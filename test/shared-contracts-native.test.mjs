@@ -146,7 +146,7 @@ test('NATIVE fitting raw references count expanded bytes while preserving surrou
 test('NATIVE missing and unsafe references stop Check, explicit lint and Try before sign-in/upload',async t=>{
   const setup=shared(t);
   for(const target of ['contracts/missing.json#','../outside.json#','contracts/link.json#']) {
-    if(target.includes('link'))symlinkSync(join(setup.repo,'contracts/shop.md'),join(setup.repo,'contracts/link.json'));
+    if(target.includes('link'))symlinkSync(join(setup.sandbox,'outside-contract.json'),join(setup.repo,'contracts/link.json'));
     updatePrompt(setup.repo,PLACE,value=>value.entries[0].input_schema={$contract:target});
     for(const [run,options]of[[runCheck,{}],[runCheck,{'--lint':true}],[runTry,{'--no-open':true,'--no-wait':true}]]) {
       const ports=portsFor({HOME:setup.home,PDD_STATE_DIR:setup.state},{gh:()=>assert.fail('must not sign in'),fetch:()=>assert.fail('must not upload')}).ports;

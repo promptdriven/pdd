@@ -18,7 +18,7 @@ const hashes = [undefined, '', current, 'stale'];
 const directories = ['test/fixtures', 'examples', 'prompts'];
 const fixture = readFileSync(new URL('./fixtures/svg-layout/game.prompt.md', import.meta.url), 'utf8');
 const actionable = message => {
-  for (const text of ['"status": "draft"', 'pdd check --fill-hash']) assert.ok(message.includes(text), message);
+  for (const text of ['"status": "draft"', 'pdd test --fill-hash']) assert.ok(message.includes(text), message);
 };
 const buckets = ['filled', 'current', 'refused', 'stale', 'warnings'];
 

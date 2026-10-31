@@ -64,7 +64,7 @@ test('HTTP door: remote origins, rebinding Hosts and bad/duplicate query values 
 
 test('HTTP door: malformed program response becomes 502 with plain reason', async t => {
   await serving(t, [route('GET', '/books')], { status: 999, body: 'bad' }, async port => {
-    const bad = await raw(port, '/books'); assert.equal(bad.status, 502); assert.match(bad.body, /^pdd try:/);
+    const bad = await raw(port, '/books'); assert.equal(bad.status, 502); assert.match(bad.body, /^pdd:/);
   });
 });
 

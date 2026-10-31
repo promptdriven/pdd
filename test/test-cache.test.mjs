@@ -64,10 +64,10 @@ async function prime(ctx, verifyReuse = true) {
 for (const vector of vectors.cases) test(`TEST-CACHE ${vector.id} (${vector.criterion_id})`, async t => {
   const id = vector.id;
   if (id === 'cli-options') {
-    for (const command of ['test', 'check']) {
+    for (const command of ['test']) {
       let parsed, error;
       try { parsed = parseArgv([command, '--lf', '--cache-clear', 'tests']); } catch (caught) { error = caught; }
-      assert.equal(error, undefined, 'test cache flags must parse on canonical and accepted former routes');
+      assert.equal(error, undefined, 'test cache flags must parse on the canonical test route');
       assert.equal(parsed.options['--lf'], true); assert.equal(parsed.options['--cache-clear'], true);
     }
     return;
@@ -106,8 +106,8 @@ for (const vector of vectors.cases) test(`TEST-CACHE ${vector.id} (${vector.crit
     });
     const first = await cli('test'); assert.equal(first.code, 0, first.err);
     const before = checks(ctx.fake).length;
-    const second = await cli('check'); assert.equal(second.code, 0, second.err);
-    assert.equal(checks(ctx.fake).length, before, 'canonical test and former alias share normal CLI reuse');
+    const second = await cli('test'); assert.equal(second.code, 0, second.err);
+    assert.equal(checks(ctx.fake).length, before, 'repeated canonical test uses normal CLI reuse');
     assert.ok(JSON.parse(second.out).rows.every(row => row.cached && row.calls === 0)); return;
   }
   const repeated = await prime(ctx, ['reuse', 'time-previous-day', 'mixed-json'].includes(id));

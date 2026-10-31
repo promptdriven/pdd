@@ -11,7 +11,10 @@ I can check my changed work quickly and return to failures without paying for un
 5. `pdd test --cache-clear` clears the whole local cache and sends my selected Stories again; it takes precedence over `--lf`, prints one stderr notice with the selected Story count, and the interpreter may return a saved answer for the same key.
 6. A damaged or unsafe cache runs my selected Stories with one warning, leaves outside files untouched and never treats damaged data as a pass.
 7. The local `.pdd/cache/test/` folder is Git-ignored in my repository, including a linked worktree.
-8. I can select tests by Story, test file, Story file or directory relative to my current folder; ordinary test and its accepted former name use the same cache.
+8. I can select tests by Story, test file, Story file or directory relative to my current folder; the canonical `pdd test` command uses this cache.
+9. I reuse passes only when their interpreter identity is known and they are at most seven days old; an older pass runs again. A build or model change found during my run also runs the selected Stories it initially skipped.
+10. A Story using the real clock or an AI-played fake runs every time and says why. Fully deterministic supplied replies and a fixed clock can still reuse a complete pass.
+11. When `CI` is set, every selected Story runs, even if its value is empty or `0`; a saved pass at most seven days old still counts for prompt approval.
 
 ## Rules to check
 
@@ -19,8 +22,8 @@ Reuse is local prior evidence. A changed or incomplete Story must never look fre
 
 Confirmed completed saved reads update the cache; running results never count as passes. The cache uses `stories.json` and reads validated `lastfailed.json` for `--lf`. Missing last-failed metadata after a cache exists, damage or inconsistency runs selected work fresh with one warning and heals after completion. Deleted Stories are pruned; existing failures outside my selection remain recorded.
 
-A Git-tracked cache or one copied without this machine's external state must run checks, including when those checks fail. My last failure remains in `--lf` after sign-in failure, interruption, timeout or any other attempt without a verdict, until a confirmed pass. A change to pdd version, local engine, interpreter origin, call budget, reached call target or exact authored bytes prevents reuse. Server engine/model updates require `pdd test --cache-clear` because zero-call reuse cannot discover them; the interpreter may still return a saved answer for the same key. A saved pass retains its observed server engine identity.
+A Git-tracked cache or one copied without this machine's external state must run checks, including when those checks fail. My last failure remains in `--lf` after sign-in failure, interruption, timeout or any other attempt without a verdict, until a confirmed pass. A change to pdd version, interpreter origin, call budget, reached call target or exact authored bytes prevents reuse. A saved pass retains the interpreter build and requested model from its answers. Missing or conflicting identity never authorizes reuse. When another answer in my run reveals a changed build or model, Stories skipped in that run also run, with a reason. An all-skipped run cannot discover server changes without calls.
 
 A damaged regular cache heals after the completed check, warns once and names `pdd test --cache-clear`. A dead-owner lock recovers with one warning, also during clear, while live owners stay protected. Symlinked ancestors of my external state folder work; a final state-folder symlink is refused.
 
-Runtime check: NOT RUN; this Story's orchestration, Git, clock and filesystem effects are native-only. The supplied JSON cases are replayed by `node --test test/test-cache.test.mjs` against a fake interpreter; no model or live service is used.
+Prompt tests: NOT RUN; this Story's orchestration, Git, clock and filesystem effects are native-only. The supplied JSON cases are replayed by `node --test test/test-cache.test.mjs test/test-cache-v3.test.mjs` against a fake interpreter; no model or live service is used.
