@@ -3,7 +3,7 @@
   "description": "Native hash-fill vectors, not a prompt-runtime scenario. Each interface is wrapped in one Runtime interface block unless block_count says otherwise; use changed prose for stale approved hashes. A source_bytes string replaces the entire generated prompt verbatim; source_fixture records its repository source. Check message substrings for refusal_contains and warning_contains, and stdout group order for output_order.",
   "cases": [
     {"name":"draft","interface":{"status":"draft","prose_sha256":""},"outcome":"filled","changes_hash_only":true},
-    {"name":"status-absent","interface":{"properties":{"READY":{},"region score":{},"region seed":{}}},"source_fixture":"test/fixtures/svg-layout/game.prompt.md","source_bytes":"# 2048-like browser screen\n\nShow score and seed data from game state. Provide four touch-sized direction\nbuttons with ids `move-left`, `move-right`, `move-up` and `move-down`.\n\n![Game layout](game.ui.svg)\n\n<details><summary>Runtime interface</summary>\n\n```json\n{\"properties\":{\"READY\":{},\"region score\":{},\"region seed\":{}}}\n```\n</details>\n","outcome":"warning","unchanged":true,"warning_contains":["no status","no prose_sha256","skipped","\"status\": \"draft\"","pdd check --fill-hash"]},
+    {"name":"status-absent","interface":{"properties":{"READY":{},"region score":{},"region seed":{}}},"source_fixture":"test/fixtures/svg-layout/game.prompt.md","source_bytes":"# 2048-like browser screen\n\nShow score and seed data from game state. Provide four touch-sized direction\nbuttons with ids `move-left`, `move-right`, `move-up` and `move-down`.\n\n![Game layout](game.ui.svg)\n\n<details><summary>Runtime interface</summary>\n\n```json\n{\"properties\":{\"READY\":{},\"region score\":{},\"region seed\":{}}}\n```\n</details>\n","outcome":"warning","unchanged":true,"warning_contains":["no status","no prose_sha256","skipped","\"status\": \"draft\"","pdd test --fill-hash"]},
     {"name":"status-null","interface":{"status":null,"prose_sha256":""},"outcome":"refused","unchanged":true},
     {"name":"status-empty","interface":{"status":"","prose_sha256":""},"outcome":"refused","unchanged":true},
     {"name":"status-invalid","interface":{"status":"pending","prose_sha256":""},"outcome":"refused","unchanged":true},
@@ -13,11 +13,11 @@
     {"name":"draft-missing-hash","interface":{"status":"draft"},"outcome":"refused","unchanged":true},
     {"name":"approved-stale","interface":{"status":"approved","prose_sha256":"stale"},"outcome":"stale","unchanged":true},
     {"name":"approved-current","interface":{"status":"approved","prose_sha256":"$CURRENT_PROSE_SHA256"},"outcome":"current","unchanged":true},
-    {"name":"missing-status-with-hash","interface":{"prose_sha256":""},"outcome":"refused","unchanged":true,"refusal_contains":["\"status\": \"draft\"","pdd check --fill-hash"]},
-    {"name":"misspelled-status-with-hash","interface":{"Status":"draft","prose_sha256":""},"outcome":"refused","unchanged":true,"refusal_contains":["\"status\": \"draft\"","pdd check --fill-hash"]},
-    {"name":"missing-status-null-hash","interface":{"prose_sha256":null},"outcome":"refused","unchanged":true,"refusal_contains":["\"status\": \"draft\"","pdd check --fill-hash"]},
-    {"name":"prototype-status-with-hash","interface":{"__proto__":{"status":"draft"},"prose_sha256":""},"outcome":"refused","unchanged":true,"refusal_contains":["\"status\": \"draft\"","pdd check --fill-hash"]},
-    {"name":"neither-key","interface":{},"outcome":"warning","unchanged":true,"warning_contains":["no status","no prose_sha256","skipped","\"status\": \"draft\"","pdd check --fill-hash"]},
+    {"name":"missing-status-with-hash","interface":{"prose_sha256":""},"outcome":"refused","unchanged":true,"refusal_contains":["\"status\": \"draft\"","pdd test --fill-hash"]},
+    {"name":"misspelled-status-with-hash","interface":{"Status":"draft","prose_sha256":""},"outcome":"refused","unchanged":true,"refusal_contains":["\"status\": \"draft\"","pdd test --fill-hash"]},
+    {"name":"missing-status-null-hash","interface":{"prose_sha256":null},"outcome":"refused","unchanged":true,"refusal_contains":["\"status\": \"draft\"","pdd test --fill-hash"]},
+    {"name":"prototype-status-with-hash","interface":{"__proto__":{"status":"draft"},"prose_sha256":""},"outcome":"refused","unchanged":true,"refusal_contains":["\"status\": \"draft\"","pdd test --fill-hash"]},
+    {"name":"neither-key","interface":{},"outcome":"warning","unchanged":true,"warning_contains":["no status","no prose_sha256","skipped","\"status\": \"draft\"","pdd test --fill-hash"]},
     {"name":"explicit-invalid-without-hash","interface":{"status":null},"outcome":"refused","unchanged":true}
   ],
   "replays": [

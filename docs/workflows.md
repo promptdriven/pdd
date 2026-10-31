@@ -26,7 +26,7 @@ In `feature`, the understand step counts the separate behaviors in the issue. On
 
 - Each Story in the plan has its own test file, `tests/<story>.json`.
 - At the story gate, the chat gives the paths of the Story files and the plan, and ends with "Reply 'I approve' here or run `pdd workflow approve N`, or tell me what to change." You can say "make it one Story", "split part 5" or "change Story 5: …". A change names one Story: the chat redoes only that Story and its test file.
-- The check step prints one `Runtime check (<story>)` line for each Story, then the overall line. If a Story fails, it fixes and checks only the Stories that failed.
+- The check step prints one `Prompt tests (<story>)` line for each Story, then the overall line. If a Story fails, it fixes and checks only the Stories that failed.
 - `pdd workflow status` shows the count, for example `Stories: 4 of 5 pass (✗ refunds)`.
 
 What each step does:
@@ -39,7 +39,7 @@ What each step does:
 | understand | States the wanted result, what must not change and what is out of scope. Counts the behaviors. With more than one, writes `user_stories/PLAN.md`. |
 | visual? | For a visible interface, sketches 2 or 3 options, with empty and error states. For a page or a screen, it also writes the app map and its SVG mockups from the chosen design, so the Simulator shows the real screen (the Screen tab). The chat asks you first, and recommends this step for a page or a screen. |
 | prompt-story | Reads the full Prompting guide and `RUNBOOK.md` sections 2 to 4, then the sections that fit: a CLI, a prompt that calls another, check paths, money and dates, a page or screen, AI calls and test patterns. A page gets a `render` operation that returns its HTML and an app map, so you can try the page on the Screen, and its tests check what the page shows. Writes or changes the smallest prompt that owns the behavior, each Story in the person's words, and one `tests/<story>.json` for each Story. Takes the expected results from the requirement, not from the code. |
-| check | Runs `pdd test` once for all Stories as `RUNBOOK.md` says, when the `pdd-prompting` skill has that file. After a fix, it checks again only the Stories that failed, by name. It never sends the same check on the same files again: it reads a result again with `pdd test --read`. In `bug`, it checks every Story whose prompt changed. Puts one `Runtime check` line and one report link for each Story in its summary. Else it reviews the prompt and the cases by hand with the review rules. |
+| check | Runs `pdd test` once for all Stories as `RUNBOOK.md` says, when the `pdd-prompting` skill has that file. After a fix, it checks again only the Stories that failed, by name. It never sends the same check on the same files again: it reads a result again with `pdd test --read`. In `bug`, it checks every Story whose prompt changed. Puts one `Prompt tests` line and one report link for each Story in its summary. Else it reviews the prompt and the cases by hand with the review rules. |
 | try? | Runs `pdd simulate` and makes a Simulator link for each Story that you want to try, as `RUNBOOK.md` says. Else it shows the plan or the bug in a safe local preview or demo. |
 | build | Builds only what you approved. Tests through the public interface. |
 | verify | Runs the replay test of `RUNBOOK.md` section 17 on the code and on a planted mistake, then the tests and the repo's required checks. Writes the tables first, and the exact commands and their real output last, in a closed `<details>` block. |
@@ -54,7 +54,7 @@ Only prompt-story reads the full Prompting guide. check reads the `pdd-prompting
 
 | | In your chat | As a run on an issue |
 |---|---|---|
-| Start | Call `pdd-feature`, `pdd-bug` or `pdd-small-change` in Codex or Claude Code | `pdd workflow start NAME ISSUE` |
+| Start | Call `pdd-feature`, `pdd-bug` or `pdd-small-change` in Codex or Claude Code | `pdd workflow run NAME ISSUE` |
 | Branch and worktree | No. The agent works in your folder | Yes. A new branch and worktree for the issue |
 | Chats | One | One for each area, in Herdr |
 | Gates | The agent asks you | pdd holds them. You approve in the chat or with `pdd workflow approve` |
@@ -63,7 +63,7 @@ Only prompt-story reads the full Prompting guide. check reads the `pdd-prompting
 ## How a run works
 
 ```
-pdd workflow start feature 42      returns at once
+pdd workflow run feature 42        returns at once
   |
 chat 1  story: understand, visual?, prompt-story
   |     gate: approve
@@ -76,7 +76,7 @@ chat 3  code (only when you ask): build, verify, formal, review
 you     review and merge on GitHub
 ```
 
-1. `pdd workflow start` reads the issue, makes the branch, the worktree and the run folder, and opens the first chat in Herdr. It refuses an issue that already has an active run. Then it returns. You can close the terminal.
+1. `pdd workflow run` reads the issue, makes the branch, the worktree and the run folder, and opens the first chat in Herdr. It refuses an issue that already has an active run. Then it returns. You can close the terminal.
 2. The first message of the chat is short. It names the skill, the issue, the worktree, the run folder and the area with its steps.
 3. The main chat coordinates and talks with you. It writes no code and performs no checks.
 4. The main chat gives steps to fresh subagents; builders are never reused and never check their own code. Before checking, close finished agents if supported and try fresh startup. Only after startup fails may verify or formal reuse an agent that wrote no code, tests or prompts in this run. Review always needs a fresh agent with no build, verify, formal or prior review of this change and no prior review context, including every repair round. If no fresh reviewer can start, write `Not checked: review (agent limit)`, stop and tell the person. Follow pdd-prompting RUNBOOK §17 for missing-check records, new-session recovery and replacing them after actual checks. Each subagent gets its full brief at once, with file paths, not chat history; the chat waits once with a long time-out and no small follow-ups.
@@ -97,7 +97,7 @@ this command even after an earlier open failed. pdd preserves the old parent she
 superseded, and opens the verified parent under an unused label. It does not allocate another Git worktree.
 An uncertain or lost allocation reply remains blocked for inspection; it never authorizes another native chat.
 
-Review a run without entering its chat with `pdd workflow view ISSUE`; `status` prints this command. The terminal view brings together the saved state and gate, recorded human approvals, pending decisions, PRs, Runtime check/report links and the Simulator link. It links to the full issue and to current Stories (including acceptance criteria), plan, prompts, tests and gate notes. The commit and uncommitted-change indicator identify what you are reading. These are current files; a recorded approval does not certify later edits. Prompt approval and permission to start code work remain separate decisions. Missing artifacts or links are shown as unavailable or not recorded.
+Review a run without entering its chat with `pdd workflow view ISSUE`; `status` prints this command. The terminal view brings together the saved state and gate, recorded human approvals, pending decisions, PRs, Prompt tests lines, report links and the Simulator link. It links to the full issue and to current Stories (including acceptance criteria), plan, prompts, tests and gate notes. The commit and uncommitted-change indicator identify what you are reading. These are current files; a recorded approval does not certify later edits. Prompt approval and permission to start code work remain separate decisions. Missing artifacts or links are shown as unavailable or not recorded.
 
 The view uses saved local records and local Git/file reads. It works with Herdr and the network offline and changes no state. Use `pdd workflow open ISSUE` when you want to focus or resume the chat.
 
@@ -105,12 +105,12 @@ The view uses saved local records and local Git/file reads. It works with Herdr 
 
 The check comes first, then the simulation. At the story gate, the chat can offer a simulation before the check: `pdd simulate <story>`, or `pdd simulate <story> --new` when visual made an app map.
 
-After the check and try steps, the chat shows one `Runtime check` line for each Story (✓, ✗ or no verdict) with its report link, and the Simulator links. You try it, then approve or ask for changes. pdd opens PR 1 only after you approve.
+After the check and try steps, the chat shows one `Prompt tests` line for each Story (✓, ✗ or no verdict) with its report link, and the Simulator links. You try it, then approve or ask for changes. pdd opens PR 1 only after you approve.
 
 The PR 1 body is short:
 
 1. For a bug: the verdict line and the `Before ✗ … → after ✓ …` line with its report links.
-2. One `Runtime check (<story>)` line for each Story. With more than one Story, pdd adds them up in a `Runtime check (all Stories)` line. Then a `Report (<story>)` link for each Story (report links expire after 7 days).
+2. One `Prompt tests (<story>)` line for each Story. With more than one Story, pdd adds them up in a `Prompt tests (all Stories)` line. Then a `Report (<story>)` link for each Story (report links expire after 7 days).
 3. `Part of #N`, and that the code comes in PR 2 only when you ask.
 4. `Draft prompts: … Approve them before you merge.`, when a prompt is still `draft`.
 5. One short line for each step.
@@ -160,7 +160,7 @@ pdd does not run tests. The agents do.
 - It runs the new cases, the regression tests and the repo's required checks. When it can, it shows that a new test fails on the old or wrong code, in a throwaway copy.
 - For a small-change behavior fix it writes `Proof (defect fixed):` and `Proof (gap closed):`, and a reason for each removed test or changed assertion.
 - It writes the exact commands, the exit codes and the real output to `verify.md`. It names what no test covers.
-- The body of PR 2, or of the one `small-change` PR, has the step summaries and `verify.md`. When a check on the PDD interpreter ran, the body starts with its `Runtime check` lines and report links. Report links expire after 7 days.
+- The body of PR 2, or of the one `small-change` PR, has the step summaries and `verify.md`. When a check on the PDD interpreter ran, the body starts with its `Prompt tests` lines and report links. Report links expire after 7 days.
 
 Bundled feature/bug code areas declare `replay_evidence: "pdd.replay-evidence.v1"`. The agent writes
 `replay-evidence.json` in the run folder using the [structured replay contract](replay-evidence.md).
@@ -185,7 +185,7 @@ Read that output before you merge. Passing tests are useful evidence. They are n
 
 If you set `CLAUDE_CONFIG_DIR`, Claude Code reads `$CLAUDE_CONFIG_DIR/skills/` for you, too.
 
-`pdd workflow start NAME` and `pdd workflow list` look for a folder `pdd-NAME` with a `workflow.json`, in this order. The first one found wins.
+`pdd workflow run NAME` and `pdd workflow list` look for a folder `pdd-NAME` with a `workflow.json`, in this order. The first one found wins.
 
 1. `.agents/skills/` in the project
 2. `.claude/skills/` in the project
@@ -225,7 +225,7 @@ Then use it:
 
 ```sh
 pdd workflow list            # pdd-mybug is in the list
-pdd workflow start mybug 42  # a run on issue 42
+pdd workflow run mybug 42    # a run on issue 42
 ```
 
 In a chat, call `$pdd-mybug` in Codex or `/pdd-mybug` in Claude Code. Commit the folder so that your team gets the same workflow.

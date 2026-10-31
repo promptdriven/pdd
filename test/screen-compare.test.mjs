@@ -174,7 +174,7 @@ test('installed browser renders reference transforms/entities/repeated numbers a
   await t.test('public CLI uses injected browser env, requires no Git and returns mismatch JSON', async () => {
     page = '<!doctype html><p>No required parts</p>';
     const stdout = sink(), stderr = sink();
-    const code = await runPdd(['check', '--screen', input.url, '--drawing', input.drawingPath, '--json'], { cwd: input.cwd, env: { ...profileEnv, PDD_RUNTIME_URL: 'invalid', PDD_STATE_DIR: input.cwd }, stdout, stderr });
+    const code = await runPdd(['test', '--screen', input.url, '--drawing', input.drawingPath, '--json'], { cwd: input.cwd, env: { ...profileEnv, PDD_RUNTIME_URL: 'invalid', PDD_STATE_DIR: input.cwd }, stdout, stderr });
     assert.equal(code, 1, stderr.text); const report = JSON.parse(stdout.text); assert.equal(report.exit_code, 1); assert.equal(report.passed, false);
   });
 });
@@ -190,7 +190,7 @@ test('public CLI requires effective text paint and literal displayed control lab
   const check = async (markup, style = '') => {
     page = `<style>body{margin:0}#label{position:absolute;left:20px;top:145px;font:16px serif;width:90px;height:22px;padding:0;border:0;${style}}</style>${markup}`;
     const stdout = sink(), stderr = sink();
-    const code = await runPdd(['check', '--screen', url, '--drawing', input.drawingPath, '--json'], { cwd: input.cwd, env: { ...process.env, PDD_CHROME_PATH: chrome, PDD_RUNTIME_URL: 'invalid-offline', PDD_STATE_DIR: input.cwd }, stdout, stderr });
+    const code = await runPdd(['test', '--screen', url, '--drawing', input.drawingPath, '--json'], { cwd: input.cwd, env: { ...process.env, PDD_CHROME_PATH: chrome, PDD_RUNTIME_URL: 'invalid-offline', PDD_STATE_DIR: input.cwd }, stdout, stderr });
     return { code, stdout: stdout.text, stderr: stderr.text, report: stdout.text ? JSON.parse(stdout.text) : null };
   };
   for (const [name, markup] of [
@@ -264,7 +264,7 @@ test('public CLI refuses unestablished SVG geometry and keeps all rendered SVG i
   const check = async (reference, actual = '') => {
     writeFileSync(join(input.cwd, input.drawingPath), wrap(reference)); page = actual.startsWith('<div') ? actual + wrap('') : wrap(actual);
     const stdout = sink(), stderr = sink();
-    const code = await runPdd(['check', '--screen', `http://127.0.0.1:${server.address().port}/`, '--drawing', input.drawingPath, '--json'], { cwd: input.cwd, env: { ...process.env, PDD_CHROME_PATH: chrome, PDD_RUNTIME_URL: 'invalid-offline', PDD_STATE_DIR: input.cwd }, stdout, stderr });
+    const code = await runPdd(['test', '--screen', `http://127.0.0.1:${server.address().port}/`, '--drawing', input.drawingPath, '--json'], { cwd: input.cwd, env: { ...process.env, PDD_CHROME_PATH: chrome, PDD_RUNTIME_URL: 'invalid-offline', PDD_STATE_DIR: input.cwd }, stdout, stderr });
     return { code, stderr: stderr.text, stdout: stdout.text, report: stdout.text ? JSON.parse(stdout.text) : null };
   };
   for (const [name, geometry] of [
@@ -331,7 +331,7 @@ test('public CLI requires literal CDATA labels, distinct occurrences and visible
   const check = async (reference, actual = reference) => {
     writeFileSync(join(input.cwd, input.drawingPath), wrap(reference)); page = wrap(actual);
     const stdout = sink(), stderr = sink();
-    const code = await runPdd(['check', '--screen', `http://127.0.0.1:${server.address().port}/`, '--drawing', input.drawingPath, '--json'], { cwd: input.cwd, env: { ...process.env, PDD_CHROME_PATH: chrome, PDD_RUNTIME_URL: 'invalid-offline', PDD_STATE_DIR: input.cwd }, stdout, stderr });
+    const code = await runPdd(['test', '--screen', `http://127.0.0.1:${server.address().port}/`, '--drawing', input.drawingPath, '--json'], { cwd: input.cwd, env: { ...process.env, PDD_CHROME_PATH: chrome, PDD_RUNTIME_URL: 'invalid-offline', PDD_STATE_DIR: input.cwd }, stdout, stderr });
     return { code, stderr: stderr.text, stdout: stdout.text, report: stdout.text ? JSON.parse(stdout.text) : null };
   };
   const label = '<text id="label" x="20" y="40"><![CDATA[CDATA REQUIRED]]></text>';

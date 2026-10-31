@@ -103,7 +103,7 @@ for (const cap of [undefined, '2']) for (const earlier of ['confirmed', 'unknown
   await runCheck({ cwd: setup.repo, words: [report.batch], options: { '--read': true, '--json': true } }, later.ports);
   assert.equal(fake.posts.length, count, 'read recovery never resends earlier unknown or paused work');
   assert.deepEqual(savedBatch(setup, report.batch).rows.find(r => r.test === 'tests/earlier.json').request_ids, earlierSaved.request_ids);
-  if (earlier === 'unknown') assert.match(made.ports.stderr.text, /pdd check --read/);
+  if (earlier === 'unknown') assert.match(made.ports.stderr.text, /pdd test --read/);
   assert.ok(checks >= 2);
 });
 

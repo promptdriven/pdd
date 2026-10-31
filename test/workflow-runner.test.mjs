@@ -285,7 +285,7 @@ for (const name of ['bug', 'feature']) {
     }
     assert.equal(f.prs.length, 2); assert.equal(f.record().stage.id, 'merge');
     assert.ok(f.prs[0].body.includes(`Runtime check: ✓ 3 of 3 criteria · 10/10 checks · 1 AI call ${report}`), 'the check result stays in PR 1');
-    assert.match(f.prs[0].body, /^Runtime check: ✓ 3 of 3 criteria · 10\/10 checks · 1 AI call\nReport: https:\/\/checks\.example\.test\/r\/k3y-123 \(report links expire after 7 days\)/);
+    assert.match(f.prs[0].body, /^Prompt tests: ✓ 3 of 3 criteria · 10\/10 checks · 1 AI call\nReport: https:\/\/checks\.example\.test\/r\/k3y-123 \(report links expire after 7 days\)/);
     assert.equal(f.prs[1].baseRefName, f.prs[0].headRefName, 'PR 2 is stacked on the open PR 1');
     const nothing = await approveRun({ ref: '17', cwd: f.source }, f.ports);
     assert.equal(nothing.exitCode, 1); assert.match(nothing.message, /Nothing to approve/);
@@ -419,7 +419,7 @@ test('feature: story, approve, PR 1 with prompt work only, then the person asks 
   assert.match(pr1.message, /Do you want the code PR now, or stop here and merge PR 1 first\?/); assert.match(pr1.message, /workflow approve 17/);
   assert.equal(f.prs.length, 1);
   assert.equal(f.prs[0].title, 'Use value two (prompt, Story and tests)'); assert.equal(f.prs[0].baseRefName, 'main'); assert.equal(f.prs[0].headRefName, run.branch);
-  assert.match(f.prs[0].body, /^Runtime check: ✓ 3 of 3 criteria · 10\/10 checks · 1 AI call\nReport: https:\/\/checks\.example\.test\/r\/k3y \(report links expire after 7 days\)\n\nPart of #17/);
+  assert.match(f.prs[0].body, /^Prompt tests: ✓ 3 of 3 criteria · 10\/10 checks · 1 AI call\nReport: https:\/\/checks\.example\.test\/r\/k3y \(report links expire after 7 days\)\n\nPart of #17/);
   assert.doesNotMatch(f.prs[0].body, /Closes #17/); assert.doesNotMatch(f.prs[0].body, /## Verify/);
   let record = f.record();
   assert.equal(record.state, 'waiting'); assert.equal(record.gate.kind, 'ask-code'); assert.equal(record.waitingFor.what, 'Make the code PR now, or stop here and merge PR 1');
@@ -713,7 +713,7 @@ async function featureAtTryGate(t, { prompt = 'Return two.\n', tests = false, tr
 test('#13: after check and try the chat asks the person to try and approve; PR 1 opens only after approval, then the code question', async t => {
   const { f, run, gate } = await featureAtTryGate(t);
   assert.equal(f.prs.length, 0, 'no PR 1 before the person approves');
-  assert.match(gate.message, /Runtime check line/); assert.match(gate.message, /Try link/); assert.match(gate.message, /approve/); assert.match(gate.message, /Stop/);
+  assert.match(gate.message, /Prompt tests line/); assert.match(gate.message, /Try link/); assert.match(gate.message, /approve/); assert.match(gate.message, /Stop/);
   assert.doesNotMatch(gate.message, /pdd opens PR 1 now/);
   let record = f.record();
   assert.equal(record.gate.kind, 'approve-pr'); assert.equal(record.state, 'waiting');
@@ -765,7 +765,7 @@ test('#18: the PR body puts the Runtime check and report link on top, cuts steps
   f.tick(); f.ports.confirm = async () => false;
   await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
   const body = f.prs[0].body, top = body.split('\n');
-  assert.equal(top[0], 'Runtime check (DRAFT): ✓ 3 of 3 criteria · 18/18 checks · 12 AI calls');
+  assert.equal(top[0], 'Prompt tests (DRAFT): ✓ 3 of 3 criteria · 18/18 checks · 12 AI calls');
   assert.equal(top[1], 'Report: https://rt.example.test/r/d379-42 (report links expire after 7 days)');
   assert.equal(top[3], 'Part of #17');
   for (const row of body.split('\n').filter(row => row.startsWith('- **'))) assert.ok(row.length <= 220, row);
@@ -806,7 +806,7 @@ test('#18: the check step\'s Runtime check wins the top of PR 1; the code questi
   f.tick(); await stepDone({ step: 'prompt-story', summary: 'Story; Runtime check (DRAFT): ✓ 1 of 2 criteria; Report: https://rt.example.test/r/first', cwd: run.root }, f.agentPorts());
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, f.ports);
   f.tick(); const gate = await stepDone({ step: 'check', summary: 'Runtime check: ✓ 2 of 2 criteria; Report: https://rt.example.test/r/second', cwd: run.root }, f.agentPorts());
-  assert.match(f.prs[0].body, /^Runtime check: ✓ 2 of 2 criteria\nReport: https:\/\/rt\.example\.test\/r\/second /);
+  assert.match(f.prs[0].body, /^Prompt tests: ✓ 2 of 2 criteria\nReport: https:\/\/rt\.example\.test\/r\/second /);
   assert.match(gate.message, /ask exactly: "Do you want the code PR now, or stop here and merge PR 1 first\? To make the code PR later, run `pdd workflow approve 17`\."/);
 });
 
@@ -824,16 +824,16 @@ test('0.1.6: PR 1 starts with one Runtime check line per Story, then the total p
   // The chat re-checks only merge-tiles and sends all current lines again; pdd counts only the latest summary.
   f.tick(); await stepDone({ step: 'check', summary: storyLines.replace('(DRAFT): ✗ 2 of 3 criteria · 8/10 checks', '(DRAFT): ✓ 3 of 3 criteria · 10/10 checks').replace('Runtime check: ✗ 7 of 8', 'Runtime check: ✓ 8 of 8'), cwd: run.root }, f.agentPorts());
   const gate = await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
-  assert.match(gate.message, /Runtime check line of each Story/);
+  assert.match(gate.message, /Prompt tests line of each Story/);
   shown = await runStatus({ ref: '17', cwd: f.source }, f.ports);
   assert.match(shown.message, /^Stories: 3 of 3 Stories pass$/m);
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
   const top = f.prs[0].body.split('\n');
   assert.deepEqual(top.slice(0, 6), [
-    'Runtime check (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
-    'Runtime check (merge-tiles) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 2 AI calls',
-    'Runtime check (score): ✓ 2 of 2 criteria · 6/6 checks · 1 AI call',
-    'Runtime check (all Stories) (DRAFT): ✓ 8 of 8 criteria · 26/26 checks · 4 AI calls',
+    'Prompt tests (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
+    'Prompt tests (merge-tiles) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 2 AI calls',
+    'Prompt tests (score): ✓ 2 of 2 criteria · 6/6 checks · 1 AI call',
+    'Prompt tests (all Stories) (DRAFT): ✓ 8 of 8 criteria · 26/26 checks · 4 AI calls',
     'Report: https://rt.example.test/r/batch-1 (report links expire after 7 days)', '']);
 });
 
@@ -858,9 +858,9 @@ test('0.1.6: the skills format (one line each, with a Report line per Story) giv
   await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
   assert.deepEqual(f.prs[0].body.split('\n').slice(0, 6), [
-    'Runtime check (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
-    'Runtime check (merge-tiles) (DRAFT): ✗ 2 of 3 criteria · 8/10 checks · 2 AI calls',
-    'Runtime check (all Stories) (DRAFT): ✗ 5 of 6 criteria · 18/20 checks · 3 AI calls',
+    'Prompt tests (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
+    'Prompt tests (merge-tiles) (DRAFT): ✗ 2 of 3 criteria · 8/10 checks · 2 AI calls',
+    'Prompt tests (all Stories) (DRAFT): ✗ 5 of 6 criteria · 18/20 checks · 3 AI calls',
     'Report: https://rt.example.test/r/one (report links expire after 7 days)',
     'Report: https://rt.example.test/r/two (report links expire after 7 days)', '']);
 });
@@ -875,9 +875,9 @@ test('0.1.6: the agreed format ("; ", one "Report (<story>): <url>" per report r
   assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^Stories: 2 of 2 Stories pass$/m);
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
   assert.deepEqual(f.prs[0].body.split('\n').slice(0, 7), [
-    'Runtime check (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
-    'Runtime check (merge-tiles) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 2 AI calls',
-    'Runtime check (all Stories) (DRAFT): ✓ 6 of 6 criteria · 20/20 checks · 3 AI calls',
+    'Prompt tests (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
+    'Prompt tests (merge-tiles) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 2 AI calls',
+    'Prompt tests (all Stories) (DRAFT): ✓ 6 of 6 criteria · 20/20 checks · 3 AI calls',
     'Report (move-tiles): https://rt.example.test/r/one (report links expire after 7 days)',
     'Report (merge-tiles): https://rt.example.test/r/two (report links expire after 7 days)',
     'Report (merge-tiles): https://rt.example.test/r/three (report links expire after 7 days)', '']);
@@ -895,10 +895,10 @@ test('0.1.6 real run (pdd-trial-2048-1027): the pasted overall line repeated one
   assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^Stories: 3 of 3 Stories pass$/m);
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
   assert.deepEqual(f.prs[0].body.split('\n').slice(0, 8), [
-    'Runtime check (swipe-play) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 8 AI calls',
-    'Runtime check (game-result) (DRAFT): ✓ 3 of 3 criteria · 13/13 checks · 5 AI calls',
-    'Runtime check (new-game) (DRAFT): ✓ 2 of 2 criteria · 12/12 checks · 4 AI calls',
-    'Runtime check (all Stories) (DRAFT): ✓ 8 of 8 criteria · 35/35 checks · 17 AI calls',
+    'Prompt tests (swipe-play) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 8 AI calls',
+    'Prompt tests (game-result) (DRAFT): ✓ 3 of 3 criteria · 13/13 checks · 5 AI calls',
+    'Prompt tests (new-game) (DRAFT): ✓ 2 of 2 criteria · 12/12 checks · 4 AI calls',
+    'Prompt tests (all Stories) (DRAFT): ✓ 8 of 8 criteria · 35/35 checks · 17 AI calls',
     'Report: https://rt.example.test/r/7a5cc123-32d4-434b-bc1e-43edcb1f643d (report links expire after 7 days)',
     'Report: https://rt.example.test/r/ddab0595-645e-47e5-9bff-74c47614d9a1 (report links expire after 7 days)',
     'Report: https://rt.example.test/r/5a866c47-e4d3-4746-9036-9fe86c9b8937 (report links expire after 7 days)', '']);
@@ -917,9 +917,9 @@ test('0.1.6: a summary with no overall line works; a Story checked again takes i
   await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
   assert.deepEqual(f.prs[0].body.split('\n').slice(0, 7), [
-    'Runtime check (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
-    'Runtime check (merge-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
-    'Runtime check (all Stories): ✓ 6 of 6 criteria · 20/20 checks · 2 AI calls',
+    'Prompt tests (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
+    'Prompt tests (merge-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
+    'Prompt tests (all Stories): ✓ 6 of 6 criteria · 20/20 checks · 2 AI calls',
     'Report (move-tiles): https://rt.example.test/r/one (report links expire after 7 days)',
     'Report (merge-tiles): https://rt.example.test/r/two (report links expire after 7 days)',
     'Report (merge-tiles): https://rt.example.test/r/three (report links expire after 7 days)', '']);
@@ -933,7 +933,7 @@ test('0.1.7: a summary with only one named Runtime check line lifts that line in
   await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
   assert.deepEqual(f.prs[0].body.split('\n').slice(0, 3), [
-    'Runtime check (unread-filter) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
+    'Prompt tests (unread-filter) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
     'Report (unread-filter): https://rt.example.test/r/one (report links expire after 7 days)', '']);
 });
 
@@ -943,7 +943,7 @@ test('0.1.6: one named Story gets no total line; its line is the total', async t
   await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
   assert.deepEqual(f.prs[0].body.split('\n').slice(0, 3), [
-    'Runtime check (move-tiles) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
+    'Prompt tests (move-tiles) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
     'Report (move-tiles): https://rt.example.test/r/one (report links expire after 7 days)', '']);
 });
 
@@ -1359,7 +1359,7 @@ for (const [name, summary] of [['one per line', verdictSummary.join('\n')], ['jo
     assert.deepEqual(f.prs[0].body.split('\n').slice(0, 5), [
       'Verdict: the bug is in the PROMPT (its check fails on the issue\'s case).',
       'Before ✗ 0 of 1 criteria https://rt.example.test/r/da176d28-b1a3 → after ✓ 5 of 5 criteria https://rt.example.test/r/526de1aa-e631 (report links expire after 7 days)',
-      'Runtime check (split-cent-conservation) (DRAFT): ✓ 5 of 5 criteria · 20/20 checks · 15 AI calls',
+      'Prompt tests (split-cent-conservation) (DRAFT): ✓ 5 of 5 criteria · 20/20 checks · 15 AI calls',
       '', 'Part of #17']);
     assert.deepEqual(f.prs[0].body.split('\n').filter(line => line.startsWith('Report')), [], 'the report links of the Before → after line are not listed again');
     assert.doesNotMatch(f.prs[0].body, /^\S+ report links expire after 7 days\.$/m, 'the top line says it already');
@@ -1372,7 +1372,7 @@ test('0.1.7 #15: "Before: no prompt" is lifted too, and a check summary without 
   await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
   assert.deepEqual(f.prs[0].body.split('\n').slice(0, 4), ['Verdict: no prompt covers this yet; the bug can only be in the code.',
-    'Before: no prompt → after ✓ 3 of 3 criteria https://rt.example.test/r/after-3 (report links expire after 7 days)', 'Runtime check: ✓ 3 of 3 criteria · 9/9 checks · 2 AI calls', '']);
+    'Before: no prompt → after ✓ 3 of 3 criteria https://rt.example.test/r/after-3 (report links expire after 7 days)', 'Prompt tests: ✓ 3 of 3 criteria · 9/9 checks · 2 AI calls', '']);
 });
 
 function topicBase(f, name = 'round3/workflow-base') {
@@ -2299,4 +2299,44 @@ test('product association: conflicting markers warn and ordinary issues keep the
     assert.equal(Object.hasOwn(f.record(),'productMarker'),false);
     if(body.includes('pdd-product')) assert.match(f.record().warnings.join(' '),/multiple.*marker/i);
   }
+});
+
+// user_stories/prompt-tests-line.md: pdd writes `Prompt tests`; every reader takes old `Runtime check` lines the same way.
+test('Prompt tests lines: PR 1 top, total and Story count read new and old labels alike; a verdict stops at either label', async t => {
+  const { f, run } = await featureAtTryGate(t);
+  const summary = ['Verdict: the bug is in the PROMPT.', 'Prompt tests (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
+    'Runtime check (merge-tiles) (DRAFT): ✗ 2 of 3 criteria · 8/10 checks · 2 AI calls', 'Report (move-tiles): https://rt.example.test/r/one'].join('; ');
+  f.tick(); await stepDone({ step: 'check', summary, cwd: run.root }, f.agentPorts());
+  const stories = JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0].stories;
+  assert.equal(stories.total, 2); assert.equal(stories.pass, 1); assert.deepEqual(stories.failing, ['merge-tiles']);
+  await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
+  f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
+  const top = f.prs[0].body.split('\n').slice(0, 4);
+  assert.ok(top[0].startsWith('Verdict:') && !/Prompt tests|Runtime check/.test(top[0]), top[0]);
+  assert.deepEqual(top.slice(1).map(line => line.split(':')[0]), ['Prompt tests (move-tiles)', 'Prompt tests (merge-tiles) (DRAFT)', 'Prompt tests (all Stories) (DRAFT)']);
+  assert.match(top[3], /: ✗ 5 of 6 criteria · 18\/20 checks · 3 AI calls$/);
+  assert.doesNotMatch(f.prs[0].body, /^Runtime check/m, 'pdd writes only the new label');
+});
+
+test('Prompt tests lines: workflow evidence records a saved result with the new or the old label', async t => {
+  const { recordEvidence } = await import('../src/workflow-runner.mjs');
+  const { captureSource } = await import('../src/runtime-preflight.mjs');
+  const { cpSync } = await import('node:fs');
+  const { f, run } = await featureAtTryGate(t);
+  for (const dir of ['prompts', 'tests', 'user_stories']) cpSync(join(packageRoot, 'test/fixtures/harbor', dir), join(run.root, dir), { recursive: true });
+  const tests = ['tests/place-order.json', 'tests/unknown-item.json'], source = captureSource(run.root, { tests, appMap: null });
+  for (const label of ['Prompt tests', 'Runtime check']) {
+    const rows = tests.map(test => { const story = test.split('/').at(-1).replace('.json', '');
+      return { test, story, state: 'passed', criteria: { passed: 1, total: 1 }, checks: { passed: 1, total: 1 }, calls: 0, summary_line: `${label} (${story}): ✓ 1 of 1 criterion · 1/1 checks · 0 AI calls` }; });
+    const file = join(f.base, `evidence-${label.split(' ')[0]}.json`);
+    writeFileSync(file, JSON.stringify({ repo: run.root, source_sha256: source.sha256, rows }));
+    f.tick(); const result = await recordEvidence({ ref: '17', summaryFile: file, cwd: run.root }, f.ports);
+    assert.equal(result.exitCode, 0, `${label}: ${result.message}`);
+    // A changed result word still refuses: only the label is read as new.
+    writeFileSync(file, JSON.stringify({ repo: run.root, source_sha256: source.sha256, rows: rows.map(row => ({ ...row, summary_line: row.summary_line.replace('✓', '✗') })) }));
+    assert.notEqual((await recordEvidence({ ref: '17', summaryFile: file, cwd: run.root }, f.ports)).exitCode, 0, label);
+  }
+  assert.equal(f.record().evidence.length, 2);
+  const stories = JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0].stories;
+  assert.equal(stories.pass, 2); assert.equal(stories.total, 2);
 });
