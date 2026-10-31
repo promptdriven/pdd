@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 97b51e0baa0ee6c85e14a35874881b4a239db4fbc4f7aceb1fcc9d7117b9f02a).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: ab6c9bd802e2c7eaaf323a084c4f8d74b405699d5883deadbb11ce619808a64c).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -325,7 +325,7 @@ const AUTH_TEXT = 'The PDD interpreter did not accept your GitHub login (HTTP 40
 
 // HTTP to the runtime. The token stays in this object and in request headers only.
 class Runtime {
-  constructor({ origin, token, ports, signal }) { Object.assign(this, { origin, token, ports, signal }); }
+  constructor({ origin, token, ports, signal }) { Object.assign(this, { origin, token, ports, signal }); this.sources = new WeakMap(); }
   async send(path, init, ms) {
     if (this.signal?.aborted) return { lost: true };
     const controller = new AbortController(), stop = () => controller.abort();
@@ -343,7 +343,9 @@ class Runtime {
   post(path, request, tar, timeoutMs = this.ports.postMs) {
     const form = new FormData();
     form.set('request', new Blob([JSON.stringify(request)], { type: 'application/json' }), 'request.json');
-    form.set('source', new Blob([tar], { type: 'application/x-tar' }), 'source.tar');
+    let source = this.sources.get(tar);
+    if (!source) { source = new Blob([tar], { type: 'application/x-tar' }); this.sources.set(tar, source); }
+    form.set('source', source, 'source.tar');
     return this.send(path, { method: 'POST', body: form }, timeoutMs);
   }
   get(id, timeoutMs = GET_MS) { return this.send(`/v1/runs/${id}`, { method: 'GET' }, timeoutMs); }
@@ -437,12 +439,22 @@ function markBusy(context, row, wait, observedAt = context.ports.now(), legacy =
 const restarted = answer => answer?.command === 'check' && answer.state === 'unknown' && [answer.result?.report?.refusal, ...(Array.isArray(answer.result?.refusals) ? answer.result.refusals : [])].some(item => item?.code === 'service-restarted');
 const confirmedEnd = answer => ['passed', 'failed', 'refused', 'not_run'].includes(answer?.state) || restarted(answer);
 function localLimit(context) {
-  if (context.localLimit) return context.localLimit;
+  if (context.localLimit !== undefined) return context.localLimit;
   const raw = context.ports.env.PDD_MAX_JOBS;
-  const value = raw === undefined ? 4 : Number(raw);
-  if (raw !== undefined && (!/^[1-9][0-9]*$/.test(String(raw)) || !Number.isSafeInteger(value)))
-    line(context.ports.stderr, 'Warning: PDD_MAX_JOBS must be a positive safe integer; using 4.');
-  return context.localLimit = Number.isSafeInteger(value) && value > 0 && (raw === undefined || /^[1-9][0-9]*$/.test(String(raw))) ? value : 4;
+  if (raw === undefined) return context.localLimit = Infinity;
+  const value = Number(raw);
+  if (/^[1-9][0-9]*$/.test(String(raw)) && Number.isSafeInteger(value)) return context.localLimit = value;
+  line(context.ports.stderr, 'Warning: PDD_MAX_JOBS must be a positive safe integer; using no local cap.');
+  return context.localLimit = Infinity;
+}
+function uploadLimit(context) {
+  if (context.uploadLimit !== undefined) return context.uploadLimit;
+  const raw = context.ports.env.PDD_MAX_UPLOADS;
+  if (raw === undefined) return context.uploadLimit = 8;
+  const value = Number(raw);
+  if (/^[0-9]+$/.test(String(raw)) && Number.isSafeInteger(value) && value > 0) return context.uploadLimit = value;
+  line(context.ports.stderr, 'Warning: PDD_MAX_UPLOADS must be a positive safe integer; using 8 uploads.');
+  return context.uploadLimit = 8;
 }
 function slotPorts(context, deadline = context.deadline) {
   const { ports } = context;
@@ -1076,7 +1088,22 @@ async function runScheduledChecks(context, rows, toSend) {
   const { ports } = context;
   context.checkWindow ??= localLimit(context);
   for (const row of toSend) row.attempts = 0;
-  const pendingSends = new Map();
+  const pendingSends = new Map(), uploads = uploadLimit(context);
+  // Refill on a POST's settlement even while the polling loop awaits GETs.
+  // Waiting rows stay outside admission and dispatch-claim allocation.
+  const pumpSends = () => {
+    if (context.interrupted || context.readStop || context.stopped || context.sendError || ports.now() >= context.deadline) return;
+    const active = rows.filter(occupiesSlot).length;
+    const available = Math.max(0, Math.min(uploads - pendingSends.size, context.checkWindow - active - pendingSends.size));
+    const eligible = toSend.filter(row => !pendingSends.has(row) && ['ready', 'waiting'].includes(row.state)
+      && (!row.retry_at || ports.now() >= row.retry_at));
+    for (const row of eligible.slice(0, available)) {
+      const pending = sendCheck(context, row).catch(error => { context.sendError ??= error; }).finally(() => {
+        pendingSends.delete(row); pumpSends();
+      });
+      pendingSends.set(row, pending);
+    }
+  };
   let waitingShown = -1, shownAt = ports.now();
   const sentAt = shownAt;
   const readable = row => isOpen(row) && ports.now() < (row.lost ? row.read_until ?? context.deadline : context.deadline);
@@ -1084,13 +1111,8 @@ async function runScheduledChecks(context, rows, toSend) {
   while (!context.interrupted && !context.readStop) {
     // Never count an uncertain dispatched job as a free slot, even if it cannot currently be read.
     const active = rows.filter(occupiesSlot).length;
-    const eligible = toSend.filter(row => !pendingSends.has(row) && ['ready', 'waiting'].includes(row.state)
-      && (!row.retry_at || ports.now() >= row.retry_at));
     if (!context.stopped && ports.now() < context.deadline && active < context.checkWindow) {
-      for (const row of eligible.slice(0, Math.max(0, context.checkWindow - active - pendingSends.size))) {
-        const pending = sendCheck(context, row).catch(error => { context.sendError ??= error; }).finally(() => pendingSends.delete(row));
-        pendingSends.set(row, pending);
-      }
+      pumpSends();
       // Admission can wait while previously dispatched rows continue to be read.
       if (!active && pendingSends.size) await Promise.race(pendingSends.values());
       else await new Promise(done => setImmediate(done));
