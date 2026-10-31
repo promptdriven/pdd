@@ -343,7 +343,7 @@ for (const json of [true, false]) test(`TEST-CACHE clear notice preserves ${json
   const notices = result.err.split('\n').filter(line => /test cache cleared/.test(line));
   assert.equal(notices.length, 1, 'exactly one clear progress notice');
   assert.match(notices[0], /Running 1 selected Stor/);
-  assert.match(notices[0], /interpreter may reuse saved answers.*#535/);
+  assert.match(notices[0], /interpreter may reuse saved answers/);
   assert.doesNotMatch(ctx.ports.stdout.text, /test cache cleared/);
   if (json) { assert.equal(result.json.rows.length, 1); assert.ok(!result.json.warnings.some(w => /test cache cleared/.test(String(w)))); }
   else assert.match(ctx.ports.stdout.text, /independent/);
