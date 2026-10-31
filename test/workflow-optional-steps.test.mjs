@@ -241,3 +241,17 @@ for(const shape of ['safe plus reserved','safe plus malformed','two safe','sole 
  assert.equal(external,0,'The actual invalid CLI selection has no external effects');assert.equal(existsSync(join(f.root,'.pdd/try')),false);
  assertOptionalUnknown(f,(await f.done('check','checked')).message);
 });
+
+for(const literal of ['1.0','1e0','1.00000000000000001'])test(`2756: repair2 called limits preserve canonical JSON tokens: ${literal}`,t=>{
+ const {run,snapshot}=seedFor('cli-command-and-time'),f=fixture(t,run,{defaultReader:true}),graph=calledSnapshot(snapshot),cli=nativeOptionalCli(f);
+ materializeSnapshot(f,snapshot,'prompt-story.md');assertOptionalCli(cli());f.seed(run);
+ // Positive integer JSON literals have no upper cap in the canonical contract.
+ const [block]=interfaceBlocks(graph.child.text),doc=JSON.parse(block[1]);doc.limits.max_steps=1;
+ const ordinary=graph.child.text.replace(block[1],JSON.stringify(doc));
+ f.put(graph.child.path,ordinary.replace('"max_steps":1',`"max_steps":${literal}`));
+ let found=findTests({root:f.root});assert.equal(preflight({root:f.root,found,selected:found.tests}).rows[0].refusals[0]?.code,'invalid-limits','Canonical preflight rejects decimal/exponent tokens even when JSON.parse rounds them to an integer');
+ assertOptionalUnknown(f,cli());f.seed(run);
+ const huge=ordinary.replace('"max_steps":1','"max_steps":'+'9'.repeat(400));f.put(graph.child.path,huge);
+ found=findTests({root:f.root});assert.deepEqual(preflight({root:f.root,found,selected:found.tests}).rows[0].refusals,[],'A large integer literal remains admitted without a new upper bound');
+ assertOptionalCli(cli());
+});

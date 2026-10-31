@@ -13,7 +13,7 @@ import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, readWorkflo
 import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mjs';
 import { allRuns, currentChat, gitContext, listRuns, readRun, resolveRun, runDirFor, runForWorktree, writeRun } from './workflow-runs.mjs';
 import { startChat, sendToChat, herdrCommand, chatSession, openChat, closeChats, expandHome, homeVariable, isFolder } from './workflow-chat.mjs';
-import { captureSource, findTests, gitFiles, interfaceBlocks, isSecretPath, storyCriteria, interfaceSchemaProblems, checkInput, proseSha256, promptRefusal } from './runtime-preflight.mjs';
+import { captureSource, findTests, gitFiles, interfaceBlocks, isSecretPath, storyCriteria, interfaceSchemaProblems, checkInput, proseSha256, promptRefusal, parseInterfaceJson } from './runtime-preflight.mjs';
 import { storyLines } from './runtime-output.mjs';
 import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
 import { causeText } from './runtime-output.mjs';
@@ -945,7 +945,7 @@ function optionalFacts(snapshot,run,p) {
   const prompt=path=>{
     if(prompts.has(path))return prompts.get(path);
     let value=null;
-    try {const text=files.get(path),blocks=interfaceBlocks(text??'');if(optionalPath(path) && path.endsWith('.prompt.md') && blocks.length===1){const declaration=JSON.parse(blocks[0][1]);if(Array.isArray(declaration.entries) && !promptRefusal({path,interface:declaration,prose:proseSha256(text)},'dependency') && !interfaceSchemaProblems(declaration).length && new Set(declaration.entries.map(entry=>entry.operation)).size===declaration.entries.length)value={text,interface:declaration};}}catch{}
+    try {const text=files.get(path),blocks=interfaceBlocks(text??'');if(optionalPath(path) && path.endsWith('.prompt.md') && blocks.length===1){const declaration=parseInterfaceJson(blocks[0][1]);if(Array.isArray(declaration.entries) && !promptRefusal({path,interface:declaration,prose:proseSha256(text)},'dependency') && !interfaceSchemaProblems(declaration).length && new Set(declaration.entries.map(entry=>entry.operation)).size===declaration.entries.length)value={text,interface:declaration};}}catch{}
     prompts.set(path,value);return value;
   };
   // Match preflight's seen-path termination: reuse and call cycles are finite,
