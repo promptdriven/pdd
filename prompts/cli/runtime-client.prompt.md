@@ -13,6 +13,14 @@ optional simulation and max_calls, with no seed. Calls use the existing JSON cal
 endpoint and identity, adding per-call max_calls. Preserve world snapshots,
 call_chain frames and error code/message for the runner. Keep existing auth,
 admission and GET-only recovery: never resend an accepted or ambiguous call.
+For direct programs, route transport-owned capacity warnings, maintenance waits,
+admission and slot notices through the caller's informational status policy:
+each emitted line starts `pdd:`, and quiet suppresses these notices. Keep program
+stdout/stderr byte for byte and useful failure reasons visible. This direct-only
+policy applies to ordinary calls, pending --read recovery, terminal shell setup
+and confirmed stopped-session replacement, including confirmed-setup notices.
+Preserve the shared session-opening interface used by screen/HTTP callers and
+existing Check/Try/simulate notices.
 
 ## Setup
 
