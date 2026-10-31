@@ -175,7 +175,6 @@ export async function runProgram({file,args=[],root=process.cwd(),env=process.en
     let data=recoveredData??programData({root,program,flags:{...flags,...(flags.data?{data:resolve(cwd,flags.data)}:{})}},ports);
     if(once){const selected=readPrivate(join(data.dir,'launcher.json'),null);if(selected){data={...data,startingData:{initial_world:selected.pending?selected.initial_world:data.startingData.initial_world,...(selected.simulation===undefined?{}:{simulation:selected.simulation})},reset:false,noCache:!!(selected.noCache||data.noCache),fresh:!!(selected.noCache||data.noCache)};}}
     if(data.reset)ports.stderr.write(renderResetNotice({root,backupPath:data.backupPath,quiet}));
-    if(data.noCache&&!quiet)ports.stderr.write(`pdd: asked again${data.reset?'':', data kept'}. The interpreter may still reuse a saved answer.\n`);
     if(flags['show-data']){ports.stdout.write(JSON.stringify(data.startingData.initial_world)+'\n');return 0;}
     unlock=acquireProgramLock(data.dir);
     if(selected.kind==='shell'&&!args.length&&!flags.read&&!once){
@@ -204,6 +203,7 @@ export async function runProgram({file,args=[],root=process.cwd(),env=process.en
       callCap=saved.pending.cap??Number(flags['max-calls']??Math.min(admissionBound,100));
       answer=await transport.finish(await transport.get(flags.read),flags.read,'call',{sessionId:saved.id});
     }else{
+      if(data.noCache&&!quiet)ports.stderr.write(`pdd: asked again${data.reset?'':', data kept'}. The interpreter may still reuse a saved answer.\n`);
       usage={calls:0,seconds:0};
       let cap=flags['max-calls']===undefined?undefined:Number(flags['max-calls']);
       if(flags['max-calls']!==undefined&&(!Number.isInteger(cap)||cap<1||cap>1000))throw localError('--max-calls must be from 1 to 1000.');
