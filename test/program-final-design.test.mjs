@@ -378,3 +378,10 @@ test('shared reset renderer is exported, pure, quiet and backup-aware',async()=>
  let module;try{module=await import('../src/program-data.mjs');}catch(error){assert.fail('program-data must exist for shared reset rendering: '+error.code);}
  assert.equal(typeof module.renderResetNotice,'function');const root='/project';assert.equal(module.renderResetNotice({root,quiet:true,backupPath:'/project/.pdd/run/x/world.prev.json'}),'');assert.equal(module.renderResetNotice({root}),'pdd: data reset.\n');assert.equal(module.renderResetNotice({root,backupPath:'/project/.pdd/run/x/world.prev.json'}),'pdd: data reset. Old data kept in .pdd/run/x/world.prev.json\n');
 });
+
+test('reset may reuse mutating answer only with its confirmed after-world installed',async t=>{
+ const h=await harness(t,{world:{count:1}});pass(await h.invoke(['increment']));
+ const reset=await h.invoke(['increment'],['--reset']);pass(reset);assert.deepEqual(h.stored('world.json'),{count:1});
+ for(const post of h.fake.jsonPosts)assert.equal(post.json.fresh,false,'reset must permit interpreter cache');
+ const next=await h.invoke(['inspect']);pass(next);assert.deepEqual(h.stored('last-run.json').data_before,{count:1},'next invocation starts from replayed after-world');
+});

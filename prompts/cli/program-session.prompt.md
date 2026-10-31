@@ -33,7 +33,11 @@ change replace automatically, carrying confirmed world; never require --new.
 Reset/data select initial data without invalidating an exact saved-answer key.
 noCache bypasses local saved answers without changing selected initial data.
 Unchanged input and data may reuse a confirmed result at0 calls only when the
-current world equals that result's data_before, not data_after. Repeating a
+current world equals that result's data_before, not data_after. A reused
+mutating answer must install its confirmed data_after and preserve session/world
+consistency before another invocation. It is also valid to send fresh:false to
+the interpreter for that exact answer instead of local reuse; never return its
+output while leaving reset data empty or a live session on a different world. Repeating a
 mutating command with the same argv must send again and apply its mutation
 again. Replay preserves the saved program exit code, including nonzero codes. Never cache
 failed/refused/unknown results or reuse another login's session. Retain pending
