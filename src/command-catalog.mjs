@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 07c2c184012068906222792b52ed65b950378e672944c5a6e1bc907f6936fe8e).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 3be86a0a4950e1f9ff1cf79da52042cddd5f79d60d77be663f6b74e0ef84364b).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of four commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', start: 'start' });
@@ -74,11 +74,11 @@ const routes = [
   // `sim` is the short form of the try route: it parses like `simulate` and never gets a notice.
   { id: 'try', prefix: [simulate], local: 'runtime-try', formerly: ['try'], short: ['sim'], operands: [{ name: 'story', type: 'text', optional: true }],
     options: [{ name: '--agent', kind: 'text' }, { name: '--tab', kind: 'value', choices: ['call', 'screen', 'terminal', 'world'] }, { name: '--new', kind: 'flag' },
-      { name: '--cli', kind: 'flag' }, { name: '--shell', kind: 'flag' }, { name: '--save-last', kind: 'flag' },
+      { name: '--page', kind: 'flag' }, { name: '--cli', kind: 'flag' }, { name: '--shell', kind: 'flag' }, { name: '--save-last', kind: 'flag' },
       { name: '--serve', kind: 'optional-integer', min: 1, max: 65535, default: 8080 }, { name: '--max-calls', kind: 'integer', min: 1, max: 1000 },
       { name: '--no-open', kind: 'flag' }, { name: '--stop', kind: 'flag' }, { name: '--app-map', kind: 'text' }, { name: '--no-wait', kind: 'flag' }],
-    forms: [form(`pdd ${simulate} [STORY] [--max-calls N] [--tab call|screen|terminal|world] [--app-map PATH] [--new] [--no-open] [--no-wait] [--agent NAME]`, 'Open the Story in the PDD Simulator: make a link on the PDD interpreter with your gh login and open it in your browser; it ends in 24 hours. Short form: pdd sim. A new simulation defaults to 400 calls; --max-calls accepts 1 to 1000. With terminal stdout or explicit --agent, it stays running to connect your own agent; otherwise it reads saved cases once and returns. --agent selects a configured name or a default Codex, Claude or Gemini; --no-wait skips the bridge. In a terminal it adds each test saved in the Simulator to the story\'s test file.'),
-      form(`pdd ${simulate} [STORY] --cli [--shell] [--max-calls N] [--new]`, 'Run your program in your terminal through a Simulator session; prints a PATH line, or opens a shell with --shell.'),
+    forms: [form(`pdd ${simulate} [STORY] [--page] [--max-calls N] [--tab call|screen|terminal|world] [--app-map PATH] [--new] [--no-open] [--no-wait] [--agent NAME]`, 'Automatically open a shell for a command-line program, localhost with an example request for HTTP routes, or the PDD Simulator page for screens. Omit STORY to open the whole project. Use --page to choose the page. On the page, make a link on the PDD interpreter with your gh login and open it in your browser; it ends in 24 hours. Short form: pdd sim. A new simulation defaults to 400 calls; --max-calls accepts 1 to 1000. With terminal stdout or explicit --agent, it stays running to connect your own agent; otherwise it reads saved cases once and returns. --agent selects a configured name or a default Codex, Claude or Gemini; --no-wait skips the bridge. In a terminal it adds each test saved in the Simulator to the story\'s test file.'),
+      form(`pdd ${simulate} [STORY] --cli [--shell] [--max-calls N] [--new]`, 'Run your program in your terminal through a Simulator session; prints a PATH line, or opens a shell with --shell. Use --shell alone to open the shell.'),
       form(`pdd ${simulate} [STORY] --serve [PORT] [--max-calls N] [--new]`, 'Serve real HTTP requests through your Simulator session on localhost (default port 8080).'),
       form(`pdd ${simulate} --save-last`, 'Save the last terminal command and its output in the original Story test file.'),
       form(`pdd ${simulate} --stop [STORY]`, 'Stop the open Simulator link of a story.')] },

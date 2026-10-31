@@ -1,4 +1,4 @@
-// Generated from prompts/cli/try-http.prompt.md (sha256: 6fa9fea29ab24253c75ffc220e61cb83ea8360ed15132d51af2b9d5d175a8628).
+// Generated from prompts/cli/try-http.prompt.md (sha256: f0f96cde921aa85d58cd7126e594c6e10acad1a9ea3e1b61feffe8817997be75).
 import { createServer, validateHeaderName, validateHeaderValue } from 'node:http';
 import { join, relative } from 'node:path';
 import { checkInput } from './runtime-preflight.mjs';
@@ -114,6 +114,39 @@ async function requestText(req) {
   try { return new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)); } catch { throw problem(400, 'The request body must be UTF-8.'); }
 }
 
+// Build a request only from authored input; missing values remain visible placeholders.
+function requestExample(entry, tests, port) {
+  const step = tests.flatMap(test => test.doc?.steps ?? []).find(step => step.entry_path === entry.entry_path && step.operation === entry.operation);
+  const input = step?.input ?? {}, props = propertiesOf(entry.input_schema);
+  const missing = name => `<required:${name}>`;
+  const path = entry.route.path.replace(/:([A-Za-z][A-Za-z0-9_]*)/g, (_, name) => {
+    const value = (input.params ?? input)[name];
+    return value === undefined ? missing(name) : encodeURIComponent(String(value));
+  });
+  const query = new URLSearchParams();
+  const queryProps = props.query ? propertiesOf(props.query) : props;
+  const required = props.query?.required ?? entry.input_schema?.required ?? [];
+  const parameters = new Set([...entry.route.path.matchAll(/:([A-Za-z][A-Za-z0-9_]*)/g)].map(match => match[1]));
+  for (const name of Object.keys(queryProps)) {
+    if (!props.query && (parameters.has(name) || ['body', 'headers', 'method', 'path', 'params'].includes(name))) continue;
+    const value = (props.query ? input.query : input)?.[name];
+    if (value !== undefined) for (const item of Array.isArray(value) ? value : [value]) query.append(name, String(item));
+    else if (required.includes(name)) query.append(name, missing(name));
+  }
+  const url = `http://127.0.0.1:${port}${path}${query.size ? `?${query}` : ''}`;
+  const args = ['curl', '-X', entry.route.method, url];
+  for (const name of Object.keys(propertiesOf(props.headers))) {
+    const value = input.headers?.[name];
+    if (value !== undefined || props.headers.required?.includes(name)) args.push('-H', `${name}: ${value ?? missing(name)}`);
+  }
+  if (props.body && (input.body !== undefined || entry.input_schema.required?.includes('body'))) {
+    const body = input.body === undefined ? missing('body') : typeof input.body === 'string' ? input.body : JSON.stringify(input.body);
+    if (props.body.type !== 'string') args.push('-H', 'Content-Type: application/json');
+    args.push('--data', body);
+  }
+  return args.map(shellWord).join(' ');
+}
+
 export async function openServe(context, test, sessionId, options) {
   const { ports, root, origin, identity } = context;
   const model = await context.runtime.send(`/v1/try/${sessionId}/model`, { method: 'GET' }, 30_000);
@@ -212,6 +245,7 @@ export async function openServe(context, test, sessionId, options) {
   context.signal?.addEventListener('abort', stop, { once: true });
   const port = server.address().port;
   ports.stdout.write(`Try is serving at http://127.0.0.1:${port}\n${routes.length ? routes.map(e => `  ${e.route.method} ${e.route.path}`).join('\n') : '  Screen only (no named HTTP routes).'}\nCtrl-C closes this server. The Try session keeps its saved data.\n`);
+  if (routes.length) ports.stdout.write(`Example: ${requestExample(routes[0], context.simulationTests ?? [test], port)}\n`);
   if (hasScreen) ports.stdout.write(`Screen: http://127.0.0.1:${port}/\n`);
   try {
     if (ports.serve) { await ports.serve(server); return 0; }

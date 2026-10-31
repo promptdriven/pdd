@@ -433,7 +433,7 @@ pdd shows the prompt's runtime interface in plain words: each input, result and 
 
 ### 7.2 Simulate a Story
 
-`pdd simulate STORY` opens the Story in the PDD Simulator: it makes a Simulator link and opens it in your browser. In the Simulator, you use the prompt by hand. The link ends after 24 hours, or with `pdd simulate --stop STORY`. If an idle simulation is paused, run `pdd simulate STORY` again: pdd asks the server to reopen that same simulation and waits until it is running. Reopening uses no AI calls and keeps its original expiry and remaining allowance. A failed reopen keeps the record and reports a nonzero result instead of printing a paused link as ready.
+`pdd simulate STORY` automatically opens a shell for a command-line program, localhost with an example request for HTTP routes, or the PDD Simulator page for screens. Omit STORY to open the whole project: all mapped screens, the unique main command-line program, or all HTTP routes. Use `--page` to choose the Simulator page. On the page, it makes a Simulator link and opens it in your browser. In the Simulator, you use the prompt by hand. The link ends after 24 hours, or with `pdd simulate --stop STORY`. If an idle simulation is paused, run `pdd simulate STORY` again: pdd asks the server to reopen that same simulation and waits until it is running. Reopening uses no AI calls and keeps its original expiry and remaining allowance. A failed reopen keeps the record and reports a nonzero result instead of printing a paused link as ready.
 
 In your terminal, `pdd simulate` keeps waiting while the page is open:
 
@@ -591,7 +591,7 @@ Do not paste tokens, passwords, Simulator links or private code.
 
 ## Use your program for real with pdd simulate
 
-Run `pdd simulate <story> --cli`. Copy the printed PATH line, then type your program's commands in your
+Run `pdd simulate <story>` to open a shell with your program ready. Use `--cli` to print the PATH line instead, then type your program's commands in your
 own terminal, or run the printed absolute path. For example: `tipjar split 100 --people 3 --tip 18 --round-up`.
 Each command runs the prompt on the interpreter with your gh login; saved data stays in the same simulation.
 `--help` also runs the prompt. `--shell` opens a shell with the PATH ready. Piped UTF-8 input is forwarded when

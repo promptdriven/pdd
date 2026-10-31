@@ -9,7 +9,7 @@ metadata:
 
 Fix both: the brakes (the real defect) and the warning light (a test or check that would catch it next time). Brakes first. If the agent cannot find the defect yet, it fixes the warning light first: it adds what makes the defect visible (a failing reproducer test, a precise error, logging), so the cause becomes easy to find, and then it fixes the brakes. A warning-light-only change must say 'Not fixed yet: this helps find the cause' on the PR, and the issue stays open; it never closes the bug.
 
-`steps/` briefs; `?` = optional.
+`steps/`; `?` optional.
 1. story: reproduce, prompt-story → gate: approve
 2. prompt-pr: check, try? → approve, then gate: pr, then ask
 3. code: build, verify, formal, review → gate: pr
@@ -22,9 +22,9 @@ Fix both: the brakes (the real defect) and the warning light (a test or check th
 - At gates show results, ask the person, stop; revise and ask again. Outside runs PRs need the person's yes; in runs pdd opens them. Never merge.
 - Use full URLs (`https://…`).
 - Before an optional step, ask the person and wait for the answer: "Do you want to try it now? yes/no". In a run, run `<pdd> workflow ask` first.
-- At the story gate, start with one verdict line, then the details: "Verdict: the bug is in the PROMPT (its check fails on the issue's case).", "Verdict: the prompt is right; the bug is only in the CODE." or "Verdict: no prompt covers this yet; the bug can only be in the code." Give the full paths of the Story files. For issue-only prompts, offer "adopt PDD for this module" later. You may offer: "You can also open it now with `pdd simulate <story>` before the check." End with: "Reply 'I approve' here or run `pdd workflow approve N`, or tell me what to change."
-- Before PR 1, show the `Runtime check` line(s) with the report link(s) and the Simulator link, if any. pdd opens PR 1 only after the approval. Then show the PR 1 link and ask: "Do you want the code PR now, or stop here and merge PR 1 first? To make the code PR later, run `pdd workflow approve N`."
-- On verify/formal failure or review must-fixes, go back to build in a new subagent, at most 2 times. 2 repair rounds after initial review: fresh build, verify, formal, then fresh review. PR 2 starts with real `Review:` verdict, remaining must-fixes and "✗ N vectors fail" for failing vectors. No new human gate.
+- At the story gate, start with one verdict line, then the details: "Verdict: the bug is in the PROMPT (its check fails on the issue's case).", "Verdict: the prompt is right; the bug is only in the CODE." or "Verdict: no prompt covers this yet; the bug can only be in the code." Give the full paths of the Story files. Issue-only: later offer "adopt PDD for this module". You may offer: "You can also open it now with `pdd simulate <story>` before the check." Automatically: shell/localhost/page; no Story: whole project. End with: "Reply 'I approve' here or run `pdd workflow approve N`, or tell me what to change."
+- Before PR 1, show each `Runtime check`, report and simulation details. pdd opens PR 1 only after the approval. Then show the PR 1 link and ask: "Do you want the code PR now, or stop here and merge PR 1 first? To make the code PR later, run `pdd workflow approve N`."
+- Verify/formal/review failures: back to build in a new subagent, at most 2 times. 2 repair rounds after initial review: fresh build, verify, formal, then fresh review. PR 2 starts with real `Review:` verdict, remaining must-fixes and "✗ N vectors fail" for failing vectors. No new human gate.
   - Repair pending: with must-fixes and fewer than 2 repairs, do not run `workflow done review`; start a fresh build with the must-fix list.
   - Final review: clear or 2 repairs used; run `workflow done review` to open PR 2.
 - `.ui.svg`: layout in reproduce, build, verify (RUNBOOK §13).

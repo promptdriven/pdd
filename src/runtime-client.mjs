@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: df043bfeb9c9ea6ae33e3d9fdeab93ae690d02d9abcb753d42ad5a18197bd8b6).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 100f3d95d5f22b80271d7e3c95467c2b807e35fb82dce972e5c5b94d8293a4c3).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -1804,6 +1804,50 @@ function oneTest(found, words, root) {
   return selected[0];
 }
 
+// Read the authored interfaces, never scenario output, to choose an interaction.
+function programEntries(root, found, test) {
+  const cli = new Set(), http = new Set();
+  for (const step of test.doc?.steps ?? []) {
+    const prompt = readPrompt(root, found.visible, step.entry_path);
+    const index = prompt.interface?.entries?.findIndex(entry => entry.operation === step.operation);
+    if (!(index >= 0)) continue;
+    const entry = prompt.interface.entries[index], key = `${step.entry_path}#${step.operation}`;
+    if (['input_schema', 'result_schema'].every(name => prompt.interface.conventions?.some(c => c.path === `/entries/${index}/${name}` && c.convention === 'cli'))) cli.add(key);
+    if (/^HTTP (GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS) \/\S*$/.test(entry.input_schema?.title ?? '')) http.add(key);
+  }
+  return { test, cli, http };
+}
+
+function simulationSelection(root, found, words, appMap, options) {
+  const all = [...found.tests].sort((a, b) => a.path.localeCompare(b.path));
+  if (!all.length) throw new Stop(2, 'No Stories are available to simulate.');
+  const kinds = all.map(test => programEntries(root, found, test));
+  const selected = words.length ? [oneTest(found, words, root)] : all;
+  const rows = kinds.filter(row => selected.includes(row.test));
+  const cli = new Set(rows.flatMap(row => [...row.cli]));
+  const hasHttp = rows.some(row => row.http.size);
+  const page = options['--page'] || options['--agent'] !== undefined || options['--tab'] !== undefined;
+  const forcedCli = options['--cli'] || options['--shell'];
+  if (forcedCli && cli.size !== 1) {
+    const names = [...new Set(kinds.filter(row => row.cli.size === 1).map(row => row.test.story))].sort();
+    throw new Stop(2, `${cli.size ? 'This Story uses more than one command-line program.' : 'This Story is not a command-line program.'} ${names.length ? `These are: ${names.join(', ')}.` : 'No Stories are command-line programs.'}`);
+  }
+  if (options['--serve'] !== undefined && !hasHttp && !appMap) {
+    const names = [...new Set(kinds.filter(row => row.http.size).map(row => row.test.story))].sort();
+    throw new Stop(2, `This Story has no HTTP routes or screens. ${names.length ? `These are: ${names.join(', ')}.` : 'No Stories have HTTP routes or screens.'}`);
+  }
+  let seed = selected[0];
+  if (!page && !forcedCli && options['--serve'] === undefined && !(appMap && !words.length)) {
+    if (cli.size > 1) throw new Stop(2, `There is more than one command-line program. Name a Story: ${[...new Set(rows.filter(row => row.cli.size).map(row => row.test.story))].sort().join(', ')}.`);
+    if (cli.size === 1) { options['--cli'] = true; options['--shell'] = true; }
+    else if (hasHttp) options['--serve'] = 0;
+  }
+  if (forcedCli) options['--cli'] = true;
+  if (options['--cli']) seed = rows.find(row => row.cli.size)?.test ?? seed;
+  else if (options['--serve'] !== undefined && hasHttp) seed = rows.find(row => row.http.size)?.test ?? seed;
+  return { test: seed, selected };
+}
+
 async function readUntil(context, id, command, isDone, ms, label) {
   const end = Math.min(context.deadline ?? Infinity, context.ports.now() + ms), tick = progressTicker(context.ports.stderr, context.ports.now);
   let last = null;
@@ -1900,14 +1944,15 @@ function tryPromptProblem(root, found, test, record, capture) {
 
 // pdd try. Returns the exit code.
 export async function runTry({ words = [], options = {}, cwd = process.cwd() } = {}, givenPorts = {}) {
-  const ports = withDefaults(givenPorts), context = { ports, interrupted: false, doorMode: !!(options['--cli'] || options['--serve']) };
+  options = { ...options };
+  const ports = withDefaults(givenPorts), context = { ports, interrupted: false, doorMode: false };
   let release = () => {};
   try {
     const requestedBudget = requestedCalls(options['--max-calls']);
-    if (options['--agent'] !== undefined && (typeof options['--agent'] !== 'string' || !options['--agent'].trim() || ['--no-wait','--stop','--save-last','--cli','--serve'].some(key => options[key] !== undefined))) throw new Stop(2, '--agent chooses a configured agent name for an ordinary connected pdd try; omit --no-wait and door modes.');
-    const doorModes = ['--cli', '--serve', '--save-last'].filter(key => options[key]);
-    if (doorModes.length > 1 || (options['--shell'] && !options['--cli']) || (doorModes.length && options['--stop'])
-      || (options['--save-last'] && (words.length || Object.keys(options).length !== 1))) throw new Stop(2, 'Choose one of --cli, --serve, --save-last or --stop; --shell needs --cli.');
+    if (options['--agent'] !== undefined && (typeof options['--agent'] !== 'string' || !options['--agent'].trim() || ['--no-wait','--stop','--save-last','--cli','--shell','--serve'].some(key => options[key] !== undefined))) throw new Stop(2, '--agent chooses a configured agent name for an ordinary connected pdd try; omit --no-wait and door modes.');
+    const doorModes = [options['--cli'] || options['--shell'], options['--serve'] !== undefined, options['--page'] || options['--tab'] !== undefined || options['--agent'] !== undefined, options['--save-last']].filter(Boolean);
+    if (doorModes.length > 1 || (doorModes.length && options['--stop'])
+      || (options['--save-last'] && (words.length || Object.keys(options).length !== 1))) throw new Stop(2, 'Choose one of --cli (with optional --shell), --shell, --serve, --page, --save-last or --stop.');
     if (options['--save-last']) {
       const root = repoRoot(cwd), store = stateFor(ports.env, root), identity = signIn(ports.gh, store);
       return await (await import('./try-doors.mjs')).saveLast({ root, store, identity, ports });
@@ -1917,6 +1962,16 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     const origin = runtimeOrigin(ports.env);
     if (options['--stop']) return await stopByName(context, cwd, words, origin);
     const { root, found, normalized } = localSetup(cwd, words), store = stateFor(ports.env, root);
+    const appMap = appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
+    if (options['--serve'] !== undefined && normalized.length && !options['--new']) {
+      const priorTest = oneTest(found, normalized, root), prior = store.repo(root).tries?.[priorTest.path];
+      if (prior) {
+        const problem = tryPromptProblem(root, found, priorTest, prior);
+        if (problem) throw new Stop(125, `${problem} Run pdd simulate STORY --serve --new.`);
+      }
+    }
+    const { test, selected } = simulationSelection(root, found, normalized, appMap, options);
+    context.doorMode = !!(options['--cli'] || options['--serve'] !== undefined);
     context.agentConnection = !options['--no-wait'] && !context.doorMode && ports.agentBridge !== false
       && (ports.stdout.isTTY === true || options['--agent'] !== undefined);
     if (context.agentConnection) {
@@ -1925,23 +1980,26 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (!context.agentDefinitions.length) throw new Stop(2,'No agents are configured. Add an agent or enable defaults in agents.json.');
       if (options['--agent'] !== undefined && !context.agentDefinitions.some(d => d.name === options['--agent'] || (['codex','claude','gemini'].includes(d.id) && d.id === options['--agent']))) throw new Stop(2,'Unknown agent name. Choose a name from agents.json or an enabled default.');
     }
-    const appMap = appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
-    const test = oneTest(found, normalized, root), repoState = store.repo(root), record = repoState.tries?.[test.path];
-    Object.assign(context, { root, store, origin, visible: found.visible, appMap, cwd: realpathSync(cwd), seedTest: { path: test.path, storyPath: test.storyPath } });
-    const checked = preflight({ root, found, selected: [test] }), row = localRows(checked.rows)[0];
+    const repoState = store.repo(root), record = repoState.tries?.[test.path];
+    Object.assign(context, { root, store, origin, visible: found.visible, appMap, cwd: realpathSync(cwd), simulationTests: selected, seedTest: { path: test.path, storyPath: test.storyPath } });
+    const checked = preflight({ root, found, selected }), rows = localRows(checked.rows), row = rows.find(row => row.state === 'refused') ?? rows.find(row => row.test === test.path) ?? rows[0];
     if (row.state === 'refused') {
-      if (options['--cli'] || options['--serve']) throw new Stop(125, row.refusals?.map(r => r.message || r.code).join('; ') || 'The Story input was refused.');
+      if (options['--cli'] || options['--serve'] !== undefined) throw new Stop(125, row.refusals?.map(r => r.message || r.code).join('; ') || 'The Story input was refused.');
       line(ports.stdout, renderText({ rows: [row], exitCode: 4 })); return 4;
     }
-    const capture = ports.captureSource(root, { tests: [test.path], appMap }), note = otherNote(otherFiles(capture.files, found).length);
+    const capture = ports.captureSource(root, { tests: selected.map(item => item.path), appMap }), note = otherNote(otherFiles(capture.files, found).length);
     for (const warning of capture.warnings ?? []) line(ports.stderr, warning);
     const identity = signIn(ports.gh, context.store);
     Object.assign(context, { capture, identity, secrets: [identity.token], startedAt: ports.now(), deadline: ports.now() + TRY_MS, lint: { request_ids: [], state: null },
-      batch: null, rows: [row], timeoutMin: TRY_MS / 60_000, head: null });
+      batch: null, rows, timeoutMin: TRY_MS / 60_000, head: null });
     context.folder = store.folder('tries');
     release = interruptible(context);
     context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
     if (record) {
+      if (!words.length && !options['--new']) {
+        const scope = { tests: selected.map(item => item.path), appMap, appMapHash: appMap ? sha256(readFileSync(join(root, appMap))) : null };
+        if (!isDeepStrictEqual(record.simulation_scope, scope) || !isDeepStrictEqual(record.prompt_hashes, capture.raw_prompt_hashes) || tryPromptProblem(root, found, test, record, capture)) throw new Stop(2, 'This saved simulation does not contain the current whole project. Run pdd simulate --new.');
+      }
       const needsOwner = context.doorMode || requestedBudget !== null || context.agentConnection;
       if (needsOwner && record.login && record.login !== identity.login) throw new Stop(context.doorMode ? 125 : 5, `This Try belongs to ${record.login}. Run: gh auth switch -u ${record.login}`);
       if (needsOwner && record.origin !== origin) throw new Stop(2, 'This Try belongs to another interpreter address. Use its original PDD_RUNTIME_URL, or stop it first.');
@@ -1963,9 +2021,9 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (live && !options['--new'] && (options['--app-map'] !== undefined || options['--tab'])) {
         throw new Stop(2, `A Try for "${test.title}" is already open. --app-map and --tab apply only to a new Try: run pdd try ${test.story} --new (it stops the open Try first).`);
       }
-      if (live && (options['--serve'] || context.agentConnection) && !options['--new']) {
+      if (live && (options['--serve'] !== undefined || context.agentConnection) && !options['--new']) {
         const problem=tryPromptProblem(root,found,test,record,capture);
-        if (problem) throw new Stop(options['--serve'] ? 125 : 4, `${problem} Run pdd try STORY${options['--serve'] ? ' --serve' : ''} --new.`);
+        if (problem) throw new Stop(options['--serve'] !== undefined ? 125 : 4, `${problem} Run pdd try STORY${options['--serve'] !== undefined ? ' --serve' : ''} --new.`);
       }
       if (answer?.state === 'passed' && answer.result?.session?.state === 'paused' && !options['--new']) {
         if (!validLink(answer.result?.url, origin, 'try')) throw new Stop(3, refusedLink(answer, origin));
@@ -1985,10 +2043,15 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       delete repoState.tries[test.path];
       store.saveRepo(root, repoState);
     }
-    await checkLint(context, [row]);
+    await checkLint(context, rows);
+    const failedRow = rows.find(item => item.state !== 'ready');
+    if (failedRow && failedRow !== row) {
+      if (context.doorMode) throw new Stop(125, failedRow.refusals?.map(r => r.message || r.code).join('; ') || 'A selected Story did not pass lint.');
+      return printTryProblem(context, failedRow);
+    }
     if (context.interrupted) throw new Stop(3, 'Stopped before the Try was made. Nothing new was sent.');
     if (row.state !== 'ready') {
-      if (options['--cli'] || options['--serve']) throw new Stop(125, row.refusals?.map(r => r.message || r.code).join('; ') || 'The Story did not pass lint.');
+      if (options['--cli'] || options['--serve'] !== undefined) throw new Stop(125, row.refusals?.map(r => r.message || r.code).join('; ') || 'The Story did not pass lint.');
       return printTryProblem(context, row);
     }
     let request, verdict, reply, done;
@@ -2002,7 +2065,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (registered === false) { await finishReservation(context, setup, { state: 'not_run' }); throw new Stop(3, context.interrupted ? 'Stopped before sending.' : 'Stopped before the Try was sent.'); }
       if (context.interrupted || ports.now() >= context.deadline) { await finishReservation(context, setup, { state: 'not_run' }); throw new Stop(3, context.interrupted ? 'Stopped before sending.' : 'Stopped before the Try was sent.'); }
       const uploadedSeed=capture.sources.find(file=>file.path===test.path);
-      store.saveRepo(root, { ...repoState, tries: { ...repoState.tries, [test.path]: { id: request.requestId, ...setup, story: test.story, storyPath: test.storyPath, title: test.title, origin, login: identity.login, seed_scenario: uploadedSeed ? JSON.parse(uploadedSeed.bytes.toString('utf8')) : test.doc, story_sha256: createHash('sha256').update(readFileSync(join(root, test.storyPath))).digest('hex'), prompt_hashes: capture.raw_prompt_hashes,
+      store.saveRepo(root, { ...repoState, tries: { ...repoState.tries, [test.path]: { id: request.requestId, ...setup, story: test.story, storyPath: test.storyPath, title: test.title, origin, login: identity.login, ...(!words.length ? { simulation_scope: { tests: selected.map(item => item.path), appMap, appMapHash: appMap ? sha256(readFileSync(join(root, appMap))) : null } } : {}), seed_scenario: uploadedSeed ? JSON.parse(uploadedSeed.bytes.toString('utf8')) : test.doc, story_sha256: createHash('sha256').update(readFileSync(join(root, test.storyPath))).digest('hex'), prompt_hashes: capture.raw_prompt_hashes,
         effective_prompt_hashes:Object.fromEntries(capture.sources.filter(file=>file.path.endsWith('.prompt.md')).map(file=>[file.path,sha256(file.bytes)])),contract_references:capture.references } } });
       store.posted(context.folder, request.requestId);
       line(ports.stderr, `Starting your Try: sending ${capture.files.length} files, ${formatSize(capture.bytes)}${note ? ` ${note}` : ''}…`);
@@ -2060,7 +2123,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     }
     return printTryProblem(context, row);
   } catch (error) {
-    if (options['--cli'] || options['--serve'] || options['--save-last']) { line(ports.stderr, `pdd try: ${cleanText(error.message || 'The Try could not start.', context.secrets ?? [])}`); return error.exitCode === 2 ? 2 : 125; }
+    if (options['--cli'] || options['--serve'] !== undefined || options['--save-last']) { line(ports.stderr, `pdd try: ${cleanText(error.message || 'The Try could not start.', context.secrets ?? [])}`); return error.exitCode === 2 ? 2 : 125; }
     if (error instanceof Stop || error instanceof PreflightError) { line(ports.stderr, error.message); return error.exitCode; }
     throw error;
   } finally { release(); await Promise.all([...(context.reservations ?? [])].map(reservation => releaseRuntimeSlot(reservation, { ended: false }, slotPorts(context)))); }
@@ -2134,8 +2197,8 @@ async function showTry(context, test, link, options, tryId, reused = false, sess
     && session.remaining_calls >= 0 && session.remaining_calls <= session.max_calls
     ? `Try budget ${session.max_calls} calls; ${session.remaining_calls} remaining. You are charged only for calls that run.`
     : 'The interpreter did not report this Try’s budget.';
-  line(options['--cli'] || options['--serve'] ? context.ports.stderr : context.ports.stdout, budget);
-  if (options['--cli'] || options['--serve']) {
+  line(options['--cli'] || options['--serve'] !== undefined ? context.ports.stderr : context.ports.stdout, budget);
+  if (options['--cli'] || options['--serve'] !== undefined) {
     const doors = await import('./try-doors.mjs');
     return options['--cli'] ? doors.openCli(context, test, tryId, options) : (await import('./try-http.mjs')).openServe(context, test, tryId, options);
   }
@@ -2454,7 +2517,7 @@ export async function readTryOwner({ cwd = process.cwd(), story } = {}, givenPor
   if (selected.length !== 1) throw new Error(`Choose one Story${story ? ` matching "${story}"` : ''}. Available: ${found.tests.map(test => `${test.story} (${test.path})`).join(', ') || 'none'}.`);
   const test = selected[0];
   async function openTry() {
-    const code = await runTry({ cwd, words: [test.path], options: { '--no-open': true, '--no-wait': true } }, { ...ports, stdout: ports.stderr, interactive: false, agentBridge: false });
+    const code = await runTry({ cwd, words: [test.path], options: { '--page': true, '--no-open': true, '--no-wait': true } }, { ...ports, stdout: ports.stderr, interactive: false, agentBridge: false });
     if (code !== 0) throw new Error('The Try could not open. Read the progress on stderr and fix the reported problem.');
   }
   let record = repo.tries?.[test.path];

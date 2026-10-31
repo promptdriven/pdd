@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runTry } from '../src/runtime-client.mjs';
-import { findTests, preflight, proseSha256 } from '../src/runtime-preflight.mjs';
+import { captureSource, findTests, preflight, proseSha256 } from '../src/runtime-preflight.mjs';
 import { Readable } from 'node:stream';
 import { PLACE, fakeRuntime, harbor, portsFor, temp } from './runtime-fake.mjs';
 
@@ -87,16 +87,19 @@ test('RUNTIME-TRY3: a Try link with another host, scheme, path or a user is not 
   }
 });
 
-// Confirmed server capacity waits; ambiguous Story selection remains a local error.
-test('RUNTIME-TRY4: confirmed capacity waits until exit 5; no STORY with many tests lists them (exit 2)', async t => {
+// Confirmed server capacity waits also apply when opening the whole project.
+test('RUNTIME-TRY4: confirmed capacity waits until exit 5, including the whole project', async t => {
   const setup = harbor(t);
   const busy = await fakeRuntime(t, (entry, f) => entry.method === 'POST' && entry.command === 'try'
     ? { status: 429, headers: { 'retry-after': '5' }, json: { error: { code: 'server-full', message: 'The runtime is busy. Try again later.' }, dispatch: 'not_started' } } : trying()(entry, f));
   const full = await tryStory(setup, busy, ['place-order']);
   assert.equal(full.code, 5); assert.match(full.err, /busy.*wait|wait.*busy/i);
   assert.ok(busy.posts.filter(post => post.command === 'try').length > 3);
-  const many = await tryStory(setup, busy, []);
-  assert.equal(many.code, 2); assert.match(many.err, /place-order/); assert.match(many.err, /unknown-item/);
+  const captures = [];
+  const many = await tryStory(setup, busy, [], {}, { captureSource: (root, options) => { captures.push(options.tests); return captureSource(root, options); } });
+  assert.equal(many.code, 5);
+  assert.deepEqual(captures, [['tests/place-order.json', 'tests/unknown-item.json']]);
+  assert.equal(busy.posts.at(-1).request.seed, 'tests/place-order.json');
   const one = harbor(t, repo => rmSync(join(repo, 'tests/unknown-item.json')));
   const lone = await fakeRuntime(t, trying());
   const used = await tryStory(one, lone, []);

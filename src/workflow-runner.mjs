@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: ffcae5ba2edff4d9f6325feb25073e2ec390d707552e78d0bf2398ab10b92200).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 76fe87e458be44a5699f8702f1f0cb26b9fd1b50a10b909c3e6d0061a9f83b72).
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
@@ -834,7 +834,7 @@ export async function stepDone({ step, summary, cwd, packageRoot = PACKAGE_ROOT 
     lines.push(`pdd recorded ${step}. The ${area.name} area is done; pdd opens ${prLabel(run, area)} after the person approves.`,
       nothingToTry(run, area, contents)
         ? 'Gate: show the person the Runtime check line of each Story (one per Story: ✓, ✗ or no verdict) with the report link, if there is one. There is nothing to try. Ask them to approve or ask for changes. Stop. Do not approve for them.'
-        : 'Gate: show the person the Runtime check line of each Story (one per Story: ✓, ✗ or no verdict) with the report link, and the Try link(s). Ask them to try it, then approve or ask for changes. Stop. Do not approve for them.',
+        : 'Gate: show the person the Runtime check line of each Story (one per Story: ✓, ✗ or no verdict) with the report link and simulation details (the Try link when it opens a page). Ask them to try it, then approve or ask for changes. Stop. Do not approve for them. Run pdd simulate <story>: it automatically opens a shell for a command-line program, localhost with an example request for HTTP routes, or the Simulator page for screens. Run pdd simulate for the whole project; use --page to choose the page.',
       ...(prLabel(run, area) === 'PR 1' ? [`Tell the person what PR 1 holds, in these words: "${holdsLine(contents)}"`] : []),
       `When the person approves in their own words, run: ${p.pdd} workflow approve ${run.number}`,
       'If they ask for changes, revise in this chat, run done again for the step you changed, and ask again.');
@@ -843,7 +843,7 @@ export async function stepDone({ step, summary, cwd, packageRoot = PACKAGE_ROOT 
   if (area.gate === 'pr') return finishPr(run, area, step, p, lines);
   run.gate = { area: area.name, at: p.now(), kind: 'approve' }; run.state = 'waiting'; writeRun(run, p);
   lines.push(`pdd recorded ${step}. The ${area.name} area is done.`,
-    'Gate: show the person the result, ask them to approve it or ask for changes, and stop. Do not approve for them.',
+    'Gate: show the person the result, ask them to approve it or ask for changes, and stop. Do not approve for them. You may offer pdd simulate <story> before the check: it automatically opens a shell for a command-line program, localhost with an example request for HTTP routes, or the Simulator page for screens. Run pdd simulate for the whole project; use --page to choose the page.',
     `When the person approves in their own words, run: ${p.pdd} workflow approve ${run.number}`,
     'If they ask for changes, revise in this chat, run done again for the step you changed, and ask again.');
   return done(lines.join('\n'));

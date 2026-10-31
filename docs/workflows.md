@@ -103,7 +103,7 @@ The view uses saved local records and local Git/file reads. It works with Herdr 
 
 ### Simulate before PR 1
 
-The check comes first, then the simulation. At the story gate, the chat can offer a simulation before the check: `pdd simulate <story>`, or `pdd simulate <story> --new` when visual made an app map.
+The check comes first, then the simulation. At the story gate, the chat can offer a simulation before the check: `pdd simulate <story>`, or `pdd simulate <story> --new` when visual made an app map. It automatically opens a command-line shell, localhost with an example request for HTTP routes, or the Simulator page for screens. Omit the Story for the whole project; use `--page` to choose the page.
 
 After the check and try steps, the chat shows one `Runtime check` line for each Story (✓, ✗ or no verdict) with its report link, and the Simulator links. You try it, then approve or ask for changes. pdd opens PR 1 only after you approve.
 

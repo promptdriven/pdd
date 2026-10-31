@@ -112,8 +112,8 @@ test('SKILLS6: runtime lines depend on RUNBOOK.md, expected values stay with the
     assert.match(read(`${name}/steps/try.md`), /If the pdd-prompting skill has a RUNBOOK\.md[^\n]*`pdd simulate STORY`[^\n]*Simulator link before the gate/);
     const text = read(`${name}/SKILL.md`);
     // pdd-feature shows one line per Story (0.1.6); pdd-bug has one Story.
-    assert.match(text, name === 'pdd-feature' ? /Before PR 1, show one `Runtime check` line per Story with its report link, and the Simulator links/
-      : /Before PR 1, show the `Runtime check` line\(s\) with the report link\(s\) and the Simulator link/);
+    assert.match(text, /Before PR 1, show each (?:Story’s )?`Runtime check`, report and simulation details/);
+    assert.match(read(`${name}/steps/try.md`), /shell, localhost URL and example request, or Simulator link before the gate, as applicable/);
     assert.match(text, /pdd opens PR 1 only after the approval\. Then show the PR 1 link/);
     // The same words as pdd's gate text, so a person who stops knows how to make the code PR later.
     assert.ok(text.includes('"Do you want the code PR now, or stop here and merge PR 1 first? To make the code PR later, run `pdd workflow approve N`."'), name);
@@ -304,7 +304,7 @@ test('SKILLS19: feature plans many Stories, each with its own test file and chec
   assert.match(skill, /At the story gate, give the full paths of the Story files and the plan, and show the plan list\./);
   for (const words of ['"make it one Story"', '"split part 5"', '"change Story 5: …"']) assert.ok(skill.includes(words), words);
   assert.match(skill, /A change request names a Story: redo only that Story and its test file/);
-  assert.match(skill, /one `Runtime check` line per Story/);
+  assert.match(skill, /each Story’s `Runtime check`/);
   assert.match(read('pdd-feature/steps/build.md'), /Build the approved Stories in PLAN\.md order\./);
   assert.match(read('pdd-feature/steps/build.md'), /replay test for each Story/);
   assert.match(read('pdd-feature/steps/verify.md'), /one row group per Story/);
