@@ -12,7 +12,7 @@ const {observe,snapshot}=await import(pathToFileURL(join(root,'test/helpers/loca
 const J=JSON.stringify;
 let configurations=0;
 const table=(column,rows)=>'# Synthetic world\n| '+column+' | Writer |\n|---|---|\n'+rows.map(([p,w])=>'| '+p+' | '+w+' |\n').join('');
-async function check(label,column,rows,seed,exit,uncovered=[]) {
+async function check(label,column,rows,seed,exit,uncovered=[],initial=[]) {
  configurations++;
  const cwd=fs.mkdtempSync(join(tmpdir(),'pdd-writers-round3-'));
  try {
@@ -37,6 +37,10 @@ async function check(label,column,rows,seed,exit,uncovered=[]) {
     assert.deepEqual(got.skipped_files,[],label);
     assert.equal(got.diagnostics.some(d=>d.file==='contracts/world.md'&&d.field==='Writer'),exit===4,label+' Writer diagnostic');
     if(exit===0)assert.deepEqual(got.diagnostics,[],label);
+    const initialWarnings=got.warnings.filter(w=>w.kind==='world-writer-initial-only');
+    assert.deepEqual(initialWarnings.map(w=>({kind:w.kind,file:w.file,world_keys:w.world_keys})),initial.map(path=>({kind:'world-writer-initial-only',file:'contracts/world.md',world_keys:[path]})),label+' initial-only');
+    for(const warning of initialWarnings)assert.ok(typeof warning.message==='string'&&warning.message.trim()&&warning.message.includes(warning.world_keys[0]),label+' finite path advisory');
+    assert.equal(got.warnings.length,1+(uncovered.length?1:0)+initial.length,label+' complete warning inventory');
     const warnings=got.warnings.filter(w=>w.kind==='world-writer-missing');
     assert.equal(warnings.length,uncovered.length?1:0,label+' one aggregate missing-row warning');
     if(uncovered.length){assert.equal(warnings[0].file,'contracts/seed-world.json',label);assert.deepEqual(warnings[0].world_keys,uncovered,label);for(const path of uncovered)assert.ok(warnings[0].message.includes(path),label);}
@@ -44,6 +48,7 @@ async function check(label,column,rows,seed,exit,uncovered=[]) {
     const schema=got.warnings.filter(w=>w.kind==='world-schema-missing');
     assert.equal(schema.length,1,label+' separate unchecked-schema advisory');
     assert.deepEqual(schema[0].world_keys,keys,label);
+    assert.deepEqual(got.warnings.map(({kind,file,world_keys})=>({kind,file,world_keys})),[{kind:'world-schema-missing',file:'contracts/world.md',world_keys:keys},...initial.map(path=>({kind:'world-writer-initial-only',file:'contracts/world.md',world_keys:[path]})),...(uncovered.length?[{kind:'world-writer-missing',file:'contracts/seed-world.json',world_keys:uncovered}]:[])],label+' complete ordered warning projection');
     assert.ok(typeof schema[0].message==='string'&&schema[0].message.trim().length>0,label+' finite advisory');
     if(keys.length===1){assert.ok(schema[0].message.includes('1 world key'),label+' singular');assert.ok(!schema[0].message.includes('1 world keys'),label+' not plural');}
    } else {
@@ -67,7 +72,7 @@ test('round3 formal A:144 literal writer and aggregate-context cases',async()=>{
   const [cell,actors]=cells[i],path=column==='Key'?'item':'/item';
   const count=new Set([...actors,...(extra?[extra]:[])]).size;
   const expected=count>1||(i===23&&!extra)?4:0;
-  await check(`A/${i}/${extra}/${column}`,column,[[path,cell],...(extra?[[path,extra]]:[])],{item:0},expected);
+  await check(`A/${i}/${extra}/${column}`,column,[[path,cell],...(extra?[[path,extra]]:[])],{item:0},expected,[],i>=2&&i<=7&&!extra?['/item']:[]);
  }
 });
 const duplicate=[
@@ -77,7 +82,7 @@ const duplicate=[
 test('round3 formal B:24 literal duplicate-row cases',async()=>{
  for(let i=0;i<duplicate.length;i++)for(const reverse of [false,true]){
   const [writers,exit]=duplicate[i];
-  await check(`B/${i}/${reverse}`,'Path',(reverse?[...writers].reverse():writers).map(w=>['/item',w]),{item:0},exit);
+  await check(`B/${i}/${reverse}`,'Path',(reverse?[...writers].reverse():writers).map(w=>['/item',w]),{item:0},exit,[],[0,3,11].includes(i)?['/item']:[]);
  }
 });
 const coverage=[
@@ -88,7 +93,7 @@ const coverage=[
  [[['/kv/orders/tickets','server']],v=>({kv:{orders:{tickets:v,spare:v},menu:v}}),['/kv/menu','/kv/orders/spare']],
  [[['/kv/orders/tickets','server']],v=>({kv:{orders:v}}),['/kv/orders']],
  [[['/kv/missing','server']],v=>({kv:{present:v}}),['/kv/present']],
- [[['/kv/<id>','server']],v=>({kv:{real:v}}),['/kv']],
+ [[['/kv/<id>','server']],v=>({kv:{real:v}}),[]],
  [[['/kv/menu','server']],v=>({kv:{menu:v},outside:v}),['/outside']],
  [[['/a~1b','server']],v=>({'a/b':v,'a~b':v}),['/a~0b']],
  [[['/kv/0','server']],v=>({kv:[v,v]}),['/kv/1']],
@@ -96,7 +101,7 @@ const coverage=[
 ];
 test('round3 formal C:72 exact coverage and present-value cases',async()=>{
  for(let i=0;i<coverage.length;i++)for(const v of [null,false,0,'',[],{}]){
-  const [rows,seed,paths]=coverage[i];await check(`C/${i}/${J(v)}`,'Path',rows,seed(v),0,paths);
+  const [rows,seed,paths]=coverage[i];await check(`C/${i}/${J(v)}`,'Path',rows,seed(v),0,paths,i===2?['/kv/menu']:[]);
  }
 });
 test('round3 formal inventory:240 configurations',()=>assert.equal(configurations,240));
