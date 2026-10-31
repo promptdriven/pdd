@@ -8,7 +8,7 @@ Empty argv, root --help/-h/-help/help, and known exact command/group help succee
 
 Recognize `pdd [OPTIONS] FILE.prompt.md [ARGS...]` before ordinary command resolution.
 Only words before FILE belong to pdd: `--fresh`, `--data FILE`, `--show-data`,
-`--max-calls N` (1–1000), `-q`/`--quiet`, `--read UUID`. Invalid, duplicate,
+`--max-calls N` (1–1000), `-q`/`--quiet`, `--json`, `--read UUID`. Invalid, duplicate,
 unknown or missing option values refuse2. Preserve every word after FILE unchanged,
 including help, pdd options, empty strings and `--`. Return a `prompt-run` local
 plan with FILE first in operands followed by exact ARGS and only prefix options.

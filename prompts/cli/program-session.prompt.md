@@ -33,7 +33,39 @@ failed/refused/unknown results or reuse another login's session. Retain pending
 request IDs before dispatch; read ambiguous accepted work by GET only.
 No synthetic Story/scenario is uploaded; the interpreter derives default fake
 bindings for the graph. Session requests use entry, initial_world and optional
-simulation, never seed. Preserve worlds, receipts, errors and call_chain unchanged.
+simulation, never seed. Default session max_calls is300, independent of the per-call --max-calls option;
+never silently replenish a session or raise its allowance. Call requests always
+send max_calls and boolean fresh. Session answers retain optional kind, entries
+and expires_at when provided; do not require unavailable NEW server fields.
+Preserve worlds, receipts, errors and call_chain unchanged. Local answer identity
+includes per-call cap; no clock-dependent graph result may satisfy local cache,
+including real clock.now whose time is not stored in world. Interpreter/model
+cache identity remains server-owned; never invent a version endpoint.
+Confirmed stopped/unknown session admission permits replacement carrying confirmed
+world; session-busy exits125. Never replace and repeat uncertain accepted work.
+
+## Own fake prompts
+
+For resources declared by reachable prompts, discover only matching
+`prompts/fakes/<resource>.prompt.md`. Include selected fake prompt closure and
+hashes in source capture/session identity through existing privacy/prepareSource
+hooks, composing with C's overlay without dropping either callback's files.
+Unrelated fake prompts stay outside upload. Explicit simulation bindings win.
+For kind http or port, auto-bind each resource operation only to the same-named
+fake entry, or its sole entry when unambiguous, with canonically equal argument/
+input and result schemas. Ambiguity, missing operation or incompatible schemas
+refuses locally with a plain actionable explanation. Automatic custom replacement supports http and port only. Other resource kinds
+retain interpreter defaults; never invent unsupported wire actions.
+
+The supported closed simulation binding is exactly
+`{action,target,operation,max_calls,request_template,request_mapping,response_template,response_mapping}`.
+The simulation key is `<resource-name>.<operation-name>`; action is `http.prompt` only for kind http,
+or `port.prompt` only for kind port. target is the repository fake prompt path;
+operation names the selected fake entry. For equal schemas use request_template
+and response_template `{}`, and request_mapping and response_mapping each
+`[{"from":"","to":""}]` (whole-value identity). max_calls is an integer1–20
+and must bound fake invocation. Never execute a real service. Native discovery,
+admission and capture consume0 AI calls; fake execution belongs to server cap.
 
 ## Dependencies
 

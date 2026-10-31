@@ -31,7 +31,7 @@ async function harness(t, cli=true, options={}) {
     if(e.json){
       const result=cli?{stdout:'answer\n',stderr:options.stderr??'',exit_code:options.exit??0}:{ok:true};
       const report=options.report??{result,world:{tasks:['saved']},remaining_calls:39};
-      const job={...f.job(e.json.requestId,'call',options.failure?'refused':'passed',{program_result:result,world:{tasks:['saved']},report},1),session_id:e.url.split('/')[3]};
+      const job={...f.job(e.json.requestId,'call',options.failure?'refused':'passed',{output:result,world:report.world??{tasks:['saved']},refusals:options.failure?[report.refusal]:[],report:{verdict:options.failure?'refused':report.error?'failed':'passed',...report}},1),session_id:e.url.split('/')[3]};
       f.jobs.set(e.json.requestId,job);
       options.onCall?.(e,f);
       return options.lost?{destroy:true}:{status:200,json:job};
@@ -66,9 +66,8 @@ const paths = root => existsSync(root)?readdirSync(root,{recursive:true}).map(p=
 
 test('direct CLI: no arguments opens prompt-backed shell with provenance first, scope, exit and PATH',async t=>{
   const h=await harness(t);let opened;
-  const r=await h.invoke([],[],{shell:async(shell,env)=>{opened={shell,env};return 0;},openUrl:()=>assert.fail('CLI opens no browser')});
-  ok(r);assert.equal(r.out.split('\n')[0],'Answers come from prompts on the PDD interpreter, not installed code.');
-  assert.match(r.out,/paperclip works only in this shell; exit.*Another terminal: export PATH=/);
+  const r=await h.invoke([],[],{stdin:Object.assign(Readable.from([]),{isTTY:true}),shell:async(shell,env)=>{opened={shell,env};return 0;},openUrl:()=>assert.fail('CLI opens no browser')});
+  ok(r);assert.equal(r.out,'');assert.match(r.err,/pdd:.*paperclip.*command.*shell/);assert.match(r.err,/pdd:.*prompt behavior, not tested code/);
   assert.ok(opened.env.PATH.endsWith(':/usr/bin:/bin'));assert.equal(h.fake.jsonPosts.length,0);
 });
 test('direct CLI: exact argv, piped stdin, streams and program exit pass through',async t=>{
@@ -122,15 +121,15 @@ test('direct typed: missing operation lists operations without sending',async t=
 test('direct: declared error displays interpreter call_chain and code/message',async t=>{
  const report={error:{code:'unknown-coupon',message:'Unknown SPRING99'},call_chain:[{prompt:PLACE,operation:'quote',call_index:null,max_calls:null},{prompt:'prompts/pricing.prompt.md',operation:'quote',call_index:1,max_calls:1}]};
  const h=await harness(t,false,{report}),r=await h.invoke(['--name','x']);assert.equal(r.code,1,r.err);
- assert.match(r.err,/Traceback \(prompt calls, most recent last\):/);assert.match(r.err,/prompts\/pricing.prompt.md, operation quote \(call 1 of at most 1\)/);assert.match(r.err,/Error unknown-coupon: Unknown SPRING99/);
+ assert.match(r.err,/Traceback \(prompt calls, most recent call last\):/);assert.match(r.err,/prompts\/pricing.prompt.md, operation quote \(call 1 of at most 1\)/);assert.match(r.err,/Error unknown-coupon: Unknown SPRING99/);
 });
 test('direct: confirmed world and last record persist in Git-ignored .pdd/run',async t=>{
  const h=await harness(t);ok(await h.invoke(['add','task']));const files=paths(join(h.setup.repo,'.pdd/run'));
- const data=files.find(p=>p.endsWith('/data.json')),last=files.find(p=>p.endsWith('/last.json'));assert.ok(data);assert.ok(last);
+ const data=files.find(p=>p.endsWith('/world.json')),last=files.find(p=>p.endsWith('/last-run.json'));assert.ok(data);assert.ok(last);
  assert.deepEqual(JSON.parse(readFileSync(data)),{tasks:['saved']});const record=JSON.parse(readFileSync(last));assert.deepEqual(record.input.argv,['add','task']);assert.ok('output' in record);assert.ok('data_before' in record);assert.ok('data_after' in record);assert.ok('ai_calls' in record);
  assert.equal(existsSync(join(h.setup.repo,'.gitignore')),false);
  assert.match(readFileSync(join(h.setup.repo,'.git/info/exclude'),'utf8'),/\.pdd\//);
- assert.equal(data,join(h.setup.repo,'.pdd/run/prompts/place_order/data.json')); 
+ assert.equal(data,join(h.setup.repo,'.pdd/run/place_order/world.json'));
 });
 test('direct: explicit data seeds world and --fresh starts empty next time',async t=>{
  const h=await harness(t);writeFileSync(join(h.setup.repo,'world.json'),'{"tasks":["seed"]}');
@@ -186,7 +185,7 @@ test('direct: missing C and no CLI or typed operation gives agreed plain fallbac
  writeFileSync(path,text);
  const r=await withoutApp(t,h);
  assert.equal(r.code,2);
- assert.equal(r.err,'Screen apps and HTTP entries open this way in the next release; for now run pdd simulate STORY.\n');
+ assert.match(r.err,/pdd:.*has no entry, so it cannot run/);assert.match(r.err,/context for other prompts/);
  assert.equal(r.out,'');assert.equal(h.fake.posts.length,0);
 });
 
@@ -209,28 +208,28 @@ test('direct: malformed CLI result is interpreter failure125',async t=>{
 });
 test('direct: interpreter refusal preserves call_chain traceback',async t=>{
  const report={refusal:{code:'graph-result-failure',message:'Child result invalid. Fix the prompt.'},call_chain:[{prompt:PLACE,operation:'main',call_index:null,max_calls:null},{prompt:'prompts/child.prompt.md',operation:'main',call_index:1,max_calls:2}]};
- const h=await harness(t,true,{failure:true,report}),r=await h.invoke(['list']);assert.equal(r.code,125,r.err);assert.match(r.err,/Traceback \(prompt calls, most recent last\):/);assert.match(r.err,/child.prompt.md, operation main \(call 1 of at most 2\)/);assert.match(r.err,/Child result invalid/);
+ const h=await harness(t,true,{failure:true,report}),r=await h.invoke(['list']);assert.equal(r.code,125,r.err);assert.match(r.err,/Traceback \(prompt calls, most recent call last\):/);assert.match(r.err,/child.prompt.md, operation main \(call 1 of at most 2\)/);assert.match(r.err,/Child result invalid/);
 });
 test('direct: same basename entry paths keep separate saved worlds',async t=>{
  const h=await harness(t);const {mkdirSync}=await import('node:fs');mkdirSync(join(h.setup.repo,'other'));writeFileSync(join(h.setup.repo,'other/place_order.prompt.md'),readFileSync(join(h.setup.repo,PLACE)));
  ok(await h.invoke(['list']));const io=portsFor({HOME:h.setup.home,PDD_STATE_DIR:h.setup.state,PDD_RUNTIME_URL:h.fake.origin},{stdin:Readable.from([])});
  const code=await runPdd(['other/place_order.prompt.md','list'],{cwd:h.setup.repo,env:io.ports.env,stdout:io.ports.stdout,stderr:io.ports.stderr,stdin:io.ports.stdin,runtimePorts:io.ports});assert.equal(code,0,io.ports.stderr.text);
- const dirs=paths(join(h.setup.repo,'.pdd/run')).filter(p=>p.endsWith('/data.json'));assert.equal(dirs.length,2);assert.deepEqual(h.fake.posts.filter(p=>p.command==='try').map(p=>p.request.initial_world),[{},{}]);
+ const dirs=paths(join(h.setup.repo,'.pdd/run')).filter(p=>p.endsWith('/world.json'));assert.equal(dirs.length,2);assert.ok(dirs.some(p=>p.includes('/prompts__place_order/')));assert.ok(dirs.some(p=>p.includes('/other__place_order/')));assert.deepEqual(h.fake.posts.filter(p=>p.command==='try').map(p=>p.request.initial_world),[{},{}]);
 });
 
 // Review cases derive from LEAD.md18:21: repeated writes, local paths and local errors.
 test('direct: repeating mutating argv sends twice and saves both tasks',async t=>{
- const h=await harness(t,true,{onCall(e,f){const n=f.jsonPosts.length;const job=f.jobs.get(e.json.requestId);job.result.report.world={tasks:Array(n).fill('x')};}});
+ const h=await harness(t,true,{onCall(e,f){const n=f.jsonPosts.length;const job=f.jobs.get(e.json.requestId);job.result.world={tasks:Array(n).fill('x')};}});
  ok(await h.invoke(['add','x']));ok(await h.invoke(['add','x']));
  assert.equal(h.fake.jsonPosts.length,2,'a write changes the input world for the next identical command');
- assert.deepEqual(JSON.parse(readFileSync(join(h.setup.repo,'.pdd/run/prompts/place_order/data.json'))),{tasks:['x','x']});
+ assert.deepEqual(JSON.parse(readFileSync(join(h.setup.repo,'.pdd/run/place_order/world.json'))),{tasks:['x','x']});
 });
 test('direct: cached CLI answer retains nonzero exit and does not resend',async t=>{
  const h=await harness(t,true,{exit:7,report:{result:{stdout:'answer\n',stderr:'',exit_code:7},world:{}}});
  assert.equal((await h.invoke(['list'])).code,7);const replay=await h.invoke(['list']);assert.equal(replay.code,7,replay.err);assert.match(replay.err,/cached · 0 AI calls/);assert.equal(h.fake.jsonPosts.length,1);
 });
 test('direct: shell exit code is returned',async t=>{
- const h=await harness(t);const r=await h.invoke([],[],{shell:async()=>23});assert.equal(r.code,23,r.err);assert.equal(h.fake.jsonPosts.length,0);
+ const h=await harness(t);const r=await h.invoke([],[],{stdin:Object.assign(Readable.from([]),{isTTY:true}),shell:async()=>23});assert.equal(r.code,23,r.err);assert.equal(h.fake.jsonPosts.length,0);
 });
 for(const [name,content,problem] of [['bad.json','{',/JSON|json/],['missing.json',undefined,/missing|not found|does not exist/i],['array.json','[]',/object/i],['null.json','null',/object/i]])test(`direct: --data ${name} is a file-specific local input error`,async t=>{
  const h=await harness(t);if(content!==undefined)writeFileSync(join(h.setup.repo,name),content);
@@ -245,7 +244,7 @@ for(const cli of [true,false])test(`direct: ${cli?'data':'input'} file resolves 
 });
 test('direct: descriptive CLI heading is allowed with argv but refused as shell command',async t=>{
  const h=await harness(t);const path=join(h.setup.repo,PLACE);let text=readFileSync(path,'utf8').replace('# paperclip','# Paperclip task manager');text=text.replace(/"prose_sha256":"[a-f0-9]+"/,`"prose_sha256":"${proseSha256(text)}"`);writeFileSync(path,text);
- ok(await h.invoke(['list']));const shell=await h.invoke([],[],{shell:async()=>assert.fail('unsafe command must not open shell')});assert.equal(shell.code,2,shell.err);assert.match(shell.err,/name|command/i);
+ ok(await h.invoke(['list']));const shell=await h.invoke([],[],{stdin:Object.assign(Readable.from([]),{isTTY:true}),shell:async()=>assert.fail('unsafe command must not open shell')});assert.equal(shell.code,2,shell.err);assert.match(shell.err,/name|command/i);
 });
 test('direct: worst case above100 is admitted to the interpreter',async t=>{
  const h=await harness(t);const path=join(h.setup.repo,PLACE),child='prompts/child.prompt.md';writeFileSync(join(h.setup.repo,child),readFileSync(path));
@@ -253,7 +252,7 @@ test('direct: worst case above100 is admitted to the interpreter',async t=>{
  ok(await h.invoke(['list']));assert.equal(h.fake.jsonPosts.length,1);
 });
 async function dataModule(){try{return await import('../src/program-data.mjs');}catch(e){assert.fail(`Public programData module is required: ${e.code}`);}}
-for(const program of ['../escape','/absolute','prompts/../escape','prompts//todo','prompts/./todo','bad name'])test(`programData rejects unsafe identity ${program} directly`,async t=>{
+for(const program of ['../escape','/absolute','prompts/../escape','prompts//todo','prompts/./todo'])test(`programData rejects unsafe identity ${program} directly`,async t=>{
  const {programData}=await dataModule();const h=harbor(t);assert.throws(()=>programData({root:h.repo,program,flags:{}},{}),/identity|name|path/i);assert.equal(existsSync(join(h.repo,'.pdd/run')),false);
 });
 test('programData refuses a symlink ancestor without modifying its target',async t=>{

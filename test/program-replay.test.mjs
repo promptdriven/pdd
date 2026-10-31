@@ -24,17 +24,17 @@ async function setup(t, options={}) {
     if(e.json){
       const result={stdout:'replayed\n',stderr:'',exit_code:0};
       const report={result,...(options.world===false?{}:{world:{saved:true}}),...(options.action?{action_id:'exact-action'}:{})};
-      const job={...f.job(e.json.requestId,'call','passed',{program_result:result,report},1),session_id:e.url.split('/')[3]};f.jobs.set(e.json.requestId,job);return {status:200,json:job};
+      const job={...f.job(e.json.requestId,'call','passed',{output:result,...(options.world===false?{}:{world:{saved:true}}),report:{verdict:'passed',...report}},1),session_id:e.url.split('/')[3]};f.jobs.set(e.json.requestId,job);return {status:200,json:job};
     }
     if(e.url.endsWith('/state'))return {status:200,json:{world:{unrelated:'latest'},actions:[{action_id:'different',world:{wrong:true}},{action_id:'exact-action',input_world:{before:'exact'},world:{after:'exact'}}]}};
     if(f.jobs.has(e.url.split('/').at(-1))) {
-      const job=f.jobs.get(e.url.split('/').at(-1));if(options.recovered)job.result.report.world={recovered:true};return {status:200,json:job};
+      const job=f.jobs.get(e.url.split('/').at(-1));if(options.recovered)job.result.world={recovered:true};return {status:200,json:job};
     }
     return {status:404,json:{error:{message:'Not found'}}};
   });
   const env={HOME:h.home,PDD_STATE_DIR:h.state,PDD_RUNTIME_URL:fake.origin,PATH:'/usr/bin:/bin'};
   const invoke=async(args,prefix=[],extra={})=>{const io=portsFor(env,{stdin:Readable.from([]),...extra});const code=await runPdd([...prefix,PLACE,...args],{cwd:h.repo,env,stdout:io.ports.stdout,stderr:io.ports.stderr,stdin:io.ports.stdin,runtimePorts:io.ports});return {code,...io};};
-  const stored=name=>{const run=join(h.repo,'.pdd/run');const path=join(run,'prompts/place_order',name);assert.ok(existsSync(path),'readable program path must contain '+name);return JSON.parse(readFileSync(path,'utf8'));};
+  const stored=name=>{const run=join(h.repo,'.pdd/run');const path=join(run,'place_order',name);assert.ok(existsSync(path),'readable program path must contain '+name);return JSON.parse(readFileSync(path,'utf8'));};
   return {...h,fake,env,invoke,stored};
 }
 
@@ -43,7 +43,7 @@ test('shell launcher executes argv[] once and carries selected starting data',as
   writeFileSync(join(bin,'gh'),`#!/bin/sh\nif [ "$1" = auth ]; then printf '%s\\n' '${TOKEN}'; else printf '%s\\n' 'octo 4242'; fi\n`,{mode:0o700});
   h.env.PATH=bin+':/usr/bin:/bin';writeFileSync(join(h.repo,'seed.json'),'{"selected":true}');
   let command;
-  const r=await h.invoke([],['--data','seed.json'],{shell:async(shell,env)=>new Promise((done,reject)=>{
+  const r=await h.invoke([],['--data','seed.json'],{stdin:Object.assign(Readable.from([]),{isTTY:true}),shell:async(shell,env)=>new Promise((done,reject)=>{
     const child=spawn('replay',[],{cwd:h.repo,env,stdio:['ignore','pipe','pipe']});let out='',err='';child.stdout.on('data',c=>out+=c);child.stderr.on('data',c=>err+=c);child.once('error',reject);child.once('exit',code=>{command={code,out,err};done(code);});
   })});
   assert.equal(r.code,0,r.ports.stderr.text+command?.err);assert.equal(command.out,'replayed\n');
@@ -55,12 +55,12 @@ test('missing confirmed world blocks new calls until same-ID GET recovery',async
   const first=await h.invoke(['change']);assert.equal(first.code,125);assert.match(first.ports.stderr.text,/did not confirm the program data/);
   const session=h.stored('session.json');assert.equal(session.pending.id,h.fake.jsonPosts[0].json.requestId);
   const second=await h.invoke(['different']);assert.equal(second.code,125);assert.equal(h.fake.jsonPosts.length,1);
-  options.recovered=true;const recovered=await h.invoke([],['--read',session.pending.id]);assert.equal(recovered.code,0,recovered.ports.stderr.text);assert.deepEqual(h.stored('data.json'),{recovered:true});assert.equal(h.fake.jsonPosts.length,1);assert.ok(h.fake.gets.some(g=>g.url.endsWith(session.pending.id)));
+  options.recovered=true;const recovered=await h.invoke([],['--read',session.pending.id]);assert.equal(recovered.code,0,recovered.ports.stderr.text);assert.deepEqual(h.stored('world.json'),{recovered:true});assert.equal(h.fake.jsonPosts.length,1);assert.ok(h.fake.gets.some(g=>g.url.endsWith(session.pending.id)));
 });
 
-test('matched action snapshots win over unrelated latest state',async t=>{
+test('final result.world wins over later action snapshots',async t=>{
   const h=await setup(t,{action:true});const r=await h.invoke(['change']);assert.equal(r.code,0,r.ports.stderr.text);
-  assert.deepEqual(h.stored('data.json'),{after:'exact'});const last=h.stored('last.json');assert.deepEqual(last.data_before,{before:'exact'});assert.deepEqual(last.data_after,{after:'exact'});
+  assert.deepEqual(h.stored('world.json'),{saved:true});const last=h.stored('last-run.json');assert.deepEqual(last.data_before,{});assert.deepEqual(last.data_after,{saved:true});
 });
 
 test('literal input cannot bypass local schema validation with a Story reference',async t=>{
@@ -69,6 +69,6 @@ test('literal input cannot bypass local schema validation with a Story reference
 
 test('external saved-world edit replaces session instead of reusing stale runtime world',async t=>{
   const h=await setup(t);assert.equal((await h.invoke(['change'])).code,0);
-  const run=join(h.repo,'.pdd/run');assert.ok(existsSync(join(run,'prompts/place_order','data.json')),'readable path must contain saved data');writeFileSync(join(run,'prompts/place_order','data.json'),'{"external":"selection"}');
+  const run=join(h.repo,'.pdd/run');assert.ok(existsSync(join(run,'place_order','world.json')),'readable path must contain saved data');writeFileSync(join(run,'place_order','world.json'),'{"external":"selection"}');
   const r=await h.invoke(['next']);assert.equal(r.code,0,r.ports.stderr.text);assert.equal(h.fake.posts.filter(p=>p.command==='try').length,2);assert.deepEqual(h.fake.posts.filter(p=>p.command==='try').at(-1).request.initial_world,{external:'selection'});assert.equal(h.fake.deletes.length,1);
 });
