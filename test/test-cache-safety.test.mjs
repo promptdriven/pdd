@@ -8,13 +8,18 @@ import { join } from 'node:path';
 import { runCheck } from '../src/runtime-client.mjs';
 import { harbor, fakeRuntime, portsFor } from './runtime-fake.mjs';
 
-async function fixture(t) {
+async function fixture(t, identity) {
   const env = harbor(t);
   let mode = 'passed', incomplete = false, delay = null;
   const fake = await fakeRuntime(t, async entry => {
     if (entry.command === 'lint') return { status: 200, json: fake.lint(entry.request.requestId) };
     if (delay && entry.method === 'POST') await delay;
     const answer = fake.check(entry.request?.requestId ?? entry.url.split('/').at(-1), mode);
+    if (identity) {
+      answer.engine_sha = identity.engine;
+      answer.usage.requested_model = identity.model;
+      if (answer.result?.report?.evaluation) answer.result.report.evaluation.requested_model = identity.model;
+    }
     if (incomplete) answer.usage.accounting_complete = false;
     return { status: 200, json: answer };
   });
@@ -201,16 +206,18 @@ test('damaged regular cache heals after completed run and warning names clear', 
   assert.equal(cacheWarnings(repeated).length, 0);
 });
 
-test('fingerprint includes local package and engine identity and pass keeps observed engine', async t => {
-  const ctx = await fixture(t); change(ctx); const keys = [];
+test('fingerprint includes package version and pass retains actual answer build and model', async t => {
+  const identity = { engine: 'b'.repeat(40), model: 'synthetic-cache-safety-model' };
+  const ctx = await fixture(t, identity); change(ctx); const keys = [];
   await ctx.invoke({}, [], { cacheHash: bytes => { keys.push(JSON.parse(bytes.toString())); return createHash('sha256').update(bytes).digest('hex'); } });
   const fingerprint = keys.find(value => value.footprint && value.raw);
   assert.ok(fingerprint, 'fingerprint goes through injected hashing port');
   assert.equal(fingerprint.pdd_version, JSON.parse(readFileSync(new URL('../package.json', import.meta.url))).version);
-  const engine = readFileSync(new URL('../src/runtime-client.mjs', import.meta.url), 'utf8').match(/const ENGINE_SHA = '([^']+)'/)[1];
-  assert.equal(fingerprint.engine_sha, engine);
   const records = JSON.parse(readFileSync(ctx.path, 'utf8')).stories;
-  assert.ok(Object.values(records).every(row => row.pass?.engine_sha === engine), 'pass retains observed server engine');
+  assert.ok(Object.values(records).every(row => row.pass?.engine_sha === identity.engine), 'pass retains actual server build rather than local engine identity');
+  const stringsIn = value => typeof value === 'string' ? [value] : value && typeof value === 'object' ? Object.values(value).flatMap(stringsIn) : [];
+  assert.ok(Object.values(records).every(row => stringsIn(row.pass).includes(identity.model)), 'pass retains actual requested model for eligibility');
+  assert.equal((await ctx.invoke()).sent, 0, 'unchanged actual build and model permit complete-pass reuse');
 });
 
 // AC6: a dead-owner recovery must still protect a live successor owner.
