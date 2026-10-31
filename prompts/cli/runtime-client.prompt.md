@@ -408,17 +408,36 @@ flowchart TD
     C -->|No CLI| H{HTTP routes?}
     C -->|Several CLI programs| R[Ask for a Story and list eligible names]
     H -->|Yes| L[Localhost server and example request]
-    H -->|No| B
+    H -->|No| M{Mapped screen entry?}
+    M -->|Yes| B
+    M -->|No| T[Simulator Form tab]
 ```
 
 For a named Story, apply the CLI/HTTP/page alternatives only to its entries; a project app
-map must not turn an unrelated CLI Story into a screen Story. Explicit `--cli` prints the
+map must not turn an unrelated CLI or typed-operation Story into a screen Story. Explicit `--cli` prints the
 launcher/PATH and returns; `--cli --shell` opens the shell. `--shell` alone selects the CLI
 shell. `--serve [PORT]` forces the existing localhost adapter, including its Screen support.
 `--page` forces the Simulator page for any Story. Existing `--agent` and `--tab` requests also
 select the page unless a conflicting explicit way is supplied. `--no-open` suppresses browser
 opening only; `--no-wait` retains existing bridge behavior. Conflicting ways refuse with exit 2
 before sign-in, capture or remote effects. Stop and Save retain their existing separate rules.
+
+A typed operation accepts declared fields (for example `resolve_command` with
+`{commands: [...]}` and a structured result), without CLI conventions or an HTTP route.
+For a named typed Story whose entry is not a screen in the selected app map, open the page
+on the **Form** tab (`tab: "call"` in the existing request protocol), even when an unrelated
+project app map exists. Print one plain line: `This Story's operation takes typed input, so
+it opens on the Form tab.` A Story whose entry really is mapped as a screen still opens
+Screen. Explicit `--tab` retains its selected tab; do not mislabel an explicit tab as Form.
+This change does not parse terminal flags into typed inputs or synthesize argv adapters.
+
+For `--cli`, `--cli --shell` or standalone `--shell` on that typed Story, return the existing
+door usage exit code **125**, with the plain non-command-line reason and eligible CLI Story
+list below, followed by `pdd simulate STORY opens its Form tab.` Substitute the authored
+Story name and shell-quote it when needed. If there are no eligible CLI Stories, retain the
+plain no-eligible-Stories message. Never advise adding CLI conventions or an adapter in any
+user-visible refusal or next step, including a direct CLI-adapter invocation. Direct adapters
+must follow this same refusal policy before launcher writes or remote work.
 
 STORY is optional. With no Story, use the complete selected app map, including every screen
 and its dependency closure. Otherwise the one distinct CLI entry across Stories is the main
@@ -440,7 +459,7 @@ refusal. Explicit page mode remains usable for generic call-only Stories.
 
 - If `repos/<key>.json` has a Try for this test and GET says `result.session.state` `running` with a valid link, open that link again. For `paused`, validate the same-origin link, then explicitly send one authenticated JSON `{}` POST to `/v1/try/<id>/reopen`. Keep the same ID and original seed identity. Read that ID until its session is running before showing/opening the link. Restore consumes no AI calls, creates no new Try and keeps the original expiry and remaining allowance. A lost reopen answer is read by the same ID; never automatically repeat the POST. A busy/refused/missing reopen or unconfirmed restore keeps the record and returns nonzero with its reason and retry advice naming the exact authored test path, shell-quoted when needed; never print a paused link as ready. `--new` stops the paused Try and creates a new one through its normal route, without reopening it. Options that apply only to a new Try remain refused before reopening. After interruption, send nothing new. `--new`: stop the old Try first, then make a new one. A Try that ended (404, 410, failed, refused, unknown, session stopped or unknown) is forgotten, and a new Try is made: a new Try costs no AI calls. A Try that is still starting, or a GET with no answer, is exit 3 with no new Try, unless `--new` stops it first. A new Try whose setup ends `unknown` is forgotten too: `The Try setup did not finish on the server (its state is unknown; the server may have restarted). It used no AI calls. Run pdd try <story> to make a new Try.` (exit 3).
 - After Ctrl-C, pdd sends nothing new: no POST starts after the interrupt.
-- App map: `--app-map PATH`, else `app-map.json` at the repo root, else `app/app-map.json`. An app map is a Git-visible JSON object with `"schema_version": "prompt-runtime.app-map.v1"` and a nonempty `name` (the engine's first checks). A bad `--app-map` is exit 2 with the reason (`not a Git-visible file`, `not JSON`, wrong `schema_version`, no `name`) and `See RUNBOOK.md §13.`; a bad found file is skipped with a note. With an open Try, `--app-map` or `--tab` without `--new` is exit 2: they apply only to a new Try. POST `/v1/try` multipart `{requestId, source_sha256, seed: <test path>, app_map, tab}`: `app_map` only when there is one; `tab` = `--tab`, else `screen` with an app map, else `call`; `max_calls` is the explicit budget or400. Read until `state: passed`, `result.session.state: running` and a valid `result.url`: the origin's scheme and host, path `/s/<token>/`, no user or password. Else refused, not run or unknown, as for a check, with one exception.
+- App map: `--app-map PATH`, else `app-map.json` at the repo root, else `app/app-map.json`. An app map is a Git-visible JSON object with `"schema_version": "prompt-runtime.app-map.v1"` and a nonempty `name` (the engine's first checks). A bad `--app-map` is exit 2 with the reason (`not a Git-visible file`, `not JSON`, wrong `schema_version`, no `name`) and `See RUNBOOK.md §13.`; a bad found file is skipped with a note. With an open Try, `--app-map` or `--tab` without `--new` is exit 2: they apply only to a new Try. POST `/v1/try` multipart `{requestId, source_sha256, seed: <test path>, app_map, tab}`: `app_map` only when there is one; `tab` = explicit `--tab`, else the selected Screen/Form/terminal way above (an unrelated app map does not change a typed Story's Form selection); `max_calls` is the explicit budget or400. Read until `state: passed`, `result.session.state: running` and a valid `result.url`: the origin's scheme and host, path `/s/<token>/`, no user or password. Else refused, not run or unknown, as for a check, with one exception.
 - A Try setup that the server refuses (the POST or the job; runtime team, Oct 27) is not a check: no table and no `pdd check` advice, exit 4. Two plain lines: `The Try could not start: the app map was refused (<code>: <reason>).` and `Fix <app map path> (RUNBOOK §13), then run pdd try <story> --new.` It is the app map when one was sent and the code is `ambiguous-handler`, `template-reference-schema` or `app-map-*`, or the section names the app map. Else `the server refused it (…)` and `Fix what it names, then run pdd try <story> --new.`, with ` Details: <report link>` when there is one. Many refusals join with `; `; a refusal with a `where` (prompt-runtime #379) adds `; at <where>` after its reason. The reason is the server's `reason` (on each `result.refusals[]` item, or on `result.report.refusal` with the same code), else pdd's plain rule (`ambiguous-handler`: on one screen, all taps of one kind must match by the same key; `template-reference-schema`: a field that gets a value from the screen (`$ref`) must be a plain {"type": "string"}), else the engine message, else the server message unless it is the generic `The runtime refused this job…`. A server `fix` takes the place of pdd's fix words: `<fix> Then run pdd try <story> --new.` A Try that is ready but has an invalid link is exit 3 with one line and no table: `Try link refused: it points at <link origin>, not <configured address>. The server's address setting may be wrong; tell the PDD team.` (or `Try link refused: it is not a valid Try link. Tell the PDD team.` when the origin matches). pdd keeps its record so `pdd try --stop` can end it, a later `pdd try` says the same, and pdd never prints that link.
 - A reused link says `It keeps its original 24-hour expiry; stop it with: pdd try --stop <story>`, so reopening never promises a fresh 24 hours.
 - Open a newly created link with `open` (macOS) or `xdg-open` (Linux) and print the end line `Try ready for "<title>": <link> (open in your browser). It ends in 24 hours, or with: pdd try --stop <story>`. `--no-open`, or a failed open, prints `Try ready for "<title>": <link>` and then how to open it.

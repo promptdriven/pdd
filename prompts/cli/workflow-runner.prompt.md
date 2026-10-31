@@ -180,8 +180,8 @@ Call the production [PR evidence preparation](workflow-pr-evidence.prompt.md) bo
 Gate instructions and bundled feature/bug skill advice show `pdd simulate <story>` for a
 named Story and `pdd simulate` for the whole project. Explain that pdd automatically opens
 a shell for a command-line program, localhost with an example request for HTTP routes,
-or the Simulator page for screens. Do not promise a browser/page link for every program
+the Simulator page for screens, or its Form tab for typed operations. Do not suggest
+adding conventions or adapters to obtain a shell. Do not promise a browser/page link for every program
 or require flags for the ordinary path. Offer `--page` only when the person wants the page.
 [Runtime client](runtime-client.prompt.md#choose-how-to-open-the-program) owns the choice;
-keep approval and
-workflow transitions unchanged.
+keep approval and workflow transitions unchanged.
