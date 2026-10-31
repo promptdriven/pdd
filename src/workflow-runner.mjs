@@ -188,7 +188,7 @@ const approvalGuide = run => `Show the gate and ask the person. One approval cov
 PDD_SAID
 Choose a quoted delimiter absent as a whole payload line. Resolve <pdd> to this package's shell-quoted executable command when running it. Or the person can use terminal y/N: pdd workflow approve ${run.number} in a normal terminal.`;
 const approvalRetry = (run, prefix) => `The saved approval remains usable for this same gate. Retry with its exact recorded words; no new approval is needed. ${approvalGuide(run, prefix).replace('Show the gate and ask the person. One approval covers the gate and all its selected draft prompts. Relay their exact later words with:', 'Use the saved words with:')}`;
-const codeLater = run => `Tell your agent when you want the code PR, or run pdd workflow approve ${run.number} in a terminal.`;
+const codeLater = run => `To make the code PR later, tell your agent, or run pdd workflow approve ${run.number} in a terminal.`;
 const prOf = (run, name) => (run.pr ?? []).find(pr => pr.stage === name) ?? null;
 const askArea = run => run.areas.find(area => area.then === 'ask-code') ?? null;
 // PR 1 is the ask-code area's prompt PR and PR 2 the code PR; a one-PR workflow says "the PR".
@@ -1260,11 +1260,13 @@ export async function approveRun({ ref, cwd, said: approvalWords, packageRoot = 
     // A draft prompt in PR 1: pdd does not offer the code PR, and says how to approve the prompt first.
     const drafts = await pr1Drafts(run, p);
     if (drafts.length) {
-      await sendToChat(currentChat(run), `pdd opened PR 1: ${url}. The person approved it in their terminal. PR 1 has draft prompts, so the code PR waits. Tell them exactly: "PR 1 is open: ${url}. ${approveFirst(run, drafts)}" Then stop.`, p);
+      await sendToChat(currentChat(run), `pdd opened PR 1: ${url}. The person approved it in their terminal. PR 1 has draft prompts, so the code PR waits. Tell them exactly: "PR 1 is open: ${url}. ${approveFirst(run, drafts)}" Then stop.
+${approvalGuide(run)}`, p);
       return done([...head, `PR 1: ${url}`, approveFirst(run, drafts)].join('\n'));
     }
     if (!await confirm(p, `Make the code PR now and approve the code gate and all selected draft prompts for ${label}? PR 1: ${url} (y/N) `)) {
-      await sendToChat(currentChat(run), `pdd opened PR 1: ${url}. The person approved it in their terminal and stops here for now. Tell them exactly: "PR 1 is open: ${url}. ${codeLater(run)}" Then stop.`, p);
+      await sendToChat(currentChat(run), `pdd opened PR 1: ${url}. The person approved it in their terminal and stops here for now. Tell them exactly: "PR 1 is open: ${url}. ${codeLater(run)}" Then stop.
+${approvalGuide(run)}`, p);
       return done([...head, `PR 1: ${url}`, `Stopped at PR 1. ${codeLater(run)}`].join('\n'));
     }
   }
@@ -1385,7 +1387,8 @@ export async function changeRun({ ref, text, cwd }, ports) {
   if (ended(run)) return fail(`The run for ${run.repo}#${run.number} is ${run.state}.`);
   const request = oneLine(text), answer = Boolean(openQuestion(run)), kind = answer ? 'answer' : 'change';
   if (!request) return fail('Write the change request after the issue number.');
-  if (!answer && run.gate && looksLikeApproval(request)) return { exitCode: 2, message: `This looks like an approval. Tell your agent you approve this gate, or run pdd workflow approve ${run.number} in a terminal. Nothing was sent to the chat.` };
+  if (!answer && run.gate && looksLikeApproval(request)) return { exitCode: 2, message: `This looks like an approval. Tell your agent you approve this gate, or run pdd workflow approve ${run.number} in a terminal.
+Nothing was sent to the chat.` };
   const area = run.areas[run.area], chat = currentChat(run);
   if (!chat) return fail(`The ${area.name} area has no chat. Start it: pdd workflow open ${run.number}`);
   const latest = () => readRun(run.runDir), matches = entry => entry.area === area.name && entry.paneId === chat.paneId;
