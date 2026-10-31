@@ -251,3 +251,48 @@ test('stale lock recovery preserves a successor live owner', async t => {
   assert.equal(removedSuccessor, false, 'stale contender must never unlink successor live owner');
   assert.ok(existsSync(ownerPath), 'the live successor retains its lock');
 });
+
+// AC6: interrupted cache transactions recover, while live owners remain protected.
+// These on-disk claims model a process stopped before or after ticket publication.
+for (const published of [false, true]) test(`dead ${published ? 'published' : 'pending'} cache claim recovers`, async t => {
+  const ctx = await fixture(t);
+  const claim = join(ctx.repo, '.pdd/cache/test/transaction-claims', `2147483647.${randomUUID()}`);
+  mkdirSync(claim, { recursive: true });
+  writeFileSync(join(claim, published ? 'ticket.json' : 'ticket.tmp'), '1');
+  const result = await ctx.invoke();
+  assert.equal(result.code, 0);
+  assert.equal(result.sent, 0, 'dead claim recovery preserves valid unchanged passes');
+  assert.equal(cacheWarnings(result).length, 1, 'dead claim recovery warns once');
+  assert.equal(existsSync(claim), false, 'abandoned transaction claim is reclaimed');
+  const repeat = await ctx.invoke();
+  assert.equal(repeat.sent, 0);
+  assert.equal(cacheWarnings(repeat).length, 0, 'recovered claim does not warn again');
+});
+
+test('live pending cache claim fails open within a bound and recovers after release', async t => {
+  const ctx = await fixture(t);
+  const claim = join(ctx.repo, '.pdd/cache/test/transaction-claims', `${process.pid}.${randomUUID()}`);
+  mkdirSync(claim, { recursive: true });
+  writeFileSync(join(claim, 'ticket.tmp'), '1');
+  const before = readFileSync(ctx.path, 'utf8');
+  let waits = 0;
+  ctx.mode('failed');
+  const result = await ctx.invoke({}, [], { sleep: async () => {
+    assert.ok(++waits <= 100, 'cache contention has a bounded wait');
+  } });
+  assert.equal(result.sent, 2, 'a live pending owner cannot authorize reuse');
+  assert.equal(result.code, 1, 'cache contention still reports interpreter failures');
+  assert.ok(result.json.rows.every(row => !row.cached));
+  assert.equal(cacheWarnings(result).length, 1);
+  assert.equal(readFileSync(ctx.path, 'utf8'), before, 'contended transaction never changes cached evidence');
+  assert.ok(existsSync(claim), 'live choosing owner retains its claim');
+  assert.equal(readFileSync(join(claim, 'ticket.tmp'), 'utf8'), '1');
+  assert.equal(existsSync(join(claim, 'ticket.json')), false, 'another process never publishes for the live owner');
+  disk.rmSync(claim, { recursive: true });
+  ctx.mode('passed');
+  const recovered = await ctx.invoke();
+  assert.equal(recovered.code, 0);
+  assert.equal(recovered.sent, 2, 'contention invalidation prevents resurrecting the earlier passes');
+  assert.equal(cacheWarnings(recovered).length, 0);
+  assert.equal((await ctx.invoke()).sent, 0, 'completed uncontended checks restore reuse');
+});
