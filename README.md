@@ -146,13 +146,15 @@ In the Simulator, the **Ask your agent** panel connects to an agent on your comp
 
 ### 4. Approve
 
-When the program does what you want, approve each prompt in your terminal:
+When the program does what you want, approve each prompt in chat or your terminal:
 
 ```sh
 pdd approve prompts/NAME.prompt.md
 ```
 
-pdd shows the interface of the prompt and the text changes since the last approval. Then it asks yes or no. Only a person at a terminal can approve. When an agent runs `pdd approve`, pdd refuses and tells it to ask you. You can also click **Approve** in the Simulator while `pdd simulate` runs in your terminal.
+Show the gate, then reply to your agent in your own words. Your agent records your approval for the gate and all its draft prompts in one call. Questions and change requests keep the gate open.
+
+See [Record a chat approval](docs/cli.md#record-a-chat-approval) for safe commands, prompt snapshots and terminal or strict-mode approval. Approval of PR 1 does not approve the later code-or-stop gate.
 
 ### 5. Code space
 
@@ -161,7 +163,7 @@ Code space is the PDD compiler: your agent writes the code from the approved pro
 1. **Prompt space.** The prompts, the Stories and the tests. The pull request text starts with the `Runtime check` lines and the report links.
 2. **Code space.** The code. To get it, say so in the chat, or run `pdd workflow approve 42`. The agent runs the unchanged tests from prompt space on the code and records the results, mutation control and formal check. pdd validates the source identity and report structure and shows missing or stale evidence as **BLOCKED**. These are agent-reported results, not independent proof of execution.
 
-pdd makes the code only after you approve each draft prompt. pdd never merges. You review and merge on GitHub.
+pdd never merges and has no merge command. To ask your agent to merge, follow [RUNBOOK §2](RUNBOOK.md#2-the-files).
 
 ## Commands
 
@@ -178,12 +180,12 @@ pdd makes the code only after you approve each draft prompt. pdd never merges. Y
 | `pdd simulate STORY --agent NAME` | Connect an agent to the **Ask your agent** panel. |
 | `pdd simulate STORY --new --max-calls N` | Start a new simulation with a limit of N AI calls. |
 | `pdd simulate --stop STORY` | Stop the Simulator link of a Story. |
-| `pdd approve PROMPT` | Approve a prompt. Only for a person at a terminal. |
+| `pdd approve PROMPT [--said WORDS]` | Approve one prompt with your chat words, or terminal y/N without --said; strict mode requires a person terminal. |
 | `pdd workflow start NAME ISSUE` | Start a run on a GitHub issue. NAME is `feature`, `bug` or `small-change`. |
 | `pdd workflow status [ISSUE]` | Show where each run is and what it waits for. |
 | `pdd workflow view ISSUE` | Show the gates, approvals, pull requests and Simulator links of a run. Changes nothing. |
 | `pdd workflow open ISSUE` | Open the chat of a run. |
-| `pdd workflow approve [ISSUE]` | Approve the gate of a run, or start code space. |
+| `pdd workflow approve [ISSUE] [--said WORDS]` | Approve the ready gate and its draft prompts together with your chat words. Without ISSUE, select the current worktree or sole waiting run. Without --said use person terminal y/N; agent callers must ask then use --said. Strict mode requires a person terminal. |
 | `pdd help` | Show all commands. |
 
 `pdd check`, `pdd check --lint`, `pdd try` and `pdd workflow run` also work. Each one prints one line on stderr with the name to use.

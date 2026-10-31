@@ -18,16 +18,24 @@ Each area is one main chat. Step briefs are in `steps/`.
 ## Rules
 
 - The main chat coordinates and talks with the person; no code or checks.
-- Use fresh subagents; never reuse builders or let them check their code. Give step file and paths at once, not chat history; wait with one long time-out; no small follow-ups.
-- Checks: fresh first. Only verify/formal may reuse after startup failure; agent wrote no code, tests or prompts in this run.
+- Use fresh subagents; never reuse builders or let them check their code. Give the step file and paths at once, not chat history. Wait once with a long time-out; no small follow-ups.
+- Checks: fresh first. Only verify/formal may reuse after startup failure; wrote no code, tests or prompts this run.
 - Read pdd-prompting RUNBOOK §17 before checks: cleanup, unrun checks, recovery and result replacement.
-- At a gate, show the result, ask the person, and stop. For changes, revise here and ask again. Outside a run, open a PR only if the person says yes; in a run, pdd does. Never merge.
-- Write each link as its full URL (`https://…`), never as a linked word.
+- At gates, show results, ask and stop. Revise changes and ask again. Outside runs, ask before opening PRs. In runs, pdd opens them. Only the main chat may merge on explicit person request under RUNBOOK §2.
+- Use full URLs, never as a linked word.
 - Before an optional step, ask the person and wait for the answer. In a run, run `<pdd> workflow ask` first.
 - A person decides expected values. Never change a test to make it pass.
 
 ## In a run
 
 - Each step writes notes to `<run folder>/STEP.md` and commits its code.
-- When you need the person's answer in the middle of a step, run `<pdd> workflow ask "<question>"` first. Then ask it in a plain chat message (never a question dialog such as request_user_input) and end your turn. The person answers in the chat or with `pdd workflow changes N "answer"`.
-- When the person approves in their own words, run `<pdd> workflow approve N`. Never approve for them.
+- For an answer mid-step, run `<pdd> workflow ask "<question>"`. Ask in plain chat, never request_user_input, and end your turn. The person replies in chat or with `<pdd> workflow changes N "answer"`.
+- Show the gate; judge the later chat reply without exact phrases. Never approve questions or changes. Show changed prompts again. Record gate and draft approval:
+
+```sh
+<pdd> workflow approve N --said - <<'PDD_SAID'
+<the person's exact words>
+PDD_SAID
+```
+
+Quote a delimiter absent as a whole line in the words. Stdin keeps newlines. Blank input fails; no word grading. RUNBOOK §2.

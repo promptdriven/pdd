@@ -207,7 +207,7 @@ test('2762 missing approve boundary: valid custom single-area workflow warns wit
 
 for(const strict of [false,true]) test(`2762 refuse ${strict?'strict said':'blank said'}`,async t=>{
  const f=await ready(t), r=f.record();
- if(strict) writeFileSync(join(r.root,'pdd.json'),JSON.stringify({strict_approvals:true}));
+ if(strict) writeFileSync(join(f.source,'pdd.json'),JSON.stringify({strict_approvals:true}));
  const before=readFileSync(join(r.runDir,'status.json'),'utf8');
  const out=await approveRun({ref:'17',cwd:f.source,said:strict?'looks good':'  '},f.agentPorts({readApprovalEvidence:async()=>({ok:false,code:'user_message_missing',message:'No turn'})}));
  assert.equal(out.exitCode,1); assert.equal(readFileSync(join(r.runDir,'status.json'),'utf8'),before);

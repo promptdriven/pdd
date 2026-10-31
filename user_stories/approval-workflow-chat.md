@@ -8,8 +8,9 @@ I can approve a ready workflow gate and its draft prompts with one chat decision
 2. Unrelated unchanged drafts stay draft; a missing gate, malformed selected prompt or invalid policy refuses without advancing or partially approving a different prompt.
 3. PR creation and later updates show all recorded gate and matching standalone prompt approvals with actor, time, route and verbatim chat words safely quoted.
 4. A person terminal lists the gate paths and hashes and approves the ready gate and all its drafts with one y/N answer. Without --said, an agent, non-terminal or current area pane must ask me and use --said; strict mode permits only the person terminal.
-5. Chat approval refuses if the shown gate snapshot is absent or its selected paths or prose hashes changed. Show the gate again before asking me again.
+5. Chat approval refuses if the shown gate snapshot is absent or its selected paths or prose hashes changed. Opening the chat does not refresh that review; complete the step again to show the changed gate before asking me again.
 6. Approving PR 1 does not approve the later code-or-stop gate; distinct or reopened gates keep separate approvals even at the same clock time, while retrying publication of the same gate reuses its evidence without duplication.
+7. Gate questions, status and replies meant for me use short plain text without agent instructions or full local executable paths; separate agent guidance explains how to relay my approval.
 
 ## Rules to check
 

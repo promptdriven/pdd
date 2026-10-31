@@ -42,10 +42,30 @@ The block of Harbor Coffee's `place_order` (schemas cut):
 ```
 - Every schema follows section 3. List every error that the prose can return in `errors`.
 - Do not write `prose_sha256`: `pdd test --fill-hash` fills it.
-- To approve a prompt, the person runs `pdd approve <path>` (agents never set approved). It shows the interface in
-  plain words and asks y/n. An approved story at a workflow gate is not an approved prompt.
+- Show the gate. Judge the person's later reply in any chat. A question, change request or earlier message is not approval. No exact phrase is needed. Never invent a decision or edit approval fields. See [Record a chat approval](https://github.com/promptdriven/pdd/blob/alpha/docs/cli.md#record-a-chat-approval).
+- After actual approval, record the exact words for the ready gate and all its drafts:
+
+```sh
+pdd workflow approve N --said - <<'PDD_SAID'
+<the person's exact words>
+PDD_SAID
+```
+
+For one prompt:
+
+```sh
+pdd approve PROMPT --said - <<'PDD_SAID'
+<the person's exact words>
+PDD_SAID
+```
+
+Choose a delimiter absent as a whole line from the payload. Keep it quoted. Never interpolate the words into shell code or shell quotes. `--said -` records stdin exactly, including newlines. Blank input is refused; pdd does not grade nonblank words.
+- The gate saves selected prompt paths and prose hashes when shown. If a prompt changes, show the gate again before approval. Output lists the paths and hashes.
+- Without --said, a person at a normal terminal can answer y/N once for the listed gate and all its drafts. `pdd approve PATH` approves one prompt. An agent or caller outside a normal terminal gets a plain instruction: ask the person, then run with --said and their words. Native Herdr area-chat evidence may record history but never authorizes approval. Only an explicit approve call passes an approval gate; steps, `workflow done` and chat messages never do. Warn, without blocking, when a workflow has no approve gate before code.
+- Workflow approval reads `pdd.json` from the main checkout (`sourceRoot`), outside the agent's run worktree. Standalone `pdd approve` reads it from the Git root of the current checkout. Root `pdd.json` with `"strict_approvals": true` permits only a person terminal; absent/false is easy mode. Strict mode refuses --said. Prompt approval records the invoking actor, time, route, exact words and path/hash; PR evidence shows matching approvals safely quoted in code spans. Gate approval does not approve the later code-or-stop gate. A person decides expected values; never change them on your own.
+- pdd never merges and has no merge command. An agent may merge only after the person's explicit chat request. Resolve the PR's exact current head and require at least one check and all required checks green for that head; missing, failed or pending checks stop. First post a PR comment beginning `Merge requested by the person: "…"`, preserving the exact request safely in a Markdown code span (use a fence longer than any backtick run; JSON-quote controls/newlines). Use a body file, never interpolate the words into shell code. A failed comment stops. Recheck head/checks, then run `gh pr merge PR --merge --match-head-commit <head>` with that same head. A changed head stops; obtain green checks for its current head before retrying.
 - To change an approved prompt (prose or interface), set `"status": "draft"`, run `pdd test --fill-hash` and ask the
-  person to run `pdd approve <path>` again.
+  person to approve again through these routes.
 
 **The story** has one line for each criterion. Number from 1. Use straight quotes (`"`), not curly quotes. Text copied
 from a GitHub issue often has curly quotes. Put real values in the text: "$10.65", "2026-11-02". Write what a user

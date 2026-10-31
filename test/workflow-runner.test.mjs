@@ -26,7 +26,7 @@ function assertSafeApprovalAdvice(text) {
   assert.match(text,/show the gate.*ask the person/i);
   const command=text.split('\n').find(line=>line.endsWith(" workflow approve 17 --said - <<'PDD_SAID'"));
   assert.ok(command,'show the actual quoted-heredoc stdin command');
-  assert.match(command,/^(?:'[^']+'|\/\S+)\s+(?:'[^']*pdd\.mjs'|\/\S*pdd\.mjs)\s+workflow approve 17/, 'use absolute package Node and bin paths');
+  assert.match(command,/^<pdd> workflow approve 17/, 'agent template uses the portable package placeholder');
   assert.match(text,/\nPDD_SAID(?:\n|$)/);
   assert.match(text,/delimiter.*absent/i);
   assert.match(text,/terminal y\/N/);
@@ -831,7 +831,7 @@ test('#18: the check step\'s Runtime check wins the top of PR 1; the code questi
   assert.match(f.prs[0].body, /^Runtime check: ✓ 2 of 2 criteria\nReport: https:\/\/rt\.example\.test\/r\/second /);
   assert.match(gate.message, /ask exactly: "Do you want the code PR now, or stop here and merge PR 1 first\?/);
   assert.match(gate.message, /show the gate.*ask the person/i);
-  assert.ok(gate.message.includes(`${f.ports.pdd} workflow approve 17 --said - <<'PDD_SAID'\n`), 'safe retry uses the injected absolute package command and quoted heredoc');
+  assert.ok(gate.message.includes(`<pdd> workflow approve 17 --said - <<'PDD_SAID'\n`), 'safe agent template uses the portable package placeholder and quoted heredoc');
   assert.match(gate.message, /\nPDD_SAID(?:\n|$)/);
   assert.match(gate.message, /terminal y\/N/);
 });
