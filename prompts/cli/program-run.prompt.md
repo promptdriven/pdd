@@ -10,10 +10,10 @@ result is `{kinds,httpOperations,screenOperations}`: kinds enumerates all admitt
 `http`/`screen` kinds; the optional operation arrays identify C-owned entries
 excluded from typed selection. Keep remaining real typed operations. For a screen
 map owning render and select, excluding both leaves one screen kind: no words
-uses rule 3 and delegates one link without authentication in B.
+delegates one link without authentication in B.
 Accept legacy `'screen'`, `'http'` or null; either legacy string owns all non-CLI
 entries as that single C kind. Mixed C/typed selection requires the extended
-descriptor. The word-table selection below decides whether to delegate to its exported
+descriptor. The start selection below decides whether to delegate to its exported
 `runApp({file,root,env,flags,kind},ports)` and awaits its exit code; asynchronous rejection uses the same plain pdd error
 handling as local failures, never a raw Node stack. Pass the parsed
 pdd prefix flags with every file-valued option (including data) resolved to a
@@ -23,7 +23,7 @@ context, not an executable: exit2 with `pdd: FILE has no entry, so it cannot run
 explain it is context for other prompts, and list actual repository prompts that
 use it. Discover callers locally; never invent callers. Inspect local dependency declarations
 without performing full source/graph capture separately for every candidate. More than one CLI entry refuses2 before authentication. A file may contain
-several kinds; each run selects exactly one through the word table.
+several kinds; each run selects exactly one through its start declaration.
 C owns screen/HTTP classification and app-map ambiguity. Preserve appKind FIRST
 and never duplicate its inference through schema titles or app-map guesses. For deterministic tests, ports.programApp may
 supply that module's public exports instead of loading it; both paths use the
@@ -32,71 +32,85 @@ never tell people to add an adapter or cli convention.
 
 ## Kind selection
 
-Build a local word table with zero AI calls: the CLI heading selects CLI, `serve`
-selects all HTTP routes, `app` selects screen, and each typed operation has its
-operation name. C alone supplies HTTP/screen facts and HTTP/screen entry identities; never infer them
-from titles. Pass the selected `http` or `screen` as runApp kind.
-For prefix `--read ID FILE`, recover the matching locally saved pending operation
-and its CLI/typed kind before applying the word-table fallback. The saved
-operation wins even if a different operation word follows FILE; recovery never
-selects that suffix operation or resends input. No suffix selector
-or input is required. A pending setup/stop request (lint, try or stop) has no
-operation: acknowledge it by GET without table selection or app launch; only a
-pending call requires restoring an operation for result validation. A pending
-typed operation stays typed even in a file with
-multiple typed operations or a default CLI. Preserve C classification precedence
-and all pending-ID, program, source and login checks; a missing or mismatched
-pending ID refuses locally before authentication. Recovery uses GET only and never
-reapplies fresh/data initialization or creates another backup.
+Read optional `start` from the Runtime interface locally, before authentication.
+Its `default` is cli, shell, http, app or call; `default_operation` names the
+non-CLI typed entry for default call. `dispatch` is an array of
+`{word,kind,operation?,app_map?}`: a unique nonempty single word not beginning
+with `-`, one of the same kinds, an existing typed operation for call, and an
+optional repository-relative app_map PATH string for app. cli/shell require a
+CLI entry; http/app require C to admit that kind, except an explicit app_map
+selects a custom map for C to validate even if ordinary appKind returns null. Reject unknown/missing kinds,
+missing/nonexistent call operations, unavailable kinds, malformed declarations,
+duplicate/dash words and unsafe app_map paths with one plain line, exit2 and no
+authentication or interpreter requests. This is launch validation, not lint.
 
-A first word starting with `-` is never a table word. Apply these rules in order:
+```mermaid
+flowchart TD
+    D{start declared?} -->|Yes| W{First ARG matches dispatch?}
+    W -->|Yes| S[Consume word and select declared kind]
+    W -->|No| F{Default declared?}
+    F -->|Yes| A[Select default with all ARGS]
+    F -->|No| U[Declaration usage, exit 2]
+    D -->|No| K{How many kinds?}
+    K -->|One| O[Ordinary kind behavior]
+    K -->|Several| E[Require start declaration, exit 2]
+```
 
-1. A table word selects that kind and forwards the remaining words to it.
-2. Otherwise a CLI entry receives all words; no words opens its shell.
-3. Otherwise one kind runs as its ordinary CLI/typed/HTTP/screen behavior.
-4. Otherwise print the word table and usage, exit2 without authentication or calls.
+pdd reserves no argument words: serve, app and the CLI heading have no special
+meaning unless declared. Dispatch wins over a CLI subcommand with the same word.
+An explicit cli selection executes once even with argv []; shell with ARGS runs
+CLI once, while shell without ARGS follows the shell behavior below. http/app
+with leftover ARGS print declaration usage and exit2, with no launch. Map app to
+C's `kind:'screen'`, http to `kind:'http'`; pass an app dispatch's optional map as
+`runApp({file,root,env,flags,kind:'screen',appMap},ports)`. Validate the map's safe
+repository-relative string before delegation; C/session capture retain disk,
+overlay and Git-visible rules. Pass prefix port unchanged to C.
 
-For example `FILE serve` starts HTTP, while `FILE manage serve` selects CLI
-heading manage and sends argv `["serve"]`. Several typed entries retain operation
-selection. HTTP and screen consume no extra words after their optional selector:
-exit2 locally for unsupported words; HTTP says `HTTP programs take no ARGS. Call
-the link.`. If extra HTTP words include a recognized pdd prefix option, also
-print `pdd options go before the file: pdd --port 9000 FILE` for that example.
-Build the hint with the actual recognized options and values before the original
-FILE spelling, shell-quoting words as needed; retain invocation-cwd file-valued
-option meaning and selected HTTP mode. This is advice only: never launch or
-silently discard extra words. The parsed prefix port is passed unchanged to C for listener validation.
-The lint table, equal-word errors and subcommand warnings belong to a later task.
+Without start, a sole CLI or C kind runs normally. Only typed operations count
+as one typed kind; multiple typed operations select by their own operation names,
+and a sole typed operation needs no selector. Remove C-owned httpOperations and
+screenOperations before counting typed entries. Several kinds have no implicit
+CLI default: print `pdd: FILE has N kinds (KINDS) and no "start" in its Interface.`,
+then `  Declare what starts, for example:` and the literal example
+`  "start": {"default": "shell", "dispatch": [{"word": "runserver", "kind": "http"}]}`,
+and exit2 before authentication. No entry keeps the context behavior above.
+
+Prefix `--read ID FILE` wins over declaration validation, selectors, suffix
+input and reset/data/no-cache initialization: restore the saved pending operation
+and CLI/typed kind even with different or invalid suffix words. Preserve pending
+ID, program, source and login checks. A pending setup/stop has no operation and
+is acknowledged by GET without selection/app launch. Recovery uses GET only,
+never resends input, resets data or creates another backup.
 
 ## Entry and input
 
-A CLI entry has cli conventions on both schemas; its first heading supplies the table word and shell command name. Apply Try's safe
+A CLI entry has cli conventions on both schemas; its first heading supplies only the shell command name. Apply Try's safe
 name, reserved-name and launcher protections only when opening that shell. With ARGS,
 a heading with spaces or punctuation must not prevent execution;
 call once with exact argv and read piped UTF-8 only if stdin is declared. Never
 consume undeclared stdin, including an enclosing shell read loop. Preserve exact
 stdout/stderr and return program exit_code 0–255 except reserved 125.
-With no ARGS create the safe real-command launcher locally. Only terminal stdin
+For shell mode with no ARGS create the safe real-command launcher locally. Only terminal stdin
 opens the injected shell(shell, env) port (native interactive shell by default).
 Without a terminal, print a correctly shell-quoted `export PATH="...:$PATH"`
 line with `# then: NAME --help` on stdout and exit0: no child, authentication,
 source lint, session or network. The shim invokes the CLI once, even with zero
-words. It carries selected initial data without reapplying fresh/backup on every
-command. In a terminal, pdd-owned informational lines go to stderr prefixed
+words. It carries selected reset/data and no-cache settings: reset/data initialization
+and backup happen once on the first shim call; no-cache applies on every call. In a terminal, pdd-owned informational lines go to stderr prefixed
 `pdd:`: NAME is a command in this shell; type exit to leave, the data directory,
 and prompt behavior, not tested code. On shell exit report saved world.json,
 restore caller PATH and return the shell exit code. Quiet hides those lines.
 Invoking that launcher with zero words calls the CLI once with empty argv; it
-never opens another shell or re-enters the word table: every word, including
-serve/app/typed names, stays CLI argv. Prefix fresh/data options select the shell's data
-before its commands run, including that zero-word invocation.
+never opens another shell or re-enters declared dispatch: every word stays CLI
+argv. Prefix reset/data select the shell data before its commands run, including
+that zero-word invocation.
 Never open a browser for CLI or typed input.
 
 For typed input, --name value fills input_schema fields. Parse integers, finite
 numbers and true/false booleans by schema; strings retain exact value. Repeated
 array flags append items in order with item types; repeated scalar flags refuse.
-Each typed operation has its optional table selector; a sole operation is also
-implicit. Never consume an unmatched arbitrary word as an operation. --input JSON or
+Without start, typed-only operations use their operation names as selectors; a
+sole operation is implicit. Declared call selection uses its explicit operation. Never consume an unmatched arbitrary word as an operation. --input JSON or
 --input @file supplies the whole object; resolve that file from the invocation
 current folder, even when the repository root differs. Piped JSON supplies it only when no flags
 were given. Whole-input and field flags cannot mix; stdin never merges with flags.
@@ -114,7 +128,14 @@ one line when piped; a declared error exits1.
 Use [program data](program-data.prompt.md) for initial and confirmed world and
 last-record persistence, and [program sessions](program-session.prompt.md) for
 source identity, automatic replacement and confirmed answer reuse. Show-data
-prints JSON without executing a call; fresh invalidates cached answers.
+prints JSON without executing a call. Reset/data change the selected world but
+do not forbid reuse for an exact before-world/key match. No-cache bypasses local
+reuse, sends fresh:true, and keeps the world unless combined with reset/data.
+Its informational notice says `asked again, data kept` only without reset/data;
+combined selection says `asked again` alongside the reset notice. The interpreter
+may still reuse a saved answer for an exact key; explain that limit without issue
+numbers in person-facing lines. Quiet hides these notices. Use program data's
+shared reset renderer, never duplicate it.
 
 ## Transport, budget and failures
 
@@ -192,7 +213,7 @@ evidence. Preserve the original FILE and all original selector/program words in
 ARGS, and preserve any supplied fix too. Other refusal codes/messages, including capture and capacity, never earn this
 max-calls advice merely by containing "cap". Never automatically retry a call-cap
 refusal with another POST or a raised cap. A session
-remaining-allowance hint must preserve the current world, never recommend fresh
+remaining-allowance hint must preserve the current world, never recommend reset
 (which empties it). report.replayed:true displays cached and0 AI calls. Report accounting uses
 confirmed calls/seconds and includes report_url as details only when a report
 link exists; never print `details: undefined`. Semantic refused accounting also

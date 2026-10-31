@@ -1,8 +1,9 @@
 # Program data
 
 Own src/program-data.mjs. Export module function
-`programData({root, program, flags: {fresh, data}}, ports)` returning
-`{dir, fresh, startingData}`. program identifies the repository-relative entry without `.prompt.md`.
+`programData({root, program, flags: {reset, 'no-cache': noCache, data}}, ports)` returning
+`{dir, reset, noCache, startingData, backupPath}`. Preserve other caller-needed
+fields; any retained fresh field means noCache, never reset. program identifies the repository-relative entry without `.prompt.md`.
 A unique entry basename uses `.pdd/run/<basename>/`. Before choosing a new mapping,
 retain any existing safe program directory whose saved entry path identifies this
 program. Adding another prompt with the same basename never moves that program
@@ -32,22 +33,26 @@ Git-ignore `.pdd/` locally through `.git/info/exclude` (including worktree Git
 metadata); never create or modify the project's `.gitignore`.
 No Story is required and all outside program effects remain fake.
 
-Starting data precedence: explicit data file, else saved world.json unless fresh,
-else {}. A data file is a JSON world or a scenario's initial_world and simulation;
-never execute its steps or require its Story. Explicit data wins even with fresh.
-startingData carries the selected initial_world and optional simulation; fresh is
-the requested boolean. Resolve explicit data from the invocation current folder, before repository-root
-normalization; callers may pass the resolved absolute filename without changing
-this public signature. Missing files, bad JSON and nonobject worlds are local
-input errors: exit2, a plain message naming the file and problem, no send.
+Starting data precedence: explicit data file, else {} with reset, else saved
+world.json, else {}. A data file implies reset and supplies a JSON world or a
+scenario's initial_world and simulation; never execute steps or require a Story.
+startingData carries initial_world and optional simulation; reset and noCache are
+independent requested booleans. noCache alone preserves saved data. Resolve data
+from invocation cwd before root normalization. Missing files, bad JSON and
+nonobject worlds are local input errors: exit2, a plain message naming file and
+problem, no send. Validate data before changing the old world.
 
-Before a fresh selection replaces saved world.json, atomically preserve it as
-world.prev.json. This happens once per invocation/shell selection, including
-fresh plus explicit data. Only when this invocation actually backs up world.json, the fresh notice names
-the repository-relative world.prev.json path (never an absolute path):
-`pdd: fresh start. Old data kept in PATH/world.prev.json`. A stale world.prev.json
-without a current world.json is not a backup this invocation and earns no claim
-that old data was kept. The notice follows quiet.
+Before reset/data replaces current world.json, atomically preserve that current
+world as world.prev.json once per invocation/shell selection, including data with
+reset/no-cache. backupPath is the actual backup path for this selection, absent
+when no current world was backed up; a stale previous file is not a new backup.
+Export module function `renderResetNotice({root,backupPath,quiet=false})` returning
+text, with no output effects: quiet returns ''; otherwise return
+`pdd: data reset. Old data kept in REPOPATH\n` when backupPath exists (render it
+relative to root), or `pdd: data reset.\n` without a backup. The caller emits it
+only for an actual reset selection. C calls this same renderer. No-cache does
+not back up or reset the world. Reset/data allow cached answers when the exact
+before-world and all answer-key inputs match.
 Persist only confirmed world snapshots in dir/world.json. Never replace confirmed
 data with an invented world after refusal or unknown outcome. dir/last-run.json records
 confirmed input, output, data_before, data_after and ai_calls, plus session_id,
