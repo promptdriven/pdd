@@ -8,6 +8,12 @@ import { join } from 'node:path';
 import { runCheck } from '../src/runtime-client.mjs';
 import { harbor, fakeRuntime, portsFor } from './runtime-fake.mjs';
 
+function portsFactory(env) {
+  const { ports: clockPorts } = portsFor(env);
+  // Each invocation gets fresh output and hooks, but time never resets between runs.
+  return () => ({ ...portsFor(env).ports, now: clockPorts.now, sleep: clockPorts.sleep });
+}
+
 async function fixture(t, identity) {
   const env = harbor(t);
   let mode = 'passed', incomplete = false, delay = null;
@@ -23,7 +29,7 @@ async function fixture(t, identity) {
     if (incomplete) answer.usage.accounting_complete = false;
     return { status: 200, json: answer };
   });
-  const makePorts = () => portsFor({ HOME: env.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: env.state }).ports;
+  const makePorts = portsFactory({ HOME: env.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: env.state });
   const invoke = async (options = {}, words = [], extra = {}) => {
     const ports = makePorts(), before = fake.posts.filter(row => row.command === 'check').length;
     const code = await runCheck({ cwd: env.repo, words, options: { '--json': true, ...options }, cache: true }, { ...ports, ...extra });
@@ -315,8 +321,9 @@ test('partial sibling pass retains last failure until the whole Story passes', a
   const fake = await fakeRuntime(t, entry => ({ status: 200, json: entry.command === 'lint'
     ? fake.lint(entry.request.requestId)
     : fake.check(entry.request?.requestId ?? entry.url.split('/').at(-1), mode) }));
+  const makePorts = portsFactory({ HOME: env.home, PDD_STATE_DIR: env.state, PDD_RUNTIME_URL: fake.origin });
   const invoke = async (words = [], options = {}) => {
-    const { ports } = portsFor({ HOME: env.home, PDD_STATE_DIR: env.state, PDD_RUNTIME_URL: fake.origin });
+    const ports = makePorts();
     const code = await runCheck({ cwd: env.repo, words, options: { '--json': true, ...options }, cache: true }, ports);
     return { code, json: JSON.parse(ports.stdout.text) };
   };
