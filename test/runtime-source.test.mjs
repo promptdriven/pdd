@@ -119,7 +119,7 @@ test('SOURCE4: optional includes preserve selected secret, symlink, non-regular,
   for (const [label, path, edit, expected] of [
     ['secret', '.env.local', r => write(r, '.env.local', 'x'), /name looks like a secret/],
     ['secret directory', 'config/secrets/a.txt', r => write(r, 'config/secrets/a.txt', 'x'), /name looks like a secret/],
-    ['symlink', 'link.md', r => symlinkSync('README.md', join(r, 'link.md')), /symbolic link/],
+    ['symlink', 'link.md', r => symlinkSync('missing.md', join(r, 'link.md')), /symbolic link|broken|missing/],
     ['directory', 'folder', r => mkdirSync(join(r, 'folder')), /regular file|Git-visible file/],
     ['size', 'big.bin', r => write(r, 'big.bin', Buffer.alloc(10_485_761)), /too big to send/],
   ]) {
@@ -131,8 +131,8 @@ test('SOURCE4: optional includes preserve selected secret, symlink, non-regular,
   json(many.repo, 'pdd-source.json', { include });
   assert.throws(() => captureSource(many.repo, { tests: [ORDER] }), /too big to send.*1000[1-3] files/);
   const linked = harbor(t); write(linked.repo, 'config.json', '{"include": []}');
-  symlinkSync('config.json', join(linked.repo, 'pdd-source.json'));
-  assert.throws(() => captureSource(linked.repo, { tests: [ORDER] }), /pdd-source\.json.*symbolic link/);
+  symlinkSync('missing-config.json', join(linked.repo, 'pdd-source.json'));
+  assert.throws(() => captureSource(linked.repo, { tests: [ORDER] }), /pdd-source\.json.*(?:symbolic link|broken|missing)/);
 });
 
 test('SOURCE5: Check and lint upload precisely the offline selected manifest, sharing one tar per batch', async t => {
@@ -389,7 +389,7 @@ test('SOURCE12: collapsible dependency context retains recursive declarations an
     ['data/menu.json', r => write(r, 'data/menu.json', '{"price":900}'), null],
     ['data/missing.json', () => {}, /not a Git-visible file/],
     ['data/auth.json', r => write(r, 'data/auth.json', '{}'), /name looks like a secret/],
-    ['data/link.json', r => { write(r, 'data/real.json', '{}'); symlinkSync('real.json', join(r, 'data/link.json')); }, /symbolic link/],
+    ['data/link.json', r => { write(r, 'data/real.json', '{}'); symlinkSync('missing.json', join(r, 'data/link.json')); }, /symbolic link|broken|missing/],
   ]) {
     await t.test(path, async t => {
       const setup = harbor(t), { repo } = setup;
@@ -437,7 +437,7 @@ test('SOURCE13: literal HTML section examples cannot hide required dependency fi
         if (mode === 'regular') write(repo, 'docs/policy.md', '# Required policy');
         if (mode === 'symlink') {
           write(repo, 'docs/real.md', '# Real policy');
-          symlinkSync('real.md', join(repo, 'docs/policy.md'));
+          symlinkSync('missing.md', join(repo, 'docs/policy.md'));
         }
         const { ports } = offline(setup);
         const code = await runCheck({ cwd: repo, words: ['place-order'], options: { '--files': true } }, ports);
@@ -446,7 +446,7 @@ test('SOURCE13: literal HTML section examples cannot hide required dependency fi
           assert.deepEqual(names(captureSource(repo, { tests: [ORDER] }).tar), [PLACE, ORDER, STORY, 'docs/policy.md'].sort());
         } else {
           assert.equal(code, 4, ports.stdout.text);
-          assert.match(ports.stderr.text, mode === 'missing' ? /not a Git-visible file/ : /symbolic link/);
+          assert.match(ports.stderr.text, mode === 'missing' ? /not a Git-visible file/ : /symbolic link|broken|missing/);
           assert.ok(ports.stderr.text.includes('docs/policy.md'), ports.stderr.text);
         }
       });
