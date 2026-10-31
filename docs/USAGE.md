@@ -595,7 +595,7 @@ Run `pdd simulate <story> --cli`. Copy the printed PATH line, then type your pro
 own terminal, or run the printed absolute path. For example: `tipjar split 100 --people 3 --tip 18 --round-up`.
 Each command runs the prompt on the interpreter with your gh login; saved data stays in the same simulation.
 `--help` also runs the prompt. `--shell` opens a shell with the PATH ready. Piped UTF-8 input is forwarded when
-the prompt declares `stdin`. Program output and exit codes pass through; wrapper errors begin `pdd simulate:`
+the prompt declares `stdin`. Program output and exit codes pass through; wrapper errors begin `pdd:`
 and use reserved code 125. Calls can take a while because they run AI.
 
 Run `pdd simulate --save-last` to append the last command and its observed answer to the original test file.

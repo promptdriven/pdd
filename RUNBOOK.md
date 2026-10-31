@@ -344,7 +344,7 @@ failed, the real reason and what to do next: pass that line on as it is.
 
 `pdd simulate place-order` makes a Simulator link and opens it in the browser. Opening costs 0 AI calls. While it works (about a minute), pdd
 prints a progress line on stderr for each step. It ends with a line such as
-`Simulator ready for "Place a coffee order": <link> (open in your browser). It ends in 24 hours, …`. To stop it before that, run `pdd simulate --stop place-order`.
+`Try ready for "Place a coffee order": <link> (open in your browser). It ends in 24 hours, …`. To stop it before that, run `pdd simulate --stop place-order`.
 - A draft prompt can be tried. The person tries it before they approve. Show the Simulator link only to the person.
   Never write it into a file, PR, issue or shared channel: anyone with the link can use it.
 - Ask the person: "Did it do what you expect?" Wait for the answer before you open PR 1. If the person is not at this
@@ -395,7 +395,7 @@ screens. It holds no code. Without it, the person uses forms (or a terminal for 
 - `pdd simulate` uses `app-map.json` at the repo root, else `app/app-map.json`. For another file:
   `pdd simulate <story> --app-map <path> --new`. Without `--new`, pdd reuses the open simulation and does not send the map.
   Git must show the file. It must be an app map like the one below, not a page of your app (`public/index.html`).
-  pdd does not check the map. A wrong map may give only an error that the setup is not finished or that its result is unknown.
+  pdd does not check the map. A wrong map may give only "The Try setup is not finished or its result is unknown".
 - **A screen from an operation** (`"source": "operation"`): the operation draws the screen. `format` is `html`, `text`
   or `grid`. `result_pointer` selects the drawing: `/html` (a string) or `/lines` (a list of strings). `stylesheets` lists CSS files.
   The interpreter cleans the drawn html. It removes the `background` style, `list-style` and `aria-pressed`. Write
@@ -629,11 +629,11 @@ repo file and link it under `## Dependencies`. Test data goes in the test (`inpu
 
 ## 19. Use a simulation from your terminal or curl
 
-`pdd simulate STORY --cli` prints a shim path and a PATH line. Startup and every command show an AI usage line on stderr: calls for the command, used/remaining in this session and its cap. Unknown counters stay unknown; this is separate from account/tester allowance. Copy the PATH line, then run the program normally.
+`pdd simulate STORY --cli` prints a shim path and a PATH line. Startup and every command show a `Try AI usage` line on stderr: calls for the command, used/remaining in this session and its cap. Unknown counters stay unknown; this is separate from account/tester allowance. Copy the PATH line, then run the program normally.
 `--shell` opens bash or zsh with that PATH. Each command uses your gh login and the same simulation's saved data.
 `pdd simulate --save-last` appends the last command and its observed result to the original test file; review the
 recorded expectation and its saved-data setup. `pdd simulate --stop STORY` stops the session. A wrapper error prints
-**pdd simulate:** on stderr and exits 125; program errors preserve the program's other exit codes.
+**pdd:** on stderr and exits 125; program errors preserve the program's other exit codes.
 
 `pdd simulate STORY --serve 8080` exposes named HTTP routes at `http://127.0.0.1:8080`. A prompt names an inbound
 route by setting the entry's `input_schema.title`, for example `"title": "HTTP GET /api/books"`. Each entry names
@@ -650,7 +650,7 @@ A JSON body is parsed; a string `body` receives exact UTF-8 text. Inputs still m
 Return `status`, an optional object of response `headers`, and `body` (a string or JSON value). An existing
 result such as `{"status":200,"books":[...]}` returns `{"books":[...]}` as its JSON body. HTTP status and headers
 come from the prompt; hop-by-hop headers are removed and Content-Length is calculated by pdd. An unknown
-route returns 404 without an AI call. Interpreter or wrapper trouble returns 502 with a plain **pdd simulate:** reason.
+route returns 404 without an AI call. Interpreter or wrapper trouble returns 502 with a plain **pdd:** reason.
 The listener binds only to loopback and accepts browser requests only from its own origin. Ctrl-C closes the
 local server while the simulation keeps its data. Use curl or fetch for API routes; browser page, image, script and
 stylesheet loads cannot spend calls through an API route.
@@ -933,8 +933,8 @@ Use `schema_version: "prompt-runtime.interface.v2"`, `instance_types: [{"name":"
 Passing prompt check (DRAFT): [2/2 checks · 4 AI calls](https://runtime.promptdriven.ai/r/eaa3c792-986a-498c-8970-5d67181d179e).
 
 A prompt pass proves these synthetic cases against the declared fake world. It does not execute the JavaScript module, establish every input/error, approve the prompt, or prove a live effect. If a criterion remains unbound, state the exact missing contract or unsupported effect and the native test needed; never report it as passed.
-## Use the Simulator tools when they are available
+## Use the Try tools when they are available
 
-The person's own agent can use the stdio server, `pdd mcp`, in the current repository. On the person's intent (for example, "try adding a bookmark with tag news"), use `simulate_open` to open or reuse the Story's simulation, `simulate_state` to inspect it, fill the input in `simulate_input`, `simulate_test` to check the run against the Story, and `simulate_save_case` to save a case. Follow the tools' returned input schemas and errors. Each run counts against the simulation's call budget and appears in the Simulator's history; inspect remaining calls before more work.
+The person's own agent can use the stdio server, `pdd mcp`, in the current repository. On the person's intent (for example, "try adding a bookmark with tag news"), use `try_open` to open or reuse the Story's simulation, `try_state` to inspect it, fill the input in `try_run`, `try_check` to check the run against the Story, and `try_save_case` to save a case. Follow the tools' returned input schemas and errors. Each run counts against the simulation's call budget and appears in the Simulator's history; inspect remaining calls before more work.
 
 Saved cases go to a separate `tests/<story>-try-<run-id>.json` with the run's exact starting data; the original scenario stays intact. A recorded case that covers only part of the Story must be completed before `pdd test`, which requires every criterion. Saved cases contain observed results. Review them against the Story with the person before treating them as expected values. Saving or checking a case never approves its expectations or a prompt. If the tools are unavailable, offer `pdd simulate STORY`.

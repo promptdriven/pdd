@@ -16,7 +16,7 @@ What this package contains:
 - The README and the docs describe pdd as it is today, as if this were the first version. Put history and change notes only in the GitHub release notes. The one exception is the short note for people who have the Python pdd installed. `test/docs-first-time.test.mjs` fails on history words.
 - Agents start in full-access mode. `pdd setup` previews per-agent MCP config changes and asks y/N before writing them. pdd does not copy credentials or touch the person's default Herdr session.
 
-Keep the package self-contained: no private dependencies and no credentials. Only `pdd test`, `pdd lint`, `pdd simulate` and the Simulator tools in `pdd mcp` call the PDD interpreter, with the user's gh token; the address is one setting (`PDD_RUNTIME_URL`, default `DEFAULT_RUNTIME_URL` in `src/runtime-client.mjs`). Do not import captured conversations or operational fixtures.
+Keep the package self-contained: no private dependencies and no credentials. Only `pdd test`, `pdd lint`, `pdd simulate` and the Try tools in `pdd mcp` call the PDD interpreter, with the user's gh token; the address is one setting (`PDD_RUNTIME_URL`, default `DEFAULT_RUNTIME_URL` in `src/runtime-client.mjs`). Do not import captured conversations or operational fixtures.
 
 Each path has one active writer. Use a topic branch, keep other work and keep implementation prompts with their code. Use ordinary Node tests for changed public behavior. Avoid tests that only check prose or repeat the implementation. The public full suite is `npm test`. It needs no live service and no model call. A real agent run that the person asked for is a separate activity.
 

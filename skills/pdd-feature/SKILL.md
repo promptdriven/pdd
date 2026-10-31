@@ -29,9 +29,9 @@ Fix both: the brakes (the real defect) and the warning light (a test or check th
   - Final review: clear or 2 repairs used; run `workflow done review` to open PR 2.
 - A person decides expected values. Never change a test to make it pass. Outside code (databases, files, network, clocks, randomness, programs): injected ports; no direct calls (RUNBOOK §21).
 
-## MCP tools
+## Try tools
 
-If asked: `simulate_open`, `simulate_state`, `simulate_input`, `simulate_test`, `simulate_save_case`. Runs spend AI calls; the Simulator shows them. Saved cases are not approved: review them with the person.
+If asked: `try_open`, `try_state`, `try_run` with input, `try_check`, `try_save_case`. Runs spend AI calls and show in Simulator history. Review saved cases with the person, never as approved expected values.
 
 ## In a run
 
