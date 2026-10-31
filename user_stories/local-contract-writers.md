@@ -13,14 +13,20 @@ The [world writer and seed rules](../prompts/cli/contracts.prompt.md#world-keys-
 own this behavior. Exact normalized seed labels identify initial-only data; a
 path with only blank Writer claims is still invalid. A comma qualifier describes the preceding writer,
 including its inner punctuation; a later comma can introduce a second actor.
-Separate actors with commas, standalone `and`, `/`, `&` or `;`. Hyphenated names
+Separate actors with commas, case-insensitive standalone `and`, `/`, `&` or `;`. Hyphenated names
 stay whole, identical runtime actors coalesce, and two different actors fail.
 Initial-only and runtime claims may agree on one exact path without inventing a
-runtime writer for initialization.
+runtime writer for initialization. With initialization provenance and no runtime
+actor, one warning names each unique exact declared path, including absent and
+symbolic paths; duplicates coalesce. A runtime actor on that path suppresses it.
 
 Coverage warnings stop at a declared concrete value. Descendant-only namespaces
 expose their closest uncovered branches. This is advisory coverage, never writer
-inheritance, wildcard matching or schema inference. Absent values add nothing;
+inheritance or schema inference. For this warning only, `<name>` matches one
+existing decoded seed segment, including an empty key. Embedded placeholders
+retain literal segment pieces, and repeated names match independently. Matching
+never expands ownership or seed schema validation. A scalar or empty prefix
+before a required descendant still warns. Absent values add nothing;
 empty containers, null, false, zero and escaped own keys remain present. Schema
 warnings stay separate and use "1 world key" for one unchecked declaration.
 Every native case observes both text and JSON, exact warning paths and kinds,

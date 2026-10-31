@@ -161,12 +161,16 @@ combined with `sync` or `--write`. Both world files may be absent; if either
 The first Key/Writer or Path/Writer table may omit Schema. Leading `/` cells
 are JSON Pointers under either heading (`~1` escapes `/`, `~0` escapes `~`);
 bare Keys name exact top-level keys. Parent and child paths have independent
-owners. Writer lists split on commas, standalone `and`, `/`, `&` or `;`, preserving
+owners. Writer lists split on commas, case-insensitive standalone `and`, `/`, `&` or `;`, preserving
 hyphenated actor names. Seed labels identify initial-only data, while comma
 qualifiers such as `through the resource` describe the preceding writer. Repeated
-actors coalesce; two runtime writers fail. Present seed branches without a row
+actors coalesce; two runtime writers fail. An initial-only declaration gets one
+warning per unique exact path; a runtime actor on that path suppresses it.
+Present seed branches without a row
 warn once with their exact paths, for either header. A declared container covers
-its value for this advisory without assigning its writer to child paths. See the
+its value for this advisory without assigning its writer to child paths. For this
+warning only, `<name>` placeholders match within one decoded seed path segment;
+literal pieces remain exact. They never expand ownership or schema validation. See the
 [writer and seed rules](../prompts/cli/contracts.prompt.md#world-keys-and-their-seed-values).
 
 Explicit Schema targets take precedence; otherwise one canonical declared record
