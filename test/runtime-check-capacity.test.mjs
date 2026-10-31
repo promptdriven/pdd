@@ -39,7 +39,7 @@ test('CAPACITY1: confirmed zero-execution capacity is retried until the wait end
   assert.equal(read.code, 5); assert.equal(read.json.rows[0].busy, true); assert.equal(fake.posts.length, before);
 });
 
-test('CAPACITY2: 17 tests use four active slots, adapt to a one-worker queue, and preserve all IDs', async t => {
+test('CAPACITY2: 17 tests use four configured active slots, adapt to a one-worker queue, and preserve all IDs', async t => {
   const setup = harbor(t, repo => {
     const file = join(repo, 'tests/place-order.json'), doc = JSON.parse(readFileSync(file));
     rmSync(file); rmSync(join(repo, 'tests/unknown-item.json'));
@@ -63,7 +63,10 @@ test('CAPACITY2: 17 tests use four active slots, adapt to a one-worker queue, an
     return f.normal(e);
   });
   const start = Date.parse('2026-10-27T16:27:47Z');
-  const result = await run(setup, fake, [], { '--json': true, '--timeout': '15' }, { now: () => start + now, sleep: async ms => { now += ms; } });
+  const result = await run(setup, fake, [], { '--json': true, '--timeout': '15' }, {
+    env: { HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state, PDD_MAX_JOBS: '4' },
+    now: () => start + now, sleep: async ms => { now += ms; }
+  });
   assert.equal(result.code, 0, result.err + result.out); assert.equal(result.json.rows.length, 17);
   assert.equal(peak, 4); assert.equal(checkPosts(fake).length, 20);
   assert.ok(result.json.rows.every(r => r.state === 'passed'));
@@ -180,13 +183,15 @@ test('CAPACITY9: explicit recovery preserves a running job and a completed job w
     original.rows.find(r => r.test === path).request_ids);
 });
 
-test('CAPACITY10: unknown dispatched jobs still occupy four slots; held rows stay unposted', async t => {
+test('CAPACITY10: unknown dispatched jobs still occupy four configured slots; held rows stay unposted', async t => {
   const setup = harbor(t, repo => {
     const bytes = readFileSync(join(repo, 'tests/place-order.json'));
     for (let i = 0; i < 8; i++) writeFileSync(join(repo, `tests/extra-${i}.json`), bytes);
   });
   const fake = await fakeRuntime(t, (e, f) => e.method === 'GET' ? { status: 200, json: { ...f.check(e.url.split('/').at(-1)), requestId: 'wrong' } } : f.normal(e));
-  const result = await run(setup, fake, []);
+  const result = await run(setup, fake, [], undefined, {
+    env: { HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state, PDD_MAX_JOBS: '4' }
+  });
   assert.equal(result.code, 3); assert.equal(checkPosts(fake).length, 4);
   assert.equal(result.json.rows.filter(r => r.state === 'unknown').length, 4);
   assert.equal(result.json.rows.filter(r => r.state === 'not_run' && r.calls === 0 && !r.request_id).length, 6);
