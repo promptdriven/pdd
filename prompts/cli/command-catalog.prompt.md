@@ -58,7 +58,7 @@ Help forms: `pdd simulate [STORY] --cli [--shell] [--max-calls N] [--new]`, `pdd
 `pdd simulate --save-last`. Describe real terminal commands, localhost HTTP requests and saving the last command
 into its original test. Add the explicit form `pdd simulate [STORY] --page [--new]`.
 The default help explains automatic choice: command-line program opens a shell, HTTP routes
-start on localhost with an example request, screens open the Simulator page, and typed
+start on localhost with an example request, screens open the PDD Simulator page, and typed
 operations open its Form tab. With no Story,
 open the whole project. `--page` forces the page. The standalone form above is required as its own manifest/help
 entry; an optional `[--page]` token in the general form does not replace it. Preserve the optional Story operand and all
