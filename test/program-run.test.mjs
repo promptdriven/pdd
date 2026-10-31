@@ -108,7 +108,7 @@ for(const [name,args] of [
  ['missing required',[]],['invalid integer',['--name','x','--count','2.5']],['minimum',['--name','x','--count','0']],
  ['invalid boolean',['--name','x','--enabled','yes']],['unknown field',['--name','x','--other','a']],
  ['duplicate scalar',['--name','a','--name','b']],['mixed whole and flags',['--input','{"name":"x"}','--name','y']],
- ['malformed JSON',['--input','{']],['unselected single operation',['quote','--name','x']],
+ ['malformed JSON',['--input','{']],
 ])test(`direct typed: ${name} reports schema usage before any send`,async t=>{
  const h=await harness(t,false),r=await h.invoke(args);assert.equal(r.code,2);assert.match(r.err,/Usage:.*place_order\.prompt\.md/i);assert.match(r.err,/name/);assert.equal(h.fake.posts.length,0);assert.equal(r.clock.gh.length,0);
 });
@@ -264,3 +264,5 @@ test('program data lock excludes a concurrent owner and admits one after release
  try{assert.throws(()=>acquireProgramLock(data.dir),/active|busy|finish/i);}finally{release();}
  const next=acquireProgramLock(data.dir);assert.equal(typeof next,'function');next();assert.equal(existsSync(join(data.dir,'active.lock')),false);
 });
+
+test('single typed table word is optional and forwards remaining fields',async t=>{const h=await harness(t,false);ok(await h.invoke(['quote','--name','x']));assert.equal(h.fake.jsonPosts[0].json.operation,'quote');assert.deepEqual(h.fake.jsonPosts[0].json.input,{name:'x'});});

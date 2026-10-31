@@ -11,11 +11,11 @@ for (const kind of ['screen','http']) test(`C classification precedes typed inpu
   const calls=[];
   const programApp={appKind(input,ports){calls.push(['kind',input]);return kind;},async runApp(input,ports){calls.push(['run',input]);ports.stdout.write('http://127.0.0.1:8080/\n');return 7;}};
   const io=portsFor(env,{programApp,stdin:Readable.from([])});
-  const code=await runPdd(['--fresh','--data','seed.json',PLACE,'--name','suffix'],{cwd:setup.repo,env,stdout:io.ports.stdout,stderr:io.ports.stderr,stdin:io.ports.stdin,runtimePorts:io.ports});
+  const code=await runPdd(['--fresh','--data','seed.json',PLACE],{cwd:setup.repo,env,stdout:io.ports.stdout,stderr:io.ports.stderr,stdin:io.ports.stdin,runtimePorts:io.ports});
   assert.equal(code,7,io.ports.stderr.text);
   assert.deepEqual(calls.map(c=>c[0]),['kind','run']);
-  assert.deepEqual(calls[0][1],{file:PLACE,root:setup.repo});
-  assert.deepEqual(calls[1][1],{file:PLACE,root:setup.repo,env,flags:{fresh:true,data:join(setup.repo,'seed.json')}});
+  assert.deepEqual(calls[0][1],{file:PLACE,root:setup.repo,all:true});
+  assert.deepEqual(calls[1][1],{file:PLACE,root:setup.repo,env,kind,flags:{fresh:true,data:join(setup.repo,'seed.json')}});
   assert.equal(io.ports.stdout.text,'http://127.0.0.1:8080/\n');
   assert.equal(io.clock.gh.length,0);
 });

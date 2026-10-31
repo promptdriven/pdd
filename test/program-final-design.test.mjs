@@ -52,10 +52,19 @@ test('server replayed receipt reports cached0 despite provider usage receipt',as
 for(const verdict of ['failed','refused'])test(`report ${verdict} preserves code, traceback total and details link`,async t=>{
  const call_chain=[{prompt:PLACE,operation:'main',call_index:1,max_calls:3}];const h=await harness(t,{report:{verdict,error:{code:verdict==='failed'?'declared':'session-call-cap',message:'Exact reason',fix:'Increase call allowance'},call_chain,call_chain_total:80}}),r=await h.invoke();assert.equal(r.code,verdict==='failed'?1:125,r.err);assert.match(r.err,/Exact reason/);assert.match(r.err,/Traceback \(prompt calls, most recent call last\):/);assert.match(r.err,/80|79/);assert.match(r.err,/details: http/);if(verdict==='refused'){assert.match(r.err,/pdd: refused/);assert.match(r.err,/Fix: Increase call allowance/);}assert.equal(r.out,'');
 });
-for(const mixed of [false,true])test(`one file refuses ${mixed?'CLI and typed':'two CLI'} before auth`,async t=>{
- const h=await harness(t,{edit(s){s.entries.push({...s.entries[0],operation:'other',...(mixed?{input_schema:obj({}),result_schema:obj({})}:{})});if(!mixed)s.conventions.push(...['input_schema','result_schema'].map(k=>({path:`/entries/1/${k}`,convention:'cli'})));}}),r=await h.invoke();assert.equal(r.code,2,r.err);assert.match(r.err,/one.*program|two.*kinds|one.*command|multiple.*CLI/i);assert.equal(r.clock.gh.length,0);assert.equal(h.fake.posts.length,0);
+test('two CLI entries refuse before auth',async t=>{
+ const h=await harness(t,{edit(s){s.entries.push({...s.entries[0],operation:'other'});s.conventions.push(...['input_schema','result_schema'].map(k=>({path:`/entries/1/${k}`,convention:'cli'})));}}),r=await h.invoke();assert.equal(r.code,2,r.err);assert.match(r.err,/one.*program|one.*command|multiple.*CLI/i);assert.equal(r.clock.gh.length,0);assert.equal(h.fake.posts.length,0);
 });
-test('CLI combined with C app classification refuses before app launch',async t=>{let classified=0;const h=await harness(t),r=await h.invoke([],[],{programApp:{appKind(){classified++;return 'http';},runApp(){assert.fail('mixed kind must not launch');}}});assert.equal(classified,1);assert.equal(r.code,2,r.err);assert.equal(r.clock.gh.length,0);});
+test('CLI plus typed uses CLI default and explicit typed selector',async t=>{
+ const h=await harness(t,{edit(s){s.entries.push({operation:'quote',input_schema:obj({item:string}),result_schema:obj({}),errors:[]});}});
+ pass(await h.invoke(['list']));assert.deepEqual(h.fake.jsonPosts[0].json.input.argv,['list']);
+ pass(await h.invoke(['quote','--item','tea']));assert.equal(h.fake.jsonPosts[1].json.operation,'quote');assert.deepEqual(h.fake.jsonPosts[1].json.input,{item:'tea'});
+});
+test('CLI combined with C HTTP selects serve and CLI name escapes clash',async t=>{
+ let classified=0,launched=0;const h=await harness(t);const programApp={appKind(){classified++;return 'http';},runApp(){launched++;return 0;}};
+ pass(await h.invoke(['serve'],[],{programApp}));assert.equal(launched,1);
+ pass(await h.invoke(['final','serve'],[],{programApp}));assert.equal(launched,1);assert.deepEqual(h.fake.jsonPosts[0].json.input.argv,['serve']);assert.equal(classified,2);
+});
 test('noentry explains context and names actual dependent prompts',async t=>{const h=await harness(t,{edit(s){s.entries=[];s.conventions=[];},files(root){prompt(root,'prompts/consumer.prompt.md',iface(),'consumer','- [Context](place_order.prompt.md)');}}),r=await h.invoke([],[],{programApp:{appKind(){return null;}}});assert.equal(r.code,2,r.err);assert.match(r.err,/pdd:.*has no entry/);assert.match(r.err,/context/);assert.match(r.err,/prompts\/consumer.prompt.md/);assert.equal(r.clock.gh.length,0);});
 test('call cap changes invalidate local replay',async t=>{const h=await harness(t);pass(await h.invoke(['list'],['--max-calls','2']));pass(await h.invoke(['list'],['--max-calls','3']));assert.equal(h.fake.jsonPosts.length,2);});
 test('clock resource never satisfies local cached answer',async t=>{const h=await harness(t,{edit(s){s.resources=[{name:'clock',kind:'port',access:'read',operations:[{name:'now',access:'read',arguments_schema:obj({}),result_schema:obj({utc:string})}]}];}});pass(await h.invoke());pass(await h.invoke());assert.equal(h.fake.jsonPosts.length,2);});
@@ -192,3 +201,47 @@ for(const notice of ['capacity','maintenance'])for(const quiet of [false,true])t
  const r=await h.invoke(['list'],quiet?['-q']:[]);pass(r);assert.equal(r.out,'program only\n');assert.ok(reads>=1);assert.equal(r.err.includes('program diagnostic\n'),true);
  const own=r.err.replace('program diagnostic\n','');if(quiet)assert.equal(own,'');else {assert.match(own,notice==='capacity'?/capacity could not be read/:/maintenance/);assert.ok(own.trim().split('\n').every(line=>line.startsWith('pdd:')),own);}
 });
+
+// Re-review 2 expectations come from DESIGN 1–5 and the lead's 20:13 decisions.
+for(const port of ['1','9000','65535'])test(`prefix port ${port} reaches C unchanged`,async t=>{
+ const h=await harness(t,{cli:false});let called;
+ const r=await h.invoke([],['--port',port],{programApp:{appKind(){return 'http';},runApp(input){called=input;return 0;}}});pass(r);assert.equal(String(called.flags.port),port);assert.equal(h.fake.posts.length,0);
+});
+for(const port of ['0','65536','-1','1.2','abc'])test(`invalid prefix port ${port} refuses locally`,async t=>{const h=await harness(t);const r=await h.invoke(['list'],['--port',port]);assert.equal(r.code,2,r.err);assert.equal(r.clock.gh.length,0);assert.equal(h.fake.posts.length,0);});
+for(const kind of ['http','screen'])test(`${kind} rejects extra words without launching`,async t=>{
+ const h=await harness(t,{cli:false});let launched=0;const r=await h.invoke(['foo','bar'],[],{programApp:{appKind(){return kind;},runApp(){launched++;return 0;}}});assert.equal(r.code,2,r.err);assert.equal(launched,0);assert.equal(r.clock.gh.length,0);assert.equal(h.fake.posts.length,0);if(kind==='http')assert.match(r.err,/HTTP programs take no ARGS\. Call the link\./);
+});
+for(const supplied of [false,true])test(`declared error uses only supplied fix=${supplied}`,async t=>{
+ const h=await harness(t,{report:{verdict:'failed',error:{code:'declared',message:'Own reason',...(supplied?{fix:'Own repair'}:{})}}});const r=await h.invoke();assert.equal(r.code,1);assert.match(r.err,/pdd: declared: Own reason/);assert.doesNotMatch(r.err,/Error declared|Fix the reported/);if(supplied)assert.match(r.err,/Fix: Own repair/);else assert.doesNotMatch(r.err,/Fix:/);
+});
+test('cap refusal prints executable increased max-calls command',async t=>{const h=await harness(t,{report:{verdict:'refused',error:{code:'session-call-cap',message:'Graph requires 5'}}});const r=await h.invoke(['list'],['--max-calls','2']);assert.equal(r.code,125);assert.match(r.err,/Fix: pdd --max-calls (?:[5-9]|[1-9]\d+) .*place_order\.prompt\.md list/);});
+test('one call summary uses singular and rounded seconds',async t=>{const h=await harness(t,{report:{duration_seconds:10.4686}});const r=await h.invoke();pass(r);assert.match(r.err,/1 AI call · \d+ s/);assert.doesNotMatch(r.err,/1 AI calls|\d+\.\d+ s/);});
+test('fresh notice names actual backup path',async t=>{const h=await harness(t,{world:{old:true}});pass(await h.invoke());const r=await h.invoke(['again'],['--fresh']);pass(r);assert.ok(r.err.includes('Old data kept in '+join(h.repo,'.pdd/run/place_order/world.prev.json')),r.err);});
+test('quiet terminal shell runs and preserves shell result without informational lines',async t=>{
+ const h=await harness(t);let opened=0;const stdin=Readable.from([]);stdin.isTTY=true;const r=await h.invoke([],['-q'],{stdin,shell(){opened++;return 23;}});assert.equal(r.code,23,r.err);assert.equal(opened,1);assert.equal(r.out,'');assert.equal(r.err,'');
+});
+test('adding basename collision retains recorded original world and isolates newcomer',async t=>{
+ const h=await harness(t,{world:{saved:true}});pass(await h.invoke());mkdirSync(join(h.repo,'later'));const newcomer='later/place_order.prompt.md';writeFileSync(join(h.repo,newcomer),readFileSync(join(h.repo,PLACE)));
+ const original=await h.invoke([],['--show-data']);pass(original);assert.deepEqual(JSON.parse(original.out),{saved:true});
+ const env={HOME:h.home,PDD_STATE_DIR:h.state,PDD_RUNTIME_URL:h.fake.origin};const io=portsFor(env,{stdin:Readable.from([])});const code=await runPdd([newcomer,'list'],{cwd:h.repo,env,stdout:io.ports.stdout,stderr:io.ports.stderr,stdin:io.ports.stdin,runtimePorts:io.ports});assert.equal(code,0,io.ports.stderr.text);assert.deepEqual(h.fake.posts.filter(p=>p.command==='try').at(-1).request.initial_world,{});assert.deepEqual(h.stored('world.json'),{saved:true});assert.equal(readdirSync(join(h.repo,'.pdd/run')).length,2);
+});
+for(const [words,expected] of [[['serve'],'http'],[['app'],'screen']])test(`complete C catalog routes ${words[0]} with explicit kind`,async t=>{
+ const h=await harness(t,{edit(s){s.entries.push({operation:'route',input_schema:obj({}),result_schema:obj({}),errors:[]},{operation:'quote',input_schema:obj({item:string}),result_schema:obj({}),errors:[]});}});let request,classification;
+ const programApp={appKind(input){classification=input;return {kinds:['http','screen'],httpOperations:['route']};},runApp(input){request=input;return 0;}};
+ pass(await h.invoke(words,[],{programApp}));assert.equal(classification.all,true);assert.equal(request.kind,expected);assert.equal(h.fake.posts.length,0);
+ pass(await h.invoke(['quote','--item','tea'],[],{programApp}));assert.equal(h.fake.jsonPosts[0].json.operation,'quote');assert.deepEqual(h.fake.jsonPosts[0].json.input,{item:'tea'});
+});
+test('without CLI mixed kinds print word table at zero calls',async t=>{
+ const h=await harness(t,{cli:false,edit(s){s.entries[0].operation='quote';s.entries.push({...s.entries[0],operation:'route'});}});let launched=0;
+ const programApp={appKind(){return {kinds:['http','screen'],httpOperations:['route']};},runApp(){launched++;return 0;}};
+ for(const words of [[],['unknown'],['--help']]){const r=await h.invoke(words,[],{programApp});assert.equal(r.code,2,r.err);for(const word of ['serve','app','quote'])assert.match(r.err,new RegExp(word));assert.equal(r.clock.gh.length,0);}
+ assert.equal(launched,0);assert.equal(h.fake.posts.length,0);
+});
+test('leading dash matching operation name remains default CLI argv',async t=>{
+ const h=await harness(t,{edit(s){s.entries.push({operation:'--quote',input_schema:obj({}),result_schema:obj({}),errors:[]});}});pass(await h.invoke(['--quote']));assert.equal(h.fake.jsonPosts[0].json.operation,'main');assert.deepEqual(h.fake.jsonPosts[0].json.input.argv,['--quote']);
+});
+test('CLI plus typed with no words still opens default shell',async t=>{
+ const h=await harness(t,{edit(s){s.entries.push({operation:'quote',input_schema:obj({}),result_schema:obj({}),errors:[]});}});const r=await h.invoke([]);pass(r);assert.match(r.out,/# then: final --help/);assert.equal(h.fake.posts.length,0);
+});
+
+test('remaining session allowance refusal keeps world and recommends no fresh reset',async t=>{const h=await harness(t,{world:{keep:true},report:{remaining_calls:0}});pass(await h.invoke(['first']));const r=await h.invoke(['second']);assert.equal(r.code,125,r.err);assert.doesNotMatch(r.err,/start fresh|--fresh/i);assert.match(r.err,/session|allowance|budget/i);assert.deepEqual(h.stored('world.json'),{keep:true});assert.equal(h.fake.jsonPosts.length,1);});
