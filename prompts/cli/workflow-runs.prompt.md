@@ -8,6 +8,54 @@ Saved fields: `runId`, `workflow`, `repo`, `issue {number,title,url}`, `number`,
 
 `writeRun(record, ports)` adds the C3 view, increments `journalSeq`, sets `updatedAt`, and writes the file atomically (temporary file, then rename). It also updates the index of known runs in `<stateDir>/runs.json` (default `~/.local/state/pdd`). An index failure is ignored. `readRun(runDir)` returns the record or null.
 
+## Concurrent record updates
+
+Module function `updateRun(runDir, update, ports = {})` synchronously returns the
+committed record. `update` is a synchronous callback receiving the latest durable
+record and returning the record to save. Reading that record, applying the
+callback and publishing its result form one indivisible update for this run,
+including across processes. Successful updates of unrelated fields retain both
+writers' effects. The callback owns its intended changes; storage does not infer
+them from an arbitrary old snapshot.
+Ordinary ownership uses `<run folder>/.ordinary-owner` and publishes complete owner
+PID, hostname and a unique token atomically. Reclaim only a confirmed dead owner
+on the same host. Live, foreign-host, malformed and unverifiable ownership,
+including permission-check failures, stays protected; age alone proves nothing.
+Release or reclaim only the observed token, so an older owner cannot remove its
+replacement. A dead owner's leftover ownership must not prevent cancellation.
+Keep the private ownership algorithm free.
+
+Module function `readRunOwnership(runDir, ports = {})` returns `null` when ordinary
+ownership is absent, otherwise a snapshot `{path, pid, hostname, token, warning}`.
+`path` names `.ordinary-owner`; unavailable PID, hostname or token fields are
+`null`. A complete readable owner has `warning: null`; unreadable or malformed
+ownership has a finite diagnostic string in `warning`, retaining available facts.
+This public read performs no acquisition, recovery, release or durable write.
+Its native filesystem binding remains unbound to the Interpreter.
+
+The callback may mutate its supplied record, but must preserve its run identity
+and perform only local state changes. A missing or unreadable existing record,
+callback failure or failed publication fails finitely without claiming a commit;
+never create an existing run from a stale fallback. Before publication, retain the
+previous durable bytes on failure. Always release only this invocation's ownership.
+Ownership covers no external Git, GitHub, Herdr or model effects, readiness waits,
+journal claim acquisition or nested ordinary save. Storage/ownership effects have
+injectable native boundaries with production defaults. Contention fails with a
+finite diagnostic naming the ownership path and available owner details, with one retry instruction. Ordinary acquisition while a delivery
+journal claim is held must wait less than its 250 ms claim budget, never block the
+main thread there for five seconds. Retain journal-before-ordinary ordering.
+
+`writeRun(record, ports)` retains its synchronous signature, supplied-object
+mutation and returned record, and its explicit whole-record save capability. Its
+publication participates in the same ownership boundary; it cannot interrupt an
+`updateRun` between read and commit. It does not infer an untracked caller's intent.
+`updateRun` uses the same C3 derivation, sequence, timestamp and best-effort index
+semantics as `writeRun`, applied to the record being committed. An index failure
+does not undo or misreport that commit.
+Neither function reads or writes the delivery journal. The callback binding and
+native filesystem concurrency are unbound to the Interpreter; no JSON callback
+adapter is part of this API.
+
 Preserve optional `productMarker` when the runner supplies it. Its capture and
 PR propagation belong to [the workflow runner](workflow-runner.prompt.md#product-run-association).
 An older record without the field stays valid; this module does not infer one.
