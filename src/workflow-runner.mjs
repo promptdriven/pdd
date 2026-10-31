@@ -863,6 +863,7 @@ async function askCodeLines(run, area, p) {
 
 async function finishPr(run, area, step, p, lines) {
   const label = prLabel(run, area), existing = prOf(run, area.name);
+  const selectedArea=run.area,selectedGate=run.gate;
   lines.push(`pdd recorded ${step}. pdd opens ${label} now.`);
   const failed = await publishAreaPr(run, area, p, lines, `run done ${step} again`);
   if (failed) return failed;
@@ -871,10 +872,10 @@ async function finishPr(run, area, step, p, lines) {
     // New commits on an open PR 1 keep the question's time, so a yes the person already gave still counts
     // (a change request with pdd workflow changes moves it).
     const at=p.now();
-    commitRun(run,p,latest=>{latest.state='waiting';latest.gate=existing && latest.gate?.kind==='ask-code'?latest.gate:{area:area.name,at,kind:'ask-code'};});
+    commitRun(run,p,latest=>{if(latest.area===selectedArea&&equalFact(latest.gate,selectedGate)){latest.state='waiting';latest.gate=existing && latest.gate?.kind==='ask-code'?latest.gate:{area:area.name,at,kind:'ask-code'};}});
     return done([...lines, ...await askCodeLines(run, area, p)].join('\n'));
   }
-  commitRun(run,p,latest=>{latest.state='waiting';latest.gate=null;});
+  commitRun(run,p,latest=>{if(latest.area===selectedArea&&equalFact(latest.gate,selectedGate)){latest.state='waiting';latest.gate=null;}});
   return done([...lines, `${label === 'the PR' ? 'PR' : label}: ${prOf(run, area.name).url}`, `Tell the person ${label} is open. pdd never merges. Stop here.`].join('\n'));
 }
 
@@ -1174,7 +1175,7 @@ async function approveRunCommand({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports
     commitRun(run,p,latest=>{
       latest.decisions.push({stage:area.name,decision:'approve',via:record.via,at,...(record.text!==undefined?{text:record.text}:{})});
       latest.approvalRecord={kind:record.via,area:area.name,at,...(record.text!==undefined?{userMessage:record.text,userMessageAt:record.at,sessionId:record.sessionId}:{})};
-      latest.state='waiting';if(equalFact(latest.gate,selectedGate))latest.gate=askCode?{area:area.name,at,kind:'ask-code'}:null;
+      if(latest.area===selectedArea&&equalFact(latest.gate,selectedGate)){latest.state='waiting';latest.gate=askCode?{area:area.name,at,kind:'ask-code'}:null;}
       if(equalFact(latest.question,observedQuestion))latest.question=null;
     });
     const head = [`Approved the ${area.name} area of ${label}.${said} pdd opened ${prLabel(run, area) === 'the PR' ? 'the PR' : prLabel(run, area)}.`, ...lines];
