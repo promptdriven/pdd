@@ -306,6 +306,6 @@ The Interpreter entries below name the actual public `changeRun` and `acknowledg
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"draft","prose_sha256":"99e93ec8bd4f5e182b34cde52b4cdd5ceada53cf3d18142fc2a6c263dbea257a","entries":[{"operation":"changeRun","input_schema":{"type":"object","properties":{"ref":{"type":"string"},"text":{"type":"string"},"cwd":{"type":"string"}},"required":["ref","text","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+{"status":"approved","prose_sha256":"99e93ec8bd4f5e182b34cde52b4cdd5ceada53cf3d18142fc2a6c263dbea257a","entries":[{"operation":"changeRun","input_schema":{"type":"object","properties":{"ref":{"type":"string"},"text":{"type":"string"},"cwd":{"type":"string"}},"required":["ref","text","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
 ```
 </details>
