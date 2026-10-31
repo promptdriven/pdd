@@ -65,6 +65,17 @@ whole cache: run all selected work with exactly one plain warning. Unwritable
 cache also fails open with one warning; it cannot block checks or claim a new
 pass was saved. An unsafe cache-clear target is left untouched and fails open.
 
+If cache writes fail, persist a small, bounded repository-keyed invalidation
+tombstone in the existing external runtime-state directory. It contains no
+source or credentials; Story fingerprints and results remain only in the ignored
+`.pdd/test-cache/`. Check recovery state before any reuse. A tombstone prevents
+every older pass from becoming eligible after permissions recover or source is
+reverted. Retire it only after a safe cache clear or reliable fresh cache
+generation has made those older passes ineligible; concurrent failures must not
+be lost during recovery. Unreadable, oversized or unsafe recovery state also
+disables reuse and fails open to ordinary checks with the same single cache
+warning. This recovery state does not change saved-batch reads or retries.
+
 ## Setup
 
 - Repo root = `git rev-parse --show-toplevel` (a worktree is its own root). No Git repo: exit 2.
