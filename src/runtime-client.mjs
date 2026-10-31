@@ -2082,9 +2082,10 @@ async function finishTestAttempts(cache, rows, capture) {
     for (const [story, token] of cache.tokens) {
       if (data.epoch !== token.epoch || data.stories[story]?.generation !== token.generation) continue;
       const own = rows.filter(row => row.story_path === story && !row.cached), footprint = capture.stories?.find(item => item.story_path === story);
-      const outcome = own.some(row => row.state === 'failed') ? 'failed' : own.some(row => row.state === 'refused') ? 'refused' : own.some(row => row.state === 'not_run') ? 'not_run' : own.length && own.every(row => row.state === 'passed' && typeof row.calls === 'number') && !cache.context.interrupted && !cache.context.lintUnknown ? 'passed' : 'unknown';
+      const complete = footprint?.tests.length === own.length && footprint.tests.every(test => own.some(row => row.test === test));
+      const outcome = own.some(row => row.state === 'failed') ? 'failed' : own.some(row => row.state === 'refused') ? 'refused' : own.some(row => row.state === 'not_run') ? 'not_run' : complete && own.length && own.every(row => row.state === 'passed' && typeof row.calls === 'number') && !cache.context.interrupted && !cache.context.lintUnknown ? 'passed' : 'unknown';
       const record = data.stories[story] = { generation: token.generation, outcome: outcome !== 'passed' && data.stories[story]?.outcome === 'failed' ? 'failed' : outcome };
-      if (outcome === 'passed' && token.fingerprint && footprint?.tests.length === own.length && footprint.tests.every(test => own.some(row => row.test === test))) {
+      if (outcome === 'passed' && token.fingerprint) {
         record.pass = { engine_sha: own.find(row => row.engine_sha)?.engine_sha ?? null, fingerprint: token.fingerprint, tests: footprint.tests, passed_at: new Date(cache.context.ports.now()).toISOString(),
           rows: Object.fromEntries(own.map(row => [row.test, { checks: row.checks, criteria: row.criteria, criteria_total: row.criteria_total, draft: !!row.draft }])) };
       }
