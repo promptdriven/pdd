@@ -1783,10 +1783,13 @@ function validTestCache(value) {
       && Array.isArray(row.pass.tests) && row.pass.tests.length > 0 && row.pass.tests.every(path) && new Set(row.pass.tests).size === row.pass.tests.length
       && keys(row.pass.rows, row.pass.tests) && Object.keys(row.pass.rows).length === row.pass.tests.length && row.pass.tests.every(test => evidence(row.pass.rows[test])))));
 }
-function cacheWarning(cache) {
+function cacheWarning(cache, recovered = false) {
   if (!cache.warned) cache.context.warnings.push('Warning: test cache unavailable or damaged; running selected Stories without reuse.');
-  if (!cache.warned) recordCacheInvalidation(cache);
-  cache.warned = true; cache.disabled = true;
+  if (!recovered) {
+    if (!cache.disabled) recordCacheInvalidation(cache);
+    cache.disabled = true;
+  }
+  cache.warned = true;
 }
 // Immutable markers let recovery retire observed failures without erasing a later one.
 function cacheInvalidations(cache) {
@@ -1845,6 +1848,7 @@ async function cacheTransaction(cache, operation, clear = false) {
     catch (error) {
       if (!clear) throw error;
       safeCachePath(cache.fs, cache.path);
+      cacheWarning(cache, true);
       // A new namespace prevents an earlier in-flight generation from matching.
       snapshot = { data: freshTestCache(cache), history: false };
     }

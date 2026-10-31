@@ -37,7 +37,11 @@ test('cache clear repairs malformed regular metadata and persists its new pass',
   const ctx = await fixture(t); writeFileSync(ctx.path, '{truncated');
   const result = await ctx.invoke({ '--cache-clear': true });
   assert.equal(result.sent, 2); assert.equal(result.code, 0);
-  assert.equal((await ctx.invoke()).sent, 0);
+  assert.equal(cacheWarnings(result).length, 1, 'damaged metadata warns once even during clear');
+  assert.ok(result.json.rows.every(row => !row.cached));
+  const repeated = await ctx.invoke();
+  assert.equal(repeated.sent, 0, 'safe clear persists a usable new cache');
+  assert.equal(cacheWarnings(repeated).length, 0);
 });
 
 test('cache refuses symlinked ancestor and unsafe clear without changing external data', async t => {
