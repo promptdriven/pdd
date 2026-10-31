@@ -75,11 +75,14 @@ or approval gate and does not change existing command validation.
 
 Before `stepDone`, `askPerson` or `approveRun` commits any progress or gate
 transition, check the latest owned run: cancelled or completed runs stay ended.
-Refuse with a nonzero reply saying the run ended; preserve state, gate, question,
+For a run newly ended since this invocation selected it, refuse with a nonzero
+reply saying the run ended; preserve state, gate, question,
 steps and decisions and start no chat. This check wins over stale command intent,
 including cancellation or completion while the command waited. The explicit
 existing done-at-PR-1 code continuation described below remains available for a
 new approval invocation; it does not authorize a stale approval to revive a run.
+Preserve existing already-ended early-return results, including successful done/ask
+stop replies without reading the delivery journal.
 
 Approval applies only to the gate actually shown for this invocation. Recheck its
 area, kind and time against the latest gate before recording approval or doing
@@ -113,10 +116,13 @@ Ordinary updates leave accepted requests and acknowledgement fields in the
 authoritative journal untouched. Change delivery retains its existing
 journal-then-ordinary update order; no ordinary update acquires a journal claim.
 Keep existing custody, uptake warnings, side-effect order and approval rules.
-`runStatus` exposes ordinary ownership through a pure snapshot read: detailed,
+`runStatus` reads ordinary ownership before any write-capable PR/chat refresh and
+exposes it through a pure snapshot read: detailed,
 list/all/cancelled text and JSON identify the held ownership path and its available
 PID, hostname and token, or say ownership is unreadable/malformed. No owner means
-no held-lock claim. Reading status never reclaims ownership; busy ownership cannot
+no held-lock claim. For unverifiable ownership, give the path and explain manual
+removal only after verifying no pdd command is running; do not recommend removal
+while a live owner works. Reading status never reclaims ownership; busy ownership cannot
 hide the saved run or turn status into a failed save. Cancellation uses the same
 recoverable ownership boundary and can proceed after confirmed-dead reclamation.
 The native callback, ownership and overlapping public saves remain unbound to
@@ -330,6 +336,6 @@ The Interpreter entries below name the actual public `changeRun` and `acknowledg
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status": "draft","prose_sha256":"fa56f606179f51f25c177cf5a4be5c26775f83918376a2a4596be3251373ae9f","entries":[{"operation":"changeRun","input_schema":{"type":"object","properties":{"ref":{"type":"string"},"text":{"type":"string"},"cwd":{"type":"string"}},"required":["ref","text","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]},{"operation":"acknowledgeRequest","input_schema":{"type":"object","properties":{"requestId":{"type":"string"},"summary":{"type":"string"},"cwd":{"type":"string"}},"required":["requestId","summary","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+{"status": "draft","prose_sha256":"c09789d52fb6adbe8eae17978dfa73e418145ff41267551e4f74e3e4dde4161f","entries":[{"operation":"changeRun","input_schema":{"type":"object","properties":{"ref":{"type":"string"},"text":{"type":"string"},"cwd":{"type":"string"}},"required":["ref","text","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]},{"operation":"acknowledgeRequest","input_schema":{"type":"object","properties":{"requestId":{"type":"string"},"summary":{"type":"string"},"cwd":{"type":"string"}},"required":["requestId","summary","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
 ```
 </details>
