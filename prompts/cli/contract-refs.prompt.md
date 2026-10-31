@@ -154,6 +154,35 @@ not an approval hash or a pin that prevents changes. A no-reference result has
 
 ## Catalog and copy proposals
 
+### Shared native lossless JSON bindings
+
+Expose the existing lossless codec through these module functions for native
+consumers, including preflight. These are not additional Runtime entries:
+
+- `parseJsonValue(text)` takes a JSON text string and returns an opaque lossless
+  JSON tree. Invalid JSON throws `SyntaxError`; a non-string argument throws
+  `TypeError`. Reuse the existing parser, including exact numeric tokens, own
+  keys and parsed container layout; do not parse through rounded numeric values.
+- `stringifyJsonValue(value)` returns JSON text for a parsed tree or subvalue
+  through the existing codec. Preserve exact number tokens, own-key order and
+  retained unchanged parsed container layout. This returns the selected JSON
+  value, not whitespace outside it or an enclosing source file.
+- `jsonNumberText(value)` returns the original JSON number token string for a
+  numeric node, or `null` for a nonnumeric node. Callers must not inspect private
+  brands or assume a numeric node is an ordinary JavaScript number.
+- `jsonValuesEqual(a,b)` returns Boolean general JSON value equality using the
+  existing value identity: object key order is immaterial, arrays retain order,
+  and numeric tokens compare by exact mathematical value. Thus `1`, `1.0` and
+  `1e0` are equal; `9007199254740993` and `9007199254740992` differ. This is literal
+  equality for enum, const and uniqueItems, not schema-copy comparison: it never
+  ignores annotations or reorders required/enum arrays in a supplied value.
+
+The domain of codec/equality/accessor values is trees and subvalues returned by
+`parseJsonValue`; native consumers may traverse own object keys and array items
+but must consume them read-only. These bindings promise no editing API or new
+write behavior. Reuse the current parser, renderer and general value identity;
+do not duplicate their implementations or expose their private representation.
+
 Module function `catalogRecords(sources, targets = [])` takes `{path,text}` files
 from `contracts/` and canonical used-target strings, returning `{records,warnings}`.
 Each record is
@@ -171,7 +200,10 @@ for every discovered record. Warn about invalid or ambiguous records without
 choosing an arbitrary record.
 
 Module function `compareCopies(sources, records)` takes prompt sources and catalog
-records, returning `{matches,warnings}`. A match is
+records, returning `{matches,warnings}`. The caller selects the authority set;
+compare only supplied records, never discover additional authorities implicitly.
+Local plan-check declaration policy belongs to [contracts](contracts.prompt.md);
+ordinary listing/sync retain their catalog selection. A match is
 `{path,source_pointer,target,kind,differences}`, where `kind` is `exact` or `near`
 and differences are plain field/constraint descriptions. Inspect the same schema
 positions as expansion, skipping existing references. Compare object schemas with
@@ -199,6 +231,13 @@ nested types with the same field set; an equal candidate needs no drift warning.
 Prefer a unique exact candidate; otherwise require exactly one candidate. Multiple
 candidates produce advice and no selected match.
 
+Module function `schemaValuesEqual(a,b)` returns Boolean schema equality for
+read-only trees/subvalues from `parseJsonValue`. Forward the existing schema
+comparison `differences(a,b).length === 0`; the semantic comparison rules above
+own its meaning. Apply no copy eligibility or field-count threshold. Do not add
+a second codec, schema matcher or native write effect. The four existing native
+lossless JSON bindings retain their public contracts.
+
 Module function `planSync(sources, matches)` returns `{edits,warnings}`; an edit is
 `{path,before,after}`. Replace selected exact/near inline schemas by `$contract`
 objects, retaining their local title/description. Near conversion deliberately
@@ -222,7 +261,7 @@ the runtime client owns saved Check provenance and freshness judgments.
 
 ```json
 {
-  "status": "draft", "prose_sha256": "4ccf86b2b020563b8aedf6322cd1a53564b5c54c88e76e4ffbc8cd61659ff5d0",
+  "status": "draft", "prose_sha256": "1696894a32f481a0a142a022db13d31d15124877ab4a2e25432df595dd403349",
   "entries": [{
     "operation": "expandSource",
     "input_schema": {

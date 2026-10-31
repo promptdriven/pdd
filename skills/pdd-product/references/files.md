@@ -54,7 +54,21 @@ repository; a reference in a comment or unrelated prose is not PR ownership.
 Each record has a `### record_name` heading and a fenced `json` schema. Schema
 objects name properties, required fields and additionalProperties explicitly.
 `contracts/world.md` has a key table: Key, What it holds, Writer, Readers, How it
-is written. Each key has one writer. State shared refusal and update rules.
+is written, with an optional Schema column. Accept Key or Path with Writer.
+A Key is an exact top-level seed key; a Path is an exact nested declaration,
+including separately backticked path lists. Follow the
+[writer rules](../../../prompts/cli/contracts.prompt.md#world-keys-and-their-seed-values)
+for actor lists, initialization labels and comma qualifiers. Parent and child
+paths have independent ownership; two runtime actors for one exact path conflict. Prefer explicit
+repository-root Schema targets for new plans, for example
+`contracts/world.md#orders`; existing tables may omit or leave them blank.
+Only declared schemas validate corresponding present seed values. Symbolic paths
+without schemas declare ownership only, without inferred template matching.
+Do not infer schema links from names or prose. Identical repeated declarations coalesce;
+conflicting runtime writers or explicit schemas for the same exact path are errors.
+A declared key may be absent initially. Present seed branches without declarations
+warn once with their exact paths under either heading; coverage of a declared
+container does not assign its writer to child paths. State shared refusal and update rules.
 Put shared starting data in `contracts/seed-world.json`.
 
 For example, phone → server crosses order_in and order_view under

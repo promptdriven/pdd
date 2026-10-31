@@ -1,0 +1,2068 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/local-contract-check.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "I can check a plan before parts have prompts, Stories or tests, with no server, model, authentication, runtime slot or file change."
+    },
+    {
+      "id": "AC2",
+      "text": "I see a nonzero result with a file, record and field when a shared schema, reference or eligible inline copy is wrong."
+    },
+    {
+      "id": "AC3",
+      "text": "I can link each world key explicitly to its schema and check every present seed value with one declared writer."
+    },
+    {
+      "id": "AC4",
+      "text": "I can leave a declared world key out of the starting seed and repeat an identical ownership row without failing."
+    },
+    {
+      "id": "AC5",
+      "text": "I see unavailable validation instead of a pass or an invented mismatch when a required selected schema or value predicate cannot be established locally."
+    },
+    {
+      "id": "AC6",
+      "text": "I can use array and primitive component schemas, JSON schema containers and seed data without confusing their roles."
+    },
+    {
+      "id": "AC7",
+      "text": "I keep exact JSON numbers and own keys, and my local check leaves all source and expected values unchanged."
+    },
+    {
+      "id": "AC8",
+      "text": "I can still list contracts and preview migration with their advisory behavior; invalid check combinations are command errors."
+    },
+    {
+      "id": "AC9",
+      "text": "I can plan without world files when both are absent, while a missing partner or broken explicit schema link identifies what needs fixing."
+    }
+  ],
+  "boundary": "real CLI argv or runContracts with real safe Git-visible filesystem discovery; no Runtime entry is claimed",
+  "setup": {
+    "git_repository": true,
+    "base_files": {
+      "contracts/world.md": "# Shared world\n| Key | What it holds | Writer | Readers | How it is written | Schema |\n|---|---|---|---|---|---|\n| items | Values | owner | reader | Replace | contracts/world.md#items |\n\n### items\n```json\n{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"minimum\":0}}\n```\n",
+      "contracts/seed-world.json": "{\"items\":[0,2]}\n"
+    },
+    "case_files": "Each case starts from base_files, applies delete_files then set_files, all Git-visible. JSON content strings are exact authored bytes. No fixture describes a live app.",
+    "observations": "diagnostics entries require file/record/field substrings in one finite diagnostic, not exact prose; kind unavailable must say unavailable. checked counts are exact only where supplied. Calls are independent spies; preserve every before/after source byte. Plain listing/sync may read local history; --check must not. Missing optional expected fields do not authorize skipping declared observations."
+  },
+  "cases": [
+    {
+      "id": "plan-only-valid",
+      "criteria": [
+        "AC1",
+        "AC3",
+        "AC7"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {},
+      "delete_files": [],
+      "expected": {
+        "exit_code": 0,
+        "diagnostics": [],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "seed-negative",
+      "criteria": [
+        "AC2",
+        "AC3"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/seed-world.json": "{\"items\":[-1]}\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 4,
+        "diagnostics": [
+          {
+            "file": "contracts/seed-world.json",
+            "record": "items",
+            "field": "/items/0"
+          }
+        ],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "seed-wrong-type",
+      "criteria": [
+        "AC3"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/seed-world.json": "{\"items\":false}\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 4,
+        "diagnostics": [
+          {
+            "file": "contracts/seed-world.json",
+            "record": "items",
+            "field": "/items"
+          }
+        ],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "absent-declared-key",
+      "criteria": [
+        "AC4"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/seed-world.json": "{}\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 0,
+        "diagnostics": [],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "empty-array",
+      "criteria": [
+        "AC3"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/seed-world.json": "{\"items\":[]}\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 0,
+        "diagnostics": [],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "extra-seed-key",
+      "criteria": [
+        "AC3"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/seed-world.json": "{\"items\":[],\"extra\":0}\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 0,
+        "diagnostics": [],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        },
+        "warnings": [
+          {
+            "kind": "world-writer-missing",
+            "file": "contracts/seed-world.json",
+            "world_keys": [
+              "/extra"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "identical-row",
+      "criteria": [
+        "AC4"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/world.md": "# Shared world\n| Key | What it holds | Writer | Readers | How it is written | Schema |\n|---|---|---|---|---|---|\n| items | Values | owner | reader | Replace | contracts/world.md#items |\n| items | Values | owner | reader | Replace | contracts/world.md#items |\n\n### items\n```json\n{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"minimum\":0}}\n```\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 0,
+        "diagnostics": [],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "two-writers",
+      "criteria": [
+        "AC3"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/world.md": "# Shared world\n| Key | What it holds | Writer | Readers | How it is written | Schema |\n|---|---|---|---|---|---|\n| items | Values | owner | reader | Replace | contracts/world.md#items |\n| items | Values | second | reader | Replace | contracts/world.md#items |\n\n### items\n```json\n{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"minimum\":0}}\n```\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 4,
+        "diagnostics": [
+          {
+            "file": "contracts/world.md",
+            "record": "items",
+            "field": "Writer"
+          }
+        ],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "writer-list",
+      "criteria": [
+        "AC3"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/world.md": "# Shared world\n| Key | What it holds | Writer | Readers | How it is written | Schema |\n|---|---|---|---|---|---|\n| items | Values | owner, second | reader | Replace | contracts/world.md#items |\n\n### items\n```json\n{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"minimum\":0}}\n```\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 4,
+        "diagnostics": [
+          {
+            "file": "contracts/world.md",
+            "record": "items",
+            "field": "Writer"
+          }
+        ],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "empty-writer",
+      "criteria": [
+        "AC3"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/world.md": "# Shared world\n| Key | What it holds | Writer | Readers | How it is written | Schema |\n|---|---|---|---|---|---|\n| items | Values |  | reader | Replace | contracts/world.md#items |\n\n### items\n```json\n{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"minimum\":0}}\n```\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 4,
+        "diagnostics": [
+          {
+            "file": "contracts/world.md",
+            "record": "items",
+            "field": "Writer"
+          }
+        ],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "conflicting-schema",
+      "criteria": [
+        "AC3"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/world.md": "# Shared world\n| Key | What it holds | Writer | Readers | How it is written | Schema |\n|---|---|---|---|---|---|\n| items | Values | owner | reader | Replace | contracts/world.md#items |\n| items | Values | owner | reader | Replace | contracts/other.md#other |\n\n### items\n```json\n{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"minimum\":0}}\n```\n",
+        "contracts/other.md": "### other\n```json\n{\"type\":\"array\",\"items\":{\"type\":\"string\"}}\n```\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 4,
+        "diagnostics": [
+          {
+            "file": "contracts/world.md",
+            "record": "items",
+            "field": "Schema"
+          }
+        ],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "legacy-table-check",
+      "criteria": [
+        "AC9"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/world.md": "# Shared world\n| Key | What it holds | Writer | Readers | How it is written |\n|---|---|---|---|---|\n| items | Values | owner | reader | Replace |\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 0,
+        "diagnostics": [],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        },
+        "skipped_files": []
+      }
+    },
+    {
+      "id": "missing-seed",
+      "criteria": [
+        "AC9"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {},
+      "delete_files": [
+        "contracts/seed-world.json"
+      ],
+      "expected": {
+        "exit_code": 4,
+        "diagnostics": [
+          {
+            "file": "contracts/seed-world.json",
+            "record": "world",
+            "field": ""
+          }
+        ],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "missing-world",
+      "criteria": [
+        "AC9"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {},
+      "delete_files": [
+        "contracts/world.md"
+      ],
+      "expected": {
+        "exit_code": 4,
+        "diagnostics": [
+          {
+            "file": "contracts/world.md",
+            "record": "world",
+            "field": ""
+          }
+        ],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "empty-library",
+      "criteria": [
+        "AC1",
+        "AC9"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {},
+      "delete_files": [
+        "contracts/world.md",
+        "contracts/seed-world.json"
+      ],
+      "expected": {
+        "exit_code": 0,
+        "diagnostics": [],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        },
+        "checked_records": 0,
+        "checked_world_values": 0
+      }
+    },
+    {
+      "id": "schema-library",
+      "criteria": [
+        "AC6",
+        "AC9"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/shapes.md": "### flag\n```json\n{\"type\":\"boolean\"}\n```\n### list\n```json\n{\"type\":\"array\",\"items\":{\"type\":\"string\"}}\n```\n"
+      },
+      "delete_files": [
+        "contracts/world.md",
+        "contracts/seed-world.json"
+      ],
+      "expected": {
+        "exit_code": 0,
+        "diagnostics": [],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "unsupported-keyword",
+      "criteria": [
+        "AC2"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/bad.md": "### broken\n```json\n{\"$ref\":\"x\"}\n```\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 4,
+        "diagnostics": [
+          {
+            "file": "contracts/bad.md",
+            "record": "contracts/bad.md#broken",
+            "field": ""
+          }
+        ],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "missing-type-record",
+      "criteria": [
+        "AC2"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/bad.md": "### broken\n```json\n{}\n```\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 4,
+        "diagnostics": [
+          {
+            "file": "contracts/bad.md",
+            "record": "contracts/bad.md#broken",
+            "field": ""
+          }
+        ],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "json-container-leaves",
+      "criteria": [
+        "AC6"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/shapes.json": "{\"defs\":{\"flag\":{\"type\":\"boolean\"},\"list\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}}}\n"
+      },
+      "delete_files": [
+        "contracts/world.md",
+        "contracts/seed-world.json"
+      ],
+      "expected": {
+        "exit_code": 0,
+        "diagnostics": [],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "json-container-bad-ref",
+      "criteria": [
+        "AC2",
+        "AC6"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/shapes.json": "{\"defs\":{\"bad\":{\"$ref\":\"x\"}}}\n"
+      },
+      "delete_files": [
+        "contracts/world.md",
+        "contracts/seed-world.json"
+      ],
+      "expected": {
+        "exit_code": 4,
+        "diagnostics": [
+          {
+            "file": "contracts/shapes.json",
+            "record": "contracts/shapes.json#/defs/bad",
+            "field": ""
+          }
+        ],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "unknown-json-role",
+      "criteria": [
+        "AC5"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/unknown.json": "{\"note\":\"hello\"}\n"
+      },
+      "delete_files": [
+        "contracts/world.md",
+        "contracts/seed-world.json"
+      ],
+      "expected": {
+        "exit_code": 0,
+        "diagnostics": [],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        },
+        "skipped_files": [
+          "contracts/unknown.json"
+        ]
+      }
+    },
+    {
+      "id": "empty-container-branch",
+      "criteria": [
+        "AC5"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/unknown.json": "{\"defs\":{\"bad\":{}}}\n"
+      },
+      "delete_files": [
+        "contracts/world.md",
+        "contracts/seed-world.json"
+      ],
+      "expected": {
+        "exit_code": 0,
+        "diagnostics": [],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        },
+        "skipped_files": [
+          "contracts/unknown.json"
+        ]
+      }
+    },
+    {
+      "id": "explicit-empty-leaf",
+      "criteria": [
+        "AC2",
+        "AC6"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/world.md": "# Shared world\n| Key | What it holds | Writer | Readers | How it is written | Schema |\n|---|---|---|---|---|---|\n| items | Values | owner | reader | Replace | contracts/shapes.json#/defs/bad |\n",
+        "contracts/shapes.json": "{\"defs\":{\"bad\":{}}}\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 4,
+        "diagnostics": [
+          {
+            "file": "contracts/shapes.json",
+            "record": "contracts/shapes.json#/defs/bad",
+            "field": ""
+          }
+        ],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "missing-reference",
+      "criteria": [
+        "AC2"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/world.md": "# Shared world\n| Key | What it holds | Writer | Readers | How it is written | Schema |\n|---|---|---|---|---|---|\n| items | Values | owner | reader | Replace | contracts/missing.md#items |\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 4,
+        "diagnostics": [
+          {
+            "file": "contracts/world.md",
+            "record": "contracts/missing.md#items",
+            "field": "Schema"
+          }
+        ],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "transitive-reference-cycle",
+      "criteria": [
+        "AC2"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/world.md": "# Shared world\n| Key | What it holds | Writer | Readers | How it is written | Schema |\n|---|---|---|---|---|---|\n| items | Values | owner | reader | Replace | contracts/world.md#items |\n\n### items\n```json\n{\"$contract\":\"contracts/cycle.md#x\"}\n```\n",
+        "contracts/cycle.md": "### x\n```json\n{\"$contract\":\"contracts/world.md#items\"}\n```\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 4,
+        "diagnostics": [
+          {
+            "file": "contracts/world.md",
+            "record": "contracts/world.md#items",
+            "field": ""
+          }
+        ],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "skip-unrelated-table",
+      "criteria": [
+        "AC3",
+        "AC6"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/world.md": "| Note | Value |\n|---|---|\n| Key | prose |\n\n```text\n| Key | Writer |\n|---|---|\n| fake | two,writers |\n```\n\n# Shared world\n| Key | What it holds | Writer | Readers | How it is written | Schema |\n|---|---|---|---|---|---|\n| items | Values | owner | reader | Replace | contracts/world.md#items |\n\n### items\n```json\n{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"minimum\":0}}\n```\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 0,
+        "diagnostics": [],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "null-is-present",
+      "criteria": [
+        "AC3",
+        "AC5",
+        "AC7"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/world.md": "# Shared world\n| Key | What it holds | Writer | Readers | How it is written | Schema |\n|---|---|---|---|---|---|\n| items | Values | owner | reader | Replace | contracts/world.md#items |\n\n### items\n```json\n{\"type\":\"null\"}\n```\n",
+        "contracts/seed-world.json": "{\"items\":null}\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 0,
+        "diagnostics": [],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "false-is-present",
+      "criteria": [
+        "AC3",
+        "AC5",
+        "AC7"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/world.md": "# Shared world\n| Key | What it holds | Writer | Readers | How it is written | Schema |\n|---|---|---|---|---|---|\n| items | Values | owner | reader | Replace | contracts/world.md#items |\n\n### items\n```json\n{\"type\":\"boolean\"}\n```\n",
+        "contracts/seed-world.json": "{\"items\":false}\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 0,
+        "diagnostics": [],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "zero-is-present",
+      "criteria": [
+        "AC3",
+        "AC5",
+        "AC7"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/world.md": "# Shared world\n| Key | What it holds | Writer | Readers | How it is written | Schema |\n|---|---|---|---|---|---|\n| items | Values | owner | reader | Replace | contracts/world.md#items |\n\n### items\n```json\n{\"type\":\"integer\"}\n```\n",
+        "contracts/seed-world.json": "{\"items\":0}\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 0,
+        "diagnostics": [],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "empty-object-is-present",
+      "criteria": [
+        "AC3",
+        "AC5",
+        "AC7"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/world.md": "# Shared world\n| Key | What it holds | Writer | Readers | How it is written | Schema |\n|---|---|---|---|---|---|\n| items | Values | owner | reader | Replace | contracts/world.md#items |\n\n### items\n```json\n{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false}\n```\n",
+        "contracts/seed-world.json": "{\"items\":{}}\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 0,
+        "diagnostics": [],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "large-const-unavailable",
+      "criteria": [
+        "AC3",
+        "AC5",
+        "AC7"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/world.md": "# Shared world\n| Key | What it holds | Writer | Readers | How it is written | Schema |\n|---|---|---|---|---|---|\n| items | Values | owner | reader | Replace | contracts/world.md#items |\n\n### items\n```json\n{\"type\":\"integer\",\"const\":9007199254740993}\n```\n",
+        "contracts/seed-world.json": "{\"items\":9007199254740992}\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 5,
+        "diagnostics": [
+          {
+            "file": "contracts/seed-world.json",
+            "record": "items",
+            "field": "/items",
+            "kind": "unavailable"
+          }
+        ],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "precision-changing-decimal-unavailable",
+      "criteria": [
+        "AC3",
+        "AC5",
+        "AC7"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/world.md": "# Shared world\n| Key | What it holds | Writer | Readers | How it is written | Schema |\n|---|---|---|---|---|---|\n| items | Values | owner | reader | Replace | contracts/world.md#items |\n\n### items\n```json\n{\"type\":\"number\",\"minimum\":0.1}\n```\n",
+        "contracts/seed-world.json": "{\"items\":0.10000000000000001}\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 5,
+        "diagnostics": [
+          {
+            "file": "contracts/seed-world.json",
+            "record": "items",
+            "field": "/items",
+            "kind": "unavailable"
+          }
+        ],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "portable-pattern-match",
+      "criteria": [
+        "AC3",
+        "AC5",
+        "AC7"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/world.md": "# Shared world\n| Key | What it holds | Writer | Readers | How it is written | Schema |\n|---|---|---|---|---|---|\n| items | Values | owner | reader | Replace | contracts/world.md#items |\n\n### items\n```json\n{\"type\":\"string\",\"pattern\":\"^[A-Z]+$\"}\n```\n",
+        "contracts/seed-world.json": "{\"items\":\"OK\"}\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 0,
+        "diagnostics": [],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "portable-pattern-miss",
+      "criteria": [
+        "AC3",
+        "AC5",
+        "AC7"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/world.md": "# Shared world\n| Key | What it holds | Writer | Readers | How it is written | Schema |\n|---|---|---|---|---|---|\n| items | Values | owner | reader | Replace | contracts/world.md#items |\n\n### items\n```json\n{\"type\":\"string\",\"pattern\":\"^[A-Z]+$\"}\n```\n",
+        "contracts/seed-world.json": "{\"items\":\"bad\"}\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 4,
+        "diagnostics": [
+          {
+            "file": "contracts/seed-world.json",
+            "record": "items",
+            "field": "/items"
+          }
+        ],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "nonportable-pattern",
+      "criteria": [
+        "AC3",
+        "AC5",
+        "AC7"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/world.md": "# Shared world\n| Key | What it holds | Writer | Readers | How it is written | Schema |\n|---|---|---|---|---|---|\n| items | Values | owner | reader | Replace | contracts/world.md#items |\n\n### items\n```json\n{\"type\":\"string\",\"pattern\":\"\\\\p{L}+\"}\n```\n",
+        "contracts/seed-world.json": "{\"items\":\"abc\"}\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 5,
+        "diagnostics": [
+          {
+            "file": "contracts/seed-world.json",
+            "record": "items",
+            "field": "/items",
+            "kind": "unavailable"
+          }
+        ],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "seed-schema-looking-own-keys",
+      "criteria": [
+        "AC6",
+        "AC7"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/world.md": "# Shared world\n| Key | What it holds | Writer | Readers | How it is written | Schema |\n|---|---|---|---|---|---|\n| __proto__ | Data | owner | reader | Replace | contracts/shapes.md#number |\n| constructor | Data | owner | reader | Replace | contracts/shapes.md#number |\n| type | Data | owner | reader | Replace | contracts/shapes.md#number |\n| properties | Data | owner | reader | Replace | contracts/shapes.md#number |\n",
+        "contracts/shapes.md": "### number\n```json\n{\"type\":\"integer\"}\n```\n",
+        "contracts/seed-world.json": "{\"__proto__\":0,\"constructor\":1,\"type\":2,\"properties\":3}\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 0,
+        "diagnostics": [],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "plain-list",
+      "criteria": [
+        "AC8"
+      ],
+      "argv": [
+        "contracts"
+      ],
+      "set_files": {
+        "contracts/world.md": "# Shared world\n| Key | What it holds | Writer | Readers | How it is written |\n|---|---|---|---|---|\n| items | Values | owner | reader | Replace |\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 0,
+        "diagnostics": [],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "sync-preview",
+      "criteria": [
+        "AC8"
+      ],
+      "argv": [
+        "contracts",
+        "sync"
+      ],
+      "set_files": {
+        "contracts/world.md": "# Shared world\n| Key | What it holds | Writer | Readers | How it is written |\n|---|---|---|---|---|\n| items | Values | owner | reader | Replace |\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 0,
+        "diagnostics": [],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "check-sync-conflict",
+      "criteria": [
+        "AC8"
+      ],
+      "argv": [
+        "contracts",
+        "sync",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/world.md": "# Shared world\n| Key | What it holds | Writer | Readers | How it is written |\n|---|---|---|---|---|\n| items | Values | owner | reader | Replace |\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 2,
+        "diagnostics": [],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "check-write-conflict",
+      "criteria": [
+        "AC8"
+      ],
+      "argv": [
+        "contracts",
+        "--check",
+        "--write"
+      ],
+      "set_files": {
+        "contracts/world.md": "# Shared world\n| Key | What it holds | Writer | Readers | How it is written |\n|---|---|---|---|---|\n| items | Values | owner | reader | Replace |\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 2,
+        "diagnostics": [],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "eligible-copy-drift",
+      "criteria": [
+        "AC2"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/record.md": "### message\n```json\n{\"type\":\"object\",\"properties\":{\"a\":{\"type\":\"integer\",\"minimum\":1},\"b\":{\"type\":\"string\"},\"c\":{\"type\":\"boolean\"},\"d\":{\"type\":\"string\"}},\"required\":[\"a\",\"b\",\"c\",\"d\"],\"additionalProperties\":false}\n```\n",
+        "prompts/part.prompt.md": "# Part\n<details><summary>Runtime interface</summary>\n\n```json\n{\"status\":\"draft\",\"prose_sha256\":\"\",\"entries\":[{\"operation\":\"send\",\"input_schema\":{\"type\":\"object\",\"properties\":{\"a\":{\"type\":\"integer\",\"minimum\":0},\"b\":{\"type\":\"string\"},\"c\":{\"type\":\"boolean\"},\"d\":{\"type\":\"string\"}},\"required\":[\"a\",\"b\",\"c\",\"d\"],\"additionalProperties\":false},\"result_schema\":{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false},\"errors\":[]}],\"calls\":[],\"resources\":[],\"limits\":{\"max_steps\":1,\"max_model_calls\":1},\"conventions\":[]}\n```\n</details>\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 4,
+        "diagnostics": [
+          {
+            "file": "prompts/part.prompt.md",
+            "record": "contracts/record.md#message",
+            "field": "/properties/a/minimum"
+          }
+        ],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "exact-copy-agrees",
+      "criteria": [
+        "AC2"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/record.md": "### message\n```json\n{\"type\":\"object\",\"properties\":{\"a\":{\"type\":\"integer\",\"minimum\":1},\"b\":{\"type\":\"string\"},\"c\":{\"type\":\"boolean\"},\"d\":{\"type\":\"string\"}},\"required\":[\"a\",\"b\",\"c\",\"d\"],\"additionalProperties\":false}\n```\n",
+        "prompts/part.prompt.md": "# Part\n<details><summary>Runtime interface</summary>\n\n```json\n{\"status\":\"draft\",\"prose_sha256\":\"\",\"entries\":[{\"operation\":\"send\",\"input_schema\":{\"type\":\"object\",\"properties\":{\"a\":{\"type\":\"integer\",\"minimum\":1},\"b\":{\"type\":\"string\"},\"c\":{\"type\":\"boolean\"},\"d\":{\"type\":\"string\"}},\"required\":[\"a\",\"b\",\"c\",\"d\"],\"additionalProperties\":false},\"result_schema\":{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false},\"errors\":[]}],\"calls\":[],\"resources\":[],\"limits\":{\"max_steps\":1,\"max_model_calls\":1},\"conventions\":[]}\n```\n</details>\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 0,
+        "diagnostics": [],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "json-root-contract-reference",
+      "criteria": [
+        "AC2",
+        "AC6"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/alias.json": "{\"$contract\":\"contracts/world.md#items\"}\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 0,
+        "diagnostics": [],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "invalid-json-record",
+      "criteria": [
+        "AC2"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/bad.md": "### bad\n```json\n{\"type\":\n```\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 4,
+        "diagnostics": [
+          {
+            "file": "contracts/bad.md",
+            "record": "contracts/bad.md#bad",
+            "field": ""
+          }
+        ],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "nested-schema-error",
+      "criteria": [
+        "AC2"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/bad.md": "### bad\n```json\n{\"type\":\"array\",\"items\":{\"type\":[\"string\",\"null\"]}}\n```\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 4,
+        "diagnostics": [
+          {
+            "file": "contracts/bad.md",
+            "record": "contracts/bad.md#bad",
+            "field": "/items"
+          }
+        ],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "definite-problem-wins-unavailable",
+      "criteria": [
+        "AC2",
+        "AC5"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/unknown.json": "{\"note\":\"hello\"}\n",
+        "contracts/seed-world.json": "{\"items\":[-1]}\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 4,
+        "diagnostics": [
+          {
+            "file": "contracts/seed-world.json",
+            "record": "items",
+            "field": "/items/0"
+          }
+        ],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        },
+        "skipped_files": [
+          "contracts/unknown.json"
+        ]
+      }
+    },
+    {
+      "id": "nonobject-seed",
+      "criteria": [
+        "AC3"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/seed-world.json": "[]\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 4,
+        "diagnostics": [
+          {
+            "file": "contracts/seed-world.json",
+            "record": "world",
+            "field": ""
+          }
+        ],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "ambiguous-copy-unavailable",
+      "criteria": [
+        "AC2",
+        "AC5"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/record.md": "### message\n```json\n{\"type\":\"object\",\"properties\":{\"a\":{\"type\":\"integer\",\"minimum\":1},\"b\":{\"type\":\"string\"},\"c\":{\"type\":\"boolean\"},\"d\":{\"type\":\"string\"}},\"required\":[\"a\",\"b\",\"c\",\"d\"],\"additionalProperties\":false}\n```\n",
+        "prompts/part.prompt.md": "# Part\n<details><summary>Runtime interface</summary>\n\n```json\n{\"status\":\"draft\",\"prose_sha256\":\"\",\"entries\":[{\"operation\":\"send\",\"input_schema\":{\"type\":\"object\",\"properties\":{\"a\":{\"type\":\"integer\",\"minimum\":1},\"b\":{\"type\":\"string\"},\"c\":{\"type\":\"boolean\"},\"d\":{\"type\":\"string\"}},\"required\":[\"a\",\"b\",\"c\",\"d\"],\"additionalProperties\":false},\"result_schema\":{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false},\"errors\":[]}],\"calls\":[],\"resources\":[],\"limits\":{\"max_steps\":1,\"max_model_calls\":1},\"conventions\":[]}\n```\n</details>\n",
+        "contracts/other.md": "### message\n```json\n{\"type\":\"object\",\"properties\":{\"a\":{\"type\":\"integer\",\"minimum\":1},\"b\":{\"type\":\"string\"},\"c\":{\"type\":\"boolean\"},\"d\":{\"type\":\"string\"}},\"required\":[\"a\",\"b\",\"c\",\"d\"],\"additionalProperties\":false}\n```\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 5,
+        "diagnostics": [
+          {
+            "file": "prompts/part.prompt.md",
+            "record": "contracts/record.md#message",
+            "field": "/entries/0/input_schema",
+            "kind": "unavailable"
+          }
+        ],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "required-symlink",
+      "criteria": [
+        "AC1",
+        "AC7"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {},
+      "delete_files": [],
+      "symlinks": {
+        "contracts/world.md": "outside-world.md"
+      },
+      "expected": {
+        "exit_code": 4,
+        "diagnostics": [
+          {
+            "file": "contracts/world.md",
+            "record": "world",
+            "field": ""
+          }
+        ],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0,
+          "symlink_target_read": 0
+        }
+      }
+    },
+    {
+      "id": "no-repository",
+      "criteria": [
+        "AC8"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "git_repository": false,
+      "set_files": {},
+      "delete_files": [],
+      "expected": {
+        "exit_code": 2,
+        "diagnostics": [],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "safe-integer-boundary",
+      "criteria": [
+        "AC3",
+        "AC7"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/world.md": "# Shared world\n| Key | What it holds | Writer | Readers | How it is written | Schema |\n|---|---|---|---|---|---|\n| items | Values | owner | reader | Replace | contracts/world.md#items |\n\n### items\n```json\n{\"type\":\"integer\",\"const\":9007199254740991}\n```\n",
+        "contracts/seed-world.json": "{\"items\":9007199254740991}\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 0,
+        "diagnostics": [],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "oneof-overlap",
+      "criteria": [
+        "AC3"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/world.md": "# Shared world\n| Key | What it holds | Writer | Readers | How it is written | Schema |\n|---|---|---|---|---|---|\n| items | Values | owner | reader | Replace | contracts/world.md#items |\n\n### items\n```json\n{\"oneOf\":[{\"type\":\"integer\"},{\"type\":\"number\"}]}\n```\n",
+        "contracts/seed-world.json": "{\"items\":1}\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 4,
+        "diagnostics": [
+          {
+            "file": "contracts/seed-world.json",
+            "record": "items",
+            "field": "/items"
+          }
+        ],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "oneof-unknown-branch",
+      "criteria": [
+        "AC5"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/world.md": "# Shared world\n| Key | What it holds | Writer | Readers | How it is written | Schema |\n|---|---|---|---|---|---|\n| items | Values | owner | reader | Replace | contracts/world.md#items |\n\n### items\n```json\n{\"oneOf\":[{\"type\":\"string\",\"pattern\":\"^a+$\"},{\"type\":\"string\",\"pattern\":\"\\\\p{L}+\"}]}\n```\n",
+        "contracts/seed-world.json": "{\"items\":\"aaa\"}\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 5,
+        "diagnostics": [
+          {
+            "file": "contracts/seed-world.json",
+            "record": "items",
+            "field": "/items",
+            "kind": "unavailable"
+          }
+        ],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "referenced-seed-role-wins",
+      "criteria": [
+        "AC6"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/other-world.json": "{\"type\":\"latte\",\"properties\":{\"note\":\"data\"}}\n",
+        "test/runtime/start.json": "{\"schema_version\":\"prompt-runtime.program-scenario.v1\",\"story_path\":\"user_stories/start.md\",\"criteria\":[],\"initial_world\":{\"$seed\":\"contracts/other-world.json\"},\"simulation\":{},\"context\":[],\"steps\":[]}\n",
+        "user_stories/start.md": "# Start\n"
+      },
+      "delete_files": [
+        "contracts/world.md",
+        "contracts/seed-world.json"
+      ],
+      "expected": {
+        "exit_code": 0,
+        "diagnostics": [],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "ordinary-decimal-bounds-pass",
+      "criteria": [
+        "AC3",
+        "AC5",
+        "AC7"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/world.md": "# Shared world\n| Key | What it holds | Writer | Readers | How it is written | Schema |\n|---|---|---|---|---|---|\n| items | Values | owner | reader | Replace | contracts/world.md#items |\n\n### items\n```json\n{\"type\":\"number\",\"minimum\":0.1,\"maximum\":0.9}\n```\n",
+        "contracts/seed-world.json": "{\"items\":0.5}\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 0,
+        "diagnostics": [],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "ordinary-decimal-minimum-miss",
+      "criteria": [
+        "AC3",
+        "AC5",
+        "AC7"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/world.md": "# Shared world\n| Key | What it holds | Writer | Readers | How it is written | Schema |\n|---|---|---|---|---|---|\n| items | Values | owner | reader | Replace | contracts/world.md#items |\n\n### items\n```json\n{\"type\":\"number\",\"minimum\":0.1}\n```\n",
+        "contracts/seed-world.json": "{\"items\":0.05}\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 4,
+        "diagnostics": [
+          {
+            "file": "contracts/seed-world.json",
+            "record": "items",
+            "field": "/items"
+          }
+        ],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "ordinary-decimal-maximum-miss",
+      "criteria": [
+        "AC3",
+        "AC5",
+        "AC7"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/world.md": "# Shared world\n| Key | What it holds | Writer | Readers | How it is written | Schema |\n|---|---|---|---|---|---|\n| items | Values | owner | reader | Replace | contracts/world.md#items |\n\n### items\n```json\n{\"type\":\"number\",\"maximum\":0.9}\n```\n",
+        "contracts/seed-world.json": "{\"items\":0.95}\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 4,
+        "diagnostics": [
+          {
+            "file": "contracts/seed-world.json",
+            "record": "items",
+            "field": "/items"
+          }
+        ],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "ordinary-decimal-enum-pass",
+      "criteria": [
+        "AC3",
+        "AC5",
+        "AC7"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/world.md": "# Shared world\n| Key | What it holds | Writer | Readers | How it is written | Schema |\n|---|---|---|---|---|---|\n| items | Values | owner | reader | Replace | contracts/world.md#items |\n\n### items\n```json\n{\"type\":\"number\",\"enum\":[0.25,0.5]}\n```\n",
+        "contracts/seed-world.json": "{\"items\":0.5}\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 0,
+        "diagnostics": [],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "ordinary-decimal-enum-miss",
+      "criteria": [
+        "AC3",
+        "AC5",
+        "AC7"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/world.md": "# Shared world\n| Key | What it holds | Writer | Readers | How it is written | Schema |\n|---|---|---|---|---|---|\n| items | Values | owner | reader | Replace | contracts/world.md#items |\n\n### items\n```json\n{\"type\":\"number\",\"enum\":[0.25,0.5]}\n```\n",
+        "contracts/seed-world.json": "{\"items\":0.75}\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 4,
+        "diagnostics": [
+          {
+            "file": "contracts/seed-world.json",
+            "record": "items",
+            "field": "/items"
+          }
+        ],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "equivalent-decimal-spellings",
+      "criteria": [
+        "AC3",
+        "AC5",
+        "AC7"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/world.md": "# Shared world\n| Key | What it holds | Writer | Readers | How it is written | Schema |\n|---|---|---|---|---|---|\n| items | Values | owner | reader | Replace | contracts/world.md#items |\n\n### items\n```json\n{\"type\":\"number\",\"enum\":[1e-1]}\n```\n",
+        "contracts/seed-world.json": "{\"items\":0.10}\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 0,
+        "diagnostics": [],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "fractional-schema-without-value",
+      "criteria": [
+        "AC2",
+        "AC5",
+        "AC6"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/fraction.md": "### fraction\n```json\n{\"type\":\"number\",\"minimum\":0.1,\"maximum\":0.9}\n```\n"
+      },
+      "delete_files": [
+        "contracts/world.md",
+        "contracts/seed-world.json"
+      ],
+      "expected": {
+        "exit_code": 0,
+        "diagnostics": [],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "invalid-schema-absent-seed-key",
+      "criteria": [
+        "AC2",
+        "AC4"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/world.md": "# Shared world\n| Key | What it holds | Writer | Readers | How it is written | Schema |\n|---|---|---|---|---|---|\n| items | Values | owner | reader | Replace | contracts/world.md#items |\n\n### items\n```json\n{\"type\":\"array\"}\n```\n",
+        "contracts/seed-world.json": "{}\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 4,
+        "diagnostics": [
+          {
+            "file": "contracts/world.md",
+            "record": "contracts/world.md#items",
+            "field": ""
+          }
+        ],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "literal-schema-annotations",
+      "criteria": [
+        "AC2",
+        "AC6",
+        "AC7"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/world.md": "# Shared world\n| Key | What it holds | Writer | Readers | How it is written | Schema |\n|---|---|---|---|---|---|\n| items | Values | owner | reader | Replace | contracts/world.md#items |\n\n### items\n```json\n{\"type\":\"object\",\"properties\":{\"$contract\":{\"type\":\"string\"},\"type\":{\"type\":\"string\"}},\"required\":[\"$contract\",\"type\"],\"additionalProperties\":false,\"default\":{\"$contract\":\"contracts/missing.md#not-a-record\",\"type\":\"not-a-schema\"},\"examples\":[{\"$contract\":\"contracts/missing.md#not-a-record\",\"type\":\"not-a-schema\"}]}\n```\n",
+        "contracts/seed-world.json": "{\"items\":{\"$contract\":\"contracts/missing.md#not-a-record\",\"type\":\"not-a-schema\"}}\n"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 0,
+        "diagnostics": [],
+        "source_bytes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    }
+  ]
+}

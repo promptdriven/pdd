@@ -154,7 +154,39 @@ Before sending work, pdd asks whether the interpreter has room. During announced
 | Command | What it does |
 |---|---|
 | `pdd contracts` | List shared records in working files, their prompt/test users, changed records and Stories needing a new check. Local; no interpreter calls |
+| `pdd contracts --check [--json]` | Check supported schemas, references, eligible copy drift, world writers and seed values locally; 0 complete, 4 definite problem, 5 unavailable validation or I/O, 2 syntax/no repository |
 | `pdd contracts sync [--write]` | Preview replacing inline copies with references. `--write` applies unambiguous proposals and adopts the shared shape; ambiguous matches warn and stay unchanged |
+
+`pdd contracts --check` writes nothing and reads no Check history. It cannot be
+combined with `sync` or `--write`. Both world files may be absent; if either
+`contracts/world.md` or `contracts/seed-world.json` exists, both are required.
+The first Key/Writer or Path/Writer table may omit Schema. Leading `/` cells
+are JSON Pointers under either heading (`~1` escapes `/`, `~0` escapes `~`);
+bare Keys name exact top-level keys. Parent and child paths have independent
+owners. Writer lists split on commas, case-insensitive standalone `and`, `/`, `&` or `;`, preserving
+hyphenated actor names. Seed labels identify initial-only data, while comma
+qualifiers such as `through the resource` describe the preceding writer. Repeated
+actors coalesce; two runtime writers fail. An initial-only declaration gets one
+warning per unique exact path; a runtime actor on that path suppresses it.
+Present seed branches without a row
+warn once with their exact paths, for either header. A declared container covers
+its value for this advisory without assigning its writer to child paths. For this
+warning only, `<name>` placeholders match within one decoded seed path segment;
+literal pieces remain exact. They never expand ownership or schema validation. See the
+[writer and seed rules](../prompts/cli/contracts.prompt.md#world-keys-and-their-seed-values).
+
+Explicit Schema targets take precedence; otherwise one canonical declared record
+designated by a schema link, exact inline-code identifier or whole plain Key/What it holds
+cell supplies the schema. Ordinary prose, path components and Writer/Readers labels
+do not designate records. Ambiguous/unknown inference warns
+that seed values were not checked; it never guesses a plural, array wrapper or
+template. JSON members validate beside primitive metadata; annotations, resources,
+simulation and seed data are not searched for schemas. Files with no schemas
+skip in one named summary. Implicit members do not authorize copy agreement.
+Declared records with identical field sets but different shapes warn once per
+pair without introducing a refusal. Unjudged value patterns and precision that
+cannot be checked without rounding remain unavailable. Ordinary finite decimal
+bounds and enum values can be checked locally.
 
 Use `{"$contract":"contracts/phone-server.md#order_in"}` in a schema of the Runtime interface.
 The Markdown section has a `### order_in` heading and one JSON code block;
@@ -194,5 +226,13 @@ approved interface set it to draft; review the preview and approve it as usual.
 | `pdd product start RUN [--no-run] [--agent codex\|claude]` | Find or create the run's issue once, then start a normal feature run; `--no-run` only finds or creates the issue |
 
 See [Build a whole product](build-a-whole-product.md).
+
+For `pdd contracts --check --json`, one JSON object contains `exit_code`,
+`checked_records`, `checked_world_values`, `skipped_files`, `diagnostics` and
+`warnings`. Warnings carry unchecked declaration names or disagreeing canonical
+record identities, separate from problems. Warnings alone exit 0; text reports
+the same facts. `--json` requires `--check`. Inline-copy thresholds stay unchanged:
+three properties for exact copies, four in a differing canonical record. Only
+declared records authorize copy agreement; incidental members do not.
 
 `pdd workflow ack REQUEST_ID --summary TEXT` records the agent’s uptake of a delivered change request from its active run worktree. The first note and time are retained on repeat calls. Delivery and this explicit agent claim do not prove the request was fully addressed. Status shows delivered requests still awaiting uptake; done warns without blocking progress.

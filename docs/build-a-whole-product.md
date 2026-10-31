@@ -28,6 +28,27 @@ Read the [file formats](../skills/pdd-product/references/files.md) for the map,
 plan tables and contract records. `product/map.md` lists parts, Stories, journeys
 and questions. `product/plan.md` lists boundaries and runs. `contracts/` holds
 shared record schemas, the world key ownership table and the shared seed.
+Each world-table row names its runtime writer or initial-only seed provenance. A Schema target can describe the whole
+value, for example `contracts/world.md#orders` for an array. When omitted, a
+unique declared record designated by a schema link, exact inline-code identifier
+or whole plain Key/What it holds cell supplies its schema. Prose words, path
+components and Writer/Readers labels do not select records. Without a unique
+selection, the check reports unchecked declarations. Leading slash Key or Path cells are
+exact JSON Pointers. Parent and child ownership are independent. A declared key
+may be absent initially; present seed branches without a row produce one warning
+naming their paths, without inferring writers or schemas.
+The coffee example adds illustrative world schemas alongside its table; these
+are authored shared shapes, not a proof of how a running part writes data.
+
+Before the plan PR, run `pdd contracts --check`. It checks supported schemas,
+references, eligible inline-copy drift, declared writers and seed values locally,
+with no authentication, interpreter slot, PDD interpreter or model call. Exit 0 means no definite problem or unavailable required validation was found;
+review advisory unchecked-values and disagreement warnings; 4 identifies a definite problem; 5 means I/O or validation
+is unavailable. Diagnostics name the file, record/key and field. Nonportable
+patterns and numeric predicates outside the local exact range can be unavailable;
+a local result does not prove interpreter behavior. Fix or review reported gaps.
+The plan makes no PDD interpreter lint, test or simulation call. Each part's first interpreter
+lint/test happens in its feature run once its prompt, Stories and tests exist.
 
 `plan PR` means `product/plan.md` is present on the base branch. Planned-run
 needs wait for the implementation PR to merge. Explicit starts show unmet needs
@@ -80,3 +101,13 @@ start or hide unrelated ready runs.
 Journey J1 is the final run after the three parts. Use its normal Story checks
 and the whole-product simulation to test the path across parts. Status tracks journeys
 separately from each part's Stories.
+
+World ownership tables accept Key or Path. The
+[writer rules](../prompts/cli/contracts.prompt.md#world-keys-and-their-seed-values)
+separate initialization from runtime writers and resource qualifiers, preserve
+hyphenated names, and recognize comma, `and`, `/`, `&` and `;` actor lists.
+Repeated runtime actors coalesce; multiple runtime actors fail. JSON contract members validate beside metadata; files with no schemas
+are skipped in one named summary. Copy drift compares declared authorities,
+while incidental nested copies cannot hide it. Same-field-set disagreements
+between valid declared records warn without refusing the plan. Use
+`pdd contracts --check --json` for counts, diagnostics and separate warnings.
