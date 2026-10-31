@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: 92e0ee4aba9889a91af99bae5714b0b5bd35ec22587157a8f7b1d9d617a92710).
+// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: de3bc9fcb8c7088dad9fb3b92770230af758659a6ecc45831bd5ad53c6117731).
 import { mkdir, open, readFile, rename, rm, lstat, realpath } from 'node:fs/promises';
 import { constants, openSync, closeSync, readFileSync, writeFileSync, fsyncSync, unlinkSync, lstatSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -63,19 +63,49 @@ async function inventory(command) {
     ||rows.some(w=>!id(w?.workspace_id))||new Set(rows.map(w=>w.workspace_id)).size!==rows.length)throw problem('invalid_workspace_inventory');
   return rows;
 }
+// Limit before quoting so even hostile inventory values remain finite and on one line.
+function literal(value) {
+  if(value===undefined||value===null)return 'missing';
+  const text=String(value),bounded=text.length>240?`${text.slice(0,240)}…[truncated]`:text;
+  return JSON.stringify(bounded).replace(/[\u007f-\u009f\u2028\u2029]/g,c=>`\\u${c.charCodeAt(0).toString(16).padStart(4,'0')}`);
+}
+function identityChanged(saved,field,expected,found) {
+  const message=`herdr_layout_identity_changed: Herdr workspace ${literal(saved.workspaceId)}: ${field} expected ${literal(expected)}, found ${literal(found)}. Inspect this workspace in Herdr session pdd; restore its expected identity, then retry your command. If the original identity is missing, manually inspect ownership and layout before restoring it.`;
+  return Object.assign(new Error(message),{code:'herdr_layout_identity_changed'});
+}
+function sameIdentity(saved,field,expected,found) {
+  if(expected!==found)throw identityChanged(saved,field,expected,found);
+}
 function ownedWorkspace(rows, saved, cwd) {
   const row=rows.find(w=>w.workspace_id===saved.workspaceId);
-  if(!row || !row.worktree || row.worktree.checkout_path!==cwd || row.worktree.repo_key!==saved.commonDir
-    || (saved.runId && row.worktree.is_linked_worktree!==true))throw problem('herdr_layout_identity_changed');
+  if(!row)throw identityChanged(saved,'workspace',saved.workspaceId,undefined);
+  if(!row.worktree)throw identityChanged(saved,'worktree','present',undefined);
+  sameIdentity(saved,'checkout_path',cwd,row.worktree.checkout_path);
+  sameIdentity(saved,'repo_key',saved.commonDir,row.worktree.repo_key);
+  if(saved.runId)sameIdentity(saved,'is_linked_worktree',true,row.worktree.is_linked_worktree);
   return row;
 }
+function rootPanes(response,saved) {
+  sameIdentity(saved,'pane_list.id','cli:pane:list',response?.id);
+  sameIdentity(saved,'pane_list.type','pane_list',response?.result?.type);
+  const panes=response?.result?.panes;
+  if(!Array.isArray(panes))throw identityChanged(saved,'panes','present',panes);
+  return panes;
+}
 async function assertRunRoot(command, run, closing = false) {
-  const response=await command(['pane','list','--workspace',run.workspaceId]),panes=response.result?.panes;
-  if(response.id!=='cli:pane:list'||response.result?.type!=='pane_list'||!Array.isArray(panes)
-    ||!panes.some(p=>p.workspace_id===run.workspaceId&&p.tab_id===run.rootTabId&&p.pane_id===run.rootPaneId
-      &&p.terminal_id===run.rootTerminalId&&p.cwd===run.cwd))throw problem('herdr_layout_identity_changed');
+  const panes=rootPanes(await command(['pane','list','--workspace',run.workspaceId]),run);
+  const fields=[['workspace_id',run.workspaceId],['tab_id',run.rootTabId],['pane_id',run.rootPaneId],['terminal_id',run.rootTerminalId],['cwd',run.cwd]];
+  if(!panes.length)throw identityChanged(run,'panes count',1,0);
+  // Narrow by saved identities in stable order, without choosing a replacement root.
+  let candidates=panes;
+  for(const [field,expected] of fields) {
+    const matches=candidates.filter(p=>p?.[field]===expected);
+    if(!id(expected))throw identityChanged(run,field,undefined,candidates[0]?.[field]);
+    if(!matches.length)throw identityChanged(run,field,expected,candidates[0]?.[field]);
+    candidates=matches;
+  }
   if(closing) {
-    if(panes.length!==1)throw problem('herdr_layout_identity_changed');
+    if(panes.length!==1)throw identityChanged(run,'panes count',1,panes.length);
     const reply=await command(['tab','list','--workspace',run.workspaceId]),tabs=reply.result?.tabs;
     if(reply.id!=='cli:tab:list'||reply.result?.type!=='tab_list'||!Array.isArray(tabs)||tabs.length!==1||tabs[0].tab_id!==run.rootTabId)
       throw problem('run_has_open_tabs');
@@ -85,9 +115,11 @@ async function ownedRepository(rows,repo,command) {
   const row=rows.find(w=>w.workspace_id===repo.workspaceId);
   if(row?.worktree){
     ownedWorkspace(rows,repo,repo.sourceRoot);
-    if(row.worktree.is_linked_worktree!==false)throw problem('herdr_layout_identity_changed');
+    sameIdentity(repo,'is_linked_worktree',false,row.worktree.is_linked_worktree);
   } else {
-    if(!row||![repo.rootTabId,repo.rootPaneId,repo.rootTerminalId].every(id))throw problem('herdr_layout_identity_changed');
+    if(!row)throw identityChanged(repo,'workspace',repo.workspaceId,undefined);
+    for(const [field,value] of [['tab_id',repo.rootTabId],['pane_id',repo.rootPaneId],['terminal_id',repo.rootTerminalId]])
+      if(!id(value))throw identityChanged(repo,field,undefined,undefined);
     await assertRunRoot(command,{...repo,cwd:repo.sourceRoot},true);
   }
   return row;
@@ -119,14 +151,15 @@ export async function openHerdrRunLayout(input, ports) {
   if(repo && repo.sourceRoot!==sourceRoot){
     if(!refused || repo.phase!=='ready' || repo.commonDir!==commonDir || repo.sourceRoot!==invokingSource ||
       pending.repoWorkspaceId!==repo.workspaceId || registry.runs.some(r=>r!==pending&&r.repoWorkspaceId===repo.workspaceId))
-      throw problem('herdr_layout_identity_changed');
+      throw identityChanged(repo,'sourceRoot',repo.sourceRoot,sourceRoot);
     const row=rows.find(w=>w.workspace_id===repo.workspaceId);
-    if(!row)throw problem('herdr_layout_identity_changed');
+    if(!row)throw identityChanged(repo,'workspace',repo.workspaceId,undefined);
     if(row.worktree)ownedWorkspace(rows,repo,invokingSource);
     else {
-      const reply=await command(['pane','list','--workspace',repo.workspaceId]),panes=reply.result?.panes;
-      if(reply.id!=='cli:pane:list'||reply.result?.type!=='pane_list'||!Array.isArray(panes)||panes.length!==1||
-        panes[0].workspace_id!==repo.workspaceId||panes[0].cwd!==invokingSource)throw problem('herdr_layout_identity_changed');
+      const panes=rootPanes(await command(['pane','list','--workspace',repo.workspaceId]),repo);
+      if(panes.length!==1)throw identityChanged(repo,'panes count',1,panes.length);
+      sameIdentity(repo,'workspace_id',repo.workspaceId,panes[0]?.workspace_id);
+      sameIdentity(repo,'cwd',invokingSource,panes[0]?.cwd);
     }
     registry.archivedRepositories=[...(registry.archivedRepositories??[]),{...repo,reason:'linked-source-pre-agent-refusal'}];
     registry.repositories=registry.repositories.filter(r=>r!==repo);repo=null;

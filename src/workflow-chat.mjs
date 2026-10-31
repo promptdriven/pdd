@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 83cca5ff7e5db08d6ee26dd984f399631983a50461ca2c0c0209d69a3684ea3c).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 1597fb71d46f7fedcab458e14acbb125ea0cd3b5d339334e3fc63da4a3c57368).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, writeFileSync } from 'node:fs';
@@ -214,9 +214,9 @@ export async function closeChats(run, ports = {}) {
       await withHerdrLayoutLock(async () => {
         await closeHerdrRunLayout({ runId: run.runId, cwd: run.root, layout: { workspaceId: last.workspaceId, repoWorkspaceId: last.repoWorkspaceId } }, layoutPorts);
         try { await closeHerdrRepoLayoutIfIdle({ repository: run.repo, commonDir: run.commonDir }, layoutPorts); }
-        catch (error) { warnings.push(`warning: the empty "${run.repo.split('/')[1]}" workspace stays open in Herdr (${error.code ?? 'error'}).`); }
+        catch (error) { warnings.push(`warning: the empty "${run.repo.split('/')[1]}" workspace stays open in Herdr (${error.code === 'herdr_layout_identity_changed' ? `${error.code}: ${error.message}` : error.code ?? 'error'}).`); }
       }, { directory: ports.layoutDirectory });
-    } catch (error) { warnings.push(`warning: the run workspace "${run.repo.split('/')[1]}#${run.number} ${run.workflow}" stays open in Herdr (${error.code ?? 'error'}).`); }
+    } catch (error) { warnings.push(`warning: the run workspace "${run.repo.split('/')[1]}#${run.number} ${run.workflow}" stays open in Herdr (${error.code === 'herdr_layout_identity_changed' ? `${error.code}: ${error.message}` : error.code ?? 'error'}).`); }
   }
   return { warnings };
 }

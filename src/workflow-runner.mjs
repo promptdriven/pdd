@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 5bc37df08e80327a573a61570ec5b5aba7226b289944f77538ad4f1472d5389c).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 123561fbe4fca324ce1a56a4009ea5eb3b6c3eb19e66b948704fac8ab3068f33).
 import { approvalActor, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { execFile as execFileCallback } from 'node:child_process';
@@ -1155,7 +1155,7 @@ export async function approveRun({ ref, cwd, said: approvalWords, packageRoot = 
   const next = run.areas[run.area];
   let chat;
   try { chat = await startNextChat(run, p, packageRoot); }
-  catch (error) { return fail(`${carried.map(line => `${line}\n`).join('')}Approved the ${area.name} area of ${label}.${said} The ${next.name} chat startup was not confirmed (${error.code ?? 'error'}). Start it: pdd workflow open ${run.number}`); }
+  catch (error) { return fail(`${carried.map(line => `${line}\n`).join('')}Approved the ${area.name} area of ${label}.${said} The ${next.name} chat startup was not confirmed (${error.code === 'herdr_layout_identity_changed' ? `${error.code}: ${error.message}` : error.code ?? 'error'}). Start it: pdd workflow open ${run.number}`); }
   return done([...carried, `Approved the ${area.name} area of ${label}.${said}${based}`,
     `Started area ${run.area + 1} of ${run.areas.length}: ${next.name} (${next.steps.join(', ')}) in a new chat: Herdr session pdd, tab "${chat.label}".`,
     `Watch it: pdd workflow open ${run.number}`, ...(agent ? ['This chat\'s work is done. Stop here.'] : [])].join('\n'));
