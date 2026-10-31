@@ -63,11 +63,11 @@ Each workflow command export takes `(input, ports)` and returns `{exitCode, mess
 
 - `startRun({name, issue, agent, base, adoptCorpus, cwd, packageRoot})`: read the areas from the pdd-NAME skill ([areas](workflow-areas.prompt.md)). Read the agent's config folder: `CODEX_HOME` for Codex, `CLAUDE_CONFIG_DIR` for Claude ([chat](workflow-chat.prompt.md) `homeVariable`, `expandHome`). A leading `~` or `~/` is the home folder (zsh leaves `~` as text in `env CODEX_HOME=~/x pdd …`, 0.1.6 tester), and a relative path is resolved from cwd. When it is set and that folder does not exist, refuse before any git, gh, worktree or Herdr work: `VAR is "PATH", but that folder does not exist. Fix VAR and run the command again.` The run keeps the full path as `configDir`, and the Claude trust check reads `.claude.json` in it. Resolve the issue with gh ([GitHub](workflow-github.prompt.md)). Refuse when the issue already has a run that is not cancelled. After a cancelled run, free the issue claim (`releaseIssueClaim`), keep the old worktree and branch, rename the old run folder to `<N>-cancelled-<first 8 of its run id>` and start fresh with a new worktree and branch; the new record lists the old one in `previous`. Select the base as described below. Make the worktree and branch ([worktree](workflow-worktree.prompt.md)). Make the run folder and write the run record ([runs](workflow-runs.prompt.md)). Start the area 1 chat ([chat](workflow-chat.prompt.md)). Print where the run is, `pdd workflow open N`, `pdd workflow status N` and `pdd workflow approve N`. Then return at once. If the main repository is not trusted by Claude, say that Claude asks to trust the folder first.
 - `stepDone({step, summary, cwd})`: only the agent calls this, from the worktree. Find the run from cwd. Record the step with its summary and time. The stored summary keeps its line breaks (each line's spaces collapsed, blank lines dropped); every place that shows a summary on one line (status, the code question, the PR step list) collapses it. An unknown or out-of-order step prints a warning and is still recorded. A step that runs again after later steps of its area (for example `build` after `verify` when vectors fail) prints a warning and clears those later steps, so they run again; the area's PR opens only after its last step. Then print one of:
-  - the next step of the area and the exact `done` command (an optional step is a question to the person, and "skipped" is a valid summary);
+  - the next step of the area and the exact `done` command; use [optional-step decisions](#optional-step-decisions) for optional steps;
   - at an `approve` gate: show the result, ask the person, stop, never approve for them; how they approve; how to handle changes (revise here, run done again, ask again);
   - after the last step of a `pr` area: "pdd opens the PR now". Commit any uncommitted files (with a warning), push and open the PR for this area. The body (0.1.4 #18, 0.1.6) starts with the Runtime check lines of that summary (the check step's, else the latest step that reports one): every "Runtime check (<story>)…: …" line, one per Story (a Story that appears again keeps its place and takes its latest line), then, with two or more Stories, a total that pdd adds up itself: "Runtime check (all Stories)[ (DRAFT)]: ✓ 8 of 8 criteria · 35/35 checks · 17 AI calls" (sum the criteria, the checks and the AI calls, each only when every Story line has it; ✓ only when every Story passes, else ✗; DRAFT when any Story line is DRAFT). A pasted overall "Runtime check: …" line is dropped when Story lines exist, because it can cover only the Stories checked last; a summary with no overall line works the same. Without Story names, keep the Runtime check lines as written. Then "Report (<story>): URL (report links expire after 7 days)" for each distinct report link, in summary order (the Story name comes from a "Report (<story>): URL" entry; a bare link or "Report: URL" or "Report (DRAFT): URL" has no name). The chat pastes the lines that `pdd check` prints into the check step's summary, one per line (with a `Report:` line per Story) or joined with "; " (with one "Report (<story>): URL" per report row); a result ends at a line break, ";", a `Report` entry, a link or the next `Runtime check`. Read these lines from the stored summary, before it is collapsed. Above the Runtime check lines go the verdict line and the before → after line of a bug check (0.1.7): the first "Verdict: …" and the first "Before ✗ …" / "Before ✓ …" / "Before: no prompt …" in the step summaries (the check step's first, then the newest step), each up to its line break, or up to a "; " that starts "Before", "Runtime check" or "Report" (a "; " inside the verdict sentence stays). A report link in the before → after line gets " (report links expire after 7 days)" and is not listed again as a "Report" line. Then the PR head ("Part of #N" / "Closes #N" …), then one line per step since the previous PR, cut to about 200 characters at a word end and never inside a URL (a URL that crosses the end stays whole, and " …" follows it). Only a PR that covers a verify step carries `<run folder>/verify.md`, under "## Verify" (0.1.6 tester: 100 lines of shell before the vector table): drop a leading "# Verify" line, write each "## " heading as "### ", and fold each fenced block of more than 15 lines that is not inside a `<details>` block into `<details><summary>Commands (N lines)</summary>` (sh, bash, zsh, shell or console blocks) or `Output (N lines)`. When verify.md has no `<details>` of its own, keep the text before its first heading on top, then its sections whose heading names vectors or results, then the Formal check, then other sections with a table, then the rest, each group in file order. GitHub refuses a PR description over 65,536 characters (0.1.7 tester: a 105,489-character verify report; every retry failed the same way), so the whole body stays at most 60,000 characters (Unicode code points), which leaves room for the marker and for GitHub's own count. When verify.md does not fit in the room that the rest of the body leaves, the body keeps a summary of it. First each `<details>` block (long commands and output) becomes one line, `- <its summary text>: not shown here.` If it is still too long, keep its first lines that fit, cut at a line end (never inside a link) with an open code fence closed, and then list the lines of the cut part that report a failure (`✗`, or the word fail, fails, failed or failing) under `Lines that report a failure, from the part not shown:`, as many as fit. End the summary with: `_The full verify report has N characters, more than a PR description can hold (GitHub's limit is 65,536). This is a summary: WHAT. The PR author has the full report: verify.md in the run folder._` (WHAT: `the long blocks are not shown`, or `its first N lines; M more lines are not shown, and K of them report a failure`, with `reports` when K is 1). Before collapsing details (authored or generated from long fenced output), retain their failure lines and report references outside the collapsed block. If truncation is still required, consider failures and report references from all omitted content, including collapsed blocks. Keep whole evidence lines and links while room allows; explicitly count omitted failures and report references when they cannot all fit. The full verify.md stays byte-for-byte in the run folder. Failures are never dropped in silence. Local paths never appear: the worktree path becomes repo-relative, the run folder "<run folder>", any other `/Users/…`, `/home/…`, `/private/…`, `/var/folders/…` or `/tmp/…` path "<local path>". Before writing a PR body, replace every Try link (a URL whose path has `/s/<token>`) in the step summaries and verify.md with "(Try link removed)"; report links (`/r/`) stay. When the first line of verify.md starts with "✗" (for example "✗ 2 vectors fail"), retain that warning ahead of the replay/ordinary body while the evidence owner controls the top evidence block. When the body has an interpreter report link, add "Interpreter report links expire after 7 days." A report link is a URL with a `/r/` path segment, or a URL that starts with `PDD_RUNTIME_URL` when it is set. Never fix a runtime host in the code. When the PR exists already, refresh the label/proof top block and, for code PRs, the inventory as required below, preserving publication-pending before changed-source pushes. When the PR does not open, print the message of the [GitHub](workflow-github.prompt.md) result: it names GitHub's own reason when GitHub refused the PR, and says unconfirmed only for a real doubt. A retry builds the same intent again (same run, area, marker, branch and SHA when nothing new was committed) and does not push again. Print the PR URL and "pdd never merges".
   A cancelled or completed run prints that the agent must stop.
-- Try before PR 1 (0.1.4 #13): a `pr` area with `"before":"approve"` does not open its PR after the last step. `done` sets the gate kind `approve-pr` and tells the chat to show the Runtime check line of each Story (one per Story: ✓, ✗ or no verdict, as `pdd check` prints it) with its report link and the Try link, ask the person to try it and approve or ask for changes, and stop. Status: "waiting for you: try it, then approve to open PR 1". When there is nothing to try (no step of the area left a Try link, and the try step was skipped or the worktree changes no test file), the gate text says "There is nothing to try. Ask them to approve or ask for changes." and status drops "try it, then " (0.1.6 tester: a browser-only Story). For PR 1 the gate text also gives the chat the words for what PR 1 holds, read from the worktree's changes against the run base (uncommitted files count): "Tell the person what PR 1 holds, in these words: "PR 1 is ready with the approved Story[, the approved prompt X][, the draft prompt Y][, the prompt Z] and the tests."", with "the approved Stories" for two or more Stories under `user_stories/`, and without "and the tests" plus " It has no test file." when no test file (a `*.json` with `prompt-runtime.program-scenario`) changed. Only the Story area was approved, so a draft prompt is never called approved (0.1.6 tester). `approve` here works like an area gate (chat evidence: any message from the person; terminal: "Approve the AREA area and open PR 1 for …? (y/N)"); it records the decision and opens the PR. With `then: ask-code` the run moves to the code-or-stop gate (new gate time): from the chat, the reply tells the chat to ask the code question; from the terminal, when PR 1 has draft prompts, pdd does not ask about the code PR: it prints PR 1's link and the approve-first line (see Draft prompts) and sends the chat "pdd opened PR 1: URL. … Tell them exactly: "PR 1 is open: URL. <approve-first line>" Then stop."; else pdd asks "Make the code PR now …? (y/N)" — no sends PR 1's link and the stop into the chat and prints "To make the code PR later, run `pdd workflow approve N`."; yes goes on as the code gate (the code branch and chat). A PR that cannot open leaves the gate open; run approve again.
+- Try before PR 1 (0.1.4 #13): a `pr` area with `"before":"approve"` does not open its PR after the last step. `done` sets the gate kind `approve-pr` and tells the chat to show the Runtime check line of each Story (one per Story: ✓, ✗ or no verdict, as `pdd check` prints it) with its report link and the Try link, ask the person to try it and approve or ask for changes, and stop. Status: "waiting for you: try it, then approve to open PR 1". When there is nothing to try (no step of the area left a Try link, and the try step was skipped or the worktree changes no test file), the gate text says "There is nothing to try. Ask them to approve or ask for changes." and status drops "try it, then " (0.1.6 tester: a browser-only Story). A person-declined try (done.try summary `skipped by the person`) takes precedence even when an earlier check left a Try link: use "The person skipped trying it. Ask them to approve or ask for changes." and omit "try it, then " from status; keep other gate evidence and approval requirements. For PR 1 the gate text also gives the chat the words for what PR 1 holds, read from the worktree's changes against the run base (uncommitted files count): "Tell the person what PR 1 holds, in these words: "PR 1 is ready with the approved Story[, the approved prompt X][, the draft prompt Y][, the prompt Z] and the tests."", with "the approved Stories" for two or more Stories under `user_stories/`, and without "and the tests" plus " It has no test file." when no test file (a `*.json` with `prompt-runtime.program-scenario`) changed. Only the Story area was approved, so a draft prompt is never called approved (0.1.6 tester). `approve` here works like an area gate (chat evidence: any message from the person; terminal: "Approve the AREA area and open PR 1 for …? (y/N)"); it records the decision and opens the PR. With `then: ask-code` the run moves to the code-or-stop gate (new gate time): from the chat, the reply tells the chat to ask the code question; from the terminal, when PR 1 has draft prompts, pdd does not ask about the code PR: it prints PR 1's link and the approve-first line (see Draft prompts) and sends the chat "pdd opened PR 1: URL. … Tell them exactly: "PR 1 is open: URL. <approve-first line>" Then stop."; else pdd asks "Make the code PR now …? (y/N)" — no sends PR 1's link and the stop into the chat and prints "To make the code PR later, run `pdd workflow approve N`."; yes goes on as the code gate (the code branch and chat). A PR that cannot open leaves the gate open; run approve again.
 - Two PRs (bug and feature): an area with gate `pr` and `then: ask-code` opens **PR 1** (title "ISSUE TITLE (prompt, Story and tests)" and body line "PR 1 of this run: the prompt, Story and test cases. …" when the worktree changes a test file, else "ISSUE TITLE (prompt and Story)" and "PR 1 of this run: the prompt and the Story. …"; body "Part of #N"). Then `done` prints the PR 1 link, the step summaries (Runtime check line, Try link) and tells the chat to ask "Do you want the code PR now, or stop here and merge PR 1 first?" and stop. This is a gate. When the chat pushes more commits to an open PR 1 at this gate (for example the prompt approval the person asked for), the gate keeps its time, so the person's earlier yes still counts; `changes` moves it. `approve` (terminal y/N "Make the code PR now…", or the person's own words in the chat) starts the code area in a NEW chat on a new branch `<branch>-code`: from PR 1's head when PR 1 is `open` (PR 2 is stacked: base = PR 1's branch), or from the fetched saved base branch when PR 1 is `merged` (base = the run’s selected base). When PR 1 is `closed` or its state is `unknown`, refuse: make no branch, change no run field, and tell the person to check PR 1 and run `approve N` again. The last area opens **PR 2** (title "ISSUE TITLE (code)", body "Closes #N" and "Builds on PR 1: URL"). If PR 1 merges while the run waits at this gate, `status` ends the run as "done at PR 1"; `approve` still starts the code area later.
 - Draft prompts: list every `*.prompt.md` that PR 1 changes (diff from the base to PR 1's branch) whose Runtime interface block ([runtime preflight](runtime-preflight.prompt.md) `interfaceBlocks`) has `"status": "draft"`. When there are any, the PR 1 body and the `done` gate text get "Draft prompts: X, Y. Approve them before you merge.", and `status` shows the same line (read again from PR 1's branch each time). The code is built only from approved prompts, so while PR 1 has a draft prompt pdd never offers the code PR (0.1.6 testers: pdd asked "Make the code PR now?" and then refused the yes). The approve-first line is "Approve the prompt[s] first: cd WORKTREE && pdd approve X[ && pdd approve Y]. Then run pdd workflow approve N to start the code PR." (paths shell-quoted). The `done` gate text then tells the chat "Do not offer the code PR yet. Tell the person exactly: "PR 1 is open: URL. <approve-first line>" Stop there." instead of the code question. Status says "PR 1 open (URL); waiting for you: approve the draft prompt[s] first, then make the code PR.", the list "waiting for you: approve the draft prompt[s], then the code PR (PR 1 open)", and Next: "cd WORKTREE && pdd approve X, then pdd workflow approve N (make the code PR)". `pdd approve` writes the prompt and commits nothing, and an approval committed by hand went to PR 2 while PR 1 still said "Draft prompts" (0.1.6 testers). So `approve` at the code gate, while the worktree is on PR 1's branch and PR 1 is open (the run is not done at PR 1, and GitHub says open), first makes PR 1 hold the approval: it commits alone each draft prompt of PR 1 that is approved (and no longer draft) in the worktree ("Approve X, Y"); it fetches PR 1's branch; when the worktree has commits that PR 1 lacks and PR 1 has none that the worktree lacks, it pushes them to PR 1 ("pdd committed your approval of X and pushed it to PR 1." or "pdd pushed N new commit(s) from the worktree to PR 1."); pdd never forces a push. After a push it reads PR 1's description and rewrites its "Draft prompts: …" line to the drafts left, or removes it ("pdd updated the PR 1 description: no draft prompts are left."); a failure there is only a warning. When the commit or the push fails, or PR 1 has other commits while there is an approval to push, `approve` changes nothing else and prints the exact commands (`cd WORKTREE && git push origin HEAD:refs/heads/BRANCH`, or `git pull --rebase origin BRANCH && git push …`) and "Then run pdd workflow approve N again." Then, when drafts remain, `approve` refuses with the approve-first line before any question or chat check. pdd never sets `approved` itself; a read problem lists no drafts. Small-change has one PR with the issue title and "Closes #N".
 - `approveRun({ref, cwd})`: only a person approves. When the run's saved config folder (`configDir`, `~` expanded) does not exist, refuse before anything changes: `This run uses VAR "PATH", but that folder does not exist. Make that folder, or cancel the run (pdd workflow cancel N) and start it again with the right VAR.` When pdd runs in an agent session (`PDD_AGENT_SESSION`, `CLAUDECODE`, `CODEX_THREAD_ID`) or without a TTY, it needs chat evidence: a user message in the current area chat's native session after the gate ([approval evidence](approval-evidence.prompt.md)). Messages that pdd sent with `changes` do not count. A terminal in the run's own chat pane also needs chat evidence: `HERDR_PANE_ID` is the pane of one of the run's chats and `HERDR_SOCKET_PATH` is a socket of the Herdr session `pdd` (`…/sessions/pdd/<file>`). A person's own terminal tab in Herdr (another pane, or the person's default Herdr session) with a TTY and no agent variable asks y/N like any terminal (0.1.6 tester). Without evidence, the chat's own agent (`PDD_AGENT_SESSION`) gets plain words to pass on (0.1.6 tester: the chat said "PDD rejected recording your earlier "Go on""): "Only the person can approve, with a reply after your gate question. pdd found none: REASON." and "Do not explain this check to the person. Tell them plainly: "I still need your approval for this step. Reply "I approve" here, or run pdd workflow approve N in your terminal." Then stop and wait." Anyone else is a person in an agent-like terminal (Claude Code's `!` prefix sets `CLAUDECODE=1`, 0.1.6 tester) or in the chat's pane, and gets three lines: "pdd sees an agent environment (CLAUDECODE=1 | CODEX_THREAD_ID is set | stdin is not a terminal)" or "pdd sees the AREA chat's own Herdr pane (PANE)", then ", so it cannot ask you y/N here."; "No approval was found in the AREA chat: REASON."; "To approve, run pdd workflow approve N in a normal terminal (in another terminal tab, for the pane). Or answer the gate question in the AREA chat: pdd workflow open N". REASON is plain: "there is no reply from you (the person) after the gate question" for `user_message_missing`, else "pdd could not read this chat". Only the words differ: the evidence rules stay the same. At the code gate (after PR 1) the chat reply must also hold a yes-word ("yes", "approve", "build the code", "go ahead", "code PR now", "continue"; any case); otherwise refuse with "Not sure you approved. Run `pdd workflow approve N` in your terminal." At other gates any reply from the person counts. Otherwise ask `y/N` on the terminal; the question names the area, the repository, the issue and its title. Closed input (end of file) means no. Before the gate, the terminal may still approve after a second question; an agent may not. Record the decision with its source and text, and clear the chat's question: an approval answers it (0.1.6 tester: status showed the answered "Do you approve … so PDD can open PR 1?" after PR 1 was open). Start the NEXT area as a NEW chat. Its first message lists the approved step summaries, the changed files and the run folder. A `pr` area has nothing to approve.
@@ -106,7 +106,14 @@ An inventory failure, removal, changed assertion, new skip, or unavailable compa
 - [Test inventory](workflow-inventory.prompt.md): required authoring/generation/runtime/verification context for collection and the informational report.
 - [Replay evidence](workflow-replay.prompt.md): required generation/runtime context for policy, source fingerprints, original anchors, validation and formatting.
 - [Product marker format](../../skills/pdd-product/references/files.md#planned-run-identity): required generation/testing context for the optional saved product association and its PR description line.
+- [Simulation command choice](simulate-command.prompt.md): required generation/runtime/verification/testing context for the single production chooseSimulationCommand function; workflow try advice calls it, and future #2760 will reuse it. The declared call maps natively to optional `ports.chooseSimulationCommand`, defaulting to the imported production function; injected instrumentation obeys the same contract and delegates to that helper without supplying policy.
+- [CLI adapter](try-doors.prompt.md): required generation/runtime/verification/testing context for distinct CLI candidate selection before the sole candidate's safe H1 program-name validation, used by local simulation facts.
+- [HTTP adapter](try-http.prompt.md): required generation/runtime/verification/testing context for the route-title method/path rules used by local simulation facts.
 - Ports: `execFile` (git and gh), `herdr`, `env`, `stdin`, `stderr`, `confirm`, `readApprovalEvidence`, `stateDir`, `now`, `pdd` (the command prefix). Defaults are the real ones.
+
+- [Run records](workflow-runs.prompt.md) supplies the existing state/selection/write and question/status representations for authoring, generation, runtime and native replay. Its runner navigation links are not required back-dependencies; no required-context cycle is introduced. Preserve all record fields outside this change.
+- `runStore.load` returns an empty record string when no run exists. `runStore.save` receives compact `JSON.stringify(record)` (the existing native store still controls its on-disk formatting). `runStore.load` and `runStore.save` below transport the actual runForWorktree/writeRun boundary as compact JSON text. They map to `ports.runForWorktree(cwd, ports)` and `ports.writeRun(record, ports)`, defaulting to those existing imported functions; adapters serialize/parse the same full record, never a check-only projection. The save adapter returns `{record}` with the saved compact JSON text. Save retains run-store atomic writing and status derivation. Runtime transport takes/returns JSON strings only to preserve unknown saved fields. The runner's existing clock is resource `clock.now`; its callback `ports.now()` returns the integer timestamp (the Runtime clock port permits an audit write so fixed-reply fakes can record reads) and the supplied pdd command is `pdd` in Runtime scenarios. Native replay can supply the same command string through the existing pdd port.
+- `evidence.readOptionalEvidence` is the actual injected reader above; `compute.hash_utf8` maps to `ports.hashUtf8(text)` (default native SHA-256) and returns `{value}` for exact UTF-8 bytes. These ports supply all outside facts for the optional decision. No Herdr, GitHub, provider, approval or execution port is called on a next-step decision. The Runtime entry covers stepDone's recording/next-step branch, including optional skips; existing gate/publication effects still require their native lifecycle checks.
 
 ## Recover a missing unconfirmed area tab
 
@@ -241,9 +248,519 @@ After acknowledgement, durably mark only that request delivered and apply existi
 
 The Interpreter entry below is scoped to the existing public `changeRun` operation (string refs and explicit cwd). Native journal/claim durability, process recovery, merge-on-save, Herdr and Git effects are unbound here and require native tests; this declaration is not an Interpreter proof of those effects.
 
-<details><summary>Runtime interface</summary>
+## Optional-step decisions
+
+PDD owns applicability and recommendations, including the uncertainty decision. Only visual may skip automatically; try always asks and can be skipped only by the person. Preserve workflow.json version 2, saved step IDs `visual` and `try`, and public commands `pdd workflow run` and `pdd simulate`. Initial area guidance says to follow PDD's next-step decision from `workflow done`; it must not pre-authorize an optional question. For each relevant writer (understand and prompt-story), it supplies the facts block shape, absolute note path, current saved base/revision, and absolute package prompt path with `#optional-step-decisions`; refreshed guidance carries the new revision. The author can fill it without another command. At start save `optionalPolicy: "pdd.optional-facts.v1"` only for package-sourced feature/bug workflows. Only opted-in feature `visual` and feature/bug `try` use the facts below. Project/home workflows and legacy saved runs without that policy always ask with the custom-step reason below; never retrofit policy from current workflow files. Other optional steps also always ask with that reason. Do not infer applicability from repository names, extensions, filenames, Story words, absent default maps or absence of changed scenarios.
+
+```mermaid
+flowchart TD
+    N[Next unfinished optional step] --> F{Current scoped facts?}
+    F -->|No| A[Ask with uncertainty reason]
+    F -->|Yes| Z{Exhaustive none, no contrary evidence?}
+    Z -->|Yes| S[Record reasoned skip]
+    S --> N
+    Z -->|No| A
+    A --> W[Wait for the person's answer]
+```
+
+The skip branch applies only to visual. Try goes directly to the question branch regardless of empty/unknown facts. The return from a visual skip selects the next unfinished step in the same area; when none remains, use the existing gate. Never cross an approval gate, approve a prompt, open a simulation, run a command or publish a PR merely because of applicability. A required step ends this selection with its existing guidance. Already completed/person-skipped steps stay completed under the existing rerun rules.
+
+<details>
+<summary>Scoped facts in private step notes</summary>
+
+Read exactly one fenced `pdd-optional-facts` JSON block from `<runDir>/understand.md` for feature visual, or `<runDir>/prompt-story.md` for feature/bug try. Reproduce may draft the latter facts; prompt-story owns the current simulation facts. Never extract facts from a done summary or person-facing Story prose. This is a local author assertion with recorded provenance, not independent attestation of the brief.
+
+The block has exactly `schema_version: "pdd.optional-facts.v1"`, `base_sha` (the saved run baseSha), `revision` (run.optionalRevision, default 0), `basis` (nonblank quoted requirement/source reference), `scope` (nonempty unique `{path, planned}` rows: repository-relative prompt path and Boolean planned), `evidence` (unique `{path, sha256}` local source references), `screens` and `simulation`. Paths cannot be absolute, contain parent traversal or select symlinks. Hashes are lowercase SHA-256 of current exact UTF-8 source bytes. An empty evidence list is allowed for an explicit brief recorded in basis; inventory alone cannot author an empty fact.
+
+A scoped path may be absent only when its scope row explicitly says planned true; a missing existing path is unknown.
+
+`screens` is null (unknown) or an exhaustive array for this change. Each row is exactly `{id, prompt_path, app_map_path, planned}`: nonempty id, a prompt_path named in scope, Boolean planned, and app_map_path null for planned screens or the exact repository map path for existing screens. Planned screens count before their files exist; their scope row must also be planned true. Existing rows must match a usable map screen with the same id and prompt_path. Identity is `(app_map_path,id)` for existing screens and `(prompt_path,id)` for planned screens; duplicates are invalid. `screens: []` explicitly asserts no affected or planned page/screen, rather than an empty repository inventory.
+
+`simulation` is null (unknown) or an array of `{story_path, scenario_path, entry_path, operation}`. Every field is a nonempty repository-relative path except operation, a nonempty operation name; entry_path belongs to scope. A row must resolve to an actual Git-visible Story with acceptance criteria, a locally valid program-scenario.v1 file linking that Story, and one of its steps linking entry_path/operation to a declared Runtime entry in that prompt. These local links are a "Simulator door"; HTTP routes and screens are not required. Repeated identical rows are invalid. `simulation: []` supplies no known door; it never permits skipping try. A known preview without such a door remains unknown and asks. No local fact claims remote setup will succeed.
+
+Missing/multiple blocks, missing/extra/wrongly typed fields, unreadable sources, mismatched hashes/base/revision, incomplete inventory and conflicting declarations make the relevant decision unknown. Never treat these as empty arrays. A valid block with null for one surface can still establish the other surface. Do not reinterpret basis prose to change the typed declarations.
+
+</details>
+
+<details>
+<summary>Repository evidence, exact outcomes and repeat questions</summary>
+
+`ports.readOptionalEvidence({root,notePath})` supplies `{snapshot:{note,error,complete,files}}`; each file has `{path,text,error}`. Its native default reads the private direct note and enumerates Git-visible tracked/untracked JSON plus declared scope/evidence files and their local prompt/drawing links, recursively including every reached prompt's Runtime `calls[].target`, through the existing injected Git/file ports. Preserve NUL-delimited paths; do not follow symlinks, secret-looking paths, parent traversal or remote links. `complete` is true only after successful enumeration and all selected reads. Missing planned prompt files are allowed; other missing selected files or failed reads are unknown. A thrown callback is unknown. Snapshot limits are 10,000 files / 10 MiB; exceeding them is unknown. JSON extensions select a format to inspect, never a UI/no-UI fact.
+
+Recognize app maps by parsed schema_version `prompt-runtime.app-map.v1` and nonempty name at any enumerated path, including alternate maps. A usable screens array has unique nonempty ids and valid screen references: operation screens name prompt_path/operation, source operation, format html/text/grid and a string result_pointer; mockup screens name prompt_path, source mockup, null operation/result_pointer and format svg. Input must be an object. Duplicate/malformed rows or a malformed selected/previously recognized map/scenario are unknown. Any unparseable enumerated JSON also leaves absence unproved. This conservative inventory is local recognition, not remote app-map validation.
+
+A screen is associated with scope by its prompt_path or a map handler's prompt reference to a scoped entry (`screen: "*"` selects all map screens). Scoped router/routes/after references whose screen cannot be resolved leave screen association unknown. Unrelated valid maps/screens cannot supply an affected-screen count or contradict a grounded no-screen declaration. Every associated existing screen must appear in the exhaustive facts; a scoped prompt's linked `.ui.svg` contradicts screens: [] unless its owning screen is accounted for. Enumerate actual scenario-to-entry links similarly: a scoped valid door absent from the declarations makes them incomplete; a malformed/unreadable candidate or unresolved entry leaves capability unknown. A malformed map affects visual; a malformed scenario affects try; unreadable/unclassifiable JSON affects both. Preserve Screen-only maps without HTTP routes.
+
+For known empty visual facts with no contrary evidence, save `done.visual` using the ordinary `{at,area,summary}` record and summary `skipped: no screen`; print `Skipped visual: no screen.`. Continue within the area and do not prompt for that automatic skip. Never create an automatic done.try record; missing, empty or unknown simulation facts always ask.
+
+Every actual question includes `Recommended: yes. REASON`. Visual may put this on its own line; try is exactly one line and is asked once, without follow-up persuasion after no. Visual question: `Do you want a visual design step? yes/no`. Reason for known screens: `This change has N screen.` (N=1) or `This change has N screens.`. Unknown visual reason: `PDD cannot determine this change's screens from current scoped facts.`. Try question: `Do you want to try it now? yes/no`. For a known door, call the production [simulation command chooser](simulate-command.prompt.md) exactly once with the first valid row's Story path and its validated capability counts. Use its reason verbatim and, when its command is nonempty, append ` Command: ` followed by the command in an inline code span and `; time: HINT.` on that same question line after Recommended. Use an adaptive backtick delimiter longer than any run in the command. Do not invent another chooser. Unknown try reason: `PDD cannot determine this change's runnable interface from current scoped facts.`. A chooser unknown uses its returned honest reason and no invented command/time hint. Custom question: `Do you want the STEP step? yes/no`, reason `PDD has no applicability rule for this optional step.`. Unknown recommends yes to keep the optional review available, never to claim evidence exists.
+
+Save the generated text as the existing `question {text,at,area}`, set waiting with no approval gate, and tell the skill to relay it verbatim and wait. Return `pdd recorded STEP.`, then any skip lines, then `Next step: NEXT (optional).`, the generated question (one line for try), and `When it is done, run: PDD workflow done NEXT --summary "one line"`. A required next step uses `Next step: NEXT.` and its existing done line. A person's no is recorded only by the existing done command with a skipped summary, subject to the try guard below; a yes allows the agent to do the step, never approves another gate.
+
+Persist `optionalDecisions[step] = {revision, fingerprint, question, at, area}` for questions. Fingerprint UTF-8 `JSON.stringify([step,baseSha,revision,predecessorSummary,note,error,complete,files])`, where files is the list of `[path,text,error]` tuples sorted by path in UTF-16 code-unit order, using the injected exact-byte hash facility. Custom steps use an empty snapshot (`note/error` empty, complete false, files empty). Never include timestamps, journalSeq or generated status. For unchanged pending facts, repeated done/open/status must not issue a second question or erase the saved one; repeated done returns `pdd recorded STEP.\nOptional step NEXT is waiting for your answer.`. A legacy run without a receipt asks once. Changed evidence yields a fresh decision only when next-step selection runs; status/open never reassess. A genuine change request (not an answer) increments optionalRevision and clears pending receipts; same-summary duplicate done does not. Existing explicit reruns still clear later done steps; when they invalidate an automatic skip, reevaluate it with current facts. Facts bound to an old revision remain unknown until the author refreshes them. Completed steps do not reopen solely because source changes. Preserve all unrelated run fields, human decisions and existing gate/publication behavior.
+
+
+Before recording a summary beginning `skipped` for an actual optional try step in the current area (case-insensitive, whole word), require a saved try question receipt for the current revision and area. Accept exact summary `skipped by the person` as the agent's explicit relay of the person's current no/skip answer in their own chat, even with no Herdr area chat, terminal or native transcript reader. This relay has the existing local run.changes provenance trust boundary, not tamper-proof attestation; the skill must never fabricate it. It requires no extra approval or evidence gate.
+
+Other skipped summaries require the latest same-stage run.changes row with answer true strictly after that receipt, or the latest eligible original native user reply from existing readApprovalEvidence after it. Compare these candidates across routes by timestamp: use only the newest answer; conflicting answers tied for the newest timestamp do not authorize a skip. Use the existing native stage/session/config selection when that route is available, decision changes, and ignore PDD's generated change/answer prefixes. Match complete trimmed case-insensitive `no`, `skip`, `skip try` or `skip it`, optionally followed by one period/exclamation mark. Stale, yes or ambiguous replies do not authorize an agent-origin skip. If none applies, return exitCode 1 and exactly `Only the person can skip try. Record their answer; do not skip it for them.` before clearing a question, recording a step or writing run state. Do not ask again, open a new gate or demand a terminal/Herdr session. An exact current-person relay is always sufficient.
+
+Normalize every accepted decline to summary `skipped by the person`; store done.try.personAnswer {via,text,at}, using changes/native text and time for those routes, or via relay with text equal to the explicit summary and the observation time. Add sessionId for native chat evidence. Continue to the ordinary next step/gate immediately. No requires-try gate, refusal because the person declined, repeat question or persuasion is allowed; other existing Story/prompt approval gates remain independent. A proactive check may have left a Try link: retain it as evidence, but a person-declined try must still remove the try invitation from subsequent gate guidance/status, never ask again to try it before approving.
+
+
+Runnable capability requires the complete transitive Runtime-call dependency closure of the selected Story's scenario-linked prompts. Validate each reachable prompt's local interface, schemas, status and current prose hash using the existing [runtime preflight rules](runtime-preflight.prompt.md); retain their canonical graph/cycle policy. Missing, unreadable, unsafe, stale, invalid or unresolved required source leaves capability unknown, never an advertised command. Use only the supplied snapshot and existing validation/hash facilities in the decision; closure reads belong to the existing injected evidence reader and retain its Git-visibility, symlink, secret-path and size boundaries.
+
+For the selected Story, count all distinct scenario-linked CLI candidates carrying both exact input_schema/result_schema cli convention paths before applying the CLI adapter's safe H1 program-name rule. Several candidates remain ambiguous even when discarding unsafe or reserved names would leave one; never advertise their CLI shell. A sole candidate is eligible for CLI advice only after that name validation succeeds. An unusable sole candidate makes capability incomplete/unknown; it is not zero CLI evidence and cannot enable an HTTP or Call fallback. Pass the validated candidate count, or null when unknown, and the completeness result to the unchanged chooser. Derive named HTTP routes only from valid `input_schema.title = "HTTP METHOD /path"` declarations of scenario-linked entries, using the HTTP-door method/path rules; duplicate/ambiguous labels are unknown. Never invent routes from operation names. For try command advice, use the map that the existing unflagged invocation selects (root app-map.json, otherwise app/app-map.json); alternate-map inventory still informs visual but cannot silently select a screen for an unflagged command. Derive screen count from its associated usable rows, including Screen-only maps without HTTP routes. Ambiguous Story/test selection remains unknown rather than printing a command that assumes a selection. Malformed/unreadable required sources make command capability unknown. These are local recommendations; authenticated pinned model metadata remains authoritative when the actual simulation starts. The chooser owns the mixed-capability priority and displayed command. Future #2760 will reuse it; this issue does not change unflagged simulate dispatch, forced-mode behavior or project-wide selection.
+
+</details>
+
+<details>
+<summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"e7de09e59a0c4cde38f044c2a14e1ff04c568cc5379b7a68907644ff25ca92b1","entries":[{"operation":"changeRun","input_schema":{"type":"object","properties":{"ref":{"type":"string"},"text":{"type":"string"},"cwd":{"type":"string"}},"required":["ref","text","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+{
+  "status": "approved",
+  "prose_sha256": "988521268d6de0fc27a0b0587c196a9e6d580e005066199c6bcdf402b43066e5",
+  "entries": [
+    {
+      "operation": "stepDone",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "step": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "packageRoot": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "step",
+          "summary",
+          "cwd"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "exitCode": {
+            "type": "integer"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "exitCode",
+          "message"
+        ],
+        "additionalProperties": false
+      },
+      "errors": []
+    },
+    {
+      "operation": "changeRun",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "ref": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "cwd": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref",
+          "text",
+          "cwd"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "exitCode": {
+            "type": "integer"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "exitCode",
+          "message"
+        ],
+        "additionalProperties": false
+      },
+      "errors": []
+    }
+  ],
+  "calls": [
+    {
+      "operation": "chooseSimulationCommand",
+      "target": "prompts/cli/simulate-command.prompt.md",
+      "target_operation": "chooseSimulationCommand",
+      "max_calls": 1
+    }
+  ],
+  "resources": [
+    {
+      "name": "runStore",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "load",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "cwd": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "cwd"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "record": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "record"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "save",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "cwd": {
+                "type": "string"
+              },
+              "record": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "cwd",
+              "record"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "record": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "record"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "evidence",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "readOptionalEvidence",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "root": {
+                "type": "string"
+              },
+              "notePath": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "root",
+              "notePath"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "snapshot": {
+                "type": "object",
+                "properties": {
+                  "note": {
+                    "type": "string"
+                  },
+                  "error": {
+                    "type": "string"
+                  },
+                  "complete": {
+                    "type": "boolean"
+                  },
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "text": {
+                          "type": "string"
+                        },
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "text",
+                        "error"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "note",
+                  "error",
+                  "complete",
+                  "files"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "snapshot"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "clock",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "now",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "at": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "at"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "compute",
+      "kind": "compute",
+      "access": "read",
+      "operations": [
+        {
+          "name": "hash_utf8",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "value"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "person",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "readApprovalEvidence",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "stage": {
+                "type": "object",
+                "properties": {
+                  "agent": {
+                    "type": "string",
+                    "enum": [
+                      "codex",
+                      "claude"
+                    ]
+                  },
+                  "root": {
+                    "type": "string"
+                  },
+                  "startedAt": {
+                    "type": "integer"
+                  },
+                  "endedAt": {
+                    "type": "integer"
+                  },
+                  "sessionId": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "agent",
+                  "root",
+                  "startedAt",
+                  "endedAt"
+                ],
+                "additionalProperties": false
+              },
+              "gateAskedAt": {
+                "type": "integer"
+              },
+              "decision": {
+                "type": "string",
+                "const": "changes"
+              },
+              "ignorePrefixes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "stage",
+              "gateAskedAt",
+              "decision",
+              "ignorePrefixes"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "ok": {
+                    "type": "boolean",
+                    "const": true
+                  },
+                  "decision": {
+                    "type": "string",
+                    "const": "changes"
+                  },
+                  "agent": {
+                    "type": "string",
+                    "enum": [
+                      "codex",
+                      "claude"
+                    ]
+                  },
+                  "sessionId": {
+                    "type": "string"
+                  },
+                  "userMessage": {
+                    "type": "string"
+                  },
+                  "userMessageAt": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "ok",
+                  "decision",
+                  "agent",
+                  "sessionId",
+                  "userMessage",
+                  "userMessageAt"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "ok": {
+                    "type": "boolean",
+                    "const": false
+                  },
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "ok",
+                  "code",
+                  "message"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "limits": {
+    "max_steps": 32,
+    "max_model_calls": 2
+  },
+  "conventions": []
+}
 ```
 </details>

@@ -357,7 +357,7 @@ test('SKILLS22: for a page or a screen, visual writes the app map, and the perso
   assert.ok(runbook.includes('Its `## Appearance` section links the mockups'));
   assert.ok(read('pdd-feature/steps/prompt-story.md').includes('- A page or a screen gets an app map, so the person can try it on the Screen.'));
   const skill = read('pdd-feature/SKILL.md');
-  assert.ok(skill.includes('For a page or a screen, recommend visual: it makes the app map.'));
+  assert.ok(skill.includes("relay PDD's question and recommendation verbatim. Ask once; wait; accept no at once."));
   assert.match(skill.split('\n').find(line => line.startsWith('- At the story gate')), /If visual made an app map, tell the person to run `pdd simulate <story> --new`/);
   assert.match(read('pdd-feature/steps/try.md'), /`pdd simulate STORY`[^\n]*with an app map, add `--new`/);
 });
@@ -419,15 +419,20 @@ test('SKILLS27: a page gets a render operation that returns html, an app map and
   assert.match(bug, /For a page, check what it shows through its `render` operation[^\n]*`count` or `equals`[^\n]*never "browser-only, no PDD test"/);
 });
 
-// Wrong (round-2 tester, 0.1.7): the optional visual step ran without asking, though pdd said "Ask the person".
-test('SKILLS28: before an optional step the main chat asks the person and waits for the answer', () => {
+// #2756: PDD decides optional applicability; the agent relays its advice without inventing a recommendation.
+test('SKILLS28: optional steps relay PDD decisions and wait; small-change retains its explicit ask', () => {
   const ask = 'In a run, run `<pdd> workflow ask` first.';
-  const lines = { 'pdd-feature': '- Before an optional step, ask the person and wait for the answer: "Do you want a visual design step? yes/no". ' + ask,
-    'pdd-bug': '- Before an optional step, ask the person and wait for the answer: "Do you want to try it now? yes/no". ' + ask,
+  const relay = "- Optional steps: relay PDD's question and recommendation verbatim. Ask once; wait; accept no at once. No invented advice or agent skip of try; don't ask about visual skips.";
+  const lines = { 'pdd-feature': relay,
+    'pdd-bug': relay,
     'pdd-small-change': '- Before an optional step, ask the person and wait for the answer. ' + ask };
   for (const [name, line] of Object.entries(lines)) {
     const skill = read(`${name}/SKILL.md`);
     assert.ok(skill.split('\n').some(text => text.startsWith(line)), name);
+    if (name !== 'pdd-small-change') {
+      assert.ok(skill.includes('May use `try_open`, `try_state`, `try_run`, `try_check`, `try_save_case` before the gate.'), name);
+      assert.ok(skill.includes('Review observations with them; never change expected values.'), name);
+    }
     assert.equal(skill.includes('not a stop'), false, `${name}: "not a stop" reads as "do not wait"`);
   }
 });
