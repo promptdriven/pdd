@@ -6,6 +6,11 @@ import { Readable } from 'node:stream';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { harbor, fakeRuntime, portsFor, PLACE } from './runtime-fake.mjs';
 
+async function loadProgramSession() {
+  try { return await import('../src/program-session.mjs'); }
+  catch (error) { assert.fail(`Public openProgramSession is required: ${error.code}`); }
+}
+
 for (const kind of ['screen','http']) test(`C classification precedes typed input for ${kind}`, async t => {
   const setup=harbor(t), env={HOME:setup.home,PDD_STATE_DIR:setup.state,PATH:'/usr/bin:/bin'};
   const calls=[];
@@ -28,8 +33,7 @@ test('C null result continues local typed usage without dispatch',async t=>{
 });
 
 test('C session preserves app map, uploads overlay and returns proxy capability on reuse',async t=>{
-  let module;
-  try {module=await import('../src/program-session.mjs');}catch(error){assert.fail(`Public openProgramSession is required: ${error.code}`);}
+  const module=await loadProgramSession();
   const setup=harbor(t,root=>{rmSync(join(root,'tests'),{recursive:true});rmSync(join(root,'user_stories'),{recursive:true});});
   const fake=await fakeRuntime(t,(e,f)=>{
     if(e.method==='GET'&&e.url.endsWith('/model'))return {status:200,json:{app_map:true,entries:[]}};
@@ -83,7 +87,7 @@ for(const args of [['serve','extra'],['serve','--port','9000']])test(`HTTP suffi
 });
 
 for(const appMap of [{schema_version:'prompt-runtime.app-map.v1'},'../escape.json','/tmp/map.json'])test(`invalid C appMap refuses before authentication: ${JSON.stringify(appMap)}`,async t=>{
- const module=await import('../src/program-session.mjs');const setup=harbor(t);
+ const module=await loadProgramSession();const setup=harbor(t);
  const fake=await fakeRuntime(t,(e,f)=>e.command==='lint'?{status:200,json:f.lint(e.request.requestId)}:{status:200,json:f.tryJob(e.request.requestId)});
  const env={HOME:setup.home,PDD_STATE_DIR:setup.state,PDD_RUNTIME_URL:fake.origin};const io=portsFor(env);
  const dir=join(setup.repo,'.pdd/run/app');mkdirSync(dir,{recursive:true});
@@ -92,7 +96,7 @@ for(const appMap of [{schema_version:'prompt-runtime.app-map.v1'},'../escape.jso
 });
 
 for(const withMap of [true,false])test(`C disk map capture and CLI omission: ${withMap}`,async t=>{
- const module=await import('../src/program-session.mjs');
+ const module=await loadProgramSession();
  const appMap='app-map.json',doc={schema_version:'prompt-runtime.app-map.v1',name:'Disk',initial_screen:'menu',screens:[{id:'menu',prompt_path:PLACE}]};
  const setup=harbor(t,root=>{if(withMap)writeFileSync(join(root,appMap),JSON.stringify(doc));});
  const fake=await fakeRuntime(t,(e,f)=>e.command==='lint'?{status:200,json:f.lint(e.request.requestId)}:{status:200,json:f.tryJob(e.request.requestId)});
