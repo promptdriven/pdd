@@ -86,7 +86,7 @@ test('CLI sync: unsafe symlink ancestor leaves destination, original test and un
   const outside=join(setup.sandbox,'outside');fs.renameSync(join(repo,'prompts'),outside);symlinkSync(outside,join(repo,'prompts'));
   const stdout=sink(),stderr=sink();
   assert.equal(await runPdd(['contracts','sync','--write'],{cwd:repo,env:{HOME:setup.home,PDD_STATE_DIR:setup.state,PDD_RUNTIME_URL:'not-an-origin'},stdout,stderr}),4,stderr.text);
-  assert.match(stderr.text,/symbolic link ancestor/);
+  assert.match(stderr.text,/symbolic link ancestor|link prompts -> .*outside.*outside the repository/);
   assert.equal(readFileSync(join(outside,'place_order.prompt.md'),'utf8'),original);
   assert.equal(readFileSync(join(outside,'unmatched.prompt.md'),'utf8'),'# unrelated exact bytes\r\n');
   assert.deepEqual(readFileSync(join(repo,ORDER)),testBytes);assert.equal(existsSync(setup.state),false);

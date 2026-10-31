@@ -18,7 +18,7 @@ test('ONEOF2500 independent CLI replay: original addresses, overlap and numeric 
     writeFileSync(promptPath, prompt.replace(block[1], JSON.stringify(contract, null, 2)));
     writeFileSync(testPath, JSON.stringify(doc, null, 2));
     return await new Promise(resolve => {
-      const child = spawn(process.execPath, [join(root, 'bin/pdd.mjs'), 'check', 'user_stories/place-order.md'], {
+      const child = spawn(process.execPath, [join(root, 'bin/pdd.mjs'), 'test', 'user_stories/place-order.md'], {
         cwd: repo, env: { ...process.env, HOME: home, PATH: `${tools}:${process.env.PATH}`, PDD_RUNTIME_URL: runtime.origin },
       });
       let stdout = '', stderr = '';

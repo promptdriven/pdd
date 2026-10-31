@@ -107,7 +107,7 @@ for (const vector of vectors.cases) test(`RECONCILE ${vector.id}`, async t => {
     hold = true; const before = checkPosts(r.fake).length, owner = r.run({ '--retry': first.json.batch }); await boundary;
     const bytes = readFileSync(file), summary = readFileSync(join(first.folder, 'summary.json')), traffic = [r.fake.gets.length, r.fake.posts.length];
     const contender = await r.run({ '--retry': first.json.batch });
-    assert.equal(contender.code, 3); assert.equal(contender.clock.uuids, 0); assert.match(contender.err, /pdd check --read/);
+    assert.equal(contender.code, 3); assert.equal(contender.clock.uuids, 0); assert.match(contender.err, /pdd test --read/);
     assert.deepEqual([r.fake.gets.length, r.fake.posts.length], traffic); assert.deepEqual(readFileSync(file), bytes); assert.deepEqual(readFileSync(join(first.folder, 'summary.json')), summary);
     resume(); const result = await owner; complete(result);
     assert.equal(checkPosts(r.fake).length - before, 1);

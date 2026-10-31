@@ -1,6 +1,6 @@
 # Local argument parser
 
-Own `src/argument-parser.mjs`; export `CommandInputError` (exitCode2) and `parseArgv(argv)`. Use only `PUBLIC_COMMAND_ROUTES` to resolve exact prefixes and declared operand/flag types. Return a fresh immutable local plan `{commandId,local,operands,options}`, with `notice` only for [former names](#former-names). Do not emit service-adapter arguments or dispositions, private validators or an execution-service enum.
+Own `src/argument-parser.mjs`; export `CommandInputError` (exitCode2) and `parseArgv(argv)`. Use only `PUBLIC_COMMAND_ROUTES` to resolve exact prefixes and declared operand/flag types. Return a fresh immutable local plan `{commandId,local,operands,options}`. Do not emit service-adapter arguments or dispositions, private validators or an execution-service enum.
 
 Empty argv, root --help/-h/-help/help, and known exact command/group help succeed; `-help` is accepted wherever `--help` is. Unknown command plus --help/-h still refuses2. A first word that is no known command and no option refuses with exactly `Unknown command "WORD". Run pdd --help to see the commands.`, with control characters in WORD shown as spaces. `--version` accepts no unrelated arguments. `completion` requires exactly bash or zsh. `workflow list` accepts one optional --json and no operands. `setup` takes no operands and no options. No route forwards native flags. Unknown/duplicate options, NUL/nonstrings, missing/extra operands and excluded commands refuse clearly without printing raw invalid input. Never mutate the caller's array. A help flag cannot hide invalid trailing arguments.
 
@@ -8,21 +8,28 @@ Empty argv, root --help/-h/-help/help, and known exact command/group help succee
 
 Read the full [Prompting guide](../../docs/prompting-guide.md) before authoring prompts or Stories. The [public alpha boundary](public-boundary.prompt.md) remains required native authoring/generation context for scope. These authoring instructions are not inputs to runtime parsing; the pure parser uses the catalog and the validation rules owned here.
 
-## Former names
+## Removed names
 
-The catalog's `formerly` words ([Names](command-catalog.prompt.md#names)) still parse like the new words of their route: same operands, options, validation and plan. `check` and `try` are known first words, so they never get `Unknown command`. The former `check` parses with the `check` route (`test`) and keeps every option that it had, `--lint` and `--local` included.
+Check for the catalog's removed words ([Names](command-catalog.prompt.md#names)) first, before any other rule, also right after `help`. `check` and `try` are known first words, so they never get `Unknown command`, and they never run. Every input whose command word is `check` or `try` (`pdd check …`, `pdd try …`, `pdd help check`, `pdd help try`), with any operands, options, help flags or unknown options, is a `CommandInputError` (exit 2) with exactly one line:
 
-A plan from former words also has `notice`: one plain line, `pdd FORMER is now pdd NEW.`, with no backticks or quotes. The four lines are `pdd check is now pdd test.`, `pdd check --lint is now pdd lint.` (the former `check` with the flag `--lint` anywhere in its options), `pdd try is now pdd simulate.` and `pdd workflow run is now pdd workflow start.`
-- Help of a former name (`pdd check --help`, `pdd check -h`, `pdd help try`, `pdd workflow run --help`) is the help of the new name, with the same notice. `check --lint` with a help flag gets the help of `lint`.
-- New words never get a notice. `pdd test --lint` works like `pdd lint`. `sim` is the short form of `simulate`: it parses like `simulate`, with the same plan, and gets no notice.
-- A refused input is a `CommandInputError` with no notice, so a usage error prints only its own message (exit 2).
+| Input | Line |
+|---|---|
+| `check`, and `--lint` is one of the words after it | `pdd check --lint was removed. Use pdd lint.` |
+| `check`, any other words | `pdd check was removed. Use pdd test.` |
+| `try`, any words | `pdd try was removed. Use pdd simulate.` |
+
+The line names the old and the new command, with no backticks or quotes, and repeats no other word of the input. Forbidden: help, a plan, a usage error about another word, or a second line.
+
+## Quiet names
+
+A quiet word (`sim`, `workflow start`) parses like the prefix of its route: same operands, options, validation, help and plan, with nothing added. So `pdd sim --help` is the `simulate` help and `pdd workflow start --help` is the `workflow run` help. `pdd test --lint` works like `pdd lint`. No plan has a `notice`.
 
 ## Missing workflow name
 
-When the first operand after `workflow start`, or after the former `workflow run`, is a positive decimal issue number
+When the first operand after `workflow run`, or after the quiet `workflow start`, is a positive decimal issue number
 (the existing digits-only issue form), reject it with `CommandInputError` and
-message `Name the workflow: pdd workflow WORD small-change NUMBER (or bug, feature). See pdd workflow list.`,
-replacing WORD with the word that the person typed (`run` or `start`) and NUMBER with that operand. This identifies the missing name rather than
+message `Name the workflow: pdd workflow run small-change NUMBER (or bug, feature). See pdd workflow list.`,
+replacing NUMBER with that operand. The message names `run` also for `workflow start`. This identifies the missing name rather than
 using the generic unsupported-input diagnostic. Never infer or start a workflow.
 Preserve all other command parsing, help, option validation and issue forms;
 this rule changes only the diagnostic for a number in the workflow-name position.

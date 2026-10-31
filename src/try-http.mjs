@@ -1,4 +1,4 @@
-// Generated from prompts/cli/try-http.prompt.md (sha256: 6fa9fea29ab24253c75ffc220e61cb83ea8360ed15132d51af2b9d5d175a8628).
+// Generated from prompts/cli/try-http.prompt.md (sha256: cdae13428913e7130b7ba39685d67d329b1af6259ca85daecf3e75f6d7d29741).
 import { createServer, validateHeaderName, validateHeaderValue } from 'node:http';
 import { join, relative } from 'node:path';
 import { checkInput } from './runtime-preflight.mjs';
@@ -123,7 +123,7 @@ export async function openServe(context, test, sessionId, options) {
   if (hasScreen && routes.some(e => ['GET', 'HEAD'].includes(e.route.method) && e.route.path === '/' || e.route.path.startsWith(SCREEN_PREFIX))) throw problem(502, 'This app map reserves GET/HEAD / and /__pdd/screen/; its HTTP routes conflict with the Screen.');
   if (!routes.length && !hasScreen) {
     if (context.appMap) {
-      const command = ['pdd', 'try', test.story, '--serve', String(options['--serve'] ?? 8080), '--new', '--app-map', relative(context.cwd ?? root, join(root, context.appMap))].map(shellWord).join(' ');
+      const command = ['pdd', 'simulate', test.story, '--serve', String(options['--serve'] ?? 8080), '--new', '--app-map', relative(context.cwd ?? root, join(root, context.appMap))].map(shellWord).join(' ');
       throw problem(502, `This saved Try has no Screen app map. Start a new Try with the selected app map: ${command}`);
     }
     throw problem(502, 'This Story has neither a Screen app map nor named HTTP routes. Add an app map (RUNBOOK §13), or name an HTTP route such as HTTP GET /api/books in input_schema.title (RUNBOOK §19).');
@@ -140,7 +140,7 @@ export async function openServe(context, test, sessionId, options) {
   let tail = Promise.resolve(), pending = 0, stopped = false;
   const server = createServer(async (req, res) => {
     let counted = false, usage = { ...latestUsage, calls: 0 }, usageSource = 'last-known';
-    const reply = (status, message) => { if (!res.headersSent) { res.writeHead(status, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', ...tryUsageHeaders(usage), 'x-pdd-usage-source': usageSource }); res.end(`pdd try: ${cleanText(message)}\n`); } else res.destroy(); };
+    const reply = (status, message) => { if (!res.headersSent) { res.writeHead(status, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', ...tryUsageHeaders(usage), 'x-pdd-usage-source': usageSource }); res.end(`pdd: ${cleanText(message)}\n`); } else res.destroy(); };
     try {
       const port = server.address()?.port, acceptedHost = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
       if (port === 80) { acceptedHost.add('127.0.0.1'); acceptedHost.add('localhost'); }
@@ -204,8 +204,8 @@ export async function openServe(context, test, sessionId, options) {
   server.requestTimeout = 30_000; server.headersTimeout = 15_000;
   const wanted = Number(options['--serve'] ?? 8080);
   await new Promise((done, reject) => { server.once('error', reject); server.listen(wanted, '127.0.0.1', done); }).catch(error => {
-    if (error.code === 'EADDRINUSE') throw problem(502, `port ${wanted} is in use by another program. Stop it, or run pdd try ${test.story} --serve ${wanted === 65535 ? wanted - 1 : wanted + 1}.`);
-    if (error.code === 'EACCES') throw problem(502, `port ${wanted} needs extra rights on this computer. Run pdd try ${test.story} --serve 8080.`);
+    if (error.code === 'EADDRINUSE') throw problem(502, `port ${wanted} is in use by another program. Stop it, or run pdd simulate ${test.story} --serve ${wanted === 65535 ? wanted - 1 : wanted + 1}.`);
+    if (error.code === 'EACCES') throw problem(502, `port ${wanted} needs extra rights on this computer. Run pdd simulate ${test.story} --serve 8080.`);
     throw error;
   });
   const stop = () => { stopped = true; server.close(); server.closeIdleConnections(); server.closeAllConnections(); };
