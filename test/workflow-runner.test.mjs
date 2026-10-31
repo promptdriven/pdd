@@ -32,6 +32,19 @@ function assertSafeApprovalAdvice(text) {
   assert.match(text,/terminal y\/N/);
 }
 
+function assertPlainPersonApprovalAdvice(text) {
+  assert.match(text, /pdd workflow approve 17(?![\w-])/);
+  assert.doesNotMatch(text, /--said|<<|PDD_SAID|<pdd>/, 'person reply has no agent approval template');
+  assert.doesNotMatch(text, /show the gate|ask the person|relay their words|tell them exactly/i, 'person reply has no instructions to the agent');
+  assert.doesNotMatch(text, /\/abs\/|\/(?:home|Users|private|var|usr|opt)\/[^\s]+|[A-Z]:\\/i, 'person reply has no full local executable path');
+}
+
+function assertPlainStoppedAtPR1(text) {
+  assert.match(text, /Stopped at PR 1/);
+  assert.match(text, /code PR later/i, 'the person can make the later code decision separately');
+  assertPlainPersonApprovalAdvice(text);
+}
+
 async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-runner-')));
   t.after(() => rmSync(base, { recursive: true, force: true }));
@@ -150,7 +163,7 @@ test('small-change: run exits at once, done reaches the gate, changes go to the 
   const gate = await stepDone({ step: 'scope', summary: 'Change value.mjs to 2.', cwd: run.root }, f.agentPorts());
   assert.equal(gate.exitCode, 0, gate.message);
   assert.match(gate.message, /show the person|ask the person/i); assert.match(gate.message, /stop/i);
-  assert.match(gate.message, /\/abs\/node \/abs\/pdd\.mjs workflow approve 17/);
+  assertSafeApprovalAdvice(gate.message);
   run = f.record();
   assert.equal(run.state, 'waiting'); assert.deepEqual(run.waitingFor.decisions, ['approve', 'changes']); assert.equal(run.stage.id, 'approve');
   assert.equal(run.gate.at, f.clock); assert.equal(run.done.scope.summary, 'Change value.mjs to 2.');
@@ -745,7 +758,7 @@ test('#13: after check and try the chat asks the person to try and approve; PR 1
   const opened = await approveRun({ ref: '17', cwd: run.root, said: 'Tried it, it splits right.' }, f.agentPorts({ readApprovalEvidence: async () => ({ ok: true, decision: 'approve', agent: 'codex', sessionId: '11111111-1111-4111-8111-111111111111', userMessage: 'Tried it, it splits right.', userMessageAt: f.clock - 1 }) }));
   assert.equal(opened.exitCode, 0, opened.message);
   assert.equal(f.prs.length, 1); assert.match(opened.message, /PR 1: https:\/\/github\.com\/example\/project\/pull\/23/);
-  assert.match(opened.message, /Stopped at PR 1/); assertSafeApprovalAdvice(opened.message);
+  assertPlainStoppedAtPR1(opened.message);
   record = f.record();
   assert.equal(record.gate.kind, 'ask-code'); assert.equal(record.areas[record.area].name, 'prompt-pr'); assert.equal(record.chats.length, 2);
   assert.equal(record.decisions.at(-1).stage, 'prompt-pr');
@@ -764,7 +777,7 @@ test('#13: from the terminal, approve opens PR 1 and asks about the code PR; no 
   assert.equal(stopped.exitCode, 0, stopped.message);
   assert.match(f.prompts.at(-2), /Approve the prompt-pr area and all selected draft prompts and open PR 1 for example\/project#17/); assert.match(f.prompts.at(-1), /Make the code PR now/);
   assert.equal(f.prs.length, 1); assert.match(stopped.message, /PR 1: https:\/\/github\.com\/example\/project\/pull\/23/);
-  assertSafeApprovalAdvice(stopped.message);
+  assertPlainStoppedAtPR1(stopped.message);
   assert.match(pane.agent.prompts.at(-1), /pdd opened PR 1: https:\/\/github\.com\/example\/project\/pull\/23/);
   assertSafeApprovalAdvice(pane.agent.prompts.at(-1));
   assert.equal(f.record().gate.kind, 'ask-code'); assert.equal(f.record().chats.length, 2);
@@ -1064,7 +1077,7 @@ test('0.1.7 #3: changes at a gate refuses a plain approval and says how to appro
     f.tick();
     const out = await changeRun({ ref: '17', text, cwd: f.source }, f.ports);
     assert.equal(out.exitCode, 2, text);
-    assert.match(out.message,/^This looks like an approval\./); assertSafeApprovalAdvice(out.message); assert.match(out.message,/\nNothing was sent to the chat\.$/);
+    assert.match(out.message,/^This looks like an approval\./); assertPlainPersonApprovalAdvice(out.message); assert.match(out.message,/\nNothing was sent to the chat\.$/);
   }
   assert.equal(pane.agent.prompts.length, 0); assert.deepEqual(f.record().changes, []); assert.equal(f.record().gate.at, gateAt);
   for (const text of ['approve it but rename X to Y', 'I approve, but please use the exact text', 'Please use the exact text from the issue', 'looks good', "I don't approve", 'Approve after you add a test']) {
