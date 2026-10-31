@@ -803,6 +803,10 @@ const OPTIONAL_POLICY = 'pdd.optional-facts.v1';
 const emptyOptionalSnapshot = () => ({note:'',error:'',complete:false,files:[]});
 const optionalObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const optionalKeys = (value, keys) => optionalObject(value) && Object.keys(value).length===keys.length && keys.every(key=>Object.hasOwn(value,key));
+// Recognize the local scenario/step shapes admitted by runtime-preflight's P1
+// and step checks. Optional metadata remains allowed; partial tests are not doors.
+const optionalScenarioKeys = new Set(['schema_version','story_path','criteria','initial_world','steps','entry_paths','simulation','check_exemptions','context','context_byte_budget','criteria_scope','prompt_mappings']);
+const optionalStepKeys = new Set(['step_id','entry_path','operation','input','checks','expected_error','simulation_overrides','model']);
 const optionalPath = path => typeof path==='string' && path.length>0 && !path.startsWith('/') && !/^[A-Za-z]:/.test(path) && !/[\\\0]/.test(path) && !path.split('/').includes('..') && !isSecretPath(path);
 const optionalHash = (p,text) => (p.hashUtf8 ?? (text=>createHash('sha256').update(text,'utf8').digest('hex')))(text);
 function optionalBlock(note) {
@@ -895,7 +899,8 @@ function optionalFacts(snapshot,run,p) {
       maps.set(path,doc);
     }
     if(doc?.schema_version==='prompt-runtime.program-scenario.v1') {
-      if(!optionalPath(doc.story_path) || !Array.isArray(doc.steps) || !Array.isArray(doc.criteria) || !optionalObject(doc.initial_world)) {simulationValid=false;continue;}
+      if(Object.keys(doc).some(key=>!optionalScenarioKeys.has(key)) || Object.hasOwn(doc,'criteria_scope') || Object.hasOwn(doc,'check_exemptions')&&!(Array.isArray(doc.check_exemptions)&&!doc.check_exemptions.length) ||
+        !optionalPath(doc.story_path) || !Array.isArray(doc.steps) || !Array.isArray(doc.criteria) || !optionalObject(doc.initial_world)) {simulationValid=false;continue;}
       const story=files.get(doc.story_path);
       if(!story || !doc.story_path.split('/').slice(0,-1).includes('user_stories') || /(?:^|\/)(?:README|PLAN)\.md$/i.test(doc.story_path) || !/(?:^|\n)##\s+Acceptance(?:\s+criteria)?\s*\n/i.test(story) || !storyCriteria(story).length){simulationValid=false;continue;}
       const criteria=doc.criteria;
@@ -903,7 +908,8 @@ function optionalFacts(snapshot,run,p) {
       const checked=new Set(),exact=new Set(),ids=new Set(criteria.map(row=>row.id)),stepIds=new Set();
       const entries=[];
       for(const step of doc.steps) {
-        if(!optionalPath(step?.entry_path) || typeof step.operation!=='string' || typeof step.step_id!=='string' || !step.step_id || stepIds.has(step.step_id) || !Object.hasOwn(step,'input') || !Array.isArray(step.checks)){simulationValid=false;continue;}
+        if(!optionalObject(step) || Object.keys(step).some(key=>!optionalStepKeys.has(key)) || !optionalPath(step.entry_path) || typeof step.operation!=='string' || !step.operation || typeof step.step_id!=='string' || !step.step_id || stepIds.has(step.step_id) || !Object.hasOwn(step,'input') || !Array.isArray(step.checks) ||
+          Object.hasOwn(step,'model')&&(typeof step.model!=='string'||!step.model.trim())){simulationValid=false;continue;}
         stepIds.add(step.step_id);
         const owner=prompt(step.entry_path),index=owner?.interface.entries.findIndex(entry=>entry.operation===step.operation);
         if(!(index>=0)){simulationValid=false;continue;}

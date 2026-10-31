@@ -1,10 +1,54 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync,writeFileSync,mkdirSync,symlinkSync} from 'node:fs';
-import {join} from 'node:path';
+import {readFileSync,writeFileSync,mkdirSync,symlinkSync,chmodSync,existsSync} from 'node:fs';
+import {join,dirname} from 'node:path';
+import {spawnSync} from 'node:child_process';
+import {pathToFileURL} from 'node:url';
 import {fixture,seedFor,clone,materializeSnapshot,runner,packageRoot,DEFECT} from './workflow-optional-steps.fixture.mjs';
 import {integrationFixture} from './workflow-optional-steps.lifecycle-fixture.mjs';
 const unknownVisual="PDD cannot determine this change's screens from current scoped facts.";
+const unknownSimulation="PDD cannot determine this change's runnable interface from current scoped facts.";
+const {findTests,preflight}=await import(pathToFileURL(join(packageRoot,'src/runtime-preflight.mjs')));
+// AC4: a real local refusal cannot establish a runnable door. Expected advice is
+// specified by the approved unknown-evidence rule, independently of CLI output.
+for(const [shape,mutate,refusal] of [
+ ['unsupported scenario key',doc=>{doc.unrecognized=true;},'invalid-document'],
+ ['another unsupported scenario key',doc=>{doc.future_entry={};},'invalid-document'],
+ ['unsupported step key',doc=>{doc.steps[0].unrecognized=true;},'invalid-step'],
+ ['blank step model',doc=>{doc.steps[0].model='  ';},'invalid-step-model'],
+ ['nonstring step model',doc=>{doc.steps[0].model=3;},'invalid-step-model'],
+ ['partial criteria scope',doc=>{doc.criteria_scope=[];},'pdd-partial-test'],
+ ['nonempty check exemptions',doc=>{doc.check_exemptions=['AC1'];},'pdd-partial-test'],
+ ['malformed check exemptions',doc=>{doc.check_exemptions={};},'pdd-partial-test'],
+ ['unsupported criterion key',doc=>{doc.criteria[0].unrecognized=true;},'invalid-criterion'],
+ ['missing check path',doc=>{delete doc.steps[0].checks[0].path;},'invalid-check'],
+ ['nonlist checks',doc=>{doc.steps[0].checks={};},'invalid-check']
+])test(`2756: native CLI rejects door advice for ${shape}`,t=>{
+ const {run,snapshot}=seedFor('cli-command-and-time'),f=fixture(t,run,{defaultReader:true});
+ const bin=join(f.base,'bin'),tmp=join(f.base,'tmp');mkdirSync(bin);mkdirSync(tmp);
+ for(const name of ['gh','herdr','codex','claude','curl','wget']){const path=join(bin,name);writeFileSync(path,'#!/bin/sh\nprintf "%s\\n" "$0 $*" >> "$HOME/blocked-transports"\nexit 91\n');chmodSync(path,0o755);}
+ const env={HOME:f.home,TMPDIR:tmp,PATH:bin+':'+dirname(process.execPath)+':/usr/bin:/bin',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',PDD_AGENT_SESSION:'1'};
+ const cli=()=>{const out=spawnSync(process.execPath,[join(packageRoot,'bin/pdd.mjs'),'workflow','done','check','--summary','checked'],{cwd:f.root,env,encoding:'utf8',timeout:15000});assert.equal(out.error,undefined);assert.equal(out.signal,null);assert.equal(out.status,0,out.stderr);return out.stdout;};
+ const local=()=>{const found=findTests({root:f.root});return preflight({root:f.root,found,selected:found.tests}).rows[0].refusals;};
+ // Keep supported optional keys and per-check metadata usable. Canonical local
+ // preflight deliberately permits additional check fields; this repair does too.
+ const file=snapshot.files.find(row=>row.path==='test/runtime/cli.json'),doc=JSON.parse(file.text);
+ Object.assign(doc,{entry_paths:['prompts/cli-app.prompt.md'],simulation:{},check_exemptions:[],context:[],context_byte_budget:1024,prompt_mappings:{}});
+ doc.steps[0].model='fixture-model';doc.steps[0].checks[0].annotation='allowed check metadata';
+ file.text=JSON.stringify(doc);materializeSnapshot(f,snapshot,'prompt-story.md');
+ assert.deepEqual(local(),[],`${shape}: valid control must pass canonical preflight`);
+ const valid=cli();assert.match(valid,/Recommended: yes\./,DEFECT);
+ assert.match(valid,/Command: `pdd simulate user_stories\/cli.md --cli --shell`; time: about 2 minutes\./,DEFECT);
+ f.seed(run);mutate(doc);f.put(file.path,JSON.stringify(doc));
+ assert.equal(local()[0]?.code,refusal,`${shape}: the same native fixture must be refused locally`);
+ const invalid=cli();assert.match(invalid,/Recommended: yes\./,DEFECT);
+ assert.doesNotMatch(invalid,/Command:|time:|has a Simulator door/,`${DEFECT} ${shape}: malformed local evidence must not invent a runnable command`);
+ assert.ok(invalid.includes(unknownSimulation),`${DEFECT} ${shape}: explain uncertainty`);
+ assert.equal(f.record().question.text,`Do you want to try it now? yes/no Recommended: yes. ${unknownSimulation}`,DEFECT);
+ assert.equal(f.record().done.try,undefined,DEFECT);assert.equal(f.record().gate,null,DEFECT);
+ assert.deepEqual(f.record().chats,[],DEFECT);assert.deepEqual(f.record().decisions,[],DEFECT);assert.deepEqual(f.record().pr,[],DEFECT);
+ assert.equal(existsSync(join(f.home,'blocked-transports')),false,'No external transport may be attempted');
+});
 function facts(snapshot,change){return {...snapshot,note:snapshot.note.replace(/```pdd-optional-facts\n([\s\S]*?)\n```/,(_,json)=>'```pdd-optional-facts\n'+JSON.stringify(change(JSON.parse(json)))+'\n```')};}
 for(const id of ['server-no-screen','server-unrelated-map','two-affected-screens-alternate-map','planned-screen-before-files','backend-door-no-app-map','cli-command-and-time','http-command-and-time','screen-only-command-and-time','screen-before-http-command','cli-before-http-command','missing-note','unknown-surfaces','malformed-note','duplicate-fact-blocks','stale-base','stale-revision','stale-source-bytes','missing-existing-scoped-prompt','unreadable-source','conflicting-affected-screen','duplicate-screen-map-row','malformed-enumerated-json','declared-unrelated-screen-not-scoped','drawing-contradicts-no-screen','malformed-scenario','unresolved-scenario-entry','door-refutes-exhaustive-no-simulation'])test(`2756: native default evidence reader ${id}`,async t=>{
  const {run,snapshot,step}=seedFor(id),f=fixture(t,run,{defaultReader:true});materializeSnapshot(f,snapshot,step.input.step==='understand'?'understand.md':'prompt-story.md');
