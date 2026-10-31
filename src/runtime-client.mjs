@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 9c6869ae9b1c4c273c380998852bda2f171e0923f95af63f608cf11e63ab71db).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: b335caa6c99be6b76c197c7635d564b458a74150a88634278fb7f0fa8909b01d).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -1609,7 +1609,7 @@ async function runRequest(context, id) {
 }
 
 // Refresh only caches owned by this exact repository, runtime and signed-in account.
-function refreshCheckBatches(context, identity, origin, id, answer) {
+async function refreshCheckBatches(context, identity, origin, id, answer) {
   const { store, root } = context, batches = join(store.dir, 'batches');
   let names;
   try { names = readdirSync(batches); } catch { return; }
@@ -1623,6 +1623,23 @@ function refreshCheckBatches(context, identity, origin, id, answer) {
       if (sameJob(cached, id, 'check') && ['passed', 'failed', 'refused'].includes(cached.state)
         && !['passed', 'failed', 'refused'].includes(answer.state)) continue;
       store.write(join(folder, `${id}.json`), answer);
+      if (context.cacheEnabled && saved.version === 1 && saved.intent === 'check'
+        && Array.isArray(saved.test_cache?.tokens) && saved.rows.some(row => row.request_ids?.at(-1) === id)) {
+        const capture = context.ports.captureSource(root, { tests: saved.rows.map(row => row.test), appMap: null });
+        if (capture.sha256 !== saved.source_sha256) continue;
+        // Project receipts privately: UUID reads never rewrite saved batch/summary views.
+        const projection = { ...context, reading: true, visible: findTests({ root }).visible, warnings: [] };
+        const rows = saved.rows.map(savedRow => {
+          const row = { ...savedRow, state: 'unknown', calls: 'unknown', request_ids: [...(savedRow.request_ids ?? [])], checks: null };
+          const latest = row.request_ids.at(-1), receipt = latest && store.read(join(folder, `${latest}.json`));
+          if (sameJob(receipt, latest, 'check')) applyAnswer(row, receipt, projection);
+          return row;
+        });
+        const cache = await openTestCache(projection, root, false);
+        cache.tokens = new Map(saved.test_cache.tokens);
+        await finishTestAttempts(cache, rows, capture);
+        for (const warning of projection.warnings) if (!context.warnings.includes(warning)) context.warnings.push(warning);
+      }
     } catch { /* A cache failure must not hide an authoritative read or other caches. */ }
   }
 }
@@ -1645,7 +1662,7 @@ async function runCallRead(context, id) {
     Object.assign(context, { origin, secrets: [identity.token] });
     const row = { test: '-', story: '-', title: '-', phase: 'server', request_ids: [id], state: 'unknown', refusals: [], warnings: [] };
     applyAnswer(row, answer, context);
-    refreshCheckBatches(context, identity, origin, id, answer);
+    await refreshCheckBatches(context, identity, origin, id, answer);
     return printResult(context, [row], { recovery: `pdd check --read ${id}` });
   }
   const state = answer?.state ?? 'unknown', exitCode = exitCodeFor([{ state }]);
@@ -1829,6 +1846,12 @@ function recordCacheInvalidation(cache) {
     cache.fs.write(path, '{"schema_version":1,"invalid":true}\n', { flag: 'wx', mode: 0o600 });
   } catch { /* Both local stores may be unavailable; checks still fail open. */ }
 }
+function readTestCacheBinding(cache) {
+  safeCachePath(cache.fs, cache.bindingPath);
+  const binding = JSON.parse(cache.fs.read(cache.bindingPath, 'utf8', 128));
+  if (binding.schema_version !== 1 || !UUID.test(binding.epoch)) throw new Error('invalid local binding');
+  return binding.epoch;
+}
 function readTestCache(cache) {
   safeCachePath(cache.fs, cache.path);
   const stat = cacheStat(cache.fs, cache.path);
@@ -1880,6 +1903,8 @@ async function cacheTransaction(cache, operation, clear = false) {
       }
     }
     if (!locked) throw new Error('busy cache');
+    // Another command may have cleared or recovered the cache while this one ran.
+    cache.epoch = readTestCacheBinding(cache);
     let snapshot;
     try { snapshot = readTestCache(cache); }
     catch (error) {
@@ -1929,9 +1954,7 @@ async function openTestCache(context, root, clear) {
       try { fs.write(bindingPath, JSON.stringify({ schema_version: 1, epoch: fs.nonce() }), { flag: 'wx', mode: 0o600 }); }
       catch (error) { if (error.code !== 'EEXIST') throw error; }
     }
-    const binding = JSON.parse(fs.read(bindingPath, 'utf8', 128));
-    if (binding.schema_version !== 1 || !UUID.test(binding.epoch)) throw new Error('invalid local binding');
-    cache.epoch = binding.epoch;
+    cache.epoch = readTestCacheBinding(cache);
     if ((fs.tracked ?? nativeCacheFiles.tracked)(root)) throw new Error('tracked test cache');
     const marker = cacheStat(fs, join(root, '.git'));
     if (!marker || marker.isSymbolicLink() || (!marker.isFile() && !marker.isDirectory())) throw new Error('unsafe Git marker');
