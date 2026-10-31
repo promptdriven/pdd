@@ -639,6 +639,23 @@ function evidenceFit(lines, room, env) {
   kept.push(notice(omitted));
   return kept;
 }
+// Approval rows are complete JSON-encoded records. Shorten the display by omitting
+// whole records, never by cutting the person's words or changing durable history.
+function publicationFit(lines, approvals, room, env) {
+  const notice = count => `Evidence omitted: ${count} approval evidence records omitted. Full approval evidence, including exact words, remains in the durable local approval journal and run history.`;
+  const approvalSize = characters(approvals.join('\n'));
+  const reserve = approvals.length ? Math.min(1000, approvalSize + characters(notice(approvals.length)) + 2) : 0;
+  const lifted = evidenceFit(lines, Math.max(0, room - reserve), env);
+  const available = Math.max(0, room - characters(lifted.join('\n')) - (lifted.length ? 2 : 0));
+  if (approvalSize <= available) return { lifted, approvals };
+  const kept = [];
+  let left = Math.max(0, available - characters(notice(approvals.length)) - 1);
+  for (const line of approvals) {
+    const size = characters(line) + 1;
+    if (size <= left) { kept.push(line); left -= size; }
+  }
+  return { lifted, approvals: [...kept, notice(approvals.length - kept.length)] };
+}
 function prBody(run, area, env, drafts = [], tests = true, evidence) {
   const index = run.areas.indexOf(area), from = run.areas.slice(0, index).map((item, at) => item.gate === 'pr' ? at + 1 : 0).reduce((a, b) => Math.max(a, b), 0);
   const steps = run.areas.slice(from, index + 1).flatMap(item => item.steps).filter(step => run.done[step]);
@@ -677,11 +694,12 @@ function prBody(run, area, env, drafts = [], tests = true, evidence) {
   const reviewAt = evidence.lines.findIndex(line => line.startsWith('Review:') || line.startsWith('Approved in '));
   const slot = reviewAt < 0 ? evidence.lines.length : reviewAt;
   const preparedLines = [...evidence.lines.slice(0, slot), ...inventory, ...evidence.lines.slice(slot)].map(line => hideLocalPaths(redactTry(line), run));
-  const body = (text, lifted) => hideLocalPaths([...lifted, ...prefix, ...top, ...(prefix.length || lifted.length || top.length ? [''] : []), ...head, ...(evidence.approvalLines?.length ? ['', ...evidence.approvalLines] : []), ...(run.productMarker ? ['', run.productMarker] : []), ...(drafts.length ? ['', draftLine(drafts)] : []), '', `Made with \`pdd workflow run ${run.workflow}\`.`, '', '## Steps', ...lines,
+  const body = (text, lifted, approvals = []) => hideLocalPaths([...lifted, ...prefix, ...top, ...(prefix.length || lifted.length || top.length ? [''] : []), ...head, ...(approvals.length ? ['', ...approvals] : []), ...(run.productMarker ? ['', run.productMarker] : []), ...(drafts.length ? ['', draftLine(drafts)] : []), '', `Made with \`pdd workflow run ${run.workflow}\`.`, '', '## Steps', ...lines,
     ...(!noted && hasReportLink([...lines, ...preparedLines, verify ?? ''].join('\n'), env) ? ['', 'Interpreter report links expire after 7 days.'] : []),
     ...(text !== null ? ['', '## Verify', '', text] : []), ''].join('\n'), run);
-  const lifted = evidenceFit(preparedLines, Math.max(0, BODY_BUDGET - 200 - (verify === null ? 0 : 1000) - characters(body(null, []))), env);
-  return verify === null ? body(null, lifted) : body(verifyFit(hideLocalPaths(verify, run), BODY_BUDGET - 200 - characters(body('', lifted)), env), lifted);
+  const approvalLines = (evidence.approvalLines ?? []).map(line => hideLocalPaths(redactTry(line), run));
+  const { lifted, approvals } = publicationFit(preparedLines, approvalLines, Math.max(0, BODY_BUDGET - 200 - (verify === null ? 0 : 1000) - characters(body(null, []))), env);
+  return verify === null ? body(null, lifted, approvals) : body(verifyFit(hideLocalPaths(verify, run), BODY_BUDGET - 200 - characters(body('', lifted, approvals)), env), lifted, approvals);
 }
 
 const commitSha = value => /^(?:[a-f\d]{40}|[a-f\d]{64})$/i.test(value);
@@ -1021,19 +1039,26 @@ async function draftDescription(run, pr1, drafts, p) {
     const headerStart = at;
     while (at < rows.length && /^(?:Verdict:|Before |Before:|Runtime check|Report(?: \([^)]*\))?:)/.test(rows[at])) at++;
     const ordinaryTop = rows.slice(headerStart, at);
+    const introduction = [];
     while (at < rows.length && !rows[at].trim()) at++;
     if (reference.test(rows[at] ?? '')) {
       at++;
       while (at < rows.length && !rows[at].trim()) at++;
-      while (at < rows.length && (evidence.approvalLines ?? []).some(line => hideLocalPaths(redactTry(line), run) === rows[at])) at++;
+      // Newly created PRs put their one-line introduction before approvals;
+      // refreshed descriptions put it with the remaining ordinary prose.
+      if (/^PR 1 of this run:/.test(rows[at] ?? '')) {
+        introduction.push(rows[at++], '');
+        while (at < rows.length && !rows[at].trim()) at++;
+      }
+      while (at < rows.length && (/^Approved in (?:chat|terminal|area chat): /.test(rows[at]) || /^Evidence omitted: \d+ approval evidence records omitted\./.test(rows[at]))) at++;
       while (at < rows.length && !rows[at].trim()) at++;
     }
-    const remainder = rows.slice(at).join('\n');
+    const remainder = [...introduction, ...rows.slice(at)].join('\n');
     const safeRemainder = hideLocalPaths(redactTry(remainder), run);
     const footer = `\n\n${marker}\n`;
-    const approvals = (evidence.approvalLines ?? []).map(line => hideLocalPaths(redactTry(line), run));
-    const room = BODY_BUDGET - characters(footer) - characters(evidence.issueReference) - characters([...ordinaryTop, ...approvals].join('\n')) - 8;
-    const lifted = evidenceFit(evidence.lines.map(line => hideLocalPaths(redactTry(line), run)), Math.max(0, room - Math.min(1000, characters(safeRemainder))), p.env);
+    const approvalLines = (evidence.approvalLines ?? []).map(line => hideLocalPaths(redactTry(line), run));
+    const room = BODY_BUDGET - characters(footer) - characters(evidence.issueReference) - characters(ordinaryTop.join('\n')) - 8;
+    const { lifted, approvals } = publicationFit(evidence.lines.map(line => hideLocalPaths(redactTry(line), run)), approvalLines, Math.max(0, room - Math.min(1000, characters(safeRemainder))), p.env);
     const leading = [...lifted, ...(lifted.length ? [''] : []), ...ordinaryTop, ...(ordinaryTop.length ? [''] : []), evidence.issueReference, '', ...approvals, ...(approvals.length ? [''] : []), ''].join('\n');
     const fitted = verifyFit(safeRemainder, BODY_BUDGET - characters(leading) - characters(footer), p.env, true);
     const nextBody = `${leading}${fitted}${footer}`;
