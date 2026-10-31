@@ -46,7 +46,7 @@ async function setup(t, edit) {
     const before = fake.posts.filter(x => x.command === 'check').length;
     const code = await runCheck({ words, options: { '--json': true, ...options }, cwd: fixture.repo, cache: true }, ports);
     assert.equal(code, 0, ports.stderr.text);
-    return { sent: fake.posts.filter(x => x.command === 'check').length - before, json: JSON.parse(ports.stdout.text), text: ports.stdout.text + ports.stderr.text };
+    return { sent: fake.posts.filter(x => x.command === 'check').length - before, json: options['--json'] === false ? null : JSON.parse(ports.stdout.text), text: ports.stdout.text + ports.stderr.text };
   };
   return { ...fixture, ports, clock, invoke, identity: x => { identity = x; }, answerEdit: fn => { answerEdit = fn; } };
 }
@@ -166,4 +166,50 @@ test('TEST-CACHE-V3 conflicting sibling identities never authorize a complete pa
   ctx.answerEdit(job => { job.engine_sha = (++answer % 2 ? 'a' : 'b').repeat(40); return job; });
   assert.equal((await ctx.invoke(['place-order'])).sent, 2);
   assert.equal((await ctx.invoke(['place-order'])).sent, 2, 'mixed interpreter identities cannot combine into one reusable Story');
+});
+
+// These isolate prompt bindings from the ordinary AI-played resource-kind guard.
+for (const action of ['http.prompt', 'port.prompt']) test(`TEST-CACHE-V3 isolated level-three ${action} overrides deterministic store`, async t => {
+  const ctx = await setup(t, repo => {
+    editPrompt(repo, doc => { doc.resources = [resource('key-value')]; });
+    const path = join(repo, 'tests/place-order.json'), doc = read(path);
+    doc.simulation = { 'gcloud.call': { action: 'fixture.lookup', cases: [{ call_index: 1, args: {}, result: {} }] } };
+    write(path, doc);
+  });
+  const selected = ['tests/place-order.json'];
+  assert.equal((await ctx.invoke(selected)).sent, 1);
+  assert.equal((await ctx.invoke(selected)).sent, 0, 'ordinary store declaration and deterministic action allow reuse');
+  const path = join(ctx.repo, 'tests/place-order.json'), doc = read(path);
+  doc.simulation['gcloud.call'] = { action, target: 'prompts/independent.prompt.md' }; write(path, doc);
+  assert.equal((await ctx.invoke(selected)).sent, 1, 'changed binding executes first');
+  const result = await ctx.invoke(selected);
+  assert.equal(result.sent, 1, 'prompt binding always runs even without an AI-played default resource kind');
+  assert.equal(result.json.rows[0].cache_reason, 'runs every time: uses an AI-played fake (gcloud)');
+});
+
+test('TEST-CACHE-V3 two operations require complete deterministic bindings', async t => {
+  const ctx = await setup(t, repo => {
+    editPrompt(repo, doc => { doc.resources = [resource('port', 'gcloud', ['call', 'other'])]; });
+    const path = join(repo, 'tests/place-order.json'), doc = read(path);
+    const binding = { action: 'fixture.lookup', cases: [{ call_index: 1, args: {}, result: {} }] };
+    doc.simulation = { 'gcloud.call': binding, 'gcloud.other': binding }; write(path, doc);
+  });
+  const selected = ['tests/place-order.json'];
+  assert.equal((await ctx.invoke(selected)).sent, 1);
+  assert.equal((await ctx.invoke(selected)).sent, 0, 'both operations deterministically bound permit reuse');
+  const path = join(ctx.repo, 'tests/place-order.json'), doc = read(path);
+  delete doc.simulation['gcloud.other']; write(path, doc);
+  assert.equal((await ctx.invoke(selected)).sent, 1, 'changed binding executes first');
+  const result = await ctx.invoke(selected);
+  assert.equal(result.sent, 1, 'one unbound operation prevents reuse of this same resource');
+  assert.equal(result.json.rows[0].cache_reason, 'runs every time: uses an AI-played fake (gcloud)');
+});
+
+test('TEST-CACHE-V3 human text result includes actual outcome and rerun reason', async t => {
+  const ctx = await setup(t, repo => editPrompt(repo, doc => { doc.resources = [resource('port')]; }));
+  const selected = ['tests/place-order.json'];
+  assert.equal((await ctx.invoke(selected)).sent, 1);
+  const result = await ctx.invoke(selected, { '--json': false });
+  assert.equal(result.sent, 1);
+  assert.match(result.text, /PASS[^\n]*runs every time: uses an AI-played fake \(gcloud\)/i, 'human Result cell preserves outcome beside reason');
 });
