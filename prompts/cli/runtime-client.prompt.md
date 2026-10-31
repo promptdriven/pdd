@@ -20,9 +20,11 @@ Changed execution origin, explicit call-budget settings, pdd package version or 
 ```mermaid
 flowchart TD
     C{Cache clear?} -->|Yes| A[Discard cache and keep normal scope]
-    C -->|No| L{Last failed?}
-    L -->|Yes| F[Intersect scope with latest failed Stories]
+    C -->|No| L{Use --lf?}
     L -->|No| S[Keep selected scope]
+    L -->|Yes| K{Failures in scope?}
+    K -->|Yes| F[Intersect scope with latest failed Stories]
+    K -->|No| S
     F --> E{Complete matching pass?}
     S --> E
     A --> R[Run ordinary local checks and dispatch]
