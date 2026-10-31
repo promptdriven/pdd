@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgv } from '../src/argument-parser.mjs';
 import { NAMES } from '../src/command-catalog.mjs';
@@ -127,7 +127,11 @@ test('an old name sends the same interpreter jobs and prints the same --json res
   writeFileSync(join(bin, 'gh'), '#!/bin/sh\nif [ "$1" = auth ]; then echo fake-test-token; else echo "octo 4242"; fi\n', { mode: 0o755 });
   const fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
   let state = 0;
-  const options = () => ({ cwd: setup.repo, env: { HOME: setup.home, PDD_STATE_DIR: join(setup.sandbox, `state-${state++}`), PDD_RUNTIME_URL: fake.origin, PATH: `${bin}:/usr/bin:/bin` } });
+  const options = () => {
+    // Compare each spelling from the same fresh state, including repository-local history.
+    rmSync(join(setup.repo, '.pdd', 'test-cache'), { recursive: true, force: true });
+    return { cwd: setup.repo, env: { HOME: setup.home, PDD_STATE_DIR: join(setup.sandbox, `state-${state++}`), PDD_RUNTIME_URL: fake.origin, PATH: `${bin}:/usr/bin:/bin` } };
+  };
   // Request IDs, batch names, report links and run times are new for every run.
   const normalize = text => text.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, 'ID').replace(/\/r\/[0-9a-f]{32}/g, '/r/R')
     .replace(/"batch":"[^"]+"/g, '"batch":"B"').replace(/--read \S+/g, '--read B').replace(/\d{4}-\d\d-\d\dT[\d:.]+Z/g, 'TIME').replace(/\b\d\d:\d\d(?::\d\d)?\b/g, 'HH:MM').replace(/ · \d+ s/g, '').replace(/"seconds":[\d.]+/g, '"seconds":S');
