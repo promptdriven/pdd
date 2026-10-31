@@ -1,4 +1,5 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: a3fd7502d814418e6d1c0a39d67024a5f2d6ea4e8b7419cfeb93b4633abac62c).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: b2a01fab74ec4f512165b6bac67d5a4f24c60c81c2ed814ea70932f4f5c36fe0).
+
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of four commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', start: 'start' });
@@ -43,8 +44,8 @@ const routes = [
     operands: [{name:'issue',type:'issue'}], options: [],
     forms: [form('pdd workflow view ISSUE', 'Read-only review of gates, approvals, files, PRs and Simulator links; never start or resume a chat.')] },
   { id: 'workflow.open', prefix: ['workflow', 'open'], local: 'workflow-open',
-    operands: [{name:'issue',type:'issue'}], options: [],
-    forms: [form('pdd workflow open ISSUE', 'Focus or attach the current area chat; resume it if its session ended.')] },
+    operands: [{name:'issue',type:'issue'}, {name:'area',type:'workflow-name',optional:true}], options: [{name:'--new',kind:'flag'}],
+    forms: [form('pdd workflow open ISSUE [AREA] [--new]', 'Focus or resume a saved area chat; --new replaces the current session while keeping the run and approvals.')] },
   { id: 'help', prefix: ['help'], local: 'help', operands: [], options: [], forms: [
     form('pdd', 'Show local commands.'), form('pdd --help', 'Show local commands.'),
     form('pdd -h', 'Show local commands.'), form('pdd help', 'Show local commands.') ] },

@@ -1,4 +1,5 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 5327a5a9c664204ca0638a7b085cebab64b3e7c32a007c07b66e49582b34e333).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 0315f975f3776bbcd593fe95bbe57df7ced42ca817f953607d9dd5bcfc752b54).
+
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -29,7 +30,7 @@ const RUNNER_ROUTES = {
   'workflow-changes': plan => ['changeRun', { ref: plan.operands[0], text: plan.operands.slice(1).join(' ') }],
   'workflow-cancel': plan => ['cancelRun', { ref: plan.operands[0] }],
   'workflow-status': plan => ['runStatus', { ref: plan.operands[0], ...Object.fromEntries(['all', 'cancelled', 'json'].filter(name => plan.options[`--${name}`]).map(name => [name, true])) }],
-  'workflow-open': plan => ['openRun', { ref: plan.operands[0] }],
+  'workflow-open': plan => ['openRun', { ref: plan.operands[0], ...(plan.operands[1] !== undefined ? { area: plan.operands[1] } : {}), ...(plan.options['--new'] ? { newSession: true } : {}) }],
 };
 export function renderHelp(prefix = []) {
   const rows = PUBLIC_COMMAND_MANIFEST.filter(({ form }) => !prefix.length
