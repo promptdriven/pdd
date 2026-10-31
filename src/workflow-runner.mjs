@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 97baf92e1eec8b143a770cb7abf1e7c98890b06e30733f2aa9636a1f6ce6fa4b).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 62f101eeb7f57db3019ab2eea568273220637284e7bcf4c9c682bb2efb2a483f).
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -12,7 +12,7 @@ import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 import { readWorkflowAreas } from './workflow-areas.mjs';
 import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, readWorkflowPrStatus } from './workflow-github.mjs';
 import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mjs';
-import { allRuns, currentChat, gitContext, listRuns, readRun, resolveRun, runDirFor, runForWorktree, updateRun, writeRun } from './workflow-runs.mjs';
+import { allRuns, currentChat, gitContext, listRuns, readRun, readRunOwnership, resolveRun, runDirFor, runForWorktree, updateRun, writeRun } from './workflow-runs.mjs';
 import { startChat, sendToChat, herdrCommand, chatSession, openChat, closeChats, expandHome, homeVariable, isFolder } from './workflow-chat.mjs';
 import { captureSource, findTests, gitFiles, interfaceBlocks } from './runtime-preflight.mjs';
 import { storyLines } from './runtime-output.mjs';
@@ -91,12 +91,34 @@ function commitRun(run, p, update) {
   const selected = runIdentity(run);
   const saved = updateRun(run.runDir, latest => {
     if (runIdentity(latest) !== selected) throw Error('The selected workflow run was replaced');
+    p.progressGuard?.(latest);
     update(latest);
     return latest;
   }, p);
   for (const key of Object.keys(run)) delete run[key];
   Object.assign(run,saved);
   return run;
+}
+// Revalidate command authority at local commits and before consequential effects.
+function protectProgress(run,p,{approval=false}={}) {
+  const selectedState=run.state,selectedGate=structuredClone(run.gate ?? null),selectedArea=run.area;
+  const check=latest=>{
+    if(ended(latest) && !(selectedState==='completed'&&latest.state==='completed'&&selectedGate?.kind==='ask-code'))
+      throw Object.assign(Error(`The run ended (${latest.state}). Stop working on it.`),{code:'workflow_progress_refused'});
+    if(approval && (latest.area!==selectedArea || Boolean(latest.gate)!==Boolean(selectedGate) || ['area','kind','at'].some(key=>latest.gate?.[key]!==selectedGate?.[key])))
+      throw Object.assign(Error('The gate changed, look again.'),{code:'workflow_progress_refused'});
+  };
+  p.progressGuard=check;
+  const inspect=()=>{const latest=readRun(run.runDir);if(!latest||runIdentity(latest)!==runIdentity(run))throw Object.assign(Error('The selected workflow run is missing or was replaced'),{code:'workflow_progress_refused'});check(latest);};
+  p.inspectProgress=inspect;
+  const exec=p.execFile,herdr=herdrCommand(p);
+  p.execFile=async(file,args,options)=>{
+    if((file==='git'&&['add','commit','push','checkout','switch','branch'].includes(args[0])) || (file==='gh'&&args[0]==='pr'&&['create','edit'].includes(args[1])))inspect();
+    return exec(file,args,options);
+  };
+  p.commandPorts={...p.commandPorts,execFile:p.execFile};
+  p.herdr=async args=>{if(['create','run','prompt'].includes(args[1]))inspect();return herdr(args);};
+  return ()=>{approval=false;};
 }
 const equalFact = (a,b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 const sameChat = (a,b) => a.area === b.area && a.paneId === b.paneId;
@@ -128,7 +150,7 @@ function publicationUpdate(run,keys=[]) {
 function saveGuard(action) {
   return async (...args)=>{
     try { return await action(...args); }
-    catch(error){if(error?.code==='workflow_run_save_failed')return fail(error.message);throw error;}
+    catch(error){if(error?.code==='workflow_run_save_failed' || error?.code==='workflow_progress_refused')return fail(error.message);throw error;}
   };
 }
 
@@ -796,7 +818,8 @@ async function publishAreaPr(run, area, p, lines, retry) {
     if (!inventoryOnly && (opted || label !== 'PR 1')) {
       let pending;
       try { pending=markedReplayBody({...run.replayEvidence,outcome:'blocked',reason:'Publication pending; source-bound replay status will be refreshed after the push.'},true); }
-      catch (error) { return fail([...lines, `${oneLine(error.message)} No source was pushed. ${retry}.`].join('\n')); }
+      catch (error) {
+    if(error?.code==='workflow_progress_refused')throw error; return fail([...lines, `${oneLine(error.message)} No source was pushed. ${retry}.`].join('\n')); }
       const failed=await editReplay(pending);if(failed)return failed;
     }
     p.say(`Pushing ${run.branch} to ${label}…`);
@@ -804,11 +827,13 @@ async function publishAreaPr(run, area, p, lines, retry) {
       const reply = await p.execFile('git', ['push', 'origin', `${codePr && /^[a-f\d]{40,64}$/i.test(run.testInventory.headSha) ? run.testInventory.headSha : 'HEAD'}:refs/heads/${run.branch}`], { cwd: run.root });
       if (reply.code !== undefined && reply.code !== 0) throw Object.assign(Error(reply.stderr || 'git push failed'), {stderr:reply.stderr, code:reply.code});
     }
-    catch (error) { return fail([...lines, `git push to ${run.branch} failed (${causeOf(error)}). Check the network and gh auth, then ${retry}.`].join('\n')); }
+    catch (error) {
+    if(error?.code==='workflow_progress_refused')throw error; return fail([...lines, `git push to ${run.branch} failed (${causeOf(error)}). Check the network and gh auth, then ${retry}.`].join('\n')); }
     prepared = await publicationEvidence(run, area, p);
     let finalBody;
     try { finalBody=markedReplayBody(run.replayEvidence); }
-    catch (error) { return fail([...lines, `${oneLine(error.message)} Source was pushed; the PR stays publication-pending. ${retry}.`].join('\n')); }
+    catch (error) {
+    if(error?.code==='workflow_progress_refused')throw error; return fail([...lines, `${oneLine(error.message)} Source was pushed; the PR stays publication-pending. ${retry}.`].join('\n')); }
     const failed=await editReplay(finalBody,true,inventoryOnly);
     if (failed) {
       if (!inventoryOnly) return failed;
@@ -826,18 +851,21 @@ async function publishAreaPr(run, area, p, lines, retry) {
   const tests = bodyTests;
   let body;
   try { body = prBody(run, area, p.env, bodyDrafts, tests, prepared); }
-  catch (error) { return fail([...lines, `${oneLine(error.message)} No source was pushed. ${retry}.`].join('\n')); }
+  catch (error) {
+    if(error?.code==='workflow_progress_refused')throw error; return fail([...lines, `${oneLine(error.message)} No source was pushed. ${retry}.`].join('\n')); }
   let intent;
   p.say(`Pushing ${run.branch} and opening ${label} on GitHub…`);
   try {
     intent = await prepareWorkflowPr({ cwd: run.root, runId: run.runId, stageId: area.name, repository: run.repo, baseBranch: base,
       title: label === 'PR 1' ? `${title} (${tests ? 'prompt, Story and tests' : 'prompt and Story'})` : label === 'PR 2' ? `${title} (code)` : title }, p.commandPorts);
   } catch (error) {
+    if(error?.code==='workflow_progress_refused')throw error;
     const why = error.code === 'workflow_github_topic_has_no_commits' ? `There are no new commits on ${run.branch}. Commit the change, then ${retry}.`
       : `pdd could not prepare ${label} (${causeOf(error)}). Fix it, then ${retry}.`;
     return fail([...lines, why].join('\n'));
   }
   const outcome = await publishWorkflowPr({ cwd: run.root, intent, body: `${body}\n<!-- ${intent.marker} -->\n` }, p.commandPorts);
+  p.inspectProgress?.();
   // GitHub's refusal and a too-long body are certain: their message names the fix. Only a real doubt says "unconfirmed".
   if (!['open', 'merged'].includes(outcome.state) || !outcome.pr) return fail([...lines, `${label[0].toUpperCase()}${label.slice(1)} did not open: ${/ then try again\.$/.test(outcome.message)
     ? outcome.message.replace(/ then try again\.$/, ` then ${retry}.`) : `${outcome.message} ${retry[0].toUpperCase()}${retry.slice(1)} to retry.`}`].join('\n'));
@@ -917,6 +945,7 @@ async function stepDoneCommand({ step, summary, cwd, packageRoot = PACKAGE_ROOT 
   if (!run) return fail('pdd workflow done works only in a run worktree. cd to the worktree that pdd made for this run.');
   if (run.state === 'cancelled') return done(`The run for #${run.number} was cancelled. Stop working on it.`);
   if (run.state === 'completed') return done(`The run for #${run.number} is complete. Stop.`);
+  protectProgress(run,p);
   const area = run.areas[run.area], lines = [];
   if (!area.steps.includes(step)) lines.push(`warning: "${step}" is not a step of the ${area.name} area (${area.steps.join(', ')}). pdd recorded it anyway.`);
   else {
@@ -1080,7 +1109,8 @@ async function draftDescription(run, pr1, drafts, p) {
     const reply = await p.execFile('gh', ['pr', 'edit', pr1.url, '--body-file', '-'], { cwd: run.root, input: nextBody });
     if (reply.code !== undefined && reply.code !== 0) throw Object.assign(Error('PR 1 description update failed.'), { code: reply.code });
     return [`pdd updated the PR 1 description: ${drafts.length ? `draft prompts left: ${drafts.join(', ')}` : 'no draft prompts are left'}.`];
-  } catch (error) { return [`warning: pdd could not update the PR 1 description (${error.code ?? 'error'}). Its "Draft prompts" line is out of date.`]; }
+  } catch (error) {
+    if(error?.code==='workflow_progress_refused')throw error; return [`warning: pdd could not update the PR 1 description (${error.code ?? 'error'}). Its "Draft prompts" line is out of date.`]; }
 }
 
 // A terminal in the run's own chat pane (Herdr session pdd) belongs to the chat; a person's other Herdr tab does not.
@@ -1100,6 +1130,7 @@ async function startNextChat(run, p, packageRoot) {
     saveChat(run,p,chat);
     return run.chats.at(-1);
   } catch (error) {
+    if(error?.code==='workflow_progress_refused')throw error;
     if(error?.code==='workflow_run_save_failed')throw error;
     if (error.chat?.area === area.name) saveChat(run,p,error.chat);
     recordChatFailure(run, error, 'start', p, area.name);
@@ -1116,6 +1147,7 @@ async function approveRunCommand({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports
   const askCode = area.then === 'ask-code', beforePr = run.gate?.kind === 'approve-pr';
   if (ended(run) && !(askCode && run.gate?.kind === 'ask-code')) return fail(`The run for ${run.repo}#${run.number} is ${run.state}. There is nothing to approve.`);
   if (area.gate === 'pr' && !askCode && !beforePr) return fail(`Nothing to approve for #${run.number}: the ${area.name} area ends with ${prLabel(run, area)}, which pdd opens after its last step.${prOf(run, area.name) ? ` ${prLabel(run, area) === 'the PR' ? 'PR' : prLabel(run, area)}: ${prOf(run, area.name).url}` : ''}`);
+  const approvalRecorded=protectProgress(run,p,{approval:true});
   const missing = missingHome(run, p.env);
   if (missing) return fail(missing);
   const agent = isAgentSession(p.env), pane = chatPane(run, p.env), viaChat = agent || !p.isTTY || Boolean(pane);
@@ -1166,6 +1198,7 @@ async function approveRunCommand({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports
     record = { via: 'terminal' };
   }
   const invocationAt=p.now();
+  p.inspectProgress();
   const said = record.text !== undefined ? ` The person wrote: "${oneLine(record.text).slice(0, 300)}".` : '';
   if (beforePr) {
     // Try before PR 1 (#13): the approval opens the area's PR; the code question comes after it.
@@ -1179,6 +1212,7 @@ async function approveRunCommand({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports
       if(latest.area===selectedArea&&equalFact(latest.gate,selectedGate)){latest.state='waiting';latest.gate=askCode?{area:area.name,at,kind:'ask-code'}:null;}
       if(equalFact(latest.question,observedQuestion))latest.question=null;
     });
+    approvalRecorded();
     const head = [`Approved the ${area.name} area of ${label}.${said} pdd opened ${prLabel(run, area) === 'the PR' ? 'the PR' : prLabel(run, area)}.`, ...lines];
     if (!askCode) return done([...head, `PR: ${url}`, 'pdd never merges.'].join('\n'));
     if (viaChat) return done([...head, ...await askCodeLines(run, area, p)].join('\n'));
@@ -1199,7 +1233,8 @@ async function approveRunCommand({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports
     // Reached at the code gate, or right after PR 1 opened when the terminal said yes to the code PR.
     p.say('Making the code branch…');
     try { based = await codeBranch(run, area, p); }
-    catch (error) { return fail(`${oneLine(error.message)} Nothing changed. Check PR 1, then run pdd workflow approve ${run.number} again.`); }
+    catch (error) {
+    if(error?.code==='workflow_progress_refused')throw error; return fail(`${oneLine(error.message)} Nothing changed. Check PR 1, then run pdd workflow approve ${run.number} again.`); }
   }
   const now = invocationAt;
   const branch=run.branch,prBase=run.prBase,observedQuestion=selectedQuestion,areaIndex=selectedArea;
@@ -1210,10 +1245,12 @@ async function approveRunCommand({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports
     if(equalFact(latest.question,observedQuestion))latest.question=null;
     if(latest.area===areaIndex){if(equalFact(latest.gate,selectedGate))latest.gate=null;latest.area=areaIndex+1;latest.state=latest.question?'waiting':'running';latest.doneAt=null;}
   });
+  approvalRecorded();
   const next = run.areas[run.area];
   let chat;
   try { chat = await startNextChat(run, p, packageRoot); }
-  catch (error) { return fail(`${carried.map(line => `${line}\n`).join('')}Approved the ${area.name} area of ${label}.${said} The ${next.name} chat startup was not confirmed (${error.code ?? 'error'}). Start it: pdd workflow open ${run.number}`); }
+  catch (error) {
+    if(error?.code==='workflow_progress_refused')throw error; return fail(`${carried.map(line => `${line}\n`).join('')}Approved the ${area.name} area of ${label}.${said} The ${next.name} chat startup was not confirmed (${error.code ?? 'error'}). Start it: pdd workflow open ${run.number}`); }
   return done([...carried, `Approved the ${area.name} area of ${label}.${said}${based}`,
     `Started area ${run.area + 1} of ${run.areas.length}: ${next.name} (${next.steps.join(', ')}) in a new chat: Herdr session pdd, tab "${chat.label}".`,
     `Watch it: pdd workflow open ${run.number}`, ...(agent ? ['This chat\'s work is done. Stop here.'] : [])].join('\n'));
@@ -1225,6 +1262,7 @@ async function askPersonCommand({ text, cwd }, ports) {
   const run = await runForWorktree(cwd, p);
   if (!run) return fail('pdd workflow ask works only in a run worktree. cd to the worktree that pdd made for this run.');
   if (ended(run)) return done(`The run for #${run.number} is ${run.state}. Stop working on it.`);
+  protectProgress(run,p);
   const question = String(text ?? '').trim().slice(0, 500);
   if (!question) return fail('Write the question after pdd workflow ask.');
   const asked={text:question,at:p.now(),area:run.areas[run.area].name};
@@ -1584,15 +1622,20 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false } = 
     line: [ref, run.workflow, area?.name ?? '?', words, ...(stories ? [storyText(stories)] : []), ...(prs.length ? [`PR ${prs.map(pr => `#${pr.number}`).join(' ')}`] : []), when].join(' · ') };
 }
 
-async function listStatus(runs, { json, cancelled, scope }, p) {
+function ownershipLines(owner) {
+  return owner?[`Workflow progress ownership: ${owner.path}; PID ${owner.pid??'unknown'}, host ${owner.hostname??'unknown'}, token ${owner.token??'unknown'}.${owner.warning?` ${owner.warning}.`:''} If no pdd command is running, inspect and remove this ownership folder, then retry.`]:[];
+}
+
+async function listStatus(runs, { json, cancelled, scope, snapshotOnly=false }, p) {
   const reading = runs.filter(run => run.state === 'waiting' && run.pr?.length).reduce((sum, run) => sum + run.pr.length, 0);
   if (reading) p.say(`Reading ${reading} PR${reading === 1 ? '' : 's'} from GitHub…`);
-  for (const run of runs) if (run.state === 'waiting' && run.pr?.length) { try { await refreshPr(run, p); } catch(error) { if(error?.code==='workflow_run_save_failed')throw error; /* A PR read failure keeps the saved state. */ } }
+  for (const run of runs) if (!snapshotOnly && !readRunOwnership(run.runDir,p) && run.state === 'waiting' && run.pr?.length) { try { await refreshPr(run, p); } catch(error) { if(error?.code==='workflow_run_save_failed')throw error; /* A PR read failure keeps the saved state. */ } }
   const all = [];
   for (const run of runs) {
-    const item = summary(run, p.timeZone, await chatState(run, p), ended(run) ? {} : await gateFacts(run, p));
+    const ordinaryOwnership=readRunOwnership(run.runDir,p);
+    const item = summary(run, p.timeZone, ordinaryOwnership||snapshotOnly?null:await chatState(run, p), ended(run)||ordinaryOwnership||snapshotOnly ? {} : await gateFacts(run, p));
     const snapshot = requestSnapshot(run, p);
-    all.push({ ...item, ...snapshot, line: [item.line, ...requestLines(snapshot, { openOnly: true, ended: ended(run), p })].join('\n') });
+    all.push({ ...item, ...snapshot, ordinaryOwnership, line: [item.line, ...ownershipLines(ordinaryOwnership), ...requestLines(snapshot, { openOnly: true, ended: ended(run), p })].join('\n') });
   }
   const hidden = cancelled ? 0 : all.filter(item => item.group === 'cancelled').length;
   const shown = all.filter(item => cancelled || item.group !== 'cancelled')
@@ -1604,18 +1647,19 @@ async function listStatus(runs, { json, cancelled, scope }, p) {
     `Review without resuming: pdd workflow view ${shown[0].ref}`, `Open one: pdd workflow open ${shown[0].ref}`].join('\n'));
 }
 
-async function runStatusCommand({ ref, cwd, all = false, json = false, cancelled = false }, ports) {
+async function runStatusCommand({ ref, cwd, all = false, json = false, cancelled = false }, ports, snapshotOnly=false) {
   const p = deps(ports);
-  if (ref === undefined && (all || !(await gitContext(cwd, p)))) return listStatus(allRuns({ cancelled }, p), { json, cancelled, scope: 'on this machine' }, p);
-  if (ref === undefined && !(await runForWorktree(cwd, p))) return listStatus(await listRuns({ cwd, cancelled }, p), { json, cancelled, scope: 'in this repository' }, p);
+  if (ref === undefined && (all || !(await gitContext(cwd, p)))) return listStatus(allRuns({ cancelled }, p), { json, cancelled, scope: 'on this machine', snapshotOnly }, p);
+  if (ref === undefined && !(await runForWorktree(cwd, p))) return listStatus(await listRuns({ cwd, cancelled }, p), { json, cancelled, scope: 'in this repository', snapshotOnly }, p);
   const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
   if (found.run.pr?.length && found.run.state !== 'cancelled') p.say(`Reading ${found.run.pr.length === 1 ? 'the PR' : `${found.run.pr.length} PRs`} from GitHub…`);
-  await refreshPr(found.run, p);
-  const run = found.run, facts = ended(run) ? {} : await gateFacts(run, p), chat = await chatState(run, p);
+  const ordinaryOwnership=readRunOwnership(found.run.runDir,p);
+  if(!ordinaryOwnership&&!snapshotOnly)await refreshPr(found.run, p);
+  const run = found.run, facts = ended(run)||ordinaryOwnership||snapshotOnly ? {} : await gateFacts(run, p), chat = ordinaryOwnership||snapshotOnly?null:await chatState(run, p);
   const snapshot = requestSnapshot(run, p);
-  if (json) { const { line, ...item } = summary(run, p.timeZone, chat, facts); return done(JSON.stringify({ runs: [{ ...item, ...snapshot }] }, null, 2)); }
-  return done([detail(run, chat, facts), ...requestLines(snapshot, { ended: ended(run), p })].join('\n'));
+  if (json) { const { line, ...item } = summary(run, p.timeZone, chat, facts); return done(JSON.stringify({ runs: [{ ...item, ...snapshot, ordinaryOwnership }] }, null, 2)); }
+  return done([detail(run, chat, facts), ...ownershipLines(ordinaryOwnership), ...requestLines(snapshot, { ended: ended(run), p })].join('\n'));
 }
 
 async function openRunCommand({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports) {
@@ -1662,6 +1706,12 @@ export const askPerson=saveGuard(askPersonCommand);
 
 export const cancelRun=saveGuard(cancelRunCommand);
 
-export const runStatus=saveGuard(runStatusCommand);
+export const runStatus=saveGuard(async(options,ports)=>{
+  try{return await runStatusCommand(options,ports);}
+  catch(error){
+    if(error?.code==='workflow_run_save_failed'&&error.cause?.code==='workflow_run_busy')return runStatusCommand(options,ports,true);
+    throw error;
+  }
+});
 
 export const openRun=saveGuard(openRunCommand);

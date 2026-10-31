@@ -31,7 +31,15 @@ for(const action of ['done-pr','done-ask-code','approve-pr'])test(`2753 ${action
    return original(file,args,opts);
   }};
   const out=action==='approve-pr'?await approveRun({ref:'17',cwd:f.source},ports):await stepDone({step:'finish',summary:'Own publication\nRuntime check: ✓ 1/1 criteria',cwd:run.root},ports);
-  const saved=f.record(),checks={
+  const saved=f.record();
+  // Lead decision 3: a replaced approval gate revokes this invocation before
+  // publication; the two done paths retain their original success contract.
+  if(action==='approve-pr'&&concurrent){
+   assert.equal(out.exitCode,1,out.message);assert.match(out.message,/gate changed, look again/i);
+   assert.deepEqual(saved,newer);assert.equal(f.prs.length,0);assert.equal(f.pushes.length,0);
+   continue;
+  }
+  const checks={
    outcome:()=>assert.equal(out.exitCode,0,out.message),boundary:()=>assert.equal(injected,concurrent),
    publication:()=>{assert.equal(saved.pr.length,1);assert.equal(saved.pr[0].stage,run.areas[0].name);assert.equal(f.prs.length,1);},
    ownWork:()=>assert.ok(saved.done.finish),
