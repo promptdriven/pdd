@@ -1,0 +1,173 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/open-prompt-app.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Opening a prompt that is a screen, or reaches a screen through calls or Dependencies, prints one URL for the whole reached app and says answers come from prompts, without claiming to test generated code."
+    },
+    {
+      "id": "AC2",
+      "text": "The opened app retains every screen, navigation handler and tab in each reached app map, while unrelated app maps stay out."
+    },
+    {
+      "id": "AC3",
+      "text": "Opening a prompt that reaches named HTTP routes serves those routes at localhost port 8080 without a Story; Ctrl-C closes the local listener and keeps program data."
+    },
+    {
+      "id": "AC4",
+      "text": "Screen and HTTP runs keep the program's saved data, the supplied starting data or the empty fresh-start data, without replacing it with product seed values."
+    },
+    {
+      "id": "AC5",
+      "text": "An app setup error explains the authored source to fix and a retry that keeps the entry, flags and product context; uncertain setup does not create a second session."
+    },
+    {
+      "id": "AC6",
+      "text": "App source is captured through the ordinary safe dependency pipeline without a synthetic Story or test, a separate archive or changes to authored files."
+    }
+  ],
+  "cases": [
+    {
+      "id": "direct-root-map",
+      "criteria": [
+        "AC1",
+        "AC2"
+      ],
+      "given": "entry is prompts/phone/shell.prompt.md in app-map.json, with shell and tester screens and now/agents/workflows/machines handlers",
+      "required_observation": "one admitted hosted Screen URL for Screen-only entry; entire root map, both screens, four tab handlers and original state retained; prompt notice; no Story selection"
+    },
+    {
+      "id": "calls-map",
+      "criteria": [
+        "AC1",
+        "AC2"
+      ],
+      "given": "main.prompt.md calls shell.prompt.md; app/app-map.json contains shell and settings",
+      "required_observation": "select app/app-map.json and both screens through calls closure"
+    },
+    {
+      "id": "dependencies-map",
+      "criteria": [
+        "AC1",
+        "AC2"
+      ],
+      "given": "main has required Dependencies link reaching a screen under app/maps/phone.json; unrelated app/maps/other.json exists",
+      "required_observation": "phone map and all its handlers selected; other map absent"
+    },
+    {
+      "id": "cyclic-navigation",
+      "criteria": [
+        "AC2"
+      ],
+      "given": "entry reaches A; map A navigates B and B navigates A; B has stylesheet and render dependencies",
+      "required_observation": "both routes, full map dependency closure and stylesheet retained without infinite discovery"
+    },
+    {
+      "id": "named-http",
+      "criteria": [
+        "AC3"
+      ],
+      "given": "entry reaches server prompt with input_schema.title HTTP GET /api/books and an admitted session model for that route",
+      "required_observation": "openServe uses same admitted session, default port 8080, endpoint link; GET response reaches route; unknown route causes zero dispatches; listener close retains data"
+    },
+    {
+      "id": "screen-and-http",
+      "criteria": [
+        "AC1",
+        "AC3"
+      ],
+      "given": "one admitted session contains app map plus named HTTP routes",
+      "required_observation": "one openServe listener using the admitted map and session at default port 8080; only its local Screen URL printed, no hosted or duplicate URL; same-session named routes served there; listener stays alive until Ctrl-C and retains data on close"
+    },
+    {
+      "id": "shared-program-state",
+      "criteria": [
+        "AC4"
+      ],
+      "given": "file main.prompt.md; flags fresh=true and data=seed.json supplied before file",
+      "required_observation": "programData receives entry name and both flags exactly; its returned data is passed unchanged to openProgramSession; composed seed remains overlay artifact and never substitutes for the data owner choice; C does not independently reset or choose persistence path"
+    },
+    {
+      "id": "source-recovery",
+      "criteria": [
+        "AC5"
+      ],
+      "given": "composed map setup refuses an operation from authored app/maps/phone.json; program file main.prompt.md and fresh flag supplied",
+      "required_observation": "diagnostic names authored source and pdd --fresh main.prompt.md; retains product selection; no generated file edit instruction and no pdd try STORY"
+    },
+    {
+      "id": "uncertain-session",
+      "criteria": [
+        "AC5"
+      ],
+      "given": "session adapter reports unknown setup outcome after request submission",
+      "required_observation": "nonzero result, finite recovery keeping entry context; no second session create"
+    },
+    {
+      "id": "no-story-capture",
+      "criteria": [
+        "AC6"
+      ],
+      "given": "no tests or user_stories folder; required prompt graph and root app map exist",
+      "required_observation": "capture selects explicit entry prompts and full map with tests:[]; no scenario/Story generated, uploaded or required"
+    },
+    {
+      "id": "safe-capture",
+      "criteria": [
+        "AC6"
+      ],
+      "given": "required dependency is ignored, secret-like or symlinked",
+      "required_observation": "existing source refusal preserved before authentication/upload; path and cause retained; no bypass reader or archive"
+    },
+    {
+      "id": "unmatched-kind",
+      "criteria": [
+        "AC5"
+      ],
+      "given": "entry closure contains no matching app-map screen and no named HTTP title",
+      "required_observation": "finite unsupported-entry explanation without guessed route, app URL or created session"
+    },
+    {
+      "id": "classify-before-typed",
+      "criteria": [
+        "AC1",
+        "AC3"
+      ],
+      "given": "HTTP title entry also has typed input_schema; separate fixture has Screen plus HTTP; ordinary typed entry has neither",
+      "required_observation": "appKind returns http, screen and null respectively before B typed dispatch; zero session/auth/upload effects; unsafe source keeps diagnostic"
+    },
+    {
+      "id": "explicit-data-beats-product-seed",
+      "criteria": [
+        "AC4"
+      ],
+      "given": "composition seed artifact contains orders:[{id:1}]; programData chooses startingData with orders:[{id:9}] from --data input",
+      "required_observation": "openProgramSession receives the exact data object selected by programData with orders:[{id:9}] unchanged; overlay still includes composed artifact orders:[{id:1}]; C does not merge, replace or inject composed world into chosen starting data"
+    },
+    {
+      "id": "fresh-empty-stays-empty",
+      "criteria": [
+        "AC4"
+      ],
+      "given": "--fresh requested; programData returns fresh:true and startingData:{}; composition seed artifact contains orders:[{id:1}]",
+      "required_observation": "session receives same fresh data selection with empty startingData; no composed orders appear in chosen data; seed artifact stays upload-only unless session owner separately resolves no-data default binding"
+    },
+    {
+      "id": "persisted-data-stays-authoritative",
+      "criteria": [
+        "AC4"
+      ],
+      "given": "programData returns persisted startingData orders:[{id:7}], fresh:false; composition seed artifact contains orders:[{id:1}]",
+      "required_observation": "session receives the same persisted data object and orders:[{id:7}] unchanged; C does not reset or merge product seed values"
+    },
+    {
+      "id": "no-data-seed-binding-unresolved",
+      "criteria": [
+        "AC4"
+      ],
+      "given": "session owner reports no persisted, explicit or fresh chosen initial data; composed seed artifact exists in overlay; no default-seed runtime adapter binding is available",
+      "required_observation": "preserve artifact and report required initial-world adapter binding as unresolved; do not claim product-seed world loaded merely because its file was uploaded; do not invent a competing data precedence rule"
+    }
+  ]
+}

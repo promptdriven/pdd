@@ -61,6 +61,22 @@ Port the engine's `explicit_story_criteria` and its 4 regexes exactly: the `## A
 
 ## Source capture
 
+`captureSource(root, selection)` additionally accepts `entryPrompts`, an explicit
+array of entry prompt paths, alongside `tests:[]` for programs with no Story.
+Select those prompts and their ordinary dependency closure without discovering
+or uploading unrelated tests/Stories. Existing selections retain their behavior.
+A `prepareSource` output may carry `role:'app-map'`; process that one prepared
+map with the same app-map closure rules as a selected authored map and expose its
+path as the effective map. Do not treat other generated JSON as app maps.
+Attempt-local path safety, privacy, limits, snapshot retries and contract expansion
+apply unchanged. Preparation `statFile(path,{occupancyOnly:true})` may test candidate generated
+artifact paths for occupancy without requiring Git visibility. It retains path,
+secret-name, symlink/ancestor and snapshot checks, returns exists:true for an
+ignored regular file, and grants no read or upload permission. Ordinary reads
+and stats retain existing Git visibility checks. Composition uses this mode only
+to choose an unoccupied artifact pair, never to select ignored source.
+
+
 Default shared-reference preparation uses the synchronous module function
 `expandSource` from [references](contract-refs.prompt.md). Expand before
 `readPrompt(root, visible, path)` parses/validates interface schemas and before
