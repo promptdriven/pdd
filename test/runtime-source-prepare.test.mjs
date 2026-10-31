@@ -193,7 +193,7 @@ test('PREPARE all access modes reject unsafe paths and unsafe original entries',
     const { repo, sandbox } = harbor(t);
     write(repo, 'ignored.txt', 'PRIVATE-CONTENT'); write(repo, '.gitignore', 'ignored.txt\n');
     write(repo, 'secret-source.txt', 'PRIVATE-CONTENT');
-    symlinkSync(join(repo, 'secret-source.txt'), join(repo, 'link.txt'));
+    symlinkSync(join(sandbox, 'outside-source.txt'), join(repo, 'link.txt'));
     symlinkSync(sandbox, join(repo, 'linked'));
     mkdirSync(join(repo, 'directory'));
     for (const path of ['../outside', '/absolute', 'bad\\path', 'bad\npath', '.git/config', '.env.local', 'secrets/a.txt', '.aws/a.txt', 'ignored.txt', 'link.txt', 'linked/a.txt', 'directory']) {

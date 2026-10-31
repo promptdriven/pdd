@@ -91,7 +91,7 @@ For extra source, put an include list in the repository root's `pdd-source.json`
 This file contains only `include`, an array of repository-relative file paths, not globs or directories. These files
 are added to the test and dependency selection. Included Markdown and prompts also have their dependencies followed.
 The config is read locally and is not automatically uploaded. Selected files must be Git-visible regular files.
-Secret-looking names, symlinks (including symlink ancestors), missing files and paths outside the repository are refused.
+Safe in-repository file links and linked folders send the final Git-visible regular target bytes under the authored path. Both authored and target names must be safe and Git-visible. Secret-looking names, outside targets, broken links and loops are refused. The bindings inventory and executable/write destinations retain their strict no-link rules.
 
 ## 3. Schema rules
 
