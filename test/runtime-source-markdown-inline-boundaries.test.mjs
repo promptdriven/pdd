@@ -81,7 +81,7 @@ for (const row of cases) test(`SOURCE-INLINE: ${row.id}`, async t => {
   const bytes = Buffer.from('# UTF-8: café\r\n## Dependencies\r\n' + row.markdown + TAIL);
   writeFileSync(join(repo, DOCUMENT), bytes);
   for (const path of ['real.txt', 'real.svg', 'bare.json', 'credentials.json']) writeFileSync(join(repo, 'docs', path), 'synthetic\n');
-  symlinkSync('real.svg', join(repo, 'docs/unsafe.svg'));
+  symlinkSync('missing-link-target.svg', join(repo, 'docs/unsafe.svg'));
   const calls = { gh: 0, fetch: 0 };
   const { ports } = portsFor({ HOME: home, PDD_RUNTIME_URL: 'http://127.0.0.1:9' }, {
     gh: () => { calls.gh++; assert.fail('file discovery must not authenticate'); },

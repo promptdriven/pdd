@@ -8,7 +8,7 @@ Read the full [Prompting guide](../../docs/prompting-guide.md) before authoring 
 
 ## Names
 
-`NAMES` is the one place for the words of four commands: the frozen object `{test: 'test', lint: 'lint', simulate: 'simulate', run: 'run'}`. A later rename changes only `NAMES`. This prompt and the prompts that link here write these words as they are today: test, lint, simulate and run. A rename changes `NAMES` and those words together.
+`NAMES` is the one place for the words of five commands: the frozen object `{test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack'}`. A later rename changes only `NAMES`. This prompt and the prompts that link here write these words as they are today: test, lint, simulate, run and ack. A rename changes `NAMES` and those words together.
 
 The `check`, `try` and `workflow.run` routes keep their ids and local dispositions; `lint` is the route for the lint forms. Some routes also list quiet words or removed words:
 
@@ -35,6 +35,7 @@ Catalog the area-chat runner routes ([runner](workflow-runner.prompt.md)):
 For `workflow.run`, accept optional `--adopt-corpus FILE`, a nonempty text path to an existing-approved-corpus declaration. Its help description says it adopts exact unchanged approved content for a fresh replay-evidence-enabled workflow; keep the existing help form unchanged. Example: `pdd workflow run feature 2640 --adopt-corpus approved-corpus.json`. The runner and replay owner define validation and trust, not the parser.
 
 - workflow.done `workflow done STEP [--summary TEXT]`: STEP is a safe step name; the summary is free text.
+- `workflow.request-uptake` (local `workflow-request-uptake`): the public verb comes only from `NAMES.requestUptake`, used for both the `['workflow', verb]` prefix and help form `pdd workflow <verb> REQUEST_ID --summary TEXT`. Require one text operand and text option `--summary` (dispatch enforces its presence). Help describes an agent in a run worktree recording that it took up one delivered change request, with a short note. Keep all five existing exports, including `NAMES` with its existing keys and values plus the uptake key; consumers find this route by its stable id, never by duplicating the public verb.
 - workflow.ask `workflow ask QUESTION…`: the question words join into one text; `--` ends options.
 - workflow.approve `workflow approve [ISSUE]`, workflow.status `workflow status [ISSUE] [--all] [--cancelled] [--json]` (flags).
 - workflow.changes `workflow changes ISSUE TEXT…`: the text words join into one request; `--` ends options.
@@ -46,7 +47,7 @@ No resume, attach, run IDs, decisions flag or native argument passthrough. The a
 
 ## Workflow runner help
 
-Describe the runner routes in plain words without preview labels. workflow.run says that pdd starts a chat and exits, and that pdd later pushes the branch and opens a real PR. Keep route IDs, prefixes, local dispositions, operands/options/forms and parser/completion behavior consistent with their contracts.
+Describe the runner routes in plain words without preview labels. workflow.run says that pdd starts a chat and exits, and that pdd later pushes the branch and opens a real PR. Keep route IDs, prefixes, local dispositions, operands/options/forms and parser/completion behavior consistent with their contracts. Place the uptake route help beside done and ask, after ask; preserve the earlier root-help commands and their order.
 
 ## Interpreter routes
 
