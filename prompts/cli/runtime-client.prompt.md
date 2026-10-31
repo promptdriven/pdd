@@ -15,11 +15,11 @@ Story footprints. Use its complete sibling-test membership, effective source
 hashes and reference provenance, plus exact Story/test bytes and reached raw
 prompt/interface bytes for eligibility. Do not substitute upload-wide hashes or
 a second dependency walk. An unavailable footprint never authorizes reuse.
-Changed execution origin or explicit model/call-budget settings invalidate reuse.
+Changed execution origin, explicit call-budget settings, pdd package version or local `ENGINE_SHA` invalidate reuse. Save the observed server `engine_sha` with each pass. A server engine/model update cannot be discovered with zero calls: after an interpreter update, use `pdd test --cache-clear`.
 
 ```mermaid
 flowchart TD
-    C{Cache clear?} -->|Yes| A[Discard cache and select all Stories]
+    C{Cache clear?} -->|Yes| A[Discard cache and keep normal scope]
     C -->|No| L{Last failed?}
     L -->|Yes| F[Intersect scope with latest failed Stories]
     L -->|No| S[Keep selected scope]
@@ -30,13 +30,11 @@ flowchart TD
     E -->|No| R
 ```
 
-`--cache-clear` wins over `--lf` and operands: discard the entire cache and run
-all discovered Stories. Otherwise preserve explicit selection scope. `--lf`
+`--cache-clear` wins over `--lf` and operands: discard the entire cache, ask the server for fresh answers without replay and run
+the normal selected scope. Otherwise preserve explicit selection scope. `--lf`
 uses each Story's latest known outcome across invocations, selecting exactly
 `failed`, including all its test files within the selected scope. A cold absent
-history runs the whole selected scope; valid history with no failures succeeds
-with no dispatch and no sign-in. Nonfailed refused/not-run/unknown outcomes are
-not last-failed selections, but normal tests must always retry them. Do not
+history runs the whole selected scope; history with no recorded failures uses the normal selected scope (including ordinary unchanged-pass reuse). Keep a known failure selected until a confirmed pass, even if a later attempt has no verdict (including sign-in failure, interruption, timeout or unavailable accounting). Refused/not-run/unknown attempts without an earlier failure are not last-failed selections, but normal tests must always retry them. Do not
 expand a selected test file to sibling files silently.
 
 Reuse requires all discovered sibling files to have confirmed passes for the
@@ -44,31 +42,30 @@ same current footprint. A partial run must never manufacture a complete pass.
 Before a fresh attempt, invalidate any older pass for that Story; local refusal,
 interruption, unknown/transient outcomes and unavailable accounting cannot leave
 an older pass eligible. Only confirmed complete terminal success becomes a new
-pass. Keep latest outcomes for unselected Stories. Saved reads and retries do not
-update this cache or change their existing recovery semantics.
+pass. Keep latest outcomes for unselected Stories. A completed `pdd test --read` writes confirmed results into this cache only when saved repository, source fingerprint and complete sibling accounting verify; running or unknown results never become passes. Saved retry guards and existing recovery semantics remain in force.
 
 Perform current local validation/capture before reuse, and filter reusable work
 before gh, capacity, lint, POSTs, GETs or fresh runtime IDs. An all-reused command
 has no gh/server requests. Mixed commands dispatch only fresh selected work.
 Existing runtime state and saved-batch recovery remain outside the repository.
 
-Store versioned, bounded metadata in `.pdd/test-cache/`; never credentials or
-source copies. Arrange Git ignore in each user's repository using its local Git
+Store versioned, bounded Story pass metadata in `.pdd/cache/test/stories.json` and last-known failures in `.pdd/cache/test/lastfailed.json`; never credentials or
+source copies. Never reuse a cache when any path under `.pdd/cache/test/` is Git-tracked: warn once and run selected checks. Bind cache eligibility to a repository-keyed local epoch or key stored only in the external `PDD_STATE_DIR`; a cache copied to fresh external state cannot authorize reuse. Arrange Git ignore in each user's repository using its local Git
 exclude, including linked worktrees, without editing tracked ignore files.
 Use injected cache filesystem, clock and capture/hash ports for decision tests;
 native tests establish actual safe writes and Git effects. Never follow symlinks
-in cache paths or Git excludes, traverse outside their intended roots, or trust
+in repository cache paths or Git excludes, traverse outside their intended roots, or trust
 cached paths as filesystem authority. Atomic replacement and serialized updates
 must prevent truncated/concurrent writes from authorizing stale passes. Malformed,
 truncated, incompatible, oversized or otherwise unsafe cache data invalidates the
 whole cache: run all selected work with exactly one plain warning. Unwritable
 cache also fails open with one warning; it cannot block checks or claim a new
-pass was saved. An unsafe cache-clear target is left untouched and fails open.
+pass was saved. An unsafe cache-clear target is left untouched and fails open. A damaged regular cache is replaced after the next completed run and then becomes reusable; the warning includes `pdd test --cache-clear`. A lock whose recorded owner PID is dead is taken over with one warning, including during `--cache-clear`; live owners remain protected. Resolve the external state root with realpath so symlinked ancestors (such as macOS `/tmp`) are accepted, while refusing a final state-directory symlink. Safety checks below that trusted root still apply.
 
 If cache writes fail, persist a small, bounded repository-keyed invalidation
 tombstone in the existing external runtime-state directory. It contains no
 source or credentials; Story fingerprints and results remain only in the ignored
-`.pdd/test-cache/`. Check recovery state before any reuse. A tombstone prevents
+`.pdd/cache/test/`. Check recovery state before any reuse. A tombstone prevents
 every older pass from becoming eligible after permissions recover or source is
 reverted. Retire it only after a safe cache clear or reliable fresh cache
 generation has made those older passes ineligible; concurrent failures must not

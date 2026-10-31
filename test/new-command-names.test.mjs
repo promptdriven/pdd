@@ -129,7 +129,7 @@ test('an old name sends the same interpreter jobs and prints the same --json res
   let state = 0;
   const options = () => {
     // Compare each spelling from the same fresh state, including repository-local history.
-    rmSync(join(setup.repo, '.pdd', 'test-cache'), { recursive: true, force: true });
+    rmSync(join(setup.repo, '.pdd', 'cache', 'test'), { recursive: true, force: true });
     return { cwd: setup.repo, env: { HOME: setup.home, PDD_STATE_DIR: join(setup.sandbox, `state-${state++}`), PDD_RUNTIME_URL: fake.origin, PATH: `${bin}:/usr/bin:/bin` } };
   };
   // Request IDs, batch names, report links and run times are new for every run.

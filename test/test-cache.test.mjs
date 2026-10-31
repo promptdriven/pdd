@@ -5,7 +5,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, symlinkSyn
 import { join } from 'node:path';
 import { runCheck } from '../src/runtime-client.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
-import { proseSha256 } from '../src/runtime-preflight.mjs';
+import { captureSource, interfaceBlocks, proseSha256 } from '../src/runtime-preflight.mjs';
 import { harbor, fakeRuntime, portsFor } from './runtime-fake.mjs';
 
 const vectors = JSON.parse(readFileSync(new URL('./runtime/test-cache.json', import.meta.url)));
@@ -49,8 +49,9 @@ async function setup(t, edit) {
   };
   return { ...fixture, fake, ports, clock, invoke, mode: value => { mode = value; } };
 }
-async function prime(ctx) {
+async function prime(ctx, verifyReuse = true) {
   const first = await ctx.invoke(); assert.equal(first.code, 0, first.err); assert.equal(first.sent, 3);
+  if (!verifyReuse) return first;
   const repeat = await ctx.invoke();
   assert.equal(repeat.sent, 0, 'unchanged complete Story passes must be reused before dispatch');
   assert.equal(repeat.network, 0, 'reuse must not lint or read runtime'); assert.equal(repeat.gh, 0, 'reuse must not sign in');
@@ -69,6 +70,19 @@ for (const vector of vectors.cases) test(`TEST-CACHE ${vector.id} (${vector.crit
     return;
   }
   const ctx = await setup(t, repo => {
+    if (id === 'call-target' || id === 'raw-hash') {
+      const path = join(repo, 'prompts/place_order.prompt.md');
+      const text = readFileSync(path, 'utf8'), block = interfaceBlocks(text)[0], doc = JSON.parse(block[1]);
+      if (id === 'call-target') {
+        writeFileSync(join(repo, 'prompts/helper.prompt.md'), text);
+        doc.calls = [{ operation: 'helper', target: 'prompts/helper.prompt.md', target_operation: 'place_order', max_calls: 1 }];
+      } else {
+        mkdirSync(join(repo, 'contracts'));
+        write(join(repo, 'contracts/input.json'), doc.entries[0].input_schema);
+        doc.entries[0].input_schema = { $contract: 'contracts/input.json#' };
+      }
+      writeFileSync(path, text.slice(0, block.indices[1][0]) + JSON.stringify(doc) + text.slice(block.indices[1][1])); refresh(path);
+    }
     if (id === 'transitive') {
       writeFileSync(join(repo, 'prompts/context.md'), 'Shared policy.\n');
       const path = join(repo, 'prompts/place_order.prompt.md');
@@ -93,7 +107,25 @@ for (const vector of vectors.cases) test(`TEST-CACHE ${vector.id} (${vector.crit
     assert.equal(checks(ctx.fake).length, before, 'canonical test and former alias share normal CLI reuse');
     assert.ok(JSON.parse(second.out).rows.every(row => row.cached && row.calls === 0)); return;
   }
-  const repeated = await prime(ctx);
+  const repeated = await prime(ctx, ['reuse', 'time-previous-day', 'mixed-json'].includes(id));
+  if (id === 'call-target' || id === 'raw-hash') {
+    const before = captureSource(ctx.repo).stories;
+    if (id === 'call-target') {
+      const path = join(ctx.repo, 'prompts/helper.prompt.md');
+      writeFileSync(path, readFileSync(path, 'utf8').replace('Use this menu.', 'Use this menu carefully.')); refresh(path);
+    } else {
+      const path = join(ctx.repo, 'prompts/place_order.prompt.md');
+      writeFileSync(path, readFileSync(path, 'utf8').replace('{"$contract":', '{  "$contract":'));
+      assert.deepEqual(captureSource(ctx.repo).stories, before, 'reference-only formatting leaves effective footprint equal');
+    }
+    const result = await ctx.invoke(); assert.equal(result.sent, 2, 'changed reached/raw prompt reruns its two Stories');
+    assert.equal(result.code, 0, result.err); return;
+  }
+  if (id === 'origin' || id === 'max-calls') {
+    if (id === 'origin') ctx.ports.env.PDD_RUNTIME_URL = ctx.fake.origin.replace('127.0.0.1', 'localhost');
+    const result = await ctx.invoke([], id === 'max-calls' ? { '--max-calls': '50' } : {});
+    assert.equal(result.sent, 3, 'changed execution origin or budget reruns every selected Story'); return;
+  }
   if (id === 'reuse' || id === 'time-previous-day' || id === 'mixed-json') {
     assert.ok(repeated.json.rows.every(row => row.cached === true && row.calls === 0 && row.request_id === null && row.report_url === null));
     assert.match(repeated.json.summary_line, /3 Stories skipped/);
@@ -123,7 +155,7 @@ for (const vector of vectors.cases) test(`TEST-CACHE ${vector.id} (${vector.crit
     else if (id === 'story') { const path = join(ctx.repo, 'user_stories/place-order.md'); writeFileSync(path, readFileSync(path, 'utf8') + '\nChanged explanation.\n'); }
     else { writeFileSync(join(ctx.repo, 'prompts/unrelated.prompt.md'), '# Unrelated\n'); expected = 0; }
     const result = await ctx.invoke(); assert.equal(result.sent, expected, 'only reaching Stories rerun'); assert.equal(result.code, 0, result.err);
-    if (id === 'prompt') { const scoped = await ctx.invoke(['independent']); assert.equal(scoped.sent, 0); assert.equal(scoped.json.rows.length, 1); }
+    if (id === 'prompt') { const scoped = await ctx.invoke(['independent']); assert.equal(scoped.sent, 0); assert.equal(scoped.json.rows.length, 0); }
     return;
   }
   if (id === 'sibling') {
@@ -158,21 +190,21 @@ for (const vector of vectors.cases) test(`TEST-CACHE ${vector.id} (${vector.crit
       const scoped = await ctx.invoke(['independent'], { '--lf': true }); assert.equal(scoped.sent, 0); assert.equal(scoped.json.rows.length, 0);
       const result = await ctx.invoke([], { '--lf': true }); assert.equal(result.sent, 1); assert.equal(result.json.rows.length, 1);
     }
-    const empty = await ctx.invoke([], { '--lf': true }); assert.equal(empty.sent, 0); assert.equal(empty.json.rows.length, 0); assert.equal(empty.code, 0); return;
+    const empty = await ctx.invoke([], { '--lf': true }); assert.equal(empty.sent, 0); assert.equal(empty.json.rows.length, 3); assert.equal(empty.code, 0); return;
   }
-  if (id === 'clear') { const result = await ctx.invoke(['independent'], { '--cache-clear': true, '--lf': true }); assert.equal(result.sent, 3); assert.equal(result.json.rows.length, 3); return; }
-  const dir = join(ctx.repo, '.pdd/test-cache');
-  assert.ok(existsSync(dir), 'cache lives under .pdd/test-cache');
+  if (id === 'clear') { const result = await ctx.invoke(['independent'], { '--cache-clear': true, '--lf': true }); assert.equal(result.sent, 1); assert.equal(result.json.rows.length, 1); return; }
+  const dir = join(ctx.repo, '.pdd/cache/test');
+  assert.ok(existsSync(dir), 'cache lives under .pdd/cache/test');
   if (id === 'ignored') {
-    const result = git(ctx.repo, 'check-ignore', '.pdd/test-cache/probe'); assert.equal(result.status, 0, result.stderr);
+    const result = git(ctx.repo, 'check-ignore', '.pdd/cache/test/probe'); assert.equal(result.status, 0, result.stderr);
     const linked = join(ctx.sandbox, 'linked'); const made = git(ctx.repo, 'worktree', 'add', '-b', 'cache-linked', linked); assert.equal(made.status, 0, made.stderr);
     assert.equal((await ctx.invoke([], {}, linked)).code, 0);
-    assert.equal(git(linked, 'check-ignore', '.pdd/test-cache/probe').status, 0); return;
+    assert.equal(git(linked, 'check-ignore', '.pdd/cache/test/probe').status, 0); return;
   }
   if (id === 'directory') { const result = await ctx.invoke(['.'], {}, join(ctx.repo, 'tests')); assert.equal(result.code, 0, result.err); assert.equal(result.json.rows.length, 3); assert.equal(result.sent, 0); return; }
   const names = readdirSync(dir, { recursive: true }).filter(name => name.endsWith('.json'));
   assert.ok(names.length > 0, 'cache contains bounded versioned metadata');
-  const path = join(dir, names[0]);
+  const path = join(dir, 'stories.json');
   if (id === 'symlink') {
     const outside = join(ctx.sandbox, 'outside.json'); writeFileSync(outside, 'outside sentinel\n');
     const { unlinkSync } = await import('node:fs'); unlinkSync(path); symlinkSync(outside, path);

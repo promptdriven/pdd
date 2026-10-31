@@ -1,6 +1,8 @@
 import test from 'node:test';
+import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
-import { chmodSync, readFileSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, utimesSync, chmodSync, readFileSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runCheck } from '../src/runtime-client.mjs';
 import { harbor, fakeRuntime, portsFor } from './runtime-fake.mjs';
@@ -22,8 +24,9 @@ async function fixture(t) {
     return { code, json: ports.stdout.text ? JSON.parse(ports.stdout.text) : null, sent: fake.posts.filter(row => row.command === 'check').length - before };
   };
   const first = await invoke(); assert.equal(first.code, 0);
-  assert.equal((await invoke()).sent, 0, 'complete unchanged passes reuse before safety checks');
-  return { ...env, fake, invoke, makePorts, path: join(env.repo, '.pdd/test-cache/stories.json'),
+  assert.ok(existsSync(join(env.repo, '.pdd/cache/test/stories.json')), 'completed pass writes local Story cache');
+  assert.ok(existsSync(join(env.repo, '.pdd/cache/test/lastfailed.json')), 'last-failed state uses the designated cache file');
+  return { ...env, fake, invoke, makePorts, path: join(env.repo, '.pdd/cache/test/stories.json'),
     mode(value) { mode = value; }, incomplete(value) { incomplete = value; }, delay(value) { delay = value; } };
 }
 const cacheWarnings = result => result.json.warnings.filter(warning => /cache/i.test(warning));
@@ -47,10 +50,10 @@ test('cache clear repairs malformed regular metadata and persists its new pass',
 test('cache refuses symlinked ancestor and unsafe clear without changing external data', async t => {
   const ctx = await fixture(t), dir = join(ctx.repo, '.pdd'), outside = join(ctx.sandbox, 'external-pdd');
   renameSync(dir, outside); symlinkSync(outside, dir);
-  const before = readFileSync(join(outside, 'test-cache/stories.json'), 'utf8');
+  const before = readFileSync(join(outside, 'cache/test/stories.json'), 'utf8');
   for (const options of [{}, { '--cache-clear': true }]) {
     const result = await ctx.invoke(options); assert.equal(result.sent, 2); assert.equal(cacheWarnings(result).length, 1);
-    assert.equal(readFileSync(join(outside, 'test-cache/stories.json'), 'utf8'), before);
+    assert.equal(readFileSync(join(outside, 'cache/test/stories.json'), 'utf8'), before);
   }
 });
 
@@ -62,7 +65,7 @@ test('cache refuses symlinked Git exclude without changing its target', async t 
 });
 
 test('unwritable cache fails open once and never claims reuse', async t => {
-  const ctx = await fixture(t), dir = join(ctx.repo, '.pdd/test-cache');
+  const ctx = await fixture(t), dir = join(ctx.repo, '.pdd/cache/test');
   const restore = change(ctx); ctx.mode('failed');
   chmodSync(dir, 0o500);
   try {
@@ -118,4 +121,91 @@ test('earlier concurrent pass cannot overwrite a later failed attempt', async t 
   const selected = await ctx.invoke({ '--lf': true });
   assert.equal(selected.sent, 1, 'the later failed Story remains selected');
   restore();
+});
+
+// Review regressions seed only a completed pass: each reaches its own contract assertion on alpha.
+test('tracked cache cannot hide failing checks', async t => {
+  const ctx = await fixture(t);
+  const tracked = spawnSync('git', ['add', '-f', '.pdd/cache/test/stories.json'], { cwd: ctx.repo, encoding: 'utf8' });
+  assert.equal(tracked.status, 0, tracked.stderr);
+  const committed = spawnSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'tracked cache'], { cwd: ctx.repo, encoding: 'utf8' });
+  assert.equal(committed.status, 0, committed.stderr);
+  ctx.mode('failed');
+  const result = await ctx.invoke();
+  assert.equal(result.sent, 2, 'Git-tracked prior evidence never skips failing checks');
+  assert.equal(result.code, 1); assert.equal(cacheWarnings(result).length, 1);
+});
+
+test('copied cache with fresh external state cannot hide failing checks', async t => {
+  const ctx = await fixture(t), copied = join(ctx.sandbox, 'copied');
+  cpSync(ctx.repo, copied, { recursive: true });
+  ctx.mode('failed');
+  const ports = ctx.makePorts(); ports.env = { ...ports.env, PDD_STATE_DIR: join(ctx.sandbox, 'fresh-state') };
+  const before = ctx.fake.posts.filter(row => row.command === 'check').length;
+  const code = await runCheck({ cwd: copied, words: [], options: { '--json': true }, cache: true }, ports);
+  assert.equal(ctx.fake.posts.filter(row => row.command === 'check').length - before, 2, 'copy has no local binding');
+  assert.equal(code, 1);
+});
+
+for (const noVerdict of ['sign-in', 'unknown', 'interrupt', 'timeout']) test(`last failure survives ${noVerdict} then --lf retries it`, async t => {
+  const ctx = await fixture(t); change(ctx); ctx.mode('failed');
+  assert.equal((await ctx.invoke({}, ['place-order'])).code, 1);
+  if (noVerdict === 'sign-in') {
+    const attempt = await ctx.invoke({ '--lf': true }, [], { gh: () => ({ status: 1, stdout: '', stderr: 'not signed in' }) });
+    assert.notEqual(attempt.code, 0);
+  } else if (noVerdict === 'unknown') {
+    ctx.mode('unknown'); assert.notEqual((await ctx.invoke({ '--lf': true })).code, 0);
+  } else {
+    ctx.mode('running'); const ports = ctx.makePorts();
+    const extra = { ...ports, sleep: async ms => { if (noVerdict === 'interrupt') interrupt(); else now += ms; }, now: () => now,
+      onInterrupt: handler => { interrupt = handler; return () => {}; } };
+    let interrupt = () => {}, now = Date.parse('2026-10-27T16:27:47Z');
+    assert.notEqual((await ctx.invoke({ '--lf': true, '--timeout': '0.001' }, [], extra)).code, 0);
+  }
+  ctx.mode('passed'); const retried = await ctx.invoke({ '--lf': true });
+  assert.equal(retried.sent, 1, 'a no-verdict attempt never clears the last failure');
+  assert.equal(retried.json.rows.length, 1);
+  assert.equal((await ctx.invoke({ '--lf': true })).sent, 0, 'confirmed pass clears failure');
+});
+
+for (const clear of [false, true]) test(`dead-owner cache lock recovers${clear ? ' during clear' : ''}`, async t => {
+  const ctx = await fixture(t), lock = join(ctx.repo, '.pdd/cache/test/transaction.lock');
+  mkdirSync(lock); writeFileSync(join(lock, 'owner.json'), JSON.stringify({ pid: 2147483647 }));
+  utimesSync(lock, new Date(0), new Date(0));
+  const result = await ctx.invoke(clear ? { '--cache-clear': true } : {});
+  assert.equal(result.sent, clear ? 2 : 0, 'dead owner does not permanently disable reuse');
+  assert.equal(cacheWarnings(result).length, 1);
+  assert.equal(existsSync(lock), false, 'stale lock is removed after transaction');
+  assert.equal((await ctx.invoke()).sent, 0);
+});
+
+test('external state accepts symlinked ancestors and refuses final symlink', async t => {
+  const ctx = await fixture(t), ancestor = join(ctx.sandbox, 'ancestor');
+  symlinkSync(ctx.sandbox, ancestor);
+  const base = ctx.makePorts().env;
+  const result = await ctx.invoke({}, [], { env: { ...base, PDD_STATE_DIR: join(ancestor, 'state') } });
+  assert.equal(result.sent, 0, 'realpath of trusted state root accepts symlinked ancestors');
+  const final = join(ctx.sandbox, 'final-state'); symlinkSync(ctx.state, final);
+  const refused = await ctx.invoke({}, [], { env: { ...base, PDD_STATE_DIR: final } });
+  assert.ok(refused.code !== 0 || refused.sent === 2, 'final symlink never authorizes reuse');
+});
+
+test('damaged regular cache heals after completed run and warning names clear', async t => {
+  const ctx = await fixture(t); writeFileSync(ctx.path, '{broken');
+  const result = await ctx.invoke(); assert.equal(result.sent, 2);
+  assert.equal(cacheWarnings(result).length, 1); assert.match(cacheWarnings(result)[0], /pdd test --cache-clear/);
+  const repeated = await ctx.invoke(); assert.equal(repeated.sent, 0, 'completed check repairs regular metadata');
+  assert.equal(cacheWarnings(repeated).length, 0);
+});
+
+test('fingerprint includes local package and engine identity and pass keeps observed engine', async t => {
+  const ctx = await fixture(t); change(ctx); const keys = [];
+  await ctx.invoke({}, [], { cacheHash: bytes => { keys.push(JSON.parse(bytes.toString())); return createHash('sha256').update(bytes).digest('hex'); } });
+  const fingerprint = keys.find(value => value.footprint && value.raw);
+  assert.ok(fingerprint, 'fingerprint goes through injected hashing port');
+  assert.equal(fingerprint.pdd_version, JSON.parse(readFileSync(new URL('../package.json', import.meta.url))).version);
+  const engine = readFileSync(new URL('../src/runtime-client.mjs', import.meta.url), 'utf8').match(/const ENGINE_SHA = '([^']+)'/)[1];
+  assert.equal(fingerprint.engine_sha, engine);
+  const records = JSON.parse(readFileSync(ctx.path, 'utf8')).stories;
+  assert.ok(Object.values(records).every(row => row.pass?.engine_sha === engine), 'pass retains observed server engine');
 });

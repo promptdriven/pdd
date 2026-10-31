@@ -16,11 +16,11 @@
     },
     {
       "id": "AC4",
-      "text": "`pdd test --lf` runs the latest failed Stories in my selected scope; no history runs the selected Stories and known history with no failures runs none."
+      "text": "`pdd test --lf` runs the latest failed Stories in my selected scope; no failures recorded uses the normal selected Stories and unchanged passes may be skipped."
     },
     {
       "id": "AC5",
-      "text": "`pdd test --cache-clear` clears the whole cache and runs all Stories, even when a path or `--lf` is also supplied."
+      "text": "`pdd test --cache-clear` clears the whole cache, asks for fresh answers and runs my selected Stories; it takes precedence over `--lf`."
     },
     {
       "id": "AC6",
@@ -28,7 +28,7 @@
     },
     {
       "id": "AC7",
-      "text": "The local `.pdd/test-cache/` folder is Git-ignored in my repository, including a linked worktree."
+      "text": "The local `.pdd/cache/test/` folder is Git-ignored in my repository, including a linked worktree."
     },
     {
       "id": "AC8",
@@ -143,6 +143,22 @@
     {
       "id": "cli-reuse",
       "criterion_id": "AC8"
+    },
+    {
+      "id": "call-target",
+      "criterion_id": "AC2"
+    },
+    {
+      "id": "raw-hash",
+      "criterion_id": "AC2"
+    },
+    {
+      "id": "origin",
+      "criterion_id": "AC2"
+    },
+    {
+      "id": "max-calls",
+      "criterion_id": "AC2"
     }
   ]
 }
