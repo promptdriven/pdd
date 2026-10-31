@@ -345,6 +345,36 @@ test('hcli-4: startup and each CLI command show session usage only on stderr', a
   assert.equal(ready.fake.jsonPosts.length, 1);
 });
 
+test('contracts: a real terminal launcher opens with references and refuses contract-only invocation/save changes', async t => {
+  const {spawn}=await import('node:child_process');
+  const setup=clip(t,false),file=join(setup.repo,PLACE),text=readFileSync(file,'utf8');
+  const match=/```json\s*([\s\S]*?)\s*```/.exec(text),iface=JSON.parse(match[1]),input=iface.entries[0].input_schema;
+  mkdirSync(join(setup.repo,'contracts'));
+  const contract=join(setup.repo,'contracts/cli.json');writeFileSync(contract,JSON.stringify(input));
+  iface.entries[0].input_schema={$contract:'contracts/cli.json#'};
+  writeFileSync(file,text.replace(match[1],JSON.stringify(iface)));
+  const raw=readFileSync(file,'utf8'),ready=await opened(t,setup);
+  assert.equal(ready.code,0,ready.ports.stderr.text);
+  const tools=join(setup.sandbox,'contract-tools');mkdirSync(tools);
+  writeFileSync(join(tools,'gh'),`#!/bin/sh\nif [ "$1" = auth ]; then printf '%s\\n' '${TOKEN}'; else printf '%s\\n' 'octo 4242'; fi\n`,{mode:0o700});
+  const descriptor=JSON.parse(readFileSync(ready.descriptor));descriptor.ghPath=join(tools,'gh');writeFileSync(ready.descriptor,JSON.stringify(descriptor));
+  const shim=join(setup.repo,'.pdd/try/bin/paperclip');
+  const invoke=()=>new Promise((done,reject)=>{
+    const child=spawn(shim,['hello'],{cwd:setup.repo,env:{...process.env,PATH:tools+':'+process.env.PATH},stdio:['ignore','pipe','pipe']});
+    let stdout='',stderr='';const timer=setTimeout(()=>{child.kill('SIGKILL');reject(Error('launcher timeout'));},5000);
+    child.stdout.on('data',s=>stdout+=s);child.stderr.on('data',s=>stderr+=s);child.on('error',reject);
+    child.on('close',code=>{clearTimeout(timer);done({code,stdout,stderr});});
+  });
+  const first=await invoke();assert.equal(first.code,0,first.stderr);assert.equal(first.stdout,'hello\n');
+  input.description='Changed only the shared contract';writeFileSync(contract,JSON.stringify(input));
+  const save=ready.makePorts();
+  assert.equal(await runTry({cwd:setup.repo,options:{'--save-last':true}},save),125);
+  assert.match(save.stderr.text,/shared contract changed.*--new/);
+  const refused=await invoke();assert.equal(refused.code,125);assert.equal(refused.stdout,'');assert.match(refused.stderr,/shared contract changed.*--new/);
+  assert.equal(ready.fake.jsonPosts.length,1);
+  assert.equal(readFileSync(file,'utf8'),raw);
+});
+
 
 test('hcli-4: unterminated program stderr is preserved and separated from accounting', async t => {
   const ready = await opened(t, clip(t), {}, (e, f) => {

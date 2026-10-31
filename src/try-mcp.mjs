@@ -81,7 +81,7 @@ export function createTryTools({ cwd = process.cwd(), words = [], env } = {}, po
         result: answer.result, ...(answer.world !== undefined ? { world_after: answer.world } : {}), lossless: true };
       runs.push(run);
       return { run_id: run.id, result: run.result, data_before: run.world_before ?? null, data_after: run.world_after ?? null,
-        ...(answer.inputWorld === undefined || answer.world === undefined ? { data_warning: 'The runtime did not supply both run world snapshots; world checks may be unavailable.' } : {}),
+        ...(answer.inputWorld === undefined || answer.world === undefined ? { data_warning: 'The interpreter did not supply both run world snapshots; world checks may be unavailable.' } : {}),
         usage: answer.usage ?? null, seconds: Math.round((Date.now() - started) / 100) / 10 };
     }
     const run = args.run_id ? runs.find(run => run.id === args.run_id) : runs.at(-1);
@@ -92,7 +92,7 @@ export function createTryTools({ cwd = process.cwd(), words = [], env } = {}, po
     const tied = [...new Set(owner.test.doc.steps.filter(step => `${step.entry_path}#${step.operation}` === run.entry).flatMap(step => (step.checks ?? []).map(check => check.criterion_id)))];
     const criterion = args.criterion_id ?? (tied.length === 1 ? tied[0] : undefined);
     if (!criteria.some(item => item.id === criterion)) throw new Error(`Choose criterion_id from: ${criteria.map(item => item.id).join(', ')}.`);
-    if (!object(run.world_before)) throw new Error('The runtime did not provide a confirmed starting world. This run cannot be saved safely.');
+    if (!object(run.world_before)) throw new Error('The interpreter did not provide a confirmed starting world. This run cannot be saved safely.');
     const separator = run.entry.lastIndexOf('#');
     const result = dependencies.saveDoorCase(owner.root, { id: run.id, name: args.name ?? 'Recorded Try tool run', story_path: owner.test.storyPath, original_path: owner.test.path,
       test: { schema_version: 'prompt-runtime.program-scenario.v1', story_path: owner.test.storyPath, criteria, initial_world: run.world_before, simulation: owner.test.doc.simulation ?? {}, context: owner.test.doc.context ?? [],
@@ -116,7 +116,7 @@ export async function runMcp({ cwd = process.cwd(), words = [], env } = {}, port
     if (msg.method === 'initialize') {
       if (!object(msg.params) || typeof msg.params.protocolVersion !== 'string' || !object(msg.params.capabilities) || !object(msg.params.clientInfo)) return error(id, -32602, 'Invalid initialize parameters');
       const versions = ['2025-06-18', '2025-03-26', '2024-11-05'];
-      return { jsonrpc: '2.0', id, result: { protocolVersion: versions.includes(msg.params.protocolVersion) ? msg.params.protocolVersion : versions[0], capabilities: { tools: {} }, serverInfo: { name: 'pdd-try', version: '0.1.10' } } };
+      return { jsonrpc: '2.0', id, result: { protocolVersion: versions.includes(msg.params.protocolVersion) ? msg.params.protocolVersion : versions[0], capabilities: { tools: {} }, serverInfo: { name: 'pdd-try', version: '0.1.12' } } };
     }
     if (msg.method === 'ping' || msg.method === 'tools/list') {
       if (msg.params !== undefined && !object(msg.params)) return error(id, -32602, 'Parameters must be an object');

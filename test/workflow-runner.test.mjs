@@ -18,59 +18,7 @@ async function lastSteps(f, run, out) {
   return out;
 }
 
-// A fake Herdr server for session pdd: workspaces, tabs, panes and the agents that pane commands start.
-function fakeHerdr() {
-  const h = { workspaces: [], tabs: [], panes: [], calls: [], next: 1, focus: null };
-  const id = prefix => `${prefix}${h.next++}`;
-  const commonDir = cwd => realpathSync(execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd, encoding: 'utf8' }).trim());
-  const pane = (workspace, tab, cwd) => { const p = { workspace_id: workspace, tab_id: tab, pane_id: id('p'), terminal_id: id('term'), cwd, agent: null }; h.panes.push(p); return p; };
-  const fail = code => { throw Object.assign(Error(code), { code }); };
-  h.herdr = async args => {
-    h.calls.push(args);
-    const [group, verb, ...rest] = args;
-    const flag = name => rest[rest.indexOf(name) + 1];
-    if (group === 'status') return { running: true, session: 'pdd', compatible: true };
-    if (group === 'workspace' && verb === 'list') return { id: 'cli:workspace:list', result: { type: 'workspace_list', workspaces: h.workspaces } };
-    if (group === 'workspace' && verb === 'create') {
-      const cwd = flag('--cwd'), w = { workspace_id: id('w'), label: flag('--label'), worktree: { checkout_path: cwd, repo_key: commonDir(cwd), is_linked_worktree: false } };
-      h.workspaces.push(w); const t = { tab_id: id('t'), workspace_id: w.workspace_id, label: '1' }; h.tabs.push(t); pane(w.workspace_id, t.tab_id, cwd);
-      return { id: 'cli:workspace:create', result: { workspace: w, tab:t, root_pane:h.panes.at(-1) } };
-    }
-    if (group === 'worktree' && verb === 'open') {
-      const cwd = flag('--path'), w = { workspace_id: id('w'), label: flag('--label'), worktree: { checkout_path: cwd, repo_key: commonDir(cwd), is_linked_worktree: true } };
-      h.workspaces.push(w); const t = { tab_id: id('t'), workspace_id: w.workspace_id, label: '1' }; h.tabs.push(t); const p = pane(w.workspace_id, t.tab_id, cwd);
-      return { id: 'cli:worktree:open', result: { workspace: w, tab: t, root_pane: p } };
-    }
-    if (group === 'workspace' && verb === 'close') {
-      h.workspaces = h.workspaces.filter(w => w.workspace_id !== rest[0]); h.tabs = h.tabs.filter(t => t.workspace_id !== rest[0]);
-      return { id: 'cli:workspace:close', result: { type: 'ok' } };
-    }
-    if (group === 'pane' && verb === 'list') return { id: 'cli:pane:list', result: { type: 'pane_list', panes: h.panes.filter(p => p.workspace_id === flag('--workspace') && h.tabs.some(t => t.tab_id === p.tab_id)) } };
-    if (group === 'tab' && verb === 'create') {
-      const t = { tab_id: id('t'), workspace_id: flag('--workspace'), label: flag('--label') }; h.tabs.push(t);
-      return { id: 'cli:tab:create', result: { tab: t, root_pane: pane(t.workspace_id, t.tab_id, flag('--cwd')) } };
-    }
-    if (group === 'tab' && verb === 'list') return { id: 'cli:tab:list', result: { type: 'tab_list', tabs: h.tabs.filter(t => t.workspace_id === flag('--workspace')) } };
-    if (group === 'tab' && verb === 'get') { const t = h.tabs.find(t => t.tab_id === rest[0]) ?? fail('tab_not_found'); return { result: { tab: t } }; }
-    if (group === 'tab' && verb === 'focus') { h.tabs.find(t => t.tab_id === rest[0]) ?? fail('tab_not_found'); h.focus = rest[0]; return { result: { type: 'ok' } }; }
-    if (group === 'tab' && verb === 'close') { h.tabs = h.tabs.filter(t => t.tab_id !== rest[0]); return { id: 'cli:tab:close', result: { type: 'ok' } }; }
-    if (group === 'pane' && verb === 'run') {
-      const p = h.panes.find(p => p.pane_id === rest[0]) ?? fail('pane_not_found');
-      const command = rest[1], kind = / claude /.test(command) ? 'claude' : / codex /.test(command) ? 'codex' : null;
-      const session = command.match(/--(?:session-id|resume) ([0-9a-f-]{36})/)?.[1] ?? command.match(/ resume ([0-9a-f-]{36})/)?.[1] ?? '00000000-0000-4000-8000-000000000017';
-      p.commands = [...(p.commands ?? []), command];
-      if (kind) p.agent = { agent: kind, agent_status: 'working', agent_session: { agent: kind, kind: 'id', value: session }, prompts: [] };
-      return {};
-    }
-    if (group === 'agent' && verb === 'get') { const p = h.panes.find(p => p.pane_id === rest[0]); if (!p?.agent) fail('agent_not_found'); return { result: { agent: { ...p.agent, pane_id: p.pane_id } } }; }
-    if (group === 'agent' && verb === 'prompt') { const p = h.panes.find(p => p.pane_id === rest[0]); if (!p?.agent) fail('agent_not_found'); if (p.agent.agent_status === 'blocked') fail('agent_blocked'); p.agent.prompts.push(rest[1]); return { result: { type: 'agent_prompted' } }; }
-    fail(`unexpected herdr ${args.join(' ')}`);
-  };
-  h.paneOf = chat => h.panes.find(p => p.pane_id === chat.paneId);
-  // Every chat finished its turn (after done, the chat writes its gate message and then waits).
-  h.idle = () => { for (const p of h.panes) if (p.agent) p.agent.agent_status = 'idle'; };
-  return h;
-}
+import { fakeHerdr } from './helpers/workflow-delivery-fixture.mjs';
 
 async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-runner-')));
@@ -140,6 +88,30 @@ async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
   f.agentPorts = extra => ({ ...f.ports, isTTY: false, env: { ...f.ports.env, PDD_AGENT_SESSION: '1' }, ...extra });
   return f;
 }
+
+test('2698: runner exits 1 for bare-in-.git linked checkout before run, claim, allocation or add', async t => {
+  const f = await fixture(t, { agent: 'codex' }), primary = join(f.base, 'mixed'), common = join(primary, '.git');
+  f.git(f.source, 'clone', '--bare', f.source, common);
+  f.git(primary, 'remote', 'set-url', 'origin', 'https://github.com/example/project.git');
+  f.git(primary, 'update-ref', 'refs/remotes/origin/main', f.git(primary, 'rev-parse', 'main'));
+  const cwd = join(f.base, 'linked'); f.git(primary, 'worktree', 'add', '-b', 'linked', cwd, 'main');
+  const before = f.git(cwd, 'worktree', 'list', '--porcelain'), original = f.ports.execFile;
+  let adds = 0;
+  f.ports.execFile = (file, args, options) => {
+    if (file === 'git' && args[0] === 'worktree' && args[1] === 'add') adds++;
+    return original(file, args, options);
+  };
+  const out = await startRun({ name: 'small-change', issue: '17', agent: 'codex', base: 'main', cwd, packageRoot }, f.ports);
+  assert.equal(out.exitCode, 1); assert.equal(adds, 0);
+  for (const path of ['pdd/runs/17', 'pdd/worktree-assignments/runs', 'pdd/worktree-assignments/issues/17.json'])
+    assert.equal(existsSync(join(common, path)), false, path);
+  assert.equal(f.git(cwd, 'worktree', 'list', '--porcelain'), before);
+  assert.equal(f.git(primary, 'config', '--get', 'core.bare'), 'true');
+  assert.deepEqual(f.herdr.calls, []); assert.deepEqual(f.pushes, []); assert.deepEqual(f.prs, []);
+  for (const words of [/bare repository/i, /\.git/, /linked worktrees/i, /independent normal clone/i, /run.*workflow.*there/i])
+    assert.match(out.message, words);
+  assert.doesNotMatch(out.message, /core\.bare/i);
+});
 
 test('small-change: run exits at once, done reaches the gate, changes go to the same chat, approve opens a new chat, done verify opens the PR', async t => {
   const f = await fixture(t);
@@ -1390,7 +1362,7 @@ for (const [name, summary] of [['one per line', verdictSummary.join('\n')], ['jo
       'Runtime check (split-cent-conservation) (DRAFT): ✓ 5 of 5 criteria · 20/20 checks · 15 AI calls',
       '', 'Part of #17']);
     assert.deepEqual(f.prs[0].body.split('\n').filter(line => line.startsWith('Report')), [], 'the report links of the Before → after line are not listed again');
-    assert.doesNotMatch(f.prs[0].body, /^Runtime report links expire after 7 days\.$/m, 'the top line says it already');
+    assert.doesNotMatch(f.prs[0].body, /^\S+ report links expire after 7 days\.$/m, 'the top line says it already');
   });
 }
 
@@ -1846,6 +1818,60 @@ test('PRBODY7: failures and report links inside authored details or auto-folded 
     assert.ok([...body].length <= 60_000); assert.ok(body.includes(failure), style); assert.ok(body.split('\n').includes(`Report: ${url} (report links expire after 7 days)`), style);
     assert.match(body, /full verify report/); assert.doesNotMatch(body, /<details\b/); assert.equal(readFileSync(join(run.runDir, 'verify.md'), 'utf8'), verify);
   }
+});
+
+test('2531: first code runs in independent clones of one origin each launch in their allocated worktree without touching the active peer', async t => {
+  const f = await fixture(t, { name: 'code-only', agent: 'codex' });
+  const skill = join(f.source, '.agents/skills/pdd-code-only');
+  mkdirSync(skill, { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# Code only\n');
+  writeFileSync(join(skill, 'workflow.json'), JSON.stringify({ version: 2, areas: [
+    { name: 'code', steps: ['build', 'verify', 'formal', 'review'], optional: [], gate: 'pr' }
+  ] }));
+  f.git(f.source, 'add', '.'); f.git(f.source, 'commit', '-qm', 'custom code workflow');
+  f.git(f.source, 'update-ref', 'refs/remotes/origin/main', f.git(f.source, 'rev-parse', 'HEAD'));
+  const peer = join(f.base, 'second-clone');
+  f.git(f.source, 'clone', '--quiet', '--no-local', f.source, peer);
+  f.git(peer, 'remote', 'set-url', 'origin', f.git(f.source, 'remote', 'get-url', 'origin'));
+  const commonDir = cwd => f.git(cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir');
+  const record = cwd => JSON.parse(readFileSync(join(commonDir(cwd), 'pdd/runs/17/status.json'), 'utf8'));
+  assert.notEqual(commonDir(peer), commonDir(f.source), 'normal clones have independent Git directories');
+  assert.equal(f.git(peer, 'remote', 'get-url', 'origin'), f.git(f.source, 'remote', 'get-url', 'origin'));
+  const first = await f.run();
+  assert.equal(first.exitCode, 0, first.message);
+  const active = f.record(), owned = structuredClone({ workspaces: f.herdr.workspaces, tabs: f.herdr.tabs, panes: f.herdr.panes });
+  assert.equal(f.herdr.paneOf(active.chats[0]).agent.agent_status, 'working');
+
+  const second = await startRun({ name: 'code-only', issue: '17', agent: 'codex', cwd: peer, packageRoot }, f.ports);
+  assert.equal(second.exitCode, 0, second.message);
+  const other = record(peer);
+  assert.notEqual(other.runId, active.runId);
+  assert.notEqual(other.root, active.root);
+  assert.notEqual(other.chats[0].repoWorkspaceId, active.chats[0].repoWorkspaceId);
+  assert.notEqual(other.chats[0].workspaceId, active.chats[0].workspaceId);
+  for (const [source, run] of [[f.source, active], [peer, other]]) {
+    assert.equal(run.sourceRoot, source);
+    assert.equal(run.chats.length, 1);
+    assert.equal(run.state, 'running');
+    assert.equal(run.area, 0);
+    assert.notEqual(run.root, source);
+    assert.ok(f.git(source, 'worktree', 'list', '--porcelain').split('\n').includes(`worktree ${run.root}`));
+    assert.equal(commonDir(run.root), commonDir(source));
+    assert.equal(f.git(run.root, 'branch', '--show-current'), run.branch);
+    const chat = run.chats[0], pane = f.herdr.paneOf(chat);
+    assert.equal(f.herdr.tabs.find(tab => tab.tab_id === chat.tabId).label, 'code');
+    assert.equal(pane.cwd, run.root);
+    assert.equal(pane.commands.length, 1);
+    assert.match(pane.commands[0], / codex /);
+    assert.equal(pane.agent.agent, 'codex');
+    assert.equal(f.herdr.workspaces.find(w => w.workspace_id === chat.workspaceId).worktree.checkout_path, run.root);
+  }
+  assert.deepEqual(f.record(), active, 'the active peer run is unchanged');
+  for (const [kind, key] of [['workspaces', 'workspace_id'], ['tabs', 'tab_id'], ['panes', 'pane_id']]) {
+    const ids = new Set(owned[kind].map(row => row[key]));
+    assert.deepEqual(f.herdr[kind].filter(row => ids.has(row[key])), owned[kind], `the active peer's ${kind} stay untouched`);
+  }
+  assert.equal(f.herdr.panes.filter(pane => pane.agent).length, 2);
 });
 
 // A real Git primary/linked/bare layout, with Herdr's repository-parent rule.

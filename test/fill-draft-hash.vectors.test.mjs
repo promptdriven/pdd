@@ -94,7 +94,10 @@ test('fill hash CLI replays succeed beside unrelated prompts in every directory'
     });
     assert.equal(result.error, undefined); assert.equal(result.signal, null);
     assert.equal(result.status, replay.exit_code, `${replay.name}: ${result.stdout}\n${result.stderr}`);
-    assert.equal(result.stderr, ''); verifyOutput(result.stdout, state, replay);
+    // The former name `check` adds only its one notice line on stderr; stdout and exit code stay the same.
+    const notice = result.stderr.split('\n').filter(Boolean);
+    assert.equal(notice.length, 1, result.stderr); assert.ok(notice[0].includes('pdd check') && notice[0].includes('pdd test'), result.stderr);
+    verifyOutput(result.stdout, state, replay);
     verifyBytes(state);
   }
 });
