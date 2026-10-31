@@ -15,4 +15,4 @@ The [runner](../prompts/cli/workflow-runner.prompt.md#approval-through-the-perso
 
 ## Acceptance and review
 
-[Native/manual cases](../test/approval-chat/approval-explicit-gates.json) derive from the final #2762 correction. Runtime check (approval-explicit-gates): NOT RUN — no provider calls authorized; native Git, TTY and Herdr effects need native tests. Pure preservation controls may pass the base; defect regressions must fail by assertion, never an import/setup crash.
+Acceptance is checked by executable native Node tests, not manual manifests. New review cases still need execution against base and implementation; this source edit claims no native pass. Filesystem, Git, stdin, terminal, Herdr and gh effects use injected native ports or isolated scratch processes. Unexecuted JSON manifests are removed; they are not Runtime checks. Runtime check: NOT RUN — these native effects have no Interpreter binding. Report actual native results separately; no Runtime pass or person approval is claimed.
