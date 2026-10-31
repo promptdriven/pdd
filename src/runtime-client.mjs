@@ -2503,7 +2503,7 @@ export function programTransport({ root, expectedLogin }, givenPorts = {}) {
     }finally{off();}
   }
   async function finish(reply,id,command,{sessionId,onInterrupt}={}) {
-    const end=ports.now()+600_000;let interrupted=context.interrupted;
+    const end=ports.now()+600_000;let interrupted=context.interrupted,admissionReply=true;
     const off=ports.onInterrupt(()=>{interrupted=true;onInterrupt?.();});
     try {
       for (;;) {
@@ -2513,14 +2513,17 @@ export function programTransport({ root, expectedLogin }, givenPorts = {}) {
           const answer=reply.json;
           if(sessionId && answer.session_id!==sessionId)throw new Stop(125,'The interpreter returned a different session identity. Read the saved request.');
           if(ENDED.has(answer.state)){await finishReservation(context,targets.get(id),answer);return redact(answer);}
-        } else if(reply && !reply.lost && reply.status!==404) {
-          throw new Stop(125,sanitize(blockingAnswer(reply)||reply.json?.error?.message||`Interpreter HTTP ${reply.status}. Read the saved request; do not repeat it.`));
+        } else if(reply && !reply.lost && (reply.status!==404||reply.json?.error?.code==='session-unknown')) {
+          const error=reply.json?.error;
+          const advice={'invalid-call-cap':'Choose a supported --max-calls allowance.','source-digest-mismatch':'Capture the current source and start a new session.','source-too-large':'Reduce the captured source size.','world-too-large':'Reduce the starting world size.','not-signed-in':'Sign in with gh auth login and configure PDD.','forbidden':'Sign in as the session owner.','rate-limit':'Wait before trying a new request.','session-busy':'Wait for the active call to finish.'};
+          const message=error?`${error.code??'interpreter-error'}${error.field?` (${error.field})`:''}: ${error.message??'The interpreter refused the request.'}\nFix: ${error.fix??error.hint??advice[error.code]??'Read the saved request before trying again.'}`:blockingAnswer(reply)||`Interpreter HTTP ${reply.status}. Read the saved request; do not repeat it.`;
+          throw Object.assign(new Stop(125,sanitize(message)),{runtimeCode:error?.code,runtimeError:error,definiteAdmission:admissionReply&&['session-unknown','session-stopped'].includes(error?.code),definiteRejection:admissionReply&&reply.status>=400&&reply.status<500});
         }
         if(ports.now()>=end)throw new Stop(125,'The ten-minute limit was reached. Read the saved request; do not repeat it.');
         await ports.sleep(ports.pollMs);
-        reply=await runtime.get(id);
+        admissionReply=false;reply=await runtime.get(id);
       }
-    } catch(error){error.requestId??=id;throw error;} finally {off();}
+    } catch(error){if(!error.definiteRejection)error.requestId??=id;throw error;} finally {off();}
   }
   return {ports,origin,login:identity.login,sanitize,redact,
     request:(path,init)=>{const url=new URL(path,origin);if(url.origin!==origin||url.username||url.password)throw new Stop(125,'Refusing a program proxy request outside its interpreter origin.');return runtime.send(url.pathname+url.search,init,GET_MS);},

@@ -1,6 +1,6 @@
-// Generated from prompts/cli/program-data.prompt.md (sha256: 8c8a025f559dc39f0457e0e656db50be2b3039d1a84dbea9005bf4aa19073e45).
+// Generated from prompts/cli/program-data.prompt.md (sha256: 5f09c6739e3bd0e67f77fc41a723a2015e4ab4de70dd53575b030c4f6072329d).
 import { constants, realpathSync, lstatSync, mkdirSync, readFileSync, openSync, closeSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve, isAbsolute } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { hostname } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -29,8 +29,12 @@ export function writePrivate(path,value) {
 }
 export function programData({root,program,flags={}},ports={}) {
   const parts=typeof program==='string'?program.split('/'):[];
-  if(!parts.length||parts.some(part=>!(/^[A-Za-z0-9._-]+$/).test(part)||part==='.'||part==='..'))throw localError('Invalid program identity.');
-  const dir=safeDirectory(root,['.pdd','run',...parts]);
+  if(!parts.length||isAbsolute(program)||parts.some(part=>!part||part==='.'||part==='..'||part.includes('\\')||part.includes('\0')))throw localError('Invalid program identity.');
+  const files=spawnSync('git',['ls-files','-z','--cached','--others','--exclude-standard'],{cwd:root,encoding:'utf8'}).stdout.split('\0');
+  const leaf=basename(program),duplicates=files.filter(f=>f.endsWith('.prompt.md')&&basename(f,'.prompt.md')===leaf).length>1;
+  const encode=part=>part.replaceAll('%','%25').replace(duplicates?/__|^_|_$/g:/__/g,match=>'%5F'.repeat(match.length));
+  const dir=safeDirectory(root,['.pdd','run',(duplicates?parts:[leaf]).map(encode).join('__')]);
+  if(flags.fresh){const release=acquireProgramLock(dir);try{const prior=readPrivate(join(dir,'world.json'),undefined);if(prior!==undefined)writePrivate(join(dir,'world.prev.json'),prior);}finally{release();}}
   const git=spawnSync('git',['rev-parse','--git-path','info/exclude'],{cwd:root,encoding:'utf8',stdio:['ignore','pipe','pipe']});
   if(git.status!==0)throw localError('Cannot locate local Git excludes.');
   const ignore=resolve(root,git.stdout.trim());let previous='';
@@ -49,7 +53,7 @@ export function programData({root,program,flags={}},ports={}) {
     catch(e){throw localError(`Cannot read starting data ${flags.data}: ${e.message}.`);}
     if(object(doc)&&Object.hasOwn(doc,'initial_world')) {world=doc.initial_world;simulation=doc.simulation;}
     else world=doc;
-  } else if(!flags.fresh)world=readPrivate(join(dir,'data.json'),{});
+  } else if(!flags.fresh)world=readPrivate(join(dir,'world.json'),{});
   if(!object(world))throw localError(`${flags.data??'Starting data'} must be a JSON world object.`);
   if(simulation!==undefined&&!object(simulation))throw localError('Simulation must be a JSON object.');
   return {dir,fresh:!!flags.fresh,startingData:{initial_world:world,...(simulation===undefined?{}:{simulation})},explicit:!!flags.data};
