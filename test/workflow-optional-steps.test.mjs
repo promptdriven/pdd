@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync,writeFileSync,mkdirSync,symlinkSync,chmodSync,existsSync} from 'node:fs';
+import {readFileSync,writeFileSync,mkdirSync,symlinkSync,chmodSync,existsSync,unlinkSync,truncateSync,lstatSync} from 'node:fs';
 import {join,dirname} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {pathToFileURL} from 'node:url';
@@ -8,7 +8,7 @@ import {fixture,seedFor,clone,materializeSnapshot,runner,packageRoot,DEFECT} fro
 import {integrationFixture} from './workflow-optional-steps.lifecycle-fixture.mjs';
 const unknownVisual="PDD cannot determine this change's screens from current scoped facts.";
 const unknownSimulation="PDD cannot determine this change's runnable interface from current scoped facts.";
-const {findTests,preflight}=await import(pathToFileURL(join(packageRoot,'src/runtime-preflight.mjs')));
+const {findTests,preflight,interfaceBlocks,proseSha256,promptRefusal,readPrompt}=await import(pathToFileURL(join(packageRoot,'src/runtime-preflight.mjs')));
 // AC4: a real local refusal cannot establish a runnable door. Expected advice is
 // specified by the approved unknown-evidence rule, independently of CLI output.
 for(const [shape,mutate,refusal] of [
@@ -144,4 +144,100 @@ for(const shape of ['malformed selected map','scenario criteria mismatch','scena
  if(shape==='scenario empty checks'){const file=snapshot.files.find(file=>file.path==='test/runtime/api.json'),doc=JSON.parse(file.text);doc.steps[0].checks=[];file.text=JSON.stringify(doc);}
  if(shape==='missing prompt interface')snapshot.files.find(file=>file.path==='prompts/api.prompt.md').text='# Missing interface\n';
  const f=fixture(t,run,{snapshot}),step=shape==='malformed selected map'?'understand':'check',out=await f.done(step,step==='understand'?'understood':'checked');assert.match(out.message,/Recommended: yes\./,DEFECT);assert.ok(out.message.includes(shape==='malformed selected map'?unknownVisual:"PDD cannot determine this change's runnable interface from current scoped facts."),`${DEFECT} ${shape}`);assert.equal(f.record().done.visual,undefined,DEFECT);
+});
+
+// Repair 2: source-authorized AC4/9 consequences, derived before implementation.
+// Calls are repository-root paths, not inferred Markdown dependencies. These
+// fixtures intentionally supply no navigation link that could hide a reader gap.
+function editOptionalPrompt(file,change) {
+ const [block]=interfaceBlocks(file.text),doc=JSON.parse(block[1]);change(doc);
+ file.text=file.text.replace(block[1],JSON.stringify(doc));return doc;
+}
+function calledSnapshot(snapshot,{cycle=false}={}) {
+ const parent=snapshot.files.find(row=>row.path==='prompts/cli-app.prompt.md');
+ const child={path:'prompts/child.prompt.md',text:parent.text,error:''},leaf={path:'prompts/leaf.prompt.md',text:parent.text,error:''};
+ const call=target=>({operation:'dependency',target,target_operation:'main',max_calls:1});
+ editOptionalPrompt(parent,doc=>{doc.calls=[call(child.path)];});
+ editOptionalPrompt(child,doc=>{doc.conventions=[];doc.calls=[call(leaf.path)];});
+ editOptionalPrompt(leaf,doc=>{doc.conventions=[];doc.calls=cycle?[call(parent.path)]:[];});
+ snapshot.files.push(child,leaf);return {parent,child,leaf};
+}
+function nativeOptionalCli(f) {
+ const bin=join(f.base,'bin'),tmp=join(f.base,'tmp');mkdirSync(bin);mkdirSync(tmp);
+ for(const name of ['gh','herdr','codex','claude','curl','wget']){const path=join(bin,name);writeFileSync(path,'#!/bin/sh\nprintf "%s\\n" "$0 $*" >> "$HOME/blocked-transports"\nexit 91\n');chmodSync(path,0o755);}
+ const env={HOME:f.home,TMPDIR:tmp,PATH:bin+':'+dirname(process.execPath)+':/usr/bin:/bin',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',PDD_AGENT_SESSION:'1'};
+ return ()=>{const out=spawnSync(process.execPath,[join(packageRoot,'bin/pdd.mjs'),'workflow','done','check','--summary','checked'],{cwd:f.root,env,encoding:'utf8',timeout:15000});assert.equal(out.error,undefined);assert.equal(out.signal,null);assert.equal(out.status,0,out.stderr);assert.equal(existsSync(join(f.home,'blocked-transports')),false,'No external transport may be attempted');return out.stdout;};
+}
+function assertOptionalCli(message) {
+ assert.match(message,/Recommended: yes\./,DEFECT);
+ assert.match(message,/Command: `pdd simulate user_stories\/cli.md --cli --shell`; time: about 2 minutes\./,DEFECT);
+}
+function assertOptionalUnknown(f,message) {
+ assert.match(message,/Recommended: yes\./,DEFECT);
+ assert.doesNotMatch(message,/Command:|time:|has a Simulator door/,`${DEFECT} Incomplete or ambiguous evidence must not advertise a command`);
+ assert.match(message,/PDD cannot determine this (?:change|Story)'s runnable interface from current (?:scoped facts|local evidence)\./,DEFECT);
+ assert.equal(f.record().question.text,`Do you want to try it now? yes/no Recommended: yes. ${message.includes(unknownSimulation)?unknownSimulation:"PDD cannot determine this Story's runnable interface from current local evidence."}`,DEFECT);
+ assert.equal(f.record().done.try,undefined,DEFECT);assert.equal(f.record().gate,null,DEFECT);
+ assert.deepEqual(f.record().chats,[],DEFECT);assert.deepEqual(f.record().decisions,[],DEFECT);assert.deepEqual(f.record().pr,[],DEFECT);assert.deepEqual(f.external,[],DEFECT);
+}
+for(const shape of ['direct input schema','transitive result schema','transitive resource schema','stale child prose','invalid child status','missing child','unresolved called operation','malformed called interface','cycle reaches invalid leaf'])test(`2756: repair2 native CLI checks complete called graph: ${shape}`,t=>{
+ const {run,snapshot}=seedFor('cli-command-and-time'),f=fixture(t,run,{defaultReader:true});
+ const graph=calledSnapshot(snapshot,{cycle:shape==='cycle reaches invalid leaf'}),cli=nativeOptionalCli(f);
+ materializeSnapshot(f,snapshot,'prompt-story.md');
+ const found=findTests({root:f.root});assert.deepEqual(preflight({root:f.root,found,selected:found.tests}).rows[0].refusals,[],'Valid transitive/cyclic graph retains native local admission');
+ assertOptionalCli(cli());f.seed(run);
+ if(shape==='direct input schema')editOptionalPrompt(graph.child,doc=>{doc.entries[0].input_schema.type=['object'];});
+ if(['transitive result schema','cycle reaches invalid leaf'].includes(shape))editOptionalPrompt(graph.leaf,doc=>{doc.entries[0].result_schema.type=['object'];});
+ if(shape==='transitive resource schema')editOptionalPrompt(graph.leaf,doc=>{doc.resources=[{name:'store',kind:'port',access:'read',operations:[{name:'read',access:'read',arguments_schema:{type:['object']},result_schema:{type:'object',properties:{},required:[],additionalProperties:false}}]}];});
+ if(shape==='stale child prose')graph.child.text+='\nChanged required behavior.\n';
+ if(shape==='invalid child status')editOptionalPrompt(graph.child,doc=>{doc.status='unknown';});
+ if(shape==='unresolved called operation')editOptionalPrompt(graph.child,doc=>{doc.calls[0].target_operation='absent';});
+ if(shape==='malformed called interface')graph.child.text='# Missing required interface\n';
+ for(const file of [graph.parent,graph.child,graph.leaf])f.put(file.path,file.text);
+ if(shape==='missing child')unlinkSync(join(f.root,graph.child.path));
+ if(shape.includes('schema') || shape==='cycle reaches invalid leaf') {
+  const current=findTests({root:f.root}),refusals=preflight({root:f.root,found:current,selected:current.tests}).rows[0].refusals;
+  assert.ok(refusals.some(row=>row.code==='graph-schema-type-list'),'Canonical schema preflight must identify the reachable invalid schema');
+ }
+ if(['stale child prose','invalid child status','malformed called interface'].includes(shape))assert.ok(promptRefusal(readPrompt(f.root,findTests({root:f.root}).visible,graph.child.path),'dependency'),'Canonical prompt admission rejects the same child');
+ assertOptionalUnknown(f,cli());
+});
+for(const shape of ['parent traversal','secret target','symlink child','ignored child','unreadable child','oversized child'])test(`2756: repair2 default reader retains call read boundary: ${shape}`,async t=>{
+ const {run,snapshot}=seedFor('cli-command-and-time'),f=fixture(t,run,{defaultReader:true}),graph=calledSnapshot(snapshot);
+ materializeSnapshot(f,snapshot,'prompt-story.md');assertOptionalCli((await f.done('check','checked')).message);f.seed(run);
+ let forbidden;
+ if(shape==='parent traversal'){forbidden=join(f.root,'..','outside.prompt.md');writeFileSync(forbidden,graph.child.text);editOptionalPrompt(graph.parent,doc=>{doc.calls[0].target='../outside.prompt.md';});}
+ if(shape==='secret target'){forbidden=join(f.root,'secrets/private.prompt.md');f.put('secrets/private.prompt.md',graph.child.text);editOptionalPrompt(graph.parent,doc=>{doc.calls[0].target='secrets/private.prompt.md';});}
+ if(shape==='symlink child'){forbidden=join(f.root,graph.child.path);const outside=join(f.base,'outside.prompt.md');writeFileSync(outside,graph.child.text);unlinkSync(forbidden);symlinkSync(outside,forbidden);}
+ if(shape==='ignored child'){forbidden=join(f.root,graph.child.path);f.put('.gitignore','prompts/child.prompt.md\n');}
+ if(shape==='unreadable child')forbidden=join(f.root,graph.child.path);
+ if(shape==='oversized child'){forbidden=join(f.root,graph.child.path);truncateSync(forbidden,10*1024*1024+1);}
+ f.put(graph.parent.path,graph.parent.text);
+ const reads=[];f.ports.optionalFiles={lstatSync,readFileSync:(path,...args)=>{reads.push(path);if(path===forbidden)throw Error('Blocked forbidden dependency read');return readFileSync(path,...args);}};
+ assertOptionalUnknown(f,(await f.done('check','checked')).message);
+ assert.equal(reads.filter(path=>path===forbidden).length,shape==='unreadable child'?1:0,'Unsafe, invisible and oversized dependencies must be rejected before read');
+});
+for(const shape of ['safe plus reserved','safe plus malformed','two safe','sole reserved with HTTP','sole malformed with Call'])test(`2756: repair2 CLI candidate selection matches actual adapter: ${shape}`,async t=>{
+ const {run,snapshot}=seedFor('cli-command-and-time'),f=fixture(t,run,{defaultReader:true}),parent=snapshot.files.find(row=>row.path==='prompts/cli-app.prompt.md');
+ // A repeated step of one entry is one candidate, as in the actual adapter.
+ const scenario=snapshot.files.find(row=>row.path==='test/runtime/cli.json'),doc=JSON.parse(scenario.text);doc.steps.push({...clone(doc.steps[0]),step_id:'repeat'});scenario.text=JSON.stringify(doc);
+ materializeSnapshot(f,snapshot,'prompt-story.md');assertOptionalCli((await f.done('check','checked')).message);f.seed(run);
+ const name=shape.includes('reserved')?'git':shape.includes('malformed')?'unsafe name':'fixture-other';
+ const second={path:'prompts/second.prompt.md',text:parent.text.replace('# fixture-cli',`# ${name}`),error:''};
+ editOptionalPrompt(second,iface=>{iface.prose_sha256=proseSha256(second.text);});
+ if(shape.startsWith('sole')) {
+  f.put(parent.path,second.text);
+  if(shape==='sole reserved with HTTP') {
+   const http=seedFor('http-command-and-time').snapshot.files.find(row=>row.path==='prompts/http-app.prompt.md');
+   assert.ok(http,'HTTP preservation fixture');f.put(http.path,http.text);
+   const httpScenario=JSON.parse(seedFor('http-command-and-time').snapshot.files.find(row=>row.path==='test/runtime/http.json').text);
+   doc.steps.push({...clone(httpScenario.steps[0]),step_id:'http'});scenario.text=JSON.stringify(doc);f.put(scenario.path,scenario.text);
+  }
+ } else {f.put(second.path,second.text);doc.steps.push({...clone(doc.steps[0]),step_id:'second',entry_path:second.path});f.put(scenario.path,JSON.stringify(doc));}
+ const found=findTests({root:f.root});assert.deepEqual(preflight({root:f.root,found,selected:found.tests}).rows[0].refusals,[],'All schemas and source hashes are locally valid');
+ const {openCli}=await import(pathToFileURL(join(packageRoot,'src/try-doors.mjs')));let external=0;
+ const canary=()=>{external++;assert.fail('CLI selection must refuse before transport, store or shell');};
+ await assert.rejects(()=>openCli({root:f.root,visible:found.visible,ports:{shell:canary},runtime:{send:canary},store:{repo:canary}},found.tests[0],'private',{}),shape.startsWith('sole')?/Name the program/:/several CLI entries/);
+ assert.equal(external,0,'The actual invalid CLI selection has no external effects');assert.equal(existsSync(join(f.root,'.pdd/try')),false);
+ assertOptionalUnknown(f,(await f.done('check','checked')).message);
 });

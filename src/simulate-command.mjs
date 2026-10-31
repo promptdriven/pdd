@@ -1,4 +1,4 @@
-// Generated from prompts/cli/simulate-command.prompt.md (sha256: c97185c64b50b40704a394ebb0534e7c07378c2d205819935503ffad0d5d9fad).
+// Generated from prompts/cli/simulate-command.prompt.md (sha256: 3d2956581a0a2e9e9151a0a90a2eb5f34b544157ca0a276a80cf4dcd935401ab).
 // Workflow advice and future #2760 dispatch share this pure choice.
 export function chooseSimulationCommand({story,complete,cliEntries,httpRoutes,screens,hasDoor}) {
   const unknown = {kind:'unknown',command:'',timeHint:'',reason:"PDD cannot determine this Story's runnable interface from current local evidence."};

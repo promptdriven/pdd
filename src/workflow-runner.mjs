@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 1c4cfe446a554c9ef0b85e2d63feacdc69f2cc0cd16f029a8c3e01dfaf417356).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 61f9a2513f515adaaa3ec8da25db5f83470f244384db59341e3d9dedad626dd4).
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -13,7 +13,7 @@ import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, readWorkflo
 import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mjs';
 import { allRuns, currentChat, gitContext, listRuns, readRun, resolveRun, runDirFor, runForWorktree, writeRun } from './workflow-runs.mjs';
 import { startChat, sendToChat, herdrCommand, chatSession, openChat, closeChats, expandHome, homeVariable, isFolder } from './workflow-chat.mjs';
-import { captureSource, findTests, gitFiles, interfaceBlocks, isSecretPath, storyCriteria, interfaceSchemaProblems, checkInput, proseSha256 } from './runtime-preflight.mjs';
+import { captureSource, findTests, gitFiles, interfaceBlocks, isSecretPath, storyCriteria, interfaceSchemaProblems, checkInput, proseSha256, promptRefusal } from './runtime-preflight.mjs';
 import { storyLines } from './runtime-output.mjs';
 import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
 import { causeText } from './runtime-output.mjs';
@@ -901,6 +901,13 @@ async function readOptionalEvidence({root,notePath},p) {
         const target=posix.normalize(posix.join(posix.dirname(path),link[1]));
         if(/(?:\.prompt\.md|\.ui\.svg)$/.test(target)) {if(!optionalPath(target))snapshot.complete=false;else selected.add(target);}
       }
+      // Runtime calls name repository-root dependencies even without Markdown links.
+      if(path.endsWith('.prompt.md') && !error)try {
+        const blocks=interfaceBlocks(text);
+        if(blocks.length===1)for(const call of JSON.parse(blocks[0][1]).calls??[]) {
+          if(!optionalPath(call?.target))snapshot.complete=false;else selected.add(call.target);
+        }
+      } catch { snapshot.complete=false; }
       // A scenario/map's prompt references are actual local dependencies, including alternate maps.
       if(path.endsWith('.json') && !error)try {
         const doc=JSON.parse(text);
@@ -938,8 +945,24 @@ function optionalFacts(snapshot,run,p) {
   const prompt=path=>{
     if(prompts.has(path))return prompts.get(path);
     let value=null;
-    try {const text=files.get(path),blocks=interfaceBlocks(text??'');if(blocks.length===1){const declaration=JSON.parse(blocks[0][1]);if(Array.isArray(declaration.entries) && ['draft','approved'].includes(declaration.status) && declaration.prose_sha256===proseSha256(text) && !interfaceSchemaProblems(declaration).length && new Set(declaration.entries.map(entry=>entry.operation)).size===declaration.entries.length)value={text,interface:declaration};}}catch{}
+    try {const text=files.get(path),blocks=interfaceBlocks(text??'');if(optionalPath(path) && path.endsWith('.prompt.md') && blocks.length===1){const declaration=JSON.parse(blocks[0][1]);if(Array.isArray(declaration.entries) && !promptRefusal({path,interface:declaration,prose:proseSha256(text)},'dependency') && !interfaceSchemaProblems(declaration).length && new Set(declaration.entries.map(entry=>entry.operation)).size===declaration.entries.length)value={text,interface:declaration};}}catch{}
     prompts.set(path,value);return value;
+  };
+  // Match preflight's seen-path termination: reuse and call cycles are finite,
+  // while every reachable prompt still receives its own canonical admission.
+  const promptGraph=path=>{
+    const pending=new Set([path]);
+    for(const target of pending) {
+      const owner=prompt(target);if(!owner)return false;
+      const calls=owner.interface.calls??[];if(!Array.isArray(calls))return false;
+      for(const call of calls) {
+        if(!optionalObject(call) || !optionalPath(call.target) || typeof call.target_operation!=='string' || !call.target_operation)return false;
+        const child=prompt(call.target);
+        if(!child || !child.interface.entries.some(entry=>entry.operation===call.target_operation))return false;
+        pending.add(call.target);
+      }
+    }
+    return true;
   };
   for(const [path,text]of files)if(path.endsWith('.json')) {
     let doc;try{doc=JSON.parse(text);}catch{visualValid=false;simulationValid=false;continue;}
@@ -968,7 +991,7 @@ function optionalFacts(snapshot,run,p) {
         if(!optionalObject(step) || Object.keys(step).some(key=>!optionalStepKeys.has(key)) || !optionalPath(step.entry_path) || typeof step.operation!=='string' || !step.operation || typeof step.step_id!=='string' || !step.step_id || stepIds.has(step.step_id) || !Object.hasOwn(step,'input') || !Array.isArray(step.checks) ||
           Object.hasOwn(step,'model')&&(typeof step.model!=='string'||!step.model.trim())){simulationValid=false;continue;}
         stepIds.add(step.step_id);
-        const owner=prompt(step.entry_path),index=owner?.interface.entries.findIndex(entry=>entry.operation===step.operation);
+        const owner=promptGraph(step.entry_path)?prompt(step.entry_path):null,index=owner?.interface.entries.findIndex(entry=>entry.operation===step.operation);
         if(!(index>=0)){simulationValid=false;continue;}
         const entry=owner.interface.entries[index];
         if(checkInput(step.input,entry.input_schema,0).refusals.length)simulationValid=false;
@@ -1028,11 +1051,11 @@ function optionalFacts(snapshot,run,p) {
       const first=declared[0],selection=scenarios.filter(test=>test.doc.story_path===first.story_path);
       if(selection.length===1 && new Set(declared.map(row=>row.story_path)).size===1) {
         const entries=[...new Map(selection[0].entries.map(entry=>[`${entry.entry_path}\0${entry.operation}`,entry])).values()];
-        let cliEntries=0,httpRoutes=0;const routes=[];
+        let cliEntries=0,httpRoutes=0,cliNameValid=true;const routes=[];
         for(const {owner,index,entry}of entries) {
           const cli=['input_schema','result_schema'].every(key=>(owner.interface.conventions??[]).some(c=>c.path===`/entries/${index}/${key}`&&c.convention==='cli'));
           const h1=owner.text.match(/^#\s+(.+?)\s*$/m)?.[1]?.replace(/^`([^`]+)`$/,'$1');
-          if(cli && /^[A-Za-z][A-Za-z0-9._-]{0,63}$/.test(h1??'') && !['pdd','node','gh','git'].includes(h1.toLowerCase()))cliEntries++;
+          if(cli){cliEntries++;cliNameValid=/^[A-Za-z][A-Za-z0-9._-]{0,63}$/.test(h1??'') && !['pdd','node','gh','git'].includes(h1.toLowerCase());}
           const route=entry.input_schema?.title?.match(/^HTTP (GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS) (\/[^\s?#]*)$/);
           if(route) {
             const parameters=route[2].split('/').filter(part=>part.startsWith(':'));
@@ -1045,7 +1068,7 @@ function optionalFacts(snapshot,run,p) {
         }
         const selected=maps.get('app-map.json')??maps.get('app/app-map.json');
         const screens=visualValid ? (selected?.screens.filter(screen=>affected.some(row=>row.app_map_path===(maps.has('app-map.json')?'app-map.json':'app/app-map.json') && row.id===screen.id)).length??0) : null;
-        simulation={story:first.story_path,complete:true,hasDoor:true,cliEntries,httpRoutes,screens};
+        simulation={story:first.story_path,complete:cliEntries!==1 || cliNameValid,hasDoor:true,cliEntries:cliEntries===1&&!cliNameValid?null:cliEntries,httpRoutes,screens};
       }
     }
   }
