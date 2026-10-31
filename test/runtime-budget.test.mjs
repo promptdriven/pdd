@@ -24,7 +24,7 @@ async function service(t,confirmed=cap=>cap){
 test('BUDGET1: Try budget parses in browser, CLI and serve forms; malformed values reject',()=>{
  for(const mode of [[],['--cli'],['--serve','8080']])for(const value of ['1','400','1000'])assert.equal(parseArgv(['simulate','story',...mode,'--max-calls',value]).options['--max-calls'],value);
  for(const value of ['1','101','1000'])assert.equal(parseArgv(['test','story','--max-calls',value]).options['--max-calls'],value);
- for(const command of ['check','try'])for(const value of ['0','-1','1.5','NaN','1e3','1001','999999','9007199254740992'])assert.throws(()=>parseArgv([command,'story','--max-calls',value]));
+ for(const command of ['test','simulate'])for(const value of ['0','-1','1.5','NaN','1e3','1001','999999','9007199254740992'])assert.throws(()=>parseArgv([command,'story','--max-calls',value]));
 });
 test('BUDGET2: Check default ceiling is tripled and actual submitted default/override stay distinct',async t=>{
  const steps=n=>({steps:Array.from({length:n},()=>({}))});assert.deepEqual([0,1,2,3,8,9,30,83,84,100].map(n=>defaultMaxCalls(steps(n))),[18,18,24,36,96,108,360,996,1000,1000]);

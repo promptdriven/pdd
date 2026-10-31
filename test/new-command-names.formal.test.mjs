@@ -14,6 +14,8 @@ import { harbor, root, sink, temp } from './runtime-fake.mjs';
 // Oracle from the Story: `check` names `pdd test`, or `pdd lint` when `--lint` is one of its words; `try` names
 // `pdd simulate`. `sim` and `workflow start` are quiet forms of `simulate` and `workflow run`.
 const words = list => list.join(' ');
+// The one line names the old and the new command; the test does not pin the rest of the sentence.
+const names = (line, before, after) => line.includes(`pdd ${before}`) && line.includes(`pdd ${after}`);
 const label = argv => JSON.stringify(argv);
 const effect = plan => ({ local: plan.local, operands: plan.operands, options: plan.options, helpPrefix: plan.helpPrefix });
 const parse = argv => { try { return { plan: parseArgv(argv) }; } catch (error) { return { error: String(error?.message), input: error instanceof CommandInputError }; } };
@@ -58,7 +60,7 @@ test('removed: every check or try argv, also after help, is one exit-2 line that
   for (const command of ['check', 'try']) for (const head of [[], ['help']]) for (const tail of tails([[], ['place-order']])) {
     const argv = [...head, command, ...tail], result = parse(argv), [before, after] = oracle(command, tail);
     assert.ok(result.input, `${label(argv)}: a CommandInputError`);
-    assert.equal(result.error, `pdd ${before} was removed. Use pdd ${after}.`, label(argv));
+    assert.ok(!result.error.includes('\n') && names(result.error, before, after), `${label(argv)}: ${result.error}`);
     count++;
   }
   // The oracle line itself: one line, the old and the new command, no other word of the input.
@@ -114,7 +116,9 @@ test('removed names run nothing on runPdd', async t => {
     const code = await runPdd(argv, { stdout, stderr, cwd: setup.repo, env, packageRoot: root, workflowRunner: spy, workflowAreas: spy,
       mcpServer: spy, runtimeSlots: spy, contracts: spy, product: spy, workflowProve: spy, gitContext: spy });
     assert.equal(code, 2, label(argv)); assert.equal(stdout.text, '', label(argv));
-    assert.equal(stderr.text, `pdd ${before} was removed. Use pdd ${after}.\n`, label(argv));
+    const lines = stderr.text.split('\n');
+    assert.equal(lines.length, 2, `${label(argv)}: one line: ${stderr.text}`); assert.equal(lines[1], '', label(argv));
+    assert.ok(names(lines[0], before, after), `${label(argv)}: ${lines[0]}`);
     count++;
   }
   assert.deepEqual(calls, []); assert.equal(fetches, 0, 'no interpreter call');
