@@ -6,9 +6,11 @@ prompt as a CLI or typed operation with fake outside resources and no Story.
 Preserve existing simulate, Try and test behavior. Screen/HTTP launches belong to
 C's src/program-app.mjs. Before B's CLI or typed classification, lazily load
 that module and call its exported `appKind({file,root,all:true},ports)` first. Its extended
-result is `{kinds,httpOperations}`: kinds enumerates all admitted `http`/`screen`
-kinds and httpOperations identifies only HTTP entries excluded from typed selection;
-a screen catalog may leave other non-CLI entries available as typed operations.
+result is `{kinds,httpOperations,screenOperations}`: kinds enumerates all admitted
+`http`/`screen` kinds; the optional operation arrays identify C-owned entries
+excluded from typed selection. Keep remaining real typed operations. For a screen
+map owning render and select, excluding both leaves one screen kind: no words
+uses rule 3 and delegates one link without authentication in B.
 Accept legacy `'screen'`, `'http'` or null; either legacy string owns all non-CLI
 entries as that single C kind. Mixed C/typed selection requires the extended
 descriptor. The word-table selection below decides whether to delegate to its exported
@@ -32,7 +34,7 @@ never tell people to add an adapter or cli convention.
 
 Build a local word table with zero AI calls: the CLI heading selects CLI, `serve`
 selects all HTTP routes, `app` selects screen, and each typed operation has its
-operation name. C alone supplies HTTP/screen facts and HTTP entry identities; never infer them
+operation name. C alone supplies HTTP/screen facts and HTTP/screen entry identities; never infer them
 from titles. Pass the selected `http` or `screen` as runApp kind.
 For prefix `--read ID FILE`, recover the matching locally saved pending operation
 and its CLI/typed kind before applying the word-table fallback. No suffix selector
@@ -56,7 +58,12 @@ For example `FILE serve` starts HTTP, while `FILE manage serve` selects CLI
 heading manage and sends argv `["serve"]`. Several typed entries retain operation
 selection. HTTP and screen consume no extra words after their optional selector:
 exit2 locally for unsupported words; HTTP says `HTTP programs take no ARGS. Call
-the link.`. The parsed prefix port is passed unchanged to C for listener validation.
+the link.`. If extra HTTP words include a recognized pdd prefix option, also
+print `pdd options go before the file: pdd --port 9000 FILE` for that example.
+Build the hint with the actual recognized options and values before the original
+FILE spelling, shell-quoting words as needed; retain invocation-cwd file-valued
+option meaning and selected HTTP mode. This is advice only: never launch or
+silently discard extra words. The parsed prefix port is passed unchanged to C for listener validation.
 The lint table, equal-word errors and subcommand warnings belong to a later task.
 
 ## Entry and input

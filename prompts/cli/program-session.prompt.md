@@ -12,8 +12,14 @@ serve provides runtime origin and the signed-in request function needed to proxy
 HTTP routes as try-http.mjs does. Additional CLI/typed metadata is allowed.
 
 appMap and overlay are optional C inputs; CLI callers omit both. Preserve the
-joined appMap object unchanged in the interpreter session request under its
-existing `app_map` field. overlay is
+repository-relative appMap PATH string unchanged in the interpreter session request under its
+existing `app_map` field, together with `tab: 'screen'`. Never accept an inline
+object or an unsafe/traversing path; reject locally before authentication. Pass
+appMap into captureSource selection alongside the entry and prepareSource, so
+its document and referenced closure are captured. A disk map must be Git-visible;
+an overlay-produced map need not exist or be Git-visible on the raw filesystem.
+Capture owns that exception through its preparation ports: preserve privacy,
+safe-path, byte and size-limit checks. overlay is
 the synchronous source-preparation callback accepted by captureSource's
 prepareSource port, returning generated `{path,bytes}` upload files such as the
 joined map and seed. Pass that callback unchanged into source capture and upload
