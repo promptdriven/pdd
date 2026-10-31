@@ -7,9 +7,11 @@ Preserve existing simulate, Try and test behavior. Screen/HTTP launches belong t
 C's src/program-app.mjs. Before B's CLI or typed classification, lazily load
 that module and call its exported `appKind({file,root,all:true},ports)` first. Its extended
 result is `{kinds,httpOperations}`: kinds enumerates all admitted `http`/`screen`
-kinds and httpOperations identifies C-owned entries excluded from typed selection.
-Accept legacy `'screen'`, `'http'` or null; legacy http owns all non-CLI entries,
-so mixed HTTP/typed selection requires the extended descriptor. The word-table selection below decides whether to delegate to its exported
+kinds and httpOperations identifies only HTTP entries excluded from typed selection;
+a screen catalog may leave other non-CLI entries available as typed operations.
+Accept legacy `'screen'`, `'http'` or null; either legacy string owns all non-CLI
+entries as that single C kind. Mixed C/typed selection requires the extended
+descriptor. The word-table selection below decides whether to delegate to its exported
 `runApp({file,root,env,flags,kind},ports)` and awaits its exit code; asynchronous rejection uses the same plain pdd error
 handling as local failures, never a raw Node stack. Pass the parsed
 pdd prefix flags with every file-valued option (including data) resolved to a

@@ -121,7 +121,7 @@ test('direct typed: missing operation lists operations without sending',async t=
 test('direct: declared error displays interpreter call_chain and code/message',async t=>{
  const report={error:{code:'unknown-coupon',message:'Unknown SPRING99'},call_chain:[{prompt:PLACE,operation:'quote',call_index:null,max_calls:null},{prompt:'prompts/pricing.prompt.md',operation:'quote',call_index:1,max_calls:1}]};
  const h=await harness(t,false,{report}),r=await h.invoke(['--name','x']);assert.equal(r.code,1,r.err);
- assert.match(r.err,/Traceback \(prompt calls, most recent call last\):/);assert.match(r.err,/prompts\/pricing.prompt.md, operation quote \(call 1 of at most 1\)/);assert.match(r.err,/Error unknown-coupon: Unknown SPRING99/);
+ assert.match(r.err,/Traceback \(prompt calls, most recent call last\):/);assert.match(r.err,/prompts\/pricing.prompt.md, operation quote \(call 1 of at most 1\)/);assert.match(r.err,/pdd: unknown-coupon: Unknown SPRING99/);assert.doesNotMatch(r.err,/Error unknown-coupon:/);
 });
 test('direct: confirmed world and last record persist in Git-ignored .pdd/run',async t=>{
  const h=await harness(t);ok(await h.invoke(['add','task']));const files=paths(join(h.setup.repo,'.pdd/run'));
