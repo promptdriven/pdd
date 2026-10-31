@@ -1,4 +1,4 @@
-// Generated from prompts/cli/try-http.prompt.md (sha256: 6fa9fea29ab24253c75ffc220e61cb83ea8360ed15132d51af2b9d5d175a8628).
+// Generated from prompts/cli/try-http.prompt.md (sha256: 54012b2b41a54dfc2b3fe40f0e569fdc085799c9f3c0f4866f9c66aa25e8275d).
 import { createServer, validateHeaderName, validateHeaderValue } from 'node:http';
 import { join, relative } from 'node:path';
 import { checkInput } from './runtime-preflight.mjs';
@@ -117,21 +117,21 @@ async function requestText(req) {
 export async function openServe(context, test, sessionId, options) {
   const { ports, root, origin, identity } = context;
   const model = await context.runtime.send(`/v1/try/${sessionId}/model`, { method: 'GET' }, 30_000);
-  if (model.status !== 200 || !Array.isArray(model.json?.entries)) throw problem(502, cleanText(model.json?.error?.message || 'The interpreter could not read this Try’s routes. It needs the Try doors server branch.'));
+  if (model.status !== 200 || !Array.isArray(model.json?.entries)) throw problem(502, cleanText(model.json?.error?.message || 'The interpreter could not read this Simulator’s routes. It needs the Simulator doors server branch.'));
   const routes = model.json.entries.filter(e => e.http).map(entry => ({ ...entry, route: entry.http }));
   const hasScreen = model.json.app_map === true;
   if (hasScreen && routes.some(e => ['GET', 'HEAD'].includes(e.route.method) && e.route.path === '/' || e.route.path.startsWith(SCREEN_PREFIX))) throw problem(502, 'This app map reserves GET/HEAD / and /__pdd/screen/; its HTTP routes conflict with the Screen.');
   if (!routes.length && !hasScreen) {
     if (context.appMap) {
-      const command = ['pdd', 'try', test.story, '--serve', String(options['--serve'] ?? 8080), '--new', '--app-map', relative(context.cwd ?? root, join(root, context.appMap))].map(shellWord).join(' ');
-      throw problem(502, `This saved Try has no Screen app map. Start a new Try with the selected app map: ${command}`);
+      const command = ['pdd', 'simulate', test.story, '--serve', String(options['--serve'] ?? 8080), '--new', '--app-map', relative(context.cwd ?? root, join(root, context.appMap))].map(shellWord).join(' ');
+      throw problem(502, `This saved Simulator has no Screen app map. Start a new Simulator with the selected app map: ${command}`);
     }
     throw problem(502, 'This Story has neither a Screen app map nor named HTTP routes. Add an app map (RUNBOOK §13), or name an HTTP route such as HTTP GET /api/books in input_schema.title (RUNBOOK §19).');
   }
   const keys = new Set();
   for (const entry of routes) {
     const key = `${entry.route.method} ${entry.route.path.replace(/:[A-Za-z][A-Za-z0-9_]*/g, ':param')}`;
-    if (keys.has(key)) throw problem(502, 'This Try has overlapping HTTP route labels; name each method/path once.');
+    if (keys.has(key)) throw problem(502, 'This Simulator has overlapping HTTP route labels; name each method/path once.');
     keys.add(key);
   }
   let latestUsage = tryUsage(model.json);
@@ -140,21 +140,21 @@ export async function openServe(context, test, sessionId, options) {
   let tail = Promise.resolve(), pending = 0, stopped = false;
   const server = createServer(async (req, res) => {
     let counted = false, usage = { ...latestUsage, calls: 0 }, usageSource = 'last-known';
-    const reply = (status, message) => { if (!res.headersSent) { res.writeHead(status, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', ...tryUsageHeaders(usage), 'x-pdd-usage-source': usageSource }); res.end(`pdd try: ${cleanText(message)}\n`); } else res.destroy(); };
+    const reply = (status, message) => { if (!res.headersSent) { res.writeHead(status, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', ...tryUsageHeaders(usage), 'x-pdd-usage-source': usageSource }); res.end(`pdd simulate: ${cleanText(message)}\n`); } else res.destroy(); };
     try {
       const port = server.address()?.port, acceptedHost = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
       if (port === 80) { acceptedHost.add('127.0.0.1'); acceptedHost.add('localhost'); }
       const acceptedOrigin = new Set([...acceptedHost].map(host => `http://${host}`));
-      if (!acceptedHost.has(req.headers.host) || (req.headers.origin && !acceptedOrigin.has(req.headers.origin)) || req.headers['sec-fetch-site'] === 'cross-site') throw problem(403, 'This local Try accepts requests only from its own origin.');
+      if (!acceptedHost.has(req.headers.host) || (req.headers.origin && !acceptedOrigin.has(req.headers.origin)) || req.headers['sec-fetch-site'] === 'cross-site') throw problem(403, 'This local Simulator accepts requests only from its own origin.');
       if (!req.url.startsWith('/') || req.url.startsWith('//') || req.url.includes('\\')) throw problem(400, 'Use a local absolute request path.');
       const url = new URL(req.url, `http://127.0.0.1:${port}`);
       const resource = hasScreen ? screenResource(url, req.method) : null;
       if (resource) {
-        if (pending >= 32 || stopped || context.signal?.aborted) throw problem(503, 'The local Try is busy or stopped.');
+        if (pending >= 32 || stopped || context.signal?.aborted) throw problem(503, 'The local Simulator is busy or stopped.');
         pending++; counted = true;
         const body = await requestText(req);
         if (req.method === 'POST' && req.headers['content-type']?.split(';')[0] !== 'application/json') throw problem(415, 'Screen actions require application/json.');
-        if (stopped || context.signal?.aborted) throw problem(503, 'The local Try is stopped.');
+        if (stopped || context.signal?.aborted) throw problem(503, 'The local Simulator is stopped.');
         const upstream = await context.runtime.send(`/v1/try/${sessionId}/screen/${resource}`, { method: req.method === 'HEAD' ? 'GET' : req.method,
           ...(req.method === 'POST' ? { headers: { 'Content-Type': 'application/json' }, body } : {}) }, 90_000);
         if (upstream.lost || !Number.isInteger(upstream.status) || upstream.status < 200 || upstream.status > 599) throw problem(502, 'The Screen request result is unknown. Read its action ID; do not resubmit.');
@@ -173,15 +173,15 @@ export async function openServe(context, test, sessionId, options) {
       for (const entry of candidates) { const found = pathParams(entry.route, url.pathname); if (found) { selected = entry; params = found; break; } }
       if (!selected) { req.resume(); reply(404, 'No prompt names this HTTP route.'); return; }
       if (req.headers['sec-fetch-dest'] && req.headers['sec-fetch-dest'] !== 'empty') throw problem(403, 'Use curl or fetch for this API route; embedded resources and page navigations cannot spend AI calls.');
-      if (pending >= 32 || stopped) throw problem(503, 'The local Try is busy or stopped.');
+      if (pending >= 32 || stopped) throw problem(503, 'The local Simulator is busy or stopped.');
       pending++; counted = true;
       const text = await requestText(req);
       const input = inputFor(selected, req, url, params, text, selected.route.method);
       // One line per request in the pdd window, like a local server log: the call can take many seconds.
       const label = `${req.method} ${url.pathname}`, sentAt = Date.now();
-      ports.stderr?.write(`${label}: running on the Try…\n`);
+      ports.stderr?.write(`${label}: running on the Simulator…\n`);
       const work = tail.then(async () => {
-        if (stopped || context.signal?.aborted) throw problem(503, 'The local Try is stopped.');
+        if (stopped || context.signal?.aborted) throw problem(503, 'The local Simulator is stopped.');
         return runDoorCall({ root, origin, login: identity.login, sessionId, callCap, prompt: selected.entry_path, operation: selected.operation }, input,
           { ...ports, signal: context.signal });
       });
@@ -204,14 +204,14 @@ export async function openServe(context, test, sessionId, options) {
   server.requestTimeout = 30_000; server.headersTimeout = 15_000;
   const wanted = Number(options['--serve'] ?? 8080);
   await new Promise((done, reject) => { server.once('error', reject); server.listen(wanted, '127.0.0.1', done); }).catch(error => {
-    if (error.code === 'EADDRINUSE') throw problem(502, `port ${wanted} is in use by another program. Stop it, or run pdd try ${test.story} --serve ${wanted === 65535 ? wanted - 1 : wanted + 1}.`);
-    if (error.code === 'EACCES') throw problem(502, `port ${wanted} needs extra rights on this computer. Run pdd try ${test.story} --serve 8080.`);
+    if (error.code === 'EADDRINUSE') throw problem(502, `port ${wanted} is in use by another program. Stop it, or run pdd simulate ${test.story} --serve ${wanted === 65535 ? wanted - 1 : wanted + 1}.`);
+    if (error.code === 'EACCES') throw problem(502, `port ${wanted} needs extra rights on this computer. Run pdd simulate ${test.story} --serve 8080.`);
     throw error;
   });
   const stop = () => { stopped = true; server.close(); server.closeIdleConnections(); server.closeAllConnections(); };
   context.signal?.addEventListener('abort', stop, { once: true });
   const port = server.address().port;
-  ports.stdout.write(`Try is serving at http://127.0.0.1:${port}\n${routes.length ? routes.map(e => `  ${e.route.method} ${e.route.path}`).join('\n') : '  Screen only (no named HTTP routes).'}\nCtrl-C closes this server. The Try session keeps its saved data.\n`);
+  ports.stdout.write(`Simulator is serving at http://127.0.0.1:${port}\n${routes.length ? routes.map(e => `  ${e.route.method} ${e.route.path}`).join('\n') : '  Screen only (no named HTTP routes).'}\nCtrl-C closes this server. The Simulator session keeps its saved data.\n`);
   if (hasScreen) ports.stdout.write(`Screen: http://127.0.0.1:${port}/\n`);
   try {
     if (ports.serve) { await ports.serve(server); return 0; }

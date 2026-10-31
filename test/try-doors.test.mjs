@@ -46,11 +46,11 @@ async function opened(t, setup, options = {}, callReply) {
 }
 
 test('doors: CLI flags and optional HTTP port parse without swallowing Story', () => {
-  assert.equal(parseArgv(['try', 'story', '--cli', '--shell']).options['--shell'], true);
-  assert.equal(parseArgv(['try', 'story', '--serve']).options['--serve'], '8080');
-  assert.equal(parseArgv(['try', '--serve', 'story']).operands[0], 'story');
-  assert.equal(parseArgv(['try', 'story', '--serve', '8123']).options['--serve'], '8123');
-  assert.throws(() => parseArgv(['try', 'story', '--serve', '70000']));
+  assert.equal(parseArgv(['simulate', 'story', '--cli', '--shell']).options['--shell'], true);
+  assert.equal(parseArgv(['simulate', 'story', '--serve']).options['--serve'], '8080');
+  assert.equal(parseArgv(['simulate', '--serve', 'story']).operands[0], 'story');
+  assert.equal(parseArgv(['simulate', 'story', '--serve', '8123']).options['--serve'], '8123');
+  assert.throws(() => parseArgv(['simulate', 'story', '--serve', '70000']));
 });
 
 test('doors: create one safe launcher, preserve argv/stdin/streams/exit and reuse Try', async t => {
@@ -59,7 +59,7 @@ test('doors: create one safe launcher, preserve argv/stdin/streams/exit and reus
   const shim = join(setup.repo, '.pdd/try/bin/paperclip');
   assert.equal(statSync(shim).mode & 0o777, 0o700);
   assert.match(ready.ports.stdout.text, /export PATH=/);
-  assert.match(ready.ports.stderr.text, /Try budget 400 calls; 400 remaining/);
+  assert.match(ready.ports.stderr.text, /Simulator budget 400 calls; 400 remaining/);
   assert.doesNotMatch(ready.ports.stdout.text, /budget|charged only/);
   assert.match(ready.ports.stdout.text, /paperclip say 'two words'/);
   assert.ok(!readFileSync(shim, 'utf8').includes(TOKEN));
@@ -69,10 +69,10 @@ test('doors: create one safe launcher, preserve argv/stdin/streams/exit and reus
   assert.equal(await runShim(ready.descriptor, args, io), 0, io.stderr.text);
   assert.deepEqual(ready.fake.jsonPosts[0].json.input, { argv: args, stdin: 'piped\n' });
   assert.equal(io.stdout.text, args.join('\n') + '\npiped\n');
-  assert.equal(io.stderr.text, 'Try AI usage: 1 this command · 1 used · 39 remaining (session cap 40).\n');
+  assert.equal(io.stderr.text, 'Simulator AI usage: 1 this command · 1 used · 39 remaining (session cap 40).\n');
   const bad = ready.makePorts();
   assert.equal(await runShim(ready.descriptor, ['bad'], bad), 7);
-  assert.equal(bad.stderr.text, 'invalid\nTry AI usage: 1 this command · 2 used · 38 remaining (session cap 40).\n');
+  assert.equal(bad.stderr.text, 'invalid\nSimulator AI usage: 1 this command · 2 used · 38 remaining (session cap 40).\n');
   const reuse = ready.makePorts();
   assert.equal(await runTry({ cwd: setup.repo, words: ['place-order'], options: { '--cli': true } }, reuse), 0);
   assert.equal(ready.fake.posts.filter(p => p.command === 'try').length, 1);
@@ -102,11 +102,11 @@ test('doors: wrapper failures use 125, never call as another login or follow lau
   const { runShim } = await import('../src/try-doors.mjs');
   const wrong = ready.makePorts({ gh: args => args[0] === 'auth' ? { status: 0, stdout: TOKEN } : { status: 0, stdout: 'other 1234' } });
   assert.equal(await runShim(ready.descriptor, ['--help'], wrong), 125);
-  assert.match(wrong.stderr.text, /^pdd try:.*belong/);
+  assert.match(wrong.stderr.text, /^pdd simulate:.*belong/);
   assert.equal(ready.fake.jsonPosts.length, 0);
   const missing = ready.makePorts();
   assert.equal(await runShim('/missing/config', [], missing), 125);
-  assert.match(missing.stderr.text, /^pdd try:/);
+  assert.match(missing.stderr.text, /^pdd simulate:/);
   const shim = join(setup.repo, '.pdd/try/bin/paperclip'); rmSync(shim); symlinkSync(join(setup.repo, 'README.md'), shim);
   const denied = ready.makePorts();
   assert.notEqual(await runTry({ cwd: setup.repo, words: ['place-order'], options: { '--cli': true } }, denied), 0);
@@ -143,7 +143,7 @@ test('doors: budget refusal and unknown outcome leave no stale output eligible f
   const io = ready.makePorts();
   assert.equal(await runShim(ready.descriptor, ['again'], io), 125);
   assert.equal(io.stdout.text, '');
-  assert.equal(io.stderr.text, 'pdd try: This Try has no AI calls left.\nTry AI usage: 0 this command · unknown used · unknown remaining (session cap 40).\n');
+  assert.equal(io.stderr.text, 'pdd simulate: This Try has no AI calls left.\nSimulator AI usage: 0 this command · unknown used · unknown remaining (session cap 40).\n');
   const save = ready.makePorts();
   assert.equal(await runTry({ cwd: setup.repo, options: { '--save-last': true } }, save), 125);
   assert.match(save.stderr.text, /unknown/);
@@ -188,7 +188,7 @@ test('doors: real launcher executes from CommonJS project', async t => {
       const timer = setTimeout(() => child.kill('SIGKILL'), 5000);
       child.on('error', reject); child.on('exit', code => { clearTimeout(timer); done({ code, stdout, stderr }); });
     });
-    assert.deepEqual(outcome, { code: 0, stdout: 'say\ntwo words\n\n', stderr: 'Try AI usage: 1 this command · 1 used · 39 remaining (session cap 40).\n' }, name);
+    assert.deepEqual(outcome, { code: 0, stdout: 'say\ntwo words\n\n', stderr: 'Simulator AI usage: 1 this command · 1 used · 39 remaining (session cap 40).\n' }, name);
     assert.equal(ready.fake.jsonPosts.length, 1, name);
   }
 });
@@ -238,7 +238,7 @@ test('doors: a queued lint ending refused prints the confirmed reason and sends 
   const ports = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin }).ports;
   assert.equal(await runTry({ cwd: setup.repo, words: ['place-order'], options: { '--cli': true } }, ports), 125);
   assert.equal(ports.stdout.text, '');
-  assert.equal(ports.stderr.text.trimEnd().split('\n').at(-1), `pdd try: ${message}`);
+  assert.equal(ports.stderr.text.trimEnd().split('\n').at(-1), `pdd simulate: ${message}`);
   assert.deepEqual(fake.posts.map(post => post.command), ['lint']);
 });
 
@@ -329,7 +329,7 @@ test('RELEASE3: the actual launcher leaves a shell read loop input open for its 
     child.on('close',code=>{clearTimeout(timer);done({code,stdout,stderr,continued});});
     child.stdin.write('first\n'); // Deliberately keep the pipe open until the first command returns.
   });
-  assert.deepEqual(outcome,{code:0,stdout:'first\nsecond\n',stderr:'Try AI usage: 1 this command · 1 used · 39 remaining (session cap 40).\nTry AI usage: 1 this command · 2 used · 38 remaining (session cap 40).\n',continued:true});
+  assert.deepEqual(outcome,{code:0,stdout:'first\nsecond\n',stderr:'Simulator AI usage: 1 this command · 1 used · 39 remaining (session cap 40).\nSimulator AI usage: 1 this command · 2 used · 38 remaining (session cap 40).\n',continued:true});
   assert.equal(readdirSync(setup.sandbox).includes('INJECTED'),false);
   assert.deepEqual(ready.fake.jsonPosts.map(p=>p.json.input),[{argv:['first']},{argv:['second']}]);
 });
@@ -337,11 +337,11 @@ test('RELEASE3: the actual launcher leaves a shell read loop input open for its 
 test('hcli-4: startup and each CLI command show session usage only on stderr', async t => {
   const setup = clip(t), ready = await opened(t, setup);
   assert.equal(ready.code, 0);
-  assert.match(ready.ports.stderr.text, /Try AI usage:.*0 used.*40 remaining.*cap 40/);
+  assert.match(ready.ports.stderr.text, /Simulator AI usage:.*0 used.*40 remaining.*cap 40/);
   const { runShim } = await import('../src/try-doors.mjs'), io = ready.makePorts();
   assert.equal(await runShim(ready.descriptor, ['say', 'hello'], io), 0);
   assert.equal(io.stdout.text, 'say\nhello\n');
-  assert.match(io.stderr.text, /Try AI usage:.*1 this command.*1 used.*39 remaining.*cap 40/);
+  assert.match(io.stderr.text, /Simulator AI usage:.*1 this command.*1 used.*39 remaining.*cap 40/);
   assert.equal(ready.fake.jsonPosts.length, 1);
 });
 
@@ -383,5 +383,5 @@ test('hcli-4: unterminated program stderr is preserved and separated from accoun
   });
   const { runShim } = await import('../src/try-doors.mjs'), io = ready.makePorts();
   assert.equal(await runShim(ready.descriptor, ['bad'], io), 7); assert.equal(io.stdout.text, 'exact stdout');
-  assert.equal(io.stderr.text, 'exact stderr\nTry AI usage: 2 this command · 2 used · 38 remaining (session cap 40).\n');
+  assert.equal(io.stderr.text, 'exact stderr\nSimulator AI usage: 2 this command · 2 used · 38 remaining (session cap 40).\n');
 });

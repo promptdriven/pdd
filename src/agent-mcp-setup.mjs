@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-mcp-setup.prompt.md (sha256: d500ed09a2bd77ffa58681b233bf1ab062df7a3e5e071899389712a1798b6dfb).
+// Generated from prompts/cli/agent-mcp-setup.prompt.md (sha256: 097e12c533216809f8fbb6543b1d1bffe49da03ac4d43d515bf5780fbdadcbd2).
 import { accessSync, constants, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, delimiter, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
@@ -69,10 +69,10 @@ export async function setupAgentMcp({ env = process.env, packageRoot = fileURLTo
         wanted: { command, args, trust: true, timeout: 600000 } },
     ].filter(item => existsSync(item.home) || existsSync(item.file) || executable(item.detect, env));
     const changes = candidates.map(planConfig).filter(Boolean);
-    if (!changes.length) { say(candidates.length ? 'PDD Try tools already registered. No config change.' : 'No Codex, Claude Code or Gemini installation found. No config change.'); return 0; }
+    if (!changes.length) { say(candidates.length ? 'PDD Simulator tools already registered. No config change.' : 'No Codex, Claude Code or Gemini installation found. No config change.'); return 0; }
     for (const change of changes) say(`${change.name}: ${change.file}\n${change.preview}`);
-    say('Only the PDD server is approved to run on your intent. Runs use the Try call budget and appear on its page. Claude Code keeps its normal tool approval controls.');
-    const question = 'Register these PDD Try tools? [y/N] ';
+    say('Only the PDD server is approved to run on your intent. Runs use the Simulator call budget and appear on its page. Claude Code keeps its normal tool approval controls.');
+    const question = 'Register these PDD Simulator tools? [y/N] ';
     let answer;
     if (confirm) { stdout.write(question); answer = await confirm(question); }
     else if (stdin.isTTY && stdout.isTTY) {
@@ -93,7 +93,7 @@ export async function setupAgentMcp({ env = process.env, packageRoot = fileURLTo
       mkdirSync(dirname(change.file), { recursive: true, mode: 0o700 });
       safePath(change.file);
       writeFileSync(change.file, change.after, { mode: 0o600, flag: change.before === null ? 'wx' : 'w' });
-      say(`Registered PDD Try tools for ${change.name} in ${change.file}.`);
+      say(`Registered PDD Simulator tools for ${change.name} in ${change.file}.`);
     }
     return 0;
   } catch (error) { stderr.write(`pdd setup: ${String(error.message).split(/[\r\n]/)[0]}\n`); return 1; }

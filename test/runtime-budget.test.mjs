@@ -21,9 +21,9 @@ async function service(t,confirmed=cap=>cap){
   return{status:200,json:answer};
  });return fake;
 }
-test('BUDGET1: Try budget parses in browser, CLI and serve forms; malformed values reject',()=>{
- for(const mode of [[],['--cli'],['--serve','8080']])for(const value of ['1','400','1000'])assert.equal(parseArgv(['try','story',...mode,'--max-calls',value]).options['--max-calls'],value);
- for(const value of ['1','101','1000'])assert.equal(parseArgv(['check','story','--max-calls',value]).options['--max-calls'],value);
+test('BUDGET1: Simulator budget parses in browser, CLI and serve forms; malformed values reject',()=>{
+ for(const mode of [[],['--cli'],['--serve','8080']])for(const value of ['1','400','1000'])assert.equal(parseArgv(['simulate','story',...mode,'--max-calls',value]).options['--max-calls'],value);
+ for(const value of ['1','101','1000'])assert.equal(parseArgv(['test','story','--max-calls',value]).options['--max-calls'],value);
  for(const command of ['check','try'])for(const value of ['0','-1','1.5','NaN','1e3','1001','999999','9007199254740992'])assert.throws(()=>parseArgv([command,'story','--max-calls',value]));
 });
 test('BUDGET2: Check default ceiling is tripled and actual submitted default/override stay distinct',async t=>{
@@ -39,9 +39,9 @@ test('BUDGET3: a new Try requests400 or its explicit ceiling and reports confirm
  for(const cap of [400,1000]){
   const setup=harbor(t),fake=await service(t),result=await invoke(setup,fake,cap===400?{}:{'--max-calls':cap});
   assert.equal(result.code,0,result.err);assert.equal(fake.posts.find(p=>p.command==='try').request.max_calls,cap);
-  assert.match(result.out,new RegExp(`Try budget ${cap} calls; ${cap} remaining`));assert.match(result.out,/charged only for calls that run/);
+  assert.match(result.out,new RegExp(`Simulator budget ${cap} calls; ${cap} remaining`));assert.match(result.out,/charged only for calls that run/);
   const again=await invoke(setup,fake);assert.equal(again.code,0,again.err);assert.equal(fake.posts.filter(p=>p.command==='try').length,1);assert.equal(fake.jsonPosts.length,0);
-  assert.match(again.out,new RegExp(`Try budget ${cap} calls`));
+  assert.match(again.out,new RegExp(`Simulator budget ${cap} calls`));
  }
 });
 test('BUDGET4: direct API callers cannot bypass budget validation before any effect',async t=>{
@@ -57,7 +57,7 @@ test('BUDGET5: --stop cannot carry a budget',async t=>{
 test('BUDGET6: creation must not present a different or unconfirmed explicit ceiling as success',async t=>{
  for(const [actual,code] of [[40,5],[300,5],[undefined,3]]){
   const setup=harbor(t),fake=await service(t,()=>actual),result=await invoke(setup,fake,{'--max-calls':240});
-  assert.equal(result.code,code);assert.doesNotMatch(result.out,/Try link/);assert.match(result.err,/budget|ceiling/i);
+  assert.equal(result.code,code);assert.doesNotMatch(result.out,/Simulator link/);assert.match(result.err,/budget|ceiling/i);
   const read=await invoke(setup,fake);assert.equal(read.code,0,read.err);assert.equal(fake.posts.filter(p=>p.command==='try').length,1);assert.equal(fake.deletes.length,0);
  }
 });
@@ -67,7 +67,7 @@ test('BUDGET7: equal or lower existing ceiling is read-only, keeps total and spe
  assert.equal((await invoke(setup,fake)).code,0);fake.spent=40;
  for(const requested of [400,80]){
   const before=fake.posts.length,r=await invoke(setup,fake,{'--max-calls':requested});assert.equal(r.code,0,r.err);
-  assert.equal(fake.posts.length,before);assert.equal(fake.jsonPosts.length,0);assert.equal(fake.deletes.length,0);assert.match(r.out,/Try budget 400 calls; 360 remaining/);
+  assert.equal(fake.posts.length,before);assert.equal(fake.jsonPosts.length,0);assert.equal(fake.deletes.length,0);assert.match(r.out,/Simulator budget 400 calls; 360 remaining/);
  }
 });
 test('BUDGET8: explicit budget on unknown/missing existing Try preserves it without replacement',async t=>{
@@ -101,5 +101,5 @@ test('BUDGET12: Check direct callers reject out-of-range budgets before any effe
 });
 test('BUDGET13: changing the default preserves an older existing160-call Try and its spent allowance',async t=>{
  const setup=harbor(t),fake=await service(t);assert.equal((await invoke(setup,fake,{'--max-calls':160})).code,0);fake.spent=40;
- const result=await invoke(setup,fake);assert.equal(result.code,0,result.err);assert.match(result.out,/Try budget 160 calls; 120 remaining/);assert.equal(fake.posts.length,2);assert.equal(fake.jsonPosts.length+fake.deletes.length,0);
+ const result=await invoke(setup,fake);assert.equal(result.code,0,result.err);assert.match(result.out,/Simulator budget 160 calls; 120 remaining/);assert.equal(fake.posts.length,2);assert.equal(fake.jsonPosts.length+fake.deletes.length,0);
 });

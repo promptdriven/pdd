@@ -20,7 +20,7 @@ const identity = ['entry_path','operation','criterion_id','target','path','op'];
 const states = ['pass','fail','blocked','not_replayed'];
 const controls = ['assertion_failure','crash','survived','not_run'];
 const sanitize = value => cleanText(String(value ?? '')).replace(/[\r\n\x00-\x1f]/g,' ').slice(0,1000)
-  .replace(/https?:\/\/[^\s]+\/s\/[^\s]+/g,'(Try link removed)');
+  .replace(/https?:\/\/[^\s]+\/s\/[^\s]+/g,'(Simulator link removed)');
 const render = value => sanitize(value).replace(/[\\`*_[\]()|]/g,'\\$&')
   .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 

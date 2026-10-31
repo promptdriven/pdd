@@ -170,7 +170,8 @@ test('no source line names pdd check or pdd try, or calls the simulation the Try
   const dir = join(root, 'src'), found = [];
   for (const name of readdirSync(dir).filter(file => file.endsWith('.mjs'))) {
     readFileSync(join(dir, name), 'utf8').split('\n').forEach((text, index) => {
-      if (/\bpdd (?:check|try)\b|\bTry (?:ready|link|page|budget|AI usage|is ready|is serving|tools)\b|PDD Try tools|['"`]pdd try:|\btry_(?:open|state|run|check|save_case)\b/.test(text)) found.push(`${name}:${index + 1}: ${text.trim().slice(0, 120)}`);
+      // A whole-line comment is never printed.
+      if (!text.trim().startsWith('//') && /\bpdd (?:check|try)\b|\bTry (?:ready|link|page|budget|AI usage|is ready|is serving|tools)\b|PDD Try tools|['"`]pdd try:|\btry_(?:open|state|run|check|save_case)\b/.test(text)) found.push(`${name}:${index + 1}: ${text.trim().slice(0, 120)}`);
     });
   }
   assert.deepEqual(found, []);

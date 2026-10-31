@@ -64,7 +64,7 @@ test('HTTP door: remote origins, rebinding Hosts and bad/duplicate query values 
 
 test('HTTP door: malformed program response becomes 502 with plain reason', async t => {
   await serving(t, [route('GET', '/books')], { status: 999, body: 'bad' }, async port => {
-    const bad = await raw(port, '/books'); assert.equal(bad.status, 502); assert.match(bad.body, /^pdd try:/);
+    const bad = await raw(port, '/books'); assert.equal(bad.status, 502); assert.match(bad.body, /^pdd simulate:/);
   });
 });
 
@@ -100,7 +100,7 @@ test('RELEASE7: port80 accepts default-port Host/Origin and still rejects cross-
 
 test('hcli-4: HTTP usage headers preserve program status/body and expose local zero-call errors', async t => {
   await serving(t, [route('GET', '/books')], { status: 201, headers: { 'x-program': 'kept', 'x-pdd-ai-calls': '999' }, body: 'program bytes\n' }, async (port, seen, ports) => {
-    assert.match(ports.stderr.text, /Try AI usage:.*0 used.*40 remaining.*cap 40/);
+    assert.match(ports.stderr.text, /Simulator AI usage:.*0 used.*40 remaining.*cap 40/);
     const result = await raw(port, '/books');
     assert.equal(result.status, 201); assert.equal(result.body, 'program bytes\n'); assert.equal(result.headers['x-program'], 'kept');
     assert.equal(result.headers['x-pdd-ai-calls'], '2'); assert.equal(result.headers['x-pdd-try-used'], '2');

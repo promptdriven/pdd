@@ -32,7 +32,7 @@ test('CAPACITY1: confirmed zero-execution capacity is retried until the wait end
   assert.equal(result.json.rows[0].busy, true); assert.equal(result.json.rows[0].can_retry, true);
   assert.equal(result.json.rows[0].calls, 0); assert.equal(result.json.rows[0].checks, null);
   assert.match(result.json.summary_line, /: busy/); assert.doesNotMatch(result.out + result.err, /Fix what|fix the test|✗/);
-  assert.match(result.err, /Server busy/); assert.match(result.err, /pdd check --retry/);
+  assert.match(result.err, /Server busy/); assert.match(result.err, /pdd test --retry/);
   assert.equal(saved(setup, result.json.batch).rows[0].request_ids.length, checkPosts(fake).length);
   const before = fake.posts.length;
   const read = await run(setup, fake, [result.json.batch], { '--read': true, '--json': true });
@@ -122,7 +122,7 @@ test('CAPACITY6: explicit recovery retries only busy rows, keeps passes/caps/his
   assert.equal(after.created_at, old.created_at);
   assert.deepEqual(after.rows.find(r => r.test.endsWith('unknown-item.json')).request_ids, old.rows.find(r => r.test.endsWith('unknown-item.json')).request_ids);
   assert.equal(after.rows.find(r => r.test.endsWith('place-order.json')).request_ids.length, old.rows.find(r => r.test.endsWith('place-order.json')).request_ids.length + 1);
-  assert.deepEqual(parseArgv(['check', '--retry', first.json.batch]).options['--retry'], first.json.batch);
+  assert.deepEqual(parseArgv(['test', '--retry', first.json.batch]).options['--retry'], first.json.batch);
 
   recover = false;
   const second = await run(setup, fake);

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-coverage.prompt.md (sha256: f3bcf66a83a6051c0ff95626c579191b1900b33b9c8cace52bef1fe6f99856e2).
+// Generated from prompts/cli/agent-coverage.prompt.md (sha256: 0b965a159573795ed2298532748378aff66e76d0dc270441918792658790a0c1).
 import {basename} from 'node:path';
 const object=x=>x!==null&&typeof x==='object'&&!Array.isArray(x);
 function clip(value,max=160){let text='',bytes=0;for(const c of String(value??'').replace(/[\u0000-\u001f\u007f-\u009f]/g,' ')){const n=Buffer.byteLength(c);if(bytes+n>max)break;text+=c;bytes+=n;}return text;}
@@ -82,7 +82,7 @@ export function createCoverage({scenarios=[],model={},productRules=[]}={}){
    const progress=new Map(list.filter(x=>typeof x?.id==='string').map(x=>[x.id,states.has(x.state)?x.state:'todo']));
    const criteria=[...story.criteria.keys()].map(id=>({id,state:progress.get(id)??'todo'}));
    const runnable=story.references.size>0&&[...story.references].every(entry=>entries.has(entry));
-   projected.push({path:story.path,title:story.title,runnable,needsOwnTry:runnable?null:`pdd try ${slug(story.path)}`,criteria,passed:criteria.filter(x=>x.state==='pass').length,total:criteria.length});
+   projected.push({path:story.path,title:story.title,runnable,needsOwnTry:runnable?null:`pdd simulate ${slug(story.path)}`,criteria,passed:criteria.filter(x=>x.state==='pass').length,total:criteria.length});
   }
   const own=(Array.isArray(ownCases)?ownCases:[]).slice(0,64).map(item=>({name:clip(item?.name||'Own case'),state:item?.saved===true||item?.state==='saved'?'saved':item?.matched===true||['match','matched'].includes(item?.state)?'matched':item?.state==='differs'?'differs':'pending'}));
   const allCli=[...commands.values()].map(x=>({...x})),http=[...endpoints.values()].map(x=>({...x})),allScreens=[...screens.values()].map(x=>({...x}));
@@ -90,7 +90,7 @@ export function createCoverage({scenarios=[],model={},productRules=[]}={}){
   const fullyTried=known&&!incomplete&&ownCases.length<=64&&projected.every(s=>s.runnable&&s.criteria.every(c=>c.state==='pass'))&&[...allCli,...http,...allScreens].every(x=>x.tried)&&own.every(x=>['matched','saved'].includes(x.state));
   const total=projected.reduce((n,s)=>n+s.total,0),passed=projected.reduce((n,s)=>n+s.passed,0);
   const line=`Coverage: ${passed}/${total} criteria pass · ${[...allCli,...http,...allScreens].filter(x=>x.tried).length}/${allCli.length+http.length+allScreens.length} surfaces tried${fullyTried?' · fully tried':''}${incomplete?' · inventory incomplete':''}`;
-  const lines=[line,...projected.map(s=>`${s.title}: ${s.runnable?`${s.passed}/${s.total} pass ${s.criteria.map(c=>c.id+MARK[c.state]).join(' ')}`:'needs its own Try: '+s.needsOwnTry}`),`CLI: ${allCli.map(x=>x.label+(x.tried?' ✓':' ·')).join(', ')||'none'}`,`HTTP: ${http.map(x=>x.label+(x.tried?' ✓':' ·')).join(', ')||'none'}`,`Screens: ${allScreens.map(x=>x.label+(x.tried?' ✓':' ·')).join(', ')||(model.app_map===true?'unknown (inventory incomplete)':'none')}`,`Own cases: ${own.map(x=>x.name+' ('+x.state+')').join(', ')||'none yet'}`];
+  const lines=[line,...projected.map(s=>`${s.title}: ${s.runnable?`${s.passed}/${s.total} pass ${s.criteria.map(c=>c.id+MARK[c.state]).join(' ')}`:'needs its own simulation: '+s.needsOwnTry}`),`CLI: ${allCli.map(x=>x.label+(x.tried?' ✓':' ·')).join(', ')||'none'}`,`HTTP: ${http.map(x=>x.label+(x.tried?' ✓':' ·')).join(', ')||'none'}`,`Screens: ${allScreens.map(x=>x.label+(x.tried?' ✓':' ·')).join(', ')||(model.app_map===true?'unknown (inventory incomplete)':'none')}`,`Own cases: ${own.map(x=>x.name+' ('+x.state+')').join(', ')||'none yet'}`];
   return{stories:projected,cli:allCli,http,screens:allScreens,ownCases:own,fullyTried,line,text:clip(lines.join('\n'),1024)};
  }
  return{record,snapshot};
