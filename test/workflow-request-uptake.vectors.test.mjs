@@ -58,10 +58,10 @@ for(const v of vectors.cases.filter(v=>!v.id.startsWith('probe-I')))test(`2722 v
  }
  case 'status-filter-and-time-boundaries':{
   f.save(v.given.requests.map(r=>{const entry=f.entry(r.id,r);if(!('deliveredAt'in r))delete entry.deliveredAt;return entry;}));const bytes=f.bytes();const row=await f.row();assert.equal(row.requests?.length,2,'status lists both delivered changes');assert.deepEqual(row.requests.map(({id,deliveredAt,ackedAt,ackSummary})=>({id,deliveredAt,ackedAt,ackSummary})),e.jsonRequests);assert.equal('requestWarning'in row,false);
-  for(const opts of viewOptions.filter(o=>!o.json))facts((await f.status(opts)).message,['legacy','unknown']);const run=f.record();run.state='cancelled';writeRun(run,f.ports);assert.equal((await f.row()).group,'cancelled');assert.ok(!(await f.status({ref:undefined,cancelled:true})).message.includes('not yet acknowledged'));assert.equal(f.bytes(),bytes);break;
+  for(const opts of viewOptions.filter(o=>!o.json))facts((await f.status(opts)).message,['legacy','unknown']);const run=f.record();run.state='cancelled';writeRun(run,f.ports);assert.equal((await f.row()).group,'cancelled');facts((await f.status()).message,['legacy','unknown']);assert.ok(!(await f.status({ref:undefined,cancelled:true})).message.includes('not yet acknowledged'));assert.equal(f.bytes(),bytes);break;
  }
  case 'done-and-gate-only-warn':{
-  f.save([f.entry()]);for(const step of ['unknown','reproduce','prompt-story']){const r=await f.done(step);assert.equal(r.exitCode,0);facts(r.message,['r1','not yet']);assert.equal(f.read()[0].ackedAt,undefined);}assert.equal(f.record().gate.kind,'approve');
+  f.save([f.entry()]);for(const step of ['unknown','reproduce','prompt-story']){const r=await f.done(step);assert.equal(r.exitCode,0);facts(r.message,['r1','not yet','after','address',f.ports.pdd,'workflow ack']);assert.ok(r.message.slice(r.message.indexOf('warning: Request r1:')).split('\n').every(line=>line.startsWith('warning:')));assert.equal(f.read()[0].ackedAt,undefined);}assert.equal(f.record().gate.kind,'approve');
   // Repeat at an existing PR ending using only the private fixture's GitHub port.
   const run=f.record();run.areas=[{name:'story',steps:['reproduce'],optional:[],gate:'pr'}];run.area=0;run.done={};run.gate=null;run.state='running';writeRun(run,f.ports);fs.writeFileSync(run.root+'/value.mjs','export const value = 2;\n');f.git(run.root,'add','.');f.git(run.root,'commit','-qm','fixture change');
   const published=await f.done('reproduce');assert.equal(published.exitCode,0,published.message);facts(published.message,['r1','not yet']);assert.equal(f.prs.length,1);const repeated=await f.done('reproduce');assert.equal(repeated.exitCode,0,repeated.message);facts(repeated.message,['r1','not yet']);assert.equal(f.prs.length,1);break;
@@ -72,7 +72,7 @@ for(const v of vectors.cases.filter(v=>!v.id.startsWith('probe-I')))test(`2722 v
    const ports={...f.ports,journalElapsedNow:()=>elapsed,journalSleep:async ms=>{elapsed+=ms;},deliveryFiles:{...fs,readFileSync:(path,...a)=>{if(path===f.path&&mode==='read')throw Error('read denied');return fs.readFileSync(path,...a);},writeFileSync:(path,...a)=>{if(String(path).includes('delivery-journal.json.')&&mode==='write')throw Error('write denied');return fs.writeFileSync(path,...a);}}};
    if(mode==='busy'){const lock=f.record().runDir+'/.delivery-journal.lock';fs.mkdirSync(lock,{recursive:true});fs.writeFileSync(lock+'/owner-held.json',JSON.stringify({pid:process.pid,hostname:hostname(),token:'held'}));}
    assert.notEqual((await f.ack('r1','Added reason',{ports})).exitCode,0);assert.equal(f.bytes(),bytes);
-   if(['read','malformed'].includes(mode)){const row=await f.row({},ports);assert.equal(row.requests,null);assert.equal(row.inFlightRequests,null);assert.ok(row.requestWarning&&row.requestWarning.length<600);for(const opts of viewOptions.filter(o=>!o.json))facts((await f.status(opts,ports)).message,['unavailable']);facts((await f.done('unknown',ports)).message,['unavailable']);}
+   if(['read','malformed'].includes(mode)){const row=await f.row({},ports);assert.equal(row.requests,null);assert.equal(row.inFlightRequests,null);assert.equal(row.pendingRequests,null);assert.equal(row.uncertainRequests,null);assert.ok(row.requestWarning&&row.requestWarning.length<600);for(const opts of viewOptions.filter(o=>!o.json))facts((await f.status(opts,ports)).message,['unavailable']);facts((await f.done('unknown',ports)).message,['unavailable']);}
    fs.rmSync(f.record().runDir+'/.delivery-journal.lock',{recursive:true,force:true});
   }await f.positive();break;
  }
@@ -102,6 +102,19 @@ for(const v of vectors.cases.filter(v=>!v.id.startsWith('probe-I')))test(`2722 v
   for(const cwd of [f.source,f.base]){const r=await runner.stepDone({step:'reproduce',cwd},ports);assert.notEqual(r.exitCode,0);assert.ok(!r.message.includes('unavailable'));}
   for(const state of ['completed','cancelled']){const run=f.record();run.state=state;writeRun(run,f.ports);const r=await f.done('reproduce',ports);assert.equal(r.exitCode,0);assert.ok(!r.message.includes('unavailable'));}assert.equal(reads,0);
   const run=f.record();run.state='running';writeRun(run,f.ports);f.save([f.entry()]);facts((await f.done('unknown')).message,['r1']);break;
+ }
+ case 'invalid-saved-times-status-and-done':{
+  f.save([f.entry('invalid-time',{deliveredAt:1e20})]);const bytes=f.bytes();
+  let status,statusError,completion,doneError;
+  try{status=await f.status();}catch(error){statusError=error;}
+  try{completion=await f.done('reproduce');}catch(error){doneError=error;}
+  assert.ok(f.record().done.reproduce,'done saves progress even when saved time is invalid');
+  assert.equal(statusError,undefined,'status must not throw for an invalid saved time');assert.equal(doneError,undefined,'done warning must not throw');
+  assert.equal(status.exitCode,0);assert.equal(completion.exitCode,0);facts(status.message,['invalid-time','unknown']);facts(completion.message,['invalid-time','unknown']);assert.equal(f.bytes(),bytes);break;
+ }
+ case 'ended-pending-custody-is-historical':{
+  f.save([f.entry('pending-ended',{state:'pending'})]);const bytes=f.bytes();const run=f.record();run.state='cancelled';writeRun(run,f.ports);
+  for(const options of [{},{ref:undefined,cancelled:true},{ref:undefined,all:true,cancelled:true}])facts((await f.status(options)).message,['pending-ended','not sent','run ended']);assert.equal(f.bytes(),bytes);break;
  }
  default:assert.fail(`Unmapped native group ${v.id}`);
  }
