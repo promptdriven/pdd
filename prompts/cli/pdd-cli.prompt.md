@@ -90,7 +90,7 @@ Help prints exactly these lines, in this order. Each line is two spaces, the for
   pdd --version  Show this package version.
   pdd completion bash|zsh  Print local shell completion.
   pdd workflow list [--json]  List the bundled workflows with their areas and gates.
-  pdd test [PATH|STORY...] [--lf] [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]  Check stories on the PDD interpreter with your gh login: reuses unchanged passing Stories from .pdd/cache/test/; --lf selects previous failures in scope or uses the normal selection when none exist there, --cache-clear clears the cache and sends the selected Stories again (the interpreter may reuse saved answers until #535); sends selected PATH or STORY dependencies (every Story when you name none), waits for every check (no limit in a terminal, at most 90 s for an agent; --timeout MIN sets the limit) with a progress line every 30 s, then prints one table with report links. Defaults to 12 calls per step, at least 18 and at most 1000; --max-calls accepts 1 to 1000.
+  pdd test [PATH|STORY...] [--lf] [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]  Check stories on the PDD interpreter with your gh login: reuses unchanged passing Stories from .pdd/cache/test/; --lf selects previous failures in scope or uses the normal selection when none exist there, --cache-clear clears the cache and sends the selected Stories again (the interpreter may reuse saved answers); sends selected PATH or STORY dependencies (every Story when you name none), waits for every check (no limit in a terminal, at most 90 s for an agent; --timeout MIN sets the limit) with a progress line every 30 s, then prints one table with report links. Defaults to 12 calls per step, at least 18 and at most 1000; --max-calls accepts 1 to 1000.
   pdd test --read [BATCH|CALL_ID] [--json] [--timeout MIN]  Read saved results; a normal Check held for lint may continue its original checks. Other reads send no work.
   pdd test --retry BATCH [--json] [--details] [--timeout MIN]  Retry only confirmed unstarted checks from a saved batch, with the same source and call caps; preserve completed and uncertain runs.
   pdd test --fill-hash  Fill prose_sha256 of draft runtime interfaces; no network.
@@ -161,7 +161,7 @@ finite local cause and returns 5. Catalog owns all syntax.
 ```json
 {
   "status": "draft",
-  "prose_sha256": "95870af301894c3f4aa3b4abf1b12051879c4a14e63e09651fa39ae26c718f7a",
+  "prose_sha256": "f310d7b27fde6e8783ed6deae9b584016762a47795febb27cb74b88c6c237008",
   "entries": [{
     "operation": "runPdd",
     "input_schema": {
