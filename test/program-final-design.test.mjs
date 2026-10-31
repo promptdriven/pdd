@@ -20,7 +20,7 @@ async function harness(t,options={}){
   if(e.command==='lint')return {status:200,json:f.lint(e.request.requestId)};
   if(e.command==='try')return {status:200,json:f.tryJob(e.request.requestId)};
   if(e.method==='DELETE')return {status:200,json:f.stopJob(e.headers['x-request-id'],e.url.split('/').at(-1))};
-  if(e.json){const output=options.cli===false?{ok:true}:{stdout:'program only\n',stderr:options.stderr??'',exit_code:options.exit??0};const report={verdict:'passed',error:null,replayed:false,provider_calls:1,remaining_calls:299,...options.report};const job={...f.job(e.json.requestId,'call','passed',{exitCode:0,output,world:options.world??{},refusals:options.refusals??[],report},options.calls??1),session_id:e.url.split('/')[3]};f.jobs.set(e.json.requestId,job);return options.reply?.(e,f,job)??{status:200,json:job};}
+  if(e.json){const output=options.outputs?.[e.json.operation]??(options.cli===false?{ok:true}:{stdout:'program only\n',stderr:options.stderr??'',exit_code:options.exit??0});const report={verdict:'passed',error:null,replayed:false,provider_calls:1,remaining_calls:299,...options.report};const job={...f.job(e.json.requestId,'call','passed',{exitCode:0,output,world:options.world??{},refusals:options.refusals??[],report},options.calls??1),session_id:e.url.split('/')[3]};f.jobs.set(e.json.requestId,job);return options.reply?.(e,f,job)??{status:200,json:job};}
   if(f.jobs.has(e.url.split('/').at(-1)))return {status:200,json:f.jobs.get(e.url.split('/').at(-1))};
   return {status:404,json:{error:{code:'not-found',message:'Not found'}}};
  });
@@ -56,9 +56,9 @@ test('two CLI entries refuse before auth',async t=>{
  const h=await harness(t,{edit(s){s.entries.push({...s.entries[0],operation:'other'});s.conventions.push(...['input_schema','result_schema'].map(k=>({path:`/entries/1/${k}`,convention:'cli'})));}}),r=await h.invoke();assert.equal(r.code,2,r.err);assert.match(r.err,/one.*program|one.*command|multiple.*CLI/i);assert.equal(r.clock.gh.length,0);assert.equal(h.fake.posts.length,0);
 });
 test('CLI plus typed uses CLI default and explicit typed selector',async t=>{
- const h=await harness(t,{edit(s){s.entries.push({operation:'quote',input_schema:obj({item:string}),result_schema:obj({}),errors:[]});}});
+ const h=await harness(t,{outputs:{quote:{}},edit(s){s.entries.push({operation:'quote',input_schema:obj({item:string}),result_schema:obj({}),errors:[]});}});
  pass(await h.invoke(['list']));assert.deepEqual(h.fake.jsonPosts[0].json.input.argv,['list']);
- pass(await h.invoke(['quote','--item','tea']));assert.equal(h.fake.jsonPosts[1].json.operation,'quote');assert.deepEqual(h.fake.jsonPosts[1].json.input,{item:'tea'});
+ const typed=await h.invoke(['quote','--item','tea']);pass(typed);assert.equal(typed.out,'{}\n');assert.equal(h.fake.jsonPosts[1].json.operation,'quote');assert.deepEqual(h.fake.jsonPosts[1].json.input,{item:'tea'});
 });
 test('CLI combined with C HTTP selects serve and CLI name escapes clash',async t=>{
  let classified=0,launched=0;const h=await harness(t);const programApp={appKind(){classified++;return 'http';},runApp(){launched++;return 0;}};
@@ -207,15 +207,24 @@ for(const port of ['1','9000','65535'])test(`prefix port ${port} reaches C uncha
  const h=await harness(t,{cli:false});let called;
  const r=await h.invoke([],['--port',port],{programApp:{appKind(){return 'http';},runApp(input){called=input;return 0;}}});pass(r);assert.equal(String(called.flags.port),port);assert.equal(h.fake.posts.length,0);
 });
-for(const port of ['0','65536','-1','1.2','abc'])test(`invalid prefix port ${port} refuses locally`,async t=>{const h=await harness(t);const r=await h.invoke(['list'],['--port',port]);assert.equal(r.code,2,r.err);assert.equal(r.clock.gh.length,0);assert.equal(h.fake.posts.length,0);});
+for(const port of ['0','65536','-1','1.2','abc'])test(`invalid prefix port ${port} refuses locally`,async t=>{
+ const h=await harness(t);let launched=0;const programApp={appKind(){return 'http';},runApp(input){launched++;assert.equal(String(input.flags.port),'9000');return 0;}};
+ pass(await h.invoke(['serve'],['--port','9000'],{programApp}));assert.equal(launched,1);
+ const r=await h.invoke(['list'],['--port',port],{programApp});assert.equal(r.code,2,r.err);assert.equal(launched,1);assert.equal(r.clock.gh.length,0);assert.equal(h.fake.posts.length,0);
+});
 for(const kind of ['http','screen'])test(`${kind} rejects extra words without launching`,async t=>{
- const h=await harness(t,{cli:false});let launched=0;const r=await h.invoke(['foo','bar'],[],{programApp:{appKind(){return kind;},runApp(){launched++;return 0;}}});assert.equal(r.code,2,r.err);assert.equal(launched,0);assert.equal(r.clock.gh.length,0);assert.equal(h.fake.posts.length,0);if(kind==='http')assert.match(r.err,/HTTP programs take no ARGS\. Call the link\./);
+ const h=await harness(t,{cli:false});let launched=0;const programApp={appKind(){return kind;},runApp(){launched++;return 0;}};pass(await h.invoke([],[],{programApp}));assert.equal(launched,1);launched=0;const r=await h.invoke(['foo','bar'],[],{programApp});assert.equal(r.code,2,r.err);assert.equal(launched,0);assert.equal(r.clock.gh.length,0);assert.equal(h.fake.posts.length,0);if(kind==='http')assert.match(r.err,/HTTP programs take no ARGS\. Call the link\./);
 });
 for(const supplied of [false,true])test(`declared error uses only supplied fix=${supplied}`,async t=>{
  const h=await harness(t,{report:{verdict:'failed',error:{code:'declared',message:'Own reason',...(supplied?{fix:'Own repair'}:{})}}});const r=await h.invoke();assert.equal(r.code,1);assert.match(r.err,/pdd: declared: Own reason/);assert.doesNotMatch(r.err,/Error declared|Fix the reported/);if(supplied)assert.match(r.err,/Fix: Own repair/);else assert.doesNotMatch(r.err,/Fix:/);
 });
-test('cap refusal prints executable increased max-calls command',async t=>{const h=await harness(t,{report:{verdict:'refused',error:{code:'session-call-cap',message:'Graph requires 5'}}});const r=await h.invoke(['list'],['--max-calls','2']);assert.equal(r.code,125);assert.match(r.err,/Fix: pdd --max-calls (?:[5-9]|[1-9]\d+) .*place_order\.prompt\.md list/);});
-test('one call summary uses singular and rounded seconds',async t=>{const h=await harness(t,{report:{duration_seconds:10.4686}});const r=await h.invoke();pass(r);assert.match(r.err,/1 AI call · \d+ s/);assert.doesNotMatch(r.err,/1 AI calls|\d+\.\d+ s/);});
+test('cap refusal prints executable increased max-calls command',async t=>{
+ // Root W1 + two (leaf W1 + caller resume1) = five calls.
+ const h=await harness(t,{edit(s){s.calls=[{operation:'child',target:'prompts/child.prompt.md',target_operation:'main',max_calls:2}];},files(root){prompt(root,'prompts/child.prompt.md',iface(false));},reply:admission(5)});
+ const r=await h.invoke(['list'],['--max-calls','2']);assert.equal(r.code,125);assert.equal(h.fake.jsonPosts[0].json.max_calls,2);assert.match(r.err,/Graph requires 5/);assert.match(r.err,/Fix: pdd --max-calls 5 .*place_order\.prompt\.md list/);
+ pass(await h.invoke(['list'],['--max-calls','5']));assert.equal(h.fake.jsonPosts[1].json.max_calls,5);
+});
+test('one call summary uses singular and rounded seconds',async t=>{const h=await harness(t,{reply(e,f,job){job.usage.seconds=10.6;return {status:200,json:job};}});const r=await h.invoke();pass(r);assert.match(r.err,/1 AI call · 11 s/);assert.doesNotMatch(r.err,/1 AI calls|\d+\.\d+ s/);});
 test('fresh notice names actual backup path',async t=>{const h=await harness(t,{world:{old:true}});pass(await h.invoke());const r=await h.invoke(['again'],['--fresh']);pass(r);assert.ok(r.err.includes('Old data kept in '+join(h.repo,'.pdd/run/place_order/world.prev.json')),r.err);});
 test('quiet terminal shell runs and preserves shell result without informational lines',async t=>{
  const h=await harness(t);let opened=0;const stdin=Readable.from([]);stdin.isTTY=true;const r=await h.invoke([],['-q'],{stdin,shell(){opened++;return 23;}});assert.equal(r.code,23,r.err);assert.equal(opened,1);assert.equal(r.out,'');assert.equal(r.err,'');
@@ -226,10 +235,10 @@ test('adding basename collision retains recorded original world and isolates new
  const env={HOME:h.home,PDD_STATE_DIR:h.state,PDD_RUNTIME_URL:h.fake.origin};const io=portsFor(env,{stdin:Readable.from([])});const code=await runPdd([newcomer,'list'],{cwd:h.repo,env,stdout:io.ports.stdout,stderr:io.ports.stderr,stdin:io.ports.stdin,runtimePorts:io.ports});assert.equal(code,0,io.ports.stderr.text);assert.deepEqual(h.fake.posts.filter(p=>p.command==='try').at(-1).request.initial_world,{});assert.deepEqual(h.stored('world.json'),{saved:true});assert.equal(readdirSync(join(h.repo,'.pdd/run')).length,2);
 });
 for(const [words,expected] of [[['serve'],'http'],[['app'],'screen']])test(`complete C catalog routes ${words[0]} with explicit kind`,async t=>{
- const h=await harness(t,{edit(s){s.entries.push({operation:'route',input_schema:obj({}),result_schema:obj({}),errors:[]},{operation:'quote',input_schema:obj({item:string}),result_schema:obj({}),errors:[]});}});let request,classification;
+ const h=await harness(t,{outputs:{quote:{}},edit(s){s.entries.push({operation:'route',input_schema:obj({}),result_schema:obj({}),errors:[]},{operation:'quote',input_schema:obj({item:string}),result_schema:obj({}),errors:[]});}});let request,classification;
  const programApp={appKind(input){classification=input;return {kinds:['http','screen'],httpOperations:['route']};},runApp(input){request=input;return 0;}};
  pass(await h.invoke(words,[],{programApp}));assert.equal(classification.all,true);assert.equal(request.kind,expected);assert.equal(h.fake.posts.length,0);
- pass(await h.invoke(['quote','--item','tea'],[],{programApp}));assert.equal(h.fake.jsonPosts[0].json.operation,'quote');assert.deepEqual(h.fake.jsonPosts[0].json.input,{item:'tea'});
+ const typed=await h.invoke(['quote','--item','tea'],[],{programApp});pass(typed);assert.equal(typed.out,'{}\n');assert.equal(h.fake.jsonPosts[0].json.operation,'quote');assert.deepEqual(h.fake.jsonPosts[0].json.input,{item:'tea'});
 });
 test('without CLI mixed kinds print word table at zero calls',async t=>{
  const h=await harness(t,{cli:false,edit(s){s.entries[0].operation='quote';s.entries.push({...s.entries[0],operation:'route'});}});let launched=0;
