@@ -105,3 +105,20 @@ test('a live selected program owner still refuses a second owner and preserves i
   const next = acquireProgramLock(second.dir);
   next();
 });
+
+for(const newcomer of ['place_order','later/place_order'])test(`base folder owned by another program isolates ${newcomer}`,async t=>{
+ const {programData}=await helpers();const h=repository(t);
+ mkdirSync(join(h.repo,'prompts'),{recursive:true});
+ writeFileSync(join(h.repo,'prompts/place_order.prompt.md'),'# Existing owner\n');
+ const owner=selection(programData,h.repo,'prompts/place_order');
+ writeFileSync(join(owner.dir,'world.json'),'{"owner":"unchanged"}\n');
+ if(newcomer.includes('/'))mkdirSync(join(h.repo,'later'));
+ writeFileSync(join(h.repo,newcomer+'.prompt.md'),'# Newcomer\n');
+ const next=selection(programData,h.repo,newcomer);
+ assert.notEqual(next.dir,owner.dir);assert.deepEqual(next.startingData.initial_world,{});
+ writeFileSync(join(next.dir,'world.json'),' {"newcomer":true}');
+ const reused=selection(programData,h.repo,'prompts/place_order');
+ assert.equal(reused.dir,owner.dir);assert.deepEqual(reused.startingData.initial_world,{owner:'unchanged'});
+ const literal='%r__place_order';writeFileSync(join(h.repo,literal+'.prompt.md'),'# Literal escape marker\n');
+ const escaped=selection(programData,h.repo,literal);assert.notEqual(escaped.dir,next.dir);assert.notEqual(escaped.dir,owner.dir);
+});

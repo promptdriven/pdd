@@ -12,7 +12,10 @@ an existing session record's file/program path is accepted ownership evidence.
 A flattened mapping also remains stable if other duplicates are later removed.
 The newcomer uses its complete relative path flattened
 with `__` separators; when neither has a saved mapping, duplicate basenames use
-that flattened form. Never reuse another program's recorded directory.
+that flattened form. If a root-level newcomer's basename is already owned,
+its collision name is `%r__` followed by its escaped basename; this reserved
+root marker cannot alias nested paths or literal escape-marker names. Never
+move the existing owner or reuse another program's recorded directory.
 Preserve valid spaces, Unicode and punctuation. Escape delimiter occurrences,
 reserved names and literal escape markers injectively and stably, with no hash;
 only unrepresentable or reserved names need encoding. Reject absolute/traversal
@@ -40,8 +43,11 @@ input errors: exit2, a plain message naming the file and problem, no send.
 
 Before a fresh selection replaces saved world.json, atomically preserve it as
 world.prev.json. This happens once per invocation/shell selection, including
-fresh plus explicit data. When a backup exists, the fresh notice names its actual world.prev.json path:
-`pdd: fresh start. Old data kept in PATH/world.prev.json`. The notice follows quiet.
+fresh plus explicit data. Only when this invocation actually backs up world.json, the fresh notice names
+the repository-relative world.prev.json path (never an absolute path):
+`pdd: fresh start. Old data kept in PATH/world.prev.json`. A stale world.prev.json
+without a current world.json is not a backup this invocation and earns no claim
+that old data was kept. The notice follows quiet.
 Persist only confirmed world snapshots in dir/world.json. Never replace confirmed
 data with an invented world after refusal or unknown outcome. dir/last-run.json records
 confirmed input, output, data_before, data_after and ai_calls, plus session_id,

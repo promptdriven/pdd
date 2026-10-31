@@ -230,7 +230,7 @@ test('structured HTTP409 cap refusal preserves supplied fix and original selecto
  const r=await h.invoke(['final','list'],['--max-calls','2']);assert.equal(r.code,125,r.err);assert.equal(r.out,'');assert.equal(h.fake.jsonPosts.length,1);assert.equal(h.fake.jsonPosts[0].json.max_calls,2);assert.match(r.err,/session-call-cap/);assert.match(r.err,/Graph requires 5/);assert.match(r.err,/Fix: Increase cap/);assert.ok(r.err.includes(`Fix: pdd --max-calls 5 ${PLACE} final list`),r.err);
 });
 test('one call summary uses singular and rounded seconds',async t=>{const h=await harness(t,{reply(e,f,job){job.usage.seconds=10.6;return {status:200,json:job};}});const r=await h.invoke();pass(r);assert.match(r.err,/1 AI call · 11 s/);assert.doesNotMatch(r.err,/1 AI calls|\d+\.\d+ s/);});
-test('fresh notice names actual backup path',async t=>{const h=await harness(t,{world:{old:true}});pass(await h.invoke());const r=await h.invoke(['again'],['--fresh']);pass(r);assert.ok(r.err.includes('Old data kept in '+join(h.repo,'.pdd/run/place_order/world.prev.json')),r.err);});
+test('fresh notice names actual backup path',async t=>{const h=await harness(t,{world:{old:true}});pass(await h.invoke());const r=await h.invoke(['again'],['--fresh']);pass(r);assert.ok(r.err.includes('Old data kept in .pdd/run/place_order/world.prev.json'),r.err);});
 test('quiet terminal shell runs and preserves shell result without informational lines',async t=>{
  const h=await harness(t);let opened=0;const stdin=Readable.from([]);stdin.isTTY=true;const r=await h.invoke([],['-q'],{stdin,shell(){opened++;return 23;}});assert.equal(r.code,23,r.err);assert.equal(opened,1);assert.equal(r.out,'');assert.equal(r.err,'');
 });
@@ -276,7 +276,7 @@ for(const mixed of [false,true])test(`same-ID read restores pending typed select
  // The interpreter now has a canonical confirmed receipt for the same accepted call.
  const job=h.fake.jobs.get(accepted);job.result.report.verdict='passed';job.result.output={};
  const posts=h.fake.posts.length,gets=h.fake.gets.length;
- const read=await h.invoke([],['--read',accepted]);
+ const read=await h.invoke([mixed?'final':'inspect'],['--read',accepted]);
  pass(read);assert.equal(read.out,'{}\n');
  assert.deepEqual(h.stored('world.json'),{confirmed:'typed recovery'});
  assert.equal(h.stored('session.json').pending,undefined);
@@ -301,4 +301,33 @@ test('same-ID read acknowledges pending setup without operation in a typed word 
  assert.deepEqual(h.stored('world.json'),{});
  assert.equal(h.fake.posts.length,posts);assert.equal(h.fake.jsonPosts.length,1);
  assert.ok(h.fake.gets.slice(gets).some(e=>e.url.endsWith(accepted)));
+});
+
+// Re-review 3: exact semantic codes, absent reports and backup provenance.
+for(const code of ['capture-denied','capacity','session-call-cap'])test(`semantic refusal advice matches exact code ${code}`,async t=>{
+ const h=await harness(t,{report:{verdict:'refused',error:{code,message:'capture capacity exhausted'}}});
+ const r=await h.invoke();assert.equal(r.code,125,r.err);
+ if(code==='session-call-cap')assert.match(r.err,/Fix: pdd --max-calls/);
+ else assert.doesNotMatch(r.err,/Fix: pdd --max-calls/);
+});
+test('semantic refusal without report link omits details',async t=>{
+ const h=await harness(t,{report:{verdict:'refused',error:{code:'refused',message:'No report'}},reply(e,f,job){delete job.reportUrl;delete job.report_url;delete job.result.report_url;delete job.result.report.report_url;return {status:200,json:job};}});
+ const r=await h.invoke();assert.equal(r.code,125,r.err);assert.doesNotMatch(r.err,/details: undefined/);
+});
+test('fresh with stale backup and absent world claims no new backup',async t=>{
+ const h=await harness(t);pass(await h.invoke());
+ const dir=join(h.repo,'.pdd/run/place_order');rmSync(join(dir,'world.json'));
+ writeFileSync(join(dir,'world.prev.json'),'{"stale":true}');
+ const r=await h.invoke(['next'],['--fresh']);pass(r);assert.doesNotMatch(r.err,/Old data kept/);
+ assert.deepEqual(h.stored('world.prev.json'),{stale:true});
+});
+test('prefix -q delegates canonical quiet flag to C',async t=>{
+ const h=await harness(t,{cli:false});let flags;
+ pass(await h.invoke([],['-q'],{programApp:{appKind(){return 'screen';},runApp(input){flags=input.flags;return 0;}}}));
+ assert.equal(flags.quiet,true);assert.equal(Object.hasOwn(flags,'q'),false);assert.equal(h.fake.posts.length,0);
+});
+
+test('semantic refusal uses singular one AI call',async t=>{
+ const h=await harness(t,{report:{verdict:'refused',error:{code:'declined',message:'Declined'}}});
+ const r=await h.invoke();assert.equal(r.code,125,r.err);assert.match(r.err,/refused, 1 AI call[.]/);assert.doesNotMatch(r.err,/1 AI calls/);
 });

@@ -37,7 +37,9 @@ selects all HTTP routes, `app` selects screen, and each typed operation has its
 operation name. C alone supplies HTTP/screen facts and HTTP/screen entry identities; never infer them
 from titles. Pass the selected `http` or `screen` as runApp kind.
 For prefix `--read ID FILE`, recover the matching locally saved pending operation
-and its CLI/typed kind before applying the word-table fallback. No suffix selector
+and its CLI/typed kind before applying the word-table fallback. The saved
+operation wins even if a different operation word follows FILE; recovery never
+selects that suffix operation or resends input. No suffix selector
 or input is required. A pending setup/stop request (lint, try or stop) has no
 operation: acknowledge it by GET without table selection or app launch; only a
 pending call requires restoring an operation for result validation. A pending
@@ -182,14 +184,18 @@ Preserve result.refusals and report.error code/message, fix/hint/field and graph
 cap evidence. Render `pdd: refused, N AI calls.` with supplied evidence and Fix
 advice. A declared failure prints only its supplied fix/hint, never a generic
 Fix line. Both a semantic refused receipt and a structured HTTP admission refusal
-with code session-call-cap supply a concrete `pdd --max-calls N FILE ARGS`
+with report.error.code exactly `session-call-cap` (or structured HTTP
+error.code exactly `session-call-cap`) supply a concrete `pdd --max-calls N FILE ARGS`
 command with an increased suitable cap supported by the graph or supplied refusal
 evidence. Preserve the original FILE and all original selector/program words in
-ARGS, and preserve any supplied fix too. Never automatically retry a call-cap
+ARGS, and preserve any supplied fix too. Other refusal codes/messages, including capture and capacity, never earn this
+max-calls advice merely by containing "cap". Never automatically retry a call-cap
 refusal with another POST or a raised cap. A session
 remaining-allowance hint must preserve the current world, never recommend fresh
 (which empties it). report.replayed:true displays cached and0 AI calls. Report accounting uses
-confirmed calls/seconds and includes report_url as details. Preserve call_chain
+confirmed calls/seconds and includes report_url as details only when a report
+link exists; never print `details: undefined`. Semantic refused accounting also
+uses `1 AI call` for one call. Preserve call_chain
 frames in order and disclose omitted frames using call_chain_total; never fabricate
 frames or lose the report link. Declared errors exit1. Interpreter refusals, exhausted calls, ten-minute limits,
 invalid results, transport failures and unknown outcomes exit125 with plain reason
