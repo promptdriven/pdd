@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: e9ee0f74d997a3edcec09514c57767cf7fa551dea5919fa0cf212350f47050f3).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 716b115196102cf0bb15c7cd20d2b6d2bfb53e87040fc68fcdda544435af366e).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -2127,7 +2127,10 @@ async function runBatch(context, cwd, words, options, setRelease) {
     const failures = selected.filter(test => cache.failed[test.storyPath] === true);
     if (failures.length) selected = failures;
   }
-  if (options['--cache-clear']) line(ports.stderr, `pdd: test cache ${cache && !cache.disabled ? 'cleared' : 'unavailable'}. Running ${new Set(selected.map(test => test.storyPath ?? test.path)).size} selected Stories; the interpreter may reuse saved answers.`);
+  if (options['--cache-clear']) {
+    const count = new Set(selected.map(test => test.storyPath ?? test.path)).size;
+    line(ports.stderr, `pdd: test cache ${cache && !cache.disabled ? 'cleared' : 'unavailable'}. Running ${count} selected ${count === 1 ? 'Story' : 'Stories'}; the interpreter may reuse saved answers.`);
+  }
   context.coverage = bindingCoverage({ root, found, selected });
   const checked = preflight({ root, found, selected });
   const rows = localRows(checked.rows);

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: 956b10dd2f363af4cf206d45a0eb59afab5e7fecd118855895e4b806a77aa7d0).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: ce031eda37512d4f19fc492d2bdbdf8651e6ce2299efb0a2521e4536300b9e7e).
 export const OPEN_STATES = new Set(['queued', 'running']);
 const RESULT_WORDS = { not_run: 'not run' };
 
@@ -199,10 +199,13 @@ export function summaryLine(rows, story = null) {
     `${checks.passed}/${checks.total} checks`, ...others, ...(rows.some(row => row.cached) ? [count(new Set(rows.filter(row => row.cached).map(row => row.story_path ?? row.story)).size, 'Story').replace('Storys', 'Stories') + ' skipped'] : []), `${usage}${unknownCalls ? ` + ${unknownCalls} unknown` : ''}`].join(' · ');
 }
 
+const shellWord = word => /^[A-Za-z0-9_./:@%+=,-]+$/.test(word) ? word : `'${word.replaceAll("'", "'\\''")}'`;
+
 function table(rows, now) {
   const previousPass = row => {
     const date = new Date(row.passed_at), today = new Date(now), two = number => String(number).padStart(2, '0');
-    return 'unchanged, passed ' + (date.toDateString() === today.toDateString() ? `${two(date.getHours())}:${two(date.getMinutes())}` : `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())}`);
+    return 'unchanged, passed ' + (date.toDateString() === today.toDateString() ? `${two(date.getHours())}:${two(date.getMinutes())}` : `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())}`)
+      + `; force with pdd test --cache-clear ${shellWord(row.story)}`;
   };
   const lines = [['Story', 'Test', 'Result', 'Checks', 'Time'], ...rows.map(row => [row.title ?? row.story, row.test,
     `${row.cached ? previousPass(row) : row.busy ? 'busy (not run)' : RESULT_WORDS[row.state] ?? row.state}${row.draft ? ' (DRAFT)' : ''}`, row.checks ? `${row.checks.passed}/${row.checks.total}` : '-',
