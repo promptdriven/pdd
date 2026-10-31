@@ -114,7 +114,7 @@ function saveChat(run,p,chat,{failure=null,abandon=false,observedChat=null}={}) 
       }
       else latest.chats.push(chat);
     }
-    if (failure) { latest.chatFailure=failure; if(!ended(latest))latest.state='waiting'; }
+    if (failure) { latest.chatFailure=failure; if(!ended(latest) && latest.areas[latest.area]?.name===failure.area)latest.state='waiting'; }
     else if(equalFact(latest.chatFailure,observedFailure))clearChatFailure(latest);
   });
 }
@@ -295,15 +295,16 @@ const chatFailureWords = run => {
 const chatStatusWords = (run, chat) => activeChatFailure(run) ? chatFailureWords(run)
   : chat === 'unavailable' ? `Herdr status unavailable (server_unavailable); chat activity is unknown. Run pdd workflow open ${run.number} after Herdr is available.`
   : `chat startup is not confirmed. Run pdd workflow open ${run.number} after Herdr is available.`;
-function recordChatFailure(run, error, phase, p) {
+function recordChatFailure(run, error, phase, p, area = run.areas[run.area].name) {
   if(error?.code==='workflow_run_save_failed')throw error;
-  const failure = { area: run.areas[run.area].name, phase, code: oneLine(error.code ?? 'error').slice(0, 100), message: oneLine(error.message ?? 'Herdr request failed').slice(0, 500), at: p.now() };
+  const failure = { area, phase, code: oneLine(error.code ?? 'error').slice(0, 100), message: oneLine(error.message ?? 'Herdr request failed').slice(0, 500), at: p.now() };
   saveChat(run,p,null,{failure});
 }
 function clearChatFailure(run) {
   if (!run.chatFailure) return;
+  const selected = run.chatFailure.area === run.areas[run.area]?.name;
   delete run.chatFailure;
-  if (!ended(run) && !run.gate && !openQuestion(run)) run.state = 'running';
+  if (selected && !ended(run) && !run.gate && !openQuestion(run)) run.state = 'running';
 }
 
 // A gate whose chat still works: after a change request it revises, else it writes the gate message (0.1.6 tester: status
@@ -668,7 +669,7 @@ function evidenceFit(lines, room, env) {
   return kept;
 }
 function prBody(run, area, env, drafts = [], tests = true, evidence) {
-  const index = run.areas.indexOf(area), from = run.areas.slice(0, index).map((item, at) => item.gate === 'pr' ? at + 1 : 0).reduce((a, b) => Math.max(a, b), 0);
+  const index = run.areas.findIndex(item => item.name === area.name), from = run.areas.slice(0, index).map((item, at) => item.gate === 'pr' ? at + 1 : 0).reduce((a, b) => Math.max(a, b), 0);
   const steps = run.areas.slice(from, index + 1).flatMap(item => item.steps).filter(step => run.done[step]);
   const raw = Object.fromEntries(steps.map(step => [step, hideLocalPaths(redactTry(withoutForgedMachineLines(run.done[step].summary)), run)]));
   const summaries = Object.fromEntries(steps.map(step => [step, oneLine(raw[step])]));
@@ -1101,7 +1102,7 @@ async function startNextChat(run, p, packageRoot) {
   } catch (error) {
     if(error?.code==='workflow_run_save_failed')throw error;
     if (error.chat?.area === area.name) saveChat(run,p,error.chat);
-    recordChatFailure(run, error, 'start', p);
+    recordChatFailure(run, error, 'start', p, area.name);
     throw error;
   }
 }
@@ -1625,16 +1626,17 @@ async function openRunCommand({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports) {
   if (ended(run)) return fail(`The run for ${run.repo}#${run.number} is ${run.state}. Its worktree is ${run.root}.`);
   const missing = missingHome(run, p.env);
   if (missing) return fail(missing);
-  let chat = currentChat(run), started = false;
+  const selectedArea = run.areas[run.area].name;
+  let chat = currentChat(run), started = false, observedChat;
   try {
     if (!chat) { chat = await startNextChat(run, p, packageRoot); started = true; }
     p.say(`Opening the ${chat.area} chat in Herdr…`);
-    const observedChat=structuredClone(chat);
+    observedChat=structuredClone(chat);
     const opened = await openChat({ run, chat }, p);
     if (opened.restartAvailable) {
       saveChat(run,p,{...chat,abandonedAt:p.now(),reason:'tab-and-agent-missing'},{abandon:true});
       const message = `The saved tab and agent are gone. The stale start was cleared; the run and worktree are kept. Run pdd workflow open ${run.number} to start the ${chat.area} chat again.`;
-      recordChatFailure(run, { code: 'chat_start_reset', message }, 'open', p);
+      recordChatFailure(run, { code: 'chat_start_reset', message }, 'open', p, selectedArea);
       return fail(message);
     }
     saveChat(run,p,chat,{observedChat});
@@ -1642,7 +1644,8 @@ async function openRunCommand({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports) {
     return done([started ? `Started the ${chat.area} chat in ${where}.` : opened.resumed ? `Resumed the ${chat.area} chat in ${where}.` : `The ${chat.area} chat is in ${where}.`,
       ...(opened.attached ? [] : [p.env.HERDR_ENV === '1' ? 'pdd focused that tab. If you are in another Herdr session, run: herdr session attach pdd' : 'See it with: herdr session attach pdd'])].join('\n'));
   } catch (error) {
-    recordChatFailure(run, error, chat ? 'open' : 'start', p);
+    if(error?.code!=='workflow_run_save_failed' && chat && observedChat)saveChat(run,p,chat,{observedChat});
+    recordChatFailure(run, error, chat ? 'open' : 'start', p, selectedArea);
     return fail(`pdd could not open the ${run.areas[run.area].name} chat (${error.code ?? 'error'}: ${oneLine(error.message)}).`);
   }
 }

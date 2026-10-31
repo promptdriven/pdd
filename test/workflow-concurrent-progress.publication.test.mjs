@@ -11,11 +11,12 @@ for(const action of ['done-pr','done-ask-code','approve-pr'])test(`2753 ${action
  const results={};
  for(const concurrent of [true,false]){
   const f=await fixture(t,{agent:'codex',name:'bug'});assert.equal((await f.run()).exitCode,0);
-  const run=f.record();run.areas[0].steps=['finish'];run.areas[0].optional=[];run.areas[0].gate='pr';
+  const run=f.record();run.areas[0].steps=['verify','finish'];run.done.verify={at:1,summary:'Prior verification',area:run.areas[0].name};
+  writeFileSync(join(run.runDir,'verify.md'),'✗ 1 vectors fail\n\nPreserved verification detail.\n');run.areas[0].optional=[];run.areas[0].gate='pr';
   delete run.areas[0].before;delete run.areas[0].then;
-  if(action==='done-ask-code')run.areas[0].then='ask-code';
+  if(action==='done-ask-code'){run.areas[0].then='ask-code';run.areas[0].steps=['finish'];delete run.done.verify;}
   if(action==='approve-pr'){
-   run.areas[0].before='approve';run.done.finish={at:1,summary:'Own completed work',area:run.areas[0].name};
+   run.areas[0].before='approve';run.done.finish={at:1,summary:'Own completed work\nRuntime check: ✓ 1/1 criteria',area:run.areas[0].name};
    run.gate={kind:'approve-pr',area:run.areas[0].name,at:1};run.state='waiting';
   }
   writeRun(run,f.ports);writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
@@ -29,11 +30,15 @@ for(const action of ['done-pr','done-ask-code','approve-pr'])test(`2753 ${action
    }
    return original(file,args,opts);
   }};
-  const out=action==='approve-pr'?await approveRun({ref:'17',cwd:f.source},ports):await stepDone({step:'finish',summary:'Own publication',cwd:run.root},ports);
+  const out=action==='approve-pr'?await approveRun({ref:'17',cwd:f.source},ports):await stepDone({step:'finish',summary:'Own publication\nRuntime check: ✓ 1/1 criteria',cwd:run.root},ports);
   const saved=f.record(),checks={
    outcome:()=>assert.equal(out.exitCode,0,out.message),boundary:()=>assert.equal(injected,concurrent),
    publication:()=>{assert.equal(saved.pr.length,1);assert.equal(saved.pr[0].stage,run.areas[0].name);assert.equal(f.prs.length,1);},
    ownWork:()=>assert.ok(saved.done.finish),
+   bodySteps:()=>{assert.match(f.prs[0].body,/\*\*finish\*\*/);if(action!=='done-ask-code')assert.match(f.prs[0].body,/\*\*verify\*\*/);},
+   bodyRuntime:()=>assert.match(f.prs[0].body,/Runtime check: ✓ 1\/1 criteria/),
+   bodyVerify:()=>{if(action==='done-ask-code'){assert.doesNotMatch(f.prs[0].body,/## Verify/);return;}assert.match(f.prs[0].body,/## Verify/);assert.match(f.prs[0].body,/Preserved verification detail/);},
+   bodyFailure:()=>{if(action!=='done-ask-code')assert.match(f.prs[0].body,/^✗ 1 vectors fail$/m);},
    gate:()=>assert.deepEqual(saved.gate,concurrent?newer.gate:action==='done-ask-code'?{area:run.areas[0].name,at:f.clock,kind:'ask-code'}:null),
    area:()=>assert.equal(saved.area,concurrent?1:0),state:()=>assert.equal(saved.state,concurrent?newer.state:'waiting'),
    question:()=>assert.deepEqual(saved.question??null,concurrent?newer.question:null),

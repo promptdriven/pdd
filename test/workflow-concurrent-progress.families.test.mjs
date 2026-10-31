@@ -14,13 +14,14 @@ const packageRoot=resolve(import.meta.dirname,'..');
 test('2753 every ordinary writer family retains unrelated progress and its own effects',async t=>{
  const row=nativeCase('all-ordinary-writer-families-preserve-unrelated-progress');
  const results={};
- const variants=['start-success','start-failure','open-success','open-failure','open-recovery','open-reset','open-newchat','evidence','done-next','done-gate','done-pr-gate','done-publication','approve-transition','approve-publication','cancel','status-detail','status-list','status-all','status-recovery','change'];
+ const variants=['start-success','start-failure','open-success','open-failure','open-lost-resume','open-lost-resume-advanced','open-recovery','open-reset','open-newchat','evidence','done-next','done-gate','done-pr-gate','done-publication','approve-transition','approve-publication','cancel','status-detail','status-list','status-all','status-recovery','change'];
  for(const variant of variants){
   const f=await fixture(t,{agent:'codex',name:'bug'});let injected=false,retained,initial;
   const inject=()=>{
    if(injected)return;injected=true;
    const latest=f.record();latest.done.independent={at:2000,summary:'Other writer finished',area:'another'};
    latest.decisions.push({stage:'another',decision:'changes',at:2000});(latest.evidence??=[]).push({at:2000,summary:'Other evidence'});
+   if(variant==='open-lost-resume-advanced'){latest.area=1;latest.gate={area:latest.areas[1].name,kind:'approve',at:2000};latest.state='running';latest.question={area:latest.areas[1].name,text:'New area question',at:2000};}
    writeRun(latest,f.ports);retained=structuredClone(latest);
   };
   const originalHerdr=f.ports.herdr;
@@ -45,9 +46,10 @@ test('2753 every ordinary writer family retains unrelated progress and its own e
    if(variant==='open-recovery'||variant==='status-recovery'){run.chatFailure={area:'story',phase:'start',code:'unconfirmed',message:'Previous failure',at:1};run.chats[0].startUnconfirmed=true;run.state='waiting';}
    if(variant==='open-reset'){f.herdr.tabs=[];for(const pane of f.herdr.panes)pane.agent=null;}
    if(variant==='open-newchat')run.chats=[];
+   if(variant.startsWith('open-lost-resume')){run.chats[0].session={agent:'codex',id:'00000000-0000-4000-8000-000000000017'};f.herdr.paneOf(run.chats[0]).agent=null;}
    writeRun(run,f.ports);
    const ports={...f.ports};
-   if(variant.startsWith('open-')||variant==='status-recovery')ports.herdr=async args=>{inject();if(variant==='open-failure')throw Object.assign(Error('Unavailable'),{code:'server_unavailable'});return originalHerdr(args);};
+   if(variant.startsWith('open-')||variant==='status-recovery')ports.herdr=async args=>{inject();if(variant==='open-failure')throw Object.assign(Error('Unavailable'),{code:'server_unavailable'});const reply=await originalHerdr(args);if(variant.startsWith('open-lost-resume')&&args[0]==='pane'&&args[1]==='run')throw Object.assign(Error('Lost resume reply'),{code:'channel_closed'});return reply;};
    else ports.now=()=>{inject();return 3000;};
    if(variant.startsWith('status-'))ports.readPrStatus=async()=>{inject();return {state:'open',ci:'success'};};
    if(variant==='evidence'){
@@ -63,8 +65,8 @@ test('2753 every ordinary writer family retains unrelated progress and its own e
    else if(variant==='change')out=await runner.changeRun({ref:'17',text:'Own requested change',cwd:f.source},ports);
    else out=await runner.runStatus({ref:variant==='status-detail'||variant==='status-recovery'?'17':undefined,cwd:variant==='status-list'?f.source:run.root,all:variant==='status-all'},ports);
   }
-  const saved=f.record(),expectedFailure=['start-failure','open-failure','open-reset'].includes(variant);
-  const checks={injected:()=>assert.equal(injected,true),outcome:()=>assert.equal(out.exitCode,expectedFailure?1:0,out.message),done:()=>assert.deepEqual(saved.done.independent,retained?.done.independent),decisions:()=>assert.ok(saved.decisions.some(d=>d.at===2000)),evidence:()=>assert.ok(saved.evidence?.some(e=>e.summary==='Other evidence')),own:()=>{
+  const saved=f.record(),expectedFailure=['start-failure','open-failure','open-lost-resume','open-lost-resume-advanced','open-reset'].includes(variant);
+  const checks={injected:()=>assert.equal(injected,true),outcome:()=>assert.equal(out.exitCode,expectedFailure?1:0,out.message),done:()=>assert.deepEqual(saved.done.independent,retained?.done.independent),decisions:()=>assert.ok(saved.decisions.some(d=>d.at===2000)),evidence:()=>assert.ok(saved.evidence?.some(e=>e.summary==='Other evidence')),resumeBoundary:()=>{if(variant.startsWith('open-lost-resume'))assert.equal(f.herdr.paneOf(saved.chats[0]).commands.length,2);},chatResume:()=>{if(variant.startsWith('open-lost-resume'))assert.equal(saved.chats[0].startUnconfirmed,true);},failureArea:()=>{if(variant.startsWith('open-lost-resume'))assert.equal(saved.chatFailure.area,'story');},newArea:()=>{if(variant==='open-lost-resume-advanced')assert.equal(saved.area,retained.area);},newGate:()=>{if(variant==='open-lost-resume-advanced')assert.deepEqual(saved.gate,retained.gate);},newState:()=>{if(variant==='open-lost-resume-advanced')assert.equal(saved.state,retained.state);},newQuestion:()=>{if(variant==='open-lost-resume-advanced')assert.deepEqual(saved.question,retained.question);},own:()=>{
    if(variant.startsWith('done-'))assert.equal(saved.done.finish.summary,'Own step finished');
    if(variant==='cancel')assert.equal(saved.state,'cancelled');
    if(variant==='evidence')assert.equal(saved.evidence.at(-1).receipt.rows.length,2);
