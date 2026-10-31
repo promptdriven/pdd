@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 36f27f248516daae389f4535c1e358f894d33e7ba76c22e4f2449a6b5b78c995).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: d5ff24fffbfb1d07b8af69040a3558746a5222799f76162703bb20a800f73899).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of four commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', start: 'run' });
@@ -29,7 +29,7 @@ const routes = [
     forms: [form('pdd workflow ask QUESTION', 'For the agent in a run worktree: show the person that the chat waits for their answer.')] },
   { id: 'workflow.approve', prefix: ['workflow', 'approve'], local: 'workflow-approve',
     operands: [{name:'issue',type:'issue',optional:true}], options: [{name:'--said',kind:'text'}],
-    forms: [form('pdd workflow approve [ISSUE] [--said WORDS]', 'Approve the gate and all its draft prompts with the person’s chat words through --said; no-said keeps terminal/native-chat approval. Root pdd.json strict_approvals true requires terminal y/N.')] },
+    forms: [form('pdd workflow approve [ISSUE] [--said WORDS]', 'Approve the gate and all its draft prompts with nonblank words from the person after the gate prompt in any chat through --said, without grading. An agent, non-TTY caller or caller in the current area pane without --said must ask the person then relay their words with --said; native chat alone never approves. Person terminal y/N remains available. Root pdd.json strict_approvals true permits only person terminal y/N.')] },
   { id: 'workflow.changes', prefix: ['workflow', 'changes'], local: 'workflow-changes',
     operands: [{name:'issue',type:'issue'},{name:'request',type:'text',repeat:true}], options: [],
     forms: [form('pdd workflow changes ISSUE TEXT', 'Send a change request to the same area chat; the gate stays open.')] },
