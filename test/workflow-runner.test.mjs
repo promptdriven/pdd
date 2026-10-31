@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFile as callbackExec, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
+import { proseSha256 } from '../src/runtime-preflight.mjs';
 import { startRun, stepDone, approveRun, changeRun, cancelRun, runStatus, openRun, askPerson } from '../src/workflow-runner.mjs';
 
 const exec = promisify(callbackExec);
@@ -20,6 +21,16 @@ async function lastSteps(f, run, out) {
 
 import { fakeHerdr } from './helpers/workflow-delivery-fixture.mjs';
 
+
+function assertSafeApprovalAdvice(text) {
+  assert.match(text,/show the gate.*ask the person/i);
+  const command=text.split('\n').find(line=>line.endsWith(" workflow approve 17 --said - <<'PDD_SAID'"));
+  assert.ok(command,'show the actual quoted-heredoc stdin command');
+  assert.match(command,/^(?:'[^']+'|\/\S+)\s+(?:'[^']*pdd\.mjs'|\/\S*pdd\.mjs)\s+workflow approve 17/, 'use absolute package Node and bin paths');
+  assert.match(text,/\nPDD_SAID(?:\n|$)/);
+  assert.match(text,/delimiter.*absent/i);
+  assert.match(text,/terminal y\/N/);
+}
 
 async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-runner-')));
@@ -118,7 +129,7 @@ test('small-change: run exits at once, done reaches the gate, changes go to the 
   const f = await fixture(t);
   const started = await f.run();
   assert.equal(started.exitCode, 0, started.message);
-  assert.match(started.message, /pdd workflow open 17/); assert.match(started.message, /pdd workflow approve 17/);
+  assert.match(started.message, /pdd workflow open 17/); assertSafeApprovalAdvice(started.message);
   let run = f.record();
   assert.equal(run.v, 1); assert.equal(run.state, 'running'); assert.equal(run.area, 0); assert.equal(run.chats.length, 1);
   assert.equal(run.workflow, 'small-change'); assert.equal(run.issue.number, 17); assert.equal(f.fetches, 1);
@@ -432,9 +443,9 @@ test('feature: story, approve, PR 1 with prompt work only, then the person asks 
   assert.equal(record.state, 'waiting'); assert.equal(record.gate.kind, 'ask-code'); assert.equal(record.waitingFor.what, 'Make the code PR now, or stop here and merge PR 1');
   f.herdr.idle();
   const shown = await runStatus({ ref: '17', cwd: f.source }, f.ports);
-  assert.match(shown.message, /PR 1 open/); assert.match(shown.message, /To make the code PR later, show the gate and ask the person\. Relay their words with `pdd workflow approve 17 --said -` using the quoted-heredoc template, or answer terminal y\/N\./);
+  assert.match(shown.message, /PR 1 open/); assertSafeApprovalAdvice(shown.message);
   // The chat gets the exact sentence to say when the person stops (testers saw it dropped when it was a hint).
-  assert.match(pr1.message, /If they stop, tell them exactly: "PR 1 is open: https:\/\/github\.com\/example\/project\/pull\/23\. To make the code PR later, show the gate and ask the person\. Relay their words with `pdd workflow approve 17 --said -` using the quoted-heredoc template, or answer terminal y\/N\."/);
+  assert.match(pr1.message, /If they stop, tell them exactly: "PR 1 is open: https:\/\/github\.com\/example\/project\/pull\/23\./); assertSafeApprovalAdvice(pr1.message);
 
   f.tick();
   const code = await approveRun({ ref: '17', cwd: f.source }, f.ports);
@@ -479,8 +490,11 @@ test('feature: when PR 1 merges while the run waits, the run is done at PR 1, an
   assert.equal(f.prs[1].baseRefName, 'main'); assert.doesNotMatch(f.prs[1].body, /stacked/);
 });
 
-const runtimePrompt = status => ['# Value', '', 'Return two.', '', '<details><summary>Runtime interface</summary>', '', '```json',
-  JSON.stringify({ status, prose_sha256: '', entries: [] }), '```', '</details>', ''].join('\n');
+const runtimePrompt = status => {
+  const text=['# Value', '', 'Return two.', '', '<details><summary>Runtime interface</summary>', '', '```json',
+    JSON.stringify({ status, prose_sha256: '', entries: [], limits: { max_steps: 1, max_model_calls: 1 } }), '```', '</details>', ''].join('\n');
+  return status==='approved' ? text.replace('\"prose_sha256\":\"\"',JSON.stringify('prose_sha256')+':'+JSON.stringify(proseSha256(text))) : text;
+};
 
 test('draft prompts in PR 1 are shown and a terminal answer approves the drafts and code gate together', async t => {
   const { f, run } = await featureToPr1(t, runtimePrompt('draft'));
@@ -583,7 +597,7 @@ for (const state of ['unknown', 'closed']) test(`R7: when PR 1 is ${state}, appr
   const before = f.record();
   f.tick();
   const refused = await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, readPrStatus: async () => ({ state, ci: 'unknown' }) });
-  assert.equal(refused.exitCode, 1); assert.match(refused.message, new RegExp(`PR 1 is ${state}`)); assert.match(refused.message, /pdd workflow approve 17/);
+  assert.equal(refused.exitCode, 1); assert.match(refused.message, new RegExp(`PR 1 is ${state}`)); assertSafeApprovalAdvice(refused.message);
   const after = f.record();
   assert.deepEqual([after.area, after.branch, after.gate, after.chats.length, after.decisions.length], [before.area, before.branch, before.gate, before.chats.length, before.decisions.length]);
   assert.equal(f.git(run.root, 'branch', '--list', `${run.branch}-code`), ''); assert.equal(f.git(run.root, 'branch', '--show-current'), run.branch);
@@ -731,7 +745,7 @@ test('#13: after check and try the chat asks the person to try and approve; PR 1
   const opened = await approveRun({ ref: '17', cwd: run.root, said: 'Tried it, it splits right.' }, f.agentPorts({ readApprovalEvidence: async () => ({ ok: true, decision: 'approve', agent: 'codex', sessionId: '11111111-1111-4111-8111-111111111111', userMessage: 'Tried it, it splits right.', userMessageAt: f.clock - 1 }) }));
   assert.equal(opened.exitCode, 0, opened.message);
   assert.equal(f.prs.length, 1); assert.match(opened.message, /PR 1: https:\/\/github\.com\/example\/project\/pull\/23/);
-  assert.match(opened.message, /Stopped at PR 1/); assert.match(opened.message, /pdd workflow approve 17/);
+  assert.match(opened.message, /Stopped at PR 1/); assertSafeApprovalAdvice(opened.message);
   record = f.record();
   assert.equal(record.gate.kind, 'ask-code'); assert.equal(record.areas[record.area].name, 'prompt-pr'); assert.equal(record.chats.length, 2);
   assert.equal(record.decisions.at(-1).stage, 'prompt-pr');
@@ -748,11 +762,11 @@ test('#13: from the terminal, approve opens PR 1 and asks about the code PR; no 
   f.tick();
   const stopped = await approveRun({ ref: '17', cwd: f.source }, f.ports);
   assert.equal(stopped.exitCode, 0, stopped.message);
-  assert.match(f.prompts.at(-2), /Approve the prompt-pr area and open PR 1 for example\/project#17/); assert.match(f.prompts.at(-1), /Make the code PR now/);
+  assert.match(f.prompts.at(-2), /Approve the prompt-pr area and all selected draft prompts and open PR 1 for example\/project#17/); assert.match(f.prompts.at(-1), /Make the code PR now/);
   assert.equal(f.prs.length, 1); assert.match(stopped.message, /PR 1: https:\/\/github\.com\/example\/project\/pull\/23/);
-  assert.match(stopped.message, /To make the code PR later, show the gate and ask the person\. Relay their words with `pdd workflow approve 17 --said -` using the quoted-heredoc template, or answer terminal y\/N\./);
+  assertSafeApprovalAdvice(stopped.message);
   assert.match(pane.agent.prompts.at(-1), /pdd opened PR 1: https:\/\/github\.com\/example\/project\/pull\/23/);
-  assert.match(pane.agent.prompts.at(-1), /To make the code PR later, show the gate and ask the person\. Relay their words with `pdd workflow approve 17 --said -` using the quoted-heredoc template, or answer terminal y\/N\./);
+  assertSafeApprovalAdvice(pane.agent.prompts.at(-1));
   assert.equal(f.record().gate.kind, 'ask-code'); assert.equal(f.record().chats.length, 2);
   f.ports.confirm = async question => { f.prompts.push(question); return true; };
   f.tick();
@@ -1050,7 +1064,7 @@ test('0.1.7 #3: changes at a gate refuses a plain approval and says how to appro
     f.tick();
     const out = await changeRun({ ref: '17', text, cwd: f.source }, f.ports);
     assert.equal(out.exitCode, 2, text);
-    assert.equal(out.message, 'This looks like an approval. To approve, run: pdd workflow approve 17\nNothing was sent to the chat.');
+    assert.match(out.message,/^This looks like an approval\./); assertSafeApprovalAdvice(out.message); assert.match(out.message,/\nNothing was sent to the chat\.$/);
   }
   assert.equal(pane.agent.prompts.length, 0); assert.deepEqual(f.record().changes, []); assert.equal(f.record().gate.at, gateAt);
   for (const text of ['approve it but rename X to Y', 'I approve, but please use the exact text', 'Please use the exact text from the issue', 'looks good', "I don't approve", 'Approve after you add a test']) {
@@ -1199,7 +1213,8 @@ test('0.1.7 #9: when pdd cannot push the approval to PR 1, it changes nothing el
   f.tick();
   const refused = await approveRun({ ref: '17', cwd: f.source }, f.ports);
   assert.equal(refused.exitCode, 1);
-  assert.equal(refused.message, `pdd could not push your approval of feature.prompt.md to PR 1. Run: cd ${run.root} && git push origin HEAD:refs/heads/${run.branch}\nThen run pdd workflow approve 17 again.`);
+  assert.equal(refused.message.split('\n')[0], `pdd could not push your approval of feature.prompt.md to PR 1. Run: cd ${run.root} && git push origin HEAD:refs/heads/${run.branch}`);
+  assertSafeApprovalAdvice(refused.message);
   assert.equal(f.record().area, 1); assert.equal(f.record().gate.kind, 'ask-code'); assert.equal(f.git(run.root, 'branch', '--show-current'), run.branch);
   assert.equal(f.prompts.length, 1, 'no code question');
   f.ports.execFile = execFile; f.tick();

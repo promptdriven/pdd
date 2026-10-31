@@ -838,7 +838,7 @@ async function finishPr(run, area, step, p, lines) {
     // New commits on an open PR 1 keep the question's time, so a yes the person already gave still counts
     // (a change request with pdd workflow changes moves it).
     run.state = 'waiting'; run.gate = existing && run.gate?.kind === 'ask-code' ? run.gate : { id: p.randomUUID(), area: area.name, at: p.now(), kind: 'ask-code' }; writeRun(run, p);
-    const savedApproval = run.decisions.some(decision => decision.gateId === run.gate.id && decision.evidence);
+    const savedApproval = (run.decisions ?? []).some(decision => decision.gateId === run.gate.id && decision.evidence);
     return done([...lines, ...(savedApproval ? snapshotLines(run.gate.promptSnapshot ?? []) : await showGate(run, p)), ...await askCodeLines(run, area, p)].join('\n'));
   }
   run.state = 'waiting'; run.gate = null; writeRun(run, p);
@@ -976,7 +976,7 @@ async function syncPr1(run, p) {
   const approved = before.filter(path => {
     try { const found = statuses(readFileSync(join(run.root, path), 'utf8')); return found.includes('approved') && !found.includes('draft'); } catch { return false; }
   });
-  const go = `cd ${shell(run.root)} && `, again = `${approvalRetry(run, p.pdd)}`, what = approved.length ? `your approval of ${listed(approved)}` : null;
+  const go = `cd ${shell(run.root)} && `, again = (run.decisions ?? []).some(decision => decision.gateId === run.gate?.id && decision.evidence) ? approvalRetry(run, p.pdd) : approvalGuide(run, p.pdd), what = approved.length ? `your approval of ${listed(approved)}` : null;
   if (approved.length) {
     try { await git(p, run.root, 'commit', '-q', '-m', `Approve ${approved.join(', ')}`, '--', ...approved); }
     catch { return { failed: `pdd could not commit ${what}. Run: ${go}git commit -m ${shell(`Approve ${approved.join(', ')}`)} -- ${approved.map(shell).join(' ')}\n${again}` }; }
@@ -1012,14 +1012,23 @@ async function draftDescription(run, pr1, drafts, p) {
     const draftBody = !old ? body : drafts.length ? body.replace(old, draftLine(drafts)) : body.replace(`\n\n${old}`, '').replace(old, '');
     const area = askArea(run), evidence = await publicationEvidence(run, area, p), marker = `<!-- pdd-workflow:${run.runId}:${area.name} -->`;
     if (evidence.lines.some(line => line.includes('pdd-workflow:')) || String(draftBody).replace(marker, '').includes('pdd-workflow:')) throw Error('Remove supplied workflow ownership markers.');
-    const owned = /^(?:Not fixed yet:|Not checked:|Defect:|Not caught because:|Proof \(defect fixed\):|Proof \(gap closed\):|Old-code proof:|Tests vs base:|Review:|Approved in (?:chat|terminal|area chat):|Evidence omitted:)/;
+    const owned = /^(?:Not fixed yet:|Not checked:|Defect:|Not caught because:|Proof \(defect fixed\):|Proof \(gap closed\):|Old-code proof:|Tests vs base:|Review:|Evidence omitted:)/;
     const reference = new RegExp(`^(?:Part of|Closes|Refs) #${run.number}$`);
-    const rows = String(draftBody).replace(marker, '').split('\n').filter(line => !owned.test(line) && !reference.test(line));
-    while (rows.length && !rows[0].trim()) rows.shift();
+    const rows = String(draftBody).replace(marker, '').split('\n');
     let at = 0;
+    while (at < rows.length && owned.test(rows[at])) at++;
+    while (at < rows.length && !rows[at].trim()) at++;
+    const headerStart = at;
     while (at < rows.length && /^(?:Verdict:|Before |Before:|Runtime check|Report(?: \([^)]*\))?:)/.test(rows[at])) at++;
-    const ordinaryTop = rows.slice(0, at);
-    const remainder = rows.slice(at).join('\n').replace(/^\n+/, '');
+    const ordinaryTop = rows.slice(headerStart, at);
+    while (at < rows.length && !rows[at].trim()) at++;
+    if (reference.test(rows[at] ?? '')) {
+      at++;
+      while (at < rows.length && !rows[at].trim()) at++;
+      while (at < rows.length && (evidence.approvalLines ?? []).some(line => hideLocalPaths(redactTry(line), run) === rows[at])) at++;
+      while (at < rows.length && !rows[at].trim()) at++;
+    }
+    const remainder = rows.slice(at).join('\n');
     const safeRemainder = hideLocalPaths(redactTry(remainder), run);
     const footer = `\n\n${marker}\n`;
     const approvals = (evidence.approvalLines ?? []).map(line => hideLocalPaths(redactTry(line), run));
@@ -1158,7 +1167,10 @@ export async function approveRun({ ref, cwd, said: approvalWords, packageRoot = 
     let state;
     try { state = await (p.readPrStatus ?? readWorkflowPrStatus)({cwd:run.root,url:pr1.url}, p.commandPorts); }
     catch { return fail('PR 1 state is unavailable; no approval was recorded.'); }
-    if (!['open','merged'].includes(state.state)) return fail(`PR 1 is ${state.state}, so pdd cannot tell where the code branch should start. No approval was recorded.`);
+    if (!['open','merged'].includes(state.state)) {
+      const retry = (run.decisions ?? []).some(decision => decision.gateId === run.gate.id && decision.evidence) ? approvalRetry(run, p.pdd) : approvalGuide(run, p.pdd);
+      return fail(`PR 1 is ${state.state}, so pdd cannot tell where the code branch should start. No approval was recorded. Check PR 1, then ${retry}`);
+    }
   }
   if (askCode && run.gate?.kind === 'ask-code' && replayEnabled(run)) {
     try { const dirty = await unpublishedScenarios(run,p); if (dirty.length) return fail(`Unpublished scenario edits remain: ${dirty.join(', ')}. Publish them in prompt space first.`); }
@@ -1173,7 +1185,13 @@ export async function approveRun({ ref, cwd, said: approvalWords, packageRoot = 
       if (approvalWords === undefined) { p.say(snapshotLines(current).join('\n')); run.gate.promptSnapshot = current; writeRun(run, p); }
     } else readPromptApprovals(await promptApprovalContext(run, p), p);
   } catch (error) { return fail(error.message); }
-  let carried = [];
+  let carried = [], synchronized = false;
+  if (askCode && run.gate?.kind === 'ask-code' && approvalWords === undefined && !edits.length) {
+    const carry = await syncPr1(run, p);
+    if (carry.failed) return fail(carry.failed);
+    carried.push(...carry.lines);
+    synchronized = true;
+  }
   if (!run.gate) {
     const why = `The ${area.name} area of #${run.number} is not at its gate yet (not done: ${area.steps.filter(step => !run.done[step]).join(', ')}).`;
     if (viaChat) return fail(`${why} Finish the steps and run done first.`);
@@ -1183,7 +1201,7 @@ export async function approveRun({ ref, cwd, said: approvalWords, packageRoot = 
   if (approvalWords !== undefined) record = { via: 'said', text: approvalWords };
   else {
     if (!await confirm(p, beforePr ? `Approve the ${area.name} area and all selected draft prompts and open ${prLabel(run, area) === 'the PR' ? 'the PR' : prLabel(run, area)} for ${label}? (y/N) `
-      : askCode ? `Approve the code gate and all selected draft prompts; make the code PR now for ${label}? PR 1: ${prOf(run, area.name)?.url} (y/N) ` : `Approve the ${area.name} area and all selected draft prompts for ${label}? (y/N) `)) return fail([...carried, 'Not approved. The run is unchanged.'].join('\n'));
+      : askCode ? `Make the code PR now and approve the code gate and all selected draft prompts for ${label}? PR 1: ${prOf(run, area.name)?.url} (y/N) ` : `Approve the ${area.name} area and all selected draft prompts for ${label}? (y/N) `)) return fail([...carried, 'Not approved. The run is unchanged.'].join('\n'));
     record = { via: 'terminal' };
   }
   try { if (run.gate && JSON.stringify(await gatePromptSnapshot(run, p)) !== JSON.stringify(run.gate.promptSnapshot)) return fail('The selected prompts changed. Show the gate again and ask the person again.'); } catch (error) { return fail(`Cannot inspect selected prompts: ${error.message}. Show the gate again and ask the person again.`); }
@@ -1192,7 +1210,7 @@ export async function approveRun({ ref, cwd, said: approvalWords, packageRoot = 
   catch (error) { return fail(`Approval failed: ${error.message}`); }
   carried.push(...edits.map(edit => `Approved ${edit.path} ${edit.proseSha256}`));
   if (askCode && run.gate?.kind === 'ask-code') {
-    const carry = await syncPr1(run, p);
+    const carry = synchronized ? { drafts: await pr1Drafts(run, p), lines: await draftDescription(run, prOf(run, area.name), await pr1Drafts(run, p), p) } : await syncPr1(run, p);
     if (carry.failed) return fail(carry.failed);
     if (carry.drafts.length) return fail(approveFirst(run, carry.drafts));
     carried.push(...carry.lines);
@@ -1216,7 +1234,7 @@ export async function approveRun({ ref, cwd, said: approvalWords, packageRoot = 
       await sendToChat(currentChat(run), `pdd opened PR 1: ${url}. The person approved it in their terminal. PR 1 has draft prompts, so the code PR waits. Tell them exactly: "PR 1 is open: ${url}. ${approveFirst(run, drafts)}" Then stop.`, p);
       return done([...head, `PR 1: ${url}`, approveFirst(run, drafts)].join('\n'));
     }
-    if (!await confirm(p, `Approve the code gate and all selected draft prompts; make the code PR now for ${label}? PR 1: ${url} (y/N) `)) {
+    if (!await confirm(p, `Make the code PR now and approve the code gate and all selected draft prompts for ${label}? PR 1: ${url} (y/N) `)) {
       await sendToChat(currentChat(run), `pdd opened PR 1: ${url}. The person approved it in their terminal and stops here for now. Tell them exactly: "PR 1 is open: ${url}. ${codeLater(run)}" Then stop.`, p);
       return done([...head, `PR 1: ${url}`, `Stopped at PR 1. ${codeLater(run)}`].join('\n'));
     }
@@ -1234,7 +1252,7 @@ export async function approveRun({ ref, cwd, said: approvalWords, packageRoot = 
     try { based = await codeBranch(run, area, p); }
     catch (error) { return fail(`${oneLine(error.message)} Check PR 1, then ${approvalRetry(run, p.pdd)}`); }
   }
-  if (askCode && approvalWords === undefined) carried.push(...await draftDescription(run, prOf(run, area.name), await pr1Drafts(run, p), p));
+  if (askCode && approvalWords === undefined && beforePr) carried.push(...await draftDescription(run, prOf(run, area.name), await pr1Drafts(run, p), p));
   const now = p.now();
 
   run.gate = null; run.question = null; run.area++; run.state = 'running'; run.doneAt = null; writeRun(run, p);
