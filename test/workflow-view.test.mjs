@@ -65,7 +65,7 @@ test('VIEW3: completed, cancelled, optional code authorization and absent links 
   for (const state of ['completed', 'cancelled']) {
     f.run.state = state; f.run.gate = null; f.save();
     const r = f.cli('workflow', 'view', '2442'); assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /Gate: none/); assert.match(r.stdout, /Try: not recorded/); assert.match(r.stdout, /PRs: none recorded/);
+    assert.match(r.stdout, /Gate: none/); assert.match(r.stdout, /Simulator: not recorded/); assert.match(r.stdout, /PRs: none recorded/);
   }
   f.run.state = 'completed'; f.run.gate = { area: 'prompt-pr', kind: 'ask-code' }; f.save();
   assert.match(f.cli('workflow', 'view', '2442').stdout, /code.*authorization/i);
@@ -101,4 +101,18 @@ test('RELEASE5: ancestor aliases show artifacts and notes; redirected notes are 
   const blocked = f.cli('workflow', 'view', '2442');
   assert.match(blocked.stdout, /Gate notes unavailable/);
   assert.doesNotMatch(blocked.stdout, /private.md/);
+});
+
+// user_stories/prompt-tests-line.md: view shows Prompt tests lines and older Runtime check lines alike, and the Simulator links.
+test('VIEW-PROMPT-TESTS: view shows new and old summary lines, joined with "; " or one per line, and Simulator links', t => {
+  const f = fixture(t);
+  f.run.done = { check: { summary: 'Prompt tests (greet) (DRAFT): ✓ 1 of 1 criterion; Runtime check (wave): ✗ 0 of 1 criterion; Report: https://runtime.example.test/r/report-id' },
+    verify: { summary: 'Prompt tests (greet): ✓ 1 of 1 criterion\nPrompt tests: ✓ 1 of 1 criterion' },
+    try: { summary: 'Simulator: https://runtime.example.test/s/review-token/' } }; f.save();
+  const r = f.cli('workflow', 'view', '2442'); assert.equal(r.status, 0, r.stderr);
+  const lines = r.stdout.split('\n');
+  for (const start of ['Prompt tests (greet) (DRAFT):', 'Runtime check (wave):', 'Prompt tests (greet):', 'Prompt tests:']) assert.ok(lines.some(line => line.startsWith(start)), start);
+  assert.ok(!lines.some(line => /^(?:Prompt tests|Runtime check).*(?:Prompt tests|Runtime check)/.test(line)), 'one line each');
+  assert.ok(lines.includes('Simulator: https://runtime.example.test/s/review-token/'), r.stdout);
+  assert.doesNotMatch(r.stdout, /^Try:/m);
 });

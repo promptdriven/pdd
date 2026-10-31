@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: 11e5a5d3b954f1d80e0dd2f91efe9c96eab35ebe6e0050014c7ef20870a59467).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: 7860e5e0ab323219d7ce307e1390b977b98eb86d99a6282f5d01c5d41dd34e0c).
 export const OPEN_STATES = new Set(['queued', 'running']);
 const RESULT_WORDS = { not_run: 'not run' };
 
@@ -177,6 +177,10 @@ export function storyLines(rows) {
   return [...groups].map(([story, own]) => [story, summaryLine(own, story)]);
 }
 
+// The paste line label. pdd writes only PROMPT_TESTS_LABEL; readers find both labels with PROMPT_TESTS_WORDS,
+// so the `Runtime check` lines of older PR bodies, run summaries and saved results read the same way.
+export const PROMPT_TESTS_LABEL = 'Prompt tests';
+export const PROMPT_TESTS_WORDS = '(?:Prompt tests|Runtime check)';
 export function summaryLine(rows, story = null) {
   const own = row => row.criteria ?? { passed: row.state === 'passed' ? row.criteria_total ?? 0 : 0, total: row.criteria_total ?? 0 };
   const criteria = rows.reduce((sum, row) => ({ passed: sum.passed + own(row).passed, total: sum.total + own(row).total }), { passed: 0, total: 0 });
@@ -195,7 +199,7 @@ export function summaryLine(rows, story = null) {
     : rows.some(row => row.busy && row.state === 'not_run') && rows.every(row => row.state === 'passed' || (row.busy && row.state === 'not_run')) ? 'busy ·' : 'no verdict ·';
   const rerunShare = rerunCalls ? `${rerunCalls} for reruns` : '';
   const usage = known.length ? `${count(calls, 'AI call')}${rerunShare ? ` (${rerunShare})` : ''}` : rerunShare || count(calls, 'AI call');
-  return [`Runtime check${story ? ` (${story})` : ''}${rows.some(row => row.draft) ? ' (DRAFT)' : ''}: ${mark} ${criteria.passed} of ${count(criteria.total, 'criterion').replace(/criterions$/, 'criteria')}`,
+  return [`${PROMPT_TESTS_LABEL}${story ? ` (${story})` : ''}${rows.some(row => row.draft) ? ' (DRAFT)' : ''}: ${mark} ${criteria.passed} of ${count(criteria.total, 'criterion').replace(/criterions$/, 'criteria')}`,
     `${checks.passed}/${checks.total} checks`, ...others, `${usage}${unknownCalls ? ` + ${unknownCalls} unknown` : ''}`].join(' · ');
 }
 
@@ -289,7 +293,7 @@ function localRefusals(rows, secrets) {
 // The terminal result of a batch (stdout).
 export function renderText({ batch, rows, coverage, warnings = [], details = false, timeoutMin = null, interrupted = false, reading = false, exitCode, secrets = [], recovery }) {
   const out = [];
-  if (exitCode === 3) out.push(recovery ?? `pdd check --read ${batch}`);
+  if (exitCode === 3) out.push(recovery ?? `pdd test --read ${batch}`);
   // One Story: its own line is the result; the overall line comes only with two or more Stories.
   const perStory = storyLines(rows).map(([, text]) => text);
   out.push(...table(rows), ...(perStory.length === 1 ? perStory : [...perStory, summaryLine(rows)]));
@@ -329,7 +333,7 @@ export function renderText({ batch, rows, coverage, warnings = [], details = fal
   }
   for (const row of rows.filter(row => row.state === 'not_run')) {
     const message = row.note?.message ?? (row.request_ids?.length ? 'No checks ran for this attempt.' : 'pdd did not send it.');
-    const explanation = row.next_step ? message.replace(/(?:^|\s)(?:Retry this batch later|Run it again|Run the same command again later|Run a fresh pdd check command to start checks|Try again later)\.?/g, '').trim() : message;
+    const explanation = row.next_step ? message.replace(/(?:^|\s)(?:Retry this batch later|Run it again|Run the same command again later|Run a fresh pdd (?:test|check) command to start checks|Try again later)\.?/g, '').trim() : message;
     out.push(`NOT RUN  ${row.title} (${row.test})${explanation ? `: ${explanation}` : ''}${row.note?.code ? ` (${row.note.code})` : ''}`, ...serverAdvice(row, secrets));
   }
   for (const row of rows.filter(row => OPEN_STATES.has(row.state))) {
@@ -345,7 +349,7 @@ export function renderText({ batch, rows, coverage, warnings = [], details = fal
   }
   for (const row of rows.filter(row => row.state === 'unknown' && row.provider)) {
     out.push(`UNKNOWN  ${row.title}: ${PROVIDER_TEXT}`, `  ${row.provider.code}${row.provider.detail ? ` (${row.provider.detail})` : ''}${row.report_url ? `  Report: ${row.report_url}` : ''}`,
-      ...(row.next_step ? [] : ['  To try again, run `pdd check` again (a new request).']), ...serverAdvice(row, secrets));
+      ...(row.next_step ? [] : ['  To try again, run `pdd test` again (a new request).']), ...serverAdvice(row, secrets));
   }
   if (details) for (const row of rows.filter(row => row.all_checks?.length)) {
     out.push(`Checks for ${row.title} (${row.test}):`,
@@ -365,7 +369,7 @@ export function renderText({ batch, rows, coverage, warnings = [], details = fal
   return `${out.join('\n')}\n`;
 }
 
-// Owner-provided Try accounting is separate from a program's stdout/body and from account-wide allowances.
+// Owner-provided Simulator accounting is separate from a program's stdout/body and from account-wide allowances.
 export function tryUsage(answer, { cap } = {}) {
   const number = value => Number.isSafeInteger(value) && value >= 0 ? value : 'unknown';
   const total = number(answer?.calls?.cap ?? answer?.result?.session?.max_calls ?? cap);
@@ -374,7 +378,7 @@ export function tryUsage(answer, { cap } = {}) {
     used: typeof total === 'number' && typeof remaining === 'number' && remaining <= total ? total - remaining : 'unknown' };
 }
 export function tryUsageLine(usage, { command = false } = {}) {
-  return `Try AI usage: ${command ? `${usage.calls} this command · ` : ''}${usage.used} used · ${usage.remaining} remaining (session cap ${usage.cap}).`;
+  return `Simulator AI usage: ${command ? `${usage.calls} this command · ` : ''}${usage.used} used · ${usage.remaining} remaining (session cap ${usage.cap}).`;
 }
 export function tryUsageHeaders(usage) {
   return { 'x-pdd-ai-calls': String(usage.calls), 'x-pdd-try-used': String(usage.used),

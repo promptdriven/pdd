@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: ffcae5ba2edff4d9f6325feb25073e2ec390d707552e78d0bf2398ab10b92200).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 2760e1bde159f17401428077bb6b944fd304821191bb2528a45f6596868f634a).
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
@@ -13,7 +13,7 @@ import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mj
 import { allRuns, currentChat, gitContext, listRuns, readRun, resolveRun, runDirFor, runForWorktree, writeRun } from './workflow-runs.mjs';
 import { startChat, sendToChat, chatSession, openChat, closeChats, expandHome, homeVariable, isFolder } from './workflow-chat.mjs';
 import { captureSource, findTests, gitFiles, interfaceBlocks } from './runtime-preflight.mjs';
-import { storyLines } from './runtime-output.mjs';
+import { storyLines, PROMPT_TESTS_LABEL, PROMPT_TESTS_WORDS } from './runtime-output.mjs';
 import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
 import { causeText } from './runtime-output.mjs';
 import { preparePrEvidence } from './workflow-pr-evidence.mjs';
@@ -25,8 +25,8 @@ const CHANGE_PREFIX = 'The person asks for changes';
 const ANSWER_PREFIX = 'The person answers your question';
 // At the code gate a chat reply must say yes in plain words; at other gates any reply from the person counts.
 const YES_WORDS = /\b(?:yes|approved?|build the code|go ahead|code pr now|continue)\b/i;
-// Try links (/s/<token>/) open a live session; they never go into a PR body. Report links (/r/) stay.
-const redactTry = text => String(text).replace(/https?:\/\/[^\s)<>\]"'`]*?\/s\/[^/\s)<>\]"'`]+(?:\/[^\s)<>\]"'`]*)?/g, '(Try link removed)');
+// Simulator links (/s/<token>/) open a live session; they never go into a PR body. Report links (/r/) stay.
+const redactTry = text => String(text).replace(/https?:\/\/[^\s)<>\]"'`]*?\/s\/[^/\s)<>\]"'`]+(?:\/[^\s)<>\]"'`]*)?/g, '(Simulator link removed)');
 const ordinary = promisify(execFileCallback);
 function execute(file, args, { cwd, input, ...options } = {}) {
   if (input === undefined) return ordinary(file, args, { cwd, ...options });
@@ -41,7 +41,7 @@ function execute(file, args, { cwd, input, ...options } = {}) {
 }
 const shell = value => /^[A-Za-z0-9_@%+=:,./-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
 const oneLine = value => String(value ?? '').replace(/\s+/g, ' ').trim();
-// A step summary keeps its line breaks (0.1.6: the chat pastes one Runtime check line per line); blank lines go.
+// A step summary keeps its line breaks (0.1.6: the chat pastes one Prompt tests line per line); blank lines go.
 const keepLines = value => String(value ?? '').split('\n').map(oneLine).filter(Boolean).join('\n');
 const done = message => ({ exitCode: 0, message });
 const fail = message => ({ exitCode: 1, message });
@@ -209,7 +209,7 @@ function holdsLine({ drafts, approved, other, tests, stories }) {
   const parts = [stories > 1 ? 'the approved Stories' : 'the approved Story', ...prompts('approved ', approved), ...prompts('draft ', drafts), ...prompts('', other), ...(tests.length ? ['the tests'] : [])];
   return `PR 1 is ready with ${listed(parts)}.${tests.length ? '' : ' It has no test file.'}`;
 }
-// Nothing to try before the PR: no step of the area left a Try link, and the try step was skipped or the run has no test
+// Nothing to try before the PR: no step of the area left a Simulator link, and the try step was skipped or the run has no test
 // file (0.1.6 tester: status said "try it" for a browser-only Story with no runtime test).
 const hasTryLink = text => redactTry(text) !== String(text);
 const nothingToTry = (run, area, contents) => !area.steps.some(step => hasTryLink(run.done[step]?.summary ?? ''))
@@ -363,16 +363,19 @@ function hideLocalPaths(text, run) {
   return text.split(`${run.root}/`).join('').split(run.root).join('.').split(run.runDir).join('<run folder>')
     .replace(/(?:\/private)?\/(?:Users|home|var\/folders|tmp)\/[^\s)`'"<>\]]*/g, '<local path>');
 }
-// Runtime check lines in a step summary (0.1.6): "Runtime check (<story>) (DRAFT)?: …" per Story, and the overall
-// "Runtime check: …". The chat pastes the lines that pdd check prints, one per line or joined with "; "; a result ends
-// at a line break, ";", a "Report" line, a link or the next Runtime check.
+// Prompt tests lines in a step summary (0.1.6): "Prompt tests (<story>) (DRAFT)?: …" per Story, and the overall
+// "Prompt tests: …"; older summaries say "Runtime check" and read the same way. The chat pastes the lines that pdd test
+// prints, one per line or joined with "; "; a result ends at a line break, ";", a "Report" line, a link or the next line.
+const PROMPT_TESTS = new RegExp(PROMPT_TESTS_WORDS);
+const LABEL_START = new RegExp(`^${PROMPT_TESTS_WORDS}`);
+const LINE_PATTERN = new RegExp(`${PROMPT_TESTS_WORDS}((?:\\s*\\([^)]*\\))*):\\s*(.*?)(?=\\n|\\s*(?:;|\\bReport\\b|https?:\\/\\/|${PROMPT_TESTS_WORDS}|$))`, 'gs');
 export function runtimeLines(text) {
-  return [...String(text ?? '').matchAll(/Runtime check((?:\s*\([^)]*\))*):\s*(.*?)(?=\n|\s*(?:;|\bReport\b|https?:\/\/|Runtime check|$))/gs)].map(match => {
+  return [...String(text ?? '').matchAll(LINE_PATTERN)].map(match => {
     const groups = [...match[1].matchAll(/\(([^)]*)\)/g)].map(group => group[1].trim());
     const story = groups.find(group => group && group.toUpperCase() !== 'DRAFT' && group !== 'all Stories') ?? null;
     const result = match[2].replace(/\s+/g, ' ').trim().replace(/[.,]$/, '');
     return { story, draft: groups.some(group => group.toUpperCase() === 'DRAFT'), result,
-      line: `Runtime check${match[1].replace(/\s+/g, ' ')}: ${result}`, pass: result.includes('✓') && !result.includes('✗') };
+      line: `${PROMPT_TESTS_LABEL}${match[1].replace(/\s+/g, ' ')}: ${result}`, pass: result.includes('✓') && !result.includes('✗') };
   });
 }
 // One line per Story: a Story checked again keeps its place and takes its latest line.
@@ -389,9 +392,9 @@ function totalLine(stories) {
     calls && `${calls[0]} AI call${calls[0] === 1 ? '' : 's'}`].filter(Boolean).join(' · ');
   const mark = stories.every(line => line.pass) ? '✓' : stories.some(line => line.result.includes('✗')) ? '✗' : stories.find(line => !line.pass).result.split(/[\s·]+/)[0];
   const result = !counts ? mark : /^[✓✗]$/.test(mark) ? `${mark} ${counts}` : `${mark} · ${counts}`;
-  return `Runtime check (all Stories)${stories.some(line => line.draft) ? ' (DRAFT)' : ''}: ${result}`;
+  return `${PROMPT_TESTS_LABEL} (all Stories)${stories.some(line => line.draft) ? ' (DRAFT)' : ''}: ${result}`;
 }
-// The Runtime check lines for the top of a PR: with Story names, one line per Story and then pdd's total (when there
+// The Prompt tests lines for the top of a PR: with Story names, one line per Story and then pdd's total (when there
 // are two or more); without, the lines as the chat wrote them.
 function runtimeTop(text) {
   const lines = runtimeLines(text), stories = latestStories(lines);
@@ -448,8 +451,10 @@ function reportLinks(text, env) {
 
 // The verdict line (RUNBOOK §14) and the "Before ✗ … → after ✓ …" line (or "Before: no prompt → …") of a bug check summary,
 // one per line or joined with "; ". "; " inside the verdict sentence stays.
-const verdictLine = text => String(text).match(/\bVerdict:[^\n]*?(?=;?\s*(?:\n|\bBefore\s*[✗✓:]|\bRuntime check\b|\bReport\b|$))/)?.[0].trim() ?? null;
-const changeLine = text => String(text).match(/\bBefore\s*[✗✓:][^\n]*?(?=;?\s*(?:\n|\bVerdict:|\bRuntime check\b|\bReport\b|$))/)?.[0].trim() ?? null;
+const VERDICT = new RegExp(`\\bVerdict:[^\\n]*?(?=;?\\s*(?:\\n|\\bBefore\\s*[✗✓:]|\\b${PROMPT_TESTS_WORDS}\\b|\\bReport\\b|$))`);
+const CHANGE = new RegExp(`\\bBefore\\s*[✗✓:][^\\n]*?(?=;?\\s*(?:\\n|\\bVerdict:|\\b${PROMPT_TESTS_WORDS}\\b|\\bReport\\b|$))`);
+const verdictLine = text => String(text).match(VERDICT)?.[0].trim() ?? null;
+const changeLine = text => String(text).match(CHANGE)?.[0].trim() ?? null;
 
 // verify.md in the PR body (0.1.6 tester: 100 lines of shell came before the vector table). pdd drops a leading "# Verify"
 // (the PR has "## Verify"), nests the "## " headings one level down, and folds each code block of more than 15 lines that is
@@ -582,11 +587,11 @@ function prBody(run, area, env, drafts = [], tests = true, evidence) {
     : [evidence.issueReference];
   // verify writes "✗ N vectors fail" as its first line when cases still fail; the person must see it first.
   const failing = verify?.split('\n').find(row => row.trim())?.trim().startsWith('✗') ? [verify.split('\n').find(row => row.trim()).trim()] : [];
-  // The Runtime check line and its report link go on top (#18).
-  // The check step's result wins; else the latest step that reports a Runtime check. One line per Story (0.1.6), then the overall line.
+  // The Prompt tests line and its report link go on top (#18).
+  // The check step's result wins; else the latest step that reports a Prompt tests line. One line per Story (0.1.6), then the overall line.
   // Lines are read from the summary as stored, with its line breaks.
-  const checked = /Runtime check/.test(raw.check ?? '') ? raw.check : Object.values(raw).reverse().find(text => /Runtime check/.test(text));
-  // A bug check starts its summary with the verdict and "Before ✗ … → after ✓ …" (0.1.7): they go above the Runtime check
+  const checked = PROMPT_TESTS.test(raw.check ?? '') ? raw.check : Object.values(raw).reverse().find(text => PROMPT_TESTS.test(text));
+  // A bug check starts its summary with the verdict and "Before ✗ … → after ✓ …" (0.1.7): they go above the Prompt tests
   // lines, and their report links are not listed again.
   const sources = [raw.check, ...Object.values(raw).reverse()].filter(Boolean);
   const verdict = sources.map(text => verdictLine(text)).find(Boolean), change = sources.map(text => changeLine(text)).find(Boolean);
@@ -740,9 +745,9 @@ async function askCodeLines(run, area, p) {
   const drafts = await pr1Drafts(run, p), url = prOf(run, area.name).url;
   // The code is built only from approved prompts, so the code PR is not offered while PR 1 has a draft prompt.
   if (drafts.length) return [`PR 1: ${url}`, ...summaries, draftLine(drafts),
-    `Gate: show the person PR 1 and the Runtime check line. Do not offer the code PR yet. Tell the person exactly: "PR 1 is open: ${url}. ${approveFirst(run, drafts)}" Stop there.`];
+    `Gate: show the person PR 1 and the Prompt tests line. Do not offer the code PR yet. Tell the person exactly: "PR 1 is open: ${url}. ${approveFirst(run, drafts)}" Stop there.`];
   return [`PR 1: ${url}`, ...summaries,
-    `Gate: show the person PR 1, the Runtime check line and the Try link, then ask exactly: "Do you want the code PR now, or stop here and merge PR 1 first? ${codeLater(run)}" Stop there.`,
+    `Gate: show the person PR 1, the Prompt tests line and the Simulator link, then ask exactly: "Do you want the code PR now, or stop here and merge PR 1 first? ${codeLater(run)}" Stop there.`,
     `If they want the code PR now (in their own words), run: ${p.pdd} workflow approve ${run.number}`,
     `If they stop, tell them exactly: "PR 1 is open: ${prOf(run, area.name).url}. ${codeLater(run)}" pdd never merges.`];
 }
@@ -786,7 +791,9 @@ export async function recordEvidence({ ref, summaryFile, cwd }, ports) {
     });
     const expected = new Map(storyLines(rows));
     lines = rows.map(row => row.summary_line);
-    if (rows.some(row => row.summary_line !== expected.get(row.story))) throw Error('Evidence summary_line does not match its structured Story results.');
+    // A saved result of an older pdd says `Runtime check`: read its label as `Prompt tests` before the compare.
+    const label = line => typeof line === 'string' ? line.replace(LABEL_START, PROMPT_TESTS_LABEL) : line;
+    if (rows.some(row => label(row.summary_line) !== expected.get(row.story))) throw Error('Evidence summary_line does not match its structured Story results.');
   } catch (error) { return fail(`Evidence not recorded: ${oneLine(error.message)}`); }
   (run.evidence ??= []).push({ at: p.now(), summary: [...new Set(lines)].join('\n'), source, receipt });
   writeRun(run, p);
@@ -833,8 +840,8 @@ export async function stepDone({ step, summary, cwd, packageRoot = PACKAGE_ROOT 
     run.gate = { area: area.name, at: p.now(), kind: 'approve-pr' }; run.state = 'waiting'; writeRun(run, p);
     lines.push(`pdd recorded ${step}. The ${area.name} area is done; pdd opens ${prLabel(run, area)} after the person approves.`,
       nothingToTry(run, area, contents)
-        ? 'Gate: show the person the Runtime check line of each Story (one per Story: ✓, ✗ or no verdict) with the report link, if there is one. There is nothing to try. Ask them to approve or ask for changes. Stop. Do not approve for them.'
-        : 'Gate: show the person the Runtime check line of each Story (one per Story: ✓, ✗ or no verdict) with the report link, and the Try link(s). Ask them to try it, then approve or ask for changes. Stop. Do not approve for them.',
+        ? 'Gate: show the person the Prompt tests line of each Story (one per Story: ✓, ✗ or no verdict) with the report link, if there is one. There is nothing to try. Ask them to approve or ask for changes. Stop. Do not approve for them.'
+        : 'Gate: show the person the Prompt tests line of each Story (one per Story: ✓, ✗ or no verdict) with the report link, and the Simulator link(s). Ask them to try it, then approve or ask for changes. Stop. Do not approve for them.',
       ...(prLabel(run, area) === 'PR 1' ? [`Tell the person what PR 1 holds, in these words: "${holdsLine(contents)}"`] : []),
       `When the person approves in their own words, run: ${p.pdd} workflow approve ${run.number}`,
       'If they ask for changes, revise in this chat, run done again for the step you changed, and ask again.');
