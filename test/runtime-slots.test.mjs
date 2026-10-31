@@ -259,3 +259,18 @@ test('jobs: the saved kinds check, try and lint print as test, simulate and lint
   assert.deepEqual(stdout.text.trim().split('\n').map(line => line.split(' · ')[0]), ['active test', 'active simulate', 'active lint']);
   assert.deepEqual((await listRuntimeJobs(options('/state'), { files: { listRecords: () => ({ jobs }) } })).jobs.map(job => job.kind), ['check', 'try', 'lint']);
 });
+
+// runCheck (pdd test, pdd lint) and runTry (pdd simulate) reserve slots through acquireRuntimeSlot with the kinds check, lint and try.
+test('slots: reservations save the old kinds check, lint and try, and an older check record still lists', async t => {
+  const stateDir = join(temp(t), 'state'), held = [];
+  for (const limit of [Infinity, 3]) {
+    for (const kind of ['check', 'lint', 'try']) {
+      const reservation = await acquireRuntimeSlot({ ...options(stateDir), limit, kind });
+      held.push(reservation);
+      assert.equal(JSON.parse(readFileSync(join(reservation.directory, `${reservation.id}.json`), 'utf8')).kind, kind, `saved ${kind} with limit ${limit}`);
+    }
+    for (const reservation of held.splice(0)) await releaseRuntimeSlot(reservation, { ended: true });
+  }
+  seed(stateDir, record('older', { kind: 'check', started_at: 5 }));
+  assert.deepEqual((await listRuntimeJobs(options(stateDir))).jobs.map(row => [row.id, row.kind]), [['older', 'check']]);
+});
