@@ -25,6 +25,14 @@ Release or reclaim only the observed token, so an older owner cannot remove its
 replacement. A dead owner's leftover ownership must not prevent cancellation.
 Keep the private ownership algorithm free.
 
+Module function `readRunOwnership(runDir, ports = {})` returns `null` when ordinary
+ownership is absent, otherwise a snapshot `{path, pid, hostname, token, warning}`.
+`path` names `.ordinary-owner`; unavailable PID, hostname or token fields are
+`null`. A complete readable owner has `warning: null`; unreadable or malformed
+ownership has a finite diagnostic string in `warning`, retaining available facts.
+This public read performs no acquisition, recovery, release or durable write.
+Its native filesystem binding remains unbound to the Interpreter.
+
 The callback may mutate its supplied record, but must preserve its run identity
 and perform only local state changes. A missing or unreadable existing record,
 callback failure or failed publication fails finitely without claiming a commit;

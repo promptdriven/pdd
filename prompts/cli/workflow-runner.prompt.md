@@ -117,8 +117,9 @@ Ordinary updates leave accepted requests and acknowledgement fields in the
 authoritative journal untouched. Change delivery retains its existing
 journal-then-ordinary update order; no ordinary update acquires a journal claim.
 Keep existing custody, uptake warnings, side-effect order and approval rules.
-`runStatus` reads ordinary ownership before any write-capable PR/chat refresh and
-exposes it through a pure snapshot read: detailed,
+`runStatus` uses `readRunOwnership` from the run-record owner before any
+write-capable PR/chat refresh and skips those refreshes while ownership is held.
+JSON adds `ordinaryOwnership` with that snapshot or `null` when absent; detailed,
 list/all/cancelled text and JSON identify the held ownership path and its available
 PID, hostname and token, or say ownership is unreadable/malformed. No owner means
 no held-lock claim. For unverifiable ownership, give the path and explain manual
@@ -337,6 +338,6 @@ The Interpreter entries below name the actual public `changeRun` and `acknowledg
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status": "draft","prose_sha256":"ea4c9fc7076fb851e8e4bef7b6892bcdf0ae8884b67270094528f59436eb1bf9","entries":[{"operation":"changeRun","input_schema":{"type":"object","properties":{"ref":{"type":"string"},"text":{"type":"string"},"cwd":{"type":"string"}},"required":["ref","text","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]},{"operation":"acknowledgeRequest","input_schema":{"type":"object","properties":{"requestId":{"type":"string"},"summary":{"type":"string"},"cwd":{"type":"string"}},"required":["requestId","summary","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+{"status": "draft","prose_sha256":"c212b09e0eb8f99da6d5cdc2352c11b7e4a05c933a396f347c88626f7f45cebc","entries":[{"operation":"changeRun","input_schema":{"type":"object","properties":{"ref":{"type":"string"},"text":{"type":"string"},"cwd":{"type":"string"}},"required":["ref","text","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]},{"operation":"acknowledgeRequest","input_schema":{"type":"object","properties":{"requestId":{"type":"string"},"summary":{"type":"string"},"cwd":{"type":"string"}},"required":["requestId","summary","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
 ```
 </details>
