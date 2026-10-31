@@ -30,9 +30,14 @@ Without either optional argument, preserve the CLI no-Story request behavior.
 Reuse one session for unchanged program source/data/login. Capture only the entry
 graph and compare reached prompt and dependency identity before reuse. On source
 change replace automatically, carrying confirmed world; never require --new.
-A fresh request invalidates saved answers and starts from selected initial data.
+Reset/data select initial data without invalidating an exact saved-answer key.
+noCache bypasses local saved answers without changing selected initial data.
 Unchanged input and data may reuse a confirmed result at0 calls only when the
-current world equals that result's data_before, not data_after. Repeating a
+current world equals that result's data_before, not data_after. A reused
+mutating answer must install its confirmed data_after and preserve session/world
+consistency before another invocation. It is also valid to send fresh:false to
+the interpreter for that exact answer instead of local reuse; never return its
+output while leaving reset data empty or a live session on a different world. Repeating a
 mutating command with the same argv must send again and apply its mutation
 again. Replay preserves the saved program exit code, including nonzero codes. Never cache
 failed/refused/unknown results or reuse another login's session. Retain pending
@@ -41,7 +46,9 @@ No synthetic Story/scenario is uploaded; the interpreter derives default fake
 bindings for the graph. Session requests use entry, initial_world and optional
 simulation, never seed. Default session max_calls is300, independent of the per-call --max-calls option;
 never silently replenish a session or raise its allowance. Call requests always
-send max_calls and boolean fresh. Session answers retain optional kind, entries
+send max_calls and boolean fresh: true only for noCache, false otherwise.
+Reset/data alone never set fresh. Explicit data does not independently forbid
+reuse: compare selected before-world, simulation, source, login, cap and input. Session answers retain optional kind, entries
 and expires_at when provided; do not require unavailable NEW server fields.
 Preserve worlds, receipts, errors and call_chain unchanged. Local answer identity
 includes per-call cap; no clock-dependent graph result may satisfy local cache,

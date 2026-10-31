@@ -81,7 +81,7 @@ test('direct CLI: undeclared stdin remains available to a surrounding read loop'
   const r=await h.invoke(['list'],[],{stdin:input});ok(r);assert.deepEqual(h.fake.jsonPosts[0].json.input,{argv:['list']});
 });
 test('direct: prefix options belong to pdd and suffix options belong to CLI unchanged',async t=>{
-  const h=await harness(t);const r=await h.invoke(['--data','literal','--max-calls','99'],['--fresh','--max-calls','3']);ok(r);
+  const h=await harness(t);const r=await h.invoke(['--data','literal','--max-calls','99'],['--reset','--max-calls','3']);ok(r);
   assert.equal(h.fake.jsonPosts[0].json.max_calls,3);assert.deepEqual(h.fake.jsonPosts[0].json.input.argv,['--data','literal','--max-calls','99']);
 });
 test('direct: no Story request uses entry and empty world instead of seed',async t=>{
@@ -131,10 +131,10 @@ test('direct: confirmed world and last record persist in Git-ignored .pdd/run',a
  assert.match(readFileSync(join(h.setup.repo,'.git/info/exclude'),'utf8'),/\.pdd\//);
  assert.equal(data,join(h.setup.repo,'.pdd/run/place_order/world.json'));
 });
-test('direct: explicit data seeds world and --fresh starts empty next time',async t=>{
+test('direct: explicit data seeds world and --reset starts empty next time',async t=>{
  const h=await harness(t);writeFileSync(join(h.setup.repo,'world.json'),'{"tasks":["seed"]}');
  ok(await h.invoke(['list'],['--data','world.json']));assert.deepEqual(h.fake.posts.find(p=>p.command==='try').request.initial_world,{tasks:['seed']});
- ok(await h.invoke(['list'],['--fresh']));assert.deepEqual(h.fake.posts.filter(p=>p.command==='try').at(-1).request.initial_world,{});
+ ok(await h.invoke(['list'],['--reset']));assert.deepEqual(h.fake.posts.filter(p=>p.command==='try').at(-1).request.initial_world,{});
 });
 test('direct: scenario data accepts simulation without requiring its Story',async t=>{
  const h=await harness(t);const simulation={'files.read':{action:'blob.read'}};writeFileSync(join(h.setup.repo,'data.json'),JSON.stringify({initial_world:{files:{}},simulation,steps:[],story_path:'missing.md'}));

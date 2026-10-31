@@ -16,11 +16,11 @@ for (const kind of ['screen','http']) test(`C classification precedes typed inpu
   const calls=[];
   const programApp={appKind(input,ports){calls.push(['kind',input]);return kind;},async runApp(input,ports){calls.push(['run',input]);ports.stdout.write('http://127.0.0.1:8080/\n');return 7;}};
   const io=portsFor(env,{programApp,stdin:Readable.from([])});
-  const code=await runPdd(['--fresh','--data','seed.json',PLACE],{cwd:setup.repo,env,stdout:io.ports.stdout,stderr:io.ports.stderr,stdin:io.ports.stdin,runtimePorts:io.ports});
+  const code=await runPdd(['--reset','--data','seed.json',PLACE],{cwd:setup.repo,env,stdout:io.ports.stdout,stderr:io.ports.stderr,stdin:io.ports.stdin,runtimePorts:io.ports});
   assert.equal(code,7,io.ports.stderr.text);
   assert.deepEqual(calls.map(c=>c[0]),['kind','run']);
   assert.deepEqual(calls[0][1],{file:PLACE,root:setup.repo,all:true});
-  assert.deepEqual(calls[1][1],{file:PLACE,root:setup.repo,env,kind,flags:{fresh:true,data:join(setup.repo,'seed.json')}});
+  assert.deepEqual(calls[1][1],{file:PLACE,root:setup.repo,env,kind,flags:{reset:true,data:join(setup.repo,'seed.json')}});
   assert.equal(io.ports.stdout.text,'http://127.0.0.1:8080/\n');
   assert.equal(io.clock.gh.length,0);
 });
@@ -77,12 +77,12 @@ for (const [descriptor,label] of [[{kinds:['screen'],screenOperations:['render',
  assert.equal(code,0,io.ports.stderr.text);assert.equal(launch.kind,'screen');assert.equal(io.clock.gh.length,0);
 });
 
-for(const args of [['serve','extra'],['serve','--port','9000']])test(`HTTP suffix refuses locally: ${args.join(' ')}`,async t=>{
+for(const args of [['extra'],['--port','9000']])test(`HTTP suffix refuses locally: ${args.join(' ')}`,async t=>{
  const setup=harbor(t),env={HOME:setup.home,PDD_STATE_DIR:setup.state};
  const io=portsFor(env,{stdin:Readable.from([]),programApp:{appKind(){return 'http';},runApp(){assert.fail('invalid suffix must not launch');}}});
  const code=await runPdd([PLACE,...args],{cwd:setup.repo,env,stdout:io.ports.stdout,stderr:io.ports.stderr,stdin:io.ports.stdin,runtimePorts:io.ports});
  assert.equal(code,2,io.ports.stderr.text);assert.match(io.ports.stderr.text,/HTTP programs take no ARGS\. Call the link\./);
- if(args.includes('--port'))assert.match(io.ports.stderr.text,/pdd options go before the file: pdd --port 9000 /);
+
  assert.equal(io.clock.gh.length,0);
 });
 
@@ -110,7 +110,7 @@ for(const withMap of [true,false])test(`C disk map capture and CLI omission: ${w
 test('recognized prefix port and cwd data reach HTTP unchanged',async t=>{
  const setup=harbor(t),env={HOME:setup.home,PDD_STATE_DIR:setup.state};const cwd=join(setup.repo,'sub folder');mkdirSync(cwd);let launch;
  const io=portsFor(env,{stdin:Readable.from([]),programApp:{appKind(){return {kinds:['http'],httpOperations:['place_order']};},runApp(input){launch=input;return 0;}}});
- const code=await runPdd(['--port','9000','--data','seed file.json','../'+PLACE,'serve'],{cwd,env,stdout:io.ports.stdout,stderr:io.ports.stderr,stdin:io.ports.stdin,runtimePorts:io.ports});
+ const code=await runPdd(['--port','9000','--data','seed file.json','../'+PLACE],{cwd,env,stdout:io.ports.stdout,stderr:io.ports.stderr,stdin:io.ports.stdin,runtimePorts:io.ports});
  assert.equal(code,0,io.ports.stderr.text);assert.equal(launch.kind,'http');assert.deepEqual(launch.flags,{port:'9000',data:join(cwd,'seed file.json')});assert.equal(io.clock.gh.length,0);
 });
 
@@ -118,13 +118,5 @@ test('screen descriptor keeps genuine typed operation in word table',async t=>{
  const setup=harbor(t),env={HOME:setup.home,PDD_STATE_DIR:setup.state};
  const io=portsFor(env,{stdin:Readable.from([]),programApp:{appKind(){return {kinds:['screen'],screenOperations:['render','select']};},runApp(){assert.fail('another typed operation requires selection');}}});
  const code=await runPdd([PLACE],{cwd:setup.repo,env,stdout:io.ports.stdout,stderr:io.ports.stderr,stdin:io.ports.stdin,runtimePorts:io.ports});
- assert.equal(code,2,io.ports.stderr.text);assert.match(io.ports.stderr.text,/place_order: typed/);assert.match(io.ports.stderr.text,/app: screen/);assert.equal(io.clock.gh.length,0);
-});
-
-test('HTTP misplaced option advice preserves quoted invocation file and HTTP selector',async t=>{
- const setup=harbor(t),env={HOME:setup.home,PDD_STATE_DIR:setup.state};const cwd=join(setup.repo,'sub');mkdirSync(cwd);
- const unusual='../prompts/my app.prompt.md';writeFileSync(join(cwd,unusual),(await import('node:fs')).readFileSync(join(setup.repo,PLACE)));
- const io=portsFor(env,{stdin:Readable.from([]),programApp:{appKind(){return 'http';},runApp(){assert.fail('suffix options are advice only');}}});
- const code=await runPdd([unusual,'serve','--port','9000'],{cwd,env,stdout:io.ports.stdout,stderr:io.ports.stderr,stdin:io.ports.stdin,runtimePorts:io.ports});
- assert.equal(code,2,io.ports.stderr.text);assert.match(io.ports.stderr.text,/pdd options go before the file: pdd --port 9000 ['"]\.\.\/prompts\/my app\.prompt\.md['"] serve/);assert.equal(io.clock.gh.length,0);
+ assert.equal(code,2,io.ports.stderr.text);assert.match(io.ports.stderr.text,/no "start" in its Interface/);assert.match(io.ports.stderr.text,/Declare what starts/);assert.equal(io.clock.gh.length,0);
 });

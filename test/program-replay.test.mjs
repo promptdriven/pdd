@@ -12,6 +12,7 @@ function entry(root,cli=true,mixed=false) {
   const schema=cli?{type:'object',properties:{argv:{type:'array',items:{type:'string'}}},required:['argv'],additionalProperties:false}:{type:'object',properties:{amount:{type:'integer',minimum:1}},required:['amount'],additionalProperties:false};
   const output=cli?{type:'object',properties:{stdout:{type:'string'},stderr:{type:'string'},exit_code:{type:'integer'}},required:['stdout','stderr','exit_code'],additionalProperties:false}:{type:'object',properties:{},required:[],additionalProperties:false};
   const iface={status:'draft',prose_sha256:'',entries:[{operation:'main',input_schema:schema,result_schema:output,errors:[]}],calls:[],resources:[],limits:{max_steps:1,max_model_calls:1},conventions:cli?['input_schema','result_schema'].map(k=>({path:'/entries/0/'+k,convention:'cli'})):[]};
+  if(mixed)iface.start={default:'shell',dispatch:[{word:'serve',kind:'call',operation:'serve'}]};
   if(mixed)iface.entries.push({operation:'serve',input_schema:{type:'object',properties:{},required:[],additionalProperties:false},result_schema:{type:'object',properties:{},required:[],additionalProperties:false},errors:[]});
   let text='# replay\n\nDeterministic fake program.\n\n## Dependencies\n\nNone.\n\n<details><summary>Runtime interface</summary>\n\n```json\n'+JSON.stringify(iface)+'\n```\n</details>\n';
   text=text.replace('"prose_sha256":""','"prose_sha256":"'+proseSha256(text)+'"');writeFileSync(join(root,PLACE),text);
@@ -51,7 +52,7 @@ test('shell launcher executes argv[] once and carries selected starting data',as
   assert.equal(h.fake.jsonPosts.length,1);assert.deepEqual(h.fake.jsonPosts[0].json.input,{argv:[]});assert.deepEqual(h.fake.posts.find(p=>p.command==='try').request.initial_world,{selected:true});assert.equal(h.fake.posts.filter(p=>p.command==='try').length,1);
 });
 
-test('mixed CLI launcher bypasses word table for serve argv',async t=>{
+test('mixed CLI launcher bypasses declared dispatch for serve argv',async t=>{
   const h=await setup(t,{mixed:true});const bin=join(h.home,'fake-bin');mkdirSync(bin);
   writeFileSync(join(bin,'gh'),`#!/bin/sh\nif [ "$1" = auth ]; then printf '%s\\n' '${TOKEN}'; else printf '%s\\n' 'octo 4242'; fi\n`,{mode:0o700});
   h.env.PATH=bin+':/usr/bin:/bin';writeFileSync(join(h.repo,'seed.json'),'{"selected":true}');
@@ -84,4 +85,18 @@ test('external saved-world edit replaces session instead of reusing stale runtim
   const h=await setup(t);assert.equal((await h.invoke(['change'])).code,0);
   const run=join(h.repo,'.pdd/run');assert.ok(existsSync(join(run,'place_order','world.json')),'readable path must contain saved data');writeFileSync(join(run,'place_order','world.json'),'{"external":"selection"}');
   const r=await h.invoke(['next']);assert.equal(r.code,0,r.ports.stderr.text);assert.equal(h.fake.posts.filter(p=>p.command==='try').length,2);assert.deepEqual(h.fake.posts.filter(p=>p.command==='try').at(-1).request.initial_world,{external:'selection'});assert.equal(h.fake.deletes.length,1);
+});
+
+test('shell reset/data is applied once while no-cache stays on every shim call',async t=>{
+ const h=await setup(t,{mixed:true});const bin=join(h.home,'fake-bin');mkdirSync(bin);
+ writeFileSync(join(bin,'gh'),`#!/bin/sh\nif [ "$1" = auth ]; then printf '%s\\n' '${TOKEN}'; else printf '%s\\n' 'octo 4242'; fi\n`,{mode:0o700});h.env.PATH=bin+':/usr/bin:/bin';
+ // Confirm a preselection world before resetting this shell to a seed.
+ const before=await h.invoke(['list']);assert.equal(before.code,0,before.ports.stderr.text);
+ writeFileSync(join(h.repo,'seed.json'),'{"selected":true}');
+ const r=await h.invoke([],['--reset','--data','seed.json','--no-cache'],{stdin:Object.assign(Readable.from([]),{isTTY:true}),shell:async(shell,env)=>{
+  for(let i=0;i<2;i++)await new Promise((resolve,reject)=>{const child=spawn('replay',['serve'],{cwd:h.repo,env,stdio:['ignore','pipe','pipe']});let err='';child.stderr.on('data',c=>err+=c);child.once('error',reject);child.once('exit',code=>{try{assert.equal(code,0,err);resolve();}catch(error){reject(error);}});});return 0;
+ }});
+ assert.equal(r.code,0,r.ports.stderr.text);assert.deepEqual(h.stored('world.prev.json'),{saved:true});assert.equal(h.fake.jsonPosts.length,3);
+ for(const post of h.fake.jsonPosts.slice(1)){assert.equal(post.json.fresh,true);assert.deepEqual(post.json.input,{argv:['serve']});}
+ const starts=h.fake.posts.filter(p=>p.command==='try').map(p=>p.request.initial_world);assert.deepEqual(starts[1],{selected:true});assert.ok(starts.slice(2).every(world=>world.saved===true),'later sessions carry confirmed data instead of reseeding');
 });

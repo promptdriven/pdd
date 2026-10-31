@@ -41,12 +41,35 @@ test('empty optional typed input is local usage2 but piped {} is supplied input'
 test('typed usage identifies required flags, optional flags, enums and scalar types',async t=>{
  const h=await harness(t,{cli:false,edit(s){s.entries[0].input_schema=obj({name:string,size:{type:'string',enum:['S','M','L']},qty:{type:'integer'}},['name']);}});const r=await h.invoke([]);assert.equal(r.code,2);assert.match(r.err,/--name STRING/);assert.match(r.err,/\[--size S\|M\|L\]/);assert.match(r.err,/\[--qty INTEGER\]/);assert.equal(r.clock.gh.length,0);
 });
-for(const fresh of [false,true])test(`call always sends boolean fresh=${fresh}`,async t=>{const h=await harness(t);pass(await h.invoke(['list'],fresh?['--fresh']:[]));assert.equal(h.fake.jsonPosts[0].json.fresh,fresh);});
-test('fresh preserves previous confirmed world and records full metadata',async t=>{
- const outside_calls=[{resource:'cloud',kind:'http',op:'deploy',summary:'cloud deploy app',level:'declared'}],chain=[{prompt:PLACE,operation:'main',call_index:null,max_calls:null}];const h=await harness(t,{world:{old:true},report:{outside_calls,call_chain:chain}});pass(await h.invoke());const r=await h.invoke(['again'],['--fresh']);pass(r);assert.deepEqual(h.stored('world.prev.json'),{old:true});const last=h.stored('last-run.json');assert.ok(last.session_id);assert.ok(last.report_url);assert.equal(last.exit_code,0);assert.deepEqual(last.outside_calls,outside_calls);assert.deepEqual(last.call_chain,chain);assert.match(r.err,/pdd: fresh start/);
+for(const fresh of [false,true])test(`call always sends boolean fresh=${fresh}`,async t=>{const h=await harness(t);pass(await h.invoke(['list'],fresh?['--no-cache']:[]));assert.equal(h.fake.jsonPosts[0].json.fresh,fresh);});
+test('reset preserves previous confirmed world and records full metadata',async t=>{
+ const outside_calls=[{resource:'cloud',kind:'http',op:'deploy',summary:'cloud deploy app',level:'declared'}],chain=[{prompt:PLACE,operation:'main',call_index:null,max_calls:null}];const h=await harness(t,{world:{old:true},report:{outside_calls,call_chain:chain}});pass(await h.invoke());const r=await h.invoke(['again'],['--reset']);pass(r);assert.deepEqual(h.stored('world.prev.json'),{old:true});const last=h.stored('last-run.json');assert.ok(last.session_id);assert.ok(last.report_url);assert.equal(last.exit_code,0);assert.deepEqual(last.outside_calls,outside_calls);assert.deepEqual(last.call_chain,chain);assert.match(r.err,/pdd: data reset/);
 });
-test('outside calls render, quiet hides all own status, prefix json preserves receipt',async t=>{
- const outside_calls=[{resource:'cloud',kind:'http',op:'deploy',summary:'cloud deploy app',level:'declared'}];const h=await harness(t,{stderr:'program error\n',report:{outside_calls}});const normal=await h.invoke();pass(normal);assert.equal(normal.out,'program only\n');assert.match(normal.err,/pdd: fake calls \(nothing real was called\):/);assert.match(normal.err,/pdd:.*cloud deploy app.*declared/);const quiet=await h.invoke(['other'],['-q','--max-calls','25']);pass(quiet);assert.equal(quiet.err,'program error\n');const json=await h.invoke(['third'],['--json']);pass(json);const record=JSON.parse(json.out);assert.deepEqual(record.outside_calls,outside_calls);assert.equal(record.output.stdout,'program only\n');assert.equal(record.exit_code,0);assert.ok(record.session_id);assert.ok(record.report_url);
+const declaredOutside={resource:'cloud',kind:'http',op:'deploy',summary:'cloud deploy app',mode:'fake',source:'declared'};
+const customOutside={resource:'git',kind:'command',op:'push',summary:'git push origin main',mode:'fake',source:'fakes/git.prompt.md'};
+const realOutside={resource:'cloud',kind:'command',op:'deploy',summary:'cloud deploy real-app',mode:'real',source:'local'};
+for(const [label,outside_calls,suffixes,typed] of [
+ ['fake declared',[declaredOutside],['(fake, declared)']],
+ ['fake custom source overrides legacy level',[{...customOutside,level:'declared'}],['(fake, fakes/git.prompt.md)']],
+ ['real',[realOutside],['(real, local)']],
+ ['mixed',[declaredOutside,customOutside,realOutside],['(fake, declared)','(fake, fakes/git.prompt.md)','(real, local)']],
+ ['legacy source fallback',[{resource:'cloud',kind:'http',op:'deploy',summary:'cloud deploy app',mode:'fake',level:'declared'}],['(fake, declared)']],
+ ['missing mode',[{resource:'cloud',kind:'http',op:'deploy',summary:'cloud deploy app',level:'declared'}],['(unknown, declared)']],
+ ['missing source',[{resource:'cloud',kind:'http',op:'deploy',summary:'cloud deploy app',mode:'real'}],['(real, unknown)']],
+ ['typed mixed',[declaredOutside,realOutside],['(fake, declared)','(real, local)'],true],
+])test(`outside calls ${label} render reported modes and sources unchanged`,async t=>{
+ const h=await harness(t,{cli:!typed,report:{outside_calls}});
+ const normal=await h.invoke(typed?[]:['list'],[],typed?{stdin:Readable.from(['{}'])}:{});pass(normal);
+ const lines=normal.err.split('\n').filter(line=>line.startsWith('pdd:   '));
+ assert.match(normal.err,/^pdd: outside calls:$/m);
+ assert.equal(lines.length,outside_calls.length);for(const [index,line] of lines.entries()){assert.ok(line.startsWith(`pdd:   ${outside_calls[index].summary}`),line);assert.ok(line.endsWith(suffixes[index]),line);}
+ assert.doesNotMatch(normal.err,/nothing real was called|pdd: fake calls/);
+ assert.deepEqual(h.stored('last-run.json').outside_calls,outside_calls);
+});
+test('outside calls quiet hides own status and prefix json preserves mixed receipt',async t=>{
+ const outside_calls=[declaredOutside,customOutside,realOutside];const h=await harness(t,{stderr:'program error\n',report:{outside_calls}});
+ const quiet=await h.invoke(['other'],['-q','--max-calls','25']);pass(quiet);assert.equal(quiet.out,'program only\n');assert.equal(quiet.err,'program error\n');assert.deepEqual(h.stored('last-run.json').outside_calls,outside_calls);
+ const json=await h.invoke(['third'],['--json']);pass(json);const record=JSON.parse(json.out);assert.deepEqual(record.outside_calls,outside_calls);assert.equal(record.output.stdout,'program only\n');assert.equal(record.exit_code,0);assert.ok(record.session_id);assert.ok(record.report_url);
 });
 test('server replayed receipt reports cached0 despite provider usage receipt',async t=>{const h=await harness(t,{report:{replayed:true}}),r=await h.invoke();pass(r);assert.match(r.err,/cached · 0 AI calls/);});
 for(const verdict of ['failed','refused'])test(`report ${verdict} preserves code, traceback total and details link`,async t=>{
@@ -56,12 +79,12 @@ test('two CLI entries refuse before auth',async t=>{
  const h=await harness(t,{edit(s){s.entries.push({...s.entries[0],operation:'other'});s.conventions.push(...['input_schema','result_schema'].map(k=>({path:`/entries/1/${k}`,convention:'cli'})));}}),r=await h.invoke();assert.equal(r.code,2,r.err);assert.match(r.err,/one.*program|one.*command|multiple.*CLI/i);assert.equal(r.clock.gh.length,0);assert.equal(h.fake.posts.length,0);
 });
 test('CLI plus typed uses CLI default and explicit typed selector',async t=>{
- const h=await harness(t,{outputs:{quote:{}},edit(s){s.entries.push({operation:'quote',input_schema:obj({item:string}),result_schema:obj({}),errors:[]});}});
+ const h=await harness(t,{outputs:{quote:{}},edit(s){s.start={default:'shell',dispatch:[{word:'quote',kind:'call',operation:'quote'}]};s.entries.push({operation:'quote',input_schema:obj({item:string}),result_schema:obj({}),errors:[]});}});
  pass(await h.invoke(['list']));assert.deepEqual(h.fake.jsonPosts[0].json.input.argv,['list']);
  const typed=await h.invoke(['quote','--item','tea']);pass(typed);assert.equal(typed.out,'{}\n');assert.equal(h.fake.jsonPosts[1].json.operation,'quote');assert.deepEqual(h.fake.jsonPosts[1].json.input,{item:'tea'});
 });
-test('CLI combined with C HTTP selects serve and CLI name escapes clash',async t=>{
- let classified=0,launched=0;const h=await harness(t);const programApp={appKind(){classified++;return 'http';},runApp(){launched++;return 0;}};
+test('declared HTTP dispatch and declared CLI escape win over default',async t=>{
+ let classified=0,launched=0;const h=await harness(t,{edit(s){s.start={default:'shell',dispatch:[{word:'serve',kind:'http'},{word:'final',kind:'cli'}]};}});const programApp={appKind(){classified++;return 'http';},runApp(){launched++;return 0;}};
  pass(await h.invoke(['serve'],[],{programApp}));assert.equal(launched,1);
  pass(await h.invoke(['final','serve'],[],{programApp}));assert.equal(launched,1);assert.deepEqual(h.fake.jsonPosts[0].json.input.argv,['serve']);assert.equal(classified,2);
 });
@@ -83,7 +106,7 @@ test('custom fake closure is captured and changing fake replaces session',async 
 test('custom fake schema mismatch refuses locally before authentication',async t=>{const h=await harness(t,fakeOptions('http',true)),r=await h.invoke();assert.equal(r.code,2,r.err);assert.match(r.err,/fake.*schema|schema.*fake/i);assert.equal(r.clock.gh.length,0);assert.equal(h.fake.posts.length,0);});
 test('explicit simulation wins over automatic own fake binding',async t=>{const h=await harness(t,fakeOptions());const simulation={'cloud.lookup':{action:'http.prompt',target:'prompts/fakes/cloud.prompt.md',operation:'lookup',max_calls:7,request_template:{},request_mapping:[{from:'',to:''}],response_template:{},response_mapping:[{from:'',to:''}]}};writeFileSync(join(h.repo,'seed.json'),JSON.stringify({initial_world:{},simulation}));pass(await h.invoke(['list'],['--data','seed.json']));assert.deepEqual(h.fake.posts.find(p=>p.command==='try').request.simulation,simulation);});
 test('unsupported resource kinds keep interpreter defaults without invented fake actions',async t=>{const h=await harness(t,fakeOptions('key-value'));pass(await h.invoke());const req=h.fake.posts.find(p=>p.command==='try').request;assert.equal(req.simulation?.['cloud.lookup'],undefined);});
-test('fresh plus explicit data preserves old backup while selecting explicit world',async t=>{const h=await harness(t,{world:{prior:true}});pass(await h.invoke());writeFileSync(join(h.repo,'seed.json'),'{"chosen":true}');pass(await h.invoke(['next'],['--fresh','--data','seed.json']));assert.deepEqual(h.stored('world.prev.json'),{prior:true});assert.deepEqual(h.fake.posts.filter(p=>p.command==='try').at(-1).request.initial_world,{chosen:true});});
+test('reset plus explicit data preserves old backup while selecting explicit world',async t=>{const h=await harness(t,{world:{prior:true}});pass(await h.invoke());writeFileSync(join(h.repo,'seed.json'),'{"chosen":true}');pass(await h.invoke(['next'],['--reset','--data','seed.json']));assert.deepEqual(h.stored('world.prev.json'),{prior:true});assert.deepEqual(h.fake.posts.filter(p=>p.command==='try').at(-1).request.initial_world,{chosen:true});});
 test('flattened duplicate paths cannot collide with literal delimiter basenames',async t=>{const h=await harness(t);mkdirSync(join(h.repo,'a'));mkdirSync(join(h.repo,'b'));for(const path of ['a/main.prompt.md','b/main.prompt.md','a__main.prompt.md']){writeFileSync(join(h.repo,path),readFileSync(join(h.repo,PLACE)));const env={HOME:h.home,PDD_STATE_DIR:h.state,PDD_RUNTIME_URL:h.fake.origin};const io=portsFor(env,{stdin:Readable.from([])});const code=await runPdd([path,'list'],{cwd:h.repo,env,stdout:io.ports.stdout,stderr:io.ports.stderr,stdin:io.ports.stdin,runtimePorts:io.ports});assert.equal(code,0,io.ports.stderr.text);}assert.equal(h.fake.posts.filter(p=>p.command==='try').length,3);assert.deepEqual(h.fake.posts.filter(p=>p.command==='try').map(p=>p.request.initial_world),[{},{},{}]);});
 
 for(const [label,mutate] of [
@@ -208,8 +231,8 @@ for(const port of ['1','9000','65535'])test(`prefix port ${port} reaches C uncha
  const r=await h.invoke([],['--port',port],{programApp:{appKind(){return 'http';},runApp(input){called=input;return 0;}}});pass(r);assert.equal(String(called.flags.port),port);assert.equal(h.fake.posts.length,0);
 });
 for(const port of ['0','65536','-1','1.2','abc'])test(`invalid prefix port ${port} refuses locally`,async t=>{
- const h=await harness(t);let launched=0;const programApp={appKind(){return 'http';},runApp(input){launched++;assert.equal(String(input.flags.port),'9000');return 0;}};
- pass(await h.invoke(['serve'],['--port','9000'],{programApp}));assert.equal(launched,1);
+ const h=await harness(t,{edit(s){s.start={default:'http'};}});let launched=0;const programApp={appKind(){return 'http';},runApp(input){launched++;assert.equal(String(input.flags.port),'9000');return 0;}};
+ pass(await h.invoke([],['--port','9000'],{programApp}));assert.equal(launched,1);
  const r=await h.invoke(['list'],['--port',port],{programApp});assert.equal(r.code,2,r.err);assert.equal(launched,1);assert.equal(r.clock.gh.length,0);assert.equal(h.fake.posts.length,0);
 });
 for(const kind of ['http','screen'])test(`${kind} rejects extra words without launching`,async t=>{
@@ -230,7 +253,7 @@ test('structured HTTP409 cap refusal preserves supplied fix and original selecto
  const r=await h.invoke(['final','list'],['--max-calls','2']);assert.equal(r.code,125,r.err);assert.equal(r.out,'');assert.equal(h.fake.jsonPosts.length,1);assert.equal(h.fake.jsonPosts[0].json.max_calls,2);assert.match(r.err,/session-call-cap/);assert.match(r.err,/Graph requires 5/);assert.match(r.err,/Fix: Increase cap/);assert.ok(r.err.includes(`Fix: pdd --max-calls 5 ${PLACE} final list`),r.err);
 });
 test('one call summary uses singular and rounded seconds',async t=>{const h=await harness(t,{reply(e,f,job){job.usage.seconds=10.6;return {status:200,json:job};}});const r=await h.invoke();pass(r);assert.match(r.err,/1 AI call · 11 s/);assert.doesNotMatch(r.err,/1 AI calls|\d+\.\d+ s/);});
-test('fresh notice names actual backup path',async t=>{const h=await harness(t,{world:{old:true}});pass(await h.invoke());const r=await h.invoke(['again'],['--fresh']);pass(r);assert.ok(r.err.includes('Old data kept in .pdd/run/place_order/world.prev.json'),r.err);});
+test('reset notice names actual backup path',async t=>{const h=await harness(t,{world:{old:true}});pass(await h.invoke());const r=await h.invoke(['again'],['--reset']);pass(r);assert.ok(r.err.includes('Old data kept in .pdd/run/place_order/world.prev.json'),r.err);});
 test('quiet terminal shell runs and preserves shell result without informational lines',async t=>{
  const h=await harness(t);let opened=0;const stdin=Readable.from([]);stdin.isTTY=true;const r=await h.invoke([],['-q'],{stdin,shell(){opened++;return 23;}});assert.equal(r.code,23,r.err);assert.equal(opened,1);assert.equal(r.out,'');assert.equal(r.err,'');
 });
@@ -240,22 +263,22 @@ test('adding basename collision retains recorded original world and isolates new
  const env={HOME:h.home,PDD_STATE_DIR:h.state,PDD_RUNTIME_URL:h.fake.origin};const io=portsFor(env,{stdin:Readable.from([])});const code=await runPdd([newcomer,'list'],{cwd:h.repo,env,stdout:io.ports.stdout,stderr:io.ports.stderr,stdin:io.ports.stdin,runtimePorts:io.ports});assert.equal(code,0,io.ports.stderr.text);assert.deepEqual(h.fake.posts.filter(p=>p.command==='try').at(-1).request.initial_world,{});assert.deepEqual(h.stored('world.json'),{saved:true});assert.equal(readdirSync(join(h.repo,'.pdd/run')).length,2);
 });
 for(const [words,expected] of [[['serve'],'http'],[['app'],'screen']])test(`complete C catalog routes ${words[0]} with explicit kind`,async t=>{
- const h=await harness(t,{outputs:{quote:{}},edit(s){s.entries.push({operation:'route',input_schema:obj({}),result_schema:obj({}),errors:[]},{operation:'quote',input_schema:obj({item:string}),result_schema:obj({}),errors:[]});}});let request,classification;
+ const h=await harness(t,{outputs:{quote:{}},edit(s){s.start={dispatch:[{word:'serve',kind:'http'},{word:'app',kind:'app'},{word:'quote',kind:'call',operation:'quote'}]};s.entries.push({operation:'route',input_schema:obj({}),result_schema:obj({}),errors:[]},{operation:'quote',input_schema:obj({item:string}),result_schema:obj({}),errors:[]});}});let request,classification;
  const programApp={appKind(input){classification=input;return {kinds:['http','screen'],httpOperations:['route']};},runApp(input){request=input;return 0;}};
  pass(await h.invoke(words,[],{programApp}));assert.equal(classification.all,true);assert.equal(request.kind,expected);assert.equal(h.fake.posts.length,0);
  const typed=await h.invoke(['quote','--item','tea'],[],{programApp});pass(typed);assert.equal(typed.out,'{}\n');assert.equal(h.fake.jsonPosts[0].json.operation,'quote');assert.deepEqual(h.fake.jsonPosts[0].json.input,{item:'tea'});
 });
-test('without CLI mixed kinds print word table at zero calls',async t=>{
+test('without start mixed kinds require literal declaration at zero calls',async t=>{
  const h=await harness(t,{cli:false,edit(s){s.entries[0].operation='quote';s.entries.push({...s.entries[0],operation:'route'});}});let launched=0;
  const programApp={appKind(){return {kinds:['http','screen'],httpOperations:['route']};},runApp(){launched++;return 0;}};
- for(const words of [[],['unknown'],['--help']]){const r=await h.invoke(words,[],{programApp});assert.equal(r.code,2,r.err);for(const word of ['serve','app','quote'])assert.match(r.err,new RegExp(word));assert.equal(r.clock.gh.length,0);}
+ for(const words of [[],['unknown'],['--help']]){const r=await h.invoke(words,[],{programApp});assert.equal(r.code,2,r.err);assert.match(r.err,/no "start" in its Interface/);assert.ok(r.err.includes('"start": {"default": "shell", "dispatch": [{"word": "runserver", "kind": "http"}]}'),r.err);assert.equal(r.clock.gh.length,0);}
  assert.equal(launched,0);assert.equal(h.fake.posts.length,0);
 });
 test('leading dash matching operation name remains default CLI argv',async t=>{
- const h=await harness(t,{edit(s){s.entries.push({operation:'--quote',input_schema:obj({}),result_schema:obj({}),errors:[]});}});pass(await h.invoke(['--quote']));assert.equal(h.fake.jsonPosts[0].json.operation,'main');assert.deepEqual(h.fake.jsonPosts[0].json.input.argv,['--quote']);
+ const h=await harness(t,{edit(s){s.start={default:'cli'};s.entries.push({operation:'--quote',input_schema:obj({}),result_schema:obj({}),errors:[]});}});pass(await h.invoke(['--quote']));assert.equal(h.fake.jsonPosts[0].json.operation,'main');assert.deepEqual(h.fake.jsonPosts[0].json.input.argv,['--quote']);
 });
 test('CLI plus typed with no words still opens default shell',async t=>{
- const h=await harness(t,{edit(s){s.entries.push({operation:'quote',input_schema:obj({}),result_schema:obj({}),errors:[]});}});const r=await h.invoke([]);pass(r);assert.match(r.out,/# then: final --help/);assert.equal(h.fake.posts.length,0);
+ const h=await harness(t,{edit(s){s.start={default:'shell'};s.entries.push({operation:'quote',input_schema:obj({}),result_schema:obj({}),errors:[]});}});const r=await h.invoke([]);pass(r);assert.match(r.out,/# then: final --help/);assert.equal(h.fake.posts.length,0);
 });
 
 test('remaining session allowance refusal keeps world and recommends no fresh reset',async t=>{const h=await harness(t,{world:{keep:true},report:{remaining_calls:0}});pass(await h.invoke(['first']));const r=await h.invoke(['second']);assert.equal(r.code,125,r.err);assert.doesNotMatch(r.err,/start fresh|--fresh/i);assert.match(r.err,/session|allowance|budget/i);assert.deepEqual(h.stored('world.json'),{keep:true});assert.equal(h.fake.jsonPosts.length,1);});
@@ -263,7 +286,7 @@ test('remaining session allowance refusal keeps world and recommends no fresh re
 for(const mixed of [false,true])for(const differentSuffix of [false,true])test(`same-ID read restores pending typed selection: ${mixed?'CLI plus typed':'multiple typed operations'}, ${differentSuffix?'different suffix':'no suffix'}`,async t=>{
  const h=await harness(t,{cli:false,outputs:{quote:{}},world:{confirmed:'typed recovery'},edit(s){
   const typed={operation:'quote',input_schema:obj({}),result_schema:obj({}),errors:[]};
-  if(mixed){const cli=iface();s.entries=[cli.entries[0],typed];s.conventions=cli.conventions;}
+  if(mixed){s.start={default:'shell',dispatch:[{word:'quote',kind:'call',operation:'quote'}]};const cli=iface();s.entries=[cli.entries[0],typed];s.conventions=cli.conventions;}
   else s.entries=[typed,{...typed,operation:'inspect'}];
  },reply(e,f,job){delete job.result.report.verdict;return {status:200,json:job};}});
  const first=await h.invoke(['quote','--input','{}']);
@@ -276,7 +299,7 @@ for(const mixed of [false,true])for(const differentSuffix of [false,true])test(`
  // The interpreter now has a canonical confirmed receipt for the same accepted call.
  const job=h.fake.jobs.get(accepted);job.result.report.verdict='passed';job.result.output={};
  const posts=h.fake.posts.length,gets=h.fake.gets.length;
- const read=await h.invoke(differentSuffix?[mixed?'final':'inspect']:[],['--read',accepted]);
+ const read=await h.invoke(differentSuffix?[mixed?'final':'inspect']:[],['--read',accepted,'--reset','--no-cache','--data','missing-seed.json']);
  pass(read);assert.equal(read.out,'{}\n');
  assert.deepEqual(h.stored('world.json'),{confirmed:'typed recovery'});
  assert.equal(h.stored('session.json').pending,undefined);
@@ -315,11 +338,11 @@ test('semantic refusal without report link omits details',async t=>{
  const h=await harness(t,{report:{verdict:'refused',error:{code:'refused',message:'No report'}},reply(e,f,job){delete job.reportUrl;delete job.report_url;delete job.result.report_url;delete job.result.report.report_url;return {status:200,json:job};}});
  const r=await h.invoke();assert.equal(r.code,125,r.err);assert.doesNotMatch(r.err,/details: undefined/);
 });
-test('fresh with stale backup and absent world claims no new backup',async t=>{
+test('reset with stale backup and absent world claims no new backup',async t=>{
  const h=await harness(t);pass(await h.invoke());
  const dir=join(h.repo,'.pdd/run/place_order');rmSync(join(dir,'world.json'));
  writeFileSync(join(dir,'world.prev.json'),'{"stale":true}');
- const r=await h.invoke(['next'],['--fresh']);pass(r);assert.doesNotMatch(r.err,/Old data kept/);
+ const r=await h.invoke(['next'],['--reset']);pass(r);assert.doesNotMatch(r.err,/Old data kept/);
  assert.deepEqual(h.stored('world.prev.json'),{stale:true});
 });
 test('prefix -q delegates canonical quiet flag to C',async t=>{
@@ -331,4 +354,57 @@ test('prefix -q delegates canonical quiet flag to C',async t=>{
 test('semantic refusal uses singular one AI call',async t=>{
  const h=await harness(t,{report:{verdict:'refused',error:{code:'declined',message:'Declined'}}});
  const r=await h.invoke();assert.equal(r.code,125,r.err);assert.match(r.err,/refused, 1 AI call[.]/);assert.doesNotMatch(r.err,/1 AI calls/);
+});
+
+// DESIGN 2.1 and 1.6: declaration and reset/cache are independent contracts.
+for(const word of ['serve','app','final','pdd','node','gh','git'])test(`undeclared CLI argument ${word} is never reserved`,async t=>{
+ const h=await harness(t);pass(await h.invoke([word]));assert.equal(h.fake.jsonPosts.length,1,'argument must execute CLI once');assert.deepEqual(h.fake.jsonPosts[0].json.input.argv,[word]);
+});
+for(const kind of ['cli','shell'])test(`declared ${kind} noargs selects its distinct behavior`,async t=>{
+ const h=await harness(t,{edit(s){s.start={default:kind};}});const r=await h.invoke([]);pass(r);
+ if(kind==='cli'){assert.equal(h.fake.jsonPosts.length,1,'explicit cli executes argv[]');assert.deepEqual(h.fake.jsonPosts[0].json.input.argv,[]);assert.equal(r.out,'program only\n');}else{assert.match(r.out,/# then: final --help/);assert.equal(h.fake.jsonPosts.length,0);}
+});
+test('declared shell with arguments executes exact CLI argv',async t=>{const h=await harness(t,{edit(s){s.start={default:'shell'};}});pass(await h.invoke(['app','serve']));assert.deepEqual(h.fake.jsonPosts[0].json.input.argv,['app','serve']);});
+test('declared default call uses operation even without selector',async t=>{
+ const h=await harness(t,{cli:false,edit(s){s.start={default:'call',default_operation:'main'};s.entries[0].input_schema=obj({item:string});}});pass(await h.invoke(['--item','tea']));assert.equal(h.fake.jsonPosts[0].json.operation,'main');assert.deepEqual(h.fake.jsonPosts[0].json.input,{item:'tea'});
+});
+for(const start of [null,'cli',{dispatch:'bad'},{dispatch:[{kind:'cli'}]},{default:'unknown'},{default:'call'},{default:'call',default_operation:'missing'},{default:'http'},{dispatch:[{word:'go'}]},{dispatch:[{word:'go',kind:'cli'},{word:'go',kind:'shell'}]},{dispatch:[{word:'-go',kind:'cli'}]},{dispatch:[{word:'go',kind:'call'}]},{default:'app',dispatch:[]}])test(`invalid start stops before auth: ${JSON.stringify(start)}`,async t=>{
+ const h=await harness(t,{edit(s){s.start=start;}});const r=await h.invoke(['go'],[],{gh(){assert.fail('invalid start authenticates');}});assert.equal(r.code,2,r.err);assert.equal(r.out,'');assert.equal(r.err.trim().split('\n').length,1);assert.equal(h.fake.posts.length,0);
+});
+test('dispatch only declaration prints usage for unmatched word and forwards matched CLI remainder',async t=>{
+ const h=await harness(t,{edit(s){s.start={dispatch:[{word:'run',kind:'cli'}]};}});const missing=await h.invoke(['other']);assert.equal(missing.code,2);assert.match(missing.err,/usage:.*run/i);assert.equal(missing.clock.gh.length,0);pass(await h.invoke(['run','other']));assert.deepEqual(h.fake.jsonPosts[0].json.input.argv,['other']);
+});
+for(const kind of ['http','app'])test(`declared ${kind} rejects leftover args with declaration usage`,async t=>{
+ const h=await harness(t,{cli:false,edit(s){s.start={dispatch:[{word:'launch',kind}]};}});const r=await h.invoke(['launch','extra'],[],{programApp:{appKind(){return kind==='app'?'screen':'http';},runApp(){assert.fail('leftovers launch');}}});assert.equal(r.code,2,r.err);assert.match(r.err,/usage:.*launch/i);assert.equal(r.clock.gh.length,0);
+});
+test('custom declared app map reaches C as path and screen kind',async t=>{
+ const h=await harness(t,{cli:false,edit(s){s.start={dispatch:[{word:'open',kind:'app',app_map:'maps/custom.json'}]};}});let selected;
+ const r=await h.invoke(['open'],[],{programApp:{appKind(){return null;},runApp(input){selected=input;return 0;}}});pass(r);assert.equal(selected.kind,'screen');assert.equal(selected.appMap,'maps/custom.json');assert.equal(h.fake.posts.length,0);
+});
+for(const app_map of ['../escape.json','/tmp/map.json',{}])test(`unsafe declared app map rejects before C: ${JSON.stringify(app_map)}`,async t=>{
+ const h=await harness(t,{edit(s){s.start={dispatch:[{word:'open',kind:'app',app_map}]};}});const r=await h.invoke(['open'],[],{programApp:{appKind(){return 'screen';},runApp(){assert.fail('bad map reaches C');}}});assert.equal(r.code,2,r.err);assert.equal(r.clock.gh.length,0);
+});
+test('CLI plus typed without declaration refuses even for operation word',async t=>{
+ const h=await harness(t,{edit(s){s.entries.push({operation:'quote',input_schema:obj({}),result_schema:obj({}),errors:[]});}});const r=await h.invoke(['quote']);assert.equal(r.code,2,r.err);assert.match(r.err,/2 kinds.*no "start"/);assert.equal(r.clock.gh.length,0);assert.equal(h.fake.posts.length,0);
+});
+test('removed fresh prefix has no migration notice and no request',async t=>{const h=await harness(t);const r=await h.invoke(['list'],['--fresh']);assert.equal(r.code,2);assert.doesNotMatch(r.err,/now |instead|renamed|migration/i);assert.equal(h.fake.posts.length,0);});
+for(const prefix of [['--reset'],['--data','seed.json']])test(`reset selection permits exact before-world cache: ${prefix.join(' ')}`,async t=>{
+ const h=await harness(t,{world:{}});writeFileSync(join(h.repo,'seed.json'),'{}');pass(await h.invoke(['list']));const r=await h.invoke(['list'],prefix);pass(r);assert.equal(h.fake.jsonPosts.length,1);assert.match(r.err,/cached.*0 AI calls/);assert.deepEqual(h.stored('world.prev.json'),{});
+});
+test('no-cache keeps data, sends fresh and bypasses local reuse with honest notice',async t=>{
+ const h=await harness(t,{world:{keep:true}});pass(await h.invoke(['list']));pass(await h.invoke(['list']));const count=h.fake.jsonPosts.length;const r=await h.invoke(['list'],['--no-cache']);pass(r);assert.equal(h.fake.jsonPosts.length,count+1);assert.equal(h.fake.jsonPosts.at(-1).json.fresh,true);assert.deepEqual(h.stored('last-run.json').data_before,{keep:true});assert.deepEqual(h.stored('world.json'),{keep:true});assert.equal(existsSync(join(h.repo,'.pdd/run/place_order/world.prev.json')),false);assert.match(r.err,/asked again, data kept/);assert.match(r.err,/may still reuse.*saved answer/i);assert.doesNotMatch(r.err,/#\d+/);
+});
+for(const prefix of [['--reset','--no-cache'],['--data','seed.json','--no-cache']])test(`reset and no-cache compose: ${prefix.join(' ')}`,async t=>{
+ const h=await harness(t,{world:{old:true}});pass(await h.invoke(['list']));writeFileSync(join(h.repo,'seed.json'),'{"seed":true}');const r=await h.invoke(['again'],prefix);pass(r);assert.equal(h.fake.jsonPosts.at(-1).json.fresh,true);assert.deepEqual(h.stored('world.prev.json'),{old:true});assert.deepEqual(h.fake.posts.filter(p=>p.command==='try').at(-1).request.initial_world,prefix.includes('--data')?{seed:true}:{});assert.match(r.err,/asked again/);assert.doesNotMatch(r.err,/data kept/);assert.match(r.err,/data reset/);
+});
+test('shared reset renderer is exported, pure, quiet and backup-aware',async()=>{
+ let module;try{module=await import('../src/program-data.mjs');}catch(error){assert.fail('program-data must exist for shared reset rendering: '+error.code);}
+ assert.equal(typeof module.renderResetNotice,'function');const root='/project';assert.equal(module.renderResetNotice({root,quiet:true,backupPath:'/project/.pdd/run/x/world.prev.json'}),'');assert.equal(module.renderResetNotice({root}),'pdd: data reset.\n');assert.equal(module.renderResetNotice({root,backupPath:'/project/.pdd/run/x/world.prev.json'}),'pdd: data reset. Old data kept in .pdd/run/x/world.prev.json\n');
+});
+
+test('reset may reuse mutating answer only with its confirmed after-world installed',async t=>{
+ const h=await harness(t,{world:{count:1}});pass(await h.invoke(['increment']));
+ const reset=await h.invoke(['increment'],['--reset']);pass(reset);assert.deepEqual(h.stored('world.json'),{count:1});
+ for(const post of h.fake.jsonPosts)assert.equal(post.json.fresh,false,'reset must permit interpreter cache');
+ const next=await h.invoke(['inspect']);pass(next);assert.deepEqual(h.stored('last-run.json').data_before,{count:1},'next invocation starts from replayed after-world');
 });

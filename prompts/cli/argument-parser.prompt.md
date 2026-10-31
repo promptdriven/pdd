@@ -7,12 +7,14 @@ Empty argv, root --help/-h/-help/help, and known exact command/group help succee
 ## Direct prompt invocation
 
 Recognize `pdd [OPTIONS] FILE.prompt.md [ARGS...]` before ordinary command resolution.
-Only words before FILE belong to pdd: `--fresh`, `--data FILE`, `--show-data`,
+Only words before FILE belong to pdd: `--reset`, `--no-cache`, `--data FILE`, `--show-data`,
 `--max-calls N` (1–1000), `--port N` (decimal integer 1–65535), `-q`/`--quiet`, `--json`, `--read UUID`. Invalid, duplicate,
 unknown or missing option values refuse2. Preserve every word after FILE unchanged,
 including help, pdd options, empty strings and `--`. Return a `prompt-run` local
 plan with FILE first in operands followed by exact ARGS and only prefix options.
-This is the sole exception to unknown-command rejection; preserve other commands.
+Keep the no-cache option spelling (flags['no-cache']) and reset for --reset. --fresh is an unknown direct
+program prefix option with no migration notice. --data implies reset during data
+selection. This is the sole exception to unknown-command rejection; preserve other commands.
 
 ## Authoring
 
