@@ -1,9 +1,9 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: e1ecee319bca00a2a98a47e78cbf8922dc20fcfe5d4c0ea17aed271e9915d37d).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 6f766c3aaedc42e44b36c3c575ad303a2dbda70f3712745e4eba989fb7a57ca3).
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import * as nativeDeliveryFiles from 'node:fs';
-import { homedir, hostname } from 'node:os';
+import { homedir, hostname, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
@@ -14,12 +14,12 @@ import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mj
 import { allRuns, currentChat, gitContext, listRuns, readRun, resolveRun, runDirFor, runForWorktree, writeRun } from './workflow-runs.mjs';
 import { startChat, sendToChat, herdrCommand, chatSession, openChat, closeChats, expandHome, homeVariable, isFolder } from './workflow-chat.mjs';
 import { captureSource, findTests, gitFiles, interfaceBlocks } from './runtime-preflight.mjs';
-import { storyLines } from './runtime-output.mjs';
+import { storyLines, PROMPT_TESTS_LABEL, PROMPT_TESTS_WORDS } from './runtime-output.mjs';
 import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
 import { causeText } from './runtime-output.mjs';
 import { preparePrEvidence } from './workflow-pr-evidence.mjs';
 import { collectTestInventory } from './workflow-inventory.mjs';
-import {REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinReplayVectors,readReplayEvidence,formatReplayEvidence} from './workflow-replay.mjs';
+import {adoptReplayCorpus,REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinReplayVectors,readReplayEvidence,formatReplayEvidence} from './workflow-replay.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const CHANGE_PREFIX = 'The person asks for changes';
@@ -42,7 +42,7 @@ function execute(file, args, { cwd, input, ...options } = {}) {
 }
 const shell = value => /^[A-Za-z0-9_@%+=:,./-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
 const oneLine = value => String(value ?? '').replace(/\s+/g, ' ').trim();
-// A step summary keeps its line breaks (0.1.6: the chat pastes one Runtime check line per line); blank lines go.
+// A step summary keeps its line breaks (0.1.6: the chat pastes one Prompt tests line per line); blank lines go.
 const keepLines = value => String(value ?? '').split('\n').map(oneLine).filter(Boolean).join('\n');
 const done = message => ({ exitCode: 0, message });
 const fail = message => ({ exitCode: 1, message });
@@ -119,14 +119,30 @@ async function scenarioInventory(run, p) {
   return paths;
 }
 const replayEnabled = run => run.areas.some(area => area.replay_evidence === REPLAY_POLICY);
+async function adoptionFailure(run,p) {
+  const blocked=reason=>{
+    run.replayEvidence={...readReplayEvidence(run),outcome:'blocked',reason};
+    const step=run.areas[run.area]?.steps.filter(step=>run.done[step]).at(-1);
+    if(step)run.done[step].replayEvidence=run.replayEvidence;
+    if(p)writeRun(run,p);return reason;
+  };
+  if (!run.replayAdoption) return null;
+  const result = await adoptReplayCorpus(run.root,join(run.runDir,'replay-adoption.json'));
+  if (result.outcome !== 'adopted' || JSON.stringify(result.provenance) !== JSON.stringify(run.replayAdoption.provenance))
+    return blocked(`Corpus adoption cannot be reused (${result.reason || 'frozen provenance changed'}${result.cause ? `: ${result.cause}` : ''}). Start an ordinary approval workflow for changed requirements.`);
+  const anchor=pinReplayVectors(run.root,result.paths);
+  if(anchor.outcome || JSON.stringify(anchor)!==JSON.stringify(run.replayBaseline))
+    return blocked('The adopted original anchor changed. Start an ordinary approval workflow for changed requirements.');
+  return null;
+}
 async function refreshReplayBaseline(run,p) {
-  if (!replayEnabled(run)) return;
+  if (!replayEnabled(run) || run.replayAdoption) return;
   try { run.replayBaseline = pinReplayVectors(run.root,await scenarioInventory(run,p)); }
   catch { run.replayBaseline = {schema_version:'pdd.replay-vectors.v1',vectors:[],outcome:'blocked',reason:'The changed scenario inventory is unavailable; repair unreadable or malformed JSON candidates and Git listing failures.'}; }
   writeRun(run,p);
 }
-async function currentReplayEvidence(run,p) {
-  let reason;
+async function currentReplayEvidence(run,p,validated=false) {
+  let reason = validated ? null : await adoptionFailure(run,p);
   try {
     const saved = new Set(run.replayBaseline?.vectors?.map(vector=>vector.path) ?? []);
     const missing = (await scenarioInventory(run,p)).filter(path=>!saved.has(path));
@@ -263,10 +279,11 @@ function describe(run, chat = null, { drafts = [], nothing = false } = {}) {
   return step ? `the agent works on ${step}` : 'the agent works';
 }
 
-export async function startRun({ name, issue, agent = 'codex', base, cwd, packageRoot = PACKAGE_ROOT }, ports) {
+export async function startRun({ name, issue, agent = 'codex', base, adoptCorpus, cwd, packageRoot = PACKAGE_ROOT }, ports) {
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
   let workflow;
   try { workflow = readWorkflowAreas({ packageRoot, name, cwd, home: p.env.HOME || homedir() }); } catch (error) { return fail(error.message); }
+  if (adoptCorpus !== undefined && (typeof adoptCorpus !== 'string' || !adoptCorpus.trim() || !workflow.areas.some(area=>area.replay_evidence===REPLAY_POLICY))) return {exitCode:2,message:'--adopt-corpus requires a declaration path and an explicitly replay-evidence-enabled workflow.'};
   if (!['codex', 'claude'].includes(agent)) return fail('Choose --agent codex or --agent claude.');
   // Every chat of the run uses this config folder; a missing one makes the agent stop at once (0.1.6 tester).
   const variable = homeVariable(agent), configDir = p.env[variable] ? resolve(cwd, expandHome(p.env[variable], p.env)) : null;
@@ -300,12 +317,27 @@ export async function startRun({ name, issue, agent = 'codex', base, cwd, packag
       return fail(`Could not fetch --base ${baseBranch} from origin. Check that origin has this branch and Git can fetch it, then run again. No new run was started.`);
     }
   }
+  let adoption, adoptionSnapshot, declarationBytes, frozenFolder;
+  try {
+  if(adoptCorpus !== undefined) {
+    try {
+      if(!explicitBase) {
+        try {await rawGit(p,context.toplevel,'fetch','origin',baseBranch);}
+        catch {return {exitCode:2,message:'Cannot adopt the approved corpus (unavailable: startup fetch failed). Repair the source or start an ordinary approval workflow. No new run was started.'};}
+      }
+      const selectedBase=await git(p,context.toplevel,'rev-parse','--verify','--end-of-options',`refs/remotes/origin/${baseBranch}^{commit}`);
+      adoption=await adoptReplayCorpus(context.toplevel,resolve(cwd,adoptCorpus),{currentRef:selectedBase,onSnapshot:s=>{adoptionSnapshot=s;},onNativeDeclaration:bytes=>{declarationBytes=bytes;}});
+      if(adoption.outcome!=='adopted')return {exitCode:2,message:`Cannot adopt the approved corpus (${adoption.reason}${adoption.cause ? `: ${adoption.cause}` : ''}). Repair the declaration/source or start an ordinary approval workflow. No new run was started.`};
+      frozenFolder=realpathSync(mkdtempSync(join(tmpdir(),'pdd-adoption-declaration-')));
+      writeFileSync(join(frozenFolder,'declaration.json'),declarationBytes,{mode:0o600});
+    } catch(error) {const code=/^[A-Z0-9_-]{1,32}$/.test(String(error.code ?? '')) ? error.code : 'local-operation-failed';return {exitCode:2,message:`Cannot adopt the approved corpus (unavailable: source selection or declaration freezing failed; ${code}). Repair the declaration/source or start an ordinary approval workflow. No new run was started.`};}
+  }
   if (existing) {
     const released = await releaseIssueClaim({ cwd: context.toplevel, runId: existing.runId, issueNumber: number }, p.commandPorts);
     if (released.state !== 'released') return fail(`Issue #${number} has a cancelled run, but pdd could not free the issue: ${released.message}`);
     warnings.push(`Issue #${number} had a cancelled run. Its worktree stays at ${existing.root} (branch ${existing.branch}). This run gets a new worktree and branch.`);
   }
-  if (!explicitBase) {
+  if (!explicitBase && adoptCorpus === undefined) {
     p.say(`Fetching origin/${baseBranch}…`);
     try { await p.execFile('git', ['fetch', 'origin', baseBranch], { cwd: context.toplevel }); }
     catch { warnings.push(`warning: "git fetch origin ${baseBranch}" failed; the worktree starts from the last fetched ${baseBranch}.`); }
@@ -314,8 +346,19 @@ export async function startRun({ name, issue, agent = 'codex', base, cwd, packag
   p.say(`Making the worktree and branch for #${number}…`);
   const allocated = await allocateIssueWorktree({ cwd: context.toplevel, repository: binding.repository, issueNumber: number, runId,
     workflowName: name, baseRef: `refs/remotes/origin/${baseBranch}` }, p.commandPorts);
-  if (allocated.state !== 'ready' || !allocated.assignment) return fail(`pdd could not make the worktree for #${number}: ${allocated.message}`);
+  if (allocated.state !== 'ready' || !allocated.assignment) {if(frozenFolder)rmSync(frozenFolder,{recursive:true,force:true});return fail(`pdd could not make the worktree for #${number}: ${allocated.message}`);}
   const a = allocated.assignment;
+  let adoptedAnchor;
+  if(adoption) {
+    try {
+      const actual=await adoptReplayCorpus(a.worktreePath,join(frozenFolder,'declaration.json'));
+      adoptedAnchor=pinReplayVectors(a.worktreePath,adoption.paths);
+      if(actual.outcome!=='adopted' || JSON.stringify(actual)!==JSON.stringify(adoption) || adoptedAnchor.outcome) {
+        const released=await releaseIssueClaim({cwd:context.toplevel,runId,issueNumber:number},p.commandPorts);
+        return {exitCode:2,message:`The allocated worktree differs from the approved corpus. No active run or chat was saved. Retained worktree: ${a.worktreePath}; branch: ${a.branch}. ${released.state==='released' ? 'The new issue claim was released; the retained files and branch are available for inspection.' : `The new issue claim ${runId} could not be released: ${released.message}. Inspect it before retrying.`} Start an ordinary approval workflow for changed requirements.`};
+      }
+    } finally {rmSync(frozenFolder,{recursive:true,force:true});}
+  }
   // Keep the cancelled run's record next to the new one; only a plain issue number names the active run.
   if (existing) renameSync(runDir, `${runDir}-cancelled-${existing.runId.slice(0, 8)}`);
   const productMarkers = [...new Set(String(binding.issue.body ?? '').match(/<!-- pdd-product: run=[^\r\n]+? -->/g) ?? [])];
@@ -329,6 +372,12 @@ export async function startRun({ name, issue, agent = 'codex', base, cwd, packag
     approvalRecord: null, pr: [], prState: null, cancelled: null, warnings, journalSeq: 0,
     previous: existing ? [...(existing.previous ?? []), { runId: existing.runId, root: existing.root, branch: existing.branch, runDir: `${runDir}-cancelled-${existing.runId.slice(0, 8)}` }] : [] };
   mkdirSync(runDir, { recursive: true });
+  if(adoption) {
+    writeFileSync(join(runDir,'replay-adoption.json'),declarationBytes,{mode:0o600,flag:'wx'});
+    run.replayAdoption={declaration:adoptionSnapshot.declaration, declaration_sha256:adoption.provenance.declaration_sha256, provenance:adoption.provenance};
+    run.replayBaseline=adoptedAnchor;
+    warnings.push(`Adopted ${adoption.paths.length} unchanged scenarios from ${adoption.provenance.repository}@${adoption.provenance.commit}. External authorization: external-assertion-unverified; reference ${adoption.provenance.reference}; asserted by ${adoption.provenance.asserted_by}. pdd cannot independently authenticate that authorization; adoption does not prove execution.`);
+  }
   writeRun(run, p);
   const first = workflow.areas[0];
   try { await startNextChat(run, p, packageRoot); }
@@ -350,6 +399,7 @@ export async function startRun({ name, issue, agent = 'codex', base, cwd, packag
     `Status:         pdd workflow status ${number}`,
     `When the ${first.name} area is ready, approve it in the chat or run: pdd workflow approve ${number}`,
     'You can close this terminal. The chat keeps working in Herdr.'].join('\n'));
+  } finally {if(frozenFolder)rmSync(frozenFolder,{recursive:true,force:true});}
 }
 
 // A runtime report link has a /r/ path segment, or starts with PDD_RUNTIME_URL when that is set. No host is fixed here.
@@ -364,16 +414,19 @@ function hideLocalPaths(text, run) {
   return text.split(`${run.root}/`).join('').split(run.root).join('.').split(run.runDir).join('<run folder>')
     .replace(/(?:\/private)?\/(?:Users|home|var\/folders|tmp)\/[^\s)`'"<>\]]*/g, '<local path>');
 }
-// Runtime check lines in a step summary (0.1.6): "Runtime check (<story>) (DRAFT)?: …" per Story, and the overall
-// "Runtime check: …". The chat pastes the lines that pdd check prints, one per line or joined with "; "; a result ends
-// at a line break, ";", a "Report" line, a link or the next Runtime check.
+// Prompt tests lines in a step summary (0.1.6): "Prompt tests (<story>) (DRAFT)?: …" per Story, and the overall
+// "Prompt tests: …"; older summaries say "Runtime check" and read the same way. The chat pastes the lines that pdd test
+// prints, one per line or joined with "; "; a result ends at a line break, ";", a "Report" line, a link or the next line.
+const PROMPT_TESTS = new RegExp(PROMPT_TESTS_WORDS);
+const LABEL_START = new RegExp(`^${PROMPT_TESTS_WORDS}`);
+const LINE_PATTERN = new RegExp(`${PROMPT_TESTS_WORDS}((?:\\s*\\([^)]*\\))*):\\s*(.*?)(?=\\n|\\s*(?:;|\\bReport\\b|https?:\\/\\/|${PROMPT_TESTS_WORDS}|$))`, 'gs');
 export function runtimeLines(text) {
-  return [...String(text ?? '').matchAll(/Runtime check((?:\s*\([^)]*\))*):\s*(.*?)(?=\n|\s*(?:;|\bReport\b|https?:\/\/|Runtime check|$))/gs)].map(match => {
+  return [...String(text ?? '').matchAll(LINE_PATTERN)].map(match => {
     const groups = [...match[1].matchAll(/\(([^)]*)\)/g)].map(group => group[1].trim());
     const story = groups.find(group => group && group.toUpperCase() !== 'DRAFT' && group !== 'all Stories') ?? null;
     const result = match[2].replace(/\s+/g, ' ').trim().replace(/[.,]$/, '');
     return { story, draft: groups.some(group => group.toUpperCase() === 'DRAFT'), result,
-      line: `Runtime check${match[1].replace(/\s+/g, ' ')}: ${result}`, pass: result.includes('✓') && !result.includes('✗') };
+      line: `${PROMPT_TESTS_LABEL}${match[1].replace(/\s+/g, ' ')}: ${result}`, pass: result.includes('✓') && !result.includes('✗') };
   });
 }
 // One line per Story: a Story checked again keeps its place and takes its latest line.
@@ -390,9 +443,9 @@ function totalLine(stories) {
     calls && `${calls[0]} AI call${calls[0] === 1 ? '' : 's'}`].filter(Boolean).join(' · ');
   const mark = stories.every(line => line.pass) ? '✓' : stories.some(line => line.result.includes('✗')) ? '✗' : stories.find(line => !line.pass).result.split(/[\s·]+/)[0];
   const result = !counts ? mark : /^[✓✗]$/.test(mark) ? `${mark} ${counts}` : `${mark} · ${counts}`;
-  return `Runtime check (all Stories)${stories.some(line => line.draft) ? ' (DRAFT)' : ''}: ${result}`;
+  return `${PROMPT_TESTS_LABEL} (all Stories)${stories.some(line => line.draft) ? ' (DRAFT)' : ''}: ${result}`;
 }
-// The Runtime check lines for the top of a PR: with Story names, one line per Story and then pdd's total (when there
+// The Prompt tests lines for the top of a PR: with Story names, one line per Story and then pdd's total (when there
 // are two or more); without, the lines as the chat wrote them.
 function runtimeTop(text) {
   const lines = runtimeLines(text), stories = latestStories(lines);
@@ -449,8 +502,10 @@ function reportLinks(text, env) {
 
 // The verdict line (RUNBOOK §14) and the "Before ✗ … → after ✓ …" line (or "Before: no prompt → …") of a bug check summary,
 // one per line or joined with "; ". "; " inside the verdict sentence stays.
-const verdictLine = text => String(text).match(/\bVerdict:[^\n]*?(?=;?\s*(?:\n|\bBefore\s*[✗✓:]|\bRuntime check\b|\bReport\b|$))/)?.[0].trim() ?? null;
-const changeLine = text => String(text).match(/\bBefore\s*[✗✓:][^\n]*?(?=;?\s*(?:\n|\bVerdict:|\bRuntime check\b|\bReport\b|$))/)?.[0].trim() ?? null;
+const VERDICT = new RegExp(`\\bVerdict:[^\\n]*?(?=;?\\s*(?:\\n|\\bBefore\\s*[✗✓:]|\\b${PROMPT_TESTS_WORDS}\\b|\\bReport\\b|$))`);
+const CHANGE = new RegExp(`\\bBefore\\s*[✗✓:][^\\n]*?(?=;?\\s*(?:\\n|\\bVerdict:|\\b${PROMPT_TESTS_WORDS}\\b|\\bReport\\b|$))`);
+const verdictLine = text => String(text).match(VERDICT)?.[0].trim() ?? null;
+const changeLine = text => String(text).match(CHANGE)?.[0].trim() ?? null;
 
 // verify.md in the PR body (0.1.6 tester: 100 lines of shell came before the vector table). pdd drops a leading "# Verify"
 // (the PR has "## Verify"), nests the "## " headings one level down, and folds each code block of more than 15 lines that is
@@ -583,11 +638,11 @@ function prBody(run, area, env, drafts = [], tests = true, evidence) {
     : [evidence.issueReference];
   // verify writes "✗ N vectors fail" as its first line when cases still fail; the person must see it first.
   const failing = verify?.split('\n').find(row => row.trim())?.trim().startsWith('✗') ? [verify.split('\n').find(row => row.trim()).trim()] : [];
-  // The Runtime check line and its report link go on top (#18).
-  // The check step's result wins; else the latest step that reports a Runtime check. One line per Story (0.1.6), then the overall line.
+  // The Prompt tests line and its report link go on top (#18).
+  // The check step's result wins; else the latest step that reports a Prompt tests line. One line per Story (0.1.6), then the overall line.
   // Lines are read from the summary as stored, with its line breaks.
-  const checked = /Runtime check/.test(raw.check ?? '') ? raw.check : Object.values(raw).reverse().find(text => /Runtime check/.test(text));
-  // A bug check starts its summary with the verdict and "Before ✗ … → after ✓ …" (0.1.7): they go above the Runtime check
+  const checked = PROMPT_TESTS.test(raw.check ?? '') ? raw.check : Object.values(raw).reverse().find(text => PROMPT_TESTS.test(text));
+  // A bug check starts its summary with the verdict and "Before ✗ … → after ✓ …" (0.1.7): they go above the Prompt tests
   // lines, and their report links are not listed again.
   const sources = [raw.check, ...Object.values(raw).reverse()].filter(Boolean);
   const verdict = sources.map(text => verdictLine(text)).find(Boolean), change = sources.map(text => changeLine(text)).find(Boolean);
@@ -627,6 +682,8 @@ async function publishAreaPr(run, area, p, lines, retry) {
     await git(p, run.root, 'commit', '-q', '-m', `${oneLine(run.issue.title)} (#${run.number})`);
     lines.push(`warning: pdd committed ${files.length} uncommitted file(s): ${files.slice(0, 10).join(', ')}${files.length > 10 ? ', …' : ''}.`);
   }
+  const changedAdoption = await adoptionFailure(run,p);
+  if(changedAdoption) {run.replayEvidence={...readReplayEvidence(run),outcome:'blocked',reason:changedAdoption};writeRun(run,p);return fail(changedAdoption);}
   const codePr = label !== 'PR 1';
   if (codePr) {
     let baseSha = '', headSha = '', result;
@@ -652,7 +709,11 @@ async function publishAreaPr(run, area, p, lines, retry) {
   }
   const opted = area.replay_evidence === REPLAY_POLICY;
   let prepared = await publicationEvidence(run, area, p);
-  if (opted) {run.replayEvidence=await currentReplayEvidence(run,p);writeRun(run,p);}
+  if (opted) {run.replayEvidence=await currentReplayEvidence(run,p,true);
+    const last=area.steps.filter(step=>run.done[step]).at(-1);if(last)run.done[last].replayEvidence=run.replayEvidence;
+    writeRun(run,p);
+    if(run.replayAdoption && /(?:missing from the approved anchor|changed scenario inventory is unavailable)/.test(run.replayEvidence.reason))return fail(`${run.replayEvidence.reason} Start an ordinary approval workflow for changed requirements.`);
+  }
   const bodyBase = run.prBase ?? run.baseBranch;
   const bodyDrafts = label === 'PR 1' ? await draftPrompts(run, p, run.branch, bodyBase) : [];
   const bodyTests = label === 'PR 1' ? (await worktreeContents(run, p)).tests.length > 0 : true;
@@ -741,9 +802,9 @@ async function askCodeLines(run, area, p) {
   const drafts = await pr1Drafts(run, p), url = prOf(run, area.name).url;
   // The code is built only from approved prompts, so the code PR is not offered while PR 1 has a draft prompt.
   if (drafts.length) return [`PR 1: ${url}`, ...summaries, draftLine(drafts),
-    `Gate: show the person PR 1 and the Runtime check line. Do not offer the code PR yet. Tell the person exactly: "PR 1 is open: ${url}. ${approveFirst(run, drafts)}" Stop there.`];
+    `Gate: show the person PR 1 and the Prompt tests line. Do not offer the code PR yet. Tell the person exactly: "PR 1 is open: ${url}. ${approveFirst(run, drafts)}" Stop there.`];
   return [`PR 1: ${url}`, ...summaries,
-    `Gate: show the person PR 1, the Runtime check line and the Try link, then ask exactly: "Do you want the code PR now, or stop here and merge PR 1 first? ${codeLater(run)}" Stop there.`,
+    `Gate: show the person PR 1, the Prompt tests line and the Try link, then ask exactly: "Do you want the code PR now, or stop here and merge PR 1 first? ${codeLater(run)}" Stop there.`,
     `If they want the code PR now (in their own words), run: ${p.pdd} workflow approve ${run.number}`,
     `If they stop, tell them exactly: "PR 1 is open: ${prOf(run, area.name).url}. ${codeLater(run)}" pdd never merges.`];
 }
@@ -753,6 +814,7 @@ async function finishPr(run, area, step, p, lines) {
   lines.push(`pdd recorded ${step}. pdd opens ${label} now.`);
   const failed = await publishAreaPr(run, area, p, lines, `run done ${step} again`);
   if (failed) return failed;
+  if(area.replay_evidence===REPLAY_POLICY)lines.push(formatReplayEvidence(run.replayEvidence));
   if (area.then === 'ask-code') {
     // New commits on an open PR 1 keep the question's time, so a yes the person already gave still counts
     // (a change request with pdd workflow changes moves it).
@@ -787,7 +849,9 @@ export async function recordEvidence({ ref, summaryFile, cwd }, ports) {
     });
     const expected = new Map(storyLines(rows));
     lines = rows.map(row => row.summary_line);
-    if (rows.some(row => row.summary_line !== expected.get(row.story))) throw Error('Evidence summary_line does not match its structured Story results.');
+    // A saved result of an older pdd says `Runtime check`: read its label as `Prompt tests` before the compare.
+    const label = line => typeof line === 'string' ? line.replace(LABEL_START, PROMPT_TESTS_LABEL) : line;
+    if (rows.some(row => label(row.summary_line) !== expected.get(row.story))) throw Error('Evidence summary_line does not match its structured Story results.');
   } catch (error) { return fail(`Evidence not recorded: ${oneLine(error.message)}`); }
   (run.evidence ??= []).push({ at: p.now(), summary: [...new Set(lines)].join('\n'), source, receipt });
   writeRun(run, p);
@@ -818,7 +882,7 @@ export async function stepDone({ step, summary, cwd, packageRoot = PACKAGE_ROOT 
     record.source = { kind: 'git-content-v1', sha256: gitFingerprint(run.root) };
     (run.runtimeHistory ??= []).push({ ...record, step });
   }
-  if (area.replay_evidence === REPLAY_POLICY) { run.replayEvidence=await currentReplayEvidence(run,p); record.replayEvidence=run.replayEvidence;lines.push(formatReplayEvidence(run.replayEvidence)); }
+  if (area.replay_evidence === REPLAY_POLICY && (area.steps.some(item=>item!==step && !run.done[item]) || area.gate!=='pr' || area.before==='approve' && !prOf(run,area.name))) { run.replayEvidence=await currentReplayEvidence(run,p); record.replayEvidence=run.replayEvidence;lines.push(formatReplayEvidence(run.replayEvidence)); }
   run.done[step] = record;
   const next = area.steps.find(item => !run.done[item]);
   if (next) {
@@ -834,8 +898,8 @@ export async function stepDone({ step, summary, cwd, packageRoot = PACKAGE_ROOT 
     run.gate = { area: area.name, at: p.now(), kind: 'approve-pr' }; run.state = 'waiting'; writeRun(run, p);
     lines.push(`pdd recorded ${step}. The ${area.name} area is done; pdd opens ${prLabel(run, area)} after the person approves.`,
       nothingToTry(run, area, contents)
-        ? 'Gate: show the person the Runtime check line of each Story (one per Story: ✓, ✗ or no verdict) with the report link, if there is one. There is nothing to try. Ask them to approve or ask for changes. Stop. Do not approve for them.'
-        : 'Gate: show the person the Runtime check line of each Story (one per Story: ✓, ✗ or no verdict) with the report link, and the Try link(s). Ask them to try it, then approve or ask for changes. Stop. Do not approve for them.',
+        ? 'Gate: show the person the Prompt tests line of each Story (one per Story: ✓, ✗ or no verdict) with the report link, if there is one. There is nothing to try. Ask them to approve or ask for changes. Stop. Do not approve for them.'
+        : 'Gate: show the person the Prompt tests line of each Story (one per Story: ✓, ✗ or no verdict) with the report link, and the Try link(s). Ask them to try it, then approve or ask for changes. Stop. Do not approve for them.',
       ...(prLabel(run, area) === 'PR 1' ? [`Tell the person what PR 1 holds, in these words: "${holdsLine(contents)}"`] : []),
       `When the person approves in their own words, run: ${p.pdd} workflow approve ${run.number}`,
       'If they ask for changes, revise in this chat, run done again for the step you changed, and ask again.');
@@ -911,6 +975,7 @@ async function syncPr1(run, p) {
     const drafts = approved.length ? await pr1Drafts(run, p) : before;
     return { drafts, lines: await draftDescription(run, pr1, drafts, p) };
   }
+  const adoption=await adoptionFailure(run,p);if(adoption)return {failed:adoption};
   try { await rawGit(p,run.root,'push','origin',`HEAD:refs/heads/${run.branch}`); }
   catch { return { failed: `pdd could not push ${what ?? `the worktree's new commit${ahead > 1 ? 's' : ''}`} to PR 1. Run: ${go}git push origin HEAD:refs/heads/${run.branch}\n${again}` }; }
   await refreshReplayBaseline(run,p);
@@ -987,6 +1052,7 @@ export async function approveRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports
   if (missing) return fail(missing);
   const agent = isAgentSession(p.env), pane = chatPane(run, p.env), viaChat = agent || !p.isTTY || Boolean(pane);
   let carried = [];
+  const adoptedFailure=await adoptionFailure(run,p); if(adoptedFailure)return fail(adoptedFailure);
   if (askCode && run.gate?.kind === 'ask-code') {
     if (replayEnabled(run)) {
       try {
@@ -1056,6 +1122,7 @@ export async function approveRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports
   }
   let based = '';
   if (askCode) {
+    const adoptedFailure=await adoptionFailure(run,p);if(adoptedFailure)return fail(adoptedFailure);
     // Reached at the code gate, or right after PR 1 opened when the terminal said yes to the code PR.
     p.say('Making the code branch…');
     try { based = await codeBranch(run, area, p); }
