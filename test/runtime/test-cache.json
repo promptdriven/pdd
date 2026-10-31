@@ -16,11 +16,11 @@
     },
     {
       "id": "AC4",
-      "text": "`pdd test --lf` runs the latest failed Stories in my selected scope; no failures recorded uses the normal selected Stories and unchanged passes may be skipped."
+      "text": "`pdd test --lf` runs the latest failed Stories in my selected scope; no failures in that scope uses the normal selected Stories and unchanged passes may be skipped."
     },
     {
       "id": "AC5",
-      "text": "`pdd test --cache-clear` clears the whole cache, asks for fresh answers and runs my selected Stories; it takes precedence over `--lf`."
+      "text": "`pdd test --cache-clear` clears the whole local cache and sends my selected Stories again; it takes precedence over `--lf`, prints one stderr notice with the selected Story count, and the interpreter may return a saved answer for the same key until prompt-runtime #535."
     },
     {
       "id": "AC6",
