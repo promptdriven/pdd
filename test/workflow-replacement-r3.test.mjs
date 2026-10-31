@@ -8,14 +8,21 @@ const vectors=JSON.parse(readFileSync(new URL('./fixtures/workflow-open-replacem
 const scenarioTitle=id=>{const scenario=vectors.cases.find(item=>item.id===id);return scenario ? `${scenario.id}: ${scenario.action}` : id;};
 const opts = f => ({ref:'17',cwd:f.source,packageRoot});
 const runs = f => f.herdr.calls.filter(a=>a[0]==='pane'&&a[1]==='run');
+const awaitHandoff = (entering, operation, name) => Promise.race([
+ entering,
+ operation.then(
+  () => assert.fail(`${name} completed before the required handoff`),
+  error => assert.fail(`${name} failed before the required handoff: ${error.message}`)
+ )
+]);
 // Expected results are the lead decisions in RECHECK-2627.md, fix round 3.
 for (const newSession of [false,true]) test(`${scenarioTitle('attached-open-releases-lock')} (${newSession?'--new':'second plain open'})`, async t=>{
  const f=await fixture(t); await f.run();
  let detach,entered;
  const hold=new Promise(r=>detach=r), entering=new Promise(r=>entered=r);
  const watching=openRun(opts(f),{...f.ports,isTTY:true,attach:async()=>{entered();await hold;return 0;}});
- await entering;
  try {
+  await awaitHandoff(entering,watching,'Attach');
   const result=await openRun({...opts(f),newSession},{...f.ports,isTTY:false});
   assert.equal(result.exitCode,0,result.message);
  } finally {detach();await watching;}
@@ -72,8 +79,8 @@ for (const throws of [false,true]) test(`attach handoff persists observations an
   assert.equal(locked,false,'lock released before attach');
   if(throws)throw Error('attach failed');return 0;
  }});
- await entering;
  try{
+  await awaitHandoff(entering,watching,'Attach observation');
   assert.equal((await openRun({...opts(f),newSession:true},f.ports)).exitCode,0);
   const latest=f.record();detach();await watching;
   assert.deepEqual(f.record(),latest,'attach return cannot overwrite replacement custody or failure');
@@ -85,8 +92,8 @@ test('ordinary open retains run lock during native resume and releases on openin
  const healthy=f.ports.herdr;let finish,entered;
  const hold=new Promise(r=>finish=r),entering=new Promise(r=>entered=r);
  f.ports.herdr=async args=>{if(args[0]==='pane'&&args[1]==='run'){entered();await hold;throw Object.assign(Error('resume failed'),{code:'server_unavailable'});}return healthy(args);};
- const opening=openRun(opts(f),f.ports);await entering;
- try{assert.match((await openRun(opts(f),f.ports)).message,/holds this run/);}finally{finish();await opening;}
+ const opening=openRun(opts(f),f.ports);
+ try{await awaitHandoff(entering,opening,'Native resume');assert.match((await openRun(opts(f),f.ports)).message,/holds this run/);}finally{finish();await opening;}
  assert.equal(existsSync(join(f.record().runDir,'chat-replacement.lock')),false);
 });
 
@@ -97,6 +104,7 @@ async function pending(t){
  await openRun({...opts(f),newSession:true},f.ports);
  assert.ok(f.record().chatReplacement,'Explicit replacement records durable launch custody');
  assert.ok(f.record().chatReplacement.replacement,'Replacement prepares an exact native identity');
+ assert.ok(f.record().chatReplacement.recovery,'Replacement retains recovery custody before evidence is changed');
  f.ports.findNativeSessions=async()=>[];
  return {f,healthy,target:f.record().chatReplacement.replacement};
 }
