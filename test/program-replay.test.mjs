@@ -8,15 +8,16 @@ import { runPdd } from '../src/pdd-cli.mjs';
 import { proseSha256 } from '../src/runtime-preflight.mjs';
 import { harbor, fakeRuntime, portsFor, PLACE, TOKEN } from './runtime-fake.mjs';
 
-function entry(root,cli=true) {
+function entry(root,cli=true,mixed=false) {
   const schema=cli?{type:'object',properties:{argv:{type:'array',items:{type:'string'}}},required:['argv'],additionalProperties:false}:{type:'object',properties:{amount:{type:'integer',minimum:1}},required:['amount'],additionalProperties:false};
   const output=cli?{type:'object',properties:{stdout:{type:'string'},stderr:{type:'string'},exit_code:{type:'integer'}},required:['stdout','stderr','exit_code'],additionalProperties:false}:{type:'object',properties:{},required:[],additionalProperties:false};
   const iface={status:'draft',prose_sha256:'',entries:[{operation:'main',input_schema:schema,result_schema:output,errors:[]}],calls:[],resources:[],limits:{max_steps:1,max_model_calls:1},conventions:cli?['input_schema','result_schema'].map(k=>({path:'/entries/0/'+k,convention:'cli'})):[]};
+  if(mixed)iface.entries.push({operation:'serve',input_schema:{type:'object',properties:{},required:[],additionalProperties:false},result_schema:{type:'object',properties:{},required:[],additionalProperties:false},errors:[]});
   let text='# replay\n\nDeterministic fake program.\n\n## Dependencies\n\nNone.\n\n<details><summary>Runtime interface</summary>\n\n```json\n'+JSON.stringify(iface)+'\n```\n</details>\n';
   text=text.replace('"prose_sha256":""','"prose_sha256":"'+proseSha256(text)+'"');writeFileSync(join(root,PLACE),text);
 }
 async function setup(t, options={}) {
-  const h=harbor(t,root=>entry(root,options.cli!==false));
+  const h=harbor(t,root=>entry(root,options.cli!==false,options.mixed));
   const fake=await fakeRuntime(t,(e,f)=>{
     if(e.command==='lint')return {status:200,json:f.lint(e.request.requestId)};
     if(e.command==='try')return {status:200,json:f.tryJob(e.request.requestId)};
@@ -48,6 +49,18 @@ test('shell launcher executes argv[] once and carries selected starting data',as
   })});
   assert.equal(r.code,0,r.ports.stderr.text+command?.err);assert.equal(command.out,'replayed\n');
   assert.equal(h.fake.jsonPosts.length,1);assert.deepEqual(h.fake.jsonPosts[0].json.input,{argv:[]});assert.deepEqual(h.fake.posts.find(p=>p.command==='try').request.initial_world,{selected:true});assert.equal(h.fake.posts.filter(p=>p.command==='try').length,1);
+});
+
+test('mixed CLI launcher bypasses word table for serve argv',async t=>{
+  const h=await setup(t,{mixed:true});const bin=join(h.home,'fake-bin');mkdirSync(bin);
+  writeFileSync(join(bin,'gh'),`#!/bin/sh\nif [ "$1" = auth ]; then printf '%s\\n' '${TOKEN}'; else printf '%s\\n' 'octo 4242'; fi\n`,{mode:0o700});
+  h.env.PATH=bin+':/usr/bin:/bin';writeFileSync(join(h.repo,'seed.json'),'{"selected":true}');
+  let command;
+  const r=await h.invoke([],['--data','seed.json'],{stdin:Object.assign(Readable.from([]),{isTTY:true}),shell:async(shell,env)=>new Promise((done,reject)=>{
+    const child=spawn('replay',['serve'],{cwd:h.repo,env,stdio:['ignore','pipe','pipe']});let out='',err='';child.stdout.on('data',c=>out+=c);child.stderr.on('data',c=>err+=c);child.once('error',reject);child.once('exit',code=>{command={code,out,err};done(code);});
+  })});
+  assert.equal(r.code,0,r.ports.stderr.text+command?.err);assert.equal(command.out,'replayed\n');
+  assert.equal(h.fake.jsonPosts.length,1);assert.deepEqual(h.fake.jsonPosts[0].json.input,{argv:['serve']});assert.deepEqual(h.fake.posts.find(p=>p.command==='try').request.initial_world,{selected:true});assert.equal(h.fake.posts.filter(p=>p.command==='try').length,1);
 });
 
 test('missing confirmed world blocks new calls until same-ID GET recovery',async t=>{
