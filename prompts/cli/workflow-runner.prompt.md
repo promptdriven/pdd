@@ -18,6 +18,8 @@ Public detailed, list, all-repository and JSON status group this failure as wait
 
 Only a successful start/open or positive observation of the same current chat clears its active failure/unconfirmed flag. Restore `running` only when no person question or approval gate is waiting; recovery never approves, advances an area or discards decisions. If Herdr remains unavailable, keep the precise external failure and preserve custody rather than claiming recovery.
 
+When the [layout owner](workflow-herdr-layout.prompt.md#actionable-identity-refusal) refuses with `herdr_layout_identity_changed`, preserve its actionable message with its unchanged code in the public command result, including later-area startup after approval. Keep initial-start and explicit-open failure reporting and cleanup warnings equally informative. The layout owner defines diagnostic contents; this forwarding changes no approval decision, area transition, run custody or recovery policy.
+
 ## Commands
 
 Each workflow command export takes `(input, ports)` and returns `{exitCode, message}`. The CLI prints the message.
