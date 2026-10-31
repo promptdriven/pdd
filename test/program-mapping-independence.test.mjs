@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, writeFileSync, symlinkSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { harbor } from './runtime-fake.mjs';
 
 async function helpers() {
@@ -110,27 +111,33 @@ for(const newcomer of ['place_order','later/place_order'])test(`base folder owne
  const {programData}=await helpers();const h=repository(t);
  mkdirSync(join(h.repo,'prompts'),{recursive:true});
  writeFileSync(join(h.repo,'prompts/place_order.prompt.md'),'# Existing owner\n');
- const owner=selection(programData,h.repo,'prompts/place_order');
+ let owner;assert.doesNotThrow(()=>{owner=selection(programData,h.repo,'prompts/place_order');});
  writeFileSync(join(owner.dir,'world.json'),'{"owner":"unchanged"}\n');
  if(newcomer.includes('/'))mkdirSync(join(h.repo,'later'));
  writeFileSync(join(h.repo,newcomer+'.prompt.md'),'# Newcomer\n');
- const next=selection(programData,h.repo,newcomer);
+ let next;assert.doesNotThrow(()=>{next=selection(programData,h.repo,newcomer);});
  assert.notEqual(next.dir,owner.dir);assert.deepEqual(next.startingData.initial_world,{});
  writeFileSync(join(next.dir,'world.json'),' {"newcomer":true}');
- const reused=selection(programData,h.repo,'prompts/place_order');
+ let reused;assert.doesNotThrow(()=>{reused=selection(programData,h.repo,'prompts/place_order');});
  assert.equal(reused.dir,owner.dir);assert.deepEqual(reused.startingData.initial_world,{owner:'unchanged'});
  const literal='%r__place_order';writeFileSync(join(h.repo,literal+'.prompt.md'),'# Literal escape marker\n');
- const escaped=selection(programData,h.repo,literal);assert.notEqual(escaped.dir,next.dir);assert.notEqual(escaped.dir,owner.dir);
+ let escaped;assert.doesNotThrow(()=>{escaped=selection(programData,h.repo,literal);});assert.notEqual(escaped.dir,next.dir);assert.notEqual(escaped.dir,owner.dir);
 });
 
 test('base owner survives removal of its prompt when a sole visible newcomer arrives',async t=>{
  const {programData}=await helpers();const h=repository(t);
  mkdirSync(join(h.repo,'prompts'),{recursive:true});const oldPath=join(h.repo,'prompts/place_order.prompt.md');
- writeFileSync(oldPath,'# Old owner\n');const owner=selection(programData,h.repo,'prompts/place_order');
+ writeFileSync(oldPath,'# Old owner\n');let owner;assert.doesNotThrow(()=>{owner=selection(programData,h.repo,'prompts/place_order');});
  const bytes='{"old":"preserve exact bytes"}\n';writeFileSync(join(owner.dir,'world.json'),bytes);
- unlinkSync(oldPath);mkdirSync(join(h.repo,'later'));
+ unlinkSync(oldPath);
+ const removed=spawnSync('git',['rm','--cached','--','prompts/place_order.prompt.md'],{cwd:h.repo,encoding:'utf8'});
+ assert.equal(removed.status,0,removed.stderr);
+ mkdirSync(join(h.repo,'later'));
  writeFileSync(join(h.repo,'later/place_order.prompt.md'),'# Sole visible newcomer\n');
- const newcomer=selection(programData,h.repo,'later/place_order');assert.notEqual(newcomer.dir,owner.dir);
+ const visible=spawnSync('git',['ls-files','-z','--cached','--others','--exclude-standard'],{cwd:h.repo,encoding:'utf8'});
+ assert.equal(visible.status,0,visible.stderr);
+ assert.deepEqual(visible.stdout.split('\0').filter(file=>file.endsWith('.prompt.md')&&basename(file,'.prompt.md')==='place_order'),['later/place_order.prompt.md']);
+ let newcomer;assert.doesNotThrow(()=>{newcomer=selection(programData,h.repo,'later/place_order');});assert.notEqual(newcomer.dir,owner.dir);
  assert.deepEqual(newcomer.startingData.initial_world,{});assert.equal(readFileSync(join(owner.dir,'world.json'),'utf8'),bytes);
  assert.deepEqual(JSON.parse(readFileSync(join(owner.dir,'program.json'),'utf8')),{program:'prompts/place_order'});
 });
