@@ -51,3 +51,10 @@ test('C session preserves app map, uploads overlay and returns proxy capability 
   }
   assert.equal(fake.posts.filter(p=>p.command==='try').length,1);
 });
+
+test('C async launch rejection becomes a plain pdd error',async t=>{
+ const setup=harbor(t),env={HOME:setup.home,PDD_STATE_DIR:setup.state};
+ const io=portsFor(env,{programApp:{appKind(){return 'http';},async runApp(){await Promise.resolve();throw new Error('App could not start');}},stdin:Readable.from([])});
+ let code;try{code=await runPdd([PLACE],{cwd:setup.repo,env,stdout:io.ports.stdout,stderr:io.ports.stderr,stdin:io.ports.stdin,runtimePorts:io.ports});}catch(error){assert.fail(`C rejection must be handled: ${error.message}`);}
+ assert.equal(code,125,io.ports.stderr.text);assert.match(io.ports.stderr.text,/App could not start/);assert.doesNotMatch(io.ports.stderr.text,/\n\s+at /);assert.equal(io.clock.gh.length,0);
+});

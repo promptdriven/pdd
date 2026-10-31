@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { runPdd } from '../src/pdd-cli.mjs';
@@ -34,7 +34,7 @@ async function setup(t, options={}) {
   });
   const env={HOME:h.home,PDD_STATE_DIR:h.state,PDD_RUNTIME_URL:fake.origin,PATH:'/usr/bin:/bin'};
   const invoke=async(args,prefix=[],extra={})=>{const io=portsFor(env,{stdin:Readable.from([]),...extra});const code=await runPdd([...prefix,PLACE,...args],{cwd:h.repo,env,stdout:io.ports.stdout,stderr:io.ports.stderr,stdin:io.ports.stdin,runtimePorts:io.ports});return {code,...io};};
-  const stored=name=>{const run=join(h.repo,'.pdd/run');return JSON.parse(readFileSync(join(run,readdirSync(run)[0],name),'utf8'));};
+  const stored=name=>{const run=join(h.repo,'.pdd/run');const path=join(run,'prompts/place_order',name);assert.ok(existsSync(path),'readable program path must contain '+name);return JSON.parse(readFileSync(path,'utf8'));};
   return {...h,fake,env,invoke,stored};
 }
 
@@ -64,11 +64,11 @@ test('matched action snapshots win over unrelated latest state',async t=>{
 });
 
 test('literal input cannot bypass local schema validation with a Story reference',async t=>{
-  const h=await setup(t,{cli:false});const r=await h.invoke(['--input','{"$step_result":1,"amount":0}']);assert.equal(r.code,2);assert.equal(r.clock.gh.length,0);assert.equal(h.fake.posts.length,0);
+  const h=await setup(t,{cli:false});const r=await h.invoke(['--input','{"$step_result":1,"amount":0}']);assert.equal(r.code,2);assert.match(r.ports.stderr.text,/Usage:.*place_order\.prompt\.md/);assert.match(r.ports.stderr.text,/amount|field|schema/i);assert.equal(r.clock.gh.length,0);assert.equal(h.fake.posts.length,0);
 });
 
 test('external saved-world edit replaces session instead of reusing stale runtime world',async t=>{
   const h=await setup(t);assert.equal((await h.invoke(['change'])).code,0);
-  const run=join(h.repo,'.pdd/run');writeFileSync(join(run,readdirSync(run)[0],'data.json'),'{"external":"selection"}');
+  const run=join(h.repo,'.pdd/run');assert.ok(existsSync(join(run,'prompts/place_order','data.json')),'readable path must contain saved data');writeFileSync(join(run,'prompts/place_order','data.json'),'{"external":"selection"}');
   const r=await h.invoke(['next']);assert.equal(r.code,0,r.ports.stderr.text);assert.equal(h.fake.posts.filter(p=>p.command==='try').length,2);assert.deepEqual(h.fake.posts.filter(p=>p.command==='try').at(-1).request.initial_world,{external:'selection'});assert.equal(h.fake.deletes.length,1);
 });
