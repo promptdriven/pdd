@@ -116,3 +116,11 @@ test('screen descriptor keeps genuine typed operation in word table',async t=>{
  const code=await runPdd([PLACE],{cwd:setup.repo,env,stdout:io.ports.stdout,stderr:io.ports.stderr,stdin:io.ports.stdin,runtimePorts:io.ports});
  assert.equal(code,2,io.ports.stderr.text);assert.match(io.ports.stderr.text,/place_order: typed/);assert.match(io.ports.stderr.text,/app: screen/);assert.equal(io.clock.gh.length,0);
 });
+
+test('HTTP misplaced option advice preserves quoted invocation file and HTTP selector',async t=>{
+ const setup=harbor(t),env={HOME:setup.home,PDD_STATE_DIR:setup.state};const cwd=join(setup.repo,'sub');mkdirSync(cwd);
+ const unusual='../prompts/my app.prompt.md';writeFileSync(join(cwd,unusual),(await import('node:fs')).readFileSync(join(setup.repo,PLACE)));
+ const io=portsFor(env,{stdin:Readable.from([]),programApp:{appKind(){return 'http';},runApp(){assert.fail('suffix options are advice only');}}});
+ const code=await runPdd([unusual,'serve','--port','9000'],{cwd,env,stdout:io.ports.stdout,stderr:io.ports.stderr,stdin:io.ports.stdin,runtimePorts:io.ports});
+ assert.equal(code,2,io.ports.stderr.text);assert.match(io.ports.stderr.text,/pdd options go before the file: pdd --port 9000 ['"]\.\.\/prompts\/my app\.prompt\.md['"] serve/);assert.equal(io.clock.gh.length,0);
+});
