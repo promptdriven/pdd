@@ -1,8 +1,9 @@
 // Generated from prompts/cli/workflow-runs.prompt.md (sha256: 2806ab3c93c8a880df568fd933f399ec4b6150950271f2e4b3789847350de70b).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import * as nativeRunFiles from 'node:fs';
 import { mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, hostname } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -102,16 +103,121 @@ export function statusView(run) {
     links: Array.isArray(run.links) ? run.links : [], controller: null, message: run.message ?? null, cancelled: run.cancelled ?? null };
 }
 
-export function writeRun(run, ports = {}) {
+// One short local owner protects selecting latest state as well as publication.
+// Busy owners are never reclaimed by age or by a guessed process identity.
+const activeRunOwners = new Set();
+const pauseBuffer = new Int32Array(new SharedArrayBuffer(4));
+const identity = run => [run.v, run.runId, run.number, run.repo, run.root, run.commonDir, run.runDir];
+const sameIdentity = (a, b) => JSON.stringify(identity(a)) === JSON.stringify(identity(b));
+function saveError(error) {
+  if (['workflow_run_save_failed', 'workflow_progress_refused'].includes(error?.code)) return error;
+  return Object.assign(new Error(`Could not save workflow progress: ${error.message ?? error}${/retry/i.test(error.message ?? '') ? '' : '. Check the run folder and retry.'}`), {code:'workflow_run_save_failed',cause:error});
+}
+const ownershipFiles=ports=>({...nativeRunFiles,...ports.runFiles});
+function ownerEntries(path,fs) { return fs.readdirSync(path).filter(name=>/^owner-[A-Za-z0-9_-]+\.json$/.test(name)); }
+function readOwner(path,name,fs) {
+  const text=fs.readFileSync(join(path,name),'utf8'),value=JSON.parse(text);
+  if(!Number.isInteger(value.pid)||value.pid<1||typeof value.hostname!=='string'||!value.hostname||typeof value.token!=='string'||name!==`owner-${value.token}.json`)throw Error('Malformed owner');
+  return {value,text};
+}
+export function readRunOwnership(runDir,ports={}) {
+  const fs=ownershipFiles(ports),path=join(runDir,'.ordinary-owner'),empty={path,pid:null,hostname:null,token:null,warning:null};
+  try {
+    fs.lstatSync(path);
+    const entries=ownerEntries(path,fs);
+    if(!entries.length){if(fs.readdirSync(path).includes('.namespace'))return null;throw Error('Owner metadata is missing');}
+    let value;
+    try{value=JSON.parse(fs.readFileSync(join(path,entries[0]),'utf8'));}catch{return {...empty,warning:'Ownership metadata is malformed or unreadable'};}
+    const snapshot={...empty,pid:Number.isInteger(value?.pid)&&value.pid>0?value.pid:null,hostname:typeof value?.hostname==='string'&&value.hostname?value.hostname:null,token:typeof value?.token==='string'&&value.token?value.token:null};
+    snapshot.warning=!snapshot.pid||!snapshot.hostname||!snapshot.token||entries[0]!==`owner-${snapshot.token}.json`?'Ownership metadata is malformed':entries.length>1?'More than one ownership claim is present':null;
+    return snapshot;
+  } catch(error) {
+    if(error.code==='ENOENT'){
+      try{fs.lstatSync(path);}catch(missing){if(missing.code==='ENOENT')return null;}
+    }
+    return {...empty,warning:'Ownership metadata is missing, malformed or unreadable'};
+  }
+}
+function claimRun(runDir, fs,ports) {
+  const path=join(runDir,'.ordinary-owner');
+  if(activeRunOwners.has(runDir))throw Error('A nested ordinary run save is not allowed');
+  const host=typeof ports.hostname==='function'?ports.hostname():ports.hostname??hostname();
+  const owner={pid:ports.ownerPid??process.pid,hostname:host,token:randomBytes(16).toString('hex')};
+  const leaf=join(path,`owner-${owner.token}.json`),bytes=JSON.stringify(owner);
+  const alive=pid=>{try{if(ports.processIdentity)return ports.processIdentity(pid)?.alive;process.kill(pid,0);return true;}catch(error){return error.code==='ESRCH'?false:null;}};
+  const busy=()=>{const held=readRunOwnership(runDir,{...ports,runFiles:fs});return Object.assign(Error(`Another command owns workflow progress at ${path}${held?.pid ? ` (PID ${held.pid}, host ${held.hostname}, token ${held.token})` : ' (owner unknown)'}. Wait briefly; if no pdd command is running, inspect and remove this ownership folder, then retry`),{code:'workflow_run_busy'});};
+  let created=false,acquired;
+  try{fs.mkdirSync(path,{mode:0o700});created=true;}catch(error){if(error.code!=='EEXIST')throw error;}
+  try{acquired=fs.lstatSync(path);}catch(error){if(created)try{fs.rmdirSync(path);}catch{}throw error;}
+  if(!acquired.isDirectory())throw busy();
+  if(created)fs.writeFileSync(join(path,'.namespace'),'v1',{mode:0o600,flag:'wx'});
+  // Keep the namespace directory permanently. Token-specific leaves avoid the
+  // empty-directory unlink race when another acquisition replaces an old owner.
+  const ownDirectory=()=>{const current=fs.lstatSync(path);return current.dev===acquired.dev&&current.ino===acquired.ino;};
+  const release=()=>{activeRunOwners.delete(runDir);try{if(ownDirectory()&&fs.readFileSync(leaf,'utf8')===bytes)fs.unlinkSync(leaf);}catch{}};
+  for(let attempt=0;;attempt++){
+    let protectedOwner=false;
+    const entries=ownerEntries(path,fs);
+    if(!entries.length&&!fs.readdirSync(path).includes('.namespace'))throw busy();
+    for(const name of entries){
+      let observed;try{observed=readOwner(path,name,fs);}catch{protectedOwner=true;continue;}
+      if(observed.value.hostname!==host||alive(observed.value.pid)!==false){protectedOwner=true;continue;}
+      // Each token has its own immutable leaf: removing a dead token cannot
+      // unlink a different replacement token, even in the same namespace.
+      if(ownDirectory()&&fs.readFileSync(join(path,name),'utf8')===observed.text)try{fs.unlinkSync(join(path,name));}catch(error){if(error.code!=='ENOENT')throw error;}
+    }
+    if(!protectedOwner){
+      if(!ownDirectory())throw busy();
+      try{fs.writeFileSync(join(path,'.namespace'),'v1',{mode:0o600,flag:'wx'});}catch(error){if(error.code!=='EEXIST')throw error;}
+      const temporary=join(runDir,`.ordinary-${owner.token}.tmp`);
+      try{fs.writeFileSync(temporary,bytes,{mode:0o600,flag:'wx'});fs.renameSync(temporary,leaf);}finally{try{fs.unlinkSync(temporary);}catch{}}
+      if(ownerEntries(path,fs).every(name=>name===`owner-${owner.token}.json`)){activeRunOwners.add(runDir);return release;}
+      release();
+    }
+    if(attempt===9)throw busy();
+    Atomics.wait(pauseBuffer,0,0,10);
+  }
+}
+function ownedRun(runDir, ports, action, {create=false}={}) {
+  const fs={...nativeRunFiles,...ports.runFiles};
+  let release;
+  try {
+    if (create) fs.mkdirSync(runDir,{recursive:true});
+    release=(ports.acquireRunOwnership ?? (directory=>claimRun(directory,fs,ports)))(runDir);
+    if (typeof release !== 'function') throw Error('Run ownership was not acquired');
+    return action(fs);
+  } catch (error) { throw saveError(error); }
+  finally { if (release) {try{release();}catch{/* Release trouble cannot undo or misreport a published record. */}} }
+}
+function publishRun(run, ports, fs) {
   run.journalSeq = (Number.isSafeInteger(run.journalSeq) ? run.journalSeq : 0) + 1;
   run.updatedAt = (ports.now ?? Date.now)();
   Object.assign(run, statusView(run));
-  mkdirSync(run.runDir, { recursive: true });
   const temporary = join(run.runDir, `.status.json.${randomBytes(6).toString('hex')}.tmp`);
-  writeFileSync(temporary, JSON.stringify(run, null, 2) + '\n', { mode: 0o600 });
-  renameSync(temporary, join(run.runDir, 'status.json'));
-  try { updateIndex(run, ports); } catch { /* The index only helps selection outside a repository. */ }
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(run, null, 2) + '\n', { mode: 0o600, flag:'wx' });
+    fs.renameSync(temporary, join(run.runDir, 'status.json'));
+  } finally { try { fs.unlinkSync(temporary); } catch { /* Published or not created. */ } }
   return run;
+}
+function indexed(run, ports) {
+  try { updateIndex(run, ports); } catch { /* Selection index is best effort after commit. */ }
+  return run;
+}
+export function writeRun(run, ports = {}) {
+  ownedRun(run.runDir, ports, fs=>publishRun(run,ports,fs), {create:true});
+  return indexed(run,ports);
+}
+export function updateRun(runDir, update, ports = {}) {
+  const committed=ownedRun(runDir,ports,fs=>{
+    const run=JSON.parse(fs.readFileSync(join(runDir,'status.json'),'utf8'));
+    if (!object(run) || run.v!==1 || !Number.isSafeInteger(run.number) || run.runDir!==runDir) throw Error('The existing run record is missing, unreadable or invalid');
+    const original=structuredClone(run);
+    const result=update(run);
+    if (!object(result) || typeof result.then==='function' || !sameIdentity(original,result)) throw Error('An ordinary update must return the same run identity synchronously');
+    return publishRun(result,ports,fs);
+  });
+  return indexed(committed,ports);
 }
 
 export async function runForWorktree(cwd, ports = {}) {
