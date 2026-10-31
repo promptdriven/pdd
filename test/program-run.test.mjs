@@ -232,7 +232,7 @@ for(const program of ['../escape','/absolute','prompts/../escape','prompts//todo
 });
 test('programData refuses a symlink ancestor without modifying its target',async t=>{
  const {programData}=await dataModule();const h=harbor(t);const outside=join(h.home,'outside');mkdirSync(outside);symlinkSync(outside,join(h.repo,'.pdd'),'dir');
- assert.throws(()=>programData({root:h.repo,program:'prompts/todo',flags:{}},{}),/unsafe|symlink|directory/i);assert.deepEqual(readdirSync(outside),[]);
+ assert.throws(()=>programData({root:h.repo,program:'todo',flags:{}},{}),/unsafe|symlink|directory/i);assert.deepEqual(readdirSync(outside),[]);
 });
 test('program data lock excludes a concurrent owner and admits one after release',async t=>{
  const {programData,acquireProgramLock}=await dataModule();const h=harbor(t);const data=programData({root:h.repo,program:'todo',flags:{}},{});const release=acquireProgramLock(data.dir);
