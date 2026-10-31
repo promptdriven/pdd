@@ -250,7 +250,7 @@ function checkContracts(root,{stdout,stderr,json = false}) {
           const raw = get(tableKind), target = unquote(get('Schema'));
           const labels = unquote(get('Writer')).split(',')
             .filter((piece,index) => !index || !/^(through|via|using|by)\b/i.test(unquote(piece)))
-            .flatMap(piece => piece.split(/\s+and\s+|[\/&;]/)).map(unquote).filter(Boolean);
+            .flatMap(piece => piece.split(/\s+and\s+|[\/&;]/i)).map(unquote).filter(Boolean);
           const initial = labels.some(label => /^(test data|seed|initial world)$/i.test(label));
           const actors = labels.filter(label => !/^(test data|seed|initial world)$/i.test(label));
           const quoted = [...raw.matchAll(/`([^`]*)`/g)].map(match => match[1]);
@@ -375,6 +375,7 @@ function checkContracts(root,{stdout,stderr,json = false}) {
       const records=[a.target,b.target].sort();
       warnings.push({kind:'declared-record-disagreement',records,message:`Declared records ${records.join(' and ')} have the same fields but different shapes`});
     }
+    for (const [pointer,row] of rows) if (row.initial && !row.actors.size) warnings.push({kind:'world-writer-initial-only',file:worldPath,world_keys:[pointer],message:`World key ${pointer} has only initialization data and no runtime writer`});
     const unknownKeys=[...rows].filter(([,row]) => !row.canonical && !row.explicit).map(([pointer]) => pointer).sort();
     if (unknownKeys.length) warnings.push({kind:'world-schema-missing',file:worldPath,world_keys:unknownKeys,message:unknownKeys.length === 1 ? '1 world key has no schema; its seed value was not checked' : `${unknownKeys.length} world keys have no schema; their seed values were not checked`});
     const compared = compareCopies(prompts,catalog.records.filter(record => authorities.has(record.target)));
@@ -382,7 +383,22 @@ function checkContracts(root,{stdout,stderr,json = false}) {
     for (const warning of compared.warnings) report(warning.split(' ')[0],warning,'',warning,true);
     if (hasWorld && hasSeed) {
       try {
-        const concrete = [...rows.values()].filter(row => !row.tokens.some(token => /<[^>]+>/.test(token)));
+        // Match templates only for advisory coverage, within one decoded key.
+        const matchesSegment = (template,key) => {
+          const pieces = template.split(/<[^>]+>/);
+          if (pieces.length === 1) return template === key;
+          const first = pieces[0], last = pieces[pieces.length-1];
+          if (!key.startsWith(first) || !key.endsWith(last)) return false;
+          let position = first.length;
+          const end = key.length-last.length;
+          for (const piece of pieces.slice(1,-1)) {
+            const found = key.indexOf(piece,position);
+            if (found < 0 || found+piece.length > end) return false;
+            position = found+piece.length;
+          }
+          return position <= end;
+        };
+        const declarations = [...rows.values()];
         const uncovered = [];
         const coverage = (value,tokens,candidates) => {
           if (candidates.some(row => row.tokens.length === tokens.length)) return;
@@ -391,9 +407,9 @@ function checkContracts(root,{stdout,stderr,json = false}) {
             uncovered.push(`/${tokens.map(escape).join('/')}`);
             return;
           }
-          for (const [key,child] of children) coverage(child,[...tokens,key],candidates.filter(row => row.tokens[tokens.length] === key));
+          for (const [key,child] of children) coverage(child,[...tokens,key],candidates.filter(row => matchesSegment(row.tokens[tokens.length],key)));
         };
-        coverage(seedWorld,[],concrete);
+        coverage(seedWorld,[],declarations);
         if (uncovered.length) {
           const world_keys = [...new Set(uncovered)].sort();
           warnings.push({kind:'world-writer-missing',file:seedPath,world_keys,message:`${world_keys.length} world ${world_keys.length === 1 ? 'key has' : 'keys have'} no writer declaration: ${world_keys.join(', ')}`});
@@ -426,7 +442,7 @@ function checkContracts(root,{stdout,stderr,json = false}) {
   unique.sort((a,b) => { for (const key of fields) { const left=a[key] ?? '', right=b[key] ?? ''; if (left!==right) return left<right?-1:1; } return 0; });
   const exit_code = unique.some(item => item.kind==='problem') ? 4 : unique.length ? 5 : 0;
   const skipped_files = [...skipped].sort();
-  warnings.sort((a,b) => { const left=[a.kind,a.file ?? '',...(a.records ?? [])].join('\n'),right=[b.kind,b.file ?? '',...(b.records ?? [])].join('\n'); return left<right?-1:left>right?1:0; });
+  warnings.sort((a,b) => { const left=[a.kind,a.file ?? '',...(a.records ?? []),...(a.world_keys ?? [])].join('\n'),right=[b.kind,b.file ?? '',...(b.records ?? []),...(b.world_keys ?? [])].join('\n'); return left<right?-1:left>right?1:0; });
   if (json) line(stdout,JSON.stringify({exit_code,checked_records:checkedRecords,checked_world_values:checkedValues,skipped_files,diagnostics:unique,warnings}));
   else {
     const presentations = new Map();

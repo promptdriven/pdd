@@ -16,6 +16,7 @@ export function checkWarnings(actual,expected,text = null) {
       assert.match(warning.message,noun,'warning quantity and noun');
       if (warning.kind==='world-writer-missing') for (const path of wanted.world_keys) assert.ok(warning.message.includes(path),'warning path');
     }
+    if (warning.kind==='world-writer-initial-only') for (const path of wanted.world_keys) assert.ok(warning.message.includes(path),'initial-only warning path');
     if (text!==null) {
       const lines=text.split('\n').filter(line=>line.startsWith('Warning:'));
       assert.equal(lines.length,expected.length,'one text line per warning');
@@ -29,6 +30,7 @@ export function checkWarnings(actual,expected,text = null) {
         const noun=new RegExp(`\\b${count} world ${count===1?'key\\b':'keys\\b'}`);
         assert.ok(lines.some(line=>noun.test(line)&&wanted.world_keys.every(path=>line.includes(path))),'missing writer count and paths');
       }
+      else if (warning.kind==='world-writer-initial-only') assert.ok(lines.some(line=>wanted.world_keys.every(path=>line.includes(path))),'initial-only text path');
       else for (const record of wanted.records) assert.ok(lines.some(line=>line.includes(record)),'warning record identity');
     }
   }
