@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, readFileSync, rmSync, existsSync, readdirSync, mkdirSync, symlinkSync } from 'node:fs';
+import { writeFileSync, readFileSync, rmSync, existsSync, readdirSync, mkdirSync, symlinkSync, cpSync } from 'node:fs';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { Readable } from 'node:stream';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { proseSha256 } from '../src/runtime-preflight.mjs';
-import { harbor, fakeRuntime, portsFor, PLACE } from './runtime-fake.mjs';
+import { harbor, fakeRuntime, portsFor, PLACE, temp } from './runtime-fake.mjs';
 
 const object = (properties, required = Object.keys(properties)) => ({ type:'object', properties, required, additionalProperties:false });
 const str = {type:'string'};
@@ -48,6 +49,17 @@ async function harness(t, cli=true, options={}) {
     return {code,out:io.ports.stdout.text,err:io.ports.stderr.text,...io};
   }
   return {setup,fake,invoke};
+}
+async function withoutApp(t, h, args=[]) {
+  const isolated=temp(t);
+  cpSync(new URL('../src/',import.meta.url),join(isolated,'src'),{recursive:true});
+  rmSync(join(isolated,'src/program-app.mjs'),{force:true});
+  // Enter through the public CLI so alpha fails by assertion, even before B's dispatcher exists.
+  const {runPdd: isolatedRunPdd}=await import(pathToFileURL(join(isolated,'src/pdd-cli.mjs')).href);
+  const env={HOME:h.setup.home,PDD_STATE_DIR:h.setup.state,PDD_RUNTIME_URL:h.fake.origin,PATH:'/usr/bin:/bin'};
+  const io=portsFor(env,{stdin:Readable.from([])});
+  const code=await isolatedRunPdd([PLACE,...args],{cwd:h.setup.repo,env,stdout:io.ports.stdout,stderr:io.ports.stderr,stdin:io.ports.stdin,runtimePorts:io.ports});
+  return {code,out:io.ports.stdout.text,err:io.ports.stderr.text};
 }
 const ok = r => assert.equal(r.code,0,r.err+r.out);
 const paths = root => existsSync(root)?readdirSync(root,{recursive:true}).map(p=>join(root,p)):[];
@@ -161,7 +173,21 @@ test('direct: Ctrl-C preserves accepted ID for GET-only --read and exits130',asy
 });
 test('direct: HTTP titled typed prompt runs typed when C module is missing',async t=>{
  const h=await harness(t,false);const path=join(h.setup.repo,PLACE);let text=readFileSync(path,'utf8').replace('"input_schema":{','"input_schema":{"title":"HTTP GET /items",');text=text.replace(/"prose_sha256":"[a-f0-9]+"/,`"prose_sha256":"${proseSha256(text)}"`);writeFileSync(path,text);
- const r=await h.invoke(['--name','x']);ok(r);assert.deepEqual(h.fake.jsonPosts[0].json.input,{name:'x'});assert.equal(r.out,'{"ok":true}\n');
+ const r=await withoutApp(t,h,['--name','x']);ok(r);assert.deepEqual(h.fake.jsonPosts[0].json.input,{name:'x'});assert.equal(r.out,'{"ok":true}\n');
+});
+
+test('direct: missing C and no CLI or typed operation gives agreed plain fallback',async t=>{
+ const h=await harness(t,false),path=join(h.setup.repo,PLACE);
+ let text=readFileSync(path,'utf8');
+ const match=text.match(/```json\n([\s\S]*?)\n```/),iface=JSON.parse(match[1]);
+ iface.entries=[];
+ text=text.replace(match[1],JSON.stringify(iface));
+ text=text.replace(/"prose_sha256":"[a-f0-9]+"/,`"prose_sha256":"${proseSha256(text)}"`);
+ writeFileSync(path,text);
+ const r=await withoutApp(t,h);
+ assert.equal(r.code,2);
+ assert.equal(r.err,'Screen apps and HTTP entries open this way in the next release; for now run pdd simulate STORY.\n');
+ assert.equal(r.out,'');assert.equal(h.fake.posts.length,0);
 });
 
 test('direct typed: numeric and boolean array flags use item types',async t=>{

@@ -10,7 +10,7 @@ import { harbor, fakeRuntime, portsFor, PLACE, TOKEN } from './runtime-fake.mjs'
 
 function entry(root,cli=true) {
   const schema=cli?{type:'object',properties:{argv:{type:'array',items:{type:'string'}}},required:['argv'],additionalProperties:false}:{type:'object',properties:{amount:{type:'integer',minimum:1}},required:['amount'],additionalProperties:false};
-  const output=cli?{type:'object',properties:{stdout:{type:'string'},stderr:{type:'string'},exit_code:{type:'integer'}},required:['stdout','stderr','exit_code'],additionalProperties:false}:{type:'object',properties:{},additionalProperties:false};
+  const output=cli?{type:'object',properties:{stdout:{type:'string'},stderr:{type:'string'},exit_code:{type:'integer'}},required:['stdout','stderr','exit_code'],additionalProperties:false}:{type:'object',properties:{},required:[],additionalProperties:false};
   const iface={status:'draft',prose_sha256:'',entries:[{operation:'main',input_schema:schema,result_schema:output,errors:[]}],calls:[],resources:[],limits:{max_steps:1,max_model_calls:1},conventions:cli?['input_schema','result_schema'].map(k=>({path:'/entries/0/'+k,convention:'cli'})):[]};
   let text='# replay\n\nDeterministic fake program.\n\n## Dependencies\n\nNone.\n\n<details><summary>Runtime interface</summary>\n\n```json\n'+JSON.stringify(iface)+'\n```\n</details>\n';
   text=text.replace('"prose_sha256":""','"prose_sha256":"'+proseSha256(text)+'"');writeFileSync(join(root,PLACE),text);
