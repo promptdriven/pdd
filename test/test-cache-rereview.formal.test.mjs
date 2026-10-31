@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, unlinkSync, existsSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -61,6 +61,7 @@ for (const damage of ['missing', 'malformed', 'epoch', 'generation', 'exact-set'
   test(`bounded lastfailed damage=${damage} lf=${lf}`, async t => {
     const ctx = await fixture(t);
     await ctx.invoke(['independent']);
+    assert.ok(existsSync(ctx.failed), 'completed Story pass persists required last-failed metadata');
     const doc = read(ctx.failed);
     if (damage === 'epoch') doc.epoch = '00000000-0000-4000-8000-000000000000';
     if (damage === 'generation') doc.generation += 1;
