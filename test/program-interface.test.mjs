@@ -15,7 +15,7 @@ for (const kind of ['screen','http']) test(`C classification precedes typed inpu
   assert.equal(code,7,io.ports.stderr.text);
   assert.deepEqual(calls.map(c=>c[0]),['kind','run']);
   assert.deepEqual(calls[0][1],{file:PLACE,root:setup.repo});
-  assert.deepEqual(calls[1][1],{file:PLACE,root:setup.repo,env,flags:{fresh:true,data:'seed.json'}});
+  assert.deepEqual(calls[1][1],{file:PLACE,root:setup.repo,env,flags:{fresh:true,data:join(setup.repo,'seed.json')}});
   assert.equal(io.ports.stdout.text,'http://127.0.0.1:8080/\n');
   assert.equal(io.clock.gh.length,0);
 });
