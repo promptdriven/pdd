@@ -20,8 +20,9 @@ test('public workflow approval help requires explicit person relay or person ter
   assert.match(result.stdout, /without grading|does not grade|no grading/i);
   assert.match(result.stdout, /ask.*person/i);
   assert.match(result.stdout, /agent/i);
-  assert.match(result.stdout, /non-TTY/i);
-  assert.match(result.stdout, /current area pane|current-area-pane/i);
+  assert.match(result.stdout, /ask the person[.;,]? then relay their words with --said/i);
+  assert.match(result.stdout, /without --said, use a separate person terminal/i);
+  assert.doesNotMatch(result.stdout, /non-TTY|current[- ]area[- ]pane/i);
   assert.match(result.stdout, /terminal y\/N/i);
   assert.match(result.stdout, /strict_approvals.*terminal/i);
   assert.ok(result.stdout.includes("pdd workflow approve N --said - <<'PDD_SAID'\n"));
