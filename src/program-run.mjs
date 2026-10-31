@@ -88,7 +88,7 @@ export async function runProgram({file,args=[],root=process.cwd(),env=process.en
     let app=ports.programApp;try{if(!app)app=await import('./program-app.mjs');}catch(e){if(e.code!=='ERR_MODULE_NOT_FOUND'||!e.message.includes('/program-app.mjs'))throw e;}
     const appKind=app?await app.appKind({file,root},ports):null;
     const entries=prompt.interface.entries??[];
-    if(appKind||entries.some(e=>/^HTTP\s/i.test(e.input_schema?.title??''))){if(app)return app.runApp({file,root,env,flags},ports);ports.stderr.write(fallback+'\n');return 2;}
+    if(appKind||(!app&&entries.some(e=>/^HTTP\s/i.test(e.input_schema?.title??'')))){if(app)return app.runApp({file,root,env,flags},ports);ports.stderr.write(fallback+'\n');return 2;}
     const cliIndex=entries.findIndex((e,i)=>['input_schema','result_schema'].every(key=>(prompt.interface.conventions??[]).some(c=>c.path===`/entries/${i}/${key}`&&c.convention==='cli')));
     const cli=cliIndex>=0;let entry=cli?entries[cliIndex]:entries.length===1?entries[0]:undefined;
     if(!entries.length){ports.stderr.write(fallback+'\n');return 2;}
