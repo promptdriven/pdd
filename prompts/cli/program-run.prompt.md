@@ -7,7 +7,8 @@ Preserve existing simulate, Try and test behavior. Screen/HTTP launches belong t
 C's src/program-app.mjs. Before B's CLI or typed classification, lazily load
 that module and call its exported `appKind({file,root},ports)`; it returns
 `'screen'`, `'http'` or null. A non-null result delegates to its exported
-`runApp({file,root,env,flags},ports)` and returns its exit code. Pass the parsed
+`runApp({file,root,env,flags},ports)` and awaits its exit code; asynchronous rejection uses the same plain pdd error
+handling as local failures, never a raw Node stack. Pass the parsed
 pdd prefix flags unchanged; program suffix words never become pdd flags.
 Null or a missing module continues B's CLI/typed classification. If neither
 kind exists, print exactly
@@ -20,8 +21,9 @@ never tell people to add an adapter or cli convention.
 
 ## Entry and input
 
-A CLI entry has cli conventions on both schemas; its first heading supplies a safe
-command name, retaining Try's reserved names and launcher protections. With ARGS,
+A CLI entry has cli conventions on both schemas; its first heading supplies a command name only for the shell. Apply Try's safe
+name, reserved-name and launcher protections only when opening that shell. With ARGS,
+a heading with spaces or punctuation must not prevent execution;
 call once with exact argv and read piped UTF-8 only if stdin is declared. Never
 consume undeclared stdin, including an enclosing shell read loop. Preserve exact
 stdout/stderr and return program exit_code 0–255 except reserved 125.
@@ -29,7 +31,7 @@ With no ARGS open the injected shell(shell, env) port (native interactive shell 
 default) with a real command launcher on PATH, without executing the program.
 First stdout line: `Answers come from prompts on the PDD interpreter, not installed code.`
 Then say `NAME works only in this shell; exit removes its PATH context. Another terminal: export PATH=...`
-with correctly shell-quoted launcher directory. Exit restores the caller's PATH.
+with correctly shell-quoted launcher directory. Exit restores the caller's PATH and returns the shell's exit code.
 Invoking that launcher with zero words calls the CLI once with empty argv; it
 never opens another shell. Prefix fresh/data options select the shell's data
 before its commands run, including that zero-word invocation.
@@ -40,7 +42,8 @@ numbers and true/false booleans by schema; strings retain exact value. Repeated
 array flags append items in order with item types; repeated scalar flags refuse.
 With two or more entries the first word selects an operation; with one it is
 implicit, and an arbitrary word is not consumed as an operation. --input JSON or
---input @file supplies the whole object. Piped JSON supplies it only when no flags
+--input @file supplies the whole object; resolve that file from the invocation
+current folder, even when the repository root differs. Piped JSON supplies it only when no flags
 were given. Whole-input and field flags cannot mix; stdin never merges with flags.
 Whole JSON supports nested objects and nullable fields. Validate all admitted
 schema constraints locally before authentication, lint, session creation or calls.
@@ -60,10 +63,11 @@ prints JSON without executing a call; fresh invalidates cached answers.
 Use runtime-client's direct transport and runtime-preflight's entry graph capture.
 No Story or synthetic scenario is uploaded. Outside resources stay fake; absent
 bindings use interpreter defaults, never real files/databases/services.
-Default per-call cap is entry worst case, at most100: 1 plus each declared call's
+Default per-call cap is entry worst case: 1 plus each declared call's
 max_calls times (child worst case +1). Explicit --max-calls accepts1–1000. A cap
 below worst case refuses at0 calls before dispatch. Cycles/indeterminate estimates
-refuse clearly. Above20 print `pdd: may use up to N AI calls.` before dispatch.
+refuse clearly. Do not add a local refusal merely because the default worst case
+exceeds100; the interpreter enforces its limits. Above20 print `pdd: may use up to N AI calls.` before dispatch.
 Session allowance must permit per-call cap and interpreter remaining admission.
 After a run stderr has one `pdd: N AI calls · T s` summary; cached results say
 `cached · 0 AI calls`; reached drafts add DRAFT; a new session adds

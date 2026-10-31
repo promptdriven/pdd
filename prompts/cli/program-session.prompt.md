@@ -25,7 +25,10 @@ Reuse one session for unchanged program source/data/login. Capture only the entr
 graph and compare reached prompt and dependency identity before reuse. On source
 change replace automatically, carrying confirmed world; never require --new.
 A fresh request invalidates saved answers and starts from selected initial data.
-Unchanged input and data may reuse a confirmed result at0 calls. Never cache
+Unchanged input and data may reuse a confirmed result at0 calls only when the
+current world equals that result's data_before, not data_after. Repeating a
+mutating command with the same argv must send again and apply its mutation
+again. Replay preserves the saved program exit code, including nonzero codes. Never cache
 failed/refused/unknown results or reuse another login's session. Retain pending
 request IDs before dispatch; read ambiguous accepted work by GET only.
 No synthetic Story/scenario is uploaded; the interpreter derives default fake

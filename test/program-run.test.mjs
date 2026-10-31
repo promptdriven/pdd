@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, readFileSync, rmSync, existsSync, readdirSync } from 'node:fs';
+import { writeFileSync, readFileSync, rmSync, existsSync, readdirSync, mkdirSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { runPdd } from '../src/pdd-cli.mjs';
@@ -116,7 +116,9 @@ test('direct: confirmed world and last record persist in Git-ignored .pdd/run',a
  const h=await harness(t);ok(await h.invoke(['add','task']));const files=paths(join(h.setup.repo,'.pdd/run'));
  const data=files.find(p=>p.endsWith('/data.json')),last=files.find(p=>p.endsWith('/last.json'));assert.ok(data);assert.ok(last);
  assert.deepEqual(JSON.parse(readFileSync(data)),{tasks:['saved']});const record=JSON.parse(readFileSync(last));assert.deepEqual(record.input.argv,['add','task']);assert.ok('output' in record);assert.ok('data_before' in record);assert.ok('data_after' in record);assert.ok('ai_calls' in record);
- assert.match(readFileSync(join(h.setup.repo,'.gitignore'),'utf8'),/\.pdd\//);
+ assert.equal(existsSync(join(h.setup.repo,'.gitignore')),false);
+ assert.match(readFileSync(join(h.setup.repo,'.git/info/exclude'),'utf8'),/\.pdd\//);
+ assert.equal(data,join(h.setup.repo,'.pdd/run/prompts/place_order/data.json')); 
 });
 test('direct: explicit data seeds world and --fresh starts empty next time',async t=>{
  const h=await harness(t);writeFileSync(join(h.setup.repo,'world.json'),'{"tasks":["seed"]}');
@@ -157,9 +159,9 @@ test('direct: Ctrl-C preserves accepted ID for GET-only --read and exits130',asy
  assert.equal(r.code,130,r.err);assert.match(r.err,/pdd --read [a-f0-9-]+ .*prompt\.md/);assert.equal(h.fake.jsonPosts.length,1);
  const id=h.fake.jsonPosts[0].json.requestId;const read=await h.invoke([],['--read',id]);ok(read);assert.equal(h.fake.jsonPosts.length,1);assert.ok(h.fake.gets.some(p=>p.url.endsWith(id)));
 });
-test('direct: named HTTP delegates lazily and missing C module gives agreed plain line',async t=>{
+test('direct: HTTP titled typed prompt runs typed when C module is missing',async t=>{
  const h=await harness(t,false);const path=join(h.setup.repo,PLACE);let text=readFileSync(path,'utf8').replace('"input_schema":{','"input_schema":{"title":"HTTP GET /items",');text=text.replace(/"prose_sha256":"[a-f0-9]+"/,`"prose_sha256":"${proseSha256(text)}"`);writeFileSync(path,text);
- const r=await h.invoke();assert.equal(r.code,2);assert.equal(r.err,'Screen apps and HTTP entries open this way in the next release; for now run pdd simulate STORY.\n');assert.equal(h.fake.posts.length,0);
+ const r=await h.invoke(['--name','x']);ok(r);assert.deepEqual(h.fake.jsonPosts[0].json.input,{name:'x'});assert.equal(r.out,'{"ok":true}\n');
 });
 
 test('direct typed: numeric and boolean array flags use item types',async t=>{
@@ -188,4 +190,52 @@ test('direct: same basename entry paths keep separate saved worlds',async t=>{
  ok(await h.invoke(['list']));const io=portsFor({HOME:h.setup.home,PDD_STATE_DIR:h.setup.state,PDD_RUNTIME_URL:h.fake.origin},{stdin:Readable.from([])});
  const code=await runPdd(['other/place_order.prompt.md','list'],{cwd:h.setup.repo,env:io.ports.env,stdout:io.ports.stdout,stderr:io.ports.stderr,stdin:io.ports.stdin,runtimePorts:io.ports});assert.equal(code,0,io.ports.stderr.text);
  const dirs=paths(join(h.setup.repo,'.pdd/run')).filter(p=>p.endsWith('/data.json'));assert.equal(dirs.length,2);assert.deepEqual(h.fake.posts.filter(p=>p.command==='try').map(p=>p.request.initial_world),[{},{}]);
+});
+
+// Review cases derive from LEAD.md18:21: repeated writes, local paths and local errors.
+test('direct: repeating mutating argv sends twice and saves both tasks',async t=>{
+ const h=await harness(t,true,{onCall(e,f){const n=f.jsonPosts.length;const job=f.jobs.get(e.json.requestId);job.result.report.world={tasks:Array(n).fill('x')};}});
+ ok(await h.invoke(['add','x']));ok(await h.invoke(['add','x']));
+ assert.equal(h.fake.jsonPosts.length,2,'a write changes the input world for the next identical command');
+ assert.deepEqual(JSON.parse(readFileSync(join(h.setup.repo,'.pdd/run/prompts/place_order/data.json'))),{tasks:['x','x']});
+});
+test('direct: cached CLI answer retains nonzero exit and does not resend',async t=>{
+ const h=await harness(t,true,{exit:7,report:{result:{stdout:'answer\n',stderr:'',exit_code:7},world:{}}});
+ assert.equal((await h.invoke(['list'])).code,7);const replay=await h.invoke(['list']);assert.equal(replay.code,7,replay.err);assert.match(replay.err,/cached · 0 AI calls/);assert.equal(h.fake.jsonPosts.length,1);
+});
+test('direct: shell exit code is returned',async t=>{
+ const h=await harness(t);const r=await h.invoke([],[],{shell:async()=>23});assert.equal(r.code,23,r.err);assert.equal(h.fake.jsonPosts.length,0);
+});
+for(const [name,content,problem] of [['bad.json','{',/JSON|json/],['missing.json',undefined,/missing|not found|does not exist/i],['array.json','[]',/object/i],['null.json','null',/object/i]])test(`direct: --data ${name} is a file-specific local input error`,async t=>{
+ const h=await harness(t);if(content!==undefined)writeFileSync(join(h.setup.repo,name),content);
+ const r=await h.invoke(['list'],['--data',name]);assert.equal(r.code,2,r.err);assert.match(r.err,new RegExp(name.replace('.','\\.')));assert.match(r.err,problem);assert.equal(h.fake.posts.length,0);assert.equal(r.clock.gh.length,0);
+});
+for(const cli of [true,false])test(`direct: ${cli?'data':'input'} file resolves from invocation subfolder`,async t=>{
+ const h=await harness(t,cli);const cwd=join(h.setup.repo,'sub');mkdirSync(cwd);writeFileSync(join(cwd,'selected.json'),JSON.stringify(cli?{selected:'cwd'}:{name:'cwd'}));
+ const io=portsFor({HOME:h.setup.home,PDD_STATE_DIR:h.setup.state,PDD_RUNTIME_URL:h.fake.origin},{stdin:Readable.from([])});
+ const args=cli?['--data','selected.json','../'+PLACE,'list']:['../'+PLACE,'--input','@selected.json'];
+ const code=await runPdd(args,{cwd,env:io.ports.env,stdout:io.ports.stdout,stderr:io.ports.stderr,stdin:io.ports.stdin,runtimePorts:io.ports});assert.equal(code,0,io.ports.stderr.text);
+ if(cli)assert.deepEqual(h.fake.posts.find(p=>p.command==='try').request.initial_world,{selected:'cwd'});else assert.deepEqual(h.fake.jsonPosts[0].json.input,{name:'cwd'});
+});
+test('direct: descriptive CLI heading is allowed with argv but refused as shell command',async t=>{
+ const h=await harness(t);const path=join(h.setup.repo,PLACE);let text=readFileSync(path,'utf8').replace('# paperclip','# Paperclip task manager');text=text.replace(/"prose_sha256":"[a-f0-9]+"/,`"prose_sha256":"${proseSha256(text)}"`);writeFileSync(path,text);
+ ok(await h.invoke(['list']));const shell=await h.invoke([],[],{shell:async()=>assert.fail('unsafe command must not open shell')});assert.equal(shell.code,2,shell.err);assert.match(shell.err,/name|command/i);
+});
+test('direct: worst case above100 is admitted to the interpreter',async t=>{
+ const h=await harness(t);const path=join(h.setup.repo,PLACE),child='prompts/child.prompt.md';writeFileSync(join(h.setup.repo,child),readFileSync(path));
+ let text=readFileSync(path,'utf8').replace('"calls":[]','"calls":[{"operation":"child","target":"'+child+'","target_operation":"main","max_calls":60}]');text=text.replace(/"prose_sha256":"[a-f0-9]+"/,`"prose_sha256":"${proseSha256(text)}"`);writeFileSync(path,text);
+ ok(await h.invoke(['list']));assert.equal(h.fake.jsonPosts.length,1);
+});
+async function dataModule(){try{return await import('../src/program-data.mjs');}catch(e){assert.fail(`Public programData module is required: ${e.code}`);}}
+for(const program of ['../escape','/absolute','prompts/../escape','prompts//todo','prompts/./todo','bad name'])test(`programData rejects unsafe identity ${program} directly`,async t=>{
+ const {programData}=await dataModule();const h=harbor(t);assert.throws(()=>programData({root:h.repo,program,flags:{}},{}),/identity|name|path/i);assert.equal(existsSync(join(h.repo,'.pdd/run')),false);
+});
+test('programData refuses a symlink ancestor without modifying its target',async t=>{
+ const {programData}=await dataModule();const h=harbor(t);const outside=join(h.home,'outside');mkdirSync(outside);symlinkSync(outside,join(h.repo,'.pdd'),'dir');
+ assert.throws(()=>programData({root:h.repo,program:'prompts/todo',flags:{}},{}),/unsafe|symlink|directory/i);assert.deepEqual(readdirSync(outside),[]);
+});
+test('program data lock excludes a concurrent owner and admits one after release',async t=>{
+ const {programData,acquireProgramLock}=await dataModule();const h=harbor(t);const data=programData({root:h.repo,program:'todo',flags:{}},{});const release=acquireProgramLock(data.dir);
+ try{assert.throws(()=>acquireProgramLock(data.dir),/active|busy|finish/i);}finally{release();}
+ const next=acquireProgramLock(data.dir);assert.equal(typeof next,'function');next();assert.equal(existsSync(join(data.dir,'active.lock')),false);
 });
