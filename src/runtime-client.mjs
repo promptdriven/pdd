@@ -181,6 +181,115 @@ export function readContractHistory({root,env = process.env}) {
   return {stories:[...latest.values()].map(row=>warnings.length && row.value.baseline==='not-checked' ? {...row.value,baseline:'unavailable'} : row.value).sort((a,b)=>a.story_path<b.story_path?-1:a.story_path>b.story_path?1:0),warnings:[...new Set(warnings)]};
 }
 
+// Read receipts without StateStore.folder: status must never allocate or mutate runtime state.
+export async function savedStoryEvidence(input, ports = {}) {
+  return createSavedStoryEvidenceReader(ports)(input);
+}
+
+export function createSavedStoryEvidenceReader(ports = {}) {
+  const captures = new Map();
+  return input => readSavedStoryEvidence(input, ports, captures);
+}
+
+async function readSavedStoryEvidence({ root, comparisonRoot = root }, ports, captures) {
+  const env = ports.env ?? process.env;
+  const read = ports.readFile ?? (path => readFileSync(path, 'utf8'));
+  const list = ports.readDir ?? (path => readdirSync(path));
+  const canonical = ports.realpath ?? realpathSync;
+  const capture = ports.captureSource ?? captureSource;
+  const stories = [], warnings = [];
+  const warning = (path, error) => warnings.push(`Could not read saved checks ${path} (${cleanText(error?.code ?? error?.message ?? 'invalid record')}).`);
+  const legacyHint = () => warnings.push('Older checks are not counted; run pdd test again.');
+  const real = async path => { try { return await canonical(path); } catch { return resolve(path); } };
+  const wanted = await real(root);
+  const directory = join(resolve(env.PDD_STATE_DIR || join(env.HOME || homedir(), '.pdd', 'runtime')), 'batches');
+  const relativeFile = path => typeof path === 'string' && path.length > 0 && !path.startsWith('/') && !path.includes('\\')
+    && path.split('/').every(part => part && part !== '.' && part !== '..');
+  let names;
+  try { names = await list(directory); }
+  catch (error) { if (error.code !== 'ENOENT') warning(directory, error); return { stories, warnings }; }
+  for (const name of names.filter(name => typeof name === 'string' && BATCH.test(name)).sort()) {
+    const folder = join(directory, name), path = join(folder, 'batch.json');
+    let batch;
+    try {
+      batch = JSON.parse(await read(path));
+      if (!isObject(batch) || batch.version !== 1 || batch.batch !== name || typeof batch.root !== 'string' || !Array.isArray(batch.rows)) throw Error('invalid batch');
+    } catch (error) { warning(path, error); continue; }
+    if (await real(batch.root) !== wanted) continue;
+    const legacy = !Object.hasOwn(batch, 'intent');
+    if (batch.intent !== 'check') {
+      if (!legacy) continue;
+      if (!batch.rows.every(row => isObject(row) && validSavedCheck(row))) { legacyHint(); continue; }
+    }
+    const valid = batch.rows.every(row => isObject(row) && relativeFile(row.test) && relativeFile(row.story) && Array.isArray(row.request_ids));
+    if (!valid) { warning(path, Error('invalid Story identity')); continue; }
+    // Older batches saved the display basename; only a unique captured path can recover its identity.
+    const rows = batch.rows.map(row => {
+      if (row.story.endsWith('.md')) return row;
+      const candidates = [...new Set((Array.isArray(batch.files) ? batch.files : []).filter(file => relativeFile(file)
+        && file.endsWith('.md') && basename(file, '.md') === row.story))];
+      return candidates.length === 1 ? { ...row, story: candidates[0] } : null;
+    });
+    if (rows.some(row => row === null)) { warning(path, Error('missing or ambiguous Story identity')); continue; }
+    let current = false;
+    if (comparisonRoot !== null && /^[a-f0-9]{64}$/.test(batch.source_sha256 ?? '')) {
+      try {
+        const folder = await real(comparisonRoot), tests = [...new Set(batch.rows.map(row => row.test))].sort();
+        const key = JSON.stringify([folder, tests]);
+        if (!captures.has(key)) captures.set(key, Promise.resolve().then(() => capture(folder, { tests, appMap: null }))
+          .then(source => ({ sha256: source.sha256 })).catch(error => ({ error })));
+        const source = await captures.get(key);
+        if (source.error) throw source.error;
+        current = source.sha256 === batch.source_sha256;
+      } catch (error) { warning(path, error); }
+    }
+    const selected = new Map(), sent = new Map(), grouped = new Map();
+    for (const row of rows) {
+      if (!selected.has(row.story)) selected.set(row.story, new Set());
+      selected.get(row.story).add(row.test);
+    }
+    for (const row of rows) {
+      if (!row.request_ids.length) continue;
+      if (!sent.has(row.story)) sent.set(row.story, new Set());
+      sent.get(row.story).add(row.test);
+      let pass = false;
+      const id = row.request_ids.at(-1);
+      if (typeof id === 'string' && UUID.test(id)) {
+        const receiptPath = join(folder, `${id}.json`);
+        try {
+          const answer = JSON.parse(await read(receiptPath));
+          if (answer?.requestId === id && answer.id === id && answer.command === 'check') {
+            const view = projectAnswer(answer, { origin: batch.origin, steps: row.steps ?? [], criterionTexts: row.criterion_texts ?? {} });
+            let authored = Object.keys(row.criterion_texts ?? {});
+            if (legacy) {
+              const fromChecks = [...new Set(row.steps.flatMap(step => step.checks.map(check => check.criterion_id)))];
+              if (authored.length !== row.criteria_total || !fromChecks.every(id => authored.includes(id))) authored = fromChecks;
+            }
+            const criteria = answer.result?.report?.criterion_results;
+            if (legacy && !(Array.isArray(criteria) && criteria.length === row.criteria_total
+              && new Set(criteria.map(item => item?.criterion_id)).size === row.criteria_total
+              && criteria.every(item => authored.includes(item?.criterion_id)))) legacyHint();
+            pass = view.state === 'passed' && Number.isInteger(row.criteria_total) && row.criteria_total > 0
+              && authored.length === row.criteria_total && view.criteria?.total === row.criteria_total
+              && view.criteria.passed === row.criteria_total && view.checks?.total > 0 && view.checks.passed === view.checks.total
+              && Array.isArray(criteria) && new Set(criteria.map(item => item?.criterion_id)).size === row.criteria_total
+              && criteria.every(item => authored.includes(item?.criterion_id) && item.status === 'passed');
+          }
+        } catch (error) { warning(receiptPath, error); }
+      }
+      const at = Number.isFinite(row.ended_at) ? row.ended_at : Date.parse(batch.created_at) || 0;
+      const previous = grouped.get(row.story);
+      grouped.set(row.story, { story: row.story, pass: pass && (previous?.pass ?? true), current, result: 'no verdict', at: Math.max(previous?.at ?? at, at) });
+    }
+    for (const row of grouped.values()) {
+      if (row.pass && sent.get(row.story).size !== selected.get(row.story).size) continue;
+      if (row.pass) row.result = '✓';
+      stories.push(row);
+    }
+  }
+  return { stories, warnings: [...new Set(warnings)] };
+}
+
 class StateStore {
   constructor(dir) { this.dir = dir; this.secrets = []; }
   folder(...parts) {
