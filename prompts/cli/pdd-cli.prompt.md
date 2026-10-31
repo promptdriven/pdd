@@ -72,7 +72,7 @@ Help prints exactly these lines, in this order. Each line is two spaces, the for
   pdd product status [--json]  Count Stories by part and slice from the product plan; no interpreter calls.
   pdd product next  Show ready planned runs and their start commands; no interpreter calls.
   pdd product start RUN [--no-run] [--agent codex|claude]  Create or reuse the run issue and start a normal feature run; --no-run only prepares the issue. No interpreter calls.
-  pdd workflow start NAME ISSUE [--agent codex|claude] [--base BRANCH]  Start the first area chat for a GitHub issue in Herdr and exit; --base selects an existing origin branch (default: repository default); pdd later pushes the issue branch and opens a real PR.
+  pdd workflow start NAME ISSUE [--agent codex|claude] [--base BRANCH]  Start the first area chat for a GitHub issue in Herdr and exit; --base selects an existing origin branch (default: repository default); --adopt-corpus FILE adopts exact unchanged approved content for a fresh replay-evidence-enabled workflow; pdd later pushes the issue branch and opens a real PR.
   pdd workflow prove ISSUE --test COMMAND --expect TEXT  Run committed changed tests on the fetched base branch merge-base and committed head with a 120-second limit per phase; save a non-gating report.
   pdd workflow done STEP [--summary TEXT]  For the agent in a run worktree: record a step and print what to do next.
   pdd workflow evidence ISSUE --summary FILE  Record source-verified saved check JSON without rerunning steps, gates or publication.
@@ -90,7 +90,7 @@ Help prints exactly these lines, in this order. Each line is two spaces, the for
   pdd --version  Show this package version.
   pdd completion bash|zsh  Print local shell completion.
   pdd workflow list [--json]  List the bundled workflows with their areas and gates.
-  pdd test [STORY...] [--json] [--details] [--timeout MIN] [--max-calls N]  Check stories on the PDD interpreter with your gh login: sends the named Stories (every Story when you name none) and their dependencies, waits for every check (no limit in a terminal, at most 90 s for an agent; --timeout MIN sets the limit) with a progress line every 30 s, then prints one table with report links. Defaults to 12 calls per step, at least 18 and at most 1000; --max-calls accepts 1 to 1000.
+  pdd test [PATH|STORY...] [--lf] [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]  Check stories on the PDD interpreter with your gh login: reuses unchanged passing Stories from .pdd/cache/test/; --lf selects previous failures in scope or uses the normal selection when none match, --cache-clear clears the cache and sends the selected Stories again (the interpreter may reuse saved answers); sends selected PATH or STORY dependencies (every Story when you name none), waits for every check (no limit in a terminal, at most 90 s for an agent; --timeout MIN sets the limit) with a progress line every 30 s, then prints one table with report links. Defaults to 12 calls per step, at least 18 and at most 1000; --max-calls accepts 1 to 1000.
   pdd test --read [BATCH|CALL_ID] [--json] [--timeout MIN]  Read saved results; a normal Check held for lint may continue its original checks. Other reads send no work.
   pdd test --retry BATCH [--json] [--details] [--timeout MIN]  Retry only confirmed unstarted checks from a saved batch, with the same source and call caps; preserve completed and uncertain runs.
   pdd test --fill-hash  Fill prose_sha256 of draft runtime interfaces; no network.
@@ -119,7 +119,7 @@ For `runtime-jobs`, dynamically import [runtime slots](runtime-slots.prompt.md),
 
 For the `prompt-approve` plan, import [prompt approve](prompt-approve.prompt.md) dynamically and return `runApprove({words, cwd}, {stdout, stderr})` unchanged.
 
-For the `runtime-check` and `runtime-try` plans, import the [runtime client](runtime-client.prompt.md) dynamically and call `runCheck` or `runTry` with the operands, the options and cwd, plus stdout, stderr and the injected env. Return its exit code unchanged. The runtime client also owns local `check --lint --local` and `check --screen URL --drawing PATH`; dispatch them with the same operands, options, cwd and ports, without adding runtime authentication in this router. Help for check and try stays local. If the client throws, write `pdd stopped with an internal error. If it sent checks, read them with pdd check --read. Do not send them again.` to stderr and return 3, because checks may have been sent.
+For the `runtime-check` and `runtime-try` plans, import the [runtime client](runtime-client.prompt.md) dynamically and call `runCheck` or `runTry` with the operands, the options and cwd, plus stdout, stderr and the injected env. Pass `cache:true` for every `runtime-check` plan (test, its former name check, and lint); the runtime client decides which modes use it. Return its exit code unchanged. The runtime client also owns local `check --lint --local` and `check --screen URL --drawing PATH`; dispatch them with the same operands, options, cwd and ports, without adding runtime authentication in this router. Help for check and try stays local. If the client throws, write `pdd stopped with an internal error. If it sent checks, read them with pdd check --read. Do not send them again.` to stderr and return 3, because checks may have been sent.
 
 For `workflow-view`, dynamically import [read-only review](workflow-view.prompt.md) and call `viewRun({ref: operands[0], cwd})`. Print the result once (stdout on success, stderr on failure) and return its exit code. This route must not import the workflow runner, inspect Herdr, or execute PATH version probes.
 
@@ -160,8 +160,8 @@ finite local cause and returns 5. Catalog owns all syntax.
 
 ```json
 {
-  "status": "approved",
-  "prose_sha256": "fe90a9f5875c0b99591342f1d806bf3762a911c0a5ed9c9f04590fd2c3194a2b",
+  "status": "draft",
+  "prose_sha256": "08d8a8e869a38f4d6c62a10435d09322287a034bf78356c96bac8cb931a0300a",
   "entries": [{
     "operation": "runPdd",
     "input_schema": {

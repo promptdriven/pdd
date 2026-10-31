@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: a3fd7502d814418e6d1c0a39d67024a5f2d6ea4e8b7419cfeb93b4633abac62c).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 4628e03e8b32196961e53db850d5203179f8c18b6cd82281e8c4a5094dd961bc).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of four commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', start: 'start' });
@@ -55,10 +55,10 @@ const routes = [
   { id: 'workflow.list', prefix: ['workflow', 'list'], local: 'workflow-list', operands: [], options: [{ name: '--json', kind: 'flag' }],
     forms: [form('pdd workflow list [--json]', 'List the bundled workflows with their areas and gates.')] },
   { id: 'check', prefix: [test], local: 'runtime-check', formerly: ['check'], operands: [{ name: 'story', type: 'text', optional: true, repeat: true }],
-    options: [{ name: '--json', kind: 'flag' }, { name: '--details', kind: 'flag' }, { name: '--timeout', kind: 'integer', min: 1, max: 120 },
+    options: [{ name: '--lf', kind: 'flag' }, { name: '--cache-clear', kind: 'flag' }, { name: '--json', kind: 'flag' }, { name: '--details', kind: 'flag' }, { name: '--timeout', kind: 'integer', min: 1, max: 120 },
       { name: '--max-calls', kind: 'integer', min: 1, max: 1000 }, { name: '--read', kind: 'flag' }, { name: '--retry', kind: 'text' }, { name: '--fill-hash', kind: 'flag' },
       { name: '--files', kind: 'flag' }, { name: '--app-map', kind: 'text' }, { name: '--lint', kind: 'flag', hidden: true }, { name: '--local', kind: 'flag', hidden: true }, { name: '--screen', kind: 'text' }, { name: '--drawing', kind: 'text' }, { name: '--request', kind: 'uuid', hidden: true }],
-    forms: [form(`pdd ${test} [STORY...] [--json] [--details] [--timeout MIN] [--max-calls N]`, 'Check stories on the PDD interpreter with your gh login: sends the named Stories (every Story when you name none) and their dependencies, waits for every check (no limit in a terminal, at most 90 s for an agent; --timeout MIN sets the limit) with a progress line every 30 s, then prints one table with report links. Defaults to 12 calls per step, at least 18 and at most 1000; --max-calls accepts 1 to 1000.'),
+    forms: [form(`pdd ${test} [PATH|STORY...] [--lf] [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]`, 'Check stories on the PDD interpreter with your gh login: reuses unchanged passing Stories from .pdd/cache/test/; --lf selects previous failures in scope or uses the normal selection when none match, --cache-clear clears the cache and sends the selected Stories again (the interpreter may reuse saved answers); sends selected PATH or STORY dependencies (every Story when you name none), waits for every check (no limit in a terminal, at most 90 s for an agent; --timeout MIN sets the limit) with a progress line every 30 s, then prints one table with report links. Defaults to 12 calls per step, at least 18 and at most 1000; --max-calls accepts 1 to 1000.'),
       form(`pdd ${test} --read [BATCH|CALL_ID] [--json] [--timeout MIN]`, 'Read saved results; a normal Check held for lint may continue its original checks. Other reads send no work.'),
       form(`pdd ${test} --retry BATCH [--json] [--details] [--timeout MIN]`, 'Retry only confirmed unstarted checks from a saved batch, with the same source and call caps; preserve completed and uncertain runs.'),
       form(`pdd ${test} --fill-hash`, 'Fill prose_sha256 of draft runtime interfaces; no network.'),
