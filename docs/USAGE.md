@@ -93,7 +93,7 @@ Important:
 
 The Python pdd (0.0.x) is on the [`v1` branch](https://github.com/promptdriven/pdd/tree/v1) and on [PyPI](https://pypi.org/project/pdd-cli/) as `pdd-cli`. It also installs a command named `pdd`. On one machine, only the first `pdd` on your PATH runs.
 
-Run this pdd by its absolute path to diagnose the selection: `"$(npm prefix -g)/bin/pdd" setup`. Setup names the running pdd version, lists executable paths in order (using `which -a pdd` when available), and reports the selected executable’s version. `pdd --version` keeps just the version on stdout and prints a conflict report to stderr; `workflow run` prints a one-line warning when another executable comes first. A program whose version cannot be read stays listed as version unavailable. No installation is removed or replaced.
+Run this pdd by its absolute path to diagnose the selection: `"$(npm prefix -g)/bin/pdd" setup`. Setup names the running pdd version, lists executable paths in order (using `which -a pdd` when available), and reports the selected executable’s version. `pdd --version` keeps just the version on stdout and prints a conflict report to stderr; `workflow start` prints a one-line warning when another executable comes first. A program whose version cannot be read stays listed as version unavailable. No installation is removed or replaced.
 
 See all of them:
 
@@ -173,7 +173,7 @@ $pdd-setup          # in Codex
 If you installed the pdd command, `pdd setup` in the top folder of the repo does the same. It also installs the skills when they are missing. Both do this:
 
 1. They pick `CLAUDE.md` if it exists, else `AGENTS.md`. If neither exists, they make `AGENTS.md`.
-2. They add one short block (7 lines) between `<!-- pdd:start -->` and `<!-- pdd:end -->`. The block says that this project uses PDD and that prompts are the source. It names the skills and `pdd workflow run`. It tells the agent to read `RUNBOOK.md` before a runtime check.
+2. They add one short block (7 lines) between `<!-- pdd:start -->` and `<!-- pdd:end -->`. The block says that this project uses PDD and that prompts are the source. It names the skills and `pdd workflow start`. It tells the agent to read `RUNBOOK.md` before a runtime check.
 3. They keep all other text. A second run changes nothing. They never paste the guide.
 
 Then open Codex or Claude Code as usual, in your project, and call a skill. In Codex:
@@ -202,7 +202,7 @@ In a chat, the work stays in your folder: no worktree and no automatic PR. To tu
 
 ## 6. Run a workflow on a GitHub issue
 
-`pdd workflow run` takes one GitHub issue to real PRs. The work happens in a few chats in Herdr. You approve at each gate. pdd opens the PRs. It never merges.
+`pdd workflow start` takes one GitHub issue to real PRs. The work happens in a few chats in Herdr. You approve at each gate. pdd opens the PRs. It never merges.
 
 ### 6.1 Prepare the repository
 
@@ -220,7 +220,7 @@ Run this from the top folder of your clone:
 ```sh
 cd your-clone
 git fetch origin
-pdd workflow run small-change 42
+pdd workflow start small-change 42
 ```
 
 ISSUE is the issue number (`42`). Add `--agent claude` to use Claude Code for the whole run. NAME is `small-change`, `bug`, `feature` or the name of [your own workflow](#8-make-your-own-workflow).
@@ -228,7 +228,7 @@ ISSUE is the issue number (`42`). Add `--agent claude` to use Claude Code for th
 To build on an isolated topic branch, put that base on `origin`, then name its branch (without an `origin/` or `refs/` prefix):
 
 ```sh
-pdd workflow run bug 2 --base feature/checkout
+pdd workflow start bug 2 --base feature/checkout
 ```
 
 PDD fetches that exact branch and starts the issue worktree from its commit. A failed fetch or missing branch stops the run; it does not use a local or default branch instead. Startup prints the selected base. The PR targets that saved base, and PDD pushes only its new issue branches. It does not change the repository's default branch. For two PRs, PR 2 stacks on an open PR 1; after PR 1 merges, PR 2 starts from and targets the saved base.
@@ -246,7 +246,7 @@ The command returns at once. It prints where the run is and the commands to open
 7. After the last step of an area with a PR gate, pdd pushes the branch and opens the PR.
 8. You review and merge the PRs on GitHub. When `pdd workflow status` sees the merge, the run is completed.
 
-With Claude Code, the first chat can ask you once to trust the new worktree folder. This happens when your clone's folder is not trusted in Claude Code yet. `pdd workflow run` prints a hint. Open the chat with `pdd workflow open 42` and answer the question.
+With Claude Code, the first chat can ask you once to trust the new worktree folder. This happens when your clone's folder is not trusted in Claude Code yet. `pdd workflow start` prints a hint. Open the chat with `pdd workflow open 42` and answer the question.
 
 The areas of the three workflows (you act at the **bold** ones):
 
@@ -292,7 +292,7 @@ See [Record a chat approval](cli.md#record-a-chat-approval) for the safe agent c
 - `status` says "waiting for you" when the chat has asked you. Before that, it says that the agent writes the gate message.
 - `approve` without N: in a run's worktree, it approves that run. Elsewhere in the repo, it approves the one run that waits for you. If more than one run waits, it lists them.
 - Changes stay in the same chat. The chat revises and asks you again.
-- `cancel` closes the chat tabs of the run. pdd keeps the worktree and the branch. A new `pdd workflow run` on the same issue then starts fresh.
+- `cancel` closes the chat tabs of the run. pdd keeps the worktree and the branch. A new `pdd workflow start` on the same issue then starts fresh.
 
 ### 6.6 Optional steps
 
@@ -356,7 +356,7 @@ After a restart, run `pdd workflow open 42`. pdd resumes the chat of the current
 
 ### 6.10 Many issues at once
 
-Each issue gets its own branch, worktree and Herdr tab. You can start several runs. An issue can have only one active run: a second `pdd workflow run` on the same issue is refused. After `pdd workflow cancel N`, you can run it again, and the new run starts fresh. Each step is a full agent session on your machine. Many runs at once use a lot of memory and agent quota.
+Each issue gets its own branch, worktree and Herdr tab. You can start several runs. An issue can have only one active run: a second `pdd workflow start` on the same issue is refused. After `pdd workflow cancel N`, you can run it again, and the new run starts fresh. Each step is a full agent session on your machine. Many runs at once use a lot of memory and agent quota.
 
 <a id="7-check-prompts-on-the-pdd-runtime"></a>
 
@@ -460,7 +460,7 @@ mkdir -p .agents/skills
 cp -RL ~/.agents/skills/pdd-bug .agents/skills/pdd-mybug   # or from .agents/skills/pdd-bug
 rm -f .agents/skills/pdd-mybug/.pdd-skill.json
 pdd workflow list            # pdd-mybug is in the list
-pdd workflow run mybug 42
+pdd workflow start mybug 42
 ```
 
 [workflows.md](workflows.md#make-your-own-workflow) has the steps and the file format.
@@ -561,9 +561,9 @@ This is a pre-release. These limits are known today:
 | A message about `refs/remotes/origin/...` or a missing base | Run `git fetch origin`. |
 | A GitHub error when the run starts | Check `git remote -v` (a GitHub `origin`), `gh auth status`, and that the issue exists in this repository. |
 | `approve` says that more than one run matches | Give the issue number, or `owner/repo#N`. |
-| `pdd workflow run` says that the issue already has a run | Use `pdd workflow open N` or `status N`. To start again, run `pdd workflow cancel N` first. |
-| `pdd workflow run` prints a hint about Claude Code trust | Run `pdd workflow open N` and answer the trust question in the chat. |
-| `pdd workflow run` says that `CODEX_HOME` or `CLAUDE_CONFIG_DIR` does not exist | Set it to a folder that exists, for example `CODEX_HOME=$HOME/.codex`, and run the command again. |
+| `pdd workflow start` says that the issue already has a run | Use `pdd workflow open N` or `status N`. To start again, run `pdd workflow cancel N` first. |
+| `pdd workflow start` prints a hint about Claude Code trust | Run `pdd workflow open N` and answer the trust question in the chat. |
+| `pdd workflow start` says that `CODEX_HOME` or `CLAUDE_CONFIG_DIR` does not exist | Set it to a folder that exists, for example `CODEX_HOME=$HOME/.codex`, and run the command again. |
 | Chat startup/open is not confirmed (`server_unavailable`) | Herdr could not handle the request. PDD keeps the same worktree, base and run and reports waiting. After Herdr is available, use `pdd workflow open N` for that run. A lost launch reply keeps the original tab identity; if no live agent can be confirmed there, inspect that tab before starting another agent. |
 | `status` says "the chat stopped" | No agent runs in the chat. Run `pdd workflow open N` to start it again. If it stops again at once, read the error in the chat. |
 | `approve` says that pdd sees an agent environment | Your terminal runs inside Claude Code or Codex. Run `pdd workflow approve N` in a normal terminal, or answer the gate question in the chat. |

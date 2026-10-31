@@ -71,7 +71,7 @@ The agent writes these files in prompt space:
 
 You read the Stories and approve them in the chat. The expected values come from you and the Stories, not from a run.
 
-In a chat, the agent opens a pull request only when you say yes. For a full run with pull requests, start from a GitHub issue: `pdd workflow run feature 42`, where 42 is the issue number. A run needs [Herdr](https://herdr.dev). pdd opens the agent chats in Herdr, and you follow the same steps.
+In a chat, the agent opens a pull request only when you say yes. For a full run with pull requests, start from a GitHub issue: `pdd workflow start feature 42`, where 42 is the issue number. A run needs [Herdr](https://herdr.dev). pdd opens the agent chats in Herdr, and you follow the same steps.
 
 > [!WARNING]
 > In a workflow run, the agents run with full access. They do not stop to ask for approval. They can change files and run commands as your user.
@@ -181,7 +181,7 @@ pdd never merges and has no merge command. You may explicitly ask your agent in 
 | `pdd simulate STORY --new --max-calls N` | Start a new simulation with a limit of N AI calls. |
 | `pdd simulate --stop STORY` | Stop the Simulator link of a Story. |
 | `pdd approve PROMPT [--said WORDS]` | Approve one prompt with your chat words, or terminal y/N without --said; strict mode requires a person terminal. |
-| `pdd workflow run NAME ISSUE` | Start a run on a GitHub issue. NAME is `feature`, `bug` or `small-change`. |
+| `pdd workflow start NAME ISSUE` | Start a run on a GitHub issue. NAME is `feature`, `bug` or `small-change`. |
 | `pdd workflow status [ISSUE]` | Show where each run is and what it waits for. |
 | `pdd workflow view ISSUE` | Show the gates, approvals, pull requests and Simulator links of a run. Changes nothing. |
 | `pdd workflow open ISSUE` | Open the chat of a run. |

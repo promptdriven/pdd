@@ -54,7 +54,7 @@ Only prompt-story reads the full Prompting guide. check reads the `pdd-prompting
 
 | | In your chat | As a run on an issue |
 |---|---|---|
-| Start | Call `pdd-feature`, `pdd-bug` or `pdd-small-change` in Codex or Claude Code | `pdd workflow run NAME ISSUE` |
+| Start | Call `pdd-feature`, `pdd-bug` or `pdd-small-change` in Codex or Claude Code | `pdd workflow start NAME ISSUE` |
 | Branch and worktree | No. The agent works in your folder | Yes. A new branch and worktree for the issue |
 | Chats | One | One for each area, in Herdr |
 | Gates | The agent asks you | pdd holds them. You approve in the chat or with `pdd workflow approve` |
@@ -63,7 +63,7 @@ Only prompt-story reads the full Prompting guide. check reads the `pdd-prompting
 ## How a run works
 
 ```
-pdd workflow run feature 42      returns at once
+pdd workflow start feature 42      returns at once
   |
 chat 1  story: understand, visual?, prompt-story
   |     gate: approve
@@ -76,7 +76,7 @@ chat 3  code (only when you ask): build, verify, formal, review
 you     review and merge on GitHub
 ```
 
-1. `pdd workflow run` reads the issue, makes the branch, the worktree and the run folder, and opens the first chat in Herdr. It refuses an issue that already has an active run. Then it returns. You can close the terminal.
+1. `pdd workflow start` reads the issue, makes the branch, the worktree and the run folder, and opens the first chat in Herdr. It refuses an issue that already has an active run. Then it returns. You can close the terminal.
 2. The first message of the chat is short. It names the skill, the issue, the worktree, the run folder and the area with its steps.
 3. The main chat coordinates and talks with you. It writes no code and performs no checks.
 4. The main chat gives steps to fresh subagents; builders are never reused and never check their own code. Before checking, close finished agents if supported and try fresh startup. Only after startup fails may verify or formal reuse an agent that wrote no code, tests or prompts in this run. Review always needs a fresh agent with no build, verify, formal or prior review of this change and no prior review context, including every repair round. If no fresh reviewer can start, write `Not checked: review (agent limit)`, stop and tell the person. Follow pdd-prompting RUNBOOK §17 for missing-check records, new-session recovery and replacing them after actual checks. Each subagent gets its full brief at once, with file paths, not chat history; the chat waits once with a long time-out and no small follow-ups.
@@ -185,7 +185,7 @@ Read that output before you merge. Passing tests are useful evidence. They are n
 
 If you set `CLAUDE_CONFIG_DIR`, Claude Code reads `$CLAUDE_CONFIG_DIR/skills/` for you, too.
 
-`pdd workflow run NAME` and `pdd workflow list` look for a folder `pdd-NAME` with a `workflow.json`, in this order. The first one found wins.
+`pdd workflow start NAME` and `pdd workflow list` look for a folder `pdd-NAME` with a `workflow.json`, in this order. The first one found wins.
 
 1. `.agents/skills/` in the project
 2. `.claude/skills/` in the project
@@ -225,7 +225,7 @@ Then use it:
 
 ```sh
 pdd workflow list            # pdd-mybug is in the list
-pdd workflow run mybug 42  # a run on issue 42
+pdd workflow start mybug 42  # a run on issue 42
 ```
 
 In a chat, call `$pdd-mybug` in Codex or `/pdd-mybug` in Claude Code. Commit the folder so that your team gets the same workflow.
