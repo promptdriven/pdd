@@ -1,4 +1,4 @@
-// Generated from prompts/cli/argument-parser.prompt.md (sha256: a9b2831a90851a8808cd82ba81d2a834bad3fc46368ac8fb888a04d26675fd22).
+// Generated from prompts/cli/argument-parser.prompt.md (sha256: eee99f303aebcc21102d58c6244ba9364e3dd188c45a42fd7baab03441cfd094).
 import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 
 export class CommandInputError extends Error {
@@ -86,6 +86,8 @@ const expandShort = (argv, at) => {
 };
 export function parseArgv(input) {
   if (!Array.isArray(input) || input.some(word => typeof word !== 'string' || word.includes('\0'))) fail();
+  const direct = parseProgram(input);
+  if (direct) return direct;
   const at = input[0] === 'help' ? 1 : 0, argv = expandShort(input, at), base = formerAt(argv.slice(at));
   if (!base) return parseWords(argv);
   // Rewrite the former words to the new words, then parse as usual; a refusal throws before any notice.
@@ -107,4 +109,21 @@ function parseWords(argv, typed) {
   }
   if (!route) fail();
   return parseRoute(route, argv.slice(route.prefix.length), false, typed);
+}
+
+function parseProgram(words) {
+  const options = {}, valueOptions = new Set(['--data', '--max-calls', '--read']);
+  let i = 0;
+  while (i < words.length && words[i].startsWith('-')) {
+    const key = words[i];
+    if (!['--fresh','--show-data','-q','--quiet', ...valueOptions].includes(key)) return null;
+    if (Object.hasOwn(options,key)) fail();
+    if (valueOptions.has(key)) { if (!words[i+1]) fail(); options[key] = words[++i]; }
+    else options[key] = true;
+    i++;
+  }
+  if (!words[i]?.endsWith('.prompt.md')) return null;
+  if (options['--max-calls'] !== undefined && !/^(?:[1-9][0-9]{0,2}|1000)$/.test(options['--max-calls'])) fail();
+  if (options['--read'] && !/^[a-f0-9-]{36}$/i.test(options['--read'])) fail();
+  return Object.freeze({commandId:'prompt-run',local:'prompt-run',operands:Object.freeze(words.slice(i)),options:Object.freeze(options)});
 }

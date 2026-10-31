@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 2678a7cc1bb27510883c5d0b34b42550c888a96b614e617bad4b10f372426816).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: afd35cd0789b5e55b7c53f7722baf261750f520934777a27701c8ac8976514ef).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -42,7 +42,7 @@ export function renderHelp(prefix = []) {
 }
 export async function runPdd(argv, { stdout = process.stdout, stderr = process.stderr,
   cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, workflowRunner, workflowAreas,
-  stdin = process.stdin, confirm, mcpServer, runtimeSlots, contracts, product, productPorts, gitContext, workflowProve, provePorts } = {}) {
+  stdin = process.stdin, confirm, mcpServer, runtimeSlots, contracts, product, productPorts, gitContext, workflowProve, provePorts, runtimePorts } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
@@ -58,6 +58,11 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     } catch { /* An optional PATH diagnostic never prevents the requested command. */ }
   }
   switch (plan.local) {
+    case 'prompt-run': {
+      const { runProgram } = await import('./program-run.mjs');
+      const flags = Object.fromEntries(Object.entries(plan.options).map(([key,value]) => [key.replace(/^--?/, ''), value]));
+      return runProgram({file:plan.operands[0],args:plan.operands.slice(1),root:cwd,env,flags}, {...runtimePorts, stdout,stderr,stdin,env});
+    }
     case 'help': line(stdout, renderHelp(plan.helpPrefix));return 0;
     case 'version':
       try { const metadata = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'));

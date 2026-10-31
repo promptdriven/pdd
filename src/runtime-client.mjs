@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: df043bfeb9c9ea6ae33e3d9fdeab93ae690d02d9abcb753d42ad5a18197bd8b6).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 82de8198136f67d7654fc641bf72f3405e8e69cf52b3c8e2dfb335445efed6c2).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -2483,4 +2483,51 @@ export async function readTryOwner({ cwd = process.cwd(), story } = {}, givenPor
   const state = await runtime.send(`/v1/try/${record.id}/state`, { method: 'GET' }, GET_MS);
   return { root, test: record.seed_scenario ? { ...test, doc: record.seed_scenario } : test, record, model: metadata.json, actions: Array.isArray(state.json?.actions) ? state.json.actions : null,
     ...(state.status === 200 && Object.hasOwn(state.json ?? {}, 'world') ? { data: state.json.world } : { data_error: `Current saved data unavailable${state.status ? ` (HTTP ${state.status})` : ''}; no initial data was substituted.` }) };
+}
+
+// Direct programs share the authenticated bounded transport with Story execution.
+// Tokens stay in this closure, never in program descriptors or persisted worlds.
+export function programTransport({ root, expectedLogin }, givenPorts = {}) {
+  const ports=withDefaults(givenPorts), origin=runtimeOrigin(ports.env), identity=signIn(ports.gh);
+  if(expectedLogin && expectedLogin!==identity.login) throw new Stop(125,'This program belongs to another GitHub login. Sign in as its owner before reading pending work.');
+  const runtime=new Runtime({origin,token:identity.token,ports});
+  const sanitize=value=>cleanText(value,[identity.token]);
+  const redact=value=>JSON.parse(JSON.stringify(value).split(identity.token).join('[secret]'));
+  const context={ports,origin,identity,runtime,store:stateFor(ports.env,root),secrets:[identity.token],deadline:ports.now()+600_000,interrupted:false};
+  const targets=new Map();
+  async function admit(id,kind='try') {
+    const target={};const off=ports.onInterrupt(()=>{context.interrupted=true;});
+    try {if(!await admission(context,kind,target))throw new Stop(context.interrupted?130:125,'The interpreter could not admit this request. Nothing was sent.');
+      targets.set(id,target);
+      if(!await recordRuntimeRequest(target.reservation,id,slotPorts(context)))throw new Stop(125,'Could not save interpreter admission. Nothing was sent.');
+    }finally{off();}
+  }
+  async function finish(reply,id,command,{sessionId,onInterrupt}={}) {
+    const end=ports.now()+600_000;let interrupted=context.interrupted;
+    const off=ports.onInterrupt(()=>{interrupted=true;onInterrupt?.();});
+    try {
+      for (;;) {
+        if(interrupted)throw Object.assign(new Stop(130,`Interrupted. Read the accepted request with pdd --read ${id}`),{requestId:id});
+        if(reply?.status===200||reply?.status===202) {
+          if(!sameJob(reply.json,id,command))throw new Stop(125,'The interpreter returned a different request identity. Read the saved request; do not repeat it.');
+          const answer=reply.json;
+          if(sessionId && answer.session_id!==sessionId)throw new Stop(125,'The interpreter returned a different session identity. Read the saved request.');
+          if(ENDED.has(answer.state)){await finishReservation(context,targets.get(id),answer);return redact(answer);}
+        } else if(reply && !reply.lost && reply.status!==404) {
+          throw new Stop(125,sanitize(blockingAnswer(reply)||reply.json?.error?.message||`Interpreter HTTP ${reply.status}. Read the saved request; do not repeat it.`));
+        }
+        if(ports.now()>=end)throw new Stop(125,'The ten-minute limit was reached. Read the saved request; do not repeat it.');
+        await ports.sleep(ports.pollMs);
+        reply=await runtime.get(id);
+      }
+    } catch(error){error.requestId??=id;throw error;} finally {off();}
+  }
+  return {ports,origin,login:identity.login,sanitize,redact,
+    request:(path,init)=>{const url=new URL(path,origin);if(url.origin!==origin||url.username||url.password)throw new Stop(125,'Refusing a program proxy request outside its interpreter origin.');return runtime.send(url.pathname+url.search,init,GET_MS);},
+    get:id=>runtime.get(id), finish,
+    multipart:async(command,request,capture)=>{const off=ports.onInterrupt(()=>{context.interrupted=true;});try{if(command==='try')await admit(request.requestId);else if(!await capacityReady(context,context.deadline))throw new Stop(context.interrupted?130:125,'The interpreter could not admit this upload. Nothing was sent.');const reply=await runtime.post(`/v1/${command}`,request,capture.tar);return reply;}finally{off();}},
+    call:async(sessionId,request)=>{if(!await capacityReady(context,context.deadline))throw new Stop(125,'The interpreter could not admit this call. Nothing was sent.');return runtime.send(`/v1/try/${sessionId}/call`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(request)},ports.postMs);},
+    state:id=>runtime.send(`/v1/try/${id}/state`,{method:'GET'},GET_MS),
+    stop:async (id,requestId=ports.randomUUID())=>{const off=ports.onInterrupt(()=>{context.interrupted=true;});let reply;try{reply=await runtime.stop(id,requestId);}finally{off();}if([404,410].includes(reply.status))return;const answer=await finish(reply,requestId,'stop');if(answer.state!=='passed'||answer.result?.session?.state!=='stopped')throw new Stop(125,'Program stop was not confirmed. Read the saved request before restarting.');},
+  };
 }
