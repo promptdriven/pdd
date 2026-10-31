@@ -478,6 +478,65 @@
       "action": "Cancel immediately before final launchRequested checkpoint",
       "expected": "Final cancellation reread stops dispatch and never restores running; cancellation after this check is a documented non-atomic legacy boundary",
       "input": {}
+    },
+    {
+      "id": "attached-open-releases-lock",
+      "criteria": [
+        1,
+        7
+      ],
+      "action": "Keep one plain open attached; invoke a second plain open, then --new",
+      "expected": "Both later opens proceed; read/allocation/resume/save stays serialized before attach; the first attachment does not hold the run lock",
+      "input": {}
+    },
+    {
+      "id": "shell-proves-launch-unsent",
+      "criteria": [
+        7,
+        9
+      ],
+      "action": "Lose launch request before dispatch; retry --new at START_GRACE_MS with exact owned live pane and authoritative shell-only process-info",
+      "expected": "Record proof and once-only recovery dispatch intent before sending same prepared launch once; retain native identity and one archive; status explains retry",
+      "input": {}
+    },
+    {
+      "id": "agent-process-forbids-launch",
+      "criteria": [
+        7
+      ],
+      "action": "Retry lost launch after START_GRACE_MS with Codex/Claude process present but no native UUID",
+      "expected": "No second launch or blind resume; retain same custody for observation",
+      "input": {}
+    },
+    {
+      "id": "unknown-process-stays-pending",
+      "criteria": [
+        7,
+        9
+      ],
+      "action": "Retry lost launch after START_GRACE_MS with missing, malformed or unknown process-info",
+      "expected": "No fresh dispatch or tab closure; safe pending retains identity and names --new plus cancel",
+      "input": {}
+    },
+    {
+      "id": "historical-empty-prepared-tab",
+      "criteria": [
+        6,
+        7,
+        9
+      ],
+      "action": "Advance current area after prepared but never requested launch; recover with verified owned shell-only pane",
+      "expected": "Close only historical empty owned tab and end attempt; no fresh launch, unchanged newer current chat and progress; unknown or agent process never authorizes close",
+      "input": {}
+    },
+    {
+      "id": "recovery-dispatch-lost-once",
+      "criteria": [
+        7
+      ],
+      "action": "Prove unsent launch after grace, save recovery dispatch intent, lose recovery launch reply, retry --new",
+      "expected": "No repeated recovery dispatch, including shell-only later observation; positive same-agent observation may finish same attempt",
+      "input": {}
     }
   ]
 }
