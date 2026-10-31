@@ -16,7 +16,7 @@
     },
     {
       "id": "AC4",
-      "text": "Multiple batches without an intent label that lack complete original Check information or complete receipt criterion coverage count no passing Stories and show one hint that older checks are not counted and I should run pdd check again."
+      "text": "Multiple batches without an intent label that lack complete original Check information or complete receipt criterion coverage count no passing Stories and show one hint that older checks are not counted and I should run pdd test again."
     },
     {
       "id": "AC5",
@@ -857,7 +857,7 @@
     "contains": [
       "older checks",
       "not counted",
-      "pdd check"
+      "pdd test"
     ]
   }
 }

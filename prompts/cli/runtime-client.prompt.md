@@ -563,7 +563,7 @@ without a second legacy policy. Any explicit other intent, including null,
 lint-only or Try, is ineligible. For an otherwise readable batch belonging to
 root with absent intent and any invalid row, count none of its rows and emit
 one deduplicated hint explaining that older checks are not counted and advising
-the person to run `pdd check` again.
+the person to run `pdd test` again.
 This advice adds no gate or dispatch. Eligible legacy batches use the same
 source identity, Story identity and receipt rules as explicit Check batches.
 For eligible legacy rows whose `criterion_texts` cannot supply the complete
