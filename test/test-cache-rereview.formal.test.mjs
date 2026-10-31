@@ -22,7 +22,7 @@ async function fixture(t) {
     write(join(repo, 'tests/independent.json'), doc);
   });
   let mode = 'passed';
-  const fake = await fakeRuntime(t, entry => ({ status: 200, json: entry.command === 'lint' ? fake.lint(entry.request.requestId) : fake.check(entry.request?.requestId ?? entry.url.split('/').at(-1), mode) }));
+  const fake = await fakeRuntime(t, entry => ({ status: 200, json: entry.command === 'lint' ? fake.lint(entry.request.requestId, ['prompts/place_order.prompt.md', 'prompts/independent.prompt.md'].map(path => ({ path, state: 'approved', admission_state: 'approved', interface: { calls: [] } }))) : fake.check(entry.request?.requestId ?? entry.url.split('/').at(-1), mode) }));
   const invoke = async (words, options = {}) => {
     const { ports } = portsFor({ HOME: ctx.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: ctx.state });
     const before = fake.posts.filter(row => row.command === 'check').length;
