@@ -31,7 +31,7 @@ flowchart TD
 ```
 
 `--cache-clear` takes precedence over `--lf` while retaining operand scope: discard the entire cache, ask the server for fresh answers without replay and run
-the normal selected scope. Otherwise preserve explicit selection scope. `--lf`
+the normal selected scope. Server replay bypass requires a compatible interpreter request control; the current Check protocol does not provide one. Keep this dependency explicit: local cache clearing alone cannot establish fresh interpreter execution. Otherwise preserve explicit selection scope. `--lf`
 uses each Story's latest known outcome across invocations, selecting exactly
 `failed`, including all its test files within the selected scope. A cold absent
 history runs the whole selected scope; history with no recorded failures uses the normal selected scope (including ordinary unchanged-pass reuse). Keep a known failure selected until a confirmed pass, even if a later attempt has no verdict (including sign-in failure, interruption, timeout or unavailable accounting). Refused/not-run/unknown attempts without an earlier failure are not last-failed selections, but normal tests must always retry them. Do not
