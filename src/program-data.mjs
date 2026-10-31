@@ -1,6 +1,6 @@
-// Generated from prompts/cli/program-data.prompt.md (sha256: 11adb576bd3ecef31c3484009478f789f44e0ef4308baade2a8867e3fa4670cc).
+// Generated from prompts/cli/program-data.prompt.md (sha256: 87c99a8d6572857c86c06621d09a5a0c506fe3e2568ce7cd73ef94fef95b438b).
 import { constants, realpathSync, lstatSync, mkdirSync, readFileSync, openSync, closeSync, writeFileSync, renameSync, unlinkSync, readdirSync } from 'node:fs';
-import { basename, dirname, join, resolve, isAbsolute } from 'node:path';
+import { basename, dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { hostname } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -62,8 +62,9 @@ export function programData({root,program,flags={}},ports={}) {
     const releaseMapping=acquireProgramLock(dir);
     try{const owner=ownership(dir);if(owner&&owner!==program)throw localError('Program data directory belongs to another entry.');writePrivate(join(dir,'program.json'),{program});}finally{releaseMapping();}
   }
+  const reset=!!(flags.reset||flags.data),noCache=!!flags['no-cache'];
   let backupPath;
-  if(flags.fresh){const release=acquireProgramLock(dir);try{const prior=readPrivate(join(dir,'world.json'),undefined);if(prior!==undefined){backupPath=join(dir,'world.prev.json');writePrivate(backupPath,prior);}}finally{release();}}
+
   const git=spawnSync('git',['rev-parse','--git-path','info/exclude'],{cwd:root,encoding:'utf8',stdio:['ignore','pipe','pipe']});
   if(git.status!==0)throw localError('Cannot locate local Git excludes.');
   const ignore=resolve(root,git.stdout.trim());let previous='';
@@ -82,10 +83,11 @@ export function programData({root,program,flags={}},ports={}) {
     catch(e){throw localError(`Cannot read starting data ${flags.data}: ${e.message}.`);}
     if(object(doc)&&Object.hasOwn(doc,'initial_world')) {world=doc.initial_world;simulation=doc.simulation;}
     else world=doc;
-  } else if(!flags.fresh)world=readPrivate(join(dir,'world.json'),{});
+  } else if(!reset)world=readPrivate(join(dir,'world.json'),{});
   if(!object(world))throw localError(`${flags.data??'Starting data'} must be a JSON world object.`);
   if(simulation!==undefined&&!object(simulation))throw localError('Simulation must be a JSON object.');
-  return {dir,...(backupPath?{backupPath}:{}),fresh:!!flags.fresh,startingData:{initial_world:world,...(simulation===undefined?{}:{simulation})},explicit:!!flags.data};
+  if(reset){const release=acquireProgramLock(dir);try{const prior=readPrivate(join(dir,'world.json'),undefined);if(prior!==undefined){backupPath=join(dir,'world.prev.json');writePrivate(backupPath,prior);}}finally{release();}}
+  return {dir,...(backupPath?{backupPath}:{}),reset,noCache,fresh:noCache,startingData:{initial_world:world,...(simulation===undefined?{}:{simulation})},explicit:!!flags.data};
 }
 
 // A dead native owner cannot prevent the saved request from being read after a crash.
@@ -103,4 +105,8 @@ export function acquireProgramLock(dir) {
     }
   }
   throw Object.assign(new Error('Could not acquire program data ownership. Try again after the other command finishes.'),{exitCode:125});
+}
+
+export function renderResetNotice({root,backupPath,quiet=false}) {
+  return quiet?'':`pdd: data reset.${backupPath?' Old data kept in '+relative(root,backupPath):''}\n`;
 }

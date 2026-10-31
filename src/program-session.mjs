@@ -1,4 +1,4 @@
-// Generated from prompts/cli/program-session.prompt.md (sha256: eb0099088649d6f9849d2b7be3452362cc4d4f978aea8be0bd6116eaffdc978d).
+// Generated from prompts/cli/program-session.prompt.md (sha256: 8b761772c7dc00458f3b8085546fa4b70ef5bfcf21e55f3a221e9efde8f38bd8).
 import { join, posix } from 'node:path';
 import { captureSource, gitFiles, readPrompt } from './runtime-preflight.mjs';
 import { programTransport } from './runtime-client.mjs';
@@ -38,7 +38,7 @@ export async function openProgramSession({root,file,program,data,appMap,overlay}
   const transport=programTransport({root},ports);
   if(old?.login!==undefined && old.login!==transport.login)throw Object.assign(new Error('The program session belongs to another GitHub login. Sign in as its owner.'),{exitCode:125});
   const selected=JSON.stringify(data.startingData);
-  if(old?.id && old.origin===transport.origin&&old.source===capture.sha256&&!data.fresh&&JSON.stringify(old.world)===JSON.stringify(data.startingData.initial_world)&&old.simulation===JSON.stringify(data.startingData.simulation??null)&&old.appMap===JSON.stringify(appMap??null)&&(!data.explicit||old.selected===selected))return {...old,transport,capture,newSession:false,serve:{origin:transport.origin,request:(path,init)=>transport.request(path,init)},save:record=>writePrivate(path,transport.redact(record))};
+  if(old?.id && old.origin===transport.origin&&old.source===capture.sha256&&JSON.stringify(old.world)===JSON.stringify(data.startingData.initial_world)&&old.simulation===JSON.stringify(data.startingData.simulation??null)&&old.appMap===JSON.stringify(appMap??null))return {...old,transport,capture,newSession:false,serve:{origin:transport.origin,request:(path,init)=>transport.request(path,init)},save:record=>writePrivate(path,transport.redact(record))};
   if(old?.id && old.origin!==transport.origin)throw Object.assign(new Error('The saved program belongs to another interpreter origin. Restore its origin before replacing it.'),{exitCode:125});
   if(old?.id){
     const stopId=transport.ports.randomUUID();

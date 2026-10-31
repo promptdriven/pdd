@@ -1,4 +1,4 @@
-// Generated from prompts/cli/argument-parser.prompt.md (sha256: ccacb3253ed0c336ffd1c79d7386b60b19191ca2d8f2cb1f684435d8c18a0009).
+// Generated from prompts/cli/argument-parser.prompt.md (sha256: eb831df0588ac233776d18fb72d9e4b31f7693f0104dfebd3824e60f6e331c06).
 import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 
 export class CommandInputError extends Error {
@@ -116,7 +116,7 @@ function parseProgram(words) {
   let i = 0;
   while (i < words.length && words[i].startsWith('-')) {
     const key = words[i];
-    if (!['--fresh','--json','--show-data','-q','--quiet', ...valueOptions].includes(key)) return null;
+    if (!['--reset','--no-cache','--json','--show-data','-q','--quiet', ...valueOptions].includes(key)) return null;
     if (Object.hasOwn(options,key)) fail();
     if (valueOptions.has(key)) { if (!words[i+1]) fail(); options[key] = words[++i]; }
     else options[key] = true;
