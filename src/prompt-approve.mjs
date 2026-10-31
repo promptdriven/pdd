@@ -1,4 +1,6 @@
-// Generated from prompts/cli/prompt-approve.prompt.md (sha256: 2037c7f4c18d9f961f3dfbd3bfe81f065f9d1ad198bf0efd31e5bc1a0c62faa4).
+// Generated from prompts/cli/prompt-approve.prompt.md (sha256: 8821baa81e0596ba99db30d9ddb283c968e280c83edabf35ea22a9dca8c00d9c).
+import { approvalActor, readApprovalPolicy, readSaidWords, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
+import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { lstatSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { relative, resolve, sep, join } from 'node:path';
@@ -195,7 +197,7 @@ export function lineReader(stdin) {
 
 // Show one prompt, ask the person, and approve on y. expectedHash (from the Try page) must equal the local prose hash.
 // Returns {state: 'done' | 'declined', exitCode, message}; prints the view and the question to stdout.
-export async function askApproval({ root, path, stdout, answers, expectedHash }) {
+export async function askApproval({ root, path, stdout, answers, expectedHash, said, commit }) {
   const text = readFileSync(join(root, path), 'utf8'), blocks = interfaceBlocks(text);
   if (blocks.length !== 1) return { state: 'declined', exitCode: 4, message: `${path} has ${blocks.length ? 'more than one' : 'no'} Runtime interface block.` };
   let iface;
@@ -213,12 +215,13 @@ export async function askApproval({ root, path, stdout, answers, expectedHash })
   }
   for (const row of [...describeInterface(path, iface), ...proseView(root, path, text)]) line(stdout, row);
   if (iface.status === 'approved') line(stdout, 'The text changed after it was approved. Read the prompt again before you answer.');
-  stdout.write(`Approve ${path}? y/n `);
-  const answer = await answers.ask();
+  if (said === undefined) stdout.write(`Approve ${path}? y/n `);
+  const answer = said === undefined ? await answers.ask() : "yes";
   if (!/^(?:y|yes)$/i.test(answer.trim())) { line(stdout, ''); return { state: 'declined', exitCode: 1, message: `Not approved: ${path}. Nothing changed.` }; }
   const next = approvePromptText(text);
   if (!next) return { state: 'declined', exitCode: 4, message: `pdd could not set approved in ${path}. Add "prose_sha256": "" to the Runtime interface, then approve again.` };
-  writeFileSync(join(root, path), next);
+  if (commit) await commit({ text, next, hash });
+  else writeFileSync(join(root, path), next);
   return { state: 'done', exitCode: 0, message: `Approved ${path}.` };
 }
 
@@ -231,19 +234,51 @@ export function promptPath(root, cwd, word) {
 }
 
 // pdd approve PROMPT. Returns the exit code.
-export async function runApprove({ words = [], cwd = process.cwd() } = {}, ports = {}) {
+export async function runApprove({ words = [], cwd = process.cwd(), said } = {}, ports = {}) {
   const stdout = ports.stdout ?? process.stdout, stderr = ports.stderr ?? process.stderr, stdin = ports.stdin ?? process.stdin;
   const interactive = ports.interactive ?? (!!process.stdin.isTTY && !!process.stdout.isTTY);
   try {
     if (words.length !== 1) throw new Stop(2, 'Name one prompt: pdd approve prompts/<name>.prompt.md');
-    const top = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8' });
+    const gitRun = async (args, cwd) => ports.execFile ? ports.execFile('git', args, {cwd,encoding:'utf8'}).then(result => ({...result,status:result.code ?? 0})) : (ports.spawnSync ?? spawnSync)('git', args, {cwd,encoding:'utf8'});
+    const top = await gitRun(['rev-parse', '--show-toplevel'], cwd);
     if (top.status !== 0) throw new Stop(2, 'pdd approve works in a Git repository.');
     const root = realpathSync(top.stdout.trim()), path = promptPath(root, cwd, words[0]);
     if (!path) throw new Stop(2, `${relative(root, resolve(realpathSync(cwd), words[0])).split(sep).join('/')} is not a Git-visible *.prompt.md file in this repository.`);
-    if (!interactive) throw new Stop(2, `pdd approve is for a person at a terminal. Ask the person to run: pdd approve ${path}`);
-    const answers = lineReader(stdin);
+    const { strictApprovals } = readApprovalPolicy({ root }, ports);
+    const env = ports.env ?? process.env;
+    const agent = approvalActor(env).kind === 'agent';
+    // A saved current workflow pane is also an agent environment in strict mode.
+    let pane = false;
+    if (strictApprovals && env.HERDR_PANE_ID) {
+      const { runForWorktree } = await import('./workflow-runs.mjs');
+      const run = await runForWorktree(cwd, ports);
+      pane = Boolean(run?.chats?.some(chat => chat.paneId === env.HERDR_PANE_ID));
+    }
+    if (strictApprovals ? said !== undefined || !interactive || agent || pane : said === undefined && !interactive) throw new Stop(2, `pdd approve is for a person at a terminal. Ask the person to run: pdd approve ${path}`);
+    const common = await gitRun(['rev-parse', '--path-format=absolute', '--git-common-dir'], root);
+    if (common.status !== 0) throw new Stop(4, 'Cannot resolve Git common directory.');
+    const commonDir = common.stdout.trim();
+    readPromptApprovals({ commonDir }, ports);
+    if (said !== undefined) {
+      try { said = await readSaidWords(said, { ...ports, stdin }); }
+      catch (error) { throw new Stop(2, error.message); }
+    }
+    const answers = said === undefined ? lineReader(stdin) : { close() {} };
+    const commit = async ({ text, next, hash }) => {
+      const fs = ports.fs ?? { writeFileSync };
+      const evidence = { id: (ports.randomUUID ?? randomUUID)(), route: said === undefined ? 'terminal' : 'said', actor: approvalActor(env), at: (ports.now ?? Date.now)(), words: said ?? null, prompts: [{ path, proseSha256: hash }] };
+      try {
+        fs.writeFileSync(join(root, path), next);
+        await recordPromptApproval({ commonDir, evidence }, ports);
+      } catch (error) {
+        try { fs.writeFileSync(join(root, path), text); } catch { throw new Stop(4, `Approval evidence failed; rollback failed for ${path}.`); }
+        throw error;
+      }
+      line(stdout, `${path} ${hash}`);
+      line(stdout, `Approval route: ${evidence.route}; actor: ${evidence.actor.kind} ${evidence.actor.id}; at: ${evidence.at}`);
+    };
     try {
-      const result = await askApproval({ root, path, stdout, answers });
+      const result = await askApproval({ root, path, stdout, answers, said, commit });
       if (result.exitCode === 1) line(stdout, 'Not approved. Nothing changed.');
       else if (result.exitCode === 4 && result.message.startsWith('Fix these')) line(stdout, 'Fix these before you approve.');
       else line(result.exitCode === 4 ? stderr : stdout, result.message);
@@ -251,6 +286,6 @@ export async function runApprove({ words = [], cwd = process.cwd() } = {}, ports
     } finally { answers.close(); }
   } catch (error) {
     if (error instanceof Stop) { line(stderr, error.message); return error.exitCode; }
-    throw error;
+    line(stderr, error.message || 'Approval failed.'); return 4;
   }
 }

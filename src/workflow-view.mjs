@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-view.prompt.md (sha256: 514dc447c291360a90ce4d5bc1396fbaddad90316ec2b03457023065cf4b824e).
+// Generated from prompts/cli/workflow-view.prompt.md (sha256: 331c079f17ad19e4ca021b3743d2dc41f7532068a22c95a752c0d1fff5f8e464).
 import { execFile } from 'node:child_process';
 import { lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
@@ -36,10 +36,10 @@ function promptState(source) {
   if (!blocks.length) return null;
   try {
     const doc = JSON.parse(blocks[0][1]);
-    if (blocks.length !== 1 || !['draft', 'approved'].includes(doc?.status)) return 'invalid interface; needs separate person review';
-    if (doc.prose_sha256 !== proseSha256(source)) return `${doc.status === 'approved' ? 'stale approval' : 'stale draft hash'}; needs separate person review`;
-    return doc.status === 'approved' ? 'approved (current prose)' : 'draft; needs separate prompt approval';
-  } catch { return 'invalid interface; needs separate person review'; }
+    if (blocks.length !== 1 || !['draft', 'approved'].includes(doc?.status)) return 'invalid interface; needs person review';
+    if (doc.prose_sha256 !== proseSha256(source)) return `${doc.status === 'approved' ? 'stale approval' : 'stale draft hash'}; needs person review`;
+    return doc.status === 'approved' ? 'approved (current prose)' : 'draft; needs person review at the next ready gate';
+  } catch { return 'invalid interface; needs person review'; }
 }
 
 // This module deliberately uses no runner/chat helpers and never refreshes external state.
@@ -106,7 +106,7 @@ export async function viewRun({ ref, cwd }, ports = {}) {
     ...(run.question && !ended(run) && (!gate || run.question.at >= gate.at) ? [`Question: ${text(run.question.text)}`] : []),
     ...(run.chatFailure ? [`Chat: ${text(run.chatFailure.code)} — ${text(run.chatFailure.message)}`] : []),
     ...(approvals.length ? approvals.map(item => `Recorded approval: ${text(item.stage)} approved via ${text(item.via)} at ${Number.isFinite(item.at) ? new Date(item.at).toISOString() : 'unknown time'}.`) : ['Recorded approvals: none.']),
-    `Pending: ${pending}`, 'Workflow gate approval and code authorization are separate from prompt approval.',
+    `Pending: ${pending}`, 'One ready-gate approval covers the gate and all its selected draft prompts. A later code-or-stop gate needs its own decision. Standalone prompt approval covers only that prompt.',
     ...[...prompts].map(([path, state]) => `Prompt status: ${text(path)} — ${state}`),
     ...(array(run.pr).length ? run.pr.map(pr => `PR: ${text(pr.url)} (${text(pr.state ?? 'unknown')}, saved)`) : ['PRs: none recorded.']),
     ...runtime.map(line => text(line)), ...(reports.length ? reports.map(url => `Report: ${text(url)}`) : ['Interpreter reports: not recorded.']),

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-pr-evidence.prompt.md (sha256: e0e3e3b683d89f3521777d5613757e6417384177289721e256be4469dc26ec48).
+// Generated from prompts/cli/workflow-pr-evidence.prompt.md (sha256: 37cd26844357b4a265c59e8e828b9de442a53c3db315582f36541f14db784eb3).
 import { execFile } from 'node:child_process';
 import { lstatSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -12,6 +12,34 @@ function safeValue(value) {
   const fence = '`'.repeat(fenceLength);
   const padding = content.startsWith('`') || content.endsWith('`') || content.startsWith(' ') && content.endsWith(' ') && content.trim() ? ' ' : '';
   return fence+padding+content+padding+fence;
+}
+// Approval values retain JSON quoting, unlike ordinary lifted prose.
+function approvalValue(value) {
+  const content = JSON.stringify(String(value)).replace(/[\u007f-\u009f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/g, char => '\\u'+char.charCodeAt(0).toString(16).padStart(4,'0')).replaceAll('pdd-workflow:', 'pdd-workflow\\u003a');
+  const fence = '`'.repeat(Math.max(1, ...[...content.matchAll(/`+/g)].map(match => match[0].length + 1)));
+  return fence + content + fence;
+}
+function approvalLines(run) {
+  const seen = new Set(), rows = [];
+  for (const decision of run.decisions ?? []) {
+    if (decision.decision !== 'approve') continue;
+    if (decision.evidence) rows.push(decision.evidence);
+    else rows.push({ route: decision.via, at: decision.at, ...(decision.text !== undefined ? { words: decision.text } : {}) });
+  }
+  rows.push(...(run.promptApprovals ?? []));
+  return rows.sort((a,b) => a.at-b.at).flatMap(evidence => {
+    const key = typeof evidence.id === 'string' && evidence.id.length
+      ? `id:${evidence.id}` : `legacy:${JSON.stringify([evidence.route, evidence.actor, evidence.at, evidence.words, evidence.prompts])}`;
+    if (seen.has(key)) return [];
+    seen.add(key);
+    const label = evidence.route === 'said' ? 'Approved in chat:' : evidence.route === 'chat' ? 'Approved in area chat:' : 'Approved in terminal:';
+    const values = [evidence.words !== undefined && evidence.words !== null ? approvalValue(evidence.words) : null,
+      evidence.actor ? `actor ${approvalValue(evidence.actor.kind)} ${approvalValue(evidence.actor.id)}` : null,
+      evidence.at !== undefined ? `at ${approvalValue(new Date(evidence.at).toISOString())}` : null,
+      `route ${approvalValue(evidence.route)}`,
+      ...(evidence.prompts ?? []).map(prompt => `${approvalValue(prompt.path)} ${approvalValue(prompt.proseSha256)}`)].filter(Boolean);
+    return [`${label} ${values.join('; ')}`];
+  });
 }
 const execute = promisify(execFile);
 const labels = ['Not fixed yet:', 'Not checked:', 'Defect:', 'Not caught because:', 'Proof (defect fixed):', 'Proof (gap closed):', 'Review:'];
@@ -88,5 +116,5 @@ export async function preparePrEvidence({ run, isCode }, ports = {}) {
   }
   lines.push(...[...grouped.get('Review:')].map(row=>row.line));
   const issueReference = `${grouped.get('Not fixed yet:').size ? 'Refs' : isCode ? 'Closes' : 'Part of'} #${run.number}`;
-  return { lines, issueReference, proofStatus };
+  return { lines, approvalLines: approvalLines(run), issueReference, proofStatus };
 }
