@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 99b863f75b5df476806aeb52b2db4e69669baf8fb036638c8a88820d67f0918a).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: f0e2412333caebd2fef797d4f89065e4414232bbe60b9c84da478ea8c18a443f).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of four commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run' });
@@ -91,7 +91,7 @@ const routes = [
   { id: 'contracts.sync', prefix: ['contracts', 'sync'], local: 'contracts-sync', operands: [], options: [{name:'--write',kind:'flag'}],
     forms: [form('pdd contracts sync [--write]', 'Show proposed changes for moving schema copies to references; apply only with --write. No interpreter calls.')] },
   { id: 'mcp', prefix: ['mcp'], local: 'mcp', operands: [], options: [],
-    forms: [form('pdd mcp', 'Serve the current repository’s Simulator tools over stdio MCP.')] },
+    forms: [form('pdd mcp', 'Serve the current repository’s Try tools over stdio MCP.')] },
   { id: 'setup', prefix: ['setup'], local: 'setup', operands: [], options: [],
     forms: [form('pdd setup', 'Install the PDD skills for Codex and Claude if they are missing, and add the short PDD block to CLAUDE.md, else AGENTS.md. Offer detected Codex, Claude Code and Gemini MCP registrations after showing exact config changes and one y/N question. A second run changes nothing.')] },
 ];

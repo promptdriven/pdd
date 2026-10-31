@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-view.prompt.md (sha256: 65bb559156ad8980d9c431be4954486ae4833bff953801ae9d3a45ee893dad4a).
+// Generated from prompts/cli/workflow-view.prompt.md (sha256: 514dc447c291360a90ce4d5bc1396fbaddad90316ec2b03457023065cf4b824e).
 import { execFile } from 'node:child_process';
 import { lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
@@ -12,7 +12,7 @@ const execute = promisify(execFile);
 const text = value => String(value ?? '').replace(/[\x00-\x1f\x7f]/g, ' ').trim();
 const array = value => Array.isArray(value) ? value : [];
 // Prompt tests lines, also the `Runtime check` lines of older summaries; a line ends at a break or a "; " before the next entry.
-const LINE_BREAK = new RegExp(`\\n|;\\s*(?=Report:|Simulator:|Try:|${PROMPT_TESTS_WORDS})`), LINE_START = new RegExp(`^${PROMPT_TESTS_WORDS}`);
+const LINE_BREAK = new RegExp(`\\n|;\\s*(?=Report:|Try:|${PROMPT_TESTS_WORDS})`), LINE_START = new RegExp(`^${PROMPT_TESTS_WORDS}`);
 const ended = run => ['completed', 'cancelled'].includes(run.state);
 function localPath(root, path) {
   if (typeof path !== 'string' || !path || isAbsolute(path) || path.includes('\\') || path.split('/').some(p => p === '..' || !p) || /[\x00-\x1f]/.test(path)) return null;
@@ -95,7 +95,7 @@ export async function viewRun({ ref, cwd }, ports = {}) {
   const runtime = summaries.flatMap(summary => summary.split(LINE_BREAK)).filter(line => LINE_START.test(line.trim()));
   const gate = run.gate && (!ended(run) || run.state === 'completed' && run.gate.kind === 'ask-code') ? run.gate : null;
   const pending = gate?.kind === 'ask-code' ? 'Optional code-work authorization: make the code PR, or stop at PR 1.'
-    : gate?.kind === 'approve-pr' ? `Approve ${text(gate.area)} after review in the Simulator to open the PR.`
+    : gate?.kind === 'approve-pr' ? `Approve ${text(gate.area)} after review/Try to open the PR.`
     : gate ? `Approve the ${text(gate.area)} area or ask for changes.` : ended(run) ? 'No active gate.'
     : run.state === 'waiting' && array(run.pr).some(pr => pr.stage === area?.name) ? 'Review and merge the recorded PR on GitHub; external status is saved, not refreshed.'
     : 'No gate open yet; the current area still needs to finish.';
@@ -110,7 +110,7 @@ export async function viewRun({ ref, cwd }, ports = {}) {
     ...[...prompts].map(([path, state]) => `Prompt status: ${text(path)} — ${state}`),
     ...(array(run.pr).length ? run.pr.map(pr => `PR: ${text(pr.url)} (${text(pr.state ?? 'unknown')}, saved)`) : ['PRs: none recorded.']),
     ...runtime.map(line => text(line)), ...(reports.length ? reports.map(url => `Report: ${text(url)}`) : ['Interpreter reports: not recorded.']),
-    ...(tries.length ? tries.map(url => `Simulator: ${text(url)}`) : ['Simulator: not recorded.']),
+    ...(tries.length ? tries.map(url => `Try: ${text(url)}`) : ['Try: not recorded.']),
     `Revision: ${revision?.trim() ?? 'unavailable'}; ${dirty === null ? 'working-tree state unavailable' : dirty ? 'uncommitted changes' : 'clean checkout'}.`,
     'Review links show current files; recorded approvals do not certify later edits.',
     ...(changed === null ? ['Changes since the base are unavailable; listing available authored files.'] : []),

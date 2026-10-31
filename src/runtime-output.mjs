@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: 7860e5e0ab323219d7ce307e1390b977b98eb86d99a6282f5d01c5d41dd34e0c).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: fa9b715e4e0faf5043e4b3406d0f6fd79cd6166a9e01ca4c6f1f9377822bbcb4).
 export const OPEN_STATES = new Set(['queued', 'running']);
 const RESULT_WORDS = { not_run: 'not run' };
 
@@ -369,7 +369,7 @@ export function renderText({ batch, rows, coverage, warnings = [], details = fal
   return `${out.join('\n')}\n`;
 }
 
-// Owner-provided Simulator accounting is separate from a program's stdout/body and from account-wide allowances.
+// Owner-provided Try accounting is separate from a program's stdout/body and from account-wide allowances.
 export function tryUsage(answer, { cap } = {}) {
   const number = value => Number.isSafeInteger(value) && value >= 0 ? value : 'unknown';
   const total = number(answer?.calls?.cap ?? answer?.result?.session?.max_calls ?? cap);
@@ -378,7 +378,7 @@ export function tryUsage(answer, { cap } = {}) {
     used: typeof total === 'number' && typeof remaining === 'number' && remaining <= total ? total - remaining : 'unknown' };
 }
 export function tryUsageLine(usage, { command = false } = {}) {
-  return `Simulator AI usage: ${command ? `${usage.calls} this command · ` : ''}${usage.used} used · ${usage.remaining} remaining (session cap ${usage.cap}).`;
+  return `Try AI usage: ${command ? `${usage.calls} this command · ` : ''}${usage.used} used · ${usage.remaining} remaining (session cap ${usage.cap}).`;
 }
 export function tryUsageHeaders(usage) {
   return { 'x-pdd-ai-calls': String(usage.calls), 'x-pdd-try-used': String(usage.used),

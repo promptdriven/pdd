@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-guide.prompt.md (sha256: 4047798b4ecf9acbe977fbbadeb24580c57eb159ed4376c6dfb9693b4ee74341).
+// Generated from prompts/cli/agent-guide.prompt.md (sha256: 3553676cff839ba33793ee0836d1898eaeb89f65d408721ae5930cdcd6db9a21).
 import {createHash} from 'node:crypto';
 import {buildProjectCard,readAgentScenarios} from './agent-project.mjs';
 import {createRunJudge,compareExpectation} from './agent-judge.mjs';
@@ -92,7 +92,7 @@ export function createTryGuide({root,env={},model,test={},features=[],secrets=[]
  }
  function ensureOwn(name){let current=ownCases.at(-1);if(!current||current.state==='saved'){current={id:`own-${++count}`,name:safe(clip(name||`Own case ${count}`,100)),state:'planned'};ownCases.push(current);ownCases=ownCases.slice(-32);}return current;}
  function prepare(message){
-  if(closed)throw Error('The Simulator guide is closed.');
+  if(closed)throw Error('The Try guide is closed.');
   requestKind=message.kind??'chat';
   const rawCurrent=object(message.context)?message.context:{},current=safe(rawCurrent);refresh();
   if(message.kind==='own'){mode='own case';pending=null;ownCases.push({id:`own-${++count}`,name:`Own case ${count}`,state:'planned'});ownCases=ownCases.slice(-32);}
@@ -114,12 +114,12 @@ export function createTryGuide({root,env={},model,test={},features=[],secrets=[]
   let byStory=statesByStory();refreshCard(byStory);byStory=statesByStory();
   const items=byStory[currentStory()]??modelStories[0]?.criteria?.map(c=>({id:c.id,state:'todo'}))??[];
   const p=progress(items),coverageView=coverage.snapshot({progressByStory:byStory,ownCases});
-  if(!coverageView.fullyTried){card={...card,nextStep:'Finish the simulation',text:/Next step:[^\n]*/.test(card.text)?card.text.replace(/Next step:[^\n]*/,'Next step: Finish the simulation.'):`Next step: Finish the simulation.\n${card.text}`};}
+  if(!coverageView.fullyTried){card={...card,nextStep:'Finish the Try',text:/Next step:[^\n]*/.test(card.text)?card.text.replace(/Next step:[^\n]*/,'Next step: Finish the Try.'):`Next step: Finish the Try.\n${card.text}`};}
   const declared=[...(modelStories.find(s=>s.path===currentStory())?.criteria??[]),...scenarios.filter(s=>s.doc.story_path===currentStory()).flatMap(s=>s.doc.criteria)];
   const bound=bindings();const criteria=[...new Map(declared.filter(object).map(c=>[c.id,c])).values()].filter(c=>typeof c.id==='string').slice(0,64).map(c=>({...c,...items.find(i=>i.id===c.id),...bound.find(b=>b.id===c.id),story_path:currentStory()}));
   if(mode==='walk'&&items.length&&items.every(x=>x.state==='pass'))mode='chat';
   const fields={entry:current.entry??null,input:current.input??null,preloaded:runs.length===0&&conversation.every(c=>!c.fill),...(mode==='own case'?{source:'blank: the person pressed + Your own case'}:{})};
-  const changed=scenarioHash!==scenarioAtConnect||(card.sourceFingerprint??card.fingerprint)!==sourceAtConnect;const project=clipBytes((changed?'Local copy changed: checks use your current local Story/test copy, which changed after this Simulator opened.\n':'')+card.text,1536);
+  const changed=scenarioHash!==scenarioAtConnect||(card.sourceFingerprint??card.fingerprint)!==sourceAtConnect;const project=clipBytes((changed?'Local copy changed: checks use your current local Story/test copy, which changed after this Try opened.\n':'')+card.text,1536);
   lastContext=safe({requestKind,project,coverage:coverageView,productRules:card.productRules??[],criteria,progress:p,world:current.world,runs,fields,mode,conversation,message:message.text,changed,ownCases,current});
   let fast=null;
   if(message.kind==='run'&&features.includes('run_events')&&verdict?.state==='pass'&&!ownCases.some(c=>c.state!=='saved')){
