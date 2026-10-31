@@ -48,6 +48,8 @@ Setup also reports the running pdd executable and version, the `pdd` paths in or
 - No command has a time limit. You can close the terminal at any time.
 - pdd never merges.
 
+`pdd workflow run NAME ISSUE --adopt-corpus FILE` adopts an unchanged externally approved declared corpus for a fresh replay-evidence-enabled workflow; see [corpus adoption](replay-evidence.md#adopt-an-unchanged-approved-corpus).
+
 ## Tests on the PDD interpreter and prompt approval
 
 | Command | What it does |
