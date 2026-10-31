@@ -360,6 +360,8 @@ function differences(a,b,pointer = '', root = true, schema = true, unordered = f
   }
   return encode(a) === encode(b) ? [] : [`${pointer}: ${encode(a)} -> ${encode(b)}`];
 }
+export function schemaValuesEqual(a,b) { return differences(a,b).length === 0; }
+
 export function compareCopies(sources, records) {
   const matches = [], warnings = [], candidates = records.flatMap(record => {
     try { const value = parse(record.value_json); return object(value) && value.type==='object' && object(value.properties) ? [{...record,value}] : []; } catch { return []; }
@@ -422,3 +424,12 @@ export function planSync(sources, matches) {
   }
   return { edits, warnings };
 }
+
+// Native consumers share the existing lossless tree and literal identity.
+export function parseJsonValue(text) {
+  if (typeof text !== 'string') throw new TypeError('JSON text must be a string');
+  return parse(text);
+}
+export function stringifyJsonValue(value) { return render(value); }
+export function jsonNumberText(value) { return value instanceof JsonNumber ? value.text : null; }
+export function jsonValuesEqual(a,b) { return identity(a) === identity(b); }
