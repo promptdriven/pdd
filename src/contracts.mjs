@@ -1,11 +1,11 @@
-// Generated from prompts/cli/contracts.prompt.md (sha256: 86ea8bfa28881385dcdc907c13ddd295f5c4a9b139b917bbfe70e7a501a8dda1).
+// Generated from prompts/cli/contracts.prompt.md (sha256: 9c2ab81e0d461d13a734382fa6cd9e8eb6d4659aab9ba2e3a4e2b28f42f7a13a).
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fchmodSync, fstatSync, lstatSync, openSync, renameSync, unlinkSync, writeSync } from 'node:fs';
 import { basename, dirname, join, posix } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { catalogRecords, compareCopies, expandSource, planSync, parseJsonValue, stringifyJsonValue, jsonNumberText, schemaValuesEqual } from './contract-refs.mjs';
-import { captureSource, findTests, gitFiles, sourceFilePort, LIMITS, TEST_SCHEMA, validateContract, schemaKeywordNames } from './runtime-preflight.mjs';
+import { createStrictSourceAccess, gitFiles, LIMITS, TEST_SCHEMA, validateContract, schemaKeywordNames } from './runtime-preflight.mjs';
 import { readContractHistory } from './runtime-client.mjs';
 
 const line = (stream,text) => stream.write(`${text}\n`);
@@ -21,7 +21,8 @@ export function runContracts({words = [],options = {},cwd = process.cwd()} = {},
   const root=git.stdout.trim();
   if (options['--check'] === true) return checkContracts(root,{stdout,stderr,json:options['--json']===true});
   try {
-    const visible=new Set(gitFiles(root)), files=sourceFilePort(root,visible);
+    const access=createStrictSourceAccess(root);
+    const visible=new Set(gitFiles(root)), files=access.sourceFilePort(visible);
     const warnings = [];
     const readDiscovered = path => {
       if (files.stat({path}).size > LIMITS.bytes) { warnings.push(`${path}: discovery/catalog unavailable (too big; limit 10 MB).`); return []; }
@@ -30,7 +31,7 @@ export function runContracts({words = [],options = {},cwd = process.cwd()} = {},
     const sources=[...visible].sort().filter(path=>path.startsWith('contracts/') && /\.(?:md|json)$/.test(path)).flatMap(readDiscovered);
     const promptPaths=[...visible].sort().filter(path=>path.endsWith('.prompt.md'));
     const prompts=promptPaths.flatMap(readDiscovered);
-    const found=findTests({root,files:[...visible]});
+    const found=access.findTests({files:[...visible]});
     warnings.push(...found.warnings.map(warning=>warning.replace(/^Warning: /,'')));
     const prepared=[];
     for (const source of prompts) {
@@ -43,7 +44,7 @@ export function runContracts({words = [],options = {},cwd = process.cwd()} = {},
     for (const test of found.tests) {
       if (stories.has(test.doc?.story_path) && !stories.get(test.doc.story_path).selectedUnavailable) continue;
       try {
-        const captured=captureSource(root,{tests:[test.path]});
+        const captured=access.captureSource({tests:[test.path]});
         selectedReferences.push(...captured.references);
         for (const story of captured.stories) stories.set(story.story_path,story);
       } catch (error) {
@@ -76,7 +77,7 @@ export function runContracts({words = [],options = {},cwd = process.cwd()} = {},
             return result;
           };
           const parents = ancestors();
-          const current=sourceFilePort(root,new Set(gitFiles(root)));
+          const current=access.sourceFilePort(new Set(gitFiles(root)));
           if (current.read({path:edit.path}).content!==edit.before) throw new Error('source changed since preview');
           const sameIdentity = stat => stat.isFile() && stat.dev===before.dev && stat.ino===before.ino && stat.size===before.size && stat.mtimeNs===before.mtimeNs && stat.ctimeNs===before.ctimeNs;
           // Exclusive preparation leaves the complete destination visible until
@@ -96,7 +97,7 @@ export function runContracts({words = [],options = {},cwd = process.cwd()} = {},
           if (!prepared.isFile() || prepared.size!==BigInt(bytes.length) || prepared.dev!==owned.dev || prepared.ino!==owned.ino) throw new Error('temporary file changed');
           closeSync(fd); fd=undefined;
           if (!sameIdentity(lstatSync(path,{bigint:true})) || !isDeepStrictEqual(parents,ancestors())) throw new Error('destination changed since preview');
-          if (sourceFilePort(root,new Set(gitFiles(root))).read({path:edit.path}).content!==edit.before) throw new Error('source changed since preview');
+          if (access.sourceFilePort(new Set(gitFiles(root))).read({path:edit.path}).content!==edit.before) throw new Error('source changed since preview');
           const tempNow=lstatSync(temporary,{bigint:true});
           if (tempNow.isSymbolicLink() || tempNow.dev!==owned.dev || tempNow.ino!==owned.ino || !sameIdentity(lstatSync(path,{bigint:true})) || !isDeepStrictEqual(parents,ancestors())) throw new Error('destination or temporary file changed since preview');
           renameSync(temporary,path); temporary=undefined;
@@ -141,7 +142,7 @@ function checkContracts(root,{stdout,stderr,json = false}) {
   const isUnavailable = error => error.localContractUnavailable === true || error.exitCode === 5 || typeof error.code === 'string' && !error.code.startsWith('contract-') && error.code !== 'seed-invalid';
   let checkedRecords = 0, checkedValues = 0;
   try {
-    const visible = new Set(gitFiles(root)), nativePort = sourceFilePort(root,visible);
+    const visible = new Set(gitFiles(root)), nativePort = createStrictSourceAccess(root).sourceFilePort(visible);
     let ioFailure = false;
     const port = Object.fromEntries(['stat','read'].map(operation => [operation,args => {
       try { return nativePort[operation](args); }

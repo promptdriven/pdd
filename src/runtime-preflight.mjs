@@ -1,8 +1,8 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 3edfe73704ab55a98cdb37159ff3dffbaeef16ff9c109e4b9a9e0a76f3ffe781).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: bebec82efae702469f748193a8bbb4bd8391a02eb00aa0b152ee74dafa96a6ab).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
-import { basename, join, posix } from 'node:path';
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
+import { basename, join, posix, isAbsolute } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { expandSource, parseJsonValue, jsonNumberText, jsonValuesEqual } from './contract-refs.mjs';
 
@@ -91,13 +91,26 @@ const titleOf = text => text.split('\n').find(line => line.startsWith('# '))?.sl
 
 // Tests, stories and Git-visible regular files of one repo.
 export function findTests({ root, files = gitFiles(root) }) {
-  const visible = new Set(), tests = [], stories = [], discoveryWarnings = [];
+  return discoverTests(root, files);
+}
+
+function discoverTests(root, files, strict = false) {
+  const visible = new Set(), tests = [], stories = [], discoveryWarnings = [], linkedPaths = new Set();
+  let linkedFiles = strict ? filePort(root, new Set(files), true) : undefined;
   for (const path of files) {
-    const stat = statOf(join(root, path));
+    let stat = strict ? null : statOf(join(root, path)), linked = false;
+    if (strict || stat?.isSymbolicLink()) {
+      linkedFiles ??= sourceFilePort(root, new Set(files));
+      try {
+        const info = linkedFiles.stat({path});
+        stat = { isFile: () => info.exists, size: BigInt(info.size) }; linked = true;
+      } catch { continue; } // Unrelated unsafe links do not select or refuse source.
+    }
     if (!stat?.isFile()) continue;
     visible.add(path);
+    if (linked) linkedPaths.add(path);
     if (path.endsWith('.json') && stat.size <= LIMITS.test) {
-      const text = readText(root, path);
+      const text = linked ? linkedFiles.read({path}).content : readText(root, path);
       if (!text.includes('prompt-runtime.program-scenario')) continue;
       let doc;
       try { doc = JSON.parse(text); } catch (error) { tests.push({ path, error: error.message }); continue; }
@@ -105,7 +118,7 @@ export function findTests({ root, files = gitFiles(root) }) {
     } else if (path.endsWith('.md') && path.split('/').slice(0, -1).includes('user_stories') && !/^(?:plan|readme)\.md$/i.test(basename(path))) {
       // An index (PLAN.md, README.md) or a file with no acceptance criteria section is not a Story (2048 session, 0.1.6).
       if (stat.size > LIMITS.bytes) { discoveryWarnings.push(`Warning: ${path}: discovery unavailable (too big; limit 10 MB).`); continue; }
-      const text = readText(root, path);
+      const text = linked ? linkedFiles.read({path}).content : readText(root, path);
       if (AC_HEADING.test(text)) stories.push({ path, name: storyName(path), title: titleOf(text) });
     }
   }
@@ -114,7 +127,13 @@ export function findTests({ root, files = gitFiles(root) }) {
     const story = stories.find(item => item.path === storyPath);
     test.storyPath = storyPath;
     test.story = storyPath ? storyName(storyPath) : storyName(test.path.replace(/\.json$/, ''));
-    test.title = story?.title ?? (storyPath && visible.has(storyPath) && Number(statOf(join(root,storyPath))?.size ?? 0) <= LIMITS.bytes ? titleOf(readText(root, storyPath)) : null) ?? test.story;
+    let fallback = null;
+    if (!story?.title && storyPath && visible.has(storyPath)) {
+      if (strict || linkedPaths.has(storyPath)) {
+        try { if (linkedFiles.stat({path:storyPath}).size <= LIMITS.bytes) fallback = titleOf(linkedFiles.read({path:storyPath}).content); } catch {}
+      } else if (Number(statOf(join(root,storyPath))?.size ?? 0) <= LIMITS.bytes) fallback = titleOf(readText(root,storyPath));
+    }
+    test.title = story?.title ?? fallback ?? test.story;
   }
   const named = new Set(tests.map(test => test.storyPath));
   const warnings = [...discoveryWarnings, ...stories.filter(story => !named.has(story.path)).map(story => `Warning: ${story.path} has no test.`)];
@@ -1006,27 +1025,115 @@ function sourceLimit(files) {
   return total;
 }
 
-function snapshotReader(root, diskVisible, beforeRead = () => {}) {
+function snapshotReader(root, diskVisible, beforeRead = () => {}, strict = false) {
   const snapshots = new Map();
   let unstable = false;
-  function inspectRaw(path, from, allowMissing = false) {
-    path = sourcePath(path, from);
-    if (snapshots.has(path)) return snapshots.get(path);
-    if (isSecretPath(path)) throw sourceProblem(from, path, ': the name looks like a secret. pdd never sends it.');
-    const parts = path.split('/');
-    for (let i = 1; i < parts.length; i++) {
-      const parent = parts.slice(0, i).join('/'), stat = statOf(join(root, parent));
-      if (stat?.isSymbolicLink()) throw sourceProblem(from, path, `has a symbolic link ancestor (${parent}). pdd sends only regular files.`);
-      if (stat && !stat.isDirectory()) throw sourceProblem(from, path, `has a non-directory ancestor (${parent}).`);
-    }
+  root = realpathSync(root);
+  const observations = new Map();
+  const changed = () => { unstable = true; throw unstableSource; };
+  function observe(path) {
     const stat = statOf(join(root, path));
-    if (stat?.isSymbolicLink()) throw sourceProblem(from, path, ': a symbolic link. pdd sends only regular files.');
-    if (stat && !stat.isFile()) throw sourceProblem(from, path, ': a submodule, folder or other non-regular file. pdd sends only regular files.');
-    if (stat && !diskVisible.has(path)) throw sourceProblem(from, path, 'is not a Git-visible file. Add it to Git or correct the declared dependency.');
-    if (!stat && !allowMissing) throw sourceProblem(from, path, 'is not a Git-visible file on disk. Restore it or correct the declared dependency.');
-    const file = { path, stat, size: Number(stat?.size ?? 0) };
-    snapshots.set(path, file);
-    return file;
+    let link = null;
+    if (stat?.isSymbolicLink()) {
+      try { link = readlinkSync(join(root, path)); }
+      catch (error) { if (['ENOENT', 'EINVAL', 'ENOTDIR'].includes(error.code)) changed(); throw error; }
+    }
+    const prior = observations.get(path);
+    if (prior && (!(stat === null && prior.stat === null) && !sameStat(stat, prior.stat) || link !== prior.link)) changed();
+    observations.set(path, { stat, link });
+    return { stat, link };
+  }
+  function stable(paths = observations.keys()) {
+    for (const path of paths) {
+      const before = observations.get(path);
+      const after = statOf(join(root, path));
+      if (before.stat === null ? after !== null : !sameStat(before.stat, after)) return false;
+      if (before.link !== null) {
+        try { if (readlinkSync(join(root, path)) !== before.link) return false; }
+        catch (error) { if (['ENOENT', 'EINVAL', 'ENOTDIR'].includes(error.code)) return false; throw error; }
+      }
+    }
+    return true;
+  }
+  observe('');
+  function inspectRaw(path, from, allowMissing = false, noLinks = false) {
+    path = sourcePath(path, from);
+    if (isSecretPath(path)) {
+      // Refusal is already decided. Enrich it only along non-following metadata
+      // whose ancestors have each been checked as directories.
+      let detail = '';
+      try {
+        const parts = path.split('/');
+        for (let i = 1; i <= parts.length; i++) {
+          const current = parts.slice(0, i).join('/');
+          const stat = statOf(join(root, current));
+          if (stat?.isSymbolicLink()) { detail = `link ${current} -> ${readlinkSync(join(root, current))}: `; break; }
+          if (!stat?.isDirectory()) break;
+        }
+      } catch {} // Metadata failure cannot override the secret refusal.
+      throw sourceProblem(from, path, `: ${detail}the name looks like a secret. pdd never sends it.`);
+    }
+    if (snapshots.has(path)) {
+      const file = snapshots.get(path);
+      if (noLinks && file.target) throw sourceProblem(from, path, ': symbolic links are not allowed for prepared output.');
+      return file;
+    }
+    let pending = path.split('/').map(part => ({part, context:null})), resolved = [], lastLink = null, firstLink = null, linkedVisible = false, authored = true;
+    const seen = new Set(), observed = new Set(['']);
+    const refuse = (reason, context = lastLink, plain = false) => {
+      throw sourceProblem(from, path, context ? `: link ${context.path} -> ${context.link}: ${reason}` : `${plain ? '' : ': '}${reason}`);
+    };
+    // Resolve components individually: an ancestor link must be checked before any
+    // descendant is inspected. No host lookup follows an unchecked link.
+    while (pending.length) {
+      const {part, context} = pending.shift();
+      if (!part || part === '.') continue;
+      if (part === '..') {
+        if (!resolved.length) refuse('resolution is outside the repository.', context);
+        resolved.pop(); continue;
+      }
+      resolved.push(part);
+      const current = resolved.join('/');
+      observed.add(current);
+      const { stat, link } = observe(current);
+      if (link !== null) {
+        lastLink = { path: current, link };
+        firstLink ??= lastLink;
+        // Only an ancestor in the authored spelling can authorize that spelling.
+        // Links encountered after substitution cannot grant authored visibility.
+        linkedVisible ||= authored && current !== path && diskVisible.has(current);
+        authored = false;
+        if (strict) refuse(current === path ? 'symbolic links are not allowed.' : 'symbolic link ancestor: symbolic links are not allowed.');
+        if (noLinks) refuse('symbolic links are not allowed for prepared output.');
+        if (isSecretPath(path) || isSecretPath(current)) refuse('the name looks like a secret. pdd never sends it.');
+        const state = `${current}\0${pending.map(item => item.part).join('/')}`;
+        if (seen.has(state)) refuse('symbolic link loop.');
+        if (seen.size >= 40) refuse('too many links (loop or chain longer than 40).');
+        seen.add(state);
+        resolved.pop();
+        if (isAbsolute(link)) {
+          if (!link.startsWith(`${root}/`)) refuse('resolution is outside the repository.');
+          const local = link.slice(root.length + 1);
+          resolved = []; pending = [...local.split('/').map(part => ({part, context:lastLink})), ...pending];
+        } else pending = [...link.split('/').map(part => ({part, context:lastLink})), ...pending];
+        continue;
+      }
+      if (isSecretPath(current) || (!pending.length && isSecretPath(path))) refuse('the name looks like a secret. pdd never sends it.', context ?? lastLink);
+      if (!stat) {
+        if (lastLink) refuse('broken link: target does not exist.', context ?? lastLink);
+        if (!allowMissing) refuse('is not a Git-visible file on disk. Restore it or correct the declared dependency.', null, true);
+        const file = { path, stat: null, size: 0, observed }; snapshots.set(path, file); return file;
+      }
+      if (pending.length && !stat.isDirectory()) refuse(`${lastLink ? 'non-directory ancestor' : 'has a non-directory ancestor'} (${current}).`, context ?? lastLink, !lastLink);
+      if (!pending.length) {
+        if (!stat.isFile()) refuse('a submodule, folder or other non-regular file. pdd sends only regular files.', context ?? lastLink);
+        if (!diskVisible.has(path) && !linkedVisible && firstLink) refuse('link itself is not a Git-visible file. Add it to Git or correct the declared dependency.', firstLink);
+        if (!diskVisible.has(current)) refuse(`${lastLink ? 'target is not' : 'is not'} a Git-visible file. Add it to Git or correct the declared dependency.`, context ?? lastLink, !lastLink);
+        const file = { path, stat, size: Number(stat.size), observed, ...(lastLink ? { target: current } : {}) };
+        snapshots.set(path, file); return file;
+      }
+    }
+    refuse('a folder or other non-regular file.');
   }
   function bytes(file) {
     if (file.bytes) return file.bytes;
@@ -1034,9 +1141,11 @@ function snapshotReader(root, diskVisible, beforeRead = () => {}) {
     beforeRead(file);
     let fd;
     try {
-      fd = openSync(join(root, file.path), constants.O_RDONLY | constants.O_NOFOLLOW);
+      fd = openSync(join(root, file.target ?? file.path), constants.O_RDONLY | constants.O_NOFOLLOW);
       if (!sameStat(file.stat, fstatSync(fd, { bigint: true }))) { unstable = true; throw unstableSource; }
+      if (!stable(file.observed)) changed();
       file.bytes = readFileSync(fd);
+      if (!stable(file.observed)) changed();
       if (!sameStat(file.stat, fstatSync(fd, { bigint: true })) || file.bytes.length !== file.size) { unstable = true; throw unstableSource; }
       return file.bytes;
     } catch (error) {
@@ -1044,11 +1153,15 @@ function snapshotReader(root, diskVisible, beforeRead = () => {}) {
       throw error;
     } finally { if (fd !== undefined) closeSync(fd); }
   }
-  return { inspectRaw, bytes, snapshots, get unstable() { return unstable; } };
+  return { inspectRaw, bytes, snapshots, stable, get unstable() { return unstable; } };
 }
 
 export function sourceFilePort(root, visible = new Set(gitFiles(root))) {
-  const reader = snapshotReader(root, visible);
+  return filePort(root, visible);
+}
+
+function filePort(root, visible, strict = false) {
+  const reader = snapshotReader(root, visible, undefined, strict);
   return {
     stat({path}) {
       const file = reader.inspectRaw(path, 'Source', true);
@@ -1071,13 +1184,13 @@ function preparedText(root, visible, path, text, format) {
   }
 }
 
-function captureOnce(root, { tests, appMap = null, prepareSource }) {
+function captureOnce(root, { tests, appMap = null, prepareSource }, strict = false) {
   const names = gitFiles(root), visible = new Set(names), overlay = new Map(), payload = new Map(), queue = [], visited = new Set();
   const effective = new Map(), provenance = new Map(), edges = new Map(), shared = new Set(), footprintPayload = new Map();
   let selecting = true;
   const unavailable = new Map();
   const markUnavailable = (path,error) => unavailable.set(path,{path,cause:String(error.message ?? error).replace(/[\r\n\x00-\x1f\x7f]/g,' ').slice(0,4000)});
-  const reader = snapshotReader(root,new Set(names),file => { if (payload.has(file.path)) sourceLimit([...payload.values()]); });
+  const reader = snapshotReader(root,new Set(names),file => { if (payload.has(file.path)) sourceLimit([...payload.values()]); }, strict);
   const { inspectRaw, bytes, snapshots } = reader;
   function inspect(path, from) {
     if (overlay.has(path)) return overlay.get(path);
@@ -1150,7 +1263,7 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
         const path = sourcePath(output.path, 'prepareSource');
         if (overlay.has(path)) throw sourceProblem('prepareSource', path, `duplicates prepared file ${path}.`);
         for (const other of overlay.keys()) if (other.startsWith(`${path}/`) || path.startsWith(`${other}/`)) throw sourceProblem('prepareSource', path, `conflicts with prepared file ${other}.`);
-        inspectRaw(path, 'prepareSource', true);
+        inspectRaw(path, 'prepareSource', true, true);
         const content = Buffer.from(output.bytes), file = { path, bytes: content, size: content.length };
         overlay.set(path, file);
         visible.add(path);
@@ -1169,7 +1282,7 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
       for (const path of doc.include) { add(path, SOURCE_CONFIG); shared.add(sourcePath(path,SOURCE_CONFIG)); }
     }
     const selected = tests ?? [...new Set([
-      ...findTests({root,files:names}).tests.map(test=>test.path).filter(path=>!overlay.has(path)),
+      ...discoverTests(root,names,strict).tests.map(test=>test.path).filter(path=>!overlay.has(path)),
       ...[...overlay.keys()].sort().filter(path => {
       if (!path.endsWith('.json')) return false;
       const file = overlay.get(path);
@@ -1186,7 +1299,7 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
       if (index === queue.length && !siblingsAdded) {
         siblingsAdded = true; selecting = false;
         const selectedStories = new Set(storyTests.keys());
-        const discovered=findTests({root,files:names}).tests.filter(test=>!overlay.has(test.path));
+        const discovered=discoverTests(root,names,strict).tests.filter(test=>!overlay.has(test.path));
         for (const [path,file] of overlay) {
           if (!path.endsWith('.json') || file.size>LIMITS.test) continue;
           try { const doc=JSON.parse(bytes(file).toString('utf8')); if (typeof doc?.schema_version==='string' && doc.schema_version.startsWith('prompt-runtime.program-scenario')) discovered.push({path,doc}); } catch {}
@@ -1260,10 +1373,7 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
     }));
     const tar = tarFiles(entries);
     if (tar.length > LIMITS.bytes) throw new PreflightError(4, `The source archive is ${formatSize(tar.length)}. The limit is 10 MB.`);
-    const same = !reader.unstable && isDeepStrictEqual(gitFiles(root), names) && [...snapshots.values()].every(file => {
-      const after = inspectParentsAndStat(root, file.path);
-      return file.stat === null ? after === null : sameStat(file.stat, after);
-    });
+    const same = !reader.unstable && isDeepStrictEqual(gitFiles(root), names) && reader.stable();
     if (!same) return null;
     const stories = new Map();
     for (const path of selected) {
@@ -1284,7 +1394,7 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
       if (failures.length) return {story_path:story.story_path,tests:story.tests.sort(),unavailable:failures};
       return {story_path:story.story_path,tests:story.tests.sort(),files:[...reached].sort().filter(path=>footprintPayload.has(path)).map(path=>({path,sha256:sha256(bytes(footprintPayload.get(path)))})),references:[...reached].sort().flatMap(path=>provenance.get(path) ?? [])};
     });
-    return { tar, sha256: sha256(tar), files: files.map(({ path, size }) => ({ path, size })), bytes: total,
+    return { tar, sha256: sha256(tar), files: files.map(({ path, size, target }) => ({ path, size, ...(target ? { target } : {}) })), bytes: total,
       references:[...provenance.keys()].filter(path=>payload.has(path)).sort().flatMap(path=>provenance.get(path)), stories:footprints,
       warnings:footprints.flatMap(story=>(story.unavailable ?? []).map(item=>`Warning: ${story.story_path}: footprint unavailable: ${item.cause}`)),
       raw_prompt_hashes:rawPromptHashes,
@@ -1292,22 +1402,26 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
   } catch (error) { if (reader.unstable || error === unstableSource) return null; throw error; }
 }
 
-function inspectParentsAndStat(root, path) {
-  const parts = path.split('/');
-  for (let i = 1; i < parts.length; i++) {
-    const parent = statOf(join(root, ...parts.slice(0, i)));
-    if (parent && !parent.isDirectory()) return unstableSource;
-  }
-  return statOf(join(root, path));
-}
-
 // Rebuild the selection on each attempt, including metadata and newly declared dependencies.
 export function captureSource(root, { attempts = 3, ...selection } = {}) {
+  return captureWithPolicy(root, { attempts, ...selection });
+}
+
+function captureWithPolicy(root, { attempts = 3, ...selection } = {}, strict = false) {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const captured = captureOnce(root, selection);
+    const captured = captureOnce(root, selection, strict);
     if (captured) return captured;
   }
   throw new PreflightError(5, `The files changed while pdd read them (${attempts} times). Stop other edits, then run pdd test again.`);
+}
+
+// A bound capability keeps strict command reads isolated from source-upload reads.
+export function createStrictSourceAccess(root) {
+  return {
+    sourceFilePort(visible = new Set(gitFiles(root))) { return filePort(root, visible, true); },
+    findTests({files = gitFiles(root)} = {}) { return discoverTests(root, files, true); },
+    captureSource(options = {}) { return captureWithPolicy(root, options, true); },
+  };
 }
 
 // Why a repo has no tests: foreign JSON under tests/, *.prompt names, prompts with no interface.
