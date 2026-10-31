@@ -34,6 +34,17 @@ Build a local word table with zero AI calls: the CLI heading selects CLI, `serve
 selects all HTTP routes, `app` selects screen, and each typed operation has its
 operation name. C alone supplies HTTP/screen facts and HTTP entry identities; never infer them
 from titles. Pass the selected `http` or `screen` as runApp kind.
+For prefix `--read ID FILE`, recover the matching locally saved pending operation
+and its CLI/typed kind before applying the word-table fallback. No suffix selector
+or input is required. A pending setup/stop request (lint, try or stop) has no
+operation: acknowledge it by GET without table selection or app launch; only a
+pending call requires restoring an operation for result validation. A pending
+typed operation stays typed even in a file with
+multiple typed operations or a default CLI. Preserve C classification precedence
+and all pending-ID, program, source and login checks; a missing or mismatched
+pending ID refuses locally before authentication. Recovery uses GET only and never
+reapplies fresh/data initialization or creates another backup.
+
 A first word starting with `-` is never a table word. Apply these rules in order:
 
 1. A table word selects that kind and forwards the remaining words to it.
