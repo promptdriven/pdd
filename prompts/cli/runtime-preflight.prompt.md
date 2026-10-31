@@ -61,6 +61,9 @@ Port the engine's `explicit_story_criteria` and its 4 regexes exactly: the `## A
 
 ## Source capture
 
+Return `raw_file_hashes`, keyed by repository-relative path, containing SHA-256 of exact authored Story, test and reached prompt bytes from the same captured snapshot. Keep these separate from effective source hashes, including when interface formatting or reference expansion changes effective bytes.
+
+
 Default shared-reference preparation uses the synchronous module function
 `expandSource` from [references](contract-refs.prompt.md). Expand before
 `readPrompt(root, visible, path)` parses/validates interface schemas and before
