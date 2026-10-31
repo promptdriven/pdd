@@ -161,8 +161,12 @@ declared report.error yields1; refused yields125 even when report.error exists.
 Preserve result.refusals and report.error code/message, fix/hint/field and graph
 cap evidence. Render `pdd: refused, N AI calls.` with supplied evidence and Fix
 advice. A declared failure prints only its supplied fix/hint, never a generic
-Fix line. A call-cap refusal supplies a concrete `pdd --max-calls N FILE ARGS`
-command with an increased suitable cap; preserve any supplied fix too. A session
+Fix line. Both a semantic refused receipt and a structured HTTP admission refusal
+with code session-call-cap supply a concrete `pdd --max-calls N FILE ARGS`
+command with an increased suitable cap supported by the graph or supplied refusal
+evidence. Preserve the original FILE and all original selector/program words in
+ARGS, and preserve any supplied fix too. Never automatically retry a call-cap
+refusal with another POST or a raised cap. A session
 remaining-allowance hint must preserve the current world, never recommend fresh
 (which empties it). report.replayed:true displays cached and0 AI calls. Report accounting uses
 confirmed calls/seconds and includes report_url as details. Preserve call_chain

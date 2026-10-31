@@ -224,6 +224,11 @@ test('cap refusal prints executable increased max-calls command',async t=>{
  const r=await h.invoke(['list'],['--max-calls','2']);assert.equal(r.code,125);assert.equal(h.fake.jsonPosts[0].json.max_calls,2);assert.match(r.err,/Graph requires 5/);assert.match(r.err,/Fix: pdd --max-calls 5 .*place_order\.prompt\.md list/);
  pass(await h.invoke(['list'],['--max-calls','5']));assert.equal(h.fake.jsonPosts[1].json.max_calls,5);
 });
+test('structured HTTP409 cap refusal preserves supplied fix and original selector in increased command',async t=>{
+ // Same actual graph as the semantic receipt: root W1 + two (leaf W1 + resume1) = five.
+ const h=await harness(t,{edit(s){s.calls=[{operation:'child',target:'prompts/child.prompt.md',target_operation:'main',max_calls:2}];},files(root){prompt(root,'prompts/child.prompt.md',iface(false));},reply(){return {status:409,json:{error:{code:'session-call-cap',message:'Graph requires 5',fix:'Increase cap'}}};}});
+ const r=await h.invoke(['final','list'],['--max-calls','2']);assert.equal(r.code,125,r.err);assert.equal(r.out,'');assert.equal(h.fake.jsonPosts.length,1);assert.equal(h.fake.jsonPosts[0].json.max_calls,2);assert.match(r.err,/session-call-cap/);assert.match(r.err,/Graph requires 5/);assert.match(r.err,/Fix: Increase cap/);assert.ok(r.err.includes(`Fix: pdd --max-calls 5 ${PLACE} final list`),r.err);
+});
 test('one call summary uses singular and rounded seconds',async t=>{const h=await harness(t,{reply(e,f,job){job.usage.seconds=10.6;return {status:200,json:job};}});const r=await h.invoke();pass(r);assert.match(r.err,/1 AI call · 11 s/);assert.doesNotMatch(r.err,/1 AI calls|\d+\.\d+ s/);});
 test('fresh notice names actual backup path',async t=>{const h=await harness(t,{world:{old:true}});pass(await h.invoke());const r=await h.invoke(['again'],['--fresh']);pass(r);assert.ok(r.err.includes('Old data kept in '+join(h.repo,'.pdd/run/place_order/world.prev.json')),r.err);});
 test('quiet terminal shell runs and preserves shell result without informational lines',async t=>{
