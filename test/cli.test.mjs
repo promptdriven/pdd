@@ -67,7 +67,7 @@ for(const key of ['spawn','spawnSync','exec','execFile','execSync','execFileSync
 for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const original=fs[key];fs[key]=function(path,...args){if(/(?:\\/toolbox\\/|\\/\\.ssh(?:\\/|$)|\\/credentials(?:\\/|$)|\\/\\.npmrc$)/.test(String(path)))stop();return original.call(this,path,...args);};}syncBuiltinESMExports();`);
   const run = (args, cwd = project) => spawnSync(process.execPath, ['--import', guard, bin, ...args],
     { cwd, env, encoding: 'utf8', timeout: 5000 });
-  for (const argv of [[], ['--help'], ['-h'], ['help'], ['workflow', '--help'], ['workflow', 'list', '--help'], ['completion', '--help'], ['setup','--help'], ['workflow','run','--help'], ['workflow','done','--help'], ['workflow','approve','--help'], ['workflow','open','--help']]) {
+  for (const argv of [[], ['--help'], ['-h'], ['help'], ['workflow', '--help'], ['workflow', 'list', '--help'], ['completion', '--help'], ['setup','--help'], ['workflow','start','--help'], ['workflow','done','--help'], ['workflow','approve','--help'], ['workflow','open','--help']]) {
     const answer = run(argv); assert.equal(answer.status, 0, answer.stderr); assert.equal(answer.stderr, '');
     assert.ok(answer.stdout.includes('pdd')); assert.doesNotMatch(answer.stdout, /pdd (?:run|verify|runtime|doctor|phone)\b/);
   }
@@ -109,9 +109,9 @@ for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const or
 // Wrong: runner routes reach the wrong export, drop parsed values, retry after a failure, or print an object instead of the message.
 test('ALPHA7: each runner route calls its own export once with parsed values, cwd and package root, and prints the message', async () => {
   const cases = [
-    [['workflow','run','feature','owner/repo#42','--agent','claude'], 'startRun', { name: 'feature', issue: 'owner/repo#42', agent: 'claude' }],
-    [['workflow','run','small-change','1'], 'startRun', { name: 'small-change', issue: '1', agent: 'codex' }],
-    [['workflow','run','bug','2','--base','round3/tipjar-workflow-base'], 'startRun', { name: 'bug', issue: '2', agent: 'codex', base: 'round3/tipjar-workflow-base' }],
+    [['workflow','start','feature','owner/repo#42','--agent','claude'], 'startRun', { name: 'feature', issue: 'owner/repo#42', agent: 'claude' }],
+    [['workflow','start','small-change','1'], 'startRun', { name: 'small-change', issue: '1', agent: 'codex' }],
+    [['workflow','start','bug','2','--base','round3/tipjar-workflow-base'], 'startRun', { name: 'bug', issue: '2', agent: 'codex', base: 'round3/tipjar-workflow-base' }],
     [['workflow','done','prompt-story','--summary','Story and cases written'], 'stepDone', { step: 'prompt-story', summary: 'Story and cases written' }],
     [['workflow','done','scope'], 'stepDone', { step: 'scope' }],
     [['workflow','approve'], 'approveRun', { ref: undefined }],

@@ -16,13 +16,13 @@ const RENAMES = [
   { before: ['check'], after: ['test'] },
   { before: ['check', '--lint'], after: ['lint'] },
   { before: ['try'], after: ['simulate'] },
-  { before: ['workflow', 'start'], after: ['workflow', 'run'] },
+  { before: ['workflow', 'run'], after: ['workflow', 'start'] },
 ];
 // The typed pairs: an old argv and the new argv with the same tail. `check --lint T` pairs with `test --lint T`.
 const PAIRS = [
   { before: ['check'], after: ['test'], operands: [[], ['place-order'], ['place-order', 'unknown-item']] },
   { before: ['try'], after: ['simulate'], operands: [[], ['place-order'], ['place-order', 'unknown-item']] },
-  { before: ['workflow', 'start'], after: ['workflow', 'run'], operands: [[], ['feature', '42'], ['bug', 'owner/repo#7'], ['81'], ['feature', '0']] },
+  { before: ['workflow', 'run'], after: ['workflow', 'start'], operands: [[], ['feature', '42'], ['bug', 'owner/repo#7'], ['81'], ['feature', '0']] },
 ];
 const words = list => list.join(' ');
 const isNotice = line => / is now /.test(line) || RENAMES.some(({ before, after }) => line.includes(`pdd ${words(before)}`) && line.includes(`pdd ${words(after)}`));
@@ -35,8 +35,8 @@ const label = argv => JSON.stringify(argv);
 function optionSamples() {
   const samples = new Map();
   const add = sample => samples.set(label(sample), sample);
-  for (const after of [['test'], ['lint'], ['simulate'], ['workflow', 'run']]) {
-    const route = PUBLIC_COMMAND_ROUTES.find(item => after[0] === 'workflow' ? item.id === 'workflow.run' : words(item.prefix) === words(after));
+  for (const after of [['test'], ['lint'], ['simulate'], ['workflow', 'start']]) {
+    const route = PUBLIC_COMMAND_ROUTES.find(item => words(item.prefix) === words(after));
     assert.ok(route, `route ${words(after)}`);
     for (const option of route.options) {
       const values = { flag: [], text: ['place-order', '--json'], uuid: ['0b5a1f2e-1c2d-4e5f-8a9b-0c1d2e3f4a5b', 'nope'],
@@ -99,7 +99,7 @@ test('same code: every old argv parses like its new argv, and only the old name 
     }
   }
   // Every catalog route, typed with its own words, has no notice; an old word as an operand is not an old name.
-  for (const route of PUBLIC_COMMAND_ROUTES) for (const tail of route.id === 'help' ? [[], ['test'], ['workflow', 'run']] : [[], ['--help'], ['check'], ['try'], ['run']]) {
+  for (const route of PUBLIC_COMMAND_ROUTES) for (const tail of route.id === 'help' ? [[], ['test'], ['workflow', 'start']] : [[], ['--help'], ['check'], ['try'], ['run']]) {
     const result = parse([...route.prefix, ...tail]);
     assert.equal(result.plan?.notice, undefined, label([...route.prefix, ...tail]));
   }
@@ -168,7 +168,7 @@ test('notice: once, on stderr, first, only after a good parse; same exit code an
 });
 
 // Every help argv: the root, every catalog prefix, the old names. The output must not name an old command.
-const OLD_IN_HELP = [/\bpdd check\b/, /\bpdd try\b/, /\bworkflow start\b/];
+const OLD_IN_HELP = [/\bpdd check\b/, /\bpdd try\b/, /\bworkflow run\b/];
 function helpArgvs() {
   const prefixes = new Map();
   for (const route of PUBLIC_COMMAND_ROUTES) for (let length = 1; length <= route.prefix.length; length++) {
@@ -219,7 +219,7 @@ function completionContexts() {
     for (let length = 1; length <= route.prefix.length; length++) { add(route.prefix.slice(0, length)); add(['help', ...route.prefix.slice(0, length)]); }
     for (const option of route.options) if (option.choices) add([...route.prefix, option.name]);
   }
-  contexts.delete('workflow run'); // that context asks the installed pdd for workflow names
+  contexts.delete('workflow start'); // that context asks the installed pdd for workflow names
   return [...contexts.values()];
 }
 
@@ -236,7 +236,7 @@ test('shell completion offers no old name in any context', t => {
     });
     const at = context => all[contexts.findIndex(item => words(item) === context)];
     for (const name of ['test', 'lint', 'simulate', 'workflow']) assert.ok(at('').includes(name), `${shell}: root offers ${name}`);
-    assert.ok(at('workflow').includes('run'), `${shell}: workflow offers run`);
+    assert.ok(at('workflow').includes('start'), `${shell}: workflow offers start`);
   }
   t.diagnostic(`bounds: ${contexts.length} contexts x ${SHELLS.join(', ')}`);
 });
@@ -257,12 +257,10 @@ test('the new words are data in one place', async t => {
   for (const word of ['exam', 'sweep', 'sandbox']) assert.match(help, new RegExp(`\\n  pdd ${word}\\b`), word);
   assert.match(help, /\n {2}pdd workflow begin\b/); assert.match(help, /\bworkflow begin\b.*Herdr/);
   for (const word of ['test', 'lint', 'simulate']) assert.doesNotMatch(help, new RegExp(`\\bpdd ${word}\\b`), word);
-  assert.doesNotMatch(help, /\bworkflow run\b/);
+  assert.doesNotMatch(help, /\bworkflow start\b/);
   for (const pattern of OLD_IN_HELP) assert.doesNotMatch(help, pattern);
-  for (const [before, after] of [[['check'], ['exam']], [['check', '--lint'], ['sweep']], [['try'], ['sandbox']], [['workflow', 'start'], ['workflow', 'begin']]]) {
-    let plan, failure;
-    try { plan = parser.parseArgv([...before, '--help']); } catch (error) { failure = error; }
-    assert.equal(failure, undefined, `${words(before)} must retain former-name parsing after a data-only rename`);
+  for (const [before, after] of [[['check'], ['exam']], [['check', '--lint'], ['sweep']], [['try'], ['sandbox']], [['workflow', 'run'], ['workflow', 'begin']]]) {
+    const plan = parser.parseArgv([...before, '--help']);
     assert.deepEqual(plan.helpPrefix, after); assert.ok(plan.notice.includes(`pdd ${words(before)}`) && plan.notice.includes(`pdd ${words(after)}`), plan.notice);
     assert.equal(parser.parseArgv([...after, '--help']).notice, undefined);
   }
