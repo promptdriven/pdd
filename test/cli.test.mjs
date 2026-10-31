@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, symlinkSync, existsSync, statSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, symlinkSync, existsSync, statSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -70,6 +70,14 @@ for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const or
   for (const argv of [[], ['--help'], ['-h'], ['help'], ['workflow', '--help'], ['workflow', 'list', '--help'], ['completion', '--help'], ['setup','--help'], ['workflow','start','--help'], ['workflow','done','--help'], ['workflow','approve','--help'], ['workflow','open','--help']]) {
     const answer = run(argv); assert.equal(answer.status, 0, answer.stderr); assert.equal(answer.stderr, '');
     assert.ok(answer.stdout.includes('pdd')); assert.doesNotMatch(answer.stdout, /pdd (?:run|verify|runtime|doctor|phone)\b/);
+  }
+  // help-teaches-pdd: root help and the prompting topic name the guide files of the installed package, not of the cwd.
+  for (const argv of [['help'], ['help', 'prompting']]) {
+    const answer = run(argv); assert.equal(answer.status, 0, answer.stderr); assert.equal(answer.stderr, '');
+    for (const file of ['docs/prompting-guide.md', 'RUNBOOK.md']) {
+      const path = answer.stdout.split('\n').find(line => line.endsWith(`/${file}`))?.replace(/^[^/]*/, '');
+      assert.equal(path, join(realpathSync(packed), file)); assert.ok(existsSync(path), file);
+    }
   }
   const version = run(['--version']); assert.equal(version.status, 0); assert.equal(version.stdout, `${metadata.version}\n`);
   const skill = run(['--skill']); assert.equal(skill.status, 2); assert.equal(skill.stdout, '');

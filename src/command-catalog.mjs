@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: f0e2412333caebd2fef797d4f89065e4414232bbe60b9c84da478ea8c18a443f).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 6e878c743d5d9845be13bf6bf868b1f783ac931fc11715f742085b19bb324cba).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of four commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run' });
@@ -46,9 +46,11 @@ const routes = [
   { id: 'workflow.open', prefix: ['workflow', 'open'], local: 'workflow-open',
     operands: [{name:'issue',type:'issue'}], options: [],
     forms: [form('pdd workflow open ISSUE', 'Focus or attach the current area chat; resume it if its session ended.')] },
-  { id: 'help', prefix: ['help'], local: 'help', operands: [], options: [], forms: [
+  // A help topic is a word after `help` only; it is no route prefix, so `pdd prompting` stays unknown.
+  { id: 'help', prefix: ['help'], local: 'help', operands: [], options: [], topics: ['prompting'], forms: [
     form('pdd', 'Show local commands.'), form('pdd --help', 'Show local commands.'),
-    form('pdd -h', 'Show local commands.'), form('pdd help', 'Show local commands.') ] },
+    form('pdd -h', 'Show local commands.'), form('pdd help', 'Show local commands.'),
+    form('pdd help prompting', 'Show how to write prompts, Stories and tests, and where the guide is.') ] },
   { id: 'version', prefix: ['--version'], local: 'version', operands: [], options: [],
     forms: [form('pdd --version', 'Show this package version.')] },
   { id: 'completion', prefix: ['completion'], local: 'completion', operands: [{ name: 'shell', type: 'choice:bash,zsh' }], options: [],
@@ -98,7 +100,8 @@ const routes = [
 export const PUBLIC_COMMAND_ROUTES = Object.freeze(routes.map(route => Object.freeze({ ...route,
   prefix: Object.freeze(route.prefix), ...(route.quiet ? { quiet: Object.freeze(route.quiet) } : {}),
   ...(route.removed ? { removed: Object.freeze(route.removed) } : {}),
-  ...(route.implies ? { implies: Object.freeze(route.implies) } : {}), operands: Object.freeze(route.operands.map(Object.freeze)),
+  ...(route.implies ? { implies: Object.freeze(route.implies) } : {}),
+  ...(route.topics ? { topics: Object.freeze(route.topics) } : {}), operands: Object.freeze(route.operands.map(Object.freeze)),
   options: Object.freeze(route.options.map(Object.freeze)), forms: Object.freeze(route.forms) })));
 export const PUBLIC_COMMAND_IDS = Object.freeze(PUBLIC_COMMAND_ROUTES.map(route => route.id));
 export const PUBLIC_COMMAND_MANIFEST = Object.freeze(PUBLIC_COMMAND_ROUTES.flatMap(route => route.forms));
