@@ -62,13 +62,29 @@ function cliEntries(context, test) {
   return entries;
 }
 
+function typedUnmappedStory(context, test) {
+  const steps = (Array.isArray(test.doc?.steps) ? test.doc.steps : []).filter(step => step && typeof step.entry_path === 'string' && typeof step.operation === 'string');
+  for (const step of steps) {
+    const prompt = readPrompt(context.root, context.visible, step.entry_path);
+    const entry = (Array.isArray(prompt.interface?.entries) ? prompt.interface.entries : []).find(entry => entry?.operation === step.operation);
+    if (typeof entry?.input_schema?.title === 'string' && /^HTTP (GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS) \/\S*$/.test(entry.input_schema.title)) return false;
+  }
+  const mapPath = context.appMap === undefined ? ['app-map.json', 'app/app-map.json'].find(path => context.visible.has(path)) : context.appMap;
+  if (mapPath) {
+    let screens;
+    try { screens = read(join(context.root, mapPath)).screens; } catch { return false; }
+    if (Array.isArray(screens) && steps.some(step => screens.some(screen => screen?.source === 'operation' && screen.prompt_path === step.entry_path && screen.operation === step.operation))) return false;
+  }
+  return true;
+}
+
 function cliEntry(context, test) {
   const entries = cliEntries(context, test);
   if (entries.size !== 1) {
     if (entries.size) fail('This Story uses more than one command-line program. Choose a Story with one command-line program.');
     const found = context.found ?? findTests({ root: context.root, files: [...context.visible] });
     const names = [...new Set(found.tests.filter(candidate => cliEntries(context, candidate).size === 1).map(candidate => candidate.story))].sort();
-    fail(`This Story is not a command-line program. ${names.length ? `These are: ${names.join(', ')}.` : 'No Stories are command-line programs.'}\npdd simulate ${quote(test.story)} opens its Form tab.`);
+    fail(`This Story is not a command-line program. ${names.length ? `These are: ${names.join(', ')}.` : 'No Stories are command-line programs.'}${typedUnmappedStory(context, test) ? `\npdd simulate ${quote(test.story)} opens its Form tab.` : ''}`);
   }
   const value = [...entries.values()][0];
   const heading = value.prompt.text.match(/^#\s+(.+?)\s*$/m)?.[1]?.replace(/^`([^`]+)`$/, '$1');

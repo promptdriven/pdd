@@ -94,6 +94,7 @@ test('2760 replay: no CLI choices explains quoted typed Story recovery before si
   assert.match(ports.stderr.text, /This Story is not a command-line program\. No Stories are command-line programs\./);
   assert.ok(ports.stderr.text.includes("pdd simulate 'resolver'\\''s input' opens its Form tab."), ports.stderr.text);
   assert.doesNotMatch(ports.stderr.text, /RUNBOOK|convention|adapter/);
+  assert.ok(ports.stderr.text.split('\n').some(line => line.startsWith('pdd simulate ')), 'Form recovery has its own line after diagnostic sanitization');
 });
 
 function malformedReplay(t, change) {
@@ -115,6 +116,7 @@ for (const [shape, change] of [
   ['null entry', iface => { iface.entries = [null]; }],
   ['non-array conventions', iface => { iface.conventions = {}; }],
   ['null convention', iface => { iface.conventions = [null]; }],
+  ['non-string HTTP title', iface => { iface.entries[0].input_schema.title = { toString: null, valueOf: null }; }],
 ]) {
   test(`2760 replay: unrelated ${shape} cannot crash named selection or direct CLI choices`, async t => {
     const setup = malformedReplay(t, change);
@@ -136,3 +138,25 @@ test('2760 replay: selected malformed entries retain local preflight refusal wit
   const visible = new Set(gitFiles(setup.repo)), found = findTests({ root: setup.repo, files: [...visible] });
   await assert.rejects(openCli({ root: setup.repo, visible, found, ports }, found.tests.find(row => row.story === 'unknown-item'), 'unused', {}), error => error.exitCode === 125 && /This Story is not a command-line program/.test(error.message));
 });
+
+for (const kind of ['HTTP', 'screen']) {
+  test(`2760 replay: direct CLI refusal for ${kind} never claims it opens Form`, async t => {
+    const setup = harbor(t, root => {
+      if (kind === 'screen') {
+        writeFileSync(join(root, 'app-map.json'), JSON.stringify({ screens: [{ source: 'operation', prompt_path: 'prompts/place_order.prompt.md', operation: 'place_order' }] }));
+      } else {
+        const path = join(root, 'prompts/place_order.prompt.md'), source = readFileSync(path, 'utf8');
+        const iface = JSON.parse(source.match(/```json\s*([\s\S]*?)```/)[1]);
+        iface.entries[0].input_schema.title = 'HTTP POST /orders';
+        writeFileSync(path, source.replace(/(```json\s*)[\s\S]*?(```)/, (_, open, close) => open + JSON.stringify(iface) + '\n' + close));
+      }
+    });
+    const visible = new Set(gitFiles(setup.repo)), found = findTests({ root: setup.repo, files: [...visible] });
+    await assert.rejects(openCli({ root: setup.repo, visible, found }, found.tests.find(row => row.story === 'place-order'), 'unused', {}), error => {
+      assert.equal(error.exitCode, 125);
+      assert.match(error.message, /This Story is not a command-line program/);
+      assert.doesNotMatch(error.message, /opens its Form tab/);
+      return true;
+    });
+  });
+}

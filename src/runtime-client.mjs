@@ -1816,7 +1816,7 @@ function programEntries(root, found, test) {
     if (!(index >= 0)) continue;
     const entry = entries[index], key = `${step.entry_path}#${step.operation}`;
     if (['input_schema', 'result_schema'].every(name => conventions.some(c => c?.path === `/entries/${index}/${name}` && c.convention === 'cli'))) cli.add(key);
-    if (/^HTTP (GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS) \/\S*$/.test(entry.input_schema?.title ?? '')) http.add(key);
+    if (typeof entry.input_schema?.title === 'string' && /^HTTP (GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS) \/\S*$/.test(entry.input_schema.title)) http.add(key);
   }
   return { test, cli, http };
 }
@@ -1837,7 +1837,9 @@ function simulationSelection(root, found, words, appMap, options) {
   if (forcedCli && cli.size !== 1) {
     const names = [...new Set(kinds.filter(row => row.cli.size === 1).map(row => row.test.story))].sort();
     const name = selected[0].story, target = /^[A-Za-z0-9_./-]+$/.test(name) ? name : "'" + name.replaceAll("'", "'\\''") + "'";
-    throw new Stop(125, `${cli.size ? 'This Story uses more than one command-line program.' : 'This Story is not a command-line program.'} ${names.length ? `These are: ${names.join(', ')}.` : 'No Stories are command-line programs.'}${typed ? `\npdd simulate ${target} opens its Form tab.` : ''}`);
+    const refusal = new Stop(125, `${cli.size ? 'This Story uses more than one command-line program.' : 'This Story is not a command-line program.'} ${names.length ? `These are: ${names.join(', ')}.` : 'No Stories are command-line programs.'}`);
+    if (typed) refusal.formRecovery = `pdd simulate ${target} opens its Form tab.`;
+    throw refusal;
   }
   if (options['--serve'] !== undefined && !hasHttp && !appMap) {
     const names = [...new Set(kinds.filter(row => row.http.size).map(row => row.test.story))].sort();
@@ -2132,8 +2134,16 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     }
     return printTryProblem(context, row);
   } catch (error) {
-    if (options['--cli'] || options['--serve'] !== undefined || options['--save-last']) { line(ports.stderr, `pdd try: ${cleanText(error.message || 'The Try could not start.', context.secrets ?? [])}`); return error.exitCode === 2 ? 2 : 125; }
-    if (error instanceof Stop || error instanceof PreflightError) { line(ports.stderr, error.message); return error.exitCode; }
+    if (options['--cli'] || options['--serve'] !== undefined || options['--save-last']) {
+      line(ports.stderr, `pdd try: ${cleanText(error.message || 'The Try could not start.', context.secrets ?? [])}`);
+      if (error instanceof Stop && error.formRecovery) line(ports.stderr, cleanText(error.formRecovery, context.secrets ?? []));
+      return error.exitCode === 2 ? 2 : 125;
+    }
+    if (error instanceof Stop || error instanceof PreflightError) {
+      line(ports.stderr, error.message);
+      if (error instanceof Stop && error.formRecovery) line(ports.stderr, cleanText(error.formRecovery, context.secrets ?? []));
+      return error.exitCode;
+    }
     throw error;
   } finally { release(); await Promise.all([...(context.reservations ?? [])].map(reservation => releaseRuntimeSlot(reservation, { ended: false }, slotPorts(context)))); }
 }
