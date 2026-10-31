@@ -234,3 +234,5 @@ record identities, separate from problems. Warnings alone exit 0; text reports
 the same facts. `--json` requires `--check`. Inline-copy thresholds stay unchanged:
 three properties for exact copies, four in a differing canonical record. Only
 declared records authorize copy agreement; incidental members do not.
+
+`pdd workflow ack REQUEST_ID --summary TEXT` records the agent’s uptake of a delivered change request from its active run worktree. The first note and time are retained on repeat calls. Delivery and this explicit agent claim do not prove the request was fully addressed. Status shows delivered requests still awaiting uptake; done warns without blocking progress.

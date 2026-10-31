@@ -1,8 +1,8 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 8600492426f34b8ac30e03f15ec9773e64e94d718ef17dc118a3e58f118a293a).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: a793172cc8b9389011d85f30ccbefffe7fbad9e601d46e45e6a611374df582d0).
 const form = (form, description) => Object.freeze({ form, description });
-// The one place for the words of four commands; a later rename changes only NAMES.
-export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run' });
-const { test, lint, simulate, run } = NAMES;
+// The one place for the words of five commands; a later rename changes only NAMES.
+export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
+const { test, lint, simulate, run, requestUptake } = NAMES;
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change', 'product']);
 const routes = [
   { id: 'product.status', prefix: ['product', 'status'], local: 'product-status', operands: [], options: [{name:'--json',kind:'flag'}],
@@ -28,6 +28,9 @@ const routes = [
   { id: 'workflow.ask', prefix: ['workflow', 'ask'], local: 'workflow-ask',
     operands: [{name:'question',type:'text',repeat:true}], options: [],
     forms: [form('pdd workflow ask QUESTION', 'For the agent in a run worktree: show the person that the chat waits for their answer.')] },
+  { id: 'workflow.request-uptake', prefix: ['workflow', requestUptake], local: 'workflow-request-uptake',
+    operands: [{name:'request-id',type:'text'}], options: [{name:'--summary',kind:'text'}],
+    forms: [form(`pdd workflow ${requestUptake} REQUEST_ID --summary TEXT`, 'For the agent in a run worktree: acknowledge a delivered change request with a short note.')] },
   { id: 'workflow.approve', prefix: ['workflow', 'approve'], local: 'workflow-approve',
     operands: [{name:'issue',type:'issue',optional:true}], options: [],
     forms: [form('pdd workflow approve [ISSUE]', 'Approve the area at its gate and start the next area in a new chat. Only a person approves.')] },
