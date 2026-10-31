@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 19bf39b1d2624c73bf60ba9f079137d50417e4778842e045d22c8d5d8a9df5d0).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: ebef1b927ac98b9a85c0faf2d3f58327cac601258dc7b7d61cc0702648c7d5f1).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -24,7 +24,7 @@ const RUNNER_ROUTES = {
   'workflow-run': plan => ['startRun', { name: plan.operands[0], issue: plan.operands[1], agent: plan.options['--agent'] ?? 'codex', ...(plan.options['--base'] !== undefined ? { base: plan.options['--base'] } : {}) }],
   'workflow-evidence': plan => ['recordEvidence', { ref: plan.operands[0], summaryFile: plan.options['--summary'] }],
   'workflow-done': plan => ['stepDone', { step: plan.operands[0], ...(plan.options['--summary'] !== undefined ? { summary: plan.options['--summary'] } : {}) }],
-  'workflow-approve': plan => ['approveRun', { ref: plan.operands[0], said: plan.options['--said'] }],
+  'workflow-approve': plan => ['approveRun', { ref: plan.operands[0], ...(plan.options['--said'] !== undefined ? { said: plan.options['--said'] } : {}) }],
   'workflow-ask': plan => ['askPerson', { text: plan.operands.join(' ') }],
   'workflow-changes': plan => ['changeRun', { ref: plan.operands[0], text: plan.operands.slice(1).join(' ') }],
   'workflow-cancel': plan => ['cancelRun', { ref: plan.operands[0] }],

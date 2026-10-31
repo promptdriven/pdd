@@ -41,7 +41,7 @@ test('VIEW1: view combines saved gates, approvals, issue, authored files, runtim
   for (const text of ['Read-only review', 'State: waiting', 'Gate: prompt-pr', 'story', 'approved', 'Pending', 'prompt-pr', 'draft',
     f.run.issue.url, f.run.pr[0].url, 'https://runtime.example.test/r/report-id', 'https://runtime.example.test/s/review-token/', 'Runtime check (greet)', f.run.baseSha]) assert.ok(r.stdout.includes(text), text+'\n'+r.stdout);
   for (const path of ['user_stories/greet.md', 'user_stories/PLAN.md', 'prompts/greet.prompt.md', 'tests/greet.json', '.git/pdd/runs/2442/verify.md']) assert.ok(r.stdout.includes(pathToFileURL(join(f.repo, path)).href), path);
-  assert.match(r.stdout, /uncommitted/); assert.match(r.stdout, /current files/); assert.match(r.stdout, /separate.*prompt approval/i);
+  assert.match(r.stdout, /uncommitted/); assert.match(r.stdout, /current files/); assert.match(r.stdout, /(?:gate|approval)[^\n]*draft[^\n]*(?:together|one|cover)|(?:one|together)[^\n]*(?:gate|approval)[^\n]*draft/i);
 });
 
 test('VIEW2: view performs only local reads and leaves run, index, HOME and authored files unchanged', t => {

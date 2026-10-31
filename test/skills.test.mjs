@@ -116,7 +116,7 @@ test('SKILLS6: runtime lines depend on RUNBOOK.md, expected values stay with the
       : /Before PR 1, show the `Runtime check` line\(s\) with the report link\(s\) and the Simulator link/);
     assert.match(text, /pdd opens PR 1 only after the approval\. Then show the PR 1 link/);
     // The same words as pdd's gate text, so a person who stops knows how to make the code PR later.
-    assert.ok(text.includes('"Do you want the code PR now, or stop here and merge PR 1 first? To make the code PR later, run `pdd workflow approve N`."'), name);
+    assert.ok(text.includes('"Do you want the code PR now, or stop here and merge PR 1 first?"'), name);
   }
   assert.match(read('pdd-bug/steps/reproduce.md'), /If a prompt owns this behavior[^\n]*section 14[^\n]*`pdd test`[^\n]*CURRENT prompt/);
   assert.match(read('pdd-bug/steps/check.md'), /before ✗ → after ✓/);
@@ -163,7 +163,7 @@ test('SKILLS9: build and verify point to RUNBOOK section 17 for the replay test,
     assert.match(verify, /planted mistake/, name);
     assert.match(verify, /table/, name);
     assert.equal(verify.includes('| Case | Criterion |'), false, `${name}: the table format lives in the RUNBOOK`);
-    assert.match(skill, /back to build in a new subagent, at most 2 times/, name);
+    assert.match(skill, /allow 2 repairs after initial review\. Use fresh build, verify, formal and review agents\./, name);
     assert.ok(skill.includes('"✗ N vectors fail"'), name);
     assert.match(read(`${name}/steps/prompt-story.md`), /## Rules to check/, name);
   }
@@ -252,7 +252,7 @@ test('SKILLS16: check notes go to <run folder>/check.md, and every workflow runs
   assert.match(read('pdd-small-change/steps/change.md'), /`pdd test`[^\n]*Keep its notes out of verify\.md\./);
   // A question dialog (request_user_input) blocks the chat, and Herdr then refuses pdd's text, so `changes` fails.
   for (const name of Object.keys(AREAS))
-    assert.ok(read(`${name}/SKILL.md`).includes('- When you need the person\'s answer in the middle of a step, run `<pdd> workflow ask "<question>"` first. Then ask it in a plain chat message (never a question dialog such as request_user_input) and end your turn. The person answers in the chat or with `pdd workflow changes N "answer"`.'), name);
+    assert.ok(read(`${name}/SKILL.md`).includes('- For an answer mid-step, run `<pdd> workflow ask "<question>"`. Ask in plain chat, never request_user_input, and end your turn. The person replies in chat or with `pdd workflow changes N "answer"`.'), name);
 });
 
 // Wrong (0.1.4 #12, #17, before link): Stories read like code, one rule gets two owner prompts (a CLI's rule copied into
@@ -342,7 +342,7 @@ test('SKILLS21: PDD formats win over a brief, PDD tests are runtime tests, and t
     const skill = read(`${name}/SKILL.md`);
     assert.match(skill, /[Gg]ive the full paths of the Story files/, name);
     // 0.1.7: the person may be in a terminal; `pdd workflow changes N "I approve"` then tells them to run approve.
-    assert.ok(skill.includes(`End with: "Reply in your own words here or run \`pdd workflow approve N\`, or tell me what to change."`), name);
+    assert.ok(skill.includes(`Ask for approval or changes in their own words.`), name);
   }
 });
 
@@ -377,7 +377,7 @@ test('SKILLS23: the step that writes prompts and tests points to the RUNBOOK sec
 test('SKILLS24: the story gate may offer a simulation before the check; the order stays check, then try', () => {
   for (const name of ['pdd-bug', 'pdd-feature']) {
     const gate = read(`${name}/SKILL.md`).split('\n').find(line => line.startsWith('- At the story gate'));
-    assert.ok(gate.includes('You may offer: "You can also open it now with `pdd simulate <story>` before the check."'), name);
+    assert.ok(gate.includes('You may offer `pdd simulate <story>` before the check.'), name);
     assert.deepEqual(JSON.parse(read(`${name}/workflow.json`)).areas[1].steps, ['check', 'try'], name);
   }
 });
@@ -423,7 +423,7 @@ test('SKILLS27: a page gets a render operation that returns html, an app map and
 test('SKILLS28: before an optional step the main chat asks the person and waits for the answer', () => {
   const ask = 'In a run, run `<pdd> workflow ask` first.';
   const lines = { 'pdd-feature': '- Before an optional step, ask the person and wait for the answer: "Do you want a visual design step? yes/no". ' + ask,
-    'pdd-bug': '- Try is recommended, optional: ask once in one line; accept no at once, record "skipped by the person"; never block. ' + ask,
+    'pdd-bug': '- Before an optional step, ask the person and wait for the answer: "Do you want to try it now? yes/no". ' + ask,
     'pdd-small-change': '- Before an optional step, ask the person and wait for the answer. ' + ask };
   for (const [name, line] of Object.entries(lines)) {
     const skill = read(`${name}/SKILL.md`);
@@ -513,7 +513,7 @@ test('SKILLS37: review repairs are bounded after initial review and exhausted fi
     assert.deepEqual(area.steps, ['build', 'verify', 'formal', 'review']);
     assert.equal(area.gate, 'pr');
     const skill = read(`${name}/SKILL.md`);
-    assert.match(skill, /2 repair rounds/, name);
+    assert.match(skill, /allow 2 repairs after initial review/, name);
     assert.match(skill, /`Review:`/, name);
     assert.ok(existsSync(join(skills, name, 'steps/review.md')), 'review brief exists');
   }
@@ -638,8 +638,8 @@ test('SKILLS46: review never reuses checkers and every repair round gets a fresh
     assert.match(review, /no.*build.*verify.*formal.*prior reviews/i, name);
     assert.match(review, /prior review.*context/i, name);
     assert.match(review, /blocked.*RUNBOOK §17/i, name);
-    const repairs = instruction(skill, [/repair rounds/i]);
-    assert.match(repairs, /repair rounds.*fresh build.*then fresh review/i, name);
+    const repairs = instruction(skill, [/2 repairs after initial review/i]);
+    assert.match(repairs, /2 repairs after initial review.*fresh build, verify, formal and review agents/i, name);
   }
   const recovery = checkingRecovery();
   const reviewStop = instruction(recovery, [/Not checked: review \(agent limit\)/]);
@@ -673,21 +673,23 @@ test('SKILLS47: actual checks replace missing-check evidence in the run record a
 test('SKILLS49: chat approval and requested merge keep the person in control', () => {
   for (const name of Object.keys(AREAS)) {
     const skill = read(`${name}/SKILL.md`);
-    assert.match(skill, /workflow approve N --said/);
+    assert.ok(skill.includes("workflow approve N --said - <<'PDD_SAID'"));
+    assert.doesNotMatch(skill, /--said "</);
     assert.doesNotMatch(skill, /Never merge\./);
   }
   const book = read('pdd-prompting/RUNBOOK.md');
-  for (const required of ['Nonblank own words are required', 'strict_approvals', 'never authorizes approval',
-    'never manually edit approval fields', "person's explicit chat request", 'all checks green',
-    'Merged at the person', '--merge --match-head-commit <head>', 'A failed comment stops', 'A changed head stops'])
+  for (const required of ['Blank input is refused', 'strict_approvals', 'never authorizes approval',
+    'Never invent a decision or edit approval fields', "person's explicit chat request", 'require at least one check and all required checks green',
+    'Merge requested by the person', '--merge --match-head-commit <head>', 'A failed comment stops', 'A changed head stops',
+    "--said - <<'PDD_SAID'", 'stdin exactly, including newlines', 'Choose a delimiter absent as a whole line'])
     assert.ok(book.includes(required), required);
 });
 
 // #2762 final source authority: the agent judges intent; pdd only records explicit approval.
 test('SKILLS50: approval instructions reject automatic chat authority and lexical grading', () => {
   const book = read('pdd-prompting/RUNBOOK.md');
-  for (const rule of ['Show the gate', 'question, change request', 'before you showed the gate',
-    'No exact approval phrase', 'any nonblank payload', 'without yes-word or semantic grading',
+  for (const rule of ['Show the gate', 'question, change request or earlier message is not approval',
+    'No exact phrase is needed', 'pdd does not grade nonblank words',
     'non-TTY or current Herdr chat-pane', 'ask the person, then run with --said',
     'Only an explicit approve call', 'never authorizes approval', 'no approve gate before code'])
     assert.ok(book.includes(rule), rule);

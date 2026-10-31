@@ -44,7 +44,7 @@ Setup also reports the running pdd executable and version, the `pdd` paths in or
 - Codex is the default agent. The chats start in full-access mode: Codex with `--dangerously-bypass-approvals-and-sandbox`, Claude Code with `--dangerously-skip-permissions`. PDD does not choose a model and does not change your agent's settings, sign-in or config.
 - The first message of each chat gives the full path of this pdd. The agent uses it, so another `pdd` on its PATH does not matter.
 - No command has a time limit. You can close the terminal at any time.
-pdd never merges and has no merge command. You may explicitly ask your agent in chat to merge a PR. It requires green checks for the exact current head, first posts `Merged at the person's request: "…"` with your exact request safely quoted in a code span (JSON-quote controls and use a delimiter longer than embedded backticks), then uses `gh pr merge PR --merge --match-head-commit <head>`. It uses a comment body file, rechecks the head and checks, and stops on a failed comment, pending/failed checks or a changed head. See [RUNBOOK §2](../RUNBOOK.md#2-the-files).
+pdd never merges and has no merge command. You may explicitly ask your agent in chat to merge a PR. It requires at least one check and all required checks green for the exact current head, first posts `Merge requested by the person: "…"` with your exact request safely quoted in a code span (JSON-quote controls and use a delimiter longer than embedded backticks), then uses `gh pr merge PR --merge --match-head-commit <head>`. It uses a comment body file, rechecks the head and checks, and stops on a failed comment, pending/failed checks or a changed head. See [RUNBOOK §2](../RUNBOOK.md#2-the-files).
 
 ## Tests on the PDD interpreter and prompt approval
 
@@ -193,8 +193,30 @@ approved interface set it to draft; review the preview and approve it as usual.
 
 See [Build a whole product](build-a-whole-product.md).
 
-After showing the gate, your agent judges your reply in any chat (your own Claude Code or Codex conversation or Herdr). It must not call approve for a question, change request or a message from before it showed the gate. After your actual chat approval, your agent runs `pdd approve PROMPT --said "<your exact words>"` for one prompt, or `pdd workflow approve N --said "<your exact words>"` for the ready gate and every draft prompt belonging to it in one step. Any nonblank words are accepted by pdd; it records them without a yes-word list or semantic grading. No exact approval phrase is needed. Output lists each prompt path and current prose hash. Without `--said`, only a person at a normal terminal can answer y/N. Agent, non-TTY and current Herdr chat-pane callers get an instruction to ask the person, then run with `--said` and their words; native Herdr evidence never authorizes approval. Root `pdd.json` with `"strict_approvals": true` allows only a person at a terminal; absent or false keeps easy mode. Agents never edit approval fields by hand or decide expected values. Approval records retain the invoking actor, time, route and exact words; PRs show matching approvals safely quoted. Approving PR 1 does not approve the later code-or-stop gate.
+## Record a chat approval
 
-The --said approval route accepts the person's approval in their own Claude Code or Codex conversation, without a Herdr area chat or terminal. Herdr chat approval uses the same --said route; its latest message never authorizes approval by itself.
+Show the gate before you ask for approval. The person may reply in their own Claude Code or Codex conversation, or in Herdr. No Herdr area chat or terminal is needed in easy mode. The agent judges the later reply. Questions, change requests and earlier messages are not approval. No exact phrase is required.
 
-Only an explicit approve call can pass an approval gate. Chat messages, steps and `workflow done` never approve it. A workflow without an approve gate before code gets a warning, not a block.
+After the person approves, record their exact words. For the ready gate and all its draft prompts, use:
+
+```sh
+pdd workflow approve N --said - <<'PDD_SAID'
+<the person's exact words>
+PDD_SAID
+```
+
+For one prompt outside a workflow gate, use:
+
+```sh
+pdd approve PROMPT --said - <<'PDD_SAID'
+<the person's exact words>
+PDD_SAID
+```
+
+Replace the payload line with the person's words. Choose a delimiter that does not occur as a whole line in those words. Keep the delimiter quoted. Do not put the words into shell quotes or interpolate them into a command. `--said -` reads stdin exactly, including newlines. Blank input is refused. pdd records nonblank words without a yes-word list or semantic grading.
+
+When the gate is shown, pdd saves the selected prompt paths and prose hashes. Approval covers that snapshot. If a prompt changes, show the gate again before approval. Output lists the prompt paths and hashes. Only an explicit approve call passes a gate. Chat messages, steps and `workflow done` never approve it. A workflow with no approve gate before code gets a warning.
+
+Without `--said`, a person at a normal terminal answers y/N. The question lists the gate and its drafts; one answer approves them together. `pdd approve PROMPT` still approves only one prompt. Agent, non-TTY and current Herdr chat-pane callers must ask the person, then relay the reply with the safe form above. Native Herdr evidence never authorizes approval by itself.
+
+Both commands read `pdd.json` from the target worktree root (the workflow's `run.root`). `"strict_approvals": true` permits only a person at a terminal and refuses `--said`. Absent or false keeps easy mode. Agents never edit approval fields or decide expected values. Records retain the invoking actor, time, route, exact words and prompt path/hash. PRs show matching approvals safely quoted. Approval of PR 1 does not approve the later code-or-stop gate.

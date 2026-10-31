@@ -21,16 +21,6 @@ async function lastSteps(f, run, out) {
 import { fakeHerdr } from './helpers/workflow-delivery-fixture.mjs';
 
 
-// Approval evidence precedes the existing verdict/runtime block under #2755.
-function ordinaryPrLines(body) {
-  const lines = body.split('\n');
-  const ordinaryAt = lines.findIndex(line => /^(?:Verdict:|Runtime check)/.test(line));
-  const approvalAt = lines.findIndex(line => line.startsWith('Approved in terminal:'));
-  assert.ok(approvalAt >= 0, 'recorded terminal approval is published');
-  assert.ok(ordinaryAt > approvalAt, 'approval evidence precedes verdict/runtime prose');
-  return lines.slice(ordinaryAt);
-}
-
 async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-runner-')));
   t.after(() => rmSync(base, { recursive: true, force: true }));
@@ -297,8 +287,8 @@ for (const name of ['bug', 'feature']) {
     assert.equal(f.prs.length, 2); assert.equal(f.record().stage.id, 'merge');
     assert.ok(f.prs[0].body.includes(`Runtime check: ✓ 3 of 3 criteria · 10/10 checks · 1 AI call ${report}`), 'the check result stays in PR 1');
     assert.match(f.prs[0].body, /^Approved in terminal:/m);
-    assert.ok(f.prs[0].body.indexOf('Approved in terminal:') < f.prs[0].body.indexOf('Runtime check:'), 'recorded terminal approval precedes runtime prose');
-    assert.match(f.prs[0].body, /^Runtime check: ✓ 3 of 3 criteria · 10\/10 checks · 1 AI call\nReport: https:\/\/checks\.example\.test\/r\/k3y-123 \(report links expire after 7 days\)/m);
+    assert.ok(f.prs[0].body.indexOf('Approved in terminal:') > f.prs[0].body.indexOf('Runtime check:'), 'recorded terminal approval follows runtime prose');
+    assert.match(f.prs[0].body, /^Runtime check: ✓ 3 of 3 criteria · 10\/10 checks · 1 AI call\nReport: https:\/\/checks\.example\.test\/r\/k3y-123 \(report links expire after 7 days\)/);
     assert.equal(f.prs[1].baseRefName, f.prs[0].headRefName, 'PR 2 is stacked on the open PR 1');
     const nothing = await approveRun({ ref: '17', cwd: f.source }, f.ports);
     assert.equal(nothing.exitCode, 1); assert.match(nothing.message, /Nothing to approve/);
@@ -418,6 +408,8 @@ async function featureToPr1(t, promptText = 'Return two.\n', base, issueBody) {
   f.git(run.root, 'add', '.'); f.git(run.root, 'commit', '-qm', 'prompt, Story and tests');
   await done('prompt-story', 'Story and cases written');
   f.tick(); assert.equal((await approveRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
+  // A later prompt revision is a fresh draft in the prompt-pr area.
+  writeFileSync(join(run.root, 'feature.prompt.md'), promptText);
   const promptMessage = readFileSync(join(run.runDir, 'prompt-pr-start.md'), 'utf8');
   assert.match(promptMessage, /opens PR 1 \(prompt, Story and tests\)/);
   await done('check', 'Runtime check: ✓ 3 of 3 criteria · 10/10 checks · 1 AI call https://checks.example.test/r/k3y');
@@ -433,16 +425,16 @@ test('feature: story, approve, PR 1 with prompt work only, then the person asks 
   assert.equal(f.prs.length, 1);
   assert.equal(f.prs[0].title, 'Use value two (prompt, Story and tests)'); assert.equal(f.prs[0].baseRefName, 'main'); assert.equal(f.prs[0].headRefName, run.branch);
   assert.match(f.prs[0].body, /^Approved in terminal:/m);
-  assert.ok(f.prs[0].body.indexOf('Approved in terminal:') < f.prs[0].body.indexOf('Runtime check:'), 'recorded terminal approval precedes runtime prose');
-  assert.match(f.prs[0].body, /^Runtime check: ✓ 3 of 3 criteria · 10\/10 checks · 1 AI call\nReport: https:\/\/checks\.example\.test\/r\/k3y \(report links expire after 7 days\)\n\nPart of #17/m);
+  assert.ok(f.prs[0].body.indexOf('Approved in terminal:') > f.prs[0].body.indexOf('Runtime check:'), 'recorded terminal approval follows runtime prose');
+  assert.match(f.prs[0].body, /^Runtime check: ✓ 3 of 3 criteria · 10\/10 checks · 1 AI call\nReport: https:\/\/checks\.example\.test\/r\/k3y \(report links expire after 7 days\)\n\nPart of #17/);
   assert.doesNotMatch(f.prs[0].body, /Closes #17/); assert.doesNotMatch(f.prs[0].body, /## Verify/);
   let record = f.record();
   assert.equal(record.state, 'waiting'); assert.equal(record.gate.kind, 'ask-code'); assert.equal(record.waitingFor.what, 'Make the code PR now, or stop here and merge PR 1');
   f.herdr.idle();
   const shown = await runStatus({ ref: '17', cwd: f.source }, f.ports);
-  assert.match(shown.message, /PR 1 open/); assert.match(shown.message, /To make the code PR later, run `pdd workflow approve 17`\./);
+  assert.match(shown.message, /PR 1 open/); assert.match(shown.message, /To make the code PR later, show the gate and ask the person\. Relay their words with `pdd workflow approve 17 --said -` using the quoted-heredoc template, or answer terminal y\/N\./);
   // The chat gets the exact sentence to say when the person stops (testers saw it dropped when it was a hint).
-  assert.match(pr1.message, /If they stop, tell them exactly: "PR 1 is open: https:\/\/github\.com\/example\/project\/pull\/23\. To make the code PR later, run `pdd workflow approve 17`\."/);
+  assert.match(pr1.message, /If they stop, tell them exactly: "PR 1 is open: https:\/\/github\.com\/example\/project\/pull\/23\. To make the code PR later, show the gate and ask the person\. Relay their words with `pdd workflow approve 17 --said -` using the quoted-heredoc template, or answer terminal y\/N\."/);
 
   f.tick();
   const code = await approveRun({ ref: '17', cwd: f.source }, f.ports);
@@ -490,20 +482,17 @@ test('feature: when PR 1 merges while the run waits, the run is done at PR 1, an
 const runtimePrompt = status => ['# Value', '', 'Return two.', '', '<details><summary>Runtime interface</summary>', '', '```json',
   JSON.stringify({ status, prose_sha256: '', entries: [] }), '```', '</details>', ''].join('\n');
 
-test('draft prompts in PR 1 are named in its body and status, and block the code PR until the person approves them', async t => {
+test('draft prompts in PR 1 are shown and a terminal answer approves the drafts and code gate together', async t => {
   const { f, run } = await featureToPr1(t, runtimePrompt('draft'));
-  assert.match(f.prs[0].body, /Draft prompts: feature\.prompt\.md\. Approve them before you merge\./);
-  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /Draft prompts: feature\.prompt\.md\. Approve them before you merge\./);
-  f.tick();
-  const refused = await approveRun({ ref: '17', cwd: f.source }, f.ports);
-  assert.equal(refused.exitCode, 1); assert.match(refused.message, /^Approve the prompt first: cd .+ && pdd approve feature\.prompt\.md\. Then run pdd workflow approve 17 to start the code PR\.$/);
-  assert.equal(f.prompts.length, 1, 'no y/N question while drafts remain'); assert.equal(f.record().chats.length, 2); assert.equal(f.record().area, 1);
-  assert.equal(readFileSync(join(run.root, 'feature.prompt.md'), 'utf8'), runtimePrompt('draft'), 'pdd never sets approved itself');
-  writeFileSync(join(run.root, 'feature.prompt.md'), runtimePrompt('approved')); f.git(run.root, 'commit', '-qam', 'person approved the prompt');
-  assert.doesNotMatch((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /Draft prompts/);
-  f.tick();
-  const code = await approveRun({ ref: '17', cwd: f.source }, f.ports);
-  assert.equal(code.exitCode, 0, code.message); assert.equal(f.record().areas[f.record().area].name, 'code');
+  assert.match(f.prs[0].body, /Draft prompts: feature\.prompt\.md/);
+  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /feature\.prompt\.md/);
+  const prior=f.prompts.length; f.tick();
+  const code=await approveRun({ ref:'17', cwd:f.source },f.ports);
+  assert.equal(code.exitCode,0,code.message);
+  assert.equal(f.prompts.length,prior+1,'one fresh terminal question covers gate and drafts');
+  assert.match(readFileSync(join(run.root,'feature.prompt.md'),'utf8'), /"status":"approved"/);
+  assert.equal(f.record().areas[f.record().area].name,'code');
+  assert.doesNotMatch(f.prs[0].body,/Draft prompts/);
 });
 
 test('status --all lists every run on this machine across repositories, person-waiting first, and hides cancelled runs', async t => {
@@ -667,7 +656,7 @@ test('a first verify.md line that starts with ✗ stays directly below the lifte
   await stepDone({ step: 'change', summary: 'two', cwd: run.root }, f.agentPorts());
   writeFileSync(join(run.runDir, 'verify.md'), '\n✗ 2 vectors fail\n\n| case | result |\n|---|---|\n| a | different |\n');
   await lastSteps(f, run, await stepDone({ step: 'verify', summary: 'two cases still fail', cwd: run.root }, f.agentPorts()));
-  assert.equal(f.prs[0].body.split('\n')[0],'Old-code proof: not run.');assert.match(f.prs[0].body,/Test inventory commits: [^\n]+\n(?:Approved in terminal:[^\n]+\n)+✗ 2 vectors fail/); assert.match(f.prs[0].body, /\| a \| different \|/);
+  assert.equal(f.prs[0].body.split('\n')[0],'Old-code proof: not run.');assert.match(f.prs[0].body,/Test inventory commits: [^\n]+\n✗ 2 vectors fail/); assert.match(f.prs[0].body, /\| a \| different \|/);
 });
 
 // Seen with a CLI tester: the chat asked a question in the middle of a step, status still said "the agent works",
@@ -722,6 +711,8 @@ async function featureAtTryGate(t, { prompt = 'Return two.\n', tests = false, tr
   if (tests) { mkdirSync(join(run.root, 'tests')); writeFileSync(join(run.root, 'tests', 'value.json'), JSON.stringify({ schema_version: 'prompt-runtime.program-scenario.v1', criteria: [], initial_world: {}, steps: [] })); }
   f.git(run.root, 'add', '.'); f.git(run.root, 'commit', '-qm', 'prompt');
   await done('prompt-story', 'Story'); f.tick(); await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  // A later revision must be reviewed at the prompt-pr gate.
+  writeFileSync(join(run.root, 'feature.prompt.md'), prompt);
   await done('check', 'Runtime check: ✓ 2 of 2 criteria · Report: https://rt.example.test/r/abc');
   const gate = await done('try', tried);
   return { f, run, done, gate };
@@ -759,9 +750,9 @@ test('#13: from the terminal, approve opens PR 1 and asks about the code PR; no 
   assert.equal(stopped.exitCode, 0, stopped.message);
   assert.match(f.prompts.at(-2), /Approve the prompt-pr area and open PR 1 for example\/project#17/); assert.match(f.prompts.at(-1), /Make the code PR now/);
   assert.equal(f.prs.length, 1); assert.match(stopped.message, /PR 1: https:\/\/github\.com\/example\/project\/pull\/23/);
-  assert.match(stopped.message, /To make the code PR later, run `pdd workflow approve 17`\./);
+  assert.match(stopped.message, /To make the code PR later, show the gate and ask the person\. Relay their words with `pdd workflow approve 17 --said -` using the quoted-heredoc template, or answer terminal y\/N\./);
   assert.match(pane.agent.prompts.at(-1), /pdd opened PR 1: https:\/\/github\.com\/example\/project\/pull\/23/);
-  assert.match(pane.agent.prompts.at(-1), /To make the code PR later, run `pdd workflow approve 17`\./);
+  assert.match(pane.agent.prompts.at(-1), /To make the code PR later, show the gate and ask the person\. Relay their words with `pdd workflow approve 17 --said -` using the quoted-heredoc template, or answer terminal y\/N\./);
   assert.equal(f.record().gate.kind, 'ask-code'); assert.equal(f.record().chats.length, 2);
   f.ports.confirm = async question => { f.prompts.push(question); return true; };
   f.tick();
@@ -781,7 +772,7 @@ test('#18: the PR body puts the Runtime check and report link on top, cuts steps
   f.tick(); await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
   f.tick(); f.ports.confirm = async () => false;
   await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
-  const body = f.prs[0].body, top = ordinaryPrLines(body);
+  const body = f.prs[0].body, top = body.split('\n');
   assert.equal(top[0], 'Runtime check (DRAFT): ✓ 3 of 3 criteria · 18/18 checks · 12 AI calls');
   assert.equal(top[1], 'Report: https://rt.example.test/r/d379-42 (report links expire after 7 days)');
   assert.equal(top[3], 'Part of #17');
@@ -823,9 +814,12 @@ test('#18: the check step\'s Runtime check wins the top of PR 1; the code questi
   f.tick(); await stepDone({ step: 'prompt-story', summary: 'Story; Runtime check (DRAFT): ✓ 1 of 2 criteria; Report: https://rt.example.test/r/first', cwd: run.root }, f.agentPorts());
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, f.ports);
   f.tick(); const gate = await stepDone({ step: 'check', summary: 'Runtime check: ✓ 2 of 2 criteria; Report: https://rt.example.test/r/second', cwd: run.root }, f.agentPorts());
-  ordinaryPrLines(f.prs[0].body);
-  assert.match(f.prs[0].body, /^Runtime check: ✓ 2 of 2 criteria\nReport: https:\/\/rt\.example\.test\/r\/second /m);
-  assert.match(gate.message, /ask exactly: "Do you want the code PR now, or stop here and merge PR 1 first\? To make the code PR later, run `pdd workflow approve 17`\."/);
+  assert.match(f.prs[0].body, /^Runtime check: ✓ 2 of 2 criteria\nReport: https:\/\/rt\.example\.test\/r\/second /);
+  assert.match(gate.message, /ask exactly: "Do you want the code PR now, or stop here and merge PR 1 first\?/);
+  assert.match(gate.message, /show the gate.*ask the person/i);
+  assert.ok(gate.message.includes(`${f.ports.pdd} workflow approve 17 --said - <<'PDD_SAID'\n`), 'safe retry uses the injected absolute package command and quoted heredoc');
+  assert.match(gate.message, /\nPDD_SAID(?:\n|$)/);
+  assert.match(gate.message, /terminal y\/N/);
 });
 
 // 0.1.6 items 6 and 7: many Stories in one run.
@@ -846,7 +840,7 @@ test('0.1.6: PR 1 starts with one Runtime check line per Story, then the total p
   shown = await runStatus({ ref: '17', cwd: f.source }, f.ports);
   assert.match(shown.message, /^Stories: 3 of 3 Stories pass$/m);
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
-  const top = ordinaryPrLines(f.prs[0].body);
+  const top = f.prs[0].body.split('\n');
   assert.deepEqual(top.slice(0, 6), [
     'Runtime check (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
     'Runtime check (merge-tiles) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 2 AI calls',
@@ -875,7 +869,7 @@ test('0.1.6: the skills format (one line each, with a Report line per Story) giv
   assert.match(shown, /check done \("Runtime check \(move-tiles\): ✓ 3 of 3 criteria · 10\/10 checks · 1 AI call Checked each Story\. Report: https:/);
   await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
-  assert.deepEqual(ordinaryPrLines(f.prs[0].body).slice(0, 6), [
+  assert.deepEqual(f.prs[0].body.split('\n').slice(0, 6), [
     'Runtime check (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
     'Runtime check (merge-tiles) (DRAFT): ✗ 2 of 3 criteria · 8/10 checks · 2 AI calls',
     'Runtime check (all Stories) (DRAFT): ✗ 5 of 6 criteria · 18/20 checks · 3 AI calls',
@@ -892,7 +886,7 @@ test('0.1.6: the agreed format ("; ", one "Report (<story>): <url>" per report r
   await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
   assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^Stories: 2 of 2 Stories pass$/m);
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
-  assert.deepEqual(ordinaryPrLines(f.prs[0].body).slice(0, 7), [
+  assert.deepEqual(f.prs[0].body.split('\n').slice(0, 7), [
     'Runtime check (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
     'Runtime check (merge-tiles) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 2 AI calls',
     'Runtime check (all Stories) (DRAFT): ✓ 6 of 6 criteria · 20/20 checks · 3 AI calls',
@@ -912,7 +906,7 @@ test('0.1.6 real run (pdd-trial-2048-1027): the pasted overall line repeated one
   await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
   assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^Stories: 3 of 3 Stories pass$/m);
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
-  assert.deepEqual(ordinaryPrLines(f.prs[0].body).slice(0, 8), [
+  assert.deepEqual(f.prs[0].body.split('\n').slice(0, 8), [
     'Runtime check (swipe-play) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 8 AI calls',
     'Runtime check (game-result) (DRAFT): ✓ 3 of 3 criteria · 13/13 checks · 5 AI calls',
     'Runtime check (new-game) (DRAFT): ✓ 2 of 2 criteria · 12/12 checks · 4 AI calls',
@@ -934,7 +928,7 @@ test('0.1.6: a summary with no overall line works; a Story checked again takes i
   assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^Stories: 2 of 2 Stories pass$/m);
   await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
-  assert.deepEqual(ordinaryPrLines(f.prs[0].body).slice(0, 7), [
+  assert.deepEqual(f.prs[0].body.split('\n').slice(0, 7), [
     'Runtime check (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
     'Runtime check (merge-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
     'Runtime check (all Stories): ✓ 6 of 6 criteria · 20/20 checks · 2 AI calls',
@@ -950,7 +944,7 @@ test('0.1.7: a summary with only one named Runtime check line lifts that line in
   assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^Stories: 1 of 1 Stories pass$/m);
   await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
-  assert.deepEqual(ordinaryPrLines(f.prs[0].body).slice(0, 3), [
+  assert.deepEqual(f.prs[0].body.split('\n').slice(0, 3), [
     'Runtime check (unread-filter) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
     'Report (unread-filter): https://rt.example.test/r/one (report links expire after 7 days)', '']);
 });
@@ -960,7 +954,7 @@ test('0.1.6: one named Story gets no total line; its line is the total', async t
   f.tick(); await stepDone({ step: 'check', summary: 'Runtime check (move-tiles) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call; Runtime check (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call; Report (move-tiles): https://rt.example.test/r/one', cwd: run.root }, f.agentPorts());
   await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
-  assert.deepEqual(ordinaryPrLines(f.prs[0].body).slice(0, 3), [
+  assert.deepEqual(f.prs[0].body.split('\n').slice(0, 3), [
     'Runtime check (move-tiles) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
     'Report (move-tiles): https://rt.example.test/r/one (report links expire after 7 days)', '']);
 });
@@ -1112,45 +1106,26 @@ test('0.1.7 #6: at a gate, status says the agent writes the gate message until t
 });
 
 // Tester B15 and the other tester's run: "Make the code PR now? (y/N)" while PR 1's prompt was still draft; a "y" was refused.
-test('0.1.7 #7: with a draft prompt in PR 1, pdd does not offer the code PR; it says how to approve the prompt, and approve then carries the approval to PR 1', async t => {
+test('0.1.7 #7: terminal opens PR 1 with approved drafts and asks separately before the code PR', async t => {
   const { f, run } = await featureAtTryGate(t, { prompt: runtimePrompt('draft') });
-  const pane = f.herdr.paneOf(f.record().chats[1]);
-  f.tick();
-  const opened = await approveRun({ ref: '17', cwd: f.source }, f.ports);
-  assert.equal(opened.exitCode, 0, opened.message);
-  assert.match(f.prompts.at(-1), /Approve the prompt-pr area and open PR 1/, 'no code PR question');
-  const first = `Approve the prompt first: cd ${run.root} && pdd approve feature.prompt.md. Then run pdd workflow approve 17 to start the code PR.`;
-  assert.ok(opened.message.includes(`PR 1: https://github.com/example/project/pull/23\n${first}`), opened.message);
-  assert.ok(pane.agent.prompts.at(-1).includes(`Tell them exactly: "PR 1 is open: https://github.com/example/project/pull/23. ${first}"`), pane.agent.prompts.at(-1));
-  assert.equal(f.record().gate.kind, 'ask-code'); assert.equal(f.record().area, 1);
-  f.herdr.idle();
-  const shown = (await runStatus({ ref: '17', cwd: f.source }, f.ports)).message;
-  assert.match(shown, /^State: PR 1 open \(https:\/\/github\.com\/example\/project\/pull\/23\); waiting for you: approve the draft prompt first, then make the code PR\.$/m);
-  assert.ok(shown.includes(`\nNext: cd ${run.root} && pdd approve feature.prompt.md, then pdd workflow approve 17 (make the code PR)`), shown);
-  assert.match((await runStatus({ all: true, cwd: f.source }, f.ports)).message, /· prompt-pr · waiting for you: approve the draft prompt, then the code PR \(PR 1 open\) · /);
-  // The person approves the prompt in the worktree; pdd approve writes the file and commits nothing.
-  writeFileSync(join(run.root, 'feature.prompt.md'), runtimePrompt('approved'));
-  f.tick();
-  const code = await approveRun({ ref: '17', cwd: f.source }, f.ports);
-  assert.equal(code.exitCode, 0, code.message);
-  assert.match(code.message, /pdd committed your approval of feature\.prompt\.md and pushed it to PR 1\./);
-  assert.equal(f.git(run.root, 'log', '-1', '--format=%s', run.branch), 'Approve feature.prompt.md');
-  assert.match(code.message, /pdd updated the PR 1 description: no draft prompts are left\./);
-  assert.doesNotMatch(f.prs[0].body, /Draft prompts/); assert.match(f.prs[0].body, /<!-- pdd-workflow:/, 'the PR marker stays');
-  assert.match(f.prompts.at(-1), /Make the code PR now/);
-  assert.equal(f.git(run.root, 'show', `${run.branch}:feature.prompt.md`), runtimePrompt('approved').trim());
-  assert.equal(f.git(run.root, 'rev-parse', `refs/remotes/origin/${run.branch}`), f.git(run.root, 'rev-parse', run.branch), 'PR 1 has the approval');
-  assert.equal(f.record().areas[f.record().area].name, 'code'); assert.equal(f.record().branch, `${run.branch}-code`);
+  f.tick(); let questions=0;
+  const opened=await approveRun({ref:'17',cwd:f.source},{...f.ports,confirm:async question=>{f.prompts.push(question);return ++questions===1;}});
+  assert.equal(opened.exitCode,0,opened.message);assert.equal(questions,2,'PR1 approval and later code decision are distinct gates');
+  assert.equal(f.record().gate.kind,'ask-code');assert.equal(f.record().area,1);
+  assert.match(readFileSync(join(run.root,'feature.prompt.md'),'utf8'), /"status":"approved"/);
+  assert.doesNotMatch(f.prs[0].body,/Draft prompts/);assert.match(f.prs[0].body,/<!-- pdd-workflow:/);
+  f.herdr.idle();const code=await approveRun({ref:'17',cwd:f.source},f.ports);
+  assert.equal(code.exitCode,0,code.message);assert.equal(f.record().areas[f.record().area].name,'code');
+  assert.equal(f.record().branch,`${run.branch}-code`);
 });
 
-test('0.1.7 #7: when done opens PR 1 with a draft prompt, the chat tells the person to approve the prompt and does not ask about the code PR', async t => {
-  const { f, run, pr1 } = await featureToPr1(t, runtimePrompt('draft'));
-  assert.doesNotMatch(pr1.message, /Do you want the code PR now/);
-  assert.ok(pr1.message.includes(`Do not offer the code PR yet. Tell the person exactly: "PR 1 is open: https://github.com/example/project/pull/23. Approve the prompt first: cd ${run.root} && pdd approve feature.prompt.md. Then run pdd workflow approve 17 to start the code PR." Stop there.`), pr1.message);
-  f.tick();
-  const refused = await approveRun({ ref: '17', cwd: f.source }, f.ports);
-  assert.equal(refused.exitCode, 1);
-  assert.equal(refused.message, `Approve the prompt first: cd ${run.root} && pdd approve feature.prompt.md. Then run pdd workflow approve 17 to start the code PR.`);
+test('0.1.7 #7: done may publish a fresh draft but terminal approval covers it before starting code', async t => {
+  const {f,run,pr1}=await featureToPr1(t,runtimePrompt('draft'));
+  assert.match(pr1.message,/feature\.prompt\.md/);assert.match(pr1.message,/--said/);
+  const before=f.prompts.length;const out=await approveRun({ref:'17',cwd:f.source},f.ports);
+  assert.equal(out.exitCode,0,out.message);assert.equal(f.prompts.length,before+1);
+  assert.match(readFileSync(join(run.root,'feature.prompt.md'),'utf8'), /"status":"approved"/);
+  assert.doesNotMatch(f.prs[0].body,/Draft prompts/);assert.equal(f.record().areas[f.record().area].name,'code');
 });
 
 // Tester B14, B16: PR 1 of a page-only Story had no test file, but its title said "tests"; the chat called the draft prompt
@@ -1370,7 +1345,7 @@ for (const [name, summary] of [['one per line', verdictSummary.join('\n')], ['jo
     f.tick(); await stepDone({ step: 'check', summary, cwd: run.root }, f.agentPorts());
     await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
     f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
-    assert.deepEqual(ordinaryPrLines(f.prs[0].body).slice(0, 5), [
+    assert.deepEqual(f.prs[0].body.split('\n').slice(0, 5), [
       'Verdict: the bug is in the PROMPT (its check fails on the issue\'s case).',
       'Before ✗ 0 of 1 criteria https://rt.example.test/r/da176d28-b1a3 → after ✓ 5 of 5 criteria https://rt.example.test/r/526de1aa-e631 (report links expire after 7 days)',
       'Runtime check (split-cent-conservation) (DRAFT): ✓ 5 of 5 criteria · 20/20 checks · 15 AI calls',
@@ -1385,7 +1360,7 @@ test('0.1.7 #15: "Before: no prompt" is lifted too, and a check summary without 
   f.tick(); await stepDone({ step: 'check', summary: 'Verdict: no prompt covers this yet; the bug can only be in the code.\nBefore: no prompt → after ✓ 3 of 3 criteria https://rt.example.test/r/after-3\nRuntime check: ✓ 3 of 3 criteria · 9/9 checks · 2 AI calls\nReport: https://rt.example.test/r/after-3', cwd: run.root }, f.agentPorts());
   await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
-  assert.deepEqual(ordinaryPrLines(f.prs[0].body).slice(0, 4), ['Verdict: no prompt covers this yet; the bug can only be in the code.',
+  assert.deepEqual(f.prs[0].body.split('\n').slice(0, 4), ['Verdict: no prompt covers this yet; the bug can only be in the code.',
     'Before: no prompt → after ✓ 3 of 3 criteria https://rt.example.test/r/after-3 (report links expire after 7 days)', 'Runtime check: ✓ 3 of 3 criteria · 9/9 checks · 2 AI calls', '']);
 });
 
@@ -1798,7 +1773,7 @@ test('PRBODY4: a huge verify.md keeps the PR body under 60,000 characters with i
   await lastSteps(f, run, await stepDone({ step: 'verify', summary: 'one case fails', cwd: run.root }, f.agentPorts()));
   const body = f.prs[0].body;
   assert.ok([...body].length <= 60_000, String([...body].length));
-  assert.equal(body.split('\n')[0],'Old-code proof: not run.');assert.match(body,/Test inventory commits: [^\n]+\n(?:Approved in terminal:[^\n]+\n)+✗ 1 vectors fail/);
+  assert.equal(body.split('\n')[0],'Old-code proof: not run.');assert.match(body,/Test inventory commits: [^\n]+\n✗ 1 vectors fail/);
   for (const kept of ['| 1500 | 4 | 5 | different ✗ |', 'Proved (bounded): 0..999.', '- Output (3000 lines): not shown here.', 'Case 1500: expected 4, got 5 ✗ (failed)'])
     assert.ok(body.includes(kept), kept);
   assert.match(body, /_The full verify report has \d{3},\d{3} characters, more than a PR description can hold \(GitHub's limit is 65,536\)\. This is a summary: its first \d+ lines; \d+ more lines are not shown, and 1 of them reports a failure\. The PR author has the full report: verify\.md in the run folder\._/);
@@ -2017,7 +1992,7 @@ test('2530: opted-in code publication marks missing structured evidence BLOCKED 
   const out=await stepDone({step:'verify',summary:'PASS: all tests and replay passed',cwd:run.root},f.agentPorts());
   assert.equal(out.exitCode,0,out.message);
   assert.equal(f.prs.length,2,'a blocked evidence review can still publish');
-  assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\n(?:Approved in terminal:[^\n]+\n)+Code replay: BLOCKED/);
+  assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\nCode replay: BLOCKED/);
   assert.match(f.prs[1].body,/replay-evidence.json/);
   assert.match(f.prs[1].body,/validates structure and identity/);
   assert.ok(f.record().replayBaseline,'original vectors were anchored before code');
@@ -2045,7 +2020,7 @@ test('2530: valid replay and real assertion failures both publish with canonical
     const out=await stepDone({step:'verify',summary:'tests ran',cwd:run.root},f.agentPorts());
     assert.equal(out.exitCode,0,out.message);assert.equal(f.prs.length,2);
     assert.match(f.prs[1].body,new RegExp(`Code replay: ${outcome.toUpperCase()}`));
-    if(scenario==='fail')assert.match(f.prs[1].body,/^Old-code proof: not run\.\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\n(?:Approved in terminal:[^\n]+\n)+✗ 1 replay assertions fail/);
+    if(scenario==='fail')assert.match(f.prs[1].body,/^Old-code proof: not run\.\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\n✗ 1 replay assertions fail/);
     if(scenario==='fail-with-warning'){
       const inventory=f.prs[1].body.indexOf('Tests vs base:');
       const warning=f.prs[1].body.indexOf('✗ 1 vector still fails');
@@ -2062,17 +2037,17 @@ test('2530: vector edits after prompt-space approval cannot replace the saved or
   writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
   writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
   const out=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());assert.equal(out.exitCode,0,out.message);
-  assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\n(?:Approved in terminal:[^\n]+\n)+Code replay: BLOCKED/);assert.match(f.prs[1].body,/Original vectors changed/);
+  assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\nCode replay: BLOCKED/);assert.match(f.prs[1].body,/Original vectors changed/);
   assert.deepEqual(f.record().replayBaseline,original);
 });
 
 test('2530: an open code PR refreshes stale evidence and keeps its ownership marker',async t=>{
   const {f,run,vector}=await replayArea(t);writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
   writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
-  await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\n(?:Approved in terminal:[^\n]+\n)+Code replay: PASS/);
+  await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\nCode replay: PASS/);
   writeFileSync(join(run.root,'value.mjs'),'export const value=3;\n');
   const out=await stepDone({step:'verify',summary:'PASS again',cwd:run.root},f.agentPorts());assert.equal(out.exitCode,0,out.message);
-  assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\n(?:Approved in terminal:[^\n]+\n)+Code replay: BLOCKED/);assert.match(f.prs[1].body,/stale/);
+  assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\nCode replay: BLOCKED/);assert.match(f.prs[1].body,/stale/);
   assert.ok(f.prs[1].body.includes(`<!-- pdd-workflow:${run.runId}:code -->`));
   assert.equal(f.edits.filter(n=>n===f.prs[1].number).length,2);
 });
@@ -2085,7 +2060,7 @@ test('2530: failed description downgrade prevents pushing new source with an old
   const original=f.ports.execFile;f.ports.execFile=async(file,args,options)=>file==='gh'&&args[0]==='pr'&&args[1]==='edit'?{stdout:'',stderr:'description permission denied',code:1}:original(file,args,options);
   const out=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
   assert.equal(out.exitCode,1);assert.match(out.message,/description permission denied/);
-  assert.equal(f.pushes.length,pushes);assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\n(?:Approved in terminal:[^\n]+\n)+Code replay: PASS/,'unchanged remote source still has its valid report');
+  assert.equal(f.pushes.length,pushes);assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\nCode replay: PASS/,'unchanged remote source still has its valid report');
 });
 
 test('2530: failed final description update leaves a pushed code PR publication-pending',async t=>{
@@ -2117,7 +2092,7 @@ test('2530: a failed push leaves an existing code PR pending and never restores 
     };
     const out=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
     assert.equal(out.exitCode,1,out.message);assert.match(out.message,/push rejected/);
-    assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\n(?:Approved in terminal:[^\n]+\n)+Code replay: BLOCKED.*Publication pending/);
+    assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\nCode replay: BLOCKED.*Publication pending/);
   }
 });
 
@@ -2164,7 +2139,7 @@ test('2553: legacy single-vector baseline cannot publish PASS after another scen
   const out = await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
   assert.equal(out.exitCode,0,out.message);
   assert.equal(f.prs.length,2);
-  assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\n(?:Approved in terminal:[^\n]+\n)+Code replay: BLOCKED/);
+  assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\nCode replay: BLOCKED/);
   assert.doesNotMatch(f.prs[1].body,/Replay evidence is stale/);
   assert.deepEqual(f.record().replayBaseline,original,'code publication cannot repin saved originals');
 });
@@ -2232,7 +2207,7 @@ for(const failure of ['listing','missing','malformed']) {
     assert.ok(manifest.source.sha256);
     writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(manifest));
     const result=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
-    assert.equal(result.exitCode,0,result.message);assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\n(?:Approved in terminal:[^\n]+\n)+Code replay: BLOCKED/);
+    assert.equal(result.exitCode,0,result.message);assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\nCode replay: BLOCKED/);
     assert.match(f.record().replayEvidence.reason,/inventory is unavailable/);
     assert.match(result.message,/Code replay: BLOCKED/);
   });
@@ -2251,11 +2226,11 @@ test('2553: an open code PR update guards newly added scenarios and preserves th
   writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
   writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
   assert.equal((await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts())).exitCode,0);
-  assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\n(?:Approved in terminal:[^\n]+\n)+Code replay: PASS/);
+  assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\nCode replay: PASS/);
   writeFileSync(join(run.root,'tests/refund.json'),JSON.stringify(vector));
   writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
   const result=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
-  assert.equal(result.exitCode,0,result.message);assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\n(?:Approved in terminal:[^\n]+\n)+Code replay: BLOCKED.*refund\.json/);
+  assert.equal(result.exitCode,0,result.message);assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\nCode replay: BLOCKED.*refund\.json/);
   assert.deepEqual(f.record().replayBaseline,saved);assert.equal(f.edits.filter(n=>n===f.prs[1].number).length,2);
 });
 

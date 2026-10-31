@@ -58,10 +58,10 @@ test('CHAT2755 initial PR evidence includes saved approval rather than dropping 
     baseBranch: 'alpha', workflow: 'feature', number: 2755, steps: [],
     decisions: [{ stage: 'story', decision: 'approve', via: 'said', at: evidence.at, text: evidence.words, evidence }] }, isCode: false },
   { readStepNotes: async () => [] });
-  const approval = result.lines.find(line => line.startsWith('Approved in chat:'));
+  const approval = result.approvalLines.find(line => line.startsWith('Approved in chat:'));
   assert.equal(typeof approval, 'string', 'saved gate approval must be visible on initial PR creation');
   assert.ok(approval.includes('CODEX_THREAD_ID=synthetic-session'));
-  assert.ok(approval.includes('1700000000000'));
+  assert.ok(approval.includes('2023-11-14T22:13:20.000Z'));
   assert.ok(approval.includes('\\n@person #17'));
   assert.ok(approval.includes('pdd-workflow\\u003aforged'));
   assert.equal(approval.includes('pdd-workflow:forged'), false);
@@ -257,7 +257,7 @@ test('CHAT2755 ready gate said approves multiple current drafts without an area 
 
 test('CHAT2755 strict workflow said refuses even with valid native evidence and writes nothing', async t => {
   const { f, run, selected } = await readyStory(t);
-  writeFileSync(join(f.source, 'pdd.json'), '{"strict_approvals":true}\n');
+  writeFileSync(join(run.root, 'pdd.json'), '{"strict_approvals":true}\n');
   const status = readFileSync(join(run.runDir, 'status.json'), 'utf8');
   const drafts = selected.map(path => readFileSync(join(run.root, path), 'utf8'));
   const calls = f.herdr.calls.length; let evidenceReads = 0;

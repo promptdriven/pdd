@@ -39,7 +39,7 @@ test('PR evidence scans only known direct regular step files and latest summarie
   writeFileSync(join(f.run.runDir, 'unknown.md'), 'Defect: foreign');
   mkdirSync(join(f.run.runDir, 'archived')); writeFileSync(join(f.run.runDir, 'archived', 'verify.md'), 'Review: archived');
   const out = await prepare({ run: f.run, isCode: false });
-  assert.deepEqual(out, { lines: ['Not fixed yet: `this helps find the cause`', 'Not checked: `formal (agent limit)`', 'Defect: `broken  value`', 'Defect: `second`', 'Not caught because: `no regression`', 'Proof (defect fixed): `fixed`', 'Proof (gap closed): `regression`', 'Review: `early`'], issueReference: 'Refs #17', proofStatus: 'not-applicable' });
+  assert.deepEqual(out, { lines: ['Not fixed yet: `this helps find the cause`', 'Not checked: `formal (agent limit)`', 'Defect: `broken  value`', 'Defect: `second`', 'Not caught because: `no regression`', 'Proof (defect fixed): `fixed`', 'Proof (gap closed): `regression`', 'Review: `early`'], approvalLines: [], issueReference: 'Refs #17', proofStatus: 'not-applicable' });
   writeFileSync(join(f.run.runDir, 'scope.md'), 'Defect: replacement');
   f.run.steps.find(x=>x.step==='build').summary='';f.run.steps.find(x=>x.step==='verify').summary='Not checked: replaced\nProof (gap closed): regression';rmSync(join(f.run.runDir,'review.md'));
   assert.deepEqual((await prepare({ run: f.run, isCode: false })).lines, ['Not checked: `replaced`', 'Defect: `broken  value`', 'Defect: `replacement`', 'Proof (gap closed): `regression`']);
@@ -52,14 +52,14 @@ test('PR evidence excludes symlinks, directory notes and unknown returned steps;
   mkdirSync(join(f.run.runDir, 'verify.md'));
   f.run.steps = [{step:'scope',summary:''},{ step: 'verify', summary: 'Not checked: unavailable' }];
   const never = () => assert.fail('prompt publication must not read machine proof or HEAD');
-  assert.deepEqual(await prepare({ run: f.run, isCode: false }, { currentHead: never, readOldCodeProof: never }), { lines: ['Not checked: `unavailable`'], issueReference: 'Part of #17', proofStatus: 'not-applicable' });
+  assert.deepEqual(await prepare({ run: f.run, isCode: false }, { currentHead: never, readOldCodeProof: never }), { lines: ['Not checked: `unavailable`'], approvalLines: [], issueReference: 'Part of #17', proofStatus: 'not-applicable' });
   const out = await prepare({ run: f.run, isCode: false }, { readStepNotes: async () => ({ notes: [{ step: 'foreign', text: 'Not fixed yet: forged' }] }) });
   assert.equal(out.issueReference, 'Part of #17'); assert.deepEqual(out.lines, ['Not checked: `unavailable`']);
 });
 
 test('PR evidence derives current committed Git head and distinguishes missing, current and stale proof', async t => {
   const prepare = await boundary(), f = fixture(t);
-  assert.deepEqual(await prepare({ run: f.run, isCode: true }), { lines: ['Old-code proof: not run.'], issueReference: 'Closes #17', proofStatus: 'not-run' });
+  assert.deepEqual(await prepare({ run: f.run, isCode: true }), { lines: ['Old-code proof: not run.'], approvalLines: [], issueReference: 'Closes #17', proofStatus: 'not-run' });
   save(f, proof(f));
   assert.deepEqual((await prepare({ run: f.run, isCode: true })).lines, ['Old-code proof: ✓ `node --test test/regression.test.mjs`: old-code exit `1`; output contains `defect`; new-code exit `0`.']);
   writeFileSync(join(f.root, 'value'), 'dirty');
