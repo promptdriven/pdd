@@ -110,7 +110,7 @@ const pauseBuffer = new Int32Array(new SharedArrayBuffer(4));
 const identity = run => [run.v, run.runId, run.number, run.repo, run.root, run.commonDir, run.runDir];
 const sameIdentity = (a, b) => JSON.stringify(identity(a)) === JSON.stringify(identity(b));
 function saveError(error) {
-  if (error?.code === 'workflow_run_save_failed') return error;
+  if (['workflow_run_save_failed', 'workflow_progress_refused'].includes(error?.code)) return error;
   return Object.assign(new Error(`Could not save workflow progress: ${error.message ?? error}${/retry/i.test(error.message ?? '') ? '' : '. Check the run folder and retry.'}`), {code:'workflow_run_save_failed',cause:error});
 }
 const ownershipFiles=ports=>({...nativeRunFiles,...ports.runFiles});

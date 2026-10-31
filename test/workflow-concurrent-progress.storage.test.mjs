@@ -58,3 +58,19 @@ test('2753 native ownership failures release only acquired ownership and retain 
  const committed=storage.updateRun(run.runDir,latest=>{latest.message='Published before release trouble';return latest;},{...f.ports,acquireRunOwnership:()=>()=>{released++;throw Error('Release unavailable');}});
  assert.equal(released,1);assert.equal(committed.message,'Published before release trouble');assert.equal(f.record().message,committed.message);
 });
+
+// A command refusal is not a failed filesystem save and must reach its caller intact.
+test('2753 local authority refusals retain their identity and never publish',async t=>{
+ const f=await fixture(t,{agent:'codex',name:'bug'});await f.run();const run=f.record();
+ const path=join(run.runDir,'status.json'),before=fs.readFileSync(path,'utf8');
+ for(const message of ['The run ended (cancelled). Stop working on it.','The gate changed, look again.']){
+  const refusal=Object.assign(Error(message),{code:'workflow_progress_refused'});
+  assert.throws(()=>storage.updateRun(run.runDir,()=>{throw refusal;},f.ports),error=>{
+   assert.equal(error,refusal,'preserve the original command refusal instead of classifying it as a save failure');
+   return true;
+  });
+  assert.equal(fs.readFileSync(path,'utf8'),before);
+ }
+ const saved=storage.updateRun(run.runDir,latest=>{latest.message='A later valid update still commits';return latest;},f.ports);
+ assert.equal(f.record().message,saved.message,'the rejected callback released its ordinary ownership');
+});
