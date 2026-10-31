@@ -45,8 +45,31 @@ for(const fresh of [false,true])test(`call always sends boolean fresh=${fresh}`,
 test('reset preserves previous confirmed world and records full metadata',async t=>{
  const outside_calls=[{resource:'cloud',kind:'http',op:'deploy',summary:'cloud deploy app',level:'declared'}],chain=[{prompt:PLACE,operation:'main',call_index:null,max_calls:null}];const h=await harness(t,{world:{old:true},report:{outside_calls,call_chain:chain}});pass(await h.invoke());const r=await h.invoke(['again'],['--reset']);pass(r);assert.deepEqual(h.stored('world.prev.json'),{old:true});const last=h.stored('last-run.json');assert.ok(last.session_id);assert.ok(last.report_url);assert.equal(last.exit_code,0);assert.deepEqual(last.outside_calls,outside_calls);assert.deepEqual(last.call_chain,chain);assert.match(r.err,/pdd: data reset/);
 });
-test('outside calls render, quiet hides all own status, prefix json preserves receipt',async t=>{
- const outside_calls=[{resource:'cloud',kind:'http',op:'deploy',summary:'cloud deploy app',level:'declared'}];const h=await harness(t,{stderr:'program error\n',report:{outside_calls}});const normal=await h.invoke();pass(normal);assert.equal(normal.out,'program only\n');assert.match(normal.err,/pdd: fake calls \(nothing real was called\):/);assert.match(normal.err,/pdd:.*cloud deploy app.*declared/);const quiet=await h.invoke(['other'],['-q','--max-calls','25']);pass(quiet);assert.equal(quiet.err,'program error\n');const json=await h.invoke(['third'],['--json']);pass(json);const record=JSON.parse(json.out);assert.deepEqual(record.outside_calls,outside_calls);assert.equal(record.output.stdout,'program only\n');assert.equal(record.exit_code,0);assert.ok(record.session_id);assert.ok(record.report_url);
+const declaredOutside={resource:'cloud',kind:'http',op:'deploy',summary:'cloud deploy app',mode:'fake',source:'declared'};
+const customOutside={resource:'git',kind:'command',op:'push',summary:'git push origin main',mode:'fake',source:'fakes/git.prompt.md'};
+const realOutside={resource:'cloud',kind:'command',op:'deploy',summary:'cloud deploy real-app',mode:'real',source:'local'};
+for(const [label,outside_calls,suffixes,typed] of [
+ ['fake declared',[declaredOutside],['(fake, declared)']],
+ ['fake custom source overrides legacy level',[{...customOutside,level:'declared'}],['(fake, fakes/git.prompt.md)']],
+ ['real',[realOutside],['(real, local)']],
+ ['mixed',[declaredOutside,customOutside,realOutside],['(fake, declared)','(fake, fakes/git.prompt.md)','(real, local)']],
+ ['legacy source fallback',[{resource:'cloud',kind:'http',op:'deploy',summary:'cloud deploy app',mode:'fake',level:'declared'}],['(fake, declared)']],
+ ['missing mode',[{resource:'cloud',kind:'http',op:'deploy',summary:'cloud deploy app',level:'declared'}],['(unknown, declared)']],
+ ['missing source',[{resource:'cloud',kind:'http',op:'deploy',summary:'cloud deploy app',mode:'real'}],['(real, unknown)']],
+ ['typed mixed',[declaredOutside,realOutside],['(fake, declared)','(real, local)'],true],
+])test(`outside calls ${label} render reported modes and sources unchanged`,async t=>{
+ const h=await harness(t,{cli:!typed,report:{outside_calls}});
+ const normal=await h.invoke(typed?[]:['list'],[],typed?{stdin:Readable.from(['{}'])}:{});pass(normal);
+ const lines=normal.err.split('\n').filter(line=>line.startsWith('pdd:   '));
+ assert.match(normal.err,/^pdd: outside calls:$/m);
+ assert.equal(lines.length,outside_calls.length);for(const [index,line] of lines.entries()){assert.ok(line.startsWith(`pdd:   ${outside_calls[index].summary}`),line);assert.ok(line.endsWith(suffixes[index]),line);}
+ assert.doesNotMatch(normal.err,/nothing real was called|pdd: fake calls/);
+ assert.deepEqual(h.stored('last-run.json').outside_calls,outside_calls);
+});
+test('outside calls quiet hides own status and prefix json preserves mixed receipt',async t=>{
+ const outside_calls=[declaredOutside,customOutside,realOutside];const h=await harness(t,{stderr:'program error\n',report:{outside_calls}});
+ const quiet=await h.invoke(['other'],['-q','--max-calls','25']);pass(quiet);assert.equal(quiet.out,'program only\n');assert.equal(quiet.err,'program error\n');assert.deepEqual(h.stored('last-run.json').outside_calls,outside_calls);
+ const json=await h.invoke(['third'],['--json']);pass(json);const record=JSON.parse(json.out);assert.deepEqual(record.outside_calls,outside_calls);assert.equal(record.output.stdout,'program only\n');assert.equal(record.exit_code,0);assert.ok(record.session_id);assert.ok(record.report_url);
 });
 test('server replayed receipt reports cached0 despite provider usage receipt',async t=>{const h=await harness(t,{report:{replayed:true}}),r=await h.invoke();pass(r);assert.match(r.err,/cached · 0 AI calls/);});
 for(const verdict of ['failed','refused'])test(`report ${verdict} preserves code, traceback total and details link`,async t=>{

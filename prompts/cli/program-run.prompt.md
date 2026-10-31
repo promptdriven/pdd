@@ -225,17 +225,19 @@ and recovery/fix hint. Ctrl-C exits130, retains accepted ID and prints
 `pdd --read ID FILE`; this prefix option uses GET only, never resends a call.
 Lost POST replies recover that same ID without duplicate execution.
 
-## Structured output and fake calls
+## Structured output and outside calls
 
 Prefix --json prints one JSON receipt, with output, outside_calls, call_chain,
 session_id, report_url, exit_code and ai_calls, preserving provided metadata.
 Never mix raw program stdout into that JSON. Normal CLI mode preserves program
 stdout/stderr byte for byte; typed mode prints result.output as JSON. When supplied,
-report.outside_calls is rendered on stderr as `pdd: fake calls (nothing real was
-called):` and one prefixed summary/level line per call. Quiet hides these lines;
-JSON and last-run.json retain complete supplied outside-call records. Metadata
-never claims an outside service was really called. Retain server error code and
-field, include supplied Fix or setup/size/cap recovery advice. session-busy exits125.
+report.outside_calls is rendered on stderr under `pdd: outside calls:`, one
+prefixed summary line per call ending in `(MODE, SOURCE)`. Use the reported mode;
+an absent mode is `unknown`, never inferred as fake or real. SOURCE is the supplied
+source, falling back to legacy level and then `unknown`. Preserve call order.
+Quiet hides these lines; JSON and last-run.json retain complete supplied records
+unchanged. A run may mix fake and real calls; never claim nothing real was called.
+Retain server error code and field, include supplied Fix or setup/size/cap recovery advice. session-busy exits125.
 Confirmed session-stopped/session-unknown admission errors may replace the session
 with confirmed world and execute once; uncertain POST outcomes always use same-ID
 GET recovery and never repeat the uncertain operation.
