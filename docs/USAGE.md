@@ -238,7 +238,7 @@ The command returns at once. It prints where the run is and the commands to open
 ### 6.3 What happens
 
 1. pdd reads the issue with `gh`. It makes a new branch (for example `pdd/small-change-42-1a2b3c4d`) and a new Git worktree in the folder `your-clone.pdd-worktrees/` next to your clone. It makes the run folder `your-clone/.git/pdd/runs/42/`.
-2. pdd opens the first chat in Herdr, in full-access mode. The Herdr session is `pdd`. Each repo has a workspace with the repo's name. Each run has a tab with the repo name, the issue and the workflow, for example `my-app#42 small-change`. If two repos have the same name, pdd uses `owner/repo`. pdd does not touch your default Herdr session.
+2. pdd opens the first chat in Herdr, in full-access mode. The Herdr session is `pdd`. Each verified common Git directory has its own repository workspace. It uses the free repository name, then `owner/repo`, then a checkout-qualified label when another clone holds those labels. Each run has a workspace with the repo name, the issue and the workflow, for example `my-app#42 small-change`, with one tab per area. pdd does not touch your default Herdr session.
 3. The chat follows the workflow skill. It gives each step to a fresh subagent. The subagent gets its full brief at once, with file paths, not the chat history.
 4. After each step, the agent tells pdd that the step is done. The step notes go into the run folder.
 5. At a gate, the chat shows you the result and asks you. Then it stops and waits. It waits as long as you need.
