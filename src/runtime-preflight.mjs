@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 39f361e8a00b5be56ef5fecc4f7e3798f067794e42b2efd6a0efd1e546abbf18).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: a8f2e79d622c69426989ec128e3e1aaa7633ce994f786819dc6aecd03cb838ab).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
@@ -127,7 +127,7 @@ export function selectTests(found, words = []) {
   const selected = new Set(), unknown = [];
   for (const raw of words) {
     const word = raw.replace(/^\.\//, '');
-    const hits = found.tests.filter(test => test.path === word || test.storyPath === word || test.story === word || basename(test.path, '.json') === word);
+    const hits = found.tests.filter(test => test.path === word || test.storyPath === word || test.story === word || basename(test.path, '.json') === word || word === '.' || (!word.startsWith('../') && word !== '..' && (test.path.startsWith(word.replace(/\/$/, '') + '/') || test.storyPath?.startsWith(word.replace(/\/$/, '') + '/'))));
     if (!hits.length) unknown.push(raw);
     for (const hit of hits) selected.add(hit);
   }
@@ -1254,9 +1254,16 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
     }
     const files = [...payload.values()].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0), total = sourceLimit(files);
     const entries = files.map(file => ({ path: file.path, bytes: bytes(file) }));
-    const rawPromptHashes = Object.fromEntries(files.filter(file=>file.path.endsWith('.prompt.md')).flatMap(file=>{
-      const original=inspectRaw(file.path,'Prompt snapshot',true);
-      return original.stat ? [[file.path,sha256(bytes(original))]] : [];
+    const rawFileHashes = Object.fromEntries([...footprintPayload.values()].flatMap(file=>{
+      if (unavailable.has(file.path)) return [];
+      try {
+        const original=inspectRaw(file.path,'Prompt snapshot',true);
+        return original.stat ? [[file.path,sha256(bytes(original))]] : [];
+      } catch (error) {
+        if (payload.has(file.path) || reader.unstable || error === unstableSource) throw error;
+        markUnavailable(file.path,error);
+        return [];
+      }
     }));
     const tar = tarFiles(entries);
     if (tar.length > LIMITS.bytes) throw new PreflightError(4, `The source archive is ${formatSize(tar.length)}. The limit is 10 MB.`);
@@ -1287,7 +1294,8 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
     return { tar, sha256: sha256(tar), files: files.map(({ path, size }) => ({ path, size })), bytes: total,
       references:[...provenance.keys()].filter(path=>payload.has(path)).sort().flatMap(path=>provenance.get(path)), stories:footprints,
       warnings:footprints.flatMap(story=>(story.unavailable ?? []).map(item=>`Warning: ${story.story_path}: footprint unavailable: ${item.cause}`)),
-      raw_prompt_hashes:rawPromptHashes,
+      raw_file_hashes:rawFileHashes,
+      raw_prompt_hashes:Object.fromEntries(Object.entries(rawFileHashes).filter(([path])=>path.endsWith('.prompt.md'))),
       sources:entries.map(file=>({path:file.path,bytes:Buffer.from(file.bytes)})) };
   } catch (error) { if (reader.unstable || error === unstableSource) return null; throw error; }
 }
