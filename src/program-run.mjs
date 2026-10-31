@@ -1,4 +1,4 @@
-// Generated from prompts/cli/program-run.prompt.md (sha256: 46af7a47f8d330c3dee27c16a957341beaddedb098d71a35f3b73c84e1e24120).
+// Generated from prompts/cli/program-run.prompt.md (sha256: 03cbd984fa086474974d24d429190890e555427144813c5db204fe4d49c425d7).
 import { spawn, spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, chmodSync, lstatSync, openSync, closeSync, constants } from 'node:fs';
 import { basename, join, relative, resolve, posix } from 'node:path';
@@ -103,7 +103,8 @@ export async function runProgram({file,args=[],root=process.cwd(),env=process.en
     if(cliEntries.length>1)throw localError('Multiple CLI entries cannot run together.');
     const kinds=typeof classification==='string'?[classification]:classification?.kinds??[];
     const httpOperations=typeof classification==='string'?entries.filter(e=>!cliEntries.includes(e)).map(e=>e.operation):classification?.httpOperations??[];
-    const typed=entries.filter(e=>!cliEntries.includes(e)&&!httpOperations.includes(e.operation));
+    const screenOperations=typeof classification==='string'?[]:classification?.screenOperations??[];
+    const typed=entries.filter(e=>!cliEntries.includes(e)&&!httpOperations.includes(e.operation)&&!screenOperations.includes(e.operation));
     const heading=prompt.text.match(/^#\s+(.+?)\s*$/m)?.[1]?.replace(/^`([^`]+)`$/,'$1');
     const table=[...(kinds.includes('http')?[{word:'serve',kind:'http'}]:[]),...(kinds.includes('screen')?[{word:'app',kind:'screen'}]:[]),...cliEntries.map(entry=>({word:heading,kind:'cli',entry})),...typed.map(entry=>({word:entry.operation,kind:'typed',entry}))];
     let selected=once?table.find(row=>row.kind==='cli'):!args[0]?.startsWith('-')?table.find(row=>row.word===args[0]):undefined;
@@ -120,7 +121,19 @@ export async function runProgram({file,args=[],root=process.cwd(),env=process.en
     }
     if(!selected)selected=table.find(row=>row.kind==='cli')??(table.length===1?table[0]:undefined);
     if(selected&&['http','screen'].includes(selected.kind)){
-      if(args.length)throw localError(selected.kind==='http'?'HTTP programs take no ARGS. Call the link.':'Screen programs take no ARGS. Open the link.');
+      if(args.length){
+        let message=selected.kind==='http'?'HTTP programs take no ARGS. Call the link.':'Screen programs take no ARGS. Open the link.';
+        const valueOptions=new Set(['--data','--max-calls','--read','--port']);
+        const options=new Set([...valueOptions,'--fresh','--json','--show-data','-q','--quiet']);
+        const index=args.findIndex(word=>options.has(word));
+        if(selected.kind==='http'&&index!==-1){
+          const words=[];
+          for(let i=0;i<args.length;i++)if(options.has(args[i])){const option=args[i];words.push(option);if(valueOptions.has(option)&&args[i+1]!==undefined)words.push(args[++i]);}
+          words.push(originalFile,'serve');
+          message+='\npdd options go before the file: pdd '+words.map(word=>/^[A-Za-z0-9_./-]+$/.test(word)?word:quote(word)).join(' ');
+        }
+        throw localError(message);
+      }
       return await app.runApp({file,root,env,flags:{...flags,...(flags.data?{data:resolve(cwd,flags.data)}:{})},kind:selected.kind},ports);
     }
     const cli=selected?.kind==='cli';let entry=selected?.entry;

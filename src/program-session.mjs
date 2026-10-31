@@ -1,10 +1,11 @@
-// Generated from prompts/cli/program-session.prompt.md (sha256: 759f3f700d1368167a715679ac8806ade640e8c4b919a3233dd52e3649c28c2d).
-import { join } from 'node:path';
+// Generated from prompts/cli/program-session.prompt.md (sha256: eb0099088649d6f9849d2b7be3452362cc4d4f978aea8be0bd6116eaffdc978d).
+import { join, posix } from 'node:path';
 import { captureSource, gitFiles, readPrompt } from './runtime-preflight.mjs';
 import { programTransport } from './runtime-client.mjs';
 import { validLink } from './runtime-output.mjs';
 import { readPrivate, writePrivate, localError } from './program-data.mjs';
 export async function openProgramSession({root,file,program,data,appMap,overlay},ports={}) {
+  if(appMap!==undefined&&(typeof appMap!=='string'||!appMap||appMap.includes('\\')||/[\0-\x1f]/.test(appMap)||appMap.startsWith('/')||/^[A-Za-z]:/.test(appMap)||appMap.split('/').includes('..')||['.','.git'].includes(posix.normalize(appMap))||posix.normalize(appMap).startsWith('.git/')))throw localError('App map must be a repository-relative file path with no traversal.');
   const path=join(data.dir,'session.json'),old=readPrivate(path,null);
   if(old?.pending)throw Object.assign(new Error(`A request is pending. Read it with pdd --read ${old.pending.id} ${file}; do not repeat it.`),{exitCode:125});
   const visible=new Set(gitFiles(root)), seen=new Set(), fakes=new Set(), simulation={...data.startingData.simulation}, explicit=new Set(Object.keys(simulation));
@@ -29,11 +30,11 @@ export async function openProgramSession({root,file,program,data,appMap,overlay}
       fakes.add(target);discover(target);
     }
   }
-  const initialCapture=(ports.captureSource??captureSource)(root,{entry:file,...(overlay?{prepareSource:overlay}:{})});
+  const initialCapture=(ports.captureSource??captureSource)(root,{entry:file,...(appMap===undefined?{}:{appMap}),...(overlay?{prepareSource:overlay}:{})});
   for(const source of initialCapture.sources)if(source.path.endsWith('.prompt.md')&&visible.has(source.path))discover(source.path);
   if(Object.keys(simulation).length)data={...data,startingData:{...data.startingData,simulation}};
   const prepare=overlay||fakes.size?io=>{const files=overlay?overlay(io):[];return [...files,...[...fakes].filter(path=>!files.some(f=>f.path===path)).map(path=>({path,bytes:io.readFile(path)}))];}:undefined;
-  const capture=fakes.size?(ports.captureSource??captureSource)(root,{entry:file,...(prepare?{prepareSource:prepare}:{})}):initialCapture;
+  const capture=fakes.size?(ports.captureSource??captureSource)(root,{entry:file,...(appMap===undefined?{}:{appMap}),...(prepare?{prepareSource:prepare}:{})}):initialCapture;
   const transport=programTransport({root},ports);
   if(old?.login!==undefined && old.login!==transport.login)throw Object.assign(new Error('The program session belongs to another GitHub login. Sign in as its owner.'),{exitCode:125});
   const selected=JSON.stringify(data.startingData);
@@ -51,7 +52,7 @@ export async function openProgramSession({root,file,program,data,appMap,overlay}
   if(lint.state!=='passed'||lint.result?.exitCode!==0){writePrivate(path,transport.redact(meta));throw Object.assign(new Error(transport.sanitize(lint.result?.report?.refusal?.message||'The interpreter refused the prompt graph. Fix the prompt before running again.')),{exitCode:125});}
   const id=transport.ports.randomUUID();
   writePrivate(path,transport.redact({...meta,pending:{id,command:'try',initial_world:data.startingData.initial_world}}));
-  const request={requestId:id,source_sha256:capture.sha256,entry:file,...data.startingData,max_calls:300,...(appMap===undefined?{}:{app_map:appMap})};
+  const request={requestId:id,source_sha256:capture.sha256,entry:file,...data.startingData,max_calls:300,...(appMap===undefined?{}:{app_map:appMap,tab:'screen'})};
   const answer=await transport.finish(await transport.multipart('try',request,capture),id,'try');
   if(answer.state!=='passed'||answer.result?.session?.state!=='running'){writePrivate(path,transport.redact(meta));throw Object.assign(new Error(transport.sanitize(answer.result?.report?.refusal?.message||'The interpreter could not start the program. Fix its reported refusal and try again.')),{exitCode:125});}
   if(!validLink(answer.result.url,transport.origin,'try')||!answer.result.session.id)throw Object.assign(new Error('The interpreter returned an invalid program session link. Read the saved setup; do not repeat it.'),{exitCode:125});
