@@ -30,7 +30,7 @@ flowchart TD
     E -->|No| R
 ```
 
-`--cache-clear` wins over `--lf` and operands: discard the entire cache, ask the server for fresh answers without replay and run
+`--cache-clear` takes precedence over `--lf` while retaining operand scope: discard the entire cache, ask the server for fresh answers without replay and run
 the normal selected scope. Otherwise preserve explicit selection scope. `--lf`
 uses each Story's latest known outcome across invocations, selecting exactly
 `failed`, including all its test files within the selected scope. A cold absent
@@ -42,7 +42,7 @@ same current footprint. A partial run must never manufacture a complete pass.
 Before a fresh attempt, invalidate any older pass for that Story; local refusal,
 interruption, unknown/transient outcomes and unavailable accounting cannot leave
 an older pass eligible. Only confirmed complete terminal success becomes a new
-pass. Keep latest outcomes for unselected Stories. A completed `pdd test --read` writes confirmed results into this cache only when saved repository, source fingerprint and complete sibling accounting verify; running or unknown results never become passes. Saved retry guards and existing recovery semantics remain in force.
+pass. Keep latest outcomes for unselected Stories. A completed `pdd test --read` writes confirmed results into this cache only when saved repository, source fingerprint and complete sibling accounting verify; running or unknown results never become passes. A saved read can update only its original local cache epoch and Story attempt generation; after a newer attempt or cache clear, an older read must leave the newer cache outcome and pass untouched. Source changes cannot attach an old result to the new fingerprint. Saved retry guards and existing recovery semantics remain in force.
 
 Perform current local validation/capture before reuse, and filter reusable work
 before gh, capacity, lint, POSTs, GETs or fresh runtime IDs. An all-reused command

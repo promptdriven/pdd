@@ -158,7 +158,7 @@ for (const vector of vectors.cases) test(`TEST-CACHE ${vector.id} (${vector.crit
     else if (id === 'story') { const path = join(ctx.repo, 'user_stories/place-order.md'); writeFileSync(path, readFileSync(path, 'utf8') + '\nChanged explanation.\n'); }
     else { writeFileSync(join(ctx.repo, 'prompts/unrelated.prompt.md'), '# Unrelated\n'); expected = 0; }
     const result = await ctx.invoke(); assert.equal(result.sent, expected, 'only reaching Stories rerun'); assert.equal(result.code, 0, result.err);
-    if (id === 'prompt') { const scoped = await ctx.invoke(['independent']); assert.equal(scoped.sent, 0); assert.equal(scoped.json.rows.length, 0); }
+    if (id === 'prompt') { const scoped = await ctx.invoke(['independent']); assert.equal(scoped.sent, 0); assert.equal(scoped.json.rows.length, 1); assert.equal(scoped.json.rows[0].cached, true); }
     return;
   }
   if (id === 'sibling') {
@@ -217,4 +217,49 @@ for (const vector of vectors.cases) test(`TEST-CACHE ${vector.id} (${vector.crit
   writeFileSync(path, id === 'malformed' ? '{broken' : '{"schema_version":"unknown","stories":[]}');
   const result = await ctx.invoke(); assert.equal(result.sent, 3);
   assert.equal(result.json.warnings.filter(w => /cache/i.test(typeof w === 'string' ? w : JSON.stringify(w))).length, 1, 'one damaged-cache warning');
+});
+
+async function pending(ctx) {
+  ctx.mode('running');
+  const sleep = ctx.ports.sleep;
+  ctx.ports.sleep = async ms => { ctx.clock.now += ms; ctx.clock.interrupt(); };
+  const result = await ctx.invoke(['place-order']);
+  ctx.ports.sleep = sleep;
+  assert.equal(result.code, 3, result.err);
+  assert.equal(result.sent, 1);
+  assert.ok(result.json.batch, 'pending checks have a recoverable batch');
+  return result.json.batch;
+}
+
+test('TEST-CACHE saved read completion creates the first reusable pass', async t => {
+  const ctx = await setup(t), batch = await pending(ctx);
+  const path = join(ctx.repo, '.pdd/cache/test/stories.json');
+  assert.ok(existsSync(path), 'exit 3 records an attempt without a pass');
+  assert.equal(read(path).stories['user_stories/place-order.md'].pass, undefined);
+  ctx.mode('passed');
+  const recovered = await ctx.invoke([batch], { '--read': true });
+  assert.equal(recovered.code, 0, recovered.err); assert.equal(recovered.sent, 0);
+  const repeat = await ctx.invoke(['place-order']);
+  assert.equal(repeat.code, 0, repeat.err);
+  assert.equal(repeat.sent, 0, 'completed saved read supplies the pass cache');
+  assert.equal(repeat.network, 0); assert.equal(repeat.gh, 0);
+  assert.ok(repeat.json.rows.every(row => row.cached && row.calls === 0));
+});
+
+for (const newer of ['failed', 'passed']) test(`TEST-CACHE old interrupted read preserves newer ${newer} generation`, async t => {
+  const ctx = await setup(t), batch = await pending(ctx);
+  const path = join(ctx.repo, 'tests/place-order.json'), doc = read(path);
+  doc.initial_world.changed = true; write(path, doc); ctx.mode(newer);
+  const fresh = await ctx.invoke(['place-order']);
+  assert.equal(fresh.code, newer === 'passed' ? 0 : 1, fresh.err);
+  const cachePath = join(ctx.repo, '.pdd/cache/test/stories.json');
+  assert.ok(existsSync(cachePath), 'newer attempt records its cache generation');
+  const before = read(cachePath).stories['user_stories/place-order.md'];
+  ctx.mode('passed');
+  const recovered = await ctx.invoke([batch], { '--read': true });
+  assert.equal(recovered.code, 0, recovered.err); assert.equal(recovered.sent, 0);
+  assert.deepEqual(read(cachePath).stories['user_stories/place-order.md'], before,
+    'old completion cannot replace newer changed-source pass or failure');
+  const repeat = await ctx.invoke(['place-order'], newer === 'failed' ? { '--lf': true } : {});
+  assert.equal(repeat.sent, newer === 'failed' ? 1 : 0); assert.equal(repeat.code, 0, repeat.err);
 });
