@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { runCheck } from '../src/runtime-client.mjs';
 import { interfaceBlocks, proseSha256 } from '../src/runtime-preflight.mjs';
 import { harbor, fakeRuntime, portsFor } from './runtime-fake.mjs';
 
 // Synthetic requirements from the approved design: no hosted interpreter or model.
-const read = path => JSON.parse(readFileSync(path, 'utf8'));
+const read = path => { assert.ok(existsSync(path), 'required fixture or cache metadata exists'); return JSON.parse(readFileSync(path, 'utf8')); };
 const write = (path, value) => writeFileSync(path, JSON.stringify(value, null, 2) + '\n');
 const day = 86400000;
 function editPrompt(repo, mutate, path = 'prompts/place_order.prompt.md') {
