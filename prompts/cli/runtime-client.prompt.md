@@ -432,19 +432,23 @@ setup. This module keeps transport, identity, saved-source and capacity rules, a
 has no state mapping of its own. Each row stores its outcome fields (`state`, and
 `progress` and `ahead` when supplied), so saved reads and JSON keep them.
 
-**Shared lint gate.** pdd sends paid work only when every selected test that it
-would send has the lint outcome `passed`. One rule serves new checks, saved-lint
-continuation, retry, the restart replacement and a new Try. When the gate fails,
-nothing is sent and unsent checks keep zero calls: a refused test is `refused`
-with its lint refusals; the others are `not_run` with
-`The lint result is unknown, so pdd sent no checks.` (with the outcome reason in
-parentheses when there is one, and exit 3), or with
-`Another selected test did not pass lint, so pdd sent no checks.` A refused,
-incomplete, empty or unknown lint never prints `Lint passed.` When the gate passes,
-each job refusal and refused prompt that the per-test pass scoped out is added to
-the warnings as `Lint diagnostic: <code>  <file>  <reason or message>` (Try prints
-them on stderr). The gate keeps the saved-source, owner, intent, call-ceiling,
-identity and dispatch-claim checks.
+**Shared lint gate.** Scope, not ignore, per test: pdd sends paid work for a
+selected test only when that test's own lint outcome is `passed`. One rule serves
+new checks, saved-lint continuation, retry, the restart replacement and a new Try;
+each sends the tests that pass and holds back the others. A test that lint refused
+is `refused` with its lint refusals. A test whose lint outcome is unknown is
+`not_run` with `The lint result is unknown, so pdd sent no checks.` (with the
+outcome reason in parentheses when there is one) and the run exits 3. A job
+refusal or an incomplete lint gives no test a pass, so it stops every test.
+Unsent checks keep zero calls. The send line keeps `Lint passed.` only when every
+test passed; otherwise it says `Lint refused R of N tests.` and/or
+`Lint gave no verdict for U of N tests.` before `Sent K checks …`, and with no
+refused and no sent test there is no send line. When a test is sent, each job
+refusal and refused prompt that per-test passes scoped out is added to the warnings
+as `Lint diagnostic: <code>  <file>  <reason or message>` (Try prints them on
+stderr). The gate keeps the saved-source, owner, intent, call-ceiling, identity and
+dispatch-claim checks; `--retry` stops with exit 2 only when no retryable test
+passes the gate.
 
 `pdd lint` rows, `lint_state`, the summary and the exit code come from the same
 outcomes. An unknown row adds `reason: {code: null, message}` in JSON and

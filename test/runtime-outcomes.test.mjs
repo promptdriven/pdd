@@ -107,6 +107,21 @@ for (const shape of ['refused', 'incomplete', 'unrelated-no-verdict']) test(`OUT
   assert.doesNotMatch(p.ports.stdout.text + p.ports.stderr.text, /Lint passed/);
 });
 
+// Scope, not ignore: one test without a lint pass never stops a test that has one.
+const mixed = { complete: true, tests: [{ path: TEST, verdict: 'passed' }] };
+for (const pending of [false, true]) test(`OUTCOME ${pending ? 'continuation' : 'new checks'}: a test without a verdict is not sent; a passing one is`, async t => {
+  const r = await setup(t, 'passed', { pending });
+  const lint = r.f.lint; r.f.lint = (id, ...rest) => { const answer = lint(id, ...rest); answer.result.report.lint = structuredClone(mixed); return answer; };
+  const first = await r.command({ '--json': true }, ['place-order', 'unknown-item']);
+  r.finish();
+  const result = pending ? await r.command({ '--json': true, '--read': first.json.batch }, []) : first;
+  assert.deepEqual(r.f.posts.filter(post => post.command === 'check').map(post => post.request.scenario), [TEST]);
+  assert.deepEqual(result.json.rows.map(row => row.state), ['passed', 'not_run']);
+  assert.equal(result.json.rows[1].calls, 0);
+  assert.match(result.json.rows[1].reason.message, /lint result is unknown \(lint gave no verdict for this test\)/);
+  assert.equal(result.code, 3);
+});
+
 test('OUTCOME retry rechecks saved per-test lint evidence', async t => {
   const r = await setup(t, 'passed');
   const first = await r.command({ '--json': true });

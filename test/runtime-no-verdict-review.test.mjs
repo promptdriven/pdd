@@ -174,12 +174,11 @@ test('REVIEW partial lint refusal keeps independent server advice after per-test
       return { status: 200, json: answer };
     });
     const result = await run(setup, fake, { '--json': true }, []);
-    // One gate: a refused selected test sends no paid check for the other one (not run, exit 5).
-    assert.equal(result.code, 5);
+    assert.equal(result.code, 4);
     const refused = result.json.rows.find(r => r.state === 'refused');
     assert.equal(refused.why, why === 'Checks failed.' ? null : why); assert.equal(refused.next_step, 'SERVER LINT NEXT');
-    assert.equal(result.json.rows.filter(r => r.state === 'not_run').length, 1);
-    assert.equal(fake.posts.filter(e => e.command === 'check').length, 0);
+    assert.equal(result.json.rows.filter(r => r.state === 'passed').length, 1);
+    assert.equal(fake.posts.filter(e => e.command === 'check').length, 1);
     const read = await run(setup, fake, { '--read': result.json.batch }); assert.match(read.text, /Next: SERVER LINT NEXT/);
   }
 });
