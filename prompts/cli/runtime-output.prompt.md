@@ -6,7 +6,7 @@ Own `src/runtime-output.mjs`. It turns `pdd test` rows into the terminal table, 
 
 A row is one test: `story`, `title`, `test`, `state`, `checks {passed, total}`, `failed_checks [{criterion_id, step_id, criterion_text, target, path, expected, actual, diagnosis}]`, `refusals [{code, section, message, engine_message, hint, reason, fix, where, cause}]`, `calls`, `seconds`, `requested_model`, `report_url`, `request_id`, and diagnosis fields `why`, `who`, `next_step`. A confirmed unstarted capacity row has `busy:true`, `can_retry:true` and state `not_run`; it is not a source refusal or failed assertion. Render its capacity advice without a Fix-the-test line and mark a summary containing only passed rows and actual busy rows (with at least one busy row) `busy`, not ✗. Mixed actual failures retain ✗. Preserve request ID, report and zero-call accounting. States: `passed`, `failed`, `refused`, `not_run`, `unknown`, `queued`, `running`.
 
-- From a server answer: checks come from `result.report.samples[0].steps[].checks[]`; refusals from `result.refusals` (prompt-runtime #379 adds `reason` in plain words, `fix`, `file`, `at`, `where` = file and place as one text, and `cause`: `call-budget`, `ai-service`, `test`, `prompt`, `server` or `unknown`; `where` falls back to `file` and `at`; each is null when missing); calls from `usage.calls`; the model from `usage.requested_model` (else the report's `evaluation.requested_model`). pdd uses `state`, not `outcome`.
+- From a server answer: checks come from `result.report.samples[0].steps[].checks[]`; refusals from `result.refusals` (prompt-runtime #379 adds `reason` in plain words, `fix`, `file`, `at`, `where` = file and place as one text, and `cause`: `call-budget`, `ai-service`, `test`, `prompt`, `server` or `unknown`; `where` falls back to `file` and `at`; each is null when missing); calls from `usage.calls`; the model from `usage.requested_model` (else the report's `evaluation.requested_model`). pdd uses the canonical selected outcome, not the server's display `outcome` string.
 - Incomplete accounting (`usage.accounting_complete:false`, report `accounting_complete:false`, or positive `usage.unknown_calls`) never projects a complete numeric row call total, even when `usage.calls` is numeric. Preserve a valid known lower bound (`usage.known_calls`, else numeric `usage.calls`) in summary totals and append the unknown part, for example `2 AI calls + 1 unknown`; absent unknown-count detail still contributes an unknown component. Keep row `calls` unknown and retain the existing public summary format. Pending or unavailable usage remains unknown; only positively unsent work defaults to zero.
 - Seconds are rounded to 0.1.
 - Expected and got values that fit on one line print as JSON on the check line, so strings are quoted and escaped (`"Sam\n"` differs from `"Sam"`). They fit when no string has a line break before its end and each JSON is at most 80 characters.
@@ -15,21 +15,13 @@ A row is one test: `story`, `title`, `test`, `state`, `checks {passed, total}`, 
 
 ## Exit code
 
-The first match from the top wins:
-
-| Code | When |
-|---|---|
-| 3 | A row is unknown, queued, running or in any state that is not a known end, the lint result is unknown, or Ctrl-C |
-| 5 | A row was not run (sign-in, gate, server busy at the time limit or when pdd stopped, no AI room) |
-| 4 | A row was refused (local preflight, lint or engine) |
-| 1 | A row failed |
-| 0 | All passed |
+Use the shared [outcome exit policy](runtime-outcome.prompt.md#progress-and-exit). No independent state-to-exit mapping.
 
 ## Text (stdout)
 
 1. Exit 3: the first line is `pdd test --read <batch>`.
 2. The table: `Story`, `Test`, `Result`, `Checks`, `Time`. Story = the story title. Result `not run` for `not_run`; a draft row adds ` (DRAFT)` to its result and to its report link line. Checks `n/m` or `-`. Time `21.0 s` or `-`.
-3. One paste line per Story ([Prompt tests line](#prompt-tests-line)), in table order: `Prompt tests (<story>): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call`, with ` (DRAFT)` after the story when a row of it ran a draft prompt; a Story with two test files gets one line for both. With one Story, its line is the only Prompt tests line (round-2 tester: no second line that repeats it). With two or more Stories, the overall summary line comes last of these lines, one line that an agent can paste into a PR: `Prompt tests: ✓ 3 of 3 criteria · 10/10 checks · 1 AI call`; `Prompt tests (DRAFT): …` when a row ran a draft prompt. Use the summary mark rule below for both Story and overall lines. Criteria come from the report's `criterion_results`; a row with no such list counts its test's criteria, all passed only when the row passed. Rows that are refused, not run, unknown, queued or running add `· N refused` (and so on). Calls count only ended rows; others add ` + N unknown`.
+3. One paste line per Story ([Prompt tests line](#prompt-tests-line)), in table order: `Prompt tests (<story>): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call`, with ` (DRAFT)` after the story when a row of it ran a draft prompt; a Story with two test files gets one line for both. With one Story, its line is the only Prompt tests line (round-2 tester: no second line that repeats it). With two or more Stories, the overall summary line comes last of these lines, one line that an agent can paste into a PR: `Prompt tests: ✓ 3 of 3 criteria · 10/10 checks · 1 AI call`; `Prompt tests (DRAFT): …` when a row ran a draft prompt. Use the summary mark rule below for both Story and overall lines. Criteria come from the report's `criterion_results`; without it, none of the authored criteria are proved passed. Rows that are refused, not run, unknown, queued or running add `· N refused` (and so on). Calls count only ended rows; others add ` + N unknown`.
 4. A block for each problem row, failed rows first. For refused, not-run and unknown rows, show each supplied nonempty server `why` as `Why:` and `next_step` as `Next:`, using the existing text cleaning. The client supplies accepted server advice under its no-verdict explanation rule; client-generated transport reasons remain valid fallback explanations. Each field overrides only its corresponding fallback: why-only keeps existing next-step advice; next-step-only keeps the existing explanation and removes only a conflicting retry sentence. For NOT RUN, preserve the true busy explanation when a request was sent; never claim it was unsent, remove the whole explanation, or leave a dangling colon when advice replaces it. With neither field, preserve the existing block. A server next step suppresses conflicting client retry/fix advice, including refusal Fix/hint instructions and the AI-service/provider "run again" lines; keep refusal codes, causes, locations, reports and IDs.
    Existing fallback blocks:
    - `FAILED  <title> (<test>)`, one line for each failed check `  AC1  step place-order  result /totalCents  expected 899, got 900` (or the check line `  AC1  step place-order  result /stdout` and its block), followed by a `Criterion: …` line when the authored criterion is at most 160 characters, the row warnings, and then the report link. For target `error`, say `got no error (a normal result)` only when the step has a result and no error, or diagnosis kind `no-error`/`needs-tool`; otherwise keep `{"missing":true}`. Print each failed check's own `Why:` and `Next:` pair from its diagnosis. With no diagnosis, use the failed row's run-level fields when both are present; otherwise say `Next: show this check to the person. A person decides expected values. The agent may propose a change, and never makes it.` For a failed step with rerun diagnosis or a matching report rerun, print one `Rerun:` line under its first failed check; `Rerun: failed N of M (stable). A recheck of the same files will not help.` or `Rerun: failed N of M (unstable). Make the rule in the prompt firmer.`; `failed 0` is `passed M of M reruns.` and `runs: 1` prints no verdict. Rerun lines carry no call count; rerun calls appear only in the summary line as `(N for reruns)`. A skipped rerun says `Rerun: skipped (<reason>).`
@@ -61,7 +53,24 @@ Each line is these parts, joined with ` · `, in this order: the label (with ` (
 
 One object: `{batch, repo, exit_code, summary_line, draft, rows: [{story, title, test, state, checks, criteria, failed_checks, refusals, calls, seconds, requested_model, report_url, request_id, draft, reason, why, who, next_step, rerun, summary_line}], warnings}`. Failed checks carry `diagnosis`, including any check rerun data; failed rows carry the first failed check's diagnosis when the run-level fields are empty, plus failed-state `who`. Preserve supplied `why` and `next_step` for failed, refused, not-run and unknown states. Refusals retain their `cause`. `reason` is `{code, message}` for a row that was not run or is unknown (`graph-provider-failure` for a provider failure), else null; passed and failed rows keep `reason` null. Preserve report-level `rerun` for the applicable state, otherwise null. `usage.calls` is the total including rerun calls; `rerun.calls` is the rerun share, shown in the Prompt tests line as `(N for reruns)`. When usage is missing, omit the unknown total rather than printing zero. A row's `summary_line` is the paste line of its Story. `draft` is true for a row that ran a draft prompt, and at the top when any row did. When the server answer has `draft_prompts` (a list of repo paths), a nonempty list means DRAFT and an empty one means not DRAFT; it wins over pdd's local guess. Older servers without the field keep the local guess. Nothing else goes to stdout.
 
+## Outcome
+
+Normalize server answers and persisted rows through [runtime outcome](runtime-outcome.prompt.md).
+Use its state for the table, text blocks, JSON, Story summaries and exit code.
+Keep the existing display formats, counts, privacy cleaning and exit precedence,
+except that empty outcomes exit 3 and absent criterion evidence proves no passes.
+A retryable unstarted pool refusal is `not run`, exit 5, with its server text and
+without a cross or refusal block.
+
+When the server sends progress, the running row's Result cell and its Story
+summary contain the shared outcome text, for example `running · step 3 of 5 ·
+4 AI calls so far · 1 in flight`. JSON retains the supplied progress. Omit missing
+fragments; do not replace a missing call count with zero. Retain unrelated lint
+diagnostics without turning a positively passed selected test into a refusal.
+
 ## Dependencies
+
+- [Runtime outcome](runtime-outcome.prompt.md): required for generation and tests; selected evidence, progress and exits.
 
 Read the full [Prompting guide](../../docs/prompting-guide.md) before you change this prompt. The [runtime client](runtime-client.prompt.md) builds the rows and prints this output.
 
