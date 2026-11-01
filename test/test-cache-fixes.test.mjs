@@ -207,6 +207,5 @@ for (const part of ['engine', 'model']) test(`TEST-CACHE-FIX partial observation
   const repeat = await successful(ctx);
   assert.equal(repeat.sent, 3, 'later omission cannot erase a known conflicting build/model and authorize old passes');
   assert.ok(latest, 'known partial identity is persisted');
-  if (part === 'engine') assert.equal(latest.engine_sha, 'b'.repeat(40));
-  else assert.deepEqual(latest.models, ['synthetic-model-B']);
+  assert.equal(latest.conflict, true, 'partial observations leave doubt instead of merging identities');
 });
