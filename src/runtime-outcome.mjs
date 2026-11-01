@@ -17,7 +17,10 @@ export function outcomeFor(answer, { test, steps = [], kind = answer?.command, t
   const result = answer?.result, report = result?.report;
   if (timeLimit) return { state: 'unknown', reason: 'The step was stopped at its time limit.' };
   if (answer?.state === 'queued') return { state: 'queued', ...(count(answer.queue?.ahead) ? { ahead: answer.queue.ahead } : {}) };
-  if (answer?.state === 'running') return { state: 'running', progress: progressFrom(answer.progress) };
+  if (answer?.state === 'running') {
+    const progress = progressFrom(answer.progress);
+    return { state: 'running', ...(Object.keys(progress).length ? { progress } : {}) };
+  }
   // The public refusal list; the report's own refusal stands in only when that list is empty.
   const refusals = objects(result?.refusals);
   if (!refusals.length && report?.refusal && typeof report.refusal === 'object' && !Array.isArray(report.refusal)) refusals.push(report.refusal);
