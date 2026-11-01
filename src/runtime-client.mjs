@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 9683792bb86d2700d4734df4e75e84fc3a1b279ee789d5625079cf141453b861).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 0d408193577ddc59d05a88d78f1655f141f797ab4c1b6d6ce932d055e4b22a3b).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -873,7 +873,7 @@ function answerCacheIdentity(answer) {
   if (!known(engine) || !models.length || !models.every(known) || new Set(models).size !== 1) return null;
   return { engine_sha: engine, requested_model: models[0] };
 }
-const observedIdentityMatches = (observed, identity) => !observed || ((!observed.engine_sha || observed.engine_sha === identity?.engine_sha)
+const observedIdentityMatches = (observed, identity) => !observed || (!observed.conflict && (!observed.engine_sha || observed.engine_sha === identity?.engine_sha)
   && observed.models.every(model => model === identity?.requested_model));
 const sameCacheIdentity = (a, b) => !!a && !!b && a.engine_sha === b.engine_sha && a.requested_model === b.requested_model;
 
@@ -1941,9 +1941,12 @@ function validTestCache(value) {
     && (row.criteria_total === undefined || Number.isSafeInteger(row.criteria_total) && row.criteria_total >= 0) && typeof row.draft === 'boolean';
   if (!keys(value, ['schema_version', 'generation', 'epoch', 'stories', 'latest_identity']) || typeof value.epoch !== 'string' || !UUID.test(value.epoch) || value.schema_version !== 1 || !Number.isSafeInteger(value.generation) || value.generation < 0 || !isObject(value.stories) || Object.keys(value.stories).length > 10000) return false;
   const latest = value.latest_identity;
-  if (latest !== undefined && (!keys(latest, ['engine_sha', 'models', 'observed_at', 'sampled_at'])
+  if (latest !== undefined && (!keys(latest, ['engine_sha', 'models', 'observed_at', 'sampled_at', 'engine_shas', 'conflict'])
     || !(latest.engine_sha === null || typeof latest.engine_sha === 'string' && latest.engine_sha.trim() && latest.engine_sha.trim().toLowerCase() !== 'unknown')
-    || !Array.isArray(latest.models) || latest.models.length > 2 || !latest.models.every(model => typeof model === 'string' && model.trim() && model.trim().toLowerCase() !== 'unknown')
+    || (latest.conflict !== undefined && typeof latest.conflict !== 'boolean')
+    || (latest.engine_shas !== undefined && (!Array.isArray(latest.engine_shas) || latest.engine_shas.length > 10000
+      || !latest.engine_shas.every(sha => typeof sha === 'string' && sha.trim() && sha.trim().toLowerCase() !== 'unknown')))
+    || !Array.isArray(latest.models) || latest.models.length > 10000 || !latest.models.every(model => typeof model === 'string' && model.trim() && model.trim().toLowerCase() !== 'unknown')
     || ![latest.observed_at, latest.sampled_at].every(at => typeof at === 'string' && Number.isFinite(Date.parse(at)) && new Date(at).toISOString() === at))) return false;
   return Object.entries(value.stories).every(([name, row]) => path(name) && keys(row, ['generation', 'outcome', 'pass']) && Number.isSafeInteger(row.generation) && row.generation >= 0 && row.generation <= value.generation
     && ['passed', 'failed', 'refused', 'not_run', 'unknown'].includes(row.outcome)
@@ -2300,15 +2303,22 @@ async function finishTestAttempts(cache, rows, capture) {
   if (cache.disabled) return;
   await cacheTransaction(cache, data => {
     const observations = cache.context.observedTestIdentities ?? [];
-    if (Number.isFinite(cache.context.startedAt)
-      && (!data.latest_identity || cache.context.startedAt >= Date.parse(data.latest_identity.sampled_at))) {
-      for (const observed of observations.filter(item => item.engine_sha || item.models.length)) {
-        data.latest_identity = {
-          engine_sha: observed.engine_sha ?? data.latest_identity?.engine_sha ?? null,
-          models: observed.models.length ? [...new Set(observed.models)] : data.latest_identity?.models ?? [],
-          observed_at: observed.observed_at, sampled_at: new Date(cache.context.startedAt).toISOString()
-        };
-      }
+    const known = observations.filter(item => item.engine_sha || item.models.length);
+    if (known.length && Number.isFinite(cache.context.startedAt)) {
+      const previous = data.latest_identity;
+      const priorEngines = previous?.engine_shas ?? (previous?.engine_sha ? [previous.engine_sha] : []);
+      const engines = [...new Set(known.map(item => item.engine_sha).filter(Boolean))];
+      const models = [...new Set(known.flatMap(item => item.models))];
+      // A read is new evidence even when its original sample predates another batch.
+      // Keep disagreement instead of choosing a winner by receipt or batch order.
+      const engineValues = [...new Set(cache.context.reading ? [...priorEngines, ...engines] : engines.length ? engines : priorEngines)].sort();
+      const modelValues = [...new Set(cache.context.reading ? [...(previous?.models ?? []), ...models] : models.length ? models : previous?.models ?? [])].sort();
+      const conflict = engineValues.length > 1 || modelValues.length > 1 || !!(cache.context.reading && previous?.conflict);
+      data.latest_identity = {
+        engine_sha: engineValues.length === 1 ? engineValues[0] : null, engine_shas: engineValues, models: modelValues, conflict,
+        observed_at: known.at(-1).observed_at,
+        sampled_at: new Date(cache.context.reading ? Math.max(cache.context.startedAt, Date.parse(previous?.sampled_at) || 0) : cache.context.startedAt).toISOString()
+      };
     }
     for (const [story, token] of cache.tokens) {
       if (data.epoch !== token.epoch || data.stories[story]?.generation !== token.generation) continue;
