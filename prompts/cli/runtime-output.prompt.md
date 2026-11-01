@@ -4,7 +4,7 @@ Own `src/runtime-output.mjs`. It turns `pdd test` rows into the terminal table, 
 
 ## Rows
 
-A row is one test: `story`, `title`, `test`, `state`, `checks {passed, total}`, `failed_checks [{criterion_id, step_id, criterion_text, target, path, expected, actual, diagnosis}]`, `refusals [{code, section, message, engine_message, hint, reason, fix, where, cause}]`, `calls`, `seconds`, `requested_model`, `report_url`, `request_id`, and diagnosis fields `why`, `who`, `next_step`. A confirmed unstarted capacity row has `busy:true`, `can_retry:true` and state `not_run`; it is not a source refusal or failed assertion. Render its capacity advice without a Fix-the-test line and mark a summary containing only passed rows and actual busy rows (with at least one busy row) `busy`, not ✗. Mixed actual failures retain ✗. Preserve request ID, report and zero-call accounting. States: `passed`, `failed`, `refused`, `not_run`, `unknown`, `queued`, `running`.
+A row is one test: `story`, `title`, `test`, `state`, `checks {passed, total}`, `failed_checks [{criterion_id, step_id, criterion_text, target, path, expected, actual, diagnosis}]`, `refusals [{code, field, section, message, engine_message, hint, reason, fix, where, cause}]`, `calls`, `seconds`, `requested_model`, `report_url`, `request_id`, diagnosis fields `why`, `who`, `next_step`, and the outcome fields `progress` and `ahead` when the server supplied them. A confirmed unstarted capacity row has `busy:true`, `can_retry:true` and state `not_run`; it is not a source refusal or failed assertion. Render its capacity advice without a Fix-the-test line and mark a summary containing only passed rows and actual busy rows (with at least one busy row) `busy`, not ✗. Mixed actual failures retain ✗. Preserve request ID, report and zero-call accounting. States: `passed`, `failed`, `refused`, `not_run`, `unknown`, `queued`, `running`.
 
 - From a server answer: checks come from `result.report.samples[0].steps[].checks[]`; refusals from `result.refusals` (prompt-runtime #379 adds `reason` in plain words, `fix`, `file`, `at`, `where` = file and place as one text, and `cause`: `call-budget`, `ai-service`, `test`, `prompt`, `server` or `unknown`; `where` falls back to `file` and `at`; each is null when missing); calls from `usage.calls`; the model from `usage.requested_model` (else the report's `evaluation.requested_model`). pdd uses the canonical selected outcome, not the server's display `outcome` string.
 - Incomplete accounting (`usage.accounting_complete:false`, report `accounting_complete:false`, or positive `usage.unknown_calls`) never projects a complete numeric row call total, even when `usage.calls` is numeric. Preserve a valid known lower bound (`usage.known_calls`, else numeric `usage.calls`) in summary totals and append the unknown part, for example `2 AI calls + 1 unknown`; absent unknown-count detail still contributes an unknown component. Keep row `calls` unknown and retain the existing public summary format. Pending or unavailable usage remains unknown; only positively unsent work defaults to zero.
@@ -20,7 +20,7 @@ Use the shared [outcome exit policy](runtime-outcome.prompt.md#progress-and-exit
 ## Text (stdout)
 
 1. Exit 3: the first line is `pdd test --read <batch>`.
-2. The table: `Story`, `Test`, `Result`, `Checks`, `Time`. Story = the story title. Result `not run` for `not_run`; a draft row adds ` (DRAFT)` to its result and to its report link line. Checks `n/m` or `-`. Time `21.0 s` or `-`.
+2. The table: `Story`, `Test`, `Result`, `Checks`, `Time`. Story = the story title. Result is the [outcome text](runtime-outcome.prompt.md#progress-and-exit) (`not run`, `queued · 2 ahead`, or `running · step 3 of 5 · 4 AI calls so far` with server progress); a draft row adds ` (DRAFT)` to its result and to its report link line. Checks `n/m` or `-`. Time `21.0 s` or `-`.
 3. One paste line per Story ([Prompt tests line](#prompt-tests-line)), in table order: `Prompt tests (<story>): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call`, with ` (DRAFT)` after the story when a row of it ran a draft prompt; a Story with two test files gets one line for both. With one Story, its line is the only Prompt tests line (round-2 tester: no second line that repeats it). With two or more Stories, the overall summary line comes last of these lines, one line that an agent can paste into a PR: `Prompt tests: ✓ 3 of 3 criteria · 10/10 checks · 1 AI call`; `Prompt tests (DRAFT): …` when a row ran a draft prompt. Use the summary mark rule below for both Story and overall lines. Criteria come from the report's `criterion_results`; without it, none of the authored criteria are proved passed. Rows that are refused, not run, unknown, queued or running add `· N refused` (and so on). Calls count only ended rows; others add ` + N unknown`.
 4. A block for each problem row, failed rows first. For refused, not-run and unknown rows, show each supplied nonempty server `why` as `Why:` and `next_step` as `Next:`, using the existing text cleaning. The client supplies accepted server advice under its no-verdict explanation rule; client-generated transport reasons remain valid fallback explanations. Each field overrides only its corresponding fallback: why-only keeps existing next-step advice; next-step-only keeps the existing explanation and removes only a conflicting retry sentence. For NOT RUN, preserve the true busy explanation when a request was sent; never claim it was unsent, remove the whole explanation, or leave a dangling colon when advice replaces it. With neither field, preserve the existing block. A server next step suppresses conflicting client retry/fix advice, including refusal Fix/hint instructions and the AI-service/provider "run again" lines; keep refusal codes, causes, locations, reports and IDs.
    Existing fallback blocks:
@@ -47,7 +47,7 @@ When an inconclusive Story is outside the failed set, use the brief's ordinary w
 
 The paste lines above and every `summary_line` start with the label `Prompt tests`: `Prompt tests (<story>): …` for a Story and `Prompt tests: …` for the total. pdd writes only this label. Export `PROMPT_TESTS_LABEL` (`'Prompt tests'`) and `PROMPT_TESTS_WORDS`, the regular-expression source `(?:Prompt tests|Runtime check)`. Every reader of these lines ([workflow runner](workflow-runner.prompt.md#prompt-tests-lines) and [read-only review](workflow-view.prompt.md)) finds them with that pattern, so the `Runtime check (<story>): …` lines of older PR bodies, saved run summaries and saved `--json` results read the same way. Forbidden: a new line that says `Runtime check`, or an old `Runtime check` line that a reader skips.
 
-Each line is these parts, joined with ` · `, in this order: the label (with ` (<story>)` and then ` (DRAFT)` when a row ran a draft prompt; `<story>` is the row's `story` value, the Story file name without `.md` and with its case unchanged, never the Story title), a colon, the mark (`✓`, `✗`, `running ·`, `busy ·` or `no verdict ·`) and `<passed> of <total> criteria`; `<passed>/<total> checks`; one count for each of refused, not run, unknown, queued and running that is above zero, in that order (for example `1 refused`); and last the AI calls. The AI calls count only rows that reached the server (`phase` is `server`): the sum of their known calls (`1 AI call`, `N AI calls`, with ` (R for reruns)` when reruns used calls), then ` + U unknown` only when some of those rows have no known call count (U adds each such row's `unknown_calls`, at least 1). A row that pdd refused before sending adds no call and no unknown. Example: `Prompt tests (one): no verdict · 0 of 0 criteria · 0/0 checks · 1 refused · 0 AI calls`.
+Each line is these parts, joined with ` · `, in this order: the label (with ` (<story>)` and then ` (DRAFT)` when a row ran a draft prompt; `<story>` is the row's `story` value, the Story file name without `.md` and with its case unchanged, never the Story title), a colon, the mark (`✓`, `✗`, `running ·`, `busy ·` or `no verdict ·`) and `<passed> of <total> criteria`; `<passed>/<total> checks`; the outcome text of each running row with server progress; one count for each of refused, not run, unknown, queued and running that is above zero, in that order (for example `1 refused`); and last the AI calls. The AI calls count only rows that reached the server (`phase` is `server`): the sum of their known calls (`1 AI call`, `N AI calls`, with ` (R for reruns)` when reruns used calls), then ` + U unknown` only when some of those rows have no known call count (U adds each such row's `unknown_calls`, at least 1). A row that pdd refused before sending adds no call and no unknown. When every row of the line is running with server progress, the progress text is the call evidence and the AI calls part is left out. Example: `Prompt tests (one): no verdict · 0 of 0 criteria · 0/0 checks · 1 refused · 0 AI calls`.
 
 ## JSON (stdout, `--json`)
 
@@ -55,18 +55,14 @@ One object: `{batch, repo, exit_code, summary_line, draft, rows: [{story, title,
 
 ## Outcome
 
-Normalize server answers and persisted rows through [runtime outcome](runtime-outcome.prompt.md).
-Use its state for the table, text blocks, JSON, Story summaries and exit code.
-Keep the existing display formats, counts, privacy cleaning and exit precedence,
-except that empty outcomes exit 3 and absent criterion evidence proves no passes.
-A retryable unstarted pool refusal is `not run`, exit 5, with its server text and
-without a cross or refusal block.
-
-When the server sends progress, the running row's Result cell and its Story
-summary contain the shared outcome text, for example `running · step 3 of 5 ·
-4 AI calls so far · 1 in flight`. JSON retains the supplied progress. Omit missing
-fragments; do not replace a missing call count with zero. Retain unrelated lint
-diagnostics without turning a positively passed selected test into a refusal.
+Each row carries its [runtime outcome](runtime-outcome.prompt.md): `projectAnswer`
+takes the outcome of the answer for the row's `test` and `steps`, and keeps its
+`progress`, `ahead` and, for a not-run pool refusal, its server code and text as
+the row `note`. The table, the text blocks, JSON, the Prompt tests lines and the
+exit code read that state; this module has no state mapping of its own. A
+retryable unstarted pool refusal is `not run`, exit 5, with the server's text and
+without a cross or refusal block. JSON rows keep supplied `progress` and `ahead`
+and each refusal's `field`; missing progress fields stay missing, never zero.
 
 ## Dependencies
 

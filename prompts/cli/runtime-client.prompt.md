@@ -230,7 +230,7 @@ producer evidence of an unsent lint-held row: pending-lint evidence, prior unkno
 `not_run` evidence, or the known already-read state with phase `lint`, state `not_run`,
 no check request IDs and note.code `lint-finished`. The latter is written by the
 legacy reader after terminal lint clears its pending/unknown markers. Each evidence form
-requires a matching passed lint and all owner, repository, source and exclusive-dispatch
+requires the [shared lint gate](#outcome) and all owner, repository, source and exclusive-dispatch
 guards below, no check IDs and no existing dispatch claim for the held row. Establish
 zero check calls from this known never-posted producer state: supported legacy batch
 serialization omits row.calls, so its absence is allowed here. If call evidence is
@@ -242,7 +242,7 @@ never infer paid intent from a passing lint or Story path alone.
 
 Before any new ID, authenticate the saved owner, use the saved runtime origin (never redirect to a changed environment setting), require the saved repository,
 recapture exactly the saved selected test paths and require the saved source SHA. Require a
-matching terminal passed lint with no selected/global refusal, valid saved per-test call ceilings,
+matching terminal lint that passes the [shared lint gate](#outcome), valid saved per-test call ceilings,
 and proof that each eligible row was held solely for lint and has never had a check POST.
 A changed capture, unresolved proof or interruption sends nothing. Reuse the completed lint:
 no new lint or redundant lint upload; each check retains its required source multipart from the recaptured identical archive. Preserve original batch/source, selection, call ceilings, all
@@ -296,7 +296,7 @@ Local waiting, maintenance, HTTP, queue reads and all backoffs share the existin
 
 Only a same-ID, correct-command terminal check receipt with state unknown and structured reason code service-restarted in result.refusals or result.report.refusal authorizes one automatic replacement for that original Story row. result.why is display text, never an authority inferred by matching message text. A generic unknown, lost POST, wrong ID/command, expired/unverifiable receipt or another reason never authorizes it. This exception can follow read-only same-ID recovery; the receipt, not an error message, authorizes dispatch.
 
-Persist the consumed replacement allowance across reads/retries and capacity attempts. Before allocating the replacement UUID, require saved owner, repository, identical recaptured source and original per-row max_calls, a live caller wait and an exclusive per-row replacement claim. Overlapping readers cannot both send. Print `The interpreter restarted during this check. pdd sends it again (1 of 1).` Keep both IDs, raw receipts and their known/unknown call accounting; do not reset usage or enlarge the row ceiling. Apply ordinary admission to the replacement. A second restarted receipt ends unknown with read/report advice, never a second replacement. UUID call reads and paid Try calls remain GET-only. A deadline-ended eligible replacement stays saved for guarded recovery; approval is never inferred. Source identity validation remains mandatory, but reuse one captured identical archive for a recovery decision instead of packing and hashing it twice per scheduler turn. Repeated visits to the same pending replacement without a new dispatch decision do not recapture source. An actual later recovery invocation or newly authorized replacement still validates against the saved source before sending.
+Persist the consumed replacement allowance across reads/retries and capacity attempts. Before allocating the replacement UUID, require the [shared lint gate](#outcome) on the saved lint, saved owner, repository, identical recaptured source and original per-row max_calls, a live caller wait and an exclusive per-row replacement claim. Overlapping readers cannot both send. Print `The interpreter restarted during this check. pdd sends it again (1 of 1).` Keep both IDs, raw receipts and their known/unknown call accounting; do not reset usage or enlarge the row ceiling. Apply ordinary admission to the replacement. A second restarted receipt ends unknown with read/report advice, never a second replacement. UUID call reads and paid Try calls remain GET-only. A deadline-ended eligible replacement stays saved for guarded recovery; approval is never inferred. Source identity validation remains mandatory, but reuse one captured identical archive for a recovery decision instead of packing and hashing it twice per scheduler turn. Repeated visits to the same pending replacement without a new dispatch decision do not recapture source. An actual later recovery invocation or newly authorized replacement still validates against the saved source before sending.
 
 ## Shared contract advice
 
@@ -426,24 +426,32 @@ pdd reports each slow upload, lint and Try setup step. Use the [progress helpers
 
 ## Outcome
 
-Use [runtime outcome](runtime-outcome.prompt.md) for every selected server answer,
-including explicit lint, check results, saved lint reads and Try admission. Keep
-call-site transport and source-verification rules; remove independent verdict
-mappings. The new module owns evidence, scope, progress fields and exit precedence.
+[Runtime outcome](runtime-outcome.prompt.md) decides each selected test's outcome
+from a server answer: explicit lint rows, check rows, saved lint reads and Try
+setup. This module keeps transport, identity, saved-source and capacity rules, and
+has no state mapping of its own. Each row stores its outcome fields (`state`, and
+`progress` and `ahead` when supplied), so saved reads and JSON keep them.
 
-One shared paid-check gate governs `checkBatch`, `continueHeld` and `runRetry`:
-all selected dispatch candidates must have lint outcome `passed` before any paid
-check is sent. A refused, incomplete, empty or unknown lint never prints
-`Lint passed.` and never sends paid checks. Valid per-test passes can authorize a
-scoped selection despite unrelated diagnostics, on every gate path. Preserve
-those diagnostics visibly. A failed gate leaves unsent checks at zero calls.
-Keep saved-source, owner, intent, call ceiling, identity and dispatch-claim checks.
-Use the same selected outcome for lint rows, lint_state, summary and exit code.
+**Shared lint gate.** pdd sends paid work only when every selected test that it
+would send has the lint outcome `passed`. One rule serves new checks, saved-lint
+continuation, retry, the restart replacement and a new Try. When the gate fails,
+nothing is sent and unsent checks keep zero calls: a refused test is `refused`
+with its lint refusals; the others are `not_run` with
+`The lint result is unknown, so pdd sent no checks.` (with the outcome reason in
+parentheses when there is one, and exit 3), or with
+`Another selected test did not pass lint, so pdd sent no checks.` A refused,
+incomplete, empty or unknown lint never prints `Lint passed.` When the gate passes,
+each job refusal and refused prompt that the per-test pass scoped out is added to
+the warnings as `Lint diagnostic: <code>  <file>  <reason or message>` (Try prints
+them on stderr). The gate keeps the saved-source, owner, intent, call-ceiling,
+identity and dispatch-claim checks.
 
-Progress uses the shared outcome text when the server sends progress. A Story is
-done only when all its rows have known terminal outcomes; unknown is not done.
-Save progress evidence with the row so reads and JSON retain it. Missing progress
-never supplies a fabricated step or call count.
+`pdd lint` rows, `lint_state`, the summary and the exit code come from the same
+outcomes. An unknown row adds `reason: {code: null, message}` in JSON and
+`unknown: <reason>` in text. With no lint answer at all, keep the existing exit 3
+line. The progress line counts a Story as done only when all its rows are done
+(`unknown` is not done). It shows the outcome text of each running row with server
+progress; otherwise known call counts only, or `AI calls unknown`, never zero.
 
 ## Dependencies
 
