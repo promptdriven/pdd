@@ -1210,10 +1210,11 @@ async function checkBatch(context, rows, priorLint = null) {
   }
   for (const [row, problem] of verdicts) Object.assign(row, { state: 'refused', phase: 'lint', refusals: [problem], why: lintView.why, next_step: lintView.next_step });
   const toSend = sendable.filter(row => row.state === 'ready');
-  line(ports.stderr, `${verdicts.size ? `Lint refused ${verdicts.size} of ${sendable.length} tests.` : 'Lint passed.'} Sent ${toSend.length} check${toSend.length === 1 ? '' : 's'} `
+  if (priorLint) line(ports.stderr, `Sending ${toSend.length} more checks: interpreter build or model changed`);
+  else line(ports.stderr, `${verdicts.size ? `Lint refused ${verdicts.size} of ${sendable.length} tests.` : 'Lint passed.'} Sent ${toSend.length} check${toSend.length === 1 ? '' : 's'} `
     + `at ${clock(ports.now())}: ${context.capture.files.length} files, ${formatSize(context.capture.bytes)}${context.otherNote ? ` ${context.otherNote}` : ''}.`);
   // Only now is there something to read again (lead, Oct 27): after lint passes, before the first check POST.
-  if (toSend.length) line(ports.stderr, `If pdd stops, read the results with: pdd test --read ${context.batch}`);
+  if (toSend.length && !priorLint) line(ports.stderr, `If pdd stops, read the results with: pdd test --read ${context.batch}`);
   for (const row of toSend) row.eligible = true;
   await runScheduledChecks(context, rows, toSend);
 }
@@ -1276,7 +1277,7 @@ async function runScheduledChecks(context, rows, toSend) {
   finally { await Promise.all(pendingSends.values()); }
   if (context.sendError) throw context.sendError;
   const stoppedEarly = context.interrupted || !!context.readStop;
-  context.timedOut = !stoppedEarly && ports.now() >= context.deadline && rows.some(isOpen);
+  context.timedOut ||= !stoppedEarly && ports.now() >= context.deadline && rows.some(isOpen);
   for (const row of toSend) {
     if (['ready', 'waiting'].includes(row.state)) Object.assign(row, { state: 'not_run', calls: row.restart_used || row.restart_pending ? accumulatedCalls(context, row) : 0, busy: true, can_retry: true,
       phase: row.request_ids.length ? 'server' : 'local', note: { code: 'check-busy', message: context.interrupted && row.busy && row.request_ids.length
@@ -2393,8 +2394,13 @@ async function runBatch(context, cwd, words, options, setRelease) {
       }
       await beginTestAttempts(cache, rerun, capture, options, origin, true);
       context.rows.push(...rerun);
+      const stopReason = context.interrupted ? 'interrupted' : context.readStop ? 'reading stopped'
+        : ports.now() >= context.deadline ? 'time limit reached' : context.stopped ? 'stopped' : null;
+      if (stopReason) {
+        for (const row of rerun) Object.assign(row, { state: 'not_run', calls: 0, seconds: 0, phase: 'local', busy: false,
+          note: { code: null, message: `not sent: ${stopReason}` }, why: `not sent: ${stopReason}` });
+      } else await checkBatch(context, rerun, context.lastCheckLint);
       saveBatch(context);
-      await checkBatch(context, rerun, context.lastCheckLint);
     }
   }
   if (cache) await finishTestAttempts(cache, rows, capture);
