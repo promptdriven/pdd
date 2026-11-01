@@ -38,6 +38,7 @@ async function setup(t, edit) {
     ports.stdout.text = ''; ports.stderr.text = '';
     const before = fake.posts.filter(x => x.command === 'check').length;
     const code = await runCheck({ words, options: { '--json': true, ...options }, cwd: fixture.repo, cache: true }, ports);
+    clock.now += 1; // Separate successive synthetic invocations without changing their sample time.
     return { code, sent: fake.posts.filter(x => x.command === 'check').length - before, json: options['--json'] === false ? null : JSON.parse(ports.stdout.text), stderr: ports.stderr.text, stdout: ports.stdout.text };
   };
   return { ...fixture, fake, ports, clock, invoke, state };

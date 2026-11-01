@@ -23,10 +23,13 @@ async function fixture(t) {
   });
   let mode = 'passed';
   const fake = await fakeRuntime(t, entry => ({ status: 200, json: entry.command === 'lint' ? fake.lint(entry.request.requestId, ['prompts/place_order.prompt.md', 'prompts/independent.prompt.md'].map(path => ({ path, state: 'approved', admission_state: 'approved', interface: { calls: [] } }))) : fake.check(entry.request?.requestId ?? entry.url.split('/').at(-1), mode) }));
+  const { clock: sharedClock } = portsFor({});
   const invoke = async (words, options = {}) => {
-    const { ports } = portsFor({ HOME: ctx.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: ctx.state });
+    const { ports, clock } = portsFor({ HOME: ctx.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: ctx.state });
+    Object.defineProperty(clock, 'now', { get: () => sharedClock.now, set: value => { sharedClock.now = value; } });
     const before = fake.posts.filter(row => row.command === 'check').length;
     const code = await runCheck({ cwd: ctx.repo, words, options: { '--json': true, ...options }, cache: true }, ports);
+    clock.now += 1;
     return { code, json: ports.stdout.text ? JSON.parse(ports.stdout.text) : null, err: ports.stderr.text, sent: fake.posts.filter(row => row.command === 'check').length - before };
   };
   return { ...ctx, invoke, mode: value => { mode = value; }, failed: join(ctx.repo, '.pdd/cache/test/lastfailed.json') };

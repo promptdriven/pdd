@@ -41,6 +41,7 @@ async function setup(t, edit) {
     p.stdout.text = ''; p.stderr.text = '';
     const before = fake.posts.filter(x => x.command === 'check').length;
     const code = await runCheck({ words, options: { '--json': true, ...options }, cwd: fixture.repo, cache: true }, p);
+    if (p === ports) clock.now += 1;
     return { code, sent: fake.posts.filter(x => x.command === 'check').length - before, json: options['--json'] === false ? null : JSON.parse(p.stdout.text), stderr: p.stderr.text };
   };
   const invoke = (words, options) => invokeWith(ports, words, options);

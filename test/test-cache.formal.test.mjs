@@ -35,6 +35,7 @@ async function fixture(t) {
     if (trouble === 'timeout') ports.sleep = async ms => { clock.now += 120000; };
     const before = fake.posts.filter(row => row.command === 'check').length;
     const code = await runCheck({ cwd: repo, words, options: { '--json': true, ...options }, cache: true }, ports);
+    clock.now += 1; // Separate successive synthetic invocations without changing their sample time.
     return { code, json: ports.stdout.text ? JSON.parse(ports.stdout.text) : null, sent: fake.posts.filter(row => row.command === 'check').length - before };
   };
   return { ...env, fake, invoke, mode: value => { mode = value; }, incomplete: value => { incomplete = value; }, delay: value => { delay = value; } };

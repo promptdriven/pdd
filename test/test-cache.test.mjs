@@ -47,6 +47,7 @@ async function setup(t, edit) {
     ports.stdout.text = ''; ports.stderr.text = '';
     const before = { posts: fake.posts.length, checks: checks(fake).length, requests, gh: clock.gh.length };
     const code = await runCheck({ words, options: { '--json': true, ...options }, cwd, cache: true }, ports);
+    clock.now += 1; // Separate successive synthetic invocations without changing their sample time.
     return { code, json: options['--json'] !== false && ports.stdout.text ? JSON.parse(ports.stdout.text) : null, err: ports.stderr.text,
       sent: checks(fake).length - before.checks, network: requests - before.requests, gh: clock.gh.length - before.gh };
   };
