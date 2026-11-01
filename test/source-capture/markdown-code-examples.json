@@ -223,11 +223,11 @@
       "expected_files": [],
       "expected_refusal": {
         "path": "prompts/views/link.svg",
-        "message": "symbolic link"
+        "message": "link"
       },
       "symlink": {
         "path": "prompts/views/link.svg",
-        "target": "real.svg"
+        "target": "missing-link-target.svg"
       }
     },
     {

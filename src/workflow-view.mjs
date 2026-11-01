@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-view.prompt.md (sha256: ea3d251036d237b1e2869a0ea4039b931800f4b086f685f178db232f628a10ce).
+// Generated from prompts/cli/workflow-view.prompt.md (sha256: 514dc447c291360a90ce4d5bc1396fbaddad90316ec2b03457023065cf4b824e).
 import { execFile } from 'node:child_process';
 import { lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
@@ -6,10 +6,13 @@ import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { resolveRun } from './workflow-runs.mjs';
 import { interfaceBlocks, isSecretPath, proseSha256 } from './runtime-preflight.mjs';
+import { PROMPT_TESTS_WORDS } from './runtime-output.mjs';
 
 const execute = promisify(execFile);
 const text = value => String(value ?? '').replace(/[\x00-\x1f\x7f]/g, ' ').trim();
 const array = value => Array.isArray(value) ? value : [];
+// Prompt tests lines, also the `Runtime check` lines of older summaries; a line ends at a break or a "; " before the next entry.
+const LINE_BREAK = new RegExp(`\\n|;\\s*(?=Report:|Try:|${PROMPT_TESTS_WORDS})`), LINE_START = new RegExp(`^${PROMPT_TESTS_WORDS}`);
 const ended = run => ['completed', 'cancelled'].includes(run.state);
 function localPath(root, path) {
   if (typeof path !== 'string' || !path || isAbsolute(path) || path.includes('\\') || path.split('/').some(p => p === '..' || !p) || /[\x00-\x1f]/.test(path)) return null;
@@ -89,7 +92,7 @@ export async function viewRun({ ref, cwd }, ports = {}) {
   const linkText = [...summaries, ...array(run.links).map(item => typeof item === 'string' ? item : item?.url ?? item?.href ?? '')].join('\n');
   const urls = [...new Set(linkText.match(/https?:\/\/[^\s<>"'`]+/g) ?? [])].map(url => url.replace(/[),.;]+$/, ''));
   const reports = urls.filter(url => /\/r\//.test(url)), tries = urls.filter(url => /\/s\//.test(url));
-  const runtime = summaries.flatMap(summary => summary.split(/\n|;\s*(?=Report:|Try:|Runtime check)/)).filter(line => /^Runtime check/.test(line.trim()));
+  const runtime = summaries.flatMap(summary => summary.split(LINE_BREAK)).filter(line => LINE_START.test(line.trim()));
   const gate = run.gate && (!ended(run) || run.state === 'completed' && run.gate.kind === 'ask-code') ? run.gate : null;
   const pending = gate?.kind === 'ask-code' ? 'Optional code-work authorization: make the code PR, or stop at PR 1.'
     : gate?.kind === 'approve-pr' ? `Approve ${text(gate.area)} after review/Try to open the PR.`

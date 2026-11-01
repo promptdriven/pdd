@@ -1,0 +1,1535 @@
+{
+  "schema_version": "pdd.native-unsent-check-cases.v1",
+  "story_path": "user_stories/product-unsent-checks.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "After four current server Story passes, a later check on the same files that sends none of its checks keeps server 4 of 4 and slice 1 4 of 13; this holds after a lint hold or a stop before sending, including for saved Check batches without an intent label."
+    },
+    {
+      "id": "AC2",
+      "text": "A saved check that was never sent supplies no passing, failing, unknown or stale Story result, even if its saved label says passed or its lint finished; a Story with only unsent checks supplies no result."
+    },
+    {
+      "id": "AC3",
+      "text": "When one Story has two selected tests and only one was sent and passed, the incomplete later check neither establishes a whole-Story pass nor erases an earlier pass. An unsent duplicate of an already sent passing test does not make that Story incomplete or failing, and an unsent check for a different Story does not hide a completed Story."
+    },
+    {
+      "id": "AC4",
+      "text": "A later sent check that fails, is unknown or lacks a valid matching receipt still cannot pass and can replace an earlier pass, including when another selected test for that Story was never sent."
+    },
+    {
+      "id": "AC5",
+      "text": "Source matching uses every originally selected test, including unsent tests; reading this progress makes no Runtime request, authenticates no Runtime user, changes no saved check and starts no workflow."
+    }
+  ],
+  "synthetic": true,
+  "execution": "Native-only expected cases. No Runtime interface is added. Expected values come from the reviewed Source policy, not execution output.",
+  "boundaries": {
+    "reader": "src/runtime-client.mjs#savedStoryEvidence/createSavedStoryEvidenceReader",
+    "product": "src/product.mjs#productStatus/productNext"
+  },
+  "default_input": {
+    "root": "/project"
+  },
+  "default_capture_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "canonical_full_record": {
+    "version": 1,
+    "batch": "20261030-120000-abcd",
+    "root": "/project",
+    "intent": "check",
+    "created_at": "1970-01-01T00:00:01.000Z",
+    "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "rows": [
+      {
+        "story": "user_stories/server/S01-one.md",
+        "test": "test/runtime/one.json",
+        "request_ids": [
+          "11111111-1111-4111-8111-111111111111"
+        ],
+        "state": "passed",
+        "ended_at": 2000,
+        "max_calls": 18,
+        "criteria_total": 1,
+        "criterion_texts": {
+          "AC1": "Synthetic complete criterion."
+        },
+        "steps": [
+          {
+            "step_id": "synthetic-check",
+            "entry_path": "prompts/server.prompt.md",
+            "operation": "check_order",
+            "checks": [
+              {
+                "criterion_id": "AC1",
+                "target": "result",
+                "path": "/ok",
+                "op": "equals",
+                "value": true
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "receipts": {
+    "11111111-1111-4111-8111-111111111111": {
+      "requestId": "11111111-1111-4111-8111-111111111111",
+      "id": "11111111-1111-4111-8111-111111111111",
+      "command": "check",
+      "state": "passed",
+      "usage": {
+        "calls": 1
+      },
+      "result": {
+        "report": {
+          "criterion_results": [
+            {
+              "criterion_id": "AC1",
+              "status": "passed"
+            }
+          ],
+          "samples": [
+            {
+              "sample": 1,
+              "steps": [
+                {
+                  "step_id": "synthetic-check",
+                  "result": {
+                    "ok": true
+                  },
+                  "checks": [
+                    {
+                      "criterion_id": "AC1",
+                      "target": "result",
+                      "path": "/ok",
+                      "op": "equals",
+                      "expected": true,
+                      "actual": true,
+                      "passed": true
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  },
+  "fixture_rules": [
+    "Start each independent case from fresh copies of canonical_full_record and receipts. Unless stated otherwise, input root and capture SHA use the defaults; source hashes match and comparisonRoot is root.",
+    "For each batch specification, copy the canonical batch, assign a distinct valid batch directory/name and its specified created_at. Each row specification replaces the canonical rows; copy canonical row metadata, keeping complete authored steps, operations, max_calls and criterion information. Story/test overrides are exact repository-relative paths.",
+    "A sent row receives a distinct valid Check UUID in request_ids and a complete matching-ID receipt. passed keeps all canonical criterion/check passes; failed uses state failed with all criterion results failed and checks passed false; unknown uses state unknown. Set the actual row.ended_at exactly to its authored sent_at numeric epoch milliseconds, overriding the copied canonical ended_at:2000; expected at fields come from these authored records, never from Code output. Set the batch lint request ID to a distinct UUID, never a Check ID.",
+    "An unsent row has request_ids:[], no Check receipt referenced by the row and ended_at omitted unless specified. It otherwise keeps complete canonical Check-row metadata; state/phase/note are local display fields only. The unsent batch may have a matching lint receipt, which supplies no Check evidence.",
+    "A row with test two.json and the same Story as one.json is a distinct selected test for that Story, not a second Story. Unsent duplicate rows reuse exactly the same Story/test identity. Original source selection is the sorted unique union of every row test in that batch, before removing unsent rows.",
+    "intent_variants means run each case separately with explicit intent check and with intent absent. The absent-intent variant retains validSavedCheck metadata in every row. Do not infer or alter the shared legacy predicate.",
+    "expected.summaries gives exact exposed saved Story rows, independent of ordering. result is the existing checkmark for pass and no verdict for false. The case does not permit an additional false/current or false/stale summary for omitted unsent or incomplete all-passing Stories.",
+    "expected.capture_test_sets gives the original sets for any source captures required by evidence in the case; appMap is null. Verify full set identity, without requiring an unnecessary number of captures. Cache lifetime and key semantics stay covered by the unchanged followup fixture.",
+    "Every read uses injected local filesystem/capture ports and spies on forbidden effects. No live service, sign-in, execution of a model or expected-value harvesting is permitted. All product reads retain their default saved-evidence reader and snapshot saved Runtime state before/after the read."
+  ],
+  "cases": [
+    {
+      "case": "earlier-pass-newer-all-unsent",
+      "criteria": [
+        "AC1",
+        "AC2",
+        "AC5"
+      ],
+      "intent_variants": [
+        "check",
+        "absent"
+      ],
+      "batches": [
+        {
+          "created_at": "1970-01-01T00:00:01.000Z",
+          "rows": [
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "passed",
+              "sent_at": 2000
+            }
+          ]
+        },
+        {
+          "created_at": "1970-01-01T00:00:05.000Z",
+          "rows": [
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "unsent",
+              "state": "not_run"
+            }
+          ],
+          "lint": {
+            "state": "passed",
+            "ended_at": 6000
+          }
+        }
+      ],
+      "expected": {
+        "summaries": [
+          {
+            "story": "user_stories/server/S01-one.md",
+            "pass": true,
+            "current": true,
+            "result": "✓",
+            "at": 2000
+          }
+        ],
+        "capture_test_sets": [
+          [
+            "test/runtime/one.json"
+          ]
+        ]
+      }
+    },
+    {
+      "case": "unsent-local-labels-never-become-evidence",
+      "criteria": [
+        "AC2",
+        "AC5"
+      ],
+      "intent_variants": [
+        "check",
+        "absent"
+      ],
+      "batches": [
+        {
+          "created_at": "1970-01-01T00:00:05.000Z",
+          "rows": [
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "unsent",
+              "state": "not_run"
+            }
+          ],
+          "lint": {
+            "state": "passed",
+            "ended_at": 6000
+          }
+        }
+      ],
+      "expected": {
+        "summaries": []
+      },
+      "unsent_state_variants": [
+        "not_run",
+        "passed",
+        "failed",
+        "unknown",
+        "queued",
+        "running"
+      ],
+      "lint_state_variants": [
+        "passed",
+        "refused",
+        "unknown",
+        "running"
+      ]
+    },
+    {
+      "case": "lint-id-and-unreferenced-check-receipt-do-not-establish-check-attempt",
+      "criteria": [
+        "AC2",
+        "AC5"
+      ],
+      "intent_variants": [
+        "check",
+        "absent"
+      ],
+      "batches": [
+        {
+          "created_at": "1970-01-01T00:00:05.000Z",
+          "rows": [
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "unsent",
+              "state": "passed",
+              "ended_at": 6000
+            }
+          ],
+          "lint": {
+            "state": "passed",
+            "ended_at": 6000
+          }
+        }
+      ],
+      "expected": {
+        "summaries": []
+      },
+      "unreferenced_receipt": "Retain the complete canonical passing receipt on disk, and put its UUID in lint.request_ids only; row.request_ids remains empty."
+    },
+    {
+      "case": "mixed-stories-sent-pass-and-unsent-story",
+      "criteria": [
+        "AC2",
+        "AC3",
+        "AC5"
+      ],
+      "intent_variants": [
+        "check",
+        "absent"
+      ],
+      "batches": [
+        {
+          "created_at": "1970-01-01T00:00:03.000Z",
+          "rows": [
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "passed",
+              "sent_at": 4000
+            },
+            {
+              "story": "user_stories/server/S02-two.md",
+              "test": "test/runtime/two.json",
+              "attempt": "unsent",
+              "state": "not_run"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "summaries": [
+          {
+            "story": "user_stories/server/S01-one.md",
+            "pass": true,
+            "current": true,
+            "result": "✓",
+            "at": 4000
+          }
+        ],
+        "capture_test_sets": [
+          [
+            "test/runtime/one.json",
+            "test/runtime/two.json"
+          ]
+        ]
+      }
+    },
+    {
+      "case": "same-story-partial-passing-coverage-no-old-pass",
+      "criteria": [
+        "AC3",
+        "AC5"
+      ],
+      "intent_variants": [
+        "check",
+        "absent"
+      ],
+      "batches": [
+        {
+          "created_at": "1970-01-01T00:00:03.000Z",
+          "rows": [
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "passed",
+              "sent_at": 4000
+            },
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/two.json",
+              "attempt": "unsent",
+              "state": "not_run"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "summaries": [],
+        "capture_test_sets": [
+          [
+            "test/runtime/one.json",
+            "test/runtime/two.json"
+          ]
+        ]
+      }
+    },
+    {
+      "case": "same-story-partial-passing-coverage-preserves-old-pass",
+      "criteria": [
+        "AC3",
+        "AC5"
+      ],
+      "intent_variants": [
+        "check",
+        "absent"
+      ],
+      "batches": [
+        {
+          "created_at": "1970-01-01T00:00:01.000Z",
+          "rows": [
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "passed",
+              "sent_at": 2000
+            },
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/two.json",
+              "attempt": "passed",
+              "sent_at": 2000
+            }
+          ]
+        },
+        {
+          "created_at": "1970-01-01T00:00:03.000Z",
+          "rows": [
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "passed",
+              "sent_at": 4000
+            },
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/two.json",
+              "attempt": "unsent",
+              "state": "not_run"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "summaries": [
+          {
+            "story": "user_stories/server/S01-one.md",
+            "pass": true,
+            "current": true,
+            "result": "✓",
+            "at": 2000
+          }
+        ],
+        "capture_test_sets": [
+          [
+            "test/runtime/one.json",
+            "test/runtime/two.json"
+          ]
+        ]
+      }
+    },
+    {
+      "case": "unsent-duplicate-does-not-create-failure-or-change-result-time",
+      "criteria": [
+        "AC3",
+        "AC5"
+      ],
+      "intent_variants": [
+        "check",
+        "absent"
+      ],
+      "batches": [
+        {
+          "created_at": "1970-01-01T00:00:03.000Z",
+          "rows": [
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "passed",
+              "sent_at": 4000
+            },
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "unsent",
+              "state": "not_run",
+              "ended_at": 9000
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "summaries": [
+          {
+            "story": "user_stories/server/S01-one.md",
+            "pass": true,
+            "current": true,
+            "result": "✓",
+            "at": 4000
+          }
+        ],
+        "capture_test_sets": [
+          [
+            "test/runtime/one.json"
+          ]
+        ]
+      },
+      "row_order_variants": [
+        "sent-first",
+        "unsent-first"
+      ]
+    },
+    {
+      "case": "all-selected-tests-sent-and-passed-with-unsent-duplicate",
+      "criteria": [
+        "AC3",
+        "AC5"
+      ],
+      "intent_variants": [
+        "check",
+        "absent"
+      ],
+      "batches": [
+        {
+          "created_at": "1970-01-01T00:00:03.000Z",
+          "rows": [
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "passed",
+              "sent_at": 4000
+            },
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/two.json",
+              "attempt": "passed",
+              "sent_at": 4000
+            },
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/two.json",
+              "attempt": "unsent",
+              "state": "not_run",
+              "ended_at": 9000
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "summaries": [
+          {
+            "story": "user_stories/server/S01-one.md",
+            "pass": true,
+            "current": true,
+            "result": "✓",
+            "at": 4000
+          }
+        ],
+        "capture_test_sets": [
+          [
+            "test/runtime/one.json",
+            "test/runtime/two.json"
+          ]
+        ]
+      }
+    },
+    {
+      "case": "posted-failed-still-overrides-old-pass",
+      "criteria": [
+        "AC4",
+        "AC5"
+      ],
+      "intent_variants": [
+        "check",
+        "absent"
+      ],
+      "batches": [
+        {
+          "created_at": "1970-01-01T00:00:01.000Z",
+          "rows": [
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "passed",
+              "sent_at": 2000
+            }
+          ]
+        },
+        {
+          "created_at": "1970-01-01T00:00:03.000Z",
+          "rows": [
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "failed",
+              "sent_at": 4000
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "summaries": [
+          {
+            "story": "user_stories/server/S01-one.md",
+            "pass": true,
+            "current": true,
+            "result": "✓",
+            "at": 2000
+          },
+          {
+            "story": "user_stories/server/S01-one.md",
+            "pass": false,
+            "current": true,
+            "result": "no verdict",
+            "at": 4000
+          }
+        ],
+        "capture_test_sets": [
+          [
+            "test/runtime/one.json"
+          ]
+        ]
+      }
+    },
+    {
+      "case": "posted-failed-with-unsent-case-still-overrides-old-pass",
+      "criteria": [
+        "AC3",
+        "AC4",
+        "AC5"
+      ],
+      "intent_variants": [
+        "check",
+        "absent"
+      ],
+      "batches": [
+        {
+          "created_at": "1970-01-01T00:00:01.000Z",
+          "rows": [
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "passed",
+              "sent_at": 2000
+            },
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/two.json",
+              "attempt": "passed",
+              "sent_at": 2000
+            }
+          ]
+        },
+        {
+          "created_at": "1970-01-01T00:00:03.000Z",
+          "rows": [
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "failed",
+              "sent_at": 4000
+            },
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/two.json",
+              "attempt": "unsent",
+              "state": "not_run",
+              "ended_at": 9000
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "summaries": [
+          {
+            "story": "user_stories/server/S01-one.md",
+            "pass": true,
+            "current": true,
+            "result": "✓",
+            "at": 2000
+          },
+          {
+            "story": "user_stories/server/S01-one.md",
+            "pass": false,
+            "current": true,
+            "result": "no verdict",
+            "at": 4000
+          }
+        ],
+        "capture_test_sets": [
+          [
+            "test/runtime/one.json",
+            "test/runtime/two.json"
+          ]
+        ]
+      }
+    },
+    {
+      "case": "posted-unknown-still-overrides-old-pass",
+      "criteria": [
+        "AC4",
+        "AC5"
+      ],
+      "intent_variants": [
+        "check",
+        "absent"
+      ],
+      "batches": [
+        {
+          "created_at": "1970-01-01T00:00:01.000Z",
+          "rows": [
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "passed",
+              "sent_at": 2000
+            }
+          ]
+        },
+        {
+          "created_at": "1970-01-01T00:00:03.000Z",
+          "rows": [
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "unknown",
+              "sent_at": 4000
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "summaries": [
+          {
+            "story": "user_stories/server/S01-one.md",
+            "pass": true,
+            "current": true,
+            "result": "✓",
+            "at": 2000
+          },
+          {
+            "story": "user_stories/server/S01-one.md",
+            "pass": false,
+            "current": true,
+            "result": "no verdict",
+            "at": 4000
+          }
+        ],
+        "capture_test_sets": [
+          [
+            "test/runtime/one.json"
+          ]
+        ]
+      }
+    },
+    {
+      "case": "posted-unknown-with-unsent-case-still-overrides-old-pass",
+      "criteria": [
+        "AC3",
+        "AC4",
+        "AC5"
+      ],
+      "intent_variants": [
+        "check",
+        "absent"
+      ],
+      "batches": [
+        {
+          "created_at": "1970-01-01T00:00:01.000Z",
+          "rows": [
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "passed",
+              "sent_at": 2000
+            },
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/two.json",
+              "attempt": "passed",
+              "sent_at": 2000
+            }
+          ]
+        },
+        {
+          "created_at": "1970-01-01T00:00:03.000Z",
+          "rows": [
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "unknown",
+              "sent_at": 4000
+            },
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/two.json",
+              "attempt": "unsent",
+              "state": "not_run",
+              "ended_at": 9000
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "summaries": [
+          {
+            "story": "user_stories/server/S01-one.md",
+            "pass": true,
+            "current": true,
+            "result": "✓",
+            "at": 2000
+          },
+          {
+            "story": "user_stories/server/S01-one.md",
+            "pass": false,
+            "current": true,
+            "result": "no verdict",
+            "at": 4000
+          }
+        ],
+        "capture_test_sets": [
+          [
+            "test/runtime/one.json",
+            "test/runtime/two.json"
+          ]
+        ]
+      }
+    },
+    {
+      "case": "nonempty-request-list-missing-receipt-retains-negative-evidence",
+      "criteria": [
+        "AC4",
+        "AC5"
+      ],
+      "intent_variants": [
+        "check",
+        "absent"
+      ],
+      "batches": [
+        {
+          "created_at": "1970-01-01T00:00:01.000Z",
+          "rows": [
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "passed",
+              "sent_at": 2000
+            }
+          ]
+        },
+        {
+          "created_at": "1970-01-01T00:00:03.000Z",
+          "rows": [
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "passed",
+              "sent_at": 4000,
+              "receipt_defect": "missing-receipt"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "summaries": [
+          {
+            "story": "user_stories/server/S01-one.md",
+            "pass": true,
+            "current": true,
+            "result": "✓",
+            "at": 2000
+          },
+          {
+            "story": "user_stories/server/S01-one.md",
+            "pass": false,
+            "current": true,
+            "result": "no verdict",
+            "at": 4000
+          }
+        ],
+        "capture_test_sets": [
+          [
+            "test/runtime/one.json"
+          ]
+        ]
+      },
+      "receipt_defect_rules": "Remove the latest ID receipt file; keep request_ids nonempty."
+    },
+    {
+      "case": "nonempty-request-list-wrong-requestId-retains-negative-evidence",
+      "criteria": [
+        "AC4",
+        "AC5"
+      ],
+      "intent_variants": [
+        "check",
+        "absent"
+      ],
+      "batches": [
+        {
+          "created_at": "1970-01-01T00:00:01.000Z",
+          "rows": [
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "passed",
+              "sent_at": 2000
+            }
+          ]
+        },
+        {
+          "created_at": "1970-01-01T00:00:03.000Z",
+          "rows": [
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "passed",
+              "sent_at": 4000,
+              "receipt_defect": "wrong-requestId"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "summaries": [
+          {
+            "story": "user_stories/server/S01-one.md",
+            "pass": true,
+            "current": true,
+            "result": "✓",
+            "at": 2000
+          },
+          {
+            "story": "user_stories/server/S01-one.md",
+            "pass": false,
+            "current": true,
+            "result": "no verdict",
+            "at": 4000
+          }
+        ],
+        "capture_test_sets": [
+          [
+            "test/runtime/one.json"
+          ]
+        ]
+      },
+      "receipt_defect_rules": "Replace only receipt.requestId with another valid UUID; retain its file name and id."
+    },
+    {
+      "case": "nonempty-request-list-wrong-id-retains-negative-evidence",
+      "criteria": [
+        "AC4",
+        "AC5"
+      ],
+      "intent_variants": [
+        "check",
+        "absent"
+      ],
+      "batches": [
+        {
+          "created_at": "1970-01-01T00:00:01.000Z",
+          "rows": [
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "passed",
+              "sent_at": 2000
+            }
+          ]
+        },
+        {
+          "created_at": "1970-01-01T00:00:03.000Z",
+          "rows": [
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "passed",
+              "sent_at": 4000,
+              "receipt_defect": "wrong-id"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "summaries": [
+          {
+            "story": "user_stories/server/S01-one.md",
+            "pass": true,
+            "current": true,
+            "result": "✓",
+            "at": 2000
+          },
+          {
+            "story": "user_stories/server/S01-one.md",
+            "pass": false,
+            "current": true,
+            "result": "no verdict",
+            "at": 4000
+          }
+        ],
+        "capture_test_sets": [
+          [
+            "test/runtime/one.json"
+          ]
+        ]
+      },
+      "receipt_defect_rules": "Replace only receipt.id with another valid UUID; retain its file name and requestId."
+    },
+    {
+      "case": "nonempty-request-list-wrong-command-retains-negative-evidence",
+      "criteria": [
+        "AC4",
+        "AC5"
+      ],
+      "intent_variants": [
+        "check",
+        "absent"
+      ],
+      "batches": [
+        {
+          "created_at": "1970-01-01T00:00:01.000Z",
+          "rows": [
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "passed",
+              "sent_at": 2000
+            }
+          ]
+        },
+        {
+          "created_at": "1970-01-01T00:00:03.000Z",
+          "rows": [
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "passed",
+              "sent_at": 4000,
+              "receipt_defect": "wrong-command"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "summaries": [
+          {
+            "story": "user_stories/server/S01-one.md",
+            "pass": true,
+            "current": true,
+            "result": "✓",
+            "at": 2000
+          },
+          {
+            "story": "user_stories/server/S01-one.md",
+            "pass": false,
+            "current": true,
+            "result": "no verdict",
+            "at": 4000
+          }
+        ],
+        "capture_test_sets": [
+          [
+            "test/runtime/one.json"
+          ]
+        ]
+      },
+      "receipt_defect_rules": "Replace receipt.command with try."
+    },
+    {
+      "case": "nonempty-request-list-refused-receipt-retains-negative-evidence",
+      "criteria": [
+        "AC4",
+        "AC5"
+      ],
+      "intent_variants": [
+        "check",
+        "absent"
+      ],
+      "batches": [
+        {
+          "created_at": "1970-01-01T00:00:01.000Z",
+          "rows": [
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "passed",
+              "sent_at": 2000
+            }
+          ]
+        },
+        {
+          "created_at": "1970-01-01T00:00:03.000Z",
+          "rows": [
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "passed",
+              "sent_at": 4000,
+              "receipt_defect": "refused-receipt"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "summaries": [
+          {
+            "story": "user_stories/server/S01-one.md",
+            "pass": true,
+            "current": true,
+            "result": "✓",
+            "at": 2000
+          },
+          {
+            "story": "user_stories/server/S01-one.md",
+            "pass": false,
+            "current": true,
+            "result": "no verdict",
+            "at": 4000
+          }
+        ],
+        "capture_test_sets": [
+          [
+            "test/runtime/one.json"
+          ]
+        ]
+      },
+      "receipt_defect_rules": "Set receipt.state refused."
+    },
+    {
+      "case": "nonempty-request-list-incomplete-criteria-retains-negative-evidence",
+      "criteria": [
+        "AC4",
+        "AC5"
+      ],
+      "intent_variants": [
+        "check"
+      ],
+      "batches": [
+        {
+          "created_at": "1970-01-01T00:00:01.000Z",
+          "rows": [
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "passed",
+              "sent_at": 2000
+            }
+          ]
+        },
+        {
+          "created_at": "1970-01-01T00:00:03.000Z",
+          "rows": [
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "passed",
+              "sent_at": 4000,
+              "receipt_defect": "incomplete-criteria"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "summaries": [
+          {
+            "story": "user_stories/server/S01-one.md",
+            "pass": true,
+            "current": true,
+            "result": "✓",
+            "at": 2000
+          },
+          {
+            "story": "user_stories/server/S01-one.md",
+            "pass": false,
+            "current": true,
+            "result": "no verdict",
+            "at": 4000
+          }
+        ],
+        "capture_test_sets": [
+          [
+            "test/runtime/one.json"
+          ]
+        ]
+      },
+      "receipt_defect_rules": "Set report.criterion_results to [] while retaining a passed state and all selected check results."
+    },
+    {
+      "case": "nonempty-request-list-failed-selected-check-retains-negative-evidence",
+      "criteria": [
+        "AC4",
+        "AC5"
+      ],
+      "intent_variants": [
+        "check",
+        "absent"
+      ],
+      "batches": [
+        {
+          "created_at": "1970-01-01T00:00:01.000Z",
+          "rows": [
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "passed",
+              "sent_at": 2000
+            }
+          ]
+        },
+        {
+          "created_at": "1970-01-01T00:00:03.000Z",
+          "rows": [
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "passed",
+              "sent_at": 4000,
+              "receipt_defect": "failed-selected-check"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "summaries": [
+          {
+            "story": "user_stories/server/S01-one.md",
+            "pass": true,
+            "current": true,
+            "result": "✓",
+            "at": 2000
+          },
+          {
+            "story": "user_stories/server/S01-one.md",
+            "pass": false,
+            "current": true,
+            "result": "no verdict",
+            "at": 4000
+          }
+        ],
+        "capture_test_sets": [
+          [
+            "test/runtime/one.json"
+          ]
+        ]
+      },
+      "receipt_defect_rules": "Retain the passed receipt/criterion label but set the selected check passed to false."
+    },
+    {
+      "case": "latest-nonempty-attempt-does-not-fall-back-to-old-receipt",
+      "criteria": [
+        "AC4",
+        "AC5"
+      ],
+      "intent_variants": [
+        "check",
+        "absent"
+      ],
+      "batches": [
+        {
+          "created_at": "1970-01-01T00:00:01.000Z",
+          "rows": [
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "passed",
+              "sent_at": 2000
+            }
+          ]
+        },
+        {
+          "created_at": "1970-01-01T00:00:03.000Z",
+          "rows": [
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "unknown",
+              "sent_at": 4000,
+              "prior_passing_attempt": true
+            },
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "unsent",
+              "state": "not_run",
+              "ended_at": 9000
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "summaries": [
+          {
+            "story": "user_stories/server/S01-one.md",
+            "pass": true,
+            "current": true,
+            "result": "✓",
+            "at": 2000
+          },
+          {
+            "story": "user_stories/server/S01-one.md",
+            "pass": false,
+            "current": true,
+            "result": "no verdict",
+            "at": 4000
+          }
+        ],
+        "capture_test_sets": [
+          [
+            "test/runtime/one.json"
+          ]
+        ]
+      },
+      "attempt_rule": "The sent row request_ids has two distinct UUIDs: first a complete passed receipt, then an unknown receipt. Keep both receipts and use the latest nonempty Check attempt as before."
+    },
+    {
+      "case": "original-source-union-includes-unsent-other-story",
+      "criteria": [
+        "AC3",
+        "AC5"
+      ],
+      "intent_variants": [
+        "check",
+        "absent"
+      ],
+      "batches": [
+        {
+          "created_at": "1970-01-01T00:00:03.000Z",
+          "rows": [
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "passed",
+              "sent_at": 4000
+            },
+            {
+              "story": "user_stories/server/S02-two.md",
+              "test": "test/runtime/two.json",
+              "attempt": "unsent",
+              "state": "not_run"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "summaries": [
+          {
+            "story": "user_stories/server/S01-one.md",
+            "pass": true,
+            "current": true,
+            "result": "✓",
+            "at": 4000
+          }
+        ],
+        "capture_test_sets": [
+          [
+            "test/runtime/one.json",
+            "test/runtime/two.json"
+          ]
+        ]
+      },
+      "capture_rule": "The injected capture returns the saved SHA only for tests [one.json,two.json], never for [one.json]. Require the original union so the sent Story stays current."
+    },
+    {
+      "case": "original-source-union-includes-unsent-same-story-with-posted-failure",
+      "criteria": [
+        "AC4",
+        "AC5"
+      ],
+      "intent_variants": [
+        "check",
+        "absent"
+      ],
+      "batches": [
+        {
+          "created_at": "1970-01-01T00:00:03.000Z",
+          "rows": [
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "failed",
+              "sent_at": 4000
+            },
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/two.json",
+              "attempt": "unsent",
+              "state": "not_run"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "summaries": [
+          {
+            "story": "user_stories/server/S01-one.md",
+            "pass": false,
+            "current": true,
+            "result": "no verdict",
+            "at": 4000
+          }
+        ],
+        "capture_test_sets": [
+          [
+            "test/runtime/one.json",
+            "test/runtime/two.json"
+          ]
+        ]
+      },
+      "capture_rule": "The injected capture returns the saved SHA only for the full original union. The current negative summary must not become stale because a sent-only capture was used."
+    },
+    {
+      "case": "all-unsent-later-source-label-cannot-supply-stale-evidence",
+      "criteria": [
+        "AC2",
+        "AC5"
+      ],
+      "intent_variants": [
+        "check",
+        "absent"
+      ],
+      "batches": [
+        {
+          "created_at": "1970-01-01T00:00:01.000Z",
+          "rows": [
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "passed",
+              "sent_at": 2000
+            }
+          ]
+        },
+        {
+          "created_at": "1970-01-01T00:00:05.000Z",
+          "rows": [
+            {
+              "story": "user_stories/server/S01-one.md",
+              "test": "test/runtime/one.json",
+              "attempt": "unsent",
+              "state": "not_run"
+            }
+          ],
+          "source_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      ],
+      "expected": {
+        "summaries": [
+          {
+            "story": "user_stories/server/S01-one.md",
+            "pass": true,
+            "current": true,
+            "result": "✓",
+            "at": 2000
+          }
+        ],
+        "capture_test_sets": [
+          [
+            "test/runtime/one.json"
+          ]
+        ]
+      }
+    }
+  ],
+  "integration_cases": [
+    {
+      "case": "authentic-four-passes-then-four-unsent-default-product-read",
+      "criteria": [
+        "AC1",
+        "AC2",
+        "AC5"
+      ],
+      "setup": {
+        "boundary": "src/runtime-client.mjs#runCheck",
+        "seed": "test/fixtures/harbor/tests/place-order.json",
+        "product": "Use the existing synthetic coffee product map/plan in test/runtime/product-saved-checks.json; create S01, S02, S03, S04 copies of the Harbor Story/scenario, preserving complete authored criteria/steps and exact original test selection.",
+        "first_check": "Use injected deterministic passing lint and complete matching-ID check receipts to produce four genuine current saved passes through runCheck, with no external Runtime.",
+        "second_check": "On the same files and exact four tests, use runCheck with injected lint hold or an interrupt after lint but before the first check dispatch. Require every row request_ids to be empty and no Check POST. Retain the original captured source SHA, complete row metadata and lint receipt.",
+        "clock": "Use distinct deterministic command times so the unsent producer batch is later than the first batch.",
+        "conversion": "Run independently with the produced intent check intact, and with only intent removed from both batches. Do not repair row metadata or synthesize Check receipts for the unsent batch."
+      },
+      "stop_variants": [
+        "lint hold with no Check dispatch",
+        "interruption before first Check POST"
+      ],
+      "independent_operations": [
+        "productStatus",
+        "productNext"
+      ],
+      "default_saved_reader": true,
+      "expected": {
+        "server": {
+          "total": 4,
+          "pass": 4,
+          "stale": 0,
+          "notRun": 0
+        },
+        "slice": {
+          "total": 13,
+          "pass": 4,
+          "stale": 0,
+          "notRun": 9
+        },
+        "runState": "running (step: prompt-story)",
+        "journeyReady": false,
+        "legacy_hints": 0,
+        "saved_check_state_changed": false,
+        "runtime_requests_during_read": 0,
+        "runtime_auth_during_read": 0,
+        "workflow_dispatches_during_read": 0
+      }
+    },
+    {
+      "case": "partial-story-sent-pass-with-unsent-case-default-product-read",
+      "criteria": [
+        "AC3",
+        "AC5"
+      ],
+      "setup": "In the same synthetic product, give S01 two distinct valid selected tests; latest eligible Check batch contains one sent complete pass and one unsent test for S01, with complete source identity. Use deterministic native fixture records, injected local capture ports, and the default product saved-evidence reader. No workflow evidence supplies a Story result.",
+      "independent_variants": [
+        {
+          "prior_batch": "none",
+          "expected": {
+            "serverPass": 0,
+            "serverStale": 0,
+            "serverNotRun": 4
+          }
+        },
+        {
+          "prior_batch": "Older same-source complete pass for both selected S01 tests.",
+          "expected": {
+            "serverPass": 1,
+            "serverStale": 0,
+            "serverNotRun": 3
+          }
+        }
+      ],
+      "operation": "productStatus",
+      "default_saved_reader": true
+    },
+    {
+      "case": "partial-story-posted-negative-still-replaces-old-pass-default-product-read",
+      "criteria": [
+        "AC4",
+        "AC5"
+      ],
+      "setup": "Use the preceding two-test S01 setup with an older complete current pass, but give the latest batch a genuinely sent failed or unknown S01 test and one unsent S01 test.",
+      "sent_state_variants": [
+        "failed",
+        "unknown"
+      ],
+      "operation": "productStatus",
+      "default_saved_reader": true,
+      "expected": {
+        "serverPass": 0,
+        "serverStale": 0,
+        "serverNotRun": 4
+      }
+    }
+  ],
+  "forbidden_reader_effects": [
+    "fetch",
+    "gh",
+    "writeFile",
+    "mkdir",
+    "workflow.start"
+  ],
+  "forbidden_during_product_read": [
+    "Runtime network",
+    "Runtime authentication",
+    "saved-check-state writes",
+    "saved-check-state directory creation",
+    "workflow.start"
+  ],
+  "permitted_existing_product_effects": [
+    "GitHub metadata reads",
+    "existing product issue-link cache operations"
+  ],
+  "nonempty_receipt_projection_scope": "The incomplete-criteria case retains explicit check intent only: legacy incomplete coverage keeps its established hint. Wrong-ID/command, unknown, failed and missing receipts retain prior rules in both intent variants."
+}

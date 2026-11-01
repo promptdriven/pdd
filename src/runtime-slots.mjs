@@ -1,9 +1,10 @@
-// Generated from prompts/cli/runtime-slots.prompt.md (sha256: a13959dae5f89dabca06790385d467f01f1560a3eebc206d46e89e6d947e0f9b).
+// Generated from prompts/cli/runtime-slots.prompt.md (sha256: ca74ebad559b49921c39c76d4168e51b4ca7e686c1c87c4daadac5b82b7fed4b).
 import { chmodSync, closeSync, lstatSync, mkdirSync, linkSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync, fsyncSync, utimesSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { runtimeOrigin } from './runtime-client.mjs';
+import { NAMES } from './command-catalog.mjs';
 
 const HEARTBEAT_MS = 5000, EXPIRED_MS = 60_000, LEASE_MS = 1_800_000, PROBE_MS = 15_000;
 const unavailable = error => Object.assign(new Error(`Local interpreter state unavailable: ${String(error?.message ?? error).split('\n')[0]}`), { code: 'local-state-unavailable' });
@@ -374,12 +375,14 @@ export async function listRuntimeJobs(options, ports = {}) {
   const jobs = await rows(ports.files ?? nativeFiles, directoryFor(options));
   return { jobs: [...jobs].sort((a, b) => (a.state === 'active' ? 0 : 1) - (b.state === 'active' ? 0 : 1) || order(a, b)) };
 }
+// The saved kind stays `check`, `lint` or `try` (older pdd versions read and write these records); only the printed word is the command name.
+const KIND_WORDS = Object.freeze({ check: NAMES.test, lint: NAMES.lint, try: NAMES.simulate });
 export async function runJobs({ env = process.env } = {}, { stdout = process.stdout, stderr = process.stderr, files, now = Date.now } = {}) {
   try {
     const stateDir = resolve(env.PDD_STATE_DIR || join(env.HOME || homedir(), '.pdd', 'runtime'));
     const { jobs } = await listRuntimeJobs({ stateDir, origin: runtimeOrigin(env) }, { files });
     if (!jobs.length) stdout.write('No local interpreter jobs.\n');
-    for (const row of jobs) stdout.write(`${row.state} ${row.kind} · PID ${row.pid} · ${Math.max(0, Math.floor((now() - row.started_at) / 1000))} s · ${row.id} · ${row.request_ids.join(', ') || 'no request yet'}\n`);
+    for (const row of jobs) stdout.write(`${row.state} ${KIND_WORDS[row.kind] ?? row.kind} · PID ${row.pid} · ${Math.max(0, Math.floor((now() - row.started_at) / 1000))} s · ${row.id} · ${row.request_ids.join(', ') || 'no request yet'}\n`);
     return 0;
   } catch (error) { stderr.write(`${String(error.message).split('\n')[0]}\n`); return 5; }
 }

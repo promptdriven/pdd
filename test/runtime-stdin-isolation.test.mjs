@@ -68,14 +68,14 @@ console.log(process.argv[2] === 'auth' ? ${JSON.stringify(TOKEN)} : 'octo 4242')
   const helpers = () => { try { return readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map(Number); } catch { return []; } };
   try {
     const socket = await socketInput(t);
-    const child = spawn(process.execPath, [process.env.PDD_STDIN_TEST_CLI || join(root, 'bin/pdd.mjs'), 'check', 'place-order', ...(lint ? ['--lint'] : ['--timeout', '10'])], {
+    const child = spawn(process.execPath, [process.env.PDD_STDIN_TEST_CLI || join(root, 'bin/pdd.mjs'), 'test', 'place-order', ...(lint ? ['--lint'] : ['--timeout', '10'])], {
       cwd: repo, env: { ...process.env, HOME: home, PDD_STATE_DIR: state, PDD_RUNTIME_URL: fake.origin, PATH: `${bin}:${process.env.PATH}` },
       stdio: [socket.input, 'pipe', 'pipe'],
     });
     t.after(() => { if (child.exitCode === null) child.kill('SIGKILL'); });
     const result = await finish(child);
     assert.equal(result.signal, null); assert.equal(result.code, 0, result.err);
-    assert.match(result.out, lint ? /Lint: 1 of 1 tests pass/ : /Runtime check \(place-order\): ✓ 1 of 1 criterion/);
+    assert.match(result.out, lint ? /Lint: 1 of 1 tests pass/ : /Prompt tests \(place-order\): ✓ 1 of 1 criterion/);
     assert.ok(helpers().length, 'native git boundary started a surviving helper');
     for (const pid of helpers()) process.kill(pid, 0);
     await socket.close();
