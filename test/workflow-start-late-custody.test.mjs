@@ -33,15 +33,16 @@ for (const lost of [false, true]) test(`2627 late dispatched startup ${lost ? 'l
     assert.ok(expected.done.scope);
     assert.ok(expected.approvalRecord);
     assert.equal(expected.decisions.length, 1);
-    assert.equal(expected.chats.length, 1);
-    assert.equal(expected.chats[0].area, 'build');
+    // The starting plan chat is saved before its launch, so the record already holds it next to the new build chat.
+    assert.equal(expected.chats.length, 2);
+    assert.equal(expected.chats.filter(chat => chat.area === 'build').length, 1);
   } finally { release(); }
   assert.equal((await starting).exitCode, lost ? 1 : 0);
   const saved = f.record();
   const historical = saved.chats.find(chat => chat.area === 'plan' && chat.paneId === originalPane);
   assert.ok(historical, 'A dispatched initial chat must retain its owned identity after concurrent area advancement');
   assert.deepEqual(progress(saved), progress(expected), 'Late startup must preserve every newer workflow field and current failure');
-  assert.deepEqual(saved.chats.filter(chat => chat.area === 'build'), expected.chats, 'Late startup must preserve current chat custody');
+  assert.deepEqual(saved.chats.filter(chat => chat.area === 'build'), expected.chats.filter(chat => chat.area === 'build'), 'Late startup must preserve current chat custody');
   assert.equal(saved.chats.length, 2);
   const pane = f.herdr.paneOf(historical);
   assert.equal(historical.tabId, pane.tab_id);
@@ -53,6 +54,6 @@ for (const lost of [false, true]) test(`2627 late dispatched startup ${lost ? 'l
   assert.equal(opened.exitCode, 0, opened.message);
   assert.equal(f.herdr.calls.filter(args => args[0] === 'pane' && args[1] === 'run').length, launches, 'Historical navigation must reuse the recorded live session');
   assert.deepEqual(progress(f.record()), progress(expected));
-  assert.deepEqual(f.record().chats.filter(chat => chat.area === 'build'), expected.chats);
+  assert.deepEqual(f.record().chats.filter(chat => chat.area === 'build'), expected.chats.filter(chat => chat.area === 'build'));
   assert.equal(f.record().chats.find(chat => chat.area === 'plan').startUnconfirmed, undefined);
 });

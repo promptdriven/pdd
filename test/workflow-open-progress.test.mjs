@@ -7,6 +7,7 @@ import { fixture, packageRoot } from './helpers/workflow-runner-fixture.mjs';
 const fields = ['runId', 'state', 'area', 'done', 'gate', 'question', 'approvalRecord', 'decisions', 'changes', 'pr', 'prState', 'cancelled', 'chatReplacement', 'abandonedChats'];
 const progress = run => Object.fromEntries(fields.map(key => [key, run[key]]));
 const unavailable = () => Object.assign(Error('Delayed native failure'), { code: 'server_unavailable' });
+const sameFailure = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 
 for (const mode of ['focus', 'resume', 'open-start', 'run-start']) {
   for (const failure of [false, true]) {
@@ -59,13 +60,20 @@ for (const mode of ['focus', 'resume', 'open-start', 'run-start']) {
           if (action === 'advance' || action === 'replace') { assert.equal(expected.area, 1); assert.ok(expected.decisions.length); assert.ok(expected.approvalRecord); }
           if (action === 'done') { assert.ok(expected.done.scope); assert.ok(expected.gate); }
         } finally { release(); }
-        // Cancel closes an already saved tab, so its delayed focus/resume must report the native failure.
-        const closedSavedTab = action === 'cancel' && ['focus', 'resume'].includes(mode);
+        // Cancel closes an already saved tab, so its delayed focus/resume must report the native failure. A starting chat is
+        // saved before its launch, so cancel closes it too and the late start reports the ended run.
+        // A run start whose run was cancelled and started again cannot save into the replaced run.
+        const closedSavedTab = action === 'cancel' || action === 'restart' && mode === 'run-start';
         assert.equal((await opening).exitCode, failure || closedSavedTab ? 1 : 0);
         const saved = f.record();
         assert.deepEqual(progress(saved), progress(expected), 'Native final writes must preserve every concurrent workflow field');
         if (['advance', 'replace', 'restart', 'cancel'].includes(action)) assert.deepEqual(saved.chats.filter(chat => chat.area === expected.areas[expected.area].name), expected.chats.filter(chat => chat.area === expected.areas[expected.area].name), 'A late result cannot overwrite current chat custody');
-        if (['advance', 'replace', 'restart', 'cancel'].includes(action)) assert.deepEqual(saved.chatFailure, expected.chatFailure, 'A historical or cancelled operation cannot set or clear current failure');
+        // The current failure is the one for the current area; a late failure keeps its own (earlier) area.
+        const current = run => run.chatFailure?.area === run.areas[run.area]?.name ? run.chatFailure : undefined;
+        if (['advance', 'replace', 'restart', 'cancel'].includes(action)) {
+          assert.deepEqual(current(saved), current(expected), 'A historical or cancelled operation cannot set or clear current failure');
+          if (!sameFailure(saved.chatFailure, expected.chatFailure)) assert.equal(saved.chatFailure.area, 'plan', 'A late failure is recorded only for its own earlier area');
+        }
         else if (failure) assert.equal(saved.chatFailure?.area, 'plan', 'A current failure is retained without discarding progress');
         else assert.equal(saved.chatFailure, undefined, 'Successful current recovery clears its prior chat failure');
       });

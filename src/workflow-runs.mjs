@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runs.prompt.md (sha256: 2806ab3c93c8a880df568fd933f399ec4b6150950271f2e4b3789847350de70b).
+// Generated from prompts/cli/workflow-runs.prompt.md (sha256: 7e6c68e9fb6a111074f7a6c07be56b3a94b6ae3bb89e8969772941f4cf7015b4).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import * as nativeRunFiles from 'node:fs';
@@ -15,6 +15,8 @@ const ended = run => ['cancelled', 'completed'].includes(run.state);
 export const runDirFor = (commonDir, number) => join(commonDir, 'pdd', 'runs', String(number));
 export const stateDirFor = (ports = {}) => ports.stateDir ?? join((ports.env ?? process.env).HOME || homedir(), '.local', 'state', 'pdd');
 export const currentChat = run => [...(run.chats ?? [])].reverse().find(chat => chat.area === run.areas?.[run.area]?.name) ?? null;
+// The runner owns chat.state; a legacy chat without it is starting only with saved unconfirmed launch custody, else unknown.
+const chatState = chat => ['starting', 'running', 'ended', 'failed', 'unknown'].includes(chat?.state) ? chat.state : chat?.startUnconfirmed ? 'starting' : 'unknown';
 
 export async function gitContext(cwd, ports = {}) {
   const exec = ports.execFile ?? ((file, args, options) => ordinary(file, args, { ...options, encoding: 'utf8' }));
@@ -99,7 +101,7 @@ export function statusView(run) {
   return { v: 1, stage, steps, waitingFor, resumeDecisions: gate ? ['approve', 'changes'] : [],
     waitingDecision: gate ? { stage: 'approve', area: run.gate.area, kind: run.gate.kind ?? 'approve', at: run.gate.at, decisions: ['approve', 'changes'] } : null,
     ...(chat?.workspaceId ? { herdr: { session: 'pdd', workspaceId: chat.workspaceId, label: `${String(run.repo).split('/')[1]}#${run.number} ${run.workflow}` } } : {}),
-    stageAgent: chat && !failure && !chat.startUnconfirmed ? { kind: run.agent, nativeSessionId: chat.session?.id ?? null, herdrSession: 'pdd', paneId: chat.paneId ?? null } : null,
+    stageAgent: chat && !failure && !chat.startUnconfirmed ? { kind: run.agent, nativeSessionId: chat.session?.id ?? null, herdrSession: 'pdd', paneId: chat.paneId ?? null, state: chatState(chat) } : null,
     links: Array.isArray(run.links) ? run.links : [], controller: null, message: run.message ?? null, cancelled: run.cancelled ?? null };
 }
 

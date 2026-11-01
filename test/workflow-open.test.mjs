@@ -92,11 +92,13 @@ test(caseName('historical AREA focuses its saved chat and preserves current prog
     unchanged(f, before);
   }
   f.herdr.calls.length = 0;
+  // The opens above saved the live current chat as running (its lifecycle); the historical open must keep that record.
+  const current = chatFor(f.record(), 'build');
   const before = stable(f), result = await open(f, { area: 'plan' });
   assert.equal(result.exitCode, 0, result.message);
   assert.equal(f.herdr.focus, plan.tabId, 'AREA selects the saved historical tab');
   assert.equal(mutationCalls(f).length, 0);
-  assert.deepEqual(chatFor(f.record(), 'build'), build);
+  assert.deepEqual(chatFor(f.record(), 'build'), current);
   unchanged(f, before);
 });
 
