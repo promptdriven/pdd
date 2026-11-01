@@ -92,7 +92,7 @@ for (const scenario of ['unknown-kind', 'unknown-action', 'store-prompt', 'missi
   assert.equal((await successful(ctx, selected)).sent, 1);
   const again = await successful(ctx, selected);
   assert.equal(again.sent, 1, 'uncertain declarations cannot authorize a skip');
-  assert.equal(again.json.rows[0].cache_reason, scenario === 'missing-sources' ? 'runs every time: resource declarations unavailable' : fakeReason);
+  assert.equal(again.json.rows[0].cache_reason, scenario === 'missing-sources' ? 'runs again: resource declarations unavailable' : fakeReason);
 });
 for (const action of ['collection.get-or-null', 'collection.merge', 'compute']) test(`TEST-CACHE-FIX documented deterministic ${action}`, async t => {
   const ctx = await setup(t, repo => {
