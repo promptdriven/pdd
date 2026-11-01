@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: a1d34312f4ca0ac521038837e7dab287bbe648ed8f95314ee32c90d8ed16f875).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 7d4be453171fd25e218081e750b321f74d5886c98cb23468246d56304504ed96).
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -695,12 +695,46 @@ function evidenceFit(lines, room, env) {
   kept.push(notice(omitted));
   return kept;
 }
+// The Steps overview cuts each summary to a short line; it is never the only copy that a reviewer can read. Below it, one
+// closed block keeps every whole summary as inert code spans: no summary line starts a body line, so its labels, HTML,
+// mentions and markers stay text. The block has the lowest priority in the body budget. When it does not fit, the longest
+// summaries are shortened first, each cut shows " …", and one line names each shortened step and what was left out.
+const FULL_SUMMARIES = '<details><summary>Full step summaries</summary>';
+function codeSpan(line) {
+  const text = line.replaceAll('pdd-workflow:', 'pdd-workflow\\u003a');
+  const fence = '`'.repeat([...text.matchAll(/`+/g)].reduce((most, run) => Math.max(most, run[0].length), 0) + 1);
+  const padding = /^`|`$/.test(text) || text.startsWith(' ') && text.endsWith(' ') && text.trim() ? ' ' : '';
+  return `${fence}${padding}${text}${padding}${fence}`;
+}
+// The first `size` characters (code points) of a summary, moved back to a word end and to the start of a URL that crosses the cut.
+function summaryStart(text, size) {
+  const points = [...text];
+  if (points.length <= size) return text;
+  let kept = points.slice(0, size).join('');
+  const url = [...text.matchAll(/https?:\/\/\S+/g)].find(match => match.index < kept.length && match.index + match[0].length > kept.length);
+  if (url) kept = kept.slice(0, url.index);
+  else if (/\S/.test(points[size])) kept = kept.replace(/\s+\S*$/, '');
+  return kept.trimEnd();
+}
+function fullSummaries(steps, texts, size) {
+  if (!steps.length) return [];
+  const shortened = [];
+  const items = steps.map(step => {
+    if (!texts[step]) return `- **${step}**: done`;
+    const kept = summaryStart(texts[step], size), left = characters(texts[step]) - characters(kept);
+    if (left) shortened.push(`${step} (${left.toLocaleString('en-US')} characters left out)`);
+    return `- **${step}**: ${kept.split('\n').filter(Boolean).map(codeSpan).join('<br>')}${left ? `${kept ? ' ' : ''}…` : ''}`;
+  });
+  const notice = shortened.length ? [`_${shortened.length} step ${shortened.length === 1 ? 'summary was' : 'summaries were'} shortened to fit the PR size limit: ${listed(shortened)}. The PR author has the full summaries in the run folder._`, ''] : [];
+  return [...notice, FULL_SUMMARIES, '', ...items, '', '</details>'];
+}
 function prBody(run, area, env, drafts = [], tests = true, evidence) {
   const index = run.areas.findIndex(item => item.name === area.name), from = run.areas.slice(0, index).map((item, at) => item.gate === 'pr' ? at + 1 : 0).reduce((a, b) => Math.max(a, b), 0);
   const steps = run.areas.slice(from, index + 1).flatMap(item => item.steps).filter(step => run.done[step]);
   const raw = Object.fromEntries(steps.map(step => [step, hideLocalPaths(redactTry(withoutForgedMachineLines(run.done[step].summary)), run)]));
   const summaries = Object.fromEntries(steps.map(step => [step, oneLine(raw[step])]));
   const lines = steps.map(step => `- **${step}**: ${shortLine(summaries[step]) || 'done'}`);
+  const full = Object.fromEntries(steps.map(step => [step, keepLines(raw[step])]));
   // Only a PR that covers a verify step carries verify.md (PR 1 never does).
   let verify = null;
   if (steps.includes('verify')) {
@@ -733,11 +767,30 @@ function prBody(run, area, env, drafts = [], tests = true, evidence) {
   const reviewAt = evidence.lines.findIndex(line => line.startsWith('Review:'));
   const slot = reviewAt < 0 ? evidence.lines.length : reviewAt;
   const preparedLines = [...evidence.lines.slice(0, slot), ...inventory, ...evidence.lines.slice(slot)].map(line => hideLocalPaths(redactTry(line), run));
-  const body = (text, lifted) => hideLocalPaths([...lifted, ...prefix, ...top, ...(prefix.length || lifted.length || top.length ? [''] : []), ...head, ...(run.productMarker ? ['', run.productMarker] : []), ...(drafts.length ? ['', draftLine(drafts)] : []), '', `Made with \`pdd workflow run ${run.workflow}\`.`, '', '## Steps', ...lines,
-    ...(!noted && hasReportLink([...lines, ...preparedLines, verify ?? ''].join('\n'), env) ? ['', 'Interpreter report links expire after 7 days.'] : []),
+  const body = (text, lifted, section) => hideLocalPaths([...lifted, ...prefix, ...top, ...(prefix.length || lifted.length || top.length ? [''] : []), ...head, ...(run.productMarker ? ['', run.productMarker] : []), ...(drafts.length ? ['', draftLine(drafts)] : []), '', `Made with \`pdd workflow run ${run.workflow}\`.`, '', '## Steps', ...lines,
+    ...(section.length ? ['', ...section] : []),
+    ...(!noted && hasReportLink([...lines, ...Object.values(full), ...preparedLines, verify ?? ''].join('\n'), env) ? ['', 'Interpreter report links expire after 7 days.'] : []),
     ...(text !== null ? ['', '## Verify', '', text] : []), ''].join('\n'), run);
-  const lifted = evidenceFit(preparedLines, Math.max(0, BODY_BUDGET - 200 - (verify === null ? 0 : 1000) - characters(body(null, []))), env);
-  return verify === null ? body(null, lifted) : body(verifyFit(hideLocalPaths(verify, run), BODY_BUDGET - 200 - characters(body('', lifted)), env), lifted);
+  // Room for the full summaries with every summary left out comes first, so a cut is never silent. The top evidence and
+  // verify.md then fit as before, and the full summaries get the room that is left.
+  const least = fullSummaries(steps, full, 0);
+  const lifted = evidenceFit(preparedLines, Math.max(0, BODY_BUDGET - 200 - (verify === null ? 0 : 1000) - characters(body(null, [], least))), env);
+  const verifyText = verify === null ? null : verifyFit(hideLocalPaths(verify, run), BODY_BUDGET - 200 - characters(body('', lifted, least)), env);
+  const fitting = size => { const text = body(verifyText, lifted, fullSummaries(steps, full, size)); return characters(text) <= BODY_BUDGET - 200 ? text : null; };
+  const whole = fitting(Infinity);
+  if (whole !== null) return whole;
+  let low = 0, high = Object.values(full).reduce((most, text) => Math.max(most, characters(text)), 0);
+  while (high - low > 1) { const middle = Math.floor((low + high) / 2); if (fitting(middle) !== null) low = middle; else high = middle; }
+  return fitting(low) ?? body(verifyText, lifted, least);
+}
+
+// GitHub refuses a PR title over 256 characters; the GitHub intent checks its UTF-16 length. The issue title stays whole
+// when the PR title fits. Else it is cut at a character boundary and shows " …" before its suffix, which always stays.
+function prTitle(issueTitle, suffix) {
+  if (`${issueTitle}${suffix}`.length <= 256) return `${issueTitle}${suffix}`;
+  let kept = '';
+  for (const point of issueTitle) { if (kept.length + point.length + 2 + suffix.length > 256) break; kept += point; }
+  return `${kept.trimEnd()} …${suffix}`;
 }
 
 const commitSha = value => /^(?:[a-f\d]{40}|[a-f\d]{64})$/i.test(value);
@@ -749,7 +802,7 @@ function inventoryCommits(inventory) {
 
 // Commit leftovers, then push to the area's PR or open it. Returns a failure result, or null when the PR is there.
 async function publishAreaPr(run, area, p, lines, retry) {
-  const label = prLabel(run, area), existing = prOf(run, area.name), title = oneLine(run.issue.title).slice(0, 220) || `Issue #${run.number}`;
+  const label = prLabel(run, area), existing = prOf(run, area.name), title = oneLine(run.issue.title) || `Issue #${run.number}`;
   const status = await git(p, run.root, 'status', '--porcelain=v1', '--untracked-files=all');
   if (status) {
     const files = status.split('\n').map(row => row.slice(3)).filter(Boolean);
@@ -862,7 +915,7 @@ async function publishAreaPr(run, area, p, lines, retry) {
   p.say(`Pushing ${run.branch} and opening ${label} on GitHub…`);
   try {
     intent = await prepareWorkflowPr({ cwd: run.root, runId: run.runId, stageId: area.name, repository: run.repo, baseBranch: base,
-      title: label === 'PR 1' ? `${title} (${tests ? 'prompt, Story and tests' : 'prompt and Story'})` : label === 'PR 2' ? `${title} (code)` : title }, p.commandPorts);
+      title: prTitle(title, label === 'PR 1' ? ` (${tests ? 'prompt, Story and tests' : 'prompt and Story'})` : label === 'PR 2' ? ' (code)' : '') }, p.commandPorts);
   } catch (error) {
     if(error?.code==='workflow_progress_refused')throw error;
     const why = error.code === 'workflow_github_topic_has_no_commits' ? `There are no new commits on ${run.branch}. Commit the change, then ${retry}.`
