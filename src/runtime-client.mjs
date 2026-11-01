@@ -2209,21 +2209,24 @@ function storyFingerprint(cache, capture, story, options, origin) {
 // inventing another dependency graph or reading a later version of a source file.
 function declarationCacheReason(capture, story, tests) {
   const footprint = capture.stories?.find(item => item.story_path === story);
-  if (!footprint?.files || !Array.isArray(capture.sources)) return null;
+  if (!footprint?.files || !Array.isArray(capture.sources)) return 'runs every time: resource declarations unavailable';
   const sources = new Map(capture.sources.map(file => [file.path, Buffer.from(file.bytes).toString('utf8')]));
   const fake = name => `runs every time: uses an AI-played fake (${name})`;
   const deterministic = binding => {
     if (!isObject(binding)) return false;
     if (binding.action === 'fixture.lookup') return Array.isArray(binding.cases) && binding.cases.length > 0;
     if (binding.action === 'port.write') return Object.hasOwn(binding, 'result_template') || Object.hasOwn(binding, 'result');
-    return /^(key-value\.(get|put|delete|list)|collection\.(get|insert|update|delete|query|list)|blob\.(read|write|stat)|sql\.execute)$/.test(binding.action);
+    return /^(key-value\.(get|put)|collection\.(get|get-or-null|merge)|blob\.(read|write|stat)|sql\.execute|compute)$/.test(binding.action);
   };
   const prompts = [];
-  for (const file of footprint.files) {
+  for (const file of footprint.files.filter(file => sources.has(file.path))) {
     const match = /^prompts\/fakes\/(.+)\.prompt\.md$/.exec(file.path);
     if (match) return fake(match[1]);
     if (!file.path.endsWith('.prompt.md')) continue;
-    try { prompts.push(JSON.parse(interfaceBlocks(sources.get(file.path) ?? '')[0][1])); }
+    try {
+      const blocks = interfaceBlocks(sources.get(file.path));
+      if (blocks.length) prompts.push(JSON.parse(blocks[0][1]));
+    }
     catch { return 'runs every time: resource declarations unavailable'; }
   }
   for (const path of tests) {
@@ -2231,16 +2234,18 @@ function declarationCacheReason(capture, story, tests) {
     // A step override is part of that step's world, not evidence for other steps.
     const bindings = [doc.simulation ?? {}, ...(doc.steps ?? []).map(step => ({ ...(doc.simulation ?? {}), ...(step.simulation_overrides ?? {}) }))];
     for (const simulation of bindings) for (const [operation, binding] of Object.entries(simulation)) {
-      if (['http.prompt', 'port.prompt'].includes(binding?.action)) return fake(operation.split('.')[0]);
+      if (!deterministic(binding)) return fake(operation.split('.')[0]);
     }
     for (const prompt of prompts) for (const resource of prompt.resources ?? []) {
-      if (!['http', 'command', 'model', 'port'].includes(resource.kind)) continue;
+      if (['key-value', 'collection', 'blob', 'sql', 'compute'].includes(resource.kind)) continue;
+      if (!['http', 'command', 'model', 'port'].includes(resource.kind)) return fake(resource.name);
       const operations = resource.operations;
       if (!Array.isArray(operations) || !operations.length) return fake(resource.name);
       for (const operation of operations) {
         const bound = bindings.every(simulation => deterministic(simulation[`${resource.name}.${operation.name}`]));
         if (resource.kind === 'port' && resource.name === 'clock' && operation.name === 'now') {
-          const fixed = [doc.initial_world, doc.world, doc.data].some(world => isObject(world?.clock) && Object.hasOwn(world.clock, 'now'));
+          const value = doc.initial_world?.clock?.now;
+          const fixed = typeof value === 'number' && Number.isFinite(value) || typeof value === 'string' && value.trim().length > 0;
           if (!fixed && !bound) return 'runs every time: uses the real clock';
         } else if (!bound) return fake(resource.name);
       }
@@ -2250,8 +2255,8 @@ function declarationCacheReason(capture, story, tests) {
 }
 function eligibleCachePass(pass, now) {
   const age = now - Date.parse(pass?.passed_at);
-  return sameCacheIdentity(pass, pass) && typeof pass.requested_model === 'string' && pass.requested_model.trim() && pass.requested_model.toLowerCase() !== 'unknown'
-    && typeof pass.engine_sha === 'string' && pass.engine_sha.trim() && pass.engine_sha.toLowerCase() !== 'unknown'
+  return !!pass && typeof pass.requested_model === 'string' && pass.requested_model.trim() && pass.requested_model.trim().toLowerCase() !== 'unknown'
+    && typeof pass.engine_sha === 'string' && pass.engine_sha.trim() && pass.engine_sha.trim().toLowerCase() !== 'unknown'
     && Number.isFinite(age) && age >= 0 && age <= 7 * 86400000;
 }
 
