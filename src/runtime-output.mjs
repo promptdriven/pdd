@@ -1,16 +1,11 @@
+import { outcomeFor, outcomeExitCode, outcomeText } from './runtime-outcome.mjs';
 // Generated from prompts/cli/runtime-output.prompt.md (sha256: fa9b715e4e0faf5043e4b3406d0f6fd79cd6166a9e01ca4c6f1f9377822bbcb4).
 export const OPEN_STATES = new Set(['queued', 'running']);
 const RESULT_WORDS = { not_run: 'not run' };
 
 // The first match from the top wins: 3 > 5 > 4 > 1 > 0.
 export function exitCodeFor(rows, { interrupted = false, lintUnknown = false } = {}) {
-  const states = new Set(rows.map(row => row.state));
-  // Any state that is not a known end (also queued, running or a half-written row) may still run: 3.
-  if (interrupted || lintUnknown || [...states].some(state => !['passed', 'failed', 'refused', 'not_run'].includes(state))) return 3;
-  if (states.has('not_run')) return 5;
-  if (states.has('refused')) return 4;
-  if (states.has('failed')) return 1;
-  return 0;
+  return outcomeExitCode(rows.map(row => outcomeFor(row)), { interrupted, lintUnknown });
 }
 
 const SERVER_PATH = /(?<![\w.:/-])\/(?:home|Users|srv|var|tmp|private|opt|mnt|workspace|usr|etc)\/[^\s"'<>)\]]*/g;
@@ -85,8 +80,9 @@ export function stepTimeLimit(answer, { steps = [], secrets = [] } = {}) {
 }
 
 // The parts of a server answer that pdd shows.
-export function projectAnswer(answer, { origin, secrets = [], steps: authoredSteps = [], criterionTexts = {} } = {}) {
+export function projectAnswer(answer, { origin, secrets = [], steps: authoredSteps = [], criterionTexts = {}, test } = {}) {
   const result = answer?.result ?? null, report = result?.report ?? null, time_limit = stepTimeLimit(answer, { steps: authoredSteps, secrets });
+  const outcome = outcomeFor(answer, { test, steps: authoredSteps, timeLimit: !!time_limit });
   const steps = Array.isArray(report?.samples) && Array.isArray(report.samples[0]?.steps) ? report.samples[0].steps : [];
   const nonNegativeInt = value => Number.isInteger(value) && value >= 0 ? value : undefined;
   const rerunStep = item => ({
@@ -113,8 +109,8 @@ export function projectAnswer(answer, { origin, secrets = [], steps: authoredSte
       normal_result: Object.prototype.hasOwnProperty.call(step ?? {}, 'result') && !step?.error, ...(diagnosis ? { diagnosis } : {}) };
   });
   // prompt-runtime #379 adds reason, fix, file, at, where and cause to each refusal; the live server may not send them yet.
-  const refusals = (Array.isArray(result?.refusals) ? result.refusals : []).map(item => ({
-    code: cleanText(item?.code, secrets) || 'unknown', section: cleanText(item?.section, secrets) || null,
+  const refusals = (outcome.refusals ?? (Array.isArray(result?.refusals) ? result.refusals : [])).map(item => ({
+    code: cleanText(item?.code, secrets) || 'unknown', path: cleanText(item?.file ?? item?.path, secrets) || null, field: cleanText(item?.field ?? item?.at ?? item?.section, secrets) || null, section: cleanText(item?.section, secrets) || null,
     message: cleanText(item?.message, secrets) || null, engine_message: cleanText(item?.engine_message, secrets) || null, hint: null,
     reason: cleanText(item?.reason, secrets) || null, fix: cleanText(item?.fix, secrets) || null,
     where: cleanText(item?.where, secrets) || [item?.file, item?.at].map(part => cleanText(part, secrets)).filter(Boolean).join(' ') || null,
@@ -130,7 +126,10 @@ export function projectAnswer(answer, { origin, secrets = [], steps: authoredSte
     ? { code: refusals.find(item => item.code === 'graph-provider-failure')?.code ?? 'graph-provider-failure',
       detail: [cause?.kind, cause?.detail].filter(Boolean).map(text => cleanText(text, secrets)).join(', ') || null } : null;
   return {
-    state: time_limit ? 'unknown' : answer?.state, time_limit, checks: all.length ? { passed: all.filter(check => check.passed).length, total: all.length } : null,
+    state: outcome.state, progress: outcome.progress ? { ...outcome.progress, ...(typeof outcome.progress.step === 'string' ? { step: cleanText(outcome.progress.step, secrets) } : {}) } : undefined, ahead: outcome.ahead,
+    outcome_reason: outcome.reason ? cleanText(outcome.reason, secrets) : null,
+    outcome_note: outcome.state === 'not_run' ? { code: cleanText(outcome.code, secrets) || null, message: cleanText(outcome.message, secrets) || null } : null,
+    time_limit, checks: all.length ? { passed: all.filter(check => check.passed).length, total: all.length } : null,
     criteria: results.length ? { passed: results.filter(item => item?.status === 'passed').length, total: results.length } : null,
     all_checks: all, failed_checks: all.filter(check => !check.passed).map(({ passed, ...check }) => check), refusals,
     calls: !incomplete && typeof usage.calls === 'number' ? usage.calls : 'unknown',
@@ -151,8 +150,8 @@ const sentRow = row => row.phase === 'server';
 
 export function jsonRow(row) {
   const publicChecks = checks => (checks ?? []).map(({ normal_result, ...check }) => check);
-  return { story: row.story, title: row.title, test: row.test, state: row.state, checks: row.checks ?? null, criteria: row.criteria ?? null,
-    failed_checks: publicChecks(row.failed_checks), refusals: (row.refusals ?? []).map(item => ({ code: item.code, section: item.section ?? null,
+  return { story: row.story, title: row.title, test: row.test, state: outcomeFor(row).state, ...(row.progress ? { progress: row.progress } : {}), ...(row.ahead !== undefined ? { ahead: row.ahead } : {}), checks: row.checks ?? null, criteria: row.criteria ?? null,
+    failed_checks: publicChecks(row.failed_checks), refusals: (row.refusals ?? []).map(item => ({ code: item.code, field: item.field ?? null, section: item.section ?? null,
       message: item.message ?? null, engine_message: item.engine_message ?? null, hint: item.hint ?? null, reason: item.reason ?? null, fix: item.fix ?? null,
       where: item.where ?? null, cause: item.cause ?? null })), calls: sentRow(row) ? row.calls ?? 'unknown' : 0,
     seconds: round(row.seconds), requested_model: row.requested_model ?? null, report_url: row.report_url ?? null,
@@ -182,7 +181,8 @@ export function storyLines(rows) {
 export const PROMPT_TESTS_LABEL = 'Prompt tests';
 export const PROMPT_TESTS_WORDS = '(?:Prompt tests|Runtime check)';
 export function summaryLine(rows, story = null) {
-  const own = row => row.criteria ?? { passed: row.state === 'passed' ? row.criteria_total ?? 0 : 0, total: row.criteria_total ?? 0 };
+  rows = rows.map(row => ({ ...row, state: outcomeFor(row).state }));
+  const own = row => row.criteria ?? { passed: 0, total: row.criteria_total ?? 0 };
   const criteria = rows.reduce((sum, row) => ({ passed: sum.passed + own(row).passed, total: sum.total + own(row).total }), { passed: 0, total: 0 });
   const checks = rows.reduce((sum, row) => ({ passed: sum.passed + (row.checks?.passed ?? 0), total: sum.total + (row.checks?.total ?? 0) }), { passed: 0, total: 0 });
   const sent = rows.filter(sentRow), known = sent.filter(row => typeof row.calls === 'number' && !OPEN_STATES.has(row.state));
@@ -198,14 +198,14 @@ export function summaryLine(rows, story = null) {
     : rows.some(row => OPEN_STATES.has(row.state)) ? 'running ·'
     : rows.some(row => row.busy && row.state === 'not_run') && rows.every(row => row.state === 'passed' || (row.busy && row.state === 'not_run')) ? 'busy ·' : 'no verdict ·';
   const rerunShare = rerunCalls ? `${rerunCalls} for reruns` : '';
-  const usage = known.length ? `${count(calls, 'AI call')}${rerunShare ? ` (${rerunShare})` : ''}` : rerunShare || count(calls, 'AI call');
+  const usage = sent.length && !known.length && !partial.some(row => typeof row.known_calls === 'number') ? rerunShare || 'AI calls unknown' : known.length ? `${count(calls, 'AI call')}${rerunShare ? ` (${rerunShare})` : ''}` : rerunShare || count(calls, 'AI call');
   return [`${PROMPT_TESTS_LABEL}${story ? ` (${story})` : ''}${rows.some(row => row.draft) ? ' (DRAFT)' : ''}: ${mark} ${criteria.passed} of ${count(criteria.total, 'criterion').replace(/criterions$/, 'criteria')}`,
-    `${checks.passed}/${checks.total} checks`, ...others, `${usage}${unknownCalls ? ` + ${unknownCalls} unknown` : ''}`].join(' · ');
+    `${checks.passed}/${checks.total} checks`, ...rows.filter(row => row.state === 'running' && Object.keys(row.progress ?? {}).length).map(row => outcomeText(outcomeFor(row))), ...others, ...(rows.every(row => row.state === 'running' && Object.keys(row.progress ?? {}).length) ? [] : [`${usage}${unknownCalls && usage !== 'AI calls unknown' ? ` + ${unknownCalls} unknown` : ''}`])].join(' · ');
 }
 
 function table(rows) {
   const lines = [['Story', 'Test', 'Result', 'Checks', 'Time'], ...rows.map(row => [row.title ?? row.story, row.test,
-    `${row.busy ? 'busy (not run)' : RESULT_WORDS[row.state] ?? row.state}${row.draft ? ' (DRAFT)' : ''}`, row.checks ? `${row.checks.passed}/${row.checks.total}` : '-',
+    `${row.busy ? 'busy (not run)' : outcomeText(outcomeFor(row))}${row.draft ? ' (DRAFT)' : ''}`, row.checks ? `${row.checks.passed}/${row.checks.total}` : '-',
     typeof row.seconds === 'number' ? `${round(row.seconds).toFixed(1)} s` : '-'])];
   const widths = lines[0].map((_, column) => Math.max(...lines.map(line => line[column].length)));
   return lines.map(line => line.map((cell, column) => column === line.length - 1 ? cell : cell.padEnd(widths[column])).join('  ').trimEnd());
@@ -292,6 +292,7 @@ function localRefusals(rows, secrets) {
 
 // The terminal result of a batch (stdout).
 export function renderText({ batch, rows, coverage, warnings = [], details = false, timeoutMin = null, interrupted = false, reading = false, exitCode, secrets = [], recovery }) {
+  rows = rows.map(row => ({ ...row, state: outcomeFor(row).state }));
   const out = [];
   if (exitCode === 3) out.push(recovery ?? `pdd test --read ${batch}`);
   // One Story: its own line is the result; the overall line comes only with two or more Stories.

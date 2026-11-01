@@ -60,8 +60,15 @@ export async function fakeRuntime(t, answer) {
   fake.origin = `http://127.0.0.1:${server.address().port}`;
   fake.job = (id, command, state, result = null, calls = 0) => ({ requestId: id, id, command, state, engine_sha: 'eae2202a68d00ab762fcbbf1eba0d8607a132a15',
     result, usage: usage(calls), report_url: `${fake.origin}/r/${createHash('sha256').update(id).digest('hex').slice(0, 32)}` });
-  fake.lint = (id, prompts = [{ path: PLACE, state: 'approved', admission_state: 'approved', interface: { calls: [] } }], refused = []) =>
-    fake.job(id, 'lint', 'passed', { exitCode: 0, refusals: [], report: { verdict: 'passed', program: { prompts, refused_prompts: refused } } });
+  fake.lint = (id, prompts = [{ path: PLACE, state: 'approved', admission_state: 'approved', interface: { calls: [] } }], refused = []) => {
+    const source = fake.posts.find(post => post.command === 'lint' && post.request.requestId === id)?.tar;
+    const listing = source ? spawnSync('tar', ['-tf', '-'], { input: source, encoding: 'utf8' }) : null;
+    if (listing) assert.equal(listing.status, 0, listing.stderr);
+    const tests = (listing?.stdout.split('\n') ?? []).filter(path => /(?:^|\/)(?:test|tests)\/.*\.json$/.test(path))
+      .map(path => ({ path, verdict: 'passed' }));
+    return fake.job(id, 'lint', 'passed', { exitCode: 0, refusals: [],
+      report: { verdict: 'passed', lint: { complete: true, tests }, program: { prompts, refused_prompts: refused } } });
+  };
   fake.check = (id, state = 'passed', checks = PASSED_CHECKS, refusals = []) => fake.job(id, 'check', state, ['queued', 'running'].includes(state) ? null
     : { exitCode: state === 'passed' ? 0 : 1, outcome: state === 'passed' ? 'Pass' : ['refused', 'unknown'].includes(state) ? 'Inconclusive' : 'Fail', refusals, who: null, why: state === 'passed' ? 'All checked criteria passed.' : ['refused', 'unknown'].includes(state) ? 'No verdict. The runtime could not judge this test.' : 'Checks failed.',
       next_step: ['refused', 'unknown'].includes(state) ? 'Tell the person the reason. Do not resend it automatically.' : null, report: { samples: [{ sample: 1, steps: [{ checks }] }], evaluation: { requested_model: 'gpt-6.1-sol' },
