@@ -113,7 +113,7 @@ for (const older of ['passed', 'failed']) for (const newer of ['passed', 'failed
     assert.equal(Boolean(persisted.stories['user_stories/place-order.md']), newer === 'failed', 'late completion preserves newer confirmed failure');
     ctx.mode('passed');
     const selected = await ctx.invoke({ options: { '--lf': true } });
-    assert.equal(selected.sent, Number(newer === 'failed'), 'latest generation alone determines failure selection');
+    assert.equal(selected.sent, 1, 'late overlapping completion leaves doubt; failure generations remain protected');
   });
 }
 
