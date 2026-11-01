@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: aebb548e556589630a7c0097ebbb0619e3b271d9abb713fb81185857ba10f749).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 9683792bb86d2700d4734df4e75e84fc3a1b279ee789d5625079cf141453b861).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -2300,10 +2300,15 @@ async function finishTestAttempts(cache, rows, capture) {
   if (cache.disabled) return;
   await cacheTransaction(cache, data => {
     const observations = cache.context.observedTestIdentities ?? [];
-    const latest = observations.findLast(item => item.engine_sha || item.models.length);
-    if (latest && Number.isFinite(cache.context.startedAt)
+    if (Number.isFinite(cache.context.startedAt)
       && (!data.latest_identity || cache.context.startedAt >= Date.parse(data.latest_identity.sampled_at))) {
-      data.latest_identity = { ...latest, sampled_at: new Date(cache.context.startedAt).toISOString() };
+      for (const observed of observations.filter(item => item.engine_sha || item.models.length)) {
+        data.latest_identity = {
+          engine_sha: observed.engine_sha ?? data.latest_identity?.engine_sha ?? null,
+          models: observed.models.length ? [...new Set(observed.models)] : data.latest_identity?.models ?? [],
+          observed_at: observed.observed_at, sampled_at: new Date(cache.context.startedAt).toISOString()
+        };
+      }
     }
     for (const [story, token] of cache.tokens) {
       if (data.epoch !== token.epoch || data.stories[story]?.generation !== token.generation) continue;
