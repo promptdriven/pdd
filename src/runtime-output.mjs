@@ -1,12 +1,9 @@
-import { outcomeFor, outcomeExitCode, outcomeText } from './runtime-outcome.mjs';
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: fa9b715e4e0faf5043e4b3406d0f6fd79cd6166a9e01ca4c6f1f9377822bbcb4).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: 7b81dded51d864953952933b2c3603ad90608ad9a61cdf2fdf8dfd1c72679252).
+import { hasProgress, outcomeExitCode, outcomeFor, outcomeText } from './runtime-outcome.mjs';
 export const OPEN_STATES = new Set(['queued', 'running']);
-const RESULT_WORDS = { not_run: 'not run' };
 
-// The first match from the top wins: 3 > 5 > 4 > 1 > 0.
-export function exitCodeFor(rows, { interrupted = false, lintUnknown = false } = {}) {
-  return outcomeExitCode(rows.map(row => outcomeFor(row)), { interrupted, lintUnknown });
-}
+// Each row carries its outcome; the outcome model owns the exit precedence.
+export const exitCodeFor = (rows, options) => outcomeExitCode(rows, options);
 
 const SERVER_PATH = /(?<![\w.:/-])\/(?:home|Users|srv|var|tmp|private|opt|mnt|workspace|usr|etc)\/[^\s"'<>)\]]*/g;
 // Server text in the terminal: no control characters, no token and, in free text, no server paths.
@@ -79,6 +76,15 @@ export function stepTimeLimit(answer, { steps = [], secrets = [] } = {}) {
   return null;
 }
 
+// One server refusal as pdd shows it, cleaned; each field is null when missing.
+export const refusalView = (item, secrets = []) => ({
+  code: cleanText(item?.code, secrets) || 'unknown', path: cleanText(item?.file ?? item?.path, secrets) || null,
+  field: cleanText(item?.field ?? item?.at ?? item?.section, secrets) || null, section: cleanText(item?.section, secrets) || null,
+  message: cleanText(item?.message, secrets) || null, engine_message: cleanText(item?.engine_message, secrets) || null, hint: null,
+  reason: cleanText(item?.reason, secrets) || null, fix: cleanText(item?.fix, secrets) || null,
+  where: cleanText(item?.where, secrets) || [item?.file, item?.at].map(part => cleanText(part, secrets)).filter(Boolean).join(' ') || null,
+  cause: cleanText(item?.cause, secrets) || null });
+
 // The parts of a server answer that pdd shows.
 export function projectAnswer(answer, { origin, secrets = [], steps: authoredSteps = [], criterionTexts = {}, test } = {}) {
   const result = answer?.result ?? null, report = result?.report ?? null, time_limit = stepTimeLimit(answer, { steps: authoredSteps, secrets });
@@ -109,12 +115,7 @@ export function projectAnswer(answer, { origin, secrets = [], steps: authoredSte
       normal_result: Object.prototype.hasOwnProperty.call(step ?? {}, 'result') && !step?.error, ...(diagnosis ? { diagnosis } : {}) };
   });
   // prompt-runtime #379 adds reason, fix, file, at, where and cause to each refusal; the live server may not send them yet.
-  const refusals = (outcome.refusals ?? (Array.isArray(result?.refusals) ? result.refusals : [])).map(item => ({
-    code: cleanText(item?.code, secrets) || 'unknown', path: cleanText(item?.file ?? item?.path, secrets) || null, field: cleanText(item?.field ?? item?.at ?? item?.section, secrets) || null, section: cleanText(item?.section, secrets) || null,
-    message: cleanText(item?.message, secrets) || null, engine_message: cleanText(item?.engine_message, secrets) || null, hint: null,
-    reason: cleanText(item?.reason, secrets) || null, fix: cleanText(item?.fix, secrets) || null,
-    where: cleanText(item?.where, secrets) || [item?.file, item?.at].map(part => cleanText(part, secrets)).filter(Boolean).join(' ') || null,
-    cause: cleanText(item?.cause, secrets) || null }));
+  const refusals = (Array.isArray(result?.refusals) ? result.refusals : []).map(item => refusalView(item, secrets));
   const usage = answer?.usage ?? {};
   const incomplete = usage.accounting_complete === false || report?.accounting_complete === false || usage.unknown_calls > 0;
   const knownCalls = nonNegativeInt(usage.known_calls) ?? nonNegativeInt(usage.calls);
@@ -126,9 +127,9 @@ export function projectAnswer(answer, { origin, secrets = [], steps: authoredSte
     ? { code: refusals.find(item => item.code === 'graph-provider-failure')?.code ?? 'graph-provider-failure',
       detail: [cause?.kind, cause?.detail].filter(Boolean).map(text => cleanText(text, secrets)).join(', ') || null } : null;
   return {
-    state: outcome.state, progress: outcome.progress ? { ...outcome.progress, ...(typeof outcome.progress.step === 'string' ? { step: cleanText(outcome.progress.step, secrets) } : {}) } : undefined, ahead: outcome.ahead,
-    outcome_reason: outcome.reason ? cleanText(outcome.reason, secrets) : null,
-    outcome_note: outcome.state === 'not_run' ? { code: cleanText(outcome.code, secrets) || null, message: cleanText(outcome.message, secrets) || null } : null,
+    state: outcome.state, ...(outcome.progress ? { progress: { ...outcome.progress, ...(typeof outcome.progress.step === 'string' ? { step: cleanText(outcome.progress.step, secrets) } : {}) } } : {}),
+    ...(outcome.ahead !== undefined ? { ahead: outcome.ahead } : {}),
+    note: outcome.state === 'not_run' ? { code: cleanText(outcome.code, secrets) || null, message: cleanText(outcome.message, secrets) || null } : null,
     time_limit, checks: all.length ? { passed: all.filter(check => check.passed).length, total: all.length } : null,
     criteria: results.length ? { passed: results.filter(item => item?.status === 'passed').length, total: results.length } : null,
     all_checks: all, failed_checks: all.filter(check => !check.passed).map(({ passed, ...check }) => check), refusals,
@@ -150,7 +151,7 @@ const sentRow = row => row.phase === 'server';
 
 export function jsonRow(row) {
   const publicChecks = checks => (checks ?? []).map(({ normal_result, ...check }) => check);
-  return { story: row.story, title: row.title, test: row.test, state: outcomeFor(row).state, ...(row.progress ? { progress: row.progress } : {}), ...(row.ahead !== undefined ? { ahead: row.ahead } : {}), checks: row.checks ?? null, criteria: row.criteria ?? null,
+  return { story: row.story, title: row.title, test: row.test, state: row.state, ...(row.progress ? { progress: row.progress } : {}), ...(row.ahead !== undefined && row.ahead !== null ? { ahead: row.ahead } : {}), checks: row.checks ?? null, criteria: row.criteria ?? null,
     failed_checks: publicChecks(row.failed_checks), refusals: (row.refusals ?? []).map(item => ({ code: item.code, field: item.field ?? null, section: item.section ?? null,
       message: item.message ?? null, engine_message: item.engine_message ?? null, hint: item.hint ?? null, reason: item.reason ?? null, fix: item.fix ?? null,
       where: item.where ?? null, cause: item.cause ?? null })), calls: sentRow(row) ? row.calls ?? 'unknown' : 0,
@@ -181,7 +182,7 @@ export function storyLines(rows) {
 export const PROMPT_TESTS_LABEL = 'Prompt tests';
 export const PROMPT_TESTS_WORDS = '(?:Prompt tests|Runtime check)';
 export function summaryLine(rows, story = null) {
-  rows = rows.map(row => ({ ...row, state: outcomeFor(row).state }));
+  // A passed row proves only the criteria its report lists.
   const own = row => row.criteria ?? { passed: 0, total: row.criteria_total ?? 0 };
   const criteria = rows.reduce((sum, row) => ({ passed: sum.passed + own(row).passed, total: sum.total + own(row).total }), { passed: 0, total: 0 });
   const checks = rows.reduce((sum, row) => ({ passed: sum.passed + (row.checks?.passed ?? 0), total: sum.total + (row.checks?.total ?? 0) }), { passed: 0, total: 0 });
@@ -191,21 +192,23 @@ export function summaryLine(rows, story = null) {
   const unknownCalls = sent.reduce((sum, row) => sum + (known.includes(row) ? 0 : row.unknown_calls || 1), 0);
   const rerunCalls = rows.reduce((sum, row) => sum + (Number.isInteger(row.rerun?.calls) && row.rerun.calls > 0 ? row.rerun.calls : 0), 0);
   const others = ['refused', 'not_run', 'unknown', 'queued', 'running'].map(state => [state, rows.filter(row => row.state === state).length])
-    .filter(([, number]) => number).map(([state, number]) => `${number} ${RESULT_WORDS[state] ?? state}`);
+    .filter(([, number]) => number).map(([state, number]) => `${number} ${outcomeText({ state })}`);
   // A cross only for a real failure; a check that still runs or has no verdict says so (cli 12b).
   const mark = rows.some(row => row.state === 'failed') ? '✗'
     : rows.length && rows.every(row => row.state === 'passed') ? '✓'
     : rows.some(row => OPEN_STATES.has(row.state)) ? 'running ·'
     : rows.some(row => row.busy && row.state === 'not_run') && rows.every(row => row.state === 'passed' || (row.busy && row.state === 'not_run')) ? 'busy ·' : 'no verdict ·';
   const rerunShare = rerunCalls ? `${rerunCalls} for reruns` : '';
-  const usage = sent.length && !known.length && !partial.some(row => typeof row.known_calls === 'number') ? rerunShare || 'AI calls unknown' : known.length ? `${count(calls, 'AI call')}${rerunShare ? ` (${rerunShare})` : ''}` : rerunShare || count(calls, 'AI call');
+  const usage = known.length ? `${count(calls, 'AI call')}${rerunShare ? ` (${rerunShare})` : ''}` : rerunShare || count(calls, 'AI call');
+  // Server progress of a running row is its call evidence; when every row has it, no other count is shown.
+  const progress = rows.filter(hasProgress).map(outcomeText);
   return [`${PROMPT_TESTS_LABEL}${story ? ` (${story})` : ''}${rows.some(row => row.draft) ? ' (DRAFT)' : ''}: ${mark} ${criteria.passed} of ${count(criteria.total, 'criterion').replace(/criterions$/, 'criteria')}`,
-    `${checks.passed}/${checks.total} checks`, ...rows.filter(row => row.state === 'running' && Object.keys(row.progress ?? {}).length).map(row => outcomeText(outcomeFor(row))), ...others, ...(rows.every(row => row.state === 'running' && Object.keys(row.progress ?? {}).length) ? [] : [`${usage}${unknownCalls && usage !== 'AI calls unknown' ? ` + ${unknownCalls} unknown` : ''}`])].join(' · ');
+    `${checks.passed}/${checks.total} checks`, ...progress, ...others, ...(rows.length && progress.length === rows.length ? [] : [`${usage}${unknownCalls ? ` + ${unknownCalls} unknown` : ''}`])].join(' · ');
 }
 
 function table(rows) {
   const lines = [['Story', 'Test', 'Result', 'Checks', 'Time'], ...rows.map(row => [row.title ?? row.story, row.test,
-    `${row.busy ? 'busy (not run)' : outcomeText(outcomeFor(row))}${row.draft ? ' (DRAFT)' : ''}`, row.checks ? `${row.checks.passed}/${row.checks.total}` : '-',
+    `${row.busy ? 'busy (not run)' : outcomeText(row)}${row.draft ? ' (DRAFT)' : ''}`, row.checks ? `${row.checks.passed}/${row.checks.total}` : '-',
     typeof row.seconds === 'number' ? `${round(row.seconds).toFixed(1)} s` : '-'])];
   const widths = lines[0].map((_, column) => Math.max(...lines.map(line => line[column].length)));
   return lines.map(line => line.map((cell, column) => column === line.length - 1 ? cell : cell.padEnd(widths[column])).join('  ').trimEnd());
@@ -292,7 +295,6 @@ function localRefusals(rows, secrets) {
 
 // The terminal result of a batch (stdout).
 export function renderText({ batch, rows, coverage, warnings = [], details = false, timeoutMin = null, interrupted = false, reading = false, exitCode, secrets = [], recovery }) {
-  rows = rows.map(row => ({ ...row, state: outcomeFor(row).state }));
   const out = [];
   if (exitCode === 3) out.push(recovery ?? `pdd test --read ${batch}`);
   // One Story: its own line is the result; the overall line comes only with two or more Stories.

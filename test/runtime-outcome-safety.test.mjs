@@ -60,7 +60,7 @@ test('OUTCOME safety: one refused selected test closes the gate for the entire s
   const f = await fakeRuntime(t, (e, f) => {
     if (e.command !== 'lint') return f.normal(e);
     const answer = f.lint(e.request.requestId);
-    answer.result.report.lint.tests.find(item => item.path === 'tests/unknown-item.json').verdict = 'refused';
+    answer.result.report.lint = { complete: true, tests: [{ path: 'tests/place-order.json', verdict: 'passed' }, { path: 'tests/unknown-item.json', verdict: 'refused' }] };
     return { status: 200, json: answer };
   });
   const result = await client(h, f)(['place-order', 'unknown-item'], { '--json': true });

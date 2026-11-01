@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runCheck } from '../src/runtime-client.mjs';
+import { runCheck, runTry } from '../src/runtime-client.mjs';
 import { exitCodeFor, projectAnswer, renderText, summaryLine } from '../src/runtime-output.mjs';
 import { fakeRuntime, harbor, portsFor } from './runtime-fake.mjs';
 
@@ -97,6 +97,15 @@ for (const retry of [false, true]) for (const shape of ['refused', 'incomplete',
     assert.equal(r.f.posts.filter(p => p.command === 'check').length, shape === 'unrelated' ? 1 : 0);
     if (shape === 'unrelated') { assert.equal(result.code, 0, result.err); assert.match(result.out + result.err, /unrelated-input/); }
   });
+
+for (const shape of ['refused', 'incomplete', 'unrelated-no-verdict']) test(`OUTCOME a new Try uses the same lint gate: ${shape}`, async t => {
+  const r = await setup(t, shape);
+  const p = portsFor({ HOME: r.h.home, PDD_STATE_DIR: r.h.state, PDD_RUNTIME_URL: r.f.origin }, { openUrl: async () => true });
+  const code = await runTry({ cwd: r.h.repo, words: ['place-order'], options: { '--no-open': true } }, p.ports);
+  assert.equal(r.f.posts.filter(post => post.command === 'try').length, 0, 'no Try setup is sent');
+  assert.equal(code, shape === 'incomplete' ? 3 : 4);
+  assert.doesNotMatch(p.ports.stdout.text + p.ports.stderr.text, /Lint passed/);
+});
 
 test('OUTCOME retry rechecks saved per-test lint evidence', async t => {
   const r = await setup(t, 'passed');
