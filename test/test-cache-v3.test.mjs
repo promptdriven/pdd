@@ -57,7 +57,10 @@ function changeIndependent(ctx) {
 
 for (const delta of [1, 0, -1]) test(`TEST-CACHE-V3 seven-day boundary ${delta}`, async t => {
   const ctx = await setup(t); await prime(ctx);
-  ctx.clock.now += 7 * day + delta;
+  // Age is measured from the original sample, not from completion of polling.
+  const saved = read(join(ctx.repo, '.pdd/cache/test/stories.json'));
+  const sampledAt = Date.parse(saved.stories['user_stories/independent.md'].pass.passed_at);
+  ctx.clock.now = sampledAt + 7 * day + delta;
   const result = await ctx.invoke();
   assert.equal(result.sent, delta > 0 ? 3 : 0, 'seven days inclusive, older evidence reruns');
   if (delta <= 0) { ctx.clock.now += 2; assert.equal((await ctx.invoke()).sent, 3, 'boundary pass expires rather than refreshing on reuse'); }
