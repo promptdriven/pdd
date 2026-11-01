@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runCheck } from '../src/runtime-client.mjs';
 import { harbor, fakeRuntime, portsFor } from './runtime-fake.mjs';
 import { interfaceBlocks, proseSha256, captureSource } from '../src/runtime-preflight.mjs';
 function appendProse(file, extra) { let text = readFileSync(file, 'utf8').replace('## Dependencies\n\nNone.\n', '## Dependencies\n' + extra); const block = interfaceBlocks(text)[0]; const doc = JSON.parse(block[1]); doc.status = 'draft'; text = text.slice(0, block.indices[1][0]) + JSON.stringify(doc) + text.slice(block.indices[1][1]); text = text.replace(/"prose_sha256"\s*:\s*"[^"]*"/, '"prose_sha256":"' + proseSha256(text) + '"'); writeFileSync(file, text); }
 
-const read = path => JSON.parse(readFileSync(path, 'utf8'));
+const read = path => { assert.ok(existsSync(path), 'required fixture or cache metadata exists'); return JSON.parse(readFileSync(path, 'utf8')); };
 const write = (path, value) => writeFileSync(path, JSON.stringify(value, null, 2) + '\n');
 const day = 86400000;
 
