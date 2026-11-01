@@ -247,9 +247,10 @@ test('TEST-CACHE saved read completion creates the first reusable pass', async t
   assert.equal(recovered.code, 0, recovered.err); assert.equal(recovered.sent, 0);
   const repeat = await ctx.invoke(['place-order']);
   assert.equal(repeat.code, 0, repeat.err);
-  assert.equal(repeat.sent, 0, 'completed saved read supplies the pass cache');
-  assert.equal(repeat.network, 0); assert.equal(repeat.gh, 0);
-  assert.ok(repeat.json.rows.every(row => row.cached && row.calls === 0));
+  assert.equal(repeat.sent, 1, 'a saved read leaves doubt until one clean normal run');
+  const clean = await ctx.invoke(['place-order']);
+  assert.equal(clean.sent, 0); assert.equal(clean.network, 0); assert.equal(clean.gh, 0);
+  assert.ok(clean.json.rows.every(row => row.cached && row.calls === 0));
 });
 
 for (const newer of ['failed', 'passed']) test(`TEST-CACHE old interrupted read preserves newer ${newer} generation`, async t => {
@@ -267,7 +268,7 @@ for (const newer of ['failed', 'passed']) test(`TEST-CACHE old interrupted read 
   assert.deepEqual(read(cachePath).stories['user_stories/place-order.md'], before,
     'old completion cannot replace newer changed-source pass or failure');
   const repeat = await ctx.invoke(['place-order'], newer === 'failed' ? { '--lf': true } : {});
-  assert.equal(repeat.sent, newer === 'failed' ? 1 : 0); assert.equal(repeat.code, 0, repeat.err);
+  assert.equal(repeat.sent, 1, 'an old read leaves identity doubt without changing the Story generation'); assert.equal(repeat.code, 0, repeat.err);
 });
 
 test('TEST-CACHE saved UUID read completion supplies reusable pass', async t => {
@@ -281,9 +282,10 @@ test('TEST-CACHE saved UUID read completion supplies reusable pass', async t => 
   assert.equal(recovered.code, 0, recovered.err); assert.equal(recovered.sent, 0);
   for (const [path, bytes] of before) assert.equal(readFileSync(join(ctx.state, path), 'utf8'), bytes, 'UUID read preserves saved batch projections');
   const repeat = await ctx.invoke(['place-order']);
-  assert.equal(repeat.sent, 0, 'UUID completion populates the Story pass cache');
-  assert.equal(repeat.network, 0); assert.equal(repeat.gh, 0);
-  assert.ok(repeat.json.rows.every(row => row.cached && row.calls === 0));
+  assert.equal(repeat.sent, 1, 'UUID completion leaves doubt until a clean normal run');
+  const clean = await ctx.invoke(['place-order']);
+  assert.equal(clean.sent, 0); assert.equal(clean.network, 0); assert.equal(clean.gh, 0);
+  assert.ok(clean.json.rows.every(row => row.cached && row.calls === 0));
 });
 
 // Oracles: cache safety and replay requirements; fake interpreter only.
