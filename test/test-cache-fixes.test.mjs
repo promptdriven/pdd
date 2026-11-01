@@ -190,3 +190,23 @@ for (const value of [null, '', '   ']) test(`TEST-CACHE-FIX invalid fixed clock 
   const repeat = await successful(ctx, selected);
   assert.equal(repeat.sent, 1); assert.equal(repeat.json.rows[0].cache_reason, 'runs every time: uses the real clock');
 });
+for (const part of ['engine', 'model']) test(`TEST-CACHE-FIX partial observations preserve latest known ${part}`, async t => {
+  const ctx = await setup(t); assert.equal((await successful(ctx)).sent, 3); changeIndependent(ctx);
+  ctx.state.edit = job => {
+    if (part === 'engine') { job.engine_sha = 'b'.repeat(40); delete job.usage.requested_model; delete job.result.report.evaluation.requested_model; }
+    else { delete job.engine_sha; job.usage.requested_model = 'synthetic-model-B'; job.result.report.evaluation.requested_model = 'synthetic-model-B'; }
+  };
+  assert.equal((await successful(ctx, ['independent'])).sent, 1);
+  ctx.state.edit = job => {
+    if (part === 'engine') delete job.engine_sha;
+    else { delete job.usage.requested_model; delete job.result.report.evaluation.requested_model; }
+  };
+  assert.equal((await successful(ctx, ['independent'])).sent, 1);
+  const latest = read(join(ctx.repo, '.pdd/cache/test/stories.json')).latest_identity;
+  ctx.state.edit = null;
+  const repeat = await successful(ctx);
+  assert.equal(repeat.sent, 3, 'later omission cannot erase a known conflicting build/model and authorize old passes');
+  assert.ok(latest, 'known partial identity is persisted');
+  if (part === 'engine') assert.equal(latest.engine_sha, 'b'.repeat(40));
+  else assert.deepEqual(latest.models, ['synthetic-model-B']);
+});
