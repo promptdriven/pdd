@@ -285,7 +285,7 @@ test('TEST-CACHE saved UUID read completion supplies reusable pass', async t => 
   assert.ok(repeat.json.rows.every(row => row.cached && row.calls === 0));
 });
 
-// Oracles: LEAD 20:05 R1/R3 and DESIGN §6; fake interpreter only.
+// Oracles: cache safety and replay requirements; fake interpreter only.
 test('TEST-CACHE lf disjoint scope falls back to its normal uncached selection', async t => {
   const ctx = await setup(t);
   ctx.mode('failed'); await ctx.invoke(['place-order']); ctx.mode('passed');

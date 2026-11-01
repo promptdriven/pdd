@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync, unlinkSync, existsSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-// Independent bounded oracle: LEAD.md 20:05, approved TEST-CACHE rules.
+// Independent bounded oracle: cache replay requirements, approved TEST-CACHE rules.
 // Failure selection is local to the named scope. No in-scope failure means
 // normal selection, including reuse. Clear retains scope and overrides --lf.
 const root = resolve(process.env.FORMAL_CODE_ROOT || fileURLToPath(new URL('..', import.meta.url)));
