@@ -75,7 +75,7 @@ for(const vector of vectors.cases)test(`2677 vector: ${vector.id}`,{timeout:1500
    }
    if(args[0]==='agent'&&args[1]==='prompt'){
     attempts++;if(args[2]!==originalPane)replacements++;
-    const answer=args[3].startsWith(answerPrefix),change=args[3].startsWith(changePrefix),text=answer?args[3].slice(answerPrefix.length,-answerSuffix.length):change?args[3].slice(changePrefix.length,-changeSuffix.length):args[3];
+    const answer=args[3].startsWith(answerPrefix),change=args[3].startsWith(changePrefix),text=answer?args[3].slice(answerPrefix.length,-answerSuffix.length):change?args[3].split('\n')[0].slice(changePrefix.length,-changeSuffix.length):args[3];
     if(!knownReady())beforeReady++;
     if(answer||change){const owned=readJournal().find(e=>e.text===text&&e.state==='pending'&&e.inFlight&&e.paneId===originalPane&&e.kind===(answer?'answer':'change'));custody.push(Boolean(owned));if(owned)bound.add(owned.paneId);}
     if(!knownReady()&&!given.initialAgentAlive)return missing();

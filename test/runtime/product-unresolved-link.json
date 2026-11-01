@@ -30,7 +30,7 @@
       "/project": "{\"version\": 2, \"repository\": \"example/coffee\", \"bindings\": [{\"run\": \"phone-1\", \"issue\": 81}]}"
     }
   },
-  "simulation": {
+  "simulation": {"savedChecks.evidence": {"action":"port.write","world_pointer":"/requests","result_template":{"json":"{\"stories\":[],\"warnings\":[]}"}},
     "productState.lock": {
       "action": "port.write",
       "world_pointer": "/requests",

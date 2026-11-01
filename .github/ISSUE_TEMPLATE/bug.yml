@@ -27,7 +27,7 @@ body:
       description: What you tried to do, in one sentence. Then the exact command.
       placeholder: |
         I tried to lint my first Story.
-        pdd check --lint
+        pdd lint
     validations:
       required: true
   - type: textarea
@@ -51,7 +51,7 @@ body:
     id: link
     attributes:
       label: Runtime link or run id
-      description: The report link that `pdd check` printed, a request ID, or for a workflow run the output of `pdd workflow status N`. Anyone with a report link can open it, so add it only when you agree. Never paste a Try link. Anyone with a Try link can use it.
+      description: The report link that `pdd test` printed, a request ID, or for a workflow run the output of `pdd workflow status N`. Anyone with a report link can open it, so add it only when you agree. Never paste a Try link. Anyone with a Try link can use it.
     validations:
       required: false
   - type: textarea
