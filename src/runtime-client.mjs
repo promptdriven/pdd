@@ -873,6 +873,8 @@ function answerCacheIdentity(answer) {
   if (!known(engine) || !models.length || !models.every(known) || new Set(models).size !== 1) return null;
   return { engine_sha: engine, requested_model: models[0] };
 }
+const observedIdentityMatches = (observed, identity) => !observed || ((!observed.engine_sha || observed.engine_sha === identity?.engine_sha)
+  && observed.models.every(model => model === identity?.requested_model));
 const sameCacheIdentity = (a, b) => !!a && !!b && a.engine_sha === b.engine_sha && a.requested_model === b.requested_model;
 
 function applyAnswer(row, answer, context, observedWait = null, observedAt = context.ports.now()) {
@@ -885,7 +887,7 @@ function applyAnswer(row, answer, context, observedWait = null, observedAt = con
   context.observedTestIdentities ??= [];
   const models = [answer?.usage?.requested_model, answer?.result?.report?.evaluation?.requested_model];
   context.observedTestIdentities.push({ engine_sha: knownIdentity(answer?.engine_sha) ? answer.engine_sha : null,
-    models: models.filter(knownIdentity) });
+    models: models.filter(knownIdentity), observed_at: new Date(context.ports.now()).toISOString() });
   const view = projectAnswer(answer, { origin: context.origin, secrets: context.secrets, steps: row.steps ?? [], criterionTexts: row.criterion_texts ?? {} });
   const advice = noVerdictAdvice(answer, view);
   const firstDiagnosis = view.failed_checks.find(check => check.diagnosis) ?? null, failed = view.state === 'failed';
@@ -1936,7 +1938,12 @@ function validTestCache(value) {
   const counts = value => value == null || keys(value, ['passed', 'total']) && ['passed', 'total'].every(key => Number.isSafeInteger(value[key]) && value[key] >= 0) && value.passed <= value.total;
   const evidence = row => keys(row, ['checks', 'criteria', 'criteria_total', 'draft']) && counts(row.checks) && counts(row.criteria)
     && (row.criteria_total === undefined || Number.isSafeInteger(row.criteria_total) && row.criteria_total >= 0) && typeof row.draft === 'boolean';
-  if (!keys(value, ['schema_version', 'generation', 'epoch', 'stories']) || typeof value.epoch !== 'string' || !UUID.test(value.epoch) || value.schema_version !== 1 || !Number.isSafeInteger(value.generation) || value.generation < 0 || !isObject(value.stories) || Object.keys(value.stories).length > 10000) return false;
+  if (!keys(value, ['schema_version', 'generation', 'epoch', 'stories', 'latest_identity']) || typeof value.epoch !== 'string' || !UUID.test(value.epoch) || value.schema_version !== 1 || !Number.isSafeInteger(value.generation) || value.generation < 0 || !isObject(value.stories) || Object.keys(value.stories).length > 10000) return false;
+  const latest = value.latest_identity;
+  if (latest !== undefined && (!keys(latest, ['engine_sha', 'models', 'observed_at', 'sampled_at'])
+    || !(latest.engine_sha === null || typeof latest.engine_sha === 'string' && latest.engine_sha.trim() && latest.engine_sha.trim().toLowerCase() !== 'unknown')
+    || !Array.isArray(latest.models) || latest.models.length > 2 || !latest.models.every(model => typeof model === 'string' && model.trim() && model.trim().toLowerCase() !== 'unknown')
+    || ![latest.observed_at, latest.sampled_at].every(at => typeof at === 'string' && Number.isFinite(Date.parse(at)) && new Date(at).toISOString() === at))) return false;
   return Object.entries(value.stories).every(([name, row]) => path(name) && keys(row, ['generation', 'outcome', 'pass']) && Number.isSafeInteger(row.generation) && row.generation >= 0 && row.generation <= value.generation
     && ['passed', 'failed', 'refused', 'not_run', 'unknown'].includes(row.outcome)
     && (row.pass === undefined || (row.outcome === 'passed' && keys(row.pass, ['fingerprint', 'passed_at', 'tests', 'rows', 'engine_sha', 'requested_model']) && hash(row.pass.fingerprint)
@@ -2192,7 +2199,7 @@ async function openTestCache(context, root, clear, visible) {
       if (visible) for (const story of Object.keys(data.stories)) {
         if (!visible.has(story)) { delete data.stories[story]; delete cache.failed[story]; }
       }
-      if (clear) { const generation = data.generation + 1; Object.assign(data, freshTestCache(cache), { generation }); cache.history = false; }
+      if (clear) { const generation = data.generation + 1; delete data.latest_identity; Object.assign(data, freshTestCache(cache), { generation }); cache.history = false; }
     }, clear);
   } catch { cacheWarning(cache); }
   return cache;
@@ -2274,6 +2281,7 @@ async function beginTestAttempts(cache, rows, capture, options, origin, force = 
       const fingerprint = capture ? storyFingerprint(cache, capture, story, options, origin) : null;
       const pass = data.stories[story]?.pass;
       const reason = capture && declarationCacheReason(capture, story, own.map(row => row.test))
+        || (pass && !observedIdentityMatches(data.latest_identity, pass) ? 'runs again: interpreter build or model changed' : null)
         || (Number.isFinite(Date.parse(pass?.passed_at)) && cache.context.ports.now() - Date.parse(pass.passed_at) > 7 * 86400000 ? 'runs again: saved pass is older than seven days' : null);
       if (reason) for (const row of own) row.cache_reason = reason;
       if (!force && !reason && !Object.hasOwn(cache.context.ports.env, 'CI') && eligibleCachePass(pass, cache.context.ports.now()) && fingerprint && pass?.fingerprint === identityFingerprint(cache, fingerprint, pass) && own.every(row => row.state === 'ready' && pass.tests.includes(row.test))) {
@@ -2290,6 +2298,12 @@ async function beginTestAttempts(cache, rows, capture, options, origin, force = 
 async function finishTestAttempts(cache, rows, capture) {
   if (cache.disabled) return;
   await cacheTransaction(cache, data => {
+    const observations = cache.context.observedTestIdentities ?? [];
+    const latest = observations.findLast(item => item.engine_sha || item.models.length);
+    if (latest && Number.isFinite(cache.context.startedAt)
+      && (!data.latest_identity || cache.context.startedAt >= Date.parse(data.latest_identity.sampled_at))) {
+      data.latest_identity = { ...latest, sampled_at: new Date(cache.context.startedAt).toISOString() };
+    }
     for (const [story, token] of cache.tokens) {
       if (data.epoch !== token.epoch || data.stories[story]?.generation !== token.generation) continue;
       const own = rows.filter(row => row.story_path === story && !row.cached), footprint = capture.stories?.find(item => item.story_path === story);
@@ -2298,7 +2312,8 @@ async function finishTestAttempts(cache, rows, capture) {
       const record = data.stories[story] = { generation: token.generation, outcome: outcome !== 'passed' && data.stories[story]?.outcome === 'failed' ? 'failed' : outcome };
       const identity = own[0]?.cache_identity;
       const consistent = identity && own.every(row => sameCacheIdentity(identity, row.cache_identity))
-        && rows.filter(row => !row.cached && row.cache_identity).every(row => sameCacheIdentity(identity, row.cache_identity));
+        && rows.filter(row => !row.cached && row.cache_identity).every(row => sameCacheIdentity(identity, row.cache_identity))
+        && observations.every(observed => observedIdentityMatches(observed, identity));
       const sampledAt = Math.min(cache.context.startedAt, ...own.map(row => row.cache_sample_at).filter(Number.isFinite));
       if (outcome === 'passed' && token.fingerprint && consistent && Number.isFinite(sampledAt)) {
         record.pass = { ...identity, fingerprint: identityFingerprint(cache, token.fingerprint, identity), tests: footprint.tests, passed_at: new Date(sampledAt).toISOString(),
