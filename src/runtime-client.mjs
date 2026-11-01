@@ -1210,7 +1210,7 @@ async function checkBatch(context, rows, priorLint = null) {
   }
   for (const [row, problem] of verdicts) Object.assign(row, { state: 'refused', phase: 'lint', refusals: [problem], why: lintView.why, next_step: lintView.next_step });
   const toSend = sendable.filter(row => row.state === 'ready');
-  if (priorLint) line(ports.stderr, `Sending ${toSend.length} more checks: interpreter build or model changed`);
+  if (priorLint) line(ports.stderr, `Sending ${toSend.length} more check${toSend.length === 1 ? '' : 's'}: interpreter build or model changed`);
   else line(ports.stderr, `${verdicts.size ? `Lint refused ${verdicts.size} of ${sendable.length} tests.` : 'Lint passed.'} Sent ${toSend.length} check${toSend.length === 1 ? '' : 's'} `
     + `at ${clock(ports.now())}: ${context.capture.files.length} files, ${formatSize(context.capture.bytes)}${context.otherNote ? ` ${context.otherNote}` : ''}.`);
   // Only now is there something to read again (lead, Oct 27): after lint passes, before the first check POST.
@@ -2220,7 +2220,7 @@ function storyFingerprint(cache, capture, story, options, origin) {
 // inventing another dependency graph or reading a later version of a source file.
 function declarationCacheReason(capture, story, tests) {
   const footprint = capture.stories?.find(item => item.story_path === story);
-  if (!footprint?.files || !Array.isArray(capture.sources)) return 'runs every time: resource declarations unavailable';
+  if (!footprint?.files || !Array.isArray(capture.sources)) return 'runs again: resource declarations unavailable';
   const sources = new Map(capture.sources.map(file => [file.path, Buffer.from(file.bytes).toString('utf8')]));
   const fake = name => `runs every time: uses an AI-played fake (${name})`;
   const deterministic = binding => {
@@ -2238,10 +2238,10 @@ function declarationCacheReason(capture, story, tests) {
       const blocks = interfaceBlocks(sources.get(file.path));
       if (blocks.length) prompts.push(JSON.parse(blocks[0][1]));
     }
-    catch { return 'runs every time: resource declarations unavailable'; }
+    catch { return 'runs again: resource declarations unavailable'; }
   }
   for (const path of tests) {
-    let doc; try { doc = JSON.parse(sources.get(path)); } catch { return 'runs every time: resource declarations unavailable'; }
+    let doc; try { doc = JSON.parse(sources.get(path)); } catch { return 'runs again: resource declarations unavailable'; }
     // A step override is part of that step's world, not evidence for other steps.
     const bindings = [doc.simulation ?? {}, ...(doc.steps ?? []).map(step => ({ ...(doc.simulation ?? {}), ...(step.simulation_overrides ?? {}) }))];
     for (const simulation of bindings) for (const [operation, binding] of Object.entries(simulation)) {
@@ -2256,7 +2256,7 @@ function declarationCacheReason(capture, story, tests) {
         const bound = bindings.every(simulation => deterministic(simulation[`${resource.name}.${operation.name}`]));
         if (resource.kind === 'port' && resource.name === 'clock' && operation.name === 'now') {
           const value = doc.initial_world?.clock?.now;
-          const fixed = typeof value === 'number' && Number.isFinite(value) || typeof value === 'string' && value.trim().length > 0;
+          const fixed = typeof value === 'number' && Number.isFinite(value) || typeof value === 'string' && Number.isFinite(Date.parse(value));
           if (!fixed && !bound) return 'runs every time: uses the real clock';
         } else if (!bound) return fake(resource.name);
       }
