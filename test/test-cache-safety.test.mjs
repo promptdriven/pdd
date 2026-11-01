@@ -9,9 +9,9 @@ import { runCheck } from '../src/runtime-client.mjs';
 import { harbor, fakeRuntime, portsFor } from './runtime-fake.mjs';
 
 function portsFactory(env) {
-  const { ports: clockPorts } = portsFor(env);
+  const { ports: clockPorts, clock } = portsFor(env);
   // Each invocation gets fresh output and hooks, but time never resets between runs.
-  return () => ({ ...portsFor(env).ports, now: clockPorts.now, sleep: clockPorts.sleep });
+  return () => { clock.now += 1; return { ...portsFor(env).ports, now: clockPorts.now, sleep: clockPorts.sleep }; };
 }
 
 async function fixture(t, identity) {
