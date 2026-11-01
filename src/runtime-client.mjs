@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 869a6a29ea25f036bbf09ca1bd0a72c44e923fc6857e614ad5507013737b181d).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: aebb548e556589630a7c0097ebbb0619e3b271d9abb713fb81185857ba10f749).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -878,6 +878,9 @@ const sameCacheIdentity = (a, b) => !!a && !!b && a.engine_sha === b.engine_sha 
 function applyAnswer(row, answer, context, observedWait = null, observedAt = context.ports.now()) {
   context.unsentInterruptions?.delete(row);
   row.cache_identity = answerCacheIdentity(answer);
+  // Evidence is no newer than its original batch, even when read much later.
+  const times = [context.startedAt, ...[answer?.finished_at, answer?.completed_at, answer?.ended_at].map(value => typeof value === 'number' ? value : Date.parse(value))].filter(Number.isFinite);
+  row.cache_sample_at = times.length ? Math.min(...times) : null;
   const knownIdentity = value => typeof value === 'string' && value.trim() && value.trim().toLowerCase() !== 'unknown';
   context.observedTestIdentities ??= [];
   const models = [answer?.usage?.requested_model, answer?.result?.report?.evaluation?.requested_model];
@@ -1755,7 +1758,7 @@ async function refreshCheckBatches(context, identity, origin, id, answer) {
         const capture = context.ports.captureSource(root, { tests: saved.rows.map(row => row.test), appMap: null });
         if (capture.sha256 !== saved.source_sha256) continue;
         // Project receipts privately: UUID reads never rewrite saved batch/summary views.
-        const projection = { ...context, reading: true, visible: findTests({ root }).visible, warnings: [] };
+        const projection = { ...context, startedAt: Date.parse(saved.created_at), reading: true, visible: findTests({ root }).visible, warnings: [] };
         const rows = saved.rows.map(savedRow => {
           const row = { ...savedRow, state: 'unknown', calls: 'unknown', request_ids: [...(savedRow.request_ids ?? [])], checks: null };
           const latest = row.request_ids.at(-1), receipt = latest && store.read(join(folder, `${latest}.json`));
@@ -2265,7 +2268,8 @@ async function beginTestAttempts(cache, rows, capture, options, origin, force = 
       if (!story) continue;
       const fingerprint = capture ? storyFingerprint(cache, capture, story, options, origin) : null;
       const pass = data.stories[story]?.pass;
-      const reason = capture && declarationCacheReason(capture, story, own.map(row => row.test));
+      const reason = capture && declarationCacheReason(capture, story, own.map(row => row.test))
+        || (Number.isFinite(Date.parse(pass?.passed_at)) && cache.context.ports.now() - Date.parse(pass.passed_at) > 7 * 86400000 ? 'runs again: saved pass is older than seven days' : null);
       if (reason) for (const row of own) row.cache_reason = reason;
       if (!force && !reason && !Object.hasOwn(cache.context.ports.env, 'CI') && eligibleCachePass(pass, cache.context.ports.now()) && fingerprint && pass?.fingerprint === identityFingerprint(cache, fingerprint, pass) && own.every(row => row.state === 'ready' && pass.tests.includes(row.test))) {
         for (const row of own) Object.assign(row, pass.rows[row.test], { state: 'passed', cached: true, cache_identity: { engine_sha: pass.engine_sha, requested_model: pass.requested_model }, passed_at: pass.passed_at, phase: 'cache', calls: 0, seconds: 0, request_ids: [], report_url: null });
@@ -2290,8 +2294,9 @@ async function finishTestAttempts(cache, rows, capture) {
       const identity = own[0]?.cache_identity;
       const consistent = identity && own.every(row => sameCacheIdentity(identity, row.cache_identity))
         && rows.filter(row => !row.cached && row.cache_identity).every(row => sameCacheIdentity(identity, row.cache_identity));
-      if (outcome === 'passed' && token.fingerprint && consistent) {
-        record.pass = { ...identity, fingerprint: identityFingerprint(cache, token.fingerprint, identity), tests: footprint.tests, passed_at: new Date(cache.context.ports.now()).toISOString(),
+      const sampledAt = Math.min(cache.context.startedAt, ...own.map(row => row.cache_sample_at).filter(Number.isFinite));
+      if (outcome === 'passed' && token.fingerprint && consistent && Number.isFinite(sampledAt)) {
+        record.pass = { ...identity, fingerprint: identityFingerprint(cache, token.fingerprint, identity), tests: footprint.tests, passed_at: new Date(sampledAt).toISOString(),
           rows: Object.fromEntries(own.map(row => [row.test, { checks: row.checks, criteria: row.criteria, criteria_total: row.criteria_total, draft: !!row.draft }])) };
       }
     }
