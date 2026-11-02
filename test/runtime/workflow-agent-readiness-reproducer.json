@@ -1,0 +1,71 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/workflow-agent-readiness-reproducer.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "With Codex signed in and Claude Code installed but signed out, PDD selects Codex."
+    },
+    {
+      "id": "AC2",
+      "text": "With Claude Code signed in and Codex installed but signed out, PDD selects Claude Code."
+    }
+  ],
+  "initial_world": {},
+  "simulation": {},
+  "context": [],
+  "steps": [
+    {
+      "step_id": "codex-ready-other-signed-out",
+      "entry_path": "prompts/cli/workflow-agents.prompt.md",
+      "operation": "chooseWorkflowAgent",
+      "input": {
+        "codex": "ready",
+        "claude": "signed_out"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/ok",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/agent",
+          "op": "equals",
+          "value": "codex"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "claude-ready-other-signed-out",
+      "entry_path": "prompts/cli/workflow-agents.prompt.md",
+      "operation": "chooseWorkflowAgent",
+      "input": {
+        "codex": "signed_out",
+        "claude": "ready"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/ok",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/agent",
+          "op": "equals",
+          "value": "claude"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}
