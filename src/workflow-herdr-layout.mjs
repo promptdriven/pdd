@@ -25,16 +25,17 @@ function identityChanged(workspaceId, field, expected, found) {
   return Object.assign(new Error(`herdr_layout_identity_changed: Herdr session ${PDD_HERDR_SESSION} workspace ${shown(workspaceId)} has ${field} ${shown(found)}, but the run expects ${shown(expected)}. Inspect that workspace in Herdr, restore it, then retry.`),
     { code: 'herdr_layout_identity_changed', field, expected, found });
 }
-// Without the run record, a duplicate or inconsistent cache entry refuses before any mutation and says how it recovers:
-// the run's next chat start passes its run record, and reconcileOwner rebuilds the entry from it.
-const cacheRefusal = (code, what) => Object.assign(new Error(`${code}: the layout registry ${what}. Nothing was changed. The run's next chat start (for example pdd workflow approve or pdd workflow open --new) rebuilds this entry from the saved run record.`), {code});
+// A duplicate or inconsistent cache entry that cannot be rebuilt refuses before any mutation and names the one true step.
+const cacheRefusal = (code, what, step) => Object.assign(new Error(`${code}: the layout registry ${what}. Nothing was changed. ${step}`), {code});
 const sameNamespace = (registry, key, commonDir) => registry.repositories.filter(r=>r.key===key&&r.commonDir===commonDir);
 const consistent = (entry, key) => String(entry.repository??'').toLowerCase()===key;
-function repositoryEntry(registry, key, commonDir) {
+const removeStep = (directory, key, commonDir) => `Remove the extra ${key} entries for ${commonDir} from ${join(directory,'registry.json')}, keeping the one whose workspace is open in Herdr session pdd, then retry.`;
+const closeStep = 'The repository workspace stays open; close it yourself in Herdr session pdd if you do not need it.';
+function repositoryEntry(registry, key, commonDir, step) {
   const matches=sameNamespace(registry,key,commonDir);
-  if(matches.length>1)throw cacheRefusal('layout_allocation_uncertain',`has ${matches.length} entries for ${key} at ${commonDir}`);
+  if(matches.length>1)throw cacheRefusal('layout_allocation_uncertain',`has ${matches.length} entries for ${key} at ${commonDir}`,step);
   // An entry whose repository disagrees with its key cannot prove ownership of either.
-  if(matches[0]&&!consistent(matches[0],key))throw cacheRefusal('invalid_layout_registry',`entry for ${key} names repository ${JSON.stringify(matches[0].repository??null)}`);
+  if(matches[0]&&!consistent(matches[0],key))throw cacheRefusal('invalid_layout_registry',`entry for ${key} names repository ${JSON.stringify(matches[0].repository??null)}`,step);
   return matches[0];
 }
 const checkoutLabel = repo => `${repo.repository}@${createHash('sha256').update(repo.commonDir).digest('hex').slice(0,12)}`;
@@ -131,10 +132,21 @@ async function liveStageTab(command, run, saved) {
 async function reconcileOwner({registry,rows,command,checkpoint,directory,owner,key,repository,sourceRoot,commonDir,cwd,runLabel}) {
   const chats=(owner.chats??[]).filter(chat=>id(chat?.workspaceId)),layout=owner.layout??{};
   const workspaceId=layout.workspaceId??chats.at(-1)?.workspaceId,repoWorkspaceId=layout.repoWorkspaceId??chats.at(-1)?.repoWorkspaceId;
-  if(!id(workspaceId))return;
-  const entries=sameNamespace(registry,key,commonDir);
-  let entry=registry.runs.find(r=>r.runId===owner.runId),repo=entries.length===1&&consistent(entries[0],key)?entries[0]:null;
   const verified=async(check)=>{try{await check();return true;}catch{return false;}};
+  let entries=sameNamespace(registry,key,commonDir);
+  if(!id(workspaceId)) {
+    // No saved workspace to rebuild from: keep the one ready entry whose repository workspace is verified open in Herdr
+    // (none: a fresh parent is allocated later), archive the others. Nothing is closed or deleted.
+    if(entries.length<2&&entries.every(e=>consistent(e,key))||entries.some(e=>e.phase!=='ready'))return;
+    const live=[];
+    for(const e of entries)if(!live.some(x=>x.workspaceId===e.workspaceId)&&await verified(()=>ownedRepository(rows,{...e,key,repository},command)))live.push(e);
+    if(live.length>1)throw cacheRefusal('layout_allocation_uncertain',`has ${entries.length} entries for ${key} at ${commonDir}, and workspaces ${live.map(e=>e.workspaceId).join(', ')} are all open for it`,`Close the one you do not use in Herdr session pdd, then retry.`);
+    registry.archivedRepositories=[...(registry.archivedRepositories??[]),...entries.filter(e=>e!==live[0]).map(e=>({...e,reason:'duplicate-or-inconsistent-cache'}))];
+    registry.repositories=[...registry.repositories.filter(r=>!entries.includes(r)),...(live[0]?[{...live[0],key,repository}]:[])];
+    await checkpoint();await persist(directory,registry);
+    return;
+  }
+  let entry=registry.runs.find(r=>r.runId===owner.runId),repo=entries.length===1&&consistent(entries[0],key)?entries[0]:null;
   const runCached=entry?.phase==='ready'&&entry.workspaceId===workspaceId&&await verified(async()=>{ownedWorkspace(rows,entry,cwd);await assertRunRoot(command,entry);});
   const repoCached=repo?.phase==='ready'&&(!id(repoWorkspaceId)||repo.workspaceId===repoWorkspaceId)&&await verified(()=>ownedRepository(rows,repo,command));
   if(runCached&&repoCached)return;
@@ -189,7 +201,7 @@ export async function openHerdrRunLayout(input, ports) {
   const sourceRoot=parent.root,key=input.repository.toLowerCase(),name=input.repository.split('/')[1];
   const runLabel=`${name}#${input.issueNumber} ${input.workflowName}`;
   if(owner)await reconcileOwner({registry,rows,command,checkpoint,directory,owner,key,repository:input.repository,sourceRoot,commonDir,cwd,runLabel});
-  let repo=repositoryEntry(registry,key,commonDir);
+  let repo=repositoryEntry(registry,key,commonDir,removeStep(directory,key,commonDir));
   const pending=registry.runs.find(r=>r.runId===input.runId);
   if(pending && (!samePath(pending.commonDir,commonDir) || !samePath(pending.cwd,cwd) ||
     ![runLabel,`#${input.issueNumber} ${input.workflowName}`].includes(pending.label)))throw problem('herdr_run_binding_changed');
@@ -197,7 +209,8 @@ export async function openHerdrRunLayout(input, ports) {
     (pending.phase==='refused'&&pending.refusal==='linked_worktree_source' ||
      pending.phase==='intent'&&!pending.retriedRefusal&&input.preAgentRefusal==='linked_worktree_source');
   // A saved run keeps its repository workspace binding: a missing or different namespace refuses before any allocation.
-  if(pending && (!repo || pending.repoWorkspaceId!==repo.workspaceId))throw cacheRefusal('herdr_run_binding_changed',`binds run ${pending.runId} to repository workspace ${pending.repoWorkspaceId}, but ${repo?`the ${key} entry is ${repo.workspaceId}`:`has no ${key} entry for ${commonDir}`}`);
+  if(pending && (!repo || pending.repoWorkspaceId!==repo.workspaceId))throw cacheRefusal('herdr_run_binding_changed',`binds run ${pending.runId} to repository workspace ${pending.repoWorkspaceId}, but ${repo?`the ${key} entry is ${repo.workspaceId}`:`has no ${key} entry for ${commonDir}`}`,
+    owner?`The run record has no saved workspace to rebuild from: remove run ${pending.runId} from ${join(directory,'registry.json')}, then retry.`:'Pass the saved run record (input run), which rebuilds the entry from it.');
   if(refused){
     if(!samePath(pending.cwd,cwd) || rows.some(w=>samePath(w.worktree?.checkout_path,cwd)))throw problem('layout_allocation_uncertain');
     pending.phase='refused';pending.refusal='linked_worktree_source';
@@ -313,7 +326,7 @@ export async function closeHerdrRunLayout({runId,cwd,layout}, ports) {
 // Returns true when it closed or was already gone; a workspace still in use (more tabs or panes, or open runs) stays.
 export async function closeHerdrRepoLayoutIfIdle({repository,commonDir}, ports) {
   const directory=directoryFor(ports),registry=await readRegistry(directory),{command,checkpoint}=ports;
-  const repo=repositoryEntry(registry,String(repository).toLowerCase(),commonDir);
+  const repo=repositoryEntry(registry,String(repository).toLowerCase(),commonDir,closeStep);
   if(!repo||repo.phase!=='ready')return false;
   if(registry.runs.some(r=>r.repoWorkspaceId===repo.workspaceId&&r.phase!=='closed'))return false;
   const rows=await inventory(command);
