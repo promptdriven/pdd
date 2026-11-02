@@ -331,6 +331,40 @@ test('RUNTIME-XFIX4: reruns attach to each failed check, use diagnosis data, and
   assert.equal(invalid.json.rows[0].rerun.calls, undefined); assert.equal(invalid.json.rows[0].rerun.steps[0].runs, undefined); assert.equal(invalid.json.rows[0].rerun.steps[0].failed, undefined);
 });
 
+test('RUNTIME-RERUN-REFUSED: an admission refusal has no rerun verdict or share and starts no follow-up check', async t => {
+  for (const options of [{}, { '--json': true }]) {
+    const setup = harbor(t);
+    const fake = await fakeRuntime(t, (entry, f) => {
+      if (entry.method !== 'GET') return f.normal(entry);
+      const answer = f.check(entry.url.split('/').at(-1), 'refused', [], [{ code: 'run-admission-failed',
+        message: 'The step needs more AI calls than the run ceiling allows.', cause: 'call-budget' }]);
+      answer.result.exitCode = 4;
+      answer.usage.calls = 0;
+      return { status: 200, json: answer };
+    });
+    const result = await check(setup, fake, ['place-order'], options);
+    assert.equal(result.code, 4, result.err + result.out);
+    assert.deepEqual(fake.posts.map(post => post.command), ['lint', 'check']);
+    if (options['--json']) {
+      assert.equal(result.json.exit_code, 4);
+      assert.equal(result.json.rows.length, 1);
+      const row = result.json.rows[0];
+      assert.equal(row.state, 'refused');
+      assert.equal(row.calls, 0);
+      assert.equal(row.rerun, null);
+      assert.deepEqual(row.failed_checks, []);
+      assert.equal(row.refusals[0].code, 'run-admission-failed');
+      assert.match(result.json.summary_line, /^Prompt tests \(place-order\): no verdict · [^\n]*1 refused · 0 AI calls$/);
+      assert.doesNotMatch(result.json.summary_line, /\(\d+ for reruns\)|\((?:un)?stable\)|✗/);
+    } else {
+      assert.match(result.out, /REFUSED/);
+      assert.match(result.out, /run-admission-failed/);
+      assert.match(result.out, /^Prompt tests \(place-order\): no verdict · [^\n]*1 refused · 0 AI calls$/m);
+      assert.doesNotMatch(result.out, /Rerun:|\(\d+ for reruns\)|\((?:un)?stable\)|✗|FAILED/);
+    }
+  }
+});
+
 test('RUNTIME-XFIX5: multiline values, result targets and run-level diagnosis sources stay guarded', async t => {
   const setup = harbor(t);
   const answerFor = ({ checks, result = {}, why = null, who = null, next_step = null, error = null }) => async (entry, f) => {

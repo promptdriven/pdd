@@ -276,7 +276,8 @@ node `<file>--op-<operation>--hex-<operation name in hex>`. `printf add | xxd -p
 - A step costs 1 AI call when the prompt only answers, 2 to 3 when it uses saved data or calls another prompt, and up
   to 4 when it calls a prompt that uses saved data. A 3-step Harbor test used 9. A 9-step test (`app` calls `store`) used 34.
 - `pdd test` gives each test 12 calls for each step, at least 18 and at most 1000. Override it with `--max-calls N` from 1 through 1000, the interpreter maximum.
-- **Choose a ceiling of at least 3 times your worst-case estimate** when setting `--max-calls` for a check or a simulation. Include child calls, saved-data operations, redraws and all the moves you plan to try. The budget is a ceiling, not a charge: you are charged only for calls that run. If the estimate does not fit the server maximum, report that limit; do not silently reduce the margin or change expected values.
+- For a failed check, the runtime can automatically run each of at most 3 failed steps up to 2 more times to diagnose stability: at most 6 additional AI calls, within the original `--max-calls` ceiling.
+- **Choose a ceiling of at least 3 times your worst-case estimate** when setting `--max-calls` for a check or a simulation. Include child calls, saved-data operations, redraws, all the moves you plan to try and, for a check, the automatic rerun allowance above. The budget is a ceiling, not a charge: you are charged only for calls that run. If the estimate does not fit the server maximum, report that limit; do not silently reduce the margin or change expected values.
 - A new `pdd simulate` requests a session budget of 400 calls. `pdd simulate STORY --max-calls 600` chooses a different ceiling when starting a new simulation. The CLI cannot raise an existing simulation’s ceiling; `--new` starts fresh saved data. The output shows the interpreter-confirmed total and remaining calls. Reusing a simulation without this option keeps its current budget.
 - Too few calls left gives the refusal `repository-graph-catalog-error`. It is not a prompt error. The interface `limits` do not set this budget.
 - **Worst case of a step:** 1, plus for each entry in its prompt's `calls`: `max_calls` × (worst case of the called
@@ -307,6 +308,15 @@ A failed check shows the criterion, the path, the expected value and the answer:
 The report preview shows the first 256 characters of a longer string followed by `…`. The check still compares
 the full value exactly. Preview clipping and sensitive-value redaction do not shorten the value being checked.
 A draft prompt is checked too. Its row and its report say DRAFT. A DRAFT pass is not an approval.
+The `Prompt tests` line's total AI calls already includes automatic reruns reported by the server. For example,
+`5 AI calls (2 for reruns)` means 5 total, of which 2 were for reruns; never add the rerun share again.
+For a failed step, pdd prints at most one `Rerun:` verdict:
+
+- `Rerun: failed 3 of 3 (stable). A recheck of the same files will not help.` means the failure repeated consistently.
+- `Rerun: failed 1 of 3 (unstable). Make the rule in the prompt firmer.` means the answers varied.
+- `Rerun: passed M of M reruns.` means all reported reruns passed; the original failed check still needs investigation.
+- `Rerun: skipped (<reason>).` means the runtime skipped diagnosis, for example `more-than-3-failed-steps` or `budget`. A skipped or unavailable diagnosis, including a single run, supplies no stability verdict. A refusal is not a failed expectation and has no verdict.
+
 In a person's terminal, `pdd test` waits until every check ends and prints `Still running: …` every 30 s. In an
 agent's shell it returns after about 90 s with `Still running` and the batch; then run `pdd test --read` about every
 minute, doing other work in between, until every Story has a result. Never send the same check again.
