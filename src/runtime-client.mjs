@@ -1285,7 +1285,7 @@ async function runScheduledChecks(context, rows, toSend) {
     if (context.blocked && !rows.some(isOpen)) throw new Stop(5, context.blocked);
     const waiting = toSend.filter(row => row.state === 'waiting');
     if (waiting.length !== waitingShown) {
-      if (waiting.length) line(ports.stderr, `PDD is busy right now. ${waiting.length} checks are waiting locally.`);
+      if (waiting.length) line(ports.stderr, `⏳ PDD is busy right now. ${waiting.length} of your checks ${waiting.length === 1 ? 'is' : 'are'} waiting to start. You are not charged while you wait.`);
       waitingShown = waiting.length;
     }
     if (context.sendError) throw context.sendError;
