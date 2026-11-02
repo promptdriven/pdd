@@ -601,7 +601,8 @@ test('R5: Try links (/s/<token>/) are removed from PR bodies; report links (/r/)
   writeFileSync(join(run.runDir, 'verify.md'), 'Try: https://rt.example.test/s/TTTTTTTT/\nReport: https://rt.example.test/r/360b7197\n');
   await lastSteps(f, run, await stepDone({ step: 'verify', summary: 'ok', cwd: run.root }, f.agentPorts()));
   const body = f.prs[0].body;
-  assert.doesNotMatch(body, /\/s\//); assert.equal(body.split('(Try link removed)').length - 1, 3);
+  // Two in the Steps line, the same two in the full step summaries, one in verify.md.
+  assert.doesNotMatch(body, /\/s\//); assert.equal(body.split('(Try link removed)').length - 1, 5);
   assert.match(body, /https:\/\/rt\.example\.test\/r\/360b7197/);
 });
 
@@ -656,7 +657,7 @@ test('code area build → verify → formal: a loop back to build only warns, as
   const pr2 = await done('formal', 'Proved (bounded)');
   assert.match(pr2.message, /pdd opens PR 2 now/); assert.equal(f.prs.length, 2);
   assert.match(f.prs[1].body, /\| 1 \| 2 \| 2 \| same \|/); assert.match(f.prs[1].body, /Proved \(bounded\): 0\.\.999/);
-  assert.match(f.prs[1].body, /\*\*formal\*\*: Proved \(bounded\)/); assert.doesNotMatch(f.prs[1].body, /first build|✗ 2 vectors fail/);
+  assert.match(f.prs[1].body, /\*\*formal\*\*: `Proved \(bounded\)`/); assert.doesNotMatch(f.prs[1].body, /first build|✗ 2 vectors fail/);
 });
 
 // Seen in a real run: the person said "I approve the prompt. Yes, build the code."; the chat committed the approval
@@ -803,7 +804,8 @@ test('#18: the PR body puts the Runtime check and report link on top, cuts steps
   assert.equal(top[0], 'Prompt tests (DRAFT): ✓ 3 of 3 criteria · 18/18 checks · 12 AI calls');
   assert.equal(top[1], 'Report: https://rt.example.test/r/d379-42 (report links expire after 7 days)');
   assert.equal(top[3], 'Part of #17');
-  for (const row of body.split('\n').filter(row => row.startsWith('- **'))) assert.ok(row.length <= 220, row);
+  const stepsList = body.split('\n## Steps\n')[1].split('\n\n')[0].split('\n');
+  assert.ok(stepsList.length > 0); for (const row of stepsList) assert.ok(row.startsWith('- **') && row.length <= 220, row);
   assert.doesNotMatch(body, /\/Users\/|\/home\/|\/private\/|\/var\/folders/);
   assert.doesNotMatch(body, /## Verify/, 'PR 1 has no verify step, so no verify.md');
   assert.match(body, /test\/x\.test\.mjs/, 'a worktree path stays as a repo path');
@@ -1293,7 +1295,7 @@ test('0.1.7 #12: status and PR step lines never cut a summary inside a URL', asy
   writeFileSync(join(run.runDir, 'verify.md'), 'ok\n');
   await lastSteps(f, run, await stepDone({ step: 'verify', summary: 'ok', cwd: run.root }, f.agentPorts()));
   const line = f.prs[0].body.split('\n').find(row => row.startsWith('- **change**'));
-  assert.ok(line.endsWith(`see ${url} …`), line);
+  assert.ok(line.endsWith(`see ${url} …\``), line);
 });
 
 // Tester 4.13: the chat told the person "PDD rejected recording your earlier "Go on" because it requires a reply after
@@ -1359,7 +1361,7 @@ test('0.1.7 #14: a verify.md that already folds its commands in <details> keeps 
   await lastSteps(f, run, await stepDone({ step: 'verify', summary: 'ok', cwd: run.root }, f.agentPorts()));
   const body = f.prs[0].body;
   assert.ok(body.includes(verify.replaceAll('## ', '### ').trim()), body);
-  assert.equal((body.match(/<details>/g) ?? []).length, 1);
+  assert.equal((body.split('\n## Verify\n')[1].match(/<details>/g) ?? []).length, 1, 'verify.md keeps its own block and gets no second fold.');
 });
 
 // skills-017 7d2d7e7 (bug check step): the check summary starts with the verdict and "Before ✗ … → after ✓ …" for the top of PR 1.
@@ -1833,7 +1835,7 @@ test('PRBODY7: failures and report links inside authored details or auto-folded 
     await lastSteps(f, run, await stepDone({ step: 'verify', summary: 'verification recorded', cwd: run.root }, f.agentPorts()));
     const body = f.prs[0].body;
     assert.ok([...body].length <= 60_000); assert.ok(body.includes(failure), style); assert.ok(body.split('\n').includes(`Report: ${url} (report links expire after 7 days)`), style);
-    assert.match(body, /full verify report/); assert.doesNotMatch(body, /<details\b/); assert.equal(readFileSync(join(run.runDir, 'verify.md'), 'utf8'), verify);
+    assert.match(body, /full verify report/); assert.doesNotMatch(body.split('\n## Verify\n')[1], /<details\b/); assert.equal(readFileSync(join(run.runDir, 'verify.md'), 'utf8'), verify);
   }
 });
 

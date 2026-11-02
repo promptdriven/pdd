@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: fa9b715e4e0faf5043e4b3406d0f6fd79cd6166a9e01ca4c6f1f9377822bbcb4).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: b923e590d9fd4197079ad74cec07897b5fa160898185e44961c6f0019f52bcf5).
 export const OPEN_STATES = new Set(['queued', 'running']);
 const RESULT_WORDS = { not_run: 'not run' };
 
@@ -158,7 +158,7 @@ export function jsonRow(row) {
     seconds: round(row.seconds), requested_model: row.requested_model ?? null, report_url: row.report_url ?? null,
     request_id: row.request_ids?.at(-1) ?? null, draft: !!row.draft, busy: !!row.busy, can_retry: !!row.can_retry, time_limit: row.time_limit ?? null,
     why: row.why ?? null, who: row.who ?? null, next_step: row.next_step ?? null,
-    rerun: row.rerun ?? null,
+    rerun: row.rerun ?? null, ...(typeof row.cache_reason === 'string' ? { cache_reason: row.cache_reason } : {}), ...(row.cached ? { cached: true, passed_at: row.passed_at } : {}),
     reason: ['passed', 'failed'].includes(row.state) ? null : row.time_limit ? { code: row.time_limit.code, message: `${row.time_limit.message} ${row.time_limit.fix}` } : row.provider ? { code: row.provider.code, message: PROVIDER_TEXT } : row.note ?? (row.state === 'unknown' && row.why ? { code: null, message: row.why } : null) };
 }
 
@@ -200,12 +200,19 @@ export function summaryLine(rows, story = null) {
   const rerunShare = rerunCalls ? `${rerunCalls} for reruns` : '';
   const usage = known.length ? `${count(calls, 'AI call')}${rerunShare ? ` (${rerunShare})` : ''}` : rerunShare || count(calls, 'AI call');
   return [`${PROMPT_TESTS_LABEL}${story ? ` (${story})` : ''}${rows.some(row => row.draft) ? ' (DRAFT)' : ''}: ${mark} ${criteria.passed} of ${count(criteria.total, 'criterion').replace(/criterions$/, 'criteria')}`,
-    `${checks.passed}/${checks.total} checks`, ...others, `${usage}${unknownCalls ? ` + ${unknownCalls} unknown` : ''}`].join(' · ');
+    `${checks.passed}/${checks.total} checks`, ...others, ...(rows.some(row => row.cached) ? [count(new Set(rows.filter(row => row.cached).map(row => row.story_path ?? row.story)).size, 'Story').replace('Storys', 'Stories') + ' skipped'] : []), `${usage}${unknownCalls ? ` + ${unknownCalls} unknown` : ''}`].join(' · ');
 }
 
-function table(rows) {
+const shellWord = word => /^[A-Za-z0-9_./:@%+=,-]+$/.test(word) ? word : `'${word.replaceAll("'", "'\\''")}'`;
+
+function table(rows, now) {
+  const previousPass = row => {
+    const date = new Date(row.passed_at), today = new Date(now), two = number => String(number).padStart(2, '0');
+    return 'unchanged, passed ' + (date.toDateString() === today.toDateString() ? `${two(date.getHours())}:${two(date.getMinutes())}` : `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())}`)
+      + `; force with pdd test --cache-clear ${shellWord(row.story)}`;
+  };
   const lines = [['Story', 'Test', 'Result', 'Checks', 'Time'], ...rows.map(row => [row.title ?? row.story, row.test,
-    `${row.busy ? 'busy (not run)' : RESULT_WORDS[row.state] ?? row.state}${row.draft ? ' (DRAFT)' : ''}`, row.checks ? `${row.checks.passed}/${row.checks.total}` : '-',
+    `${row.cached ? previousPass(row) : row.busy ? 'busy (not run)' : RESULT_WORDS[row.state] ?? row.state}${row.draft ? ' (DRAFT)' : ''}${row.cache_reason ? `; ${cleanText(row.cache_reason)}` : ''}`, row.checks ? `${row.checks.passed}/${row.checks.total}` : '-',
     typeof row.seconds === 'number' ? `${round(row.seconds).toFixed(1)} s` : '-'])];
   const widths = lines[0].map((_, column) => Math.max(...lines.map(line => line[column].length)));
   return lines.map(line => line.map((cell, column) => column === line.length - 1 ? cell : cell.padEnd(widths[column])).join('  ').trimEnd());
@@ -291,12 +298,13 @@ function localRefusals(rows, secrets) {
 }
 
 // The terminal result of a batch (stdout).
-export function renderText({ batch, rows, coverage, warnings = [], details = false, timeoutMin = null, interrupted = false, reading = false, exitCode, secrets = [], recovery }) {
+export function renderText({ batch, rows, coverage, warnings = [], details = false, timeoutMin = null, interrupted = false, reading = false, exitCode, secrets = [], recovery, now = Date.now(), noFailed = false }) {
   const out = [];
   if (exitCode === 3) out.push(recovery ?? `pdd test --read ${batch}`);
   // One Story: its own line is the result; the overall line comes only with two or more Stories.
   const perStory = storyLines(rows).map(([, text]) => text);
-  out.push(...table(rows), ...(perStory.length === 1 ? perStory : [...perStory, summaryLine(rows)]));
+  if (noFailed) return 'No failed Stories. 0 AI calls.\n';
+  out.push(...table(rows, now), ...(perStory.length === 1 ? perStory : [...perStory, summaryLine(rows)]));
   if ([3, 4, 5].includes(exitCode)) {
     const failed = new Set(rows.filter(row => row.state === 'failed').map(row => row.story));
     const inconclusive = new Set(rows.filter(row => !['passed', 'failed'].includes(row.state)).map(row => row.story));

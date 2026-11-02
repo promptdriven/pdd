@@ -1,6 +1,88 @@
 # Runtime client
 
-Own `src/runtime-client.mjs`. Export `runCheck({words, options, cwd}, ports)` and `runTry({words, options, cwd}, ports)`. Each returns an exit code. These commands and the Try MCP tools call the PDD interpreter with the person's `gh` login. Lines that pdd writes itself call it the PDD interpreter ([word rule](public-boundary.prompt.md#pdd-interpreter)).
+Own `src/runtime-client.mjs`. Export `runCheck({words, options, cwd, cache=false}, ports)` and `runTry({words, options, cwd}, ports)`. Each returns an exit code. These commands and the Try MCP tools call the PDD interpreter with the person's `gh` login. Lines that pdd writes itself call it the PDD interpreter ([word rule](public-boundary.prompt.md#pdd-interpreter)).
+
+## Reuse complete Story passes
+
+Ordinary test CLI calls opt into local reuse with `cache:true`; direct `runCheck`
+callers retain `cache:false` by default. Explicit `--lf` or `--cache-clear` also
+opts in. Apply this only to ordinary checks: lint, files, fill-hash, screen,
+request, saved reads/retries and Try keep their current behavior. Cache options
+mixed with those modes are input errors before effects.
+
+The existing [source capture](runtime-preflight.prompt.md#source-capture) owns
+Story footprints. Use its complete sibling-test membership, effective source
+hashes and reference provenance, plus exact Story/test bytes and reached raw
+prompt/interface bytes for eligibility. Do not substitute upload-wide hashes or
+a second dependency walk. An unavailable footprint never authorizes reuse.
+Changed execution origin, explicit call-budget settings or pdd test-format/package version invalidate reuse. Interpreter identity comes from each confirmed job answer: `engine_sha` and `requested_model` (the reported usage/evaluation requested model), never the local `ENGINE_SHA` constant. Store this identity with each pass and include it in eligibility. Missing, empty, unknown or conflicting identity cannot authorize reuse, including legacy entries and inconsistent sibling answers. Date each pass from the original batch start (saved created_at on either read path), never the time it was read or stored; use an earlier reported finish time if present. An expired saved pass reports `runs again: saved pass is older than seven days`. Reuse requires a complete pass at most seven days old, inclusive, measured by the injected clock; future or invalid pass times cannot authorize reuse. `CI` unset or set to the empty string, `0` or `false` permits ordinary reuse; every other value runs every selected Story. These edit-loop guards do not invalidate a saved pass of at most seven days for prompt approval.
+
+When any confirmed test-job answer in the current invocation reports a build or requested model different from a provisionally skipped Story's saved identity, run that Story's selected tests in this same invocation. Replace its provisional cached row with the actual result, report `runs again: interpreter build or model changed`, and count its calls and outcome normally. Do not leave both cached and executed rows, rerun an already executed test, or expand operand scope. Differing identities within a run cannot create reusable whole-Story evidence: compare every known build and every known requested model, even on partial identities. A Story may be reused only when one clean identity record names the same known build and model as its complete pass, and that pass is at most seven days old. In every other case it runs. A clean record comes from one normal invocation that started after the previous record's sample time, whose record did not change during the invocation, and whose every observation agrees on a known build and model. Overlap, a read writing the record (including a read that resends a check), an older or unknown writer, mixed or partial observations, or stored multiple build/model values makes the record doubt: it matches no pass, regardless of a false conflict flag. A read's identity is fixed when the read starts; later scheduling cannot turn it into a normal invocation. The next clean normal run can write clean evidence again. Before sending checks, write an in-progress mark with this invocation's unique ownership token, pid and start time in the same begin transaction that invalidates the selected passes. Any other invocation's mark, live or dead, blocks reuse. Preserve other live marks until their owners finish; retire dead marks only after treating their presence as doubt for this run. At finish, write clean evidence only when this invocation still owns its mark, no other mark remains, the record has not changed since it began, and the ordinary clean-run rules hold. Remove only this invocation's mark when it finishes; preserve others. A sign-in failure before any check can be sent removes only its own mark and leaves the record in doubt, without writing new identity evidence. Every check send goes through one run-owned boundary, including normal checks, second-phase checks, saved-read continuations, retries, capacity retries and restart recovery. It holds this run's own mark from before the first check POST until all sends and their resulting observations finish. A retry keeps ownership across its initial read and all subsequent checks; the read cannot release it early. Saved reads and retries finish with doubt after recording their observations. Direct callers with reuse disabled still participate in ownership when they send; this does not enable reuse for those callers. If complete new identity evidence cannot be recorded, finish with doubt. Preserve fail-open behavior when safe cache bookkeeping is unavailable. Clearing the cache preserves every in-progress mark so it cannot hide another run. A crash before the finish leaves its mark, so the next run sends checks. One later clean normal run restores reuse after overlap or a crash. Do not merge competing identities or try to infer which one is newer. If time has expired, an interrupt occurred, or reading stopped, invalidate affected provisional skips and mark them not_run with zero calls and one of `not sent: time limit reached`, `not sent: interrupted`, `not sent: reading stopped`, or `not sent: stopped`; keep the original timeout state and Still running recovery line. Otherwise the second phase says `Sending N more checks: interpreter build or model changed` (`Sending 1 more check: interpreter build or model changed` for one) instead of repeating the lint/send estimate. An all-reused local invocation cannot discover a server update without calls; `pdd test --cache-clear` sends again, although the interpreter may return a saved answer for the same key.
+
+### Declarations that require a run
+
+Use only captured prompts reached by the selected tests; a sibling-only prompt outside that capture is not a declaration failure. A plain dependency with no Runtime interface declares no resources. Missing Story footprints, missing captured sources or an actual declaration parse failure runs with `runs again: resource declarations unavailable`. Reuse may resume once complete declarations and a matching complete pass are available.
+
+Known zero-call resource kinds are `key-value`, `collection`, `blob`, `sql` and `compute`; an unknown kind always runs. Other declared kinds (`http`, `command`, `model`, `port`) require every declared operation to be bound deterministically in every applicable step. Only these simulation actions establish determinism: `fixture.lookup` with nonempty cases, `port.write` with a fixed result, `key-value.get`, `key-value.put`, `collection.get`, `collection.get-or-null`, `collection.merge`, `blob.read`, `blob.write`, `blob.stat`, `sql.execute` and `compute`. Any other action, including any action ending in `.prompt` on any resource kind, runs. The row says `runs every time: uses an AI-played fake (<resource>)` using the declared resource or binding name. Partial bindings do not establish determinism.
+
+A reached `prompts/fakes/<resource>.prompt.md` always runs with that same AI-played-fake reason, including transitive reaches. A reached `port` named `clock` with operation `now` instead says `runs every time: uses the real clock`, unless initial_world sets `{"clock":{"now":…}}` to a finite number or an ISO 8601 date-time string with a finite Date.parse result, or simulation binds `clock.now` deterministically. Fixed zero is present data; null, empty strings and labels such as `now`, `real 2026` or `1` are not fixed clocks. Step simulation overrides apply only to that step. Other operations remain subject to the ordinary resource guard. A resource that a later declaration marks as real always runs; no current real-resource marker is defined.
+
+Apply the age, identity, CI and declaration guards before reuse, alongside complete-pass/source checks. The Mermaid eligibility question below includes all these guards.
+
+```mermaid
+flowchart TD
+    C{Cache clear?} -->|Yes| A[Discard cache and keep normal scope]
+    C -->|No| L{Use --lf?}
+    L -->|No| S[Keep selected scope]
+    L -->|Yes| K{Failures in scope?}
+    K -->|Yes| F[Intersect scope with latest failed Stories]
+    K -->|No| S
+    F --> E{Eligible complete matching pass?}
+    S --> E
+    A --> R[Run ordinary local checks and dispatch]
+    E -->|Yes| U[Report unchanged with zero current calls]
+    E -->|No| R
+```
+
+`--cache-clear` takes precedence over `--lf` while retaining operand scope: discard the local pass and identity evidence, preserve every in-progress mark, and send the normal selected scope again. The interpreter may return a saved answer for the same key; fresh server execution is not guaranteed. Print exactly one progress line to stderr, including in JSON mode: `pdd: test cache cleared. Running N selected Stories; the interpreter may reuse saved answers.` If safe local clearing is unavailable, truthfully replace `test cache cleared` with `test cache unavailable`; still report selected dispatch and the same replay caveat. Use `1 selected Story` when N is one and `N selected Stories` otherwise. Count distinct selected Stories, retain the named scope, and do not add this progress notice to the warnings array.
+
+Otherwise preserve explicit selection scope. `--lf` reads validated `lastfailed.json` to select each Story whose latest known outcome is `failed`, including all its test files within the selected scope. If no failure belongs to the selected scope, run the normal selected scope (including ordinary unchanged-pass reuse), even when failures exist elsewhere. Forget records for deleted Stories in both metadata files, using authoritative discovered Git-visible regular files rather than operand scope or cached-path filesystem lookups. An existing Story with temporarily invalid text retains its failure; unselected existing failures survive. Keep a known failure selected until a confirmed pass, even if a later attempt has no verdict (including sign-in failure, interruption, timeout or unavailable accounting). Refused/not-run/unknown attempts without an earlier failure are not last-failed selections, but normal tests must always retry them. Do not expand a selected test file to sibling files silently.
+
+Reuse requires all discovered sibling files to have confirmed passes for the
+same current footprint. A partial run must never manufacture a complete pass.
+Before a fresh attempt, invalidate any older pass for that Story; local refusal,
+interruption, unknown/transient outcomes and unavailable accounting cannot leave
+an older pass eligible. Only confirmed complete terminal success becomes a new
+pass. Keep latest outcomes for unselected Stories. A completed `pdd test --read` writes confirmed results into this cache only when saved repository, source fingerprint and complete sibling accounting verify; running or unknown results never become passes. A saved read can update only its original local cache epoch and Story attempt generation; after a newer attempt or cache clear, an older read must leave the newer cache outcome and pass untouched. Source changes cannot attach an old result to the new fingerprint. Saved retry guards and existing recovery semantics remain in force.
+
+Perform current local validation/capture before reuse, and filter reusable work
+before gh, capacity, lint, POSTs, GETs or fresh runtime IDs. An all-reused command
+has no gh/server requests. Mixed commands dispatch only fresh selected work.
+Existing runtime state and saved-batch recovery remain outside the repository.
+
+Store versioned, bounded Story pass metadata in `.pdd/cache/test/stories.json` and last-known failures in `.pdd/cache/test/lastfailed.json`; never credentials or
+source copies. Read last-failed metadata safely and validate its version, epoch, generation and failed Story set against the Story metadata before using it. A missing last-failed file after Story metadata exists, damaged metadata or inconsistent metadata invalidates the whole cache with one warning, runs selected work fresh and heals after the next completed run. A cold absent cache remains warning-free. Never reuse a cache when any path under `.pdd/cache/test/` is Git-tracked: warn once and run selected checks. Bind cache eligibility to a repository-keyed local epoch or key stored only in the external `PDD_STATE_DIR`; a cache copied to fresh external state cannot authorize reuse. Arrange Git ignore in each user's repository using its local Git
+exclude, including linked worktrees, without editing tracked ignore files.
+Use injected cache filesystem, clock and capture/hash ports for decision tests;
+native tests establish actual safe writes and Git effects. Never follow symlinks
+in repository cache paths or Git excludes, traverse outside their intended roots, or trust
+cached paths as filesystem authority. Atomic replacement and serialized updates
+must prevent truncated/concurrent writes from authorizing stale passes. Malformed,
+truncated, incompatible, oversized or otherwise unsafe cache data invalidates the
+whole cache: run all selected work with exactly one plain warning. Unwritable
+cache also fails open with one warning; it cannot block checks or claim a new
+pass was saved. An unsafe cache-clear target is left untouched and fails open. A damaged regular cache is replaced after the next completed run and then becomes reusable; the warning includes `pdd test --cache-clear`. A lock whose recorded owner PID is dead is taken over with one warning, including during `--cache-clear`; live owners remain protected. Recovery warnings describe the stale lock or claim recovered and truthfully say that previous passes may remain eligible; never claim that recovery necessarily runs all work. Resolve the external state root with realpath so symlinked ancestors (such as macOS `/tmp`) are accepted, while refusing a final state-directory symlink. Safety checks below that trusted root still apply.
+
+If cache writes fail, persist a small, bounded repository-keyed invalidation
+tombstone in the existing external runtime-state directory. It contains no
+source or credentials; Story fingerprints and results remain only in the ignored
+`.pdd/cache/test/`. Check recovery state before any reuse. A tombstone prevents
+every older pass from becoming eligible after permissions recover or source is
+reverted. Retire it only after a safe cache clear or reliable fresh cache
+generation has made those older passes ineligible; concurrent failures must not
+be lost during recovery. Unreadable, oversized or unsafe recovery state also
+disables reuse and fails open to ordinary checks with the same single cache
+warning. This recovery state does not change saved-batch reads or retries.
 
 ## Setup
 
@@ -169,7 +251,7 @@ A locally held check becomes a submitted server check as soon as dispatch may ha
 
 A terminal receipt with 17/17 checks, four passed criteria and four AI calls must show those facts in retry and later batch read. Keep existing summary formatting and `no verdict ·` marks; accounting projection belongs to [runtime output](runtime-output.prompt.md#rows). Batch recovery preserves all earlier attempts, source identity, ownership and interruption guards, never POSTs for an accepted or uncertain submission, and continues polling its original ID until terminal, interruption or deadline even when zero rows qualify for a new attempt. At the caller deadline or interruption, retain a verified same-ID queued/running receipt as open; a missing or unverifiable receipt remains unknown. A final result received in this invocation takes precedence over an older cached open receipt. Receipt projection must not invent a loss merely because another row consumed the wait budget.
 
-A verified `pdd test --read UUID` check answer saves only its raw receipt in matching batch caches for the same repository root, runtime origin, login and user ID. Never rewrite `batch.json` or `summary.json` during UUID reads: the next batch read lazily projects the latest attempt from its refreshed receipt. Reading an older attempt must not replace the latest result. Exclude call receipts, mismatched IDs and the hidden `--request UUID` path. Leave unrelated caches unchanged; a failure to cache in one batch must not crash the direct read or prevent other matching caches from being attempted.
+A verified `pdd test --read UUID` check answer saves only its raw receipt in matching batch caches for the same repository root, runtime origin, login and user ID. Never rewrite `batch.json` or `summary.json` during UUID reads: the next batch read lazily projects the latest attempt from its refreshed receipt. Reading an older attempt must not replace the latest result. Exclude call receipts, mismatched IDs and the hidden `--request UUID` path. For `pdd test --read UUID`, the verified receipt may also complete the local Story test cache through matching saved batch tokens and all sibling receipts, under the same epoch/generation and source-fingerprint guards as a batch read. This never rewrites batch or summary files. Leave unrelated caches unchanged; a failure to cache in one batch must not crash the direct read or prevent other matching caches from being attempted.
 
 ## Retry confirmed lint capacity refusals
 
