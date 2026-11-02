@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 7ea091b64bc190aa278cec9e32be556f26e7f2efb325f0bc23e7e71dcb419871).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 8b9fcb776ca5afc4eb4bdc6ea8ada4b95efcb8afac1de5945589c2f5be7c7758).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -795,6 +795,8 @@ function localSetup(cwd, words) {
 }
 
 // Each JSON file in a test folder that matches no Story (text shows one summary line; --files and --json list each).
+// The tests that a check uploads: every row but those that discovery could not use.
+const sentTests = rows => rows.filter(row => !row.unsent).map(row => row.test);
 const unmatchedLines = found => (found.orphans ?? []).map(item => `Warning: ${item.line}`);
 
 function storyList(found) {
@@ -917,7 +919,7 @@ function batchRecord(context) {
     contract_snapshots: capture.stories,
     rows: rows.map(row => ({ test: row.test, story: row.story, story_path: row.story_path, title: row.title, request_ids: row.request_ids, state: row.state,
       ...(!row.request_ids.length && Object.hasOwn(row, 'calls') ? { calls: row.calls } : {}),
-      phase: row.phase, post_verdict: row.post_verdict ?? null, report_url: row.report_url, refusals: row.refusals, note: row.note ?? null, why: row.why ?? null, next_step: row.next_step ?? null,
+      ...(row.unsent ? { unsent: true } : {}), phase: row.phase, post_verdict: row.post_verdict ?? null, report_url: row.report_url, refusals: row.refusals, note: row.note ?? null, why: row.why ?? null, next_step: row.next_step ?? null,
       sent_at: row.sent_at ?? null, ended_at: row.ended_at ?? null, max_calls: row.max_calls, warnings: row.warnings, steps: row.steps, criteria_total: row.criteria_total,
       reservation: row.reservation ?? null, restart_used: !!row.restart_used,
       busy: !!row.busy, can_retry: !!row.can_retry, eligible: !!row.eligible, retry_at: row.retry_at ?? null,
@@ -1304,7 +1306,8 @@ function printResult(context, rows, extra = {}) {
 function runFiles(cwd, words, options, ports) {
   const { root, found, normalized } = localSetup(cwd, words);
   const selected = select(found, normalized, root), coverage = bindingCoverage({ root, found, selected });
-  const tests = selected.map(test => test.path);
+  const tests = selected.filter(test => !test.error).map(test => test.path);
+  for (const test of selected.filter(test => test.error)) line(ports.stderr, `Warning: not sent: ${test.error}`);
   const appMap = options['--app-map'] === undefined ? null : appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
   const capture = ports.captureSource(root, { tests, appMap });
   for (const warning of [...(capture.warnings ?? []), ...unmatchedLines(found)]) line(ports.stderr, warning);
@@ -1575,7 +1578,7 @@ async function continueHeld(context, candidates, saved) {
   const verdicts = judgeLint(lint, candidates, context.root, context.visible, context.secrets);
   if (!verdicts || verdicts.size || globalRefusals.length) return;
   let capture;
-  try { capture = context.ports.captureSource(context.root, { tests: saved.rows.map(row => row.test), appMap: null }); }
+  try { capture = context.ports.captureSource(context.root, { tests: sentTests(saved.rows), appMap: null }); }
   catch (error) {
     if (!(error instanceof PreflightError)) throw error;
     context.continuationNotice = `No checks were sent for the lint-held rows: the saved source cannot be verified. ${error.message}`;
@@ -1673,7 +1676,7 @@ async function recoverRestarts(context) {
   if (!eligible.length || context.interrupted || context.ports.now() >= context.deadline) return [];
   context.restartDecisions ??= new Set();
   for (const row of eligible) context.restartDecisions.add(row.request_ids.at(-1));
-  const capture = context.ports.captureSource(context.root, { tests: context.rows.map(row => row.test), appMap: null });
+  const capture = context.ports.captureSource(context.root, { tests: sentTests(context.rows), appMap: null });
   if (capture.sha256 !== context.capture.sha256) { context.continuationNotice = 'The saved source changed; no restarted check was sent again.'; return []; }
   capture.stories = context.capture.stories;
   context.capture = capture;
@@ -1693,7 +1696,7 @@ async function runRetry(context, name, options) {
   context.deadline = ports.now() + timeout * 60_000;
   const rows = await runRead(context, name, true, options);
   if (context.interrupted || ports.now() >= context.deadline) return printResult(context, rows);
-  const capture = context.ports.captureSource(context.root, { tests: rows.map(row => row.test), appMap: null });
+  const capture = context.ports.captureSource(context.root, { tests: sentTests(rows), appMap: null });
   if (capture.sha256 !== context.capture.sha256) throw new Stop(2, 'The saved source no longer matches: source changed. Start a fresh selected pdd test instead.');
   capture.stories = context.capture.stories;
   const lintId = context.lint?.request_ids?.at(-1), lint = lintId && context.store.read(join(context.folder, `${lintId}.json`));
@@ -1809,7 +1812,7 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd() }
         let promptPaths;
         if (words.length) {
           const { found, normalized } = localSetup(cwd, words), selected = select(found, normalized, root);
-          promptPaths = ports.captureSource(root, { tests: selected.map(test => test.path), appMap: null }).files.map(file => file.path).filter(path => path.endsWith('.prompt.md'));
+          promptPaths = ports.captureSource(root, { tests: selected.filter(test => !test.error).map(test => test.path), appMap: null }).files.map(file => file.path).filter(path => path.endsWith('.prompt.md'));
         }
         const warnings = lintSvgLayouts({ root, files, promptPaths }), summary = `SVG layout lint: ${warnings.length} warnings. 0 AI calls. No checks were sent.`;
         line(ports.stdout, context.json ? JSON.stringify({ repo: root, exit_code: 0, warnings, summary_line: summary }) : [...warnings, summary].join('\n'));
@@ -1866,6 +1869,8 @@ async function runBatch(context, cwd, words, options, setRelease) {
   for (const row of rows) {
     const test = selected.find(item => item.path === row.test);
     row.story_path = test?.storyPath;
+    // A test that discovery cannot use (a conflict, unreadable, invalid or over the upload limit) is refused and never uploaded.
+    if (test?.error) row.unsent = true;
     row.criterion_texts = Object.fromEntries((Array.isArray(test?.doc?.criteria) ? test.doc.criteria : []).filter(isObject).map(item => [item.id, item.text]));
   }
   if (options['--max-calls'] !== undefined) for (const row of rows) row.max_calls = Number(options['--max-calls']);
@@ -1873,7 +1878,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
   context.unmatched = unmatchedLines(found);
   if (!rows.some(row => row.state === 'ready')) return printResult(context, rows);
   if (!words.length) line(ports.stderr, costLine(rows.filter(row => row.state === 'ready'), root, found.visible));
-  const capture = ports.captureSource(root, { tests: selected.map(test => test.path), appMap: null });
+  const capture = ports.captureSource(root, { tests: sentTests(rows), appMap: null });
   context.warnings.push(...(capture.warnings ?? []));
   context.otherNote = otherNote(otherFiles(capture.files, found).length);
   const identity = signIn(ports.gh, context.store);
