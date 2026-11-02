@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: aafd9132f6c76533978a6b8a8954c24b0eaac62dc85cbbfba376d5a86606724e).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 8730bd8183c3cfa065505fa7b0d4aca335dc3ba53cdac8ed22fd40b49ad42605).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -1296,12 +1296,11 @@ function printResult(context, rows, extra = {}) {
 
 function runFiles(cwd, words, options, ports) {
   const { root, found, normalized } = localSetup(cwd, words);
-  // A Try has one seed Story, so a Try listing makes the same choice as pdd simulate.
-  const selected = options['--app-map'] === undefined ? select(found, normalized, root)
-    : [oneTest(found, normalized, root, '--app-map lists what one Try sends, and a Try starts from one Story. Name the Story that seeds the Try:')];
-  const coverage = bindingCoverage({ root, found, selected }), tests = selected.map(test => test.path);
-  const appMap = options['--app-map'] === undefined ? null : appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
-  const capture = ports.captureSource(root, { tests, appMap });
+  // With --app-map the listing previews a Try: the same choice and capture as pdd simulate.
+  const source = options['--app-map'] === undefined ? null : trySource(ports, found, normalized, options['--app-map'], cwd, root,
+    '--app-map lists what one Try sends, and a Try starts from one Story. Name the Story that seeds the Try:');
+  const selected = source ? [source.test] : select(found, normalized, root), coverage = bindingCoverage({ root, found, selected });
+  const capture = source ? source.capture() : ports.captureSource(root, { tests: selected.map(test => test.path), appMap: null });
   for (const warning of capture.warnings ?? []) line(ports.stderr, warning);
   const other = otherFiles(capture.files, found), width = Math.max(0, ...capture.files.map(file => file.path.length));
   for (const file of capture.files) line(ports.stdout, `  ${(file.path + (file.target ? ` -> ${file.target}` : '')).padEnd(width)}  ${file.size} bytes`);
@@ -1909,6 +1908,13 @@ function appMapFor(found, given, cwd, root, stderr) {
   return rel;
 }
 
+// A Try's app map and one seed test, and its upload. pdd simulate and its --files preview both use this.
+// capture() runs later, so the Try still checks the Story locally before it reads the upload.
+function trySource(ports, found, words, given, cwd, root, heading) {
+  const appMap = appMapFor(found, given, cwd, root, ports.stderr), test = oneTest(found, words, root, heading);
+  return { appMap, test, capture: () => ports.captureSource(root, { tests: [test.path], appMap }) };
+}
+
 function oneTest(found, words, root, heading = 'pdd simulate needs one story. Choose one:') {
   const selected = select(found, words, root);
   if (selected.length !== 1) throw new Stop(2, [heading, ...storyList({ tests: selected })].join('\n'));
@@ -2036,15 +2042,15 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (!context.agentDefinitions.length) throw new Stop(2,'No agents are configured. Add an agent or enable defaults in agents.json.');
       if (options['--agent'] !== undefined && !context.agentDefinitions.some(d => d.name === options['--agent'] || (['codex','claude','gemini'].includes(d.id) && d.id === options['--agent']))) throw new Stop(2,'Unknown agent name. Choose a name from agents.json or an enabled default.');
     }
-    const appMap = appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
-    const test = oneTest(found, normalized, root), repoState = store.repo(root), record = repoState.tries?.[test.path];
+    const source = trySource(ports, found, normalized, options['--app-map'], cwd, root), { appMap, test } = source;
+    const repoState = store.repo(root), record = repoState.tries?.[test.path];
     Object.assign(context, { root, store, origin, visible: found.visible, appMap, cwd: realpathSync(cwd), seedTest: { path: test.path, storyPath: test.storyPath } });
     const checked = preflight({ root, found, selected: [test] }), row = localRows(checked.rows)[0];
     if (row.state === 'refused') {
       if (options['--cli'] || options['--serve']) throw new Stop(125, row.refusals?.map(r => r.message || r.code).join('; ') || 'The Story input was refused.');
       line(ports.stdout, renderText({ rows: [row], exitCode: 4 })); return 4;
     }
-    const capture = ports.captureSource(root, { tests: [test.path], appMap }), note = otherNote(otherFiles(capture.files, found).length);
+    const capture = source.capture(), note = otherNote(otherFiles(capture.files, found).length);
     for (const warning of capture.warnings ?? []) line(ports.stderr, warning);
     const identity = signIn(ports.gh, context.store);
     Object.assign(context, { capture, identity, secrets: [identity.token], startedAt: ports.now(), deadline: ports.now() + TRY_MS, lint: { request_ids: [], state: null },
