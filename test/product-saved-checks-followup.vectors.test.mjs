@@ -4,6 +4,7 @@ import childProcess, { spawnSync } from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import { chmodSync, cpSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import * as runtime from '../src/runtime-client.mjs';
 import { productStatus, productNext, productStart } from '../src/product.mjs';
 import { harbor, portsFor, fakeRuntime, filesUnder, sha } from './runtime-fake.mjs';
@@ -281,7 +282,6 @@ async function cliStatus(t, f, expected) {
   const log = join(f.sandbox, 'gh.jsonl'), executable = join(bin, 'gh');
   writeFileSync(executable, `#!${process.execPath}
 import {appendFileSync} from 'node:fs';
-import { fileURLToPath } from 'node:url';
 const args=process.argv.slice(2); appendFileSync(${JSON.stringify(log)}, JSON.stringify(args)+'\\n');
 const issue=${JSON.stringify(issue)};
 if(args[0]==='repo') console.log(JSON.stringify({nameWithOwner:'example/coffee',defaultBranchRef:{name:'alpha'},url:'https://github.com/example/coffee'}));

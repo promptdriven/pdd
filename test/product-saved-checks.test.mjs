@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import * as runtime from '../src/runtime-client.mjs';
 import { productStatus, productNext } from '../src/product.mjs';
 import { harbor, portsFor, fakeRuntime, filesUnder, sha } from './runtime-fake.mjs';
@@ -181,7 +182,6 @@ test('actual CLI consumes producer state with a deterministic metadata-only gh',
   const log = join(f.sandbox, 'gh-calls.jsonl'), executable = join(bin, 'gh');
   writeFileSync(executable, `#!${process.execPath}
 import {appendFileSync} from 'node:fs';
-import { fileURLToPath } from 'node:url';
 const args=process.argv.slice(2); appendFileSync(${JSON.stringify(log)}, JSON.stringify(args)+'\\n');
 const issue=${JSON.stringify(issue)};
 if(args[0]==='repo') console.log(JSON.stringify({nameWithOwner:'example/coffee',defaultBranchRef:{name:'alpha'},url:'https://github.com/example/coffee'}));
