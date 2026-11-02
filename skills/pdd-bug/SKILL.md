@@ -15,7 +15,7 @@ Fix both: the brakes (the real defect) and the warning light (a test or check th
 3. code: build, verify, formal, review → gate: pr
 
 - Main chat: coordinate; no code or checks.
-- Use fresh subagents; never reuse builders or let them check their code. Give step file and paths at once, not chat history; wait with one long time-out; no small follow-ups.
+- Use fresh subagents; never reuse builders or let them check their code. Give step file and paths at once, not chat history; wait with one long time-out; no small follow-ups. For `pdd test` and saved-batch `--read`, use the shell tool's longest timeout or a background task with an exit notification (Claude Code: `run_in_background`; Codex: a long `timeout_ms`). If the tool stops pdd, run its saved `pdd test --read BATCH` command once to keep waiting. Never poll every minute.
 - Checks: fresh first. Only verify/formal may reuse after startup failure; agent wrote no code, tests or prompts in this run.
 - Review: always fresh; no build, verify, formal, prior reviews or their context. Blocked: RUNBOOK §17.
 - Read pdd-prompting RUNBOOK §17 before checks: cleanup, unrun checks, recovery and result replacement.

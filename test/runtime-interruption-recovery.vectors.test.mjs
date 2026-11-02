@@ -127,7 +127,7 @@ for (const vector of vectors.cases) test(`RECONCILE ${vector.id}`, async t => {
     return { status: 200, headers: { 'retry-after': '1' }, json: capacity(f, e.request.requestId) };
   });
   const start = r.made.clock.now, sleeps = [];
-  const result = await r.run({}, { onInterrupt: handler => { stop = handler; return () => {}; }, sleep: async ms => {
+  const result = await r.run(vector.id === 'busy-caller-deadline' ? { '--timeout': 1.5 } : {}, { onInterrupt: handler => { stop = handler; return () => {}; }, sleep: async ms => {
     sleeps.push(ms); r.made.clock.now += ms;
     if (vector.id === 'busy-interruption' && posts >= 4) stop();
   } });

@@ -28,18 +28,18 @@ async function pending(t, mode = 'check') {
   });
   const env = { HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin };
   const first = portsFor(env); clock = first.clock;
-  const options = mode === 'try' ? { '--no-open': true } : { '--json': true, ...(mode === 'lint' ? { '--lint': true } : {}) };
+  const options = mode === 'try' ? { '--no-open': true } : { '--json': true, ...(mode === 'check' ? { '--timeout': 1.5 } : {}), ...(mode === 'lint' ? { '--lint': true } : {}) };
   const code = await (mode === 'try' ? runTry : runCheck)({ cwd: setup.repo, words: ['place-order'], options }, first.ports);
   return { setup, fake, env, code, ...first, setReply(value) { reply = value; } };
 }
 
 async function read(r, batch) {
   const next = portsFor(r.env);
-  const code = await runCheck({ cwd: r.setup.repo, options: { '--read': batch, '--json': true } }, next.ports);
+  const code = await runCheck({ cwd: r.setup.repo, options: { '--read': batch, '--json': true, '--timeout': 1.5 } }, next.ports);
   return { code, json: JSON.parse(next.ports.stdout.text), ...next };
 }
 
-for (const mode of ['check', 'lint', 'try']) test(`LINT-PENDING: ${mode} reports known running lint at the shared 90 s deadline`, async t => {
+for (const mode of ['check', 'lint', 'try']) test(`LINT-PENDING: ${mode} reports known running lint at a finite 90 s deadline`, async t => {
   const r = await pending(t, mode);
   assert.equal(r.code, 3);
   assert.equal(r.clock.now - Date.parse('2026-10-27T16:27:47Z'), 90_000);

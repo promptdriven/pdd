@@ -552,7 +552,7 @@ test('RUNTIME-WAIT3: Ctrl-C after 12 min prints the read line and exits 3; --rea
 });
 
 // Wrong: an agent's shell tool (Claude Code: 2 min) cuts pdd off before pdd prints anything (owner, Oct 27).
-test('RUNTIME-WAIT4: with no terminal pdd waits at most 90 s, prints the table and the read line, and exits 3; --timeout overrides', async t => {
+test('RUNTIME-WAIT4: agent default waits to completion; explicit timeout preserves pending output', async t => {
   const setup = harbor(t);
   let clock;
   const sent = new Map(), fake = await fakeRuntime(t, (entry, f) => {
@@ -567,7 +567,10 @@ test('RUNTIME-WAIT4: with no terminal pdd waits at most 90 s, prints the table a
     const code = await runCheck({ words: ['place-order'], options, cwd: setup.repo }, made.ports);
     return { code, out: made.ports.stdout.text, err: made.ports.stderr.text, batch: /pdd test --read (\S+)/.exec(made.ports.stderr.text)?.[1] };
   };
-  const agent = await run({}, { interactive: false });
+  const unlimited = await run({}, { interactive: false });
+  assert.equal(unlimited.code, 0, unlimited.err + unlimited.out);
+  assert.equal(JSON.parse(readFileSync(join(setup.state, 'batches', unlimited.batch, 'batch.json'), 'utf8')).timeout_min, null);
+  const agent = await run({ '--timeout': 1.5 }, { interactive: false });
   assert.equal(agent.code, 3, agent.err + agent.out);
   assert.match(agent.out, /^Place a coffee order +tests\/place-order\.json +running +- +-$/m);
   assert.match(agent.out, /^STILL RUNNING after 90 s: Place a coffee order\. Do not send it again\.$/m);
@@ -742,7 +745,7 @@ test('RUNTIME-SERVER17: --read of a still-running row names no wait time', async
   const fake = await fakeRuntime(t, (entry, f) => entry.method === 'GET' ? { status: 200, json: f.check(entry.url.split('/').at(-1), 'running') } : f.normal(entry));
   const first = await check(setup, fake, ['place-order'], { '--timeout': '1' });
   assert.equal(first.code, 3);
-  const read = await check(setup, fake, [], { '--read': true });
+  const read = await check(setup, fake, [], { '--read': true, '--timeout': 1.5 });
   assert.equal(read.code, 3); assert.match(read.out, /^STILL RUNNING: Place a coffee order\. Do not send it again\.$/m);
 });
 
@@ -792,11 +795,11 @@ test('RUNTIME-WAIT2: in a terminal with no --timeout a lost POST answer is read 
 });
 
 // Wrong: a lost POST answer keeps an agent's pdd reading for 5 min, past its shell tool's limit.
-test('RUNTIME-WAIT5: with no terminal a lost POST answer is read until 90 s, then exit 3 with the read line and no new POST', async t => {
+test('RUNTIME-WAIT5: with explicit timeout a lost POST answer is read until 90 s, then exit 3 with the read line and no new POST', async t => {
   const setup = harbor(t);
   const fake = await fakeRuntime(t, (entry, f) => entry.method === 'POST' && entry.command === 'check' ? { destroy: true }
     : entry.method === 'GET' ? { status: 404, json: NOT_STARTED } : f.normal(entry));
-  const result = await check(setup, fake, ['place-order']);
+  const result = await check(setup, fake, ['place-order'], { '--timeout': 1.5 });
   assert.equal(result.code, 3);
   assert.ok(fake.gets.length >= 44 && fake.gets.length <= 45, String(fake.gets.length));
   assert.equal(fake.posts.filter(post => post.command === 'check').length, 1);

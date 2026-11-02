@@ -287,9 +287,11 @@ A failed check shows the criterion, the path, the expected value and the answer:
 The report preview shows the first 256 characters of a longer string followed by `…`. The check still compares
 the full value exactly. Preview clipping and sensitive-value redaction do not shorten the value being checked.
 A draft prompt is checked too. Its row and its report say DRAFT. A DRAFT pass is not an approval.
-In a person's terminal, `pdd test` waits until every check ends and prints `Still running: …` every 30 s. In an
-agent's shell it returns after about 90 s with `Still running` and the batch; then run `pdd test --read` about every
-minute, doing other work in between, until every Story has a result. Never send the same check again.
+`pdd test` and saved-batch `pdd test --read BATCH` wait until every Story ends in every shell, with
+`Still running: …` on stderr every 30 s. Use the shell tool's longest timeout or a background task that notifies
+on exit (Claude Code: `run_in_background`; Codex: a long `timeout_ms`). `--timeout MIN` sets an explicit limit.
+pdd prints the recovery `--read` command before the first check. If the tool stops pdd, run that command once
+to keep waiting on the saved batch. Never poll every minute or send the same check again.
 Before `pdd test` or `pdd simulate`, tell the person in one line what you run and that it can take a few minutes. pdd prints
 a progress line on stderr before each slow step (lint, upload, the queue, the simulation setup). When it fails, it says what
 failed, the real reason and what to do next: pass that line on as it is.
@@ -300,7 +302,7 @@ failed, the real reason and what to do next: pass that line on as it is.
 | 1 | failed | Find the cause first ("After a ✗" below). Fix only what the evidence shows. A person decides expected values. |
 | 4 | refused | Nothing was judged (`no verdict ·`): a file breaks a rule, or the AI service failed. Read the reason and the next step under the line. When the reason names a file rule, fix that file (table below); for an AI-service cause, change no file. If a fix changes an expected value, ask the person. |
 | 5 | not run | Sign-in, network, server busy or no AI room. Run `gh auth status`. Wait, then run again. If it stays, tell the person. |
-| 3 | unknown or still running | Run `pdd test --read` about every minute until every Story has a result. Never send the check again. |
+| 3 | unknown or still running | Run `pdd test --read BATCH` once with a long shell timeout or exit notification; it waits until every Story ends. Never resend the check. |
 | 2 | command error | Wrong command or story name. Run `pdd test --help`. |
 
 **After a ✗ (exit 1).** Find the real cause first, then fix it. Never send the same files again to get another answer.

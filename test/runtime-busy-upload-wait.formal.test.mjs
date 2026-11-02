@@ -142,7 +142,7 @@ for (const mode of ['404', 'full']) test(`formal busy answer time, not POST star
 
 test('formal finite 90s busy stream has no three-attempt ceiling and no upload churn', async t => {
   const w = await world(t, { repeat: true });
-  const result = await w.invoke();
+  const result = await w.invoke({ '--timeout': 1.5 });
   assert.equal(result.code, 5); assert.equal(result.json.rows[0].calls, 0);
   assert.ok(w.traffic.length > 3 && w.traffic.length <= 10, `90s uploads: ${w.traffic.length}`);
   for (let i = 1; i < w.traffic.length; i++) assert.ok(w.traffic[i] - w.traffic[i - 1] >= 10_000);
@@ -169,7 +169,7 @@ test('formal maintenance wins over capacity hold expiry', async t => {
   const w = await world(t, { capacity: (_, posted) => !posted ? occupancy() : { status: 200, json: {
     ...occupancy().json, maintenance: { until: new Date(ORIGIN + 120_000).toISOString(), reason: 'maintenance' },
   } } });
-  const result = await w.invoke();
+  const result = await w.invoke({ '--timeout': 1.5 });
   assert.equal(result.code, 5); assert.equal(w.traffic.length, 1); assert.equal(w.elapsed(), 90_000); w.history(result);
 });
 

@@ -62,7 +62,7 @@ for (const vector of vectors.cases) test(`BUSY-WAIT ${vector.id}`, async t => {
     const success = vector.id === 'four-busy-then-pass';
     const r = await fixture(t, { answer: (e, f, count) => success && count === 5 ? { status: 200, json: pass(f, e.request.requestId) }
       : { status: 200, headers: { 'retry-after': '1' }, json: busy(f, e.request.requestId) } });
-    const result = await r.run();
+    const result = await r.run(success ? {} : { '--timeout': 1.5 });
     if (success) { completed(result); assert.equal(r.times.length, 5); assert.ok(r.times[4] >= 40_000); }
     else { assert.ok(r.times.length > 3 && r.times.length <= 10, `90s upload bound: ${r.times.length}`); assert.equal(result.code, 5); assert.equal(result.json.rows[0].calls, 0); assert.equal(result.json.rows[0].busy, true); assert.equal(r.made.clock.now - r.start, 90_000); }
     spaced(r); assert.ok(r.times.every(at => at < 90_000)); history(r, result); return;
@@ -115,7 +115,7 @@ for (const vector of vectors.cases) test(`BUSY-WAIT ${vector.id}`, async t => {
   if (vector.id === 'interrupt-capacity-wait' || vector.id === 'maintenance-precedence') {
     const interrupt = vector.id === 'interrupt-capacity-wait';
     const r = await fixture(t, { capacity: (_, count) => !interrupt && count ? { status: 200, json: { ...full().json, maintenance: { until: new Date(r.start + 120_000).toISOString(), reason: 'Scheduled work' } } } : full(), interruptAt: interrupt ? 15_000 : Infinity });
-    const result = await r.run(); assert.equal(result.code, interrupt ? 3 : 5); assert.equal(r.times.length, 1); assert.equal(result.json.rows[0].calls, 0); history(r, result);
+    const result = await r.run(interrupt ? {} : { '--timeout': 1.5 }); assert.equal(result.code, interrupt ? 3 : 5); assert.equal(r.times.length, 1); assert.equal(result.json.rows[0].calls, 0); history(r, result);
     if (interrupt) { assert.equal(r.made.clock.now - r.start, 15_000); assert.match(result.err + JSON.stringify(result.json), /Stopped\./); assert.doesNotMatch(result.err + JSON.stringify(result.json), /Stopped before sending|wait ended|until the timeout/); }
     else { assert.equal(r.made.clock.now - r.start, 90_000); assert.match(result.err, /maintenance|Scheduled work/i); } return;
   }

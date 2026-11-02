@@ -36,7 +36,7 @@ The first match from the top wins:
    - `REFUSED before sending (not sent, 0 AI calls)`, then for each row `  <test>  step N  <code>` and the message and hint lines.
    - `REFUSED  <title> (<test>)`, then for each refusal with a `reason`: `  <code>: <reason>`, `  Where: <where>` when there is one, and `  Fix: <fix>`; when `cause` is `ai-service` the last line is `  Your test is fine. Run it again.` in place of the fix. A refusal with no `reason` (the live server before #379) keeps `  <code>  <section>  <message>` and the engine message when it adds detail. Both end with the `pdd:` hint when there is one.
    - `NOT RUN  <title> (<test>): <message> (<code>)`.
-   - `STILL RUNNING after <limit>: <title>. Do not send it again.` at the time limit; the limit is `90 s` for the agent default, else `N min` (after Ctrl-C: `STILL RUNNING when pdd stopped reading: …`; in `--read`, or with no known limit: `STILL RUNNING: …`)
+   - `STILL RUNNING after <limit>: <title>. Do not send it again.` at the time limit; the limit is `90 s` for a 1.5-minute finite limit, else `N min` (after Ctrl-C: `STILL RUNNING when pdd stopped reading: …`; in `--read`, or with no known limit: `STILL RUNNING: …`)
    - `UNKNOWN  <title>: the run may have executed. Its result is unknown.` and the server's reason.
    - An AI provider failure (state `unknown` with `graph-provider-failure`, or a sample `failure_cause.kind` of `transport_unknown`) has its own block: `UNKNOWN  <title>: the AI provider failed during the run. It is not a failed check. Do not send it again yet.`, then the code, the cause and the report link. The block ends with `To try again, run \`pdd test\` again (a new request).` pdd never resends it.
 5. With `--details`: every check of each row, failed checks first.

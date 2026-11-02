@@ -82,7 +82,7 @@ for (const interrupt of [false, true]) test(`maintenance: ${interrupt ? 'interru
   const made = makePorts(setup, fake);
   fake.capacity = () => ({ status: 200, json: { maintenance: { until: new Date(made.clock.now + 600_000).toISOString(), reason: 'deploy' } } });
   if (interrupt) made.ports.sleep = async ms => { made.clock.now += ms; made.clock.interrupt(); };
-  assert.equal(await runCheck({ words: ['place-order'], cwd: setup.repo, options: { '--json': true } }, made.ports), interrupt ? 3 : 5);
+  assert.equal(await runCheck({ words: ['place-order'], cwd: setup.repo, options: { '--json': true, '--timeout': 1.5 } }, made.ports), interrupt ? 3 : 5);
   assert.equal(fake.posts.length, 0); assert.equal((await listRuntimeJobs({ stateDir: setup.state, origin: fake.origin })).jobs.length, 0);
   assert.equal(JSON.parse(made.ports.stdout.text).rows[0].calls, 0);
 });
@@ -150,7 +150,7 @@ test('restart: changed source and display-only restart wording authorize no repl
       }
       return f.normal(e);
     });
-    const made = makePorts(setup, fake); assert.equal(await runCheck({ words: ['place-order'], cwd: setup.repo, options: { '--json': true } }, made.ports), 3);
+    const made = makePorts(setup, fake); assert.equal(await runCheck({ words: ['place-order'], cwd: setup.repo, options: { '--json': true, '--timeout': 1.5 } }, made.ports), 3);
     const batch = JSON.parse(made.ports.stdout.text).batch; resume = true;
     if (changed) writeFileSync(join(setup.repo, 'user_stories/place-order.md'), readFileSync(join(setup.repo, 'user_stories/place-order.md')) + '\nChanged source.\n');
     const next = makePorts(setup, fake); await runCheck({ words: [batch], cwd: setup.repo, options: { '--read': true, '--json': true } }, next.ports);
@@ -170,7 +170,7 @@ test('leases: a later live reader releases terminal check/lint reservations with
       return f.normal(e);
     });
     const first = makePorts(setup, fake);
-    assert.equal(await runCheck({ words: ['place-order'], cwd: setup.repo, options: { '--json': true, ...(kind === 'lint' ? { '--lint': true } : {}) } }, first.ports), 3);
+    assert.equal(await runCheck({ words: ['place-order'], cwd: setup.repo, options: { '--json': true, ...(kind === 'lint' ? { '--lint': true } : { '--timeout': 1.5 }) } }, first.ports), 3);
     assert.equal((await listRuntimeJobs({ stateDir: setup.state, origin: fake.origin })).jobs.length, 1);
     resume = true; const next = makePorts(setup, fake);
     await runCheck({ words: [JSON.parse(first.ports.stdout.text).batch], cwd: setup.repo, options: { '--read': true, '--json': true } }, next.ports);
@@ -259,7 +259,7 @@ test('admission: contended registration cannot POST after cancellation or deadli
       touch: path => { if (!records.has(path)) return false; refreshed.set(path, made.clock.now); return true; },
     };
     made.ports.sleep = async () => { if (interrupt) made.clock.interrupt(); else made.clock.now += 90_000; };
-    const code = await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--json': true } }, made.ports);
+    const code = await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--json': true, '--timeout': 1.5 } }, made.ports);
     assert.equal(code, interrupt ? 3 : 5); assert.equal(fake.posts.length, 0);
     assert.equal([...records.values()].filter(row => row.state).length, 0);
   }
@@ -279,7 +279,7 @@ test('leases: dead-owner runtime reads require exact ID and command before recla
     const directory = join(setup.state, 'slots', encodeURIComponent(new URL(fake.origin).host)); mkdirSync(directory, { recursive: true });
     writeFileSync(join(directory, 'old.json'), JSON.stringify({ id: 'old', state: 'active', pid: 2147483647, kind: 'check', started_at: made.clock.now, request_ids: ['old-run'] }));
     made.ports.sleep = async ms => { made.clock.now += 90_000; };
-    assert.equal(await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--json': true } }, made.ports), 5);
+    assert.equal(await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--json': true, '--timeout': 1.5 } }, made.ports), 5);
     assert.equal(fake.posts.length, 0); assert.equal((await listRuntimeJobs({ stateDir: setup.state, origin: fake.origin })).jobs[0].id, 'old');
   }
 });
@@ -294,7 +294,7 @@ for (const invalid of ['positive', 'unknown', 'incomplete', 'checks']) test(`adm
     return f.normal(e);
   });
   const { ports } = makePorts(setup, fake);
-  assert.equal(await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--json': true } }, ports), 3);
+  assert.equal(await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--json': true, '--timeout': 1.5 } }, ports), 3);
   assert.equal(checkPosts(fake).length, 1); assert.ok(fake.gets.length); assert.equal(JSON.parse(ports.stdout.text).rows[0].can_retry, false);
 });
 
