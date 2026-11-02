@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: a6f1be8dd28eb2ce4bbabb1c07a4053b079924828bfff66f2bc662504713a852).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 530b4fd1a846336673189a3a285d45f4775fdb4b4f50fab302ce8f77955f8afd).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -875,7 +875,7 @@ function answerCacheIdentity(answer) {
 }
 const observedIdentityMatches = (observed, identity) => !observed || (!observed.conflict && (!observed.engine_sha || observed.engine_sha === identity?.engine_sha)
   && observed.models.every(model => model === identity?.requested_model));
-const cleanRecordMatches = (record, identity) => record?.clean === true && record.conflict === false
+const cleanRecordMatches = (record, identity) => record?.clean === true && record.conflict === false && !record.in_progress?.length
   && typeof record.engine_sha === 'string' && record.engine_sha.trim() && record.engine_sha.trim().toLowerCase() !== 'unknown'
   && record.models.length === 1 && typeof record.models[0] === 'string' && record.models[0].trim() && record.models[0].trim().toLowerCase() !== 'unknown'
   && (record.engine_shas ?? [record.engine_sha]).every(value => value === record.engine_sha)
@@ -1948,8 +1948,11 @@ function validTestCache(value) {
     && (row.criteria_total === undefined || Number.isSafeInteger(row.criteria_total) && row.criteria_total >= 0) && typeof row.draft === 'boolean';
   if (!keys(value, ['schema_version', 'generation', 'epoch', 'stories', 'latest_identity']) || typeof value.epoch !== 'string' || !UUID.test(value.epoch) || value.schema_version !== 1 || !Number.isSafeInteger(value.generation) || value.generation < 0 || !isObject(value.stories) || Object.keys(value.stories).length > 10000) return false;
   const latest = value.latest_identity;
-  if (latest !== undefined && (!keys(latest, ['engine_sha', 'models', 'observed_at', 'sampled_at', 'engine_shas', 'conflict', 'clean', 'written_at'])
+  if (latest !== undefined && (!keys(latest, ['engine_sha', 'models', 'observed_at', 'sampled_at', 'engine_shas', 'conflict', 'clean', 'written_at', 'in_progress'])
     || !(latest.engine_sha === null || typeof latest.engine_sha === 'string' && latest.engine_sha.trim() && latest.engine_sha.trim().toLowerCase() !== 'unknown')
+    || (latest.in_progress !== undefined && (!Array.isArray(latest.in_progress) || latest.in_progress.length > 10000
+      || !latest.in_progress.every(mark => keys(mark, ['token', 'pid', 'started_at']) && typeof mark.token === 'string' && UUID.test(mark.token)
+        && Number.isSafeInteger(mark.pid) && mark.pid > 0 && Number.isFinite(mark.started_at))))
     || (latest.clean !== undefined && typeof latest.clean !== 'boolean')
     || (latest.written_at !== undefined && (typeof latest.written_at !== 'string' || !Number.isFinite(Date.parse(latest.written_at))))
     || (latest.conflict !== undefined && typeof latest.conflict !== 'boolean')
@@ -2289,7 +2292,6 @@ async function beginTestAttempts(cache, rows, capture, options, origin, force = 
   const grouped = new Map();
   for (const row of rows) grouped.set(row.story_path, [...(grouped.get(row.story_path) ?? []), row]);
   await cacheTransaction(cache, data => {
-    cache.identitySnapshot ??= JSON.stringify(data.latest_identity ?? null);
     for (const [story, own] of grouped) {
       if (!story) continue;
       const fingerprint = capture ? storyFingerprint(cache, capture, story, options, origin) : null;
@@ -2306,6 +2308,17 @@ async function beginTestAttempts(cache, rows, capture, options, origin, force = 
       data.stories[story] = { generation, outcome: data.stories[story]?.outcome === 'failed' ? 'failed' : own.some(row => row.state === 'refused') ? 'refused' : 'unknown' };
       cache.tokens.set(story, { epoch: data.epoch, generation, fingerprint });
     }
+    if (capture && rows.some(row => !row.cached && row.state === 'ready') && !cache.mark) {
+      cache.mark = { token: cache.fs.nonce(), pid: cache.context.ports.pid ?? process.pid, started_at: cache.context.ports.now() };
+      const latest = data.latest_identity ?? { engine_sha: null, models: [], clean: false, conflict: true,
+        sampled_at: new Date(0).toISOString(), observed_at: new Date(cache.context.ports.now()).toISOString() };
+      const isAlive = cache.context.ports.isAlive ?? (pid => { try { process.kill(pid, 0); return true; } catch (error) { return error.code !== 'ESRCH'; } });
+      // Eligibility already saw every mark, including dead owners. Only now retire
+      // dead marks; live owners must survive another invocation's finish.
+      latest.in_progress = [...(latest.in_progress ?? []).filter(mark => isAlive(mark.pid)), cache.mark];
+      data.latest_identity = latest;
+      cache.identitySnapshot = JSON.stringify(latest);
+    }
   });
   if (cache.disabled) rows.forEach((row, index) => { for (const key of Object.keys(row)) delete row[key]; Object.assign(row, originals[index]); });
 }
@@ -2317,11 +2330,13 @@ async function finishTestAttempts(cache, rows, capture) {
     const identity = { engine_sha: observations[0]?.engine_sha ?? null,
       requested_model: observations[0]?.models[0] ?? null };
     const complete = observations.length > 0 && observations.every(item => item.complete && observedIdentityMatches(item, identity));
-    const clean = !cache.context.cacheReadInvocation && Number.isFinite(cache.context.startedAt)
+    const marks = previous?.in_progress ?? [];
+    const ownMark = mark => !!cache.mark && mark.token === cache.mark.token;
+    const clean = marks.length === 1 && ownMark(marks[0]) && !cache.context.cacheReadInvocation && Number.isFinite(cache.context.startedAt)
       && (!previous || cache.context.startedAt > Date.parse(previous.sampled_at))
       && cache.identitySnapshot === JSON.stringify(previous ?? null) && complete;
     data.latest_identity = { engine_sha: identity.engine_sha, models: identity.requested_model ? [identity.requested_model] : [],
-      clean, conflict: !clean, sampled_at: new Date(Number.isFinite(cache.context.startedAt) ? cache.context.startedAt : 0).toISOString(),
+      in_progress: marks.filter(mark => !ownMark(mark)), clean, conflict: !clean, sampled_at: new Date(Number.isFinite(cache.context.startedAt) ? cache.context.startedAt : 0).toISOString(),
       written_at: new Date(cache.context.ports.now()).toISOString(), observed_at: new Date(cache.context.ports.now()).toISOString() };
     for (const [story, token] of cache.tokens) {
       if (data.epoch !== token.epoch || data.stories[story]?.generation !== token.generation) continue;
@@ -2382,7 +2397,14 @@ async function runBatch(context, cwd, words, options, setRelease) {
   if (!fresh.some(row => row.state === 'ready')) return printResult(context, rows);
   if (!words.length) line(ports.stderr, costLine(fresh.filter(row => row.state === 'ready'), root, found.visible));
   context.otherNote = otherNote(otherFiles(capture.files, found).length);
-  const identity = signIn(ports.gh, context.store);
+  let identity;
+  try { identity = signIn(ports.gh, context.store); }
+  catch (error) {
+    if (cache?.mark) await cacheTransaction(cache, data => {
+      if (data.latest_identity?.in_progress) data.latest_identity.in_progress = data.latest_identity.in_progress.filter(mark => mark.token !== cache.mark.token);
+    });
+    throw error;
+  }
   const startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
   const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   Object.assign(context, { capture, identity, batch, startedAt, deadline: context.timeoutMin ? startedAt + context.timeoutMin * 60_000 : Infinity, rows: fresh,
