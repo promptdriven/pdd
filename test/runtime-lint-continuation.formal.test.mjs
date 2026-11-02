@@ -36,6 +36,7 @@ for (const cap of domain.cap) for (const schedule of domain.schedule) {
       if (currentLint === 'passed') return { status: 200, json: f.lint(id) };
       if (currentLint === 'refused') {
         const receipt = f.lint(id);
+        receipt.result.report.lint.tests = [];
         receipt.result.refusals = [{ code: 'global-refusal', message: 'Lint refused' }];
         return { status: 200, json: receipt };
       }

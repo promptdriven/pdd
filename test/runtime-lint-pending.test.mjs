@@ -101,13 +101,15 @@ test('LINT-PENDING: an older already-read terminal lint repairs stale unknown wo
   writeFileSync(file, JSON.stringify(saved));
   const answer = r.fake.lint(id, [{ path: PLACE, admission_state: 'draft', interface: { calls: [] } }]);
   answer.state = 'refused';
+  answer.result.report.lint.tests = [];
   answer.result.refusals = [{ code: 'interface-missing', message: 'auxiliary.prompt.md has no Runtime interface.', path: 'auxiliary.prompt.md' }];
   writeFileSync(join(folder, id + '.json'), JSON.stringify(answer));
   const reads = r.fake.gets.length;
   const next = await read(r, batch);
-  assert.equal(next.code, 5);
+  assert.equal(next.code, 4);
   assert.equal(next.json.rows[0].calls, 0);
-  assert.match(next.json.rows[0].reason.message, /auxiliary.prompt.md/);
+  assert.equal(next.json.rows[0].state, 'refused');
+  assert.match(next.json.rows[0].refusals[0].message, /auxiliary.prompt.md/);
   assert.doesNotMatch(JSON.stringify(next.json), /lint result is unknown/);
   assert.equal(r.fake.gets.length, reads, 'matching saved terminal lint needs no GET');
   assert.equal(r.fake.posts.length, 2);
