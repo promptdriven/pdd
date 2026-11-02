@@ -17,7 +17,7 @@ const EXACT_OPS = new Set(['equals', 'not_equals', 'one_of', 'count', ...RULE_OP
 const SCHEMA_RULES = new Set(['type', 'properties', 'required', 'additionalProperties', 'items', 'enum', 'const', 'oneOf',
   'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'multipleOf', 'minLength', 'maxLength', 'pattern',
   'minItems', 'maxItems', 'uniqueItems', 'minProperties', 'maxProperties']);
-const SCHEMA_NOTES = new Set(['title', 'description', 'default', 'examples', 'format', '$comment', '$schema', '$id']);
+const SCHEMA_NOTES = new Set(['title', 'description', 'default', 'examples', 'format', 'writeOnly', '$comment', '$schema', '$id']);
 
 // The engine's _INTERFACE regex (prompt_program_discovery.py, eae2202a).
 const INTERFACE = /<details\b[^>]*>\s*<summary\b[^>]*>\s*(?:<strong\b[^>]*>\s*)?Runtime\s+interface(?:\s*:\s*[^<]+?)?\s*(?:<\/strong\s*>\s*)?(?:\s*:\s*[^<]+?)?\s*<\/summary\s*>\s*```json\b\s*([\s\S]*?)\s*```\s*<\/details\s*>/gid;
@@ -289,7 +289,7 @@ export function checkInput(input, schema, index) {
 }
 
 // The engine's executable schema subset (graph_runtime_protocol.py, _validate_schema_node, eae2202a).
-const SCHEMA_ANNOTATIONS = new Set(['default', 'description', 'title', 'examples', 'format']);
+const SCHEMA_ANNOTATIONS = new Set(['default', 'description', 'title', 'examples', 'format', 'writeOnly']);
 const SCHEMA_FORBIDDEN = new Set(['$ref', '$dynamicRef', 'anyOf', 'allOf', 'not', 'if', 'then', 'else', 'contains',
   'unevaluatedProperties', 'patternProperties', 'propertyNames', 'contentEncoding']);
 const NUMBER_FIELDS = ['type', 'enum', 'const', 'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'multipleOf'];
@@ -357,6 +357,7 @@ function schemaRules(schema, pointer, out) {
 function annotationRules(schema, add) {
   for (const key of ['description', 'title', 'format']) if (Object.hasOwn(schema, key) && typeof schema[key] !== 'string') add('graph-schema-invalid', `"${key}" must be a string.`);
   if (Object.hasOwn(schema, 'examples') && !Array.isArray(schema.examples)) add('graph-schema-invalid', '"examples" must be a list.');
+  if (Object.hasOwn(schema, 'writeOnly') && typeof schema.writeOnly !== 'boolean') add('graph-schema-invalid', '"writeOnly" must be true or false.');
 }
 
 // Preserve numeric JSON spelling only for parsed prompt interfaces; ordinary callers supply JSON values.
@@ -395,6 +396,9 @@ export function interfaceSchemaProblems(iface) {
     for (const key of ['input_schema', 'result_schema']) if (isObject(entry) && Object.hasOwn(entry, key)) schemaRules(entry[key], `/entries/${index}/${key}`, out);
   }
   for (const [index, resource] of (Array.isArray(iface?.resources) ? iface.resources : []).entries()) {
+    if (isObject(resource) && Object.hasOwn(resource, 'returns_credentials') && typeof resource.returns_credentials !== 'boolean') {
+      out.push({ code: 'graph-schema-invalid', pointer: `/resources/${index}/returns_credentials`, rule: '"returns_credentials" must be true or false.' });
+    }
     for (const [opIndex, operation] of (Array.isArray(resource?.operations) ? resource.operations : []).entries()) {
       for (const key of ['arguments_schema', 'result_schema']) {
         if (!isObject(operation) || !Object.hasOwn(operation, key)) continue;
