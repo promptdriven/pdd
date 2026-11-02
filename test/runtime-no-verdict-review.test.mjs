@@ -129,7 +129,7 @@ test('REVIEW busy retry to lost response or fresh refusal never inherits retry a
       if (e.method === 'GET') return { status: 410, json: { error: { code: 'expired' } } };
       return f.normal(e);
     });
-    const result = await run(setup, fake);
+    const result = await run(setup, fake, mode === 'busy' ? { '--json': true, '--timeout': 1.5 } : undefined);
     if (mode === 'busy') assert.ok(posts > 3 && posts <= 10, '90-second busy uploads are bounded by minimum backoff, without an attempt ceiling');
     else assert.equal(posts, 2);
     assert.equal(result.json.rows[0].next_step, null);

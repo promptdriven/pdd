@@ -135,7 +135,7 @@ test('2704 S3: uncapped busy drops dispatch to one while accepted work runs', as
     return f.normal(entry);
   });
   made = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin }); made.ports.pollMs = 10000;
-  assert.equal(await runCheck({ cwd: setup.repo, words: [], options: { '--json': true } }, made.ports), 3);
+  assert.equal(await runCheck({ cwd: setup.repo, words: [], options: { '--json': true, '--timeout': 1.5 } }, made.ports), 3);
   assert.equal(first.size, 3); assert.equal(busyAt.length, 2); assert.ok(polls > 0);
   assert.deepEqual(retries, [], 'window one must hold every busy retry behind still-running accepted work');
   assert.equal(fake.posts.filter(p => p.request.requestId === acceptedId).length, 1);
