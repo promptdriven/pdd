@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-outcome.prompt.md (sha256: 15c59ba9b948b59ef7bc066297fc42336a3f5e84838537bb099ac35af1715eeb).
+// Generated from prompts/cli/runtime-outcome.prompt.md (sha256: 1191f789e2f90581ae521758f335315804768b5f4deb6e693634c0a01969be55).
 // What happened to one selected test: the one place that turns a server answer into an outcome.
 const objects = value => Array.isArray(value) ? value.filter(item => item && typeof item === 'object' && !Array.isArray(item)) : [];
 const count = value => Number.isSafeInteger(value) && value >= 0;
@@ -30,24 +30,24 @@ export function outcomeFor(answer, { test, steps = [], kind = answer?.command, t
     return { state: 'not_run', code: pool.code, retryable: true, message: pool.reason ?? pool.message ?? pool.code };
   if (kind === 'lint') return lintOutcome(answer, refusals, test, steps);
   if (answer?.state === 'unknown') return { state: 'unknown', reason: result?.why ?? 'No verdict was returned.' };
-  if (answer?.state === 'refused' || report?.verdict === 'refused') return refused(refusals);
   if (answer?.state === 'failed') return { state: 'failed', criteria: objects(report?.criterion_results) };
+  if (answer?.state === 'refused' || report?.verdict === 'refused') return refused(refusals);
   if (answer?.state === 'passed' && result && typeof result === 'object') return { state: 'passed' };
   return { state: 'unknown', reason: result?.why ?? 'No verdict was returned.' };
 }
 
-// Lint passes a selected test only on positive evidence: complete lint and a passing verdict for that test.
+// A selected test passes lint on its own evidence: a passing per-test verdict. An ended lint that
+// gives a test no verdict leaves it not run; only a lint that has not ended is unknown.
 function lintOutcome(answer, refusals, test, steps) {
   const result = answer?.result, report = result?.report, program = report?.program;
   if (!['passed', 'failed', 'refused'].includes(answer?.state)) return { state: 'unknown', reason: 'no lint verdict' };
   const complete = report?.lint && typeof report.lint === 'object' ? report.lint.complete === true : result?.problems_complete === true;
-  const listed = objects(Array.isArray(result?.tests) ? result.tests : report?.lint?.tests).filter(item => item.path === test);
+  const entries = list => objects(list).filter(item => item.path === test);
+  const listed = entries(result?.tests).length ? entries(result.tests) : entries(report?.lint?.tests);
   const verdict = listed.length && listed.every(item => item.verdict === listed[0].verdict) ? listed[0].verdict : null;
   const own = [...refusals, ...objects(result?.problems ?? report?.problems)]
     .filter(item => (item.file ?? item.path) === test && item.severity !== 'warning');
-  if (own.some(item => refusals.includes(item))) return refused(own);
   // The prompts the test reaches: each step's entry prompt and its declared call targets.
-  // An explicit refusal of any reached prompt wins over a prompt that incomplete lint did not list.
   let draft = false, unlisted = false, reachedProblem = null;
   if (Array.isArray(program?.prompts) || Array.isArray(program?.refused_prompts)) {
     const byPath = new Map(objects(program.prompts).map(prompt => [prompt.path, prompt]));
@@ -58,35 +58,39 @@ function lintOutcome(answer, refusals, test, steps) {
       if (reached.has(path)) continue;
       reached.add(path);
       const prompt = byPath.get(path), state = prompt?.admission_state ?? prompt?.state, item = refusedPrompts.get(path);
-      if (item) reachedProblem = { ...item, code: item.code || 'lint-refused', path, section: 'lint', message: `${path}: ${item.message || item.code}` };
+      const problem = (code, message) => ({ code, path, section: 'lint', message, reached: true });
+      if (item) reachedProblem = { ...item, ...problem(item.code || 'lint-refused', `${path}: ${item.message || item.code}`) };
       else if (!Array.isArray(program.prompts)) continue;
       else if (!prompt && !complete) unlisted = true;
-      else if (!prompt) reachedProblem = { code: 'unknown-target', path, section: 'lint', message: `${path} is not in the lint report.` };
-      else if (state === 'stale') reachedProblem = { code: 'interface-stale', path, section: 'lint', message: `${path} changed after its hash was filled or approved.` };
-      else if (state !== 'approved' && state !== 'draft') reachedProblem = { code: `interface-${typeof state === 'string' && state ? state : 'unapproved'}`, path,
-        section: 'lint', message: `${path} has no usable Runtime interface.` };
+      else if (!prompt) reachedProblem = problem('unknown-target', `${path} is not in the lint report.`);
+      else if (state === 'stale') reachedProblem = problem('interface-stale', `${path} changed after its hash was filled or approved.`);
+      else if (state !== 'approved' && state !== 'draft') reachedProblem = problem(`interface-${typeof state === 'string' && state ? state : 'unapproved'}`,
+        `${path} has no usable Runtime interface.`);
       else {
         draft ||= state === 'draft';
         for (const call of objects(prompt.interface?.calls)) if (typeof call.target === 'string') queue.push(call.target);
       }
     }
   }
+  const notRun = reason => ({ state: 'not_run', code: null, retryable: false, reason, draft });
+  if (own.some(item => refusals.includes(item))) return refused(own, { draft });
   if (reachedProblem) return refused([reachedProblem], { draft });
-  if (unlisted) return { state: 'unknown', reason: 'lint did not finish', draft };
   if (verdict === 'refused') return refused(own.length ? own : [{ code: 'lint-refused', message: `${test} was refused by complete lint.` }], { draft });
-  if (verdict === 'passed' && complete) return { state: 'passed', draft };
+  if (verdict === 'passed') return { state: 'passed', draft };
   // A job refusal refuses a selected test that has no verdict of its own.
   if (!listed.length && (answer.state === 'refused' || report?.verdict === 'refused' || refusals.length))
     return refused(refusals.length ? refusals : [{ code: 'lint-refused', message: 'The interpreter refused lint.' }], { draft });
-  return { state: 'unknown', reason: complete ? 'lint gave no verdict for this test' : 'lint did not finish', draft };
+  return notRun(complete && !unlisted && verdict !== 'not-checked' ? 'lint gave no verdict for this test' : 'lint did not finish');
 }
 
 function progressFrom(value) {
   const progress = {};
   for (const key of ['steps_done', 'steps_total', 'calls_settled', 'calls_open']) if (count(value?.[key])) progress[key] = value[key];
-  if (count(value?.step) || typeof value?.step === 'string' && value.step.trim()) progress.step = value.step;
+  if (Number.isSafeInteger(value?.step) && value.step >= 1 || typeof value?.step === 'string' && value.step.trim()) progress.step = value.step;
   return progress;
 }
+
+const callWords = (settled, open) => [...(count(settled) ? [`${settled} AI call${settled === 1 ? '' : 's'} so far`] : []), ...(open > 0 ? [`${open} in flight`] : [])];
 
 // Module function: the words for an outcome, or for a saved row that carries its outcome fields.
 export function outcomeText(outcome) {
@@ -96,11 +100,21 @@ export function outcomeText(outcome) {
   const p = outcome.progress ?? {};
   const step = p.step ?? (count(p.steps_done) && count(p.steps_total) && p.steps_done < p.steps_total ? p.steps_done + 1 : undefined);
   return ['running', ...(typeof step === 'number' ? [`step ${step}${count(p.steps_total) ? ` of ${p.steps_total}` : ''}`] : step ? [step] : []),
-    ...(count(p.calls_settled) ? [`${p.calls_settled} AI call${p.calls_settled === 1 ? '' : 's'} so far`] : []),
-    ...(p.calls_open > 0 ? [`${p.calls_open} in flight`] : [])].join(' · ');
+    ...callWords(p.calls_settled, p.calls_open)].join(' · ');
 }
 
 export const hasProgress = outcome => outcome.state === 'running' && Object.keys(outcome.progress ?? {}).length > 0;
+
+// Module function: one progress fragment for a group of rows; null when no row has server progress.
+// One row keeps its step; several rows add up the counts they report.
+export function progressText(outcomes) {
+  const moving = outcomes.filter(hasProgress);
+  if (moving.length < 2) return moving.length ? outcomeText(moving[0]) : null;
+  const reported = key => moving.filter(outcome => count(outcome.progress[key]));
+  const sum = key => reported(key).reduce((total, outcome) => total + outcome.progress[key], 0);
+  return ['running', ...callWords(reported('calls_settled').length ? sum('calls_settled') : undefined, sum('calls_open'))].join(' · ');
+}
+
 export const outcomeDone = outcome => TERMINAL.has(outcome.state);
 
 // Module function: the state that decides a group's result, with the exit code's precedence.

@@ -1,62 +1,84 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { hasProgress, outcomeDone, outcomeExitCode, outcomeFor, outcomeOverall, outcomeText } from '../src/runtime-outcome.mjs';
-import { projectAnswer, summaryLine } from '../src/runtime-output.mjs';
+import { exitCodeFor, projectAnswer, renderJson, renderText, summaryLine } from '../src/runtime-output.mjs';
 import { TOKEN } from './runtime-fake.mjs';
 
+// Expected outcomes through the public output functions, so they are part of the contract.
 const selected = { test: 'tests/one.json', steps: [{ entry_path: 'prompts/one.prompt.md' }] };
 const lint = () => ({ command: 'lint', state: 'passed', result: { report: { lint: { complete: true, tests: [{ path: selected.test, verdict: 'passed' }] } } } });
 const refused = { code: 'bad-input', field: '/steps/0/input', message: 'Correct this input.', fix: 'Use an integer.' };
+const row = view => ({ ...view, story: 'one', title: 'One', test: selected.test, phase: 'server' });
 
-for (const shape of ['no-inventory', 'empty-inventory', 'partial-inventory']) test(`OUTCOME model: incomplete ${shape} is unknown, never an invented refusal`, () => {
+for (const shape of ['no-inventory', 'empty-inventory', 'partial-inventory']) test(`OUTCOME model: an ended incomplete lint without a verdict is not run (${shape})`, () => {
   const answer = lint();
   answer.result.report.lint = { complete: false, tests: [] };
   answer.result.report.program = shape === 'no-inventory' ? {} : { prompts: shape === 'empty-inventory' ? [] : [{ path: 'prompts/other.prompt.md' }] };
-  const outcome = outcomeFor(answer, selected);
-  assert.equal(outcome.state, 'unknown'); assert.equal(outcome.reason, 'lint did not finish');
-  assert.equal(outcomeExitCode([outcome]), 3);
+  const view = projectAnswer(answer, selected);
+  assert.equal(view.state, 'not_run');
+  assert.equal(exitCodeFor([view]), 5);
 });
 
 for (const location of ['test', 'entry', 'entry-no-inventory']) test(`OUTCOME model: an explicit ${location} refusal defeats a selected pass`, () => {
   const answer = lint();
   if (location === 'test') answer.result.refusals = [{ ...refused, file: selected.test }];
   else answer.result.report.program = { ...(location === 'entry' ? { prompts: [] } : {}), refused_prompts: [{ ...refused, path: selected.steps[0].entry_path }] };
-  const outcome = outcomeFor(answer, selected);
-  assert.equal(outcome.state, 'refused'); assert.equal(outcome.code, refused.code);
-  assert.equal(outcome.field, refused.field); assert.equal(outcome.fix, refused.fix);
+  const view = projectAnswer(answer, selected);
+  assert.equal(view.state, 'refused');
+  if (location === 'test') assert.equal(view.refusals[0].field, refused.field);
 });
 
-test('OUTCOME model: an unrelated refusal is scoped out by a complete selected pass; the input is unchanged', () => {
+test('OUTCOME model: an unrelated refusal is scoped out by a selected pass; the input is unchanged', () => {
   const answer = lint(); answer.state = 'refused'; answer.result.refusals = [{ ...refused, file: 'tests/other.json' }];
   const before = structuredClone(answer);
-  const first = outcomeFor(answer, selected);
-  assert.equal(first.state, 'passed');
-  assert.deepEqual(outcomeFor(answer, selected), first); assert.deepEqual(answer, before);
-  assert.equal(outcomeFor(answer, { ...selected, test: 'tests/other.json' }).state, 'refused');
+  assert.equal(projectAnswer(answer, selected).state, 'passed');
+  assert.deepEqual(answer, before);
+  assert.equal(projectAnswer(answer, { ...selected, test: 'tests/other.json' }).state, 'refused');
 });
 
-test('OUTCOME model: a job in an unknown state is unknown even with refusals; a passed check needs a result', () => {
-  assert.equal(outcomeFor({ command: 'lint', state: 'unknown', result: { refusals: [refused] } }, selected).state, 'unknown');
-  assert.equal(outcomeFor({ command: 'check', state: 'passed', result: null }).state, 'unknown');
-  assert.equal(outcomeFor({ command: 'check', state: 'passed', result: {} }).state, 'passed');
+test('OUTCOME model: a test with its own pass passes although the lint did not finish', () => {
+  const answer = lint();
+  answer.result.report.lint = { complete: false, tests: [{ path: selected.test, verdict: 'passed' }, { path: 'tests/other.json', verdict: 'not-checked' }] };
+  assert.equal(projectAnswer(answer, selected).state, 'passed');
+  assert.equal(projectAnswer(answer, { ...selected, test: 'tests/other.json' }).state, 'not_run');
 });
 
-test('OUTCOME model: unknown is not done; the exit precedence comes from one table', () => {
-  for (const state of ['passed', 'failed', 'refused', 'not_run']) assert.equal(outcomeDone({ state }), true);
-  for (const state of ['unknown', 'queued', 'running', 'ready']) assert.equal(outcomeDone({ state }), false);
-  assert.equal(outcomeExitCode([]), 3); assert.equal(outcomeOverall([]), 'unknown');
-  assert.equal(outcomeOverall([{ state: 'refused' }, { state: 'not_run' }]), 'not_run');
-  assert.equal(outcomeExitCode([{ state: 'failed' }, { state: 'refused' }]), 4);
-  assert.equal(outcomeExitCode([{ state: 'passed' }], { lintUnknown: true }), 3);
+test('OUTCOME model: unknown means not ended; a passed check needs a result; failed stays failed', () => {
+  assert.equal(projectAnswer({ command: 'lint', state: 'unknown', result: { refusals: [refused] } }, selected).state, 'unknown');
+  assert.equal(projectAnswer({ command: 'lint', state: 'running' }, selected).state, 'running');
+  assert.equal(projectAnswer({ command: 'check', state: 'passed', result: null }).state, 'unknown');
+  assert.equal(projectAnswer({ command: 'check', state: 'passed', result: {} }).state, 'passed');
+  assert.equal(projectAnswer({ command: 'check', state: 'failed', result: { report: { verdict: 'refused' } } }).state, 'failed');
 });
 
-test('OUTCOME model: queued keeps its place and partial progress invents no numbers', () => {
-  assert.equal(outcomeText(projectAnswer({ command: 'check', state: 'queued', queue: { ahead: 2 } })), 'queued · 2 ahead');
-  const running = projectAnswer({ command: 'check', state: 'running', progress: { step: 'prepare', calls_settled: -1 } });
-  assert.equal(hasProgress(running), true); assert.deepEqual(running.progress, { step: 'prepare' });
-  assert.match(summaryLine([{ ...running, phase: 'server' }]), /running · prepare/);
-  assert.doesNotMatch(summaryLine([{ ...running, phase: 'server' }]), /0 AI calls|step \d/);
-  assert.equal(outcomeText({ state: 'running', progress: { steps_done: 2, steps_total: 5 } }), 'running · step 3 of 5');
+test('OUTCOME model: the exit precedence', () => {
+  assert.equal(exitCodeFor([]), 3);
+  assert.equal(exitCodeFor([{ state: 'refused' }, { state: 'not_run' }]), 5);
+  assert.equal(exitCodeFor([{ state: 'failed' }, { state: 'refused' }]), 4);
+  assert.equal(exitCodeFor([{ state: 'passed' }], { lintUnknown: true }), 3);
+});
+
+test('OUTCOME model: queued keeps its place in the table and JSON', () => {
+  const view = row(projectAnswer({ command: 'check', state: 'queued', queue: { ahead: 2 } }));
+  assert.match(renderText({ batch: 'b', rows: [view], exitCode: 3 }), /One +tests\/one\.json +queued · 2 ahead/);
+  assert.equal(renderJson({ repo: 'r', rows: [view], exitCode: 3 }).rows[0].ahead, 2);
+});
+
+test('OUTCOME model: progress keeps only valid supplied fields and invents no numbers', () => {
+  const partial = row(projectAnswer({ command: 'check', state: 'running', progress: { step: 'prepare', calls_settled: -1 } }));
+  assert.deepEqual(partial.progress, { step: 'prepare' });
+  assert.match(summaryLine([partial]), /running · prepare/);
+  assert.doesNotMatch(summaryLine([partial]), /0 AI calls|step \d/);
+  assert.equal(projectAnswer({ command: 'check', state: 'running', progress: { step: 0 } }).progress, undefined, 'steps are one-based');
+  const counted = row(projectAnswer({ command: 'check', state: 'running', progress: { steps_done: 2, steps_total: 5 } }));
+  assert.match(summaryLine([counted]), /running · step 3 of 5/);
+});
+
+test('OUTCOME model: one progress part per line, and the calls of ended rows stay', () => {
+  const progress = { steps_done: 2, steps_total: 5, step: 3, calls_settled: 4, calls_open: 1 };
+  const moving = row(projectAnswer({ command: 'check', state: 'running', progress }));
+  const ended = { ...row({ state: 'passed' }), calls: 5, criteria: { passed: 1, total: 1 }, checks: { passed: 1, total: 1 } };
+  assert.match(summaryLine([moving, ended]), /running · step 3 of 5 · 4 AI calls so far · 1 in flight · 1 running · 5 AI calls$/);
+  assert.match(summaryLine([moving, moving, ended]), /checks · running · 8 AI calls so far · 2 in flight · 2 running · 5 AI calls$/);
 });
 
 test('OUTCOME model: a typed step timeout stays unknown even when the report verdict is refused', () => {

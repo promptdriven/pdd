@@ -1,5 +1,5 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: 7b81dded51d864953952933b2c3603ad90608ad9a61cdf2fdf8dfd1c72679252).
-import { hasProgress, outcomeExitCode, outcomeFor, outcomeText } from './runtime-outcome.mjs';
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: e5cbf881de1b1eb4a6733e3833a2a332d6f76842a9b7a882e20e2c80aaf53169).
+import { hasProgress, outcomeExitCode, outcomeFor, outcomeText, progressText } from './runtime-outcome.mjs';
 export const OPEN_STATES = new Set(['queued', 'running']);
 
 // Each row carries its outcome; the outcome model owns the exit precedence.
@@ -186,7 +186,9 @@ export function summaryLine(rows, story = null) {
   const own = row => row.criteria ?? { passed: 0, total: row.criteria_total ?? 0 };
   const criteria = rows.reduce((sum, row) => ({ passed: sum.passed + own(row).passed, total: sum.total + own(row).total }), { passed: 0, total: 0 });
   const checks = rows.reduce((sum, row) => ({ passed: sum.passed + (row.checks?.passed ?? 0), total: sum.total + (row.checks?.total ?? 0) }), { passed: 0, total: 0 });
-  const sent = rows.filter(sentRow), known = sent.filter(row => typeof row.calls === 'number' && !OPEN_STATES.has(row.state));
+  // A running row with server progress reports its calls in the one progress fragment; the calls part counts the other rows.
+  const progress = progressText(rows), counted = rows.filter(row => !hasProgress(row));
+  const sent = counted.filter(sentRow), known = sent.filter(row => typeof row.calls === 'number' && !OPEN_STATES.has(row.state));
   const partial = sent.filter(row => !OPEN_STATES.has(row.state) && typeof row.calls !== 'number');
   const calls = known.reduce((sum, row) => sum + row.calls, 0) + partial.reduce((sum, row) => sum + (row.known_calls ?? 0), 0);
   const unknownCalls = sent.reduce((sum, row) => sum + (known.includes(row) ? 0 : row.unknown_calls || 1), 0);
@@ -200,10 +202,8 @@ export function summaryLine(rows, story = null) {
     : rows.some(row => row.busy && row.state === 'not_run') && rows.every(row => row.state === 'passed' || (row.busy && row.state === 'not_run')) ? 'busy ·' : 'no verdict ·';
   const rerunShare = rerunCalls ? `${rerunCalls} for reruns` : '';
   const usage = known.length ? `${count(calls, 'AI call')}${rerunShare ? ` (${rerunShare})` : ''}` : rerunShare || count(calls, 'AI call');
-  // Server progress of a running row is its call evidence; when every row has it, no other count is shown.
-  const progress = rows.filter(hasProgress).map(outcomeText);
   return [`${PROMPT_TESTS_LABEL}${story ? ` (${story})` : ''}${rows.some(row => row.draft) ? ' (DRAFT)' : ''}: ${mark} ${criteria.passed} of ${count(criteria.total, 'criterion').replace(/criterions$/, 'criteria')}`,
-    `${checks.passed}/${checks.total} checks`, ...progress, ...others, ...(rows.length && progress.length === rows.length ? [] : [`${usage}${unknownCalls ? ` + ${unknownCalls} unknown` : ''}`])].join(' · ');
+    `${checks.passed}/${checks.total} checks`, ...(progress ? [progress] : []), ...others, ...(progress && !sent.length ? [] : [`${usage}${unknownCalls ? ` + ${unknownCalls} unknown` : ''}`])].join(' · ');
 }
 
 function table(rows) {
