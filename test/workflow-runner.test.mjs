@@ -624,7 +624,7 @@ test('code area build → verify → formal: a loop back to build only warns, as
   const pr2 = await done('formal', 'Proved (bounded)');
   assert.match(pr2.message, /pdd opens PR 2 now/); assert.equal(f.prs.length, 2);
   assert.match(f.prs[1].body, /\| 1 \| 2 \| 2 \| same \|/); assert.match(f.prs[1].body, /Proved \(bounded\): 0\.\.999/);
-  assert.match(f.prs[1].body, /\*\*formal\*\*: Proved \(bounded\)/); assert.doesNotMatch(f.prs[1].body, /first build|✗ 2 vectors fail/);
+  assert.match(f.prs[1].body, /\*\*formal\*\*: `Proved \(bounded\)`/); assert.doesNotMatch(f.prs[1].body, /first build|✗ 2 vectors fail/);
 });
 
 // Seen in a real run: the person said "I approve the prompt. Yes, build the code."; the chat committed the approval
@@ -1277,7 +1277,7 @@ test('0.1.7 #12: status and PR step lines never cut a summary inside a URL', asy
   writeFileSync(join(run.runDir, 'verify.md'), 'ok\n');
   await lastSteps(f, run, await stepDone({ step: 'verify', summary: 'ok', cwd: run.root }, f.agentPorts()));
   const line = f.prs[0].body.split('\n').find(row => row.startsWith('- **change**'));
-  assert.ok(line.endsWith(`see ${url} …`), line);
+  assert.ok(line.endsWith(`see ${url} …\``), line);
 });
 
 // Tester 4.13: the chat told the person "PDD rejected recording your earlier "Go on" because it requires a reply after
