@@ -1301,7 +1301,7 @@ async function startNextChat(run, p, packageRoot) {
     if (latest && ended(latest)) throw Object.assign(Error(`The run ended (${latest.state}). Stop working on it.`), { code: 'workflow_progress_refused' });
     if (!saveChatObservations(original, prior, chat, p, { checkpoint: true, layout }))
       throw Object.assign(Error('The run changed before the chat launch, so pdd sent nothing.'), { code: 'chat_checkpoint_refused' });
-    prior = structuredClone(chat);
+    if (chat) prior = structuredClone(chat);
   };
   const endedMeanwhile = () => {
     const latest = readRun(run.runDir);
@@ -2024,8 +2024,8 @@ function saveChatObservations(run, original, observed, p, { error, phase = 'open
       fresh.chats = fresh.chats.filter(chat => chat !== selected);
     } else if (selected && observed) copyObservation(selected, observed);
     else if (observed) fresh.chats.push(structuredClone(observed));
-    // Retain the run's initial root identities for live validation and conservative cleanup.
-    if (layout && !fresh.layout) fresh.layout = structuredClone(layout);
+    // Verified live custody supersedes stale hints; partial allocation saves retain known fields.
+    if (layout) fresh.layout = { ...fresh.layout, ...structuredClone(layout) };
     if (checkpoint) return;
     // A late failed open of an area that is no longer current keeps its own record, but never replaces a current failure.
     if (error && phase === 'open' && fresh.areas[fresh.area].name !== area && !activeChatFailure(fresh))
