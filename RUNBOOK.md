@@ -110,7 +110,8 @@ and no field name. So check every schema against ALL the rules before the first 
 7. Use only these keywords. string: `minLength`, `maxLength`, `pattern`. integer and number: `minimum`, `maximum`,
    `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`. array: `items`, `minItems`, `maxItems`, `uniqueItems`.
    object: `properties`, `required`, `additionalProperties`, `minProperties`, `maxProperties`. All types: `enum`,
-   `const`, `title`, `description`, `default`, `examples`, `format`. All others are refused: `$ref`, `$defs`, `anyOf`, `if` …
+   `const`, `title`, `description`, `default`, `examples`, `format`, `writeOnly` (`true` or `false`).
+   All others are refused: `$ref`, `$defs`, `anyOf`, `if` …
 8. Each `enum` value has the right type and comes one time. A `default` must match its own schema.
 
 Integer bounds in schemas (`minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum` and `multipleOf`) must lie
@@ -839,6 +840,16 @@ The `simulation` entry of the scenario:
 `hash_json` hashes the interpreter's canonical JSON: keys sorted by UTF-16 code units, no spaces, and the interpreter's own spelling of numbers (a subset of RFC 8785). An application's own serializer can give other bytes, for example for floats or non-ASCII keys. To hash exact bytes that the application made, use `hash_utf8`. Native tests must prove that the hash and the serializer match.
 
 Lint accepts this declaration also when the native code hashes inside (for example with Python `hashlib`) and takes no `compute` argument. Keep the native signature. [Module binding coverage](https://github.com/promptdriven/pdd/blob/alpha/docs/runtime-bindings.md) checks that the prompt can reach its operations. It does not run native hashing. Native tests own that, and a lint pass is not a behavior pass.
+
+### Use made-up sign-in data
+
+A test may hold made-up sign-in data, for example `"secret": "test-only-attempt-proof"` or a fake `claim_token`.
+The interpreter does not refuse a field because of its name. A value is secret only when it comes from a real
+credential channel: a `credential_ref`, the environment, live sign-in of a resource or live HTTP headers.
+- Use plainly fake values. Do not copy the shape of a real key (`sk-…`, `ghp_…`, `Bearer …`, a JWT): the
+  model recording refuses text in that shape.
+- To hide a value in the report, mark its result field `"writeOnly": true`. The check still compares the real value.
+- Never put a real credential in a test, a prompt or the repo.
 
 ### Inject a fixed-answer callback
 
