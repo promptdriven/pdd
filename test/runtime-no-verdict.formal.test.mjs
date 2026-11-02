@@ -55,7 +55,8 @@ function checkRows(rows, label) {
   }
   const rank = Math.max(0, ...rows.map(row => exitRank[row.state]));
   for (const interrupted of [false, true]) for (const lintUnknown of [false, true]) {
-    assert.equal(exitCodeFor(rows, { interrupted, lintUnknown }), interrupted || lintUnknown ? 3 : codes[rank], `${label}: unchanged exit precedence`);
+    // An empty result has no evidence: unknown, exit 3.
+    assert.equal(exitCodeFor(rows, { interrupted, lintUnknown }), interrupted || lintUnknown || !rows.length ? 3 : codes[rank], `${label}: unchanged exit precedence`);
   }
 }
 

@@ -119,7 +119,7 @@ test('root help keeps its first line, every form line and its closing lines; com
   assert.equal(closing.length, 3); assert.match(closing.at(-1), /never merges/);
   assert.doesNotMatch(scoped.join('\n'), /help prompting|prompting-guide\.md|RUNBOOK\.md/);
   // Root help: the same first line, every catalog form in order, the learn line and two path lines, the same closing lines.
-  const all = PUBLIC_COMMAND_MANIFEST.map(formLine);
+  const all = PUBLIC_COMMAND_MANIFEST.flatMap(row => formLine(row).split('\n'));
   assert.ok(all.some(line => line.startsWith('  pdd help prompting  ')));
   assert.equal(rootHelp[0], scoped[0]); assert.ok(rootHelp[0].startsWith('PDD'));
   assert.equal(rootHelp[1], ''); assert.deepEqual(rootHelp.slice(2, 2 + all.length), all);

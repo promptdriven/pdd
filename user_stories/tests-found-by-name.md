@@ -13,7 +13,7 @@ I can keep the test of a Story in a `tests` folder under the Story's name, at an
 7. A selected test that is not valid JSON, cannot be read or is over the upload limit is refused with its file name, and the other Stories still run. A test whose `story_path` names another Story is refused with the test, its Story and the other Story.
 8. `pdd test nope` stops with exit 2 and lists every Story with its test file, or with "no test" and the expected path.
 9. One test file has no size limit. The only size limit is the upload limit of 10 MB and 10,000 files; over it, pdd names the largest files with their sizes and the limit.
-10. When the interpreter says that it can lint named tests, the lint request names the selected tests, so the interpreter lints exactly those files.
+10. When the interpreter says that it can lint named tests, the lint request names the selected tests, so the interpreter lints exactly those files. Its app-map list is the union of maps named by the command and maps declared by the selected tests, without duplicates.
 
 ## Rules to check
 
