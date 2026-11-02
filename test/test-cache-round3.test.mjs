@@ -215,7 +215,7 @@ test('TEST-CACHE-V2 crash before finish leaves a mark that forces a run', async 
     const job = fake.check(id, first && entry.method === 'POST' ? 'passed' : 'running'); first = false;
     job.engine_sha = B.engine_sha; job.usage.requested_model = B.requested_model;
     if (job.result?.report?.evaluation) job.result.report.evaluation.requested_model = B.requested_model;
-    return { status: entry.method === 'POST' ? 202 : 200, json: job };
+    return { status: job.state === 'running' && entry.method === 'POST' ? 202 : 200, json: job };
   };
   c.ports.sleep = async () => { throw new Error('simulated crash before finish'); };
   await assert.rejects(ctx.invokeWith(c.ports, ['independent', 'place-order']), /simulated crash before finish/);
