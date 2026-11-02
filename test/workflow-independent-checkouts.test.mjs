@@ -202,3 +202,22 @@ test('2531B AC4,5: duplicate or inconsistent selected ownership cannot authorize
   assert.deepEqual(mutations(f),[]);assert.deepEqual(f.workspaces,world);
  }
 });
+
+test('a run with no saved workspace rebuilds a duplicate namespace entry from live Herdr instead of refusing',async t=>{
+ const f=await fixture(t),a=await f.open(),state=await registry(f);
+ state.repositories.push(structuredClone(state.repositories[0]));await save(f,state);
+ const runId=randomUUID(),cwd=join(f.root,'run-two');await mkdir(cwd);f.calls.length=0;
+ const b=await f.open({runId,cwd,stageId:'scope',run:{runId,number:2,workflow:'small-change',chats:[]}});
+ assert.equal(b.repoWorkspaceId,a.repoWorkspaceId,'The one live entry is kept');
+ const after=await registry(f);
+ assert.equal(after.repositories.filter(r=>r.commonDir===f.input.commonDir).length,1);
+ assert.equal(after.archivedRepositories.length,1);assert.equal(after.archivedRepositories[0].reason,'duplicate-or-inconsistent-cache');
+ assert.deepEqual(f.calls.filter(c=>['close','remove','rename'].includes(c[1])),[]);
+});
+test('duplicate namespace refusals name the one true recovery step on the open and close paths',async t=>{
+ const {f,bInput}=await pair(t),state=await registry(f);
+ state.repositories.push(structuredClone(state.repositories[1]));await save(f,state);f.calls.length=0;
+ await assert.rejects(f.open(bInput),error=>error.code==='layout_allocation_uncertain'&&/Nothing was changed\. Remove the extra alice\/coffee entries for .* from .*registry\.json, keeping the one whose workspace is open in Herdr session pdd, then retry\./.test(error.message));
+ await assert.rejects(idle(f,bInput),error=>error.code==='layout_allocation_uncertain'&&/Nothing was changed\. The repository workspace stays open; close it yourself in Herdr session pdd if you do not need it\./.test(error.message));
+ assert.deepEqual(mutations(f),[]);
+});
