@@ -5,8 +5,8 @@ import { runCheck } from '../src/runtime-client.mjs';
 import { renderText, summaryLine, exitCodeFor } from '../src/runtime-output.mjs';
 import { harbor, fakeRuntime, portsFor, PLACE, TOKEN } from './runtime-fake.mjs';
 const row = (state, extra = {}) => ({ state, story: 'one', title: 'One', test: 'one.json', refusals: [], ...extra });
-async function run(setup, fake, options = { '--json': true }, words = ['place-order']) {
-  const { ports } = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state });
+async function run(setup, fake, options = { '--json': true }, words = ['place-order'], suppliedPorts) {
+  const ports = suppliedPorts ?? portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state }).ports;
   const code = await runCheck({ words: options['--read'] ? [] : words, options, cwd: setup.repo }, ports);
   return { code, text: ports.stdout.text, json: options['--json'] ? JSON.parse(ports.stdout.text) : null };
 }
@@ -75,9 +75,9 @@ test('REVIEW server why preserves specific advice and drops legacy generic even 
     ['unknown', 'local', 'The answer to the request was lost.'],
     ['refused', 'cached', 'Checks failed.'], ['failed', 'local', 'Checks failed.'],
   ]) await t.test(`saved ${state} ${source}: ${why}`, async t => {
-    const setup = harbor(t); let reading = false, gets = 0;
+    const setup = harbor(t); let reading = false, gets = 0, interruptRead = () => {};
     const fake = await fakeRuntime(t, (e, f) => {
-      if (reading && e.method === 'GET') { gets++; return { destroy: true }; }
+      if (reading && e.method === 'GET') { gets++; interruptRead(); return { destroy: true }; }
       if (e.command === 'check') return { status: 200, json: f.check(e.request.requestId, 'refused', [], [{ code: 'service', reason: 'Unavailable' }]) };
       return f.normal(e);
     });
@@ -100,7 +100,14 @@ test('REVIEW server why preserves specific advice and drops legacy generic even 
       writeFileSync(`${folder}/${id}.json`, JSON.stringify(answer));
     } else rmSync(`${folder}/${id}.json`);
     writeFileSync(path, JSON.stringify(saved)); reading = true;
-    const read = await run(setup, fake, { '--json': true, '--read': first.json.batch });
+    const readSaved = options => {
+      if (source !== 'transport') return run(setup, fake, options);
+      // Each lost-response read stops only after its first GET reaches the server.
+      const { ports, clock } = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state });
+      interruptRead = clock.interrupt;
+      return run(setup, fake, options, [], ports);
+    };
+    const read = await readSaved({ '--json': true, '--read': first.json.batch });
     const expected = state === 'failed' || why !== 'Checks failed.' ? why : source === 'transport' ? 'pdd could not read this run yet.' : null;
     assert.equal(read.json.rows[0].why, expected);
     assert.equal(read.json.rows[0].state, state);
@@ -110,7 +117,7 @@ test('REVIEW server why preserves specific advice and drops legacy generic even 
       if (source === 'transport') assert.equal(read.json.rows[0].reason.message, expected);
     }
     assert.equal(JSON.parse(readFileSync(path)).rows[0].why, expected);
-    const text = await run(setup, fake, { '--read': first.json.batch });
+    const text = await readSaved({ '--read': first.json.batch });
     if (state !== 'failed' && why === 'Checks failed.') assert.doesNotMatch(text.text, /Checks failed\./);
     else assert.ok(text.text.includes(expected));
     assert.equal(fake.posts.filter(e => e.command === 'check').length, 1);
