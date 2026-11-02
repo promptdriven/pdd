@@ -5,10 +5,7 @@ import {join} from 'node:path';
 import {fixture} from './helpers/workflow-runner-fixture.mjs';
 import {startChat} from '../src/workflow-chat.mjs';
 
-// PR 1 deliberately keeps the native bug visible without making the public suite red.
-// PR 2 removes this TODO once the real implementation satisfies the assertion.
-const todo = process.env.PDD_ENFORCE_LIVE_LAYOUT === '1' ? false : 'Implementation belongs to PR 2; enforce with PDD_ENFORCE_LIVE_LAYOUT=1';
-test('a different linked caller starts its story chat despite an obsolete layout registry', {todo}, async t => {
+test('a different linked caller starts its story chat despite an obsolete layout registry', async t => {
   const f = await fixture(t);
   const oldSource = join(f.base, 'old-topic'), source = join(f.base, 'new-topic'), root = join(f.base, 'fresh-run');
   for (const [path, branch] of [[oldSource, 'old-topic'], [source, 'new-topic'], [root, 'fresh-run']])
