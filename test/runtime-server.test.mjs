@@ -187,7 +187,7 @@ test('RUNTIME-SERVER8: lint refuses tests that reach a bad prompt; unknown lint 
   assert.equal(refused.code, 4); assert.deepEqual(draft.posts.map(post => post.command), ['lint']);
   assert.deepEqual(refused.json.rows.map(row => row.refusals[0].code), ['interface-stale', 'interface-stale']);
   const lost = await fakeRuntime(t, entry => entry.method === 'POST' ? { destroy: true } : { status: 404, json: { error: { code: 'not-found' } } });
-  const unknown = await check(setup, lost, []);
+  const unknown = await check(setup, lost, [], { '--timeout': 1.5 });
   assert.equal(unknown.code, 3); assert.deepEqual(lost.posts.map(post => post.command), ['lint']);
   assert.match(unknown.out, /^pdd test --read /);
 });
