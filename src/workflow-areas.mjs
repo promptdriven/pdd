@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-areas.prompt.md (sha256: b99507d1bce9ae7b7776620f6096bb863240aa5a589ebdf2226eee3b23838604).
+// Generated from prompts/cli/workflow-areas.prompt.md (sha256: 6bed6481c85015e80e573a7e8e64b193767efcb1d8c06aa029859e0cd5145d7b).
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -59,22 +59,29 @@ function found(options) {
   return workflows;
 }
 
+function withAreas(workflow) {
+  const areas = parse(workflow.name, join(workflow.dir, 'workflow.json'));
+  const boundary = areas.some((area, index) => area.gate === 'approve' || area.before === 'approve'
+    || area.then === 'ask-code' && index < areas.length - 1);
+  return { ...workflow, areas, ...(!boundary ? { warnings: [`The ${workflow.name} workflow has no approve gate before code.`] } : {}) };
+}
+
 export function readWorkflowAreas({ packageRoot, name, cwd, home }) {
   if (!word(name)) throw Object.assign(Error(`"${String(name).slice(0, 64)}" is not a workflow name.`), { code: 'workflow_unknown' });
   const workflows = found({ packageRoot, cwd, home }), workflow = workflows.get(name);
   if (!workflow) throw Object.assign(Error(`There is no ${name} workflow. Workflows: ${[...workflows.keys()].sort().join(', ') || 'none'}.`), { code: 'workflow_unknown' });
-  return { ...workflow, areas: parse(name, join(workflow.dir, 'workflow.json')) };
+  return withAreas(workflow);
 }
 
 export function listWorkflowAreas({ packageRoot, cwd, home }) {
   return [...found({ packageRoot, cwd, home }).values()].sort((a, b) => a.name.localeCompare(b.name))
-    .map(workflow => ({ ...workflow, areas: parse(workflow.name, join(workflow.dir, 'workflow.json')) }));
+    .map(withAreas);
 }
 
 export function formatWorkflowList(list, { json = false } = {}) {
-  if (json) return JSON.stringify({ workflows: list.map(({ name, skill, source, dir, areas }) => ({ name, skill, source, dir, areas })), default: null });
-  const lines = list.length ? list.map(({ name, areas, source }) => `${name}  ${areas.map(area =>
-    `${area.name} [${area.steps.map(step => area.optional.includes(step) ? `${step}?` : step).join(', ')}] → ${area.before ? 'approve → ' : ''}${area.gate}`).join(' → ')}  (${source ?? 'package'})`)
+  if (json) return JSON.stringify({ workflows: list.map(({ name, skill, source, dir, areas, warnings }) => ({ name, skill, source, dir, areas, ...(warnings ? { warnings } : {}) })), default: null });
+  const lines = list.length ? list.flatMap(({ name, areas, source, warnings }) => [`${name}  ${areas.map(area =>
+    `${area.name} [${area.steps.map(step => area.optional.includes(step) ? `${step}?` : step).join(', ')}] → ${area.before ? 'approve → ' : ''}${area.gate}`).join(' → ')}  (${source ?? 'package'})`, ...(warnings ?? [])])
     : ['No workflows found.'];
   lines.push('Listing starts no work. Use pdd workflow run NAME ISSUE.');
   return lines.join('\n');

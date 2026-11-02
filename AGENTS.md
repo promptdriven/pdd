@@ -11,7 +11,25 @@ What this package contains:
 - `pdd workflow run` makes a worktree and a branch for an issue, opens the area chats in Herdr (session `pdd`) and returns at once. pdd has four jobs: start, gates, PRs and status. There is no controller process, no polling loop and no time limit.
 - `feature` and `bug` run the check and the simulation, and the person approves, before pdd opens PR 1 (prompt, Story and tests). Then the chat asks before the code area. PR 2 (code) is stacked on PR 1 while PR 1 is open. `small-change` makes one PR.
 - A big feature request gets a plan first: `user_stories/PLAN.md`, many Stories, one test file for each Story, and one `Prompt tests` line for each Story. `status` shows `Stories: N of M pass`.
-- The agents run the tests. A fresh subagent that did not write the code does the verify step. pdd does not run tests and never merges. Only a person approves a gate, and only a person approves a prompt (`pdd approve PROMPT` at a terminal, or the Approve button in the PDD Simulator that the owner's `pdd simulate` picks up). Agents use `pdd workflow done` and `pdd workflow ask`.
+- Agents run the tests. A fresh subagent that did not write the code verifies it. pdd does not run tests or merge. Show the gate, then judge the person's later reply in any chat. Never approve a question, change request or earlier message. No exact phrase is needed. Record actual approval with the safe commands below. pdd records nonblank words without grading them; blank input is refused. Only explicit approve calls advance gates. Chat, steps and done never do. If a selected prompt changes, show the gate again. Terminal y/N covers the gate and its drafts once. Workflow strict mode comes from the main checkout (`sourceRoot`), outside the run worktree; standalone approval uses the current checkout's Git root. `"strict_approvals": true` in that root's `pdd.json` requires a person terminal. Never edit approval fields or decide expected values. See [approval commands](docs/cli.md#record-a-chat-approval). Agents use `pdd workflow done` and `pdd workflow ask`.
+- Main agents merge only on an explicit person request. Follow [RUNBOOK §2](RUNBOOK.md#2-the-files).
+
+```sh
+pdd workflow approve N --said - <<'PDD_SAID'
+<the person's exact words>
+PDD_SAID
+```
+
+For one prompt, use:
+
+```sh
+pdd approve PROMPT --said - <<'PDD_SAID'
+<the person's exact words>
+PDD_SAID
+```
+
+Choose a delimiter absent as a whole line from the words. Keep it quoted. Stdin preserves newlines. Never put untrusted words into shell quotes or interpolate them into shell code.
+
 - `docs/cli.md` shows every command form of `pdd --help`. `test/docs-commands.test.mjs` fails when a form is missing, so update `docs/cli.md` with each change to the command catalog.
 - The README and the docs describe pdd as it is today, as if this were the first version. Put history and change notes only in the GitHub release notes. The one exception is the short note for people who have the Python pdd installed. `test/docs-first-time.test.mjs` fails on history words.
 - Agents start in full-access mode. `pdd setup` previews per-agent MCP config changes and asks y/N before writing them. pdd does not copy credentials or touch the person's default Herdr session.

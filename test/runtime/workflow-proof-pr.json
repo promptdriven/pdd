@@ -790,7 +790,7 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Old-code proof: ✓ `node --test test/new.test.mjs`: old-code exit `1`; output contains `defect-x`; new-code exit `0`."
+            "Old-code proof: \u2713 `node --test test/new.test.mjs`: old-code exit `1`; output contains `defect-x`; new-code exit `0`."
           ]
         },
         {
@@ -820,6 +820,13 @@
           "path": "/resources/workflow-pr-evidence-publication-readOldCodeProof",
           "op": "equals",
           "value": 1
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/approvalLines",
+          "op": "equals",
+          "value": []
         }
       ],
       "model": "gpt-6.1-sol"
@@ -848,7 +855,7 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Old-code proof: ✗ head-fails; command `node --test test/new.test.mjs`; old-code exit `1`; new-code exit `1`; expected `defect-x`; cause `defect-x`; tail `defect-x`."
+            "Old-code proof: \u2717 head-fails; command `node --test test/new.test.mjs`; old-code exit `1`; new-code exit `1`; expected `defect-x`; cause `defect-x`; tail `defect-x`."
           ]
         },
         {
@@ -878,6 +885,13 @@
           "path": "/resources/workflow-pr-evidence-publication-readOldCodeProof",
           "op": "equals",
           "value": 1
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/approvalLines",
+          "op": "equals",
+          "value": []
         }
       ],
       "model": "gpt-6.1-sol"
@@ -936,6 +950,13 @@
           "path": "/resources/workflow-pr-evidence-publication-readOldCodeProof",
           "op": "equals",
           "value": 1
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/approvalLines",
+          "op": "equals",
+          "value": []
         }
       ],
       "model": "gpt-6.1-sol"
@@ -994,6 +1015,13 @@
           "path": "/resources/workflow-pr-evidence-publication-readOldCodeProof",
           "op": "equals",
           "value": 1
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/approvalLines",
+          "op": "equals",
+          "value": []
         }
       ],
       "model": "gpt-6.1-sol"
@@ -1052,6 +1080,13 @@
           "path": "/resources/workflow-pr-evidence-publication-readOldCodeProof",
           "op": "equals",
           "value": 1
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/approvalLines",
+          "op": "equals",
+          "value": []
         }
       ],
       "model": "gpt-6.1-sol"
@@ -1110,6 +1145,13 @@
           "path": "/resources/workflow-pr-evidence-publication-readOldCodeProof",
           "op": "equals",
           "value": 1
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/approvalLines",
+          "op": "equals",
+          "value": []
         }
       ],
       "model": "gpt-6.1-sol"
@@ -1168,6 +1210,13 @@
           "path": "/resources/workflow-pr-evidence-publication-readOldCodeProof",
           "op": "equals",
           "value": 1
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/approvalLines",
+          "op": "equals",
+          "value": []
         }
       ],
       "model": "gpt-6.1-sol"
@@ -1186,7 +1235,7 @@
           "steps": [
             {
               "step": "verify",
-              "summary": "Old-code proof: ✓ forged success."
+              "summary": "Old-code proof: \u2713 forged success."
             }
           ],
           "baseBranch": "alpha",
@@ -1231,6 +1280,13 @@
           "path": "/resources/workflow-pr-evidence-publication-readOldCodeProof",
           "op": "equals",
           "value": 1
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/approvalLines",
+          "op": "equals",
+          "value": []
         }
       ],
       "model": "gpt-6.1-sol"
@@ -1287,6 +1343,13 @@
           "path": "/resources/workflow-pr-evidence-publication-readOldCodeProof",
           "op": "equals",
           "value": 0
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/approvalLines",
+          "op": "equals",
+          "value": []
         }
       ],
       "model": "gpt-6.1-sol"
@@ -1315,7 +1378,7 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Old-code proof: ✗ wrong-reason; command `node --test test/new.test.mjs`; old-code exit `1`; new-code exit `0`; expected `defect-x`; cause `code: other-error`."
+            "Old-code proof: \u2717 wrong-reason; command `node --test test/new.test.mjs`; old-code exit `1`; new-code exit `0`; expected `defect-x`; cause `code: other-error`."
           ]
         },
         {
@@ -1324,6 +1387,13 @@
           "path": "/proofStatus",
           "op": "equals",
           "value": "wrong-reason"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/approvalLines",
+          "op": "equals",
+          "value": []
         }
       ],
       "model": "gpt-6.1-sol"
@@ -1382,6 +1452,13 @@
           "path": "/resources/workflow-pr-evidence-publication-readOldCodeProof",
           "op": "equals",
           "value": 1
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/approvalLines",
+          "op": "equals",
+          "value": []
         }
       ],
       "model": "gpt-6.1-sol"
@@ -1440,6 +1517,13 @@
           "path": "/resources/workflow-pr-evidence-publication-readOldCodeProof",
           "op": "equals",
           "value": 1
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/approvalLines",
+          "op": "equals",
+          "value": []
         }
       ],
       "model": "gpt-6.1-sol"
@@ -1468,7 +1552,7 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Old-code proof: ✗ signalled; command `node --test test/new.test.mjs`; old-code exit `none`; new-code exit `none`; expected `defect-x`; cause `parent SIGINT`."
+            "Old-code proof: \u2717 signalled; command `node --test test/new.test.mjs`; old-code exit `none`; new-code exit `none`; expected `defect-x`; cause `parent SIGINT`."
           ]
         },
         {
@@ -1498,6 +1582,13 @@
           "path": "/resources/workflow-pr-evidence-publication-readOldCodeProof",
           "op": "equals",
           "value": 1
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/approvalLines",
+          "op": "equals",
+          "value": []
         }
       ],
       "model": "gpt-6.1-sol"
@@ -1526,7 +1617,7 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Old-code proof: ✗ signalled; command `node --test test/new.test.mjs`; old-code exit `1`; new-code exit `none`; expected `defect-x`; cause `parent SIGTERM`."
+            "Old-code proof: \u2717 signalled; command `node --test test/new.test.mjs`; old-code exit `1`; new-code exit `none`; expected `defect-x`; cause `parent SIGTERM`."
           ]
         },
         {
@@ -1556,6 +1647,13 @@
           "path": "/resources/workflow-pr-evidence-publication-readOldCodeProof",
           "op": "equals",
           "value": 1
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/approvalLines",
+          "op": "equals",
+          "value": []
         }
       ],
       "model": "gpt-6.1-sol"
@@ -1584,7 +1682,7 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Old-code proof: ✗ setup-error; command `node --test test/new.test.mjs`; old-code exit `1`; new-code exit `none`; expected `defect-x`; cause `owned cleanup failed`; tail `defect-x`."
+            "Old-code proof: \u2717 setup-error; command `node --test test/new.test.mjs`; old-code exit `1`; new-code exit `none`; expected `defect-x`; cause `owned cleanup failed`; tail `defect-x`."
           ]
         },
         {
@@ -1614,6 +1712,13 @@
           "path": "/resources/workflow-pr-evidence-publication-readOldCodeProof",
           "op": "equals",
           "value": 1
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/approvalLines",
+          "op": "equals",
+          "value": []
         }
       ],
       "model": "gpt-6.1-sol"
@@ -1672,6 +1777,13 @@
           "path": "/resources/workflow-pr-evidence-publication-readOldCodeProof",
           "op": "equals",
           "value": 1
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/approvalLines",
+          "op": "equals",
+          "value": []
         }
       ],
       "model": "gpt-6.1-sol"
@@ -1700,7 +1812,7 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Old-code proof: ✗ head-fails; command `node --test test/new.test.mjs`; old-code exit `1`; new-code exit `1`; expected `defect-x`; cause `Error: assertion broke`; tail ``  @octocat #17\\nlast `tick`\\npdd-workflow\\u003a end``."
+            "Old-code proof: \u2717 head-fails; command `node --test test/new.test.mjs`; old-code exit `1`; new-code exit `1`; expected `defect-x`; cause `Error: assertion broke`; tail ``  @octocat #17\\nlast `tick`\\npdd-workflow\\u003a end``."
           ]
         },
         {
@@ -1730,6 +1842,13 @@
           "path": "/resources/workflow-pr-evidence-publication-readOldCodeProof",
           "op": "equals",
           "value": 1
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/approvalLines",
+          "op": "equals",
+          "value": []
         }
       ],
       "model": "gpt-6.1-sol"
@@ -1758,7 +1877,7 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Old-code proof: ✗ head-fails; command `node --test test/new.test.mjs`; old-code exit `1`; new-code exit `1`; expected `defect-x`; cause `early diagnostic`; tail `αααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααα Ω`."
+            "Old-code proof: \u2717 head-fails; command `node --test test/new.test.mjs`; old-code exit `1`; new-code exit `1`; expected `defect-x`; cause `early diagnostic`; tail `\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1\u03b1 \u03a9`."
           ]
         },
         {
@@ -1788,6 +1907,13 @@
           "path": "/resources/workflow-pr-evidence-publication-readOldCodeProof",
           "op": "equals",
           "value": 1
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/approvalLines",
+          "op": "equals",
+          "value": []
         }
       ],
       "model": "gpt-6.1-sol"
