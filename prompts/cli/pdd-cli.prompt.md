@@ -114,7 +114,7 @@ finite local cause and returns 5. Catalog owns all syntax.
 
 ```json
 {
-  "status": "draft",
+  "status": "approved",
   "prose_sha256": "4e09521f6ea93030c2eb7391076c062edd30ba76fe7a9141f45bdff93930df20",
   "entries": [{
     "operation": "runPdd",
