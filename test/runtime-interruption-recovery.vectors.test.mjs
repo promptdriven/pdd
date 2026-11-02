@@ -17,9 +17,9 @@ const passed = (f, id) => { const answer = f.check(id, 'passed', checks); answer
 async function fixture(t, answer) {
   const setup = harbor(t), fake = await fakeRuntime(t, (e, f) => e.command === 'lint' ? { status: 200, json: f.lint(e.request.requestId) } : answer(e, f));
   const made = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin });
-  async function run(options = {}, extra = {}) {
+  async function run(options = {}, extra = {}, words = options['--read'] ? [] : ['place-order']) {
     const next = portsFor(made.ports.env, { now: () => made.clock.now, sleep: made.ports.sleep, ...extra });
-    const code = await runCheck({ cwd: setup.repo, words: options['--read'] ? [] : Object.keys(options).length ? [] : ['place-order'], options: { '--json': true, ...options } }, next.ports);
+    const code = await runCheck({ cwd: setup.repo, words, options: { '--json': true, ...options } }, next.ports);
     const json = next.ports.stdout.text ? JSON.parse(next.ports.stdout.text) : null;
     return { code, json, err: next.ports.stderr.text, clock: next.clock, folder: json?.batch && join(setup.state, 'batches', json.batch) };
   }
@@ -83,7 +83,7 @@ for (const vector of vectors.cases) test(`RECONCILE ${vector.id}`, async t => {
       if (cache === 'wrong-id') { const answer = read(raw); answer.id = 'wrong-id'; write(raw, answer); }
       recovering = true; const posts = r.fake.posts.length;
       for (const options of [{ '--read': initial.json.batch }, { '--retry': initial.json.batch }]) {
-        const result = await r.run(options);
+        const result = await r.run(options, {}, []);
         assert.equal(r.fake.posts.length, posts); assert.equal(result.clock.uuids, 0);
         assert.deepEqual(read(file).rows[0].request_ids, [id]);
         if (cache === 'verified') { complete(result); assert.deepEqual(read(raw), passed(r.fake, id)); }
@@ -104,9 +104,9 @@ for (const vector of vectors.cases) test(`RECONCILE ${vector.id}`, async t => {
     const first = await r.run(), file = join(first.folder, 'batch.json'), saved = read(file);
     for (const name of readdirSync(first.folder).filter(name => name.endsWith('.dispatch.json'))) rmSync(join(first.folder, name));
     Object.assign(saved.rows[0], { request_ids: [], phase: 'local', state: 'not_run', busy: true, can_retry: true, eligible: true, retry_at: null }); write(file, saved);
-    hold = true; const before = checkPosts(r.fake).length, owner = r.run({ '--retry': first.json.batch }); await boundary;
+    hold = true; const before = checkPosts(r.fake).length, owner = r.run({ '--retry': first.json.batch }, {}, []); await boundary;
     const bytes = readFileSync(file), summary = readFileSync(join(first.folder, 'summary.json')), traffic = [r.fake.gets.length, r.fake.posts.length];
-    const contender = await r.run({ '--retry': first.json.batch });
+    const contender = await r.run({ '--retry': first.json.batch }, {}, []);
     assert.equal(contender.code, 3); assert.equal(contender.clock.uuids, 0); assert.match(contender.err, /pdd test --read/);
     assert.deepEqual([r.fake.gets.length, r.fake.posts.length], traffic); assert.deepEqual(readFileSync(file), bytes); assert.deepEqual(readFileSync(join(first.folder, 'summary.json')), summary);
     resume(); const result = await owner; complete(result);

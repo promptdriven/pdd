@@ -132,7 +132,7 @@ for (const interactive of [false, true]) for (const completeAt of [88000, 90000,
 
 // The catalog owns the text rendered by public Check help.
 test('ONE-CALL public help describes the unlimited caller wait in every shell', () => {
-  const help = PUBLIC_COMMAND_MANIFEST.find(row => row.form.startsWith('pdd test [STORY...]')).description;
+  const help = PUBLIC_COMMAND_MANIFEST.find(row => row.form.startsWith('pdd test [PATH|STORY...]')).description;
   assert.match(help, /no default limit in any shell; --timeout MIN sets the limit/);
   assert.match(help, /progress line every 30 s/);
   assert.doesNotMatch(help, /at most 90 s for an agent/);
