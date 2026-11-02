@@ -2,10 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import {join,resolve} from 'node:path';
-import {pathToFileURL} from 'node:url';
+import {fileURLToPath,pathToFileURL} from 'node:url';
 import {spawnSync,execFileSync} from 'node:child_process';
 import {Readable} from 'node:stream';
-const root=resolve(process.env.PDD_TEST_SOURCE_ROOT || new URL('../',import.meta.url).pathname);
+const root=resolve(process.env.PDD_TEST_SOURCE_ROOT || fileURLToPath(new URL('../',import.meta.url)));
 const load=p=>import(pathToFileURL(join(root,p)));
 async function requiredJournalBoundary(){
  let module,missing;

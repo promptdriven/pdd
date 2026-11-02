@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const bin = fileURLToPath(new URL('../bin/pdd.mjs', import.meta.url));
@@ -18,7 +18,7 @@ Object.defineProperty(process, 'version', { value: 'v20.11.1' });\n`);
   const env = { ...process.env, HOME: home };
   delete env.CLAUDE_CONFIG_DIR;
   for (const args of [['--version'], ['workflow', 'list'], ['setup']]) {
-    const result = spawnSync(process.execPath, ['--import', preload, bin, ...args], { cwd: dir, env, encoding: 'utf8', timeout: 10000 });
+    const result = spawnSync(process.execPath, ['--import', pathToFileURL(preload).href, bin, ...args], { cwd: dir, env, encoding: 'utf8', timeout: 10000 });
     assert.equal(result.status, 1, args.join(' '));
     assert.equal(result.stdout, '');
     assert.equal(result.stderr, 'pdd needs Node.js 22 or newer. You have v20.11.1. Update Node from https://nodejs.org, then run pdd again.\n');

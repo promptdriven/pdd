@@ -181,6 +181,7 @@ test('actual CLI consumes producer state with a deterministic metadata-only gh',
   const log = join(f.sandbox, 'gh-calls.jsonl'), executable = join(bin, 'gh');
   writeFileSync(executable, `#!${process.execPath}
 import {appendFileSync} from 'node:fs';
+import { fileURLToPath } from 'node:url';
 const args=process.argv.slice(2); appendFileSync(${JSON.stringify(log)}, JSON.stringify(args)+'\\n');
 const issue=${JSON.stringify(issue)};
 if(args[0]==='repo') console.log(JSON.stringify({nameWithOwner:'example/coffee',defaultBranchRef:{name:'alpha'},url:'https://github.com/example/coffee'}));
@@ -190,7 +191,7 @@ else if(args[0]==='api' && args[1]==='repos/example/coffee/issues/81') console.l
 else {console.error('Forbidden fixture gh '+JSON.stringify(args));process.exit(91);}
 `); chmodSync(executable, 0o755);
   const before = snapshot(f.state);
-  const result = spawnSync(process.execPath, [new URL('../bin/pdd.mjs', import.meta.url).pathname, 'product', 'status', '--json'], {
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL('../bin/pdd.mjs', import.meta.url)), 'product', 'status', '--json'], {
     cwd: f.repo, encoding: 'utf8', env: { ...f.env, PATH: `${bin}:${process.env.PATH}`, PDD_RUNTIME_URL: 'invalid-reader-must-not-resolve-runtime' }, timeout: 30000,
   });
   assert.equal(result.status, 0, result.stderr + result.stdout);

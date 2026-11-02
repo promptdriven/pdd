@@ -6,6 +6,7 @@ import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { productNext, productStart, productStatus, runProduct } from '../src/product.mjs';
 
 const marker = run => `<!-- pdd-product: run=${run} -->`;
@@ -168,7 +169,7 @@ else if (a[1]?.includes('/timeline?')) process.stdout.write('[]');
 else if (/\\/issues\\/\\d+$/.test(a[1] ?? '')) process.stdout.write(fs.readFileSync(path.join(data,a[1].split('/').at(-1)+'.json')));
 else { process.stderr.write('Unexpected gh: '+JSON.stringify(a)); process.exit(2); }
 `, { mode: 0o755 });
-  const cli = new URL('../bin/pdd.mjs', import.meta.url).pathname;
+  const cli = fileURLToPath(new URL('../bin/pdd.mjs', import.meta.url));
   const invoke = run => new Promise(resolve => {
     const child = spawn(process.execPath, [cli, 'product', 'start', run, '--no-run'], { cwd: f.cwd, env: { ...process.env, HOME: f.cwd, PATH: `${bin}:${process.env.PATH}` } });
     let stdout = '', stderr = ''; child.stdout.on('data', chunk => stdout += chunk); child.stderr.on('data', chunk => stderr += chunk);

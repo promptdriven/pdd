@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, symlinkSync, existsSync, statSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { parseArgv, CommandInputError } from '../src/argument-parser.mjs';
 import { PUBLIC_COMMAND_IDS, PUBLIC_COMMAND_MANIFEST } from '../src/command-catalog.mjs';
@@ -65,7 +65,7 @@ const stop=()=>{throw Error('Forbidden private/network/process effect');};
 for(const x of [http,https]){x.request=stop;x.get=stop;}net.connect=stop;net.createConnection=stop;globalThis.fetch=stop;
 for(const key of ['spawn','spawnSync','exec','execFile','execSync','execFileSync','fork'])child[key]=stop;
 for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const original=fs[key];fs[key]=function(path,...args){if(/(?:\\/toolbox\\/|\\/\\.ssh(?:\\/|$)|\\/credentials(?:\\/|$)|\\/\\.npmrc$)/.test(String(path)))stop();return original.call(this,path,...args);};}syncBuiltinESMExports();`);
-  const run = (args, cwd = project) => spawnSync(process.execPath, ['--import', guard, bin, ...args],
+  const run = (args, cwd = project) => spawnSync(process.execPath, ['--import', pathToFileURL(guard).href, bin, ...args],
     { cwd, env, encoding: 'utf8', timeout: 5000 });
   for (const argv of [[], ['--help'], ['-h'], ['help'], ['workflow', '--help'], ['workflow', 'list', '--help'], ['completion', '--help'], ['setup','--help'], ['workflow','start','--help'], ['workflow','done','--help'], ['workflow','approve','--help'], ['workflow','open','--help']]) {
     const answer = run(argv); assert.equal(answer.status, 0, answer.stderr); assert.equal(answer.stderr, '');
