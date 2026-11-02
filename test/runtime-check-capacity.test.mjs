@@ -32,11 +32,38 @@ test('CAPACITY1: confirmed zero-execution capacity is retried until the wait end
   assert.equal(result.json.rows[0].busy, true); assert.equal(result.json.rows[0].can_retry, true);
   assert.equal(result.json.rows[0].calls, 0); assert.equal(result.json.rows[0].checks, null);
   assert.match(result.json.summary_line, /: busy/); assert.doesNotMatch(result.out + result.err, /Fix what|fix the test|✗/);
-  assert.match(result.err, /Server busy/); assert.match(result.err, /pdd test --retry/);
+  assert.ok(result.err.split('\n').includes('⏳ PDD is busy right now. 1 of your checks is waiting to start. You are not charged while you wait.')); assert.match(result.err, /pdd test --retry/);
   assert.equal(saved(setup, result.json.batch).rows[0].request_ids.length, checkPosts(fake).length);
   const before = fake.posts.length;
   const read = await run(setup, fake, [result.json.batch], { '--read': true, '--json': true });
   assert.equal(read.code, 5); assert.equal(read.json.rows[0].busy, true); assert.equal(fake.posts.length, before);
+});
+
+for (const [count, words, message] of [
+  [1, ['place-order'], '⏳ PDD is busy right now. 1 of your checks is waiting to start. You are not charged while you wait.'],
+  [2, [], '⏳ PDD is busy right now. 2 of your checks are waiting to start. You are not charged while you wait.'],
+]) test(`CAPACITY local wait: ${count} held check${count === 1 ? '' : 's'} has exact progress and zero-call recovery`, async t => {
+  const setup = harbor(t);
+  const fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.command !== 'check') return f.normal(entry);
+    const json = capacity(f, entry.request.requestId);
+    json.result.report.refusal.details.retry_after = 300;
+    return { status: 200, json };
+  });
+  const result = await run(setup, fake, words);
+  assert.equal(result.code, 5, result.err + result.out);
+  assert.ok(result.err.split('\n').includes(message), result.err);
+  assert.doesNotMatch(result.err, /checks are waiting locally|Your check is in line|Your check is next in line/);
+  assert.equal(checkPosts(fake).length, count);
+  assert.equal(fake.gets.length, 0);
+  assert.equal(result.json.rows.length, count);
+  for (const row of result.json.rows) {
+    assert.equal(row.state, 'not_run');
+    assert.equal(row.calls, 0);
+    assert.equal(row.busy, true);
+    assert.equal(row.can_retry, true);
+  }
+  assert.ok(saved(setup, result.json.batch).rows.every(row => row.request_ids.length === 1));
 });
 
 test('CAPACITY2: 17 tests use four configured active slots, adapt to a one-worker queue, and preserve all IDs', async t => {

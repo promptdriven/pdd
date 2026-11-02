@@ -32,11 +32,11 @@ test('REVIEW final rows with exit-three flags never claim checks have no verdict
 test('REVIEW NOT RUN advice keeps sent busy explanation and has no dangling colon', () => {
   const base = row('not_run', { busy: true, request_ids: ['a', 'b', 'c'], note: { code: 'check-busy', message: 'The interpreter is busy. No checks ran for this attempt. Retry this batch later.' }, next_step: 'Tell the person.' });
   const text = renderText({ rows: [base], exitCode: 5 });
-  assert.match(text, /The interpreter is busy\. No checks ran for this attempt\./);
+  assert.match(text, /Not run: PDD stayed busy, so your check did not start\. Nothing was charged\. Try again in a few minutes: pdd test one/);
   assert.doesNotMatch(text, /pdd did not send|Retry this batch/);
   const both = renderText({ rows: [{ ...base, why: 'No verdict. Queue full.' }], exitCode: 5 });
   assert.doesNotMatch(both, /:\s*(?:\(check-busy\))?\n/);
-  assert.match(both, /Why: No verdict/);
+  assert.doesNotMatch(both, /Why:|Next:|interpreter/);
   const lint = renderText({ rows: [row('not_run', { note: { message: 'The saved lint finished. No checks were sent. Run a fresh pdd check command to start checks.' }, next_step: 'Tell the person.' })], exitCode: 5 });
   assert.match(lint, /The saved lint finished\. No checks were sent\./); assert.doesNotMatch(lint, /Run a fresh pdd check/);
 });
@@ -135,7 +135,7 @@ test('REVIEW busy retry to lost response or fresh refusal never inherits retry a
     assert.equal(result.json.rows[0].next_step, null);
     const text = await run(setup, fake, { '--read': result.json.batch });
     assert.doesNotMatch(text.text, /STALE RETRY/);
-    if (mode === 'busy') { assert.equal(result.code, 5); assert.match(text.text, /The interpreter is busy\. No checks ran for this attempt\./); }
+    if (mode === 'busy') { assert.equal(result.code, 5); assert.match(text.text, /Not run: PDD stayed busy, so your check did not start\. Nothing was charged\. Try again in a few minutes: pdd test place-order/); }
     else if (mode === 'lost') { assert.equal(result.code, 3); assert.match(text.text, /The result expired\./); assert.doesNotMatch(text.text, /Why: The result expired/); }
     else { assert.equal(result.code, 4); assert.match(text.text, /Fix: NEW FIX/); assert.match(text.text, /NEW HINT/);
       assert.deepEqual(Object.fromEntries(['reason', 'fix', 'hint', 'cause'].map(key => [key, result.json.rows[0].refusals[0][key]])), { reason: 'Source too large. [secret] <server path>', fix: 'NEW FIX [secret] <server path>', hint: 'NEW HINT [secret] <server path>', cause: 'test' });
