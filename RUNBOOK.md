@@ -476,6 +476,19 @@ Cut from the Harbor Coffee app map (`…` marks cut parts):
    "state": {"cart": {"$ref": "/result/cart"}, …every other state field…}}, …]}
 ```
 
+**A Story test that seeds a Try names its map.** A tap may call an operation that the Story's own steps never reach.
+Bind that operation in the test's `simulation`, and list the map in `app_maps`. Then `pdd test` and `pdd lint` send
+the map and its prompts, and the interpreter accepts the binding; the Story's steps run as before. Without
+`app_maps`, lint refuses the binding as `unknown-simulation-operation`, and without the binding the tap stops with
+`unbound-resource-operation`. `pdd test --lint <story> --app-map <map>` is refused: the map belongs in the test, so
+lint, `pdd test` and `pdd simulate` see the same operations.
+```json
+{"schema_version": "prompt-runtime.program-scenario.v1", "story_path": "user_stories/place-order.md",
+ "app_maps": ["app/app-map.json"], "initial_world": {"orders": [], "receipts": []},
+ "simulation": {"receipts.send": {"action": "port.write", "world_pointer": "/receipts", "result_template": {"sent": true}}},
+ "criteria": […], "steps": […]}
+```
+
 ## 14. Bug workflow
 
 1. Reproduce: turn the issue into a test. Add a criterion to the story and a step that checks it to the story's test file.
