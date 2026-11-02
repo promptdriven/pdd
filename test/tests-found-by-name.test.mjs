@@ -223,7 +223,7 @@ test('NAME9: a file name that fits two Story names is an error that names both S
 });
 
 // Wrong: one unreadable test stopped pdd test for every Story; a test over the upload limit was read anyway.
-test('NAME10: an unreadable test or a test over the upload limit is refused by name, and other Stories still run', async t => {
+test('NAME10: an unreadable test or a test over the upload limit is refused by name, never uploaded, and other Stories still run', async t => {
   const setup = repoWith(t, { 'user_stories/place-order.md': story(), 'tests/place-order.json': scenario('user_stories/place-order.md'),
     'user_stories/locked.md': story('Locked'), 'tests/locked.json': scenario('user_stories/locked.md'),
     'user_stories/huge.md': story('Huge'), 'tests/huge.json': '{}' });
@@ -235,8 +235,22 @@ test('NAME10: an unreadable test or a test over the upload limit is refused by n
     ['tests/huge.json', 'tests/huge.json is 11.0 MB. The upload limit is 10 MB, so pdd cannot send it.'],
     ['tests/locked.json', 'tests/locked.json cannot be read: EACCES.'],
     ['tests/place-order.json', null]]);
-  const files = await check(setup, ['place-order'], { '--files': true });
+  const files = await check(setup, [], { '--files': true });
   assert.equal(files.code, 0, files.err);
+  assert.ok(files.err.includes('Warning: not sent: tests/locked.json cannot be read: EACCES.'), files.err);
+  assert.doesNotMatch(files.out, /tests\/(?:huge|locked)\.json/);
+  // pdd test runs the other Stories: the two refused tests are neither uploaded nor named for lint.
+  const fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
+  fake.capacity = () => ({ status: 200, json: { maintenance: null, features: ['lint-tests'] } });
+  const env = { HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: join(setup.home, 'state') };
+  let made = portsFor(env);
+  assert.equal(await runCheck({ words: [], options: { '--json': true }, cwd: setup.repo }, made.ports), 4, made.ports.stderr.text);
+  const json = JSON.parse(made.ports.stdout.text);
+  assert.deepEqual(json.rows.map(row => [row.test, row.state]), [['tests/huge.json', 'refused'], ['tests/locked.json', 'refused'], ['tests/place-order.json', 'passed']]);
+  assert.deepEqual(fake.posts.find(post => post.command === 'lint').request.tests, ['tests/place-order.json']);
+  assert.ok(fake.posts.every(post => !post.tar.includes(Buffer.from('tests/huge.json')) && !post.tar.includes(Buffer.from('tests/locked.json'))));
+  made = portsFor(env);
+  assert.equal(await runCheck({ words: [json.batch], options: { '--read': true, '--json': true }, cwd: setup.repo }, made.ports), 4, made.ports.stderr.text);
 });
 
 // Wrong: a saved Try case made a second test file for a Story whose test pdd could not use.
