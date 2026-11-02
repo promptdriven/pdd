@@ -224,3 +224,96 @@ test('TEST-CACHE-V2 crash before finish leaves a mark that forces a run', async 
   assert.equal((await ctx.invoke(['unknown-item'])).sent, 1, 'a crash after observing build b must not leave build-a reuse');
   assert.equal((await ctx.invoke(['unknown-item'])).sent, 0, 'one clean recovery run restores reuse');
 });
+
+// Round 4: a failed sign-in, an in-flight read and a clear must retain doubt.
+const DEAD = 987654321;
+const wait = () => new Promise(done => setTimeout(done, 5));
+function round4Other(ctx, offset, extra = {}) {
+  const other = portsFor(ctx.env, { isAlive: pid => pid !== DEAD, ...extra });
+  other.clock.now = ctx.clock.now + offset; return other;
+}
+const job = (fake, id, identity, state = 'passed') => {
+  const value = fake.check(id, state); value.engine_sha = identity.engine_sha; value.usage.requested_model = identity.requested_model;
+  if (value.result?.report?.evaluation) value.result.report.evaluation.requested_model = identity.requested_model;
+  return value;
+};
+// A crash run with pid DEAD: its first answer reports build b, then the process dies before finish.
+async function crashOnB(ctx, words) {
+  const c = round4Other(ctx, 1000, { pid: DEAD, isAlive: () => true });
+  let first = true;
+  ctx.state.reply = (id, entry, fake) => {
+    if (entry.method === 'POST' && first) { first = false; return { status: 200, json: job(fake, id, B) }; }
+    return { status: entry.method === 'POST' ? 202 : 200, json: job(fake, id, B, 'running') };
+  };
+  c.ports.sleep = async () => { throw new Error('simulated crash'); };
+  let error; try { await ctx.invokeWith(c.ports, words); } catch (e) { error = e; }
+  ctx.state.reply = null;
+  return error;
+}
+
+// K1: a crash leaves a dead mark; the next run retires it at begin and then fails sign-in.
+test('TEST-CACHE-K1: sign-in failure after retiring a dead mark', async t => {
+  const ctx = await setup(t);
+  assert.equal((await ctx.invoke()).sent, 3);
+  bump(ctx, 'tests/independent.json'); bump(ctx, 'tests/place-order.json');
+  const crash = await crashOnB(ctx, ['independent', 'place-order']);
+  assert.match(crash.message, /simulated crash/);
+  ctx.state.identity = { ...B };
+  const s = round4Other(ctx, 2 * min, { gh: () => ({ status: 1, stdout: '', stderr: 'You are not logged into any GitHub hosts.' }) });
+  const signin = await ctx.invokeWith(s.ports, ['independent']);
+  assert.equal(signin.code, 5); assert.equal(signin.sent, 0);
+  ctx.clock.now += 5 * min;
+  const next = await ctx.invoke(['unknown-item']);
+  assert.equal(next.sent, 1, 'the crashed run saw build b; nothing has run since; never reuse build a');
+});
+
+// K2: a read that sends a restarted check again is in flight (new job on build b) while another run starts.
+test('TEST-CACHE-K2: read that resends, in flight', async t => {
+  const ctx = await setup(t);
+  assert.equal((await ctx.invoke()).sent, 3);
+  bump(ctx, 'tests/place-order.json');
+  ctx.state.running = true; const x = await ctx.invoke(['place-order']); ctx.state.running = false;
+  const xId = ctx.fake.posts.filter(e => e.command === 'check').at(-1).request.requestId;
+  const resent = new Set(); let released = false;
+  ctx.state.reply = (id, entry, fake) => {
+    if (id === xId) { const j = fake.job(id, 'check', 'unknown', { exitCode: 1, refusals: [{ code: 'service-restarted', message: 'restarted' }], report: { refusal: { code: 'service-restarted' } } }); j.engine_sha = A.engine_sha; j.usage.requested_model = A.requested_model; return { status: 200, json: j }; }
+    if (entry.method === 'POST') resent.add(id);
+    if (resent.has(id)) return { status: entry.method === 'POST' && !released ? 202 : 200, json: job(fake, id, B, released ? 'passed' : 'running') };
+    return null;
+  };
+  const ro = round4Other(ctx, 5 * min);
+  ro.ports.stdout.text = ''; ro.ports.stderr.text = '';
+  const readRun = runCheck({ words: [x.json.batch], options: { '--read': true, '--json': true, '--timeout': '60' }, cwd: ctx.repo, cache: true }, ro.ports);
+  for (let i = 0; !resent.size && i < 2000; i++) await wait();
+  let r;
+  try {
+    assert.equal(resent.size, 1, 'read resends the restarted job before the concurrent check');
+    r = await ctx.invokeWith(round4Other(ctx, 6 * min).ports, ['unknown-item']);
+  } finally { released = true; assert.equal(await readRun, 0); ctx.state.reply = null; }
+  assert.equal(r.sent, 1, 'the read is sending checks and has seen build b; never reuse build a');
+});
+
+// K3: --cache-clear while another run is in flight removes that run's live mark.
+test('TEST-CACHE-K3: --cache-clear during a run', async t => {
+  const ctx = await setup(t);
+  assert.equal((await ctx.invoke()).sent, 3);
+  bump(ctx, 'tests/independent.json');
+  const p = round4Other(ctx, 1000); p.ports.interactive = true;
+  const held = new Set(); let phase = 'p', released = false;
+  ctx.state.reply = (id, entry, fake) => {
+    if (entry.method === 'POST' && phase === 'p') held.add(id);
+    if (held.has(id)) return released ? { status: 200, json: job(fake, id, B) } : { status: entry.method === 'POST' ? 202 : 200, json: job(fake, id, B, 'running') };
+    return { status: 200, json: job(fake, id, A) };
+  };
+  const pRun = ctx.invokeWith(p.ports, ['independent']);
+  for (let i = 0; !held.size && i < 2000; i++) await wait();
+  let r;
+  try {
+    assert.equal(held.size, 1, 'the other run is still in progress');
+    phase = 'q';
+    const q = await ctx.invokeWith(round4Other(ctx, 30000).ports, ['place-order'], { '--cache-clear': true });
+    assert.equal(q.code, 0); assert.equal(q.sent, 1);
+    r = await ctx.invokeWith(round4Other(ctx, 60000).ports, ['place-order']);
+  } finally { released = true; await pRun; ctx.state.reply = null; }
+  assert.equal(r.sent, 1, 'P is in flight and has seen build b');
+});

@@ -66,9 +66,9 @@ for (const delta of [1, 0, -1]) test(`TEST-CACHE-V3 seven-day boundary ${delta}`
   assert.equal(result.sent, delta > 0 ? 3 : 0, 'seven days inclusive, older evidence reruns');
   if (delta <= 0) { ctx.clock.now += 2; assert.equal((await ctx.invoke()).sent, 3, 'boundary pass expires rather than refreshing on reuse'); }
 });
-for (const ci of ['', '0', 'true']) test(`TEST-CACHE-V3 CI present ${JSON.stringify(ci)}`, async t => {
+for (const ci of ['', '0', 'false', 'true', '1', 'FALSE', 'yes']) test(`TEST-CACHE-V3 CI present ${JSON.stringify(ci)}`, async t => {
   const ctx = await setup(t); await prime(ctx); ctx.ports.env.CI = ci;
-  assert.equal((await ctx.invoke(['independent'])).sent, 1, 'CI presence runs selected scope');
+  assert.equal((await ctx.invoke(['independent'])).sent, ['', '0', 'false'].includes(ci) ? 0 : 1, 'only explicit false CI values allow ordinary reuse');
 });
 for (const missing of ['engine', 'model', 'unknown-model', 'conflicting-model']) test(`TEST-CACHE-V3 missing identity ${missing}`, async t => {
   const ctx = await setup(t);

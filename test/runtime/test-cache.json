@@ -44,7 +44,7 @@
     },
     {
       "id": "AC11",
-      "text": "When `CI` is set, every selected Story runs, even if its value is empty or `0`; a saved pass at most seven days old still counts for prompt approval."
+      "text": "When `CI` is unset or is the empty string, `0` or `false`, unchanged passes may be reused; every other value runs every selected Story. A saved pass at most seven days old still counts for prompt approval."
     }
   ],
   "cases": [
