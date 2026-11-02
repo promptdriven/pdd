@@ -20,7 +20,7 @@ test('OUTCOME safety: unknown is not counted done alongside a running Story', as
     const post = f.posts.find(p => p.request.requestId === id);
     return { status: 200, json: f.check(id, post?.request.scenario === 'tests/place-order.json' ? 'unknown' : 'running') };
   });
-  const result = await client(h, f)(['place-order', 'unknown-item'], { '--json': true });
+  const result = await client(h, f)(['place-order', 'unknown-item'], { '--json': true, '--timeout': 1.5 });
   assert.equal(result.code, 3);
   assert.match(result.err, /0 of 2 Stories done/);
   assert.doesNotMatch(result.err, /1 of 2 Stories done/);
@@ -45,7 +45,7 @@ test('OUTCOME safety: saved restart cannot bypass missing selected lint evidence
     const id = e.request?.requestId ?? e.url.split('/').at(-1);
     return { status: 200, json: restarted ? f.job(id, 'check', 'unknown', { refusals: [{ code: 'service-restarted' }] }, 'unknown') : f.check(id, 'running') };
   });
-  const run = client(h, f), first = await run(['place-order'], { '--json': true });
+  const run = client(h, f), first = await run(['place-order'], { '--json': true, '--timeout': 1.5 });
   const folder = join(h.state, 'batches', first.json.batch), saved = JSON.parse(readFileSync(join(folder, 'batch.json')));
   const lintPath = join(folder, `${saved.lint.request_ids.at(-1)}.json`), answer = JSON.parse(readFileSync(lintPath));
   delete answer.result.report.lint;
