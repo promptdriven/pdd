@@ -47,7 +47,7 @@ for(const action of ['done-pr','done-ask-code','approve-pr'])test(`2753 ${action
    bodyRuntime:()=>assert.match(f.prs[0].body,/Runtime check: ✓ 1\/1 criteria/),
    bodyVerify:()=>{if(action==='done-ask-code'){assert.doesNotMatch(f.prs[0].body,/## Verify/);return;}assert.match(f.prs[0].body,/## Verify/);assert.match(f.prs[0].body,/Preserved verification detail/);},
    bodyFailure:()=>{if(action!=='done-ask-code')assert.match(f.prs[0].body,/^✗ 1 vectors fail$/m);},
-   gate:()=>assert.deepEqual(saved.gate,concurrent?newer.gate:action==='done-ask-code'?{area:run.areas[0].name,at:f.clock,kind:'ask-code'}:null),
+   gate:()=>{if(!concurrent&&action==='done-ask-code'){const {id,promptSnapshot,...facts}=saved.gate;assert.equal(typeof id,'string');assert.ok(id.length);assert.deepEqual(promptSnapshot,[]);assert.deepEqual(facts,{area:run.areas[0].name,at:f.clock,kind:'ask-code'});}else assert.deepEqual(saved.gate,concurrent?newer.gate:null);},
    area:()=>assert.equal(saved.area,concurrent?1:0),state:()=>assert.equal(saved.state,concurrent?newer.state:'waiting'),
    question:()=>assert.deepEqual(saved.question??null,concurrent?newer.question:null),
    unrelatedWork:()=>assert.deepEqual(saved.done.independent,newer?.done.independent),
