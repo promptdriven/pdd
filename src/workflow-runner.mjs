@@ -954,7 +954,7 @@ async function finishPr(run, area, step, p, lines) {
     // (a change request with pdd workflow changes moves it).
     const at=p.now();
     commitRun(run,p,latest=>{if(latest.area===selectedArea&&sameGate(latest.gate,selectedGate)){latest.state='waiting';latest.gate=existing && latest.gate?.kind==='ask-code'?latest.gate:{id:p.randomUUID(),area:area.name,at,kind:'ask-code'};}});
-    const savedApproval = (run.decisions ?? []).some(decision => decision.gateId === run.gate.id && decision.evidence);
+    const savedApproval = !!run.gate && (run.decisions ?? []).some(decision => decision.gateId === run.gate.id && decision.evidence);
     const shownGate = run.area===selectedArea && run.gate?.kind==='ask-code' ? (savedApproval ? snapshotLines(run.gate.promptSnapshot ?? []) : await showGate(run, p)) : [];
     return done([...lines, ...shownGate, ...await askCodeLines(run, area, p)].join('\n'));
   }
@@ -1229,10 +1229,10 @@ async function showGate(run, p) {
   try {
     const snapshot=await gatePromptSnapshot(run,p);
     let applied=false;
-    commitRun(run,p,latest=>{if(equalFact(latest.gate,observedGate)){latest.gate.promptSnapshot=snapshot;applied=true;}});
+    commitRun(run,p,latest=>{if(latest.gate&&equalFact(latest.gate,observedGate)){latest.gate.promptSnapshot=snapshot;applied=true;}});
     return applied ? snapshotLines(snapshot) : [];
   } catch (error) {
-    commitRun(run,p,latest=>{if(equalFact(latest.gate,observedGate))delete latest.gate.promptSnapshot;});
+    commitRun(run,p,latest=>{if(latest.gate&&equalFact(latest.gate,observedGate))delete latest.gate.promptSnapshot;});
     return [`Cannot show selected prompts: ${error.message}. Repair the selection, show the gate again and ask the person again.`];
   }
 }

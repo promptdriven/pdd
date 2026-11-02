@@ -32,7 +32,7 @@ const RUNNER_ROUTES = {
   'workflow-status': plan => ['runStatus', { ref: plan.operands[0], ...Object.fromEntries(['all', 'cancelled', 'json'].filter(name => plan.options[`--${name}`]).map(name => [name, true])) }],
   'workflow-open': plan => ['openRun', { ref: plan.operands[0] }],
 };
-const packageLines = packageRoot => PUBLIC_HELP_TEXT.learnLines.map(line => line.replace('PACKAGE_ROOT', packageRoot));
+const packageLines = packageRoot => PUBLIC_HELP_TEXT.learnLines.map(line => line.replace('PACKAGE_ROOT', () => packageRoot));
 const renderTopic = (topic, packageRoot) => [PUBLIC_HELP_TEXT.heading, '', ...PUBLIC_HELP_TEXT.promptingLines, '', ...packageLines(packageRoot).slice(1)].join('\n');
 export function renderHelp(prefix = [], packageRoot = PACKAGE_ROOT) {
   const rows = PUBLIC_COMMAND_MANIFEST.filter(({ form }) => !prefix.length
