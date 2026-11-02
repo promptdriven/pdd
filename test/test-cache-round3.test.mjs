@@ -289,7 +289,7 @@ test('TEST-CACHE-K2: read that resends, in flight', async t => {
   let r;
   try {
     assert.equal(resent.size, 1, 'read resends the restarted job before the concurrent check');
-    r = await ctx.invokeWith(round4Other(ctx, 6 * min).ports, ['unknown-item']);
+    r = await ctx.invokeWith(round4Other(ctx, 6 * min).ports, ['unknown-item'], { '--timeout': 1.5 });
   } finally { released = true; assert.equal(await readRun, 0); ctx.state.reply = null; }
   assert.equal(r.sent, 1, 'the read is sending checks and has seen build b; never reuse build a');
 });
