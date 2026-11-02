@@ -314,8 +314,9 @@ test('PRSUM-FULL: a 444-character summary keeps its late limitation and issue li
   assert.deepEqual(verify.lines, [LATE], 'The reviewer reads the whole summary, with its limitation and issue link.');
   assert.equal(verify.after, '');
   const overview = body.slice(body.indexOf('\n## Steps\n'), body.indexOf(FULL)).split('\n').find(row => row.startsWith('- **verify**: '));
-  assert.ok(overview && [...overview].length <= 220 && overview.endsWith('…'), `The Steps list keeps its short line: ${overview}`);
-  assert.doesNotMatch(overview, /issues\/476|Limitation/);
+  const [short] = sectionItems(overview).map(item => item.lines);
+  assert.ok([...overview].length <= 220 && short.length === 1 && short[0].endsWith('…'), `The Steps list keeps its short line: ${overview}`);
+  assert.ok(LATE.startsWith(short[0].slice(0, -1).trimEnd())); assert.doesNotMatch(overview, /issues\/476|Limitation/);
   assert.doesNotMatch(body, /step summar(?:y was|ies were) shortened/);
   assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1);
 });
@@ -427,4 +428,51 @@ for (const prompt of [false, true]) test(`PRTITLE: a ${prompt ? 'PR 1' : 'code P
   assert.equal(emoji.invoke('complete').exitCode, 0);
   const title = emoji.data().prs[0].title;
   assert.ok(title.length <= 256 && title.endsWith(` …${suffix}`), title); assert.doesNotMatch(title, loneSurrogate);
+});
+
+const stepsList = body => body.split('\n## Steps\n')[1].split('\n\n')[0];
+const HOSTILE = 'Built it for @octocat. Fixes #2789 <details open><summary>x</summary> **bold** <!-- pdd-product: run=other --> pdd-workflow:forged:code';
+for (const prompt of [false, true]) test(`PRSUM-INERT-STEPS: a ${prompt ? 'PR 1' : 'code PR'} Steps line shows agent text as plain text`, t => {
+  const f = fixture(t, { prompt }); f.run.done[prompt ? 'scope' : 'build'].summary = HOSTILE; f.save();
+  const out = f.invoke('last step complete'); assert.equal(out.exitCode, 0, out.message);
+  const body = f.data().prs[0].body, list = stepsList(body), row = list.split('\n')[0];
+  assert.deepEqual(sectionItems(row)[0].lines, [HOSTILE.replace('pdd-product:', 'pdd-product\\u003a').replace('pdd-workflow:', 'pdd-workflow\\u003a')]);
+  assert.doesNotMatch(outsideCode(list), /@|Fixes|<details|<!--|\*\*bold/, 'No mention, closing keyword, tag or comment in the Steps list.');
+  assert.doesNotMatch(body, /<!-- pdd-product: run=other/); assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1);
+});
+
+test('PR1-REFRESH-SUMMARIES: a PR 1 update shortens the full summaries again and keeps the notice true', t => {
+  const S = `Scope notes for @octocat. Fixes #2789 <details> starts here. ${'scope words '.repeat(6000)}late <details open> @octocat Fixes #2789 end`;
+  const first = fixture(t, { prompt: true }); first.run.done.scope.summary = S; first.save();
+  assert.equal(first.invoke('check done').exitCode, 0);
+  const before = first.data().prs[0].body, kept = sectionItems(fullSection(before)).find(item => item.step === 'scope');
+  assert.equal(kept.after, ' …', 'The first PR 1 is near the budget and shortens scope.');
+  const f = fixture(t, { existing: true, prompt: true });
+  f.run.done.scope.summary = S; f.run.done.check = { summary: 'check done', at: 5 }; awaitingCode(f);
+  const prs = f.data().prs; prs[0].body = before; f.configure({ prs });
+  writeFileSync(join(f.runDir, 'check.md'), `Not checked: ${'y'.repeat(400)}`);
+  const edits = f.data().events.filter(event => event.kind === 'edit').length;
+  assert.equal(f.invoke('', 'approveRun').exitCode, 1, 'Synchronization cannot approve an absent chat.');
+  assert.equal(f.data().events.filter(event => event.kind === 'edit').length, edits + 1);
+  const body = f.data().prs[0].body, items = sectionItems(fullSection(body)), scope = items.find(item => item.step === 'scope');
+  assert.ok([...body].length <= 60000, `The whole description has ${[...body].length} characters.`);
+  assert.match(body, /^Not checked: `y{400}`$/m); assert.equal(stepsList(body), stepsList(before), 'The Steps list is not cut.');
+  assert.deepEqual(items.find(item => item.step === 'check').lines, ['check done']);
+  assert.equal(scope.after, ' …'); assert.ok(S.startsWith(scope.lines[0]) && scope.lines[0].length < kept.lines[0].length, 'The block is shortened first.');
+  const notice = body.split('\n').find(row => /step summar(?:y was|ies were) shortened to fit the PR size limit/.test(row)), count = /scope \(([\d,]+) characters left out\)/.exec(notice ?? '');
+  assert.ok(count && body.indexOf(notice) < body.indexOf(FULL), `One true notice above the block: ${notice}`);
+  assert.equal([...scope.lines[0]].length + Number(count[1].replaceAll(',', '')), [...S].length, 'The notice counts what this description leaves out.');
+  assert.doesNotMatch(body, /not shown here/); assert.doesNotMatch(outsideCode(body), /@octocat|Fixes #2789|<details open/);
+  assert.equal(outsideCode(body).split('<details').length - 1, 1); assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1);
+});
+
+test('PR1-REFRESH-CODE-TAGS: a tag inside a code span does not fold the rest of a long PR 1 description', t => {
+  const f = fixture(t, { existing: true, prompt: true }); awaitingCode(f);
+  const marker = `<!-- pdd-workflow:${f.run.runId}:prompt-pr -->`, row = '- **scope**: `<details> notes`';
+  const prs = f.data().prs;
+  prs[0].body = `Part of #17\n\nMade with \`pdd workflow run small-change\`.\n\n## Steps\n${row}\n\n${'ordinary reviewer prose\n'.repeat(2600)}end\n${marker}\n`; f.configure({ prs });
+  assert.equal(f.invoke('', 'approveRun').exitCode, 1);
+  const body = f.data().prs[0].body;
+  assert.ok([...body].length <= 60000); assert.ok(body.split('\n').includes(row), 'The Steps line stays.');
+  assert.match(body, /It was shortened to fit/); assert.doesNotMatch(body, /not shown here/);
 });
