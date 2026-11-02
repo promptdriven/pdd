@@ -315,7 +315,7 @@ test('live pending cache claim fails open within a bound and recovers after rele
 // A partial pass cannot confirm a complete Story pass or clear its known failure.
 test('partial sibling pass retains last failure until the whole Story passes', async t => {
   const env = harbor(t, repo => {
-    cpSync(join(repo, 'tests/place-order.json'), join(repo, 'tests/place-order-extra.json'));
+    cpSync(join(repo, 'tests/place-order.json'), join(repo, 'tests/place-order.extra.json'));
   });
   let mode = 'passed';
   const fake = await fakeRuntime(t, entry => ({ status: 200, json: entry.command === 'lint'
@@ -333,7 +333,7 @@ test('partial sibling pass retains last failure until the whole Story passes', a
   const failed = await invoke([], { '--cache-clear': true });
   assert.equal(failed.code, 1);
   assert.deepEqual(failed.json.rows.map(row => row.test).sort(),
-    ['tests/place-order-extra.json', 'tests/place-order.json', 'tests/unknown-item.json']);
+    ['tests/place-order.extra.json', 'tests/place-order.json', 'tests/unknown-item.json']);
   assert.ok(failed.json.rows.every(row => row.state === 'failed'));
   mode = 'passed';
   const partial = await invoke(['tests/place-order.json']);
@@ -344,14 +344,14 @@ test('partial sibling pass retains last failure until the whole Story passes', a
   mode = 'failed';
   const retained = await invoke([], { '--lf': true });
   assert.deepEqual(retained.json.rows.map(row => row.test).sort(),
-    ['tests/place-order-extra.json', 'tests/place-order.json', 'tests/unknown-item.json'],
+    ['tests/place-order.extra.json', 'tests/place-order.json', 'tests/unknown-item.json'],
     '--lf retains every sibling of the previously failed Story after only a partial pass');
   assert.equal(retained.code, 1);
   mode = 'passed';
   const complete = await invoke(['user_stories/place-order.md']);
   assert.equal(complete.code, 0);
   assert.deepEqual(complete.json.rows.map(row => row.test).sort(),
-    ['tests/place-order-extra.json', 'tests/place-order.json']);
+    ['tests/place-order.extra.json', 'tests/place-order.json']);
   assert.ok(complete.json.rows.every(row => row.state === 'passed'));
   mode = 'failed';
   const remaining = await invoke([], { '--lf': true });
