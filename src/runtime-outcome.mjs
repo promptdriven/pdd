@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-outcome.prompt.md (sha256: 83628c0598c604ee9192fa900f539bf772e8208abc6121bb558576d717e0f7e5).
+// Generated from prompts/cli/runtime-outcome.prompt.md (sha256: 476d30da369bd60df810f1361ecf075272d487ca653ec6f1bc095877f6fb5f23).
 // What happened to one selected test: the one place that turns a server answer into an outcome.
 const objects = value => Array.isArray(value) ? value.filter(item => item && typeof item === 'object' && !Array.isArray(item)) : [];
 const count = value => Number.isSafeInteger(value) && value >= 0;
@@ -24,10 +24,10 @@ export function outcomeFor(answer, { test, steps = [], kind = answer?.command, t
   // The public refusal list; the report's own refusal stands in only when that list is empty.
   const refusals = objects(result?.refusals);
   if (!refusals.length && report?.refusal && typeof report.refusal === 'object' && !Array.isArray(report.refusal)) refusals.push(report.refusal);
-  // A retryable pool refusal before dispatch is a check that did not run, never a refused test.
-  const pool = refusals.find(item => item.code === 'pool-copy-unavailable' && (item.retryable === true || item.details?.retryable === true));
-  if (pool && (report?.dispatch ?? answer?.dispatch) === 'not_started')
-    return { state: 'not_run', code: pool.code, retryable: true, message: pool.reason ?? pool.message ?? pool.code };
+  // A refusal the server declares retryable, before dispatch, is a check that did not run, whatever its code.
+  const retry = refusals.find(item => item.retryable === true || item.details?.retryable === true);
+  if (retry && (report?.dispatch ?? answer?.dispatch) === 'not_started')
+    return { state: 'not_run', code: retry.code ?? null, retryable: true, message: retry.reason ?? retry.message ?? retry.code ?? null };
   if (kind === 'lint') return lintOutcome(answer, refusals, test, steps);
   if (answer?.state === 'unknown') return { state: 'unknown', reason: result?.why ?? 'No verdict was returned.' };
   if (answer?.state === 'failed') return { state: 'failed', criteria: objects(report?.criterion_results) };
