@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 2eb1b18897b3d8b134160063289e74f6477f2b40e11c0f948d5e1bcff70ac561).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 49cc2d236c0ed5d4d99d144d1fa0529c932f0cb7ecb9a60762d29d9a03898c62).
 import { hasProgress, outcomeDone, outcomeFor, outcomeOverall, outcomeText, progressText } from './runtime-outcome.mjs';
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';

@@ -9,9 +9,9 @@ pdd follows the server's requested delay and keeps trying until your wait ends.
 There is no fixed number of attempts. It keeps the same selected files and saves
 every request ID. Check and saved-batch reads have no default wait limit in any shell; `--timeout`
 sets an explicit limit. Standalone remote lint retains its 90-second agent default
-and unlimited interactive wait, with `--timeout` override. `pdd simulate` keeps its
-five-minute setup allowance and 90-second agent default. Waiting, retries and
-lint all use the same time allowance.
+and unlimited interactive wait, with `--timeout` override. `pdd simulate` follows the
+[Try lint deadline policy](../prompts/cli/runtime-client.prompt.md#retry-confirmed-lint-capacity-refusals).
+Waiting, retries and lint stay within their applicable deadline.
 
 If the server stays busy, pdd says that no checks ran and asks you to run the same
 command again later. Check and lint exit with code 5; the `--cli` and `--serve`
