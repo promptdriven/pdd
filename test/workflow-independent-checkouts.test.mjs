@@ -64,13 +64,15 @@ async function pair(t) {
 const idle=(f,input)=>f.module.withHerdrLayoutLock(()=>f.module.closeHerdrRepoLayoutIfIdle(input,f.ports),f.ports);
 const close=(f,input,layout)=>f.module.withHerdrLayoutLock(()=>f.module.closeHerdrRunLayout({...input,layout},f.ports),f.ports);
 
-test('2531B AC1,2,6: legacy A first, independent B allocation, stable digest, and exact pair reuse',async t=>{
+// Labels follow the approved #2665 rule (short name first, then owner/repo, then owner/repo@token); identity is the
+// common Git directory key, not the label.
+test('2531B AC1,2,6: legacy A first, independent B allocation, approved label, and exact pair reuse',async t=>{
  const {f,a,b,bInput}=await pair(t);
  assert.notEqual(a.repoWorkspaceId,b.repoWorkspaceId);assert.notEqual(a.workspaceId,b.workspaceId);
- assert.equal(f.workspaces.find(w=>w.workspace_id===b.repoWorkspaceId).label,`alice/coffee@${token(bInput.commonDir)}`);
+ assert.equal(f.workspaces.find(w=>w.workspace_id===b.repoWorkspaceId).label,'alice/coffee');
  assert.deepEqual(f.calls.filter(a=>a[0]==='workspace'&&a[1]==='create').map(a=>a.slice(2)),[
   ['--cwd',f.input.sourceRoot,'--label','coffee','--no-focus'],
-  ['--cwd',bInput.sourceRoot,'--label',`alice/coffee@${token(bInput.commonDir)}`,'--no-focus']]);
+  ['--cwd',bInput.sourceRoot,'--label','alice/coffee','--no-focus']]);
  const saved=await registry(f),world=structuredClone(f.workspaces);f.calls.length=0;
  assert.equal((await f.open({stageId:'next'})).repoWorkspaceId,a.repoWorkspaceId);
  assert.equal((await f.open({...bInput,repository:'ALICE/coffee',stageId:'next'})).repoWorkspaceId,b.repoWorkspaceId);
@@ -151,7 +153,7 @@ for(const kind of ['duplicate','occupied','parent-path','parent-metadata','run-c
  if(kind==='duplicate')state.repositories.push(structuredClone(state.repositories[1]));
  if(kind==='occupied'){
   state.repositories.pop();state.runs.pop();f.workspaces.splice(2);
-  f.workspaces.push({workspace_id:'stranger',label:`alice/coffee@${token(bInput.commonDir)}`});
+  f.workspaces.push({workspace_id:'stranger',label:'alice/coffee'},{workspace_id:'stranger-2',label:`alice/coffee@${token(bInput.commonDir)}`});
  }
  if(kind==='parent-path')state.repositories[1].sourceRoot=f.input.sourceRoot;
  if(kind==='parent-metadata')f.workspaces.find(w=>w.workspace_id===b.repoWorkspaceId).worktree.repo_key=f.input.commonDir;
@@ -160,7 +162,7 @@ for(const kind of ['duplicate','occupied','parent-path','parent-metadata','run-c
  await save(f,state);const original=f.ports.command;
  f.ports.command=async args=>{const reply=await original(args);if(kind==='run-root'&&args[0]==='pane'&&args[3]===b.workspaceId)reply.result.panes[0].terminal_id='forged';if(kind==='inventory'&&args[0]==='workspace'&&args[1]==='list')reply.result.workspaces.push(reply.result.workspaces[0]);return reply;};
  const world=structuredClone(f.workspaces),bytes=await readFile(join(f.ports.directory,'registry.json'),'utf8');f.calls.length=0;
- await assert.rejects(f.open(bInput),{code:kind==='duplicate'?'invalid_layout_registry':kind==='occupied'?'repository_label_unavailable':kind==='inventory'?'invalid_workspace_inventory':'herdr_layout_identity_changed'});
+ await assert.rejects(f.open(bInput),{code:kind==='duplicate'?'layout_allocation_uncertain':kind==='occupied'?'repository_label_unavailable':kind==='inventory'?'invalid_workspace_inventory':'herdr_layout_identity_changed'});
  assert.deepEqual(mutations(f),[]);assert.deepEqual(f.workspaces,world);assert.equal(await readFile(join(f.ports.directory,'registry.json'),'utf8'),bytes);
 });
 
@@ -178,12 +180,12 @@ for(const kind of ['tab','pane','identity','lost-close'])test(`2531B AC5: parent
  if(kind!=='lost-close')assert.deepEqual(mutations(f),[]);
 });
 
-test('2531B AC6: mixed legacy A short, B hash, and C other origin only qualify the owned short label',async t=>{
+test('2531B AC6: mixed legacy A short, B owner/repo, and C other origin only qualify the owned short label',async t=>{
  const {f,a,b,bInput}=await pair(t),before=await registry(f),bWorld=structuredClone(f.workspaces.filter(w=>[b.repoWorkspaceId,b.workspaceId].includes(w.workspace_id)));
  const cRoot=join(f.root,'third');await mkdir(cRoot);await f.init(cRoot,'bob/coffee');f.calls.length=0;
  await f.open({repository:'bob/coffee',sourceRoot:cRoot,commonDir:join(cRoot,'.git'),cwd:cRoot,runId:randomUUID()});
- assert.deepEqual(f.calls.filter(a=>a[1]==='rename'),[['workspace','rename',a.repoWorkspaceId,'alice/coffee']]);
- assert.equal(f.workspaces.find(w=>w.workspace_id===b.repoWorkspaceId).label,`alice/coffee@${token(bInput.commonDir)}`);
+ assert.deepEqual(f.calls.filter(a=>a[1]==='rename'),[['workspace','rename',a.repoWorkspaceId,`alice/coffee@${token(f.input.commonDir)}`]]);
+ assert.equal(f.workspaces.find(w=>w.workspace_id===b.repoWorkspaceId).label,'alice/coffee');
  assert.deepEqual(f.workspaces.filter(w=>[b.repoWorkspaceId,b.workspaceId].includes(w.workspace_id)),bWorld);
  const after=await registry(f);assert.deepEqual(after.repositories.slice(0,2),before.repositories);assert.deepEqual(after.runs.slice(0,2),before.runs);
 });
@@ -194,8 +196,9 @@ test('2531B AC4,5: duplicate or inconsistent selected ownership cannot authorize
   if(kind==='duplicate')state.repositories.push(structuredClone(state.repositories[1]));
   else state.repositories[1].repository='someone/else';
   await save(f,state);const world=structuredClone(f.workspaces);f.calls.length=0;
-  await assert.rejects(f.open(bInput),{code:'invalid_layout_registry'});
-  await assert.rejects(idle(f,bInput),{code:'invalid_layout_registry'});
+  const code=kind==='duplicate'?'layout_allocation_uncertain':'invalid_layout_registry';
+  await assert.rejects(f.open(bInput),{code});
+  await assert.rejects(idle(f,bInput),{code});
   assert.deepEqual(mutations(f),[]);assert.deepEqual(f.workspaces,world);
  }
 });
