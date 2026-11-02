@@ -3,10 +3,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, mkdirSync, readFileSync, truncateSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { captureSource, findTests, preflight, selectTests } from '../src/runtime-preflight.mjs';
-import { runCheck } from '../src/runtime-client.mjs';
+import { runCheck, saveDoorCase } from '../src/runtime-client.mjs';
 import { readAgentScenarios } from '../src/agent-project.mjs';
 import { fakeRuntime, harbor, portsFor, root, sink, temp } from './runtime-fake.mjs';
 
@@ -138,6 +138,23 @@ test('NAME5: two files with one name for one Story, or one test for two Stories,
     assert.deepEqual(result.json.rows.map(row => [row.test, row.state, row.refusals.map(item => item.message)]), [['test/runtime/p17.json', 'refused', [sentence]]], word);
     assert.deepEqual(result.calls, { fetch: 0, gh: 0 });
   }
+  // pdd test --lint refuses the conflict locally, sends the other Story's test and names only that one.
+  put(setup.repo, 'user_stories/place-order.md', story()); put(setup.repo, 'tests/place-order.json', scenario('user_stories/place-order.md'));
+  const fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
+  fake.capacity = () => ({ status: 200, json: { maintenance: null, features: ['lint-tests'] } });
+  const lintRun = async words => {
+    const { ports } = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: join(setup.home, 'state') });
+    const code = await runCheck({ words, options: { '--lint': true, '--json': true }, cwd: setup.repo }, ports);
+    return { code, json: JSON.parse(ports.stdout.text), err: ports.stderr.text };
+  };
+  const alone = await lintRun(['p17']);
+  assert.equal(alone.code, 4, alone.err);
+  assert.deepEqual(alone.json.rows.map(row => [row.test, row.state, row.refusals.map(item => item.message)]), [['test/runtime/p17.json', 'refused', [sentence]]]);
+  assert.equal(fake.posts.length, 0, 'nothing is sent');
+  const both = await lintRun(['p17', 'place-order']);
+  assert.equal(both.code, 4, both.err);
+  assert.deepEqual(both.json.rows.map(row => [row.test, row.state]), [['test/runtime/p17.json', 'refused'], ['tests/place-order.json', 'passed']]);
+  assert.deepEqual(fake.posts.map(post => [post.command, post.request.tests]), [['lint', ['tests/place-order.json']]]);
   const twin = repoWith(t, { 'user_stories/a/x.md': story('X a'), 'user_stories/b/x.md': story('X b'), 'tests/x.json': scenario('user_stories/a/x.md') });
   assert.deepEqual(findTests({ root: twin.repo }).warnings, ['Warning: tests/x.json matches 2 Stories: user_stories/a/x.md and user_stories/b/x.md. Rename one.']);
   const result = await check(twin, ['x'], { '--json': true });
@@ -185,4 +202,47 @@ test('NAME8: the Try guide reads tests by the same rule, in full, and marks a co
   const none = readAgentScenarios({ root: twice.repo });
   assert.deepEqual(none.map(record => record.path), []);
   assert.equal(none.incomplete, true);
+});
+
+// Wrong: with Stories a and a.b, tests/a.b.json was given to one of them with no message.
+test('NAME9: a file name that fits two Story names is an error that names both Stories', t => {
+  const setup = repoWith(t, { 'user_stories/a.md': story('A'), 'user_stories/a.b.md': story('A B'), 'user_stories/x.y.md': story('X Y'),
+    'tests/a.b.json': scenario('user_stories/a.b.md'), 'tests/a.b.c.json': scenario('user_stories/a.b.md'), 'tests/a.c.json': scenario('user_stories/a.md'),
+    'tests/x.y.json': scenario('user_stories/x.y.md'), 'tests/x.y.z.json': scenario('user_stories/x.y.md') });
+  const found = findTests({ root: setup.repo });
+  assert.deepEqual(found.tests.map(item => [item.path, item.storyPath, item.error ?? null]), [
+    ['tests/a.b.c.json', null, 'tests/a.b.c.json matches 2 Stories: user_stories/a.b.md and user_stories/a.md. Rename one.'],
+    ['tests/a.b.json', null, 'tests/a.b.json matches 2 Stories: user_stories/a.b.md and user_stories/a.md. Rename one.'],
+    ['tests/a.c.json', 'user_stories/a.md', null],
+    ['tests/x.y.json', 'user_stories/x.y.md', null],
+    ['tests/x.y.z.json', 'user_stories/x.y.md', null]]);
+  assert.deepEqual(found.warnings, [
+    'Warning: tests/a.b.c.json matches 2 Stories: user_stories/a.b.md and user_stories/a.md. Rename one.',
+    'Warning: tests/a.b.json matches 2 Stories: user_stories/a.b.md and user_stories/a.md. Rename one.']);
+  assert.deepEqual(selectTests(found, ['a.b']).selected.map(item => item.path), ['tests/a.b.c.json', 'tests/a.b.json']);
+});
+
+// Wrong: one unreadable test stopped pdd test for every Story; a test over the upload limit was read anyway.
+test('NAME10: an unreadable test or a test over the upload limit is refused by name, and other Stories still run', async t => {
+  const setup = repoWith(t, { 'user_stories/place-order.md': story(), 'tests/place-order.json': scenario('user_stories/place-order.md'),
+    'user_stories/locked.md': story('Locked'), 'tests/locked.json': scenario('user_stories/locked.md'),
+    'user_stories/huge.md': story('Huge'), 'tests/huge.json': '{}' });
+  truncateSync(join(setup.repo, 'tests/huge.json'), 11 * 1024 * 1024);
+  chmodSync(join(setup.repo, 'tests/locked.json'), 0o000);
+  let found;
+  assert.doesNotThrow(() => { found = findTests({ root: setup.repo }); });
+  assert.deepEqual(found.tests.map(item => [item.path, item.error ?? null]), [
+    ['tests/huge.json', 'tests/huge.json is 11.0 MB. The upload limit is 10 MB, so pdd cannot send it.'],
+    ['tests/locked.json', 'tests/locked.json cannot be read: EACCES.'],
+    ['tests/place-order.json', null]]);
+  const files = await check(setup, ['place-order'], { '--files': true });
+  assert.equal(files.code, 0, files.err);
+});
+
+// Wrong: a saved Try case made a second test file for a Story whose test pdd could not use.
+test('NAME11: a saved case never makes a second test for a Story; a test path that is taken is refused', t => {
+  const setup = repoWith(t, { 'user_stories/s.md': story('S'), 'runtime/tests/s.json': '{"schema_version":', 'user_stories/q.md': story('Q'), 'tests/q.json/notes.txt': 'x' });
+  const saved = storyPath => ({ id: 'c1', name: 'saved', story_path: storyPath, test: JSON.parse(scenario(storyPath)) });
+  assert.equal(saveDoorCase(setup.repo, saved('user_stories/s.md')), 'not added: runtime/tests/s.json is the test of user_stories/s.md, but pdd cannot use it. Fix it first.');
+  assert.equal(saveDoorCase(setup.repo, saved('user_stories/q.md')), 'not added: tests/q.json exists but is not the test of user_stories/q.md. Fix that file first.');
 });

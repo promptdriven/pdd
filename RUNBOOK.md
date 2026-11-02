@@ -21,7 +21,7 @@ When the person asks you to report a problem with pdd itself, follow
 |---|---|
 | `prompts/<job>.prompt.md` | The program in plain English, then `## Dependencies`, then one Runtime interface block. |
 | `user_stories/<story>.md` | One story with a numbered `## Acceptance criteria` list. pdd skips index files: `PLAN.md`, `README.md` and any file with no `## Acceptance criteria` heading. |
-| `tests/<story>.json` | The test for that story. pdd finds it by its name and folder: `<story>.json` in a folder named `tests` or `test`, at any depth (`tests/`, `tests/runtime/`, `runtime/tests/`). pdd does not look inside other JSON files to find tests, and a test can have any size. If the repo's own tests are in `tests/` or `test/`, use `tests/runtime/` or `test/runtime/`. |
+| `tests/<story>.json` | The test for that story. pdd finds it by its name and folder: `<story>.json` in a folder named `tests` or `test`, at any depth (`tests/`, `tests/runtime/`, `runtime/tests/`). pdd does not look inside other JSON files to find tests, and a test can have any size up to the upload limit (section 1). Every `.json` file in a `tests` or `test` folder named `<story>.json` or `<story>.<word>.json` is a test of that story, so give fixtures and other data files other names. If the repo's own tests are in `tests/` or `test/`, use `tests/runtime/` or `test/runtime/`. |
 
 **1 story = 1 test file = many cases.** Each case is one step. Steps run in order and share the saved data.
 Across its steps, the test file must check every criterion of its story.
