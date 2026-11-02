@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: f1bf633402b1012feeaca6ed9f801a309ab16eaf12ff3665404c6815045d4629).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 65d8a6054cb083f081c3248461d008a7c81d26236154755e3962fc39206eee3e).
 import { hasProgress, outcomeDone, outcomeFor, outcomeOverall, outcomeText, progressText } from './runtime-outcome.mjs';
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
@@ -1456,10 +1456,10 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
   const lint = await runLint(context);
   if (lint.kind === 'pending') { Object.assign(context.lint, { state: lint.answer.state, pending: true });
-    for (const row of rows) Object.assign(row, { state: 'not_run', calls: 0, phase: 'lint', note: { code: 'lint-pending', message: pendingLintMessage(context, lint.answer) } });
+    for (const row of rows) if (!local(row)) Object.assign(row, { state: 'not_run', calls: 0, phase: 'lint', note: { code: 'lint-pending', message: pendingLintMessage(context, lint.answer) } });
     saveBatch(context); throw new Stop(3, pendingLintMessage(context, lint.answer)); }
   if (lint.kind === 'not_run' && context.json) {
-    for (const row of rows) Object.assign(row, { state: 'not_run', calls: 0, note: lint.note });
+    for (const row of rows) if (!local(row)) Object.assign(row, { state: 'not_run', calls: 0, note: lint.note });
     saveBatch(context); line(ports.stderr, lint.note.message);
     line(ports.stdout, JSON.stringify({ batch, repo: root, exit_code: 5, lint_state: 'not_run', summary_line: `Lint did not run. 0 AI calls. No checks were sent.`, coverage: context.coverage, problems: [],
       rows: rows.map(row => ({ story: row.story, title: row.title, test: row.test, state: row.state, refusals: row.refusals })), warnings: [...new Set([...context.warnings, ...context.unmatched])] }));
@@ -1809,7 +1809,7 @@ async function refreshCheckBatches(context, identity, origin, id, answer) {
       store.write(join(folder, `${id}.json`), answer);
       if (context.cacheEnabled && saved.version === 1 && saved.intent === 'check'
         && Array.isArray(saved.test_cache?.tokens) && saved.rows.some(row => row.request_ids?.at(-1) === id)) {
-        const capture = context.ports.captureSource(root, { tests: saved.rows.map(row => row.test), appMap: null });
+        const capture = context.ports.captureSource(root, { tests: sentTests(saved.rows), appMap: null });
         if (capture.sha256 !== saved.source_sha256) continue;
         // Project receipts privately: UUID reads never rewrite saved batch/summary views.
         const projection = { ...context, cacheReadInvocation: true, startedAt: Date.parse(saved.created_at), reading: true, visible: findTests({ root }).visible, warnings: [] };
