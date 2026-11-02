@@ -9,7 +9,7 @@ import { fakeRuntime, harbor, portsFor } from './runtime-fake.mjs';
 const TEST = 'tests/place-order.json';
 const refusal = { code: 'admission-stopped', message: 'Admission stopped before this test.', fix: 'Correct the admission input.' };
 const running = { steps_done: 2, steps_total: 5, step: 3, calls_settled: 4, calls_open: 1 };
-const progressText = 'running · step 3 of 5 · 4 AI calls so far · 1 in flight';
+const progressText = 'running · step 3 of 5 · 4 AI calls so far · 1 not yet settled';
 function lintAnswer(f, id, shape) {
   const answer = f.lint(id);
   answer.result.report.lint = { complete: true, tests: [{ path: TEST, verdict: 'passed' }] };
@@ -191,7 +191,7 @@ test('OUTCOME supplied progress reaches table, summary, stderr and saved reads',
   const result = await r.command({ '--json': true });
   assert.equal(result.code, 3);
   assert.deepEqual(result.json.rows[0].progress, running);
-  assert.match(result.json.summary_line, /running · step 3 of 5 · 4 AI calls so far · 1 in flight/);
+  assert.match(result.json.summary_line, /running · step 3 of 5 · 4 AI calls so far · 1 not yet settled/);
   assert.ok(result.err.includes(progressText), result.err);
   assert.ok(renderText({ rows: result.json.rows, exitCode: 3 }).includes(progressText));
   const next = await r.command({ '--read': result.json.batch, '--json': true }, []);
@@ -201,7 +201,7 @@ test('OUTCOME supplied progress reaches table, summary, stderr and saved reads',
 test('OUTCOME several running tests share one progress part', async t => {
   const r = await setup(t, 'both', { check: 'running', progress: running });
   const result = await r.command({ '--json': true }, ['place-order', 'unknown-item']);
-  assert.match(result.json.summary_line, /running · 8 AI calls so far · 2 in flight · 2 running$/);
+  assert.match(result.json.summary_line, /running · 8 AI calls so far · 2 not yet settled · 2 running$/);
   assert.equal(result.json.summary_line.split('step 3 of 5').length, 1, 'no per-row step in a shared line');
   assert.ok(result.err.split('\n').filter(line => line.startsWith('Still running:')).every(line => line.split(' · running').length === 2), result.err);
 });

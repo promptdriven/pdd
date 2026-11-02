@@ -108,15 +108,18 @@ that carries these outcome fields is used as it is.
 
 - Module function `outcomeText(outcome)`: `queued · 2 ahead` (or `queued`),
   `not run`, the state name for other ended states, and for running
-  `running · step 3 of 5 · 4 AI calls so far · 1 in flight`. A whole-number `step`
-  is one-based; without it, the step is `steps_done + 1` while `steps_done` is
-  below `steps_total`. A named step is shown as it is. Omit each missing fragment;
-  `in flight` appears only when `calls_open` is above zero.
+  `running · step 3 of 5 (render) · 4 AI calls so far · 1 not yet settled`. A
+  whole-number `step` is the one-based step number; otherwise the number is
+  `steps_done + 1` while `steps_done` is below `steps_total`. A named `step` follows
+  the number in parentheses, or stands alone when no number is known. Omit each
+  missing fragment. `calls_open` counts calls without a settled result, which can
+  stay open until the check ends, so it reads `N not yet settled`, never as live
+  traffic, and appears only when it is above zero.
 - Module function `hasProgress(outcome)`: running with at least one progress field.
 - Module function `progressText(outcomes)`: one fragment for a line, or null when
   no outcome has progress. With one such outcome, its `outcomeText`. With several,
-  `running · <sum of calls_settled> AI calls so far · <sum of calls_open> in
-  flight`, without a step; a sum is left out when no outcome reports it.
+  `running · <sum of calls_settled> AI calls so far · <sum of calls_open> not yet
+  settled`, without a step; a sum is left out when no outcome reports it.
 - Module function `outcomeDone(outcome)`: true only for `passed`, `failed`,
   `refused` and `not_run`. `unknown` is not done.
 - Module function `outcomeOverall(outcomes, {interrupted, lintUnknown} = {})`: the
