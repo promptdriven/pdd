@@ -323,7 +323,7 @@ test('NAME14: a UUID receipt refresh keeps unsent tests out of capture and cache
   assert.deepEqual(first.json.rows.map(row => [row.test, row.state]), [['tests/huge.json', 'refused'], ['tests/place-order.json', 'running']]);
   const id = first.json.rows[1].request_id;
   running = false;
-  assert.equal((await invoke([], { '--read': id })).code, 0);
+  assert.equal((await invoke([id], { '--read': true })).code, 0);
   const next = await invoke();
   assert.equal(next.code, 4);
   assert.equal(next.json.rows.find(row => row.test === 'tests/place-order.json').cached, true);
