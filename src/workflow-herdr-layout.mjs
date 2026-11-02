@@ -28,6 +28,8 @@ function identityChanged(workspaceId, field, expected, found) {
 function repositoryEntry(registry, key, commonDir) {
   const matches=registry.repositories.filter(r=>r.key===key&&r.commonDir===commonDir);
   if(matches.length>1)throw problem('layout_allocation_uncertain');
+  // An entry whose repository disagrees with its key cannot prove ownership of either.
+  if(matches[0]&&String(matches[0].repository??'').toLowerCase()!==key)throw problem('invalid_layout_registry');
   return matches[0];
 }
 const checkoutLabel = repo => `${repo.repository}@${createHash('sha256').update(repo.commonDir).digest('hex').slice(0,12)}`;
@@ -188,6 +190,8 @@ export async function openHerdrRunLayout(input, ports) {
   const refused=pending && !pending.workspaceId && !pending.rootPaneId && !pending.rootTabId && !pending.rootTerminalId &&
     (pending.phase==='refused'&&pending.refusal==='linked_worktree_source' ||
      pending.phase==='intent'&&!pending.retriedRefusal&&input.preAgentRefusal==='linked_worktree_source');
+  // A saved run keeps its repository workspace binding: a missing or different namespace refuses before any allocation.
+  if(pending && (!repo || pending.repoWorkspaceId!==repo.workspaceId))throw problem('herdr_run_binding_changed');
   if(refused){
     if(!samePath(pending.cwd,cwd) || rows.some(w=>samePath(w.worktree?.checkout_path,cwd)))throw problem('layout_allocation_uncertain');
     pending.phase='refused';pending.refusal='linked_worktree_source';
