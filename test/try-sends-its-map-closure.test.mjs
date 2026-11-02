@@ -8,7 +8,7 @@ import { PLACE, fakeRuntime, harbor, portsFor } from './runtime-fake.mjs';
 
 // Story: user_stories/try-sends-its-map-closure.md. A repo with two areas: "orders" (2 small Stories)
 // and "shelf" (12 Stories whose tests are large, about 10.8 MB together, so all tests do not fit in one upload).
-const SEED = 'tests/place-order.json', STORY = 'user_stories/place-order.md';
+const SEED = 'tests/place-order.json', STORY = 'user_stories/place-order.md', TWIN = 'tests/place-order-twin.json';
 const ORDERS_MAP = 'app/maps/orders.json', SHELF_MAP = 'app/maps/shelf.json', STOCK = 'prompts/shelf/stock.prompt.md';
 const write = (repo, path, text) => { mkdirSync(join(repo, path, '..'), { recursive: true }); writeFileSync(join(repo, path), typeof text === 'string' ? text : JSON.stringify(text)); };
 const tarNames = tar => {
@@ -35,8 +35,9 @@ function tarEntries(tar) {
 const listedEntries = ports => ports.stdout.text.split('\n').map(line => /^\s+(\S+)\s+(\d+) bytes$/.exec(line)).filter(Boolean).map(match => [match[1], Number(match[2])])
   .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
 
-function twoAreas(t, { missing = null } = {}) {
+function twoAreas(t, { missing = null, twin = false } = {}) {
   return harbor(t, repo => {
+    if (twin) write(repo, TWIN, readFileSync(join(repo, SEED), 'utf8'));
     const map = (name, prompt, stylesheet) => ({ schema_version: 'prompt-runtime.app-map.v1', name, stylesheets: [stylesheet],
       screens: [{ id: 'main', prompt_path: prompt }], handlers: [{ screen: 'main', kind: 'button', match: { name: 'go' }, handler: { prompt_path: prompt } }] });
     write(repo, ORDERS_MAP, map('Orders', missing === 'prompt' ? 'prompts/orders/gone.prompt.md' : PLACE, missing === 'stylesheet' ? 'app/styles/gone.css' : 'app/styles/orders.css'));
@@ -73,23 +74,35 @@ test('CTRY1: an area Try uploads only its map closure and its one seed test, in 
   assert.ok(tries[0].tar.length < 1_048_576, `the Try upload is ${tries[0].tar.length} bytes`);
 });
 
-test('CTRY2: the --files listing of an area Try is exactly what the real Try path posts for the same arguments', async t => {
-  const setup = twoAreas(t), words = ['place-order'], options = { '--app-map': ORDERS_MAP };
+// The real Try path with a fake runtime: its exit code, stderr and the Try POST (null when nothing was posted).
+async function realTry(t, setup, words, options) {
   const fake = await fakeRuntime(t, (entry, f) => {
     if (entry.command === 'lint') return { status: 200, json: f.lint(entry.request.requestId) };
     if (entry.command === 'try') return { status: 200, json: f.tryJob(entry.request.requestId) };
     return { status: 404, json: {} };
   });
   const { ports } = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin });
-  assert.equal(await runTry({ cwd: setup.repo, words, options: { ...options, '--no-open': true, '--no-wait': true } }, ports), 0, ports.stderr.text);
-  const posted = fake.posts.find(post => post.command === 'try');
-  assert.ok(posted, 'the Try was posted');
-  const preview = offline(setup);
-  assert.equal(await runCheck({ cwd: setup.repo, words, options: { ...options, '--files': true } }, preview), 0, preview.stderr.text);
-  assert.deepEqual(tarEntries(posted.tar).map(([path]) => path), CLOSURE);
-  assert.deepEqual(listedEntries(preview), tarEntries(posted.tar), 'same paths and byte sizes');
-  const total = tarEntries(posted.tar).reduce((sum, [, size]) => sum + size, 0);
-  assert.match(preview.stdout.text, new RegExp(`^${tarEntries(posted.tar).length} files, .*\\(${total} bytes\\)`, 'm'));
+  const code = await runTry({ cwd: setup.repo, words, options: { ...options, '--no-open': true, '--no-wait': true } }, ports);
+  return { code, stderr: ports.stderr.text, posted: fake.posts.find(post => post.command === 'try') ?? null };
+}
+async function listing(setup, words, options) {
+  const ports = offline(setup), code = await runCheck({ cwd: setup.repo, words, options: { ...options, '--files': true } }, ports);
+  return { code, stderr: ports.stderr.text, stdout: ports.stdout.text, entries: listedEntries(ports) };
+}
+async function sameAsTry(t, setup, words, closure) {
+  const options = { '--app-map': ORDERS_MAP }, real = await realTry(t, setup, words, options), preview = await listing(setup, words, options);
+  assert.equal(real.code, 0, real.stderr);
+  assert.ok(real.posted, 'the Try was posted');
+  assert.equal(preview.code, 0, preview.stderr);
+  const sent = tarEntries(real.posted.tar);
+  assert.deepEqual(sent.map(([path]) => path), closure);
+  assert.deepEqual(preview.entries, sent, 'same paths and byte sizes');
+  const total = sent.reduce((sum, [, size]) => sum + size, 0);
+  assert.match(preview.stdout, new RegExp(`^${sent.length} files, .*\\(${total} bytes\\)`, 'm'));
+}
+
+test('CTRY2: the --files listing of an area Try is exactly what the real Try path posts for the same arguments', async t => {
+  await sameAsTry(t, twoAreas(t), ['place-order'], CLOSURE);
 });
 
 test('CTRY3: a Try listing needs exactly one Story, because a Try has one seed; it never lists an upload that no command sends', async t => {
@@ -121,4 +134,28 @@ for (const missing of ['prompt', 'stylesheet']) test(`CTRY4: a missing declared 
   assert.equal(await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--files': true, '--app-map': ORDERS_MAP } }, preview), 4, preview.stderr.text);
   assert.match(preview.stderr.text, new RegExp(path.replace(/\./g, '\\.')));
   assert.deepEqual(listed(preview), []);
+});
+
+test('CTRY5: a Story with two test files is refused by name, and each test path given directly lists exactly what its Try posts', async t => {
+  const setup = twoAreas(t, { twin: true });
+  const named = await listing(setup, ['place-order'], { '--app-map': ORDERS_MAP });
+  assert.equal(named.code, 2, named.stderr);
+  for (const path of [SEED, TWIN]) assert.match(named.stderr, new RegExp(path.replace(/[./]/g, '\\$&')), 'both test files are listed to choose from');
+  assert.deepEqual(named.entries, []);
+  await sameAsTry(t, setup, [SEED], CLOSURE);
+  await sameAsTry(t, setup, [TWIN], [ORDERS_MAP, 'app/styles/orders.css', PLACE, TWIN, STORY].sort());
+});
+
+test('CTRY6: the listing refuses in the same order and with the same choices as the Try', async t => {
+  const broken = twoAreas(t);
+  writeFileSync(join(broken.repo, ORDERS_MAP), 'not json');
+  for (const words of [[], ['place-order']]) {
+    const real = await realTry(t, broken, words, { '--app-map': ORDERS_MAP }), preview = await listing(broken, words, { '--app-map': ORDERS_MAP });
+    assert.equal(real.posted, null);
+    assert.deepEqual([preview.code, preview.stderr], [real.code, real.stderr], `${JSON.stringify(words)}: a bad map is reported first by both`);
+  }
+  const setup = twoAreas(t);
+  const real = await realTry(t, setup, [], { '--app-map': ORDERS_MAP }), preview = await listing(setup, [], { '--app-map': ORDERS_MAP });
+  assert.equal(real.posted, null);
+  assert.deepEqual([preview.code, preview.stderr.split('\n').slice(1)], [real.code, real.stderr.split('\n').slice(1)], 'the same Stories to choose from');
 });
