@@ -33,7 +33,8 @@ async function lostLint(t, { interactive, confirmed = null, timeout } = {}) {
     gets.push({ id, elapsed });
     if (!confirmed || elapsed < 240000) return Response.json({}, { status: 404 });
     if (elapsed < 420000) return Response.json(job(id, 'lint', confirmed));
-    return Response.json(job(id, 'lint', 'passed', { report: { program: {
+    return Response.json(job(id, 'lint', 'passed', { exitCode: 0, refusals: [], report: {
+      verdict: 'passed', lint: { complete: true, tests: [{ path: 'tests/place-order.json', verdict: 'passed' }] }, program: {
       prompts: [{ path: PLACE, admission_state: 'draft', interface: { calls: [] } }], refused_prompts: []
     } } }));
   };

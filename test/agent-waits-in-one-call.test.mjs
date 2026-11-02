@@ -30,7 +30,10 @@ function fixture(t, { multiple = false, failed = false, completeAt = 150000 } = 
       const request = JSON.parse(await init.body.get('request').text()), command = path.split('/').at(-1);
       posts.push({ command, request });
       if (command === 'lint') return Response.json(job(request.requestId, command, 'passed', {
-        report: { program: { prompts: [{ path: PLACE, admission_state: 'draft', interface: { calls: [] } }], refused_prompts: [] } }
+        exitCode: 0, refusals: [], report: { verdict: 'passed',
+          lint: { complete: true, tests: ['tests/place-order.json', ...(multiple ? ['tests/second-order.json'] : [])]
+            .map(path => ({ path, verdict: 'passed' })) },
+          program: { prompts: [{ path: PLACE, admission_state: 'draft', interface: { calls: [] } }], refused_prompts: [] } }
       }));
       const recovery = /pdd test --read (\S+)/.exec(current.ports.stderr.text);
       assert.ok(recovery, 'recovery command is visible before first check POST');

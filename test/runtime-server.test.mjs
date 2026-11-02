@@ -34,7 +34,7 @@ test('RUNTIME-SERVER1: one lint, then every check is sent before the first answe
   assert.deepEqual(fake.posts.map(post => post.command), ['lint', 'check', 'check']);
   assert.equal(held, 2);
   const [lint, ...checks] = fake.posts;
-  assert.deepEqual(Object.keys(lint.request).sort(), ['requestId', 'source_sha256']);
+  assert.deepEqual(Object.keys(lint.request).sort(), ['complete', 'requestId', 'source_sha256']);
   assert.deepEqual(checks.map(post => post.request.scenario).sort(), ['tests/place-order.json', 'tests/unknown-item.json']);
   for (const post of fake.posts) { assert.equal(post.request.source_sha256, sha(post.tar)); assert.ok(post.tar.equals(lint.tar)); }
   assert.deepEqual(checks.map(post => post.request.max_calls), [18, 18]);
@@ -1237,7 +1237,7 @@ test('RUNTIME-LINT5: passing selected lint JSON preserves unrelated refusal diag
 });
 
 
-test('T3-5: explicit lint requests complete diagnostics while preliminary check lint stays unchanged', async t => {
+test('T3-5: explicit and preliminary lint request complete selected-test evidence', async t => {
   const setup = harbor(t);
   const faults = [{ code:'invalid-schema',path:PLACE,section:'Runtime interface.entries[0].input_schema.properties.argv.items.type',message:'Use one schema type.' },
     { code:'invalid-schema',path:PLACE,section:'Runtime interface.resources[0].result_schema.properties.value.items',message:'Array items are required.' }];
@@ -1252,7 +1252,7 @@ test('T3-5: explicit lint requests complete diagnostics while preliminary check 
   assert.equal(fake.posts[0].request.complete,true);
   const ordinary=await fakeRuntime(t,(entry,f)=>f.normal(entry));
   assert.equal((await check(setup,ordinary,['place-order'])).code,0);
-  assert.equal(Object.hasOwn(ordinary.posts[0].request,'complete'),false);
+  assert.equal(Object.hasOwn(ordinary.posts[0].request,'complete'),true);
 });
 
 

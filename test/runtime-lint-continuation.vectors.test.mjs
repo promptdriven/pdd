@@ -40,7 +40,7 @@ async function setup(t, { mode = 'check', interactive = false, timeout, multiple
     if (state.lint === 'missing') return { status: 404, json: {} };
     if (state.lint === 'reached') return { status: 200, json: f.lint(id, [{ path: PLACE, admission_state: 'missing' }]) };
     if (state.lint === 'global') {
-      const answer = f.lint(id); answer.result.refusals = [{ code: 'global-refusal', message: 'Global refusal' }];
+      const answer = f.lint(id); answer.result.report.lint.tests = []; answer.result.refusals = [{ code: 'global-refusal', message: 'Global refusal' }];
       return { status: 200, json: answer };
     }
     return { status: 200, json: state.lint === 'passed' ? f.lint(id) : f.job(id, 'lint', state.lint) };

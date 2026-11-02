@@ -28,7 +28,7 @@ for(const mode of ['check','lint','try']) test(`LINT-RETRY: ${mode} retries a co
   const lints=r.fake.posts.filter(p=>p.command==='lint');assert.equal(lints.length,2);
   assert.notEqual(lints[0].request.requestId,lints[1].request.requestId);assert.ok(lints[0].tar.equals(lints[1].tar));
   assert.deepEqual(lints[1].request,{...lints[0].request,requestId:lints[1].request.requestId},'retry keeps every original lint option');
-  if(mode!=='lint') for(const p of lints) assert.equal(Object.hasOwn(p.request,'complete'),false);
+  if(mode!=='lint') for(const p of lints) assert.equal(Object.hasOwn(p.request,'complete'),true);
   assert.match(r.ports.stderr.text,/The server is busy\. Waiting for a lint slot/);
   assert.doesNotMatch(r.ports.stderr.text+r.ports.stdout.text,/lint result is unknown/);
   const saved=r.setup.state;

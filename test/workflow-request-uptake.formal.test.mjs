@@ -105,6 +105,8 @@ test('2722 formal: acknowledged/open snapshots preserve journal and protected ow
   f.save([f.entry('acknowledged'), f.entry('still-open'), protectedRequest]);
   f.ports.now = () => 0;
   assert.equal(await f.ack('acknowledged', 'Recorded actual change'), 0);
+  // The first status records the started chat's positive observation (starting -> running) once; later snapshots are pure.
+  assert.equal((await runner.runStatus({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
   const sends = () => f.herdr.calls.filter(args => args[0] === 'agent' && args[1] === 'prompt').length;
   const before = f.bytes(), progress = f.record(), sent = sends();
   let claims = 0;
