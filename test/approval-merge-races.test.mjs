@@ -27,6 +27,7 @@ test('2755 MERGE-RACE finishPr: a concurrent area advance that clears the gate d
   assert.ok(injected,'the concurrent writer ran');
   assert.equal(out.exitCode,0,out.message);
   assert.equal(f.record().gate,null,'the newer record keeps its cleared gate');
+  assert.ok(f.record().pr?.length,'PR 1 was saved before the guarded read');
 });
 
 test('2755 MERGE-RACE showGate: a concurrent writer that clears the open gate does not fail the repeated done', async t => {
@@ -39,7 +40,7 @@ test('2755 MERGE-RACE showGate: a concurrent writer that clears the open gate do
   const ports={...f.ports,now:()=>{if(!injected){injected=true;const newer=f.record();newer.gate=null;newer.state='running';writeRun(newer,f.ports);}return 5000;}};
   const out=await stepDone({step:'finish',summary:'second',cwd:run.root},ports);
   assert.ok(injected,'the concurrent writer ran');
-  assert.doesNotMatch(out.message,/Cannot convert undefined or null/);
+  assert.doesNotMatch(out.message,/Cannot show selected prompts|Could not save/);
   assert.equal(out.exitCode,0,out.message);
   assert.equal(f.record().gate,null,'no snapshot is written into a cleared gate');
 });

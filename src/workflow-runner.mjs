@@ -1266,7 +1266,7 @@ async function approveGatePrompts(run, p) {
 }
 async function saveGateApproval(run, area, record, edits, p) {
   // An id-less legacy gate gets a current identity only; timestamps never authorize reuse.
-  if (run.gate && !run.gate.id) { const id=p.randomUUID(); commitRun(run,p,latest=>{latest.gate.id??=id;}); }
+  if (run.gate && !run.gate.id) { const id=p.randomUUID(); commitRun(run,p,latest=>{if(latest.gate)latest.gate.id??=id;}); }
   const gateId = run.gate?.id ?? p.randomUUID(), gateAt = run.gate?.at;
   const existing = run.decisions.find(decision => decision.gateId === gateId && decision.evidence);
   if (existing && !edits.length) { run.approvalRecord = { ...(run.approvalRecord?.gateId === gateId ? run.approvalRecord : {}), gateId, kind: existing.via, area: area.name, at: existing.at, evidence: existing.evidence }; return existing; }
