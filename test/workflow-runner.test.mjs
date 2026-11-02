@@ -19,7 +19,7 @@ async function lastSteps(f, run, out) {
   return out;
 }
 
-import { fakeHerdr } from './helpers/workflow-delivery-fixture.mjs';
+import {fakeHerdr} from './helpers/fake-herdr.mjs';
 
 
 function assertSafeApprovalAdvice(text) {
