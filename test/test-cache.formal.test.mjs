@@ -152,7 +152,7 @@ for (const damage of ['malformed', 'symlink']) for (const clear of [false, true]
     if (damage === 'malformed') assert.equal((await ctx.invoke()).sent, 0, 'regular cache heals');
   });
 }
-for (const selected of ['place-order.json', 'place-order-extra.json']) {
+for (const selected of ['place-order.json', 'place-order.extra.json']) {
   test(`bounded incomplete sibling=${selected}`, async t => {
     const ctx = await fixture(t);
     writeFileSync(join(ctx.repo, 'tests/place-order.extra.json'), readFileSync(join(ctx.repo, 'tests/place-order.json')));
