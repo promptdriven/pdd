@@ -121,9 +121,9 @@ test('BUSY immediate, batch read and bare request read agree without new POSTs o
   assert.equal(row.reason.code, 'login-queue-timeout');
   const saved = JSON.parse(readFileSync(join(h.state, 'batches', batch, `${row.request_id}.json`), 'utf8'));
   assert.deepEqual(saved, receipt);
-  const read = await command(h, f, { '--read': batch }, []);
+  const read = await command(h, f, { '--read': true }, [batch]);
   assert.deepEqual(busyLines(read.out), [`${timed('10 minutes')}: pdd test place-order`]);
-  const bare = await command(h, f, { '--read': row.request_id }, []);
+  const bare = await command(h, f, { '--read': true }, [row.request_id]);
   assert.deepEqual(busyLines(bare.out), [`${timed('10 minutes')}.`]);
   assert.equal(read.code, 5); assert.equal(bare.code, 5);
   assert.equal(f.posts.filter(post => post.command === 'check').length, 1);

@@ -32,7 +32,7 @@ test('CAPACITY1: confirmed zero-execution capacity is retried until the wait end
   assert.equal(result.json.rows[0].busy, true); assert.equal(result.json.rows[0].can_retry, true);
   assert.equal(result.json.rows[0].calls, 0); assert.equal(result.json.rows[0].checks, null);
   assert.match(result.json.summary_line, /: busy/); assert.doesNotMatch(result.out + result.err, /Fix what|fix the test|✗/);
-  assert.match(result.err, /Server busy/); assert.match(result.err, /pdd test --retry/);
+  assert.ok(result.err.split('\n').includes('PDD is busy right now. 1 checks are waiting locally.')); assert.match(result.err, /pdd test --retry/);
   assert.equal(saved(setup, result.json.batch).rows[0].request_ids.length, checkPosts(fake).length);
   const before = fake.posts.length;
   const read = await run(setup, fake, [result.json.batch], { '--read': true, '--json': true });
