@@ -12,7 +12,7 @@
     },
     {
       "id": "AC3",
-      "text": "Without current machine evidence, a PR does not present \"Full npm test: 665/665 passed\" typed in a verification note or summary as checked evidence; ordinary proof prose and not-checked warnings remain visible."
+      "text": "Agent prose, including \"Full npm test: 665/665 passed\", ordinary proof, warnings and failures, stays under \"Agent note — not checked by pdd\"; only structured current-head CI or the old-code proof run supplies checked native-suite counts, otherwise they are unknown."
     },
     {
       "id": "AC4",
@@ -20,11 +20,11 @@
     },
     {
       "id": "AC5",
-      "text": "When \"the release prints only the release version\" has only an exit-code assertion, pdd warns that the output is unchecked and still accepts the test."
+      "text": "A criterion with one or more checks all checking exit code says \"checked by exit code only\", regardless of its wording, result or checks in other steps."
     },
     {
       "id": "AC6",
-      "text": "Adding an output assertion for that criterion removes the exit-only warning; a criterion promising only a successful exit needs no output warning."
+      "text": "A criterion with mixed checks or zero checks has no exit-code-only annotation; unavailable authored checks remain unknown. No new warning, refusal or verdict change is added."
     }
   ],
   "initial_world": {
@@ -169,45 +169,7 @@
           "error": "unreadable"
         }
       }
-    ],
-    "files": {
-      "user_stories/exit-only-output.md": {
-        "content": "# Release\n\n## Acceptance criteria\n\n1. The release prints only the release version.\n",
-        "is_symlink": false
-      },
-      "prompts/exit-only-output.prompt.md": {
-        "content": "# Release version\n\nmain returns stdout \"0.1.12\\n\", stderr \"\", exit_code 0.\n\n<details>\n<summary>Runtime interface</summary>\n\n```json\n{\"status\":\"draft\",\"prose_sha256\":\"9ab2983405ab4e9d7acd08dbf930a31299ca78cfe1e901e47c9d6d4c4960dff9\",\"entries\":[{\"operation\":\"main\",\"input_schema\":{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false},\"result_schema\":{\"type\":\"object\",\"properties\":{\"stdout\":{\"type\":\"string\"},\"stderr\":{\"type\":\"string\"},\"exit_code\":{\"type\":\"integer\"}},\"required\":[\"stdout\",\"stderr\",\"exit_code\"],\"additionalProperties\":false},\"errors\":[]}],\"calls\":[],\"resources\":[],\"limits\":{\"max_steps\":1,\"max_model_calls\":1},\"conventions\":[]}\n```\n</details>\n",
-        "is_symlink": false
-      },
-      "test/runtime/exit-only-output.json": {
-        "content": "{\"schema_version\":\"prompt-runtime.program-scenario.v1\",\"story_path\":\"user_stories/exit-only-output.md\",\"criteria\":[{\"id\":\"AC1\",\"text\":\"The release prints only the release version.\"}],\"initial_world\":{},\"simulation\":{},\"context\":[],\"steps\":[{\"step_id\":\"version\",\"entry_path\":\"prompts/exit-only-output.prompt.md\",\"operation\":\"main\",\"input\":{},\"checks\":[{\"criterion_id\":\"AC1\",\"target\":\"result\",\"path\":\"/exit_code\",\"op\":\"equals\",\"value\":0}]}]}",
-        "is_symlink": false
-      },
-      "user_stories/with-output.md": {
-        "content": "# Release\n\n## Acceptance criteria\n\n1. The release prints only the release version.\n",
-        "is_symlink": false
-      },
-      "prompts/with-output.prompt.md": {
-        "content": "# Release version\n\nmain returns stdout \"0.1.12\\n\", stderr \"\", exit_code 0.\n\n<details>\n<summary>Runtime interface</summary>\n\n```json\n{\"status\":\"draft\",\"prose_sha256\":\"9ab2983405ab4e9d7acd08dbf930a31299ca78cfe1e901e47c9d6d4c4960dff9\",\"entries\":[{\"operation\":\"main\",\"input_schema\":{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false},\"result_schema\":{\"type\":\"object\",\"properties\":{\"stdout\":{\"type\":\"string\"},\"stderr\":{\"type\":\"string\"},\"exit_code\":{\"type\":\"integer\"}},\"required\":[\"stdout\",\"stderr\",\"exit_code\"],\"additionalProperties\":false},\"errors\":[]}],\"calls\":[],\"resources\":[],\"limits\":{\"max_steps\":1,\"max_model_calls\":1},\"conventions\":[]}\n```\n</details>\n",
-        "is_symlink": false
-      },
-      "test/runtime/with-output.json": {
-        "content": "{\"schema_version\":\"prompt-runtime.program-scenario.v1\",\"story_path\":\"user_stories/with-output.md\",\"criteria\":[{\"id\":\"AC1\",\"text\":\"The release prints only the release version.\"}],\"initial_world\":{},\"simulation\":{},\"context\":[],\"steps\":[{\"step_id\":\"version\",\"entry_path\":\"prompts/with-output.prompt.md\",\"operation\":\"main\",\"input\":{},\"checks\":[{\"criterion_id\":\"AC1\",\"target\":\"result\",\"path\":\"/exit_code\",\"op\":\"equals\",\"value\":0},{\"criterion_id\":\"AC1\",\"target\":\"result\",\"path\":\"/stdout\",\"op\":\"equals\",\"value\":\"0.1.12\\n\"}]}]}",
-        "is_symlink": false
-      },
-      "user_stories/exit-only-process.md": {
-        "content": "# Release\n\n## Acceptance criteria\n\n1. The release exits successfully.\n",
-        "is_symlink": false
-      },
-      "prompts/exit-only-process.prompt.md": {
-        "content": "# Release version\n\nmain returns stdout \"0.1.12\\n\", stderr \"\", exit_code 0.\n\n<details>\n<summary>Runtime interface</summary>\n\n```json\n{\"status\":\"draft\",\"prose_sha256\":\"9ab2983405ab4e9d7acd08dbf930a31299ca78cfe1e901e47c9d6d4c4960dff9\",\"entries\":[{\"operation\":\"main\",\"input_schema\":{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false},\"result_schema\":{\"type\":\"object\",\"properties\":{\"stdout\":{\"type\":\"string\"},\"stderr\":{\"type\":\"string\"},\"exit_code\":{\"type\":\"integer\"}},\"required\":[\"stdout\",\"stderr\",\"exit_code\"],\"additionalProperties\":false},\"errors\":[]}],\"calls\":[],\"resources\":[],\"limits\":{\"max_steps\":1,\"max_model_calls\":1},\"conventions\":[]}\n```\n</details>\n",
-        "is_symlink": false
-      },
-      "test/runtime/exit-only-process.json": {
-        "content": "{\"schema_version\":\"prompt-runtime.program-scenario.v1\",\"story_path\":\"user_stories/exit-only-process.md\",\"criteria\":[{\"id\":\"AC1\",\"text\":\"The release exits successfully.\"}],\"initial_world\":{},\"simulation\":{},\"context\":[],\"steps\":[{\"step_id\":\"version\",\"entry_path\":\"prompts/exit-only-process.prompt.md\",\"operation\":\"main\",\"input\":{},\"checks\":[{\"criterion_id\":\"AC1\",\"target\":\"result\",\"path\":\"/exit_code\",\"op\":\"equals\",\"value\":0}]}]}",
-        "is_symlink": false
-      }
-    }
+    ]
   },
   "simulation": {
     "source.fingerprint": {
@@ -259,35 +221,6 @@
       "item_value_pointer": "/reply",
       "result_template": {},
       "result_value_pointer": ""
-    },
-    "files.read": {
-      "action": "blob.read",
-      "world_pointer": "/files",
-      "path_argument_pointer": "/path",
-      "content_argument_pointer": null,
-      "result_template": {
-        "content": ""
-      },
-      "result_value_pointer": "/content"
-    },
-    "files.stat": {
-      "action": "blob.stat",
-      "world_pointer": "/files",
-      "path_argument_pointer": "/path",
-      "content_argument_pointer": null,
-      "result_template": {
-        "exists": false,
-        "is_symlink": false,
-        "size": 0
-      },
-      "result_value_pointer": ""
-    },
-    "compute.hash_utf8": {
-      "action": "compute",
-      "result_template": {
-        "value": null
-      },
-      "result_value_pointer": "/value"
     }
   },
   "context": [],
@@ -485,7 +418,7 @@
       "model": "gpt-6.1-sol"
     },
     {
-      "step_id": "typed-count-missing",
+      "step_id": "agent-notes-missing",
       "entry_path": "prompts/cli/workflow-pr-evidence.prompt.md",
       "operation": "preparePrEvidence",
       "input": {
@@ -500,7 +433,7 @@
           "steps": [
             {
               "step": "verify",
-              "summary": "Proof (defect fixed): Full npm test: 665/665 passed\nProof (gap closed): regression assertion added"
+              "summary": "Proof (defect fixed): Full npm test: 665/665 passed\nProof (gap closed): regression assertion added\nNot checked: 0 passed, 665 failed; failure needs investigation"
             }
           ]
         },
@@ -513,9 +446,12 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Not checked: `live CI`",
-            "Proof (gap closed): `regression assertion added`",
-            "Old-code proof: not run."
+            "Old-code proof: not run.",
+            "Agent note — not checked by pdd: Not checked: `0 passed, 665 failed; failure needs investigation`",
+            "Agent note — not checked by pdd: Not checked: `live CI`",
+            "Agent note — not checked by pdd: Proof (defect fixed): `Full npm test: 665/665 passed`",
+            "Agent note — not checked by pdd: Proof (gap closed): `regression assertion added`",
+            "Agent note — not checked by pdd: Proof (gap closed): `Full npm test: 665/665 passed`"
           ]
         },
         {
@@ -536,7 +472,7 @@
       "model": "gpt-6.1-sol"
     },
     {
-      "step_id": "typed-count-unreadable",
+      "step_id": "agent-notes-unreadable",
       "entry_path": "prompts/cli/workflow-pr-evidence.prompt.md",
       "operation": "preparePrEvidence",
       "input": {
@@ -551,7 +487,7 @@
           "steps": [
             {
               "step": "verify",
-              "summary": "Proof (defect fixed): Full npm test: 665/665 passed\nProof (gap closed): regression assertion added"
+              "summary": "Proof (defect fixed): Full npm test: 665/665 passed\nProof (gap closed): regression assertion added\nNot checked: 0 passed, 665 failed; failure needs investigation\nNot fixed yet: this helps find the cause"
             }
           ]
         },
@@ -564,9 +500,13 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Not checked: `live CI`",
-            "Proof (gap closed): `regression assertion added`",
-            "Old-code proof: unavailable."
+            "Old-code proof: unavailable.",
+            "Agent note — not checked by pdd: Not fixed yet: `this helps find the cause`",
+            "Agent note — not checked by pdd: Not checked: `0 passed, 665 failed; failure needs investigation`",
+            "Agent note — not checked by pdd: Not checked: `live CI`",
+            "Agent note — not checked by pdd: Proof (defect fixed): `Full npm test: 665/665 passed`",
+            "Agent note — not checked by pdd: Proof (gap closed): `regression assertion added`",
+            "Agent note — not checked by pdd: Proof (gap closed): `Full npm test: 665/665 passed`"
           ]
         },
         {
@@ -581,242 +521,334 @@
           "target": "result",
           "path": "/issueReference",
           "op": "equals",
-          "value": "Closes #2596"
+          "value": "Refs #2596"
         }
       ],
       "model": "gpt-6.1-sol"
     },
     {
-      "step_id": "exit-only-output",
-      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
-      "operation": "preflight",
+      "step_id": "criterion-coverage-passed",
+      "entry_path": "prompts/cli/runtime-output.prompt.md",
+      "operation": "renderJson",
       "input": {
-        "root": "/synthetic/preflight",
-        "found": {
-          "visible": [
-            "user_stories/exit-only-output.md",
-            "prompts/exit-only-output.prompt.md",
-            "test/runtime/exit-only-output.json"
-          ]
-        },
-        "selected": [
+        "repo": "/synthetic/repo",
+        "rows": [
           {
-            "path": "test/runtime/exit-only-output.json",
-            "doc": {
-              "schema_version": "prompt-runtime.program-scenario.v1",
-              "story_path": "user_stories/exit-only-output.md",
-              "criteria": [
-                {
-                  "id": "AC1",
-                  "text": "The release prints only the release version."
-                }
-              ],
-              "initial_world": {},
-              "simulation": {},
-              "context": [],
-              "steps": [
-                {
-                  "step_id": "version",
-                  "entry_path": "prompts/exit-only-output.prompt.md",
-                  "operation": "main",
-                  "input": {},
-                  "checks": [
-                    {
-                      "criterion_id": "AC1",
-                      "target": "result",
-                      "path": "/exit_code",
-                      "op": "equals",
-                      "value": 0
-                    }
-                  ]
-                }
-              ]
-            },
-            "story": "exit-only-output",
-            "title": "Release"
+            "story": "release",
+            "title": "Synthetic release",
+            "test": "test/runtime/release.json",
+            "state": "passed",
+            "steps": [
+              {
+                "step_id": "first",
+                "checks": [
+                  {
+                    "criterion_id": "AC1",
+                    "target": "result",
+                    "path": "/exit_code",
+                    "op": "equals",
+                    "value": 0
+                  },
+                  {
+                    "criterion_id": "AC2",
+                    "target": "result",
+                    "path": "/exitCode",
+                    "op": "equals",
+                    "value": 0
+                  },
+                  {
+                    "criterion_id": "AC3",
+                    "target": "result",
+                    "path": "/exit_code",
+                    "op": "equals",
+                    "value": 0
+                  }
+                ]
+              },
+              {
+                "step_id": "second",
+                "checks": [
+                  {
+                    "criterion_id": "AC1",
+                    "target": "result",
+                    "path": "/exitCode",
+                    "op": "equals",
+                    "value": 0
+                  },
+                  {
+                    "criterion_id": "AC2",
+                    "target": "result",
+                    "path": "/exit_code",
+                    "op": "equals",
+                    "value": 0
+                  },
+                  {
+                    "criterion_id": "AC3",
+                    "target": "result",
+                    "path": "/stdout",
+                    "op": "equals",
+                    "value": "release\n"
+                  }
+                ]
+              }
+            ],
+            "criterion_texts": {
+              "AC1": "The release prints only the release version.",
+              "AC2": "The command exits successfully.",
+              "AC3": "The release prints a version.",
+              "AC4": "No checks are assigned."
+            }
           }
-        ]
+        ],
+        "exitCode": 0
       },
       "checks": [
         {
           "criterion_id": "AC5",
           "target": "result",
-          "path": "/rows/0/refusals",
+          "path": "/rows/0/criterion_coverage",
+          "op": "equals",
+          "value": [
+            {
+              "criterion_id": "AC1",
+              "check_count": 2,
+              "exit_code_only": true
+            },
+            {
+              "criterion_id": "AC2",
+              "check_count": 2,
+              "exit_code_only": true
+            },
+            {
+              "criterion_id": "AC3",
+              "check_count": 2,
+              "exit_code_only": false
+            },
+            {
+              "criterion_id": "AC4",
+              "check_count": 0,
+              "exit_code_only": false
+            }
+          ]
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/warnings",
           "op": "equals",
           "value": []
         },
         {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/exit_code",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/rows/0/criterion_coverage/2/exit_code_only",
+          "op": "equals",
+          "value": false
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/rows/0/criterion_coverage/3/check_count",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/rows/0/criterion_coverage/3/exit_code_only",
+          "op": "equals",
+          "value": false
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "criterion-coverage-failed",
+      "entry_path": "prompts/cli/runtime-output.prompt.md",
+      "operation": "renderJson",
+      "input": {
+        "repo": "/synthetic/repo",
+        "rows": [
+          {
+            "story": "release",
+            "title": "Synthetic release",
+            "test": "test/runtime/release.json",
+            "state": "failed",
+            "steps": [
+              {
+                "step_id": "first",
+                "checks": [
+                  {
+                    "criterion_id": "AC1",
+                    "target": "result",
+                    "path": "/exit_code",
+                    "op": "equals",
+                    "value": 0
+                  },
+                  {
+                    "criterion_id": "AC2",
+                    "target": "result",
+                    "path": "/exitCode",
+                    "op": "equals",
+                    "value": 0
+                  },
+                  {
+                    "criterion_id": "AC3",
+                    "target": "result",
+                    "path": "/exit_code",
+                    "op": "equals",
+                    "value": 0
+                  }
+                ]
+              },
+              {
+                "step_id": "second",
+                "checks": [
+                  {
+                    "criterion_id": "AC1",
+                    "target": "result",
+                    "path": "/exitCode",
+                    "op": "equals",
+                    "value": 0
+                  },
+                  {
+                    "criterion_id": "AC2",
+                    "target": "result",
+                    "path": "/exit_code",
+                    "op": "equals",
+                    "value": 0
+                  },
+                  {
+                    "criterion_id": "AC3",
+                    "target": "result",
+                    "path": "/stdout",
+                    "op": "equals",
+                    "value": "release\n"
+                  }
+                ]
+              }
+            ],
+            "criterion_texts": {
+              "AC1": "The release prints only the release version.",
+              "AC2": "The command exits successfully.",
+              "AC3": "The release prints a version.",
+              "AC4": "No checks are assigned."
+            }
+          }
+        ],
+        "exitCode": 1
+      },
+      "checks": [
+        {
           "criterion_id": "AC5",
           "target": "result",
-          "path": "/rows/0/warnings",
-          "op": "count",
+          "path": "/rows/0/criterion_coverage",
+          "op": "equals",
+          "value": [
+            {
+              "criterion_id": "AC1",
+              "check_count": 2,
+              "exit_code_only": true
+            },
+            {
+              "criterion_id": "AC2",
+              "check_count": 2,
+              "exit_code_only": true
+            },
+            {
+              "criterion_id": "AC3",
+              "check_count": 2,
+              "exit_code_only": false
+            },
+            {
+              "criterion_id": "AC4",
+              "check_count": 0,
+              "exit_code_only": false
+            }
+          ]
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/warnings",
+          "op": "equals",
+          "value": []
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/exit_code",
+          "op": "equals",
           "value": 1
         },
         {
-          "criterion_id": "AC5",
+          "criterion_id": "AC6",
           "target": "result",
-          "path": "/rows/0/warnings/0",
-          "op": "contains",
-          "value": "AC1"
+          "path": "/rows/0/criterion_coverage/2/exit_code_only",
+          "op": "equals",
+          "value": false
         },
         {
-          "criterion_id": "AC5",
+          "criterion_id": "AC6",
           "target": "result",
-          "path": "/rows/0/warnings/0",
-          "op": "contains",
-          "value": "test/runtime/exit-only-output.json"
+          "path": "/rows/0/criterion_coverage/3/check_count",
+          "op": "equals",
+          "value": 0
         },
         {
-          "criterion_id": "AC5",
+          "criterion_id": "AC6",
           "target": "result",
-          "path": "/rows/0/warnings/0",
-          "op": "contains",
-          "value": "output"
+          "path": "/rows/0/criterion_coverage/3/exit_code_only",
+          "op": "equals",
+          "value": false
         }
       ],
       "model": "gpt-6.1-sol"
     },
     {
-      "step_id": "with-output",
-      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
-      "operation": "preflight",
+      "step_id": "criterion-coverage-unknown",
+      "entry_path": "prompts/cli/runtime-output.prompt.md",
+      "operation": "renderJson",
       "input": {
-        "root": "/synthetic/preflight",
-        "found": {
-          "visible": [
-            "user_stories/with-output.md",
-            "prompts/with-output.prompt.md",
-            "test/runtime/with-output.json"
-          ]
-        },
-        "selected": [
+        "repo": "/synthetic/repo",
+        "rows": [
           {
-            "path": "test/runtime/with-output.json",
-            "doc": {
-              "schema_version": "prompt-runtime.program-scenario.v1",
-              "story_path": "user_stories/with-output.md",
-              "criteria": [
-                {
-                  "id": "AC1",
-                  "text": "The release prints only the release version."
-                }
-              ],
-              "initial_world": {},
-              "simulation": {},
-              "context": [],
-              "steps": [
-                {
-                  "step_id": "version",
-                  "entry_path": "prompts/with-output.prompt.md",
-                  "operation": "main",
-                  "input": {},
-                  "checks": [
-                    {
-                      "criterion_id": "AC1",
-                      "target": "result",
-                      "path": "/exit_code",
-                      "op": "equals",
-                      "value": 0
-                    },
-                    {
-                      "criterion_id": "AC1",
-                      "target": "result",
-                      "path": "/stdout",
-                      "op": "equals",
-                      "value": "0.1.12\n"
-                    }
-                  ]
-                }
-              ]
-            },
-            "story": "with-output",
-            "title": "Release"
+            "story": "release",
+            "title": "Synthetic release",
+            "test": "test/runtime/release.json",
+            "state": "unknown"
           }
-        ]
+        ],
+        "exitCode": 3
       },
       "checks": [
         {
           "criterion_id": "AC6",
           "target": "result",
-          "path": "/rows/0/refusals",
+          "path": "/rows/0/criterion_coverage",
+          "op": "equals",
+          "value": null
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/warnings",
           "op": "equals",
           "value": []
         },
         {
           "criterion_id": "AC6",
           "target": "result",
-          "path": "/rows/0/warnings",
-          "op": "count",
-          "value": 0
-        }
-      ],
-      "model": "gpt-6.1-sol"
-    },
-    {
-      "step_id": "exit-only-process",
-      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
-      "operation": "preflight",
-      "input": {
-        "root": "/synthetic/preflight",
-        "found": {
-          "visible": [
-            "user_stories/exit-only-process.md",
-            "prompts/exit-only-process.prompt.md",
-            "test/runtime/exit-only-process.json"
-          ]
-        },
-        "selected": [
-          {
-            "path": "test/runtime/exit-only-process.json",
-            "doc": {
-              "schema_version": "prompt-runtime.program-scenario.v1",
-              "story_path": "user_stories/exit-only-process.md",
-              "criteria": [
-                {
-                  "id": "AC1",
-                  "text": "The release exits successfully."
-                }
-              ],
-              "initial_world": {},
-              "simulation": {},
-              "context": [],
-              "steps": [
-                {
-                  "step_id": "version",
-                  "entry_path": "prompts/exit-only-process.prompt.md",
-                  "operation": "main",
-                  "input": {},
-                  "checks": [
-                    {
-                      "criterion_id": "AC1",
-                      "target": "result",
-                      "path": "/exit_code",
-                      "op": "equals",
-                      "value": 0
-                    }
-                  ]
-                }
-              ]
-            },
-            "story": "exit-only-process",
-            "title": "Release"
-          }
-        ]
-      },
-      "checks": [
-        {
-          "criterion_id": "AC6",
-          "target": "result",
-          "path": "/rows/0/refusals",
+          "path": "/exit_code",
           "op": "equals",
-          "value": []
-        },
-        {
-          "criterion_id": "AC6",
-          "target": "result",
-          "path": "/rows/0/warnings",
-          "op": "count",
-          "value": 0
+          "value": 3
         }
       ],
       "model": "gpt-6.1-sol"
