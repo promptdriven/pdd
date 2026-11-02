@@ -31,6 +31,7 @@ async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
   writeFileSync(join(source, 'value.mjs'), 'export const value = 1;\n'); git(source, 'add', '.'); git(source, 'commit', '-qm', 'initial');
   git(source, 'update-ref', 'refs/remotes/origin/main', git(source, 'rev-parse', 'HEAD'));
   const f = { base, source, state, git, herdr: fakeHerdr(), prs: [], pushes: [], edits: [], fetches: 0, clock: Date.parse('2026-10-27T17:00:00Z'), ci: [], merged: false, mergedNumbers: [] };
+  f.herdr.now = () => f.clock;
   async function execFile(file, args, opts) {
     if (file === 'git' && args[0] === 'push') {
       f.pushes.push(args);
@@ -78,7 +79,7 @@ async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
     throw Error(`unexpected gh ${args.join(' ')}`);
   }
   f.prompts = [];
-  f.ports = { execFile, herdr: f.herdr.herdr, stateDir: state, layoutDirectory: join(state, 'herdr-layout'), now: () => f.clock, sleep: async ms => { f.clock += ms; },
+  f.ports = { execFile, herdr: f.herdr.herdr, stateDir: state, layoutDirectory: join(state, 'herdr-layout'), now: () => f.clock, sleep: async ms => { f.clock += ms; }, findNativeSessions: stage => f.herdr.findNativeSessions(stage),
     env: { HOME: home, CLAUDE_CONFIG_DIR: join(home, '.claude') }, isTTY: true, pdd: '/abs/node /abs/pdd.mjs',
     confirm: async question => { f.prompts.push(question); return f.answer ?? true; },
     attach: async () => 0, readApprovalEvidence: async () => assert.fail('A terminal person needs no chat evidence') };
