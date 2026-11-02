@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 530b4fd1a846336673189a3a285d45f4775fdb4b4f50fab302ce8f77955f8afd).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 89d68bdc935cfdee03123f9918d8664640458a25c35dd9b76eabb6a732818e33).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -1636,6 +1636,12 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
   const evidence = candidates.map(row => ({ row, hadCalls: Object.hasOwn(row, 'calls'), calls: row.calls }));
   for (const row of rows) adoptClaims(context, row);
   Object.assign(context, { rows, visible: findTests({ root }).visible, reading: true });
+  const cache = context.cacheEnabled ? await openTestCache(context, root, false) : null;
+  if (cache && !cache.disabled) {
+    cache.tokens = new Map(Array.isArray(saved.test_cache?.tokens) ? saved.test_cache.tokens : []);
+    // Reads may continue lint-held checks or resend restarted jobs below.
+    await cacheTransaction(cache, data => markTestAttempt(cache, data));
+  }
   // A pdd that was killed can leave rows that never got an answer: read them if they were posted.
   for (const row of rows) if (['ready', 'sending', 'waiting'].includes(row.state)) {
     if (row.request_ids.length) row.state = 'unknown';
@@ -1682,12 +1688,8 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
   const replacements = await recoverRestarts(context);
   if (replacements.length) await runScheduledChecks(context, rows, replacements);
   context.savedTestCache = saved.test_cache;
-  if (context.cacheEnabled && Array.isArray(saved.test_cache?.tokens)) {
-    const cache = await openTestCache(context, root, false);
-    cache.tokens = new Map(saved.test_cache.tokens);
-    // Tokens refer to the original captured footprint, and generations reject newer attempts.
-    await finishTestAttempts(cache, rows, context.capture);
-  }
+  // Tokens refer to the original captured footprint, and generations reject newer attempts.
+  if (cache) await finishTestAttempts(cache, rows, context.capture);
   saveBatch(context);
   return quiet ? rows : printResult(context, rows);
 }
@@ -2215,7 +2217,14 @@ async function openTestCache(context, root, clear, visible) {
       if (visible) for (const story of Object.keys(data.stories)) {
         if (!visible.has(story)) { delete data.stories[story]; delete cache.failed[story]; }
       }
-      if (clear) { const generation = data.generation + 1; delete data.latest_identity; Object.assign(data, freshTestCache(cache), { generation }); cache.history = false; }
+      if (clear) {
+        const generation = data.generation + 1, marks = data.latest_identity?.in_progress ?? [];
+        delete data.latest_identity;
+        Object.assign(data, freshTestCache(cache), { generation });
+        if (marks.length) data.latest_identity = { engine_sha: null, models: [], clean: false, conflict: true,
+          sampled_at: new Date(0).toISOString(), observed_at: new Date(cache.context.ports.now()).toISOString(), in_progress: marks };
+        cache.history = false;
+      }
     }, clear);
   } catch { cacheWarning(cache); }
   return cache;
@@ -2286,6 +2295,20 @@ function eligibleCachePass(pass, now) {
 function identityFingerprint(cache, fingerprint, identity) {
   return cache.context.ports.cacheHash(Buffer.from(JSON.stringify({ fingerprint, engine_sha: identity?.engine_sha ?? null, requested_model: identity?.requested_model ?? null })));
 }
+// Call only while holding the cache transaction; normal and saved-read sends
+// share ownership so another invocation cannot reuse evidence while either runs.
+function markTestAttempt(cache, data) {
+  if (cache.mark) return;
+  cache.mark = { token: cache.fs.nonce(), pid: cache.context.ports.pid ?? process.pid, started_at: cache.context.ports.now() };
+  const latest = data.latest_identity ?? { engine_sha: null, models: [], clean: false, conflict: true,
+    sampled_at: new Date(0).toISOString(), observed_at: new Date(cache.context.ports.now()).toISOString() };
+  const isAlive = cache.context.ports.isAlive ?? (pid => { try { process.kill(pid, 0); return true; } catch (error) { return error.code !== 'ESRCH'; } });
+  // Eligibility already saw every mark, including dead owners. Only now retire
+  // dead marks; live owners must survive another invocation's finish.
+  latest.in_progress = [...(latest.in_progress ?? []).filter(mark => isAlive(mark.pid)), cache.mark];
+  data.latest_identity = latest;
+  cache.identitySnapshot = JSON.stringify(latest);
+}
 async function beginTestAttempts(cache, rows, capture, options, origin, force = false) {
   if (cache.disabled || !rows.length) return;
   const originals = rows.map(row => ({ ...row }));
@@ -2300,7 +2323,7 @@ async function beginTestAttempts(cache, rows, capture, options, origin, force = 
         || (Number.isFinite(Date.parse(pass?.passed_at)) && cache.context.ports.now() - Date.parse(pass.passed_at) > 7 * 86400000 ? 'runs again: saved pass is older than seven days' : null)
         || (pass && !cleanRecordMatches(data.latest_identity, pass) ? 'runs again: interpreter build or model changed' : null);
       if (reason) for (const row of own) row.cache_reason = reason;
-      if (!force && !reason && !Object.hasOwn(cache.context.ports.env, 'CI') && eligibleCachePass(pass, cache.context.ports.now()) && fingerprint && pass?.fingerprint === identityFingerprint(cache, fingerprint, pass) && own.every(row => row.state === 'ready' && pass.tests.includes(row.test))) {
+      if (!force && !reason && [undefined, '', '0', 'false'].includes(cache.context.ports.env.CI) && eligibleCachePass(pass, cache.context.ports.now()) && fingerprint && pass?.fingerprint === identityFingerprint(cache, fingerprint, pass) && own.every(row => row.state === 'ready' && pass.tests.includes(row.test))) {
         for (const row of own) Object.assign(row, pass.rows[row.test], { state: 'passed', cached: true, cache_identity: { engine_sha: pass.engine_sha, requested_model: pass.requested_model }, passed_at: pass.passed_at, phase: 'cache', calls: 0, seconds: 0, request_ids: [], report_url: null });
         continue;
       }
@@ -2309,15 +2332,7 @@ async function beginTestAttempts(cache, rows, capture, options, origin, force = 
       cache.tokens.set(story, { epoch: data.epoch, generation, fingerprint });
     }
     if (capture && rows.some(row => !row.cached && row.state === 'ready') && !cache.mark) {
-      cache.mark = { token: cache.fs.nonce(), pid: cache.context.ports.pid ?? process.pid, started_at: cache.context.ports.now() };
-      const latest = data.latest_identity ?? { engine_sha: null, models: [], clean: false, conflict: true,
-        sampled_at: new Date(0).toISOString(), observed_at: new Date(cache.context.ports.now()).toISOString() };
-      const isAlive = cache.context.ports.isAlive ?? (pid => { try { process.kill(pid, 0); return true; } catch (error) { return error.code !== 'ESRCH'; } });
-      // Eligibility already saw every mark, including dead owners. Only now retire
-      // dead marks; live owners must survive another invocation's finish.
-      latest.in_progress = [...(latest.in_progress ?? []).filter(mark => isAlive(mark.pid)), cache.mark];
-      data.latest_identity = latest;
-      cache.identitySnapshot = JSON.stringify(latest);
+      markTestAttempt(cache, data);
     }
   });
   if (cache.disabled) rows.forEach((row, index) => { for (const key of Object.keys(row)) delete row[key]; Object.assign(row, originals[index]); });
@@ -2401,7 +2416,10 @@ async function runBatch(context, cwd, words, options, setRelease) {
   try { identity = signIn(ports.gh, context.store); }
   catch (error) {
     if (cache?.mark) await cacheTransaction(cache, data => {
-      if (data.latest_identity?.in_progress) data.latest_identity.in_progress = data.latest_identity.in_progress.filter(mark => mark.token !== cache.mark.token);
+      if (data.latest_identity?.in_progress) {
+        data.latest_identity.in_progress = data.latest_identity.in_progress.filter(mark => mark.token !== cache.mark.token);
+        Object.assign(data.latest_identity, { clean: false, conflict: true });
+      }
     });
     throw error;
   }
