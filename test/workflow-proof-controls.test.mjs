@@ -9,6 +9,7 @@ function scratch(t) {
   let exists = false; try { exists = readFileSync('src/workflow-prove.mjs','utf8').includes('export async function proveRun'); } catch {}
   assert.equal(exists, true, '#2594 missing API: controls require proveRun');
   const root=mkdtempSync(join(tmpdir(),'pdd-proof-control-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
+  cpSync('package.json',join(root,'package.json'));
   cpSync('src',join(root,'src'),{recursive:true});mkdirSync(join(root,'test'),{recursive:true});
   cpSync('test/helpers',join(root,'test/helpers'),{recursive:true});mkdirSync(join(root,'test/runtime'),{recursive:true});
   for(const name of ['workflow-prove','workflow-proof-pr','workflow-pr-labels']) {cpSync(`test/runtime/${name}.json`,join(root,`test/runtime/${name}.json`));cpSync(`test/${name}.vectors.test.mjs`,join(root,`test/${name}.vectors.test.mjs`));}
