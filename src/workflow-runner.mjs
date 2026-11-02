@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 7d4be453171fd25e218081e750b321f74d5886c98cb23468246d56304504ed96).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: cddcc3619978fa229ff1beadaf92f334675135e9c4fc044cd9e9224e155a637c).
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -618,6 +618,9 @@ function verifyBody(text) {
 // failed the same way). The body stays at most 60,000 characters (code points), so the marker and GitHub's count have room.
 const BODY_BUDGET = 60_000, characters = text => [...text].length;
 const reportsFailure = line => /✗|\bfail(?:s|ed|ing)?\b/i.test(line);
+// An inline code span (a run of N backticks up to the next run of exactly N) shows a tag as text: it opens and closes nothing.
+const outsideCode = line => line.replace(/(?<!`)(`+)(?!`).*?(?<!`)\1(?!`)/g, '');
+const withoutTags = line => line.replace(/((?<!`)(`+)(?!`).*?(?<!`)\2(?!`))|<\/?(?:details|summary)\b[^>]*>/gi, (tag, code) => code ?? '');
 // verify.md in at most `room` characters: the whole report when it fits. Else each <details> block becomes one line; if it is
 // still too long, its first lines that fit (cut at a line end, a code fence closed), then the lines of the cut part that report
 // a failure. A note says that this is a summary and where the full report is, so no failure is dropped in silence.
@@ -630,11 +633,11 @@ function verifyFit(text, room, env, description = false) {
   const lines = [], hiddenEvidence = new Set();
   let depth = 0, summary = null;
   for (const line of full.split('\n')) {
-    const opens = (line.match(/<details\b/gi) ?? []).length, closes = (line.match(/<\/details>/gi) ?? []).length;
+    const shown = outsideCode(line), opens = (shown.match(/<details\b/gi) ?? []).length, closes = (shown.match(/<\/details>/gi) ?? []).length;
     if (!depth && !opens) { lines.push(line); continue; }
-    if (reportsFailure(line) && !/^\s*(`{3,}|~{3,})/.test(line)) hiddenEvidence.add(line.replace(/<\/?(?:details|summary)\b[^>]*>/gi, ''));
+    if (reportsFailure(line) && !/^\s*(`{3,}|~{3,})/.test(line)) hiddenEvidence.add(withoutTags(line));
     for (const reference of reportLinks(line, env)) hiddenEvidence.add(reference);
-    summary ??= /<summary>(.*?)<\/summary>/i.exec(line)?.[1].trim() || null;
+    summary ??= /<summary>(.*?)<\/summary>/i.exec(shown)?.[1].trim() || null;
     depth = Math.max(0, depth + opens - closes);
     if (!depth) { lines.push(`- ${summary ?? 'Details'}: not shown here.`); summary = null; }
   }
@@ -699,11 +702,11 @@ function evidenceFit(lines, room, env) {
 // closed block keeps every whole summary as inert code spans: no summary line starts a body line, so its labels, HTML,
 // mentions and markers stay text. The block has the lowest priority in the body budget. When it does not fit, the longest
 // summaries are shortened first, each cut shows " …", and one line names each shortened step and what was left out.
-const FULL_SUMMARIES = '<details><summary>Full step summaries</summary>';
+const FULL_SUMMARIES = '<details><summary>Full step summaries</summary>', SLOT = '\u0000';
 function codeSpan(line) {
-  const text = line.replaceAll('pdd-workflow:', 'pdd-workflow\\u003a');
+  const text = line.replaceAll('pdd-workflow:', 'pdd-workflow\\u003a').replaceAll('pdd-product:', 'pdd-product\\u003a');
   const fence = '`'.repeat([...text.matchAll(/`+/g)].reduce((most, run) => Math.max(most, run[0].length), 0) + 1);
-  const padding = /^`|`$/.test(text) || text.startsWith(' ') && text.endsWith(' ') && text.trim() ? ' ' : '';
+  const padding = /^`|`$/.test(text) ? ' ' : '';
   return `${fence}${padding}${text}${padding}${fence}`;
 }
 // The first `size` characters (code points) of a summary, moved back to a word end and to the start of a URL that crosses the cut.
@@ -715,6 +718,22 @@ function summaryStart(text, size) {
   if (url) kept = kept.slice(0, url.index);
   else if (/\S/.test(points[size])) kept = kept.replace(/\s+\S*$/, '');
   return kept.trimEnd();
+}
+const SHORTENED = /^_\d+ step summar(?:y was|ies were) shortened to fit the PR size limit: .*\._$/;
+// The steps of one PR area (those since the previous PR) and their whole summaries after the PR cleaning.
+function prSteps(run, area) {
+  const index = run.areas.findIndex(item => item.name === area.name), from = run.areas.slice(0, index).map((item, at) => item.gate === 'pr' ? at + 1 : 0).reduce((a, b) => Math.max(a, b), 0);
+  return run.areas.slice(from, index + 1).flatMap(item => item.steps).filter(step => run.done[step]);
+}
+const cleanSummary = (run, step) => hideLocalPaths(redactTry(withoutForgedMachineLines(run.done[step].summary)), run);
+// render(section) is the whole body with that block; the block takes the room that is left: whole when it fits, else one
+// common length for the longest summaries, as large as the search finds within the limit.
+function withSummaries(steps, texts, render, limit) {
+  const fits = size => characters(render(fullSummaries(steps, texts, size))) <= limit;
+  let low = 0, high = Object.values(texts).reduce((most, text) => Math.max(most, characters(text)), 0);
+  if (fits(Infinity)) return render(fullSummaries(steps, texts, Infinity));
+  while (high - low > 1) { const middle = Math.floor((low + high) / 2); if (fits(middle)) low = middle; else high = middle; }
+  return render(fullSummaries(steps, texts, low));
 }
 function fullSummaries(steps, texts, size) {
   if (!steps.length) return [];
@@ -729,11 +748,11 @@ function fullSummaries(steps, texts, size) {
   return [...notice, FULL_SUMMARIES, '', ...items, '', '</details>'];
 }
 function prBody(run, area, env, drafts = [], tests = true, evidence) {
-  const index = run.areas.findIndex(item => item.name === area.name), from = run.areas.slice(0, index).map((item, at) => item.gate === 'pr' ? at + 1 : 0).reduce((a, b) => Math.max(a, b), 0);
-  const steps = run.areas.slice(from, index + 1).flatMap(item => item.steps).filter(step => run.done[step]);
-  const raw = Object.fromEntries(steps.map(step => [step, hideLocalPaths(redactTry(withoutForgedMachineLines(run.done[step].summary)), run)]));
+  const steps = prSteps(run, area);
+  const raw = Object.fromEntries(steps.map(step => [step, cleanSummary(run, step)]));
   const summaries = Object.fromEntries(steps.map(step => [step, oneLine(raw[step])]));
-  const lines = steps.map(step => `- **${step}**: ${shortLine(summaries[step]) || 'done'}`);
+  // Agent text is inert everywhere in the body: the short Steps line is a code span too.
+  const lines = steps.map(step => `- **${step}**: ${summaries[step] ? codeSpan(shortLine(summaries[step])) : 'done'}`);
   const full = Object.fromEntries(steps.map(step => [step, keepLines(raw[step])]));
   // Only a PR that covers a verify step carries verify.md (PR 1 never does).
   let verify = null;
@@ -776,12 +795,7 @@ function prBody(run, area, env, drafts = [], tests = true, evidence) {
   const least = fullSummaries(steps, full, 0);
   const lifted = evidenceFit(preparedLines, Math.max(0, BODY_BUDGET - 200 - (verify === null ? 0 : 1000) - characters(body(null, [], least))), env);
   const verifyText = verify === null ? null : verifyFit(hideLocalPaths(verify, run), BODY_BUDGET - 200 - characters(body('', lifted, least)), env);
-  const fitting = size => { const text = body(verifyText, lifted, fullSummaries(steps, full, size)); return characters(text) <= BODY_BUDGET - 200 ? text : null; };
-  const whole = fitting(Infinity);
-  if (whole !== null) return whole;
-  let low = 0, high = Object.values(full).reduce((most, text) => Math.max(most, characters(text)), 0);
-  while (high - low > 1) { const middle = Math.floor((low + high) / 2); if (fitting(middle) !== null) low = middle; else high = middle; }
-  return fitting(low) ?? body(verifyText, lifted, least);
+  return withSummaries(steps, full, section => body(verifyText, lifted, section), BODY_BUDGET - 200);
 }
 
 // GitHub refuses a PR title over 256 characters; the GitHub intent checks its UTF-16 length. The issue title stays whole
@@ -1157,14 +1171,19 @@ async function draftDescription(run, pr1, drafts, p) {
     while (at < rows.length && !rows[at].trim()) at++;
     if (reference.test(rows[at] ?? '')) at++;
     while (at < rows.length && !rows[at].trim()) at++;
-    const remainder = rows.slice(at).join('\n');
-    const safeRemainder = hideLocalPaths(redactTry(remainder), run);
+    // pdd's own full step summaries (with their cut notice) leave the rest; they come back fitted like a new PR body.
+    const rest = rows.slice(at), start = rest.indexOf(FULL_SUMMARIES), end = start < 0 ? -1 : rest.indexOf('</details>', start);
+    const from = end < 0 ? -1 : start >= 2 && !rest[start - 1] && SHORTENED.test(rest[start - 2]) ? start - 2 : start;
+    const steps = from < 0 ? [] : prSteps(run, area), texts = Object.fromEntries(steps.map(step => [step, keepLines(cleanSummary(run, step))]));
+    const least = from < 0 ? '' : fullSummaries(steps, texts, 0).join('\n');
+    const safeRemainder = hideLocalPaths(redactTry((from < 0 ? rest : [...rest.slice(0, from), SLOT, ...rest.slice(end + 1)]).join('\n')), run);
     const footer = `\n\n${marker}\n`;
     const room = BODY_BUDGET - characters(footer) - characters(evidence.issueReference) - 4;
-    const lifted = evidenceFit(evidence.lines.map(line => hideLocalPaths(redactTry(line), run)), Math.max(0, room - Math.min(1000, characters(safeRemainder))), p.env);
+    const lifted = evidenceFit(evidence.lines.map(line => hideLocalPaths(redactTry(line), run)), Math.max(0, room - Math.min(1000, characters(safeRemainder) + characters(least))), p.env);
     const leading = [...lifted, ...(lifted.length ? [''] : []), evidence.issueReference, '', ''].join('\n');
-    const fitted = verifyFit(safeRemainder, BODY_BUDGET - characters(leading) - characters(footer), p.env, true);
-    const nextBody = `${leading}${fitted}${footer}`;
+    const fitted = verifyFit(safeRemainder, BODY_BUDGET - characters(leading) - characters(footer) - characters(least) - 2, p.env, true);
+    const placed = section => { const text = section.join('\n'); return fitted.includes(SLOT) ? fitted.replace(SLOT, () => text) : `${fitted}\n\n${text}`; };
+    const nextBody = from < 0 ? `${leading}${fitted}${footer}` : withSummaries(steps, texts, section => `${leading}${placed(section)}${footer}`, BODY_BUDGET);
     if (nextBody === body) return [];
     const reply = await p.execFile('gh', ['pr', 'edit', pr1.url, '--body-file', '-'], { cwd: run.root, input: nextBody });
     if (reply.code !== undefined && reply.code !== 0) throw Object.assign(Error('PR 1 description update failed.'), { code: reply.code });
