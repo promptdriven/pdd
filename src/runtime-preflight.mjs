@@ -396,6 +396,9 @@ export function interfaceSchemaProblems(iface) {
     for (const key of ['input_schema', 'result_schema']) if (isObject(entry) && Object.hasOwn(entry, key)) schemaRules(entry[key], `/entries/${index}/${key}`, out);
   }
   for (const [index, resource] of (Array.isArray(iface?.resources) ? iface.resources : []).entries()) {
+    if (isObject(resource) && Object.hasOwn(resource, 'returns_credentials') && typeof resource.returns_credentials !== 'boolean') {
+      out.push({ code: 'graph-schema-invalid', pointer: `/resources/${index}/returns_credentials`, rule: '"returns_credentials" must be true or false.' });
+    }
     for (const [opIndex, operation] of (Array.isArray(resource?.operations) ? resource.operations : []).entries()) {
       for (const key of ['arguments_schema', 'result_schema']) {
         if (!isObject(operation) || !Object.hasOwn(operation, key)) continue;
