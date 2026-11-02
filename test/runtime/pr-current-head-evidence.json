@@ -1,0 +1,113 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/pr-current-head-evidence.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "When no current CI result or old-code proof exists, a PR does not present \"Full npm test: 665/665 passed\" typed in a verification note or summary as checked evidence."
+    }
+  ],
+  "initial_world": {
+    "publication_currentHead": [],
+    "publication_readStepNotes": [],
+    "publication_readOldCodeProof": []
+  },
+  "simulation": {
+    "publication.currentHead": {
+      "action": "fixture.lookup",
+      "world_pointer": "/publication_currentHead",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "root": "/synthetic/repo",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "error": ""
+          }
+        }
+      ]
+    },
+    "publication.readStepNotes": {
+      "action": "fixture.lookup",
+      "world_pointer": "/publication_readStepNotes",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "runDir": "/synthetic/run",
+            "steps": [
+              "verify"
+            ]
+          },
+          "result": {
+            "notes": []
+          }
+        }
+      ]
+    },
+    "publication.readOldCodeProof": {
+      "action": "fixture.lookup",
+      "world_pointer": "/publication_readOldCodeProof",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "runDir": "/synthetic/run"
+          },
+          "result": {
+            "content": "",
+            "error": "missing"
+          }
+        }
+      ]
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "typed-count-is-not-machine-evidence",
+      "entry_path": "prompts/cli/workflow-pr-evidence.prompt.md",
+      "operation": "preparePrEvidence",
+      "input": {
+        "run": {
+          "runId": "synthetic-2596",
+          "runDir": "/synthetic/run",
+          "root": "/synthetic/repo",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "baseBranch": "alpha",
+          "workflow": "bug",
+          "number": 2596,
+          "steps": [
+            {
+              "step": "verify",
+              "summary": "Proof (defect fixed): Full npm test: 665/665 passed"
+            }
+          ]
+        },
+        "isCode": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": [
+            "Old-code proof: not run."
+          ]
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/proofStatus",
+          "op": "equals",
+          "value": "not-run"
+        }
+      ]
+    }
+  ]
+}
