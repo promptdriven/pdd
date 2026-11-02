@@ -121,8 +121,10 @@ for (const shape of ['refused', 'incomplete', 'unrelated-no-verdict']) test(`OUT
   const p = portsFor({ HOME: r.h.home, PDD_STATE_DIR: r.h.state, PDD_RUNTIME_URL: r.f.origin }, { openUrl: async () => true });
   const code = await runTry({ cwd: r.h.repo, words: ['place-order'], options: { '--no-open': true } }, p.ports);
   assert.equal(r.f.posts.filter(post => post.command === 'try').length, 0, 'no Try setup is sent');
-  assert.equal(code, shape === 'incomplete' ? 3 : 4);
-  assert.doesNotMatch(p.ports.stdout.text + p.ports.stderr.text, /Lint passed/);
+  // An ended lint without a pass for the test is final for a Try too: not run, exit 5, with the reason.
+  assert.equal(code, shape === 'incomplete' ? 5 : 4);
+  if (shape === 'incomplete') assert.match(p.ports.stderr.text, /No lint pass for this test \(lint did not finish\), so pdd made no Try link\./);
+  assert.doesNotMatch(p.ports.stdout.text + p.ports.stderr.text, /Lint passed|again later/);
 });
 
 // Scope, not ignore: one test without a lint pass never stops a test that has one.

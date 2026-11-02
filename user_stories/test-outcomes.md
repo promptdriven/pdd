@@ -5,10 +5,10 @@ keeps its reason, and unfinished work stays unfinished.
 
 ## Acceptance criteria
 
-1. `pdd lint place-order` passes only when lint is complete and the server explicitly passes that test; its row, summary, JSON and exit code agree.
-2. Refused lint with a program report but no selected verdict keeps the server's refusal code and text, exits 4 (or 3 when only incomplete evidence exists), never says the test passed, and sends no paid checks.
+1. `pdd lint place-order` passes only when the server gives that test its own passing verdict. This counts even when the lint did not finish for other tests. Its row, summary, JSON and exit code agree.
+2. Refused lint with a program report but no verdict for my test keeps the server's refusal code and text, exits 4, never says the test passed, and sends no paid checks.
 3. A lint that ended without a pass for my test says why ("lint did not finish" or "lint gave no verdict for this test"), shows not run and exits 5, so I know that reading again will not help. Only a lint that has not ended yet is unknown with exit 3. Empty lint is never exit 0. A program without a prompts list produces a truthful result without an internal error.
-4. An unrelated refusal remains visible as a diagnostic. Only a complete passing verdict for the selected test allows that test to pass despite it; a refused selected test or reached prompt still refuses the row.
+4. An unrelated refusal remains visible as a diagnostic. Only the selected test's own passing verdict allows that test to pass despite it; a refusal of the selected test or of a prompt it reaches still refuses the row.
 5. New checks, saved-lint continuation, retry, the restart replacement and a new Try use the same gate, per test: a selected test is sent only when its own lint verdict is a pass. With 18 selected tests and one lint refusal, the other 17 are still sent; the refused one stays refused and a test with no verdict is not run. A test with its own pass is sent even when the lint did not finish for other tests. A held-back test allocates no paid request and keeps zero calls, and the restart replacement says in one line why it held a test back. Source, owner, intent and call-ceiling protections remain in force.
 6. Queued, running, passed, failed, refused, not run and unknown remain distinct in the table, Story summary, JSON and exit. Empty outcomes exit 3; unknown is not counted as a done Story. Missing per-criterion evidence does not count authored criteria as passed.
 7. A retryable pool-copy-unavailable answer with dispatch not_started shows not run, exits 5, keeps the server's text and has neither a cross nor a refused block. Uncertain execution is never retried by inference.

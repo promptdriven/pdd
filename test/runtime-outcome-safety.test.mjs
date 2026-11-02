@@ -53,6 +53,7 @@ test('OUTCOME safety: saved restart cannot bypass missing selected lint evidence
   const result = await run([], { '--read': first.json.batch, '--json': true });
   assert.equal(result.code, 3);
   assert.equal(f.posts.filter(p => p.command === 'check').length, 1, 'only the original paid request exists');
+  assert.match(result.err, /The interpreter restarted a check, but the saved lint gives no pass of its own to that test, so pdd did not send it again\./);
   assert.equal(result.json.rows[0].request_id, first.json.rows[0].request_id);
 });
 test('OUTCOME safety: each selected test passes its own lint gate', async t => {

@@ -46,7 +46,7 @@ Order:
 2. Batch ID `YYYYMMDD-HHMMSS-xxxx` (local time). Allocate one new `crypto.randomUUID()` for lint at batch creation and write `batch.json`. Allocate each test's first check UUID only at its first authorized dispatch after the applicable dispatch gates; pending lint allocates no check UUID. Print to stderr `If pdd stops, read the results with: pdd test --read <batch>` after lint passes and right before the first check POST, and again at the end of an exit 3. A pending lint also has a saved result to read: name its batch when the wait limit ends.
 3. Lint: write `<id>.posted` (exclusive create), then POST `/v1/lint` multipart (`request` = `{requestId, source_sha256, complete: true}`, no `paths`; `source` = the tar). Read until terminal within the caller wait defined below; there is no independent 120-second lint cap. Judge selected tests through the Outcome contract below.
 4. Checks: validate an explicit --max-calls as a whole number from1 through1000 before sign-in, capture or network effects, including direct runCheck callers. For each test write `<id>.posted`, then POST `/v1/check` with `{requestId, source_sha256, scenario: <test path>, max_calls}` and the same tar. `max_calls` = `--max-calls` or the preflight default (12 for each step, 18 to 1000). Each remote lint, test and new Simulator setup uses the shared local admission contract below. Hold remaining tests locally only when an explicit local job cap, the per-process upload setting below or confirmed server backpressure requires it; do not reserve a batch slot while its child jobs wait for slots. POST timeout is the earlier 90 s and remaining command budget. Reuse one immutable source Blob per packed tar across all its lint, test, retry and Simulator setup POSTs, preserving exact tar bytes and source hash; multipart request metadata remains distinct for each attempt. Reuse must not copy the source per upload or impose a default job cap.
-5. Read: GET `/v1/runs/<id>` for each open row every 2 s (at most 8 GETs at a time) until all rows end or the time limit, counted from the start of remote admission, including local-slot, maintenance and capacity waiting, ends. The limit depends on who waits. A person (`interactive`) has no limit. An agent (no terminal) waits at most 90 s, below the 2-minute default limit of Claude Code's shell tool. `--timeout MIN` overrides both. `batch.json` keeps the limit as `timeout_min` (1.5 for 90 s, null for none). While rows are open, in both modes, print ONE progress line to stderr every 30 s after the checks are sent, so an agent that is cut off still has output: `Still running: 2 of 3 Stories done · 14 AI calls so far · 4 min`. A Story is done when all its rows have known terminal outcomes; `Story` when there is one; the AI calls are the sum of the known `usage.calls` of all rows, the running ones too; the time is since the checks were sent, `N s` under a minute, else whole minutes. Save each answer as `<id>.json`. Then print the [output](runtime-output.prompt.md), write `summary.json` and return the exit code.
+5. Read: GET `/v1/runs/<id>` for each open row every 2 s (at most 8 GETs at a time) until all rows end or the time limit, counted from the start of remote admission, including local-slot, maintenance and capacity waiting, ends. The limit depends on who waits. A person (`interactive`) has no limit. An agent (no terminal) waits at most 90 s, below the 2-minute default limit of Claude Code's shell tool. `--timeout MIN` overrides both. `batch.json` keeps the limit as `timeout_min` (1.5 for 90 s, null for none). While rows are open, in both modes, print ONE progress line to stderr every 30 s after the checks are sent, so an agent that is cut off still has output: `Still running: 2 of 3 Stories done · 14 AI calls so far · 4 min`. A Story is done when all its rows have known terminal outcomes; `Story` when there is one; the AI calls are the sum of the known `usage.calls` of all rows, the running ones too (rows with server progress: see [Outcome](#outcome)); the time is since the checks were sent, `N s` under a minute, else whole minutes. Save each answer as `<id>.json`. Then print the [output](runtime-output.prompt.md), write `summary.json` and return the exit code.
 
 | Answer to a POST | Row | Next step |
 |---|---|---|
@@ -441,7 +441,7 @@ each sends the tests that pass and holds back the others:
 |---|---|---|---|
 | passed | sent | | from its result |
 | refused | `refused`, with its lint refusals | | 4 |
-| not_run (the lint ended without a pass for it) | `not_run`, final | `No lint pass for this test (<reason>), so pdd sent no checks.` | 5 |
+| not_run (the lint ended without a pass for it) | `not_run`, final | `No lint pass for this test (<reason>), so pdd sent no checks.` (Try: `… so pdd made no Try link.`) | 5 |
 | unknown (the lint has not ended) | `not_run`, held for the saved-lint continuation | `The lint result is unknown, so pdd sent no checks.` | 3 |
 
 A job refusal refuses only the tests that have no verdict of their own; a test with
@@ -466,9 +466,9 @@ exit 3 line `The lint result is unknown. Run pdd lint again; a lint uses no AI c
 
 The progress line counts a Story as done only when all its rows are done
 (`unknown` is not done). It shows one [progress fragment](runtime-outcome.prompt.md#progress-and-exit)
-for all running rows with server progress, then the known calls of ended checks
-(`N AI calls in ended checks`, or `N AI calls so far` without a fragment), or
-`AI calls unknown` when there is neither; never an invented zero. A row that a
+for all running rows with server progress, then the known calls of the other rows
+(`N AI calls in other checks`, or `N AI calls so far` without a fragment, as in
+step 5 above), or `AI calls unknown` when there is neither; never an invented zero. A row that a
 read turns into a lost, unknown row drops its old `progress`.
 
 ## Dependencies
