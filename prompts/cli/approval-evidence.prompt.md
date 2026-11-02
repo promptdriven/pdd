@@ -49,6 +49,11 @@ Do not read a file whose last write is older than the stage start; a person's Co
 Zero matches refuses; multiple files refuse even if only one has a user reply.
 Incomplete discovery must refuse rather than silently discard unreadable files
 and manufacture uniqueness. Missing discovery directories mean no matches.
+Export async module function `findNativeSessions(stage, ports = {})` for chat
+resume and recovery callers: the same stage fields, ports and matching rules
+return the distinct matching sessions as `[{id, startedAt}]` (empty when none
+match). Incomplete discovery throws code `session_unreadable`; it never returns
+an empty list that hides an unreadable file.
 Skip symlink entries and refuse over-depth discovery rather than silently truncate.
 
 <details>

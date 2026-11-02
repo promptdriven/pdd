@@ -2,7 +2,8 @@ import {realpathSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 // A fake Herdr server for session pdd: workspaces, tabs, panes and the agents that pane commands start.
 export function fakeHerdr() {
-  const h = { workspaces: [], tabs: [], panes: [], calls: [], next: 1, focus: null };
+  // sessions: the native session files that agents started by pane commands wrote ({agent, id, root, at}).
+  const h = { workspaces: [], tabs: [], panes: [], calls: [], next: 1, focus: null, sessions: [], now: () => Date.now() };
   const id = prefix => `${prefix}${h.next++}`;
   const commonDir = cwd => realpathSync(execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd, encoding: 'utf8' }).trim());
   const pane = (workspace, tab, cwd) => { const p = { workspace_id: workspace, tab_id: tab, pane_id: id('p'), terminal_id: id('term'), cwd, agent: null }; h.panes.push(p); return p; };
@@ -41,7 +42,10 @@ export function fakeHerdr() {
       const command = rest[1], kind = / claude /.test(command) ? 'claude' : / codex /.test(command) ? 'codex' : null;
       const session = command.match(/--(?:session-id|resume) ([0-9a-f-]{36})/)?.[1] ?? command.match(/ resume ([0-9a-f-]{36})/)?.[1] ?? '00000000-0000-4000-8000-000000000017';
       p.commands = [...(p.commands ?? []), command];
-      if (kind) p.agent = { agent: kind, agent_status: 'working', agent_session: { agent: kind, kind: 'id', value: session }, prompts: [] };
+      if (kind) {
+        p.agent = { agent: kind, agent_status: 'working', agent_session: { agent: kind, kind: 'id', value: session }, prompts: [] };
+        if (!h.sessions.some(item => item.id === session && item.agent === kind)) h.sessions.push({ agent: kind, id: session, root: p.cwd, at: h.now() });
+      }
       return {};
     }
     if (group === 'agent' && verb === 'get') { const p = h.panes.find(p => p.pane_id === rest[0]); if (!p?.agent) fail('agent_not_found'); return { result: { agent: { ...p.agent, pane_id: p.pane_id } } }; }
@@ -49,6 +53,9 @@ export function fakeHerdr() {
     fail(`unexpected herdr ${args.join(' ')}`);
   };
   h.paneOf = chat => h.panes.find(p => p.pane_id === chat.paneId);
+  // The native session lookup over the files above: same agent and worktree, started inside the window, saved id if given.
+  h.findNativeSessions = async stage => h.sessions.filter(item => item.agent === stage.agent && realpathSync(item.root) === realpathSync(stage.root)
+    && item.at >= stage.startedAt && item.at <= stage.endedAt && (!stage.sessionId || item.id === stage.sessionId)).map(item => ({ id: item.id, startedAt: item.at }));
   // Every chat finished its turn (after done, the chat writes its gate message and then waits).
   h.idle = () => { for (const p of h.panes) if (p.agent) p.agent.agent_status = 'idle'; };
   return h;
