@@ -148,9 +148,9 @@ test('2531B AC3,4: confirmed refusal permits one explicit retry; lost retry igno
  assert.equal(mutations(f).length,before);assert.equal(f.calls.filter(a=>a[0]==='worktree').length,2);
 });
 
-for(const kind of ['duplicate','occupied','parent-path','parent-metadata','run-cwd','run-common','run-root','inventory'])test(`2531B AC4: ${kind} refuses without peer mutation or adoption`,async t=>{
+// A duplicate copy of an open owned entry is archived by pdd itself (no manual registry edit); see the settle cases below.
+for(const kind of ['occupied','parent-path','parent-metadata','run-cwd','run-common','run-root','inventory'])test(`2531B AC4: ${kind} refuses without peer mutation or adoption`,async t=>{
  const {f,b,bInput}=await pair(t),state=await registry(f);
- if(kind==='duplicate')state.repositories.push(structuredClone(state.repositories[1]));
  if(kind==='occupied'){
   state.repositories.pop();state.runs.pop();f.workspaces.splice(2);
   f.workspaces.push({workspace_id:'stranger',label:'alice/coffee'},{workspace_id:'stranger-2',label:`alice/coffee@${token(bInput.commonDir)}`});
@@ -162,7 +162,7 @@ for(const kind of ['duplicate','occupied','parent-path','parent-metadata','run-c
  await save(f,state);const original=f.ports.command;
  f.ports.command=async args=>{const reply=await original(args);if(kind==='run-root'&&args[0]==='pane'&&args[3]===b.workspaceId)reply.result.panes[0].terminal_id='forged';if(kind==='inventory'&&args[0]==='workspace'&&args[1]==='list')reply.result.workspaces.push(reply.result.workspaces[0]);return reply;};
  const world=structuredClone(f.workspaces),bytes=await readFile(join(f.ports.directory,'registry.json'),'utf8');f.calls.length=0;
- await assert.rejects(f.open(bInput),{code:kind==='duplicate'?'layout_allocation_uncertain':kind==='occupied'?'repository_label_unavailable':kind==='inventory'?'invalid_workspace_inventory':'herdr_layout_identity_changed'});
+ await assert.rejects(f.open(bInput),{code:kind==='occupied'?'repository_label_unavailable':kind==='inventory'?'invalid_workspace_inventory':'herdr_layout_identity_changed'});
  assert.deepEqual(mutations(f),[]);assert.deepEqual(f.workspaces,world);assert.equal(await readFile(join(f.ports.directory,'registry.json'),'utf8'),bytes);
 });
 
@@ -190,19 +190,20 @@ test('2531B AC6: mixed legacy A short, B owner/repo, and C other origin only qua
  const after=await registry(f);assert.deepEqual(after.repositories.slice(0,2),before.repositories);assert.deepEqual(after.runs.slice(0,2),before.runs);
 });
 
-test('2531B AC4,5: duplicate or inconsistent selected ownership cannot authorize cleanup or allocation',async t=>{
+test('2531B AC4,5: a duplicate or inconsistent entry of an open owned workspace is settled by pdd, with no manual edit',async t=>{
  for(const kind of ['duplicate','inconsistent']){
   const {f,b,bInput}=await pair(t),state=await registry(f);
   if(kind==='duplicate')state.repositories.push(structuredClone(state.repositories[1]));
   else state.repositories[1].repository='someone/else';
   await save(f,state);const world=structuredClone(f.workspaces);f.calls.length=0;
-  const code=kind==='duplicate'?'layout_allocation_uncertain':'invalid_layout_registry';
-  await assert.rejects(f.open(bInput),{code});
-  await assert.rejects(idle(f,bInput),{code});
-  assert.deepEqual(mutations(f),[]);assert.deepEqual(f.workspaces,world);
+  assert.equal((await f.open({...bInput,stageId:'again'})).repoWorkspaceId,b.repoWorkspaceId);
+  const after=await registry(f),kept=after.repositories.filter(r=>r.commonDir===bInput.commonDir);
+  assert.equal(kept.length,1);assert.equal(kept[0].repository,'alice/coffee');assert.equal(kept[0].workspaceId,b.repoWorkspaceId);
+  assert.equal((after.archivedRepositories??[]).length,kind==='duplicate'?1:0,'A duplicate copy is archived; an inconsistent entry is corrected in place');
+  assert.equal(await idle(f,bInput),false,'The repository workspace of an open run stays');
+  assert.deepEqual(mutations(f).map(c=>c.slice(0,2)),[['tab','create']]);assert.deepEqual(f.workspaces.filter(w=>world.some(x=>x.workspace_id===w.workspace_id)),world);
  }
 });
-
 test('a run with no saved workspace rebuilds a duplicate namespace entry from live Herdr instead of refusing',async t=>{
  const f=await fixture(t),a=await f.open(),state=await registry(f);
  state.repositories.push(structuredClone(state.repositories[0]));await save(f,state);
@@ -214,10 +215,13 @@ test('a run with no saved workspace rebuilds a duplicate namespace entry from li
  assert.equal(after.archivedRepositories.length,1);assert.equal(after.archivedRepositories[0].reason,'duplicate-or-inconsistent-cache');
  assert.deepEqual(f.calls.filter(c=>['close','remove','rename'].includes(c[1])),[]);
 });
-test('duplicate namespace refusals name the one true recovery step on the open and close paths',async t=>{
+test('two open workspaces for one namespace refuse on open and close and ask the person to choose',async t=>{
  const {f,bInput}=await pair(t),state=await registry(f);
- state.repositories.push(structuredClone(state.repositories[1]));await save(f,state);f.calls.length=0;
- await assert.rejects(f.open(bInput),error=>error.code==='layout_allocation_uncertain'&&/Nothing was changed\. Remove the extra alice\/coffee entries for .* from .*registry\.json, keeping the one whose workspace is open in Herdr session pdd, then retry\./.test(error.message));
- await assert.rejects(idle(f,bInput),error=>error.code==='layout_allocation_uncertain'&&/Nothing was changed\. The repository workspace stays open; close it yourself in Herdr session pdd if you do not need it\./.test(error.message));
- assert.deepEqual(mutations(f),[]);
+ f.workspaces.push({workspace_id:'other-parent',label:'other',worktree:{checkout_path:bInput.sourceRoot,repo_key:bInput.commonDir,is_linked_worktree:false}});
+ state.repositories.push({...structuredClone(state.repositories[1]),workspaceId:'other-parent'});await save(f,state);
+ const bytes=await readFile(join(f.ports.directory,'registry.json'),'utf8'),world=structuredClone(f.workspaces);f.calls.length=0;
+ const choose=error=>error.code==='layout_allocation_uncertain'&&/Nothing was changed\. Close the one you do not use in Herdr session pdd, then retry\./.test(error.message)&&!/registry\.json/.test(error.message);
+ await assert.rejects(f.open(bInput),choose);
+ await assert.rejects(idle(f,bInput),choose);
+ assert.deepEqual(mutations(f),[]);assert.deepEqual(f.workspaces,world);assert.equal(await readFile(join(f.ports.directory,'registry.json'),'utf8'),bytes);
 });
