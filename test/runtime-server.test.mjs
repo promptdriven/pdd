@@ -1099,7 +1099,7 @@ test('RUNTIME-READLINE1: "If pdd stops" prints after lint passes and before the 
 
 // Wrong: many Stories in one run give one blended line, so the gate and PR 1 cannot say which Story failed (0.1.6).
 test('RUNTIME-STORYLINE1: one paste line per Story after the table, the overall line last, and summary_line on each --json row', async t => {
-  const setup = harbor(t, repo => cpSync(join(repo, 'tests/place-order.json'), join(repo, 'tests/place-order-2.json')));
+  const setup = harbor(t, repo => cpSync(join(repo, 'tests/place-order.json'), join(repo, 'tests/place-order.second.json')));
   const fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
   const result = await check(setup, fake, []);
   assert.equal(result.code, 0, result.err);
@@ -1108,8 +1108,8 @@ test('RUNTIME-STORYLINE1: one paste line per Story after the table, the overall 
     'Prompt tests (unknown-item): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call', 'Prompt tests: ✓ 3 of 3 criteria · 3/3 checks · 3 AI calls']);
   const json = await check(setup, fake, [], { '--json': true });
   assert.deepEqual(json.json.rows.map(row => [row.test, row.summary_line]), [
-    ['tests/place-order-2.json', 'Prompt tests (place-order): ✓ 2 of 2 criteria · 2/2 checks · 2 AI calls'],
     ['tests/place-order.json', 'Prompt tests (place-order): ✓ 2 of 2 criteria · 2/2 checks · 2 AI calls'],
+    ['tests/place-order.second.json', 'Prompt tests (place-order): ✓ 2 of 2 criteria · 2/2 checks · 2 AI calls'],
     ['tests/unknown-item.json', 'Prompt tests (unknown-item): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call']]);
   assert.equal(json.json.summary_line, 'Prompt tests: ✓ 3 of 3 criteria · 3/3 checks · 3 AI calls');
   const draft = await check(draftRepo(t), await fakeRuntime(t, (entry, f) => draftLint(entry, f) ?? f.normal(entry)), ['place-order']);

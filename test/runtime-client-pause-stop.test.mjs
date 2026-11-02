@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { runCheck, runTry } from '../src/runtime-client.mjs';
 import { listRuntimeJobs } from '../src/runtime-slots.mjs';
-import { fakeRuntime, harbor, portsFor, filesUnder } from './runtime-fake.mjs';
+import { fakeRuntime, harbor, portsFor, filesUnder, storyTest } from './runtime-fake.mjs';
 
 const pauseReply = (kind, maintenance) => ({ status: 503, headers: { 'retry-after': '7' }, json: {
   dispatch: 'not_started', job_created: false, usage: { calls: 0 }, accounting_complete: true,
@@ -63,7 +63,7 @@ for (const stage of ['check', 'explicit-lint']) test(`post-POST stop: ${stage} t
 for (const cap of [undefined, '2']) for (const earlier of ['confirmed', 'unknown']) test(`post-POST stop preserves earlier ${earlier} evidence, accounting and recovery (cap ${cap ?? 'unset'})`, async t => {
   const setup = harbor(t, repo => {
     rmSync(join(repo, 'tests/unknown-item.json'));
-    writeFileSync(join(repo, 'tests/earlier.json'), readFileSync(join(repo, 'tests/place-order.json')));
+    storyTest(repo, 'earlier');
   });
   let made, checks = 0, paused = false; const answers = new Map();
   const fake = await fakeRuntime(t, (e, f) => {

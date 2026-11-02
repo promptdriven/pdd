@@ -9,7 +9,7 @@ import { captureSource } from '../src/runtime-preflight.mjs';
 import { productStatus, productNext } from '../src/product.mjs';
 import { harbor, portsFor, fakeRuntime, sha } from './runtime-fake.mjs';
 
-const vectors = JSON.parse(readFileSync(new URL('./fixtures/product-unsent-checks.json', import.meta.url)));
+const vectors = JSON.parse(readFileSync(new URL('./fixtures/product-unsent-checks-cases.json', import.meta.url)));
 const productScenario = JSON.parse(readFileSync(new URL('./runtime/product-saved-checks.json', import.meta.url)));
 const copy = value => structuredClone(value);
 const own = (value, key) => Object.hasOwn(value, key);

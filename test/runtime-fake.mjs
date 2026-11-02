@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,6 +23,16 @@ export function harbor(t, edit) {
   edit?.(repo);
   git(repo, 'init', '-q'); git(repo, 'add', '-A'); git(repo, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-qm', 'init');
   return { sandbox, repo, home, state: join(sandbox, 'state') };
+}
+
+// One more Story with its own test, a copy of Place an order: user_stories/<name>.md and tests/<name>.json
+// (a test is found by its name and folder).
+export function storyTest(repo, name, folder = 'tests') {
+  const harborFile = path => readFileSync(join(root, 'test/fixtures/harbor', path), 'utf8');
+  writeFileSync(join(repo, `user_stories/${name}.md`), harborFile('user_stories/place-order.md'));
+  const doc = JSON.parse(harborFile('tests/place-order.json'));
+  mkdirSync(join(repo, folder), { recursive: true });
+  writeFileSync(join(repo, folder, `${name}.json`), JSON.stringify({ ...doc, story_path: `user_stories/${name}.md` }, null, 2));
 }
 
 const usage = calls => ({ calls, model: 'unknown', requested_model: calls ? 'gpt-6.1-sol' : 'unknown', seconds: 10.4686, input_tokens: calls ? 6835 : 'unknown', output_tokens: calls ? 110 : 'unknown' });

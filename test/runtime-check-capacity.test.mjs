@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { runCheck } from '../src/runtime-client.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
-import { fakeRuntime, harbor, portsFor } from './runtime-fake.mjs';
+import { fakeRuntime, harbor, portsFor, storyTest } from './runtime-fake.mjs';
 
 function capacity(f, id, { calls = 0, code = 'check-queue-timeout', dispatch = 'not_started', checks = [], state = 'refused' } = {}) {
   const refusal = { code, message: 'No checks ran.', reason: 'The queue is full.', fix: 'Fix what it names.', details: { retryable: true, retry_after: 5 } };
@@ -43,7 +43,7 @@ test('CAPACITY2: 17 tests use four configured active slots, adapt to a one-worke
   const setup = harbor(t, repo => {
     const file = join(repo, 'tests/place-order.json'), doc = JSON.parse(readFileSync(file));
     rmSync(file); rmSync(join(repo, 'tests/unknown-item.json'));
-    for (let i = 0; i < 17; i++) writeFileSync(join(repo, `tests/order-${i}.json`), JSON.stringify(doc));
+    for (let i = 0; i < 17; i++) storyTest(repo, `order-${i}`);
   });
   let now = 0, active = null, peak = 0;
   const jobs = new Map();
@@ -165,7 +165,7 @@ test('CAPACITY8: deadline and interruption never bypass backoff or send another 
 });
 
 test('CAPACITY9: explicit recovery preserves a running job and a completed job while retrying capacity', async t => {
-  const setup = harbor(t, repo => writeFileSync(join(repo, 'tests/running.json'), readFileSync(join(repo, 'tests/place-order.json'))));
+  const setup = harbor(t, repo => storyTest(repo, 'running'));
   let recover = false;
   const runningIds = new Set();
   const fake = await fakeRuntime(t, (e, f) => {
@@ -185,8 +185,7 @@ test('CAPACITY9: explicit recovery preserves a running job and a completed job w
 
 test('CAPACITY10: unknown dispatched jobs still occupy four configured slots; held rows stay unposted', async t => {
   const setup = harbor(t, repo => {
-    const bytes = readFileSync(join(repo, 'tests/place-order.json'));
-    for (let i = 0; i < 8; i++) writeFileSync(join(repo, `tests/extra-${i}.json`), bytes);
+    for (let i = 0; i < 8; i++) storyTest(repo, `extra-${i}`);
   });
   const fake = await fakeRuntime(t, (e, f) => e.method === 'GET' ? { status: 200, json: { ...f.check(e.url.split('/').at(-1)), requestId: 'wrong' } } : f.normal(e));
   const result = await run(setup, fake, [], undefined, {

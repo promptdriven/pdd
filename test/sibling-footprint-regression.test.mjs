@@ -10,10 +10,10 @@ import { runCheck, runTry, readContractHistory } from '../src/runtime-client.mjs
 import { harbor, fakeRuntime, portsFor, PLACE, sink } from './runtime-fake.mjs';
 
 // Expected observations are the eight reviewed native-only case declarations.
-const status=JSON.parse(readFileSync(new URL('./shared-contracts/shared-contract-status.json',import.meta.url)));
-const limits=JSON.parse(readFileSync(new URL('./shared-contracts/shared-source-limits.json',import.meta.url)));
+const status=JSON.parse(readFileSync(new URL('./shared-contracts/shared-contract-status-cases.json',import.meta.url)));
+const limits=JSON.parse(readFileSync(new URL('./shared-contracts/shared-source-limits-cases.json',import.meta.url)));
 const caseOf=id=>{const value=[...status.cases,...limits.cases].find(row=>row.id===id);assert.ok(value?.required_observation,id);return value;};
-const ONE='tests/place-order.json', TWO='tests/sibling.json', STORY='user_stories/place-order.md', OTHER='tests/unknown-item.json', SP='prompts/sibling.prompt.md';
+const ONE='tests/place-order.json', TWO='tests/place-order.sibling.json', STORY='user_stories/place-order.md', OTHER='tests/unknown-item.json', SP='prompts/sibling.prompt.md';
 const write=(repo,path,text)=>{mkdirSync(join(repo,path,'..'),{recursive:true});writeFileSync(join(repo,path),typeof text==='string'||Buffer.isBuffer(text)?text:JSON.stringify(text));};
 const load=(repo,path)=>JSON.parse(readFileSync(join(repo,path),'utf8'));
 function editPrompt(repo,path,edit){const text=readFileSync(join(repo,path),'utf8'),block=interfaceBlocks(text)[0],value=JSON.parse(block[1]);edit(value);write(repo,path,text.slice(0,block.indices[1][0])+JSON.stringify(value)+text.slice(block.indices[1][1]));}

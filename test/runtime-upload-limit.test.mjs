@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { runCheck } from '../src/runtime-client.mjs';
-import { fakeRuntime, harbor, portsFor } from './runtime-fake.mjs';
+import { fakeRuntime, harbor, portsFor, storyTest } from './runtime-fake.mjs';
 
 const gate = () => { let release; const promise = new Promise(done => { release = done; }); return { promise, release }; };
 const watchdog = promise => Promise.race([promise, new Promise((_, reject) => {
@@ -13,9 +13,8 @@ const watchdog = promise => Promise.race([promise, new Promise((_, reject) => {
 for (const [raw, limit, warnings] of [[undefined, 8, 0], ['2', 2, 0], ['0', 8, 1]]) {
   test(`2704 uploads: 20 checks, ${raw ?? 'default'}, POST reply frees a place before job completion`, { timeout: 20000 }, async t => {
     const setup = harbor(t, repo => {
-      const bytes = readFileSync(join(repo, 'tests/place-order.json'));
       rmSync(join(repo, 'tests/unknown-item.json'));
-      for (let i = 1; i < 20; i++) writeFileSync(join(repo, `tests/order-${i}.json`), bytes);
+      for (let i = 1; i < 20; i++) storyTest(repo, `order-${i}`);
     });
     const firstWindow = gate(), nextPost = gate(), readStarted = gate(), terminal = gate(), releaseAll = gate();
     const replies = [], requests = []; let open = 0, peak = 0, reads = 0;

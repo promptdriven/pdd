@@ -10,13 +10,13 @@
 
 # Shared runtime admission (#2631)
 
-Build on the saved-lint continuation contract. The existing Stories also cover owner heartbeat expiry, contention progress, bounded maintenance, fail-open advisory capacity, phase-specific lint waits, truthful wait-end text and per-process read reuse. Prompts and expected cases are reviewed before code. Native tests use fake transport/clock plus real temporary state and child processes; do not claim supplied port replies prove atomic exclusion. Follow-up native checks cover wall-clock jumps during acquisition, interruption between admission and submission, long observer timers and cached unclear capacity; check causal order, no resend, exclusion and completion with generous watchdogs. These native timer/process effects are not Runtime-replayed. Each Story has one case file. Five native case files use pdd.native-cases.v1 and are not discovered as executable Runtime scenarios; the jobs snapshot has a real Runtime scenario.
+Build on the saved-lint continuation contract. The existing Stories also cover owner heartbeat expiry, contention progress, bounded maintenance, fail-open advisory capacity, phase-specific lint waits, truthful wait-end text and per-process read reuse. Prompts and expected cases are reviewed before code. Native tests use fake transport/clock plus real temporary state and child processes; do not claim supplied port replies prove atomic exclusion. Follow-up native checks cover wall-clock jumps during acquisition, interruption between admission and submission, long observer timers and cached unclear capacity; check causal order, no resend, exclusion and completion with generous watchdogs. These native timer/process effects are not Runtime-replayed. Each Story has one case file. Five native case files use pdd.native-cases.v1. They are named `<story>-cases.json`, so the test name rule does not take them as Runtime scenarios; the jobs snapshot has a real Runtime scenario.
 
-- [runtime-local-slots](runtime-local-slots.md) — [native cases](../test/runtime-admission/runtime-local-slots.json). Runtime check: NOT REPLAYED (#2548); native cases in Story.
-- [runtime-local-queue](runtime-local-queue.md) — [native cases](../test/runtime-admission/runtime-local-queue.json). Runtime check: NOT REPLAYED (#2548); native cases in Story.
-- [runtime-capacity-wait](runtime-capacity-wait.md) — [native cases](../test/runtime-admission/runtime-capacity-wait.json). Runtime check: NOT REPLAYED (#2548); native cases in Story.
-- [runtime-maintenance-wait](runtime-maintenance-wait.md) — [native cases](../test/runtime-admission/runtime-maintenance-wait.json). Runtime check: NOT REPLAYED (#2548); native cases in Story.
-- [runtime-restart-retry](runtime-restart-retry.md) — [native cases](../test/runtime-admission/runtime-restart-retry.json). Runtime check: NOT REPLAYED (#2548); native cases in Story.
+- [runtime-local-slots](runtime-local-slots.md) — [native cases](../test/runtime-admission/runtime-local-slots-cases.json). Runtime check: NOT REPLAYED (#2548); native cases in Story.
+- [runtime-local-queue](runtime-local-queue.md) — [native cases](../test/runtime-admission/runtime-local-queue-cases.json). Runtime check: NOT REPLAYED (#2548); native cases in Story.
+- [runtime-capacity-wait](runtime-capacity-wait.md) — [native cases](../test/runtime-admission/runtime-capacity-wait-cases.json). Runtime check: NOT REPLAYED (#2548); native cases in Story.
+- [runtime-maintenance-wait](runtime-maintenance-wait.md) — [native cases](../test/runtime-admission/runtime-maintenance-wait-cases.json). Runtime check: NOT REPLAYED (#2548); native cases in Story.
+- [runtime-restart-retry](runtime-restart-retry.md) — [native cases](../test/runtime-admission/runtime-restart-retry-cases.json). Runtime check: NOT REPLAYED (#2548); native cases in Story.
 - [runtime-jobs](runtime-jobs.md) — [scenario](../test/runtime/runtime-jobs.json). Runtime check: snapshot binding only; CLI/native effects NOT REPLAYED.
 
 Live maintenance/drain remains unverified until prompt-runtime #453 supplies a staging window. No runtime-server implementation belongs to this plan.
@@ -28,11 +28,11 @@ ports; catalog/history, CLI, capture and write effects require native verificati
 
 - [shared-records](shared-records.md) — [scenario](../test/runtime/shared-records.json). Runtime check: expansion binding only.
 - [shared-seed](shared-seed.md) — [scenario](../test/runtime/shared-seed.json). Runtime check: expansion binding only.
-- [shared-contract-status](shared-contract-status.md) — [native cases](../test/shared-contracts/shared-contract-status.json). Runtime check: native effects unbound.
-- [shared-contract-drift](shared-contract-drift.md) — [native cases](../test/shared-contracts/shared-contract-drift.json). Runtime check: CLI advice unbound.
-- [shared-contract-sync](shared-contract-sync.md) — [native cases](../test/shared-contracts/shared-contract-sync.json). Runtime check: native writes unbound.
+- [shared-contract-status](shared-contract-status.md) — [native cases](../test/shared-contracts/shared-contract-status-cases.json). Runtime check: native effects unbound.
+- [shared-contract-drift](shared-contract-drift.md) — [native cases](../test/shared-contracts/shared-contract-drift-cases.json). Runtime check: CLI advice unbound.
+- [shared-contract-sync](shared-contract-sync.md) — [native cases](../test/shared-contracts/shared-contract-sync-cases.json). Runtime check: native writes unbound.
 
-- [shared-source-limits](shared-source-limits.md) — [native cases](../test/shared-contracts/shared-source-limits.json). Runtime check: native read/allocation/archive effects unbound.
+- [shared-source-limits](shared-source-limits.md) — [native cases](../test/shared-contracts/shared-source-limits-cases.json). Runtime check: native read/allocation/archive effects unbound.
 
 2. [Recognize checks with no verdict](check-no-verdict.md): distinguish failed, no-verdict, open and busy summaries.
 
@@ -83,15 +83,15 @@ The seven workflow Stories retain their separately approved contracts and all 28
 
 ## Runtime interruption and recovery
 
-- [Keep a truthful interruption message during recovery](runtime-interruption-recovery.md) — [native cases](../test/runtime-admission/runtime-interruption-recovery.json). Runtime check: NOT REPLAYED (#2548); native claim, interruption, ownership and retry effects require code-step checks.
+- [Keep a truthful interruption message during recovery](runtime-interruption-recovery.md) — [native cases](../test/runtime-admission/runtime-interruption-recovery-cases.json). Runtime check: NOT REPLAYED (#2548); native claim, interruption, ownership and retry effects require code-step checks.
 
 ## Busy Check upload waits
 
-- [Wait before uploading a busy check again](runtime-busy-upload-wait.md) — [native cases](../test/runtime-admission/runtime-busy-upload-wait.json). Runtime check: NOT REPLAYED (#2548); upload timing, capacity observation and saved-retry effects require code-step checks.
+- [Wait before uploading a busy check again](runtime-busy-upload-wait.md) — [native cases](../test/runtime-admission/runtime-busy-upload-wait-cases.json). Runtime check: NOT REPLAYED (#2548); upload timing, capacity observation and saved-retry effects require code-step checks.
 
 ## Optional local interpreter limit (#2704)
 
-- [Send selected jobs without a default limit](runtime-no-default-limit.md) — [native cases](../test/runtime-admission/runtime-no-default-limit.json). Runtime check: NOT REPLAYED; native shared-process admission and dispatch barriers require Node tests.
+- [Send selected jobs without a default limit](runtime-no-default-limit.md) — [native cases](../test/runtime-admission/runtime-no-default-limit-cases.json). Runtime check: NOT REPLAYED; native shared-process admission and dispatch barriers require Node tests.
 
 ## PDD names (#2701)
 
@@ -106,3 +106,7 @@ The seven workflow Stories retain their separately approved contracts and all 28
 ## pdd help teaches PDD (#2769)
 
 1. [Learn PDD from pdd help](help-teaches-pdd.md): root help (`pdd`, `pdd --help`, `pdd -h`, `pdd help`) names `pdd help prompting` and the full paths of the installed Prompting guide and RUNBOOK. `pdd help prompting` is a help topic: it shows how to write a prompt, a Story and its test, names `pdd test`, `pdd lint` and `pdd approve`, and prints the two paths. `pdd prompting` stays an unknown command. Test: `test/runtime/help-teaches-pdd.json`. The interpreter cannot know the install folder, so the test checks the file names; Node tests in the code area check that both paths are absolute and exist on disk, and that help works with no network and no PDD skills.
+
+## Tests found by name (#2580)
+
+1. [Find each Story's test by its name and folder](tests-found-by-name.md): the tests of Story `S` are `S.json` and `S.<variant>.json` in a `test` or `tests` folder; pdd opens no JSON file to find tests, reads a matched test in full at any size, prints every Story with no test (with the expected path), one line for the test-folder JSON files that match no Story (`--files` lists them) and every conflict, and names the selected tests in the lint request when the interpreter supports it. Native cases: `test/tests-found-by-name.test.mjs`. Interpreter test: none (native effects).

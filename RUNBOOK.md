@@ -21,13 +21,13 @@ When the person asks you to report a problem with pdd itself, follow
 |---|---|
 | `prompts/<job>.prompt.md` | The program in plain English, then `## Dependencies`, then one Runtime interface block. |
 | `user_stories/<story>.md` | One story with a numbered `## Acceptance criteria` list. pdd skips index files: `PLAN.md`, `README.md` and any file with no `## Acceptance criteria` heading. |
-| `tests/<story>.json` | The test for that story. pdd finds tests in any folder. If the repo's own tests are in `tests/` or `test/`, use `tests/runtime/` or `test/runtime/`. |
+| `tests/<story>.json` | The test for that story. pdd finds it by its name and folder: `<story>.json` in a folder named `tests` or `test`, at any depth (`tests/`, `tests/runtime/`, `runtime/tests/`). pdd does not look inside other JSON files to find tests, and a test can have any size. If the repo's own tests are in `tests/` or `test/`, use `tests/runtime/` or `test/runtime/`. |
 
 **1 story = 1 test file = many cases.** Each case is one step. Steps run in order and share the saved data.
 Across its steps, the test file must check every criterion of its story.
 
 Keep each test step small. One step = one action, or a short run of actions (about 10 moves, rows or calls). Split a long replay into steps with the expected state after each part. The server stops a step after 10 minutes.
-Add a second file only for a case that needs a different starting world. That file also checks every criterion.
+Add a second file only for a case that needs a different starting world. Name it `<story>.<world>.json`, for example `tests/place-order.empty-shop.json`. That file also checks every criterion. pdd prints every story with no test (and the path it expects), one line for the `.json` files in test folders that match no story (`pdd test --files` lists them), and two files with the same name for one story as an error that names both.
 
 **One rule, one prompt.** Before you write a prompt, look in `prompts/` for a prompt that owns the rule. Change that
 prompt. Two prompts must never state the same rule. A command-line program has one program prompt (section 6).
