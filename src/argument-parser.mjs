@@ -1,4 +1,4 @@
-// Generated from prompts/cli/argument-parser.prompt.md (sha256: 8b6bfcc6f626aeef5008c67ea7fbf4f97e8be74882d8fa06141b2347d61cf92c).
+// Generated from prompts/cli/argument-parser.prompt.md (sha256: 545a683140822504fedf2ff8a88fd02111696200f212c911b2fe7c144aa30a07).
 import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 
 export class CommandInputError extends Error {
@@ -10,6 +10,9 @@ const routes = [...PUBLIC_COMMAND_ROUTES].sort((a, b) => b.prefix.length - a.pre
 const matches = (route, words) => route.prefix.every((token, index) => words[index] === token);
 const findRoute = words => routes.find(route => matches(route, words));
 const help = prefix => Object.freeze({ commandId: 'help', local: 'help', helpPrefix: Object.freeze([...prefix]) });
+// A help topic (`help prompting`) is exactly two words; any word after the topic, also a help flag, refuses.
+const TOPICS = PUBLIC_COMMAND_ROUTES.find(route => route.id === 'help')?.topics ?? [];
+const topicHelp = words => words.length === 1 ? Object.freeze({ ...help([]), topic: words[0] }) : fail();
 // A plan whose options hold every flag that another route of the same local always has works like that route (`test --lint` = `lint`).
 const routeLike = (route, options) => routes.find(other => other !== route && other.local === route.local && other.implies
   ?.every(flag => options[flag] === true)) ?? route;
@@ -90,7 +93,7 @@ export function parseArgv(input) {
 }
 function parseWords(argv) {
   if (!argv.length || argv.length === 1 && HELP_WORDS.includes(argv[0])) return help([]);
-  if (argv[0] === 'help') return helpFor(argv.slice(1));
+  if (argv[0] === 'help') return TOPICS.includes(argv[1]) ? topicHelp(argv.slice(1)) : helpFor(argv.slice(1));
   if (HELP_WORDS.includes(argv.at(-1)) && !(findRoute(argv)?.operands.at(-1)?.type === 'text' && argv.includes('--'))) {
     const words = argv.slice(0, -1), route = findRoute(words);
     if (!route || route.prefix.length === words.length) return helpFor(words);

@@ -1,9 +1,15 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: f1e5a494622b47ff68bb09fd43582bbec69ceee380ce3327ce50ea3f18402d48).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: b85c3dcc7e5874545e737c3340f4f8eaf3143dbafab97954c671ac2353a31846).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
 const { test, lint, simulate, run, requestUptake } = NAMES;
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change', 'product']);
+export const PUBLIC_HELP_TEXT = Object.freeze({
+  heading: "PDD: prompt-driven development for your coding agent.",
+  closingLines: Object.freeze(["Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex, /pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting).", "workflow run opens the first area chat in Herdr session pdd and exits. The person approves each area; after the last step pdd pushes the branch and opens a real PR.", "pdd never merges."]),
+  learnLines: Object.freeze(["Learn PDD: run pdd help prompting, or read the Prompting guide and the RUNBOOK.", "Prompting guide: PACKAGE_ROOT/docs/prompting-guide.md", "RUNBOOK: PACKAGE_ROOT/RUNBOOK.md"]),
+  promptingLines: Object.freeze(["In PDD, prompts are the source. Code follows the prompts.", "1. Prompt: prompts/NAME.prompt.md. Write what the program does in plain English, then ## Dependencies, then one Runtime interface block.", "2. Story: user_stories/STORY.md. Write one thing that a person can do, then a numbered ## Acceptance criteria list.", "3. Test: tests/STORY.json. When the repo keeps its own tests in tests/ or test/, use tests/runtime/ or test/runtime/. Write steps with an exact check for each criterion.", "4. Check: run pdd test --fill-hash, then pdd lint (0 AI calls), then pdd test STORY on the PDD interpreter.", "5. Approve: a person reads each prompt and runs pdd approve PROMPT. An agent never approves."])
+});
 const approvalHelp = command => `Use the person's words after showing the gate or prompt. Ask the person in any chat, then relay their nonblank words without grading. Ask the person, then relay their words with --said. Without --said, use a separate person terminal. Chat alone never approves. Use this quoted heredoc by default:
 ${command} --said - <<'PDD_SAID'
 <the person's exact words>
@@ -54,9 +60,11 @@ const routes = [
   { id: 'workflow.open', prefix: ['workflow', 'open'], local: 'workflow-open',
     operands: [{name:'issue',type:'issue'}], options: [],
     forms: [form('pdd workflow open ISSUE', 'Focus or attach the current area chat; resume it if its session ended.')] },
-  { id: 'help', prefix: ['help'], local: 'help', operands: [], options: [], forms: [
+  // A help topic is a word after `help` only; it is no route prefix, so `pdd prompting` stays unknown.
+  { id: 'help', prefix: ['help'], local: 'help', operands: [], options: [], topics: ['prompting'], forms: [
     form('pdd', 'Show local commands.'), form('pdd --help', 'Show local commands.'),
-    form('pdd -h', 'Show local commands.'), form('pdd help', 'Show local commands.') ] },
+    form('pdd -h', 'Show local commands.'), form('pdd help', 'Show local commands.'),
+    form('pdd help prompting', 'Show how to write prompts, Stories and tests, and where the guide is.') ] },
   { id: 'version', prefix: ['--version'], local: 'version', operands: [], options: [],
     forms: [form('pdd --version', 'Show this package version.')] },
   { id: 'completion', prefix: ['completion'], local: 'completion', operands: [{ name: 'shell', type: 'choice:bash,zsh' }], options: [],
@@ -106,7 +114,8 @@ const routes = [
 export const PUBLIC_COMMAND_ROUTES = Object.freeze(routes.map(route => Object.freeze({ ...route,
   prefix: Object.freeze(route.prefix), ...(route.quiet ? { quiet: Object.freeze(route.quiet) } : {}),
   ...(route.removed ? { removed: Object.freeze(route.removed) } : {}),
-  ...(route.implies ? { implies: Object.freeze(route.implies) } : {}), operands: Object.freeze(route.operands.map(Object.freeze)),
+  ...(route.implies ? { implies: Object.freeze(route.implies) } : {}),
+  ...(route.topics ? { topics: Object.freeze(route.topics) } : {}), operands: Object.freeze(route.operands.map(Object.freeze)),
   options: Object.freeze(route.options.map(Object.freeze)), forms: Object.freeze(route.forms) })));
 export const PUBLIC_COMMAND_IDS = Object.freeze(PUBLIC_COMMAND_ROUTES.map(route => route.id));
 export const PUBLIC_COMMAND_MANIFEST = Object.freeze(PUBLIC_COMMAND_ROUTES.flatMap(route => route.forms));

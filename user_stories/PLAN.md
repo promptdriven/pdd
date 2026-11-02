@@ -112,3 +112,7 @@ The seven workflow Stories retain their separately approved contracts and all 28
 ## Explicit gate decisions (#2762, same PR pair as #2755)
 
 1. [Keep every gate waiting for my decision](approval-explicit-gates.md) — native cases `test/approval-explicit-gates.test.mjs` in [code PR #2768](https://github.com/promptdriven/pdd/pull/2768). Runtime check: NOT RUN (provider calls forbidden). Native gate authority and advisory regressions plus honest terminal/no-auto-advance preservation controls.
+
+## pdd help teaches PDD (#2769)
+
+1. [Learn PDD from pdd help](help-teaches-pdd.md): root help (`pdd`, `pdd --help`, `pdd -h`, `pdd help`) names `pdd help prompting` and the full paths of the installed Prompting guide and RUNBOOK. `pdd help prompting` is a help topic: it shows how to write a prompt, a Story and its test, names `pdd test`, `pdd lint` and `pdd approve`, and prints the two paths. `pdd prompting` stays an unknown command. Test: `test/runtime/help-teaches-pdd.json`. The interpreter cannot know the install folder, so the test checks the file names; Node tests in the code area check that both paths are absolute and exist on disk, and that help works with no network and no PDD skills.

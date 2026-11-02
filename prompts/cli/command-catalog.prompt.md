@@ -1,6 +1,6 @@
 # Local command catalog
 
-Own `src/command-catalog.mjs`; export only `PUBLIC_COMMAND_ROUTES`, `PUBLIC_COMMAND_IDS`, `PUBLIC_COMMAND_MANIFEST`, `NAMES` ([Names](#names)) and `BUNDLED_WORKFLOW_NAMES` (feature, bug, small-change, product). Catalog the complete small alpha surface: root help, --version, completion bash|zsh, workflow list [--json] and setup (`pdd setup`, local `setup`, no operands or options; its help says that it installs the PDD skills for Codex and Claude if they are missing, adds the short PDD block to CLAUDE.md, else AGENTS.md, and that a second run changes nothing). Each route has stable id, exact prefix, local disposition, operand/option specs and plain help forms. Expose no excluded command, private schema/type, service flag or hosted execution operation. Help, parser and completion share this one authority.
+Own `src/command-catalog.mjs`; export only `PUBLIC_COMMAND_ROUTES`, `PUBLIC_COMMAND_IDS`, `PUBLIC_COMMAND_MANIFEST`, `NAMES` ([Names](#names)), `PUBLIC_HELP_TEXT` ([Help text](#help-text)) and `BUNDLED_WORKFLOW_NAMES` (feature, bug, small-change, product). Catalog the complete small alpha surface: root help, --version, completion bash|zsh, workflow list [--json] and setup (`pdd setup`, local `setup`, no operands or options; its help says that it installs the PDD skills for Codex and Claude if they are missing, adds the short PDD block to CLAUDE.md, else AGENTS.md, and that a second run changes nothing). Each route has stable id, exact prefix, local disposition, operand/option specs and plain help forms. Expose no excluded command, private schema/type, service flag or hosted execution operation. Help, parser and completion share this one authority.
 
 ## Authoring
 
@@ -125,6 +125,7 @@ The ordered help-form list consists of the lines below in their displayed order,
   pdd --help  Show local commands.
   pdd -h  Show local commands.
   pdd help  Show local commands.
+  pdd help prompting  Show how to write prompts, Stories and tests, and where the guide is.
   pdd --version  Show this package version.
   pdd completion bash|zsh  Print local shell completion.
   pdd workflow list [--json]  List the bundled workflows with their areas and gates.
@@ -149,6 +150,46 @@ The ordered help-form list consists of the lines below in their displayed order,
   pdd setup  Install the PDD skills for Codex and Claude if they are missing, and add the short PDD block to CLAUDE.md, else AGENTS.md. Offer detected Codex, Claude Code and Gemini MCP registrations after showing exact config changes and one y/N question. A second run changes nothing.
 ```
 
+
+
+The `help` route owns the forms `pdd`, `pdd --help`, `pdd -h`, `pdd help` and `pdd help prompting`, and lists one help topic: `prompting`. A topic is no route prefix, so `prompting` alone is no command. The [Learn PDD](#learn-pdd) section owns the topic's text; the [parser](argument-parser.prompt.md#help-topics) owns its syntax.
+
+## Help text
+
+Export the frozen `PUBLIC_HELP_TEXT` object with `heading`, `closingLines`, `learnLines` and `promptingLines`. The heading is exactly `PDD: prompt-driven development for your coding agent.` The three line arrays contain the exact ordered lines in the closing block below, the Learn PDD block and the prompting topic block respectively. Keep `PACKAGE_ROOT` as a template marker in `learnLines`; the CLI substitutes its absolute package root. The topic uses the last two learn lines after its prompting lines. This catalog owns every help text template; the dispatcher owns composition and path substitution.
+
+The closing lines are exactly:
+
+```text
+Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex, /pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting).
+workflow run opens the first area chat in Herdr session pdd and exits. The person approves each area; after the last step pdd pushes the branch and opens a real PR.
+pdd never merges.
+```
+
+(`run` is the [NAMES](#names) word. Codex calls a skill with `$name`, Claude Code with `/name`.)
+
+## Learn PDD
+
+The catalog owns these help text templates; the CLI substitutes its package root without reading files.
+
+Help tells a person or an agent with no PDD skills where to learn PDD. PACKAGE_ROOT is the absolute path of the folder that holds the package.json of this pdd: the `packageRoot` of the CLI dispatcher's `runPdd`, by default the parent folder of `src/`. It is never the cwd or the person's repo. Both files ship in the package (`files` in package.json), so both paths exist in every install. Help reads no file to print them. The learn line and the two path lines are exactly:
+
+```text
+Learn PDD: run pdd help prompting, or read the Prompting guide and the RUNBOOK.
+Prompting guide: PACKAGE_ROOT/docs/prompting-guide.md
+RUNBOOK: PACKAGE_ROOT/RUNBOOK.md
+```
+
+`pdd help prompting` is a help topic, not a command ([help topics](argument-parser.prompt.md#help-topics)). It prints the first help line, one empty line, the lines below, one empty line, then the two path lines. It exits 0, writes nothing to stderr and is local, as all help is.
+
+```text
+In PDD, prompts are the source. Code follows the prompts.
+1. Prompt: prompts/NAME.prompt.md. Write what the program does in plain English, then ## Dependencies, then one Runtime interface block.
+2. Story: user_stories/STORY.md. Write one thing that a person can do, then a numbered ## Acceptance criteria list.
+3. Test: tests/STORY.json. When the repo keeps its own tests in tests/ or test/, use tests/runtime/ or test/runtime/. Write steps with an exact check for each criterion.
+4. Check: run pdd test --fill-hash, then pdd lint (0 AI calls), then pdd test STORY on the PDD interpreter.
+5. Approve: a person reads each prompt and runs pdd approve PROMPT. An agent never approves.
+```
 
 
 ## Dependencies
