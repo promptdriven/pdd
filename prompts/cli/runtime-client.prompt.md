@@ -183,9 +183,11 @@ Retry confirmed busy lint replies until the caller deadline, with no attempt-cou
 and the same captured archive/options each time. Honor Retry-After first, else positive numeric details.retry_after in
 seconds (bound1..300, default5), before retrying. Print `The server is busy. Waiting for a lint
 slot…` before the wait. No attempt or wait starts after interruption or the total lint deadline:
-the caller deadline. Check (including standalone remote lint) keeps its 90-second agent default,
-unlimited interactive wait and explicit --timeout override; Try keeps its existing total 5-minute
-setup allowance and 90-second agent default, with no independent 120-second lint cap. Bound each lint HTTP request/read by the remaining wait.
+the caller deadline. Ordinary Check, including its preliminary lint, waits without a default
+limit in every shell; only explicit --timeout bounds it. Standalone remote lint retains its
+90-second agent default and unlimited interactive wait, with explicit --timeout override.
+Try retains its total 5-minute setup allowance and 90-second agent lint default.
+There is no independent 120-second lint cap. Bound each lint HTTP request/read by the remaining wait.
 A lost reply still reads only that ID; it may retry only after that read confirms the retryable
 terminal capacity refusal. Do not submit checks or create a Try until lint succeeds.
 
@@ -196,16 +198,20 @@ the existing read-only recovery and unknown wording; do not relabel them as safe
 ## Lint still running when the wait ends
 
 A matching lint job whose last confirmed state is `queued` or `running` is pending,
-not an unknown result or a capacity refusal. Keep the command/90-second agent limit;
-queue time, retry backoff and actual lint work share that budget. Save the last lint ID,
+not an unknown result or a capacity refusal. Queue time, retry backoff and lint work
+share the caller wait in [shared local admission](#shared-local-admission-and-maintenance):
+ordinary Check and saved-batch read are unlimited unless --timeout is explicit; standalone
+lint, Try and explicit retry retain their separate defaults. Only a deadline or interruption
+ends a wait while matching lint remains pending. Save the last lint ID,
 state and pending marker. Return exit 3 with a plain “Lint is still queued/running”
 message, no check/Try dispatch, and zero check AI calls. Check and explicit lint name
 `pdd test --read BATCH`; `pdd simulate` says that no Try was made and lint used no AI calls.
 Lost replies, wrong IDs/commands and explicit unknown states retain unknown handling.
 
 A saved read refreshes unresolved lint using only its latest saved ID, or uses a matching
-saved terminal answer. Still-pending lint stays exit3; wrong-ID/command or unknown lint
-cannot authorize dispatch. Clear stale unknown/pending wording on confirmed terminal lint;
+saved terminal answer. Continue reading matching pending lint within this invocation's
+caller wait; exit3 only when that wait ends. Wrong-ID/command or unknown lint cannot
+authorize dispatch. Clear stale unknown/pending wording on confirmed terminal lint;
 report global and reached prompt refusals with their paths. Never rejudge posted check rows
 or local preflight refusals. Terminal busy lint stays busy without resubmission.
 
@@ -264,8 +270,10 @@ A later verified same-ID receipt supplies the current result under the recovery 
 and supersedes the interruption note. Do not change accounting, receipt projection or dispatch
 authority merely to retain the note.
 
-Each continuation gets a fresh finite wait: --timeout MIN when supplied, otherwise 90 seconds,
-including receipt refresh, source validation and check polling. Allocate the original held
+Each continuation gets a fresh caller wait, including receipt refresh, source validation
+and check polling: saved-batch --read has no default limit in either shell; --timeout MIN
+bounds it when supplied. Explicit --retry retains its finite default of 90 seconds,
+with --timeout override. Allocate the original held
 row's first check ID only after these gates; save it and an exclusive dispatch claim before
 POST. Repeated reads or retries share the claim; batch ownership refuses an overlapping
 command with exit 3 and no dispatch. Neither duplicates a paid POST. A saved dispatch claim

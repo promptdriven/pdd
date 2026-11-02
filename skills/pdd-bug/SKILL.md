@@ -7,7 +7,7 @@ metadata:
 
 # PDD bug
 
-Fix the defect and add a test/check that catches it. Fix the defect first; if its cause is unclear, first add a failing reproducer, precise error or logging to expose it, then fix it. A diagnostic-only PR must say 'Not fixed yet: this helps find the cause' and leave the issue open.
+Fix both: the brakes (the real defect) and the warning light (a test or check that would catch it next time). Brakes first. If the agent cannot find the defect yet, it fixes the warning light first: it adds what makes the defect visible (a failing reproducer test, a precise error, logging), so the cause becomes easy to find, and then it fixes the brakes. A warning-light-only change must say 'Not fixed yet: this helps find the cause' on the PR, and the issue stays open; it never closes the bug.
 
 Step briefs are in `steps/`. `?` means optional.
 1. story: reproduce, prompt-story → gate: approve
@@ -15,7 +15,7 @@ Step briefs are in `steps/`. `?` means optional.
 3. code: build, verify, formal, review → gate: pr
 
 - Main chat: coordinate; no code or checks.
-- Use fresh subagents; never reuse builders or let them check their code. Give step file and paths, not chat history. Wait once; no small follow-ups. Run `pdd test`/`--read BATCH` with the shell's longest timeout (Codex: long `timeout_ms`) or exit-notifying background task (Claude Code: `run_in_background`). If stopped, resume once with the saved `--read` command; never poll every minute.
+- Use fresh subagents; never reuse builders or let them check their code. Give the step file and paths at once, not chat history. Wait once with a long time-out; no small follow-ups. Check/read: RUNBOOK §11 once.
 - Checks: fresh first. Only verify/formal may reuse after startup failure; wrote no code, tests or prompts this run.
 - Review: always fresh; no build, verify, formal, prior reviews or their context. Blocked: RUNBOOK §17.
 - Read pdd-prompting RUNBOOK §17 before checks: cleanup, unrun checks, recovery and result replacement.

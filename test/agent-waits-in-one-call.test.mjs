@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { runCheck } from '../src/runtime-client.mjs';
+import { PUBLIC_COMMAND_MANIFEST } from '../src/command-catalog.mjs';
 import { harbor, portsFor, PLACE } from './runtime-fake.mjs';
 
 // Offline public-boundary replay: every service reply and clock tick is injected.
@@ -128,3 +129,11 @@ for (const interactive of [false, true]) for (const completeAt of [88000, 90000,
     assert.equal(f.posts.filter(p => p.command === 'check').length, 1);
   });
 }
+
+// The catalog owns the text rendered by public Check help.
+test('ONE-CALL public help describes the unlimited caller wait in every shell', () => {
+  const help = PUBLIC_COMMAND_MANIFEST.find(row => row.form.startsWith('pdd test [STORY...]')).description;
+  assert.match(help, /no default limit in any shell; --timeout MIN sets the limit/);
+  assert.match(help, /progress line every 30 s/);
+  assert.doesNotMatch(help, /at most 90 s for an agent/);
+});

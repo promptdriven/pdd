@@ -81,6 +81,27 @@ for (const [name, config, expect, elapsed] of [
   assert.equal(paid(r).length, code === 0 && r.mode === 'check' ? 1 : 0);
   if (paid(r).length) assert.equal(paid(r)[0].request.max_calls, 6);
 });
+// A saved read must keep the original accepted lint ID pending beyond the old cutoff.
+for (const interactive of [false, true]) test(`CONTINUATION one-call saved pending lint (${interactive ? 'person' : 'agent'})`, async t => {
+  const r = await setup(t, { timeout: 1 });
+  const seed = await r.first();
+  assert.equal(seed.code, 3); assert.equal(paid(r).length, 0);
+  const lintId = r.f.posts.find(e => e.command === 'lint').request.requestId;
+  r.state.readyAt = START + 150000;
+  const before = r.f.gets.length;
+  const next = await recovery(r, seed.batch, false, { interactive });
+  assert.equal(next.code, 0, 'saved read waits through pending lint and dispatches original held check once');
+  assert.equal(next.clock.now - START, 150000);
+  assert.equal(r.f.posts.filter(e => e.command === 'lint').length, 1);
+  assert.ok(r.f.gets.slice(before).length > 1);
+  assert.ok(r.f.gets.slice(before).every(e => e.url.endsWith(lintId)));
+  assert.equal(paid(r).length, 1); assert.equal(paid(r)[0].request.max_calls, 6);
+  assert.equal(saved(r, seed.batch).doc.timeout_min, null);
+  const again = await recovery(r, seed.batch, false, { interactive });
+  assert.equal(again.code, 0); assert.equal(again.clock.uuids, 0);
+  assert.equal(paid(r).length, 1);
+  assert.equal(again.json.rows[0].request_id, next.json.rows[0].request_id);
+});
 for (const retry of [false, true]) test(`CONTINUATION native table: ${retry ? 'retry' : 'read'} and repeat`, async t => {
   const r = await setup(t, { timeout: 1.5 }); const { batch } = await r.first(); r.state.lint = 'passed';
   const next = await recovery(r, batch, retry); assert.equal(next.code, 0, next.ports.stderr.text);

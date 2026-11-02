@@ -6,10 +6,11 @@ final Story results without asking my agent to poll every minute.
 ## Acceptance criteria
 
 1. With no timeout, `pdd test` waits until every Story ends in either kind of shell, including checks finishing after 90 seconds.
-2. `pdd test --read BATCH` waits until every saved Story ends, including results after 90 seconds, using the original request IDs for accepted running checks without resubmitting them or creating replacement request IDs.
+2. `pdd test --read BATCH` waits until every saved Story ends, including results after 90 seconds, using the original request IDs for accepted running checks without resubmitting them or creating replacement request IDs. A saved Check held for queued or running lint waits for lint to finish, then starts each original held check at most once.
 3. Before the first check is sent, pdd saves the batch and prints its recovery command. While waiting, it prints progress on stderr every 30 seconds, keeping stdout for the final results.
 4. `--timeout 1` stops either a new check or a saved read at 60 seconds with exit 3 and the recovery command, retaining running receipts and their request IDs.
 5. If the shell tool stops pdd, one recovery read waits for completion without resending the checks. Final results retain one Prompt tests line per Story, the existing table, reports, coverage and failure details; JSON remains one document.
+6. Check help describes the same unlimited default in every shell, the explicit timeout option and 30-second progress.
 
 ## Rules to check
 

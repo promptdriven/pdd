@@ -7,7 +7,7 @@ metadata:
 
 # PDD small change
 
-Fix the defect and add a test/check that catches it. Fix the defect first; if its cause is unclear, first add a failing reproducer, precise error or logging to expose it, then fix it. A diagnostic-only PR must say 'Not fixed yet: this helps find the cause' and leave the issue open.
+Fix both: the brakes (the real defect) and the warning light (a test or check that would catch it next time). Brakes first. If the agent cannot find the defect yet, it fixes the warning light first: it adds what makes the defect visible (a failing reproducer test, a precise error, logging), so the cause becomes easy to find, and then it fixes the brakes. A warning-light-only change must say 'Not fixed yet: this helps find the cause' on the PR, and the issue stays open; it never closes the bug.
 
 Use this for a small change with a clear effect that is easy to undo. If the impact grows, suggest pdd-bug or pdd-feature.
 
@@ -18,7 +18,7 @@ Each area is one main chat. Step briefs are in `steps/`.
 ## Rules
 
 - The main chat coordinates and talks with the person; no code or checks.
-- Use fresh subagents; never reuse builders or let them check their code. Give step file and paths, not chat history. Wait once; no small follow-ups. Run `pdd test`/`--read BATCH` with the shell's longest timeout (Codex: long `timeout_ms`) or exit-notifying background task (Claude Code: `run_in_background`). If stopped, resume once with the saved `--read` command; never poll every minute.
+- Use fresh subagents; never reuse builders or let them check their code. Give the step file and paths at once, not chat history. Wait once with a long time-out; no small follow-ups. Check/read: RUNBOOK §11 once.
 - Checks: fresh first. Only verify/formal may reuse after startup failure; wrote no code, tests or prompts this run.
 - Read pdd-prompting RUNBOOK §17 before checks: cleanup, unrun checks, recovery and result replacement.
 - At gates, show results, ask and stop. Revise changes and ask again. Outside runs, ask before opening PRs. In runs, pdd opens them. Only the main chat may merge on explicit person request under RUNBOOK §2.
