@@ -428,34 +428,48 @@ pdd reports each slow upload, lint and Try setup step. Use the [progress helpers
 
 [Runtime outcome](runtime-outcome.prompt.md) decides each selected test's outcome
 from a server answer: explicit lint rows, check rows, saved lint reads and Try
-setup. This module keeps transport, identity, saved-source and capacity rules, and
-has no state mapping of its own. Each row stores its outcome fields (`state`, and
-`progress` and `ahead` when supplied), so saved reads and JSON keep them.
+setup. Each row stores its outcome fields (`state`, and `progress` and `ahead`
+when supplied), so saved reads and JSON keep them. Transport, polling, capacity
+and job-lifecycle rules stay in this module.
 
 **Shared lint gate.** Scope, not ignore, per test: pdd sends paid work for a
 selected test only when that test's own lint outcome is `passed`. One rule serves
 new checks, saved-lint continuation, retry, the restart replacement and a new Try;
-each sends the tests that pass and holds back the others. A test that lint refused
-is `refused` with its lint refusals. A test whose lint outcome is unknown is
-`not_run` with `The lint result is unknown, so pdd sent no checks.` (with the
-outcome reason in parentheses when there is one) and the run exits 3. A job
-refusal or an incomplete lint gives no test a pass, so it stops every test.
-Unsent checks keep zero calls. The send line keeps `Lint passed.` only when every
-test passed; otherwise it says `Lint refused R of N tests.` and/or
-`Lint gave no verdict for U of N tests.` before `Sent K checks …`, and with no
-refused and no sent test there is no send line. When a test is sent, each job
-refusal and refused prompt that per-test passes scoped out is added to the warnings
-as `Lint diagnostic: <code>  <file>  <reason or message>` (Try prints them on
-stderr). The gate keeps the saved-source, owner, intent, call-ceiling, identity and
-dispatch-claim checks; `--retry` stops with exit 2 only when no retryable test
-passes the gate.
+each sends the tests that pass and holds back the others:
+
+| Lint outcome of the test | The check | Note | Exit |
+|---|---|---|---|
+| passed | sent | | from its result |
+| refused | `refused`, with its lint refusals | | 4 |
+| not_run (the lint ended without a pass for it) | `not_run`, final | `No lint pass for this test (<reason>), so pdd sent no checks.` | 5 |
+| unknown (the lint has not ended) | `not_run`, held for the saved-lint continuation | `The lint result is unknown, so pdd sent no checks.` | 3 |
+
+A job refusal refuses only the tests that have no verdict of their own; a test with
+its own passing verdict is sent. An incomplete lint holds back only the tests
+without their own pass. Unsent checks keep zero calls. The send line keeps
+`Lint passed.` only when every test passed; otherwise it says
+`Lint refused R of N tests.` and/or `Lint gave no verdict for U of N tests.` before
+`Sent K checks …`, and with no refused and no sent test there is no send line.
+When a test is sent, each job refusal and refused prompt that did not refuse one of
+the selected tests is added to the warnings as
+`Lint diagnostic: <code>  <file>  <reason or message>` (Try prints them on stderr).
+The gate keeps the saved-source, owner, intent, call-ceiling, identity and
+dispatch-claim checks. `--retry` stops with exit 2 only when no retryable test
+passes the gate. When the restart replacement holds a test back, print one line:
+`The interpreter restarted a check, but the saved lint gives no pass of its own to that test, so pdd did not send it again. Start a fresh pdd test.`
+(`<N> checks` for more than one).
 
 `pdd lint` rows, `lint_state`, the summary and the exit code come from the same
-outcomes. An unknown row adds `reason: {code: null, message}` in JSON and
-`unknown: <reason>` in text. With no lint answer at all, keep the existing exit 3
-line. The progress line counts a Story as done only when all its rows are done
-(`unknown` is not done). It shows the outcome text of each running row with server
-progress; otherwise known call counts only, or `AI calls unknown`, never zero.
+outcomes. A `not_run` row adds `reason: {code: null, message: <reason>}` in JSON and
+`not run: <reason>` in text, exit 5. With no ended lint answer, keep the existing
+exit 3 line `The lint result is unknown. Run pdd lint again; a lint uses no AI calls.`
+
+The progress line counts a Story as done only when all its rows are done
+(`unknown` is not done). It shows one [progress fragment](runtime-outcome.prompt.md#progress-and-exit)
+for all running rows with server progress, then the known calls of ended checks
+(`N AI calls in ended checks`, or `N AI calls so far` without a fragment), or
+`AI calls unknown` when there is neither; never an invented zero. A row that a
+read turns into a lost, unknown row drops its old `progress`.
 
 ## Dependencies
 

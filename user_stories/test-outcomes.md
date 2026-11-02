@@ -7,12 +7,12 @@ keeps its reason, and unfinished work stays unfinished.
 
 1. `pdd lint place-order` passes only when lint is complete and the server explicitly passes that test; its row, summary, JSON and exit code agree.
 2. Refused lint with a program report but no selected verdict keeps the server's refusal code and text, exits 4 (or 3 when only incomplete evidence exists), never says the test passed, and sends no paid checks.
-3. Incomplete lint says "lint did not finish", shows unknown and exits 3. Empty lint or a complete lint missing the selected verdict also stays unknown, never exit 0. A program without a prompts list produces a truthful result without an internal error.
+3. A lint that ended without a pass for my test says why ("lint did not finish" or "lint gave no verdict for this test"), shows not run and exits 5, so I know that reading again will not help. Only a lint that has not ended yet is unknown with exit 3. Empty lint is never exit 0. A program without a prompts list produces a truthful result without an internal error.
 4. An unrelated refusal remains visible as a diagnostic. Only a complete passing verdict for the selected test allows that test to pass despite it; a refused selected test or reached prompt still refuses the row.
-5. New checks, saved-lint continuation, retry, the restart replacement and a new Try use the same gate, per test: a selected test is sent only when its own lint outcome is passed. With 18 selected tests and one lint refusal, the other 17 are still sent; the refused one stays refused and a test with no verdict is not run. A held-back test allocates no paid request and keeps zero calls. Source, owner, intent and call-ceiling protections remain in force.
+5. New checks, saved-lint continuation, retry, the restart replacement and a new Try use the same gate, per test: a selected test is sent only when its own lint verdict is a pass. With 18 selected tests and one lint refusal, the other 17 are still sent; the refused one stays refused and a test with no verdict is not run. A test with its own pass is sent even when the lint did not finish for other tests. A held-back test allocates no paid request and keeps zero calls, and the restart replacement says in one line why it held a test back. Source, owner, intent and call-ceiling protections remain in force.
 6. Queued, running, passed, failed, refused, not run and unknown remain distinct in the table, Story summary, JSON and exit. Empty outcomes exit 3; unknown is not counted as a done Story. Missing per-criterion evidence does not count authored criteria as passed.
 7. A retryable pool-copy-unavailable answer with dispatch not_started shows not run, exits 5, keeps the server's text and has neither a cross nor a refused block. Uncertain execution is never retried by inference.
-8. When the server sends step 3 of 5, 4 settled AI calls and 1 in flight, the running row, progress line and summary show "running · step 3 of 5 · 4 AI calls so far · 1 in flight". Missing progress fields stay unknown; no step or call count is invented. Saved reads retain supplied progress.
+8. When the server sends step 3 of 5, 4 settled AI calls and 1 in flight, the running row, progress line and summary show "running · step 3 of 5 · 4 AI calls so far · 1 in flight". With several running tests, a line shows one progress part with the summed calls, and the calls of checks that ended stay on the line. Missing progress fields stay unknown; no step or call count is invented. Saved reads retain supplied progress.
 
 ## Server evidence
 
@@ -30,7 +30,6 @@ Read from the server's main branch before defining the cases:
 It tests complete pass; program-bearing refusal; incomplete, empty and missing
 verdicts; unrelated diagnostics with and without selected evidence; every gate;
 all exit states; retryable pool refusal; full and partial running progress.
-Expected changes are listed for the person in the builder's EXPECTED-CHANGES.md.
 No paid interpreter check or live server result is claimed. The client has native
 filesystem/capture effects without a complete interpreter binding; these native
 regressions do not claim an interpreter prompt verdict.

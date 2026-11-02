@@ -21,8 +21,17 @@ function lintAnswer(f, id, shape) {
     case 'raw-refusal':
       answer.result.report.refusal = refusal;
       answer.result.report.lint = { complete: false, tests: [] }; break;
-    case 'incomplete': answer.result.report.lint.complete = false; break;
+    // The lint ended before this test: the server marks it not-checked.
+    case 'incomplete': answer.result.report.lint = { complete: false, tests: [{ path: TEST, verdict: 'not-checked' }] }; break;
+    // The lint ended before another test; this test has its own pass.
+    case 'incomplete-own-pass': answer.result.report.lint = { complete: false, tests: [{ path: TEST, verdict: 'passed' }, { path: 'tests/other.json', verdict: 'not-checked' }] }; break;
+    // The status view's public list (result.tests, problems_complete) with no report.lint.
+    case 'public-tests': delete answer.result.report.lint; Object.assign(answer.result, { tests: [{ path: TEST, verdict: 'passed', problems: 0 }], problems_complete: true }); break;
+    // A raw refusal of the selected test with no message text.
+    case 'bare-refusal': answer.state = 'refused'; answer.result.report.lint = { complete: true, tests: [] };
+      answer.result.refusals = [{ code: 'interface-missing', file: TEST, reason: 'The test names a prompt with no Runtime interface.' }]; break;
     case 'missing-verdict': answer.result.report.lint.tests = []; break;
+    case 'both': answer.result.report.lint.tests.push({ path: 'tests/unknown-item.json', verdict: 'passed' }); break;
     case 'empty': return f.job(id, 'lint', 'passed', {});
     case 'no-prompts': delete answer.result.report.program.prompts;
       answer.result.report.lint = { complete: false, tests: [] }; break;
@@ -58,10 +67,11 @@ async function setup(t, shape, { pending = false, check = 'passed', progress } =
   return { h, f, command, finish() { done = true; } };
 }
 
+// An ended lint without a pass for the test is final: not run, exit 5 (exit 3 means "read again").
 for (const [shape, code, state] of [
-  ['passed', 0, 'passed'], ['refused', 4, 'refused'], ['raw-refusal', 4, 'refused'],
-  ['incomplete', 3, 'unknown'], ['missing-verdict', 3, 'unknown'], ['empty', 3, 'unknown'],
-  ['no-prompts', 3, 'unknown'], ['unrelated', 0, 'passed'], ['unrelated-no-verdict', 4, 'refused'],
+  ['passed', 0, 'passed'], ['refused', 4, 'refused'], ['raw-refusal', 4, 'refused'], ['bare-refusal', 4, 'refused'],
+  ['incomplete', 5, 'not_run'], ['missing-verdict', 5, 'not_run'], ['empty', 5, 'not_run'], ['no-prompts', 5, 'not_run'],
+  ['incomplete-own-pass', 0, 'passed'], ['public-tests', 0, 'passed'], ['unrelated', 0, 'passed'], ['unrelated-no-verdict', 4, 'refused'],
 ]) test(`OUTCOME explicit lint: ${shape}`, async t => {
   const r = await setup(t, shape);
   let result;
@@ -71,21 +81,29 @@ for (const [shape, code, state] of [
   assert.equal(result.json.rows[0]?.state, state, 'selected row must be present, including unknown');
   assert.equal(r.f.posts.filter(p => p.command === 'check').length, 0);
   if (state !== 'passed') assert.doesNotMatch(result.json.summary_line, /1 of 1 tests pass/);
-  if (shape === 'refused' || shape === 'raw-refusal') assert.match(JSON.stringify(result.json), /admission-stopped/);
-  if (shape === 'incomplete') assert.match(JSON.stringify(result.json), /lint did not finish/);
+  if (shape === 'refused' || shape === 'raw-refusal') assert.match(JSON.stringify(result.json), /admission-stopped[\s\S]*Admission stopped before this test\./);
+  if (shape === 'incomplete') assert.match(JSON.stringify(result.json.rows[0].reason), /lint did not finish/);
+  if (shape === 'missing-verdict') assert.match(JSON.stringify(result.json.rows[0].reason), /lint gave no verdict for this test/);
   if (shape === 'unrelated') assert.ok(result.json.problems.some(p => p.code === 'unrelated-input'));
   assert.doesNotMatch(result.err, /internal error|not iterable/i);
 });
 
-for (const shape of ['refused', 'raw-refusal', 'incomplete', 'empty', 'missing-verdict', 'unrelated-no-verdict'])
+for (const shape of ['refused', 'raw-refusal', 'bare-refusal', 'incomplete', 'empty', 'missing-verdict', 'unrelated-no-verdict'])
   test(`OUTCOME new checks stop at ${shape} lint`, async t => {
     const r = await setup(t, shape);
     const result = await r.command({ '--json': true });
     assert.equal(r.f.posts.filter(p => p.command === 'check').length, 0, 'no paid POST');
     assert.equal(result.json.rows[0].calls, 0);
     assert.doesNotMatch(result.err, /Lint passed/);
-    assert.ok([3, 4].includes(result.code));
+    assert.equal(result.code, result.json.rows[0].state === 'refused' ? 4 : 5, 'an ended lint is final');
   });
+
+test('OUTCOME a test with its own pass is sent although the lint did not finish for another test', async t => {
+  const r = await setup(t, 'incomplete-own-pass');
+  const result = await r.command({ '--json': true });
+  assert.deepEqual(r.f.posts.filter(p => p.command === 'check').map(p => p.request.scenario), [TEST]);
+  assert.equal(result.code, 0, result.err);
+});
 
 for (const retry of [false, true]) for (const shape of ['refused', 'incomplete', 'unrelated', 'unrelated-no-verdict'])
   test(`OUTCOME ${retry ? 'retry' : 'continuation'} gate: ${shape}`, async t => {
@@ -108,32 +126,46 @@ for (const shape of ['refused', 'incomplete', 'unrelated-no-verdict']) test(`OUT
 });
 
 // Scope, not ignore: one test without a lint pass never stops a test that has one.
-const mixed = { complete: true, tests: [{ path: TEST, verdict: 'passed' }] };
 for (const pending of [false, true]) test(`OUTCOME ${pending ? 'continuation' : 'new checks'}: a test without a verdict is not sent; a passing one is`, async t => {
   const r = await setup(t, 'passed', { pending });
-  const lint = r.f.lint; r.f.lint = (id, ...rest) => { const answer = lint(id, ...rest); answer.result.report.lint = structuredClone(mixed); return answer; };
   const first = await r.command({ '--json': true }, ['place-order', 'unknown-item']);
   r.finish();
   const result = pending ? await r.command({ '--json': true, '--read': first.json.batch }, []) : first;
   assert.deepEqual(r.f.posts.filter(post => post.command === 'check').map(post => post.request.scenario), [TEST]);
   assert.deepEqual(result.json.rows.map(row => row.state), ['passed', 'not_run']);
   assert.equal(result.json.rows[1].calls, 0);
-  assert.match(result.json.rows[1].reason.message, /lint result is unknown \(lint gave no verdict for this test\)/);
-  assert.equal(result.code, 3);
+  assert.match(result.json.rows[1].reason.message, /No lint pass for this test \(lint gave no verdict for this test\)/);
+  assert.equal(result.code, 5, 'an ended lint without a verdict is final');
+  if (pending) {
+    const again = await r.command({ '--json': true, '--read': first.json.batch }, []);
+    assert.equal(again.code, 5); assert.equal(r.f.posts.filter(post => post.command === 'check').length, 1);
+  }
 });
 
-test('OUTCOME retry rechecks saved per-test lint evidence', async t => {
-  const r = await setup(t, 'passed');
-  const first = await r.command({ '--json': true });
-  const folder = join(r.h.state, 'batches', first.json.batch), path = join(folder, 'batch.json');
-  const saved = JSON.parse(readFileSync(path)), lintId = saved.lint.request_ids.at(-1);
-  const answer = lintAnswer(r.f, lintId, 'incomplete');
+// --retry: a busy, unstarted check is sent again only when its saved lint gives it a pass of its own.
+for (const saved of ['passed', 'not-checked']) test(`OUTCOME retry gate on a busy unstarted check: saved verdict ${saved}`, async t => {
+  const h = harbor(t);
+  let busy = true, now;
+  const f = await fakeRuntime(t, (e, f) => e.command === 'check' && busy ? { status: 503, headers: { 'retry-after': '300' },
+    json: { dispatch: 'not_started', error: { code: 'check-queue-full', details: { retryable: true, retry_after: 300 } } } } : f.normal(e));
+  const run = async options => {
+    const p = portsFor({ HOME: h.home, PDD_STATE_DIR: h.state, PDD_RUNTIME_URL: f.origin });
+    if (now) p.clock.now = now;
+    const code = await runCheck({ cwd: h.repo, words: options['--retry'] ? [] : ['place-order'], options }, p.ports);
+    now = p.clock.now;
+    return { code, err: p.ports.stderr.text, json: p.ports.stdout.text.startsWith('{') ? JSON.parse(p.ports.stdout.text) : null };
+  };
+  const first = await run({ '--json': true });
+  assert.equal(first.code, 5); assert.equal(first.json.rows[0].can_retry, true);
+  const folder = join(h.state, 'batches', first.json.batch), lintId = JSON.parse(readFileSync(join(folder, 'batch.json'))).lint.request_ids.at(-1);
+  const answer = JSON.parse(readFileSync(join(folder, `${lintId}.json`)));
+  answer.result.report.lint = { complete: saved === 'passed', tests: [{ path: TEST, verdict: saved }] };
   writeFileSync(join(folder, `${lintId}.json`), JSON.stringify(answer));
-  Object.assign(saved.rows[0], { request_ids: [], state: 'not_run', phase: 'lint', calls: 0, can_retry: true, eligible: true });
-  writeFileSync(path, JSON.stringify(saved));
-  const count = r.f.posts.filter(p => p.command === 'check').length;
-  await r.command({ '--retry': first.json.batch, '--json': true }, []);
-  assert.equal(r.f.posts.filter(p => p.command === 'check').length, count, 'incomplete saved evidence cannot authorize a paid retry');
+  busy = false; now += 400_000;
+  const sent = f.posts.filter(p => p.command === 'check').length;
+  const retry = await run({ '--retry': first.json.batch, '--json': true });
+  assert.equal(f.posts.filter(p => p.command === 'check').length - sent, saved === 'passed' ? 1 : 0, retry.err);
+  assert.equal(retry.code, saved === 'passed' ? 0 : 2, retry.err);
 });
 
 test('OUTCOME empty results cannot succeed or imply criterion passes', () => {
@@ -162,6 +194,14 @@ test('OUTCOME supplied progress reaches table, summary, stderr and saved reads',
   assert.ok(renderText({ rows: result.json.rows, exitCode: 3 }).includes(progressText));
   const next = await r.command({ '--read': result.json.batch, '--json': true }, []);
   assert.deepEqual(next.json.rows[0].progress, running);
+});
+
+test('OUTCOME several running tests share one progress part', async t => {
+  const r = await setup(t, 'both', { check: 'running', progress: running });
+  const result = await r.command({ '--json': true }, ['place-order', 'unknown-item']);
+  assert.match(result.json.summary_line, /running · 8 AI calls so far · 2 in flight · 2 running$/);
+  assert.equal(result.json.summary_line.split('step 3 of 5').length, 1, 'no per-row step in a shared line');
+  assert.ok(result.err.split('\n').filter(line => line.startsWith('Still running:')).every(line => line.split(' · running').length === 2), result.err);
 });
 
 test('OUTCOME partial progress never invents a call or step number', async t => {
