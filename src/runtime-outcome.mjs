@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-outcome.prompt.md (sha256: 1191f789e2f90581ae521758f335315804768b5f4deb6e693634c0a01969be55).
+// Generated from prompts/cli/runtime-outcome.prompt.md (sha256: 83628c0598c604ee9192fa900f539bf772e8208abc6121bb558576d717e0f7e5).
 // What happened to one selected test: the one place that turns a server answer into an outcome.
 const objects = value => Array.isArray(value) ? value.filter(item => item && typeof item === 'object' && !Array.isArray(item)) : [];
 const count = value => Number.isSafeInteger(value) && value >= 0;
@@ -90,7 +90,8 @@ function progressFrom(value) {
   return progress;
 }
 
-const callWords = (settled, open) => [...(count(settled) ? [`${settled} AI call${settled === 1 ? '' : 's'} so far`] : []), ...(open > 0 ? [`${open} in flight`] : [])];
+// An open call has no settled result yet; it can stay open until the check ends, so it is never shown as live traffic.
+const callWords = (settled, open) => [...(count(settled) ? [`${settled} AI call${settled === 1 ? '' : 's'} so far`] : []), ...(open > 0 ? [`${open} not yet settled`] : [])];
 
 // Module function: the words for an outcome, or for a saved row that carries its outcome fields.
 export function outcomeText(outcome) {
@@ -98,9 +99,10 @@ export function outcomeText(outcome) {
   if (outcome.state === 'not_run') return 'not run';
   if (outcome.state !== 'running') return outcome.state;
   const p = outcome.progress ?? {};
-  const step = p.step ?? (count(p.steps_done) && count(p.steps_total) && p.steps_done < p.steps_total ? p.steps_done + 1 : undefined);
-  return ['running', ...(typeof step === 'number' ? [`step ${step}${count(p.steps_total) ? ` of ${p.steps_total}` : ''}`] : step ? [step] : []),
-    ...callWords(p.calls_settled, p.calls_open)].join(' · ');
+  const name = typeof p.step === 'string' ? p.step : null;
+  const number = typeof p.step === 'number' ? p.step : count(p.steps_done) && count(p.steps_total) && p.steps_done < p.steps_total ? p.steps_done + 1 : null;
+  const step = number ? `step ${number}${count(p.steps_total) ? ` of ${p.steps_total}` : ''}${name ? ` (${name})` : ''}` : name;
+  return ['running', ...(step ? [step] : []), ...callWords(p.calls_settled, p.calls_open)].join(' · ');
 }
 
 export const hasProgress = outcome => outcome.state === 'running' && Object.keys(outcome.progress ?? {}).length > 0;
