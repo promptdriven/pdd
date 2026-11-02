@@ -41,7 +41,7 @@ async function fixture(t, identity) {
   return { ...env, fake, invoke, makePorts, path: join(env.repo, '.pdd/cache/test/stories.json'),
     mode(value) { mode = value; }, incomplete(value) { incomplete = value; }, delay(value) { delay = value; } };
 }
-const cacheWarnings = result => result.json.warnings.filter(warning => /cache/i.test(warning));
+const cacheWarnings = result => result.json.warnings.filter(warning => /^Warning: (?:test cache |recovered stale cache )/.test(warning));
 const change = ctx => {
   const path = join(ctx.repo, 'tests/place-order.json'), original = readFileSync(path, 'utf8'), doc = JSON.parse(original);
   doc.initial_world.changed = true; writeFileSync(path, JSON.stringify(doc));
@@ -146,6 +146,7 @@ test('tracked cache cannot hide failing checks', async t => {
   const result = await ctx.invoke();
   assert.equal(result.sent, 2, 'Git-tracked prior evidence never skips failing checks');
   assert.equal(result.code, 1); assert.equal(cacheWarnings(result).length, 1);
+  assert.ok(result.json.warnings.includes('Warning: .pdd/cache/test/stories.json matches no Story (user_stories/**/stories.md).'));
 });
 
 test('copied cache with fresh external state cannot hide failing checks', async t => {
