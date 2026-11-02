@@ -7,17 +7,21 @@ import { chooseWorkflowAgent } from '../src/workflow-agents.mjs';
 const scenario = JSON.parse(readFileSync(new URL('./runtime/use-a-signed-in-workflow-agent.json', import.meta.url)));
 const pointer = (obj, path) => path === '' ? obj : path.slice(1).split('/').reduce((o, k) => o?.[k.replaceAll('~1', '/').replaceAll('~0', '~')], obj);
 
-test('replay signed-in workflow agent scenario through public functions', async () => {
+test('replay signed-in workflow agent scenario through public functions', async t => {
   const world = structuredClone(scenario.initial_world);
   let readiness = 0;
   for (const step of scenario.steps) {
+    // Reserve the scripted response for this step even if a defective implementation skips the probe.
+    const readinessRow = step.operation === 'runPdd' && !step.input.argv.includes('--help')
+      ? scenario.simulation['agents.checkWorkflowAgents'].cases[readiness++] : undefined;
+    await t.test(step.step_id, async () => {
     const calls = {};
     const call = (name, args) => {
       const key = `pdd-cli-${name.replace('.', '-')}`;
       calls[key] = (calls[key] ?? 0) + 1;
       const spec = scenario.simulation[name];
       if (name === 'agents.checkWorkflowAgents') {
-        const row = spec.cases[readiness++];
+        const row = readinessRow;
         assert.deepEqual(args, row.args, step.step_id);
         return structuredClone(row.result);
       }
@@ -45,6 +49,7 @@ test('replay signed-in workflow agent scenario through public functions', async 
         : (pointer({ resources: calls }, check.path) ?? 0);
       assert.deepEqual(actual, check.value, `${step.step_id} check ${index}`);
     }
+    });
   }
 });
 
