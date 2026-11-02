@@ -38,8 +38,8 @@ export const chatLifecycle = chat => CHAT_STATES.includes(chat?.state) ? chat.st
 export const launchAnchor = chat => { const times = [chat?.startedAt, chat?.resumedAt].filter(Number.isFinite); return times.length ? Math.max(...times) : null; };
 // One Herdr observation of the saved pane as lifecycle facts. Absence (Herdr's definite answer that no agent runs in the
 // saved pane) is end evidence only together with proof that the agent ran: it was seen running, or, after the shared grace,
-// its own native session is known (`ran` from a lookup, or a Codex id, which pdd saves only after observing it; a Claude
-// id is chosen before launch and proves nothing). Elapsed time alone is never evidence; an unconfirmed launch stays starting.
+// its own native session is known (`ran` from a lookup, or a saved id that observedSession accepts). Elapsed time alone is
+// never evidence; an unconfirmed launch stays starting.
 export function observeLifecycle(chat, live, at, agent = chat?.agent, ran = null) {
   const state = chatLifecycle(chat);
   // Running is the live agent in the saved pane; it is exact unless it shows another session than the saved one.
@@ -52,8 +52,9 @@ export function observeLifecycle(chat, live, at, agent = chat?.agent, ran = null
   if (state !== 'running' && (!sessionEvidenceDue(chat, live, at) || !sessionId)) return { state: 'starting' };
   return { state: 'ended', evidence: { kind: 'pane-exit', at, paneId: chat.paneId, observed: live.code, ...(sessionId ? { sessionId } : {}) } };
 }
-// A saved Codex session id was observed (Herdr or a lookup reported it); a saved Claude id was only chosen.
-export const observedSession = (chat, agent = chat?.agent) => agent === 'codex' && validSessionId(chat?.session?.id) ? chat.session.id : null;
+// A saved session id that proves the agent ran: a Codex id is saved only after it was observed, and a resumed chat was
+// resumed from its own known session. A Claude id chosen before the first launch proves nothing alone.
+export const observedSession = (chat, agent = chat?.agent) => validSessionId(chat?.session?.id) && (agent === 'codex' || Number.isFinite(chat.resumedAt)) ? chat.session.id : null;
 // Only an acknowledged, never-seen chat after the grace needs its own session as evidence.
 export function sessionEvidenceDue(chat, live, at) {
   const state = chatLifecycle(chat), anchor = launchAnchor(chat);
