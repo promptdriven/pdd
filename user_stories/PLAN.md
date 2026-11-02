@@ -103,6 +103,10 @@ The seven workflow Stories retain their separately approved contracts and all 28
 1. [Use one name for each command](new-command-names.md): `pdd test`, `pdd lint`, `pdd simulate` (short: `pdd sim`) and `pdd workflow run`. `pdd check …` and `pdd try …`, with any options and also for help, exit 2 with one line such as `pdd check was removed. Use pdd test.` and run nothing. `pdd workflow start` works like `pdd workflow run`, with no extra line. No line that pdd prints names `pdd check` or `pdd try`. A person approved this Story in 0.1.12 (#2701) and approves the changed text again. Test: `test/runtime/new-command-names.json`.
 2. [Read the Prompt tests line](prompt-tests-line.md): `pdd test` prints `Prompt tests (<story>): …`. The PR text, `pdd workflow status`, `pdd workflow view`, `pdd workflow evidence` and `pdd product status` read `Prompt tests` lines and older `Runtime check` lines. Test: `test/runtime/prompt-tests-line.json`.
 
+## Reuse unchanged Story checks (#2707, step D)
+
+1. [Reuse unchanged Story checks](test-cache.md). Cases: `test/runtime/test-cache.json`; native adapter: `test/test-cache.test.mjs`. Prompt tests: NOT RUN; native-only orchestration/filesystem/Git behavior, no AI calls.
+
 ## Approval through agent chat (#2755)
 
 1. [Approve a prompt through my agent](approval-prompt-chat.md) — native cases `test/approval-chat-core.test.mjs` in [code PR #2768](https://github.com/promptdriven/pdd/pull/2768). Runtime check: NOT RUN (provider calls forbidden).
