@@ -174,7 +174,12 @@ for (const saved of ['passed', 'not-checked']) test(`OUTCOME retry gate on a bus
 
 test('OUTCOME empty results cannot succeed or imply criterion passes', () => {
   assert.equal(exitCodeFor([]), 3);
-  assert.match(summaryLine([{ state: 'passed', story: 'one', criteria_total: 3 }]), /0 of 3 criteria/);
+  // A passed row without per-criterion results says so; it never counts its criteria either way.
+  const line = summaryLine([{ state: 'passed', story: 'one', criteria_total: 3 }]);
+  assert.match(line, /: ✓ passed · criteria details not reported · /);
+  assert.doesNotMatch(line, /\d+ of 3 criteria/);
+  const mixed = summaryLine([{ state: 'passed', story: 'one', criteria_total: 3 }, { state: 'passed', story: 'one', criteria_total: 2, criteria: { passed: 2, total: 2 } }]);
+  assert.match(mixed, /: ✓ 2 of 2 criteria · criteria details not reported · /);
 });
 
 for (const [check, code, said] of [['pool', 'pool-copy-unavailable', /No model login is available/], ['login-queue', 'login-queue-timeout', /Waited too long for a model login/]])
