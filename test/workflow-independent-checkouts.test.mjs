@@ -196,7 +196,8 @@ test('2531B AC4,5: a duplicate or inconsistent entry of an open owned workspace 
   if(kind==='duplicate')state.repositories.push(structuredClone(state.repositories[1]));
   else state.repositories[1].repository='someone/else';
   await save(f,state);const world=structuredClone(f.workspaces);f.calls.length=0;
-  assert.equal((await f.open({...bInput,stageId:'again'})).repoWorkspaceId,b.repoWorkspaceId);
+  let settled;await assert.doesNotReject(async()=>{settled=await f.open({...bInput,stageId:'again'});},'pdd settles the namespace itself');
+  assert.equal(settled.repoWorkspaceId,b.repoWorkspaceId);
   const after=await registry(f),kept=after.repositories.filter(r=>r.commonDir===bInput.commonDir);
   assert.equal(kept.length,1);assert.equal(kept[0].repository,'alice/coffee');assert.equal(kept[0].workspaceId,b.repoWorkspaceId);
   assert.equal((after.archivedRepositories??[]).length,kind==='duplicate'?1:0,'A duplicate copy is archived; an inconsistent entry is corrected in place');
@@ -208,7 +209,7 @@ test('a run with no saved workspace rebuilds a duplicate namespace entry from li
  const f=await fixture(t),a=await f.open(),state=await registry(f);
  state.repositories.push(structuredClone(state.repositories[0]));await save(f,state);
  const runId=randomUUID(),cwd=join(f.root,'run-two');await mkdir(cwd);f.calls.length=0;
- const b=await f.open({runId,cwd,stageId:'scope',run:{runId,number:2,workflow:'small-change',chats:[]}});
+ let b;await assert.doesNotReject(async()=>{b=await f.open({runId,cwd,stageId:'scope',run:{runId,number:2,workflow:'small-change',chats:[]}});},'A run with no saved workspace settles the namespace');
  assert.equal(b.repoWorkspaceId,a.repoWorkspaceId,'The one live entry is kept');
  const after=await registry(f);
  assert.equal(after.repositories.filter(r=>r.commonDir===f.input.commonDir).length,1);
@@ -241,7 +242,8 @@ for(const open of [true,false])test(`an unconfirmed entry next to a live entry i
   await assert.rejects(f.open(bInput),error=>error.code==='layout_allocation_uncertain'&&error.message.includes('lost-parent')&&/Close the one you do not use in Herdr session pdd, then retry\./.test(error.message));
   assert.equal(await readFile(join(f.ports.directory,'registry.json'),'utf8'),bytes);assert.deepEqual(mutations(f),[]);
  }else{
-  assert.equal((await f.open({...bInput,stageId:'again'})).repoWorkspaceId,b.repoWorkspaceId);
+  let settled;await assert.doesNotReject(async()=>{settled=await f.open({...bInput,stageId:'again'});},'The unconfirmed entry is archived when no workspace it made is open');
+  assert.equal(settled.repoWorkspaceId,b.repoWorkspaceId);
   const after=await registry(f);assert.equal(after.repositories.filter(r=>r.commonDir===bInput.commonDir).length,1);
   assert.equal(after.archivedRepositories.at(-1).phase,'intent');assert.deepEqual(mutations(f).map(c=>c.slice(0,2)),[['tab','create']]);
  }
