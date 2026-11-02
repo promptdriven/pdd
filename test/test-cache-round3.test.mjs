@@ -376,7 +376,7 @@ for (const path of ['normal', 'read-resend', 'retry', 'recovery', 'reuse-disable
 test('TEST-CACHE-L1 retry cannot hide build b during or after its sends', async t => {
   const ctx = await setup(t); assert.equal((await ctx.invoke()).sent, 3); bump(ctx, 'tests/place-order.json');
   ctx.state.reply = (id, entry, fake) => entry.method === 'POST' ? { status: 200, json: queueRefusal(fake, id) } : null;
-  const busy = await ctx.invoke(['place-order']); assert.equal(busy.code, 3);
+  const busy = await ctx.invoke(['place-order']); assert.equal(busy.json.rows[0].can_retry, true, 'capacity refusal permits retry');
   const retried = new Set(); let release, released = false; const gate = new Promise(done => { release = () => { released = true; done(); }; });
   ctx.state.reply = (id, entry, fake) => {
     if (entry.method === 'POST' && !retried.size) retried.add(id);
