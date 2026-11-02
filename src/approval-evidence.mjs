@@ -1,4 +1,4 @@
-// Generated from prompts/cli/approval-evidence.prompt.md (sha256: 332f714ad979e53428f24d56bae3c395eb213cdc8dd46b3776d146baddca08d2).
+// Generated from prompts/cli/approval-evidence.prompt.md (sha256: 0ff0081adb287056f3b443b516d614b56dca97c4622b92ec4e1b74451f41d56d).
 import * as nodeFs from 'node:fs/promises';
 import { join, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
@@ -184,10 +184,13 @@ export async function readApprovalEvidence(request, ports = {}) {
   }
 }
 
-// Find the native session IDs that started in this worktree inside the window, for resuming a chat.
+// Find the native session IDs that started in this worktree inside the window, for resuming a chat. Incomplete discovery
+// throws session_unreadable: an unreadable file must not look like "no session".
 export async function findNativeSessions(stage, ports = {}) {
   if (!stage || !['codex', 'claude'].includes(stage.agent) || typeof stage.root !== 'string' || !isAbsolute(stage.root)
     || !Number.isFinite(stage.startedAt) || !Number.isFinite(stage.endedAt)) return [];
-  try { return [...new Map((await sessionCandidates(stage, ports)).map(match => [match.meta.id, { id: match.meta.id, startedAt: match.meta.timestamp }])).values()]; }
-  catch { return []; }
+  let matches;
+  try { matches = await sessionCandidates(stage, ports); }
+  catch (error) { throw Object.assign(new Error(`The native session files cannot be read completely (${error.message}).`), { code: 'session_unreadable' }); }
+  return [...new Map(matches.map(match => [match.meta.id, { id: match.meta.id, startedAt: match.meta.timestamp }])).values()];
 }

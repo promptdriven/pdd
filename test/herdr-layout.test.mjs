@@ -250,8 +250,11 @@ test('2615: a hand-edited repeated repository key selects the matching clone and
  assert.equal(layout.repoWorkspaceId,made.result.workspace.workspace_id);
  assert.notEqual(layout.repoWorkspaceId,first.repoWorkspaceId);
  assert.equal(f.calls.filter(args=>args[0]==='workspace'&&args[1]==='create').length,2,'reuse the matching parent');
+ // Two open owned workspaces for one clone are a real ambiguity (a person chooses); a stale copy is archived by pdd.
+ const other=await f.ports.command(['workspace','create','--cwd',sourceRoot,'--label','alice/coffee-2','--no-focus']);
  const updated=JSON.parse(await readFile(file,'utf8'));
- updated.repositories.push({...updated.repositories.at(-1),workspaceId:'ambiguous-parent'});
+ updated.repositories.push({...updated.repositories.at(-1),workspaceId:other.result.workspace.workspace_id,rootTabId:other.result.tab.tab_id,
+  rootPaneId:other.result.root_pane.pane_id,rootTerminalId:other.result.root_pane.terminal_id});
  await writeFile(file,JSON.stringify(updated));
  const mutations=f.calls.filter(args=>['create','open','rename','close'].includes(args[1])).length;
  await assert.rejects(f.open({...input,stageId:'change'}),/layout_allocation_uncertain/);

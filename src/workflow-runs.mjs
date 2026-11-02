@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runs.prompt.md (sha256: b76ece844a8e7e8331bd063e72131792eb998d0d75606740dd85649875a77ea7).
+// Generated from prompts/cli/workflow-runs.prompt.md (sha256: 78b372efeb7a16cb63de1a6a202ec79985e23e4329d229394046100b7c489ef4).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import * as nativeRunFiles from 'node:fs';
@@ -6,6 +6,8 @@ import { mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, writeFi
 import { homedir, hostname } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+// The chat owner derives a legacy chat's state; this record only projects it.
+import { chatLifecycle } from './workflow-chat.mjs';
 
 const ordinary = promisify(execFileCallback);
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -99,7 +101,7 @@ export function statusView(run) {
   return { v: 1, stage, steps, waitingFor, resumeDecisions: gate ? ['approve', 'changes'] : [],
     waitingDecision: gate ? { ...(run.gate.id ? { id: run.gate.id } : {}), ...(Object.hasOwn(run.gate, 'promptSnapshot') ? { promptSnapshot: run.gate.promptSnapshot } : {}), stage: 'approve', area: run.gate.area, kind: run.gate.kind ?? 'approve', at: run.gate.at, decisions: ['approve', 'changes'] } : null,
     ...(chat?.workspaceId ? { herdr: { session: 'pdd', workspaceId: chat.workspaceId, label: `${String(run.repo).split('/')[1]}#${run.number} ${run.workflow}` } } : {}),
-    stageAgent: chat && !failure && !chat.startUnconfirmed ? { kind: run.agent, nativeSessionId: chat.session?.id ?? null, herdrSession: 'pdd', paneId: chat.paneId ?? null } : null,
+    stageAgent: chat && !failure && !chat.startUnconfirmed ? { kind: run.agent, nativeSessionId: chat.session?.id ?? null, herdrSession: 'pdd', paneId: chat.paneId ?? null, state: chatLifecycle(chat) } : null,
     links: Array.isArray(run.links) ? run.links : [], controller: null, message: run.message ?? null, cancelled: run.cancelled ?? null };
 }
 
