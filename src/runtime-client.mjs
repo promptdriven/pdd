@@ -27,7 +27,7 @@ const ENGINE_SHA = 'eae2202a68d00ab762fcbbf1eba0d8607a132a15';
 // The same engine: the full sha or a prefix of it with at least 7 hex digits.
 const sameEngine = sha => { const value = sha.toLowerCase(); return /^[0-9a-f]{7,40}$/.test(value) && ENGINE_SHA.startsWith(value); };
 const POST_MS = 90_000, GET_MS = 30_000, TRY_MS = 300_000, MAX_READS = 8, PROGRESS_MS = 30_000;
-// An agent (no terminal) waits at most 90 s, below the 2-minute default limit of Claude Code's shell tool; a person has no limit.
+// Standalone lint, Try lint and explicit batch retry retain their finite agent wait.
 const AGENT_WAIT_MIN = 1.5;
 // Under load a POST can time out and its job appear 3 to 4 min later: read a lost answer's ID for 5 min.
 const LOST_READ_MS = 300_000;
@@ -1055,14 +1055,14 @@ async function sendCheckAttempt(context, row) {
   else if (verdict.kind === 'not_run') Object.assign(row, { state: 'not_run', note: verdict.note });
   else if (verdict.kind === 'stop') { Object.assign(row, { state: 'not_run', note: verdict.note }); context.stopped = verdict.note; if (verdict.blocked) context.blocked = verdict.note.message; }
   else if (verdict.kind === 'refused') Object.assign(row, { state: 'refused', refusals: [verdict.refusal] });
-  // The agent's default limit caps this read too: pdd exits 3 and --read reads the same ID later.
-  else Object.assign(row, { state: 'unknown', why: verdict.why, lost: true, read_until: context.agentLimit ? context.deadline
-    : Math.max(Number.isFinite(context.deadline) ? context.deadline : 0, context.ports.now() + LOST_READ_MS) });
+  // An explicit caller deadline also bounds recovery of a lost POST answer.
+  else Object.assign(row, { state: 'unknown', why: verdict.why, lost: true, read_until: Number.isFinite(context.deadline)
+    ? context.deadline : context.ports.now() + LOST_READ_MS });
 }
 
 // GET one open row once.
 async function readRow(context, row, deadline = Infinity) {
-  const id = row.request_ids.at(-1), end = Math.min(deadline, row.lost ? row.read_until ?? context.deadline : context.deadline);
+  const id = row.request_ids.at(-1), end = Math.min(context.deadline, deadline, row.lost ? row.read_until ?? context.deadline : context.deadline);
   if (!id) return;
   const verdict = judgeGet(await context.runtime.get(id, Math.max(1, Math.min(GET_MS, (end ?? Infinity) - context.ports.now()))), id, 'check');
   verdict.observed_at = context.ports.now();
@@ -1215,7 +1215,7 @@ async function runScheduledChecks(context, rows, toSend) {
   };
   let waitingShown = -1, shownAt = ports.now();
   const sentAt = shownAt;
-  const readable = row => isOpen(row) && ports.now() < (row.lost ? row.read_until ?? context.deadline : context.deadline);
+  const readable = row => isOpen(row) && ports.now() < Math.min(context.deadline, row.lost ? row.read_until ?? context.deadline : context.deadline);
   try {
   while (!context.interrupted && !context.readStop) {
     // Never count an uncertain dispatched job as a free slot, even if it cannot currently be read.
@@ -1482,6 +1482,7 @@ async function readUnsentLint(context, rows) {
     if (answer) saveAnswer(context, id, answer);
   }
   if (answer) await finishReservation(context, lint, answer);
+  context.lintPending = false; context.lintUnknown = false;
   const lintView = noVerdictAdvice(answer, projectAnswer(answer ?? {}, { origin: context.origin, secrets: context.secrets }));
   const unknown = () => {
     Object.assign(lint, { state: answer?.state ?? 'unknown', pending: false, unknown: true });
@@ -1572,17 +1573,17 @@ async function continueHeld(context, candidates, saved) {
   if (capture.sha256 !== saved.source_sha256) { context.continuationNotice = 'No checks were sent for the lint-held rows: the saved source no longer matches: source changed. Start a fresh selected pdd test instead.'; return; }
   capture.stories = context.capture.stories;
   if (context.interrupted || context.ports.now() >= context.deadline) return;
-  Object.assign(context, { capture, reading: false });
+  Object.assign(context, { capture });
   const selected = candidates.filter(row => !row.request_ids.length && !row.dispatchIncomplete);
   for (const row of selected) Object.assign(row, { state: 'ready', eligible: true, note: null });
-  if (selected.length) await runScheduledChecks(context, context.rows, selected);
+  return selected;
 }
 
 async function runRead(context, batchWord, quiet = false, options = {}) {
   const { store, ports, root } = context;
-  const timeout = options['--timeout'] === undefined ? AGENT_WAIT_MIN : Number(options['--timeout']);
-  context.deadline ??= ports.now() + timeout * 60_000;
-  context.timeoutMin = timeout; context.agentLimit = true;
+  const timeout = options['--timeout'] === undefined ? quiet ? AGENT_WAIT_MIN : null : Number(options['--timeout']);
+  context.deadline ??= timeout === null ? Infinity : ports.now() + timeout * 60_000;
+  context.timeoutMin = timeout; context.agentLimit = false;
   const name = batchWord ?? store.repo(root).last_batch;
   if (!name || !BATCH.test(name)) throw new Stop(2, name ? 'BATCH looks like 20261027-092747-k3f9.' : 'No saved check for this repository. Run pdd test first.');
   context.folder = join(store.dir, 'batches', name);
@@ -1620,7 +1621,6 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
   }
   for (const row of rows.filter(row => row.dispatchIncomplete)) Object.assign(row, { state: 'unknown', phase: 'server', calls: 'unknown', final: true,
     why: 'An interrupted dispatch claim has no recoverable ID. No replacement check was sent.' });
-  await continueHeld(context, candidates, saved);
   await eachLimited(rows, MAX_READS, async row => {
     const id = row.request_ids.at(-1);
     if (!id) return;
@@ -1640,14 +1640,32 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
       && answer && sameJob(answer, id, 'check') && ['queued', 'running'].includes(answer.state)) { applyAnswer(row, answer, context); return; }
     // Polling an open cache is not evidence that its saved advice came from a lost read.
     if (!row.lost && (row.state !== 'unknown' || row.lost === false)) row.why = null;
-    Object.assign(row, { state: 'unknown', calls: 'unknown', checks: null, criteria: null, failed_checks: [], all_checks: [], busy: false, can_retry: false, note: null, lost: true });
+    Object.assign(row, { state: 'unknown', calls: 'unknown', checks: null, criteria: null, failed_checks: [], all_checks: [], busy: false, can_retry: false, note: null, lost: true,
+      read_until: row.read_until ?? ports.now() + LOST_READ_MS });
     if (ports.now() >= (context.deadline ?? Infinity) || context.interrupted) return;
     if (!quiet) line(ports.stderr, 'Reading 1 result from the PDD interpreter…');
     await readRow(context, row, context.deadline);
     if (row.state === 'unknown' && row.lost) row.why ??= 'pdd could not read this run yet.';
   });
+  const readingStarted = ports.now();
+  let shownAt = readingStarted;
+  while (context.lintPending && !context.interrupted && !context.readStop && ports.now() < context.deadline) {
+    if (ports.now() - shownAt >= PROGRESS_MS) {
+      shownAt = ports.now();
+      line(ports.stderr, progressLine(rows, shownAt - readingStarted));
+    }
+    await ports.sleep(Math.max(0, Math.min(ports.pollMs, context.deadline - ports.now())), context.signal);
+    if (context.interrupted || ports.now() >= context.deadline) break;
+    await readUnsentLint(context, rows);
+    await eachLimited(rows.filter(isOpen), MAX_READS, row => readRow(context, row));
+    saveBatch(context);
+  }
+  const continued = await continueHeld(context, candidates, saved) ?? [];
   const replacements = await recoverRestarts(context);
-  if (replacements.length) await runScheduledChecks(context, rows, replacements);
+  if (continued.length || replacements.length || !quiet && rows.some(isOpen)) {
+    if (continued.length) context.reading = false;
+    await runScheduledChecks(context, rows, [...continued, ...replacements]);
+  }
   saveBatch(context);
   return quiet ? rows : printResult(context, rows);
 }
@@ -1844,9 +1862,9 @@ async function runBatch(context, cwd, words, options, setRelease) {
   const origin = runtimeOrigin(ports.env);
   const { root, found, normalized } = localSetup(cwd, words);
   context.visible = found.visible; context.origin = origin;
-  // A person has no time limit; an agent has 90 s; --timeout MIN overrides both.
-  context.agentLimit = options['--timeout'] === undefined && !ports.interactive;
-  context.timeoutMin = options['--timeout'] !== undefined ? Number(options['--timeout']) : context.agentLimit ? AGENT_WAIT_MIN : null;
+  // Ordinary Check waits for completion in every shell unless a limit is explicit.
+  context.agentLimit = false;
+  context.timeoutMin = options['--timeout'] !== undefined ? Number(options['--timeout']) : null;
   const selected = select(found, normalized, root);
   context.coverage = bindingCoverage({ root, found, selected });
   const checked = preflight({ root, found, selected });
