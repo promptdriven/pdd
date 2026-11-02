@@ -334,9 +334,10 @@ test('cancel closes the run tabs, keeps the worktree and branch, and done then t
   const cancelled = await cancelRun({ ref: '17', cwd: f.source }, f.ports);
   assert.equal(cancelled.exitCode, 0, cancelled.message);
   assert.equal(f.record().state, 'cancelled'); assert.equal(f.record().cancelled.state, 'cancelled');
+  assert.equal(f.record().layout.phase,'closed','Run-close acknowledgement is saved in existing run custody');
   assert.equal(f.herdr.tabs.some(tab => tab.tab_id === run.chats[0].tabId), false);
   assert.equal(f.herdr.workspaces.some(w => w.workspace_id === run.chats[0].workspaceId), false);
-  assert.deepEqual(f.herdr.workspaces, [], 'the repository workspace closes too once no run uses it');
+  assert.deepEqual(f.herdr.workspaces.map(w=>w.workspace_id), [run.chats[0].repoWorkspaceId], 'The parent remains without durable creation custody');
   assert.ok(existsSync(run.root)); assert.equal(f.git(run.root, 'branch', '--show-current'), run.branch);
   const late = await stepDone({ step: 'scope', cwd: run.root }, f.agentPorts());
   assert.match(late.message, /cancelled/); assert.match(late.message, /Stop/);
@@ -558,7 +559,7 @@ test('status --all lists every run on this machine across repositories, person-w
   assert.doesNotMatch((await runStatus({ cwd: a.source }, a.ports)).message, /· bug ·/);
 });
 
-test('status --all shows PR states, done runs last, and reads the Herdr registry for repositories missing from the index', async t => {
+test('status --all shows indexed PR states and discovers no repositories when the index is missing', async t => {
   const f = await fixture(t);
   f.ports.timeZone = 'UTC';
   await f.run(); const run = f.record(); f.tick();
@@ -566,7 +567,10 @@ test('status --all shows PR states, done runs last, and reads the Herdr registry
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, f.ports);
   writeFileSync(join(run.root, 'value.mjs'), 'export const value = 2;\n'); f.git(run.root, 'commit', '-qam', 'two');
   await stepDone({ step: 'change', summary: 'two', cwd: run.root }, f.agentPorts()); await lastSteps(f, run, await stepDone({ step: 'verify', summary: 'ok', cwd: run.root }, f.agentPorts()));
-  rmSync(join(f.state, 'runs.json'));
+  const indexFile=join(f.state,'runs.json'), indexBytes=readFileSync(indexFile);
+  rmSync(indexFile);
+  assert.match((await runStatus({all:true,cwd:f.source},f.ports)).message,/No pdd runs on this machine/);
+  writeFileSync(indexFile,indexBytes);
   const open = await runStatus({ all: true, cwd: f.source }, f.ports);
   assert.match(open.message, /^example\/project#17 · small-change · build · PR open · PR #23 · /);
   const seq = f.record().journalSeq; f.tick(3600000);
@@ -812,7 +816,7 @@ test('#18: the PR body puts the Runtime check and report link on top, cuts steps
   assert.match(body, /test\/x\.test\.mjs/, 'a worktree path stays as a repo path');
 });
 
-test('cancel keeps the repository workspace while another run of that repository is open, and a later run gets a new one', async t => {
+test('cancel retains the clone parent and a later run reuses it', async t => {
   const f = await fixture(t);
   await f.run(); const first = f.record();
   // A second issue in the same repository.
@@ -824,10 +828,10 @@ test('cancel keeps the repository workspace while another run of that repository
   await cancelRun({ ref: '17', cwd: f.source }, f.ports);
   assert.deepEqual(f.herdr.workspaces.map(w => w.label), ['project', 'project#18 small-change']);
   await cancelRun({ ref: '18', cwd: f.source }, f.ports);
-  assert.deepEqual(f.herdr.workspaces, []);
-  assert.equal((await f.run()).exitCode, 0, 'a run after the repository workspace closed opens a new one');
+  assert.deepEqual(f.herdr.workspaces.map(w=>w.label), ['project']);
+  assert.equal((await f.run()).exitCode, 0, 'A later run reuses the retained verified parent');
   assert.deepEqual(f.herdr.workspaces.map(w => w.label), ['project', 'project#17 small-change']);
-  assert.notEqual(f.record().chats[0].repoWorkspaceId, first.chats[0].repoWorkspaceId);
+  assert.equal(f.record().chats[0].repoWorkspaceId, first.chats[0].repoWorkspaceId);
 });
 
 // Seen in the 0.1.4 real run: the prompt-story summary also had a (first) Runtime check; the check step's is the result.
@@ -1944,8 +1948,9 @@ test('2531: confirmed pre-agent worktree refusal recovers the same run with open
 
 test('2531: legacy linked-parent refusal and failed open recover without replacing Git allocation',async t=>{
   const {f,primary,source,record,start}=await linkedSourceFixture(t);f.refuseOnce=true;await start();
-  const before=record(),path=join(f.state,'herdr-layout/registry.json'),registry=JSON.parse(readFileSync(path));
-  const repo=registry.repositories[0],oldId=repo.workspaceId,row=f.herdr.workspaces.find(w=>w.workspace_id===oldId);
+  const before=record(),path=join(f.state,'herdr-layout/registry.json');
+  const row=f.herdr.workspaces.find(w=>w.worktree?.is_linked_worktree===false),oldId=row.workspace_id;
+  const registry={version:1,repositories:[{sourceRoot:source,commonDir:before.commonDir,workspaceId:oldId}],runs:[{runId:before.runId,phase:'intent'}]},repo=registry.repositories[0];
   // Saved shape from alpha after linked_worktree_source, then an unsuccessful open.
   repo.sourceRoot=source;delete repo.rootTabId;delete repo.rootPaneId;delete repo.rootTerminalId;
   row.worktree=null;f.herdr.panes.find(p=>p.workspace_id===oldId).cwd=source;
@@ -1957,38 +1962,40 @@ test('2531: legacy linked-parent refusal and failed open recover without replaci
   const after=record(),saved=JSON.parse(readFileSync(path));
   assert.equal(after.runId,before.runId);assert.equal(after.root,before.root);assert.equal(after.sourceRoot,source);assert.equal(after.branch,before.branch);
   assert.equal(f.git(source,'worktree','list','--porcelain'),worktrees);assert.equal(after.chats.length,1);
-  assert.equal(saved.repositories[0].sourceRoot,primary);assert.equal(saved.archivedRepositories[0].workspaceId,oldId);
+  assert.deepEqual(saved,registry,'The legacy registry stays untouched');
+  assert.equal(f.herdr.workspaces.find(w=>w.workspace_id===after.chats[0].repoWorkspaceId).worktree.checkout_path,primary);
   assert.equal(f.herdr.panes.find(p=>p.workspace_id===oldId).cwd,source,'old shell remains untouched');
   assert(!f.herdr.calls.some(args=>args[0]==='workspace'&&['close','rename'].includes(args[1])));
 });
 
-test('2531: an uncertain retry reply cannot reuse an earlier confirmed refusal to launch again',async t=>{
+test('2531: a lost pre-agent allocation reply adopts its verified live result on explicit retry',async t=>{
   const {f,source,record,start}=await linkedSourceFixture(t);f.refuseOnce=true;await start();
   const healthy=f.ports.herdr;
   f.ports.herdr=async args=>{const reply=await healthy(args);if(args[0]==='worktree'&&args[1]==='open')throw closedChannel();return reply;};
   const out=await openRun({ref:'17',cwd:source,packageRoot},f.ports);assert.equal(out.exitCode,1);
   const before=record(),calls=f.herdr.calls.filter(args=>args[0]==='worktree').length;
   f.ports.herdr=healthy;
-  const again=await openRun({ref:'17',cwd:source,packageRoot},f.ports);assert.equal(again.exitCode,1);assert.match(again.message,/layout_allocation_uncertain/);
-  assert.equal(f.herdr.calls.filter(args=>args[0]==='worktree').length,calls);assert.equal(record().chats.length,0);
-  assert.equal(record().root,before.root);assert.equal(f.herdr.panes.filter(p=>p.agent).length,0);
+  const again=await openRun({ref:'17',cwd:source,packageRoot},f.ports);assert.equal(again.exitCode,0,again.message);
+  assert.equal(f.herdr.calls.filter(args=>args[0]==='worktree').length,calls);assert.equal(record().chats.length,1);
+  assert.equal(record().root,before.root);assert.equal(f.herdr.panes.filter(p=>p.agent).length,1);
 });
 
 test('2531: recovery refuses a competing workspace at the assigned cwd and retains its identities',async t=>{
   const {f,source,record,start}=await linkedSourceFixture(t);f.refuseOnce=true;await start();const before=record();
   f.herdr.workspaces.push({workspace_id:'foreign',label:'person',worktree:{checkout_path:before.root,repo_key:before.commonDir,is_linked_worktree:true}});
-  const out=await openRun({ref:'17',cwd:source,packageRoot},f.ports);assert.equal(out.exitCode,1);assert.match(out.message,/layout_allocation_uncertain/);
+  const out=await openRun({ref:'17',cwd:source,packageRoot},f.ports);assert.equal(out.exitCode,1);assert.match(out.message,/herdr_layout_identity_changed/);
   assert.equal(record().chats.length,0);assert.equal(record().runId,before.runId);assert.equal(f.herdr.panes.filter(p=>p.agent).length,0);
 });
 
-test('2531: a refused run cannot change its saved common repository or issue/workflow binding',async t=>{
+test('2531: obsolete registry common/label rows cannot change the saved Git assignment',async t=>{
  for(const kind of ['common','label']){
   const {f,source,record,start}=await linkedSourceFixture(t);f.refuseOnce=true;await start();
-  const run=record(),file=join(f.state,'herdr-layout/registry.json'),registry=JSON.parse(readFileSync(file));
+  const run=record(),file=join(f.state,'herdr-layout/registry.json'),registry={version:1,repositories:[],runs:[{runId:record().runId}]};
   if(kind==='common')registry.runs[0].commonDir=join(f.base,'different.git');else registry.runs[0].label='other#99 feature';
   writeFileSync(file,JSON.stringify(registry));const calls=f.herdr.calls.filter(a=>a[0]==='worktree').length;
-  const out=await openRun({ref:'17',cwd:source,packageRoot},f.ports);assert.equal(out.exitCode,1,out.message);
-  assert.equal(f.herdr.calls.filter(a=>a[0]==='worktree').length,calls);assert.equal(record().runId,run.runId);assert.equal(record().chats.length,0);
+  const out=await openRun({ref:'17',cwd:source,packageRoot},f.ports);assert.equal(out.exitCode,0,out.message);
+  assert.equal(f.herdr.calls.filter(a=>a[0]==='worktree').length,calls+1);assert.equal(record().runId,run.runId);assert.equal(record().chats.length,1);
+  assert.equal(record().root,run.root);assert.equal(record().commonDir,run.commonDir);assert.deepEqual(JSON.parse(readFileSync(file)),registry);
  }
 });
 
