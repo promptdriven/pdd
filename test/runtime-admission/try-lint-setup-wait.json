@@ -1,0 +1,68 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/try-lint-setup-wait.md",
+  "criteria": [
+    {"id": "AC1", "text": "`pdd simulate place-order --app-map app-map.json --max-calls 40 --no-open --no-wait` waits for lint that passes after 122 seconds in either an agent shell or a terminal, then creates one Try with that app map and ceiling of 40 calls, without another lint upload."},
+    {"id": "AC2", "text": "Lint, local admission, maintenance, retry backoff and Try creation share one five-minute setup allowance; passing lint does not grant another five minutes."},
+    {"id": "AC3", "text": "Pending or unknown lint creates no Try; lint that ends without a pass for the selected test remains final not run with exit 5, and a lint refusal remains exit 4."},
+    {"id": "AC4", "text": "Interruption or exhaustion of the setup allowance sends nothing further; an accepted or uncertain request is read by its original ID and is never repeated automatically."},
+    {"id": "AC5", "text": "`--no-wait` affects collection after the Try is ready and never bypasses lint; no new Try timeout flag or saved Try-lint continuation is required."}
+  ],
+  "cases": [
+    {
+      "id": "agent-slow-lint",
+      "given": "noninteractive; place-order --app-map app-map.json --max-calls 40 --no-open --no-wait; lint passes at 122000ms; Try immediately ready",
+      "required_observation": "exit0 at 122000ms; one lint POST and one Try POST, no Check POST; original source/seed, app_map app-map.json and max_calls40 retained"
+    },
+    {
+      "id": "terminal-slow-lint",
+      "given": "same command and receipts as agent-slow-lint, interactive",
+      "required_observation": "same result, elapsed time and dispatch counts as agent-slow-lint"
+    },
+    {
+      "id": "last-available-time",
+      "given": "lint passes at 299000ms; Try immediately ready",
+      "required_observation": "exit0; one lint and one Try POST; no reset of shared300000ms deadline"
+    },
+    {
+      "id": "pending-boundary",
+      "given": "lint remains running through 300000ms",
+      "required_observation": "exit3 at300000ms, pending wording; one lint POST, zero Try/Check POSTs"
+    },
+    {
+      "id": "shared-remainder",
+      "given": "lint passes at240000ms; confirmed not-started Try capacity reply; remaining wait exceeds60000ms",
+      "required_observation": "stop at300000ms; no later POST or fresh five-minute wait; no accepted Try created"
+    },
+    {
+      "id": "admission-consumes-budget",
+      "given": "separately local slot or maintenance unavailable until300000ms before first lint POST",
+      "required_observation": "exit5; zero lint/Try/Check POSTs; name actual ended wait"
+    },
+    {
+      "id": "terminal-no-pass",
+      "given": "lint ends at122000ms; selected test has no passing verdict or refusal",
+      "required_observation": "exit5 immediately, final not-run reason; zero Try/Check POSTs"
+    },
+    {
+      "id": "refused",
+      "given": "lint ends at122000ms refusing selected test",
+      "required_observation": "exit4 with refusal reason; zero Try/Check POSTs"
+    },
+    {
+      "id": "unknown",
+      "given": "separately explicit unknown lint, wrong-ID/command receipt or lost lint reply",
+      "required_observation": "zero Try/Check POSTs; uncertain lint reads original ID only; no new lint without confirmed safe capacity evidence"
+    },
+    {
+      "id": "interrupt",
+      "given": "interrupt after122000ms while lint runs, separately after lint pass before Try dispatch",
+      "required_observation": "no subsequent ID allocation or POST; interruption wording retains submission history"
+    },
+    {
+      "id": "lost-try-reply",
+      "given": "lint passes at122000ms; Try POST reply lost; same-ID read confirms ready",
+      "required_observation": "one Try POST, read same ID; source/app map/cap retained"
+    }
+  ]
+}

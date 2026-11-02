@@ -10,7 +10,7 @@ I can wait for lint or use the saved recovery command to finish my original Stor
 4. Recovery refuses a changed owner, repository or captured source before allocating a check ID or sending a check, and always uses the saved runtime origin.
 5. Repeated or concurrent recovery and interrupted or lost replies never send the same paid check twice; previous IDs, answers and usage remain intact.
 6. A standalone lint read sends no paid checks; ambiguous legacy intent, unresolved lint and lint refusals cannot authorize checks.
-7. Interactive Try can finish lint after 120 seconds within its existing five-minute setup allowance, while its agent default remains 90 seconds.
+7. Try can finish lint after 120 seconds within its existing five-minute setup allowance in either an agent shell or a terminal, as specified by [Start my Try after slow lint](try-lint-setup-wait.md).
 
 ## Rules to check
 
@@ -45,6 +45,6 @@ Each row is one command/action with deterministic fake clock and transport repli
 | Legacy ambiguity | legacy standalone missing max_calls/criteria_total; separately contradictory intent | zero paid IDs/POSTs; explain unavailable Check intent |
 | Existing jobs | batch includes completed, running, lost and held rows | preserve all prior IDs/answers; only proven never-posted held row gets first ID |
 | Recovery deadline | --read BATCH --timeout 4, separately default | fresh bounded240000ms or90000ms wait; no cap increase or extra dispatch after limit |
-| Try | interactive lint passes150s; separately agent lint pending90s | terminal proceeds within existing300000ms setup allowance; agent exits3 at90000ms; no Try timeout flag added |
+| Try | lint passes150s, separately interactive and agent | both proceed within the same existing300000ms setup allowance; no Try timeout flag added |
 
 Runtime check: BLOCKED (#2548). The owning module exports real runCheck/runTry with injected transport, clock, gh and interrupt ports, but Git root/discovery/capture, hashing/archive and private RuntimeStore filesystem/locking effects remain native and unbound. The prompt has no Runtime interface metadata. Supplying transport replies alone cannot test this public behavior truthfully; no check-only operation or fabricated Runtime interface is introduced. Code-area native tests must use the real exports and temporary Git/state plus fake transport/clock, cover this table and preserve capacity recovery controls. A future Runtime binding must bind those actual outside effects and preserve handles/callbacks. No Runtime pass or live report is claimed.
