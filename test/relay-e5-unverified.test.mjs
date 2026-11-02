@@ -14,7 +14,7 @@ for (const damage of ['wrong-id', 'wrong-command', 'unknown', 'verified']) test(
     return { status: 200, json: f.check(id, 'running') };
   });
   const env = { HOME: h.home, PDD_STATE_DIR: h.state, PDD_RUNTIME_URL: f.origin };
-  await runCheck({ cwd: h.repo, words: ['place-order'], options: { '--json': true } }, portsFor(env).ports);
+  await runCheck({ cwd: h.repo, words: ['place-order'], options: { '--json': true, '--timeout': 1.5 } }, portsFor(env).ports);
   const batch = readdirSync(join(h.state, 'batches'), { withFileTypes: true }).find(e => e.isDirectory()).name;
   const folder = join(h.state, 'batches', batch), doc = JSON.parse(readFileSync(join(folder, 'batch.json'))), id = doc.rows[0].request_ids[0];
   const raw = join(folder, `${id}.json`), receipt = JSON.parse(readFileSync(raw));
