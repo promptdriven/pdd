@@ -51,13 +51,18 @@
     },
     {
       "id": "unknown",
-      "given": "separately explicit unknown lint, wrong-ID/command receipt or lost lint reply",
+      "given": "separately explicit unknown lint, wrong-ID/command receipt or lost lint reply that remains unresolved/unknown after same-ID reads",
       "required_observation": "zero Try/Check POSTs; uncertain lint reads original ID only; no new lint without confirmed safe capacity evidence"
     },
     {
       "id": "interrupt",
       "given": "interrupt after122000ms while lint runs, separately after lint pass before Try dispatch",
       "required_observation": "no subsequent ID allocation or POST; interruption wording retains submission history"
+    },
+    {
+      "id": "lost-lint-reply-resolves",
+      "given": "exact command from AC1; lint POST reply lost; same-ID read confirms selected test passes at 122000ms; Try immediately ready",
+      "required_observation": "exit0 at122000ms; one lint POST and one Try POST, zero Check POSTs; no new lint ID or upload; original source/seed, app_map app-map.json and max_calls40 retained"
     },
     {
       "id": "lost-try-reply",
