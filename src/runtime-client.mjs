@@ -1093,7 +1093,7 @@ async function sendCheckAttempt(context, row) {
 // GET one open row once.
 async function readRow(context, row, deadline = Infinity) {
   const id = row.request_ids.at(-1), end = Math.min(context.deadline, deadline, row.lost ? row.read_until ?? context.deadline : context.deadline);
-  if (!id) return;
+  if (!id || context.interrupted || context.ports.now() >= end) return;
   const verdict = judgeGet(await context.runtime.get(id, Math.max(1, Math.min(GET_MS, (end ?? Infinity) - context.ports.now()))), id, 'check');
   verdict.observed_at = context.ports.now();
   // A network problem while reading says so once; pdd keeps reading the same IDs.
@@ -1112,7 +1112,7 @@ const occupiesSlot = row => OPEN_STATES.has(row.state) || (row.state === 'unknow
 // One line every 30 s while checks run.
 function progressLine(rows, ms) {
   const stories = new Map();
-  for (const row of rows) stories.set(row.story, (stories.get(row.story) ?? true) && ENDED.has(row.state) && !isOpen(row));
+  for (const row of rows) stories.set(row.story, (stories.get(row.story) ?? true) && ENDED.has(row.state) && !isOpen(row) && !heldForLint(row));
   const done = [...stories.values()].filter(Boolean).length, calls = rows.reduce((sum, row) => sum + (typeof row.calls === 'number' ? row.calls : 0), 0);
   return `Still running: ${done} of ${stories.size} ${stories.size === 1 ? 'Story' : 'Stories'} done · ${calls} AI call${calls === 1 ? '' : 's'} so far · `
     + `${ms < 60_000 ? `${Math.floor(ms / 1000)} s` : `${Math.floor(ms / 60_000)} min`}`;
@@ -1245,8 +1245,8 @@ async function runScheduledChecks(context, rows, toSend) {
       pendingSends.set(row, pending);
     }
   };
-  let waitingShown = -1, shownAt = ports.now();
-  const sentAt = shownAt;
+  let waitingShown = -1;
+  const progress = context.checkProgress ??= { startedAt: ports.now(), shownAt: ports.now() };
   const readable = row => isOpen(row) && ports.now() < Math.min(context.deadline, row.lost ? row.read_until ?? context.deadline : context.deadline);
   try {
   while (!context.interrupted && !context.readStop) {
@@ -1270,8 +1270,8 @@ async function runScheduledChecks(context, rows, toSend) {
     const pending = toSend.some(row => ['ready', 'waiting'].includes(row.state));
     if (pending && active >= context.checkWindow && !rows.some(readable)) break;
     if ((!pending || context.stopped || ports.now() >= context.deadline) && !rows.some(readable) && !pendingSends.size) break;
-    if (ports.now() - shownAt >= PROGRESS_MS) { shownAt = ports.now(); line(ports.stderr, progressLine(rows, shownAt - sentAt)); }
-    const end = Math.max(context.deadline, ...rows.filter(row => row.lost).map(row => row.read_until ?? 0));
+    if (ports.now() - progress.shownAt >= PROGRESS_MS) { progress.shownAt = ports.now(); line(ports.stderr, progressLine(rows, progress.shownAt - progress.startedAt)); }
+    const end = context.deadline;
     await ports.sleep(Math.max(0, Math.min(ports.pollMs, end - ports.now())), context.signal);
     if (context.interrupted) break;
     await eachLimited(rows.filter(readable), MAX_READS, row => readRow(context, row));
@@ -1614,6 +1614,7 @@ async function continueHeld(context, candidates, saved) {
 async function runRead(context, batchWord, quiet = false, options = {}) {
   context.cacheReadInvocation = true;
   const { store, ports, root } = context;
+  const progress = context.checkProgress ??= { startedAt: ports.now(), shownAt: ports.now() };
   const timeout = options['--timeout'] === undefined ? quiet ? AGENT_WAIT_MIN : null : Number(options['--timeout']);
   context.deadline ??= timeout === null ? Infinity : ports.now() + timeout * 60_000;
   context.timeoutMin = timeout; context.agentLimit = false;
@@ -1681,18 +1682,16 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
     // Polling an open cache is not evidence that its saved advice came from a lost read.
     if (!row.lost && (row.state !== 'unknown' || row.lost === false)) row.why = null;
     Object.assign(row, { state: 'unknown', calls: 'unknown', checks: null, criteria: null, failed_checks: [], all_checks: [], busy: false, can_retry: false, note: null, lost: true,
-      read_until: row.read_until ?? ports.now() + LOST_READ_MS });
+      read_until: Number.isFinite(context.deadline) ? context.deadline : ports.now() + LOST_READ_MS });
     if (ports.now() >= (context.deadline ?? Infinity) || context.interrupted) return;
     if (!quiet) line(ports.stderr, 'Reading 1 result from the PDD interpreter…');
     await readRow(context, row, context.deadline);
     if (row.state === 'unknown' && row.lost) row.why ??= 'pdd could not read this run yet.';
   });
-  const readingStarted = ports.now();
-  let shownAt = readingStarted;
   while (context.lintPending && !context.interrupted && !context.readStop && ports.now() < context.deadline) {
-    if (ports.now() - shownAt >= PROGRESS_MS) {
-      shownAt = ports.now();
-      line(ports.stderr, progressLine(rows, shownAt - readingStarted));
+    if (ports.now() - progress.shownAt >= PROGRESS_MS) {
+      progress.shownAt = ports.now();
+      line(ports.stderr, progressLine(rows, progress.shownAt - progress.startedAt));
     }
     await ports.sleep(Math.max(0, Math.min(ports.pollMs, context.deadline - ports.now())), context.signal);
     if (context.interrupted || ports.now() >= context.deadline) break;
