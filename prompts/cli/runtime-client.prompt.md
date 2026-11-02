@@ -471,9 +471,47 @@ for all running rows with server progress, then the known calls of the other row
 step 5 above), or `AI calls unknown` when there is neither; never an invented zero. A row that a
 read turns into a lost, unknown row drops its old `progress`.
 
+## Parts
+
+A Check or an explicit `--lint` sends its selection in parts that each fit one
+server request ([runtime split](runtime-split.prompt.md)). Local preflight is
+unchanged. The Stories with ready rows are packed by `planParts`, measuring each
+candidate part with `captureSource` on exactly its tests and the `uploadLimits`
+port (default `UPLOAD`). One part that fits everything behaves as before.
+
+- **A Story too large to send alone** is refused locally (phase `local`, 0 calls,
+  never sent): each of its rows gets the refusal `upload-too-large`, message
+  `<test>: its files need <size> (<n> files) to send; the limit is <size> and <n>
+  files.` The other Stories are still sent. Exit precedence decides the code.
+- **Each part** has its own capture (archive, `source_sha256`, files, bytes) and its
+  own lint (`complete: true`), with the same [shared lint gate](#outcome) per test.
+  A check POST sends its own part's archive and `source_sha256`. Lint progress
+  lines start with `Part I of N: ` when there are two or more parts.
+- **A lint that did not reach a test** (its verdict is `not-checked`, or the lint is
+  incomplete and lists no verdict for it) is linted again: the Stories that have
+  such a test are packed into new parts and linted, sharing the same lint wait.
+  Their new verdicts replace the old ones. This repeats while a round gives at
+  least one of those tests a verdict. Tests still without a verdict are not run,
+  "lint did not finish". A complete lint that lists no verdict is not linted again.
+- **One send loop** sends and reads the admitted rows of all parts together, so a
+  later part is never starved by an earlier part's running checks. Then one table,
+  one summary and one exit code. With two or more parts, stderr says
+  `Sent in N parts: …` (`Linted in N parts: …` for `--lint`) before the first check.
+- **The saved batch** is `version: 2` with `parts: [{tests, source_sha256, files,
+  bytes, lint}]` (`files` and `bytes` as the version 1 top-level fields; `lint` as
+  the version 1 `lint` record); each row has `part` (its index). `--read`, `--retry`, the
+  saved-lint continuation and the restart replacement use the row's part: its
+  capture for the recapture and source check, its lint for the gate. A version 1
+  batch reads as one part made from its top-level source and lint.
+- **JSON** adds `parts: [{tests, source_sha256, files, bytes}]` (`files` is the
+  part's file count, `bytes` its archive size); the top-level
+  `source_sha256` is the one part's hash, or null with two or more parts.
+
 ## Dependencies
 
 - [Runtime outcome](runtime-outcome.prompt.md): required for generation and tests; selected outcomes and exit policy.
+
+- [Runtime split](runtime-split.prompt.md): required for generation and tests; upload limits and part planning.
 
 - [Preflight](runtime-preflight.prompt.md#source-capture): required generation and
   verification context for source capture, advisory warnings and Story footprint

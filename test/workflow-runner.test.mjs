@@ -1754,6 +1754,21 @@ test('GREG2442-3: saved check JSON records only source-verified evidence and pre
 });
 
 
+test('SPLIT workflow evidence explains that it records the result of one part only', async t => {
+  const { recordEvidence } = await import('../src/workflow-runner.mjs');
+  const { f, run } = await featureAtTryGate(t);
+  const rows = ['tests/place-order.json', 'tests/unknown-item.json'].map(test => ({ test, story: test.split('/').at(-1).replace('.json', ''), state: 'passed',
+    summary_line: `Prompt tests (${test.split('/').at(-1).replace('.json', '')}): ✓ 1 of 1 criterion · 1/1 checks · 0 AI calls` }));
+  const doc = { batch: '20261101-120000-abcd', repo: run.root, source_sha256: null, exit_code: 0, rows,
+    parts: rows.map(row => ({ tests: [row.test], source_sha256: 'a'.repeat(64), files: 3, bytes: 4096 })) };
+  const file = join(run.root, 'split.json'); writeFileSync(file, JSON.stringify(doc));
+  const before = readFileSync(join(run.runDir, 'status.json'), 'utf8');
+  const result = await recordEvidence({ ref: '17', summaryFile: file, cwd: run.root }, f.ports);
+  assert.notEqual(result.exitCode, 0);
+  assert.match(result.message, /this result was sent in 2 parts\. Record a result of one part: run pdd test for fewer Stories\./);
+  assert.equal(readFileSync(join(run.runDir, 'status.json'), 'utf8'), before, 'nothing is written');
+});
+
 test('GREG2442-4: later stale-source verify cannot override compatible older results', async t => {
   const { f, run } = await featureAtTryGate(t);
   const file = join(run.root, 'value.mjs'), original = readFileSync(file);

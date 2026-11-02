@@ -94,8 +94,10 @@ and preparation-hook `readFile`, including raw bytes read before replacement.
 An oversized required raw file refuses before allocation/open/read, even when
 sparse or above the native Buffer limit; preserve exit 4 and the finite too-big
 diagnostic with total and largest files, never a RangeError. Deferring a selected
-read cannot bypass this guard. Enforce selected-source totals and the 10,000
-selected-file budget before selected reads. Reference/preparation-only raw reads
+read cannot bypass this guard. Enforce selected-source totals and the
+selected-file budget before selected reads, with the upload limits from
+[runtime split](runtime-split.prompt.md) (`UPLOAD`, or the caller's limits); pdd
+keeps no second copy of the numbers. Reference/preparation-only raw reads
 do not become upload members or accumulate again in selected totals.
 A safe Git-visible regular path may instead receive prepared replacement bytes
 without reading its raw original, even when that original is 2 GiB. Its stat size
@@ -257,6 +259,7 @@ attempt-local inputs; this module owns capture policy, not product composition.
 
 ## Dependencies
 
+- [Runtime split](runtime-split.prompt.md): required for generation; the upload limits.
 - [References](contract-refs.prompt.md): required generation and verification
   context for synchronous expansion and provenance; native adapters preserve
   this module's privacy, snapshot and capture rules.
