@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 89d68bdc935cfdee03123f9918d8664640458a25c35dd9b76eabb6a732818e33).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: fb6398924724110a86a2bcd8b5f9d2e532adb64c8a99e9864c349866544984c9).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -1073,7 +1073,7 @@ async function sendCheckAttempt(context, row) {
   row.busy_request_id = null; row.busy_observed_at = null; row.capacity_until = null;
   row.phase = 'server';
   const request = { requestId: id, source_sha256: context.capture.sha256, scenario: row.test, max_calls: row.max_calls };
-  const verdict = await postJob(context, '/v1/check', 'check', request, row, Math.max(1, Math.min(context.ports.postMs, context.deadline - context.ports.now())));
+  const verdict = await context.postCheck(request, row, Math.max(1, Math.min(context.ports.postMs, context.deadline - context.ports.now())));
   if (verdict.kind === 'not_sent') {
     const note = { code: null, message: 'Stopped before sending.' };
     // Live knowledge owns this attempt's wording only; claim adoption still owns uncertainty.
@@ -1637,6 +1637,7 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
   for (const row of rows) adoptClaims(context, row);
   Object.assign(context, { rows, visible: findTests({ root }).visible, reading: true });
   const cache = context.cacheEnabled ? await openTestCache(context, root, false) : null;
+  context.testCache = cache; context.savedTestCache = saved.test_cache;
   if (cache && !cache.disabled) {
     cache.tokens = new Map(Array.isArray(saved.test_cache?.tokens) ? saved.test_cache.tokens : []);
     // Reads may continue lint-held checks or resend restarted jobs below.
@@ -1688,10 +1689,8 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
   const replacements = await recoverRestarts(context);
   if (replacements.length) await runScheduledChecks(context, rows, replacements);
   context.savedTestCache = saved.test_cache;
-  // Tokens refer to the original captured footprint, and generations reject newer attempts.
-  if (cache) await finishTestAttempts(cache, rows, context.capture);
   saveBatch(context);
-  return quiet ? rows : printResult(context, rows);
+  return quiet ? rows : () => printResult(context, rows);
 }
 
 async function recoverRestarts(context) {
@@ -1722,7 +1721,7 @@ async function runRetry(context, name, options) {
   const timeout = options['--timeout'] === undefined ? AGENT_WAIT_MIN : Number(options['--timeout']);
   context.deadline = ports.now() + timeout * 60_000;
   const rows = await runRead(context, name, true, options);
-  if (context.interrupted || ports.now() >= context.deadline) return printResult(context, rows);
+  if (context.interrupted || ports.now() >= context.deadline) return () => printResult(context, rows);
   const capture = context.ports.captureSource(context.root, { tests: rows.map(row => row.test), appMap: null });
   if (capture.sha256 !== context.capture.sha256) throw new Stop(2, 'The saved source no longer matches: source changed. Start a fresh selected pdd test instead.');
   capture.stories = context.capture.stories;
@@ -1735,7 +1734,7 @@ async function runRetry(context, name, options) {
   if (selected.length) line(ports.stderr, `Retrying ${selected.length} unstarted check${selected.length === 1 ? '' : 's'}…`);
   await runScheduledChecks(context, rows, selected);
   saveBatch(context);
-  return printResult(context, rows);
+  return () => printResult(context, rows);
 }
 
 async function runRequest(context, id) {
@@ -1833,6 +1832,34 @@ async function runCallRead(context, id) {
   return exitCode;
 }
 
+// All check POSTs use this one run-owned boundary, including sends after a read.
+// Its lifetime covers scheduler waits, recovery and every phase of a retry.
+async function withCheckRun(context, run) {
+  let ownership;
+  context.postCheck = async (request, row, timeoutMs) => {
+    ownership ??= (async () => {
+      if (!context.testCache) {
+        const cache = context.testCache = await openTestCache(context, context.root, false);
+        if (Array.isArray(context.savedTestCache?.tokens)) cache.tokens = new Map(context.savedTestCache.tokens);
+        else await beginTestAttempts(cache, context.rows, null, {}, context.origin, true);
+      }
+      const cache = context.testCache;
+      if (!cache.disabled && !cache.mark) await cacheTransaction(cache, data => markTestAttempt(cache, data));
+    })();
+    await ownership;
+    return postJob(context, '/v1/check', 'check', request, row, timeoutMs);
+  };
+  let result;
+  try { result = await run(); }
+  catch (error) { context.checkRunFailed = true; throw error; }
+  finally {
+    const cache = context.testCache;
+    if (cache && context.capture && context.rows) await finishTestAttempts(cache, context.rows, context.capture);
+  }
+  // Keep warnings and cache completion ahead of the final result rendering.
+  return typeof result === 'function' ? result() : result;
+}
+
 // pdd test. Returns the exit code.
 export async function runCheck({ words = [], options = {}, cwd = process.cwd(), cache = false } = {}, givenPorts = {}) {
   const ports = withDefaults(givenPorts);
@@ -1873,10 +1900,12 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
     if (modes[0] === '--fill-hash') return runFillHash(root, ports);
     if (modes[0] === '--files') return runFiles(cwd, words, options, ports);
     context.root = root; context.store = stateFor(ports.env, root);
-    if (modes[0] === '--retry') { release = interruptible(context); return await runRetry(context, options['--retry'], options); }
-    if (modes[0] === '--read') { release = interruptible(context); return UUID.test(words[0] ?? '') ? await runCallRead(context, words[0]) : await runRead(context, words[0], false, options); }
-    if (modes[0] === '--lint') return await runLintOnly(context, cwd, words, options, value => { release = value; });
-    return await runBatch(context, cwd, words, options, value => { release = value; });
+    return await withCheckRun(context, async () => {
+      if (modes[0] === '--retry') { release = interruptible(context); return await runRetry(context, options['--retry'], options); }
+      if (modes[0] === '--read') { release = interruptible(context); return UUID.test(words[0] ?? '') ? await runCallRead(context, words[0]) : await runRead(context, words[0], false, options); }
+      if (modes[0] === '--lint') return await runLintOnly(context, cwd, words, options, value => { release = value; });
+      return await runBatch(context, cwd, words, options, value => { release = value; });
+    });
   } catch (error) {
     if (error instanceof Stop || error instanceof PreflightError) {
       line(ports.stderr, error.message);
@@ -2347,7 +2376,7 @@ async function finishTestAttempts(cache, rows, capture) {
     const complete = observations.length > 0 && observations.every(item => item.complete && observedIdentityMatches(item, identity));
     const marks = previous?.in_progress ?? [];
     const ownMark = mark => !!cache.mark && mark.token === cache.mark.token;
-    const clean = marks.length === 1 && ownMark(marks[0]) && !cache.context.cacheReadInvocation && Number.isFinite(cache.context.startedAt)
+    const clean = marks.length === 1 && ownMark(marks[0]) && !cache.context.cacheReadInvocation && !cache.context.checkRunFailed && Number.isFinite(cache.context.startedAt)
       && (!previous || cache.context.startedAt > Date.parse(previous.sampled_at))
       && cache.identitySnapshot === JSON.stringify(previous ?? null) && complete;
     data.latest_identity = { engine_sha: identity.engine_sha, models: identity.requested_model ? [identity.requested_model] : [],
@@ -2461,9 +2490,8 @@ async function runBatch(context, cwd, words, options, setRelease) {
       saveBatch(context);
     }
   }
-  if (cache) await finishTestAttempts(cache, rows, capture);
   saveBatch(context);
-  return printResult(context, rows);
+  return () => printResult(context, rows);
 }
 
 // ---- pdd simulate ----
