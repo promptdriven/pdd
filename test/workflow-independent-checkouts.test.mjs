@@ -224,4 +224,26 @@ test('two open workspaces for one namespace refuse on open and close and ask the
  await assert.rejects(f.open(bInput),choose);
  await assert.rejects(idle(f,bInput),choose);
  assert.deepEqual(mutations(f),[]);assert.deepEqual(f.workspaces,world);assert.equal(await readFile(join(f.ports.directory,'registry.json'),'utf8'),bytes);
+});test('a binding refusal after a settle candidate changes nothing, as its text says',async t=>{
+ const {f,bInput}=await pair(t),state=await registry(f);
+ state.runs[1].repoWorkspaceId='changed';state.repositories.push(structuredClone(state.repositories[1]));await save(f,state);
+ const bytes=await readFile(join(f.ports.directory,'registry.json'),'utf8'),world=structuredClone(f.workspaces);f.calls.length=0;
+ await assert.rejects(f.open(bInput),error=>error.code==='herdr_run_binding_changed'&&/Nothing was changed\./.test(error.message));
+ assert.equal(await readFile(join(f.ports.directory,'registry.json'),'utf8'),bytes,'The settle is saved only after the binding checks pass');
+ assert.deepEqual(mutations(f),[]);assert.deepEqual(f.workspaces,world);
+});
+for(const open of [true,false])test(`an unconfirmed entry next to a live entry is ${open?'refused when a workspace it may have made is open':'archived when no other workspace is open'}`,async t=>{
+ const {f,b,bInput}=await pair(t),state=await registry(f);
+ state.repositories.push({key:'alice/coffee',repository:'alice/coffee',sourceRoot:bInput.sourceRoot,commonDir:bInput.commonDir,phase:'intent'});await save(f,state);
+ if(open)f.workspaces.push({workspace_id:'lost-parent',label:'lost',worktree:{checkout_path:bInput.sourceRoot,repo_key:bInput.commonDir,is_linked_worktree:false}});
+ const bytes=await readFile(join(f.ports.directory,'registry.json'),'utf8'),world=structuredClone(f.workspaces);f.calls.length=0;
+ if(open){
+  await assert.rejects(f.open(bInput),error=>error.code==='layout_allocation_uncertain'&&error.message.includes('lost-parent')&&/Close the one you do not use in Herdr session pdd, then retry\./.test(error.message));
+  assert.equal(await readFile(join(f.ports.directory,'registry.json'),'utf8'),bytes);assert.deepEqual(mutations(f),[]);
+ }else{
+  assert.equal((await f.open({...bInput,stageId:'again'})).repoWorkspaceId,b.repoWorkspaceId);
+  const after=await registry(f);assert.equal(after.repositories.filter(r=>r.commonDir===bInput.commonDir).length,1);
+  assert.equal(after.archivedRepositories.at(-1).phase,'intent');assert.deepEqual(mutations(f).map(c=>c.slice(0,2)),[['tab','create']]);
+ }
+ assert.deepEqual(f.workspaces,world,'Nothing is closed or deleted');
 });
