@@ -105,7 +105,7 @@ function protectProgress(run,p,{approval=false}={}) {
   const check=latest=>{
     if(ended(latest) && !(selectedState==='completed'&&latest.state==='completed'&&selectedGate?.kind==='ask-code'))
       throw Object.assign(Error(`The run ended (${latest.state}). Stop working on it.`),{code:'workflow_progress_refused'});
-    if(approval && (latest.area!==selectedArea || Boolean(latest.gate)!==Boolean(selectedGate) || ['id','area','kind','at'].some(key=>latest.gate?.[key]!==selectedGate?.[key])))
+    if(approval && (latest.area!==selectedArea || Boolean(latest.gate)!==Boolean(selectedGate) || (selectedGate?.id && latest.gate?.id!==selectedGate.id) || ['area','kind','at'].some(key=>latest.gate?.[key]!==selectedGate?.[key])))
       throw Object.assign(Error('The gate changed, look again.'),{code:'workflow_progress_refused'});
   };
   p.progressGuard=check;
@@ -1353,7 +1353,7 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, packageRoot = 
   }
   const invocationAt=p.now();
   p.inspectProgress();
-  try { if (run.gate && JSON.stringify(await gatePromptSnapshot(run, p)) !== JSON.stringify(run.gate.promptSnapshot)) return fail('The selected prompts changed. Show the gate again and ask the person again.'); } catch (error) { return fail(`Cannot inspect selected prompts: ${error.message}. Show the gate again and ask the person again.`); }
+  try { if (run.gate?.promptSnapshot && JSON.stringify(await gatePromptSnapshot(run, p)) !== JSON.stringify(run.gate.promptSnapshot)) return fail('The selected prompts changed. Show the gate again and ask the person again.'); } catch (error) { return fail(`Cannot inspect selected prompts: ${error.message}. Show the gate again and ask the person again.`); }
   let saved;
   try { if (run.gate || beforePr || !askCode) saved = await saveGateApproval(run, area, record, edits, p); }
   catch (error) { return fail(`Approval failed: ${error.message}`); }
