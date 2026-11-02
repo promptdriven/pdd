@@ -7,9 +7,11 @@ import { CommandInputError, parseArgv } from './argument-parser.mjs';
 import { renderCompletion } from './completion.mjs';
 import { NAMES, PUBLIC_COMMAND_MANIFEST, PUBLIC_COMMAND_ROUTES, PUBLIC_HELP_TEXT } from './command-catalog.mjs';
 import { listWorkflowAreas, formatWorkflowList } from './workflow-areas.mjs';
-import { setupProject } from './project-setup.mjs';
-import { findSkills, setupSkills } from './skills-install.mjs';
-import { pathDiagnostic } from './path-diagnostic.mjs';
+import { setupProject as defaultSetupProject } from './project-setup.mjs';
+import { findSkills, setupSkills as defaultSetupSkills } from './skills-install.mjs';
+import { pathDiagnostic as defaultPathDiagnostic } from './path-diagnostic.mjs';
+import { checkWorkflowAgents } from './workflow-agents.mjs';
+import { setupWithWorkflowAgent } from './workflow-setup.mjs';
 import { causeText } from './runtime-output.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -42,7 +44,9 @@ export function renderHelp(prefix = [], packageRoot = PACKAGE_ROOT) {
 }
 export async function runPdd(argv, { stdout = process.stdout, stderr = process.stderr,
   cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, workflowRunner, workflowAreas,
-  stdin = process.stdin, confirm, mcpServer, runtimeSlots, contracts, product, productPorts, gitContext, workflowProve, provePorts } = {}) {
+  stdin = process.stdin, confirm, mcpServer, runtimeSlots, contracts, product, productPorts, gitContext, workflowProve, provePorts,
+  workflowAgents = { checkWorkflowAgents }, workflowAgentPorts = {}, setupSkills = defaultSetupSkills,
+  setupProject = defaultSetupProject, setupAgentMcp, pathDiagnostic = defaultPathDiagnostic } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
@@ -90,10 +94,17 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         line(stderr, `Use pdd ${route.prefix.join(' ')} REQUEST_ID --summary TEXT.`); return 2;
       }
       const [name, input] = RUNNER_ROUTES[plan.local](plan);
+      if (plan.local === 'workflow-run') {
+        let selected;
+        try { selected = await workflowAgents.checkWorkflowAgents({ cwd, env, ...(plan.options['--agent'] !== undefined ? { requested: plan.options['--agent'] } : {}) }, workflowAgentPorts); }
+        catch { line(stderr, 'Agent sign-in could not be checked. Run codex login status or claude auth status.'); return 1; }
+        if (!selected?.ok) { line(stderr, selected?.message || 'Agent sign-in could not be checked. Run codex login status or claude auth status.'); return 1; }
+        input.agent = selected.agent;
+      }
       try {
         const runner = workflowRunner ?? await import('./workflow-runner.mjs');
         if (typeof runner[name] !== 'function') throw Error('Missing runner export');
-        const result = await runner[name]({ ...input, cwd, packageRoot }, { say: text => line(stderr, text) });
+        const result = await runner[name]({ ...input, cwd, packageRoot }, { say: text => line(stderr, text), ...(plan.local === 'workflow-run' ? { env } : {}) });
         if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255
           || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid runner reply');
         line(result.exitCode === 0 ? stdout : stderr, result.message);
@@ -131,6 +142,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       } catch (error) { line(stderr, `pdd mcp could not start.${reason(error)}`); return 1; }
     }
     case 'setup': {
+      return setupWithWorkflowAgent({ cwd, env }, { ...workflowAgentPorts, checkWorkflowAgents: workflowAgents.checkWorkflowAgents, stderr, setup: async () => {
       let code = 0;
       for (const result of setupSkills({ packageRoot, cwd, home: env.HOME || homedir(), claudeConfigDir: env.CLAUDE_CONFIG_DIR })) {
         if (result.updated.length) line(stdout, `Updated ${skillCount(result.updated)} in ${result.root}: ${skillNames(result.updated)}`);
@@ -146,10 +158,11 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         line(stdout, changed ? `Wrote the PDD block in ${file}.` : `${file} already has this PDD block. No change.`);
       } catch (error) { line(stderr, `pdd setup: ${error.message}`); code = 1; }
       try {
-        const { setupAgentMcp } = await import('./agent-mcp-setup.mjs');
-        if (await setupAgentMcp({ env, packageRoot }, { stdin, stdout, stderr, confirm })) code = 1;
+        const action = setupAgentMcp ?? (await import('./agent-mcp-setup.mjs')).setupAgentMcp;
+        if (await action({ env, packageRoot }, { stdin, stdout, stderr, confirm })) code = 1;
       } catch (error) { line(stderr, `pdd setup: MCP registration failed.${reason(error)}`); code = 1; }
       return code;
+      } });
     }
     case 'runtime-jobs':
       try { const slots = runtimeSlots ?? await import('./runtime-slots.mjs'); return await slots.runJobs({ env }, { stdout, stderr }); }

@@ -9,7 +9,7 @@ export async function setupWithWorkflowAgent({ cwd = process.cwd(), env = proces
     return 1;
   }
   let selected;
-  try { selected = await checkWorkflowAgents({ cwd, env }, ports); }
+  try { selected = await (ports.checkWorkflowAgents ?? checkWorkflowAgents)({ cwd, env }, ports); }
   catch { stderr.write(`${recovery}\n`); return 1; }
   if (!selected.ok) { stderr.write(`${selected.message}\n`); return 1; }
   try {
