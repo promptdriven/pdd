@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: 1b5e68d96176a0b8dbed628de2879f668531a4f38c86e731cfa9e98bcb81dfae).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: dab31ec931d730f8710969d96d5e6df13bfdb6f3b38554bf3f4216410c2ff88f).
 import { hasProgress, outcomeExitCode, outcomeFor, outcomeText, progressText } from './runtime-outcome.mjs';
 export const OPEN_STATES = new Set(['queued', 'running']);
 
@@ -182,9 +182,13 @@ export function storyLines(rows) {
 export const PROMPT_TESTS_LABEL = 'Prompt tests';
 export const PROMPT_TESTS_WORDS = '(?:Prompt tests|Runtime check)';
 export function summaryLine(rows, story = null) {
-  // A passed row proves only the criteria its report lists.
+  // A passed row proves only the criteria its report lists; without the list its criteria are not reported, never counted.
+  const unreported = row => row.state === 'passed' && !row.criteria;
   const own = row => row.criteria ?? { passed: 0, total: row.criteria_total ?? 0 };
-  const criteria = rows.reduce((sum, row) => ({ passed: sum.passed + own(row).passed, total: sum.total + own(row).total }), { passed: 0, total: 0 });
+  const criteria = rows.filter(row => !unreported(row)).reduce((sum, row) => ({ passed: sum.passed + own(row).passed, total: sum.total + own(row).total }), { passed: 0, total: 0 });
+  const notReported = rows.some(unreported), someCounted = rows.some(row => !unreported(row));
+  const criteriaText = [...(someCounted || !notReported ? [`${criteria.passed} of ${count(criteria.total, 'criterion').replace(/criterions$/, 'criteria')}`] : ['passed']),
+    ...(notReported ? ['criteria details not reported'] : [])].join(' · ');
   const checks = rows.reduce((sum, row) => ({ passed: sum.passed + (row.checks?.passed ?? 0), total: sum.total + (row.checks?.total ?? 0) }), { passed: 0, total: 0 });
   // A running row with server progress reports its calls in the one progress fragment; the calls part counts the other rows.
   const progress = progressText(rows), counted = rows.filter(row => !hasProgress(row));
@@ -202,7 +206,7 @@ export function summaryLine(rows, story = null) {
     : rows.some(row => row.busy && row.state === 'not_run') && rows.every(row => row.state === 'passed' || (row.busy && row.state === 'not_run')) ? 'busy ·' : 'no verdict ·';
   const rerunShare = rerunCalls ? `${rerunCalls} for reruns` : '';
   const usage = known.length ? `${count(calls, 'AI call')}${rerunShare ? ` (${rerunShare})` : ''}` : rerunShare || count(calls, 'AI call');
-  return [`${PROMPT_TESTS_LABEL}${story ? ` (${story})` : ''}${rows.some(row => row.draft) ? ' (DRAFT)' : ''}: ${mark} ${criteria.passed} of ${count(criteria.total, 'criterion').replace(/criterions$/, 'criteria')}`,
+  return [`${PROMPT_TESTS_LABEL}${story ? ` (${story})` : ''}${rows.some(row => row.draft) ? ' (DRAFT)' : ''}: ${mark} ${criteriaText}`,
     `${checks.passed}/${checks.total} checks`, ...(progress ? [progress] : []), ...others, ...(progress && !sent.length ? [] : [`${usage}${unknownCalls ? ` + ${unknownCalls} unknown` : ''}`])].join(' · ');
 }
 
