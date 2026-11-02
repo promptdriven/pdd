@@ -61,7 +61,7 @@ entry is declared, and no prompt pass is claimed for these obligations.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"draft","prose_sha256":"","entries":[],"calls":[],"resources":[],"limits":{"max_steps":1,"max_model_calls":1},"conventions":[]}
+{"status":"approved","prose_sha256":"918ffbf96ddfc37c2c0369d30858ba0ad1e61d1140ef7f228f22f387b70104d9","entries":[],"calls":[],"resources":[],"limits":{"max_steps":1,"max_model_calls":1},"conventions":[]}
 ```
 
 </details>
