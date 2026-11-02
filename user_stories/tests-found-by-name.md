@@ -9,8 +9,8 @@ I can keep the test of a Story in a `tests` folder under the Story's name, at an
 3. A Story with no test prints one line with the exact expected path, for example `Warning: user_stories/phone/p17.md has no test: expected tests/p17.json (or p17.json in any test or tests folder).`
 4. `pdd test p17` for that Story stops with exit 2 and the same sentence, not "Unknown story".
 5. JSON files in `test` or `tests` folders whose names match no Story print one line, for example `Warning: tests/notes.json matches no Story (user_stories/**/notes.md).`, or `Warning: 2 JSON files in test folders match no Story (…). pdd test --files lists them.` for more than one; `pdd test --files` and `--json` list each file.
-6. Two files with the same name for one Story, for example `test/runtime/p17.json` and `tests/p17.json`, are an error that names both files, and pdd checks neither of them.
-7. A selected test that is not valid JSON is refused with its file name. A test whose `story_path` names another Story is refused with the test, its Story and the other Story.
+6. Two files with the same name for one Story, for example `test/runtime/p17.json` and `tests/p17.json`, are an error that names both files, and pdd checks neither of them, also with `pdd test --lint`. A file name that fits two Stories, such as `tests/a.b.json` with Stories `a` and `a.b`, is an error that names both Stories.
+7. A selected test that is not valid JSON, cannot be read or is over the upload limit is refused with its file name, and the other Stories still run. A test whose `story_path` names another Story is refused with the test, its Story and the other Story.
 8. `pdd test nope` stops with exit 2 and lists every Story with its test file, or with "no test" and the expected path.
 9. One test file has no size limit. The only size limit is the upload limit of 10 MB and 10,000 files; over it, pdd names the largest files with their sizes and the limit.
 10. When the interpreter says that it can lint named tests, the lint request names the selected tests, so the interpreter lints exactly those files.
