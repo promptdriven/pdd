@@ -46,7 +46,7 @@ async function setup(t, edit) {
     return { code, sent: fake.posts.filter(x => x.command === 'check').length - before, json: options['--json'] === false ? null : JSON.parse(p.stdout.text), stderr: p.stderr.text };
   };
   const invoke = (words, options) => invokeWith(ports, words, options);
-  const readBatch = async (name, p = ports) => { p.stdout.text = ''; p.stderr.text = ''; return runCheck({ words: [name], options: { '--read': true, '--json': true }, cwd: fixture.repo, cache: true }, p); };
+  const readBatch = async (name, p = ports, options = {}) => { p.stdout.text = ''; p.stderr.text = ''; return runCheck({ words: [name], options: { '--read': true, '--json': true, ...options }, cwd: fixture.repo, cache: true }, p); };
   return { ...fixture, fake, ports, clock, env, invoke, invokeWith, readBatch, state };
 }
 function bump(ctx, file) { const path = join(ctx.repo, file), doc = read(path); doc.initial_world.changed = (doc.initial_world.changed ?? 0) + 1; write(path, doc); }
@@ -88,7 +88,7 @@ const interleavings = [
   assert.equal((await ctx.invoke()).sent, 3);
   bump(ctx, 'tests/independent.json'); bump(ctx, 'tests/place-order.json');
   ctx.state.running = true;
-  const x = await ctx.invoke(['independent', 'place-order']);
+  const x = await ctx.invoke(['independent', 'place-order'], { '--timeout': 1.5 });
   assert.equal(x.code, 3); assert.equal(x.sent, 2);
   ctx.state.running = false;
   const saved = read(findBatch(ctx.env.PDD_STATE_DIR, x.json.batch) ?? findBatch(ctx.home, x.json.batch));
@@ -102,7 +102,7 @@ const interleavings = [
     const job = fake.check(id, 'queued'); delete job.engine_sha; delete job.usage.requested_model; return { status: entry.method === 'POST' ? 202 : 200, json: job };
   };
   const before = ctx.fake.posts.filter(p => p.command === 'check').length;
-  const code = await ctx.readBatch(x.json.batch);
+  const code = await ctx.readBatch(x.json.batch, ctx.ports, { '--timeout': 1.5 });
   ctx.state.reply = null;
   const named = await ctx.invoke(['independent']);
   assert.equal(named.sent, 1, 'Y saw build b after X started; X\'s build-a pass must not be reused');
@@ -112,7 +112,7 @@ const interleavings = [
     assert.equal((await ctx.invoke(['unknown-item'])).sent, 0);
   } },
   { name: 'late read', run: async ctx => {
-    ctx.state.running = true; const first = await ctx.invoke(['independent']); assert.equal(first.code, 3);
+    ctx.state.running = true; const first = await ctx.invoke(['independent'], { '--timeout': 1.5 }); assert.equal(first.code, 3);
     ctx.state.running = false; ctx.clock.now += 10 * min;
     assert.equal((await ctx.invoke(['place-order', 'unknown-item'])).sent, 2);
     ctx.state.identity = { ...B }; ctx.clock.now += 10 * min;
@@ -273,7 +273,7 @@ test('TEST-CACHE-K2: read that resends, in flight', async t => {
   const ctx = await setup(t);
   assert.equal((await ctx.invoke()).sent, 3);
   bump(ctx, 'tests/place-order.json');
-  ctx.state.running = true; const x = await ctx.invoke(['place-order']); ctx.state.running = false;
+  ctx.state.running = true; const x = await ctx.invoke(['place-order'], { '--timeout': 1.5 }); ctx.state.running = false;
   const xId = ctx.fake.posts.filter(e => e.command === 'check').at(-1).request.requestId;
   const resent = new Set(); let released = false;
   ctx.state.reply = (id, entry, fake) => {
@@ -349,7 +349,7 @@ for (const path of ['normal', 'read-resend', 'retry', 'recovery', 'reuse-disable
     assert.equal((await ctx.invokeWith(a.ports, [], {}, path !== 'reuse-disabled')).sent, 3);
   } else if (path === 'retry') {
     ctx.state.reply = (id, entry, fake) => entry.method === 'POST' ? { status: 200, json: queueRefusal(fake, id) } : null;
-    const first = await ctx.invokeWith(a.ports, ['place-order']);
+    const first = await ctx.invokeWith(a.ports, ['place-order'], { '--timeout': 1.5 });
     ctx.state.reply = null;
     const b = watched.actor(5 * min); b.use();
     assert.equal((await ctx.invokeWith(b.ports, [], { '--retry': first.json.batch }, false)).sent, 1);
@@ -361,7 +361,7 @@ for (const path of ['normal', 'read-resend', 'retry', 'recovery', 'reuse-disable
       return { status: 200, json: job(fake, id, B) };
     };
     if (path === 'read-resend') {
-      const first = await ctx.invokeWith(a.ports, ['place-order']); assert.equal(first.code, 3);
+      const first = await ctx.invokeWith(a.ports, ['place-order'], { '--timeout': 1.5 }); assert.equal(first.code, 3);
       recover = true; const b = watched.actor(5 * min); b.use();
       assert.equal((await ctx.invokeWith(b.ports, [first.json.batch], { '--read': true })).code, 0);
     } else {
@@ -376,7 +376,7 @@ for (const path of ['normal', 'read-resend', 'retry', 'recovery', 'reuse-disable
 test('TEST-CACHE-L1 retry cannot hide build b during or after its sends', async t => {
   const ctx = await setup(t); assert.equal((await ctx.invoke()).sent, 3); bump(ctx, 'tests/place-order.json');
   ctx.state.reply = (id, entry, fake) => entry.method === 'POST' ? { status: 200, json: queueRefusal(fake, id) } : null;
-  const busy = await ctx.invoke(['place-order']); assert.equal(busy.json.rows[0].can_retry, true, 'capacity refusal permits retry');
+  const busy = await ctx.invoke(['place-order'], { '--timeout': 1.5 }); assert.equal(busy.json.rows[0].can_retry, true, 'capacity refusal permits retry');
   const retried = new Set(); let release, released = false; const gate = new Promise(done => { release = () => { released = true; done(); }; });
   ctx.state.reply = (id, entry, fake) => {
     if (entry.method === 'POST' && !retried.size) retried.add(id);

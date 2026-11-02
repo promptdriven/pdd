@@ -68,7 +68,7 @@ async function successful(ctx, words = [], options = {}) {
 
 test('TEST-CACHE-R2 late read identity conflict invalidates a newer batch pass', async t => {
   const ctx = await setup(t); ctx.state.running = true;
-  const original = await ctx.invoke(['independent']); assert.equal(original.code, 3); assert.equal(original.sent, 1);
+  const original = await ctx.invoke(['independent'], { '--timeout': 1.5 }); assert.equal(original.code, 3); assert.equal(original.sent, 1);
   ctx.state.running = false; ctx.clock.now += 10 * 60000;
   assert.equal((await successful(ctx, ['place-order', 'unknown-item'])).sent, 2);
   ctx.state.identity.engine_sha = 'b'.repeat(40); ctx.clock.now += 10 * 60000;
