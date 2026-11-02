@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 8935ab1cf864e10d60eec5bd25b6e82cff21c02d91f8d908095654f54d03d859).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 2897dc872d07ed586796e24963f3309f323bdeb976d9fa431f9e891ac34e05f6).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
@@ -146,7 +146,7 @@ export function selectTests(found, words = []) {
   const selected = new Set(), unknown = [];
   for (const raw of words) {
     const word = raw.replace(/^\.\//, '');
-    const hits = found.tests.filter(test => test.path === word || test.storyPath === word || test.story === word || basename(test.path, '.json') === word);
+    const hits = found.tests.filter(test => test.path === word || test.storyPath === word || test.story === word || basename(test.path, '.json') === word || word === '.' || (!word.startsWith('../') && word !== '..' && (test.path.startsWith(word.replace(/\/$/, '') + '/') || test.storyPath?.startsWith(word.replace(/\/$/, '') + '/'))));
     if (!hits.length) unknown.push(raw);
     for (const hit of hits) selected.add(hit);
   }
@@ -1367,9 +1367,22 @@ function captureOnce(root, { tests, appMap = null, prepareSource }, strict = fal
     }
     const files = [...payload.values()].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0), total = sourceLimit(files);
     const entries = files.map(file => ({ path: file.path, bytes: bytes(file) }));
-    const rawPromptHashes = Object.fromEntries(files.filter(file=>file.path.endsWith('.prompt.md')).flatMap(file=>{
-      const original=inspectRaw(file.path,'Prompt snapshot',true);
-      return original.stat ? [[file.path,sha256(bytes(original))]] : [];
+    const rawFileHashes = Object.fromEntries([...footprintPayload.values()].flatMap(file=>{
+      if (unavailable.has(file.path)) return [];
+      try {
+        // Cache metadata reuses observed raw bytes; it must not read an unread
+        // replacement original merely to make a Story eligible for reuse.
+        if (!file.path.endsWith('.prompt.md')) {
+          const original = snapshots.get(file.path);
+          return original?.bytes ? [[file.path,sha256(original.bytes)]] : [];
+        }
+        const original=inspectRaw(file.path,'Prompt snapshot',true);
+        return original.stat ? [[file.path,sha256(bytes(original))]] : [];
+      } catch (error) {
+        if (payload.has(file.path) || reader.unstable || error === unstableSource) throw error;
+        markUnavailable(file.path,error);
+        return [];
+      }
     }));
     const tar = tarFiles(entries);
     if (tar.length > LIMITS.bytes) throw new PreflightError(4, `The source archive is ${formatSize(tar.length)}. The limit is 10 MB.`);
@@ -1397,7 +1410,8 @@ function captureOnce(root, { tests, appMap = null, prepareSource }, strict = fal
     return { tar, sha256: sha256(tar), files: files.map(({ path, size, target }) => ({ path, size, ...(target ? { target } : {}) })), bytes: total,
       references:[...provenance.keys()].filter(path=>payload.has(path)).sort().flatMap(path=>provenance.get(path)), stories:footprints,
       warnings:footprints.flatMap(story=>(story.unavailable ?? []).map(item=>`Warning: ${story.story_path}: footprint unavailable: ${item.cause}`)),
-      raw_prompt_hashes:rawPromptHashes,
+      raw_file_hashes:rawFileHashes,
+      raw_prompt_hashes:Object.fromEntries(Object.entries(rawFileHashes).filter(([path])=>path.endsWith('.prompt.md'))),
       sources:entries.map(file=>({path:file.path,bytes:Buffer.from(file.bytes)})) };
   } catch (error) { if (reader.unstable || error === unstableSource) return null; throw error; }
 }

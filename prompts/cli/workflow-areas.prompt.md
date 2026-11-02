@@ -27,3 +27,7 @@ A pr area may explicitly set replay_evidence to `pdd.replay-evidence.v1`. Preser
 areas and saved runs. Reject an unsupported version or a policy on a non-pr area. The bundled feature/bug
 code areas set it; small-change and custom areas have no implicit policy. Never retrofit a policy onto a
 saved area from the current package. [Replay evidence](workflow-replay.prompt.md) owns the manifest contract.
+
+## Approval gate advisory
+
+Own detection of a workflow with no approval gate before implementation. An area `gate: "approve"` or `before: "approve"` provides the explicit approval boundary; `then: "ask-code"` also provides a boundary before its following area. If none of these exists, return optional `warnings` containing one plain advisory that names the workflow and says it has no approve gate before code. This includes a valid custom single-area `pr` workflow. Do not reject, insert a gate, reorder steps or prevent startup. Workflows with a boundary retain their existing returned shape (no warning field required). Preserve all existing exports and inputs; this optional string-array field on a workflow is the only result addition. Listing renders the advisory in plain text and retains it in each affected JSON workflow; the runner displays it on startup. Detection policy belongs here, not in the runner.

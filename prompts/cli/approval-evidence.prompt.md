@@ -5,8 +5,11 @@ request changes. This module checks for a user message in that stage's native
 session after the gate question and returns the original text and session ID for
 the caller's journal and status record. It reads files only. The caller owns the
 current gate, decision semantics, persistence and application of the decision.
-This is evidence of a user turn, not proof against an agent modifying local files
-or proof that arbitrary user text means approval.
+This is recording evidence of a user turn, never authority to approve a gate. The
+[runner](workflow-runner.prompt.md#approval-through-the-persons-words) owns explicit
+approval authorization; neither even genuine "I approve" text nor freshness proves
+that the agent displayed the gate or received consent to advance. Preserve this
+reader's public interface and selection rules for recording and changes.
 
 New standalone interface; preserve the worktree/window matching rule from the
 existing session-file matcher. A native session ID is optional. When the caller
