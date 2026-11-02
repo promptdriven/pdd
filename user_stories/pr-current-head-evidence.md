@@ -8,7 +8,7 @@ I can read a PR and tell what was checked for its current contents, and see when
 2. Unchanged checked content can retain its current result across commits; newer compatible evidence updates the same Story without restoring an older overall total.
 3. Agent prose, including "Full npm test: 665/665 passed", ordinary proof, warnings and failures, stays under "Agent note — not checked by pdd"; only structured current-head CI or the old-code proof run supplies checked native-suite counts, otherwise they are unknown.
 4. A missing machine proof remains "not run" and an unreadable proof remains "unavailable"; neither prevents publication.
-5. A criterion with one or more checks all checking exit code says "checked by exit code only", regardless of its wording, result or checks in other steps.
+5. A criterion with one or more checks, all checking exit code across every step, says "checked by exit code only", regardless of its wording or result; checks assigned to other criteria do not affect this fact.
 6. A criterion with mixed checks or zero checks has no exit-code-only annotation; unavailable authored checks remain unknown. No new warning, refusal or verdict change is added.
 
 ## What must not change

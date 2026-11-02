@@ -20,7 +20,7 @@
     },
     {
       "id": "AC5",
-      "text": "A criterion with one or more checks all checking exit code says \"checked by exit code only\", regardless of its wording, result or checks in other steps."
+      "text": "A criterion with one or more checks, all checking exit code across every step, says \"checked by exit code only\", regardless of its wording or result; checks assigned to other criteria do not affect this fact."
     },
     {
       "id": "AC6",
