@@ -56,6 +56,7 @@ async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
   writeFileSync(join(source, 'value.mjs'), 'export const value = 1;\n'); git(source, 'add', '.'); git(source, 'commit', '-qm', 'initial');
   git(source, 'update-ref', 'refs/remotes/origin/main', git(source, 'rev-parse', 'HEAD'));
   const f = { base, source, state, git, herdr: fakeHerdr(), prs: [], pushes: [], edits: [], fetches: 0, clock: Date.parse('2026-10-27T17:00:00Z'), ci: [], merged: false, mergedNumbers: [] };
+  f.herdr.now = () => f.clock;
   async function execFile(file, args, opts) {
     if (file === 'git' && args[0] === 'push') {
       f.pushes.push(args);
@@ -103,7 +104,7 @@ async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
     throw Error(`unexpected gh ${args.join(' ')}`);
   }
   f.prompts = [];
-  f.ports = { execFile, herdr: f.herdr.herdr, stateDir: state, layoutDirectory: join(state, 'herdr-layout'), now: () => f.clock,
+  f.ports = { execFile, herdr: f.herdr.herdr, stateDir: state, layoutDirectory: join(state, 'herdr-layout'), now: () => f.clock, sleep: async ms => { f.clock += ms; }, findNativeSessions: stage => f.herdr.findNativeSessions(stage),
     env: { HOME: home, CLAUDE_CONFIG_DIR: join(home, '.claude') }, isTTY: true, pdd: '/abs/node /abs/pdd.mjs',
     confirm: async question => { f.prompts.push(question); return f.answer ?? true; },
     attach: async () => 0, readApprovalEvidence: async () => assert.fail('A terminal person needs no chat evidence') };
@@ -1059,10 +1060,11 @@ test('0.1.7 #2: status says the chat stopped when no agent runs in its pane, and
   // The pdd Herdr server is down: no chat of it runs.
   const down = { ...f.ports, herdr: async args => { if (args[0] === 'agent') throw Object.assign(Error('no server'), { code: 'server_not_running' }); return f.herdr.herdr(args); } };
   assert.match((await runStatus({ ref: '17', cwd: f.source }, down)).message, /^State: the chat stopped\./m);
-  // Any other Herdr failure: pdd cannot tell, so status keeps its words and still works.
+  // Any other Herdr failure: pdd cannot tell, so status keeps the saved chat state (ended, with its evidence) and still works.
   const broken = { ...f.ports, herdr: async args => { if (args[0] === 'agent') throw Object.assign(Error('odd'), { code: 'herdr_failed' }); return f.herdr.herdr(args); } };
   const unsure = await runStatus({ ref: '17', cwd: f.source }, broken);
-  assert.equal(unsure.exitCode, 0); assert.match(unsure.message, /^State: the agent works on scope$/m);
+  assert.equal(unsure.exitCode, 0); assert.match(unsure.message, /^State: the chat stopped\./m);
+  assert.equal(f.record().chats[0].state, 'ended'); assert.equal(f.record().chats[0].evidence.kind, 'pane-exit');
   // pdd workflow open starts the chat again, and status says it works.
   assert.equal((await openRun({ ref: '17', cwd: f.source }, { ...f.ports, env: { ...f.ports.env, HERDR_ENV: '1' } })).exitCode, 0);
   assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^State: the agent works on scope$/m);
