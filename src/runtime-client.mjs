@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 43b981d05678aea07e49ab0ea81ea994217b6e8a6d50c9758404f09b4f8b6c13).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: aafd9132f6c76533978a6b8a8954c24b0eaac62dc85cbbfba376d5a86606724e).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -1296,8 +1296,10 @@ function printResult(context, rows, extra = {}) {
 
 function runFiles(cwd, words, options, ports) {
   const { root, found, normalized } = localSetup(cwd, words);
-  const selected = select(found, normalized, root), coverage = bindingCoverage({ root, found, selected });
-  const tests = selected.map(test => test.path);
+  // A Try has one seed Story, so a Try listing makes the same choice as pdd simulate.
+  const selected = options['--app-map'] === undefined ? select(found, normalized, root)
+    : [oneTest(found, normalized, root, '--app-map lists what one Try sends, and a Try starts from one Story. Name the Story that seeds the Try:')];
+  const coverage = bindingCoverage({ root, found, selected }), tests = selected.map(test => test.path);
   const appMap = options['--app-map'] === undefined ? null : appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
   const capture = ports.captureSource(root, { tests, appMap });
   for (const warning of capture.warnings ?? []) line(ports.stderr, warning);
@@ -1907,9 +1909,9 @@ function appMapFor(found, given, cwd, root, stderr) {
   return rel;
 }
 
-function oneTest(found, words, root) {
+function oneTest(found, words, root, heading = 'pdd simulate needs one story. Choose one:') {
   const selected = select(found, words, root);
-  if (selected.length !== 1) throw new Stop(2, ['pdd simulate needs one story. Choose one:', ...storyList({ tests: selected })].join('\n'));
+  if (selected.length !== 1) throw new Stop(2, [heading, ...storyList({ tests: selected })].join('\n'));
   return selected[0];
 }
 
