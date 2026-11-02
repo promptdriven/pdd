@@ -209,7 +209,7 @@ test('TEST-CACHE-V1 short run inside a longer run cannot reuse a pass', async t 
 test('TEST-CACHE-V2 crash before finish leaves a mark that forces a run', async t => {
   const ctx = await setup(t); assert.equal((await ctx.invoke()).sent, 3);
   bump(ctx, 'tests/independent.json'); bump(ctx, 'tests/place-order.json');
-  const deadPid = 987654321, c = portsFor(ctx.env, { pid: deadPid }); c.clock.now = ctx.clock.now + 1000;
+  const deadPid = 987654321, c = portsFor(ctx.env, { pid: deadPid, isAlive: () => true }); c.clock.now = ctx.clock.now + 1000;
   let first = true;
   ctx.state.reply = (id, entry, fake) => {
     const job = fake.check(id, first && entry.method === 'POST' ? 'passed' : 'running'); first = false;
