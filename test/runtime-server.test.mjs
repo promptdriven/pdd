@@ -771,12 +771,12 @@ test('RUNTIME-SERVER18: after a POST timeout pdd reads the same ID for at least 
     return { code, out: made.ports.stdout.text };
   };
   const late = await fakeRuntime(t, slow(220_000));
-  const appeared = await run(late, { '--timeout': '1' });
+  const appeared = await run(late, {});
   assert.equal(appeared.code, 0, appeared.out);
   assert.equal(late.posts.filter(post => post.command === 'check').length, 1);
   assert.ok(late.gets.every(get => get.url === `/v1/runs/${late.posts[1].request.requestId}`));
   const never = await fakeRuntime(t, slow(null));
-  const lost = await run(never, { '--timeout': '1' });
+  const lost = await run(never, {});
   assert.equal(lost.code, 3);
   assert.ok(never.gets.length >= 149, String(never.gets.length));
   assert.match(lost.out, /^Place a coffee order +tests\/place-order\.json +unknown/m);
