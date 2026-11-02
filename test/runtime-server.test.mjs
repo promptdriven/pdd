@@ -354,7 +354,7 @@ test('RUNTIME-RERUN-REFUSED: an admission refusal has no rerun verdict or share 
       assert.equal(row.rerun, null);
       assert.deepEqual(row.failed_checks, []);
       assert.equal(row.refusals[0].code, 'run-admission-failed');
-      assert.match(result.json.summary_line, /^Prompt tests \(place-order\): no verdict · [^\n]*1 refused · 0 AI calls$/);
+      assert.match(row.summary_line, /^Prompt tests \(place-order\): no verdict · [^\n]*1 refused · 0 AI calls$/);
       assert.doesNotMatch(result.json.summary_line, /\(\d+ for reruns\)|\((?:un)?stable\)|✗/);
     } else {
       assert.match(result.out, /REFUSED/);
