@@ -34,16 +34,23 @@ const verified = async check => { try { await check(); return true; } catch { re
 // Duplicate or inconsistent entries of one namespace: pdd keeps the one ready entry whose repository workspace is verified
 // open in Herdr and archives the others (none open: all are archived, and a fresh parent is allocated later). Nothing is
 // closed or deleted. Only two open workspaces need a person's choice. An unconfirmed allocation with none open stays.
-async function settleNamespace({registry,rows,command,checkpoint,directory,key,repository,commonDir}) {
+// Returns true when it changed the registry; with persistNow false the caller saves it only after its own checks pass.
+async function settleNamespace({registry,rows,command,checkpoint,directory,key,repository,commonDir,persistNow=true}) {
   const entries=sameNamespace(registry,key,commonDir);
-  if(entries.length<2&&entries.every(e=>consistent(e,key)))return;
+  if(entries.length<2&&entries.every(e=>consistent(e,key)))return false;
   const live=[];
   for(const e of entries)if(e.phase==='ready'&&!live.some(x=>x.workspaceId===e.workspaceId)&&await verified(()=>ownedRepository(rows,{...e,key,repository},command)))live.push(e);
-  if(live.length>1)throw cacheRefusal('layout_allocation_uncertain',`has ${entries.length} entries for ${key} at ${commonDir}, and workspaces ${live.map(e=>e.workspaceId).join(', ')} are all open for it`,'Close the one you do not use in Herdr session pdd, then retry.');
-  if(!live.length&&entries.some(e=>e.phase!=='ready'))return;
+  // An unconfirmed allocation may have opened a workspace that no entry records: an open parent workspace of this
+  // checkout that is not a live entry's counts as open too, so pdd never archives an entry whose workspace may be open.
+  const open=live.map(e=>e.workspaceId);
+  for(const e of entries)if(e.phase!=='ready'&&id(e.workspaceId)&&!open.includes(e.workspaceId)&&rows.some(w=>w.workspace_id===e.workspaceId))open.push(e.workspaceId);
+  if(entries.some(e=>e.phase!=='ready'))for(const w of rows)if(!open.includes(w.workspace_id)&&w.worktree?.is_linked_worktree===false&&samePath(w.worktree.repo_key,commonDir)&&entries.some(e=>samePath(w.worktree.checkout_path,e.sourceRoot)))open.push(w.workspace_id);
+  if(open.length>1)throw cacheRefusal('layout_allocation_uncertain',`has ${entries.length} entries for ${key} at ${commonDir}, and workspaces ${open.join(', ')} are all open for it`,'Close the one you do not use in Herdr session pdd, then retry.');
+  if(!live.length&&entries.some(e=>e.phase!=='ready'))return false;
   registry.archivedRepositories=[...(registry.archivedRepositories??[]),...entries.filter(e=>e!==live[0]).map(e=>({...e,reason:'duplicate-or-inconsistent-cache'}))];
   registry.repositories=[...registry.repositories.filter(r=>!entries.includes(r)),...(live[0]?[{...live[0],key,repository}]:[])];
-  await checkpoint?.();await persist(directory,registry);
+  if(persistNow){await checkpoint?.();await persist(directory,registry);}
+  return true;
 }
 const closeStep = 'The repository workspace stays open; close it yourself in Herdr session pdd if you do not need it.';
 function repositoryEntry(registry, key, commonDir, step) {
@@ -148,7 +155,7 @@ async function reconcileOwner({registry,rows,command,checkpoint,directory,owner,
   const chats=(owner.chats??[]).filter(chat=>id(chat?.workspaceId)),layout=owner.layout??{};
   const workspaceId=layout.workspaceId??chats.at(-1)?.workspaceId,repoWorkspaceId=layout.repoWorkspaceId??chats.at(-1)?.repoWorkspaceId;
   // Without a saved workspace there is nothing to rebuild from; settle the namespace from live Herdr only.
-  if(!id(workspaceId))return settleNamespace({registry,rows,command,checkpoint,directory,key,repository,commonDir});
+  if(!id(workspaceId))return settleNamespace({registry,rows,command,checkpoint,directory,key,repository,commonDir,persistNow:false});
   const entries=sameNamespace(registry,key,commonDir);
   let entry=registry.runs.find(r=>r.runId===owner.runId),repo=entries.length===1&&consistent(entries[0],key)?entries[0]:null;
   const runCached=entry?.phase==='ready'&&entry.workspaceId===workspaceId&&await verified(async()=>{ownedWorkspace(rows,entry,cwd);await assertRunRoot(command,entry);});
@@ -204,8 +211,9 @@ export async function openHerdrRunLayout(input, ports) {
   if(parent.state!=='ready')throw problem('repository_parent_unverified');
   const sourceRoot=parent.root,key=input.repository.toLowerCase(),name=input.repository.split('/')[1];
   const runLabel=`${name}#${input.issueNumber} ${input.workflowName}`;
-  if(owner)await reconcileOwner({registry,rows,command,checkpoint,directory,owner,key,repository:input.repository,sourceRoot,commonDir,cwd,runLabel});
-  await settleNamespace({registry,rows,command,checkpoint,directory,key,repository:input.repository,commonDir});
+  // A settled namespace is saved only after the binding checks below pass, so a refusal changes nothing.
+  let settled=owner?Boolean(await reconcileOwner({registry,rows,command,checkpoint,directory,owner,key,repository:input.repository,sourceRoot,commonDir,cwd,runLabel})):false;
+  settled=await settleNamespace({registry,rows,command,checkpoint,directory,key,repository:input.repository,commonDir,persistNow:false})||settled;
   let repo=repositoryEntry(registry,key,commonDir,unconfirmedStep);
   const pending=registry.runs.find(r=>r.runId===input.runId);
   if(pending && (!samePath(pending.commonDir,commonDir) || !samePath(pending.cwd,cwd) ||
@@ -216,6 +224,7 @@ export async function openHerdrRunLayout(input, ports) {
   // A saved run keeps its repository workspace binding: a missing or different namespace refuses before any allocation.
   if(pending && (!repo || pending.repoWorkspaceId!==repo.workspaceId))throw cacheRefusal('herdr_run_binding_changed',`binds run ${pending.runId} to repository workspace ${pending.repoWorkspaceId}, but ${repo?`the ${key} entry is ${repo.workspaceId}`:`has no ${key} entry for ${commonDir}`}`,
     owner?'The run record has no saved workspace to rebuild from, so pdd allocates nothing for this unconfirmed binding.':'Pass the saved run record (input run), which rebuilds the entry from it.');
+  if(settled){await checkpoint();await persist(directory,registry);}
   if(refused){
     if(!samePath(pending.cwd,cwd) || rows.some(w=>samePath(w.worktree?.checkout_path,cwd)))throw problem('layout_allocation_uncertain');
     pending.phase='refused';pending.refusal='linked_worktree_source';
