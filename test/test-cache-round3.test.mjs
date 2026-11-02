@@ -144,7 +144,12 @@ const interleavings = [
   } },
 ];
 test('TEST-CACHE-R3 interleaving table: never skip on doubt', async t => {
-  for (const row of interleavings) await t.test(row.name, async t => row.run(await setup(t)));
+  const failures = [];
+  for (const row of interleavings) {
+    try { await row.run(await setup(t)); }
+    catch (error) { failures.push({ case: row.name, code: error.code, message: error.message }); }
+  }
+  assert.deepEqual(failures, [], 'every interleaving must obey never-skip-on-doubt');
 });
 function editClock(repo) {
   const file = join(repo, 'prompts/place_order.prompt.md'); let text = readFileSync(file, 'utf8');
@@ -171,4 +176,51 @@ for (const part of ['engine', 'model']) test(`TEST-CACHE-R3 multiple stored ${pa
   else Object.assign(doc.latest_identity, { models: [A.requested_model, 'synthetic-model-B'], conflict: false });
   write(file, doc);
   assert.equal((await ctx.invoke()).sent, 3, 'stored multiple values can never authorize a skip');
+});
+
+
+test('TEST-CACHE-V1 short run inside a longer run cannot reuse a pass', async t => {
+  const ctx = await setup(t); assert.equal((await ctx.invoke()).sent, 3);
+  bump(ctx, 'tests/independent.json'); bump(ctx, 'tests/place-order.json');
+  const p = portsFor(ctx.env); p.ports.interactive = true; p.clock.now = ctx.clock.now + 1000;
+  const q = portsFor(ctx.env); q.clock.now = ctx.clock.now + 30000;
+  const r = portsFor(ctx.env); r.clock.now = ctx.clock.now + 60000;
+  let released = false, phase = 'p'; const held = new Set();
+  ctx.state.reply = (id, entry, fake) => {
+    if (entry.method === 'POST' && phase === 'p') held.add(id);
+    const identity = held.has(id) ? B : A;
+    const job = fake.check(id, held.has(id) && !released ? 'running' : 'passed');
+    job.engine_sha = identity.engine_sha; job.usage.requested_model = identity.requested_model;
+    if (job.result?.report?.evaluation) job.result.report.evaluation.requested_model = identity.requested_model;
+    return { status: job.state === 'running' && entry.method === 'POST' ? 202 : 200, json: job };
+  };
+  const pRun = ctx.invokeWith(p.ports, ['independent']);
+  try {
+    while (!held.size) await new Promise(done => setTimeout(done, 5));
+    phase = 'q'; await ctx.invokeWith(q.ports, ['place-order']);
+    const short = await ctx.invokeWith(r.ports, ['unknown-item']);
+    assert.equal(short.sent, 1, 'the longer run has already seen build b; never reuse build a while it is active');
+  } finally { released = true; await pRun; ctx.state.reply = null; }
+  ctx.clock.now = r.clock.now + 5 * min;
+  assert.equal((await ctx.invoke(['unknown-item'])).sent, 1, 'overlap leaves doubt');
+  assert.equal((await ctx.invoke(['unknown-item'])).sent, 0, 'a later clean run restores reuse');
+});
+
+test('TEST-CACHE-V2 crash before finish leaves a mark that forces a run', async t => {
+  const ctx = await setup(t); assert.equal((await ctx.invoke()).sent, 3);
+  bump(ctx, 'tests/independent.json'); bump(ctx, 'tests/place-order.json');
+  const deadPid = 987654321, c = portsFor(ctx.env, { pid: deadPid }); c.clock.now = ctx.clock.now + 1000;
+  let first = true;
+  ctx.state.reply = (id, entry, fake) => {
+    const job = fake.check(id, first && entry.method === 'POST' ? 'passed' : 'running'); first = false;
+    job.engine_sha = B.engine_sha; job.usage.requested_model = B.requested_model;
+    if (job.result?.report?.evaluation) job.result.report.evaluation.requested_model = B.requested_model;
+    return { status: entry.method === 'POST' ? 202 : 200, json: job };
+  };
+  c.ports.sleep = async () => { throw new Error('simulated crash before finish'); };
+  await assert.rejects(ctx.invokeWith(c.ports, ['independent', 'place-order']), /simulated crash before finish/);
+  ctx.state.reply = null; ctx.clock.now += 5 * min; ctx.state.identity = { ...B };
+  ctx.ports.isAlive = pid => pid !== deadPid;
+  assert.equal((await ctx.invoke(['unknown-item'])).sent, 1, 'a crash after observing build b must not leave build-a reuse');
+  assert.equal((await ctx.invoke(['unknown-item'])).sent, 0, 'one clean recovery run restores reuse');
 });
