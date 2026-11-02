@@ -257,6 +257,9 @@ attempt-local inputs; this module owns capture policy, not product composition.
 
 ## Dependencies
 
+- [Credential-returning resources](../../RUNBOOK.md#use-made-up-sign-in-data):
+  required resource marker meaning for authoring, generation and verification.
+
 - [References](contract-refs.prompt.md): required generation and verification
   context for synchronous expansion and provenance; native adapters preserve
   this module's privacy, snapshot and capture rules.
@@ -268,3 +271,13 @@ Read the full [Prompting guide](../../docs/prompting-guide.md) before you change
 Optional Git-visible root `pdd-bindings.json` is local selection metadata, never a runtime test schema extension or automatically uploaded context. Its exact format is documented in [binding inventory](../../docs/runtime-bindings.md), required for generation and testing of this capability. Discover only declared modules; never treat every source file as part of the selected Stories. No inventory means coverage unavailable.
 
 The root inventory is an explicit exception to source-link acceptance: keep `pdd-bindings.json` and every declaration on strict Git-visible regular paths without symlink ancestors, as owned by [binding inventory](runtime-bindings.prompt.md). Do not read a linked inventory, even if its target is safe. Validate declared native module targets under their separate executable-binding rules: no secrets, symlinks, traversal or missing files; safe source reading does not relax executable bindings. Select entries whose authored Story paths intersect the selected tests' Story paths. Count unique module paths once. A bound module must name a prompt reachable from those selected tests through step entries or declared prompt calls, with a valid executable Runtime interface; a prompt merely included as prose is not bound. An unbound declaration requires a nonblank reason and nonblank port_attempt describing the attempted runtime port and why it did not suffice. Missing explanations are lint problems. Invalid, duplicate or conflicting declarations and unknown Story references are lint problems, not silently ignored coverage. Other Stories' modules do not enter the selected denominator. Expose fresh coverage metadata and diagnostics to the client; never change expected test values.
+
+## Credential-returning resource declarations
+
+The Runtime interface's optional resource-level `returns_credentials` accepts
+only exact Booleans. Absence means false; true and false pass without warnings.
+An invalid value produces one `graph-schema-invalid` problem at
+`/resources/<index>/returns_credentials`, before upload. No name or value-format
+heuristic supplies this marker or a lint warning. The field declares a live
+result boundary as described in [the RUNBOOK](../../RUNBOOK.md#use-made-up-sign-in-data);
+it does not change local authored input validation.

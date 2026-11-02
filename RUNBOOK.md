@@ -850,6 +850,15 @@ live HTTP headers.
 - Use plainly fake values. Never put a real credential in a test, a prompt or the repo.
 - To hide a value in the report, mark its result field `"writeOnly": true`. The check still compares the real value.
   The report also hides fields whose names look secret (for example `secret`, `token`).
+- To declare that a live resource returns credentials, add `"returns_credentials": true` to that resource
+  in the Runtime interface. This optional field accepts only the Booleans `true` and `false`; absence means false.
+  For a marked live resource, every present response value must have a declared normal position in its result
+  schema or be refused. A `"writeOnly": true` field is secret and is always refused, including null and empty
+  containers. Each nested object property and array item needs its own schema position. Unknown fields and
+  values that no unique `oneOf` branch can safely place are refused with their full JSON Pointer before the
+  model, reports, saved state or live recordings. Declared normal fields still pass whatever their names or
+  value formats. False or absent keeps existing live behavior; authored fixtures keep their existing behavior.
+  No field name, value shape or lint guess supplies this declaration.
 - In a live resource's result schema, `"writeOnly": true` declares a secret that the live service returns. The
   interpreter refuses that value where it enters, so it never reaches the model, the report or saved data.
 - What a person types into a Simulator form is still checked by field name.
