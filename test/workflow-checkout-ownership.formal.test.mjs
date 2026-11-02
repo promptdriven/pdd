@@ -47,10 +47,14 @@ test('bounded live checkout ownership: all 188 seeded worlds',async()=>{
    const file=join(directory,'registry.json');await writeFile(file,bytes);
    const saved={repo:repository,number:17,workflow:'bug',runId:`run-${target}`,root:c.cwd,commonDir:c.common,layout:{phase:registry==='refused'?'close_intent':'ready',workspaceId:`run-${target}`,tabId:`run-${target}-t`,paneId:`run-${target}-p`,terminalId:`run-${target}-x`},chats:[]};
    const input={repository,issueNumber:17,runId:saved.runId,workflowName:'bug',stageId:'formal',sourceRoot:c.source,commonDir:c.common,cwd:c.cwd,run:saved};
-   let checkpoint=0;
+   let checkpoint=0, effectCheckpoint=0;
    const ports={directory,checkpoint:async()=>{checkpoint++;events.push('checkpoint');},command:async args=>{
     await access(join(directory,'lock')); // Every inventory/effect occurs inside the find/create lock.
-    if(['create','open','close'].includes(args[1]))assert.equal(events.at(-1),'checkpoint','checkpoint precedes effect');
+    if(['create','open','close'].includes(args[1])){
+     // Read-only inventory may follow custody persistence before the next effect.
+     assert.ok(checkpoint>effectCheckpoint,'a fresh checkpoint precedes each effect');
+     effectCheckpoint=checkpoint;
+    }
     events.push(args.slice(0,2).join(':'));
     return h.herdr(args);
    }};
