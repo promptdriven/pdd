@@ -844,12 +844,15 @@ Lint accepts this declaration also when the native code hashes inside (for examp
 ### Use made-up sign-in data
 
 A test may hold made-up sign-in data, for example `"secret": "test-only-attempt-proof"` or a fake `claim_token`.
-The interpreter does not refuse a field because of its name. A value is secret only when it comes from a real
-credential channel: a `credential_ref`, the environment, live sign-in of a resource or live HTTP headers.
-- Use plainly fake values. Do not copy the shape of a real key (`sk-…`, `ghp_…`, `Bearer …`, a JWT): the
-  model recording refuses text in that shape.
+The interpreter does not refuse test data because of a field name or the shape of a value. A value is secret only
+when it comes from a real credential channel: a `credential_ref`, the environment, live sign-in of a resource or
+live HTTP headers.
+- Use plainly fake values. Never put a real credential in a test, a prompt or the repo.
 - To hide a value in the report, mark its result field `"writeOnly": true`. The check still compares the real value.
-- Never put a real credential in a test, a prompt or the repo.
+  The report also hides fields whose names look secret (for example `secret`, `token`).
+- In a live resource's result schema, `"writeOnly": true` declares a secret that the live service returns. The
+  interpreter refuses that value where it enters, so it never reaches the model, the report or saved data.
+- What a person types into a Simulator form is still checked by field name.
 
 ### Inject a fixed-answer callback
 
