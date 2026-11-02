@@ -25,11 +25,16 @@ function identityChanged(workspaceId, field, expected, found) {
   return Object.assign(new Error(`herdr_layout_identity_changed: Herdr session ${PDD_HERDR_SESSION} workspace ${shown(workspaceId)} has ${field} ${shown(found)}, but the run expects ${shown(expected)}. Inspect that workspace in Herdr, restore it, then retry.`),
     { code: 'herdr_layout_identity_changed', field, expected, found });
 }
+// Without the run record, a duplicate or inconsistent cache entry refuses before any mutation and says how it recovers:
+// the run's next chat start passes its run record, and reconcileOwner rebuilds the entry from it.
+const cacheRefusal = (code, what) => Object.assign(new Error(`${code}: the layout registry ${what}. Nothing was changed. The run's next chat start (for example pdd workflow approve or pdd workflow open --new) rebuilds this entry from the saved run record.`), {code});
+const sameNamespace = (registry, key, commonDir) => registry.repositories.filter(r=>r.key===key&&r.commonDir===commonDir);
+const consistent = (entry, key) => String(entry.repository??'').toLowerCase()===key;
 function repositoryEntry(registry, key, commonDir) {
-  const matches=registry.repositories.filter(r=>r.key===key&&r.commonDir===commonDir);
-  if(matches.length>1)throw problem('layout_allocation_uncertain');
+  const matches=sameNamespace(registry,key,commonDir);
+  if(matches.length>1)throw cacheRefusal('layout_allocation_uncertain',`has ${matches.length} entries for ${key} at ${commonDir}`);
   // An entry whose repository disagrees with its key cannot prove ownership of either.
-  if(matches[0]&&String(matches[0].repository??'').toLowerCase()!==key)throw problem('invalid_layout_registry');
+  if(matches[0]&&!consistent(matches[0],key))throw cacheRefusal('invalid_layout_registry',`entry for ${key} names repository ${JSON.stringify(matches[0].repository??null)}`);
   return matches[0];
 }
 const checkoutLabel = repo => `${repo.repository}@${createHash('sha256').update(repo.commonDir).digest('hex').slice(0,12)}`;
@@ -127,7 +132,8 @@ async function reconcileOwner({registry,rows,command,checkpoint,directory,owner,
   const chats=(owner.chats??[]).filter(chat=>id(chat?.workspaceId)),layout=owner.layout??{};
   const workspaceId=layout.workspaceId??chats.at(-1)?.workspaceId,repoWorkspaceId=layout.repoWorkspaceId??chats.at(-1)?.repoWorkspaceId;
   if(!id(workspaceId))return;
-  let entry=registry.runs.find(r=>r.runId===owner.runId),repo=repositoryEntry(registry,key,commonDir);
+  const entries=sameNamespace(registry,key,commonDir);
+  let entry=registry.runs.find(r=>r.runId===owner.runId),repo=entries.length===1&&consistent(entries[0],key)?entries[0]:null;
   const verified=async(check)=>{try{await check();return true;}catch{return false;}};
   const runCached=entry?.phase==='ready'&&entry.workspaceId===workspaceId&&await verified(async()=>{ownedWorkspace(rows,entry,cwd);await assertRunRoot(command,entry);});
   const repoCached=repo?.phase==='ready'&&(!id(repoWorkspaceId)||repo.workspaceId===repoWorkspaceId)&&await verified(()=>ownedRepository(rows,repo,command));
@@ -152,7 +158,7 @@ async function reconcileOwner({registry,rows,command,checkpoint,directory,owner,
     const rebuilt={key,repository,sourceRoot,commonDir,workspaceId:repoId,phase:'ready'};
     ownedWorkspace(rows,rebuilt,sourceRoot);
     if(row.worktree.is_linked_worktree!==false)throw identityChanged(repoId,'is_linked_worktree',false,row.worktree.is_linked_worktree);
-    registry.repositories=[...registry.repositories.filter(r=>r!==repo),rebuilt];
+    registry.repositories=[...registry.repositories.filter(r=>!entries.includes(r)),rebuilt];
   }
   if(!entry.repoWorkspaceId)throw identityChanged(workspaceId,'repo_workspace_id',repoWorkspaceId??null,null);
   registry.runs=[...registry.runs.filter(r=>r.runId!==owner.runId),entry];
@@ -191,7 +197,7 @@ export async function openHerdrRunLayout(input, ports) {
     (pending.phase==='refused'&&pending.refusal==='linked_worktree_source' ||
      pending.phase==='intent'&&!pending.retriedRefusal&&input.preAgentRefusal==='linked_worktree_source');
   // A saved run keeps its repository workspace binding: a missing or different namespace refuses before any allocation.
-  if(pending && (!repo || pending.repoWorkspaceId!==repo.workspaceId))throw problem('herdr_run_binding_changed');
+  if(pending && (!repo || pending.repoWorkspaceId!==repo.workspaceId))throw cacheRefusal('herdr_run_binding_changed',`binds run ${pending.runId} to repository workspace ${pending.repoWorkspaceId}, but ${repo?`the ${key} entry is ${repo.workspaceId}`:`has no ${key} entry for ${commonDir}`}`);
   if(refused){
     if(!samePath(pending.cwd,cwd) || rows.some(w=>samePath(w.worktree?.checkout_path,cwd)))throw problem('layout_allocation_uncertain');
     pending.phase='refused';pending.refusal='linked_worktree_source';
