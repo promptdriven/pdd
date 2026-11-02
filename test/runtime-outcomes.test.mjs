@@ -190,6 +190,15 @@ test(`OUTCOME a retryable refusal before dispatch is not run in every output, wh
   assert.equal(result.json.rows[0].state, 'not_run');
   assert.equal(result.json.rows[0].reason?.code, code, 'its own code');
   assert.match(JSON.stringify(result.json), said);
+  assert.equal(result.json.rows[0].reason.message, check === 'pool' ? 'No model login is available.' : 'Waited too long for a model login.');
+  assert.equal(result.json.rows[0].refusals[0].code, code);
+  assert.equal(result.json.rows[0].calls, 0);
+  assert.ok(result.json.rows[0].request_id);
+  assert.ok(result.json.rows[0].report_url);
+  const read = await r.command({ '--read': result.json.batch }, []);
+  assert.match(read.out, /Not run: PDD stayed busy, so your check did not start\. Nothing was charged\. Try again in a few minutes: pdd test place-order/);
+  assert.doesNotMatch(read.out, /interpreter|slot|pool|model|login|account|Why:|Next:/i);
+  assert.equal(r.f.posts.filter(post => post.command === 'check').length, 1);
   assert.doesNotMatch(result.json.summary_line, /✗|refused/);
   const text = renderText({ rows: result.json.rows, exitCode: 5 });
   assert.match(text, /NOT RUN/); assert.doesNotMatch(text, /REFUSED|✗/);

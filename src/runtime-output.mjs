@@ -126,7 +126,11 @@ export function projectAnswer(answer, { origin, secrets = [], steps: authoredSte
   const provider = answer?.state === 'unknown' && (refusals.some(item => item.code === 'graph-provider-failure') || cause?.kind === 'transport_unknown')
     ? { code: refusals.find(item => item.code === 'graph-provider-failure')?.code ?? 'graph-provider-failure',
       detail: [cause?.kind, cause?.detail].filter(Boolean).map(text => cleanText(text, secrets)).join(', ') || null } : null;
+  const rawRefusals = Array.isArray(result?.refusals) && result.refusals.length ? result.refusals : [report?.refusal];
+  const busyRefusal = outcome.state === 'not_run' && outcome.retryable === true && answer?.command === 'check'
+    ? rawRefusals.find(item => item?.retryable === true || item?.details?.retryable === true) : null;
   return {
+    busy_display: busyRefusal ? { max_wait_seconds: busyRefusal.max_wait_seconds } : null,
     state: outcome.state, ...(outcome.progress ? { progress: { ...outcome.progress, ...(typeof outcome.progress.step === 'string' ? { step: cleanText(outcome.progress.step, secrets) } : {}) } } : {}),
     ...(outcome.ahead !== undefined ? { ahead: outcome.ahead } : {}),
     note: outcome.state === 'not_run' ? { code: cleanText(outcome.code, secrets) || null, message: cleanText(outcome.message, secrets) || null } : null,
@@ -268,6 +272,16 @@ const serverAdvice = (row, secrets = []) => [
   ...(row.why ? [`  Why: ${cleanText(row.why, secrets)}`] : []),
   ...(row.next_step ? [`  Next: ${cleanText(row.next_step, secrets)}`] : [])];
 
+// Text-only metadata comes from the raw refusal; technical JSON keeps its original fields.
+function busyMessage(row, secrets) {
+  const seconds = row.busy_display?.max_wait_seconds;
+  const duration = Number.isSafeInteger(seconds) && seconds > 0
+    ? seconds % 60 === 0 ? count(seconds / 60, 'minute') : count(seconds, 'second') : null;
+  const story = typeof row.story === 'string' ? cleanText(row.story, secrets) : '';
+  const retry = story && story !== '-' ? `: pdd test ${shellWord(story)}` : '.';
+  return `Not run: PDD stayed busy${duration ? ` for ${duration}` : ''}, so your check did not start. Nothing was charged. Try again in a few minutes${retry}`;
+}
+
 const validRerun = item => Number.isInteger(item?.runs) && item.runs >= 2
   && Number.isInteger(item?.failed) && item.failed >= 0 && item.failed <= item.runs;
 const rerunVerdict = item => item.failed === 0
@@ -348,6 +362,10 @@ export function renderText({ batch, rows, coverage, warnings = [], details = fal
     out.push(`REFUSED  ${row.title} (${row.test})`, ...row.refusals.flatMap(item => refusalLines(item, !!row.next_step)), ...serverAdvice(row, secrets), ...(row.report_url ? [`  Report: ${row.report_url}`] : []));
   }
   for (const row of rows.filter(row => row.state === 'not_run')) {
+    if ((row.busy_display || row.busy && row.request_ids?.length) && !row.note?.message?.startsWith('Stopped.')) {
+      out.push(busyMessage(row, secrets));
+      continue;
+    }
     const message = row.note?.message ?? (row.request_ids?.length ? 'No checks ran for this attempt.' : 'pdd did not send it.');
     const explanation = row.next_step ? message.replace(/(?:^|\s)(?:Retry this batch later|Run it again|Run the same command again later|Run a fresh pdd (?:test|check) command to start checks|Try again later)\.?/g, '').trim() : message;
     out.push(`NOT RUN  ${row.title} (${row.test})${explanation ? `: ${explanation}` : ''}${row.note?.code ? ` (${row.note.code})` : ''}`, ...serverAdvice(row, secrets));

@@ -80,7 +80,7 @@ test('RUNTIME-SERVER3: 429 server-full gives a new ID after Retry-After and keep
   assert.equal(result.code, 0, result.err + result.out);
   const checks = fake.posts.filter(post => post.command === 'check');
   assert.equal(checks.length, 2); assert.notEqual(checks[0].request.requestId, checks[1].request.requestId);
-  assert.match(result.err, /Server busy: 0 checks running, 1 waiting for a free slot\./);
+  assert.match(result.err, /PDD is busy right now\. 1 checks are waiting locally\./);
   const saved = batchFile(setup, result.batch);
   assert.deepEqual(saved.rows[0].request_ids, checks.map(post => post.request.requestId));
   for (const post of checks) assert.ok(existsSync(join(setup.state, 'batches', result.batch, `${post.request.requestId}.posted`)));
