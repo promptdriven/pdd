@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 7d7ed2bc8518ab537b2b830956a7ef2c3869a5edd7db4ba95b88493640472952).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 6dcf8b5fc4cc432503e68fec983dbd2a7f20f56a37733452bb00abf25cf46d52).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -58,8 +58,8 @@ const routes = [
     operands: [{name:'issue',type:'issue'}], options: [],
     forms: [form('pdd workflow view ISSUE', 'Read-only review of gates, approvals, files, PRs and Simulator links; never start or resume a chat.')] },
   { id: 'workflow.open', prefix: ['workflow', 'open'], local: 'workflow-open',
-    operands: [{name:'issue',type:'issue'}], options: [],
-    forms: [form('pdd workflow open ISSUE', 'Focus or attach the current area chat; resume it if its session ended.')] },
+    operands: [{name:'issue',type:'issue'}, {name:'area',type:'workflow-name',optional:true}], options: [{name:'--new',kind:'flag'}],
+    forms: [form('pdd workflow open ISSUE [AREA] [--new]', 'Focus or resume a saved area chat; --new replaces the current session while keeping the run and approvals.')] },
   // A help topic is a word after `help` only; it is no route prefix, so `pdd prompting` stays unknown.
   { id: 'help', prefix: ['help'], local: 'help', operands: [], options: [], topics: ['prompting'], forms: [
     form('pdd', 'Show local commands.'), form('pdd --help', 'Show local commands.'),
