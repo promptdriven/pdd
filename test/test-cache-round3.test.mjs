@@ -20,10 +20,11 @@ async function setup(t, edit) {
     for (const step of doc.steps) step.entry_path = 'prompts/independent.prompt.md';
     write(join(repo, 'tests/independent.json'), doc); edit?.(repo);
   });
-  const state = { identity: { ...A }, running: false, reply: null, pick: null };
+  const state = { identity: { ...A }, running: false, reply: null, pick: null, onCheckPost: null };
   const fake = await fakeRuntime(t, entry => {
     const id = entry.request?.requestId ?? entry.url.split('/').at(-1);
     if (entry.command === 'lint') return { status: 200, json: fake.lint(id, ['prompts/place_order.prompt.md', 'prompts/independent.prompt.md'].map(path => ({ path, state: 'approved', admission_state: 'approved', interface: { calls: [] } }))) };
+    if (entry.method === 'POST' && entry.command === 'check') state.onCheckPost?.(entry);
     const custom = state.reply?.(id, entry, fake); if (custom) return custom;
     const identity = state.pick?.(id) ?? state.identity;
     if (state.running) {
@@ -37,10 +38,10 @@ async function setup(t, edit) {
   });
   const env = { HOME: fixture.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: fixture.state };
   const { ports, clock } = portsFor(env);
-  const invokeWith = async (p, words = [], options = {}) => {
+  const invokeWith = async (p, words = [], options = {}, cache = true) => {
     p.stdout.text = ''; p.stderr.text = '';
     const before = fake.posts.filter(x => x.command === 'check').length;
-    const code = await runCheck({ words, options: { '--json': true, ...options }, cwd: fixture.repo, cache: true }, p);
+    const code = await runCheck({ words, options: { '--json': true, ...options }, cwd: fixture.repo, cache }, p);
     if (p === ports) clock.now += 1;
     return { code, sent: fake.posts.filter(x => x.command === 'check').length - before, json: options['--json'] === false ? null : JSON.parse(p.stdout.text), stderr: p.stderr.text };
   };
@@ -316,4 +317,81 @@ test('TEST-CACHE-K3: --cache-clear during a run', async t => {
     r = await ctx.invokeWith(round4Other(ctx, 60000).ports, ['place-order']);
   } finally { released = true; await pRun; ctx.state.reply = null; }
   assert.equal(r.sent, 1, 'P is in flight and has seen build b');
+});
+
+// Class invariant: inspect the actual cache at every fake-runtime check POST.
+function watchSendOwnership(ctx) {
+  const violations = [], tokens = new Map(); let expectedPid = null, count = 0;
+  ctx.state.onCheckPost = () => {
+    count++;
+    let marks = [];
+    try { marks = JSON.parse(readFileSync(join(ctx.repo, '.pdd/cache/test/stories.json'), 'utf8')).latest_identity?.in_progress ?? []; } catch {}
+    const own = marks.find(mark => mark.pid === expectedPid);
+    if (!own || !own.token || !Number.isFinite(own.started_at)) violations.push({ post: count, expectedPid, marks });
+    else if (tokens.has(expectedPid) && tokens.get(expectedPid) !== own.token) violations.push({ post: count, expectedPid, changedToken: true });
+    else tokens.set(expectedPid, own.token);
+  };
+  let sequence = 0;
+  const actor = offset => {
+    const pid = 40000 + ++sequence, item = portsFor(ctx.env, { pid, isAlive: () => true });
+    item.clock.now = ctx.clock.now + offset;
+    return { ...item, pid, use: () => { expectedPid = pid; } };
+  };
+  return { actor, assert: () => { assert.ok(count > 0, 'the scenario actually sent checks'); assert.deepEqual(violations, [], 'every check POST holds the sending run own mark, unchanged until finish'); } };
+}
+const queueRefusal = (fake, id) => fake.job(id, 'check', 'refused', { outcome: 'Inconclusive', why: 'No verdict. Queue full.', next_step: 'RETRY LATER',
+  refusals: [{ code: 'check-queue-timeout', details: { retryable: true, retry_after: 1 } }], report: { dispatch: 'not_started', provider_calls: 0, samples: [] } }, 0);
+
+for (const path of ['normal', 'read-resend', 'retry', 'recovery', 'reuse-disabled']) test(`TEST-CACHE-R5 every POST owns a mark: ${path}`, async t => {
+  const ctx = await setup(t), watched = watchSendOwnership(ctx), a = watched.actor(1000);
+  a.use();
+  if (path === 'normal' || path === 'reuse-disabled') {
+    assert.equal((await ctx.invokeWith(a.ports, [], {}, path !== 'reuse-disabled')).sent, 3);
+  } else if (path === 'retry') {
+    ctx.state.reply = (id, entry, fake) => entry.method === 'POST' ? { status: 200, json: queueRefusal(fake, id) } : null;
+    const first = await ctx.invokeWith(a.ports, ['place-order']);
+    ctx.state.reply = null;
+    const b = watched.actor(5 * min); b.use();
+    assert.equal((await ctx.invokeWith(b.ports, [], { '--retry': first.json.batch }, false)).sent, 1);
+  } else {
+    const original = new Set(); let recover = false;
+    ctx.state.reply = (id, entry, fake) => {
+      if (entry.method === 'POST' && !original.size) { original.add(id); return { status: 202, json: job(fake, id, A, 'running') }; }
+      if (original.has(id)) return { status: 200, json: recover ? fake.job(id, 'check', 'unknown', { exitCode: 1, refusals: [{ code: 'service-restarted', message: 'restarted' }], report: { refusal: { code: 'service-restarted' } } }) : job(fake, id, A, 'running') };
+      return { status: 200, json: job(fake, id, B) };
+    };
+    if (path === 'read-resend') {
+      const first = await ctx.invokeWith(a.ports, ['place-order']); assert.equal(first.code, 3);
+      recover = true; const b = watched.actor(5 * min); b.use();
+      assert.equal((await ctx.invokeWith(b.ports, [first.json.batch], { '--read': true })).code, 0);
+    } else {
+      recover = true; assert.equal((await ctx.invokeWith(a.ports, ['place-order'])).sent, 2);
+    }
+  }
+  watched.assert();
+  const doc = read(join(ctx.repo, '.pdd/cache/test/stories.json'));
+  assert.deepEqual(doc.latest_identity.in_progress, [], 'finished sends remove only their own marks');
+});
+
+test('TEST-CACHE-L1 retry cannot hide build b during or after its sends', async t => {
+  const ctx = await setup(t); assert.equal((await ctx.invoke()).sent, 3); bump(ctx, 'tests/place-order.json');
+  ctx.state.reply = (id, entry, fake) => entry.method === 'POST' ? { status: 200, json: queueRefusal(fake, id) } : null;
+  const busy = await ctx.invoke(['place-order']); assert.equal(busy.code, 3);
+  const retried = new Set(); let release, released = false; const gate = new Promise(done => { release = () => { released = true; done(); }; });
+  ctx.state.reply = (id, entry, fake) => {
+    if (entry.method === 'POST' && !retried.size) retried.add(id);
+    return { status: entry.method === 'POST' && !released ? 202 : 200, json: job(fake, id, retried.has(id) ? B : A, retried.has(id) && !released ? 'running' : 'passed') };
+  };
+  const retry = round4Other(ctx, 10 * min); retry.ports.sleep = async ms => { retry.clock.now += ms; await gate; };
+  const pending = runCheck({ cwd: ctx.repo, words: [], options: { '--retry': busy.json.batch, '--json': true }, cache: true }, retry.ports);
+  let during;
+  try {
+    for (let i = 0; !retried.size && i < 2000; i++) await wait();
+    assert.equal(retried.size, 1, 'the retry is in flight');
+    bump(ctx, 'tests/independent.json');
+    assert.equal((await ctx.invokeWith(round4Other(ctx, 11 * min).ports, ['independent'])).sent, 1);
+    during = await ctx.invokeWith(round4Other(ctx, 12 * min).ports, ['unknown-item']);
+  } finally { release(); assert.equal(await pending, 0); ctx.state.reply = null; }
+  const after = await ctx.invokeWith(round4Other(ctx, 20 * min).ports, ['unknown-item']);
+  assert.deepEqual([during.sent, after.sent], [1, 1], 'never reuse build a while or after retry observes build b');
 });
