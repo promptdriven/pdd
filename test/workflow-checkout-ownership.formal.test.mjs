@@ -120,8 +120,10 @@ test('bounded public checkout ownership: all 80 seeded worlds',async()=>{
   for(const order of [0,1])for(const target of [0,1])for(const occupied of [false,true]){
    const w=await world(order,target),peer=1-target,p=w.repos[target],r=w.runs[target],before=snapshot(w,peer);
    w.registry.repositories=w.registry.repositories.filter(x=>x!==p);w.registry.runs=w.registry.runs.filter(x=>x!==r);w.rows.splice(w.rows.findIndex(x=>x.workspace_id===p.workspaceId),1);w.rows.splice(w.rows.findIndex(x=>x.workspace_id===r.workspaceId),1);
-   const label=`${repository}@${createHash('sha256').update(clones[target].common).digest('hex').slice(0,12)}`;
-   if(occupied)w.rows.push({workspace_id:'stranger',label});await w.save();
+   // The approved #2665 label rule: the short name when free, else owner/repo, else owner/repo@token.
+   const hashed=`${repository}@${createHash('sha256').update(clones[target].common).digest('hex').slice(0,12)}`;
+   const label=w.rows.some(x=>x.label?.toLowerCase()==='pdd')?repository:'pdd';
+   if(occupied)w.rows.push({workspace_id:'stranger',label:'pdd'},{workspace_id:'stranger-2',label:repository},{workspace_id:'stranger-3',label:hashed});await w.save();
    const saved=await w.load();
    if(occupied){await assert.rejects(openHerdrRunLayout(w.input,w.ports),{code:'repository_label_unavailable'});assert.deepEqual(w.calls,[]);assert.deepEqual(await w.load(),saved);}
    else {
