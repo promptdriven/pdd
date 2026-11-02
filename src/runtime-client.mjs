@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 43b981d05678aea07e49ab0ea81ea994217b6e8a6d50c9758404f09b4f8b6c13).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 74bb30803895258d3f3b4a7887ecd5c8acd59c432d8f945cf618a3c66e064dcd).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -1807,6 +1807,7 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd() }
     requestedCalls(options['--max-calls']);
     const modes = ['--read', '--retry', '--fill-hash', '--files', '--request', '--lint'].filter(name => options[name] !== undefined);
     const others = Object.keys(options).filter(name => !modes.includes(name) && !(modes[0] === '--retry' && ['--json', '--details', '--timeout'].includes(name)) && !(name === '--json' && ['--read', '--request', '--lint'].includes(modes[0])) && !(name === '--timeout' && ['--read', '--lint'].includes(modes[0])) && !(name === '--app-map' && modes[0] === '--files'));
+    if (options['--app-map'] !== undefined && modes[0] !== '--files') throw new Stop(2, '--app-map works only with pdd simulate and pdd test --files. A test names the app maps it seeds in its "app_maps" list; lint and checks send them (RUNBOOK.md §13).');
     if (modes.length > 1 || (modes.length && others.length) || (['--fill-hash', '--request', '--retry'].includes(modes[0]) && words.length)
       || (modes[0] === '--read' && words.length > 1) || (!modes.length && options['--app-map'] !== undefined)) throw new Stop(2, 'This mix of options does not work together. Run pdd test --help.');
     if (modes[0] === '--request') { release = interruptible(context); return await runRequest(context, options['--request']); }
