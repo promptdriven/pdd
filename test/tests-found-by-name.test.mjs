@@ -260,3 +260,24 @@ test('NAME11: a saved case never makes a second test for a Story; a test path th
   assert.equal(saveDoorCase(setup.repo, saved('user_stories/s.md')), 'not added: runtime/tests/s.json is the test of user_stories/s.md, but pdd cannot use it. Fix it first.');
   assert.equal(saveDoorCase(setup.repo, saved('user_stories/q.md')), 'not added: tests/q.json exists but is not the test of user_stories/q.md. Fix that file first.');
 });
+
+// The selected tests declare the maps that lint must judge, even when the CLI names none.
+test('NAME12: named lint includes the distinct maps declared by selected tests only', async t => {
+  const setup = repoWith(t, {
+    'user_stories/place-order.md': story(),
+    'tests/place-order.json': scenario('user_stories/place-order.md', { app_maps: ['maps/b.json', 'maps/a.json', 'maps/a.json'] }),
+    'user_stories/other.md': story('Other'),
+    'tests/other.json': scenario('user_stories/other.md', { app_maps: ['maps/other.json'] }),
+    'maps/a.json': '{}', 'maps/b.json': '{}', 'maps/other.json': '{}',
+    'pdd-source.json': JSON.stringify({ include: ['maps/a.json', 'maps/b.json', 'maps/other.json'] }),
+  });
+  const fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
+  fake.capacity = () => ({ status: 200, json: { maintenance: null, features: ['lint-tests'] } });
+  const { ports } = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: join(setup.home, 'state') });
+  const code = await runCheck({ words: ['place-order'], options: { '--lint': true }, cwd: setup.repo }, ports);
+  assert.equal(code, 0, ports.stderr.text);
+  const lint = fake.posts.find(entry => entry.command === 'lint').request;
+  assert.deepEqual(lint.tests, ['tests/place-order.json']);
+  assert.deepEqual(lint.app_maps, ['maps/a.json', 'maps/b.json']);
+  assert.equal(lint.complete, true);
+});

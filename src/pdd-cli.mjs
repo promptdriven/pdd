@@ -1,11 +1,11 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 30ed58eff4b9e290e14e5135306b75b2d799c282310612f240b02901853b2868).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: daa6e68ed0cf5c8b440ac7a142abab2075f0a6d9179ec2fb1c602828498ae2b7).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CommandInputError, parseArgv } from './argument-parser.mjs';
 import { renderCompletion } from './completion.mjs';
-import { NAMES, PUBLIC_COMMAND_MANIFEST, PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
+import { NAMES, PUBLIC_COMMAND_MANIFEST, PUBLIC_COMMAND_ROUTES, PUBLIC_HELP_TEXT } from './command-catalog.mjs';
 import { listWorkflowAreas, formatWorkflowList } from './workflow-areas.mjs';
 import { setupProject } from './project-setup.mjs';
 import { findSkills, setupSkills } from './skills-install.mjs';
@@ -25,35 +25,20 @@ const RUNNER_ROUTES = {
   'workflow-run': plan => ['startRun', { name: plan.operands[0], issue: plan.operands[1], agent: plan.options['--agent'] ?? 'codex', ...(plan.options['--base'] !== undefined ? { base: plan.options['--base'] } : {}), ...(plan.options['--adopt-corpus'] !== undefined ? { adoptCorpus: plan.options['--adopt-corpus'] } : {}) }],
   'workflow-evidence': plan => ['recordEvidence', { ref: plan.operands[0], summaryFile: plan.options['--summary'] }],
   'workflow-done': plan => ['stepDone', { step: plan.operands[0], ...(plan.options['--summary'] !== undefined ? { summary: plan.options['--summary'] } : {}) }],
-  'workflow-approve': plan => ['approveRun', { ref: plan.operands[0] }],
+  'workflow-approve': plan => ['approveRun', { ref: plan.operands[0], ...(plan.options['--said'] !== undefined ? { said: plan.options['--said'] } : {}) }],
   'workflow-ask': plan => ['askPerson', { text: plan.operands.join(' ') }],
   'workflow-changes': plan => ['changeRun', { ref: plan.operands[0], text: plan.operands.slice(1).join(' ') }],
   'workflow-cancel': plan => ['cancelRun', { ref: plan.operands[0] }],
   'workflow-status': plan => ['runStatus', { ref: plan.operands[0], ...Object.fromEntries(['all', 'cancelled', 'json'].filter(name => plan.options[`--${name}`]).map(name => [name, true])) }],
-  'workflow-open': plan => ['openRun', { ref: plan.operands[0] }],
+  'workflow-open': plan => ['openRun', { ref: plan.operands[0], ...(plan.operands[1] !== undefined ? { area: plan.operands[1] } : {}), ...(plan.options['--new'] ? { newSession: true } : {}) }],
 };
-const FIRST_HELP_LINE = 'PDD: prompt-driven development for your coding agent.';
-// Learn PDD: the paths of the guide files in this package, never in the cwd. Help reads no file to print them.
-const guidePaths = packageRoot => [`Prompting guide: ${join(packageRoot, 'docs', 'prompting-guide.md')}`,
-  `RUNBOOK: ${join(packageRoot, 'RUNBOOK.md')}`];
-const TOPICS = {
-  prompting: ['In PDD, prompts are the source. Code follows the prompts.',
-    '1. Prompt: prompts/NAME.prompt.md. Write what the program does in plain English, then ## Dependencies, then one Runtime interface block.',
-    '2. Story: user_stories/STORY.md. Write one thing that a person can do, then a numbered ## Acceptance criteria list.',
-    '3. Test: tests/STORY.json. When the repo keeps its own tests in tests/ or test/, use tests/runtime/ or test/runtime/. Write steps with an exact check for each criterion.',
-    `4. Check: run pdd ${NAMES.test} --fill-hash, then pdd ${NAMES.lint} (0 AI calls), then pdd ${NAMES.test} STORY on the PDD interpreter.`,
-    '5. Approve: a person reads each prompt and runs pdd approve PROMPT. An agent never approves.'],
-};
-const renderTopic = (topic, packageRoot) => [FIRST_HELP_LINE, '', ...TOPICS[topic], '', ...guidePaths(packageRoot)].join('\n');
+const packageLines = packageRoot => PUBLIC_HELP_TEXT.learnLines.map(line => line.replace('PACKAGE_ROOT', () => packageRoot));
+const renderTopic = (topic, packageRoot) => [PUBLIC_HELP_TEXT.heading, '', ...PUBLIC_HELP_TEXT.promptingLines, '', ...packageLines(packageRoot).slice(1)].join('\n');
 export function renderHelp(prefix = [], packageRoot = PACKAGE_ROOT) {
   const rows = PUBLIC_COMMAND_MANIFEST.filter(({ form }) => !prefix.length
     || prefix.every((word, index) => form.slice(4).split(/\s+/)[index] === word));
-  return [FIRST_HELP_LINE, '',
-    ...rows.map(({ form, description }) => `  ${form}  ${description}`), '',
-    ...(prefix.length ? [] : ['Learn PDD: run pdd help prompting, or read the Prompting guide and the RUNBOOK.', ...guidePaths(packageRoot), '']),
-    'Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex, /pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting).',
-    `workflow ${NAMES.run} opens the first area chat in Herdr session pdd and exits. The person approves each area; after the last step pdd pushes the branch and opens a real PR.`,
-    'pdd never merges.'].join('\n');
+  return [PUBLIC_HELP_TEXT.heading, '', ...rows.map(({ form, description }) => `  ${form}  ${description}`), '',
+    ...(prefix.length ? [] : [...packageLines(packageRoot), '']), ...PUBLIC_HELP_TEXT.closingLines].join('\n');
 }
 export async function runPdd(argv, { stdout = process.stdout, stderr = process.stderr,
   cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, workflowRunner, workflowAreas,
@@ -178,14 +163,14 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     case 'runtime-try':
       try {
         const runtime = await import('./runtime-client.mjs');
-        return await runtime[plan.local === 'runtime-check' ? 'runCheck' : 'runTry']({ words: [...plan.operands], options: { ...plan.options }, cwd }, { stdout, stderr, env });
+        return await runtime[plan.local === 'runtime-check' ? 'runCheck' : 'runTry']({ words: [...plan.operands], options: { ...plan.options }, cwd, cache: plan.local === 'runtime-check' }, { stdout, stderr, env });
       } catch (error) {
         line(stderr, `pdd stopped with an internal error. If it sent checks, read them with pdd test --read. Do not send them again.${reason(error)}`);
         return 3;
       }
     case 'prompt-approve': {
       const { runApprove } = await import('./prompt-approve.mjs');
-      return runApprove({ words: [...plan.operands], cwd }, { stdout, stderr });
+      return runApprove({ words: [...plan.operands], cwd, said: plan.options['--said'] }, { stdout, stderr, stdin, env });
     }
     case 'completion': stdout.write(renderCompletion(plan.operands[0]));return 0;
     case 'workflow-list':

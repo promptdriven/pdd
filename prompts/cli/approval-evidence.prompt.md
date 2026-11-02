@@ -5,8 +5,11 @@ request changes. This module checks for a user message in that stage's native
 session after the gate question and returns the original text and session ID for
 the caller's journal and status record. It reads files only. The caller owns the
 current gate, decision semantics, persistence and application of the decision.
-This is evidence of a user turn, not proof against an agent modifying local files
-or proof that arbitrary user text means approval.
+This is recording evidence of a user turn, never authority to approve a gate. The
+[runner](workflow-runner.prompt.md#approval-through-the-persons-words) owns explicit
+approval authorization; neither even genuine "I approve" text nor freshness proves
+that the agent displayed the gate or received consent to advance. Preserve this
+reader's public interface and selection rules for recording and changes.
 
 New standalone interface; preserve the worktree/window matching rule from the
 existing session-file matcher. A native session ID is optional. When the caller
@@ -49,6 +52,11 @@ Do not read a file whose last write is older than the stage start; a person's Co
 Zero matches refuses; multiple files refuse even if only one has a user reply.
 Incomplete discovery must refuse rather than silently discard unreadable files
 and manufacture uniqueness. Missing discovery directories mean no matches.
+Export async module function `findNativeSessions(stage, ports = {})` for chat
+resume and recovery callers: the same stage fields, ports and matching rules
+return the distinct matching sessions as `[{id, startedAt}]` (empty when none
+match). Incomplete discovery throws code `session_unreadable`; it never returns
+an empty list that hides an unreadable file.
 Skip symlink entries and refuse over-depth discovery rather than silently truncate.
 
 <details>
