@@ -855,8 +855,10 @@ live HTTP headers.
   For a marked live resource, every present response value must have a declared normal position in its result
   schema or be refused. A `"writeOnly": true` field is secret and is always refused, including null and empty
   containers. Each nested object property and array item needs its own schema position. Unknown fields and
-  values that no unique `oneOf` branch can safely place are refused with their full JSON Pointer before the
-  model, reports, saved state or live recordings. Declared normal fields still pass whatever their names or
+  values that no unique `oneOf` branch can safely place are refused before the model, reports, saved state
+  or live recordings. Refusal paths keep declared field names and actual array indexes; each undeclared live
+  property name appears as `<extra-field>`, since a service can return a credential as a property name.
+  Declared normal fields still pass whatever their names or
   value formats. False or absent keeps existing live behavior; authored fixtures keep their existing behavior.
   No field name, value shape or lint guess supplies this declaration.
 - In a live resource's result schema, `"writeOnly": true` declares a secret that the live service returns. The
