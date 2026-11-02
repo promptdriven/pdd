@@ -36,18 +36,44 @@ const ABSENT = new Set(['agent_not_found', 'server_not_running']);
 export const chatLifecycle = chat => CHAT_STATES.includes(chat?.state) ? chat.state : chat?.startUnconfirmed ? 'starting' : 'unknown';
 // The latest launch or resume request time; no finite time means no grace can expire.
 export const launchAnchor = chat => { const times = [chat?.startedAt, chat?.resumedAt].filter(Number.isFinite); return times.length ? Math.max(...times) : null; };
-// One Herdr observation of the saved pane as lifecycle facts. Absence is end evidence only after the agent was seen
-// running, or after an acknowledged launch outlived the shared grace. An unconfirmed launch stays starting.
-export function observeLifecycle(chat, live, at, agent = chat?.agent) {
+// One Herdr observation of the saved pane as lifecycle facts. Absence (Herdr's definite answer that no agent runs in the
+// saved pane) is end evidence only together with proof that the agent ran: it was seen running, or, after the shared grace,
+// its own native session is known (`ran` from a lookup, or a Codex id, which pdd saves only after observing it; a Claude
+// id is chosen before launch and proves nothing). Elapsed time alone is never evidence; an unconfirmed launch stays starting.
+export function observeLifecycle(chat, live, at, agent = chat?.agent, ran = null) {
   const state = chatLifecycle(chat);
   // Running is the live agent in the saved pane; it is exact unless it shows another session than the saved one.
   if (live.alive) return { state: 'running', exact: !validSessionId(chat.session?.id) || !live.sessionId || live.sessionId === chat.session.id,
     ...(live.sessionId ? { session: { agent, id: live.sessionId } } : {}) };
   if (!ABSENT.has(live.code)) return { state: state === 'running' ? 'unknown' : state };
   if (state === 'ended' || state === 'failed') return { state };
-  const anchor = launchAnchor(chat);
-  if (chat.startUnconfirmed || state !== 'running' && (anchor === null || at < anchor + START_GRACE_MS)) return { state: 'starting' };
-  return { state: 'ended', evidence: { kind: 'pane-exit', at, paneId: chat.paneId, observed: live.code, ...(validSessionId(chat.session?.id) ? { sessionId: chat.session.id } : {}) } };
+  if (chat.startUnconfirmed) return { state: 'starting' };
+  const sessionId = state === 'running' ? (validSessionId(chat.session?.id) ? chat.session.id : null) : ran ?? observedSession(chat, agent);
+  if (state !== 'running' && (!sessionEvidenceDue(chat, live, at) || !sessionId)) return { state: 'starting' };
+  return { state: 'ended', evidence: { kind: 'pane-exit', at, paneId: chat.paneId, observed: live.code, ...(sessionId ? { sessionId } : {}) } };
+}
+// A saved Codex session id was observed (Herdr or a lookup reported it); a saved Claude id was only chosen.
+export const observedSession = (chat, agent = chat?.agent) => agent === 'codex' && validSessionId(chat?.session?.id) ? chat.session.id : null;
+// Only an acknowledged, never-seen chat after the grace needs its own session as evidence.
+export function sessionEvidenceDue(chat, live, at) {
+  const state = chatLifecycle(chat), anchor = launchAnchor(chat);
+  return !live.alive && ABSENT.has(live.code) && !chat.startUnconfirmed && !['ended', 'failed', 'running'].includes(state)
+    && anchor !== null && at >= anchor + START_GRACE_MS;
+}
+// The native session of one chat or attempt: Claude by its saved id, Codex by the worktree and the window since the latest
+// launch or resume request. An unreadable, ambiguous or unrelated result is never evidence and never authorizes a launch.
+export async function ownSession({ run, chat, since, ports = {} }) {
+  const env = ports.env ?? process.env, kind = chat.agent ?? run.agent, folder = expandHome(chat.configDir, env);
+  const saved = kind === 'claude' && validSessionId(chat.session?.id) ? chat.session.id : null;
+  let sessions;
+  try {
+    sessions = await (ports.findNativeSessions ?? findNativeSessions)({ agent: kind, root: run.root, startedAt: since, endedAt: (ports.now ?? Date.now)(), ...(saved ? { sessionId: saved } : {}) },
+      { env, ...(folder ? (kind === 'claude' ? { claudeConfigDir: folder } : { codexHome: folder }) : {}) });
+  } catch { return { kind: 'unknown' }; }
+  if (!Array.isArray(sessions)) return { kind: 'unknown' };
+  if (!sessions.length) return { kind: 'none' };
+  if (sessions.length !== 1 || !validSessionId(sessions[0]?.id) || kind === 'claude' && sessions[0].id !== saved) return { kind: 'unknown' };
+  return { kind: 'match', id: sessions[0].id };
 }
 export function applyLifecycle(chat, observed) {
   chat.state = observed.state;
@@ -233,6 +259,10 @@ export async function openChat({ run, chat }, ports = {}) {
       observed = inspect();
     }
   }
+  if (sessionEvidenceDue(chat, live, now()) && !observedSession(chat, agent)) {
+    const own = await ownSession({ run, chat, since: launchAnchor(chat), ports });
+    observed = observeLifecycle(chat, live, now(), agent, own.kind === 'match' ? own.id : null);
+  }
   applyLifecycle(chat, observed);
   if (live.alive) delete chat.startUnconfirmed;
   if (observed.state === 'starting') throw problem('chat_start_unconfirmed', `The ${chat.area} chat is starting, not confirmed: Herdr shows no agent in its tab, and pdd sent no new launch or resume. Look at the "${chat.area}" tab in Herdr session pdd, then run pdd workflow open ${run.number} again.`);
@@ -336,21 +366,8 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
       const times=[target.startedAt,target.resumedAt,record.recovery?.latestLaunchRequest?.at].filter(Number.isFinite);
       return times.length ? Math.max(...times) : null;
     };
-    // The native session of THIS attempt: Claude by its saved id, Codex by the worktree and the window since the latest
-    // launch request. An unrelated, ambiguous or unreadable result is never evidence and never authorizes a fresh launch.
-    const attemptSession = async target => {
-      const kind=target.agent??run.agent,folder=expandHome(target.configDir,env);
-      const saved=kind==='claude'&&validSessionId(target.session?.id)?target.session.id:null;
-      let sessions;
-      try {
-        sessions=await (ports.findNativeSessions??findNativeSessions)({agent:kind,root:run.root,startedAt:record.recovery?.latestLaunchRequest?.at??target.startedAt,endedAt:now(),...(saved?{sessionId:saved}:{})},
-          {env,...(folder?(kind==='claude'?{claudeConfigDir:folder}:{codexHome:folder}):{})});
-      } catch { return {kind:'unknown'}; }
-      if(!Array.isArray(sessions)) return {kind:'unknown'};
-      if(!sessions.length) return {kind:'none'};
-      if(sessions.length!==1 || !validSessionId(sessions[0]?.id) || kind==='claude' && sessions[0].id!==saved) return {kind:'unknown'};
-      return {kind:'match',id:sessions[0].id};
-    };
+    // The native session of THIS attempt, from the latest launch request; see ownSession.
+    const attemptSession = target => ownSession({run,chat:target,since:record.recovery?.latestLaunchRequest?.at??target.startedAt,ports:{...ports,env,now}});
     const requestIntent = () => {
       const id=uuid(),at=now();
       if(!validSessionId(id)||!Number.isFinite(at))throw problem('invalid_replacement_identity');

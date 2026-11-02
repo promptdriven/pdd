@@ -6,6 +6,8 @@ import { mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, writeFi
 import { homedir, hostname } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+// The chat owner derives a legacy chat's state; this record only projects it.
+import { chatLifecycle } from './workflow-chat.mjs';
 
 const ordinary = promisify(execFileCallback);
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -15,8 +17,6 @@ const ended = run => ['cancelled', 'completed'].includes(run.state);
 export const runDirFor = (commonDir, number) => join(commonDir, 'pdd', 'runs', String(number));
 export const stateDirFor = (ports = {}) => ports.stateDir ?? join((ports.env ?? process.env).HOME || homedir(), '.local', 'state', 'pdd');
 export const currentChat = run => [...(run.chats ?? [])].reverse().find(chat => chat.area === run.areas?.[run.area]?.name) ?? null;
-// The runner owns chat.state; a legacy chat without it is starting only with saved unconfirmed launch custody, else unknown.
-const chatState = chat => ['starting', 'running', 'ended', 'failed', 'unknown'].includes(chat?.state) ? chat.state : chat?.startUnconfirmed ? 'starting' : 'unknown';
 
 export async function gitContext(cwd, ports = {}) {
   const exec = ports.execFile ?? ((file, args, options) => ordinary(file, args, { ...options, encoding: 'utf8' }));
@@ -101,7 +101,7 @@ export function statusView(run) {
   return { v: 1, stage, steps, waitingFor, resumeDecisions: gate ? ['approve', 'changes'] : [],
     waitingDecision: gate ? { stage: 'approve', area: run.gate.area, kind: run.gate.kind ?? 'approve', at: run.gate.at, decisions: ['approve', 'changes'] } : null,
     ...(chat?.workspaceId ? { herdr: { session: 'pdd', workspaceId: chat.workspaceId, label: `${String(run.repo).split('/')[1]}#${run.number} ${run.workflow}` } } : {}),
-    stageAgent: chat && !failure && !chat.startUnconfirmed ? { kind: run.agent, nativeSessionId: chat.session?.id ?? null, herdrSession: 'pdd', paneId: chat.paneId ?? null, state: chatState(chat) } : null,
+    stageAgent: chat && !failure && !chat.startUnconfirmed ? { kind: run.agent, nativeSessionId: chat.session?.id ?? null, herdrSession: 'pdd', paneId: chat.paneId ?? null, state: chatLifecycle(chat) } : null,
     links: Array.isArray(run.links) ? run.links : [], controller: null, message: run.message ?? null, cancelled: run.cancelled ?? null };
 }
 

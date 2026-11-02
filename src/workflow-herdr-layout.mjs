@@ -21,6 +21,7 @@ export function samePath(a, b) {
 const shown = value => JSON.stringify(value ?? null).replace(/[\u0080-\u009f\u00ad\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/g, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
 // The run expected one value and live Herdr shows another. Name both; repair never closes or deletes anything.
 function identityChanged(workspaceId, field, expected, found) {
+  // The message starts with the code, as every other layout error does (callers and tests match on it).
   return Object.assign(new Error(`herdr_layout_identity_changed: Herdr session ${PDD_HERDR_SESSION} workspace ${shown(workspaceId)} has ${field} ${shown(found)}, but the run expects ${shown(expected)}. Inspect that workspace in Herdr, restore it, then retry.`),
     { code: 'herdr_layout_identity_changed', field, expected, found });
 }

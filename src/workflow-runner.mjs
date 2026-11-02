@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 79d78113f98b4d9e1dcff75d5f43f9b793ec9aca1d68701e0b312299461c245b).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: f3401fff028cdc34516a7d6992ae95de712c0a37abbb21fd53169db2f85fe722).
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { constants, openSync, closeSync, fsyncSync, unlinkSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
@@ -14,7 +14,7 @@ import { readWorkflowAreas } from './workflow-areas.mjs';
 import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, readWorkflowPrStatus } from './workflow-github.mjs';
 import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mjs';
 import { allRuns, currentChat, gitContext, listRuns, readRun, readRunOwnership, resolveRun, runDirFor, runForWorktree, updateRun, writeRun } from './workflow-runs.mjs';
-import { startChat, sendToChat, herdrCommand, chatSession, openChat, restartChat, validSessionId, closeChats, expandHome, homeVariable, isFolder, observeLifecycle, applyLifecycle, launchAnchor, START_GRACE_MS } from './workflow-chat.mjs';
+import { startChat, sendToChat, herdrCommand, chatSession, openChat, restartChat, validSessionId, closeChats, expandHome, homeVariable, isFolder, observeLifecycle, applyLifecycle, launchAnchor, sessionEvidenceDue, ownSession, observedSession, START_GRACE_MS } from './workflow-chat.mjs';
 import { captureSource, findTests, gitFiles, interfaceBlocks } from './runtime-preflight.mjs';
 import { storyLines, PROMPT_TESTS_LABEL, PROMPT_TESTS_WORDS } from './runtime-output.mjs';
 import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
@@ -1603,7 +1603,10 @@ async function chatState(run, p) {
   const area = run.areas[run.area], failure = activeChatFailure(run), chat = currentChat(run);
   if (!chat) return failure || !run.gate && !prOf(run, area?.name) ? 'unconfirmed' : null;
   if (!(run.state === 'running' || run.gate || failure)) return null;
-  const live = await chatSession(chat, p), observed = observeLifecycle(chat, live, p.now(), chat.agent ?? run.agent);
+  const live = await chatSession(chat, p);
+  // A never-seen chat after the grace counts as ended only when its own native session shows that the agent ran.
+  const own = sessionEvidenceDue(chat, live, p.now()) && !observedSession(chat, chat.agent ?? run.agent) ? await ownSession({ run, chat, since: launchAnchor(chat), ports: p }) : null;
+  const observed = observeLifecycle(chat, live, p.now(), chat.agent ?? run.agent, own?.kind === 'match' ? own.id : null);
   // Status saves only positive facts: the exact live agent (running) or end evidence. An unclear observation changes nothing.
   const next = structuredClone(chat);
   if (observed.state === 'ended' || observed.state === 'running' && observed.exact) applyLifecycle(next, observed);
@@ -1785,8 +1788,8 @@ function saveChatObservations(run, original, observed, p, { error, phase = 'open
     // The run's own layout custody (repository and run workspaces, initial root tab/pane/terminal) rebuilds the layout cache.
     if (layout && !fresh.layout) fresh.layout = structuredClone(layout);
     if (checkpoint) return;
-    // A late failure of an area that is no longer current keeps its own record, but never replaces a current failure.
-    if (error && fresh.areas[fresh.area].name !== area && !activeChatFailure(fresh))
+    // A late failed open of an area that is no longer current keeps its own record, but never replaces a current failure.
+    if (error && phase === 'open' && fresh.areas[fresh.area].name !== area && !activeChatFailure(fresh))
       fresh.chatFailure = { area, phase, code: oneLine(error.code ?? 'error').slice(0, 100), message: oneLine(error.message ?? 'Herdr request failed').slice(0, 500), at: p.now() };
     if (fresh.areas[fresh.area].name === area && sameFact(fresh.chatFailure, run.chatFailure)) {
       const stateFields = ['state', 'area', 'done', 'gate', 'question', 'approvalRecord', 'decisions'];
@@ -1865,6 +1868,7 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
       chat = await restartChat({ run, chat, message, pending: pending && !['launched','rolledBack','ended'].includes(pending.phase) ? pending : undefined }, { ...p, checkpoint });
       if (run.chatReplacement?.phase === 'ended') return done(`Ended the historical ${chat.area} replacement attempt without launching or resuming it. The current chat and progress are kept.`);
       if (run.chatReplacement?.phase === 'rolledBack') return done(`Restored the usable ${chat.area} chat. The same replacement attempt was rolled back.`);
+      if (run.chatReplacement?.recovery?.resumeRequested) return done(`Resumed this attempt's ${chat.area} session in Herdr session pdd; no second first message was sent. The run, completed work, gates and approvals are kept.`);
       return done(`Started one fresh ${chat.area} chat in Herdr session pdd. The run, completed work, gates and approvals are kept.`);
     }
     if (!chat) { chat = await startNextChat(run, p, packageRoot); defaultOriginal = structuredClone(chat); started = true; }
