@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: a79c3d7f3a874c6a70affc6b2a92317b5b8e85fc8366016e6c983ae336ad65b6).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 698218a98fc215ef31e5e7ea3276df12348998a1c93d6bf1fa31b400e2170ce4).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
@@ -103,11 +103,11 @@ export function expectedTestPath(storyPath) {
   const parts = folders(storyPath);
   return [...parts.slice(0, parts.lastIndexOf('user_stories')), 'tests', `${storyName(storyPath)}.json`].join('/');
 }
-// The Story name that a test file name belongs to: S for S.json, else the longest S for S.<variant>.json.
-function ownerName(name, names) {
-  if (names.has(name)) return name;
-  for (let at = name.lastIndexOf('.'); at > 0; at = name.lastIndexOf('.', at - 1)) if (names.has(name.slice(0, at))) return name.slice(0, at);
-  return null;
+// The Story names that a test file name fits: N for N.json, and each S where N is S.<variant>.
+function ownerNames(name, names) {
+  const fits = names.has(name) ? [name] : [];
+  for (let at = name.lastIndexOf('.'); at > 0; at = name.lastIndexOf('.', at - 1)) if (names.has(name.slice(0, at))) fits.push(name.slice(0, at));
+  return fits;
 }
 export function matchTests(storyPaths, files) {
   const groups = new Map(), names = new Set();
@@ -117,16 +117,26 @@ export function matchTests(storyPaths, files) {
     if (!groups.has(name)) groups.set(name, { stories: [], files: new Map() });
     groups.get(name).stories.push(path);
   }
-  const tests = [], untested = [], orphans = [];
+  const tests = [], untested = [], orphans = [], claimed = new Set();
   for (const path of [...new Set(files)].sort(byText)) {
     if (!isTestFolderJson(path)) continue;
-    const base = basename(path, '.json'), owner = ownerName(base, names);
-    if (owner === null) { orphans.push({ path, line: `${path} matches no Story (user_stories/**/${base}.md).` }); continue; }
-    const same = groups.get(owner).files;
+    const base = basename(path, '.json'), owners = ownerNames(base, names);
+    if (!owners.length) { orphans.push({ path, line: `${path} matches no Story (user_stories/**/${base}.md).` }); continue; }
+    if (owners.length > 1) {
+      // A file name that fits two Story names (tests/a.b.json with Stories a and a.b): pdd never picks one.
+      const stories = owners.flatMap(name => groups.get(name).stories).sort(byText);
+      for (const name of owners) claimed.add(name);
+      tests.push({ path, files: [path], story: base, storyPath: null, storyPaths: stories, problem: `${path} matches ${stories.length} Stories: ${listed(stories)}. Rename one.` });
+      continue;
+    }
+    const same = groups.get(owners[0]).files;
     same.set(base, [...(same.get(base) ?? []), path]);
   }
   for (const [story, { stories, files: byName }] of groups) {
-    if (!byName.size) { untested.push(...stories.map(storyPath => ({ story, storyPath, line: `${storyPath} has no test: expected ${expectedTestPath(storyPath)} (or ${story}.json in any test or tests folder).` }))); continue; }
+    if (!byName.size) {
+      if (!claimed.has(story)) untested.push(...stories.map(storyPath => ({ story, storyPath, line: `${storyPath} has no test: expected ${expectedTestPath(storyPath)} (or ${story}.json in any test or tests folder).` })));
+      continue;
+    }
     const entry = (found, problem) => ({ path: found[0], files: found, story, storyPath: stories.length === 1 ? stories[0] : null, storyPaths: stories, problem });
     if (stories.length > 1) {
       const found = [...byName.values()].flat().sort(byText);
@@ -188,7 +198,11 @@ function discoverTests(root, files, strict = false) {
     if (size > LIMITS.bytes) return { ...test, error: `${entry.path} is ${formatSize(size)}. The upload limit is 10 MB, so pdd cannot send it.` };
     // A matched test is read in full, at any size below the upload limit.
     try { return { ...test, doc: JSON.parse(read(entry.path)) }; }
-    catch (error) { if (error instanceof SyntaxError) return { ...test, error: `${entry.path} is not valid JSON: ${error.message}` }; throw error; }
+    catch (error) {
+      if (error instanceof SyntaxError) return { ...test, error: `${entry.path} is not valid JSON: ${error.message}` };
+      if (error.code === 'EACCES' || error.code === 'EISDIR' || error.code === 'ENOENT' || error instanceof PreflightError) return { ...test, error: `${entry.path} cannot be read: ${error.code ?? error.message}.` };
+      throw error;
+    }
   });
   const warnings = [...storyWarnings, ...rule.tests.filter(entry => entry.problem).map(entry => `Warning: ${entry.problem}`),
     ...rule.untested.map(item => `Warning: ${item.line}`), ...(rule.orphans.length ? [orphanSummary(rule.orphans)] : [])];
@@ -202,7 +216,8 @@ export function selectTests(found, words = []) {
   const selected = new Set(), unknown = [], untested = [];
   for (const raw of words) {
     const word = raw.replace(/^\.\//, '');
-    const hits = found.tests.filter(test => test.path === word || test.files?.includes(word) || test.storyPath === word || test.storyPaths?.includes(word) || test.story === word || basename(test.path, '.json') === word);
+    const hits = found.tests.filter(test => test.path === word || test.files?.includes(word) || test.storyPath === word || test.storyPaths?.includes(word) || test.story === word
+      || basename(test.path, '.json') === word || test.storyPaths?.some(path => storyName(path) === word));
     const missing = hits.length ? [] : (found.untested ?? []).filter(item => item.storyPath === word || item.story === word);
     if (missing.length) untested.push(...missing.map(item => item.line));
     else if (!hits.length) unknown.push(raw);
@@ -633,13 +648,23 @@ function promptSchemaRefusals(root, found, prompt, prompts, seen = new Set()) {
   })];
 }
 
+// A refusal that discovery alone proves: a conflict, an unreadable or invalid file, a file over the upload limit,
+// or a story_path that names another Story than the test name rule matched.
+export function discoveryRefusal(test) {
+  if (test.error) return refusal('invalid-document', 'scenario', test.error);
+  if (test.storyPath && isObject(test.doc) && typeof test.doc.story_path === 'string' && test.doc.story_path !== test.storyPath) {
+    return refusal('pdd-story-mismatch', 'story_path', `${test.path} is the test of ${test.storyPath} by its name, but its story_path names ${test.doc.story_path}. Make them agree.`);
+  }
+  return null;
+}
+
 function checkTest(root, found, test, prompts) {
   let doc = test.doc;
   if (!test.error && isObject(doc)) {
     const prepared = preparedText(root,found.visible,test.path,readText(root,test.path),'scenario');
     try { doc = JSON.parse(prepared.text); } catch { /* Preserve ordinary malformed scenario handling. */ }
   }
-  if (test.error) return refusal('invalid-document', 'scenario', test.error);
+  if (test.error) return discoveryRefusal(test);
   if (!isObject(doc)) return refusal('invalid-document', 'scenario', `${test.path} is not a JSON object.`);
   const missing = REQUIRED_KEYS.filter(key => !Object.hasOwn(doc, key)), extra = Object.keys(doc).filter(key => !TOP_KEYS.has(key));
   if (missing.length) return refusal('invalid-document', 'scenario', `The test has no ${missing.map(key => `"${key}"`).join(', ')}.`);
@@ -647,7 +672,7 @@ function checkTest(root, found, test, prompts) {
   if (doc.schema_version !== TEST_SCHEMA) return refusal('invalid-document', 'schema_version', `schema_version must be "${TEST_SCHEMA}".`);
   if (typeof doc.story_path !== 'string' || !doc.story_path) return refusal('pdd-no-story', 'story_path', 'The test has no story_path. Name its story, for example "user_stories/<story>.md".');
   if (!found.visible.has(doc.story_path)) return refusal('story-missing', 'story_path', `${doc.story_path} is not a Git-visible file.`);
-  if (test.storyPath && doc.story_path !== test.storyPath) return refusal('pdd-story-mismatch', 'story_path', `${test.path} is the test of ${test.storyPath} by its name, but its story_path names ${doc.story_path}. Make them agree.`);
+  if (test.storyPath && doc.story_path !== test.storyPath) return discoveryRefusal({ ...test, doc });
   if (Object.hasOwn(doc, 'criteria_scope') || (Object.hasOwn(doc, 'check_exemptions') && !(Array.isArray(doc.check_exemptions) && !doc.check_exemptions.length))) {
     return refusal('pdd-partial-test', Object.hasOwn(doc, 'criteria_scope') ? 'criteria_scope' : 'check_exemptions', 'In the beta a test checks the whole story. Remove criteria_scope and check_exemptions.');
   }

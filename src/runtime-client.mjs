@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 7fe39bd220bc07863d385527330c14c2348eed441b9bd6f0a326fc2afcb8d69b).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 7ea091b64bc190aa278cec9e32be556f26e7f2efb325f0bc23e7e71dcb419871).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -9,7 +9,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { homedir, hostname } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { DRAFT_SERVER_TEXT, NO_TESTS, PreflightError, TEST_SCHEMA, captureSource, checkInput, expectedTestPath, fillHashes, sharedSourceFiles, whyNoTests, findTests, formatSize, gitFiles, otherFiles,
-  preflight, readPrompt, selectTests, sourceFilePort, sha256, STALE_HINT, staleHint } from './runtime-preflight.mjs';
+  discoveryRefusal, preflight, readPrompt, selectTests, sourceFilePort, sha256, STALE_HINT, staleHint } from './runtime-preflight.mjs';
 import { catalogRecords, compareCopies } from './contract-refs.mjs';
 import { askApproval, lineReader, promptPath } from './prompt-approve.mjs';
 import { OPEN_STATES, causeText, cleanText, exitCodeFor, progressTicker, projectAnswer, renderJson, renderText, summaryLine, stepTimeLimit, tryUsage, validLink, coverageText } from './runtime-output.mjs';
@@ -1131,7 +1131,8 @@ async function runLint(context, complete = false) {
     paused = false;
     if (!await admission(context, 'lint', context.lint, lintEnd)) return busy();
     const named = context.serverFeatures?.includes('lint-tests')
-      ? { tests: [...new Set((context.rows ?? []).map(row => row.test))].sort(), app_maps: context.appMap ? [context.appMap] : [] } : {};
+      ? { tests: [...new Set((context.rows ?? []).filter(row => !(row.state === 'refused' && row.phase === 'local')).map(row => row.test))].sort(),
+        app_maps: context.appMap ? [context.appMap] : [] } : {};
     const request = { requestId: context.ports.randomUUID(), source_sha256: context.capture.sha256, ...(complete ? { complete: true } : {}), ...named };
     context.lint.request_ids.push(request.requestId);
     const verdict = await postJob(context, '/v1/lint', 'lint', request, null, Math.max(1, Math.min(context.ports.postMs, lintEnd - context.ports.now())), lintEnd);
@@ -1320,9 +1321,12 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   const { ports } = context, origin = runtimeOrigin(ports.env), { root, found, normalized } = localSetup(cwd, words);
   const selected = select(found, normalized, root);
   context.coverage = bindingCoverage({ root, found, selected });
+  // A test that the test name rule cannot use is refused here and never sent; the other tests are linted.
   const rows = selected.map(test => ({ test: test.path, story: test.story, title: test.title, state: 'ready', phase: 'lint',
     refusals: [], request_ids: [], warnings: [], steps: Array.isArray(test.doc?.steps) ? test.doc.steps.filter(isObject) : [],
-    criterion_texts: Object.fromEntries((Array.isArray(test.doc?.criteria) ? test.doc.criteria : []).filter(isObject).map(item => [item.id, item.text])) }));
+    criterion_texts: Object.fromEntries((Array.isArray(test.doc?.criteria) ? test.doc.criteria : []).filter(isObject).map(item => [item.id, item.text])),
+    ...(discoveryRefusal(test) ? { state: 'refused', phase: 'local', refusals: [discoveryRefusal(test)], steps: [] } : {}) }));
+  const local = row => row.phase === 'local';
   const {readPrompt,interfaceSchemaProblems} = await import('./runtime-preflight.mjs');
   const prompts = new Map();
   const limitsFor = (path, seen) => {
@@ -1338,15 +1342,16 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   };
   const limitRows = rows.map(row => {
     const seen = new Set();
-    return {...row,refusals:row.steps.flatMap(step => limitsFor(step.entry_path,seen))};
+    return local(row) ? row : {...row,refusals:row.steps.flatMap(step => limitsFor(step.entry_path,seen))};
   });
-  if (limitRows.some(row => row.refusals.length)) {
+  const limited = limitRows.some(row => !local(row) && row.refusals.length);
+  if (limited || rows.every(local)) {
     const refusedRows = limitRows.map(row => ({story:row.story,title:row.title,test:row.test,state:row.refusals.length ? 'refused' : 'not_run',refusals:row.refusals}));
     const problems = [];
     for (const problem of refusedRows.flatMap(row => row.refusals)) {
       if (!problems.some(item => item.code === problem.code && item.path === problem.path && item.section === problem.section)) problems.push(problem);
     }
-    const summary = 'Lint refused local Runtime limits. 0 AI calls. No files were sent.';
+    const summary = limited ? 'Lint refused local Runtime limits. 0 AI calls. No files were sent.' : 'Lint refused every selected test before sending. 0 AI calls. No files were sent.';
     if (context.json) line(ports.stdout, JSON.stringify({batch:null,repo:root,exit_code:4,lint_state:'refused',summary_line:summary,
       coverage:context.coverage,problems,rows:refusedRows,warnings:found.warnings}));
     else {
@@ -1360,7 +1365,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
     }
     return 4;
   }
-  const capture = ports.captureSource(root, { tests: selected.map(test => test.path), appMap: null });
+  const capture = ports.captureSource(root, { tests: selected.filter((test, index) => !local(rows[index])).map(test => test.path), appMap: null });
   const svgWarnings = lintSvgLayouts({ root, files: [...found.visible], promptPaths: capture.files.map(file => file.path).filter(path => path.endsWith('.prompt.md')) });
   const drift=[];
   try {
@@ -1417,13 +1422,13 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
       section: cleanText(item.section, context.secrets) || null, message: cleanText(item.message, context.secrets) || null, hint: null };
     if (!problems.some(p => p.code === problem.code && p.path === problem.path && p.section === problem.section)) problems.push(problem);
   }
-  const verdicts = isObject(program) ? judgeLint(answer, rows, root, found.visible, context.secrets) : new Map();
+  const verdicts = isObject(program) ? judgeLint(answer, rows.filter(row => !local(row)), root, found.visible, context.secrets) : new Map();
   for (const [row, problem] of verdicts) {
     Object.assign(row, { state: 'refused', refusals: [problem] });
     const path = /^(\S+?\.prompt\.md)\b/.exec(problem.message ?? '')?.[1] ?? null;
     if (!problems.some(item => item.code === problem.code && item.path === path)) problems.push({ ...problem, path, section: null });
   }
-  if (lint.kind === 'refused' || (answer?.state === 'refused' && !isObject(program))) for (const row of rows) Object.assign(row, { state: 'refused', refusals: problems });
+  if (lint.kind === 'refused' || (answer?.state === 'refused' && !isObject(program))) for (const row of rows) if (!local(row)) Object.assign(row, { state: 'refused', refusals: problems });
   for (const item of Array.isArray(answer?.result?.tests) ? answer.result.tests.filter(isObject) : []) {
     const row = rows.find(row => row.test === item.path);
     if (!row || item.verdict !== 'refused') continue;
@@ -2354,6 +2359,8 @@ function addSavedCaseSafely(root, saved, seedTest) {
     : saved?.original_path ? candidates.find(item => item.path === saved.original_path) : candidates[0];
   if (seededStory && !target) return `not added: the original test ${cleanText(seedTest.path)} is missing or no longer belongs to ${cleanText(story)}. Restore it before importing the case.`;
   if (saved?.original_path && !target) return 'not added: the original test file is missing or its Story changed.';
+  const unusable = !target && found.tests.find(item => item.storyPath === story || item.storyPaths?.includes(story));
+  if (unusable) return `not added: ${cleanText(unusable.path)} is the test of ${cleanText(story)}, but pdd cannot use it. Fix it first.`;
   if (!target) {
     // A story with no test gets tests/<story>.json (the story's own file name, never a path from the server), so the
     // test name rule finds it.
