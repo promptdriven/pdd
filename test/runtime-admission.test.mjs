@@ -130,7 +130,7 @@ test('restart: overlapping saved readers share one durable replacement allowance
     if (e.method === 'GET' && checkPosts(f).length && e.url.endsWith(checkPosts(f)[0].request.requestId)) return { status: 200, json: resume ? restart(f, checkPosts(f)[0].request.requestId) : f.check(checkPosts(f)[0].request.requestId, 'running') };
     return f.normal(e);
   });
-  const first = makePorts(setup, fake); assert.equal(await runCheck({ words: ['place-order'], cwd: setup.repo, options: { '--json': true } }, first.ports), 3);
+  const first = makePorts(setup, fake); assert.equal(await runCheck({ words: ['place-order'], cwd: setup.repo, options: { '--json': true, '--timeout': 1.5 } }, first.ports), 3);
   const batch = JSON.parse(first.ports.stdout.text).batch; resume = true;
   const readers = [makePorts(setup, fake), makePorts(setup, fake)]; for (const made of readers) made.clock.now = first.clock.now;
   await Promise.all(readers.map(made => runCheck({ words: [batch], cwd: setup.repo, options: { '--read': true, '--json': true } }, made.ports)));
@@ -316,7 +316,7 @@ for (const priorCalls of [2, 'unknown']) test(`restart: capacity attempts retain
     return f.normal(e);
   });
   const { ports } = makePorts(setup, fake);
-  assert.equal(await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--json': true } }, ports), 5);
+  assert.equal(await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--json': true, '--timeout': 1.5 } }, ports), 5);
   assert.ok(checkPosts(fake).length > 3); assert.equal(JSON.parse(ports.stdout.text).rows[0].calls, priorCalls);
 });
 
