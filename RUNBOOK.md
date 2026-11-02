@@ -392,7 +392,8 @@ Keep actual rows and the command's exit code. A missing/hidden part, wrong regio
 
 The Simulator has a **Screen** tab only when the repo has an app map: a JSON file that connects prompt operations to
 screens. It holds no code. Without it, the person uses forms (or a terminal for `cli`).
-- `pdd simulate` uses `app-map.json` at the repo root, else `app/app-map.json`. For another file:
+- `pdd simulate` uses the map that the story's test names in `app_maps` (with several, pass one of them with
+  `--app-map`), else `app-map.json` at the repo root, else `app/app-map.json`. For another file:
   `pdd simulate <story> --app-map <path> --new`. Without `--new`, pdd reuses the open simulation and does not send the map.
   Git must show the file. It must be an app map like the one below, not a page of your app (`public/index.html`).
   pdd does not check the map. A wrong map may give only "The Try setup is not finished or its result is unknown".
@@ -474,6 +475,20 @@ Cut from the Harbor Coffee app map (`…` marks cut parts):
    "input": {"cart": {"$ref": "/state/cart"}, "itemId": "latte", "size": "M"},
    "next": {"kind": "screen", "screen": "cart", "route_pointer": null},
    "state": {"cart": {"$ref": "/result/cart"}, …every other state field…}}, …]}
+```
+
+**A Story test that seeds a Try names its map.** A tap may call an operation that the Story's own steps never reach.
+Bind that operation in the test's `simulation`, and list the map in `app_maps`. Then `pdd test` and `pdd lint` send
+the map and its prompts, and the interpreter accepts the binding; the Story's steps run as before. Without
+`app_maps`, lint refuses the binding as `unknown-simulation-operation`, and without the binding the tap stops with
+`unbound-resource-operation`. `pdd test --lint <story> --app-map <map>` is refused: the map belongs in the test.
+`pdd simulate <story>` then uses that map, and refuses a `--app-map` that the test does not name, so lint, `pdd test`
+and `pdd simulate` see the same operations.
+```json
+{"schema_version": "prompt-runtime.program-scenario.v1", "story_path": "user_stories/place-order.md",
+ "app_maps": ["app/app-map.json"], "initial_world": {"orders": [], "receipts": []},
+ "simulation": {"receipts.send": {"action": "port.write", "world_pointer": "/receipts", "result_template": {"sent": true}}},
+ "criteria": […], "steps": […]}
 ```
 
 ## 14. Bug workflow
