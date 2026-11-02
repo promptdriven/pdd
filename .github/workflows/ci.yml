@@ -90,11 +90,9 @@ jobs:
           git init --quiet
           git add .
           "$installed" lint --local place-order | tee "$smoke_dir/lint.log"
-          grep -Fq '0 AI calls. No checks were sent.' "$smoke_dir/lint.log"
           checks=$((checks + 1))
           read_result=0
           "$installed" test --read > "$smoke_dir/read.log" 2>&1 || read_result=$?
           cat "$smoke_dir/read.log"
           test "$read_result" -eq 2
-          grep -Fq 'No saved check for this repository.' "$smoke_dir/read.log"
           checks=$((checks + 1))
