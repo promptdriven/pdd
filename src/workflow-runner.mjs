@@ -1803,7 +1803,12 @@ async function cancelRunCommand({ ref, cwd }, ports) {
   if (run.state === 'cancelled') return done(`The run for ${run.repo}#${run.number} is already cancelled.`);
   p.say('Closing the chat tabs in Herdr…');
   const { warnings } = await closeChats(run, {...p, checkpoint: async (_chat, layout) => {
-    if (layout) commitRun(run,p,latest=>{latest.layout=structuredClone(layout);});
+    if (layout) {
+      // Sample the outside clock before ordinary ownership so concurrent progress
+      // is visible to the checkpoint's fresh read rather than a nested save.
+      const at = p.now();
+      commitRun(run,{...p,now:()=>at},latest=>{latest.layout=structuredClone(layout);});
+    }
   }});
   const cancelled={state:'cancelled',at:p.now()};
   commitRun(run,p,latest=>{latest.state='cancelled';latest.cancelled=cancelled;latest.gate=null;});
