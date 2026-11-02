@@ -31,9 +31,9 @@ for(const shape of ['approve','approve-pr'])for(const change of ['time','area','
  if(shape==='approve-pr'){run.areas[0].gate='pr';run.areas[0].before='approve';}
  writeRun(run,f.ports);let newer;
  const replace=()=>{newer=f.record();if(change==='removed')newer.gate=null;else if(change==='time')newer.gate.at=2;else if(change==='kind')newer.gate.kind='ask-code';else{newer.area=1;newer.gate.area=newer.areas[1].name;}writeRun(newer,f.ports);};
- const ports=approvalVia==='terminal'?{...f.ports,confirm:async()=>{replace();return true;}}:f.agentPorts({readApprovalEvidence:async()=>{replace();return {ok:true,userMessage:'I approve',userMessageAt:3,sessionId:'00000000-0000-4000-8000-000000000017'};}});
+ const ports=approvalVia==='terminal'?{...f.ports,confirm:async()=>{replace();return true;}}:f.agentPorts({stdin:{async *[Symbol.asyncIterator](){replace();yield 'I approve';}},readApprovalEvidence:async()=>{assert.fail('Native evidence is not approval authority');}});
  const beforeChats=f.herdr.calls.filter(a=>a[0]==='pane'&&a[1]==='run').length;
- const out=await runner.approveRun({ref:'17',cwd:f.source},ports);assert.equal(out.exitCode,1,out.message);assert.match(out.message,/gate changed, look again/i);assert.deepEqual(f.record(),newer);assert.equal(f.pushes.length,0);assert.equal(f.prs.length,0);assert.equal(f.herdr.calls.filter(a=>a[0]==='pane'&&a[1]==='run').length,beforeChats);
+ const out=await runner.approveRun({ref:'17',cwd:f.source,...(approvalVia==='chat'?{said:'-'}:{})},ports);assert.equal(out.exitCode,1,out.message);assert.match(out.message,/gate changed, look again/i);assert.deepEqual(f.record(),newer);assert.equal(f.pushes.length,0);assert.equal(f.prs.length,0);assert.equal(f.herdr.calls.filter(a=>a[0]==='pane'&&a[1]==='run').length,beforeChats);
 });
 for(const ending of ['cancelled','completed'])test(`2753 final done gate respects ${ending}`,async t=>{
  const f=await fixture(t,{agent:'codex',name:'bug'});await f.run();const run=f.record();run.areas[0].steps=['reproduce'];writeRun(run,f.ports);let newer;
