@@ -115,3 +115,15 @@ test('VIEW-PROMPT-TESTS: view shows new and old summary lines, joined with "; " 
   assert.ok(!lines.some(line => /^(?:Prompt tests|Runtime check).*(?:Prompt tests|Runtime check)/.test(line)), 'one line each');
   assert.ok(lines.includes('Try: https://runtime.example.test/s/review-token/'), r.stdout);
 });
+
+// Wrong (#2580): a test over 1 MiB was not read, so the view called it "Test/app map" and linked no Story or prompt.
+test('VIEW-BIG-TEST: a 2.4 MB test is found by its name and links its Story and prompt', t => {
+  const f = fixture(t);
+  const doc = { notes: 'x'.repeat(2_400_000), schema_version: 'prompt-runtime.program-scenario.v1', story_path: 'user_stories/greet.md', steps: [{ entry_path: 'prompts/greet.prompt.md' }] };
+  writeFileSync(join(f.repo, 'tests/greet.json'), JSON.stringify(doc));
+  writeFileSync(join(f.repo, 'tests/greet-notes.json'), JSON.stringify({ schema_version: 'prompt-runtime.program-scenario.v1', story_path: 'user_stories/greet.md' }));
+  const r = f.cli('workflow', 'view', '2442');
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(r.stdout.includes(`Test cases: ${pathToFileURL(join(f.repo, 'tests/greet.json')).href}`), r.stdout);
+  assert.ok(r.stdout.includes(`Test/app map: ${pathToFileURL(join(f.repo, 'tests/greet-notes.json')).href}`), r.stdout);
+});

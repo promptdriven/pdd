@@ -4,7 +4,7 @@ I can keep the test of a Story in a `tests` folder under the Story's name, at an
 
 ## Acceptance criteria
 
-1. The test of Story `user_stories/S.md` (also in a subfolder of `user_stories`) is `S.json` in a folder named `test` or `tests`, at any depth: `tests/S.json`, `tests/runtime/S.json` and `runtime/tests/S.json` all count. A second test for another starting world is named `S.<world>.json`, for example `tests/S.empty-shop.json`. pdd finds tests by their names and folders and does not open other JSON files to find tests.
+1. The test of Story `user_stories/S.md` (also in a subfolder of `user_stories`) is `S.json` with a folder named `test` or `tests` anywhere in its path, not only as the direct parent: `tests/S.json`, `test/runtime/S.json` and `runtime/tests/S.json` all count. A second test for another starting world is named `S.<world>.json`, for example `tests/S.empty-shop.json`. pdd finds tests by their names and folders and does not open other JSON files to find tests.
 2. A 2,408,687-byte test `runtime/tests/m1-big.json` whose `schema_version` comes after the first 64 KiB is found, `pdd test m1-big` selects it, and pdd reads and checks the whole file.
 3. A Story with no test prints one line with the exact expected path, for example `Warning: user_stories/phone/p17.md has no test: expected tests/p17.json (or p17.json in any test or tests folder).`
 4. `pdd test p17` for that Story stops with exit 2 and the same sentence, not "Unknown story".
