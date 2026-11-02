@@ -91,7 +91,8 @@ test('bounded public checkout ownership: all 80 seeded worlds',async()=>{
    if(state==='run-forged')w.rows.find(x=>x.workspace_id===r.workspaceId).worktree.checkout_path=clones[peer].cwd;
    if(state==='root-forged')w.panes.get(r.workspaceId)[0].terminal_id='forged';
    await w.save();const before=await w.load(),peerBefore=snapshot(w,peer);
-   if(['valid','legacy-label'].includes(state)){
+   // A duplicate copy of the open owned entry is archived by pdd itself, so the exact pair still succeeds.
+   if(['valid','legacy-label','duplicate-owner'].includes(state)){
     let result;await assert.doesNotReject(async()=>{result=await openHerdrRunLayout(w.input,w.ports);},`${order}/${target}/${state}: exact pair succeeds`);
     assert.equal(result.repoWorkspaceId,p.workspaceId);assert.equal(result.workspaceId,r.workspaceId);assert.deepEqual(w.calls,[['tab','create','--workspace',r.workspaceId,'--cwd',clones[target].cwd,'--label','formal','--no-focus']]);
    }else{
