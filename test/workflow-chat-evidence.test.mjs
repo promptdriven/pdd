@@ -67,6 +67,26 @@ for (const agent of ['claude', 'codex']) {
   });
 }
 
+for (const agent of ['claude', 'codex']) test(`${agent}: a resumed chat whose agent exits again is ended after the grace and resumed again, never stuck starting`, async t => {
+  const { f, chat } = await started(t, agent);
+  const id = agent === 'claude' ? chat.session.id : CODEX_SESSION;
+  f.ports.findNativeSessions = async stage => stage.startedAt <= chat.startedAt ? [{ id, startedAt: chat.startedAt }] : [];
+  f.tick(31_000);
+  const inside = { ...f.ports, env: { ...f.ports.env, HERDR_ENV: '1' } };
+  assert.equal((await open({ ref: '17', cwd: f.source, packageRoot }, inside)).exitCode, 0);
+  // The resumed agent exits at once; its session started before the resume, so a window lookup cannot find it.
+  f.herdr.paneOf(chat).agent = null;
+  f.tick(31_000);
+  const status = await runner.runStatus({ ref: '17', cwd: f.source }, f.ports);
+  assert.match(stateLine(status.message), /the chat stopped/);
+  assert.equal(f.record().chats.at(-1).state, 'ended');
+  const before = launches(f).length;
+  const again = await open({ ref: '17', cwd: f.source, packageRoot }, inside);
+  assert.equal(again.exitCode, 0, again.message);
+  assert.equal(launches(f).length, before + 1);
+  assert.ok(launches(f).at(-1)[3].includes(id), 'Resume the same session again');
+});
+
 for (const malformed of [false, true]) test(`R4 with the real session lookup: ${malformed ? 'an unreadable' : 'a readable'} session file of this attempt ${malformed ? 'keeps the attempt pending' : 'is resumed'}`, async t => {
   const f = await fixture(t); await f.run();
   const healthy = f.herdr.herdr;
