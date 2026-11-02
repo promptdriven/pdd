@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 87ea338d841cc2bef6227097127377a96270733c302014f6bb039778bf3b153f).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 1e7f688c57c159f283da1b3d209ca72c93edb45726aa5bff1b23c46a93e00987).
 import { hasProgress, outcomeDone, outcomeFor, outcomeOverall, outcomeText, progressText } from './runtime-outcome.mjs';
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
@@ -590,8 +590,8 @@ async function finishReservation(context, target, answer) {
 }
 function queueProgress(context, answer) {
   const q = answer?.queue;
-  if (answer?.state === 'queued' && [q?.ahead, q?.slots_in_use, q?.slots].every(value => Number.isSafeInteger(value) && value >= 0)) {
-    const message = `Queued on the interpreter: ${q.ahead} ahead, ${q.slots_in_use} of ${q.slots} slots busy. Your test is fine.`;
+  if (answer?.state === 'queued' && Number.isSafeInteger(q?.ahead) && q.ahead >= 0) {
+    const message = `⏳ PDD is busy right now. Your check is ${q.ahead === 0 ? 'next in line' : `in line (${q.ahead} ahead of you)`} and starts by itself. You are not charged while you wait.`;
     context.queueLines ??= new Map();
     if (context.queueLines.get(answer.id) !== message) { line(context.ports.stderr, message); context.queueLines.set(answer.id, message); }
   }
@@ -909,7 +909,7 @@ function applyAnswer(row, answer, context, observedWait = null, observedAt = con
   const firstDiagnosis = view.failed_checks.find(check => check.diagnosis) ?? null, failed = view.state === 'failed';
   Object.assign(row, { state: view.state, checks: view.checks, criteria: view.criteria, failed_checks: view.failed_checks, all_checks: view.all_checks,
     refusals: view.refusals, calls: view.calls, requested_model: view.requested_model, report_url: view.report_url ?? row.report_url,
-    server_seconds: view.server_seconds, time_limit: view.time_limit, known_calls: view.known_calls, unknown_calls: view.unknown_calls,
+    server_seconds: view.server_seconds, busy_display: view.busy_display, time_limit: view.time_limit, known_calls: view.known_calls, unknown_calls: view.unknown_calls,
     why: failed ? view.why ?? firstDiagnosis?.diagnosis?.why ?? null : ['refused', 'not_run', 'unknown'].includes(view.state) ? advice.why ?? (view.state === 'unknown' && row.lost && row.why !== 'Checks failed.' ? row.why : null) : null,
     who: failed ? view.who ?? firstDiagnosis?.diagnosis?.who ?? null : null,
     next_step: failed ? view.next_step ?? firstDiagnosis?.diagnosis?.next_step ?? null : ['refused', 'not_run', 'unknown'].includes(view.state) ? advice.next_step : null,
@@ -1080,7 +1080,7 @@ async function sendCheckAttempt(context, row) {
   }
   row.attempts = (row.attempts ?? 0) + 1;
   row.sent_at = context.ports.now(); row.ended_at = null; row.retry_at = null; row.busy = false; row.can_retry = false;
-  row.busy_request_id = null; row.busy_observed_at = null; row.capacity_until = null;
+  row.busy_request_id = null; row.busy_observed_at = null; row.capacity_until = null; row.busy_display = null;
   row.phase = 'server';
   const request = { requestId: id, source_sha256: context.capture.sha256, scenario: row.test, max_calls: row.max_calls };
   const verdict = await context.postCheck(request, row, Math.max(1, Math.min(context.ports.postMs, context.deadline - context.ports.now())));
@@ -1285,7 +1285,7 @@ async function runScheduledChecks(context, rows, toSend) {
     if (context.blocked && !rows.some(isOpen)) throw new Stop(5, context.blocked);
     const waiting = toSend.filter(row => row.state === 'waiting');
     if (waiting.length !== waitingShown) {
-      if (waiting.length) line(ports.stderr, `Server busy: ${rows.filter(isOpen).length} checks running, ${waiting.length} waiting for a free slot.`);
+      if (waiting.length) line(ports.stderr, `⏳ PDD is busy right now. ${waiting.length} of your checks ${waiting.length === 1 ? 'is' : 'are'} waiting to start. You are not charged while you wait.`);
       waitingShown = waiting.length;
     }
     if (context.sendError) throw context.sendError;
