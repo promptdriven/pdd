@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 74bb30803895258d3f3b4a7887ecd5c8acd59c432d8f945cf618a3c66e064dcd).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 218f691bd729c0f516fb232a6820fd1c0dc78a94220508058164a5756da25c63).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -1908,6 +1908,23 @@ function appMapFor(found, given, cwd, root, stderr) {
   return rel;
 }
 
+// A seed test that names maps in app_maps fixes the Try's map to one of them: lint and the check judged only those.
+function seedAppMap(found, root, test, given, stderr) {
+  const declared = Array.isArray(test.doc?.app_maps) ? test.doc.app_maps.filter(path => typeof path === 'string') : [];
+  if (!declared.length) return given === undefined ? appMapFor(found, undefined, null, root, stderr) : given;
+  const list = declared.map(path => cleanText(path)).join(', ');
+  if (given !== undefined) {
+    if (!declared.includes(given)) throw new Stop(2, `--app-map ${cleanText(given)} is not in ${test.path}'s "app_maps" (${list}). Add it there, or choose one of them.`);
+    return given;
+  }
+  if (declared.length > 1) throw new Stop(2, `${test.path} names ${declared.length} app maps in "app_maps" (${list}). Choose one with --app-map.`);
+  const [path] = declared;
+  if (!found.visible.has(path)) throw new Stop(2, `${test.path} names ${cleanText(path)} in "app_maps", but it is not a Git-visible file in this repository.`);
+  const problem = appMapProblem(root, path);
+  if (problem) throw new Stop(2, `${test.path} names ${cleanText(path)} in "app_maps", but it is not an app map: ${problem}. See RUNBOOK.md §13.`);
+  return path;
+}
+
 function oneTest(found, words, root) {
   const selected = select(found, words, root);
   if (selected.length !== 1) throw new Stop(2, ['pdd simulate needs one story. Choose one:', ...storyList({ tests: selected })].join('\n'));
@@ -2035,8 +2052,9 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (!context.agentDefinitions.length) throw new Stop(2,'No agents are configured. Add an agent or enable defaults in agents.json.');
       if (options['--agent'] !== undefined && !context.agentDefinitions.some(d => d.name === options['--agent'] || (['codex','claude','gemini'].includes(d.id) && d.id === options['--agent']))) throw new Stop(2,'Unknown agent name. Choose a name from agents.json or an enabled default.');
     }
-    const appMap = appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
+    const given = options['--app-map'] === undefined ? undefined : appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
     const test = oneTest(found, normalized, root), repoState = store.repo(root), record = repoState.tries?.[test.path];
+    const appMap = seedAppMap(found, root, test, given, ports.stderr);
     Object.assign(context, { root, store, origin, visible: found.visible, appMap, cwd: realpathSync(cwd), seedTest: { path: test.path, storyPath: test.storyPath } });
     const checked = preflight({ root, found, selected: [test] }), row = localRows(checked.rows)[0];
     if (row.state === 'refused') {
