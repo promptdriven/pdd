@@ -326,6 +326,6 @@ test('NAME14: a UUID receipt refresh keeps unsent tests out of capture and cache
   assert.equal((await invoke([id], { '--read': true })).code, 0);
   const next = await invoke();
   assert.equal(next.code, 4);
-  assert.equal(next.json.rows.find(row => row.test === 'tests/place-order.json').cached, true);
+  assert.equal(next.json.rows.find(row => row.test === 'tests/place-order.json').cached, true, JSON.stringify(next.json));
   assert.equal(fake.posts.filter(post => post.command === 'check').length, 1);
 });
