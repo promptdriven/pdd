@@ -4,78 +4,494 @@
   "criteria": [
     {
       "id": "AC1",
-      "text": "When no current CI result or old-code proof exists, a PR does not present \"Full npm test: 665/665 passed\" typed in a verification note or summary as checked evidence."
+      "text": "After checked files change or disappear, or their current source cannot be verified, the PR shows no current successful check or count for that saved result."
+    },
+    {
+      "id": "AC2",
+      "text": "Unchanged checked content can retain its current result across commits; newer compatible evidence updates the same Story without restoring an older overall total."
+    },
+    {
+      "id": "AC3",
+      "text": "Without current machine evidence, a PR does not present \"Full npm test: 665/665 passed\" typed in a verification note or summary as checked evidence; ordinary proof prose and not-checked warnings remain visible."
+    },
+    {
+      "id": "AC4",
+      "text": "A missing machine proof remains \"not run\" and an unreadable proof remains \"unavailable\"; neither prevents publication."
+    },
+    {
+      "id": "AC5",
+      "text": "When \"the release prints only the release version\" has only an exit-code assertion, pdd warns that the output is unchecked and still accepts the test."
+    },
+    {
+      "id": "AC6",
+      "text": "Adding an output assertion for that criterion removes the exit-only warning; a criterion promising only a successful exit needs no output warning."
     }
   ],
   "initial_world": {
-    "publication_currentHead": [],
-    "publication_readStepNotes": [],
-    "publication_readOldCodeProof": []
+    "source_fingerprint": [
+      {
+        "request": {
+          "root": "/synthetic/current"
+        },
+        "reply": {
+          "value": null
+        }
+      },
+      {
+        "request": {
+          "root": "/synthetic/changed"
+        },
+        "reply": {
+          "value": null
+        }
+      },
+      {
+        "request": {
+          "root": "/synthetic/removed"
+        },
+        "reply": {
+          "value": null
+        }
+      },
+      {
+        "request": {
+          "root": "/synthetic/unbound"
+        },
+        "reply": {
+          "value": null
+        }
+      }
+    ],
+    "source_capture": [
+      {
+        "request": {
+          "root": "/synthetic/current",
+          "tests": [
+            "test/runtime/release.json"
+          ],
+          "appMap": null
+        },
+        "reply": {
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/synthetic/changed",
+          "tests": [
+            "test/runtime/release.json"
+          ],
+          "appMap": null
+        },
+        "reply": {
+          "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/synthetic/removed",
+          "tests": [
+            "test/runtime/release.json"
+          ],
+          "appMap": null
+        },
+        "reply": {
+          "sha256": "",
+          "error": "missing selected file"
+        }
+      }
+    ],
+    "publication_readStepNotes": [
+      {
+        "request": {
+          "runDir": "/synthetic/run-missing",
+          "steps": [
+            "verify"
+          ]
+        },
+        "reply": {
+          "notes": [
+            {
+              "step": "verify",
+              "text": "Proof (gap closed): Full npm test: 665/665 passed\nNot checked: live CI"
+            }
+          ]
+        }
+      },
+      {
+        "request": {
+          "runDir": "/synthetic/run-unreadable",
+          "steps": [
+            "verify"
+          ]
+        },
+        "reply": {
+          "notes": [
+            {
+              "step": "verify",
+              "text": "Proof (gap closed): Full npm test: 665/665 passed\nNot checked: live CI"
+            }
+          ]
+        }
+      }
+    ],
+    "publication_currentHead": [
+      {
+        "request": {
+          "root": "/synthetic/repo",
+          "baseBranch": "alpha"
+        },
+        "reply": {
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "error": ""
+        }
+      }
+    ],
+    "publication_readOldCodeProof": [
+      {
+        "request": {
+          "runDir": "/synthetic/run-missing"
+        },
+        "reply": {
+          "content": "",
+          "error": "missing"
+        }
+      },
+      {
+        "request": {
+          "runDir": "/synthetic/run-unreadable"
+        },
+        "reply": {
+          "content": "",
+          "error": "unreadable"
+        }
+      }
+    ],
+    "files": {
+      "user_stories/exit-only-output.md": {
+        "content": "# Release\n\n## Acceptance criteria\n\n1. The release prints only the release version.\n",
+        "is_symlink": false
+      },
+      "prompts/exit-only-output.prompt.md": {
+        "content": "# Release version\n\nmain returns stdout \"0.1.12\\n\", stderr \"\", exit_code 0.\n\n<details>\n<summary>Runtime interface</summary>\n\n```json\n{\"status\":\"draft\",\"prose_sha256\":\"9ab2983405ab4e9d7acd08dbf930a31299ca78cfe1e901e47c9d6d4c4960dff9\",\"entries\":[{\"operation\":\"main\",\"input_schema\":{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false},\"result_schema\":{\"type\":\"object\",\"properties\":{\"stdout\":{\"type\":\"string\"},\"stderr\":{\"type\":\"string\"},\"exit_code\":{\"type\":\"integer\"}},\"required\":[\"stdout\",\"stderr\",\"exit_code\"],\"additionalProperties\":false},\"errors\":[]}],\"calls\":[],\"resources\":[],\"limits\":{\"max_steps\":1,\"max_model_calls\":1},\"conventions\":[]}\n```\n</details>\n",
+        "is_symlink": false
+      },
+      "test/runtime/exit-only-output.json": {
+        "content": "{\"schema_version\":\"prompt-runtime.program-scenario.v1\",\"story_path\":\"user_stories/exit-only-output.md\",\"criteria\":[{\"id\":\"AC1\",\"text\":\"The release prints only the release version.\"}],\"initial_world\":{},\"simulation\":{},\"context\":[],\"steps\":[{\"step_id\":\"version\",\"entry_path\":\"prompts/exit-only-output.prompt.md\",\"operation\":\"main\",\"input\":{},\"checks\":[{\"criterion_id\":\"AC1\",\"target\":\"result\",\"path\":\"/exit_code\",\"op\":\"equals\",\"value\":0}]}]}",
+        "is_symlink": false
+      },
+      "user_stories/with-output.md": {
+        "content": "# Release\n\n## Acceptance criteria\n\n1. The release prints only the release version.\n",
+        "is_symlink": false
+      },
+      "prompts/with-output.prompt.md": {
+        "content": "# Release version\n\nmain returns stdout \"0.1.12\\n\", stderr \"\", exit_code 0.\n\n<details>\n<summary>Runtime interface</summary>\n\n```json\n{\"status\":\"draft\",\"prose_sha256\":\"9ab2983405ab4e9d7acd08dbf930a31299ca78cfe1e901e47c9d6d4c4960dff9\",\"entries\":[{\"operation\":\"main\",\"input_schema\":{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false},\"result_schema\":{\"type\":\"object\",\"properties\":{\"stdout\":{\"type\":\"string\"},\"stderr\":{\"type\":\"string\"},\"exit_code\":{\"type\":\"integer\"}},\"required\":[\"stdout\",\"stderr\",\"exit_code\"],\"additionalProperties\":false},\"errors\":[]}],\"calls\":[],\"resources\":[],\"limits\":{\"max_steps\":1,\"max_model_calls\":1},\"conventions\":[]}\n```\n</details>\n",
+        "is_symlink": false
+      },
+      "test/runtime/with-output.json": {
+        "content": "{\"schema_version\":\"prompt-runtime.program-scenario.v1\",\"story_path\":\"user_stories/with-output.md\",\"criteria\":[{\"id\":\"AC1\",\"text\":\"The release prints only the release version.\"}],\"initial_world\":{},\"simulation\":{},\"context\":[],\"steps\":[{\"step_id\":\"version\",\"entry_path\":\"prompts/with-output.prompt.md\",\"operation\":\"main\",\"input\":{},\"checks\":[{\"criterion_id\":\"AC1\",\"target\":\"result\",\"path\":\"/exit_code\",\"op\":\"equals\",\"value\":0},{\"criterion_id\":\"AC1\",\"target\":\"result\",\"path\":\"/stdout\",\"op\":\"equals\",\"value\":\"0.1.12\\n\"}]}]}",
+        "is_symlink": false
+      },
+      "user_stories/exit-only-process.md": {
+        "content": "# Release\n\n## Acceptance criteria\n\n1. The release exits successfully.\n",
+        "is_symlink": false
+      },
+      "prompts/exit-only-process.prompt.md": {
+        "content": "# Release version\n\nmain returns stdout \"0.1.12\\n\", stderr \"\", exit_code 0.\n\n<details>\n<summary>Runtime interface</summary>\n\n```json\n{\"status\":\"draft\",\"prose_sha256\":\"9ab2983405ab4e9d7acd08dbf930a31299ca78cfe1e901e47c9d6d4c4960dff9\",\"entries\":[{\"operation\":\"main\",\"input_schema\":{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false},\"result_schema\":{\"type\":\"object\",\"properties\":{\"stdout\":{\"type\":\"string\"},\"stderr\":{\"type\":\"string\"},\"exit_code\":{\"type\":\"integer\"}},\"required\":[\"stdout\",\"stderr\",\"exit_code\"],\"additionalProperties\":false},\"errors\":[]}],\"calls\":[],\"resources\":[],\"limits\":{\"max_steps\":1,\"max_model_calls\":1},\"conventions\":[]}\n```\n</details>\n",
+        "is_symlink": false
+      },
+      "test/runtime/exit-only-process.json": {
+        "content": "{\"schema_version\":\"prompt-runtime.program-scenario.v1\",\"story_path\":\"user_stories/exit-only-process.md\",\"criteria\":[{\"id\":\"AC1\",\"text\":\"The release exits successfully.\"}],\"initial_world\":{},\"simulation\":{},\"context\":[],\"steps\":[{\"step_id\":\"version\",\"entry_path\":\"prompts/exit-only-process.prompt.md\",\"operation\":\"main\",\"input\":{},\"checks\":[{\"criterion_id\":\"AC1\",\"target\":\"result\",\"path\":\"/exit_code\",\"op\":\"equals\",\"value\":0}]}]}",
+        "is_symlink": false
+      }
+    }
   },
   "simulation": {
-    "publication.currentHead": {
-      "action": "fixture.lookup",
-      "world_pointer": "/publication_currentHead",
-      "cases": [
-        {
-          "call_index": 1,
-          "args": {
-            "root": "/synthetic/repo",
-            "baseBranch": "alpha"
-          },
-          "result": {
-            "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            "error": ""
-          }
-        }
-      ]
+    "source.fingerprint": {
+      "action": "collection.get",
+      "world_pointer": "/source_fingerprint",
+      "key_argument_pointer": "/root",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/request/root",
+      "item_value_pointer": "/reply",
+      "result_template": {},
+      "result_value_pointer": ""
+    },
+    "source.capture": {
+      "action": "collection.get",
+      "world_pointer": "/source_capture",
+      "key_argument_pointer": "/root",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/request/root",
+      "item_value_pointer": "/reply",
+      "result_template": {},
+      "result_value_pointer": ""
     },
     "publication.readStepNotes": {
-      "action": "fixture.lookup",
+      "action": "collection.get",
       "world_pointer": "/publication_readStepNotes",
-      "cases": [
-        {
-          "call_index": 1,
-          "args": {
-            "runDir": "/synthetic/run",
-            "steps": [
-              "verify"
-            ]
-          },
-          "result": {
-            "notes": []
-          }
-        }
-      ]
+      "key_argument_pointer": "/runDir",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/request/runDir",
+      "item_value_pointer": "/reply",
+      "result_template": {},
+      "result_value_pointer": ""
+    },
+    "publication.currentHead": {
+      "action": "collection.get",
+      "world_pointer": "/publication_currentHead",
+      "key_argument_pointer": "/root",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/request/root",
+      "item_value_pointer": "/reply",
+      "result_template": {},
+      "result_value_pointer": ""
     },
     "publication.readOldCodeProof": {
-      "action": "fixture.lookup",
+      "action": "collection.get",
       "world_pointer": "/publication_readOldCodeProof",
-      "cases": [
-        {
-          "call_index": 1,
-          "args": {
-            "runDir": "/synthetic/run"
-          },
-          "result": {
-            "content": "",
-            "error": "missing"
-          }
-        }
-      ]
+      "key_argument_pointer": "/runDir",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/request/runDir",
+      "item_value_pointer": "/reply",
+      "result_template": {},
+      "result_value_pointer": ""
+    },
+    "files.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": ""
+      },
+      "result_value_pointer": "/content"
+    },
+    "files.stat": {
+      "action": "blob.stat",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "exists": false,
+        "is_symlink": false,
+        "size": 0
+      },
+      "result_value_pointer": ""
+    },
+    "compute.hash_utf8": {
+      "action": "compute",
+      "result_template": {
+        "value": null
+      },
+      "result_value_pointer": "/value"
     }
   },
   "context": [],
   "steps": [
     {
-      "step_id": "typed-count-is-not-machine-evidence",
+      "step_id": "source-current",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "storyCount",
+      "input": {
+        "root": "/synthetic/current",
+        "runtimeHistory": [
+          {
+            "summary": "Prompt tests (release): ✓ 1 of 1 criteria · 1/1 checks · 1 AI call",
+            "at": 1,
+            "source": {
+              "kind": "runtime-capture-v1",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "tests": [
+                "test/runtime/release.json"
+              ]
+            }
+          }
+        ],
+        "done": {},
+        "evidence": [
+          {
+            "summary": "Prompt tests (release): ✓ 1 of 1 criteria · 2/2 checks · 1 AI call",
+            "at": 2,
+            "source": {
+              "kind": "runtime-capture-v1",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "tests": [
+                "test/runtime/release.json"
+              ]
+            }
+          }
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/pass",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/total",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "source-changed",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "storyCount",
+      "input": {
+        "root": "/synthetic/changed",
+        "runtimeHistory": [
+          {
+            "summary": "Prompt tests (release): ✓ 1 of 1 criteria · 1/1 checks · 1 AI call",
+            "at": 1,
+            "source": {
+              "kind": "runtime-capture-v1",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "tests": [
+                "test/runtime/release.json"
+              ]
+            }
+          }
+        ],
+        "done": {},
+        "evidence": []
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/pass",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/total",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/unknown",
+          "op": "equals",
+          "value": [
+            "release"
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "source-removed",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "storyCount",
+      "input": {
+        "root": "/synthetic/removed",
+        "runtimeHistory": [
+          {
+            "summary": "Prompt tests (release): ✓ 1 of 1 criteria · 1/1 checks · 1 AI call",
+            "at": 1,
+            "source": {
+              "kind": "runtime-capture-v1",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "tests": [
+                "test/runtime/release.json"
+              ]
+            }
+          }
+        ],
+        "done": {},
+        "evidence": []
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/pass",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/total",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/unknown",
+          "op": "equals",
+          "value": [
+            "release"
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "source-unbound",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "storyCount",
+      "input": {
+        "root": "/synthetic/unbound",
+        "runtimeHistory": [
+          {
+            "summary": "Prompt tests (release): ✓ 1 of 1 criteria · 1/1 checks · 1 AI call",
+            "at": 1
+          }
+        ],
+        "done": {},
+        "evidence": []
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/pass",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/total",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/unknown",
+          "op": "equals",
+          "value": [
+            "release"
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "typed-count-missing",
       "entry_path": "prompts/cli/workflow-pr-evidence.prompt.md",
       "operation": "preparePrEvidence",
       "input": {
         "run": {
           "runId": "synthetic-2596",
-          "runDir": "/synthetic/run",
+          "runDir": "/synthetic/run-missing",
           "root": "/synthetic/repo",
           "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "baseBranch": "alpha",
@@ -84,7 +500,7 @@
           "steps": [
             {
               "step": "verify",
-              "summary": "Proof (defect fixed): Full npm test: 665/665 passed"
+              "summary": "Proof (defect fixed): Full npm test: 665/665 passed\nProof (gap closed): regression assertion added"
             }
           ]
         },
@@ -92,22 +508,318 @@
       },
       "checks": [
         {
-          "criterion_id": "AC1",
+          "criterion_id": "AC3",
           "target": "result",
           "path": "/lines",
           "op": "equals",
           "value": [
+            "Not checked: `live CI`",
+            "Proof (gap closed): `regression assertion added`",
             "Old-code proof: not run."
           ]
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "AC4",
           "target": "result",
           "path": "/proofStatus",
           "op": "equals",
           "value": "not-run"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/issueReference",
+          "op": "equals",
+          "value": "Closes #2596"
         }
-      ]
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "typed-count-unreadable",
+      "entry_path": "prompts/cli/workflow-pr-evidence.prompt.md",
+      "operation": "preparePrEvidence",
+      "input": {
+        "run": {
+          "runId": "synthetic-2596",
+          "runDir": "/synthetic/run-unreadable",
+          "root": "/synthetic/repo",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "baseBranch": "alpha",
+          "workflow": "bug",
+          "number": 2596,
+          "steps": [
+            {
+              "step": "verify",
+              "summary": "Proof (defect fixed): Full npm test: 665/665 passed\nProof (gap closed): regression assertion added"
+            }
+          ]
+        },
+        "isCode": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": [
+            "Not checked: `live CI`",
+            "Proof (gap closed): `regression assertion added`",
+            "Old-code proof: unavailable."
+          ]
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/proofStatus",
+          "op": "equals",
+          "value": "unavailable"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/issueReference",
+          "op": "equals",
+          "value": "Closes #2596"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "exit-only-output",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "preflight",
+      "input": {
+        "root": "/synthetic/preflight",
+        "found": {
+          "visible": [
+            "user_stories/exit-only-output.md",
+            "prompts/exit-only-output.prompt.md",
+            "test/runtime/exit-only-output.json"
+          ]
+        },
+        "selected": [
+          {
+            "path": "test/runtime/exit-only-output.json",
+            "doc": {
+              "schema_version": "prompt-runtime.program-scenario.v1",
+              "story_path": "user_stories/exit-only-output.md",
+              "criteria": [
+                {
+                  "id": "AC1",
+                  "text": "The release prints only the release version."
+                }
+              ],
+              "initial_world": {},
+              "simulation": {},
+              "context": [],
+              "steps": [
+                {
+                  "step_id": "version",
+                  "entry_path": "prompts/exit-only-output.prompt.md",
+                  "operation": "main",
+                  "input": {},
+                  "checks": [
+                    {
+                      "criterion_id": "AC1",
+                      "target": "result",
+                      "path": "/exit_code",
+                      "op": "equals",
+                      "value": 0
+                    }
+                  ]
+                }
+              ]
+            },
+            "story": "exit-only-output",
+            "title": "Release"
+          }
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/rows/0/refusals",
+          "op": "equals",
+          "value": []
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/rows/0/warnings",
+          "op": "count",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/rows/0/warnings/0",
+          "op": "contains",
+          "value": "AC1"
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/rows/0/warnings/0",
+          "op": "contains",
+          "value": "test/runtime/exit-only-output.json"
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/rows/0/warnings/0",
+          "op": "contains",
+          "value": "output"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "with-output",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "preflight",
+      "input": {
+        "root": "/synthetic/preflight",
+        "found": {
+          "visible": [
+            "user_stories/with-output.md",
+            "prompts/with-output.prompt.md",
+            "test/runtime/with-output.json"
+          ]
+        },
+        "selected": [
+          {
+            "path": "test/runtime/with-output.json",
+            "doc": {
+              "schema_version": "prompt-runtime.program-scenario.v1",
+              "story_path": "user_stories/with-output.md",
+              "criteria": [
+                {
+                  "id": "AC1",
+                  "text": "The release prints only the release version."
+                }
+              ],
+              "initial_world": {},
+              "simulation": {},
+              "context": [],
+              "steps": [
+                {
+                  "step_id": "version",
+                  "entry_path": "prompts/with-output.prompt.md",
+                  "operation": "main",
+                  "input": {},
+                  "checks": [
+                    {
+                      "criterion_id": "AC1",
+                      "target": "result",
+                      "path": "/exit_code",
+                      "op": "equals",
+                      "value": 0
+                    },
+                    {
+                      "criterion_id": "AC1",
+                      "target": "result",
+                      "path": "/stdout",
+                      "op": "equals",
+                      "value": "0.1.12\n"
+                    }
+                  ]
+                }
+              ]
+            },
+            "story": "with-output",
+            "title": "Release"
+          }
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/rows/0/refusals",
+          "op": "equals",
+          "value": []
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/rows/0/warnings",
+          "op": "count",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "exit-only-process",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "preflight",
+      "input": {
+        "root": "/synthetic/preflight",
+        "found": {
+          "visible": [
+            "user_stories/exit-only-process.md",
+            "prompts/exit-only-process.prompt.md",
+            "test/runtime/exit-only-process.json"
+          ]
+        },
+        "selected": [
+          {
+            "path": "test/runtime/exit-only-process.json",
+            "doc": {
+              "schema_version": "prompt-runtime.program-scenario.v1",
+              "story_path": "user_stories/exit-only-process.md",
+              "criteria": [
+                {
+                  "id": "AC1",
+                  "text": "The release exits successfully."
+                }
+              ],
+              "initial_world": {},
+              "simulation": {},
+              "context": [],
+              "steps": [
+                {
+                  "step_id": "version",
+                  "entry_path": "prompts/exit-only-process.prompt.md",
+                  "operation": "main",
+                  "input": {},
+                  "checks": [
+                    {
+                      "criterion_id": "AC1",
+                      "target": "result",
+                      "path": "/exit_code",
+                      "op": "equals",
+                      "value": 0
+                    }
+                  ]
+                }
+              ]
+            },
+            "story": "exit-only-process",
+            "title": "Release"
+          }
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/rows/0/refusals",
+          "op": "equals",
+          "value": []
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/rows/0/warnings",
+          "op": "count",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
     }
   ]
 }

@@ -15,6 +15,8 @@ Authorized writers:
 | Proof (defect fixed) / Proof (gap closed) | verify summary/direct note |
 | Review | direct review.md only, and only when review is an actual known workflow step; never a summary |
 
+A typed test-count claim is not Proof evidence. Drop a lifted Proof line when its payload claims test totals or pass/fail counts (including "Full npm test: 665/665 passed"), even in authorized verify summaries or direct notes. Keep ordinary non-count Proof prose and every warning/failure label. If an omitted typed-count Proof claims a failure, emit a Not checked notice that a failure claim with unsupported counts was omitted; never silently erase a failure or turn it into success. Counts must instead come from current machine evidence under the runner's publication rule; summary text never supplies their provenance.
+
 Other steps or workflow types cannot supply these labels. In particular build/verify cannot write Review, and a run with no review step publishes no Review line.
 
 Order the top evidence block: Not fixed yet, Not checked, Defect, Not caught because, Proof (defect fixed), Proof (gap closed), machine Old-code proof (code PR only), integration-owned Tests vs base when supplied, Review. The inventory position is reserved for integration; this module does not implement #2570 or invent inventory text. Both PRs retain all applicable known-step labels across area boundaries. With a nonempty Not fixed yet line use `Refs #N` for every runner-owned issue reference on either PR; introduce no `Closes #N`. Otherwise retain `Part of #N` for PR 1 and `Closes #N` for code/small-change. `isCode` means code or single small-change publication; prompt-space uses false.
@@ -45,8 +47,8 @@ Every dynamic value, including actor, timestamp, route, path/hash and words, is 
 
 ```json
 {
-  "status": "approved",
-  "prose_sha256": "08d77bbc6fb8417cd2e9c46f75aebeaa52b02f521dfb1673638b91e889075684",
+  "status": "draft",
+  "prose_sha256": "a4047fa9f16e2b9d87aaadd529c1fd93007d4f770e2952db4da2e96bbef05dff",
   "entries": [
     {
       "operation": "preparePrEvidence",
