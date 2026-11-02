@@ -1,5 +1,5 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 548eda0a8f0ee305c36feba202d9261e4023b212eceda58f3620c2d44d227dbf).
-import { outcomeDone, outcomeFor, outcomeOverall, outcomeText, progressText } from './runtime-outcome.mjs';
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 830ff690069615f56954a48c73e9dc1d5833bda541528417f1fad11f052ee12e).
+import { hasProgress, outcomeDone, outcomeFor, outcomeOverall, outcomeText, progressText } from './runtime-outcome.mjs';
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -1094,10 +1094,10 @@ function progressLine(rows, ms) {
   const stories = new Map();
   for (const row of rows) stories.set(row.story, (stories.get(row.story) ?? true) && outcomeDone(row) && !isOpen(row));
   const done = [...stories.values()].filter(Boolean).length;
-  // One fragment for server progress; known calls of ended checks stay; no count is invented.
-  const progress = progressText(rows), counts = rows.filter(row => typeof row.calls === 'number').map(row => row.calls);
+  // One fragment for server progress, then the known calls of the other rows; no count is invented.
+  const progress = progressText(rows), counts = rows.filter(row => !hasProgress(row) && typeof row.calls === 'number').map(row => row.calls);
   const calls = counts.reduce((sum, value) => sum + value, 0), callText = `${calls} AI call${calls === 1 ? '' : 's'}`;
-  const usage = [...(progress ? [progress] : []), ...(counts.length ? [progress ? `${callText} in ended checks` : `${callText} so far`] : progress ? [] : ['AI calls unknown'])];
+  const usage = [...(progress ? [progress] : []), ...(counts.length ? [progress ? `${callText} in other checks` : `${callText} so far`] : progress ? [] : ['AI calls unknown'])];
   return `Still running: ${done} of ${stories.size} ${stories.size === 1 ? 'Story' : 'Stories'} done · ${usage.join(' · ')} · `
     + `${ms < 60_000 ? `${Math.floor(ms / 1000)} s` : `${Math.floor(ms / 60_000)} min`}`;
 }
@@ -2230,9 +2230,12 @@ async function checkLint(context, rows) {
   }
   // A Try uses AI calls, so it passes the same lint gate as a check.
   if (rows.every(row => lintAdmits(lint.answer, row))) { for (const text of lintDiagnostics(context, lint.answer, rows)) line(context.ports.stderr, text); return; }
-  for (const [row, outcome] of judgeLint(lint.answer, rows, context.root, context.visible, context.secrets))
-    if (outcome.state === 'refused') Object.assign(row, { state: 'refused', phase: 'lint', refusals: outcome.refusals });
-  if (rows.some(row => row.state !== 'refused')) throw new Stop(3, 'The lint result is unknown, so pdd made no Try link. Run pdd simulate again later.');
+  const verdicts = judgeLint(lint.answer, rows, context.root, context.visible, context.secrets);
+  for (const [row, outcome] of verdicts) if (outcome.state === 'refused') Object.assign(row, { state: 'refused', phase: 'lint', refusals: outcome.refusals });
+  if ([...verdicts.values()].some(outcome => outcome.state === 'unknown')) throw new Stop(3, 'The lint result is unknown, so pdd made no Try link. Run pdd simulate again later.');
+  // A lint that ended without a pass for the test is final: nothing changes by waiting.
+  const ended = [...verdicts.values()].find(outcome => outcome.state === 'not_run');
+  if (ended) throw new Stop(5, `No lint pass for this test (${ended.reason ?? ended.message}), so pdd made no Try link.`);
 }
 
 // A refused Try setup is not a check (runtime team, Oct 27): two plain lines with what was refused, why and the fix; no table.
