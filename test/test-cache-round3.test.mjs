@@ -260,7 +260,7 @@ test('TEST-CACHE-K1: sign-in failure after retiring a dead mark', async t => {
   assert.match(crash.message, /simulated crash/);
   ctx.state.identity = { ...B };
   const s = round4Other(ctx, 2 * min, { gh: () => ({ status: 1, stdout: '', stderr: 'You are not logged into any GitHub hosts.' }) });
-  const signin = await ctx.invokeWith(s.ports, ['independent']);
+  const signin = await ctx.invokeWith(s.ports, ['independent'], { '--json': false });
   assert.equal(signin.code, 5); assert.equal(signin.sent, 0);
   ctx.clock.now += 5 * min;
   const next = await ctx.invoke(['unknown-item']);
