@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, cpSync, mkdirSync, readFileSync, truncateSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, mkdirSync, readFileSync, readdirSync, truncateSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { captureSource, findTests, preflight, selectTests } from '../src/runtime-preflight.mjs';
 import { runCheck, saveDoorCase } from '../src/runtime-client.mjs';
@@ -280,4 +280,52 @@ test('NAME12: named lint includes the distinct maps declared by selected tests o
   assert.deepEqual(lint.tests, ['tests/place-order.json']);
   assert.deepEqual(lint.app_maps, ['maps/a.json', 'maps/b.json']);
   assert.equal(lint.complete, true);
+});
+
+// A local refusal remains a fact while the remote lint waits or cannot run.
+for (const state of ['running', 'not_run']) test(`NAME13: ${state} lint preserves local discovery refusals`, async t => {
+  const setup = repoWith(t, {
+    'user_stories/place-order.md': story(), 'tests/place-order.json': scenario('user_stories/place-order.md'),
+    'user_stories/broken.md': story('Broken'), 'tests/broken.json': '{"schema_version":"prompt-runtime.program-scenario.v1",',
+  });
+  const fake = await fakeRuntime(t, (entry, f) => state === 'not_run'
+    ? { status: 503, json: { error: { code: 'pool-low-room', message: 'No login room.' } } }
+    : { status: 202, json: f.job(entry.request?.requestId ?? entry.url.split('/').at(-1), 'lint', 'running') });
+  const stateDir = join(setup.home, 'state');
+  const { ports } = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: stateDir });
+  assert.equal(await runCheck({ words: [], options: { '--lint': true, '--json': true }, cwd: setup.repo }, ports), state === 'running' ? 3 : 5);
+  const batch = readdirSync(join(stateDir, 'batches'))[0];
+  const saved = JSON.parse(readFileSync(join(stateDir, 'batches', batch, 'batch.json')));
+  assert.deepEqual(saved.rows.map(row => [row.test, row.state, row.phase]), [
+    ['tests/broken.json', 'refused', 'local'], ['tests/place-order.json', 'not_run', 'lint']]);
+  assert.equal(saved.rows[0].refusals[0].code, 'invalid-document');
+  if (state === 'not_run') assert.equal(JSON.parse(ports.stdout.text).rows[0].state, 'refused');
+});
+
+// Receipt refresh must reuse the same source as dispatch, including the excluded-test decision.
+test('NAME14: a UUID receipt refresh keeps unsent tests out of capture and caches the completed Story', async t => {
+  const setup = repoWith(t, {
+    'user_stories/place-order.md': story(), 'tests/place-order.json': scenario('user_stories/place-order.md'),
+    'user_stories/huge.md': story('Huge'), 'tests/huge.json': '{}',
+  });
+  truncateSync(join(setup.repo, 'tests/huge.json'), 11 * 1024 * 1024);
+  let running = true;
+  const fake = await fakeRuntime(t, (entry, f) => entry.command === 'lint'
+    ? { status: 200, json: f.lint(entry.request.requestId) }
+    : { status: 200, json: f.check(entry.request?.requestId ?? entry.url.split('/').at(-1), running ? 'running' : 'passed') });
+  const env = { HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: join(setup.home, 'state') };
+  const invoke = async (words = [], options = {}) => {
+    const { ports } = portsFor(env);
+    const code = await runCheck({ words, options: { '--json': true, ...options }, cwd: setup.repo, cache: true }, ports);
+    return { code, json: JSON.parse(ports.stdout.text) };
+  };
+  const first = await invoke();
+  assert.deepEqual(first.json.rows.map(row => [row.test, row.state]), [['tests/huge.json', 'refused'], ['tests/place-order.json', 'running']]);
+  const id = first.json.rows[1].request_id;
+  running = false;
+  assert.equal((await invoke([], { '--read': id })).code, 0);
+  const next = await invoke();
+  assert.equal(next.code, 4);
+  assert.equal(next.json.rows.find(row => row.test === 'tests/place-order.json').cached, true);
+  assert.equal(fake.posts.filter(post => post.command === 'check').length, 1);
 });
