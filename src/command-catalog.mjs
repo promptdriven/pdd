@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 2574c8671cdfe8e4800ebff4ac0ace598088406cc3ab375b5af1d01d29a0c1ce).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 7d7ed2bc8518ab537b2b830956a7ef2c3869a5edd7db4ba95b88493640472952).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
