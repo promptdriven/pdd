@@ -31,10 +31,12 @@ Rules for every answer, in this order:
 
 1. A time-limit stop is `unknown`.
 2. Refusal records are `result.refusals`; `report.refusal` stands in only when that
-   list is empty. A `pool-copy-unavailable` record with `retryable: true` (on the
-   record or in its `details`) and `dispatch: not_started` (report or answer) is
-   `not_run` with the server's text. It is never refused or failed. Retryability is
-   never inferred from text.
+   list is empty. Any refusal record that the server declares `retryable: true` (on
+   the record or in its `details`), in an answer with `dispatch: not_started`
+   (report or answer), is `not_run` with its own code and the server's text, whatever
+   the code is (for example `pool-copy-unavailable` or `login-queue-timeout`). The
+   check did not start, so it is never refused or failed. Retryability is never
+   inferred from a code name or from text.
 3. Lint answers follow [Lint evidence](#lint-evidence-and-scope).
 4. For a check: job state `unknown` is `unknown` with the server's `why` as reason;
    job state `failed` is `failed`; job state `refused`, or report `verdict:

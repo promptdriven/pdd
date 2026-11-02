@@ -52,9 +52,11 @@ async function setup(t, shape, { pending = false, check = 'passed', progress } =
       return { status: 200, json: done ? lintAnswer(f, id, shape) : f.job(id, 'lint', 'running') };
     let answer = f.check(id, check);
     if (check === 'running') { answer.progress = progress; answer.usage.calls = 'unknown'; }
-    if (check === 'pool') {
-      const pool = { code: 'pool-copy-unavailable', message: 'No model login is available.', details: { retryable: true } };
-      answer = f.job(id, 'check', 'refused', { refusals: [pool], report: { dispatch: 'not_started', refusal: pool } });
+    // A retryable refusal before dispatch, declared on the record (login queue) or in its details (pool copy).
+    if (check === 'pool' || check === 'login-queue') {
+      const refusal = check === 'pool' ? { code: 'pool-copy-unavailable', message: 'No model login is available.', details: { retryable: true } }
+        : { code: 'login-queue-timeout', message: 'Waited too long for a model login.', retryable: true };
+      answer = f.job(id, 'check', 'refused', { refusals: [refusal], report: { dispatch: 'not_started', refusal } });
     }
     return { status: 200, json: answer };
   });
@@ -175,12 +177,14 @@ test('OUTCOME empty results cannot succeed or imply criterion passes', () => {
   assert.match(summaryLine([{ state: 'passed', story: 'one', criteria_total: 3 }]), /0 of 3 criteria/);
 });
 
-test('OUTCOME retryable unstarted pool answer is not run in every output', async t => {
-  const r = await setup(t, 'passed', { check: 'pool' });
+for (const [check, code, said] of [['pool', 'pool-copy-unavailable', /No model login is available/], ['login-queue', 'login-queue-timeout', /Waited too long for a model login/]])
+test(`OUTCOME a retryable refusal before dispatch is not run in every output, whatever its code: ${code}`, async t => {
+  const r = await setup(t, 'passed', { check });
   const result = await r.command({ '--json': true });
   assert.equal(result.code, 5);
   assert.equal(result.json.rows[0].state, 'not_run');
-  assert.match(JSON.stringify(result.json), /No model login is available/);
+  assert.equal(result.json.rows[0].reason?.code, code, 'its own code');
+  assert.match(JSON.stringify(result.json), said);
   assert.doesNotMatch(result.json.summary_line, /✗|refused/);
   const text = renderText({ rows: result.json.rows, exitCode: 5 });
   assert.match(text, /NOT RUN/); assert.doesNotMatch(text, /REFUSED|✗/);
