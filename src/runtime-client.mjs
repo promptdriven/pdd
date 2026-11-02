@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 43b981d05678aea07e49ab0ea81ea994217b6e8a6d50c9758404f09b4f8b6c13).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 218f691bd729c0f516fb232a6820fd1c0dc78a94220508058164a5756da25c63).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -1807,6 +1807,7 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd() }
     requestedCalls(options['--max-calls']);
     const modes = ['--read', '--retry', '--fill-hash', '--files', '--request', '--lint'].filter(name => options[name] !== undefined);
     const others = Object.keys(options).filter(name => !modes.includes(name) && !(modes[0] === '--retry' && ['--json', '--details', '--timeout'].includes(name)) && !(name === '--json' && ['--read', '--request', '--lint'].includes(modes[0])) && !(name === '--timeout' && ['--read', '--lint'].includes(modes[0])) && !(name === '--app-map' && modes[0] === '--files'));
+    if (options['--app-map'] !== undefined && modes[0] !== '--files') throw new Stop(2, '--app-map works only with pdd simulate and pdd test --files. A test names the app maps it seeds in its "app_maps" list; lint and checks send them (RUNBOOK.md §13).');
     if (modes.length > 1 || (modes.length && others.length) || (['--fill-hash', '--request', '--retry'].includes(modes[0]) && words.length)
       || (modes[0] === '--read' && words.length > 1) || (!modes.length && options['--app-map'] !== undefined)) throw new Stop(2, 'This mix of options does not work together. Run pdd test --help.');
     if (modes[0] === '--request') { release = interruptible(context); return await runRequest(context, options['--request']); }
@@ -1905,6 +1906,23 @@ function appMapFor(found, given, cwd, root, stderr) {
   const problem = appMapProblem(root, rel);
   if (problem) throw new Stop(2, `--app-map ${cleanText(given)} is not an app map: ${problem}. An app map is a JSON file with "schema_version": "${APP_MAP_VERSION}". See RUNBOOK.md §13.`);
   return rel;
+}
+
+// A seed test that names maps in app_maps fixes the Try's map to one of them: lint and the check judged only those.
+function seedAppMap(found, root, test, given, stderr) {
+  const declared = Array.isArray(test.doc?.app_maps) ? test.doc.app_maps.filter(path => typeof path === 'string') : [];
+  if (!declared.length) return given === undefined ? appMapFor(found, undefined, null, root, stderr) : given;
+  const list = declared.map(path => cleanText(path)).join(', ');
+  if (given !== undefined) {
+    if (!declared.includes(given)) throw new Stop(2, `--app-map ${cleanText(given)} is not in ${test.path}'s "app_maps" (${list}). Add it there, or choose one of them.`);
+    return given;
+  }
+  if (declared.length > 1) throw new Stop(2, `${test.path} names ${declared.length} app maps in "app_maps" (${list}). Choose one with --app-map.`);
+  const [path] = declared;
+  if (!found.visible.has(path)) throw new Stop(2, `${test.path} names ${cleanText(path)} in "app_maps", but it is not a Git-visible file in this repository.`);
+  const problem = appMapProblem(root, path);
+  if (problem) throw new Stop(2, `${test.path} names ${cleanText(path)} in "app_maps", but it is not an app map: ${problem}. See RUNBOOK.md §13.`);
+  return path;
 }
 
 function oneTest(found, words, root) {
@@ -2034,8 +2052,9 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (!context.agentDefinitions.length) throw new Stop(2,'No agents are configured. Add an agent or enable defaults in agents.json.');
       if (options['--agent'] !== undefined && !context.agentDefinitions.some(d => d.name === options['--agent'] || (['codex','claude','gemini'].includes(d.id) && d.id === options['--agent']))) throw new Stop(2,'Unknown agent name. Choose a name from agents.json or an enabled default.');
     }
-    const appMap = appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
+    const given = options['--app-map'] === undefined ? undefined : appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
     const test = oneTest(found, normalized, root), repoState = store.repo(root), record = repoState.tries?.[test.path];
+    const appMap = seedAppMap(found, root, test, given, ports.stderr);
     Object.assign(context, { root, store, origin, visible: found.visible, appMap, cwd: realpathSync(cwd), seedTest: { path: test.path, storyPath: test.storyPath } });
     const checked = preflight({ root, found, selected: [test] }), row = localRows(checked.rows)[0];
     if (row.state === 'refused') {

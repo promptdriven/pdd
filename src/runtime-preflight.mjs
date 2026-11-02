@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 8935ab1cf864e10d60eec5bd25b6e82cff21c02d91f8d908095654f54d03d859).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 6fc66e7ac7195b6d6574db15426b30618f9cccb85d8770df3f3a58bccf0150e9).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
@@ -9,7 +9,7 @@ import { expandSource } from './contract-refs.mjs';
 export const TEST_SCHEMA = 'prompt-runtime.program-scenario.v1';
 export const LIMITS = Object.freeze({ bytes: 10_485_760, files: 10_000, test: 1_048_576 });
 const TOP_KEYS = new Set(['schema_version', 'story_path', 'criteria', 'initial_world', 'steps', 'entry_paths', 'simulation',
-  'check_exemptions', 'context', 'context_byte_budget', 'criteria_scope', 'prompt_mappings']);
+  'check_exemptions', 'context', 'context_byte_budget', 'criteria_scope', 'prompt_mappings', 'app_maps']);
 const REQUIRED_KEYS = ['schema_version', 'criteria', 'initial_world', 'steps'];
 const STEP_KEYS = new Set(['step_id', 'entry_path', 'operation', 'input', 'checks', 'expected_error', 'simulation_overrides', 'model']);
 const RULE_OPS = new Set(['at_most', 'at_least', 'not_contains', 'all_in', 'equals_ignore_case']);
@@ -1331,6 +1331,7 @@ function captureOnce(root, { tests, appMap = null, prepareSource }, strict = fal
               add(doc.story_path, path, 'story');
             }
             addStrings(doc.entry_paths, path);
+            addStrings(doc.app_maps, path, 'app-map'); // the maps this test seeds are part of its own closure
             for (const step of Array.isArray(doc.steps) ? doc.steps : []) if (typeof step?.entry_path === 'string') add(step.entry_path, path);
             for (const item of Array.isArray(doc.context) ? doc.context : []) {
               if (typeof item?.prompt_path === 'string') add(item.prompt_path, path);
