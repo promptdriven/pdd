@@ -168,7 +168,7 @@ for (const vector of vectors.cases) test(`TEST-CACHE ${vector.id} (${vector.crit
     return;
   }
   if (id === 'sibling') {
-    const path = join(ctx.repo, 'tests/place-order-extra.json'); write(path, read(join(ctx.repo, 'tests/place-order.json')));
+    const path = join(ctx.repo, 'tests/place-order.extra.json'); write(path, read(join(ctx.repo, 'tests/place-order.json')));
     assert.equal((await ctx.invoke(['tests/place-order.json'])).sent, 1);
     assert.equal((await ctx.invoke(['place-order'])).sent, 2, 'partial sibling pass cannot cache complete Story');
     assert.equal((await ctx.invoke(['place-order'])).sent, 0); return;

@@ -155,7 +155,7 @@ for (const damage of ['malformed', 'symlink']) for (const clear of [false, true]
 for (const selected of ['place-order.json', 'place-order-extra.json']) {
   test(`bounded incomplete sibling=${selected}`, async t => {
     const ctx = await fixture(t);
-    writeFileSync(join(ctx.repo, 'tests/place-order-extra.json'), readFileSync(join(ctx.repo, 'tests/place-order.json')));
+    writeFileSync(join(ctx.repo, 'tests/place-order.extra.json'), readFileSync(join(ctx.repo, 'tests/place-order.json')));
     assert.equal((await ctx.invoke({ words: [`tests/${selected}`] })).sent, 1);
     const complete = await ctx.invoke();
     assert.equal(complete.sent, 2, 'partial sibling evidence never authorizes whole Story pass');
