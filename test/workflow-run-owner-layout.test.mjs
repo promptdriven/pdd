@@ -72,3 +72,17 @@ test('ambiguous run-matching live peers refuse cache repair without touching eit
   assert.deepEqual(f.herdr.workspaces,before);
   assert.equal(f.herdr.calls.slice(at).filter(a=>['create','open','close','remove','rename'].includes(a[1])).length,0);
 });
+for(const kind of ['duplicate','inconsistent'])test(`a ${kind} repository cache entry is rebuilt from the run record, not a dead end`,async t=>{
+  const {f,run,ports,open}=await setup(t),file=join(ports.directory,'registry.json'),registry=JSON.parse(readFileSync(file,'utf8'));
+  if(kind==='duplicate')registry.repositories.push(structuredClone(registry.repositories[0]));
+  else registry.repositories[0].repository='someone/else';
+  writeFileSync(file,JSON.stringify(registry));
+  const count=f.herdr.workspaces.length,at=f.herdr.calls.length;
+  let result,error;try{result=await open();}catch(e){error=e;}
+  assert.equal(error,undefined,'The run record rebuilds the cache entry');
+  assert.equal(result.workspaceId,run.chats[0].workspaceId);
+  assert.equal(f.herdr.workspaces.length,count);
+  assert.equal(f.herdr.calls.slice(at).filter(a=>['close','remove','rename'].includes(a[1])).length,0);
+  const rebuilt=JSON.parse(readFileSync(file,'utf8')).repositories.filter(r=>r.commonDir===run.commonDir);
+  assert.equal(rebuilt.length,1);assert.equal(rebuilt[0].repository,run.repo);assert.equal(rebuilt[0].workspaceId,run.chats[0].repoWorkspaceId);
+});
