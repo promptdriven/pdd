@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runCheck } from '../src/runtime-client.mjs';
+import { runCheck, runTry } from '../src/runtime-client.mjs';
 import { PLACE, fakeRuntime, harbor, portsFor } from './runtime-fake.mjs';
 
 // Story: user_stories/seed-test-names-its-app-maps.md. The Harbor seed test names one app map whose tap calls
@@ -18,11 +18,12 @@ const tarNames = tar => {
 };
 const listed = ports => ports.stdout.text.split('\n').filter(line => /\d+ bytes$/.test(line)).map(line => line.trim().split(/\s{2,}/)[0]).sort();
 
-function seeded(t, { appMaps = [MAP], map = MAP } = {}) {
+function seeded(t, { appMaps = [MAP], map = MAP, other = null } = {}) {
   return harbor(t, repo => {
     write(repo, map, { schema_version: 'prompt-runtime.app-map.v1', name: 'Harbor', stylesheets: [STYLE],
       screens: [{ id: 'menu', prompt_path: PLACE, operation: 'place_order', source: 'operation' }],
       handlers: [{ screen: 'menu', kind: 'button', match: { value: 'send-receipt' }, handler: { prompt_path: RECEIPTS, operation: 'send' } }] });
+    if (other) write(repo, other, { schema_version: 'prompt-runtime.app-map.v1', name: 'Other', stylesheets: [], screens: [], handlers: [] });
     write(repo, STYLE, 'body { color: navy; }');
     write(repo, RECEIPTS, readFileSync(join(repo, PLACE), 'utf8'));
     const seed = JSON.parse(readFileSync(join(repo, SEED), 'utf8'));
@@ -67,7 +68,6 @@ for (const options of [{ '--lint': true, '--app-map': MAP }, { '--app-map': MAP 
   test(`CSEED4: pdd test ${Object.keys(options).join(' ')} is refused and points to app_maps`, async t => {
     const setup = seeded(t), ports = offline(setup);
     assert.equal(await runCheck({ cwd: setup.repo, words: ['place-order'], options }, ports), 2, ports.stderr.text);
-    assert.match(ports.stderr.text, /--app-map works only with pdd simulate and pdd test --files/);
     assert.match(ports.stderr.text, /"app_maps"/);
   });
 }
@@ -76,4 +76,31 @@ test('CSEED5: a test without app_maps sends the same files as before', async t =
   const setup = seeded(t, { appMaps: null }), ports = offline(setup);
   assert.equal(await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--files': true } }, ports), 0, ports.stderr.text);
   assert.deepEqual(listed(ports), [...STORY_FILES].sort());
+});
+
+const tryOptions = extra => ({ '--no-open': true, '--no-wait': true, ...extra });
+
+test('CSEED6: pdd simulate with no --app-map starts the Try with the one map that the test names', async t => {
+  const setup = seeded(t);
+  const fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.command === 'lint') return { status: 200, json: f.lint(entry.request.requestId) };
+    if (entry.command === 'try') return { status: 200, json: f.tryJob(entry.request.requestId) };
+    return { status: 404, json: {} };
+  });
+  const { ports } = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin });
+  await runTry({ cwd: setup.repo, words: ['place-order'], options: tryOptions({}) }, ports);
+  const tries = fake.posts.filter(post => post.command === 'try');
+  assert.equal(tries.length, 1, ports.stdout.text + ports.stderr.text);
+  assert.equal(tries[0].request.app_map, MAP);
+  assert.deepEqual(tarNames(tries[0].tar), WITH_MAP);
+});
+
+for (const [name, options, appMaps] of [
+  ['a --app-map that the test does not name', { '--app-map': 'app/other-map.json' }, [MAP]],
+  ['several named maps and no --app-map', {}, [MAP, 'app/other-map.json']],
+]) test(`CSEED7: pdd simulate refuses ${name} with exit 2 and sends nothing`, async t => {
+  const setup = seeded(t, { appMaps, other: 'app/other-map.json' }), ports = offline(setup);
+  assert.equal(await runTry({ cwd: setup.repo, words: ['place-order'], options: tryOptions(options) }, ports), 2, ports.stderr.text);
+  assert.match(ports.stderr.text, /"app_maps"/);
+  assert.match(ports.stderr.text, new RegExp(MAP.replace(/\./g, '\\.')));
 });
