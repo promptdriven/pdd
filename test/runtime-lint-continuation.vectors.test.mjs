@@ -7,15 +7,15 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { runCheck, runTry } from '../src/runtime-client.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
-import { harbor, fakeRuntime, portsFor, PLACE, TOKEN } from './runtime-fake.mjs';
+import { harbor, fakeRuntime, portsFor, PLACE, TOKEN, storyTest } from './runtime-fake.mjs';
 
 // Native replay of the approved Story's case table. There are no executable Runtime
 // vectors for this native boundary (#2548); this suite does not claim a Runtime pass.
 const START = Date.parse('2026-10-27T16:27:47Z');
 async function setup(t, { mode = 'check', interactive = false, timeout, multiple = false } = {}) {
   const h = harbor(t, repo => {
-    if (multiple === 'mixed') { const doc = JSON.parse(readFileSync(join(repo, 'tests/place-order.json'))); doc.steps = []; writeFileSync(join(repo, 'tests/second-1.json'), JSON.stringify(doc)); }
-    for (let i = 1; multiple !== 'mixed' && i < (multiple === true || multiple === 'mixed' ? 2 : multiple || 1); i++) copyFileSync(join(repo, 'tests/place-order.json'), join(repo, `tests/second-${i}.json`));
+    if (multiple === 'mixed') { storyTest(repo, 'second-1'); const doc = JSON.parse(readFileSync(join(repo, 'tests/second-1.json'))); doc.steps = []; writeFileSync(join(repo, 'tests/second-1.json'), JSON.stringify(doc)); }
+    for (let i = 1; multiple !== 'mixed' && i < (multiple === true || multiple === 'mixed' ? 2 : multiple || 1); i++) storyTest(repo, `second-${i}`);
   });
   const state = { lint: 'running', checks: 'passed', lost: false, clock: null, readyAt: Infinity };
   const f = await fakeRuntime(t, async (e, f) => {

@@ -22,7 +22,7 @@ for (const outcome of ['passed', 'refused', 'not-run']) {
     const s = harbor(t);
     const sibling = JSON.parse(fs.readFileSync(join(s.repo, ONE), 'utf8'));
     sibling.steps.forEach(step => { step.entry_path = MISSING; });
-    write(s.repo, 'tests/sibling.json', JSON.stringify(sibling));
+    write(s.repo, 'tests/place-order.sibling.json', JSON.stringify(sibling));
     const fake = await fakeRuntime(t, (entry, f) => {
       assert.equal(entry.command, 'lint', 'explicit lint must not submit checks');
       if (outcome === 'not-run') return { status: 403, json: { code: 'no-cloud-access', message: 'Synthetic access refusal.' } };
@@ -58,7 +58,7 @@ for (const known of [false, true]) for (const failure of ['12MiB', '2GiB', 'unre
     if (failure === 'sibling') {
       const sibling = JSON.parse(fs.readFileSync(join(s.repo, ONE), 'utf8'));
       sibling.initial_world = { $seed: 'contracts/missing-world.json' };
-      write(s.repo, 'tests/sibling.json', JSON.stringify(sibling));
+      write(s.repo, 'tests/place-order.sibling.json', JSON.stringify(sibling));
     } else if (failure === 'unresolved') {
       const broken = JSON.parse(block[1]);
       broken.entries[0].input_schema = { $contract: 'contracts/missing.json#' };

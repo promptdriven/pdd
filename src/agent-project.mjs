@@ -1,18 +1,18 @@
-// Generated from prompts/cli/agent-project.prompt.md (sha256: 75e7fc7385a759120557506f787925d0d9299f5d5c4ed0ac5e11855117529875).
+// Generated from prompts/cli/agent-project.prompt.md (sha256: b89e9a07f900aa583f8bc96735a98a42e4e283f79267bd5c032b173540c89205).
 import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {constants,lstatSync,realpathSync,openSync,fstatSync,readSync,closeSync,readdirSync} from 'node:fs';
 import {resolve,join,relative,sep,basename,parse} from 'node:path';
 import {homedir} from 'node:os';
 import {isDeepStrictEqual} from 'node:util';
-import {isSecretPath,interfaceBlocks,storyCriteria} from './runtime-preflight.mjs';
+import {isSecretPath,interfaceBlocks,storyCriteria,matchTests,isStoryPath,LIMITS} from './runtime-preflight.mjs';
 const object=x=>x!==null&&typeof x==='object'&&!Array.isArray(x);
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const BATCH=/^\d{8}-\d{6}-[a-z0-9]{4}$/;
 const SECRET=/token|password|secret|api[_-]?key|authorization|cookie|credential/i;
 const inside=(path,root)=>{const rel=relative(root,path);return !rel||(!rel.startsWith('..'+sep)&&rel!=='..'&&!rel.startsWith(sep));};
 function safeStat(path){try{let current=parse(resolve(path)).root;for(const part of resolve(path).slice(current.length).split(sep).filter(Boolean)){current=join(current,part);const st=lstatSync(current);if(st.isSymbolicLink())return null;}return lstatSync(path);}catch{return null;}}
-function read(path,limit){let fd;try{const before=safeStat(path);if(!before?.isFile()||before.size>limit)return null;fd=openSync(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);const st=fstatSync(fd);if(!st.isFile()||st.size>limit||st.ino!==before.ino||st.dev!==before.dev)return null;const bytes=Buffer.alloc(limit+1);let length=0;while(length<bytes.length){const n=readSync(fd,bytes,length,bytes.length-length,null);if(!n)break;length+=n;}if(length>limit)return null;const text=new TextDecoder('utf-8',{fatal:true}).decode(bytes.subarray(0,length));if(text.includes('\0'))return null;return{text,mtime:st.mtimeMs};}catch{return null;}finally{if(fd!==undefined)closeSync(fd);}}
+function read(path,limit){let fd;try{const before=safeStat(path);if(!before?.isFile()||before.size>limit)return null;fd=openSync(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);const st=fstatSync(fd);if(!st.isFile()||st.size>limit||st.ino!==before.ino||st.dev!==before.dev)return null;const bytes=Buffer.alloc(Math.min(limit,st.size)+1);let length=0;while(length<bytes.length){const n=readSync(fd,bytes,length,bytes.length-length,null);if(!n)break;length+=n;}if(length>limit||length>st.size)return null;const text=new TextDecoder('utf-8',{fatal:true}).decode(bytes.subarray(0,length));if(text.includes('\0'))return null;return{text,mtime:st.mtimeMs};}catch{return null;}finally{if(fd!==undefined)closeSync(fd);}}
 function json(path,limit){const record=read(path,limit);if(!record)return null;try{return{value:JSON.parse(record.text),mtime:record.mtime};}catch{return null;}}
 function clip(value,max){let out='',size=0;for(const char of String(value??'')){const bytes=Buffer.byteLength(char);if(size+bytes>max)break;out+=char;size+=bytes;}return out;}
 function sanitizer(env,secrets){const values=[...secrets,...Object.entries(env??{}).filter(([k,v])=>SECRET.test(k)&&typeof v==='string'&&v).map(([,v])=>v)].filter(x=>typeof x==='string'&&x);return value=>{let text=String(value??'');for(const secret of values)text=text.split(secret).join('[redacted]');return text.replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/g,'[redacted]').replace(/\b(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]{12,})\b/g,'[redacted]').replace(/Bearer\s+\S+/gi,'Bearer [redacted]').replace(/\b(token|password|secret|api[_-]?key|authorization|cookie|credential)["']?\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,'$1=[redacted]').replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi,'$1[redacted]@').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g,'').replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g,'');};}
@@ -36,10 +36,13 @@ function rulesFor(prompts,entries,clean){
 }
 function listFiles(root){try{const result=spawnSync('git',['-c','core.fsmonitor=false','ls-files','-z','-co','--exclude-standard'],{cwd:root,maxBuffer:1048576,timeout:2000});if(result.status!==0)return{paths:[],incomplete:!!result.error&&result.error.code!=='ENOENT'};const all=[...new Set(result.stdout.toString('utf8').split('\0').filter(Boolean))].sort();return{paths:all.slice(0,2048),incomplete:all.length>2048};}catch{return{paths:[],incomplete:false};}}
 function canonicalRoot(root){try{return realpathSync(root);}catch{return resolve(root);}}
-function relativeJson(path,root){return typeof path==='string'&&path.endsWith('.json')&&!path.includes('\\')&&!path.split('/').some(x=>!x||x==='.'||x==='..'||x==='.git')&&!isSecretPath(path)&&inside(resolve(root,path),root)&&relative(root,resolve(root,path)).split(sep).join('/')===path;}
+function relativeJson(path,root){return typeof path==='string'&&path.endsWith('.json')&&relativeFile(path,root);}
+function relativeFile(path,root){return typeof path==='string'&&!path.includes('\\')&&!path.split('/').some(x=>!x||x==='.'||x==='..'||x==='.git')&&!isSecretPath(path)&&inside(resolve(root,path),root)&&relative(root,resolve(root,path)).split(sep).join('/')===path;}
 export function readAgentScenarios({root}){
  const canonical=canonicalRoot(root),listed=listFiles(canonical),records=[];let bytes=0,incomplete=listed.incomplete;
- for(const path of listed.paths){if(!relativeJson(path,canonical))continue;const file=read(join(canonical,path),1048576);if(!file)continue;if(bytes+Buffer.byteLength(file.text)>16777216){incomplete=true;break;}bytes+=Buffer.byteLength(file.text);let doc;try{doc=JSON.parse(file.text);}catch{continue;}if(!object(doc)||doc.schema_version!=='prompt-runtime.program-scenario.v1')continue;if(records.length===128){incomplete=true;break;}records.push({path,doc});}
+ // The test name rule (runtime-preflight): Story files and tests by name and folder; no other JSON is opened.
+ const safe=listed.paths.filter(path=>relativeFile(path,canonical));
+ for(const test of matchTests(safe.filter(isStoryPath),safe.filter(path=>relativeJson(path,canonical))).tests){if(test.problem){incomplete=true;continue;}const file=read(join(canonical,test.path),LIMITS.bytes);if(!file){incomplete=true;continue;}if(bytes+Buffer.byteLength(file.text)>16777216){incomplete=true;break;}bytes+=Buffer.byteLength(file.text);let doc;try{doc=JSON.parse(file.text);}catch{incomplete=true;continue;}if(!object(doc)||doc.schema_version!=='prompt-runtime.program-scenario.v1'){incomplete=true;continue;}if(records.length===128){incomplete=true;break;}records.push({path:test.path,doc});}
  Object.defineProperty(records,'incomplete',{value:incomplete});return records;
 }
 function dynamic(value){return Array.isArray(value)?value.some(dynamic):object(value)&&(Object.hasOwn(value,'$step_result')||Object.values(value).some(dynamic));}
