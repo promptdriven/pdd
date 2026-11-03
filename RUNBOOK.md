@@ -887,7 +887,7 @@ Passing prompt check (DRAFT): [2/2 checks · 2 AI calls](https://runtime.promptd
 
 ### Return a different port reply on each call
 
-This synthetic example uses one counter for `service.lookup`, starting at zero. Each case has exactly `args`, `call_index`, and `result`: `args` is the literal complete argument object, and `call_index` is a unique positive one-based integer. Other case properties, including `world_result_bindings`, are refused. The counter progresses per operation across steps, so indices must follow that operation's actual call order. The result template and pointer wrap the selected literal result. This binding does not supply a request log or arbitrary world mutations; use an appropriate separate boundary and native tests for effects.
+This synthetic example uses one counter for `service.lookup`, starting at zero. Each case has exactly `args`, `call_index`, and `result`: `args` is the literal complete argument object, and `call_index` is a unique positive one-based integer. Other case properties, including `world_result_bindings`, are refused. The counter progresses per operation across steps, so indices must follow that operation's actual call order. The empty result pointer replaces the whole result template with the selected literal result. This binding does not supply a request log or arbitrary world mutations; use an appropriate separate boundary and native tests for effects.
 
 Copy these three files into a repository, fill the draft hash with `pdd test --fill-hash`, and use `pdd lint varying-port` for zero-AI fixture/schema admission. Lint does not prove execution behavior or a live service effect.
 
@@ -946,8 +946,8 @@ I can look up the same item twice and see each supplied reply.
         {"args": {"id": "book-7"}, "call_index": 1, "result": {"label": "Available"}},
         {"args": {"id": "book-7"}, "call_index": 2, "result": {"label": "Reserved"}}
       ],
-      "result_template": {"value": null},
-      "result_value_pointer": "/value"
+      "result_template": null,
+      "result_value_pointer": ""
     }
   },
   "context": [],

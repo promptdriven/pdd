@@ -27,9 +27,10 @@ test('RUNBOOK indexed port example has complete, schema-compatible cases', () =>
   assert.equal(resource.access, 'write');
   assert.equal(operation.access, 'write');
   assert.equal(binding.action, 'fixture.lookup');
-  const pointer = (root, path) => path.slice(1).split('/').reduce((value, key) => value[key.replaceAll('~1', '/').replaceAll('~0', '~')], root);
+  const pointer = (root, path) => path === '' ? root : path.slice(1).split('/').reduce((value, key) => value[key.replaceAll('~1', '/').replaceAll('~0', '~')], root);
   assert.equal(pointer(scenario.initial_world, binding.world_pointer), 0);
-  assert.equal(pointer(binding.result_template, binding.result_value_pointer), null);
+  assert.equal(binding.result_value_pointer, '');
+  assert.equal(binding.result_template, null);
 
   function matches(schema, value) {
     if (schema.type === 'string') return typeof value === 'string';
@@ -37,6 +38,11 @@ test('RUNBOOK indexed port example has complete, schema-compatible cases', () =>
     return schema.required.every(key => Object.hasOwn(value, key)) &&
       Object.entries(value).every(([key, child]) => schema.properties[key] ? matches(schema.properties[key], child) : schema.additionalProperties !== false);
   }
+  // The pointer selects a location in the declared result schema as well as the template.
+  const schemaAt = (schema, path) => path === '' ? schema : path.slice(1).split('/').reduce(
+    (current, key) => current?.properties?.[key.replaceAll('~1', '/').replaceAll('~0', '~')], schema);
+  assert.ok(schemaAt(operation.result_schema, binding.result_value_pointer));
+  assert.equal(schemaAt(operation.result_schema, '/value'), undefined);
   const validCases = cases => {
     const indices = new Set();
     return cases.every(item => {
