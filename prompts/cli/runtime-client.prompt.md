@@ -272,7 +272,7 @@ limit in every shell; only explicit --timeout bounds it. Standalone remote lint 
 90-second agent default and unlimited interactive wait, with explicit --timeout override.
 Try uses its total 5-minute setup allowance in every shell, with no separate agent lint cap; passing lint does not restart the setup clock.
 The effective lint deadline also bounds dead-owner GETs, local claim waits and request-ID
-recording before lint POST; never substitute the longer Try setup deadline.
+recording before lint POST; do not reset that deadline during preparation.
 There is no independent 120-second lint cap. Bound each lint HTTP request/read by the remaining wait.
 A lost reply still reads only that ID; it may retry only after that read confirms the retryable
 terminal capacity refusal. Do not submit checks or create a Try until lint succeeds.
