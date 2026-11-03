@@ -1,0 +1,129 @@
+{
+  "schema_version": "screen-label-ownership.native.v1",
+  "story_path": "user_stories/screen-label-ownership.md",
+  "module": "src/screen-compare.mjs",
+  "operation": "compareScreen",
+  "criteria": [
+    {"id": "AC1", "text": "A painted box passes its id check, but READY outside that matched box cannot satisfy the owned label: the label is missing and the comparison fails."},
+    {"id": "AC2", "text": "A visible READY label nested in the matched box or painted on the box itself passes when geometry and order match."},
+    {"id": "AC3", "text": "A hidden READY label inside the matched box remains hidden and fails, even when a visible READY copy exists outside."},
+    {"id": "AC4", "text": "A reference label without a matched enclosing id can still match visible page text globally."}
+  ],
+  "files": {
+    "/screen/screen.ui.svg": {"content": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 400 400\"><g id=\"box\"><rect x=\"20\" y=\"20\" width=\"100\" height=\"80\" fill=\"silver\"/><text x=\"30\" y=\"60\">READY</text></g></svg>", "is_symlink": false},
+    "/screen/global.ui.svg": {"content": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 400 400\"><g id=\"box\"><rect x=\"20\" y=\"20\" width=\"100\" height=\"80\" fill=\"silver\"/></g><text x=\"30\" y=\"60\">READY</text></svg>", "is_symlink": false}
+  },
+  "cases": [
+    {
+      "case_id": "outside-only",
+      "input": {"url": "http://example.test/outside-only", "drawingPath": "screen.ui.svg", "cwd": "/screen"},
+      "browser_reply": {
+        "viewport": {"width": 400, "height": 400},
+        "reference": [
+          {"kind": "id", "value": "box", "node": 1, "ancestors": [], "region": null, "visible": true, "box": {"x": 20, "y": 20, "width": 100, "height": 80}},
+          {"kind": "text", "value": "READY", "node": 2, "ancestors": [1], "region": "box", "visible": true, "box": {"x": 20, "y": 20, "width": 100, "height": 80}}
+        ],
+        "actual": [
+          {"kind": "id", "value": "box", "node": 10, "ancestors": [], "region": null, "visible": true, "box": {"x": 20, "y": 20, "width": 100, "height": 80}},
+          {"kind": "text", "value": "READY", "node": 11, "ancestors": [], "region": null, "visible": true, "box": {"x": 20, "y": 20, "width": 100, "height": 80}}
+        ]
+      },
+      "checks": [
+        {"criterion_id": "AC1", "target": "result", "path": "/passed", "op": "equals", "value": false},
+        {"criterion_id": "AC1", "target": "result", "path": "/rows/0/status", "op": "equals", "value": "pass"},
+        {"criterion_id": "AC1", "target": "result", "path": "/rows/1/status", "op": "equals", "value": "missing"},
+        {"criterion_id": "AC1", "target": "result", "path": "/rows/1/kind", "op": "equals", "value": "text"},
+        {"criterion_id": "AC1", "target": "result", "path": "/rows", "op": "count", "value": 2}
+      ]
+    },
+    {
+      "case_id": "nested-owned",
+      "input": {"url": "http://example.test/nested-owned", "drawingPath": "screen.ui.svg", "cwd": "/screen"},
+      "browser_reply": {
+        "viewport": {"width": 400, "height": 400},
+        "reference": [
+          {"kind": "id", "value": "box", "node": 1, "ancestors": [], "region": null, "visible": true, "box": {"x": 20, "y": 20, "width": 100, "height": 80}},
+          {"kind": "text", "value": "READY", "node": 2, "ancestors": [1], "region": "box", "visible": true, "box": {"x": 20, "y": 20, "width": 100, "height": 80}}
+        ],
+        "actual": [
+          {"kind": "id", "value": "box", "node": 10, "ancestors": [], "region": null, "visible": true, "box": {"x": 20, "y": 20, "width": 100, "height": 80}},
+          {"kind": "text", "value": "READY", "node": 12, "ancestors": [10], "region": null, "visible": true, "box": {"x": 20, "y": 20, "width": 100, "height": 80}}
+        ]
+      },
+      "checks": [
+        {"criterion_id": "AC2", "target": "result", "path": "/passed", "op": "equals", "value": true},
+        {"criterion_id": "AC2", "target": "result", "path": "/rows/0/status", "op": "equals", "value": "pass"},
+        {"criterion_id": "AC2", "target": "result", "path": "/rows/1/status", "op": "equals", "value": "pass"},
+        {"criterion_id": "AC2", "target": "result", "path": "/rows/1/kind", "op": "equals", "value": "text"},
+        {"criterion_id": "AC2", "target": "result", "path": "/rows", "op": "count", "value": 2}
+      ]
+    },
+    {
+      "case_id": "self-owned",
+      "input": {"url": "http://example.test/self-owned", "drawingPath": "screen.ui.svg", "cwd": "/screen"},
+      "browser_reply": {
+        "viewport": {"width": 400, "height": 400},
+        "reference": [
+          {"kind": "id", "value": "box", "node": 1, "ancestors": [], "region": null, "visible": true, "box": {"x": 20, "y": 20, "width": 100, "height": 80}},
+          {"kind": "text", "value": "READY", "node": 2, "ancestors": [1], "region": "box", "visible": true, "box": {"x": 20, "y": 20, "width": 100, "height": 80}}
+        ],
+        "actual": [
+          {"kind": "id", "value": "box", "node": 10, "ancestors": [], "region": null, "visible": true, "box": {"x": 20, "y": 20, "width": 100, "height": 80}},
+          {"kind": "text", "value": "READY", "node": 10, "ancestors": [], "region": null, "visible": true, "box": {"x": 20, "y": 20, "width": 100, "height": 80}}
+        ]
+      },
+      "checks": [
+        {"criterion_id": "AC2", "target": "result", "path": "/passed", "op": "equals", "value": true},
+        {"criterion_id": "AC2", "target": "result", "path": "/rows/0/status", "op": "equals", "value": "pass"},
+        {"criterion_id": "AC2", "target": "result", "path": "/rows/1/status", "op": "equals", "value": "pass"},
+        {"criterion_id": "AC2", "target": "result", "path": "/rows/1/kind", "op": "equals", "value": "text"},
+        {"criterion_id": "AC2", "target": "result", "path": "/rows", "op": "count", "value": 2}
+      ]
+    },
+    {
+      "case_id": "hidden-owned",
+      "input": {"url": "http://example.test/hidden-owned", "drawingPath": "screen.ui.svg", "cwd": "/screen"},
+      "browser_reply": {
+        "viewport": {"width": 400, "height": 400},
+        "reference": [
+          {"kind": "id", "value": "box", "node": 1, "ancestors": [], "region": null, "visible": true, "box": {"x": 20, "y": 20, "width": 100, "height": 80}},
+          {"kind": "text", "value": "READY", "node": 2, "ancestors": [1], "region": "box", "visible": true, "box": {"x": 20, "y": 20, "width": 100, "height": 80}}
+        ],
+        "actual": [
+          {"kind": "id", "value": "box", "node": 10, "ancestors": [], "region": null, "visible": true, "box": {"x": 20, "y": 20, "width": 100, "height": 80}},
+          {"kind": "text", "value": "READY", "node": 12, "ancestors": [10], "region": null, "visible": false, "box": {"x": 20, "y": 20, "width": 100, "height": 80}},
+          {"kind": "text", "value": "READY", "node": 11, "ancestors": [], "region": null, "visible": true, "box": {"x": 20, "y": 20, "width": 100, "height": 80}}
+        ]
+      },
+      "checks": [
+        {"criterion_id": "AC3", "target": "result", "path": "/passed", "op": "equals", "value": false},
+        {"criterion_id": "AC3", "target": "result", "path": "/rows/0/status", "op": "equals", "value": "pass"},
+        {"criterion_id": "AC3", "target": "result", "path": "/rows/1/status", "op": "equals", "value": "hidden"},
+        {"criterion_id": "AC3", "target": "result", "path": "/rows/1/kind", "op": "equals", "value": "text"},
+        {"criterion_id": "AC3", "target": "result", "path": "/rows", "op": "count", "value": 2}
+      ]
+    },
+    {
+      "case_id": "global-unowned",
+      "input": {"url": "http://example.test/global-unowned", "drawingPath": "global.ui.svg", "cwd": "/screen"},
+      "browser_reply": {
+        "viewport": {"width": 400, "height": 400},
+        "reference": [
+          {"kind": "id", "value": "box", "node": 1, "ancestors": [], "region": null, "visible": true, "box": {"x": 20, "y": 20, "width": 100, "height": 80}},
+          {"kind": "text", "value": "READY", "node": 2, "ancestors": [], "region": null, "visible": true, "box": {"x": 20, "y": 20, "width": 100, "height": 80}}
+        ],
+        "actual": [
+          {"kind": "id", "value": "box", "node": 10, "ancestors": [], "region": null, "visible": true, "box": {"x": 20, "y": 20, "width": 100, "height": 80}},
+          {"kind": "text", "value": "READY", "node": 11, "ancestors": [], "region": null, "visible": true, "box": {"x": 20, "y": 20, "width": 100, "height": 80}}
+        ]
+      },
+      "checks": [
+        {"criterion_id": "AC4", "target": "result", "path": "/passed", "op": "equals", "value": true},
+        {"criterion_id": "AC4", "target": "result", "path": "/rows/0/status", "op": "equals", "value": "pass"},
+        {"criterion_id": "AC4", "target": "result", "path": "/rows/1/status", "op": "equals", "value": "pass"},
+        {"criterion_id": "AC4", "target": "result", "path": "/rows/1/kind", "op": "equals", "value": "text"},
+        {"criterion_id": "AC4", "target": "result", "path": "/rows", "op": "count", "value": 2}
+      ]
+    }
+  ]
+}
