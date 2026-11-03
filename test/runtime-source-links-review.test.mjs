@@ -27,18 +27,21 @@ test('LINK review missing secret stat refuses before absence',t=>{
   const {repo}=harbor(t);
   refusal(()=>sourceFilePort(repo).stat({path:'nodir/.env'}), /name looks like a secret/);
 });
+// A test's title is its Story file's title; a linked Story file is read only through its checked target.
 test('LINK review linked Story title uses target size limit',t=>{
   const {repo}=harbor(t);
   write(repo,'shared/story.md','# BIG TITLE\n'+'x'.repeat(10_485_761));
-  write(repo,'tests/title.json',JSON.stringify({schema_version:'prompt-runtime.program-scenario.v1',story_path:'docs/story.md'}));
-  mkdirSync(join(repo,'docs'));symlinkSync('../shared/story.md',join(repo,'docs/story.md'));
-  assert.equal(findTests({root:repo}).tests.find(t=>t.path==='tests/title.json').title,'story');
+  write(repo,'tests/title.json',JSON.stringify({schema_version:'prompt-runtime.program-scenario.v1',story_path:'user_stories/title.md'}));
+  symlinkSync('../shared/story.md',join(repo,'user_stories/title.md'));
+  const found=findTests({root:repo});
+  assert.equal(found.tests.find(t=>t.path==='tests/title.json').title,'title');
+  assert.ok(found.warnings.includes('Warning: user_stories/title.md: discovery unavailable (too big; limit 10 MB).'));
 });
 test('LINK review linked Story title never follows unchecked path at read time',t=>{
   const {repo,sandbox}=harbor(t);
   write(repo,'shared/story.md','# SAFE TITLE\n');write(sandbox,'external/story.md','# OUTSIDE TITLE\n');
-  write(repo,'tests/title.json',JSON.stringify({schema_version:'prompt-runtime.program-scenario.v1',story_path:'docs/story.md'}));
-  mkdirSync(join(repo,'docs'));symlinkSync('../shared/story.md',join(repo,'docs/story.md'));
+  write(repo,'tests/title.json',JSON.stringify({schema_version:'prompt-runtime.program-scenario.v1',story_path:'user_stories/title.md'}));
+  symlinkSync('../shared/story.md',join(repo,'user_stories/title.md'));
   assert.equal(child('title-race',repo,join(sandbox,'external')).title,'SAFE TITLE');
 });
 test('LINK review nested destination failure names the escaping link itself',t=>{

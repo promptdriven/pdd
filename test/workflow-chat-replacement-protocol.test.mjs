@@ -12,7 +12,7 @@ import { fixture, packageRoot } from './helpers/workflow-runner-fixture.mjs';
 
 const vectors = JSON.parse(readFileSync(new URL('./fixtures/workflow-open-replacement.json', import.meta.url), 'utf8'));
 const inputs = kind => vectors.cases.filter(c => c.input.kind === kind).map(c => c.input);
-const phases = ['intent', 'closeRequested', 'closeRequested', 'closed', 'createRequested', 'createRequested', 'prepared', 'launchRequested', 'launched'];
+const phases = ['intent', 'closeRequested', 'closeRequested', 'closed', 'createRequested', 'createRequested', 'createRequested', 'prepared', 'launchRequested', 'launched'];
 const lost = () => Object.assign(Error('Synthetic reply lost'), { code: 'server_unavailable' });
 const copy = value => JSON.parse(JSON.stringify(value));
 const effect = args => args[0] === 'pane' && args[1] === 'run' || ['tab', 'workspace', 'worktree'].includes(args[0]) && ['create', 'close', 'open'].includes(args[1]);

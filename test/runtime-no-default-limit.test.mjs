@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { runCheck, runTry } from '../src/runtime-client.mjs';
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from '../src/runtime-slots.mjs';
-import { fakeRuntime, harbor, portsFor, root } from './runtime-fake.mjs';
+import { fakeRuntime, harbor, portsFor, root, storyTest } from './runtime-fake.mjs';
 
 const pause = ms => new Promise(done => setTimeout(done, ms));
 async function waitFor(predicate) {
@@ -15,9 +15,8 @@ async function waitFor(predicate) {
 }
 function selected(t, count) {
   return harbor(t, repo => {
-    const source = readFileSync(join(repo, 'tests/place-order.json'));
     rmSync(join(repo, 'tests/unknown-item.json'));
-    for (let i = 1; i < count; i++) writeFileSync(join(repo, `tests/place-order-${i}.json`), source);
+    for (let i = 1; i < count; i++) storyTest(repo, `place-order-${i}`);
   });
 }
 const make = (setup, fake, extra = {}) => portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin }, extra);

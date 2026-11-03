@@ -9,7 +9,7 @@ import { listRuntimeJobs } from '../src/runtime-slots.mjs';
 import { fakeRuntime, filesUnder, harbor, portsFor, TOKEN } from './runtime-fake.mjs';
 
 const execute = promisify(execFile);
-const cases = JSON.parse(readFileSync(new URL('runtime-admission/runtime-maintenance-wait.json', import.meta.url))).cases;
+const cases = JSON.parse(readFileSync(new URL('runtime-admission/runtime-maintenance-wait-cases.json', import.meta.url))).cases;
 // Synthetic inputs and expected local observations approved with the native cases.
 const localCases = [
   { id: 'summer-local-end', zone: 'America/Los_Angeles', until: '2026-07-02T02:25:00.000Z', time: /\b19:25\b/, zoneName: /\bPDT\b/ },
