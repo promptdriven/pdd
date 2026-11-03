@@ -2732,7 +2732,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     for (const warning of capture.warnings ?? []) line(ports.stderr, warning);
     const identity = signIn(ports.gh, context.store);
     Object.assign(context, { capture, identity, secrets: [identity.token], startedAt: ports.now(), deadline: ports.now() + TRY_MS, lint: { request_ids: [], state: null },
-      batch: null, rows: [row], timeoutMin: TRY_MS / 60_000, head: null });
+      batch: null, rows: [row], timeoutMin: TRY_MS / 60_000, agentLimit: false, head: null });
     context.folder = store.folder('tries');
     release = interruptible(context);
     context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });

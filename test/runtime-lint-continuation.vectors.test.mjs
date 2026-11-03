@@ -72,7 +72,7 @@ for (const [name, config, expect, elapsed] of [
   ['interactive', { interactive: true }, 0, 150000],
   ['lint-only wait', { mode: 'lint', timeout: 4 }, 0, 150000],
   ['Try interactive', { mode: 'try', interactive: true }, 0, 150000],
-  ['Try agent', { mode: 'try' }, 3, 90000],
+  ['Try agent', { mode: 'try' }, 0, 150000],
 ]) test(`CONTINUATION native table: ${name}`, async t => {
   const r = await setup(t, config); r.state.readyAt = START + 150000;
   const { code } = await r.first(); assert.equal(code, expect, r.p.ports.stderr.text);

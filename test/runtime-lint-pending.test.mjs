@@ -42,7 +42,7 @@ async function read(r, batch) {
 for (const mode of ['check', 'lint', 'try']) test(`LINT-PENDING: ${mode} reports known running lint at its finite deadline`, async t => {
   const r = await pending(t, mode);
   assert.equal(r.code, 3);
-  assert.equal(r.clock.now - Date.parse('2026-10-27T16:27:47Z'), mode === 'check' ? 60_000 : 90_000);
+  assert.equal(r.clock.now - Date.parse('2026-10-27T16:27:47Z'), mode === 'check' ? 60_000 : mode === 'try' ? 300_000 : 90_000);
   assert.equal(r.fake.posts.length, 2);
   const output = r.ports.stdout.text + r.ports.stderr.text;
   assert.match(output, /Lint is still running/);
