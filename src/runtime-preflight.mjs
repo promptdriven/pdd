@@ -1,13 +1,15 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 39f361e8a00b5be56ef5fecc4f7e3798f067794e42b2efd6a0efd1e546abbf18).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 1687aaebedceba6d0eed9d1d8dd579ff45ba086e20b98f22fed5a36b105ae2f5).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
-import { basename, join, posix } from 'node:path';
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
+import { basename, join, posix, isAbsolute } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { expandSource } from './contract-refs.mjs';
 
 export const TEST_SCHEMA = 'prompt-runtime.program-scenario.v1';
-export const LIMITS = Object.freeze({ bytes: 10_485_760, files: 10_000, test: 1_048_576 });
+// The interpreter's upload limit (prompt-runtime server/uploads.py: MAX_UPLOAD 10 MiB, at most 10,000 files).
+// The only size limit on what pdd sends; over it, pdd names the largest files with their sizes.
+export const LIMITS = Object.freeze({ bytes: 10_485_760, files: 10_000 });
 const TOP_KEYS = new Set(['schema_version', 'story_path', 'criteria', 'initial_world', 'steps', 'entry_paths', 'simulation',
   'check_exemptions', 'context', 'context_byte_budget', 'criteria_scope', 'prompt_mappings']);
 const REQUIRED_KEYS = ['schema_version', 'criteria', 'initial_world', 'steps'];
@@ -89,49 +91,140 @@ const readText = (root, path) => {
 const storyName = path => basename(path).replace(/\.md$/, '');
 const titleOf = text => text.split('\n').find(line => line.startsWith('# '))?.slice(2).trim() || null;
 
+// The test name rule (one owner): the tests of Story S (user_stories/**/S.md) are S.json and S.<variant>.json in a
+// folder named test or tests, at any depth. It uses names only, so no size or content can hide a test.
+const folders = path => path.split('/').slice(0, -1);
+export const isStoryPath = path => path.endsWith('.md') && folders(path).includes('user_stories') && !/^(?:plan|readme)\.md$/i.test(basename(path));
+const hasAcceptance = text => AC_HEADING.test(text);
+const isTestFolderJson = path => path.endsWith('.json') && folders(path).some(part => part === 'test' || part === 'tests');
+const byText = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+const listed = items => items.length < 3 ? items.join(' and ') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`;
+export function expectedTestPath(storyPath) {
+  const parts = folders(storyPath);
+  return [...parts.slice(0, parts.lastIndexOf('user_stories')), 'tests', `${storyName(storyPath)}.json`].join('/');
+}
+// The Story names that a test file name fits: N for N.json, and each S where N is S.<variant>.
+function ownerNames(name, names) {
+  const fits = names.has(name) ? [name] : [];
+  for (let at = name.lastIndexOf('.'); at > 0; at = name.lastIndexOf('.', at - 1)) if (names.has(name.slice(0, at))) fits.push(name.slice(0, at));
+  return fits;
+}
+export function matchTests(storyPaths, files) {
+  const groups = new Map(), names = new Set();
+  for (const path of [...new Set(storyPaths)].sort(byText)) {
+    const name = storyName(path);
+    names.add(name);
+    if (!groups.has(name)) groups.set(name, { stories: [], files: new Map() });
+    groups.get(name).stories.push(path);
+  }
+  const tests = [], untested = [], orphans = [], claimed = new Set();
+  for (const path of [...new Set(files)].sort(byText)) {
+    if (!isTestFolderJson(path)) continue;
+    const base = basename(path, '.json'), owners = ownerNames(base, names);
+    if (!owners.length) { orphans.push({ path, line: `${path} matches no Story (user_stories/**/${base}.md).` }); continue; }
+    if (owners.length > 1) {
+      // A file name that fits two Story names (tests/a.b.json with Stories a and a.b): pdd never picks one.
+      const stories = owners.flatMap(name => groups.get(name).stories).sort(byText);
+      for (const name of owners) claimed.add(name);
+      tests.push({ path, files: [path], story: base, storyPath: null, storyPaths: stories, problem: `${path} matches ${stories.length} Stories: ${listed(stories)}. Rename one.` });
+      continue;
+    }
+    const same = groups.get(owners[0]).files;
+    same.set(base, [...(same.get(base) ?? []), path]);
+  }
+  for (const [story, { stories, files: byName }] of groups) {
+    if (!byName.size) {
+      if (!claimed.has(story)) untested.push(...stories.map(storyPath => ({ story, storyPath, line: `${storyPath} has no test: expected ${expectedTestPath(storyPath)} (or ${story}.json in any test or tests folder).` })));
+      continue;
+    }
+    const entry = (found, problem) => ({ path: found[0], files: found, story, storyPath: stories.length === 1 ? stories[0] : null, storyPaths: stories, problem });
+    if (stories.length > 1) {
+      const found = [...byName.values()].flat().sort(byText);
+      tests.push(entry(found, `${listed(found)} ${found.length > 1 ? 'match' : 'matches'} ${stories.length} Stories: ${listed(stories)}. Rename one.`));
+      continue;
+    }
+    for (const [base, found] of byName) tests.push(entry(found, found.length > 1 ? `${stories[0]} has ${found.length} files named ${base}.json: ${listed(found)}. Keep one.` : null));
+  }
+  const sorted = (items, key) => items.sort((a, b) => byText(a[key], b[key]));
+  return { tests: sorted(tests, 'path'), untested: sorted(untested, 'storyPath'), orphans: sorted(orphans, 'path') };
+}
+// One line for the JSON files in test folders that match no Story; `pdd test --files` and --json list each one.
+export const orphanSummary = orphans => orphans.length === 1 ? `Warning: ${orphans[0].line}`
+  : `Warning: ${orphans.length} JSON files in test folders match no Story (the tests of user_stories/**/S.md are S.json and S.<variant>.json). pdd test --files lists them.`;
+
 // Tests, stories and Git-visible regular files of one repo.
 export function findTests({ root, files = gitFiles(root) }) {
-  const visible = new Set(), tests = [], stories = [], discoveryWarnings = [];
-  for (const path of files) {
-    const stat = statOf(join(root, path));
-    if (!stat?.isFile()) continue;
-    visible.add(path);
-    if (path.endsWith('.json') && stat.size <= LIMITS.test) {
-      const text = readText(root, path);
-      if (!text.includes('prompt-runtime.program-scenario')) continue;
-      let doc;
-      try { doc = JSON.parse(text); } catch (error) { tests.push({ path, error: error.message }); continue; }
-      if (typeof doc?.schema_version === 'string' && doc.schema_version.startsWith('prompt-runtime.program-scenario')) tests.push({ path, doc });
-    } else if (path.endsWith('.md') && path.split('/').slice(0, -1).includes('user_stories') && !/^(?:plan|readme)\.md$/i.test(basename(path))) {
-      // An index (PLAN.md, README.md) or a file with no acceptance criteria section is not a Story (2048 session, 0.1.6).
-      if (stat.size > LIMITS.bytes) { discoveryWarnings.push(`Warning: ${path}: discovery unavailable (too big; limit 10 MB).`); continue; }
-      const text = readText(root, path);
-      if (AC_HEADING.test(text)) stories.push({ path, name: storyName(path), title: titleOf(text) });
-    }
-  }
-  for (const test of tests) {
-    const storyPath = typeof test.doc?.story_path === 'string' ? test.doc.story_path : null;
-    const story = stories.find(item => item.path === storyPath);
-    test.storyPath = storyPath;
-    test.story = storyPath ? storyName(storyPath) : storyName(test.path.replace(/\.json$/, ''));
-    test.title = story?.title ?? (storyPath && visible.has(storyPath) && Number(statOf(join(root,storyPath))?.size ?? 0) <= LIMITS.bytes ? titleOf(readText(root, storyPath)) : null) ?? test.story;
-  }
-  const named = new Set(tests.map(test => test.storyPath));
-  const warnings = [...discoveryWarnings, ...stories.filter(story => !named.has(story.path)).map(story => `Warning: ${story.path} has no test.`)];
-  return { visible, tests, stories, warnings };
+  return discoverTests(root, files);
 }
 
-// STORY words: a test path, a story path, a story name or a test file name. Returns {selected, unknown}.
+// Git-visible regular files and Stories: discovery reads Story files, never JSON files.
+function discoverStories(root, files, strict = false) {
+  const visible = new Set(), stories = [], storyFiles = [], titles = new Map(), warnings = [], linkedPaths = new Set(), sizes = new Map();
+  let linkedFiles = strict ? filePort(root, new Set(files), true) : undefined;
+  for (const path of files) {
+    let stat = strict ? null : statOf(join(root, path)), linked = false;
+    if (strict || stat?.isSymbolicLink()) {
+      linkedFiles ??= sourceFilePort(root, new Set(files));
+      try {
+        const info = linkedFiles.stat({path});
+        stat = { isFile: () => info.exists, size: BigInt(info.size) }; linked = true;
+      } catch { continue; } // Unrelated unsafe links do not select or refuse source.
+    }
+    if (!stat?.isFile()) continue;
+    visible.add(path); sizes.set(path, Number(stat.size));
+    if (linked) linkedPaths.add(path);
+    if (isStoryPath(path)) {
+      // Every Story file can own a test by its name. An index (PLAN.md, README.md) or a file with no acceptance
+      // criteria section is not listed as a Story (2048 session, 0.1.6), so it never gets a "has no test" line.
+      storyFiles.push(path);
+      if (stat.size > LIMITS.bytes) { warnings.push(`Warning: ${path}: discovery unavailable (too big; limit 10 MB).`); continue; }
+      const text = linked ? linkedFiles.read({path}).content : readText(root, path);
+      titles.set(path, titleOf(text));
+      if (hasAcceptance(text)) stories.push({ path, name: storyName(path), title: titleOf(text) });
+    }
+  }
+  const read = path => strict || linkedPaths.has(path) ? linkedFiles.read({path}).content : readText(root, path);
+  return { visible, stories, storyFiles, titles, warnings, sizes, read };
+}
+
+function discoverTests(root, files, strict = false) {
+  const { visible, stories, storyFiles, titles, warnings: storyWarnings, sizes, read } = discoverStories(root, files, strict);
+  const named = new Set(stories.map(story => story.path)), rule = matchTests(storyFiles, [...visible]);
+  rule.untested = rule.untested.filter(item => named.has(item.storyPath));
+  const tests = rule.tests.map(entry => {
+    const size = sizes.get(entry.path);
+    const test = { path: entry.path, files: entry.files, story: entry.story, storyPath: entry.storyPath, storyPaths: entry.storyPaths, title: titles.get(entry.storyPath) ?? entry.story };
+    if (entry.problem) return { ...test, error: entry.problem };
+    if (size > LIMITS.bytes) return { ...test, error: `${entry.path} is ${formatSize(size)}. The upload limit is 10 MB, so pdd cannot send it.` };
+    // A matched test is read in full, at any size below the upload limit.
+    try { return { ...test, doc: JSON.parse(read(entry.path)) }; }
+    catch (error) {
+      if (error instanceof SyntaxError) return { ...test, error: `${entry.path} is not valid JSON: ${error.message}` };
+      if (error.code === 'EACCES' || error.code === 'EISDIR' || error.code === 'ENOENT' || error instanceof PreflightError) return { ...test, error: `${entry.path} cannot be read: ${error.code ?? error.message}.` };
+      throw error;
+    }
+  });
+  const warnings = [...storyWarnings, ...rule.tests.filter(entry => entry.problem).map(entry => `Warning: ${entry.problem}`),
+    ...rule.untested.map(item => `Warning: ${item.line}`), ...(rule.orphans.length ? [orphanSummary(rule.orphans)] : [])];
+  return { visible, tests, stories, warnings, untested: rule.untested, orphans: rule.orphans };
+}
+
+// STORY words, by the test name rule: a test path, a story path, a story name or a test file name.
+// Returns {selected, unknown, untested}: untested holds the line of each named Story that has no test.
 export function selectTests(found, words = []) {
-  if (!words.length) return { selected: [...found.tests], unknown: [] };
-  const selected = new Set(), unknown = [];
+  if (!words.length) return { selected: [...found.tests], unknown: [], untested: [] };
+  const selected = new Set(), unknown = [], untested = [];
   for (const raw of words) {
     const word = raw.replace(/^\.\//, '');
-    const hits = found.tests.filter(test => test.path === word || test.storyPath === word || test.story === word || basename(test.path, '.json') === word);
-    if (!hits.length) unknown.push(raw);
+    const hits = found.tests.filter(test => test.path === word || test.files?.includes(word) || test.storyPath === word || test.storyPaths?.includes(word) || test.story === word
+      || word === '.' || (!word.startsWith('../') && word !== '..' && [test.path, ...(test.files ?? []), ...(test.storyPaths ?? []), test.storyPath].some(path => path?.startsWith(word.replace(/\/$/, '') + '/')))
+      || basename(test.path, '.json') === word || test.storyPaths?.some(path => storyName(path) === word));
+    const missing = hits.length ? [] : (found.untested ?? []).filter(item => item.storyPath === word || item.story === word);
+    if (missing.length) untested.push(...missing.map(item => item.line));
+    else if (!hits.length) unknown.push(raw);
     for (const hit of hits) selected.add(hit);
   }
-  return { selected: found.tests.filter(test => selected.has(test)), unknown };
+  return { selected: found.tests.filter(test => selected.has(test)), unknown, untested };
 }
 
 const refusal = (code, section, message, extra = {}) => ({ code, section, message, ...extra });
@@ -412,8 +505,8 @@ export function readPrompt(root, visible, path) {
 
 // Drafts may run; until the server takes them, its refusal gets this plain text.
 export const DRAFT_SERVER_TEXT = 'The server does not run draft prompts yet. Approve the prompt first, or wait for the server update.';
-const draftStaleHint = path => `pdd: ${path} is a draft whose text changed after its hash was filled. Run pdd check --fill-hash.`;
-export const STALE_HINT = 'the text changed after approval: set status to draft, run pdd check --fill-hash, ask the person';
+const draftStaleHint = path => `pdd: ${path} is a draft whose text changed after its hash was filled. Run pdd test --fill-hash.`;
+export const STALE_HINT = 'the text changed after approval: set status to draft, run pdd test --fill-hash, ask the person';
 export const staleHint = `pdd: ${STALE_HINT}.`;
 const PROMPT_MESSAGES = {
   'entry-missing': path => `${path} is not a Git-visible *.prompt.md file.`,
@@ -556,13 +649,23 @@ function promptSchemaRefusals(root, found, prompt, prompts, seen = new Set()) {
   })];
 }
 
+// A refusal that discovery alone proves: a conflict, an unreadable or invalid file, a file over the upload limit,
+// or a story_path that names another Story than the test name rule matched.
+export function discoveryRefusal(test) {
+  if (test.error) return refusal('invalid-document', 'scenario', test.error);
+  if (test.storyPath && isObject(test.doc) && typeof test.doc.story_path === 'string' && test.doc.story_path !== test.storyPath) {
+    return refusal('pdd-story-mismatch', 'story_path', `${test.path} is the test of ${test.storyPath} by its name, but its story_path names ${test.doc.story_path}. Make them agree.`);
+  }
+  return null;
+}
+
 function checkTest(root, found, test, prompts) {
   let doc = test.doc;
   if (!test.error && isObject(doc)) {
     const prepared = preparedText(root,found.visible,test.path,readText(root,test.path),'scenario');
     try { doc = JSON.parse(prepared.text); } catch { /* Preserve ordinary malformed scenario handling. */ }
   }
-  if (test.error) return refusal('invalid-document', 'scenario', `${test.path} is not valid JSON: ${test.error}`);
+  if (test.error) return discoveryRefusal(test);
   if (!isObject(doc)) return refusal('invalid-document', 'scenario', `${test.path} is not a JSON object.`);
   const missing = REQUIRED_KEYS.filter(key => !Object.hasOwn(doc, key)), extra = Object.keys(doc).filter(key => !TOP_KEYS.has(key));
   if (missing.length) return refusal('invalid-document', 'scenario', `The test has no ${missing.map(key => `"${key}"`).join(', ')}.`);
@@ -570,6 +673,7 @@ function checkTest(root, found, test, prompts) {
   if (doc.schema_version !== TEST_SCHEMA) return refusal('invalid-document', 'schema_version', `schema_version must be "${TEST_SCHEMA}".`);
   if (typeof doc.story_path !== 'string' || !doc.story_path) return refusal('pdd-no-story', 'story_path', 'The test has no story_path. Name its story, for example "user_stories/<story>.md".');
   if (!found.visible.has(doc.story_path)) return refusal('story-missing', 'story_path', `${doc.story_path} is not a Git-visible file.`);
+  if (test.storyPath && doc.story_path !== test.storyPath) return discoveryRefusal({ ...test, doc });
   if (Object.hasOwn(doc, 'criteria_scope') || (Object.hasOwn(doc, 'check_exemptions') && !(Array.isArray(doc.check_exemptions) && !doc.check_exemptions.length))) {
     return refusal('pdd-partial-test', Object.hasOwn(doc, 'criteria_scope') ? 'criteria_scope' : 'check_exemptions', 'In the beta a test checks the whole story. Remove criteria_scope and check_exemptions.');
   }
@@ -666,8 +770,8 @@ export function fillHashes({ root, files = gitFiles(root) }) {
     try { value = JSON.parse(body); } catch { result.refused.push({ path, message: `The Runtime interface of ${path} is not valid JSON.` }); continue; }
     if (!isObject(value)) { result.refused.push({ path, message: `The Runtime interface of ${path} is not a JSON object.` }); continue; }
     if (!Object.hasOwn(value, 'status')) {
-      if (Object.hasOwn(value, 'prose_sha256')) result.refused.push({ path, message: `The Runtime interface of ${path} has no status. Add "status": "draft" and run pdd check --fill-hash again.` });
-      else result.warnings.push({ path, message: `The Runtime interface of ${path} has no status and no prose_sha256, so pdd skipped it. If this is a prompt you check, add "status": "draft" and run pdd check --fill-hash again.` });
+      if (Object.hasOwn(value, 'prose_sha256')) result.refused.push({ path, message: `The Runtime interface of ${path} has no status. Add "status": "draft" and run pdd test --fill-hash again.` });
+      else result.warnings.push({ path, message: `The Runtime interface of ${path} has no status and no prose_sha256, so pdd skipped it. If this is a prompt you check, add "status": "draft" and run pdd test --fill-hash again.` });
       continue;
     }
     const hash = proseSha256(text);
@@ -1006,27 +1110,115 @@ function sourceLimit(files) {
   return total;
 }
 
-function snapshotReader(root, diskVisible, beforeRead = () => {}) {
+function snapshotReader(root, diskVisible, beforeRead = () => {}, strict = false) {
   const snapshots = new Map();
   let unstable = false;
-  function inspectRaw(path, from, allowMissing = false) {
-    path = sourcePath(path, from);
-    if (snapshots.has(path)) return snapshots.get(path);
-    if (isSecretPath(path)) throw sourceProblem(from, path, ': the name looks like a secret. pdd never sends it.');
-    const parts = path.split('/');
-    for (let i = 1; i < parts.length; i++) {
-      const parent = parts.slice(0, i).join('/'), stat = statOf(join(root, parent));
-      if (stat?.isSymbolicLink()) throw sourceProblem(from, path, `has a symbolic link ancestor (${parent}). pdd sends only regular files.`);
-      if (stat && !stat.isDirectory()) throw sourceProblem(from, path, `has a non-directory ancestor (${parent}).`);
-    }
+  root = realpathSync(root);
+  const observations = new Map();
+  const changed = () => { unstable = true; throw unstableSource; };
+  function observe(path) {
     const stat = statOf(join(root, path));
-    if (stat?.isSymbolicLink()) throw sourceProblem(from, path, ': a symbolic link. pdd sends only regular files.');
-    if (stat && !stat.isFile()) throw sourceProblem(from, path, ': a submodule, folder or other non-regular file. pdd sends only regular files.');
-    if (stat && !diskVisible.has(path)) throw sourceProblem(from, path, 'is not a Git-visible file. Add it to Git or correct the declared dependency.');
-    if (!stat && !allowMissing) throw sourceProblem(from, path, 'is not a Git-visible file on disk. Restore it or correct the declared dependency.');
-    const file = { path, stat, size: Number(stat?.size ?? 0) };
-    snapshots.set(path, file);
-    return file;
+    let link = null;
+    if (stat?.isSymbolicLink()) {
+      try { link = readlinkSync(join(root, path)); }
+      catch (error) { if (['ENOENT', 'EINVAL', 'ENOTDIR'].includes(error.code)) changed(); throw error; }
+    }
+    const prior = observations.get(path);
+    if (prior && (!(stat === null && prior.stat === null) && !sameStat(stat, prior.stat) || link !== prior.link)) changed();
+    observations.set(path, { stat, link });
+    return { stat, link };
+  }
+  function stable(paths = observations.keys()) {
+    for (const path of paths) {
+      const before = observations.get(path);
+      const after = statOf(join(root, path));
+      if (before.stat === null ? after !== null : !sameStat(before.stat, after)) return false;
+      if (before.link !== null) {
+        try { if (readlinkSync(join(root, path)) !== before.link) return false; }
+        catch (error) { if (['ENOENT', 'EINVAL', 'ENOTDIR'].includes(error.code)) return false; throw error; }
+      }
+    }
+    return true;
+  }
+  observe('');
+  function inspectRaw(path, from, allowMissing = false, noLinks = false) {
+    path = sourcePath(path, from);
+    if (isSecretPath(path)) {
+      // Refusal is already decided. Enrich it only along non-following metadata
+      // whose ancestors have each been checked as directories.
+      let detail = '';
+      try {
+        const parts = path.split('/');
+        for (let i = 1; i <= parts.length; i++) {
+          const current = parts.slice(0, i).join('/');
+          const stat = statOf(join(root, current));
+          if (stat?.isSymbolicLink()) { detail = `link ${current} -> ${readlinkSync(join(root, current))}: `; break; }
+          if (!stat?.isDirectory()) break;
+        }
+      } catch {} // Metadata failure cannot override the secret refusal.
+      throw sourceProblem(from, path, `: ${detail}the name looks like a secret. pdd never sends it.`);
+    }
+    if (snapshots.has(path)) {
+      const file = snapshots.get(path);
+      if (noLinks && file.target) throw sourceProblem(from, path, ': symbolic links are not allowed for prepared output.');
+      return file;
+    }
+    let pending = path.split('/').map(part => ({part, context:null})), resolved = [], lastLink = null, firstLink = null, linkedVisible = false, authored = true;
+    const seen = new Set(), observed = new Set(['']);
+    const refuse = (reason, context = lastLink, plain = false) => {
+      throw sourceProblem(from, path, context ? `: link ${context.path} -> ${context.link}: ${reason}` : `${plain ? '' : ': '}${reason}`);
+    };
+    // Resolve components individually: an ancestor link must be checked before any
+    // descendant is inspected. No host lookup follows an unchecked link.
+    while (pending.length) {
+      const {part, context} = pending.shift();
+      if (!part || part === '.') continue;
+      if (part === '..') {
+        if (!resolved.length) refuse('resolution is outside the repository.', context);
+        resolved.pop(); continue;
+      }
+      resolved.push(part);
+      const current = resolved.join('/');
+      observed.add(current);
+      const { stat, link } = observe(current);
+      if (link !== null) {
+        lastLink = { path: current, link };
+        firstLink ??= lastLink;
+        // Only an ancestor in the authored spelling can authorize that spelling.
+        // Links encountered after substitution cannot grant authored visibility.
+        linkedVisible ||= authored && current !== path && diskVisible.has(current);
+        authored = false;
+        if (strict) refuse(current === path ? 'symbolic links are not allowed.' : 'symbolic link ancestor: symbolic links are not allowed.');
+        if (noLinks) refuse('symbolic links are not allowed for prepared output.');
+        if (isSecretPath(path) || isSecretPath(current)) refuse('the name looks like a secret. pdd never sends it.');
+        const state = `${current}\0${pending.map(item => item.part).join('/')}`;
+        if (seen.has(state)) refuse('symbolic link loop.');
+        if (seen.size >= 40) refuse('too many links (loop or chain longer than 40).');
+        seen.add(state);
+        resolved.pop();
+        if (isAbsolute(link)) {
+          if (!link.startsWith(`${root}/`)) refuse('resolution is outside the repository.');
+          const local = link.slice(root.length + 1);
+          resolved = []; pending = [...local.split('/').map(part => ({part, context:lastLink})), ...pending];
+        } else pending = [...link.split('/').map(part => ({part, context:lastLink})), ...pending];
+        continue;
+      }
+      if (isSecretPath(current) || (!pending.length && isSecretPath(path))) refuse('the name looks like a secret. pdd never sends it.', context ?? lastLink);
+      if (!stat) {
+        if (lastLink) refuse('broken link: target does not exist.', context ?? lastLink);
+        if (!allowMissing) refuse('is not a Git-visible file on disk. Restore it or correct the declared dependency.', null, true);
+        const file = { path, stat: null, size: 0, observed }; snapshots.set(path, file); return file;
+      }
+      if (pending.length && !stat.isDirectory()) refuse(`${lastLink ? 'non-directory ancestor' : 'has a non-directory ancestor'} (${current}).`, context ?? lastLink, !lastLink);
+      if (!pending.length) {
+        if (!stat.isFile()) refuse('a submodule, folder or other non-regular file. pdd sends only regular files.', context ?? lastLink);
+        if (!diskVisible.has(path) && !linkedVisible && firstLink) refuse('link itself is not a Git-visible file. Add it to Git or correct the declared dependency.', firstLink);
+        if (!diskVisible.has(current)) refuse(`${lastLink ? 'target is not' : 'is not'} a Git-visible file. Add it to Git or correct the declared dependency.`, context ?? lastLink, !lastLink);
+        const file = { path, stat, size: Number(stat.size), observed, ...(lastLink ? { target: current } : {}) };
+        snapshots.set(path, file); return file;
+      }
+    }
+    refuse('a folder or other non-regular file.');
   }
   function bytes(file) {
     if (file.bytes) return file.bytes;
@@ -1034,9 +1226,11 @@ function snapshotReader(root, diskVisible, beforeRead = () => {}) {
     beforeRead(file);
     let fd;
     try {
-      fd = openSync(join(root, file.path), constants.O_RDONLY | constants.O_NOFOLLOW);
+      fd = openSync(join(root, file.target ?? file.path), constants.O_RDONLY | constants.O_NOFOLLOW);
       if (!sameStat(file.stat, fstatSync(fd, { bigint: true }))) { unstable = true; throw unstableSource; }
+      if (!stable(file.observed)) changed();
       file.bytes = readFileSync(fd);
+      if (!stable(file.observed)) changed();
       if (!sameStat(file.stat, fstatSync(fd, { bigint: true })) || file.bytes.length !== file.size) { unstable = true; throw unstableSource; }
       return file.bytes;
     } catch (error) {
@@ -1044,11 +1238,15 @@ function snapshotReader(root, diskVisible, beforeRead = () => {}) {
       throw error;
     } finally { if (fd !== undefined) closeSync(fd); }
   }
-  return { inspectRaw, bytes, snapshots, get unstable() { return unstable; } };
+  return { inspectRaw, bytes, snapshots, stable, get unstable() { return unstable; } };
 }
 
 export function sourceFilePort(root, visible = new Set(gitFiles(root))) {
-  const reader = snapshotReader(root, visible);
+  return filePort(root, visible);
+}
+
+function filePort(root, visible, strict = false) {
+  const reader = snapshotReader(root, visible, undefined, strict);
   return {
     stat({path}) {
       const file = reader.inspectRaw(path, 'Source', true);
@@ -1071,13 +1269,13 @@ function preparedText(root, visible, path, text, format) {
   }
 }
 
-function captureOnce(root, { tests, appMap = null, prepareSource }) {
+function captureOnce(root, { tests, appMap = null, prepareSource }, strict = false) {
   const names = gitFiles(root), visible = new Set(names), overlay = new Map(), payload = new Map(), queue = [], visited = new Set();
   const effective = new Map(), provenance = new Map(), edges = new Map(), shared = new Set(), footprintPayload = new Map();
   let selecting = true;
   const unavailable = new Map();
   const markUnavailable = (path,error) => unavailable.set(path,{path,cause:String(error.message ?? error).replace(/[\r\n\x00-\x1f\x7f]/g,' ').slice(0,4000)});
-  const reader = snapshotReader(root,new Set(names),file => { if (payload.has(file.path)) sourceLimit([...payload.values()]); });
+  const reader = snapshotReader(root,new Set(names),file => { if (payload.has(file.path)) sourceLimit([...payload.values()]); }, strict);
   const { inspectRaw, bytes, snapshots } = reader;
   function inspect(path, from) {
     if (overlay.has(path)) return overlay.get(path);
@@ -1150,7 +1348,7 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
         const path = sourcePath(output.path, 'prepareSource');
         if (overlay.has(path)) throw sourceProblem('prepareSource', path, `duplicates prepared file ${path}.`);
         for (const other of overlay.keys()) if (other.startsWith(`${path}/`) || path.startsWith(`${other}/`)) throw sourceProblem('prepareSource', path, `conflicts with prepared file ${other}.`);
-        inspectRaw(path, 'prepareSource', true);
+        inspectRaw(path, 'prepareSource', true, true);
         const content = Buffer.from(output.bytes), file = { path, bytes: content, size: content.length };
         overlay.set(path, file);
         visible.add(path);
@@ -1159,7 +1357,6 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
     }
     if (visible.has(SOURCE_CONFIG)) {
       const config = inspect(SOURCE_CONFIG, SOURCE_CONFIG);
-      if (config.size > LIMITS.test) throw sourceProblem(SOURCE_CONFIG, '', 'must be at most 1 MiB.');
       let doc;
       try { doc = JSON.parse(bytes(config).toString('utf8')); } catch (error) {
         if (error === unstableSource) throw error;
@@ -1168,16 +1365,10 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
       if (!isObject(doc) || Object.keys(doc).length !== 1 || !Array.isArray(doc.include)) throw sourceProblem(SOURCE_CONFIG, '', 'must contain only an include array of file paths.');
       for (const path of doc.include) { add(path, SOURCE_CONFIG); shared.add(sourcePath(path,SOURCE_CONFIG)); }
     }
-    const selected = tests ?? [...new Set([
-      ...findTests({root,files:names}).tests.map(test=>test.path).filter(path=>!overlay.has(path)),
-      ...[...overlay.keys()].sort().filter(path => {
-      if (!path.endsWith('.json')) return false;
-      const file = overlay.get(path);
-      if (file.size > LIMITS.test) return false;
-      const text = bytes(file).toString('utf8');
-      if (!text.includes('prompt-runtime.program-scenario')) return false;
-      try { const version=JSON.parse(text)?.schema_version; return typeof version==='string' && version.startsWith('prompt-runtime.program-scenario'); } catch { return true; }
-    })])];
+    // The test name rule over the effective source (Git-visible files and prepared files); it opens no JSON file.
+    const onDisk = discoverStories(root,names,strict);
+    const named = matchTests(onDisk.storyFiles, [...onDisk.visible, ...overlay.keys()]).tests.filter(test=>!test.problem);
+    const selected = tests ?? named.map(test=>test.path);
     for (const path of selected) add(path, 'Selected test', 'test');
     if (appMap) { add(appMap, 'App map', 'app-map'); shared.add(sourcePath(appMap,'App map')); }
     const storyTests = new Map();
@@ -1186,14 +1377,9 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
       if (index === queue.length && !siblingsAdded) {
         siblingsAdded = true; selecting = false;
         const selectedStories = new Set(storyTests.keys());
-        const discovered=findTests({root,files:names}).tests.filter(test=>!overlay.has(test.path));
-        for (const [path,file] of overlay) {
-          if (!path.endsWith('.json') || file.size>LIMITS.test) continue;
-          try { const doc=JSON.parse(bytes(file).toString('utf8')); if (typeof doc?.schema_version==='string' && doc.schema_version.startsWith('prompt-runtime.program-scenario')) discovered.push({path,doc}); } catch {}
-        }
-        for (const test of discovered) {
-          if (!selectedStories.has(test.doc?.story_path)) continue;
-          if (!storyTests.get(test.doc.story_path).includes(test.path)) storyTests.get(test.doc.story_path).push(test.path);
+        for (const test of named) {
+          if (!selectedStories.has(test.storyPath)) continue;
+          if (!storyTests.get(test.storyPath).includes(test.path)) storyTests.get(test.storyPath).push(test.path);
           try { add(test.path,'Story footprint','test'); } catch (error) { if (reader.unstable || error === unstableSource) throw error; markUnavailable(test.path,error); }
         }
         if (index === queue.length) break;
@@ -1254,16 +1440,26 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
     }
     const files = [...payload.values()].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0), total = sourceLimit(files);
     const entries = files.map(file => ({ path: file.path, bytes: bytes(file) }));
-    const rawPromptHashes = Object.fromEntries(files.filter(file=>file.path.endsWith('.prompt.md')).flatMap(file=>{
-      const original=inspectRaw(file.path,'Prompt snapshot',true);
-      return original.stat ? [[file.path,sha256(bytes(original))]] : [];
+    const rawFileHashes = Object.fromEntries([...footprintPayload.values()].flatMap(file=>{
+      if (unavailable.has(file.path)) return [];
+      try {
+        // Cache metadata reuses observed raw bytes; it must not read an unread
+        // replacement original merely to make a Story eligible for reuse.
+        if (!file.path.endsWith('.prompt.md')) {
+          const original = snapshots.get(file.path);
+          return original?.bytes ? [[file.path,sha256(original.bytes)]] : [];
+        }
+        const original=inspectRaw(file.path,'Prompt snapshot',true);
+        return original.stat ? [[file.path,sha256(bytes(original))]] : [];
+      } catch (error) {
+        if (payload.has(file.path) || reader.unstable || error === unstableSource) throw error;
+        markUnavailable(file.path,error);
+        return [];
+      }
     }));
     const tar = tarFiles(entries);
     if (tar.length > LIMITS.bytes) throw new PreflightError(4, `The source archive is ${formatSize(tar.length)}. The limit is 10 MB.`);
-    const same = !reader.unstable && isDeepStrictEqual(gitFiles(root), names) && [...snapshots.values()].every(file => {
-      const after = inspectParentsAndStat(root, file.path);
-      return file.stat === null ? after === null : sameStat(file.stat, after);
-    });
+    const same = !reader.unstable && isDeepStrictEqual(gitFiles(root), names) && reader.stable();
     if (!same) return null;
     const stories = new Map();
     for (const path of selected) {
@@ -1284,40 +1480,43 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
       if (failures.length) return {story_path:story.story_path,tests:story.tests.sort(),unavailable:failures};
       return {story_path:story.story_path,tests:story.tests.sort(),files:[...reached].sort().filter(path=>footprintPayload.has(path)).map(path=>({path,sha256:sha256(bytes(footprintPayload.get(path)))})),references:[...reached].sort().flatMap(path=>provenance.get(path) ?? [])};
     });
-    return { tar, sha256: sha256(tar), files: files.map(({ path, size }) => ({ path, size })), bytes: total,
+    return { tar, sha256: sha256(tar), files: files.map(({ path, size, target }) => ({ path, size, ...(target ? { target } : {}) })), bytes: total,
       references:[...provenance.keys()].filter(path=>payload.has(path)).sort().flatMap(path=>provenance.get(path)), stories:footprints,
       warnings:footprints.flatMap(story=>(story.unavailable ?? []).map(item=>`Warning: ${story.story_path}: footprint unavailable: ${item.cause}`)),
-      raw_prompt_hashes:rawPromptHashes,
+      raw_file_hashes:rawFileHashes,
+      raw_prompt_hashes:Object.fromEntries(Object.entries(rawFileHashes).filter(([path])=>path.endsWith('.prompt.md'))),
       sources:entries.map(file=>({path:file.path,bytes:Buffer.from(file.bytes)})) };
   } catch (error) { if (reader.unstable || error === unstableSource) return null; throw error; }
 }
 
-function inspectParentsAndStat(root, path) {
-  const parts = path.split('/');
-  for (let i = 1; i < parts.length; i++) {
-    const parent = statOf(join(root, ...parts.slice(0, i)));
-    if (parent && !parent.isDirectory()) return unstableSource;
-  }
-  return statOf(join(root, path));
-}
-
 // Rebuild the selection on each attempt, including metadata and newly declared dependencies.
 export function captureSource(root, { attempts = 3, ...selection } = {}) {
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const captured = captureOnce(root, selection);
-    if (captured) return captured;
-  }
-  throw new PreflightError(5, `The files changed while pdd read them (${attempts} times). Stop other edits, then run pdd check again.`);
+  return captureWithPolicy(root, { attempts, ...selection });
 }
 
-// Why a repo has no tests: foreign JSON under tests/, *.prompt names, prompts with no interface.
-export function whyNoTests(root, visible) {
-  const files = [...visible].sort(), why = [];
-  for (const path of files.filter(file => file.endsWith('.json') && file.split('/').slice(0, -1).includes('tests'))) {
-    let doc = null;
-    try { doc = JSON.parse(readText(root, path)); } catch { doc = null; }
-    if (doc?.schema_version !== TEST_SCHEMA) why.push(`${path} is not a PDD test file (it has no "schema_version": "${TEST_SCHEMA}"). See RUNBOOK.md §2.`);
+function captureWithPolicy(root, { attempts = 3, ...selection } = {}, strict = false) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const captured = captureOnce(root, selection, strict);
+    if (captured) return captured;
   }
+  throw new PreflightError(5, `The files changed while pdd read them (${attempts} times). Stop other edits, then run pdd test again.`);
+}
+
+// A bound capability keeps strict command reads isolated from source-upload reads.
+export function createStrictSourceAccess(root) {
+  return {
+    sourceFilePort(visible = new Set(gitFiles(root))) { return filePort(root, visible, true); },
+    findTests({files = gitFiles(root)} = {}) { return discoverTests(root, files, true); },
+    captureSource(options = {}) { return captureWithPolicy(root, options, true); },
+  };
+}
+
+export const NO_TESTS = 'No tests found. The test of Story user_stories/S.md is S.json in a test or tests folder. See RUNBOOK.md §2.';
+
+// Why a repo has no tests, by the test name rule (it opens no JSON file): Stories with no test, test-folder JSON
+// that matches no Story, *.prompt names, prompts with no interface.
+export function whyNoTests(root, visible, found = discoverTests(root, [...visible])) {
+  const files = [...visible].sort(), why = [...(found.untested ?? []), ...(found.orphans ?? [])].map(item => item.line);
   for (const path of files.filter(file => file.endsWith('.prompt'))) why.push(`PDD prompts must end in .prompt.md: rename ${path} to ${path}.md.`);
   for (const path of files.filter(file => file.endsWith('.prompt.md'))) {
     if (!interfaceBlocks(readText(root, path)).length) why.push(`${path} has no Runtime interface block. See RUNBOOK.md §2.`);

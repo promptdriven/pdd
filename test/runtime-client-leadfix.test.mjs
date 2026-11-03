@@ -150,6 +150,7 @@ for (const interrupted of [false, true]) test(`lint-record-deadline: contended T
   const setup = harbor(t), fake = await fakeRuntime(t, () => { assert.fail('registration posted'); }), made = make(setup, fake), start = made.clock.now;
   const mem = memorySlots(made, fake.origin), create = mem.files.exclusiveCreate; let claims = 0;
   mem.files.exclusiveCreate = (path, row) => path.endsWith('claim.json') && ++claims > 1 ? false : create(path, row);
+  made.ports.env.PDD_MAX_JOBS = '4';
   made.ports.slotFiles = mem.files;
   made.ports.sleep = async () => { made.clock.now = start + 90_000; if (interrupted) made.clock.interrupt(); };
   assert.equal(await startTry(setup, made.ports), 5); assert.equal(made.clock.now, start + 90_000); assert.equal(fake.posts.length, 0);

@@ -27,7 +27,7 @@ for(const mode of ['check','lint','try']) test(`LINT-RETRY: ${mode} retries a co
   const lints=r.fake.posts.filter(p=>p.command==='lint');assert.equal(lints.length,2);
   assert.notEqual(lints[0].request.requestId,lints[1].request.requestId);assert.ok(lints[0].tar.equals(lints[1].tar));
   assert.deepEqual(lints[1].request,{...lints[0].request,requestId:lints[1].request.requestId},'retry keeps every original lint option');
-  if(mode!=='lint') for(const p of lints) assert.equal(Object.hasOwn(p.request,'complete'),false);
+  if(mode!=='lint') for(const p of lints) assert.equal(Object.hasOwn(p.request,'complete'),true);
   assert.match(r.ports.stderr.text,/The server is busy\. Waiting for a lint slot/);
   assert.doesNotMatch(r.ports.stderr.text+r.ports.stdout.text,/lint result is unknown/);
   const saved=r.setup.state;
@@ -84,7 +84,7 @@ for (const json of [false, true]) test(`h2048-1: explicit lint still running exi
   const setup = harbor(t), fake = await fakeRuntime(t, (e, f) => ({ status: 200, json: f.job(e.request?.requestId ?? e.url.split('/').at(-1), 'lint', e.method === 'POST' ? 'queued' : 'running') }));
   const { ports, clock } = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin });
   assert.equal(await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--lint': true, ...(json ? { '--json': true } : {}) } }, ports), 3);
-  assert.match(ports.stderr.text, /Lint is still running.*pdd check --read/);
+  assert.match(ports.stderr.text, /Lint is still running.*pdd test --read/);
   assert.equal(fake.posts.length, 1); assert.equal(fake.posts[0].command, 'lint');
   assert.ok(clock.now - Date.parse('2026-10-27T16:27:47Z') <= 90_000);
 });

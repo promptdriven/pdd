@@ -18,6 +18,6 @@ A forward wall-clock jump of more than 60 seconds before the next heartbeat must
 
 ## Native cases for the code step
 
-[Requirement-derived native cases](../test/runtime-admission/runtime-local-queue.json) cover the normal path, limits, interruption and missing evidence. Run them through the real public commands with fake transport/clock and real temporary local state; process races need separate child processes.
+[Requirement-derived native cases](../test/runtime-admission/runtime-local-queue-cases.json) cover the normal path, limits, interruption and missing evidence. Run them through the real public commands with fake transport/clock and real temporary local state; process races need separate child processes.
 
 Runtime check: NOT REPLAYED (#2548). The companion native case file records requirement-derived inputs and observations for code-step tests; it is not a prompt-runtime scenario. Real runCheck/runTry depend on native Git/source capture, private state, dispatch claims and process lifecycle without a complete Runtime interface. Injected HTTP/clock replies alone cannot establish this Story. Local exclusion, crash/permission behavior and concurrency need ordinary Node tests and separate processes. No Runtime call or pass is claimed.

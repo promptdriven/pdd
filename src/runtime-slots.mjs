@@ -1,9 +1,10 @@
-// Generated from prompts/cli/runtime-slots.prompt.md (sha256: 147c1ce2915c2369030716c75f3de0e288e90a79057d5484023b41a68b640974).
+// Generated from prompts/cli/runtime-slots.prompt.md (sha256: ca74ebad559b49921c39c76d4168e51b4ca7e686c1c87c4daadac5b82b7fed4b).
 import { chmodSync, closeSync, lstatSync, mkdirSync, linkSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync, fsyncSync, utimesSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { runtimeOrigin } from './runtime-client.mjs';
+import { NAMES } from './command-catalog.mjs';
 
 const HEARTBEAT_MS = 5000, EXPIRED_MS = 60_000, LEASE_MS = 1_800_000, PROBE_MS = 15_000;
 const unavailable = error => Object.assign(new Error(`Local interpreter state unavailable: ${String(error?.message ?? error).split('\n')[0]}`), { code: 'local-state-unavailable' });
@@ -189,7 +190,7 @@ async function observe(result, ports, ended, deadline, stopWaiting) {
     off();
   }
 }
-async function inspect(directory, origin, ports, ended, deadline, stopWaiting, waitingTicket) {
+async function inspect(directory, origin, ports, ended, deadline, stopWaiting, waitingTicket, passive = false) {
   const snapshots = [];
   for (const row of await rows(ports.files, directory)) {
     if (ended()) break;
@@ -199,7 +200,7 @@ async function inspect(directory, origin, ports, ended, deadline, stopWaiting, w
     const path = join(directory, `${row.id}.json`), modified = await freshness(ports, path);
     if (!expired(ports, row, modified)) continue;
     let reclaim = row.state === 'waiting' || !row.request_ids.length || ports.now() - row.started_at >= LEASE_MS;
-    if (!reclaim) {
+    if (!reclaim && !passive) {
       const states = [];
       for (const id of row.request_ids) {
         if (ended()) break;
@@ -224,15 +225,16 @@ async function inspect(directory, origin, ports, ended, deadline, stopWaiting, w
   return snapshots;
 }
 
-export async function acquireRuntimeSlot({ stateDir, origin, limit = 4, kind, deadline = null }, given = {}) {
+export async function acquireRuntimeSlot({ stateDir, origin, limit = Infinity, kind, deadline = null }, given = {}) {
   const ports = defaults(given), directory = directoryFor({ stateDir, origin }), id = ports.randomUUID();
-  const ticket = { id, state: 'waiting', pid: ports.pid, kind, started_at: ports.now(), request_ids: [] };
+  const uncapped = limit === Infinity;
+  const ticket = { id, state: uncapped ? 'active' : 'waiting', pid: ports.pid, kind, started_at: ports.now(), request_ids: [] };
   const path = join(directory, `${id}.json`);
   let cancelled = false;
   const ended = () => cancelled || ports.interrupted() || deadline !== null && ports.now() >= deadline;
   if (ended()) return null;
   if (!await ports.files.exclusiveCreate(path, ticket)) throw unavailable(new Error('Duplicate slot identity'));
-  let acquired = false, activeTicket = null, last = '', failures = 0;
+  let acquired = false, activeTicket = uncapped ? ticket : null, last = '', failures = 0;
   const owner = { posted: false, pulse: null, snapshot: snapshotKey(ticket), [rememberNativeOwnership]: ports.files[rememberNativeOwnership] };
   const interruptOwner = () => {
     cancelled = true;
@@ -247,6 +249,24 @@ export async function acquireRuntimeSlot({ stateDir, origin, limit = 4, kind, de
   owner.pulse = heartbeat(path, ports, interruptOwner, true);
   owners.set(path, owner);
   try {
+    if (uncapped) {
+      // Only local expiry evidence is available here. In particular, a recent
+      // uncertain paid lease must not trigger a runtime read or hold admission.
+      const snapshots = await inspect(directory, origin, ports, ended, deadline, () => { cancelled = true; }, ticket, true);
+      if (snapshots.length && !ended()) await locked(directory, ports, async ownsClaim => {
+        const currentJobs = await rows(ports.files, directory);
+        for (const item of snapshots) {
+          if (ended() || !await ownsClaim()) break;
+          const row = currentJobs.find(row => row.id === item.row.id), file = join(directory, `${item.row.id}.json`);
+          const modified = await freshness(ports, file);
+          if (row && snapshotKey(row) === item.key && modified === item.modified && expired(ports, row, modified) && await ownsClaim())
+            await ports.files.unlink(file);
+        }
+      });
+      if (ended()) return null;
+      acquired = true;
+      const reservation = { id, directory }; reservationOwners.set(reservation, owner); return reservation;
+    }
     while (!ended()) {
       // Probes can block on HTTP. Nothing in this process holds exclusion here.
       const snapshots = await inspect(directory, origin, ports, ended, deadline, () => { cancelled = true; }, ticket);
@@ -355,12 +375,14 @@ export async function listRuntimeJobs(options, ports = {}) {
   const jobs = await rows(ports.files ?? nativeFiles, directoryFor(options));
   return { jobs: [...jobs].sort((a, b) => (a.state === 'active' ? 0 : 1) - (b.state === 'active' ? 0 : 1) || order(a, b)) };
 }
+// The saved kind stays `check`, `lint` or `try` (older pdd versions read and write these records); only the printed word is the command name.
+const KIND_WORDS = Object.freeze({ check: NAMES.test, lint: NAMES.lint, try: NAMES.simulate });
 export async function runJobs({ env = process.env } = {}, { stdout = process.stdout, stderr = process.stderr, files, now = Date.now } = {}) {
   try {
     const stateDir = resolve(env.PDD_STATE_DIR || join(env.HOME || homedir(), '.pdd', 'runtime'));
     const { jobs } = await listRuntimeJobs({ stateDir, origin: runtimeOrigin(env) }, { files });
     if (!jobs.length) stdout.write('No local interpreter jobs.\n');
-    for (const row of jobs) stdout.write(`${row.state} ${row.kind} · PID ${row.pid} · ${Math.max(0, Math.floor((now() - row.started_at) / 1000))} s · ${row.id} · ${row.request_ids.join(', ') || 'no request yet'}\n`);
+    for (const row of jobs) stdout.write(`${row.state} ${KIND_WORDS[row.kind] ?? row.kind} · PID ${row.pid} · ${Math.max(0, Math.floor((now() - row.started_at) / 1000))} s · ${row.id} · ${row.request_ids.join(', ') || 'no request yet'}\n`);
     return 0;
   } catch (error) { stderr.write(`${String(error.message).split('\n')[0]}\n`); return 5; }
 }

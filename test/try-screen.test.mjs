@@ -98,7 +98,7 @@ test('saved Try missing the current local app map gives deliberate recovery with
   const ports=make();
   assert.equal(await runTry({cwd:setup.repo,words:['place-order'],options:{'--serve':'8080'}},ports),125);
   assert.match(ports.stderr.text,/saved Try has no Screen app map/);
-  assert.match(ports.stderr.text,/pdd try place-order --serve 8080 --new --app-map app-map.json/);
+  assert.match(ports.stderr.text,/pdd simulate place-order --serve 8080 --new --app-map app-map.json/);
   assert.equal(fake.posts.filter(p=>p.command==='try').length,1);assert.equal(fake.deletes.length,0);assert.equal(fake.jsonPosts.length,0);
 });
 
@@ -120,6 +120,6 @@ test('missing-map recovery works from a subdirectory and shell-quotes the select
   const bin=join(setup.home,'bin');mkdirSync(bin);writeFileSync(join(bin,'pdd'),'#!/bin/sh\nprintf \'%s\\n\' "$@"\n',{mode:0o700});
   const parsed=spawnSync('/bin/sh',['-c',command],{cwd,env:{...process.env,PATH:bin+':'+process.env.PATH},encoding:'utf8'});
   assert.equal(parsed.status,0,parsed.stderr);
-  assert.deepEqual(parsed.stdout.trimEnd().split('\n'),['try','place-order','--serve','8080','--new','--app-map','../map files/my $literal.json']);
+  assert.deepEqual(parsed.stdout.trimEnd().split('\n'),['simulate','place-order','--serve','8080','--new','--app-map','../map files/my $literal.json']);
   assert.equal(fake.deletes.length,0);assert.equal(fake.posts.filter(p=>p.command==='try').length,1);
 });
