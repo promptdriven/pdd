@@ -885,6 +885,79 @@ The native `lookup(service, id)` uses the supplied callback; resource `service.l
 
 Passing prompt check (DRAFT): [2/2 checks · 2 AI calls](https://runtime.promptdriven.ai/r/53737185-9685-408f-83ca-be9e13c6ae79).
 
+### Return a different port reply on each call
+
+This synthetic example uses one counter for `service.lookup`, starting at zero. Each case has exactly `args`, `call_index`, and `result`: `args` is the literal complete argument object, and `call_index` is a unique positive one-based integer. Other case properties, including `world_result_bindings`, are refused. The counter progresses per operation across steps, so indices must follow that operation's actual call order. The empty result pointer replaces the whole result template with the selected literal result. This binding does not supply a request log or arbitrary world mutations; use an appropriate separate boundary and native tests for effects.
+
+Copy these three files into a repository, fill the draft hash with `pdd test --fill-hash`, and use `pdd lint varying-port` for zero-AI fixture/schema admission. Lint does not prove execution behavior or a live service effect.
+
+`prompts/varying-port.prompt.md`:
+
+````markdown
+# Varying port
+
+`varying-port.mjs` exports module function `lookup(service, id)`. Call the injected `service.lookup` with `{id}` once and return its `{label}` reply unchanged. The service owns outside access.
+
+## Dependencies
+
+None.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "status": "draft",
+  "prose_sha256": "",
+  "entries": [{"operation": "lookup", "input_schema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"], "additionalProperties": false}, "result_schema": {"type": "object", "properties": {"label": {"type": "string"}}, "required": ["label"], "additionalProperties": false}, "errors": []}],
+  "calls": [],
+  "resources": [{"name": "service", "kind": "port", "access": "write", "operations": [{"name": "lookup", "access": "write", "arguments_schema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"], "additionalProperties": false}, "result_schema": {"type": "object", "properties": {"label": {"type": "string"}}, "required": ["label"], "additionalProperties": false}}]}],
+  "limits": {"max_steps": 12, "max_model_calls": 6},
+  "conventions": []
+}
+```
+</details>
+````
+
+`user_stories/varying-port.md`:
+
+```markdown
+# Varying port
+
+I can look up the same item twice and see each supplied reply.
+
+## Acceptance criteria
+
+1. The first lookup of book-7 returns Available and the second returns Reserved.
+```
+
+`test/runtime/varying-port.json`:
+
+```json
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/varying-port.md",
+  "criteria": [{"id": "AC1", "text": "The first lookup of book-7 returns Available and the second returns Reserved."}],
+  "initial_world": {"fixture_counters": {"lookup": 0}},
+  "simulation": {
+    "service.lookup": {
+      "action": "fixture.lookup",
+      "world_pointer": "/fixture_counters/lookup",
+      "cases": [
+        {"args": {"id": "book-7"}, "call_index": 1, "result": {"label": "Available"}},
+        {"args": {"id": "book-7"}, "call_index": 2, "result": {"label": "Reserved"}}
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    }
+  },
+  "context": [],
+  "steps": [
+    {"step_id": "first", "entry_path": "prompts/varying-port.prompt.md", "operation": "lookup", "input": {"id": "book-7"}, "checks": [{"criterion_id": "AC1", "target": "result", "path": "/label", "op": "equals", "value": "Available"}], "model": "gpt-6.1-sol"},
+    {"step_id": "second", "entry_path": "prompts/varying-port.prompt.md", "operation": "lookup", "input": {"id": "book-7"}, "checks": [{"criterion_id": "AC1", "target": "result", "path": "/label", "op": "equals", "value": "Reserved"}], "model": "gpt-6.1-sol"}
+  ]
+}
+```
+
 ### Separate decide from do
 
 [Module](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/decision.mjs) · [Prompt](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/decision.prompt.md) · [Story](https://github.com/promptdriven/pdd/blob/alpha/user_stories/fake-decision.md) · [Scenario](https://github.com/promptdriven/pdd/blob/alpha/test/runtime/fake-decision.json)
