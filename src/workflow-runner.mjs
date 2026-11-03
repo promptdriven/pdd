@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 8b9b6157eca685b7d0eb6e81d1ac4c979e72cc4a2d68689ca386c49698a51063).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 030fc8c49166cf62f9d109157251e204105c358eb7951657fa49d69af23be33e).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { execFile as execFileCallback } from 'node:child_process';
@@ -395,7 +395,7 @@ async function startRunCommand({ name, issue, agent = 'codex', base, adoptCorpus
   let workflow;
   try { workflow = readWorkflowAreas({ packageRoot, name, cwd, home: p.env.HOME || homedir() }); } catch (error) { return fail(error.message); }
   if (adoptCorpus !== undefined && (typeof adoptCorpus !== 'string' || !adoptCorpus.trim() || !workflow.areas.some(area=>area.replay_evidence===REPLAY_POLICY))) return {exitCode:2,message:'--adopt-corpus requires a declaration path and an explicitly replay-evidence-enabled workflow.'};
-  if (!['codex', 'claude'].includes(agent)) return fail('Choose --agent codex or --agent claude.');
+  if (!['codex', 'claude', 'gemini'].includes(agent)) return fail('Choose --agent codex, --agent claude or --agent gemini.');
   // Every chat of the run uses this config folder; a missing one makes the agent stop at once (0.1.6 tester).
   const variable = homeVariable(agent), configDir = p.env[variable] ? resolve(cwd, expandHome(p.env[variable], p.env)) : null;
   if (configDir && !isFolder(configDir)) return fail(`${variable} is "${configDir}", but that folder does not exist. Fix ${variable} and run the command again.`);
@@ -503,7 +503,7 @@ async function startRunCommand({ name, issue, agent = 'codex', base, adoptCorpus
   const chat = run.chats[0];
   return done([...warnings,
     `Started ${name} for ${run.repo}#${number} "${oneLine(run.issue.title)}".`,
-    `Area 1 of ${run.areas.length}: ${first.name} (${first.steps.join(', ')}). ${agent === 'claude' ? 'Claude' : 'Codex'} works in Herdr session pdd, tab "${chat.label}".`,
+    `Area 1 of ${run.areas.length}: ${first.name} (${first.steps.join(', ')}). ${agent === 'claude' ? 'Claude' : agent === 'gemini' ? 'Gemini' : 'Codex'} works in Herdr session pdd, tab "${chat.label}".`,
     ...(agent === 'claude' && !claudeTrusts(run.sourceRoot, run.configDir, p.env) ? ['Claude may first ask you to trust the new worktree folder. Open the chat and choose "Yes, I trust this folder".'] : []),
     `Base: origin/${run.baseBranch}`,
     `Worktree: ${run.root} (branch ${run.branch})`,
