@@ -18,7 +18,7 @@ Each area is one main chat. Step briefs are in `steps/`.
 ## Rules
 
 - The main chat coordinates and talks with the person; no code or checks.
-- Use fresh subagents; never reuse builders or let them check their code. Give the step file and paths at once, not chat history. Wait once with a long time-out; no small follow-ups.
+- Use fresh subagents; never reuse builders or let them check their code. Give the step file and paths at once, not chat history. Wait once with a long time-out; no small follow-ups. Check/read: RUNBOOK §11 once.
 - Checks: fresh first. Only verify/formal may reuse after startup failure; wrote no code, tests or prompts this run.
 - Read pdd-prompting RUNBOOK §17 before checks: cleanup, unrun checks, recovery and result replacement.
 - At gates, show results, ask and stop. Revise changes and ask again. Outside runs, ask before opening PRs. In runs, pdd opens them. Only the main chat may merge on explicit person request under RUNBOOK §2.
