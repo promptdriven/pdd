@@ -50,7 +50,7 @@ for (const [count, words, message] of [
     json.result.report.refusal.details.retry_after = 300;
     return { status: 200, json };
   });
-  const result = await run(setup, fake, words);
+  const result = await run(setup, fake, words, { '--json': true, '--timeout': 1.5 });
   assert.equal(result.code, 5, result.err + result.out);
   assert.ok(result.err.split('\n').includes(message), result.err);
   assert.doesNotMatch(result.err, /checks are waiting locally|Your check is in line|Your check is next in line/);
