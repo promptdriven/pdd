@@ -55,9 +55,15 @@ Port the engine's `explicit_story_criteria` and its 4 regexes exactly: the `## A
 
 - The interface block is the engine `_INTERFACE` regex (`prompt_program_discovery.py` at eae2202a), in JS with the flags `gi`.
 - `prose_sha256` = lowercase hex SHA-256 of the UTF-8 bytes of the text with every block removed. Read the file as UTF-8 and do not change newlines.
-- `fillHashes({root, files})` examines Git-visible `*.prompt.md` files by default, independently of test discovery or source capture. It returns `filled`, `current`, `refused`, `stale` and `warnings` arrays; outcome records name `path`, and refusals and warnings also have `message`. A file without an interface block is skipped. Multiple blocks, invalid JSON or a non-object interface are refused before status classification.
+- Module function `fillHashes({root, files, compact = false})` examines Git-visible `*.prompt.md` files by default, independently of test discovery or source capture. It returns `filled`, `current`, `refused`, `stale` and `warnings` arrays; outcome records name `path`, and refusals and warnings also have `message`. Only when `compact` is true, also return `compacted`, an array of `{path}` records for drafts whose JSON whitespace changed, in examined-file order. Keep hash classification independent: `filled` means its hash changed; a compacted draft whose hash was already current remains in `current`. The default result has exactly its existing five fields. A file without an interface block is skipped. Multiple blocks, invalid JSON or a non-object interface are refused before status classification.
 - Classify absent keys by own-property presence, not truthiness or inherited values. Without its own `status` but with its own `prose_sha256` key (of any value), leave every byte unchanged and refuse: identify the path and advise adding `"status": "draft"` and rerunning `pdd check --fill-hash`. A misspelled `Status` is not `status`. Without either own key, leave every byte unchanged and return a warning identifying the path: its Runtime interface has no status and no prose_sha256, so pdd skipped it; if this is a prompt to check, add `"status": "draft"` and run `pdd check --fill-hash` again. Apply these rules in every directory, even without tests. A present status other than `draft` or `approved` (including null or an empty string) remains a refusal.
-- For `draft`, replace only the string value of `"prose_sha256"` in its block and keep every other byte; a missing key is refused (`add "prose_sha256": ""`), as is a value that cannot be replaced safely. `approved` and current = no change; `approved` and stale = no change and a stale result, even when no test reaches that prompt. `--fill-hash` never sets `approved`.
+- For `draft`, replace only the string value of `"prose_sha256"` in its block and keep every other byte unless compaction is explicitly requested below; a missing key is refused (`add "prose_sha256": ""`), as is a value that cannot be replaced safely. `approved` and current = no change; `approved` and stale = no change and a stale result, even when no test reaches that prompt. `--fill-hash` never sets `approved`.
+
+### Draft interface compaction
+
+With `compact: true`, apply the same discovery, reference validation, status, refusal and skip rules. Only a `draft` may change, including a draft with an already-current hash. When its hash needs replacement, check the existing replacement safety rules before either edit; an unsafe replacement is a refusal with no edit to that file. A current draft needs no hash replacement, so preserve its existing current classification while compacting its JSON. Preserve independent successful files when another file refuses. Never compact approved, statusless, invalid or multiple-block files.
+
+Remove only JSON whitespace (space, tab, CR and LF) between tokens inside the root interface object's original span. Preserve every field, member order, duplicate non-hash member, number spelling, escape spelling and string byte, including whitespace and escaped quotes inside strings. Do not parse and reserialize to obtain compact bytes. Leave all prose, fences, wrappers and whitespace outside that root span exact. Apart from the normal hash-string replacement, the compacted interface's parsed value must equal the original. The prose hash remains the hash of the same outside-block bytes; never change status or approval rules. An already compact, current draft causes no write and no `compacted` record. This operation is local and adds no AI or network call.
 
 ## Source capture
 
@@ -66,7 +72,7 @@ Default shared-reference preparation uses the synchronous module function
 `readPrompt(root, visible, path)` parses/validates interface schemas and before
 `checkTest` validates a scenario or its inputs. Preserve readPrompt's synchronous
 public API. `--fill-hash` validates references but writes only its existing draft
-hash string, never an expanded schema/world. Explicit lint prepares references
+hash string and, only with explicit compaction, interface JSON whitespace; never an expanded schema/world. Explicit lint prepares references
 without adding local engine-rule validation.
 Preparation preserves existing malformed no-reference consumer handling:
 `readPrompt` still reports `invalid-json`, scenario failures keep their existing

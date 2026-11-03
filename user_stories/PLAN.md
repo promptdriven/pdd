@@ -2,6 +2,10 @@
 
 1. [Keep the built screen aligned with its drawing](svg-layout-spec.md): local prompt/drawing warnings and a failing browser comparison for missing layout parts.
 
+## Draft interface compaction
+
+- [Compact a draft interface before checking it](compact-draft-interface.md) — [native cases](../test/fixtures/fill-hash/compact-cases.json). Runtime check: NOT REPLAYED; Git discovery, file writes, CLI output and early option rejection need native verification. Default hash-only behavior stays unchanged.
+
 # Shared runtime admission (#2631)
 
 Build on the saved-lint continuation contract. The existing Stories also cover owner heartbeat expiry, contention progress, bounded maintenance, fail-open advisory capacity, phase-specific lint waits, truthful wait-end text and per-process read reuse. Prompts and expected cases are reviewed before code. Native tests use fake transport/clock plus real temporary state and child processes; do not claim supplied port replies prove atomic exclusion. Follow-up native checks cover wall-clock jumps during acquisition, interruption between admission and submission, long observer timers and cached unclear capacity; check causal order, no resend, exclusion and completion with generous watchdogs. These native timer/process effects are not Runtime-replayed. Each Story has one case file. Five native case files use pdd.native-cases.v1 and are not discovered as executable Runtime scenarios; the jobs snapshot has a real Runtime scenario.
