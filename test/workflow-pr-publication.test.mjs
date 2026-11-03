@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync, chmodSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync, chmodSync, cpSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -72,7 +72,7 @@ test('real publication creates code PR with all known-step labels, current machi
   writeFileSync(join(f.runDir, 'foreign.md'), 'Review: foreign');
   const out = f.invoke(allLabels); assert.equal(out.exitCode, 0, out.message);
   const body = f.data().prs[0].body;
-  const order = ['Not fixed yet:', 'Not checked:', 'Defect: `broken value`', 'Not caught because:', 'Proof (defect fixed):', 'Proof (gap closed):', 'Old-code proof: ✓', 'Review: `reviewed`'];
+  const order = ['Old-code proof: ✓', 'Not fixed yet:', 'Not checked:', 'Defect: `broken value`', 'Not caught because:', 'Proof (defect fixed):', 'Proof (gap closed):', 'Review: `reviewed`'];
   let previous = -1; for (const label of order) { const at = body.indexOf(label); assert.ok(at > previous, label); previous = at; }
   assert.match(body, /Refs #17/); assert.doesNotMatch(body, /Closes #17|forged|Review: foreign/);
   const inventory = `Tests vs base: none.\nChanged assertions in kept tests: none.\nNew skips: none.\nStatic inventory only; tests were not run.\nTest inventory commits: ${f.run.baseSha.slice(0,7)} → ${f.head.slice(0,7)}.`;
@@ -86,7 +86,7 @@ test('real prompt publication lifts cross-area labels and never adds machine pro
   const f = fixture(t, { prompt: true }); f.machine();
   const out = f.invoke('Not checked: formal\nNot fixed yet: diagnosis only\nReview: source reviewed');
   assert.equal(out.exitCode, 0, out.message); const body = f.data().prs[0].body;
-  assert.match(body, /^Not fixed yet: `diagnosis only`\nNot checked: `formal`\nDefect: `broken value`\nReview: `source reviewed`/);
+  assert.match(body, /^Agent note — not checked by pdd: Not fixed yet: `diagnosis only`\nAgent note — not checked by pdd: Not checked: `formal`\nAgent note — not checked by pdd: Defect: `broken value`\nAgent note — not checked by pdd: Review: `source reviewed`/);
   assert.match(body, /Refs #17/); assert.doesNotMatch(body, /Old-code proof:|Closes #17|Part of #17/);
 });
 
@@ -117,7 +117,7 @@ test('real existing code PR retains pending after final edit fails and reports p
 test('real existing prompt PR refreshes labels on repeat publication', t => {
   const f = fixture(t, { existing: true, prompt: true }); f.change();
   const out = f.invoke('Not fixed yet: still diagnosing\nNot checked: external\nReview: updated'); assert.equal(out.exitCode, 0, out.message);
-  assert.match(f.data().prs[0].body, /^Not fixed yet: `still diagnosing`\nNot checked: `external`/);
+  assert.match(f.data().prs[0].body, /^Agent note — not checked by pdd: Not fixed yet: `still diagnosing`\nAgent note — not checked by pdd: Not checked: `external`/);
   assert.match(f.data().prs[0].body, /Review: `updated`/); assert.match(f.data().prs[0].body, /Refs #17/);
   assert.doesNotMatch(f.data().prs[0].body, /Old-code proof:|Closes #17/);
 });
@@ -173,7 +173,7 @@ test('real PR1 approval synchronization refreshes note labels while preserving e
   const out = f.invoke('', 'approveRun');
   assert.equal(out.exitCode, 1, 'A person terminal declines; synchronization does not fabricate approval.');
   const body = f.data().prs[0].body;
-  assert.match(body, /^Not fixed yet: `diagnosis only`\nNot checked: `external`/); assert.match(body, /Review: `refreshed`/);
+  assert.match(body, /^Agent note — not checked by pdd: Not fixed yet: `diagnosis only`\nAgent note — not checked by pdd: Not checked: `external`/); assert.match(body, /Review: `refreshed`/);
   assert.match(body, /Preserved reviewer prose/); assert.match(body, /^Refs #17$/m); assert.doesNotMatch(body, /Closes #17|Old-code proof:/);
   assert.ok(body.includes('Preserved reviewer prose.\nPart of #17\n'), 'Keep the ordinary issue-reference example and its context byte for byte.');
   const saved = JSON.parse(readFileSync(join(f.runDir, 'status.json'), 'utf8'));
@@ -206,13 +206,13 @@ test('PR1-REFRESH-BUDGET: real approval synchronization bounds the complete body
 
 test('PR1-REFRESH-PROSE: real approval synchronization preserves later ordinary and fenced label examples byte for byte', t => {
   const f = fixture(t, { existing: true, prompt: true }); awaitingCode(f);
-  const example = 'Defect: retain this ordinary example\n\nReviewer explanation:\n```text\nDefect: retain this example\nNot checked: example only\nReview: illustrative\nPart of #17\n```\n\n~~~markdown\nProof (gap closed): another example\n~~~\n';
+  const example = 'Defect: retain this ordinary example\n\n- **scope**: reviewer example must remain literal.\n\nReviewer explanation:\n```text\nDefect: retain this example\nNot checked: example only\nReview: illustrative\nPart of #17\n```\n\n~~~markdown\nProof (gap closed): another example\n~~~\n';
   const prs = f.data().prs;
   prs[0].body = `Old-code proof: ✓ old success\n\nPart of #17\n\n${example}\n<!-- pdd-workflow:${f.run.runId}:prompt-pr -->\n`; f.configure({ prs });
   writeFileSync(join(f.runDir, 'review.md'), 'Review: refreshed');
   assert.equal(f.invoke('', 'approveRun').exitCode, 1);
   const body = f.data().prs[0].body;
-  assert.match(body, /^Defect: `broken value`\nReview: `refreshed`\n/);
+  assert.match(body, /^Agent note — not checked by pdd: Defect: `broken value`\nAgent note — not checked by pdd: Review: `refreshed`\n/);
   assert.doesNotMatch(body, /Old-code proof:/);
   assert.ok(body.includes(example), 'Preserve the complete reviewer example, including fences and literal issue reference.');
   assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1);
@@ -234,7 +234,7 @@ for (const [kind, ordinary] of [
   const body = f.data().prs[0].body;
   assert.equal(f.data().events.filter(event => event.kind === 'edit').length, editsBefore + 1);
   assert.ok(body.includes(ordinary), 'Preserve the complete ordinary reviewer context when room remains.');
-  assert.match(body, /^Not fixed yet: `diagnosis only`\nNot checked: `external`\nDefect: `broken value`\nReview: `refreshed`\n\nRefs #17\n\n/);
+  assert.match(body, /^Agent note — not checked by pdd: Not fixed yet: `diagnosis only`\nAgent note — not checked by pdd: Not checked: `external`\nAgent note — not checked by pdd: Defect: `broken value`\nAgent note — not checked by pdd: Review: `refreshed`\n\nRefs #17\n\n/);
   assert.doesNotMatch(body, /Review: old|Closes #17|Old-code proof:/);
   assert.equal(body.split(marker).length - 1, 1);
   assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1);
@@ -256,14 +256,14 @@ test('PR1-REFRESH-RETENTION: bounded synchronization counts omitted failures and
   assert.equal(f.invoke('', 'approveRun').exitCode, 1);
   const body = f.data().prs[0].body;
   assert.ok([...body].length <= 60000);
-  assert.match(body, /^Defect: `broken value`/);
+  assert.match(body, /^Agent note — not checked by pdd: Defect: `broken value`/);
   assert.doesNotMatch(body, /stale owned label|stale owned review|Part of #17|Closes #17/);
   assert.match(body, /^Refs #17$/m); assert.match(body, /Evidence omitted: \d+ labels, [1-9]\d* failure lines, [1-9]\d* report references/);
   const omitted = /Evidence omitted: (\d+) labels, (\d+) failure lines, (\d+) report references/.exec(body).slice(1).map(Number);
-  const shownFailures = (body.match(/^Defect: `✗ failure \d+ /gm) ?? []).length;
+  const shownFailures = (body.match(/^Agent note — not checked by pdd: Defect: `✗ failure \d+ /gm) ?? []).length;
   assert.equal(shownFailures + omitted[1], failures.length, 'Every evidence failure is visible or explicitly counted.');
   assert.equal(shownFailures + omitted[2], failures.length, 'Every evidence report reference is visible or explicitly counted.');
-  assert.equal((body.match(/^(?:Defect:|Review:)/gm) ?? []).length + omitted[0], failures.length + 3);
+  assert.equal((body.match(/^Agent note — not checked by pdd: (?:Defect:|Review:)/gm) ?? []).length + omitted[0], failures.length + 3);
   assert.match(body, /✗ retained reviewer failure/); assert.match(body, /https:\/\/runtime.example\/r\/reviewer/);
   assert.match(body, /not shown|summary|shortened/i);
   assert.equal((body.match(/^```/gm) ?? []).length % 2, 0, 'Summarized description closes its fence.');
@@ -287,7 +287,9 @@ const outsideCode = text => text.replace(/(?<!`)(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)/g
 function sectionItems(section) {
   const items = [];
   for (const row of section.split('\n').filter(row => row.startsWith('- **'))) {
-    const [, step, rest] = /^- \*\*([^*]+)\*\*: (.*)$/.exec(row);
+    const [, step, labelled] = /^- \*\*([^*]+)\*\*: (.*)$/.exec(row);
+    assert.ok(labelled.startsWith('Agent note — not checked by pdd: '), 'Every rendered summary carries its trust label.');
+    const rest = labelled.slice('Agent note — not checked by pdd: '.length);
     const lines = []; let at = 0;
     while (rest[at] === '`') {
       const fence = /^`+/.exec(rest.slice(at))[0], close = new RegExp(`(?<!\`)${fence}(?!\`)`, 'g');
@@ -315,7 +317,7 @@ test('PRSUM-FULL: a 444-character summary keeps its late limitation and issue li
   assert.equal(verify.after, '');
   const overview = body.slice(body.indexOf('\n## Steps\n'), body.indexOf(FULL)).split('\n').find(row => row.startsWith('- **verify**: '));
   const [short] = sectionItems(overview).map(item => item.lines);
-  assert.ok([...overview].length <= 220 && short.length === 1 && short[0].endsWith('…'), `The Steps list keeps its short line: ${overview}`);
+  assert.ok([...overview].length <= 220 + 'Agent note — not checked by pdd: '.length && short.length === 1 && short[0].endsWith('…'), `The Steps list keeps its short line: ${overview}`);
   assert.ok(LATE.startsWith(short[0].slice(0, -1).trimEnd())); assert.doesNotMatch(overview, /issues\/476|Limitation/);
   assert.doesNotMatch(body, /step summar(?:y was|ies were) shortened/);
   assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1);
@@ -456,7 +458,7 @@ test('PR1-REFRESH-SUMMARIES: a PR 1 update shortens the full summaries again and
   assert.equal(f.data().events.filter(event => event.kind === 'edit').length, edits + 1);
   const body = f.data().prs[0].body, items = sectionItems(fullSection(body)), scope = items.find(item => item.step === 'scope');
   assert.ok([...body].length <= 60000, `The whole description has ${[...body].length} characters.`);
-  assert.match(body, /^Not checked: `y{400}`$/m); assert.equal(stepsList(body), stepsList(before), 'The Steps list is not cut.');
+  assert.match(body, /^Agent note — not checked by pdd: Not checked: `y{400}`$/m); assert.equal(stepsList(body), stepsList(before), 'The Steps list is not cut.');
   assert.deepEqual(items.find(item => item.step === 'check').lines, ['check done']);
   assert.equal(scope.after, ' …'); assert.ok(S.startsWith(scope.lines[0]) && scope.lines[0].length < kept.lines[0].length, 'The block is shortened first.');
   const notice = body.split('\n').find(row => /step summar(?:y was|ies were) shortened to fit the PR size limit/.test(row)), count = /scope \(([\d,]+) characters left out\)/.exec(notice ?? '');
@@ -473,6 +475,103 @@ test('PR1-REFRESH-CODE-TAGS: a tag inside a code span does not fold the rest of 
   prs[0].body = `Part of #17\n\nMade with \`pdd workflow run small-change\`.\n\n## Steps\n${row}\n\n${'ordinary reviewer prose\n'.repeat(2600)}end\n${marker}\n`; f.configure({ prs });
   assert.equal(f.invoke('', 'approveRun').exitCode, 1);
   const body = f.data().prs[0].body;
-  assert.ok([...body].length <= 60000); assert.ok(body.split('\n').includes(row), 'The Steps line stays.');
+  assert.ok([...body].length <= 60000); assert.ok(body.split('\n').includes(row.replace(': ', ': Agent note — not checked by pdd: ')), 'The Steps payload stays under its unchecked label.');
   assert.match(body, /It was shortened to fit/); assert.doesNotMatch(body, /not shown here/);
+});
+
+// #2596 expectations derive from the approved current-head Story. These exercise
+// the CLI-facing publication boundary, real local Git and the fake gh transport.
+const currentRuntime = 'Prompt tests (release): ✓ 1 of 1 criteria · 2/2 checks · 1 AI call';
+async function runtimeReceipt(f) {
+  const { sourceFingerprint } = await import('../src/workflow-replay.mjs');
+  f.run.evidence = [{ summary: currentRuntime, at: 10, source: {kind:'git-content-v1',sha256:sourceFingerprint(f.root)} }];
+  f.save();
+}
+test('#2596 publication checks only compatible receipts and labels every prose surface', async t => {
+  const f = fixture(t); await runtimeReceipt(f);
+  const prose = 'Full npm test: 665/665 passed';
+  f.run.done.verify.summary = `verified\n${currentRuntime}\n${prose}`; f.save();
+  writeFileSync(join(f.runDir,'verify.md'), `# Verify\n${currentRuntime}\n${prose}\n## Vectors\n| case | result |\n| A | pass |`);
+  assert.equal(f.invoke(`Not checked: ${prose}`).exitCode, 0);
+  const body = f.data().prs[0].body;
+  assert.match(body, new RegExp(currentRuntime.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
+  assert.match(body, /Native tests: unknown/);
+  assert.match(body, /- \*\*verify\*\*: Agent note — not checked by pdd:/);
+  assert.match(body, /## Verify\n\nAgent note — not checked by pdd:/);
+  assert.equal((body.match(/^# Verify$/gm) ?? []).length,0);
+  assert.match(body, /Saved runtime receipt \(unverified in this agent note\): Prompt tests/);
+  assert.match(body, /Agent note — not checked by pdd: Not checked: `Full npm test: 665\/665 passed`/);
+});
+for (const failure of ['pending','final']) test(`#2596 ${failure} description failure keeps current-success claims cleared before push`, async t => {
+  const f = fixture(t, {existing:true}); await runtimeReceipt(f); f.machine(); const next = f.change();
+  f.configure({failEdit:failure === 'pending' ? 1 : 2});
+  const out = f.invoke('Not checked: live CI'); assert.equal(out.exitCode, 1, out.message);
+  const events = f.data().events;
+  assert.doesNotMatch(events[0].body, /^Prompt tests.*✓|Old-code proof: ✓|Native tests.*\d+\/\d+/m);
+  assert.match(events[0].body, /Native tests: publication-pending/);
+  assert.equal(events[0].remote, f.head);
+  if (failure === 'pending') assert.equal(f.git('ls-remote','origin','refs/heads/topic').split('\t')[0], f.head);
+  else { assert.equal(events[1].remote, next); assert.equal(f.data().prs.at(-1).body,events[0].body); assert.match(out.message,/stays publication-pending/); }
+});
+for (const proofState of ['current','stale','unreadable','missing']) test(`#2596 native counts come from actual ${proofState} machine proof output`, t => {
+  const f = fixture(t);
+  if (proofState !== 'missing') {
+    f.machine(); const path=join(f.runDir,'old-code-proof.json'), record=JSON.parse(readFileSync(path));
+    record.head.stdoutTail=['# tests 8','# pass 7','# fail 1','# cancelled 0','# skipped 0','# todo 0'];
+    record.head.exitCode=1; record.outcome='head-fails';
+    if (proofState === 'stale') record.headSha='a'.repeat(40);
+    writeFileSync(path,proofState === 'unreadable' ? '{' : JSON.stringify(record));
+  }
+  assert.equal(f.invoke('Proof (defect fixed): Full npm test: 665/665 passed').exitCode,0);
+  const body=f.data().prs[0].body;
+  if(proofState==='current') assert.match(body,/Native tests \(current old-code proof, new-code output\): 7\/8 passed; 1 failed\./);
+  else {assert.match(body,/Native tests: unknown/);assert.doesNotMatch(body,/Native tests.*(?:7\/8|665\/665)/);}
+});
+
+for (const failure of ['pending','final']) test(`#2596 PR1 approval synchronization retains pending custody on ${failure} edit failure`, async t => {
+  const f=fixture(t,{existing:true,prompt:true}); awaitingCode(f); await runtimeReceipt(f);
+  const prs=f.data().prs;
+  prs[0].body=`${currentRuntime}\n\nPart of #17\n\nPR 1 of this run: the prompt, Story and test cases. The code comes in PR 2 only when the person asks for it.\n\nReviewer prose.\n<!-- pdd-workflow:${f.run.runId}:prompt-pr -->\n`;
+  f.configure({prs,failEdit:failure==='pending'?1:2});
+  const next=f.change(), out=f.invoke('','approveRun'); assert.equal(out.exitCode,1);
+  const events=f.data().events;
+  assert.doesNotMatch(events[0].body,/^Prompt tests.*✓/m);
+  assert.equal(events[0].remote,f.head);
+  if(failure==='pending') {assert.match(out.message,/No source was pushed/);assert.equal(f.git('ls-remote','origin','refs/heads/topic').split('\t')[0],f.head);}
+  else {assert.equal(events[1].remote,next);assert.equal(f.data().prs[0].body,events[0].body);assert.match(out.message,/stays publication-pending/);}
+});
+
+test('#2596 PR1 refresh removes a deleted runtime scenario from its contents description', async t => {
+  const f=fixture(t,{existing:true,prompt:true}); awaitingCode(f);
+  mkdirSync(join(f.root,'tests'));
+  writeFileSync(join(f.root,'tests/release.json'),JSON.stringify({schema_version:'prompt-runtime.program-scenario.v1',story_path:'user_stories/release.md',criteria:[],steps:[]}));
+  f.git('add','.');f.git('commit','-qm','add scenario');
+  assert.equal(f.invoke(currentRuntime).exitCode,0);
+  assert.match(f.data().prs[0].body,/PR 1 of this run: the prompt, Story and test cases/);
+  f.git('rm','tests/release.json');f.git('commit','-qm','remove scenario');
+  assert.equal(f.invoke('refreshed').exitCode,0);
+  const body=f.data().prs[0].body;
+  assert.match(body,/PR 1 of this run: the prompt and the Story\./);
+  assert.doesNotMatch(body,/PR 1 of this run: the prompt, Story and test cases|^Prompt tests.*✓/m);
+});
+
+for(const change of ['identical','prompt','dependency','deleted']) test(`#2596 selected-source receipt publication after ${change} content`, async t=>{
+  const f=fixture(t);
+  for(const folder of ['prompts','tests','user_stories']) cpSync(join(packageRoot,'test/fixtures/harbor',folder),join(f.root,folder),{recursive:true});
+  const prompt=join(f.root,'prompts/place_order.prompt.md');
+  writeFileSync(prompt,readFileSync(prompt,'utf8').replace('## Dependencies\n\nNone.', '## Dependencies\n\n- [Prices](prices.md): required runtime context.'));
+  writeFileSync(join(f.root,'prompts/prices.md'),'Synthetic selected dependency.\n');
+  f.git('add','.');f.git('commit','-qm','selected runtime corpus');
+  const {captureSource}=await import('../src/runtime-preflight.mjs');
+  const tests=['tests/place-order.json'];
+  const source=captureSource(f.root,{tests,appMap:null});
+  f.run.evidence=[{at:10,summary:currentRuntime.replace('(release)', '(place-order)'),source:{kind:'runtime-capture-v1',tests,sha256:source.sha256}}];f.save();
+  if(change==='identical')f.git('commit','--allow-empty','-qm','same selected bytes');
+  if(change==='prompt')writeFileSync(prompt,readFileSync(prompt,'utf8')+'\nChanged prompt.\n');
+  if(change==='dependency')writeFileSync(join(f.root,'prompts/prices.md'),'Changed required dependency.\n');
+  if(change==='deleted')f.git('rm','tests/place-order.json');
+  assert.equal(f.invoke('verified publication').exitCode,0);
+  const body=f.data().prs[0].body;
+  if(change==='identical')assert.match(body,/^Prompt tests \(place-order\): ✓ 1 of 1 criteria · 2\/2 checks · 1 AI call$/m);
+  else assert.doesNotMatch(body,/^Prompt tests.*✓/m);
 });
