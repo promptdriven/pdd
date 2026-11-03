@@ -492,13 +492,13 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Not fixed yet: `this helps find the cause.`",
-            "Defect: `real defect`",
-            "Defect: `direct note`",
-            "Not caught because: `missing regression`",
-            "Proof (defect fixed): `observed fix`",
-            "Proof (gap closed): `regression added`",
-            "Review: `approved latest note`"
+            "Agent note \u2014 not checked by pdd: Not fixed yet: `this helps find the cause.`",
+            "Agent note \u2014 not checked by pdd: Defect: `real defect`",
+            "Agent note \u2014 not checked by pdd: Defect: `direct note`",
+            "Agent note \u2014 not checked by pdd: Not caught because: `missing regression`",
+            "Agent note \u2014 not checked by pdd: Proof (defect fixed): `observed fix`",
+            "Agent note \u2014 not checked by pdd: Proof (gap closed): `regression added`",
+            "Agent note \u2014 not checked by pdd: Review: `approved latest note`"
           ]
         },
         {
@@ -507,13 +507,13 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Not fixed yet: `this helps find the cause.`",
-            "Defect: `real defect`",
-            "Defect: `direct note`",
-            "Not caught because: `missing regression`",
-            "Proof (defect fixed): `observed fix`",
-            "Proof (gap closed): `regression added`",
-            "Review: `approved latest note`"
+            "Agent note \u2014 not checked by pdd: Not fixed yet: `this helps find the cause.`",
+            "Agent note \u2014 not checked by pdd: Defect: `real defect`",
+            "Agent note \u2014 not checked by pdd: Defect: `direct note`",
+            "Agent note \u2014 not checked by pdd: Not caught because: `missing regression`",
+            "Agent note \u2014 not checked by pdd: Proof (defect fixed): `observed fix`",
+            "Agent note \u2014 not checked by pdd: Proof (gap closed): `regression added`",
+            "Agent note \u2014 not checked by pdd: Review: `approved latest note`"
           ]
         },
         {
@@ -522,13 +522,13 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Not fixed yet: `this helps find the cause.`",
-            "Defect: `real defect`",
-            "Defect: `direct note`",
-            "Not caught because: `missing regression`",
-            "Proof (defect fixed): `observed fix`",
-            "Proof (gap closed): `regression added`",
-            "Review: `approved latest note`"
+            "Agent note \u2014 not checked by pdd: Not fixed yet: `this helps find the cause.`",
+            "Agent note \u2014 not checked by pdd: Defect: `real defect`",
+            "Agent note \u2014 not checked by pdd: Defect: `direct note`",
+            "Agent note \u2014 not checked by pdd: Not caught because: `missing regression`",
+            "Agent note \u2014 not checked by pdd: Proof (defect fixed): `observed fix`",
+            "Agent note \u2014 not checked by pdd: Proof (gap closed): `regression added`",
+            "Agent note \u2014 not checked by pdd: Review: `approved latest note`"
           ]
         },
         {
@@ -589,14 +589,14 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Not fixed yet: `this helps find the cause.`",
-            "Defect: `real defect`",
-            "Defect: `direct note`",
-            "Not caught because: `missing regression`",
-            "Proof (defect fixed): `observed fix`",
-            "Proof (gap closed): `regression added`",
             "Old-code proof: not run.",
-            "Review: `approved latest note`"
+            "Agent note \u2014 not checked by pdd: Not fixed yet: `this helps find the cause.`",
+            "Agent note \u2014 not checked by pdd: Defect: `real defect`",
+            "Agent note \u2014 not checked by pdd: Defect: `direct note`",
+            "Agent note \u2014 not checked by pdd: Not caught because: `missing regression`",
+            "Agent note \u2014 not checked by pdd: Proof (defect fixed): `observed fix`",
+            "Agent note \u2014 not checked by pdd: Proof (gap closed): `regression added`",
+            "Agent note \u2014 not checked by pdd: Review: `approved latest note`"
           ]
         },
         {
@@ -605,14 +605,14 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Not fixed yet: `this helps find the cause.`",
-            "Defect: `real defect`",
-            "Defect: `direct note`",
-            "Not caught because: `missing regression`",
-            "Proof (defect fixed): `observed fix`",
-            "Proof (gap closed): `regression added`",
             "Old-code proof: not run.",
-            "Review: `approved latest note`"
+            "Agent note \u2014 not checked by pdd: Not fixed yet: `this helps find the cause.`",
+            "Agent note \u2014 not checked by pdd: Defect: `real defect`",
+            "Agent note \u2014 not checked by pdd: Defect: `direct note`",
+            "Agent note \u2014 not checked by pdd: Not caught because: `missing regression`",
+            "Agent note \u2014 not checked by pdd: Proof (defect fixed): `observed fix`",
+            "Agent note \u2014 not checked by pdd: Proof (gap closed): `regression added`",
+            "Agent note \u2014 not checked by pdd: Review: `approved latest note`"
           ]
         },
         {
@@ -621,14 +621,14 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Not fixed yet: `this helps find the cause.`",
-            "Defect: `real defect`",
-            "Defect: `direct note`",
-            "Not caught because: `missing regression`",
-            "Proof (defect fixed): `observed fix`",
-            "Proof (gap closed): `regression added`",
             "Old-code proof: not run.",
-            "Review: `approved latest note`"
+            "Agent note \u2014 not checked by pdd: Not fixed yet: `this helps find the cause.`",
+            "Agent note \u2014 not checked by pdd: Defect: `real defect`",
+            "Agent note \u2014 not checked by pdd: Defect: `direct note`",
+            "Agent note \u2014 not checked by pdd: Not caught because: `missing regression`",
+            "Agent note \u2014 not checked by pdd: Proof (defect fixed): `observed fix`",
+            "Agent note \u2014 not checked by pdd: Proof (gap closed): `regression added`",
+            "Agent note \u2014 not checked by pdd: Review: `approved latest note`"
           ]
         },
         {
@@ -785,11 +785,11 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Not fixed yet: `this helps find the cause.`",
-            "Not checked: `formal (agent limit)`",
-            "Not checked: `native  check deferred`",
-            "Not checked: `review (agent limit)`",
-            "Defect: `real defect`"
+            "Agent note \u2014 not checked by pdd: Not fixed yet: `this helps find the cause.`",
+            "Agent note \u2014 not checked by pdd: Not checked: `formal (agent limit)`",
+            "Agent note \u2014 not checked by pdd: Not checked: `native  check deferred`",
+            "Agent note \u2014 not checked by pdd: Not checked: `review (agent limit)`",
+            "Agent note \u2014 not checked by pdd: Defect: `real defect`"
           ]
         },
         {
@@ -798,11 +798,11 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Not fixed yet: `this helps find the cause.`",
-            "Not checked: `formal (agent limit)`",
-            "Not checked: `native  check deferred`",
-            "Not checked: `review (agent limit)`",
-            "Defect: `real defect`"
+            "Agent note \u2014 not checked by pdd: Not fixed yet: `this helps find the cause.`",
+            "Agent note \u2014 not checked by pdd: Not checked: `formal (agent limit)`",
+            "Agent note \u2014 not checked by pdd: Not checked: `native  check deferred`",
+            "Agent note \u2014 not checked by pdd: Not checked: `review (agent limit)`",
+            "Agent note \u2014 not checked by pdd: Defect: `real defect`"
           ]
         },
         {
@@ -863,12 +863,12 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Not fixed yet: `this helps find the cause.`",
-            "Not checked: `formal (agent limit)`",
-            "Not checked: `native  check deferred`",
-            "Not checked: `review (agent limit)`",
-            "Defect: `real defect`",
-            "Old-code proof: not run."
+            "Old-code proof: not run.",
+            "Agent note \u2014 not checked by pdd: Not fixed yet: `this helps find the cause.`",
+            "Agent note \u2014 not checked by pdd: Not checked: `formal (agent limit)`",
+            "Agent note \u2014 not checked by pdd: Not checked: `native  check deferred`",
+            "Agent note \u2014 not checked by pdd: Not checked: `review (agent limit)`",
+            "Agent note \u2014 not checked by pdd: Defect: `real defect`"
           ]
         },
         {
@@ -877,12 +877,12 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Not fixed yet: `this helps find the cause.`",
-            "Not checked: `formal (agent limit)`",
-            "Not checked: `native  check deferred`",
-            "Not checked: `review (agent limit)`",
-            "Defect: `real defect`",
-            "Old-code proof: not run."
+            "Old-code proof: not run.",
+            "Agent note \u2014 not checked by pdd: Not fixed yet: `this helps find the cause.`",
+            "Agent note \u2014 not checked by pdd: Not checked: `formal (agent limit)`",
+            "Agent note \u2014 not checked by pdd: Not checked: `native  check deferred`",
+            "Agent note \u2014 not checked by pdd: Not checked: `review (agent limit)`",
+            "Agent note \u2014 not checked by pdd: Defect: `real defect`"
           ]
         },
         {
@@ -931,7 +931,7 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Not checked: `formal (agent limit)`"
+            "Agent note \u2014 not checked by pdd: Not checked: `formal (agent limit)`"
           ]
         },
         {
@@ -980,8 +980,8 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Not checked: `formal (agent limit)`",
-            "Old-code proof: not run."
+            "Old-code proof: not run.",
+            "Agent note \u2014 not checked by pdd: Not checked: `formal (agent limit)`"
           ]
         },
         {
@@ -1130,8 +1130,8 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Defect: `scope defect`",
-            "Not caught because: `scope gap`"
+            "Agent note \u2014 not checked by pdd: Defect: `scope defect`",
+            "Agent note \u2014 not checked by pdd: Not caught because: `scope gap`"
           ]
         },
         {
@@ -1239,9 +1239,9 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Defect: ``@octocat #17 Closes #17 `tick` pdd-workflow\\u003a``",
-            "Not caught because: `internal\\tcontrol`",
-            "Review: ``` @serhan #2559 ``two`` ```"
+            "Agent note \u2014 not checked by pdd: Defect: ``@octocat #17 Closes #17 `tick` pdd-workflow\\u003a``",
+            "Agent note \u2014 not checked by pdd: Not caught because: `internal\\tcontrol`",
+            "Agent note \u2014 not checked by pdd: Review: ``` @serhan #2559 ``two`` ```"
           ]
         },
         {
