@@ -100,8 +100,8 @@ for (const kind of ['check', 'lint', 'try']) for (const reason of ['local slot',
     made.ports.env.PDD_MAX_JOBS = '1'; const directory = join(setup.state, 'slots', encodeURIComponent(new URL(fake.origin).host)); mkdirSync(directory, { recursive: true });
     writeFileSync(join(directory, 'busy.json'), JSON.stringify({ id: 'busy', state: 'active', pid: process.pid, kind: 'check', started_at: made.clock.now, request_ids: ['other'] }));
   } else fake.capacity = () => ({ status: 200, json: { maintenance: { until: new Date(made.clock.now + 600_000).toISOString(), reason: 'test window' } } });
-  made.ports.sleep = async ms => { made.clock.now += interrupted ? ms : 90_000; if (interrupted) made.clock.interrupt(); };
-  const code = await (kind === 'try' ? startTry(setup, made.ports) : check(setup, made.ports, kind === 'lint' ? { '--lint': true } : { '--timeout': 1.5 }));
+  made.ports.sleep = async ms => { made.clock.now += interrupted ? ms : kind === 'check' ? 60_000 : 90_000; if (interrupted) made.clock.interrupt(); };
+  const code = await (kind === 'try' ? startTry(setup, made.ports) : check(setup, made.ports, kind === 'lint' ? { '--lint': true } : { '--timeout': 1 }));
   assert.equal(code, interrupted && kind === 'check' ? 3 : 5); assert.equal(fake.posts.length, 0);
   const output = made.ports.stdout.text + made.ports.stderr.text; assert.match(output, new RegExp(reason)); assert.doesNotMatch(output, /after 0 lint attempts/);
   if (kind !== 'try') { const out = JSON.parse(made.ports.stdout.text); if (kind === 'check') assert.equal(out.rows[0].calls, 0); else assert.match(out.summary_line, /0 AI calls/); }
@@ -216,7 +216,7 @@ test('later-recovery-revalidates: a new invocation recaptures changed source bef
     if (e.method === 'GET') return { status: 200, json: restart ? f.job(e.url.split('/').at(-1), 'check', 'unknown', { refusals: [{ code: 'service-restarted' }] }, 1) : f.check(e.url.split('/').at(-1), 'running') };
     return f.normal(e);
   });
-  const first = make(setup, fake); assert.equal(await check(setup, first.ports, { '--timeout': 1.5 }), 3); const batch = JSON.parse(first.ports.stdout.text).batch;
+  const first = make(setup, fake); assert.equal(await check(setup, first.ports, { '--timeout': 1 }), 3); const batch = JSON.parse(first.ports.stdout.text).batch;
   restart = true; writeFileSync(join(setup.repo, 'user_stories/place-order.md'), readFileSync(join(setup.repo, 'user_stories/place-order.md'), 'utf8') + '\nChanged after prior wait.\n');
   const later = make(setup, fake, { captureSource: (...args) => { captures++; return captureSource(...args); } }); later.clock.now = first.clock.now;
   assert.equal(await runCheck({ cwd: setup.repo, words: [batch], options: { '--read': true, '--json': true } }, later.ports), 3);
@@ -230,7 +230,7 @@ test('command return stops heartbeat timers without freeing an uncertain paid le
   const fake = await fakeRuntime(t, (e, f) => e.command === 'check' || e.method === 'GET'
     ? { status: 202, json: f.check(e.request?.requestId ?? e.url.split('/').at(-1), 'running') } : f.normal(e));
   const made = make(setup, fake, { timers: { setInterval: fn => { intervals.add(fn); return fn; }, clearInterval: fn => intervals.delete(fn) } });
-  assert.equal(await check(setup, made.ports, { '--timeout': 1.5 }), 3);
+  assert.equal(await check(setup, made.ports, { '--timeout': 1 }), 3);
   assert.equal(intervals.size, 0);
   const jobs = (await listRuntimeJobs({ stateDir: setup.state, origin: fake.origin })).jobs;
   assert.equal(jobs.length, 1); assert.deepEqual(jobs[0].request_ids, [fake.posts.find(e => e.command === 'check').request.requestId]);
@@ -295,8 +295,8 @@ for (const kind of ['check', 'lint', 'try']) test(`cleared-maintenance-then-capa
   });
   made = make(setup, fake); const base = made.clock.now; until = base + 7000;
   fake.capacity = () => { reads++; return { status: 200, json: { maintenance: made.clock.now < until ? { until: new Date(until).toISOString(), reason: 'brief window' } : null } }; };
-  assert.equal(await (kind === 'try' ? startTry(setup, made.ports) : check(setup, made.ports, kind === 'lint' ? { '--lint': true } : { '--timeout': 1.5 })), 5);
-  assert.equal(made.clock.now, base + 90_000); assert.equal(reads, 2); assert.equal(maintenanceCount(made.ports), 1);
+  assert.equal(await (kind === 'try' ? startTry(setup, made.ports) : check(setup, made.ports, kind === 'lint' ? { '--lint': true } : { '--timeout': 1 })), 5);
+  assert.equal(made.clock.now, base + (kind === 'check' ? 60_000 : 90_000)); assert.equal(reads, 2); assert.equal(maintenanceCount(made.ports), 1);
   assert.equal(fake.posts.length, 1); assert.equal(fake.gets.length, 0);
   const output = made.ports.stdout.text + made.ports.stderr.text;
   assert.match(output, /Your wait ended while pdd waited for server capacity\./);

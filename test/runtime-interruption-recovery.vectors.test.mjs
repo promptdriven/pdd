@@ -127,7 +127,7 @@ for (const vector of vectors.cases) test(`RECONCILE ${vector.id}`, async t => {
     return { status: 200, headers: { 'retry-after': '1' }, json: capacity(f, e.request.requestId) };
   });
   const start = r.made.clock.now, sleeps = [];
-  const result = await r.run(vector.id === 'busy-caller-deadline' ? { '--timeout': 1.5 } : {}, { onInterrupt: handler => { stop = handler; return () => {}; }, sleep: async ms => {
+  const result = await r.run(vector.id === 'busy-caller-deadline' ? { '--timeout': 1 } : {}, { onInterrupt: handler => { stop = handler; return () => {}; }, sleep: async ms => {
     sleeps.push(ms); r.made.clock.now += ms;
     if (vector.id === 'busy-interruption' && posts >= 4) stop();
   } });
@@ -137,7 +137,7 @@ for (const vector of vectors.cases) test(`RECONCILE ${vector.id}`, async t => {
   if (vector.id === 'more-than-three-busy-attempts') { assert.equal(posts, 5); assert.ok(lastAt - start >= 40_000); complete(result); }
   else if (vector.id === 'busy-caller-deadline') {
     assert.ok(posts > 3 && posts <= 10); assert.equal(result.code, 5); assert.equal(row.state, 'not_run'); assert.equal(row.calls, 0); assert.equal(row.busy, true);
-    assert.equal(r.made.clock.now - start, 90_000); assert.match(row.reason.message, /busy|No checks ran/i);
+    assert.equal(r.made.clock.now - start, 60_000); assert.match(row.reason.message, /busy|No checks ran/i);
   } else if (vector.id === 'busy-interruption') {
     assert.ok(posts > 3); assert.equal(result.code, 3); assert.ok(r.made.clock.now - start < 90_000);
     assert.match(result.err + JSON.stringify(result.json), /Stopped\./); assert.doesNotMatch(result.err + JSON.stringify(result.json), /Stopped before sending|wait ended|until the timeout/);

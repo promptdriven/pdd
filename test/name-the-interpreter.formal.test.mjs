@@ -155,7 +155,7 @@ test('keep-list: schema ids, host, setting, folder, block label and gate text st
     const run = harbor(t); let requests = 0;
     const fetch = async () => { requests++; return json ? Response.json(json, { status }) : new Response(text, { status, headers: { 'content-type': 'text/plain' } }); };
     const { ports } = portsFor({ HOME: run.home, PDD_STATE_DIR: run.state, PDD_RUNTIME_URL: 'http://127.0.0.1:9' }, { fetch });
-    const code = await runCheck({ words: ['place-order'], cwd: run.repo, options: status === 503 && text === 'Other text.' ? { '--timeout': 1.5 } : {} }, ports);
+    const code = await runCheck({ words: ['place-order'], cwd: run.repo, options: status === 503 && text === 'Other text.' ? { '--timeout': 1 } : {} }, ports);
     said.push({ code, requests, out: ports.stdout.text + ports.stderr.text });
   }
   // The gate stops at the first answer; another 503 text is not the gate.

@@ -187,7 +187,7 @@ test('RUNTIME-SERVER8: lint refuses tests that reach a bad prompt; unknown lint 
   assert.equal(refused.code, 4); assert.deepEqual(draft.posts.map(post => post.command), ['lint']);
   assert.deepEqual(refused.json.rows.map(row => row.refusals[0].code), ['interface-stale', 'interface-stale']);
   const lost = await fakeRuntime(t, entry => entry.method === 'POST' ? { destroy: true } : { status: 404, json: { error: { code: 'not-found' } } });
-  const unknown = await check(setup, lost, [], { '--timeout': 1.5 });
+  const unknown = await check(setup, lost, [], { '--timeout': 1 });
   assert.equal(unknown.code, 3); assert.deepEqual(lost.posts.map(post => post.command), ['lint']);
   assert.match(unknown.out, /^pdd test --read /);
 });
@@ -604,16 +604,15 @@ test('RUNTIME-WAIT4: agent default waits to completion; explicit timeout preserv
   const unlimited = await run({}, { interactive: false });
   assert.equal(unlimited.code, 0, unlimited.err + unlimited.out);
   assert.equal(JSON.parse(readFileSync(join(setup.state, 'batches', unlimited.batch, 'batch.json'), 'utf8')).timeout_min, null);
-  const agent = await run({ '--timeout': 1.5 }, { interactive: false });
+  const agent = await run({ '--timeout': 1 }, { interactive: false });
   assert.equal(agent.code, 3, agent.err + agent.out);
   assert.match(agent.out, /^Place a coffee order +tests\/place-order\.json +running +- +-$/m);
-  assert.match(agent.out, /^STILL RUNNING after 90 s: Place a coffee order\. Do not send it again\.$/m);
+  assert.match(agent.out, /^STILL RUNNING after 1 min: Place a coffee order\. Do not send it again\.$/m);
   const err = agent.err.trimEnd().split('\n');
-  assert.deepEqual(err.filter(text => text.startsWith('Still running:')), ['Still running: 0 of 1 Story done · 1 AI call so far · 30 s',
-    'Still running: 0 of 1 Story done · 1 AI call so far · 1 min']);
+  assert.deepEqual(err.filter(text => text.startsWith('Still running:')), ['Still running: 0 of 1 Story done · 1 AI call so far · 30 s']);
   assert.equal(err.at(-1), `Still running. Read the results later with: pdd test --read ${agent.batch}`);
   assert.equal(err.filter(text => text.startsWith('If pdd stops')).length, 1);
-  assert.equal(JSON.parse(readFileSync(join(setup.state, 'batches', agent.batch, 'batch.json'), 'utf8')).timeout_min, 1.5);
+  assert.equal(JSON.parse(readFileSync(join(setup.state, 'batches', agent.batch, 'batch.json'), 'utf8')).timeout_min, 1);
   const longer = await run({ '--timeout': '20' }, { interactive: false });
   assert.equal(longer.code, 0, longer.err + longer.out);
   assert.doesNotMatch(longer.err, /Read the results later/);
@@ -779,7 +778,7 @@ test('RUNTIME-SERVER17: --read of a still-running row names no wait time', async
   const fake = await fakeRuntime(t, (entry, f) => entry.method === 'GET' ? { status: 200, json: f.check(entry.url.split('/').at(-1), 'running') } : f.normal(entry));
   const first = await check(setup, fake, ['place-order'], { '--timeout': '1' });
   assert.equal(first.code, 3);
-  const read = await check(setup, fake, [], { '--read': true, '--timeout': 1.5 });
+  const read = await check(setup, fake, [], { '--read': true, '--timeout': 1 });
   assert.equal(read.code, 3); assert.match(read.out, /^STILL RUNNING: Place a coffee order\. Do not send it again\.$/m);
 });
 
@@ -829,13 +828,13 @@ test('RUNTIME-WAIT2: in a terminal with no --timeout a lost POST answer is read 
 });
 
 // Wrong: a lost POST answer keeps an agent's pdd reading for 5 min, past its shell tool's limit.
-test('RUNTIME-WAIT5: with explicit timeout a lost POST answer is read until 90 s, then exit 3 with the read line and no new POST', async t => {
+test('RUNTIME-WAIT5: with explicit timeout a lost POST answer is read until 1 min, then exit 3 with the read line and no new POST', async t => {
   const setup = harbor(t);
   const fake = await fakeRuntime(t, (entry, f) => entry.method === 'POST' && entry.command === 'check' ? { destroy: true }
     : entry.method === 'GET' ? { status: 404, json: NOT_STARTED } : f.normal(entry));
-  const result = await check(setup, fake, ['place-order'], { '--timeout': 1.5 });
+  const result = await check(setup, fake, ['place-order'], { '--timeout': 1 });
   assert.equal(result.code, 3);
-  assert.ok(fake.gets.length >= 44 && fake.gets.length <= 45, String(fake.gets.length));
+  assert.ok(fake.gets.length >= 29 && fake.gets.length <= 30, String(fake.gets.length));
   assert.equal(fake.posts.filter(post => post.command === 'check').length, 1);
   assert.equal(result.err.trimEnd().split('\n').at(-1), `Still running. Read the results later with: pdd test --read ${result.batch}`);
 });
