@@ -57,11 +57,13 @@ test('PREPARE selects virtual files and discovers replacement calls, map assets 
 });
 
 test('PREPARE default discovery uses effective replaced and virtual scenario bytes', t => {
+  // A prepared file is a test by the same name rule: generated/tests/extra.json is the test of user_stories/extra.md.
   const { repo } = harbor(t), scenario = readFileSync(join(repo, ORDER));
+  write(repo, 'user_stories/extra.md', readFileSync(join(repo, STORY)));
   const capture = captureSource(repo, { prepareSource: () => [
-    { path: ORDER, bytes: '{}' }, { path: 'generated/test.json', bytes: scenario },
+    { path: ORDER, bytes: '{}' }, { path: 'generated/tests/extra.json', bytes: scenario },
   ] });
-  assert.ok(capture.files.some(file => file.path === 'generated/test.json'));
+  assert.ok(capture.files.some(file => file.path === 'generated/tests/extra.json'));
   assert.ok(capture.files.some(file => file.path === STORY));
   assert.equal(extract(capture.tar, ORDER).toString(), '{}');
   for (const schema_version of [1,{},null]) {

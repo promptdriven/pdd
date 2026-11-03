@@ -1,11 +1,11 @@
-// Generated from prompts/cli/workflow-view.prompt.md (sha256: 331c079f17ad19e4ca021b3743d2dc41f7532068a22c95a752c0d1fff5f8e464).
+// Generated from prompts/cli/workflow-view.prompt.md (sha256: e43adbca1b77ed5e3176573a71f328f0dbb59f5a4f82bc284395456bb2f5d7eb).
 import { execFile } from 'node:child_process';
 import { lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { resolveRun } from './workflow-runs.mjs';
-import { interfaceBlocks, isSecretPath, proseSha256 } from './runtime-preflight.mjs';
+import { findTests, interfaceBlocks, isSecretPath, LIMITS, proseSha256 } from './runtime-preflight.mjs';
 import { PROMPT_TESTS_WORDS } from './runtime-output.mjs';
 
 const execute = promisify(execFile);
@@ -28,7 +28,7 @@ function fileInfo(root, path, directory = false) {
 }
 function readArtifact(root, path) {
   const file = localPath(root, path), stat = file && fileInfo(root, file);
-  if (!stat || stat.size > 1048576 || isSecretPath(path)) return null;
+  if (!stat || stat.size > LIMITS.bytes || isSecretPath(path)) return null;
   try { return readFileSync(file, 'utf8'); } catch { return null; }
 }
 function promptState(source) {
@@ -57,7 +57,11 @@ export async function viewRun({ ref, cwd }, ports = {}) {
   const changed = run.baseSha ? await git(['diff', '--no-ext-diff', '--no-textconv', '--name-only', '-z', run.baseSha, '--']) : null;
   const listed = changed ?? await git(['ls-files', '-z']);
   const extra = await git(['ls-files', '--others', '--exclude-standard', '-z']);
-  const files = new Map(), prompts = new Map();
+  const files = new Map(), prompts = new Map(), tests = new Map();
+  // Tests are found by the test name rule (runtime-preflight), never by their content or size.
+  let discovery = null;
+  try { for (const test of findTests({ root }).tests) for (const file of test.files ?? [test.path]) tests.set(file, test); }
+  catch (error) { discovery = `Test discovery unavailable: ${text(error.message)}`; }
   const add = (role, path) => {
     const file = localPath(root, path);
     if (file && !isSecretPath(path)) files.set(file, { role, path });
@@ -67,13 +71,17 @@ export async function viewRun({ ref, cwd }, ports = {}) {
     else if (path.endsWith('.svg')) add('View', path);
     else if (path.endsWith('.md') && (path.split('/').includes('user_stories') || /(?:^|\/)plan\.md$/i.test(path))) add('Story/plan', path);
     else if (path.endsWith('.json')) {
-      const source = readArtifact(root, path);
-      let doc; try { doc = JSON.parse(source); } catch { /* Link malformed authored tests for review too. */ }
-      if (doc?.schema_version === 'prompt-runtime.program-scenario.v1') {
-        add('Test cases', path); add('Story', doc.story_path);
-        for (const step of array(doc.steps)) add('Prompt', step?.entry_path);
-        for (const entry of array(doc.entry_paths)) add('Prompt', entry);
-      } else if (doc?.schema_version === 'prompt-runtime.app-map.v1' || /(?:^|\/)(?:test|tests)\//.test(path)) add('Test/app map', path);
+      const test = tests.get(path);
+      if (test) {
+        // Malformed or conflicting tests are linked for review too.
+        add('Test cases', path);
+        for (const story of test.storyPaths ?? [test.storyPath]) add('Story', story);
+        for (const step of array(test.doc?.steps)) add('Prompt', step?.entry_path);
+        for (const entry of array(test.doc?.entry_paths)) add('Prompt', entry);
+      } else {
+        let doc; try { doc = JSON.parse(readArtifact(root, path)); } catch { /* not an app map */ }
+        if (doc?.schema_version === 'prompt-runtime.app-map.v1' || /(?:^|\/)(?:test|tests)\//.test(path)) add('Test/app map', path);
+      }
     }
   }
   for (const { path } of files.values()) if (path.endsWith('.prompt.md')) {
@@ -114,7 +122,7 @@ export async function viewRun({ ref, cwd }, ports = {}) {
     `Revision: ${revision?.trim() ?? 'unavailable'}; ${dirty === null ? 'working-tree state unavailable' : dirty ? 'uncommitted changes' : 'clean checkout'}.`,
     'Review links show current files; recorded approvals do not certify later edits.',
     ...(changed === null ? ['Changes since the base are unavailable; listing available authored files.'] : []),
-    ...(listed === null ? ['Worktree file inspection unavailable.'] : []), 'Gate files:',
+    ...(listed === null ? ['Worktree file inspection unavailable.'] : []), ...(discovery ? [discovery] : []), 'Gate files:',
     ...[...files].sort(([a], [b]) => a.localeCompare(b)).map(([file, { role }]) => `  ${role}: ${pathToFileURL(file).href}${fileInfo(root, file) ? '' : ' (unavailable)'}`), ...gateFiles];
   return { exitCode: 0, message: lines.join('\n') };
 }

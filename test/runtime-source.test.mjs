@@ -170,7 +170,7 @@ test('SOURCE6: scoped Try keeps its authored seed and adds saved cases to the or
 });
 
 test('SOURCE11: Try saves to its selected test when a Story has several tests, including a reopened Try', async t => {
-  const setup = harbor(t), selected = 'tests/z-place-order.json';
+  const setup = harbor(t), selected = 'tests/place-order.z.json';
   const original = readFileSync(join(setup.repo, ORDER), 'utf8');
   write(setup.repo, selected, original);
   const saved = load(setup.repo, selected);
@@ -188,16 +188,16 @@ test('SOURCE11: Try saves to its selected test when a Story has several tests, i
     assert.equal(await runTry({ cwd: setup.repo, words: [selected], options: { '--no-open': true, '--no-wait': true } }, ports), 0, ports.stderr.text);
     return ports.stdout.text;
   };
-  assert.match(await run(), /added to tests\/z-place-order\.json as step saved-selected/);
+  assert.match(await run(), /added to tests\/place-order\.z\.json as step saved-selected/);
   savedCases = [...savedCases, { id: 'selected-case', path: ORDER, story_path: STORY, test: saved }];
-  assert.match(await run(), /added to tests\/z-place-order\.json as step saved-selected-2/);
+  assert.match(await run(), /added to tests\/place-order\.z\.json as step saved-selected-2/);
   assert.equal(readFileSync(join(setup.repo, ORDER), 'utf8'), original);
   assert.deepEqual(load(setup.repo, selected).steps.slice(-2).map(step => step.step_id), ['saved-selected', 'saved-selected-2']);
   assert.equal(fake.posts.filter(post => post.command === 'try').length, 1);
 });
 
 test('SOURCE13: reopening preserves the original Story identity after the selected test is reassigned', async t => {
-  const setup = harbor(t), selected = 'tests/z-place-order.json';
+  const setup = harbor(t), selected = 'tests/place-order.z.json';
   const original = readFileSync(join(setup.repo, ORDER), 'utf8');
   write(setup.repo, selected, original);
   const saved = load(setup.repo, selected);
@@ -217,14 +217,19 @@ test('SOURCE13: reopening preserves the original Story identity after the select
   await run();
   json(setup.repo, selected, load(setup.repo, 'tests/unknown-item.json'));
   savedCases = [{ id: 'original-story', story_path: STORY, test: saved }];
-  assert.match(await run(), /not added: the original test tests\/z-place-order\.json is missing or no longer belongs/);
+  // By its name the file is still a test of place-order, but its story_path names unknown-item: pdd refuses it
+  // before the Try and adds the case nowhere.
+  const { ports } = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin });
+  assert.equal(await runTry({ cwd: setup.repo, words: [selected], options: { '--no-open': true, '--no-wait': true } }, ports), 4);
+  assert.match(ports.stdout.text + ports.stderr.text, /tests\/place-order\.z\.json is the test of user_stories\/place-order\.md by its name, but its story_path names user_stories\/unknown-item\.md/);
+  assert.doesNotMatch(ports.stdout.text, /added to/);
   assert.equal(readFileSync(join(setup.repo, ORDER), 'utf8'), original);
   assert.equal(fake.posts.filter(post => post.command === 'try').length, 1);
 });
 
 test('SOURCE12: a removed or reassigned Try seed is never replaced by another test for the Story', async t => {
   for (const change of ['remove', 'reassign']) {
-    const setup = harbor(t), selected = 'tests/z-place-order.json';
+    const setup = harbor(t), selected = 'tests/place-order.z.json';
     const original = readFileSync(join(setup.repo, ORDER), 'utf8');
     write(setup.repo, selected, original);
     const saved = load(setup.repo, selected);
@@ -240,7 +245,7 @@ test('SOURCE12: a removed or reassigned Try seed is never replaced by another te
     });
     const { ports } = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin });
     assert.equal(await runTry({ cwd: setup.repo, words: [selected], options: { '--no-open': true, '--no-wait': true } }, ports), 0, ports.stderr.text);
-    assert.match(ports.stdout.text, /not added: the original test tests\/z-place-order\.json is missing or no longer belongs/);
+    assert.match(ports.stdout.text, /not added: the original test tests\/place-order\.z\.json is missing or no longer belongs/);
     assert.equal(readFileSync(join(setup.repo, ORDER), 'utf8'), original);
   }
 });
