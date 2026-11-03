@@ -108,7 +108,7 @@ async function sameRun(argvs, options) {
 test('workflow start reaches the same runner export as workflow run, with no extra line', async () => {
   const calls = [];
   const runs = await sameRun([['workflow', RUN, 'feature', 'o/r#42', '--agent', 'claude'], ['workflow', 'start', 'feature', 'o/r#42', '--agent', 'claude']], () => ({
-    cwd: '/chosen', packageRoot: '/bundle', workflowRunner: { startRun: async input => { calls.push(input); return { exitCode: 0, message: 'started' }; } } }));
+    cwd: '/chosen', packageRoot: '/bundle', workflowAgents: { checkWorkflowAgents: async ({ requested }) => ({ ok: true, agent: requested ?? 'codex', message: '' }) }, workflowRunner: { startRun: async input => { calls.push(input); return { exitCode: 0, message: 'started' }; } } }));
   assert.equal(calls.length, 2); assert.deepEqual(calls[0], calls[1]);
   assert.deepEqual(runs[0], runs[1]); assert.equal(runs[0].stdout, 'started\n');
 });

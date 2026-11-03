@@ -14,7 +14,7 @@ const temp=t=>{const p=mkdtempSync(join(tmpdir(),'pdd-caller-'));t.after(()=>rmS
 test('a free safe NAME reaches startRun; the areas module decides whether that workflow exists',async t=>{
  const calls=[],stdout=capture(),stderr=capture();
  const runner={startRun:async input=>{calls.push(input);return {exitCode:1,message:'There is no my-team-workflow workflow. Workflows: bug, feature, small-change.'};}};
- assert.equal(await runPdd(['workflow','run','my-team-workflow','octo/repo#12','--agent','claude'],{workflowRunner:runner,cwd:'/assigned invoker',packageRoot:'/package',stdout,stderr}),1);
+ assert.equal(await runPdd(['workflow','run','my-team-workflow','octo/repo#12','--agent','claude'],{workflowAgents: { checkWorkflowAgents: async ({ requested }) => ({ ok: true, agent: requested ?? 'codex', message: '' }) }, workflowRunner:runner,cwd:'/assigned invoker',packageRoot:'/package',stdout,stderr}),1);
  assert.deepEqual(calls,[{name:'my-team-workflow',issue:'octo/repo#12',agent:'claude',cwd:'/assigned invoker',packageRoot:'/package'}]);
  assert.equal(stdout.text,'');assert.match(stderr.text,/no my-team-workflow workflow/);
  for(const name of ['../bad','/bad','Bad','a--b','a-','a'.repeat(65)])assert.throws(()=>parseArgv(['workflow','run',name,'1']));
