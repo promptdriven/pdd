@@ -108,7 +108,7 @@ test('TEST-CACHE-FIX sibling-only reached prompt does not poison selected test',
   const ctx = await setup(t, repo => {
     const doc = read(join(repo, 'tests/place-order.json'));
     for (const step of doc.steps) step.entry_path = 'prompts/independent.prompt.md';
-    write(join(repo, 'tests/place-order-2.json'), doc);
+    write(join(repo, 'tests/place-order.second.json'), doc);
   });
   assert.equal((await successful(ctx)).sent, 4);
   assert.equal((await successful(ctx, selected)).sent, 0);

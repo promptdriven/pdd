@@ -17,7 +17,7 @@ if (mode === 'race') {
 } else if (mode === 'title-race') {
   const read = fs.readFileSync;
   fs.readFileSync = function(path, ...args) {
-    if (!swapped && path === join(repo, 'docs/story.md')) {
+    if (!swapped && path === join(repo, 'user_stories/title.md')) {
       swapped = true;
       fs.unlinkSync(path);
       fs.symlinkSync(join(outside, 'story.md'), path);

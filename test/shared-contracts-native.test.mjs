@@ -200,11 +200,11 @@ test('NATIVE evaluated failures remain failures; lint and Try do not advance the
 
 test('NATIVE identical original Check times select a real failed result; strictly later passing Check wins',async t=>{
   const setup=shared(t);rmSync(join(setup.repo,OTHER));
-  const second=load(setup.repo,ORDER);second.steps[0].step_id='second-world';json(setup.repo,'tests/second-world.json',second);
+  const second=load(setup.repo,ORDER);second.steps[0].step_id='second-world';json(setup.repo,'tests/place-order.second-world.json',second);
   let originalTime='2026-10-27T16:27:47.000Z';
   const ready=await runtime(t,setup,(entry,f)=>{
     if(entry.command!=='check')return null;
-    const failed=entry.request.scenario==='tests/second-world.json';
+    const failed=entry.request.scenario==='tests/place-order.second-world.json';
     const receipt=f.check(entry.request.requestId,failed?'failed':'passed',[{criterion_id:'AC1',target:'result',path:'/totalCents',op:'equals',expected:900,actual:failed?0:900,passed:!failed}]);
     receipt.created_at=originalTime;
     return{status:200,json:receipt};
@@ -375,7 +375,7 @@ test('NATIVE command parser dispatch and subprocess listing stay local without a
 });
 
 test('NATIVE actual Check from one sibling, all Story tests or a batch remains current without uploading unselected siblings',async t=>{
-  const setup=shared(t),sibling='tests/sibling.json',siblingPrompt='prompts/sibling.prompt.md',dependency='docs/sibling.txt';
+  const setup=shared(t),sibling='tests/place-order.sibling.json',siblingPrompt='prompts/sibling.prompt.md',dependency='docs/sibling.txt';
   const scenario=load(setup.repo,ORDER);for(const step of scenario.steps)step.entry_path=siblingPrompt;
   json(setup.repo,sibling,scenario);
   write(setup.repo,dependency,'Sibling dependency before.');

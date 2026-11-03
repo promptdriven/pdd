@@ -3,13 +3,13 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, copyFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runCheck } from '../src/runtime-client.mjs';
-import { harbor, fakeRuntime, portsFor } from './runtime-fake.mjs';
+import { harbor, fakeRuntime, portsFor, storyTest } from './runtime-fake.mjs';
 
 // E1: within one continuation --read, row A gets a fresh "unknown" verdict (410 or wrong ID),
 // row B keeps the budget busy until the deadline. Does the guard replace A's fresh unknown with
 // the stale POST-time "queued/running" cache?
 for (const kind of ['410', 'wrong-id']) test(`E1 guard vs fresh ${kind} in same continuation`, async t => {
-  const h = harbor(t, repo => copyFileSync(join(repo, 'tests/place-order.json'), join(repo, 'tests/second.json')));
+  const h = harbor(t, repo => storyTest(repo, 'second'));
   let lintPassed = false, aId = null;
   const f = await fakeRuntime(t, (e, f) => {
     const id = e.request?.requestId ?? e.url.split('/').at(-1);

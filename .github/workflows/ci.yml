@@ -35,6 +35,64 @@ jobs:
           command -v zsh
           zsh --version
       - run: npm ci --ignore-scripts
-      - run: npm test
+      - name: Run offline tests
+        run: |
+          set +e
+          npm test 2>&1 | tee "$RUNNER_TEMP/auto-heal.tap"
+          result=${PIPESTATUS[0]}
+          exit "$result"
+      - name: Summarize test counts
+        if: always()
+        run: |
+          node --input-type=module - "$RUNNER_TEMP/auto-heal.tap" >> "$GITHUB_STEP_SUMMARY" <<'NODE'
+          import { readFileSync } from 'node:fs';
+          let output = '';
+          try { output = readFileSync(process.argv[2], 'utf8').replace(/\r/g, ''); } catch {}
+          const footer = output.slice(output.lastIndexOf('\n# tests ') + 1);
+          const match = footer.match(/^# tests (\d+)\n# suites \d+\n# pass (\d+)\n# fail (\d+)\n# cancelled (\d+)\n# skipped (\d+)\n# todo (\d+)\n# duration_ms [\d.]+(?:\n|$)/);
+          const counts = match?.slice(1).map(Number);
+          console.log('### auto-heal');
+          if (!counts || !counts.every(Number.isSafeInteger) || counts[0] !== counts.slice(1).reduce((a, b) => a + b, 0)) {
+            console.log('Test counts unavailable: no complete final TAP totals. See the test log.');
+          } else {
+            const [total, passed, failed, cancelled, skipped, todo] = counts;
+            console.log(`${passed}/${total} passed, ${failed} failed, ${cancelled} cancelled, ${skipped} skipped, ${todo} todo.`);
+          }
+          NODE
       - run: node bin/pdd.mjs --help
       - run: npm pack --ignore-scripts --dry-run
+
+  install-smoke:
+    name: install-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Pack, install and smoke the installed command
+        run: |
+          smoke_dir=$(mktemp -d)
+          checks=0
+          trap 'echo "### install-smoke" >> "$GITHUB_STEP_SUMMARY"; echo "$checks/3 command smoke checks passed (help, local lint, empty-state read). No runtime scenario tests ran." >> "$GITHUB_STEP_SUMMARY"; rm -rf "$smoke_dir"' EXIT
+          export HOME="$smoke_dir/home" PDD_STATE_DIR="$smoke_dir/state"
+          export PDD_RUNTIME_URL=http://127.0.0.1:1
+          mkdir -p "$HOME" "$PDD_STATE_DIR"
+          npm pack --ignore-scripts --json --pack-destination "$smoke_dir" > "$smoke_dir/pack.json"
+          archive=$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))[0].filename' "$smoke_dir/pack.json")
+          npm install --global --prefix "$smoke_dir/install" --ignore-scripts --no-audit --no-fund --package-lock=false "$smoke_dir/$archive"
+          installed="$smoke_dir/install/bin/pdd"
+          "$installed" --help
+          checks=$((checks + 1))
+          cp -R test/fixtures/harbor "$smoke_dir/harbor"
+          cd "$smoke_dir/harbor"
+          git init --quiet
+          git add .
+          "$installed" lint --local place-order | tee "$smoke_dir/lint.log"
+          checks=$((checks + 1))
+          read_result=0
+          "$installed" test --read > "$smoke_dir/read.log" 2>&1 || read_result=$?
+          cat "$smoke_dir/read.log"
+          test "$read_result" -eq 2
+          checks=$((checks + 1))

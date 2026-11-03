@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { runCheck } from '../src/runtime-client.mjs';
 import { harbor, fakeRuntime, portsFor, TOKEN } from './runtime-fake.mjs';
 
-const vectors = JSON.parse(readFileSync(new URL('./runtime-admission/runtime-interruption-recovery.json', import.meta.url)));
+const vectors = JSON.parse(readFileSync(new URL('./runtime-admission/runtime-interruption-recovery-cases.json', import.meta.url)));
 const read = path => JSON.parse(readFileSync(path));
 const write = (path, value) => writeFileSync(path, JSON.stringify(value));
 const checkPosts = fake => fake.posts.filter(e => e.command === 'check');

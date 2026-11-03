@@ -164,7 +164,7 @@ for (const action of ['fixture.lookup', 'port.write']) test(`TEST-CACHE-V3 all o
 });
 test('TEST-CACHE-V3 conflicting sibling identities never authorize a complete pass', async t => {
   const ctx = await setup(t, repo => {
-    const doc = read(join(repo, 'tests/place-order.json')); write(join(repo, 'tests/place-order-extra.json'), doc);
+    const doc = read(join(repo, 'tests/place-order.json')); write(join(repo, 'tests/place-order.extra.json'), doc);
   });
   let answer = 0;
   ctx.answerEdit(job => { job.engine_sha = (++answer % 2 ? 'a' : 'b').repeat(40); return job; });
