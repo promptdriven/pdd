@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-adapters.prompt.md (sha256: 415f8506fee0d8926088170a8be8edc83ad0361ba9dc9fb0706509c498d37f22).
+// Generated from prompts/cli/agent-adapters.prompt.md (sha256: 9dc74bacd457bf58690744bdda2f33c50e2e0ee91f052784e9a7d6f28623fe30).
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync, chmodSync, mkdirSync, lstatSync, openSync, fstatSync, closeSync, fchmodSync, statSync, constants } from 'node:fs';
@@ -91,14 +91,19 @@ export function runAgentProcess(command,args,{cwd,env,input='',signal,timeoutMs=
   child.stdout.on('data',c=>data('stdout',c));child.stderr.on('data',c=>data('stderr',c));child.on('error',e=>finish(e));child.on('close',code=>{if(!stopping)clearTimeout(killTimer);finish(null,code);});child.stdin.on('error',()=>{});child.stdin.end(input);
  });
 }
+function geminiCapabilityError(help) {
+ if(help.code!==0)return 'Gemini Try read-only capability discovery failed (--help).';
+ const missing=['--approval-mode','--admin-policy','--extensions','--allowed-mcp-server-names','--output-format'].find(flag=>!help.stdout.includes(flag));
+ return missing?`Gemini Try read-only mode requires ${missing}; update Gemini CLI.`:null;
+}
 export async function discoverAgents({cwd=process.cwd(),env=process.env,run=runAgentProcess,definitions}={}) {
  const result=[];
  for(const {id,name,kind,command,env:overrides} of definitions??loadAgentDefinitions({cwd,env})){
   const childEnv={...env,...overrides},opts={cwd,env:childEnv,timeoutMs:10000,maxBytes:131072};
   try{
    const help=await run(command,['--help'],opts);
+   if(kind==='gemini'){const detail=geminiCapabilityError(help);result.push({id,name,state:detail?'error':'available',detail:detail||'Installed; sign-in is checked when you send a message.'});continue;}
    if(help.code!==0){result.push({id,name,state:'error',detail:'The agent help command failed.'});continue;}
-   if(kind==='gemini'){const version=await run(command,['--version'],{...opts,maxBytes:1024});const verified=version.code===0&&version.stdout.trim()==='0.66.0';result.push({id,name,state:verified?'available':'error',detail:verified?'Installed; sign-in is checked when you send a message.':'This Gemini version has no verified read-only adapter yet.'});continue;}
    const flags=kind==='codex'?['--sandbox']:['--safe-mode','--tools','--permission-prompts'];
    if(flags.some(f=>!help.stdout.includes(f))){result.push({id,name,state:'error',detail:'Update this agent to a version with the required read-only controls.'});continue;}
    const auth=await run(command,kind==='codex'?['login','status']:['auth','status','--json'],{...opts,maxBytes:16384});
@@ -134,7 +139,7 @@ export async function askAgent({agent,definition,cwd,env=process.env,context={},
   const input=buildAgentInput({context:safe.context,entries:safe.entries,supportsApply,supportsRun});
   const opts={cwd,env,input,signal,timeoutMs,maxBytes:131072};
   let args,overlay;
-  if(agent==='gemini'){const version=await run(command,['--version'],{cwd,env,signal,timeoutMs:10000,maxBytes:1024});if(version.code!==0||version.stdout.trim()!=='0.66.0')return fail('error','This Gemini version has no verified read-only adapter. Choose another agent.');overlay=geminiOverlay(env);opts.env=overlay.env;}
+  if(agent==='gemini'){const detail=geminiCapabilityError(await run(command,['--help'],{cwd,env,signal,timeoutMs:10000,maxBytes:131072}));if(detail)return fail('error',detail);overlay=geminiOverlay(env);opts.env=overlay.env;}
   if(agent==='codex'){
    args=['exec','--sandbox','read-only','--ephemeral','--color','never','--ignore-rules','-c','approval_policy="never"','-c','web_search="disabled"','-c','mcp_servers={}'];
    for(const feature of ['hooks','plugins','apps','browser_use','browser_use_external','browser_use_full_cdp_access','computer_use','multi_agent','multi_agent_v2','shell_tool','unified_exec','code_mode','code_mode_host'])args.push('-c',`features.${feature}=false`);
