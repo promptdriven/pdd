@@ -19,3 +19,19 @@ test('authored criterion coverage remains structural for passed and failed text 
     assert.equal(renderJson({ rows: [{...row, steps: undefined}], exitCode }).rows[0].criterion_coverage, null);
   }
 });
+
+test('unavailable or malformed authored checks leave coverage unknown without changing the verdict', () => {
+  const exitCheck = { criterion_id:'AC1', target:'result', path:'/exit_code' };
+  for (const steps of [null, {}, [null], [{}], [{checks:null}], [{checks:{}}],
+    [{checks:[null]}], [{checks:[{}]}], [{checks:[{criterion_id:''}]}],
+    [{checks:[exitCheck]}, {checks:[null]}]]) {
+    const row = { story:'legacy', title:'Legacy', test:'legacy.json', state:'passed',
+      criterion_texts:{AC1:'Exits'}, steps };
+    let result;
+    assert.doesNotThrow(() => { result = renderJson({rows:[row], exitCode:0}); }, 'malformed saved coverage must not escape rendering');
+    assert.equal(result.rows[0].criterion_coverage, null, 'partial or malformed authored facts cannot establish a count');
+    assert.equal(result.rows[0].state, 'passed');
+    assert.equal(result.exit_code, 0);
+    assert.doesNotMatch(renderText({rows:[row], exitCode:0}), /checked by exit code only/);
+  }
+});

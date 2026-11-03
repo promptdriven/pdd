@@ -1303,12 +1303,16 @@ async function draftDescription(run, pr1, drafts, p) {
     const reference = new RegExp(`^(?:Part of|Closes|Refs) #${run.number}$`);
     const rows = String(draftBody).replace(marker, '').split('\n');
     let at = 0;
-    while (at < rows.length && owned.test(rows[at])) at++;
+    const labelledTop = [];
+    while (at < rows.length && owned.test(rows[at])) {
+      if (/^Agent note — not checked by pdd: (?:Verdict:|Before[ :])/.test(rows[at])) labelledTop.push(rows[at]);
+      at++;
+    }
     while (at < rows.length && !rows[at].trim()) at++;
     const headerStart = at;
-    while (at < rows.length && new RegExp(String.raw`^(?:Verdict:|Before |Before:|${PROMPT_TESTS_WORDS}|Report(?: \([^)]*\))?:)`).test(rows[at])) at++;
+    while (at < rows.length && new RegExp(String.raw`^(?:Agent note — not checked by pdd: (?:Verdict:|Before[ :])|Verdict:|Before |Before:|${PROMPT_TESTS_WORDS}|Report(?: \([^)]*\))?:)`).test(rows[at])) at++;
     const priorTop = rows.slice(headerStart, at);
-    const ordinaryTop = [...priorTop.filter(line => /^(?:Verdict:|Before[ :])/.test(line)).map(line => `${AGENT_NOTE}: ${line}`), ...publicationRuntime(run, p.env)];
+    const ordinaryTop = [...new Set([...labelledTop, ...priorTop.filter(line => /^(?:Agent note — not checked by pdd: )?(?:Verdict:|Before[ :])/.test(line)).map(line => line.startsWith(`${AGENT_NOTE}: `) ? line : `${AGENT_NOTE}: ${line}`)]), ...publicationRuntime(run, p.env)];
     const introduction = [];
     while (at < rows.length && !rows[at].trim()) at++;
     if (reference.test(rows[at] ?? '')) {

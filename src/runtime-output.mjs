@@ -156,10 +156,14 @@ const sentRow = row => row.phase === 'server';
 function criterionCoverage(row) {
   if (!Array.isArray(row.steps)) return null;
   const counts = new Map(Object.keys(row.criterion_texts ?? {}).map(id => [id, []]));
-  for (const step of row.steps) for (const check of step.checks ?? []) {
-    if (typeof check.criterion_id !== 'string') continue;
-    if (!counts.has(check.criterion_id)) counts.set(check.criterion_id, []);
-    counts.get(check.criterion_id).push(check);
+  for (const step of row.steps) {
+    if (!isObjectLike(step) || !Array.isArray(step.checks)) return null;
+    for (const check of step.checks) {
+      if (!isObjectLike(check) || typeof check.criterion_id !== 'string' || !check.criterion_id.trim()
+        || typeof check.target !== 'string' || typeof check.path !== 'string') return null;
+      if (!counts.has(check.criterion_id)) counts.set(check.criterion_id, []);
+      counts.get(check.criterion_id).push(check);
+    }
   }
   return [...counts].map(([criterion_id, checks]) => ({ criterion_id, check_count: checks.length,
     exit_code_only: checks.length > 0 && checks.every(check => check.target === 'result' && ['/exit_code', '/exitCode'].includes(check.path)) }));

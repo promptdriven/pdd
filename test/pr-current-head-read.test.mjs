@@ -33,6 +33,7 @@ for (const failed of [false, true]) test(`criterion coverage survives immediate 
   };
   const immediate = JSON.parse(await invoke({'--json':true}));
   const facts = immediate.rows[0].criterion_coverage;
+  assert.ok(Array.isArray(facts), 'authored criterion coverage is available as an array');
   assert.deepEqual(facts.slice(0, 3), [
     {criterion_id:'AC1', check_count:2, exit_code_only:false},
     {criterion_id:'AC2', check_count:2, exit_code_only:true},
