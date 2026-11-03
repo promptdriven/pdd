@@ -19,10 +19,10 @@ for (const requested of ['codex','claude']) for (const state of ['ready','missin
  });
 }
 test('2451 guidance distinguishes installation, sign-in and an unknown status',()=>{
- const missing=chooseWorkflowAgent({codex:'missing',claude:'missing'});
- assert.match(missing.message,/Install Codex or Claude Code first/);assert.match(missing.message,/https:\/\//);
- const out=chooseWorkflowAgent({codex:'signed_out',claude:'signed_out'});
- assert.deepEqual(out.message.split('\n'),['Codex is not signed in. Run: codex login','Claude Code is not signed in. Run: claude auth login']);
+ const missing=chooseWorkflowAgent({codex:'missing',claude:'missing',gemini:'missing'});
+ assert.match(missing.message,/Install Codex, Claude Code or Gemini CLI first/);assert.match(missing.message,/https:\/\//);
+ const out=chooseWorkflowAgent({codex:'signed_out',claude:'signed_out',gemini:'signed_out'});
+ assert.deepEqual(out.message.split('\n'),['Codex is not signed in. Run: codex login','Claude Code is not signed in. Run: claude auth login','Gemini CLI is not signed in. Run: gemini']);
  assert.match(chooseWorkflowAgent({codex:'unavailable',claude:'missing',requested:'codex'}).message,/codex login status/);
  assert.match(chooseWorkflowAgent({codex:'missing',claude:'unavailable',requested:'claude'}).message,/claude auth status/);
 });
@@ -37,7 +37,7 @@ test('2451 native status commands preserve the exact caller configuration and us
   calls.push({command,args,options});return command==='codex'?response(1,'','Not logged in'):response(0,'{"loggedIn":true,"private":"not exposed"}');
  }});
  assert.deepEqual(result,{ok:true,agent:'claude',message:''});
- assert.deepEqual(calls.map(c=>[c.command,c.args]),[['codex',['login','status']],['claude',['auth','status']]]);
+ assert.deepEqual(calls.map(c=>[c.command,c.args]),[['codex',['login','status']],['claude',['auth','status']],['gemini',['--version']]]);
  for(const {options} of calls){assert.equal(options.env,env);assert.equal(options.cwd,'/scratch/project');assert.equal(options.input,'');assert.equal(options.maxBytes,16384);assert.equal(options.timeoutMs,10000);}
  assert.doesNotMatch(JSON.stringify(result),/private|exposed/);
 });
@@ -67,7 +67,7 @@ test('2451 a failed optional process does not veto a signed-in agent; private di
   return response(0,'{"loggedIn":true}');
  }});assert.deepEqual(reply,{ok:true,agent:'claude',message:''});
  const absent=await checkWorkflowAgents({}, {run:async()=>{throw Object.assign(Error('private token'),{code:'ENOENT',executableMissing:true});}});
- assert.equal(absent.ok,false);assert.match(absent.message,/Install Codex or Claude Code first/);assert.doesNotMatch(absent.message,/private|token/);
+ assert.equal(absent.ok,false);assert.match(absent.message,/Install Codex, Claude Code or Gemini CLI first/);assert.doesNotMatch(absent.message,/private|token/);
 });
 test('2451 real process port runs only scratch status stubs, honoring a custom Claude config folder',async t=>{
  const root=mkdtempSync(join(tmpdir(),'pdd-workflow-auth-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
@@ -79,10 +79,10 @@ test('2451 real process port runs only scratch status stubs, honoring a custom C
  assert.deepEqual(result,{ok:true,agent:'claude',message:''});
 });
 
-test('2451 two default probes start together; Codex retains precedence regardless of completion',async()=>{
+test('2451 three default probes start together; Codex retains precedence regardless of completion',async()=>{
  let started=0;const pending=[];
  const result=checkWorkflowAgents({}, {run:async agent=>{started++;return new Promise(resolve=>pending.push(()=>resolve(agent==='codex'?response(0,'Logged in'):response(0,'{"loggedIn":true}'))));}});
- await Promise.resolve();assert.equal(started,2,'both probes start before either finishes');
+ await Promise.resolve();assert.equal(started,3,'all probes start before any finishes');
  pending.reverse().forEach(resolve=>resolve());assert.equal((await result).agent,'codex');
 });
 test('2451 uncertain ENOENT evidence does not claim installation missing',async()=>{

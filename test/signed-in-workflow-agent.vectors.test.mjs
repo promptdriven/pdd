@@ -70,9 +70,9 @@ test('workflow and setup admit a ready Claude using status probes before effects
   assert.equal(await runPdd(['workflow', 'run', 'bug', '42'], common), 0);
   assert.equal(starts[0].input.agent, 'claude');
   assert.equal(starts[0].env, env);
-  assert.equal(probes.length, 4);
+  assert.equal(probes.length, 6);
   for (const probe of probes) {
-    assert.deepEqual(probe.args, probe.agent === 'codex' ? ['login', 'status'] : ['auth', 'status']);
+    assert.deepEqual(probe.args, probe.agent === 'codex' ? ['login', 'status'] : probe.agent === 'gemini' ? ['--version'] : ['auth', 'status']);
     assert.equal(probe.options.env, env);
   }
 });

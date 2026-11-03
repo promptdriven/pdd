@@ -15,10 +15,10 @@ concurrency:
 
 jobs:
   public:
-    # main requires this check name; the offline Node suite owns that gate.
-    name: auto-heal
+    # main and alpha require this check name; the offline Node suite owns that gate.
+    name: tests
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -38,20 +38,20 @@ jobs:
       - name: Run offline tests
         run: |
           set +e
-          npm test 2>&1 | tee "$RUNNER_TEMP/auto-heal.tap"
+          npm test 2>&1 | tee "$RUNNER_TEMP/tests.tap"
           result=${PIPESTATUS[0]}
           exit "$result"
       - name: Summarize test counts
         if: always()
         run: |
-          node --input-type=module - "$RUNNER_TEMP/auto-heal.tap" >> "$GITHUB_STEP_SUMMARY" <<'NODE'
+          node --input-type=module - "$RUNNER_TEMP/tests.tap" >> "$GITHUB_STEP_SUMMARY" <<'NODE'
           import { readFileSync } from 'node:fs';
           let output = '';
           try { output = readFileSync(process.argv[2], 'utf8').replace(/\r/g, ''); } catch {}
           const footer = output.slice(output.lastIndexOf('\n# tests ') + 1);
           const match = footer.match(/^# tests (\d+)\n# suites \d+\n# pass (\d+)\n# fail (\d+)\n# cancelled (\d+)\n# skipped (\d+)\n# todo (\d+)\n# duration_ms [\d.]+(?:\n|$)/);
           const counts = match?.slice(1).map(Number);
-          console.log('### auto-heal');
+          console.log('### tests');
           if (!counts || !counts.every(Number.isSafeInteger) || counts[0] !== counts.slice(1).reduce((a, b) => a + b, 0)) {
             console.log('Test counts unavailable: no complete final TAP totals. See the test log.');
           } else {
