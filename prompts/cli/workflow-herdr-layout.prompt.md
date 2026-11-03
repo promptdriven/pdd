@@ -1,53 +1,63 @@
 # Repository and run layout in Herdr
 
-Own `src/workflow-herdr-layout.mjs`: shared session naming, owned repository and run workspace allocation, and run workspace closure. Export `PDD_HERDR_SESSION` (`pdd`), `withHerdrLayoutLock(action, ports)`, `openHerdrRunLayout(input, ports)` and `closeHerdrRunLayout(input, ports)`. This is behavioral refinement of the authorized 0.1.0 layout: stage acceptance and Git worktree allocation remain with their existing owners.
+Own `src/workflow-herdr-layout.mjs`: session naming, finding or creating repository/run workspaces and area tabs, and verified run cleanup. Export module functions `withHerdrLayoutLock(action, ports)`, `openHerdrRunLayout(input, ports)`, `closeHerdrRunLayout(input, ports)`, `closeHerdrRepoLayoutIfIdle({repository, commonDir}, ports)` and `samePath(a,b)`, plus `PDD_HERDR_SESSION` (`pdd`). Preserve these native interfaces and behavior outside the authorized replacement of PDD's layout registry with live Herdr lookup. Git assignments and native-agent dispatch remain with their existing owners.
 
-All new runs use the explicit session `pdd`, never the person's `default` or a per-run server. The [area chat owner](workflow-chat.prompt.md) owns compatible-server startup. Serialize session bootstrap and layout mutations across processes in the same HOME; unrelated repositories may have concurrent active agents. A live owner remains exclusive. Recover a lock only when its recorded process is proved absent; a normal Ctrl+C must not block all later runs. When a live owner holds the lock, fail at once with `herdr_layout_busy`; never wait or poll. Serialize owner inspection/replacement in a synchronous claim section; malformed or interrupted claims fail finitely and require inspection.
+Use only session `pdd`. The area-chat owner supplies compatible-server startup and a session-bound command port. Keep the cross-process layout lock around complete find/create operations and session bootstrap in the same HOME. A live owner is exclusive; return `herdr_layout_busy` immediately, without waiting or polling. Recover only a proved-absent process, with synchronous exclusive inspection/replacement; malformed or interrupted claims fail finitely. Ctrl+C must not leave a dead owner blocking later runs.
 
-Inputs identify the run UUID, canonical repository (`owner/repo`) verified against the Git origin remote by the worktree assignment owner, source checkout, common Git directory, assigned run cwd, issue number, workflow and stage. Ports supply a Herdr command function already bound to `pdd`, an awaited checkpoint, and optionally a state directory (normally the person's local PDD state). No credential/configuration reads or tool-version checks belong here.
+Inputs retain run UUID, origin-verified `owner/repo`, sourceRoot, commonDir, assigned run cwd, issue/workflow and stageId; optional run/repair inputs remain accepted. Ports retain command, awaited checkpoint, optional directory and execFile. The directory holds the lock, not layout state. Never read, write, repair, migrate or delete `registry.json`; old repository rows, run intents and refusal phases have no authority over allocation. No credentials, configuration or version checks belong here.
 
-## Repository parent and confirmed pre-agent recovery
+## Find live identity before creating
 
-Resolve input sourceRoot through the worktree owner's read-only verified repository-parent lookup before
-allocating. Use that root for Herdr's repository workspace, including a verified bare primary; retain the
-actual invoking sourceRoot separately from the assigned run cwd. Never treat a linked caller as a parent.
-Pass the optional execFile port through to that identity lookup; no bypass or independently guessed path.
+Resolve the verified repository parent through the worktree owner's read-only lookup, forwarding execFile. Keep the invoking sourceRoot and assigned cwd unchanged; a linked caller is never the parent checkout. Normalize both sides of filesystem comparisons with the same realpath-based identity rule, including sourceRoot, parent, commonDir, checkout_path, repo_key and pane cwd. Symlink aliases compare equally in either direction; inability to establish identity is uncertainty, never label-based equality. CommonDir separates independent clones of the same repository.
 
-A structured `linked_worktree_source` rejection of worktree open is confirmed before any child workspace or
-native launch. Persist that run as refused with the code, retaining its original cwd/runId and repository binding.
-On a later explicit open, retry only this refused action after inventory shows no workspace for that cwd.
-Other failures/lost replies retain uncertain intent and must never authorize another allocation.
+```mermaid
+flowchart TD
+    I[Inspect live Herdr under lock] --> R{Unique matching run workspace?}
+    R -->|Yes| T[Find area tab by label and cwd]
+    R -->|None| P[Find verified non-linked clone parent]
+    R -->|Ambiguous or unsafe| F([Refuse without mutation])
+    P -->|Found| O[Open assigned existing worktree]
+    P -->|Absent| C[Create parent under unused label]
+    P -->|Unverifiable| F
+    C --> O
+    O -->|Created or already_open verified| T
+    O -->|Lost reply or refusal| U([Retain uncertainty; inspect on explicit retry])
+    T -->|Unique match| A([Checkpoint actual IDs; return])
+    T -->|None| N[Create and checkpoint area tab]
+    T -->|Ambiguous or unsafe| F
+    N --> A
+```
 
-For an affected saved run, optional input preAgentRefusal=`linked_worktree_source` conveys the runner's
-confirmed original pre-agent refusal. A legacy intent without a returned workspace/root identity can become
-refused only with this evidence and no inventory workspace at its cwd.
-Always reassert the refused run's saved common directory, assigned cwd and issue/workflow label before
-any recovery persistence or mutation; a refusal does not authorize rebinding those identities.
-For a legacy repository workspace created at the linked caller, require same saved common directory and sourceRoot, no other run sharing it,
-and this one confirmed refused run. Archive the old repository entry, preserve its workspace untouched,
-create a verified parent workspace under an unused label, and rebind only that refused run to it. Never
-adopt, close or rename the old workspace. Unknown child allocation or an unrelated identity blocks recovery.
-A further confirmed refusal stays retryable. Before retrying, durably mark the new attempt; a lost retry reply
-is uncertain even when an earlier startup warning records a refusal. Never reuse that warning to retry again.
-Pin the parent workspace root tab/pane/terminal returned at creation. If parent inventory lacks Git metadata,
-reuse only with those same root identities and exact parent cwd, one tab and one pane; conflicting metadata refuses.
-Apply that same repository-parent identity rule to reuse, name qualification and idle cleanup. Parent Git metadata
-must identify a non-linked parent; absent metadata cannot justify accepting changed root identities.
+**Run match:** the unique live workspace whose checkout_path equals assigned cwd, repo_key equals commonDir and is_linked_worktree is true. Workspace labels are not identity. Saved layout/chat IDs are live-checked lookup hints, not a second registry; stale IDs alone cannot defeat a unique verified run match. Conflicting live checkout/repo identity or ambiguous candidates refuse before mutation. Preserve runId, original Git assignment, native session and workflow progress.
 
-## Allocation and identity
+**Parent match:** any live non-linked workspace whose checkout_path equals the verified parent and repo_key equals commonDir is usable, including one opened by the person. Multiple matching parents do not require the person to close one; use an existing match. Missing Git metadata does not establish a parent. In particular, an old workspace at another linked checkout without worktree metadata remains untouched and does not block creation of a verified parent for this clone.
 
-Keep a durable, private ownership registry. A matching repository identity and common Git directory reuse one repository workspace. Refuse a second checkout identity for the same repository instead of silently opening its worktree against the wrong repository. Name the repository workspace after its repo; on a name clash qualify both owned repository labels with owner/repo. HD2: when another workspace in session `pdd` already holds the short label for a different folder, use `owner/repo` from the verified origin identity, even if that workspace is absent from the PDD ownership registry. The checkout folder name must not replace the origin owner/repo. Never rename or adopt an unrelated workspace; refuse an occupied qualified label.
+If no parent exists, choose the unused short repository name, otherwise `owner/repo`, otherwise `owner/repo@` plus the first 12 lowercase SHA-256 hex characters of canonical commonDir. Refuse an occupied final label. Preserve all existing workspace labels: adopting a parent does not authorize renaming it or qualifying peer workspaces.
 
-Each run gets one `worktree open --workspace <repo-id> --path <assigned-cwd> --label '<repo name>#<issue> <workflow>' --no-focus` workspace (the repository name keeps runs with the same issue number in two repositories apart; a saved run with the older label `#<issue> <workflow>` still matches). PDD's Git worktree already exists; never ask Herdr to create or remove the Git checkout. Every area chat gets a fresh tab inside that workspace, named after its area (input `stageId`). Preserve the worktree's initial shell tab so closing a stage tab cannot close the run workspace. Return actual `repoWorkspaceId`, `workspaceId`, `tabId`, `paneId`, and `terminalId`; never predict opaque IDs.
+Open the already-assigned Git worktree with `worktree open --workspace <parent-id> --path <cwd> --label '<repo name>#<issue> <workflow>' --no-focus`; never create/remove a Git checkout through Herdr. Treat Herdr's `already_open` response as adoption, not refusal: verify its actual workspace through complete live inventory before using it. A lost create reply never licenses blind duplicate allocation; an explicit retry first inspects live identity and adopts a unique match.
 
-Checkpoint and persist allocation intent before mutations and returned ownership before proceeding. Lost replies or interrupted intents remain uncertain; do not repeat allocation or adopt unrelated workspaces by label. Validate actual owned inventory before reuse: require worktree checkout path, common Git directory and linked-worktree kind; pin the returned initial root tab, pane and terminal identities and reassert them through pane list. Require exactly the initial tab and its one original pane before run closure; an added or unknown tab or split pane prevents closure. Registry labels describe ownership but do not authorize closing a workspace with changed checkout identity. A closed run cannot silently reopen.
+**Area match:** inside the verified run workspace, select the unique tab labelled exactly stageId whose single pane cwd equals assigned cwd. Adopt that tab, including a prelaunch tab left after a crash, or create one when no match exists. Never select a peer tab by label alone. Preserve the initial shell tab. Repeated lookup, including repair:true, returns the same verified area tab; explicit native-session replacement remains the chat owner's separate protocol. Allocation alone never authorizes another native launch after an uncertain dispatch.
+
+Checkpoint before effects and checkpoint returned identities before proceeding; checkpoint failure stops the next effect. Return actual `repoWorkspaceId`, `workspaceId`, `tabId`, `paneId`, `terminalId` and `root` (initial run tab/pane/terminal IDs), never predicted IDs. Run-record creation/close custody remains available for cleanup but cannot override contradictory live identity. A closed saved run does not silently reopen. Unavailable/malformed inventory or identity uncertainty refuses finitely, retaining custody. For unsafe live identity, diagnostics identify session/workspace, failed field, escaped expected/observed values and one inspect/retry action; do not recommend closing or deleting anything.
 
 ## Cleanup
 
-The caller invokes run cleanup after it closed the run's area tabs (for example on cancel). Close exactly the saved run workspace using `workspace close`, never `worktree remove` or group close. Require the documented close acknowledgement and a valid inventory proving absence. Preserve repository workspaces, peer runs, unrelated workspaces and the Git checkout. Uncertain close must not be blindly repeated. Git removal, permitted only after merge or cancellation, remains the Git-worktree owner's responsibility.
+After the caller closes its verified area tabs, close only the saved run workspace with `workspace close`, never worktree remove or group close. Revalidate its checkout/repo identity and saved initial root tab/pane/terminal; require exactly that original tab and pane. Extra tabs, split panes or changed roots prevent closure. Require documented acknowledgement and valid inventory proving absence. A lost close reply is not blindly repeated. Preserve peer/unrelated workspaces and Git checkout; Git removal remains the worktree owner's responsibility.
 
-Export `closeHerdrRepoLayoutIfIdle({repository, commonDir}, ports)`. After the last open run of a repository is closed, close that repository's own workspace too, so no empty shell workspace stays after cancel. Close it only when no saved run of it is open, its identity still matches, and it holds exactly its one tab and one pane (a person may use more). Remove the repository from the registry, so a later run opens a new repository workspace. Return true when it closed or was already gone, false when it stays.
+`closeHerdrRepoLayoutIfIdle` returns true if a safely owned idle parent was closed or is already gone, false when retained. Adoption is not creation ownership: never close a parent merely because it is a non-linked workspace of the clone. A parent may be closed only with durable run-record evidence that PDD created this exact parent/root, no remaining open run uses it, unchanged verified parent identity and exactly its one original tab/pane. Existing run records with workspace IDs alone do not prove parent creation or its initial roots; preserve those parents and return false. Without that evidence preserve it, including legacy or person-opened parents. Never create another durable layout registry to establish cleanup ownership.
 
 ## Dependencies
 
-Load [Prompting guide](../../docs/prompting-guide.md) for authoring and generation. The installed Herdr CLI's public workspace/worktree/tab commands and JSON identities supply runtime transport, with 0.9.1 as the capability baseline and no version pin. The [worktree assignment owner](workflow-worktree.prompt.md) supplies origin-verified repository identity and canonical checkout paths; load its contract for generation and verification. Node filesystem primitives provide durable local ownership and cross-process serialization. The area chat owner supplies a session-bound command function; it keeps native-agent identity and prompt delivery.
+- Load the complete [Prompting guide](../../docs/prompting-guide.md) for authoring/generation.
+- Load the [worktree assignment owner](workflow-worktree.prompt.md) for generation/verification of origin, commonDir, verified parent and assigned paths. No Git allocation rule is changed here.
+- Runtime Herdr public workspace/worktree/tab/pane commands and JSON identities, capability baseline 0.9.1 without version pin, supplied by the area-chat command port.
+- Node filesystem/crypto primitives supply canonical identity, SHA-256 label qualification and the private cross-process lock. Durable run custody is supplied by the caller, not reconstructed from a registry.
+
+<details><summary>Runtime interface</summary>
+
+The native module remains unbound to the Interpreter: its callback/checkpoint ports, real filesystem identity and cross-process lock have no declared JSON transport binding. No check-only entry or invented adapter is part of this contract. Native tests must establish allocation, chat dispatch and cleanup effects; an Interpreter pass cannot prove them.
+
+```json
+{"status":"draft","prose_sha256":"","entries":[],"calls":[],"resources":[],"limits":{"max_steps":1,"max_model_calls":0},"conventions":[]}
+```
+</details>

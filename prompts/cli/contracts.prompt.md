@@ -8,8 +8,17 @@ These routes read working files and private local Check history. They never
 authenticate, reserve a runtime slot, upload, lint remotely or call a model.
 
 Find the Git root as preflight does. Read Git-visible Markdown/JSON files under
-`contracts/`, prompts and discovered scenarios using preflight's safe-file rules.
-Do not follow symlinks or secret paths, including during writes. Use the
+`contracts/`, prompts and discovered scenarios using preflight's bounded native
+reads. Do not follow symlinks or secret paths, including during writes. Bind
+`access = createStrictSourceAccess(root)` from `src/runtime-preflight.mjs`, using
+its [scoped strict source access](runtime-preflight.prompt.md#scoped-strict-source-access)
+contract. Use `access.sourceFilePort(visible)` for catalog, prompt, expansion and
+original-byte checks, `access.findTests({files})` for discovery, and
+`access.captureSource({tests})` for current Story footprints. Fresh write-time
+visibility uses the same capability's `sourceFilePort` method. All nested reads
+must remain within this boundary; a direct-port wrapper alone is insufficient.
+This command owns the no-follow requirement; preflight owns the scoped adapter
+and physical source/snapshot checks. Use the
 contract-reference module's catalog, expansion, comparison and migration APIs;
 this command owns orchestration and presentation, not another resolver.
 
@@ -82,7 +91,8 @@ write happens while merely listing or previewing.
 - [References](contract-refs.prompt.md): required generation and verification
   context for record, expansion, comparison and migration rules.
 - [Preflight](runtime-preflight.prompt.md): required generation and verification
-  context for Git discovery and safe native reads.
+  context for Git discovery, the `createStrictSourceAccess` module export and
+  all bound-method inputs/results, and safe native reads.
 - [Runtime client](runtime-client.prompt.md#shared-contract-check-history):
   required generation and verification context for the local history API only.
 

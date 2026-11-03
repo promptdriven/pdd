@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, readdirSync, copyFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { runCheck } from '../src/runtime-client.mjs';
-import { harbor, fakeRuntime, portsFor } from './runtime-fake.mjs';
+import { harbor, fakeRuntime, portsFor, storyTest } from './runtime-fake.mjs';
 
 // The merged contract requires lint continuation and no-verdict evidence together:
 // a saved held row may gain one ID, while a prior unknown ID is never replayed.
 for (const retry of [false, true]) test(`RELAY held lint + no verdict + unknown via ${retry ? 'retry' : 'read'}`, async t => {
-  const h = harbor(t, repo => copyFileSync(join(repo, 'tests/place-order.json'), join(repo, 'tests/second.json')));
+  const h = harbor(t, repo => storyTest(repo, 'second'));
   let lintPassed = false, lostId = null;
   const oldId = '77777777-7777-4777-8777-777777777777';
   const why = 'No verdict. The service could not judge this check.';

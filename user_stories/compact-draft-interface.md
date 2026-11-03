@@ -9,7 +9,7 @@ I can remove unused JSON formatting from my draft interface before its first che
 3. Running compaction again on a compact current draft changes nothing; ordinary `pdd test --fill-hash` retains its hash-only output, result shape and formatting behavior.
 4. Approved, statusless, malformed, multiple-block and unsafe-to-fill prompts stay unchanged with the existing current, stale, warning or refusal outcome; refusals or stale approved hashes retain exit 4.
 5. For execution, `--compact` without `--fill-hash`, with a Story, or with another mode or option exits 2 before any write, sign-in, network request or AI call. Existing local help requests still show help without execution.
-6. The command needs no tests, sign-in, network request or AI call, applies in every directory, and the former `pdd check` name performs the same work with its existing notice.
+6. The command needs no tests, sign-in, network request or AI call, applies in every directory, and uses the canonical `pdd test` command; the removed `pdd check` name stays rejected.
 
 ## Rules to check
 

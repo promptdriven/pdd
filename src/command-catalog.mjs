@@ -1,9 +1,20 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: b75318b0668da74751f9288bb32d9c1ad6c11db733522e92af9a69e91ff0d9c3).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 2b6fdf19dbaa0e8e0fd5d4f67e3d86f9ae314ead4d2edf024e8c997ad8aa72a5).
 const form = (form, description) => Object.freeze({ form, description });
-// The one place for the words of four commands; a later rename changes only NAMES.
-export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', start: 'start' });
-const { test, lint, simulate, start } = NAMES;
+// The one place for the words of five commands; a later rename changes only NAMES.
+export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
+const { test, lint, simulate, run, requestUptake } = NAMES;
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change', 'product']);
+export const PUBLIC_HELP_TEXT = Object.freeze({
+  heading: "PDD: prompt-driven development for your coding agent.",
+  closingLines: Object.freeze(["Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex, /pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting).", `workflow ${run} opens the first area chat in Herdr session pdd and exits. The person approves each area; after the last step pdd pushes the branch and opens a real PR.`, "pdd never merges."]),
+  learnLines: Object.freeze(["Learn PDD: run pdd help prompting, or read the Prompting guide and the RUNBOOK.", "Prompting guide: PACKAGE_ROOT/docs/prompting-guide.md", "RUNBOOK: PACKAGE_ROOT/RUNBOOK.md"]),
+  promptingLines: Object.freeze(["In PDD, prompts are the source. Code follows the prompts.", "1. Prompt: prompts/NAME.prompt.md. Write what the program does in plain English, then ## Dependencies, then one Runtime interface block.", "2. Story: user_stories/STORY.md. Write one thing that a person can do, then a numbered ## Acceptance criteria list.", "3. Test: tests/STORY.json. When the repo keeps its own tests in tests/ or test/, use tests/runtime/ or test/runtime/. Write steps with an exact check for each criterion.", `4. Check: run pdd ${test} --fill-hash, then pdd ${lint} (0 AI calls), then pdd ${test} STORY on the PDD interpreter.`, "5. Approve: a person reads each prompt and runs pdd approve PROMPT. An agent never approves."])
+});
+const approvalHelp = command => `Use the person's words after showing the gate or prompt. Ask the person in any chat, then relay their nonblank words without grading. Ask the person, then relay their words with --said. Without --said, use a separate person terminal. Chat alone never approves. Use this quoted heredoc by default:
+${command} --said - <<'PDD_SAID'
+<the person's exact words>
+PDD_SAID
+Choose a delimiter absent as a whole line from the words. Keep the delimiter quoted. --said - reads all UTF-8 stdin, including trailing newlines. Simple words may use --said WORDS. Without --said, a person can use terminal y/N. Root pdd.json strict_approvals true requires a person terminal.`;
 const routes = [
   { id: 'product.status', prefix: ['product', 'status'], local: 'product-status', operands: [], options: [{name:'--json',kind:'flag'}],
     forms: [form('pdd product status [--json]', 'Count Stories by part and slice from the product plan; no interpreter calls.')] },
@@ -11,10 +22,11 @@ const routes = [
     forms: [form('pdd product next', 'Show ready planned runs and their start commands; no interpreter calls.')] },
   { id: 'product.start', prefix: ['product', 'start'], local: 'product-start', operands: [{name:'run',type:'text'}], options: [{name:'--no-run',kind:'flag'},{name:'--agent',kind:'value',choices:['codex','claude']}],
     forms: [form('pdd product start RUN [--no-run] [--agent codex|claude]', 'Create or reuse the run issue and start a normal feature run; --no-run only prepares the issue. No interpreter calls.')] },
-  { id: 'workflow.run', prefix: ['workflow', start], local: 'workflow-run', formerly: ['workflow', 'run'],
+  // `workflow start` is a quiet word for now; a later change moves it to `removed`: one data edit.
+  { id: 'workflow.run', prefix: ['workflow', run], local: 'workflow-run', quiet: ['workflow', 'start'],
     operands: [{name:'name',type:'workflow-name'},{name:'issue',type:'issue'}],
-    options:[{name:'--agent',kind:'value',choices:['codex','claude']},{name:'--base',kind:'text'}],
-    forms:[form(`pdd workflow ${start} NAME ISSUE [--agent codex|claude] [--base BRANCH]`, 'Start the first area chat for a GitHub issue in Herdr and exit; --base selects an existing origin branch (default: repository default); pdd later pushes the issue branch and opens a real PR.')] },
+    options:[{name:'--agent',kind:'value',choices:['codex','claude']},{name:'--base',kind:'text'},{name:'--adopt-corpus',kind:'text'}],
+    forms:[form(`pdd workflow ${run} NAME ISSUE [--agent codex|claude] [--base BRANCH]`, 'Start the first area chat for a GitHub issue in Herdr and exit; --base selects an existing origin branch (default: repository default); --adopt-corpus FILE adopts exact unchanged approved content for a fresh replay-evidence-enabled workflow; pdd later pushes the issue branch and opens a real PR.')] },
   { id: 'workflow.prove', prefix: ['workflow', 'prove'], local: 'workflow-prove',
     operands: [{name:'issue',type:'issue'}], options: [{name:'--test',kind:'text'},{name:'--expect',kind:'text'}],
     forms: [form('pdd workflow prove ISSUE --test COMMAND --expect TEXT', 'Run committed changed tests on the fetched base branch merge-base and committed head with a 120-second limit per phase; save a non-gating report.')] },
@@ -27,9 +39,12 @@ const routes = [
   { id: 'workflow.ask', prefix: ['workflow', 'ask'], local: 'workflow-ask',
     operands: [{name:'question',type:'text',repeat:true}], options: [],
     forms: [form('pdd workflow ask QUESTION', 'For the agent in a run worktree: show the person that the chat waits for their answer.')] },
+  { id: 'workflow.request-uptake', prefix: ['workflow', requestUptake], local: 'workflow-request-uptake',
+    operands: [{name:'request-id',type:'text'}], options: [{name:'--summary',kind:'text'}],
+    forms: [form(`pdd workflow ${requestUptake} REQUEST_ID --summary TEXT`, 'For the agent in a run worktree: acknowledge a delivered change request with a short note.')] },
   { id: 'workflow.approve', prefix: ['workflow', 'approve'], local: 'workflow-approve',
-    operands: [{name:'issue',type:'issue',optional:true}], options: [],
-    forms: [form('pdd workflow approve [ISSUE]', 'Approve the area at its gate and start the next area in a new chat. Only a person approves.')] },
+    operands: [{name:'issue',type:'issue',optional:true}], options: [{name:'--said',kind:'text'}],
+    forms: [form('pdd workflow approve [ISSUE] [--said WORDS]', 'Approve the gate and all its selected draft prompts in one step. ' + approvalHelp('pdd workflow approve N'))] },
   { id: 'workflow.changes', prefix: ['workflow', 'changes'], local: 'workflow-changes',
     operands: [{name:'issue',type:'issue'},{name:'request',type:'text',repeat:true}], options: [],
     forms: [form('pdd workflow changes ISSUE TEXT', 'Send a change request to the same area chat; the gate stays open.')] },
@@ -43,22 +58,25 @@ const routes = [
     operands: [{name:'issue',type:'issue'}], options: [],
     forms: [form('pdd workflow view ISSUE', 'Read-only review of gates, approvals, files, PRs and Simulator links; never start or resume a chat.')] },
   { id: 'workflow.open', prefix: ['workflow', 'open'], local: 'workflow-open',
-    operands: [{name:'issue',type:'issue'}], options: [],
-    forms: [form('pdd workflow open ISSUE', 'Focus or attach the current area chat; resume it if its session ended.')] },
-  { id: 'help', prefix: ['help'], local: 'help', operands: [], options: [], forms: [
+    operands: [{name:'issue',type:'issue'}, {name:'area',type:'workflow-name',optional:true}], options: [{name:'--new',kind:'flag'}],
+    forms: [form('pdd workflow open ISSUE [AREA] [--new]', 'Focus or resume a saved area chat; --new replaces the current session while keeping the run and approvals.')] },
+  // A help topic is a word after `help` only; it is no route prefix, so `pdd prompting` stays unknown.
+  { id: 'help', prefix: ['help'], local: 'help', operands: [], options: [], topics: ['prompting'], forms: [
     form('pdd', 'Show local commands.'), form('pdd --help', 'Show local commands.'),
-    form('pdd -h', 'Show local commands.'), form('pdd help', 'Show local commands.') ] },
+    form('pdd -h', 'Show local commands.'), form('pdd help', 'Show local commands.'),
+    form('pdd help prompting', 'Show how to write prompts, Stories and tests, and where the guide is.') ] },
   { id: 'version', prefix: ['--version'], local: 'version', operands: [], options: [],
     forms: [form('pdd --version', 'Show this package version.')] },
   { id: 'completion', prefix: ['completion'], local: 'completion', operands: [{ name: 'shell', type: 'choice:bash,zsh' }], options: [],
     forms: [form('pdd completion bash|zsh', 'Print local shell completion.')] },
   { id: 'workflow.list', prefix: ['workflow', 'list'], local: 'workflow-list', operands: [], options: [{ name: '--json', kind: 'flag' }],
     forms: [form('pdd workflow list [--json]', 'List the bundled workflows with their areas and gates.')] },
-  { id: 'check', prefix: [test], local: 'runtime-check', formerly: ['check'], operands: [{ name: 'story', type: 'text', optional: true, repeat: true }],
-    options: [{ name: '--json', kind: 'flag' }, { name: '--details', kind: 'flag' }, { name: '--timeout', kind: 'integer', min: 1, max: 120 },
+  // A removed word runs nothing: the parser refuses it with one line that names the route's prefix.
+  { id: 'check', prefix: [test], local: 'runtime-check', removed: ['check'], operands: [{ name: 'story', type: 'text', optional: true, repeat: true }],
+    options: [{ name: '--lf', kind: 'flag' }, { name: '--cache-clear', kind: 'flag' }, { name: '--json', kind: 'flag' }, { name: '--details', kind: 'flag' }, { name: '--timeout', kind: 'integer', min: 1, max: 120 },
       { name: '--max-calls', kind: 'integer', min: 1, max: 1000 }, { name: '--read', kind: 'flag' }, { name: '--retry', kind: 'text' }, { name: '--fill-hash', kind: 'flag' }, { name: '--compact', kind: 'flag' },
       { name: '--files', kind: 'flag' }, { name: '--app-map', kind: 'text' }, { name: '--lint', kind: 'flag', hidden: true }, { name: '--local', kind: 'flag', hidden: true }, { name: '--screen', kind: 'text' }, { name: '--drawing', kind: 'text' }, { name: '--request', kind: 'uuid', hidden: true }],
-    forms: [form(`pdd ${test} [STORY...] [--json] [--details] [--timeout MIN] [--max-calls N]`, 'Check stories on the PDD interpreter with your gh login: sends the named Stories (every Story when you name none) and their dependencies, waits for every check (no limit in a terminal, at most 90 s for an agent; --timeout MIN sets the limit) with a progress line every 30 s, then prints one table with report links. Defaults to 12 calls per step, at least 18 and at most 1000; --max-calls accepts 1 to 1000.'),
+    forms: [form(`pdd ${test} [PATH|STORY...] [--lf] [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]`, 'Check stories on the PDD interpreter with your gh login: reuses unchanged passing Stories from .pdd/cache/test/; --lf selects previous failures in scope or uses the normal selection when none match, --cache-clear clears the cache and sends the selected Stories again (the interpreter may reuse saved answers); sends selected PATH or STORY dependencies (every Story when you name none), waits for every check (no limit in a terminal, at most 90 s for an agent; --timeout MIN sets the limit) with a progress line every 30 s, then prints one table with report links. Defaults to 12 calls per step, at least 18 and at most 1000; --max-calls accepts 1 to 1000.'),
       form(`pdd ${test} --read [BATCH|CALL_ID] [--json] [--timeout MIN]`, 'Read saved results; a normal Check held for lint may continue its original checks. Other reads send no work.'),
       form(`pdd ${test} --retry BATCH [--json] [--details] [--timeout MIN]`, 'Retry only confirmed unstarted checks from a saved batch, with the same source and call caps; preserve completed and uncertain runs.'),
       form(`pdd ${test} --fill-hash`, 'Fill prose_sha256 of draft runtime interfaces; no network.'),
@@ -66,14 +84,14 @@ const routes = [
       form(`pdd ${test} --files [STORY...] [--app-map PATH]`, 'List the exact selected upload files and byte sizes; no network. --app-map selects the Simulator\'s app map.'),
       form(`pdd ${test} --screen URL --drawing PATH [--json]`, 'Compare a real page with its drawing at the drawing viewport in installed headless Chrome/Chromium; no AI or interpreter calls.')] },
   // A lint plan always has --lint, so the runtime client runs the same code as for `pdd test --lint`.
-  { id: 'lint', prefix: [lint], local: 'runtime-check', formerly: ['check', '--lint'], implies: ['--lint'], operands: [{ name: 'story', type: 'text', optional: true, repeat: true }],
+  { id: 'lint', prefix: [lint], local: 'runtime-check', removed: ['check', '--lint'], implies: ['--lint'], operands: [{ name: 'story', type: 'text', optional: true, repeat: true }],
     options: [{ name: '--json', kind: 'flag' }, { name: '--timeout', kind: 'integer', min: 1, max: 120 }, { name: '--local', kind: 'flag' }],
     forms: [form(`pdd ${lint} [STORY...] [--json] [--timeout MIN]`, 'Print local SVG layout warnings, then the PDD interpreter lint (0 AI calls) on selected Stories and their dependencies; sends no checks.'),
       form(`pdd ${lint} --local [STORY...] [--json]`, 'Check linked SVG layout parts locally with warning diagnostics and 0 AI/network calls.')] },
-  { id: 'approve', prefix: ['approve'], local: 'prompt-approve', operands: [{ name: 'prompt', type: 'text' }], options: [],
-    forms: [form('pdd approve PROMPT', 'Show a prompt\'s runtime interface and its text changes since the last approval, and set it to approved after you answer y. For a person at a terminal only.')] },
-  // `sim` is the short form of the try route: it parses like `simulate` and never gets a notice.
-  { id: 'try', prefix: [simulate], local: 'runtime-try', formerly: ['try'], short: ['sim'], operands: [{ name: 'story', type: 'text', optional: true }],
+  { id: 'approve', prefix: ['approve'], local: 'prompt-approve', operands: [{ name: 'prompt', type: 'text' }], options: [{name:'--said',kind:'text'}],
+    forms: [form('pdd approve PROMPT [--said WORDS]', "Show one prompt's runtime interface and text changes since its last approval. Approve only that prompt. Easy mode accepts the person's nonblank words without grading them. " + approvalHelp('pdd approve PATH'))] },
+  // A quiet word (`sim`) parses like the prefix, with nothing added; help names `sim` once, completion never.
+  { id: 'try', prefix: [simulate], local: 'runtime-try', quiet: ['sim'], removed: ['try'], operands: [{ name: 'story', type: 'text', optional: true }],
     options: [{ name: '--agent', kind: 'text' }, { name: '--tab', kind: 'value', choices: ['call', 'screen', 'terminal', 'world'] }, { name: '--new', kind: 'flag' },
       { name: '--cli', kind: 'flag' }, { name: '--shell', kind: 'flag' }, { name: '--save-last', kind: 'flag' },
       { name: '--serve', kind: 'optional-integer', min: 1, max: 65535, default: 8080 }, { name: '--max-calls', kind: 'integer', min: 1, max: 1000 },
@@ -95,9 +113,10 @@ const routes = [
     forms: [form('pdd setup', 'Install the PDD skills for Codex and Claude if they are missing, and add the short PDD block to CLAUDE.md, else AGENTS.md. Offer detected Codex, Claude Code and Gemini MCP registrations after showing exact config changes and one y/N question. A second run changes nothing.')] },
 ];
 export const PUBLIC_COMMAND_ROUTES = Object.freeze(routes.map(route => Object.freeze({ ...route,
-  prefix: Object.freeze(route.prefix), ...(route.formerly ? { formerly: Object.freeze(route.formerly) } : {}),
-  ...(route.short ? { short: Object.freeze(route.short) } : {}),
-  ...(route.implies ? { implies: Object.freeze(route.implies) } : {}), operands: Object.freeze(route.operands.map(Object.freeze)),
+  prefix: Object.freeze(route.prefix), ...(route.quiet ? { quiet: Object.freeze(route.quiet) } : {}),
+  ...(route.removed ? { removed: Object.freeze(route.removed) } : {}),
+  ...(route.implies ? { implies: Object.freeze(route.implies) } : {}),
+  ...(route.topics ? { topics: Object.freeze(route.topics) } : {}), operands: Object.freeze(route.operands.map(Object.freeze)),
   options: Object.freeze(route.options.map(Object.freeze)), forms: Object.freeze(route.forms) })));
 export const PUBLIC_COMMAND_IDS = Object.freeze(PUBLIC_COMMAND_ROUTES.map(route => route.id));
 export const PUBLIC_COMMAND_MANIFEST = Object.freeze(PUBLIC_COMMAND_ROUTES.flatMap(route => route.forms));

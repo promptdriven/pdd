@@ -62,7 +62,7 @@ test('RUNTIME-HASH2: --fill-hash fills a draft, keeps approved prompts and exits
   writeFileSync(file, stale);
   result = await check(repo, home, [], { '--fill-hash': true });
   assert.equal(result.code, 4); assert.equal(readFileSync(file, 'utf8'), stale);
-  assert.match(result.out, /the text changed after approval: set status to draft, run pdd check --fill-hash, ask the person/);
+  assert.match(result.out, /the text changed after approval: set status to draft, run pdd test --fill-hash, ask the person/);
   writeFileSync(file, draft.replace('"prose_sha256": "",\n', ''));
   result = await check(repo, home, [], { '--fill-hash': true });
   assert.equal(result.code, 4); assert.match(result.out, /Add "prose_sha256": ""/);
@@ -121,7 +121,7 @@ test('RUNTIME-RULES2: quantity 0 gives the exact field and rule; the number warn
   writeJson(file, doc);
   const result = await check(repo, home, ['place-order'], {});
   assert.equal(result.code, 4);
-  assert.deepEqual(result.out.split('\n').slice(2, 3), ['Runtime check (place-order): no verdict · 0 of 3 criteria · 0/0 checks · 1 refused · 0 AI calls']);
+  assert.deepEqual(result.out.split('\n').slice(2, 3), ['Prompt tests (place-order): no verdict · 0 of 3 criteria · 0/0 checks · 1 refused · 0 AI calls']);
   assert.equal(result.out.split('\n').filter(Boolean).slice(3, 6).join('\n').startsWith('REFUSED before sending'), true);
   assert.equal(result.out.split('\n').filter(Boolean).slice(3, 6).join('\n'), ['REFUSED before sending (not sent, 0 AI calls)',
     '  tests/place-order.json  step 1  invalid-input', '  steps[0] input /items/0/quantity is 0. The prompt allows 1 to 20.'].join('\n'));
@@ -131,7 +131,7 @@ test('RUNTIME-RULES2: quantity 0 gives the exact field and rule; the number warn
   writeFileSync(prompt, readFileSync(prompt, 'utf8').replace('Use this menu.', 'Use this menu now.'));
   const stale = await check(repo, home, ['unknown-item'], {});
   assert.equal(stale.code, 4); assert.deepEqual(stale.calls, { fetch: 0, gh: 0 });
-  assert.match(stale.out, /interface-stale[\s\S]*pdd: prompts\/place_order\.prompt\.md is a draft whose text changed after its hash was filled\. Run pdd check --fill-hash\./);
+  assert.match(stale.out, /interface-stale[\s\S]*pdd: prompts\/place_order\.prompt\.md is a draft whose text changed after its hash was filled\. Run pdd test --fill-hash\./);
 });
 
 // Wrong: an unknown story sends every test, or the error hides the stories that exist.
@@ -163,7 +163,7 @@ test('RUNTIME-CAPTURE1: capture refuses secrets, links and size limits, and make
   for (const [name, setup, pattern] of [
     ['secret', r => writeFileSync(join(r, '.env.local'), 'TOKEN=x\n'), /\.env\.local: the name looks like a secret/],
     ['secret folder', r => { mkdirSync(join(r, 'config/secrets'), { recursive: true }); writeFileSync(join(r, 'config/secrets/a.txt'), 'x'); }, /config\/secrets\/a\.txt/],
-    ['symlink', r => symlinkSync('README.md', join(r, 'link.md')), /link\.md: a symbolic link/],
+    ['symlink', r => symlinkSync('missing.md', join(r, 'link.md')), /link\.md.*(?:symbolic link|broken|missing)/],
     ['size', r => writeFileSync(join(r, 'big.bin'), Buffer.alloc(10_485_761)), /too big to send: \d+ files, 10\.0 MB[\s\S]*big\.bin/],
     ['count', r => { mkdirSync(join(r, 'many')); for (let i = 0; i < 10_000; i += 1) writeFileSync(join(r, 'many', `${i}.txt`), ''); }, /too big to send: 1000\d files/],
   ]) {
@@ -213,19 +213,21 @@ test('RUNTIME-CLI1: check and try help, option ranges and option mixes', t => {
   for (const text of [help.stdout, lint.stdout]) assert.doesNotMatch(text, /--request|--lint|pdd test --local/);
   assert.match(pdd('simulate', '--help').stdout, /pdd simulate --stop \[STORY\]/);
   assert.doesNotMatch(pdd('completion', 'bash').stdout, /--request/);
-  for (const args of [['check', '--max-calls', '0'], ['check', '--max-calls', '1001'], ['check', '--timeout', 'x'], ['try', '--tab', 'phone'],
-    ['check', '--request', 'nope'], ['check', '--fill-hash', '--json'], ['check', '--files', '--json'], ['check', '--read', 'a', 'b'],
-    ['try', '--stop', '--new'], ['try', 'a', 'b']]) {
+  for (const args of [['test', '--max-calls', '0'], ['test', '--max-calls', '1001'], ['test', '--timeout', 'x'], ['simulate', '--tab', 'phone'],
+    ['test', '--request', 'nope'], ['test', '--fill-hash', '--json'], ['test', '--files', '--json'], ['test', '--read', 'a', 'b'],
+    ['simulate', '--stop', '--new'], ['simulate', 'a', 'b']]) {
     const result = pdd(...args);
     assert.equal(result.status, 2, `${args.join(' ')}: ${result.stdout}${result.stderr}`); assert.equal(result.stdout, '', args.join(' '));
   }
-  assert.equal(pdd('check', '--files', 'place-order').status, 0);
-  const filled = pdd('check', '--fill-hash');
+  assert.equal(pdd('test', '--files', 'place-order').status, 0);
+  const filled = pdd('test', '--fill-hash');
   assert.equal(filled.status, 0, filled.stderr); assert.match(filled.stdout, /Hashes: 0 filled, 1 current/);
 });
 
 // Split documented shell words without evaluating expansions or commands.
 function runbookWords(command) {
+  // The shell consumes a trailing quoted heredoc redirect; it is not a CLI argument.
+  command = command.replace(/\s+<<(['"])[^'"\r\n]+\1\s*$/, '');
   const words = []; let word = '', quote = '', started = false;
   for (let i = 0; i < command.length; i++) {
     const ch = command[i];
@@ -251,9 +253,15 @@ test('RUNTIME-RUNBOOK-QUOTES: quoted summary words remain one existing-command a
   assert.deepEqual(proof.operands, ['2594']);
   assert.equal(proof.options['--test'], 'node --test test/new.test.mjs');
   assert.equal(proof.options['--expect'], 'defect x');
+  for (const command of ["pdd workflow approve 2594 --said - <<'PDD_SAID'", "pdd approve prompts/review.prompt.md --said - <<'PDD_SAID'"]) {
+    const words=runbookWords(command);
+    assert.equal(words.at(-1),'-','heredoc removal preserves the stdin marker');
+    const plan=parseArgv(words.slice(1));
+    assert.equal(plan.options['--said'],'-','the parser receives the original stdin marker, without shell redirection');
+  }
 });
 
-// Wrong: the package has no runbook, so the skills and the setup block never mention pdd check, or the runbook names commands pdd refuses.
+// Wrong: the package has no runbook, so the skills and the setup block never mention pdd test, or the runbook names commands pdd refuses.
 test('RUNTIME-RUNBOOK1: the package ships RUNBOOK.md, the pdd-prompting skill carries it, and its commands parse', () => {
   const runbook = readFileSync(join(root, 'RUNBOOK.md'), 'utf8');
   assert.ok(readJson(join(root, 'package.json')).files.includes('RUNBOOK.md'));
@@ -266,7 +274,7 @@ test('RUNTIME-RUNBOOK1: the package ships RUNBOOK.md, the pdd-prompting skill ca
     .map(text => text.trim()).filter(Boolean);
   assert.match(runbook, /`pdd replay …`"?\. That command does not exist yet\./);
   assert.ok(commands.length >= 6, commands.join(' | '));
-  for (const command of commands) assert.doesNotThrow(() => parseArgv(runbookWords(command.replace(/<run>/g, '2594')).slice(1)), command);
+  for (const command of commands) assert.doesNotThrow(() => parseArgv(runbookWords(command.replace(/<run>/g, '2594')).slice(1).map((word, index, words) => word === 'N' && index === 2 && words[0] === 'workflow' && words[1] === 'approve' ? '2594' : word)), command);
 });
 
 // Wrong: steps with saved data or prompt calls run out of AI calls (real-projects issue 6), or pdd refuses a step the live engine accepts.
@@ -292,14 +300,22 @@ test('RUNTIME-DRAFT1: a draft interface with a current hash passes preflight and
 });
 
 // Wrong: a second test file for a story (another starting world) is refused (lead, Oct 27: P11 removed).
-test('RUNTIME-RULES4: a story may have two test files; each one must still cover every criterion', async t => {
-  const { repo, home } = harbor(t), second = join(repo, 'tests/place-order-2.json');
+test('RUNTIME-RULES4: a story may have two test files (S.json and S.<variant>.json); each one must still cover every criterion', async t => {
+  const { repo, home } = harbor(t), second = join(repo, 'tests/place-order.second-world.json');
   cpSync(join(repo, 'tests/place-order.json'), second);
   const both = await check(repo, home, ['place-order']);
   assert.equal(both.code, 5, both.err); assert.equal(both.calls.gh, 1);
   const doc = readJson(second); doc.criteria.pop(); doc.steps[0].checks = doc.steps[0].checks.filter(c => c.criterion_id !== 'AC3'); writeJson(second, doc);
-  const partial = await check(repo, home, ['tests/place-order-2.json']);
+  const partial = await check(repo, home, ['tests/place-order.second-world.json']);
   assert.equal(partial.code, 4); assert.equal(partial.json.rows[0].refusals[0].code, 'story-criterion-mismatch');
+  // Another name is not a test of the Story; two files with one name are an error that names both.
+  cpSync(join(repo, 'tests/place-order.json'), join(repo, 'tests/place-order-2.json'));
+  const unknown = await check(repo, home, ['tests/place-order-2.json'], {});
+  assert.equal(unknown.code, 2); assert.match(unknown.err, /^Unknown story "tests\/place-order-2\.json"\. Stories:$/m);
+  mkdirSync(join(repo, 'test/runtime'), { recursive: true }); cpSync(join(repo, 'tests/place-order.json'), join(repo, 'test/runtime/place-order.json'));
+  const two = await check(repo, home, ['tests/place-order.json']);
+  assert.equal(two.code, 4); assert.deepEqual(two.calls, { fetch: 0, gh: 0 });
+  assert.equal(two.json.rows[0].refusals[0].message, 'user_stories/place-order.md has 2 files named place-order.json: test/runtime/place-order.json and tests/place-order.json. Keep one.');
 });
 
 // Wrong: a credential file with a common name goes up with the source (review R6).
@@ -422,7 +438,7 @@ test('RUNTIME-SCHEMA5: the number warning fires only for a near miss of a number
 });
 
 // Wrong: two prompts claim the same source file and nobody notices until they disagree (cli issue 10).
-test('RUNTIME-OWNER1: pdd check warns once when two prompts name the same source file', async t => {
+test('RUNTIME-OWNER1: pdd test warns once when two prompts name the same source file', async t => {
   const { repo, home } = harbor(t);
   mkdirSync(join(repo, 'src')); writeFileSync(join(repo, 'src/split.js'), 'export {};\n'); writeFileSync(join(repo, 'src/cli.js'), 'export {};\n');
   writeFileSync(join(repo, 'prompts/tipjar.prompt.md'), '# tipjar\n\nThe code runs `src/cli.js`; `src/split.js` owns the money math.\n');
@@ -436,9 +452,10 @@ test('RUNTIME-OWNER1: pdd check warns once when two prompts name the same source
 });
 
 // Wrong: an agent wrote its own test format and *.prompt files, and pdd only says "No tests found".
-test('RUNTIME-NOTESTS1: with no tests, pdd check says why: foreign test JSON, *.prompt names, prompts with no interface (5 lines at most)', async t => {
+test('RUNTIME-NOTESTS1: with no tests, pdd test says why: Stories with no test, test-folder JSON that matches no Story, *.prompt names, prompts with no interface (5 lines at most)', async t => {
   const sandbox = temp(t), repo = join(sandbox, 'repo'), home = join(sandbox, 'home');
-  mkdirSync(join(repo, 'tests/unit'), { recursive: true }); mkdirSync(join(repo, 'prompts')); mkdirSync(home);
+  mkdirSync(join(repo, 'tests/unit'), { recursive: true }); mkdirSync(join(repo, 'prompts')); mkdirSync(join(repo, 'user_stories')); mkdirSync(home);
+  writeFileSync(join(repo, 'user_stories/play.md'), '# Play\n\n## Acceptance criteria\n\n1. A move scores 4.\n');
   writeFileSync(join(repo, 'tests/game.json'), '{"cases": [{"input": 2, "expected": 4}]}\n');
   writeFileSync(join(repo, 'tests/unit/board.json'), '{"name": "board"}\n');
   writeFileSync(join(repo, 'package.json'), '{"name": "game"}\n');
@@ -448,15 +465,16 @@ test('RUNTIME-NOTESTS1: with no tests, pdd check says why: foreign test JSON, *.
   const result = await check(repo, home, [], {});
   assert.equal(result.code, 2); assert.equal(result.out, '');
   assert.deepEqual(result.err.trimEnd().split('\n'), [
-    'No tests found. A test is a Git-visible *.json file with "schema_version": "prompt-runtime.program-scenario.v1".',
-    'tests/game.json is not a PDD test file (it has no "schema_version": "prompt-runtime.program-scenario.v1"). See RUNBOOK.md §2.',
-    'tests/unit/board.json is not a PDD test file (it has no "schema_version": "prompt-runtime.program-scenario.v1"). See RUNBOOK.md §2.',
+    'No tests found. The test of Story user_stories/S.md is S.json in a test or tests folder. See RUNBOOK.md §2.',
+    'user_stories/play.md has no test: expected tests/play.json (or play.json in any test or tests folder).',
+    'tests/game.json matches no Story (user_stories/**/game.md).',
+    'tests/unit/board.json matches no Story (user_stories/**/board.md).',
     'PDD prompts must end in .prompt.md: rename prompts/board.prompt to prompts/board.prompt.md.',
     'prompts/engine.prompt.md has no Runtime interface block. See RUNBOOK.md §2.']);
   for (let index = 0; index < 4; index += 1) writeFileSync(join(repo, `tests/extra-${index}.json`), '{}\n');
   const many = await check(repo, home, [], {});
   const lines = many.err.trimEnd().split('\n');
-  assert.equal(lines.length, 7); assert.equal(lines.at(-1), '…and 3 more');
+  assert.equal(lines.length, 7); assert.equal(lines.at(-1), '…and 4 more');
 });
 
 // Wrong: an index file (PLAN.md, README.md, a story with no criteria) gets "has no test" on every multi-Story run (2048 session, 0.1.6).
@@ -468,5 +486,5 @@ test('RUNTIME-STORIES1: PLAN.md, README.md and story files with no acceptance cr
   writeFileSync(join(repo, 'user_stories/refund.md'), '# Refund\n\n## Acceptance criteria\n\n1. A refund returns the total.\n');
   const found = (await import('../src/runtime-preflight.mjs')).findTests({ root: repo });
   assert.deepEqual(found.stories.map(story => story.path).sort(), ['user_stories/place-order.md', 'user_stories/refund.md', 'user_stories/unknown-item.md']);
-  assert.deepEqual(found.warnings, ['Warning: user_stories/refund.md has no test.']);
+  assert.deepEqual(found.warnings, ['Warning: user_stories/refund.md has no test: expected tests/refund.json (or refund.json in any test or tests folder).']);
 });

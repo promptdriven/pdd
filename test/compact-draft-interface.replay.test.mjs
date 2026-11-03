@@ -72,7 +72,7 @@ function checkOutput(output, rows, compact) {
     for (const part of [row.path, ...row.message_contains]) assert.ok(line.includes(part), line);
     expected.push(line);
   }
-  for (const row of rows.filter(row => row.expected_outcome === 'stale')) expected.push(`Stale: ${row.path} is approved, but the text changed after approval: set status to draft, run pdd check --fill-hash, ask the person.`);
+  for (const row of rows.filter(row => row.expected_outcome === 'stale')) expected.push(`Stale: ${row.path} is approved, but the text changed after approval: set status to draft, run pdd test --fill-hash, ask the person.`);
   if (compact) expected.push(`Interfaces: ${rows.filter(row => row.expected_compacted).length} compacted.`);
   expected.push(`Hashes: ${counts.filled} filled, ${counts.current} current, ${counts.refused} refused, ${counts.stale} stale.`);
   assert.equal(output, expected.join('\n') + '\n');
@@ -143,13 +143,13 @@ test('compact Story replays all 18 literal byte/result vectors at preflight and 
   }
 });
 
-test('real public test command replays all byte vectors; check alias retains only its notice', t => {
-  for (const row of vectors.cases) for (const name of ['test', ...(['pretty-draft', 'ambiguous-hash'].includes(row.id) ? ['check'] : [])]) {
+test('real public test command replays all byte vectors', t => {
+  for (const row of vectors.cases) {
+    const name = 'test';
     const state = setup(t, [row]);
     const result = publicCli(state, name, ['--fill-hash', ...(row.compact ? ['--compact'] : [])]);
     assert.equal(result.status, row.exit_code, `${row.id}: ${result.stdout}\n${result.stderr}`);
-    if (name === 'check') assert.equal(result.stderr, 'pdd check is now pdd test.\n');
-    else assert.equal(result.stderr, '');
+    assert.equal(result.stderr, '');
     assert.equal(result.writes, row.expected_writes, row.id);
     checkOutput(result.stdout, [row], row.compact); bytes(state);
     if (row.id === 'pretty-draft') {
@@ -157,6 +157,17 @@ test('real public test command replays all byte vectors; check alias retains onl
       assert.equal(second.status, 0); assert.equal(second.writes, 0);
       assert.equal(second.stdout, 'Interfaces: 0 compacted.\nHashes: 0 filled, 1 current, 0 refused, 0 stale.\n'); bytes(state);
     }
+  }
+});
+
+test('removed check name rejects compact success and refusal inputs before effects', t => {
+  for (const id of ['pretty-draft', 'ambiguous-hash']) {
+    const row = vectors.cases.find(row => row.id === id), state = setup(t, [row]);
+    const result = publicCli(state, 'check', ['--fill-hash', '--compact']);
+    assert.equal(result.status, 2);
+    assert.equal(result.stdout, '');
+    assert.equal(result.stderr, 'pdd check was removed. Use pdd test.\n');
+    assert.equal(result.writes, 0); bytes(state, false);
   }
 });
 
@@ -177,6 +188,10 @@ test('all 12 flag conflicts reject before files, state, browser, sign-in or netw
     ['--fill-hash', '--compact', '--screen', 'https://example.test', '--drawing', 'view.ui.svg'],
     ['--fill-hash', '--compact', '--details'],
     ['--fill-hash', '--compact', '--app-map', 'map.json'],
+    ['--compact', '--lf'],
+    ['--compact', '--cache-clear'],
+    ['--fill-hash', '--compact', '--lf'],
+    ['--fill-hash', '--compact', '--cache-clear'],
   ];
   for (const argv of [...vectors.invalid_combinations.map(row => row.argv), ...extras]) {
     const state = setup(t, [row]), ports = noExternalPorts(state);
@@ -187,6 +202,18 @@ test('all 12 flag conflicts reject before files, state, browser, sign-in or netw
     const result = publicCli(state, 'test', argv);
     assert.equal(result.status, 2, `${argv}: ${result.stdout}\n${result.stderr}`);
     assert.equal(result.stdout, ''); assert.equal(result.writes, 0); bytes(state, false);
+  }
+});
+
+test('compact help stays local and retains current-main test options', t => {
+  const row = vectors.cases.find(row => row.id === 'pretty-draft');
+  for (const argv of [['--fill-hash', '--compact', '--help'], ['--compact', '--lf', '--cache-clear', '--help']]) {
+    const state = setup(t, [row]), result = publicCli(state, 'test', argv);
+    assert.equal(result.status, 0);
+    assert.equal(result.stderr, '');
+    assert.ok(result.stdout.includes('pdd test --fill-hash --compact'));
+    assert.ok(result.stdout.includes('[--lf] [--cache-clear]'));
+    assert.equal(result.writes, 0); bytes(state, false);
   }
 });
 

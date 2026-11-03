@@ -1,4 +1,4 @@
-// Generated from prompts/cli/try-mcp.prompt.md (sha256: b8be665a251da4d4e2dcc96a58d53b639868ae7fa12972937fad1193a41f4f23).
+// Generated from prompts/cli/try-mcp.prompt.md (sha256: d03704791897bcd4cd86f2a0c6c82cb3ab445d3d35b9e367f1f76ff99f1e71d9).
 import { createInterface } from 'node:readline';
 import { readTryOwner, runDoorCall, saveDoorCase } from './runtime-client.mjs';
 import { createRunJudge } from './agent-judge.mjs';
@@ -100,7 +100,7 @@ export function createTryTools({ cwd = process.cwd(), words = [], env } = {}, po
           checks: [{ criterion_id: criterion, target: 'result', path: '', op: 'equals', value: run.result }] }] } }, { isolated: true });
     if (!result.startsWith('added ') && !result.startsWith('already saved ')) throw new Error(result);
     run.saved = result;
-    return { run_id: run.id, result, note: `Recorded case; covers 1 of ${criteria.length} Story criteria.${criteria.length > 1 ? ' Complete coverage before pdd check.' : ''} This records observed output; review its expectation and saved-data setup before replaying.` };
+    return { run_id: run.id, result, note: `Recorded case; covers 1 of ${criteria.length} Story criteria.${criteria.length > 1 ? ' Complete coverage before pdd test.' : ''} This records observed output; review its expectation and saved-data setup before replaying.` };
   }
   return { call(name, args = {}) { const result = queue.then(() => invoke(name, args)); queue = result.catch(() => {}); return result; } };
 }
@@ -116,7 +116,7 @@ export async function runMcp({ cwd = process.cwd(), words = [], env } = {}, port
     if (msg.method === 'initialize') {
       if (!object(msg.params) || typeof msg.params.protocolVersion !== 'string' || !object(msg.params.capabilities) || !object(msg.params.clientInfo)) return error(id, -32602, 'Invalid initialize parameters');
       const versions = ['2025-06-18', '2025-03-26', '2024-11-05'];
-      return { jsonrpc: '2.0', id, result: { protocolVersion: versions.includes(msg.params.protocolVersion) ? msg.params.protocolVersion : versions[0], capabilities: { tools: {} }, serverInfo: { name: 'pdd-try', version: '0.1.12' } } };
+      return { jsonrpc: '2.0', id, result: { protocolVersion: versions.includes(msg.params.protocolVersion) ? msg.params.protocolVersion : versions[0], capabilities: { tools: {} }, serverInfo: { name: 'pdd-try', version: '0.1.13' } } };
     }
     if (msg.method === 'ping' || msg.method === 'tools/list') {
       if (msg.params !== undefined && !object(msg.params)) return error(id, -32602, 'Parameters must be an object');
