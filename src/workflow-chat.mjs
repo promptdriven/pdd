@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: eca221741384f402b2de979073e488fee61196ffa936a00e89b6fc75a918cb5d).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 9305703de0416ce79f7651e70a9337130ded43706890addb2fb918a1e0ebaae3).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
@@ -105,7 +105,8 @@ export function herdrCommand(ports = {}) {
 export function chatCommand({ agent, cwd, messageFile, sessionId, resumeId, configDir }) {
   if (resumeId !== undefined && !validSessionId(resumeId)) throw problem('invalid_session_id', 'The saved native session id is not a UUID, so pdd will not resume it.');
   if (resumeId !== undefined) resumeId = quote(resumeId);
-  const env = ['env', 'PDD_AGENT_SESSION=1', ...(configDir ? [`${homeVariable(agent)}=${quote(configDir)}`] : [])];
+  // Gemini asks a hidden "trust this folder?" question in a new worktree; trust the run worktree for this session.
+  const env = ['env', 'PDD_AGENT_SESSION=1', ...(configDir ? [`${homeVariable(agent)}=${quote(configDir)}`] : []), ...(agent === 'gemini' ? ['GEMINI_CLI_TRUST_WORKSPACE=true'] : [])];
   const message = messageFile ? [`"$(cat ${quote(messageFile)})"`] : [];
   if (agent === 'gemini') return [...env, 'gemini', '--yolo', ...(resumeId ? ['--resume', resumeId] : []), ...(messageFile ? ['--prompt-interactive', ...message] : [])].join(' ');
   if (agent === 'claude') return [...env, 'claude', '--dangerously-skip-permissions', ...(resumeId ? ['--resume', resumeId] : ['--session-id', sessionId]), ...message].join(' ');

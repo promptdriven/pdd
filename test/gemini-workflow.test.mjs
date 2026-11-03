@@ -60,6 +60,16 @@ test('Gemini shell launch preserves message, configuration, Vertex and model env
  assert.match(chatCommand({agent:'gemini',cwd:root,resumeId:'11111111-1111-4111-8111-111111111111'}),/gemini --yolo --resume '11111111-1111-4111-8111-111111111111'$/);
 });
 
+test('Gemini start and resume trust the run worktree, so a new worktree never stops at the folder-trust question',t=>{
+ const root=mkdtempSync(join(tmpdir(),'pdd-gemini-trust-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
+ const bin=join(root,'bin');mkdirSync(bin);
+ writeFileSync(join(bin,'gemini'),`#!${process.execPath}\nconsole.log(JSON.stringify({trust:process.env.GEMINI_CLI_TRUST_WORKSPACE??null}));`,{mode:0o755});
+ const messageFile=join(root,'start.md');writeFileSync(messageFile,'Use pdd-small-change.');
+ const launch=command=>JSON.parse(execFileSync('/bin/sh',['-c',command],{cwd:root,env:{PATH:`${bin}:/usr/bin:/bin`},encoding:'utf8'}));
+ assert.deepEqual(launch(chatCommand({agent:'gemini',cwd:root,messageFile})),{trust:'true'});
+ assert.deepEqual(launch(chatCommand({agent:'gemini',cwd:root,resumeId:'11111111-1111-4111-8111-111111111111'})),{trust:'true'});
+});
+
 test('Gemini run opens and reopens the same Herdr chat; recorded words approve without any chat-file evidence',async t=>{
  const f=await fixture(t,{agent:'gemini'});
  // The fake server recognizes a Gemini process without inventing any native transcript.
