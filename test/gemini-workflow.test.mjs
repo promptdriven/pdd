@@ -122,6 +122,6 @@ test('Gemini passes both external folders as separate shell arguments on start a
   if(options.messageFile)writeFileSync(options.messageFile,'hello');
   const cmd=chatCommand({agent:'gemini',cwd:root,commonDir,sourceRoot,...options});
   const args=JSON.parse(execFileSync('/bin/sh',['-c',cmd],{env:{PATH:`${bin}:/usr/bin:/bin`},encoding:'utf8'}));
-  assert.deepEqual(args.slice(0,5),['--yolo','--include-directories',join(commonDir,'pdd/runs'),'--include-directories',`${sourceRoot}.pdd-worktrees`]);
+  assert.deepEqual(args.slice(0,5),['--yolo','--include-directories',join(commonDir,'pdd/runs'),'--include-directories',`${sourceRoot}.pdd-worktrees`], "Defect: `src/workflow-chat.mjs` launches Gemini without including the external run and worktree folders, so its file tools cannot read them. Separately, startup PATH diagnostics and workflow instructions in `src/path-diagnostic.mjs` and `src/workflow-runner.mjs` suggest long absolute executable commands; such commands have triggered Gemini's safety dialog.");
  }
 });
