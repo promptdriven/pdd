@@ -110,7 +110,7 @@ test('OUTCOME a test with its own pass is sent although the lint did not finish 
 for (const retry of [false, true]) for (const shape of ['refused', 'incomplete', 'unrelated', 'unrelated-no-verdict'])
   test(`OUTCOME ${retry ? 'retry' : 'continuation'} gate: ${shape}`, async t => {
     const r = await setup(t, shape, { pending: true });
-    const first = await r.command({ '--json': true, '--timeout': 1.5 });
+    const first = await r.command({ '--json': true, '--timeout': 1 });
     assert.equal(first.code, 3);
     r.finish();
     const result = await r.command({ '--json': true, [retry ? '--retry' : '--read']: first.json.batch }, []);
@@ -132,7 +132,7 @@ for (const shape of ['refused', 'incomplete', 'unrelated-no-verdict']) test(`OUT
 // Scope, not ignore: one test without a lint pass never stops a test that has one.
 for (const pending of [false, true]) test(`OUTCOME ${pending ? 'continuation' : 'new checks'}: a test without a verdict is not sent; a passing one is`, async t => {
   const r = await setup(t, 'passed', { pending });
-  const first = await r.command({ '--json': true, ...(pending ? { '--timeout': 1.5 } : {}) }, ['place-order', 'unknown-item']);
+  const first = await r.command({ '--json': true, ...(pending ? { '--timeout': 1 } : {}) }, ['place-order', 'unknown-item']);
   r.finish();
   const result = pending ? await r.command({ '--json': true, '--read': first.json.batch }, []) : first;
   assert.deepEqual(r.f.posts.filter(post => post.command === 'check').map(post => post.request.scenario), [TEST]);
@@ -159,7 +159,7 @@ for (const saved of ['passed', 'not-checked']) test(`OUTCOME retry gate on a bus
     now = p.clock.now;
     return { code, err: p.ports.stderr.text, json: p.ports.stdout.text.startsWith('{') ? JSON.parse(p.ports.stdout.text) : null };
   };
-  const first = await run({ '--json': true, '--timeout': 1.5 });
+  const first = await run({ '--json': true, '--timeout': 1 });
   assert.equal(first.code, 5); assert.equal(first.json.rows[0].can_retry, true);
   const folder = join(h.state, 'batches', first.json.batch), lintId = JSON.parse(readFileSync(join(folder, 'batch.json'))).lint.request_ids.at(-1);
   const answer = JSON.parse(readFileSync(join(folder, `${lintId}.json`)));
@@ -206,19 +206,19 @@ test(`OUTCOME a retryable refusal before dispatch is not run in every output, wh
 
 test('OUTCOME supplied progress reaches table, summary, stderr and saved reads', async t => {
   const r = await setup(t, 'passed', { check: 'running', progress: running });
-  const result = await r.command({ '--json': true, '--timeout': 1.5 });
+  const result = await r.command({ '--json': true, '--timeout': 1 });
   assert.equal(result.code, 3);
   assert.deepEqual(result.json.rows[0].progress, running);
   assert.match(result.json.summary_line, /running · step 3 of 5 · 4 AI calls so far · 1 not yet settled/);
   assert.ok(result.err.includes(progressText), result.err);
   assert.ok(renderText({ rows: result.json.rows, exitCode: 3 }).includes(progressText));
-  const next = await r.command({ '--read': result.json.batch, '--json': true, '--timeout': 1.5 }, []);
+  const next = await r.command({ '--read': result.json.batch, '--json': true, '--timeout': 1 }, []);
   assert.deepEqual(next.json.rows[0].progress, running);
 });
 
 test('OUTCOME several running tests share one progress part', async t => {
   const r = await setup(t, 'both', { check: 'running', progress: running });
-  const result = await r.command({ '--json': true, '--timeout': 1.5 }, ['place-order', 'unknown-item']);
+  const result = await r.command({ '--json': true, '--timeout': 1 }, ['place-order', 'unknown-item']);
   assert.match(result.json.summary_line, /running · 8 AI calls so far · 2 not yet settled · 2 running$/);
   assert.equal(result.json.summary_line.split('step 3 of 5').length, 1, 'no per-row step in a shared line');
   assert.ok(result.err.split('\n').filter(line => line.startsWith('Still running:')).every(line => line.split(' · running').length === 2), result.err);
@@ -226,7 +226,7 @@ test('OUTCOME several running tests share one progress part', async t => {
 
 test('OUTCOME partial progress never invents a call or step number', async t => {
   const r = await setup(t, 'passed', { check: 'running', progress: { step: 'prepare' } });
-  const result = await r.command({ '--json': true, '--timeout': 1.5 });
+  const result = await r.command({ '--json': true, '--timeout': 1 });
   assert.match(result.json.summary_line, /running · prepare/);
   assert.doesNotMatch(result.err, /0 AI calls so far|step \d+ of/);
 });

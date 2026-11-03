@@ -26,7 +26,7 @@ for (const retry of [false, true]) test(`RELAY held lint + no verdict + unknown 
   });
   const env = { HOME: h.home, PDD_STATE_DIR: h.state, PDD_RUNTIME_URL: f.origin };
   const first = portsFor(env);
-  assert.equal(await runCheck({ cwd: h.repo, words: ['tests/place-order.json', 'tests/second.json'], options: { '--json': true, '--max-calls': 6, '--timeout': 1.5 } }, first.ports), 3);
+  assert.equal(await runCheck({ cwd: h.repo, words: ['tests/place-order.json', 'tests/second.json'], options: { '--json': true, '--max-calls': 6, '--timeout': 1 } }, first.ports), 3);
   assert.equal(f.posts.filter(p => p.command === 'check').length, 0);
   const batch = readdirSync(join(h.state, 'batches'), { withFileTypes: true }).find(e => e.isDirectory()).name;
   const path = join(h.state, 'batches', batch, 'batch.json');

@@ -74,7 +74,7 @@ for (const noVerdict of ['auth', 'unknown', 'refused', 'incomplete', 'interrupt'
     assert.equal((await ctx.invoke()).code, 1);
     ctx.mode(['interrupt', 'timeout'].includes(noVerdict) ? 'running' : noVerdict === 'refused' ? 'refused' : noVerdict === 'unknown' ? 'unknown' : 'passed');
     ctx.incomplete(noVerdict === 'incomplete');
-    const attempt = await ctx.invoke({ options: { '--lf': true, ...(noVerdict === 'timeout' ? { '--timeout': 1.5 } : {}) }, trouble: noVerdict });
+    const attempt = await ctx.invoke({ options: { '--lf': true, ...(noVerdict === 'timeout' ? { '--timeout': 1 } : {}) }, trouble: noVerdict });
     assert.equal(attempt.sent, noVerdict === 'auth' ? 0 : 1, 'exercise declared no-verdict attempt');
     if (noVerdict === 'auth') assert.equal(attempt.code, 5);
     if (['interrupt', 'timeout'].includes(noVerdict)) assert.equal(attempt.code, 3);

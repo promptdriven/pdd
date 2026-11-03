@@ -20,7 +20,7 @@ for (const response of ['lost', '404']) test(`RELAY busy row + unsaved retry cla
   });
   const env = { HOME: h.home, PDD_STATE_DIR: h.state, PDD_RUNTIME_URL: f.origin };
   const first = portsFor(env);
-  await runCheck({ cwd: h.repo, words: ['place-order'], options: { '--json': true, '--timeout': 1.5 } }, first.ports);
+  await runCheck({ cwd: h.repo, words: ['place-order'], options: { '--json': true, '--timeout': 1 } }, first.ports);
   const batch = JSON.parse(first.ports.stdout.text).batch;
   const folder = join(h.state, 'batches', batch), doc = JSON.parse(readFileSync(join(folder, 'batch.json')));
   const row = doc.rows[0];

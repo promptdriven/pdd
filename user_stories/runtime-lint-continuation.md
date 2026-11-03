@@ -28,7 +28,7 @@ Each row is one command/action with deterministic fake clock and transport repli
 | Default agent | same selected Check without timeout; lint passes at150s | exit0 at150000ms for passing check; one original check POST with cap6; no90s stop |
 | Interactive | terminal Check; lint passes at150s | waits150s; one original check; exit0 for passing check |
 | Lint-only wait | remote --lint p06 --timeout 4; lint passes150s | exit0; exactly one lint POST; zero check POSTs |
-| Read continuation | saved pending normal Check seeded with explicit --timeout 1.5; same capture; latest lint passes | one first held check ID and POST; original batch/test/cap6 retained; zero redundant lint uploads/new lint; required check multipart retained; exit0 when passed |
+| Read continuation | saved pending normal Check seeded with explicit --timeout 1; same capture; latest lint passes | one first held check ID and POST; original batch/test/cap6 retained; zero redundant lint uploads/new lint; required check multipart retained; exit0 when passed |
 | Retry continuation | separate identical pending batch; --retry BATCH | same continuation guarantees as read |
 | Repeat | read completed continuation batch | no new UUID/POST; same result and IDs |
 | Concurrent | two recoveries overlap on the same eligible saved batch | one exclusive claim and one paid POST total; the owner keeps the one check ID; an overlapping command exits 3 and sends nothing |
@@ -37,14 +37,14 @@ Each row is one command/action with deterministic fake clock and transport repli
 | Identity guards | separately change login, repo or selected file bytes | refusal before ID/POST; all previous saved results retained |
 | Saved origin | change current PDD_RUNTIME_URL while retaining saved batch origin | use saved origin for reads and continuation; never redirect saved jobs |
 | Source selection | unrelated Story also exists; saved p06 only | recapture saved paths only; no unrelated check; exact saved source SHA required |
-| Still pending | latest lint remains running on recovery with explicit --timeout 1.5 | exit3; same lint ID; zero paid IDs/POSTs |
+| Still pending | latest lint remains running on recovery with explicit --timeout 1 | exit3; same lint ID; zero paid IDs/POSTs |
 | Invalid lint | separately wrong ID, wrong command, unknown, missing receipt, reached/global refusal | no check ID/POST; preserve uncertainty or explain refusal and paths |
 | Standalone | saved explicit lint with terminal passing receipt | zero paid IDs/POSTs on read/retry |
 | Legacy Check | version1 producer record with valid max_calls6, criteria_total, authored steps and pending evidence | safe same-source continuation without repeat lint |
 | Legacy already read | version1 0.1.9/0.1.10 Check with valid max_calls6, positive criteria_total and consistent authored steps; prior read left lint passed with pending/unknown cleared, row phase lint/state not_run with calls omitted by the known producer, no check IDs and note.code lint-finished; matching owner/repo/source and no dispatch claim | one first check ID and exclusive claim, one original check POST without repeat lint; known never-posted state establishes zero calls; same guards apply to prior unknown-lint not_run evidence; positive/unknown/incomplete call evidence if present refuses continuation |
 | Legacy ambiguity | legacy standalone missing max_calls/criteria_total; separately contradictory intent | zero paid IDs/POSTs; explain unavailable Check intent |
 | Existing jobs | batch includes completed, running, lost and held rows | preserve all prior IDs/answers; only proven never-posted held row gets first ID |
-| Recovery deadline | --read BATCH --timeout 4, separately --timeout 1.5 | fresh bounded240000ms or90000ms wait; no cap increase or extra dispatch after limit |
+| Recovery deadline | --read BATCH --timeout 4, separately --timeout 1 | fresh bounded240000ms or60000ms wait; no cap increase or extra dispatch after limit |
 | Try | interactive lint passes150s; separately agent lint pending90s | terminal proceeds within existing300000ms setup allowance; agent exits3 at90000ms; no Try timeout flag added |
 
 Runtime check: BLOCKED (#2548). The owning module exports real runCheck/runTry with injected transport, clock, gh and interrupt ports, but Git root/discovery/capture, hashing/archive and private RuntimeStore filesystem/locking effects remain native and unbound. The prompt has no Runtime interface metadata. Supplying transport replies alone cannot test this public behavior truthfully; no check-only operation or fabricated Runtime interface is introduced. Code-area native tests must use the real exports and temporary Git/state plus fake transport/clock, cover this table and preserve capacity recovery controls. A future Runtime binding must bind those actual outside effects and preserve handles/callbacks. No Runtime pass or live report is claimed.
