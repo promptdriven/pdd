@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 62ecfa4a3bb5ff180c3186c3001416e1453447301c4fcc4c6d432e1d687dc699).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 1f765dbba70c959579be4a8fe2fb8f7c6cd7916556e89d1322a64a64064fb632).
 import { hasProgress, outcomeDone, outcomeFor, outcomeOverall, outcomeText, progressText } from './runtime-outcome.mjs';
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
@@ -1517,12 +1517,14 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   return exitCode;
 }
 
-function runFillHash(root, ports) {
-  const result = fillHashes({ root });
+function runFillHash(root, ports, compact = false) {
+  const result = fillHashes(compact ? { root, compact: true } : { root });
   for (const { message } of result.warnings) line(ports.stdout, `Warning: ${message}`);
   for (const { path } of result.filled) line(ports.stdout, `Filled prose_sha256: ${path}`);
+  if (compact) for (const { path } of result.compacted) line(ports.stdout, `Compacted Runtime interface: ${path}`);
   for (const { message } of result.refused) line(ports.stdout, `Refused: ${message}`);
   for (const { path } of result.stale) line(ports.stdout, `Stale: ${path} is approved, but ${STALE_HINT}.`);
+  if (compact) line(ports.stdout, `Interfaces: ${result.compacted.length} compacted.`);
   line(ports.stdout, `Hashes: ${result.filled.length} filled, ${result.current.length} current, ${result.refused.length} refused, ${result.stale.length} stale.`);
   return result.refused.length || result.stale.length ? 4 : 0;
 }
@@ -1909,6 +1911,8 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
   const context = { ports, cacheEnabled: cache || !!options['--lf'] || !!options['--cache-clear'], json: options['--json'] === true, details: options['--details'] === true, interrupted: false, warnings: [] };
   let release = () => {};
   try {
+    if (Object.hasOwn(options, '--compact') && (options['--compact'] !== true || options['--fill-hash'] !== true || words.length
+      || Object.keys(options).some(name => !['--fill-hash', '--compact'].includes(name)))) throw new Stop(2, '--compact requires --fill-hash, without other options or Stories.');
     // Local modes dispatch before repository runtime state, origin or sign-in.
     if (options['--screen'] !== undefined || options['--drawing'] !== undefined) {
       if (!options['--screen'] || !options['--drawing'] || words.length || Object.keys(options).some(name => !['--screen', '--drawing', '--json'].includes(name))) throw new Stop(2, 'Use pdd test --screen URL --drawing PATH [--json], without other options or Stories.');
@@ -1935,12 +1939,12 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
     }
     requestedCalls(options['--max-calls']);
     const modes = ['--read', '--retry', '--fill-hash', '--files', '--request', '--lint'].filter(name => options[name] !== undefined);
-    const others = Object.keys(options).filter(name => !modes.includes(name) && !(modes[0] === '--retry' && ['--json', '--details', '--timeout'].includes(name)) && !(name === '--json' && ['--read', '--request', '--lint'].includes(modes[0])) && !(name === '--timeout' && ['--read', '--lint'].includes(modes[0])) && !(name === '--app-map' && modes[0] === '--files'));
+    const others = Object.keys(options).filter(name => !modes.includes(name) && !(modes[0] === '--fill-hash' && name === '--compact') && !(modes[0] === '--retry' && ['--json', '--details', '--timeout'].includes(name)) && !(name === '--json' && ['--read', '--request', '--lint'].includes(modes[0])) && !(name === '--timeout' && ['--read', '--lint'].includes(modes[0])) && !(name === '--app-map' && modes[0] === '--files'));
     if (modes.length > 1 || (modes.length && others.length) || (['--fill-hash', '--request', '--retry'].includes(modes[0]) && words.length)
       || (modes[0] === '--read' && words.length > 1) || (!modes.length && options['--app-map'] !== undefined)) throw new Stop(2, 'This mix of options does not work together. Run pdd test --help.');
     if (modes[0] === '--request') { release = interruptible(context); return await runRequest(context, options['--request']); }
     const root = repoRoot(cwd);
-    if (modes[0] === '--fill-hash') return runFillHash(root, ports);
+    if (modes[0] === '--fill-hash') return runFillHash(root, ports, options['--compact'] === true);
     if (modes[0] === '--files') return runFiles(cwd, words, options, ports);
     context.root = root; context.store = stateFor(ports.env, root);
     return await withCheckRun(context, async () => {
