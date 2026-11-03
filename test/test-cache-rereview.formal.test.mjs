@@ -74,9 +74,9 @@ for (const damage of ['missing', 'malformed', 'epoch', 'generation', 'exact-set'
     const result = await ctx.invoke(['independent'], { '--lf': lf });
     assert.equal(result.code, 0);
     assert.equal(result.sent, 1, 'invalid failure index cannot authorize reuse');
-    assert.equal(result.json.warnings.filter(w => /cache/i.test(String(w))).length, 1, 'one cache warning');
+    assert.equal(result.json.warnings.filter(w => /^Warning: (?:test cache |recovered stale cache )/.test(String(w))).length, 1, 'one cache warning');
     const healed = await ctx.invoke(['independent'], { '--lf': lf });
     assert.equal(healed.sent, 0, 'completed safe run heals metadata');
-    assert.equal(healed.json.warnings.filter(w => /cache/i.test(String(w))).length, 0);
+    assert.equal(healed.json.warnings.filter(w => /^Warning: (?:test cache |recovered stale cache )/.test(String(w))).length, 0);
   });
 }

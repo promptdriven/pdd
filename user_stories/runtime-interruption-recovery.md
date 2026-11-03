@@ -20,6 +20,6 @@ Confirmed unstarted capacity may retry without an attempt ceiling inside the cal
 
 ## Native cases for the code step
 
-[Requirement-derived native cases](../test/runtime-admission/runtime-interruption-recovery.json) keep each case's inputs and expected observations separate from code output. Replay through the public Check boundary with fake transport/clock and real temporary private state; synchronize native claim and interruption effects.
+[Requirement-derived native cases](../test/runtime-admission/runtime-interruption-recovery-cases.json) keep each case's inputs and expected observations separate from code output. Replay through the public Check boundary with fake transport/clock and real temporary private state; synchronize native claim and interruption effects.
 
 Runtime check: NOT REPLAYED (#2548). Check source capture, durable dispatch claims, batch ownership, slots and process interruption lack a complete bound Runtime interface. The companion is pdd.native-cases.v1, not an executable prompt-runtime scenario. No synthetic interface, Runtime call or pass is claimed; ordinary Node tests must establish these effects in the code step.

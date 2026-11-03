@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync, readdirSync, copyFileSync } from 'node:fs'
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { runCheck } from '../src/runtime-client.mjs';
-import { harbor, fakeRuntime, portsFor } from './runtime-fake.mjs';
+import { harbor, fakeRuntime, portsFor, storyTest } from './runtime-fake.mjs';
 const CLAIMED = '99999999-9999-4999-8999-999999999999';
 const WHY = 'No verdict. The judge service was unavailable for this check.';
 const NEXT = 'Tell the person; do not change expected values.';
@@ -15,7 +15,7 @@ const cases = [
   ['ready', 'missing'], ['local', 'missing'], ['local', 'refused'],
 ];
 for (const [shape, server] of cases) for (const mode of ['read', 'retry']) test(`RELAY claim without ID: ${shape} row, server ${server}, via ${mode}`, async t => {
-  const h = harbor(t, repo => copyFileSync(join(repo, 'tests/place-order.json'), join(repo, 'tests/second.json')));
+  const h = harbor(t, repo => storyTest(repo, 'second'));
   let lintPassed = false;
   const f = await fakeRuntime(t, (e, f) => {
     const id = e.request?.requestId ?? e.url.split('/').at(-1);

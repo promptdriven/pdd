@@ -24,15 +24,15 @@ for(const side of ['live','saved'])test(`canonical ${side} checkout alias reuses
   assert.equal(result.workspaceId,run.chats[0].workspaceId);
   assert.equal(f.herdr.workspaces.length,before);
 });
-for(const kind of ['missing','stale'])test(`${kind} registry rebuild adopts the run/live identity without destructive repair`,async t=>{
+for(const kind of ['missing','stale'])test(`${kind} legacy registry is ignored when adopting live identity without destructive repair`,async t=>{
   const {f,run,ports,open}=await setup(t),file=join(ports.directory,'registry.json');
-  const registry=JSON.parse(readFileSync(file,'utf8'));
+  const registry={version:1,repositories:[{commonDir:run.commonDir,repository:run.repo}],runs:[{runId:run.runId,workspaceId:run.chats[0].workspaceId}]};
   if(kind==='missing'){registry.runs=[];registry.repositories=[];}
   else {registry.runs.find(r=>r.runId===run.runId).workspaceId='stale-workspace';}
   writeFileSync(file,JSON.stringify(registry));
   const before=f.herdr.calls.length,count=f.herdr.workspaces.length;
   let result,error;try{result=await open();}catch(e){error=e;}
-  assert.equal(error,undefined,'Run plus verified live identity can rebuild stale cache');
+  assert.equal(error,undefined,'Run plus verified live identity can ignore stale cache');
   assert.equal(result.workspaceId,run.chats[0].workspaceId);
   assert.equal(f.herdr.workspaces.length,count);
   assert.equal(f.herdr.calls.slice(before).filter(a=>['workspace','tab','worktree'].includes(a[0])&&['close','remove','rename'].includes(a[1])).length,0);
@@ -65,24 +65,23 @@ test('missing selected tab repair opens one tab in the same run and repeats with
 test('ambiguous run-matching live peers refuse cache repair without touching either peer',async t=>{
   const {f,run,ports,open}=await setup(t),workspace=f.herdr.workspaces.find(w=>w.workspace_id===run.chats[0].workspaceId);assert.ok(workspace);
   f.herdr.workspaces.push({...structuredClone(workspace),workspace_id:'ambiguous-peer'});
-  const file=join(ports.directory,'registry.json'),registry=JSON.parse(readFileSync(file,'utf8'));registry.runs=[];writeFileSync(file,JSON.stringify(registry));
+  const file=join(ports.directory,'registry.json');writeFileSync(file,JSON.stringify({version:1,repositories:[],runs:[]}));
   const before=structuredClone(f.herdr.workspaces),at=f.herdr.calls.length;
   let error;try{await open();}catch(e){error=e;}
   assert.ok(error,'Multiple matching live workspaces cannot establish unique ownership');
   assert.deepEqual(f.herdr.workspaces,before);
   assert.equal(f.herdr.calls.slice(at).filter(a=>['create','open','close','remove','rename'].includes(a[1])).length,0);
 });
-for(const kind of ['duplicate','inconsistent'])test(`a ${kind} repository cache entry is rebuilt from the run record, not a dead end`,async t=>{
-  const {f,run,ports,open}=await setup(t),file=join(ports.directory,'registry.json'),registry=JSON.parse(readFileSync(file,'utf8'));
+for(const kind of ['duplicate','inconsistent'])test(`a ${kind} repository cache entry cannot block a verified live run`,async t=>{
+  const {f,run,ports,open}=await setup(t),file=join(ports.directory,'registry.json'),registry={version:1,repositories:[{commonDir:run.commonDir,repository:run.repo,workspaceId:run.chats[0].repoWorkspaceId}],runs:[]};
   if(kind==='duplicate')registry.repositories.push(structuredClone(registry.repositories[0]));
   else registry.repositories[0].repository='someone/else';
   writeFileSync(file,JSON.stringify(registry));
   const count=f.herdr.workspaces.length,at=f.herdr.calls.length;
   let result,error;try{result=await open();}catch(e){error=e;}
-  assert.equal(error,undefined,'The run record rebuilds the cache entry');
+  assert.equal(error,undefined,'Live identity ignores cache entries');
   assert.equal(result.workspaceId,run.chats[0].workspaceId);
   assert.equal(f.herdr.workspaces.length,count);
   assert.equal(f.herdr.calls.slice(at).filter(a=>['close','remove','rename'].includes(a[1])).length,0);
-  const rebuilt=JSON.parse(readFileSync(file,'utf8')).repositories.filter(r=>r.commonDir===run.commonDir);
-  assert.equal(rebuilt.length,1);assert.equal(rebuilt[0].repository,run.repo);assert.equal(rebuilt[0].workspaceId,run.chats[0].repoWorkspaceId);
+  assert.deepEqual(JSON.parse(readFileSync(file,'utf8')),registry,'The obsolete registry is never repaired or rewritten');
 });

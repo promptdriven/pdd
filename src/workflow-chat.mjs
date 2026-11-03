@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 68eac3c1199171e4e04ab90d0475b441f273de658152dd3685d080d478bf18df).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 14abece2d8b148fe02da8d04cd72a1cd39f74145e5f2dc2e37140c2083aa9285).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
@@ -136,20 +136,29 @@ async function ensureServer(herdr, ports) {
 export async function startChat({ run, area, message }, ports = {}) {
   const herdr = herdrCommand(ports), now = ports.now ?? Date.now, env = ports.env ?? process.env;
   await ensureServer(herdr, ports);
-  const layout = await withHerdrLayoutLock(() => openHerdrRunLayout({ repository: run.repo, issueNumber: run.number, runId: run.runId,
-    workflowName: run.workflow, stageId: area, sourceRoot: run.sourceRoot, cwd: run.root, commonDir: run.commonDir,
-    preAgentRefusal: !(run.chats?.length || Object.keys(run.done??{}).length || run.pr?.length) &&
-      (run.chatFailure?.code==='linked_worktree_source' || run.warnings?.includes(`The ${area} chat startup was not confirmed (linked_worktree_source).`)) ? 'linked_worktree_source':undefined, run },
-  { command: herdr, checkpoint: async () => {}, directory: ports.layoutDirectory, ...(ports.execFile?{execFile:ports.execFile}:{}) }), { directory: ports.layoutDirectory });
   const messageFile = join(run.runDir, `${area}-start.md`);
-  writeFileSync(messageFile, message);
   const sessionId = run.agent === 'claude' ? randomUUID() : null;
   const configDir = expandHome(run.configDir !== undefined ? run.configDir : env[homeVariable(run.agent)], env);
-  const startedAt = now();
-  const chat = { area, agent: run.agent, tabId: layout.tabId, paneId: layout.paneId, terminalId: layout.terminalId, workspaceId: layout.workspaceId, repoWorkspaceId: layout.repoWorkspaceId,
+  let startedAt;
+  const identity = layout => {
+    if (startedAt === undefined) { writeFileSync(messageFile, message); startedAt = now(); }
+    return { area, agent: run.agent, tabId: layout.tabId, paneId: layout.paneId, terminalId: layout.terminalId, workspaceId: layout.workspaceId, repoWorkspaceId: layout.repoWorkspaceId,
     label: `${run.repo.split('/')[1]}#${run.number} ${run.workflow} › ${area}`, startedAt, session: sessionId ? { agent: 'claude', id: sessionId } : null, configDir, messageFile, state: 'starting' };
-  // The caller saves this starting identity (and the run's layout custody) before the launch; its failure sends nothing.
-  if (ports.checkpoint) await ports.checkpoint({ ...chat }, layout.root ? { repoWorkspaceId: layout.repoWorkspaceId, workspaceId: layout.workspaceId, ...layout.root } : null);
+  };
+  const checkpoint = async layout => {
+    if (!ports.checkpoint) return;
+    const custody = layout.root ? {repoWorkspaceId: layout.repoWorkspaceId, workspaceId: layout.workspaceId, ...layout.root} : layout;
+    await ports.checkpoint(layout.tabId ? identity(layout) : null, custody);
+  };
+  const {layout, chat} = await withHerdrLayoutLock(async () => {
+    const layout = await openHerdrRunLayout({ repository: run.repo, issueNumber: run.number, runId: run.runId,
+      workflowName: run.workflow, stageId: area, sourceRoot: run.sourceRoot, cwd: run.root, commonDir: run.commonDir, run },
+    { command: herdr, checkpoint, directory: ports.layoutDirectory, ...(ports.execFile?{execFile:ports.execFile}:{}) });
+    const chat = identity(layout);
+    // Keep exact starting-chat custody durable under the same find/create lock.
+    await checkpoint(layout);
+    return {layout, chat};
+  }, { directory: ports.layoutDirectory });
   try { await herdr(['pane', 'run', layout.paneId, chatCommand({ agent: run.agent, cwd: run.root, messageFile, sessionId, configDir })]); }
   catch (error) {
     const failed = problem(error.code ?? 'herdr_failed', error.message);
@@ -300,9 +309,10 @@ export async function closeChats(run, ports = {}) {
   const last = chats.at(-1);
   if (last?.workspaceId) {
     try {
-      const layoutPorts = { command: herdr, checkpoint: async () => {}, directory: ports.layoutDirectory };
+      const custody = run.layout;
+      const layoutPorts = { command: herdr, checkpoint: async () => {if (ports.checkpoint) await ports.checkpoint(null, custody);}, directory: ports.layoutDirectory };
       await withHerdrLayoutLock(async () => {
-        await closeHerdrRunLayout({ runId: run.runId, cwd: run.root, layout: { workspaceId: last.workspaceId, repoWorkspaceId: last.repoWorkspaceId } }, layoutPorts);
+        await closeHerdrRunLayout({ runId: run.runId, cwd: run.root, commonDir: run.commonDir, layout: custody }, layoutPorts);
         try { await closeHerdrRepoLayoutIfIdle({ repository: run.repo, commonDir: run.commonDir }, layoutPorts); }
         catch (error) { warnings.push(`warning: the empty "${run.repo.split('/')[1]}" workspace stays open in Herdr (${error.code ?? 'error'}).`); }
       }, { directory: ports.layoutDirectory });

@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { runCheck } from '../src/runtime-client.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
-import { fakeRuntime, harbor, portsFor } from './runtime-fake.mjs';
+import { fakeRuntime, harbor, portsFor, storyTest } from './runtime-fake.mjs';
 
 function capacity(f, id, { calls = 0, code = 'check-queue-timeout', dispatch = 'not_started', checks = [], state = 'refused' } = {}) {
   const refusal = { code, message: 'No checks ran.', reason: 'The queue is full.', fix: 'Fix what it names.', details: { retryable: true, retry_after: 5 } };
@@ -32,18 +32,45 @@ test('CAPACITY1: confirmed zero-execution capacity is retried until the wait end
   assert.equal(result.json.rows[0].busy, true); assert.equal(result.json.rows[0].can_retry, true);
   assert.equal(result.json.rows[0].calls, 0); assert.equal(result.json.rows[0].checks, null);
   assert.match(result.json.summary_line, /: busy/); assert.doesNotMatch(result.out + result.err, /Fix what|fix the test|✗/);
-  assert.match(result.err, /Server busy/); assert.match(result.err, /pdd test --retry/);
+  assert.ok(result.err.split('\n').includes('⏳ PDD is busy right now. 1 of your checks is waiting to start. You are not charged while you wait.')); assert.match(result.err, /pdd test --retry/);
   assert.equal(saved(setup, result.json.batch).rows[0].request_ids.length, checkPosts(fake).length);
   const before = fake.posts.length;
   const read = await run(setup, fake, [result.json.batch], { '--read': true, '--json': true });
   assert.equal(read.code, 5); assert.equal(read.json.rows[0].busy, true); assert.equal(fake.posts.length, before);
 });
 
+for (const [count, words, message] of [
+  [1, ['place-order'], '⏳ PDD is busy right now. 1 of your checks is waiting to start. You are not charged while you wait.'],
+  [2, [], '⏳ PDD is busy right now. 2 of your checks are waiting to start. You are not charged while you wait.'],
+]) test(`CAPACITY local wait: ${count} held check${count === 1 ? '' : 's'} has exact progress and zero-call recovery`, async t => {
+  const setup = harbor(t);
+  const fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.command !== 'check') return f.normal(entry);
+    const json = capacity(f, entry.request.requestId);
+    json.result.report.refusal.details.retry_after = 300;
+    return { status: 200, json };
+  });
+  const result = await run(setup, fake, words);
+  assert.equal(result.code, 5, result.err + result.out);
+  assert.ok(result.err.split('\n').includes(message), result.err);
+  assert.doesNotMatch(result.err, /checks are waiting locally|Your check is in line|Your check is next in line/);
+  assert.equal(checkPosts(fake).length, count);
+  assert.equal(fake.gets.length, 0);
+  assert.equal(result.json.rows.length, count);
+  for (const row of result.json.rows) {
+    assert.equal(row.state, 'not_run');
+    assert.equal(row.calls, 0);
+    assert.equal(row.busy, true);
+    assert.equal(row.can_retry, true);
+  }
+  assert.ok(saved(setup, result.json.batch).rows.every(row => row.request_ids.length === 1));
+});
+
 test('CAPACITY2: 17 tests use four configured active slots, adapt to a one-worker queue, and preserve all IDs', async t => {
   const setup = harbor(t, repo => {
     const file = join(repo, 'tests/place-order.json'), doc = JSON.parse(readFileSync(file));
     rmSync(file); rmSync(join(repo, 'tests/unknown-item.json'));
-    for (let i = 0; i < 17; i++) writeFileSync(join(repo, `tests/order-${i}.json`), JSON.stringify(doc));
+    for (let i = 0; i < 17; i++) storyTest(repo, `order-${i}`);
   });
   let now = 0, active = null, peak = 0;
   const jobs = new Map();
@@ -165,7 +192,7 @@ test('CAPACITY8: deadline and interruption never bypass backoff or send another 
 });
 
 test('CAPACITY9: explicit recovery preserves a running job and a completed job while retrying capacity', async t => {
-  const setup = harbor(t, repo => writeFileSync(join(repo, 'tests/running.json'), readFileSync(join(repo, 'tests/place-order.json'))));
+  const setup = harbor(t, repo => storyTest(repo, 'running'));
   let recover = false;
   const runningIds = new Set();
   const fake = await fakeRuntime(t, (e, f) => {
@@ -185,8 +212,7 @@ test('CAPACITY9: explicit recovery preserves a running job and a completed job w
 
 test('CAPACITY10: unknown dispatched jobs still occupy four configured slots; held rows stay unposted', async t => {
   const setup = harbor(t, repo => {
-    const bytes = readFileSync(join(repo, 'tests/place-order.json'));
-    for (let i = 0; i < 8; i++) writeFileSync(join(repo, `tests/extra-${i}.json`), bytes);
+    for (let i = 0; i < 8; i++) storyTest(repo, `extra-${i}`);
   });
   const fake = await fakeRuntime(t, (e, f) => e.method === 'GET' ? { status: 200, json: { ...f.check(e.url.split('/').at(-1)), requestId: 'wrong' } } : f.normal(e));
   const result = await run(setup, fake, [], undefined, {

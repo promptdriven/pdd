@@ -4,13 +4,12 @@ import { readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { runCheck } from '../src/runtime-client.mjs';
 import { acquireRuntimeSlot, releaseRuntimeSlot, listRuntimeJobs } from '../src/runtime-slots.mjs';
-import { fakeRuntime, harbor, portsFor, sha } from './runtime-fake.mjs';
+import { fakeRuntime, harbor, portsFor, sha, storyTest } from './runtime-fake.mjs';
 
 function selected(t, count) {
   return harbor(t, repo => {
-    const source = readFileSync(join(repo, 'tests/place-order.json'));
     rmSync(join(repo, 'tests/unknown-item.json'));
-    for (let i = 1; i < count; i++) writeFileSync(join(repo, `tests/place-order-${i}.json`), source);
+    for (let i = 1; i < count; i++) storyTest(repo, `place-order-${i}`);
   });
 }
 
