@@ -1,4 +1,4 @@
-// Generated from prompts/cli/product.prompt.md (sha256: 43f53295855d7f88cfd512727baeea8faae320d83152a4bdb8b11ccd934cb075).
+// Generated from prompts/cli/product.prompt.md (sha256: f183ad802e37da62fcdc4a59c918e330b51c9048fb1f8e014d1aefe15aafce35).
 import { execFile as execute } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, existsSync, fstatSync, lstatSync, openSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -562,7 +562,7 @@ export async function productStart({ cwd, run, noRun = false, agent = 'codex', p
   try {
     const p = portsFor(given), { product, boundaries } = await documents({ cwd }, p), planned = product.runs.find(row => row.run === run);
     if (!planned) invalid(`Unknown planned run ${run}.`);
-    if (!['codex', 'claude', 'gemini'].includes(agent)) invalid(`Unknown agent ${agent}.`);
+    if (!['codex', 'claude', 'gemini', 'agy'].includes(agent)) invalid(`Unknown agent ${agent}.`);
     const state = await progress({ cwd }, given, run), { repo, localRuns } = state;
     const selected = state.details.find(detail => detail.run.run === run);
     issue = selected.issue;
