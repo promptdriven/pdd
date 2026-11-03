@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 39f361e8a00b5be56ef5fecc4f7e3798f067794e42b2efd6a0efd1e546abbf18).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: fcd797fad0af0ff03ad5eb2be3322cc1cea897261b017ea577c0d25bbe0a740b).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
@@ -651,9 +651,27 @@ export function preflight({ root, found, selected }) {
   return { rows, warnings };
 }
 
-// --fill-hash: fill draft hashes; report approved interfaces whose text changed.
-export function fillHashes({ root, files = gitFiles(root) }) {
+// The caller has parsed a root object. Keep surrounding whitespace and all
+// string/token bytes; remove only JSON whitespace between tokens.
+function compactInterface(body) {
+  const start = body.indexOf('{'), end = body.lastIndexOf('}') + 1;
+  let compacted = '', inString = false, escaped = false;
+  for (const char of body.slice(start, end)) {
+    if (inString) {
+      compacted += char;
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') inString = false;
+    } else if (char === '"') { inString = true; compacted += char; }
+    else if (![' ', '\t', '\r', '\n'].includes(char)) compacted += char;
+  }
+  return body.slice(0, start) + compacted + body.slice(end);
+}
+
+// --fill-hash: fill draft hashes; optionally compact safe draft interfaces.
+export function fillHashes({ root, files = gitFiles(root), compact = false }) {
   const result = { filled: [], current: [], refused: [], stale: [], warnings: [] };
+  if (compact === true) result.compacted = [];
   for (const path of files) {
     if (!path.endsWith('.prompt.md') || !statOf(join(root, path))?.isFile()) continue;
     const text = readText(root, path), blocks = interfaceBlocks(text);
@@ -674,16 +692,23 @@ export function fillHashes({ root, files = gitFiles(root) }) {
     if (value.status === 'approved') { (value.prose_sha256 === hash ? result.current : result.stale).push({ path }); continue; }
     if (value.status !== 'draft') { result.refused.push({ path, message: `${path} has status ${show(value.status)}. Use "draft" until the person approves it.` }); continue; }
     if (!Object.hasOwn(value, 'prose_sha256')) { result.refused.push({ path, message: `${path} has no "prose_sha256" key. Add "prose_sha256": "" to its Runtime interface.` }); continue; }
-    if (value.prose_sha256 === hash) { result.current.push({ path }); continue; }
-    const key = /("prose_sha256"\s*:\s*)"(?:[^"\\]|\\.)*"/g;
-    const changed = [...body.matchAll(key)].length === 1 ? body.replace(key, `$1"${hash}"`) : null;
-    let same = false;
-    try { same = changed !== null && isDeepStrictEqual(JSON.parse(changed), { ...value, prose_sha256: hash }); } catch { same = false; }
-    if (!same) { result.refused.push({ path, message: `pdd could not fill "prose_sha256" in ${path}. Make it one string value, for example "prose_sha256": "".` }); continue; }
+    const current = value.prose_sha256 === hash;
+    let changed = body;
+    if (!current) {
+      const key = /("prose_sha256"\s*:\s*)"(?:[^"\\]|\\.)*"/g;
+      changed = [...body.matchAll(key)].length === 1 ? body.replace(key, `$1"${hash}"`) : null;
+      let same = false;
+      try { same = changed !== null && isDeepStrictEqual(JSON.parse(changed), { ...value, prose_sha256: hash }); } catch { same = false; }
+      if (!same) { result.refused.push({ path, message: `pdd could not fill "prose_sha256" in ${path}. Make it one string value, for example "prose_sha256": "".` }); continue; }
+    }
+    const compacted = compact === true ? compactInterface(changed) : changed;
+    const whitespaceChanged = compacted !== changed;
+    changed = compacted;
     const next = text.slice(0, start) + changed + text.slice(end);
     if (proseSha256(next) !== hash) { result.refused.push({ path, message: `pdd could not fill "prose_sha256" in ${path} without a change to its text.` }); continue; }
-    writeFileSync(join(root, path), next);
-    result.filled.push({ path });
+    if (next !== text) writeFileSync(join(root, path), next);
+    (current ? result.current : result.filled).push({ path });
+    if (whitespaceChanged) result.compacted.push({ path });
   }
   return result;
 }
