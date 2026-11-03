@@ -137,7 +137,8 @@ within `[-9007199254740991, 9007199254740991]`, or ±(2^53−1). An out-of-range
 names the bad bound's JSON Pointer (for example `/properties/count/maximum`), the declared bound (`bound_text`)
 and the supported range (`supported_integer_range`).
 
-For an optional input field, leave it out of `required`. Use `oneOf` with `null` when null is an allowed value; pdd validates the input before sending. A correct schema (`read` is optional):
+For an optional input field, leave it out of `required`. Do not use `oneOf` with `null` for it: the Simulator's form shows
+`oneOf` only as a raw JSON box. A correct schema (`read` is optional):
 ```json
 {"type": "object", "properties": {"title": {"type": "string", "minLength": 1}, "read": {"type": "boolean"},
    "tags": {"type": "array", "items": {"type": "string"}}, "note": {"oneOf": [{"type": "string"}, {"type": "null"}]}},
@@ -177,7 +178,7 @@ The AI cannot compute a hash. Declare a compute resource with hash_json or hash_
 
 Declare the data as a resource in the interface. The prose names each operation: "Read the tasks once with
 `store.load` and the key `todos`." This is the full `todo-cli` resource. `TASKS` is the list schema of the first
-line: write it out in all 3 places, or use a `$contract` reference expanded locally before lint, test and simulate (JSON Schema `$ref` is not allowed). A missing key reads as `null`, so `load` uses `oneOf`.
+line: write it out in full in all 3 places, or use a `$contract` reference expanded locally before lint, test and simulate (JSON Schema `$ref` is not allowed). A missing key reads as `null`, so `load` uses `oneOf`.
 ```json
 TASKS = {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "integer", "minimum": 1},
          "text": {"type": "string"}, "done": {"type": "boolean"}}, "required": ["id", "text", "done"], "additionalProperties": false}}
@@ -561,7 +562,7 @@ Agents replay the approved prompt-space cases against the real code. Checks of p
 that the code behaves the same. Agents execute the tests and supply the evidence; pdd validates structure and
 identity only. It does not independently prove execution or prompt/code equivalence.
 
-In verify after the last commit, run one `pdd workflow prove <run> --test "<command>" --expect "<distinctive text printed by the failing test on old code>"` command that covers all new or changed tests; its line goes on the PR. Fresh worktrees have no installed dependencies, so include any required installation in the command.
+In verify after the last commit, run one `pdd workflow prove <run> --test "<command>" --expect "<distinctive text printed by the failing test on old code>"` command that covers all new or changed tests; text the old-code run does not print gives `wrong-reason`. Its line goes on the PR. Fresh worktrees have no installed dependencies, so include any required installation in the command.
 
 **Test vectors: the approved cases, run on the real code.**
 - Use `tests/<story>.json` from prompt space as it is. Never edit it in code space. If an expected value looks
