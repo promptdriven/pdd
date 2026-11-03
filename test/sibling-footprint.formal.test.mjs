@@ -13,7 +13,8 @@ import { runContracts } from '../src/contracts.mjs';
 // Rules to check and their owner prompts. These are not Runtime/native replays.
 const LIMIT = 10_485_760;
 const A = 'user_stories/a.md', B = 'user_stories/b.md';
-const GOOD = 'tests/good.json', SIBLING = 'tests/sibling.json', OTHER = 'tests/other.json';
+// The tests of Story a are tests/a.json and the variant tests/a.sibling.json; Story b's test is tests/b.json.
+const GOOD = 'tests/a.json', SIBLING = 'tests/a.sibling.json', OTHER = 'tests/b.json';
 const SP = 'prompts/sibling.prompt.md';
 const leaf = '{ "type" : "number", "default" : 9007199254740993 }';
 const sink = () => ({ text:'', write(value) { this.text += value; } });

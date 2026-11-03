@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { runCheck } from '../src/runtime-client.mjs';
 import { harbor, fakeRuntime, portsFor, TOKEN } from './runtime-fake.mjs';
 
-const vectors = JSON.parse(readFileSync(new URL('./runtime-admission/runtime-busy-upload-wait.json', import.meta.url)));
+const vectors = JSON.parse(readFileSync(new URL('./runtime-admission/runtime-busy-upload-wait-cases.json', import.meta.url)));
 const read = path => JSON.parse(readFileSync(path));
 const posts = f => f.posts.filter(e => e.command === 'check');
 const full = (running = 4, limit = 4) => ({ status: 200, json: { maintenance: null, slots: { check: { running, limit, waiting: 0 } } } });

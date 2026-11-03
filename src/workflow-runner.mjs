@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 8055cb66146ffa04a9f33be8ec23413446d707462733b386be00010d4a32e84b).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 15699967b2e4e01d5105757cee0f97c10291bded22ebc62ac156c637c0689d68).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { execFile as execFileCallback } from 'node:child_process';
@@ -1301,7 +1301,7 @@ async function startNextChat(run, p, packageRoot) {
     if (latest && ended(latest)) throw Object.assign(Error(`The run ended (${latest.state}). Stop working on it.`), { code: 'workflow_progress_refused' });
     if (!saveChatObservations(original, prior, chat, p, { checkpoint: true, layout }))
       throw Object.assign(Error('The run changed before the chat launch, so pdd sent nothing.'), { code: 'chat_checkpoint_refused' });
-    prior = structuredClone(chat);
+    if (chat) prior = structuredClone(chat);
   };
   const endedMeanwhile = () => {
     const latest = readRun(run.runDir);
@@ -1802,7 +1802,14 @@ async function cancelRunCommand({ ref, cwd }, ports) {
   const run = found.run;
   if (run.state === 'cancelled') return done(`The run for ${run.repo}#${run.number} is already cancelled.`);
   p.say('Closing the chat tabs in Herdr…');
-  const { warnings } = await closeChats(run, p);
+  const { warnings } = await closeChats(run, {...p, checkpoint: async (_chat, layout) => {
+    if (layout) {
+      // Sample the outside clock before ordinary ownership so concurrent progress
+      // is visible to the checkpoint's fresh read rather than a nested save.
+      const at = p.now();
+      commitRun(run,{...p,now:()=>at},latest=>{latest.layout=structuredClone(layout);});
+    }
+  }});
   const cancelled={state:'cancelled',at:p.now()};
   commitRun(run,p,latest=>{latest.state='cancelled';latest.cancelled=cancelled;latest.gate=null;});
   return done([...warnings, `Cancelled the run for ${run.repo}#${run.number} and closed its Herdr tabs.`,
@@ -2022,8 +2029,8 @@ function saveChatObservations(run, original, observed, p, { error, phase = 'open
       fresh.chats = fresh.chats.filter(chat => chat !== selected);
     } else if (selected && observed) copyObservation(selected, observed);
     else if (observed) fresh.chats.push(structuredClone(observed));
-    // The run's own layout custody (repository and run workspaces, initial root tab/pane/terminal) rebuilds the layout cache.
-    if (layout && !fresh.layout) fresh.layout = structuredClone(layout);
+    // Verified live custody supersedes stale hints; partial allocation saves retain known fields.
+    if (layout) fresh.layout = { ...fresh.layout, ...structuredClone(layout) };
     if (checkpoint) return;
     // A late failed open of an area that is no longer current keeps its own record, but never replaces a current failure.
     if (error && phase === 'open' && fresh.areas[fresh.area].name !== area && !activeChatFailure(fresh))

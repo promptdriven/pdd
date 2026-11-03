@@ -8,7 +8,7 @@ import * as runtime from '../src/runtime-client.mjs';
 import { productStatus, productNext, productStart } from '../src/product.mjs';
 import { harbor, portsFor, fakeRuntime, filesUnder, sha } from './runtime-fake.mjs';
 
-const vectors = JSON.parse(readFileSync(new URL('./fixtures/product-saved-checks-followup.json', import.meta.url)));
+const vectors = JSON.parse(readFileSync(new URL('./fixtures/product-saved-checks-followup-cases.json', import.meta.url)));
 const productScenario = JSON.parse(readFileSync(new URL('./runtime/product-saved-checks.json', import.meta.url)));
 const copy = value => structuredClone(value);
 const own = (value, key) => Object.prototype.hasOwnProperty.call(value, key);

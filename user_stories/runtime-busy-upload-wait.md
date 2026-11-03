@@ -23,6 +23,6 @@ Older confirmed-busy saves without the new timing fields establish one conservat
 
 ## Native cases for the code step
 
-[Requirement-derived native cases](../test/runtime-admission/runtime-busy-upload-wait.json) separate causal input from expected observations. Replay through public Check/read/retry with fake transport/clock and real temporary private state; native claim/process effects need ordinary code-step tests.
+[Requirement-derived native cases](../test/runtime-admission/runtime-busy-upload-wait-cases.json) separate causal input from expected observations. Replay through public Check/read/retry with fake transport/clock and real temporary private state; native claim/process effects need ordinary code-step tests.
 
 Runtime check: NOT REPLAYED (#2548). Source capture, saved batch ownership, durable claims and interruption lack a complete bound Runtime interface. The pdd.native-cases.v1 companion is not an executable prompt-runtime scenario; no Runtime call or pass is claimed.
