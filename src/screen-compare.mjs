@@ -1,4 +1,4 @@
-// Generated from prompts/cli/screen-compare.prompt.md (sha256: 7ffe72838901a5f99a7173e0dc5d0c5b9091028899ad3d8c99a5184bb71b27ef).
+// Generated from prompts/cli/screen-compare.prompt.md (sha256: d1a7f03e22aee25b1f979a16ddc096b706689056ee2e4a60fd29cfac3857001d).
 import { spawn } from 'node:child_process';
 import { accessSync, constants, lstatSync, mkdtempSync, readFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
@@ -305,7 +305,7 @@ function compareParts(reference, actual, viewport) {
     if (ref.kind === 'text') {
       const enclosing = idMatches.get(ref.region);
       const scoped = enclosing ? hits.filter(part => part.ancestors.includes(enclosing.node) || part.node === enclosing.node) : [];
-      if (scoped.length) hits = scoped;
+      if (enclosing) hits = scoped;
       const [x, y] = center(ref.box);
       hits.sort((a, b) => Number(b.visible) - Number(a.visible) || Math.hypot(...center(a.box).map((v, i) => (v - [x, y][i]) / [viewport.width, viewport.height][i])) - Math.hypot(...center(b.box).map((v, i) => (v - [x, y][i]) / [viewport.width, viewport.height][i])));
     }
