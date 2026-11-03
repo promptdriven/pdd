@@ -317,7 +317,7 @@ test('PRSUM-FULL: a 444-character summary keeps its late limitation and issue li
   assert.equal(verify.after, '');
   const overview = body.slice(body.indexOf('\n## Steps\n'), body.indexOf(FULL)).split('\n').find(row => row.startsWith('- **verify**: '));
   const [short] = sectionItems(overview).map(item => item.lines);
-  assert.ok([...overview].length <= 220 && short.length === 1 && short[0].endsWith('…'), `The Steps list keeps its short line: ${overview}`);
+  assert.ok([...overview].length <= '- **verify**: '.length + 'Agent note — not checked by pdd: '.length + 199 + '``'.length && short.length === 1 && short[0].endsWith('…'), `The Steps list keeps its short line: ${overview}`);
   assert.ok(LATE.startsWith(short[0].slice(0, -1).trimEnd())); assert.doesNotMatch(overview, /issues\/476|Limitation/);
   assert.doesNotMatch(body, /step summar(?:y was|ies were) shortened/);
   assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1);
