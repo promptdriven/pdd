@@ -114,7 +114,7 @@ export async function preparePrEvidence({ run, isCode }, ports = {}) {
     } catch { /* Publication retains an explicit unavailable result. */ }
     lines.push(line);
   }
-  lines.push(...labels.flatMap(label => [...grouped.get(label)].map(row => `Agent note — not checked by pdd: ${row.line}`))); 
+  lines.push(...labels.flatMap(label => [...grouped.get(label)].map(row => `Agent note — not checked by pdd: ${row.line}`)));
   const issueReference = `${grouped.get('Not fixed yet:').size ? 'Refs' : isCode ? 'Closes' : 'Part of'} #${run.number}`;
   return { lines, approvalLines: approvalLines(run), issueReference, proofStatus };
 }
