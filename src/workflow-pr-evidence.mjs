@@ -93,7 +93,7 @@ export async function preparePrEvidence({ run, isCode }, ports = {}) {
     scan(summary,step);
     for (const note of notes.filter(note => note.step === step)) scan(note.text,step,true);
   }
-  const lines = labels.slice(0, -1).flatMap(label => [...grouped.get(label)].map(row=>row.line));
+  const lines = [];
   let proofStatus = 'not-applicable';
   if (isCode) {
     let line = 'Old-code proof: unavailable.';
@@ -114,7 +114,7 @@ export async function preparePrEvidence({ run, isCode }, ports = {}) {
     } catch { /* Publication retains an explicit unavailable result. */ }
     lines.push(line);
   }
-  lines.push(...[...grouped.get('Review:')].map(row=>row.line));
+  lines.push(...labels.flatMap(label => [...grouped.get(label)].map(row => `Agent note — not checked by pdd: ${row.line}`))); 
   const issueReference = `${grouped.get('Not fixed yet:').size ? 'Refs' : isCode ? 'Closes' : 'Part of'} #${run.number}`;
   return { lines, approvalLines: approvalLines(run), issueReference, proofStatus };
 }
