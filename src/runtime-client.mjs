@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: ca0c6176d0f8075105f9beca27d7c8b227c844ba7052f60c73b652b8a0854df8).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: ccaa4ec55bddc477a2e762342f3cb17b81d17f40428ca36f35951df931e29782).
 import { hasProgress, outcomeDone, outcomeFor, outcomeOverall, outcomeText, progressText } from './runtime-outcome.mjs';
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
@@ -2732,7 +2732,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     for (const warning of capture.warnings ?? []) line(ports.stderr, warning);
     const identity = signIn(ports.gh, context.store);
     Object.assign(context, { capture, identity, secrets: [identity.token], startedAt: ports.now(), deadline: ports.now() + TRY_MS, lint: { request_ids: [], state: null },
-      batch: null, rows: [row], timeoutMin: TRY_MS / 60_000, head: null });
+      batch: null, rows: [row], timeoutMin: TRY_MS / 60_000, agentLimit: false, head: null });
     context.folder = store.folder('tries');
     release = interruptible(context);
     context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
