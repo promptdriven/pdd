@@ -94,12 +94,12 @@ for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const or
       const loaded = spawnSync('bash', ['--noprofile', '--norc', '-c', 'source "$1"; COMP_WORDS=(pdd workflow ""); COMP_CWORD=2; _pdd_complete; printf "%s\\n" "${COMPREPLY[@]}"', 'test', script], { env, encoding: 'utf8' });
       assert.equal(loaded.status, 0, loaded.stderr); assert.ok(loaded.stdout.split('\n').includes('list'));
       const selected=spawnSync('bash',['--noprofile','--norc','-c','source "$1"; COMP_WORDS=(pdd workflow bug --agent ""); COMP_CWORD=4; _pdd_complete; printf "%s\\n" "${COMPREPLY[@]}"','test',script],{env,encoding:'utf8'});
-      assert.equal(selected.status,0,selected.stderr);assert.deepEqual(selected.stdout.trim().split('\n').sort(),['claude','codex']);
+      assert.equal(selected.status,0,selected.stderr);assert.deepEqual(selected.stdout.trim().split('\n').sort(),['claude','codex','gemini']);
     } else {
       const loaded = spawnSync('zsh', ['-f', '-c', 'autoload -Uz compinit; compinit -D -i || exit 1; source "$1"; [[ $_comps[pdd] == _pdd ]] || exit 3; _describe() { print -rl -- "${choices[@]}"; }; words=(pdd workflow ""); CURRENT=3; _pdd', 'test', script], { env, encoding: 'utf8' });
       assert.equal(loaded.status, 0, loaded.stderr); assert.ok(loaded.stdout.split('\n').includes('list'));
       const selected=spawnSync('zsh',['-f','-c','autoload -Uz compinit; compinit -D -i || exit 1; source "$1"; _describe() { print -rl -- "${choices[@]}"; }; words=(pdd workflow feature --agent ""); CURRENT=5; _pdd','test',script],{env,encoding:'utf8'});
-      assert.equal(selected.status,0,selected.stderr);assert.deepEqual(selected.stdout.trim().split('\n').sort(),['claude','codex']);
+      assert.equal(selected.status,0,selected.stderr);assert.deepEqual(selected.stdout.trim().split('\n').sort(),['claude','codex','gemini']);
     }
   }
   for (const word of ['run', 'verify', 'runtime', 'replay', 'call', 'tests', 'doctor', 'phone', 'machine', 'repo', 'agents', 'workbench', 'unknown']) {
@@ -175,7 +175,8 @@ test('Try accepts named local launchers while workflow agent choices stay bounde
     const plan=parseArgv(['simulate','my-story','--agent',name]);
     assert.equal(plan.commandId,'try');assert.equal(plan.options['--agent'],name);
   }
-  for (const args of [['simulate','--agent'],['simulate','--agent',''],['simulate','--agent','   '],['workflow','run','bug','42','--agent','Codex (work5)'],['workflow','run','bug','42','--agent','gemini']]) assert.throws(()=>parseArgv(args),CommandInputError);
+  for (const args of [['simulate','--agent'],['simulate','--agent',''],['simulate','--agent','   '],['workflow','run','bug','42','--agent','Codex (work5)'],['workflow','run','bug','42','--agent','other']]) assert.throws(()=>parseArgv(args),CommandInputError);
+  for (const agent of ['codex','claude','gemini']) assert.equal(parseArgv(['workflow','run','bug','42','--agent',agent]).options['--agent'],agent);
   for (const shell of ['bash','zsh']) {
     const completion=renderCompletion(shell);
     assert.doesNotMatch(completion,/(?:try|sim|simulate):--agent\)/);
