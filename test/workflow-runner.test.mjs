@@ -2059,7 +2059,7 @@ test('2530: valid replay and real assertion failures both publish with canonical
     const out=await stepDone({step:'verify',summary:'tests ran',cwd:run.root},f.agentPorts());
     assert.equal(out.exitCode,0,out.message);assert.equal(f.prs.length,2);
     assert.match(f.prs[1].body,new RegExp(`Code replay: ${outcome.toUpperCase()}`));
-    if(scenario==='fail')assert.match(f.prs[1].body,/^Old-code proof: not run\.\nNative tests: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\nAgent note — not checked by pdd: ✗ 1 replay assertions fail/);
+    if(scenario==='fail')assert.match(f.prs[1].body,/^Old-code proof: not run\.\nNative tests: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\n✗ 1 replay assertions fail/);
     if(scenario==='fail-with-warning'){
       const inventory=f.prs[1].body.indexOf('Tests vs base:');
       const warning=f.prs[1].body.indexOf('✗ 1 vector still fails');
