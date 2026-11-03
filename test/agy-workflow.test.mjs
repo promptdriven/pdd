@@ -62,10 +62,10 @@ test('agy shell launch: full access, pdd run and worktree folders in its workspa
   const messageFile = join(root, "start 'message'.md"), message = 'Use pdd-small-change.\nLiteral $(touch broken) `text`'; writeFileSync(messageFile, message);
   const launch = command => JSON.parse(execFileSync('/bin/sh', ['-c', command], { cwd: root, env: { PATH: `${bin}:/usr/bin:/bin` }, encoding: 'utf8' }));
   assert.deepEqual(launch(chatCommand({ agent: 'agy', cwd: run.root, messageFile, addDirs: dirs, configDir: '/ignored' })),
-    { args: ['--dangerously-skip-permissions', '--add-dir', dirs[0], '--add-dir', dirs[1], '--prompt-interactive', message], marker: '1', codex: null });
+    { args: ['--dangerously-skip-permissions', '--settings', JSON.stringify({ trustedWorkspaces: [run.root] }), '--add-dir', dirs[0], '--add-dir', dirs[1], '--prompt-interactive', message], marker: '1', codex: null });
   const id = '11111111-1111-4111-8111-111111111111';
   assert.deepEqual(launch(chatCommand({ agent: 'agy', cwd: run.root, resumeId: id, addDirs: dirs })).args,
-    ['--dangerously-skip-permissions', '--add-dir', dirs[0], '--add-dir', dirs[1], '--conversation', id]);
+    ['--dangerously-skip-permissions', '--settings', JSON.stringify({ trustedWorkspaces: [run.root] }), '--add-dir', dirs[0], '--add-dir', dirs[1], '--conversation', id]);
   // Other agents ignore the folders.
   assert.doesNotMatch(chatCommand({ agent: 'claude', cwd: run.root, messageFile, sessionId: id, addDirs: dirs }), /--add-dir/);
 });
@@ -83,7 +83,7 @@ test('agy run starts and reopens the same Herdr chat with its folders; recorded 
   let run = f.record(); assert.equal(run.agent, 'agy'); assert.equal(run.configDir, null);
   const launches = () => f.herdr.calls.filter(a => a[0] === 'pane' && a[1] === 'run');
   const line = launches()[0][3];
-  assert.match(line, /^env PDD_AGENT_SESSION=1 agy --dangerously-skip-permissions --add-dir /);
+  assert.ok(line.startsWith(`env PDD_AGENT_SESSION=1 agy --dangerously-skip-permissions --settings '{"trustedWorkspaces":[${JSON.stringify(run.root)}]}' --add-dir `), line);
   for (const dir of [dirname(run.runDir), dirname(run.root)]) assert.ok(line.includes(`--add-dir '${dir}'`), line);
   assert.ok(run.chats[0].messageFile.startsWith(dirname(run.runDir)));
   assert.match(readFileSync(run.chats[0].messageFile, 'utf8'), /pdd-small-change.*SKILL\.md/);

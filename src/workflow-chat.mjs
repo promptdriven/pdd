@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: f6588f3d8ac2a741849b7b5ab4ddb75b7631423fea45dc4926ee1b30b1ff706f).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 907de162b4ceef6032a4b49310195aedd0839ed699526f5334e2354bc820c4b7).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
@@ -112,7 +112,9 @@ export function chatCommand({ agent, cwd, messageFile, sessionId, resumeId, conf
   // Gemini asks a hidden "trust this folder?" question in a new worktree; trust the run worktree for this session.
   const env = ['env', 'PDD_AGENT_SESSION=1', ...(configDir && homeVariable(agent) ? [`${homeVariable(agent)}=${quote(configDir)}`] : []), ...(agent === 'gemini' ? ['GEMINI_CLI_TRUST_WORKSPACE=true'] : [])];
   const message = messageFile ? [`"$(cat ${quote(messageFile)})"`] : [];
-  if (agent === 'agy') return [...env, 'agy', '--dangerously-skip-permissions', ...[...new Set(addDirs)].flatMap(dir => ['--add-dir', quote(dir)]),
+  // agy asks "Do you trust the contents of this project?" in a new worktree; --settings trusts it for this session only.
+  if (agent === 'agy') return [...env, 'agy', '--dangerously-skip-permissions', '--settings', quote(JSON.stringify({ trustedWorkspaces: [cwd] })),
+    ...[...new Set(addDirs)].flatMap(dir => ['--add-dir', quote(dir)]),
     ...(resumeId ? ['--conversation', resumeId] : []), ...(messageFile ? ['--prompt-interactive', ...message] : [])].join(' ');
   if (agent === 'gemini') return [...env, 'gemini', '--yolo', ...(resumeId ? ['--resume', resumeId] : []), ...(messageFile ? ['--prompt-interactive', ...message] : [])].join(' ');
   if (agent === 'claude') return [...env, 'claude', '--dangerously-skip-permissions', ...(resumeId ? ['--resume', resumeId] : ['--session-id', sessionId]), ...message].join(' ');
