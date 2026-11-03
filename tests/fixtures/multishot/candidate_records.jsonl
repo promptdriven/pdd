@@ -1,0 +1,6 @@
+{"task_id": "task-1", "arm_id": "arm-a", "candidate_index": 0, "model": "test-model-v1", "harness": "pytest-harness", "public_signals": {"lint_pass": 1, "parse_ok": 1, "test_pass": true}, "selected": true}
+{"task_id": "task-1", "arm_id": "arm-a", "candidate_index": 1, "model": "test-model-v1", "harness": "pytest-harness", "public_signals": {"lint_pass": 0, "parse_ok": 1, "test_pass": false}, "selected": false}
+{"task_id": "task-2", "arm_id": "arm-a", "candidate_index": 0, "model": "test-model-v1", "harness": "pytest-harness", "public_signals": {"lint_pass": 1, "parse_ok": 1, "test_pass": false}, "selected": true}
+{"task_id": "task-2", "arm_id": "arm-a", "candidate_index": 1, "model": "test-model-v1", "harness": "pytest-harness", "public_signals": {"lint_pass": 0, "parse_ok": 0, "test_pass": false}, "selected": false}
+{"task_id": "task-3", "arm_id": "arm-a", "candidate_index": 0, "model": "test-model-v1", "harness": "pytest-harness", "public_signals": {"lint_pass": 1, "parse_ok": 0, "test_pass": false}, "selected": true}
+{"task_id": "task-3", "arm_id": "arm-a", "candidate_index": 1, "model": "test-model-v1", "harness": "pytest-harness", "public_signals": {"lint_pass": 0, "parse_ok": 1, "test_pass": true}, "selected": false}
