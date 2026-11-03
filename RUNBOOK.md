@@ -61,7 +61,7 @@ PDD_SAID
 
 Choose a delimiter absent as a whole line from the payload. Keep it quoted. Never interpolate the words into shell code or shell quotes. `--said -` records stdin exactly, including newlines. Blank input is refused; pdd does not grade nonblank words.
 - The gate saves selected prompt paths and prose hashes when shown. If a prompt changes, show the gate again before approval. Output lists the paths and hashes.
-- Without --said, a person at a normal terminal can answer y/N once for the listed gate and all its drafts. `pdd approve PATH` approves one prompt. An agent or caller outside a normal terminal gets a plain instruction: ask the person, then run with --said and their words. Native Herdr area-chat evidence may record history but never authorizes approval. Only an explicit approve call passes an approval gate; steps, `workflow done` and chat messages never do. Warn, without blocking, when a workflow has no approve gate before code.
+- Without --said, a person at a normal terminal can answer y/N once for the listed gate and all its drafts. `pdd approve PATH` approves one prompt. Outside a normal terminal, `pdd workflow approve` instructs the agent to ask the person and record their words with --said; `pdd approve PATH` instructs the person to run that command. Native Herdr area-chat evidence may record history but never authorizes approval. Only an explicit approve call passes an approval gate; steps, `workflow done` and chat messages never do. Warn, without blocking, when a workflow has no approve gate before code.
 - Workflow approval reads `pdd.json` from the main checkout (`sourceRoot`), outside the agent's run worktree. Standalone `pdd approve PATH` reads it from the Git root of the current checkout. Root `pdd.json` with `"strict_approvals": true` permits only a person terminal; absent/false is easy mode. Strict mode refuses --said. Prompt approval records the invoking actor, time, route, exact words and path/hash; PR evidence shows matching approvals safely quoted in code spans. Gate approval does not approve the later code-or-stop gate. A person decides expected values; never change them on your own.
 - pdd never merges and has no merge command. An agent may merge only after the person's explicit chat request. Resolve the PR's exact current head and require at least one check and all required checks green for that head; missing, failed or pending checks stop. First post a PR comment beginning `Merge requested by the person: "…"`, preserving the exact request safely in a Markdown code span (use a fence longer than any backtick run; JSON-quote controls/newlines). Use a body file, never interpolate the words into shell code. A failed comment stops. Recheck head/checks, then run `gh pr merge PR --merge --match-head-commit <head>` with that same head. A changed head stops; obtain green checks for its current head before retrying.
 - To change an approved prompt (prose or interface), set `"status": "draft"`, run `pdd test --fill-hash` and ask the
@@ -116,8 +116,7 @@ Safe in-repository file links and linked folders send the final Git-visible regu
 ## 3. Schema rules
 
 These rules apply to every `input_schema` and `result_schema`, to each resource `arguments_schema` and `result_schema`,
-and to an app map's `state_schema`. Today the interpreter reports only one broken rule at a time, often with `"path": null`
-and no field name. So check every schema against ALL the rules before the first `pdd test`.
+and to an app map's `state_schema`. Local preflight reports schema problems in the prompt and called prompts with JSON Pointers at 0 AI calls. Check every schema against these rules before the first `pdd test`.
 
 1. The top of each schema is `"type": "object"`.
 2. Every object has `properties`, `required` and `"additionalProperties": false`. With no fields: `"properties": {}, "required": []`.
@@ -138,8 +137,7 @@ within `[-9007199254740991, 9007199254740991]`, or ±(2^53−1). An out-of-range
 names the bad bound's JSON Pointer (for example `/properties/count/maximum`), the declared bound (`bound_text`)
 and the supported range (`supported_integer_range`).
 
-For an optional input field, leave it out of `required`. Do not use `oneOf` with `null` for it: the Simulator's form shows
-`oneOf` only as a raw JSON box, and pdd cannot check that input before it sends. A correct schema (`read` is optional):
+For an optional input field, leave it out of `required`. Use `oneOf` with `null` when null is an allowed value; pdd validates the input before sending. A correct schema (`read` is optional):
 ```json
 {"type": "object", "properties": {"title": {"type": "string", "minLength": 1}, "read": {"type": "boolean"},
    "tags": {"type": "array", "items": {"type": "string"}}, "note": {"oneOf": [{"type": "string"}, {"type": "null"}]}},
@@ -179,7 +177,7 @@ The AI cannot compute a hash. Declare a compute resource with hash_json or hash_
 
 Declare the data as a resource in the interface. The prose names each operation: "Read the tasks once with
 `store.load` and the key `todos`." This is the full `todo-cli` resource. `TASKS` is the list schema of the first
-line: write it out in full in all 3 places (`$ref` is not allowed). A missing key reads as `null`, so `load` uses `oneOf`.
+line: write it out in all 3 places, or use a `$contract` reference expanded locally before lint, test and simulate (JSON Schema `$ref` is not allowed). A missing key reads as `null`, so `load` uses `oneOf`.
 ```json
 TASKS = {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "integer", "minimum": 1},
          "text": {"type": "string"}, "done": {"type": "boolean"}}, "required": ["id", "text", "done"], "additionalProperties": false}}
@@ -297,12 +295,12 @@ node `<file>--op-<operation>--hex-<operation name in hex>`. `printf add | xxd -p
 
 ## 11. `pdd test`
 
-`pdd test --fill-hash` fills the hash of draft prompts. `pdd test` checks every test at the same time.
+`pdd test --fill-hash` fills the hash of draft prompts. `pdd test` checks discovered tests, reusing unchanged passing Stories from `.pdd/cache/test/`. Use `--lf` for last failures, `--cache-clear` to clear the cache, or `--retry` to retry confirmed unstarted checks in a saved batch.
 `pdd test place-order` checks one story. `pdd test --read` reads the last results again. `--fill-hash` sends nothing. A saved `--read` may continue original checks held for lint after it passes, using identical source, owner and call ceilings; other reads send nothing.
 Before you send a check, run `pdd lint` to find format problems (0 AI calls). Exit 0 means finished and passed; queued/running lint exits 3 with its saved read command. Never import pdd's source.
 `pdd lint [STORY…]` sends the files to the server's lint only. It makes no AI call, and it prints every problem
 the server finds.
-pdd checks the files on this computer first. Then it sends one check for each test. It shows one table (story, test,
+pdd checks the files on this computer first. Then it sends checks for tests without a reusable pass. It shows one table (story, test,
 result, checks, time), the AI calls and a report link for each test. Anyone with a report link can open it.
 A failed check shows the criterion, the path, the expected value and the answer: `AC1  result /totalCents  expected 899, got 900`.
 The report preview shows the first 256 characters of a longer string followed by `…`. The check still compares
@@ -360,7 +358,7 @@ failed, the real reason and what to do next: pass that line on as it is.
 
 | Refusal | Usual cause | Fix |
 |---|---|---|
-| `graph-schema-…` | A schema breaks a rule of section 3. `keyword` names the rule; `path: null` names no field | Check every schema against all of section 3. |
+| `graph-schema-…` | A schema breaks a rule of section 3. Local diagnostics give the rule and JSON Pointer | Check the named schema against section 3. |
 | `invalid-input` | A step input breaks the input schema: `"7pm"`, or a tax rate as a number | Fix the input. pdd shows the field and the rule. |
 | `story-criterion-mismatch` | A test criterion is not the story text: often curly quotes | Copy the story line exactly. |
 | `unchecked-criteria` | A criterion has no exact check | Add a check for it. |
@@ -427,7 +425,7 @@ screens. It holds no code. Without it, the person uses forms (or a terminal for 
 - `pdd simulate` uses `app-map.json` at the repo root, else `app/app-map.json`. For another file:
   `pdd simulate <story> --app-map <path> --new`. Without `--new`, pdd reuses the open simulation and does not send the map.
   Git must show the file. It must be an app map like the one below, not a page of your app (`public/index.html`).
-  pdd does not check the map. A wrong map may give only "The Try setup is not finished or its result is unknown".
+  pdd checks that the map is JSON with the app-map schema version and a name. A bad explicit map stops the command; a bad default map is skipped with a warning.
 - **A screen from an operation** (`"source": "operation"`): the operation draws the screen. `format` is `html`, `text`
   or `grid`. `result_pointer` selects the drawing: `/html` (a string) or `/lines` (a list of strings). `stylesheets` lists CSS files.
   The interpreter cleans the drawn html. It removes the `background` style, `list-style` and `aria-pressed`. Write
@@ -563,7 +561,7 @@ Agents replay the approved prompt-space cases against the real code. Checks of p
 that the code behaves the same. Agents execute the tests and supply the evidence; pdd validates structure and
 identity only. It does not independently prove execution or prompt/code equivalence.
 
-In verify after the last commit, run one `pdd workflow prove <run> --test "<command>" --expect "<Defect: text>"` command that covers all new or changed tests; its line goes on the PR. Fresh worktrees have no installed dependencies, so include any required installation in the command.
+In verify after the last commit, run one `pdd workflow prove <run> --test "<command>" --expect "<distinctive text printed by the failing test on old code>"` command that covers all new or changed tests; its line goes on the PR. Fresh worktrees have no installed dependencies, so include any required installation in the command.
 
 **Test vectors: the approved cases, run on the real code.**
 - Use `tests/<story>.json` from prompt space as it is. Never edit it in code space. If an expected value looks
@@ -1042,4 +1040,4 @@ A prompt pass proves these synthetic cases against the declared fake world. It d
 
 The person's own agent can use the stdio server, `pdd mcp`, in the current repository. On the person's intent (for example, "try adding a bookmark with tag news"), use `try_open` to open or reuse the Story's simulation, `try_state` to inspect it, fill the input in `try_run`, `try_check` to check the run against the Story, and `try_save_case` to save a case. Follow the tools' returned input schemas and errors. Each run counts against the simulation's call budget and appears in the Simulator's history; inspect remaining calls before more work.
 
-Saved cases go to a separate `tests/<story>-try-<run-id>.json` with the run's exact starting data; the original scenario stays intact. A recorded case that covers only part of the Story must be completed before `pdd test`, which requires every criterion. Saved cases contain observed results. Review them against the Story with the person before treating them as expected values. Saving or checking a case never approves its expectations or a prompt. If the tools are unavailable, offer `pdd simulate STORY`.
+Saved cases go to a separate `tests/<story>.try-<run-id>.json` with the run's exact starting data; the original scenario stays intact. A recorded case that covers only part of the Story must be completed before `pdd test`, which requires every criterion. Saved cases contain observed results. Review them against the Story with the person before treating them as expected values. Saving or checking a case never approves its expectations or a prompt. If the tools are unavailable, offer `pdd simulate STORY`.
