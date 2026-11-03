@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: af491649ad1f2a7ca8fa0673beb5e2740c8e755a4b4e383af2fb93ad16b7e2fc).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 9305703de0416ce79f7651e70a9337130ded43706890addb2fb918a1e0ebaae3).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
@@ -20,7 +20,7 @@ export const validSessionId = id => typeof id === 'string' && /^[0-9a-f]{8}-[0-9
 const AGENT_MARKER = /^(?:CLAUDECODE|CLAUDE_CODE_(?:CHILD_SESSION|SESSION_ID|SESSION_ATTENDED|ENTRYPOINT|MESSAGING_SOCKET|MESSAGING_TOKEN|EXECPATH)|CLAUDE_PID|CODEX_THREAD_ID|CODEX_SANDBOX[A-Z_]*|HERDR_[A-Z_]+|PDD_AGENT_SESSION)$/;
 
 // The variable that names the agent's config folder (the run keeps its value as configDir).
-export const homeVariable = agent => agent === 'claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME';
+export const homeVariable = agent => agent === 'claude' ? 'CLAUDE_CONFIG_DIR' : agent === 'gemini' ? 'GEMINI_CLI_HOME' : 'CODEX_HOME';
 // A leading "~" or "~/" is the home folder: zsh leaves "~" as text in "env CODEX_HOME=~/x pdd …" (0.1.6 tester), and the
 // agent then refuses the folder.
 export function expandHome(dir, env = process.env) {
@@ -65,6 +65,7 @@ export function sessionEvidenceDue(chat, live, at) {
 // launch or resume request. An unreadable, ambiguous or unrelated result is never evidence and never authorizes a launch.
 export async function ownSession({ run, chat, since, ports = {} }) {
   const env = ports.env ?? process.env, kind = chat.agent ?? run.agent, folder = expandHome(chat.configDir, env);
+  if (kind === 'gemini') return { kind: 'unknown' };
   const saved = kind === 'claude' && validSessionId(chat.session?.id) ? chat.session.id : null;
   let sessions;
   try {
@@ -104,8 +105,10 @@ export function herdrCommand(ports = {}) {
 export function chatCommand({ agent, cwd, messageFile, sessionId, resumeId, configDir }) {
   if (resumeId !== undefined && !validSessionId(resumeId)) throw problem('invalid_session_id', 'The saved native session id is not a UUID, so pdd will not resume it.');
   if (resumeId !== undefined) resumeId = quote(resumeId);
-  const env = ['env', 'PDD_AGENT_SESSION=1', ...(configDir ? [`${agent === 'claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME'}=${quote(configDir)}`] : [])];
+  // Gemini asks a hidden "trust this folder?" question in a new worktree; trust the run worktree for this session.
+  const env = ['env', 'PDD_AGENT_SESSION=1', ...(configDir ? [`${homeVariable(agent)}=${quote(configDir)}`] : []), ...(agent === 'gemini' ? ['GEMINI_CLI_TRUST_WORKSPACE=true'] : [])];
   const message = messageFile ? [`"$(cat ${quote(messageFile)})"`] : [];
+  if (agent === 'gemini') return [...env, 'gemini', '--yolo', ...(resumeId ? ['--resume', resumeId] : []), ...(messageFile ? ['--prompt-interactive', ...message] : [])].join(' ');
   if (agent === 'claude') return [...env, 'claude', '--dangerously-skip-permissions', ...(resumeId ? ['--resume', resumeId] : ['--session-id', sessionId]), ...message].join(' ');
   return [...env, 'codex', ...(resumeId ? ['resume', resumeId] : []), '--no-daemon', '--dangerously-bypass-approvals-and-sandbox',
     '-c', quote(`projects={${JSON.stringify(cwd)}={trust_level="trusted"}}`), ...message].join(' ');

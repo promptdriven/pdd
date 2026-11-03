@@ -1,6 +1,6 @@
 # PDD usage guide
 
-This guide is for people who install pdd 0.1.14 from `promptdriven/pdd`. Each section has commands that you can copy.
+This guide is for people who install pdd 0.1.15 from `promptdriven/pdd`. Each section has commands that you can copy.
 
 > [!WARNING]
 > **Agents run with full access.** PDD starts Codex with `--dangerously-bypass-approvals-and-sandbox` and Claude Code with `--dangerously-skip-permissions`. The agents do not stop to ask for approval. They can read, change and delete files and run commands as your user. Use PDD only in projects and on machines where you accept this.
@@ -76,7 +76,7 @@ You need the pdd command only for runs on GitHub issues ([section 6](#6-run-a-wo
 ```sh
 npm install -g github:promptdriven/pdd
 "$(npm prefix -g)/bin/pdd" setup  # reports PATH selection and keeps other installs
-pdd --version   # prints 0.1.14
+pdd --version   # prints 0.1.15
 which -a pdd    # the first line must be in "$(npm prefix -g)/bin"
 ```
 
@@ -99,7 +99,7 @@ See all of them:
 
 ```sh
 which -a pdd
-pdd --version   # this pdd prints 0.1.14
+pdd --version   # this pdd prints 0.1.15
 ```
 
 If you choose to remove the Python installation, use the tool that installed it:
@@ -155,7 +155,7 @@ Where the skills go:
 
 Each copy that pdd makes has a marker file, `.pdd-skill.json`. After you update the pdd command, `pdd setup` replaces an older copy that has this marker. It never touches a copy without the marker, or a symlink, for example an `npx skills` install.
 
-`npx skills add promptdriven/pdd --skill pdd-prompting` installs one skill. `npx skills list` shows what you have. The `pdd-skills:` line at the top of each `SKILL.md` shows the version of that skill, for example `pdd-skills: 0.1.14`.
+`npx skills add promptdriven/pdd --skill pdd-prompting` installs one skill. `npx skills list` shows what you have. The `pdd-skills:` line at the top of each `SKILL.md` shows the version of that skill, for example `pdd-skills: 0.1.15`.
 
 Do not edit the installed skill folders: an update replaces your edits. To change a workflow, [make your own](#8-make-your-own-workflow).
 
@@ -394,7 +394,7 @@ pdd simulate --stop place-order
 
 The AI-call budget is a ceiling; you are charged only for calls that run. Check defaults to 12 calls per step, with a minimum of 18 and maximum of 1000 per test. `pdd test STORY --max-calls N` overrides that ceiling. A new `pdd simulate STORY` requests 400 calls; use `pdd simulate STORY --max-calls 600` when starting a new simulation. The CLI cannot raise an existing simulation’s ceiling; `--new --max-calls 600` replaces it with fresh saved data. The Simulator shows the interpreter-confirmed total and remaining calls, and reusing a simulation without a budget option keeps its current ceiling. Both `pdd test` and `pdd simulate` accept --max-calls from 1 through 1000, the interpreter maximum. Agents choosing a budget use at least 3 times their worst-case estimate, including child calls and planned interactions (RUNBOOK §10).
 
-In a terminal, `pdd test` waits until every check ends. When an agent runs it (no terminal), it waits at most 90 seconds, then prints the table and a `Still running` line with the command that reads the results later, `pdd test --read BATCH`; the checks keep running on the server. `--timeout MIN` (1 to 120 minutes) sets the limit in both cases. While checks run, pdd prints one line every 30 s, for example `Still running: 2 of 3 Stories done · 14 AI calls so far · 4 min`. Press Ctrl-C to stop waiting, and run `pdd test --read` to see the results.
+`pdd test` and saved-batch `pdd test --read BATCH` wait until every Story ends in every shell. `--timeout MIN` (1 to 120 minutes) sets an explicit caller limit. While checks run, pdd prints one stderr line every 30 s, for example `Still running: 2 of 3 Stories done · 14 AI calls so far · 4 min`. Use the shell tool's longest timeout or a background task that notifies on exit (Claude Code: `run_in_background`; Codex: a long `timeout_ms`). If the tool stops pdd, or you press Ctrl-C, run the printed recovery read once to keep waiting. Never poll every minute.
 
 After the table, `pdd test` prints one `Prompt tests` line for each Story that you can paste into a PR, for example `Prompt tests (place-order): ✓ 4 of 4 criteria · 11/11 checks · 2 AI calls`. With two or more Stories, the overall `Prompt tests:` line comes last.
 
@@ -555,7 +555,7 @@ This is a pre-release. These limits are known today:
 
 | You see | What to do |
 |---|---|
-| `pdd --version` does not print `0.1.14` | Another `pdd` comes first. See [section 3](#3-if-you-have-the-old-python-pdd). |
+| `pdd --version` does not print `0.1.15` | Another `pdd` comes first. See [section 3](#3-if-you-have-the-old-python-pdd). |
 | pdd says that `codex` or `claude` is not on PATH | Install the agent and sign in, or use the other one with `--agent`. |
 | A message about `git rev-parse --show-toplevel` | You are not in a Git clone. `cd` into your clone. |
 | A message about `refs/remotes/origin/...` or a missing base | Run `git fetch origin`. |

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: 1c1658de36eb66c60e22f5529efd201a2f638ed39f2ffd9ef0e95b4a27230ba1).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: 71f986858b86600655abc326b72234ac594d215e8848b93f3a387e492b919229).
 import { hasProgress, outcomeExitCode, outcomeFor, outcomeText, progressText } from './runtime-outcome.mjs';
 export const OPEN_STATES = new Set(['queued', 'running']);
 
@@ -153,9 +153,25 @@ export const PROVIDER_TEXT = 'the AI provider failed during the run. It is not a
 const round = seconds => typeof seconds === 'number' ? Math.round(seconds * 10) / 10 : null;
 const sentRow = row => row.phase === 'server';
 
+function criterionCoverage(row) {
+  if (!Array.isArray(row.steps)) return null;
+  const counts = new Map(Object.keys(row.criterion_texts ?? {}).map(id => [id, []]));
+  for (const step of row.steps) {
+    if (!isObjectLike(step) || !Array.isArray(step.checks)) return null;
+    for (const check of step.checks) {
+      if (!isObjectLike(check) || typeof check.criterion_id !== 'string' || !check.criterion_id.trim()
+        || typeof check.target !== 'string' || typeof check.path !== 'string') return null;
+      if (!counts.has(check.criterion_id)) counts.set(check.criterion_id, []);
+      counts.get(check.criterion_id).push(check);
+    }
+  }
+  return [...counts].map(([criterion_id, checks]) => ({ criterion_id, check_count: checks.length,
+    exit_code_only: checks.length > 0 && checks.every(check => check.target === 'result' && ['/exit_code', '/exitCode'].includes(check.path)) }));
+}
+
 export function jsonRow(row) {
   const publicChecks = checks => (checks ?? []).map(({ normal_result, ...check }) => check);
-  return { story: row.story, title: row.title, test: row.test, state: row.state, ...(row.progress ? { progress: row.progress } : {}), ...(row.ahead !== undefined && row.ahead !== null ? { ahead: row.ahead } : {}), checks: row.checks ?? null, criteria: row.criteria ?? null,
+  return { story: row.story, title: row.title, test: row.test, state: row.state, criterion_coverage: criterionCoverage(row), ...(row.progress ? { progress: row.progress } : {}), ...(row.ahead !== undefined && row.ahead !== null ? { ahead: row.ahead } : {}), checks: row.checks ?? null, criteria: row.criteria ?? null,
     failed_checks: publicChecks(row.failed_checks), refusals: (row.refusals ?? []).map(item => ({ code: item.code, field: item.field ?? null, section: item.section ?? null,
       message: item.message ?? null, engine_message: item.engine_message ?? null, hint: item.hint ?? null, reason: item.reason ?? null, fix: item.fix ?? null,
       where: item.where ?? null, cause: item.cause ?? null })), calls: sentRow(row) ? row.calls ?? 'unknown' : 0,
@@ -389,6 +405,10 @@ export function renderText({ batch, rows, coverage, warnings = [], details = fal
     out.push(`Checks for ${row.title} (${row.test}):`,
       ...[...row.all_checks].sort((a, b) => a.passed - b.passed).flatMap(check => checkLines(check, secrets)
         .map((text, index) => index ? `  ${text}` : `  ${check.passed ? 'passed' : 'failed'}  ${text}`)));
+  }
+  for (const row of rows) for (const item of criterionCoverage(row) ?? []) {
+    const text = row.criterion_texts?.[item.criterion_id];
+    out.push(`criterion ${item.criterion_id}:${text ? ` ${cleanText(text, secrets)}` : ''}${item.exit_code_only ? ' — checked by exit code only' : ''}`);
   }
   if (coverage) out.push(coverageText(coverage));
   const models = [...new Set(rows.map(row => row.requested_model).filter(Boolean))];

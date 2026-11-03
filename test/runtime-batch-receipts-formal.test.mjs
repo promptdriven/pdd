@@ -49,7 +49,7 @@ test('2655 formal: accepted-ID recovery obeys receipt evidence across all 144 bo
             }
             response = reply;
             const posts = fake.posts.length, gets = fake.gets.length;
-            const actual = await run(operation === 'read' ? [batch] : [], operation === 'read' ? { '--read': true } : { '--retry': batch, '--timeout': '0.01' });
+            const actual = await run(operation === 'read' ? [batch] : [], operation === 'read' ? { '--read': true, ...(reply === 'running' && cache !== 'valid' ? { '--timeout': 1 } : {}) } : { '--retry': batch, '--timeout': '0.01' });
             const row = actual.json.rows[0];
             assert.equal(fake.posts.length, posts, `accepted ID must never be POSTed: ${context}`);
             assert.equal(actual.clock.uuids, 0, `recovery allocates no new ID: ${context}`);

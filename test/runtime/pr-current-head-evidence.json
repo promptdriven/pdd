@@ -1,0 +1,857 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/pr-current-head-evidence.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "After checked files change or disappear, or their current source cannot be verified, the PR shows no current successful check or count for that saved result."
+    },
+    {
+      "id": "AC2",
+      "text": "Unchanged checked content can retain its current result across commits; newer compatible evidence updates the same Story without restoring an older overall total."
+    },
+    {
+      "id": "AC3",
+      "text": "Agent prose, including \"Full npm test: 665/665 passed\", ordinary proof, warnings and failures, stays under \"Agent note — not checked by pdd\"; only structured current-head CI or the old-code proof run supplies checked native-suite counts, otherwise they are unknown."
+    },
+    {
+      "id": "AC4",
+      "text": "A missing machine proof remains \"not run\" and an unreadable proof remains \"unavailable\"; neither prevents publication."
+    },
+    {
+      "id": "AC5",
+      "text": "A criterion with one or more checks, all checking exit code across every step, says \"checked by exit code only\", regardless of its wording or result; checks assigned to other criteria do not affect this fact."
+    },
+    {
+      "id": "AC6",
+      "text": "A criterion with mixed checks or zero checks has no exit-code-only annotation; unavailable authored checks remain unknown. No new warning, refusal or verdict change is added."
+    }
+  ],
+  "initial_world": {
+    "source_fingerprint": [
+      {
+        "request": {
+          "root": "/synthetic/current"
+        },
+        "reply": {
+          "value": null
+        }
+      },
+      {
+        "request": {
+          "root": "/synthetic/changed"
+        },
+        "reply": {
+          "value": null
+        }
+      },
+      {
+        "request": {
+          "root": "/synthetic/removed"
+        },
+        "reply": {
+          "value": null
+        }
+      },
+      {
+        "request": {
+          "root": "/synthetic/unbound"
+        },
+        "reply": {
+          "value": null
+        }
+      }
+    ],
+    "source_capture": [
+      {
+        "request": {
+          "root": "/synthetic/current",
+          "tests": [
+            "test/runtime/release.json"
+          ],
+          "appMap": null
+        },
+        "reply": {
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/synthetic/changed",
+          "tests": [
+            "test/runtime/release.json"
+          ],
+          "appMap": null
+        },
+        "reply": {
+          "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/synthetic/removed",
+          "tests": [
+            "test/runtime/release.json"
+          ],
+          "appMap": null
+        },
+        "reply": {
+          "sha256": "",
+          "error": "missing selected file"
+        }
+      }
+    ],
+    "publication_readStepNotes": [
+      {
+        "request": {
+          "runDir": "/synthetic/run-missing",
+          "steps": [
+            "verify"
+          ]
+        },
+        "reply": {
+          "notes": [
+            {
+              "step": "verify",
+              "text": "Proof (gap closed): Full npm test: 665/665 passed\nNot checked: live CI"
+            }
+          ]
+        }
+      },
+      {
+        "request": {
+          "runDir": "/synthetic/run-unreadable",
+          "steps": [
+            "verify"
+          ]
+        },
+        "reply": {
+          "notes": [
+            {
+              "step": "verify",
+              "text": "Proof (gap closed): Full npm test: 665/665 passed\nNot checked: live CI"
+            }
+          ]
+        }
+      }
+    ],
+    "publication_currentHead": [
+      {
+        "request": {
+          "root": "/synthetic/repo",
+          "baseBranch": "alpha"
+        },
+        "reply": {
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "error": ""
+        }
+      }
+    ],
+    "publication_readOldCodeProof": [
+      {
+        "request": {
+          "runDir": "/synthetic/run-missing"
+        },
+        "reply": {
+          "content": "",
+          "error": "missing"
+        }
+      },
+      {
+        "request": {
+          "runDir": "/synthetic/run-unreadable"
+        },
+        "reply": {
+          "content": "",
+          "error": "unreadable"
+        }
+      }
+    ]
+  },
+  "simulation": {
+    "source.fingerprint": {
+      "action": "collection.get",
+      "world_pointer": "/source_fingerprint",
+      "key_argument_pointer": "/root",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/request/root",
+      "item_value_pointer": "/reply",
+      "result_template": {},
+      "result_value_pointer": ""
+    },
+    "source.capture": {
+      "action": "collection.get",
+      "world_pointer": "/source_capture",
+      "key_argument_pointer": "/root",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/request/root",
+      "item_value_pointer": "/reply",
+      "result_template": {},
+      "result_value_pointer": ""
+    },
+    "publication.readStepNotes": {
+      "action": "collection.get",
+      "world_pointer": "/publication_readStepNotes",
+      "key_argument_pointer": "/runDir",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/request/runDir",
+      "item_value_pointer": "/reply",
+      "result_template": {},
+      "result_value_pointer": ""
+    },
+    "publication.currentHead": {
+      "action": "collection.get",
+      "world_pointer": "/publication_currentHead",
+      "key_argument_pointer": "/root",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/request/root",
+      "item_value_pointer": "/reply",
+      "result_template": {},
+      "result_value_pointer": ""
+    },
+    "publication.readOldCodeProof": {
+      "action": "collection.get",
+      "world_pointer": "/publication_readOldCodeProof",
+      "key_argument_pointer": "/runDir",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/request/runDir",
+      "item_value_pointer": "/reply",
+      "result_template": {},
+      "result_value_pointer": ""
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "source-current",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "storyCount",
+      "input": {
+        "root": "/synthetic/current",
+        "runtimeHistory": [
+          {
+            "summary": "Prompt tests (release): ✓ 1 of 1 criteria · 1/1 checks · 1 AI call",
+            "at": 1,
+            "source": {
+              "kind": "runtime-capture-v1",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "tests": [
+                "test/runtime/release.json"
+              ]
+            }
+          }
+        ],
+        "done": {},
+        "evidence": [
+          {
+            "summary": "Prompt tests (release): ✓ 1 of 1 criteria · 2/2 checks · 1 AI call",
+            "at": 2,
+            "source": {
+              "kind": "runtime-capture-v1",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "tests": [
+                "test/runtime/release.json"
+              ]
+            }
+          }
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/pass",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/total",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "source-changed",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "storyCount",
+      "input": {
+        "root": "/synthetic/changed",
+        "runtimeHistory": [
+          {
+            "summary": "Prompt tests (release): ✓ 1 of 1 criteria · 1/1 checks · 1 AI call",
+            "at": 1,
+            "source": {
+              "kind": "runtime-capture-v1",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "tests": [
+                "test/runtime/release.json"
+              ]
+            }
+          }
+        ],
+        "done": {},
+        "evidence": []
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/pass",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/total",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/unknown",
+          "op": "equals",
+          "value": [
+            "release"
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "source-removed",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "storyCount",
+      "input": {
+        "root": "/synthetic/removed",
+        "runtimeHistory": [
+          {
+            "summary": "Prompt tests (release): ✓ 1 of 1 criteria · 1/1 checks · 1 AI call",
+            "at": 1,
+            "source": {
+              "kind": "runtime-capture-v1",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "tests": [
+                "test/runtime/release.json"
+              ]
+            }
+          }
+        ],
+        "done": {},
+        "evidence": []
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/pass",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/total",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/unknown",
+          "op": "equals",
+          "value": [
+            "release"
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "source-unbound",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "storyCount",
+      "input": {
+        "root": "/synthetic/unbound",
+        "runtimeHistory": [
+          {
+            "summary": "Prompt tests (release): ✓ 1 of 1 criteria · 1/1 checks · 1 AI call",
+            "at": 1
+          }
+        ],
+        "done": {},
+        "evidence": []
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/pass",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/total",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/unknown",
+          "op": "equals",
+          "value": [
+            "release"
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "agent-notes-missing",
+      "entry_path": "prompts/cli/workflow-pr-evidence.prompt.md",
+      "operation": "preparePrEvidence",
+      "input": {
+        "run": {
+          "runId": "synthetic-2596",
+          "runDir": "/synthetic/run-missing",
+          "root": "/synthetic/repo",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "baseBranch": "alpha",
+          "workflow": "bug",
+          "number": 2596,
+          "steps": [
+            {
+              "step": "verify",
+              "summary": "Proof (defect fixed): Full npm test: 665/665 passed\nProof (gap closed): regression assertion added\nNot checked: 0 passed, 665 failed; failure needs investigation"
+            }
+          ]
+        },
+        "isCode": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": [
+            "Old-code proof: not run.",
+            "Agent note — not checked by pdd: Not checked: `0 passed, 665 failed; failure needs investigation`",
+            "Agent note — not checked by pdd: Not checked: `live CI`",
+            "Agent note — not checked by pdd: Proof (defect fixed): `Full npm test: 665/665 passed`",
+            "Agent note — not checked by pdd: Proof (gap closed): `regression assertion added`",
+            "Agent note — not checked by pdd: Proof (gap closed): `Full npm test: 665/665 passed`"
+          ]
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/proofStatus",
+          "op": "equals",
+          "value": "not-run"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/issueReference",
+          "op": "equals",
+          "value": "Closes #2596"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "agent-notes-unreadable",
+      "entry_path": "prompts/cli/workflow-pr-evidence.prompt.md",
+      "operation": "preparePrEvidence",
+      "input": {
+        "run": {
+          "runId": "synthetic-2596",
+          "runDir": "/synthetic/run-unreadable",
+          "root": "/synthetic/repo",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "baseBranch": "alpha",
+          "workflow": "bug",
+          "number": 2596,
+          "steps": [
+            {
+              "step": "verify",
+              "summary": "Proof (defect fixed): Full npm test: 665/665 passed\nProof (gap closed): regression assertion added\nNot checked: 0 passed, 665 failed; failure needs investigation\nNot fixed yet: this helps find the cause"
+            }
+          ]
+        },
+        "isCode": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": [
+            "Old-code proof: unavailable.",
+            "Agent note — not checked by pdd: Not fixed yet: `this helps find the cause`",
+            "Agent note — not checked by pdd: Not checked: `0 passed, 665 failed; failure needs investigation`",
+            "Agent note — not checked by pdd: Not checked: `live CI`",
+            "Agent note — not checked by pdd: Proof (defect fixed): `Full npm test: 665/665 passed`",
+            "Agent note — not checked by pdd: Proof (gap closed): `regression assertion added`",
+            "Agent note — not checked by pdd: Proof (gap closed): `Full npm test: 665/665 passed`"
+          ]
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/proofStatus",
+          "op": "equals",
+          "value": "unavailable"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/issueReference",
+          "op": "equals",
+          "value": "Refs #2596"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "criterion-coverage-passed",
+      "entry_path": "prompts/cli/runtime-output.prompt.md",
+      "operation": "renderJson",
+      "input": {
+        "repo": "/synthetic/repo",
+        "rows": [
+          {
+            "story": "release",
+            "title": "Synthetic release",
+            "test": "test/runtime/release.json",
+            "state": "passed",
+            "steps": [
+              {
+                "step_id": "first",
+                "checks": [
+                  {
+                    "criterion_id": "AC1",
+                    "target": "result",
+                    "path": "/exit_code",
+                    "op": "equals",
+                    "value": 0
+                  },
+                  {
+                    "criterion_id": "AC2",
+                    "target": "result",
+                    "path": "/exitCode",
+                    "op": "equals",
+                    "value": 0
+                  },
+                  {
+                    "criterion_id": "AC3",
+                    "target": "result",
+                    "path": "/exit_code",
+                    "op": "equals",
+                    "value": 0
+                  }
+                ]
+              },
+              {
+                "step_id": "second",
+                "checks": [
+                  {
+                    "criterion_id": "AC1",
+                    "target": "result",
+                    "path": "/exitCode",
+                    "op": "equals",
+                    "value": 0
+                  },
+                  {
+                    "criterion_id": "AC2",
+                    "target": "result",
+                    "path": "/exit_code",
+                    "op": "equals",
+                    "value": 0
+                  },
+                  {
+                    "criterion_id": "AC3",
+                    "target": "result",
+                    "path": "/stdout",
+                    "op": "equals",
+                    "value": "release\n"
+                  }
+                ]
+              }
+            ],
+            "criterion_texts": {
+              "AC1": "The release prints only the release version.",
+              "AC2": "The command exits successfully.",
+              "AC3": "The release prints a version.",
+              "AC4": "No checks are assigned."
+            }
+          }
+        ],
+        "exitCode": 0
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/rows/0/criterion_coverage",
+          "op": "equals",
+          "value": [
+            {
+              "criterion_id": "AC1",
+              "check_count": 2,
+              "exit_code_only": true
+            },
+            {
+              "criterion_id": "AC2",
+              "check_count": 2,
+              "exit_code_only": true
+            },
+            {
+              "criterion_id": "AC3",
+              "check_count": 2,
+              "exit_code_only": false
+            },
+            {
+              "criterion_id": "AC4",
+              "check_count": 0,
+              "exit_code_only": false
+            }
+          ]
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/warnings",
+          "op": "equals",
+          "value": []
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/exit_code",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/rows/0/criterion_coverage/2/exit_code_only",
+          "op": "equals",
+          "value": false
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/rows/0/criterion_coverage/3/check_count",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/rows/0/criterion_coverage/3/exit_code_only",
+          "op": "equals",
+          "value": false
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "criterion-coverage-failed",
+      "entry_path": "prompts/cli/runtime-output.prompt.md",
+      "operation": "renderJson",
+      "input": {
+        "repo": "/synthetic/repo",
+        "rows": [
+          {
+            "story": "release",
+            "title": "Synthetic release",
+            "test": "test/runtime/release.json",
+            "state": "failed",
+            "steps": [
+              {
+                "step_id": "first",
+                "checks": [
+                  {
+                    "criterion_id": "AC1",
+                    "target": "result",
+                    "path": "/exit_code",
+                    "op": "equals",
+                    "value": 0
+                  },
+                  {
+                    "criterion_id": "AC2",
+                    "target": "result",
+                    "path": "/exitCode",
+                    "op": "equals",
+                    "value": 0
+                  },
+                  {
+                    "criterion_id": "AC3",
+                    "target": "result",
+                    "path": "/exit_code",
+                    "op": "equals",
+                    "value": 0
+                  }
+                ]
+              },
+              {
+                "step_id": "second",
+                "checks": [
+                  {
+                    "criterion_id": "AC1",
+                    "target": "result",
+                    "path": "/exitCode",
+                    "op": "equals",
+                    "value": 0
+                  },
+                  {
+                    "criterion_id": "AC2",
+                    "target": "result",
+                    "path": "/exit_code",
+                    "op": "equals",
+                    "value": 0
+                  },
+                  {
+                    "criterion_id": "AC3",
+                    "target": "result",
+                    "path": "/stdout",
+                    "op": "equals",
+                    "value": "release\n"
+                  }
+                ]
+              }
+            ],
+            "criterion_texts": {
+              "AC1": "The release prints only the release version.",
+              "AC2": "The command exits successfully.",
+              "AC3": "The release prints a version.",
+              "AC4": "No checks are assigned."
+            }
+          }
+        ],
+        "exitCode": 1
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/rows/0/criterion_coverage",
+          "op": "equals",
+          "value": [
+            {
+              "criterion_id": "AC1",
+              "check_count": 2,
+              "exit_code_only": true
+            },
+            {
+              "criterion_id": "AC2",
+              "check_count": 2,
+              "exit_code_only": true
+            },
+            {
+              "criterion_id": "AC3",
+              "check_count": 2,
+              "exit_code_only": false
+            },
+            {
+              "criterion_id": "AC4",
+              "check_count": 0,
+              "exit_code_only": false
+            }
+          ]
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/warnings",
+          "op": "equals",
+          "value": []
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/exit_code",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/rows/0/criterion_coverage/2/exit_code_only",
+          "op": "equals",
+          "value": false
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/rows/0/criterion_coverage/3/check_count",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/rows/0/criterion_coverage/3/exit_code_only",
+          "op": "equals",
+          "value": false
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "criterion-coverage-unknown",
+      "entry_path": "prompts/cli/runtime-output.prompt.md",
+      "operation": "renderJson",
+      "input": {
+        "repo": "/synthetic/repo",
+        "rows": [
+          {
+            "story": "release",
+            "title": "Synthetic release",
+            "test": "test/runtime/release.json",
+            "state": "unknown"
+          }
+        ],
+        "exitCode": 3
+      },
+      "checks": [
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/rows/0/criterion_coverage",
+          "op": "equals",
+          "value": null
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/warnings",
+          "op": "equals",
+          "value": []
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/exit_code",
+          "op": "equals",
+          "value": 3
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

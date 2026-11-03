@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 2b6fdf19dbaa0e8e0fd5d4f67e3d86f9ae314ead4d2edf024e8c997ad8aa72a5).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: f4f6fe58da927cdff540f999a15e3587afd52be29f03c6b19f93f2920b55daef).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -20,13 +20,13 @@ const routes = [
     forms: [form('pdd product status [--json]', 'Count Stories by part and slice from the product plan; no interpreter calls.')] },
   { id: 'product.next', prefix: ['product', 'next'], local: 'product-next', operands: [], options: [],
     forms: [form('pdd product next', 'Show ready planned runs and their start commands; no interpreter calls.')] },
-  { id: 'product.start', prefix: ['product', 'start'], local: 'product-start', operands: [{name:'run',type:'text'}], options: [{name:'--no-run',kind:'flag'},{name:'--agent',kind:'value',choices:['codex','claude']}],
-    forms: [form('pdd product start RUN [--no-run] [--agent codex|claude]', 'Create or reuse the run issue and start a normal feature run; --no-run only prepares the issue. No interpreter calls.')] },
+  { id: 'product.start', prefix: ['product', 'start'], local: 'product-start', operands: [{name:'run',type:'text'}], options: [{name:'--no-run',kind:'flag'},{name:'--agent',kind:'value',choices:['codex','claude','gemini']}],
+    forms: [form('pdd product start RUN [--no-run] [--agent codex|claude|gemini]', 'Create or reuse the run issue and start a normal feature run; --no-run only prepares the issue. No interpreter calls.')] },
   // `workflow start` is a quiet word for now; a later change moves it to `removed`: one data edit.
   { id: 'workflow.run', prefix: ['workflow', run], local: 'workflow-run', quiet: ['workflow', 'start'],
     operands: [{name:'name',type:'workflow-name'},{name:'issue',type:'issue'}],
-    options:[{name:'--agent',kind:'value',choices:['codex','claude']},{name:'--base',kind:'text'},{name:'--adopt-corpus',kind:'text'}],
-    forms:[form(`pdd workflow ${run} NAME ISSUE [--agent codex|claude] [--base BRANCH]`, 'Start the first area chat for a GitHub issue in Herdr and exit; --base selects an existing origin branch (default: repository default); --adopt-corpus FILE adopts exact unchanged approved content for a fresh replay-evidence-enabled workflow; pdd later pushes the issue branch and opens a real PR.')] },
+    options:[{name:'--agent',kind:'value',choices:['codex','claude','gemini']},{name:'--base',kind:'text'},{name:'--adopt-corpus',kind:'text'}],
+    forms:[form(`pdd workflow ${run} NAME ISSUE [--agent codex|claude|gemini] [--base BRANCH]`, 'Start the first area chat for a GitHub issue in Herdr and exit; --base selects an existing origin branch (default: repository default); --adopt-corpus FILE adopts exact unchanged approved content for a fresh replay-evidence-enabled workflow; pdd later pushes the issue branch and opens a real PR.')] },
   { id: 'workflow.prove', prefix: ['workflow', 'prove'], local: 'workflow-prove',
     operands: [{name:'issue',type:'issue'}], options: [{name:'--test',kind:'text'},{name:'--expect',kind:'text'}],
     forms: [form('pdd workflow prove ISSUE --test COMMAND --expect TEXT', 'Run committed changed tests on the fetched base branch merge-base and committed head with a 120-second limit per phase; save a non-gating report.')] },
@@ -76,7 +76,7 @@ const routes = [
     options: [{ name: '--lf', kind: 'flag' }, { name: '--cache-clear', kind: 'flag' }, { name: '--json', kind: 'flag' }, { name: '--details', kind: 'flag' }, { name: '--timeout', kind: 'integer', min: 1, max: 120 },
       { name: '--max-calls', kind: 'integer', min: 1, max: 1000 }, { name: '--read', kind: 'flag' }, { name: '--retry', kind: 'text' }, { name: '--fill-hash', kind: 'flag' }, { name: '--compact', kind: 'flag' },
       { name: '--files', kind: 'flag' }, { name: '--app-map', kind: 'text' }, { name: '--lint', kind: 'flag', hidden: true }, { name: '--local', kind: 'flag', hidden: true }, { name: '--screen', kind: 'text' }, { name: '--drawing', kind: 'text' }, { name: '--request', kind: 'uuid', hidden: true }],
-    forms: [form(`pdd ${test} [PATH|STORY...] [--lf] [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]`, 'Check stories on the PDD interpreter with your gh login: reuses unchanged passing Stories from .pdd/cache/test/; --lf selects previous failures in scope or uses the normal selection when none match, --cache-clear clears the cache and sends the selected Stories again (the interpreter may reuse saved answers); sends selected PATH or STORY dependencies (every Story when you name none), waits for every check (no limit in a terminal, at most 90 s for an agent; --timeout MIN sets the limit) with a progress line every 30 s, then prints one table with report links. Defaults to 12 calls per step, at least 18 and at most 1000; --max-calls accepts 1 to 1000.'),
+    forms: [form(`pdd ${test} [PATH|STORY...] [--lf] [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]`, 'Check stories on the PDD interpreter with your gh login: reuses unchanged passing Stories from .pdd/cache/test/; --lf selects previous failures in scope or uses the normal selection when none match, --cache-clear clears the cache and sends the selected Stories again (the interpreter may reuse saved answers); sends selected PATH or STORY dependencies (every Story when you name none), waits for every check (no default limit in any shell; --timeout MIN sets the limit) with a progress line every 30 s, then prints one table with report links. Defaults to 12 calls per step, at least 18 and at most 1000; --max-calls accepts 1 to 1000.'),
       form(`pdd ${test} --read [BATCH|CALL_ID] [--json] [--timeout MIN]`, 'Read saved results; a normal Check held for lint may continue its original checks. Other reads send no work.'),
       form(`pdd ${test} --retry BATCH [--json] [--details] [--timeout MIN]`, 'Retry only confirmed unstarted checks from a saved batch, with the same source and call caps; preserve completed and uncertain runs.'),
       form(`pdd ${test} --fill-hash`, 'Fill prose_sha256 of draft runtime interfaces; no network.'),
