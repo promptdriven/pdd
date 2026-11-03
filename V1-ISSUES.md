@@ -61,7 +61,7 @@ Total: 279 issues. Data: `V1-ISSUES.json` (number, title, dates, author, labels,
 | [407](https://github.com/promptdriven/pdd/issues/407) | feature+bug - pdd connect handling of ambiguous update preconditions | 2026-01-27 | bug,priority/medium |
 | [412](https://github.com/promptdriven/pdd/issues/412) | Generated tests use incorrect sys.modules paths for mocking | 2026-01-27 | pdd,priority/medium |
 | [413](https://github.com/promptdriven/pdd/issues/413) | Generated tests use fragile try/except ImportError pattern for mocking | 2026-01-27 | bug,pdd,priority/medium |
-| [414](https://github.com/promptdriven/pdd/issues/414) | Investigate: <include> tags in step outputs bypass preprocessing | 2026-01-27 | priority/medium |
+| [414](https://github.com/promptdriven/pdd/issues/414) | Investigate: &lt;include> tags in step outputs bypass preprocessing | 2026-01-27 | priority/medium |
 | [423](https://github.com/promptdriven/pdd/issues/423) | Architecture generation: Missing public/ directory for Next.js frontend causes Docker build failure | 2026-01-28 | pdd,priority/medium |
 | [426](https://github.com/promptdriven/pdd/issues/426) | Architecture generation: docker-compose.yml and Dockerfiles have dev/prod conflicts that prevent startup | 2026-01-28 | pdd,connect,priority/high |
 | [427](https://github.com/promptdriven/pdd/issues/427) | Code generation ignores interface contracts: frontend/backend field and endpoint mismatches | 2026-01-28 | pdd,priority/high |
@@ -114,7 +114,7 @@ Total: 279 issues. Data: `V1-ISSUES.json` (number, title, dates, author, labels,
 | [1324](https://github.com/promptdriven/pdd/issues/1324) | CLI: mid-run issue comment steering (orchestrators + run_agentic_task) | 2026-06-01 | priority/medium |
 | [1335](https://github.com/promptdriven/pdd/issues/1335) | auto-heal reports FAILURE (red ❌) on human-authored PRs instead of a neutral/skipped conclusion | 2026-06-01 | bug,priority/medium |
 | [1383](https://github.com/promptdriven/pdd/issues/1383) | Integrate agentic reviewer into checkup CLI and evidence pipeline | 2026-06-03 | priority/medium |
-| [1384](https://github.com/promptdriven/pdd/issues/1384) | Introduce target-neutral capability/effect IR for <capabilities> parsing | 2026-06-03 | enhancement,priority/medium |
+| [1384](https://github.com/promptdriven/pdd/issues/1384) | Introduce target-neutral capability/effect IR for &lt;capabilities> parsing | 2026-06-03 | enhancement,priority/medium |
 | [1385](https://github.com/promptdriven/pdd/issues/1385) | Introduce PolicyBackend interface, Python AST backend, and unsupported-target stub | 2026-06-03 | priority/medium |
 | [1439](https://github.com/promptdriven/pdd/issues/1439) | Research: Budgeted context selection, grounding, and compression for AI coding agents | 2026-06-05 | priority/medium |
 | [1460](https://github.com/promptdriven/pdd/issues/1460) | preprocess: fail fast with size diagnostics before curly-brace doubling OOM | 2026-06-07 | cli,performance,pdd,priority/high |
