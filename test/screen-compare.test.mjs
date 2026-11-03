@@ -14,6 +14,40 @@ const chrome = [process.env.PDD_CHROME_PATH, '/usr/bin/google-chrome', '/usr/bin
 const point = (kind, value, node, x, y, extra = {}) => ({ kind, value, node, box: { x, y, width: 10, height: 10 }, visible: true, ancestors: [], region: null, ...extra });
 function setup(t, source = svg) { const cwd = temp(t); writeFileSync(join(cwd, 'screen.ui.svg'), source); return { cwd, drawingPath: 'screen.ui.svg', url: 'http://example.test/' }; }
 
+test('public CLI keeps required labels inside their matched regions', { skip: !chrome, timeout: 120000 }, async t => {
+  const owned = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400"><g id="box"><rect x="20" y="20" width="100" height="80" fill="silver"/><text x="30" y="60">READY</text></g></svg>';
+  const global = owned.replace('<text x="30" y="60">READY</text></g>', '</g><text x="30" y="60">READY</text>');
+  const input = setup(t, owned);
+  let page = '';
+  const server = createServer((_, res) => { res.writeHead(200, { 'content-type': 'text/html' }); res.end(page); });
+  await new Promise(done => server.listen(0, '127.0.0.1', done));
+  t.after(() => new Promise(done => { server.closeAllConnections(); server.close(done); }));
+  const url = `http://127.0.0.1:${server.address().port}/`;
+  for (const [name, drawing, markup, expectedCode, expectedStatus] of [
+    ['outside-only', owned, '<section id="box"></section><span class="label">READY</span>', 1, 'missing'],
+    ['nested-owned', owned, '<section id="box"><span class="nested">READY</span></section>', 0, 'pass'],
+    ['self-owned', owned, '<section id="box">READY</section>', 0, 'pass'],
+    ['hidden-owned with visible outside copy', owned, '<section id="box"><span hidden>READY</span></section><span class="label">READY</span>', 1, 'hidden'],
+    ['global-unowned', global, '<section id="box"></section><span class="label">READY</span>', 0, 'pass'],
+  ]) await t.test(name, async () => {
+    writeFileSync(join(input.cwd, input.drawingPath), drawing);
+    page = '<!doctype html><style>body{margin:0;font:16px serif}#box{position:absolute;left:20px;top:20px;width:100px;height:80px;background:silver;line-height:80px}.label{position:absolute;left:30px;top:46px}.nested{position:absolute;left:10px;top:26px;line-height:normal}</style>' + markup;
+    const stdout = sink(), stderr = sink();
+    const code = await runPdd(['test', '--screen', url, '--drawing', input.drawingPath, '--json'], {
+      cwd: input.cwd, env: { ...process.env, PDD_CHROME_PATH: chrome, PDD_RUNTIME_URL: 'invalid-offline', PDD_STATE_DIR: input.cwd }, stdout, stderr,
+      gh: () => assert.fail('screen comparison must not authenticate'), fetch: () => assert.fail('screen comparison must not call the runtime'),
+    });
+    assert.equal(code, expectedCode, stderr.text || stdout.text);
+    assert.equal(stderr.text, '');
+    const report = JSON.parse(stdout.text);
+    assert.equal(report.exit_code, expectedCode);
+    assert.equal(report.passed, expectedCode === 0);
+    assert.equal(report.rows.length, 2);
+    assert.equal(report.rows.find(row => row.part === '#box').status, 'pass');
+    assert.equal(report.rows.find(row => row.part === '“READY”').status, expectedStatus);
+  });
+});
+
 test('parts compare consumes repeated text, enforces ids/content, visibility, region, order and exact case', async t => {
   const input = setup(t);
   const reference = [point('id', 'score', 1, 20, 20), point('text', 'SCORE', 2, 20, 20, { region: 'score', ancestors: [1] }), point('text', '2', 3, 20, 100), point('text', '2', 4, 70, 100), point('text', 'READY', 5, 20, 200)];
