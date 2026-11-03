@@ -1,0 +1,85 @@
+{
+  "kind": "native-regression-cases",
+  "story_path": "user_stories/retry-with-live-herdr-layout.md",
+  "criteria": [
+    {"id": "AC1", "text": "Starting a new run from a linked checkout starts its story chat even when an old layout registry points at another linked checkout of the same clone, contains an old run intent, and Herdr lists that old workspace without worktree metadata."},
+    {"id": "AC2", "text": "Starting or reopening uses the unique live run workspace for the assigned checkout and clone, and the area tab with the matching name and checkout; retrying an allocation adopts Herdr's verified \"already_open\" result without creating duplicates."},
+    {"id": "AC3", "text": "An existing non-linked workspace of this clone can serve as the parent, including one the person opened; other clones, ambiguous run matches and changed checkout identities cannot supply the run's workspace."},
+    {"id": "AC4", "text": "PDD neither reads nor changes its old layout registry; \"pdd workflow status --all\" discovers clones only through the run index."},
+    {"id": "AC5", "text": "Existing unrelated workspaces, labels, native sessions and Git checkouts stay intact. Cleanup preserves adopted parents and refuses to close a run with changed roots, extra tabs or extra panes."}
+  ],
+  "cases": [
+    {
+      "id": "legacy-linked-caller", "criteria": ["AC1", "AC4", "AC5"],
+      "given": {"registry": "old linked source, old run intent", "live": "old workspace without worktree metadata", "caller": "different linked checkout of same clone"},
+      "expected": {"chatDispatches": 1, "storyTab": true, "registryUnchanged": true, "legacyWorkspaceUnchanged": true},
+      "verification": "native PR 2 pending"
+    },
+    {
+      "id": "unique-live-run", "criteria": ["AC2"],
+      "given": {"savedIds": "stale", "live": "one run workspace at assigned cwd with same repo_key and linked kind, one area tab with single matching cwd pane"},
+      "expected": {"reuseRun": true, "reuseTab": true, "creates": 0},
+      "verification": "native PR 2 pending"
+    },
+    {
+      "id": "area-label-wrong-cwd", "criteria": ["AC2", "AC5"],
+      "given": {"live": "verified run; existing story tab pane belongs to another cwd"},
+      "expected": {"adoptWrongTab": false, "preservePeer": true},
+      "verification": "native PR 2 pending"
+    },
+    {
+      "id": "already-open", "criteria": ["AC2"],
+      "given": {"openReply": "already_open", "live": "one matching run workspace"},
+      "expected": {"adoptActualIds": true, "duplicateWorkspaces": 0},
+      "verification": "native PR 2 pending"
+    },
+    {
+      "id": "person-parent", "criteria": ["AC3", "AC5"],
+      "given": {"live": "person-opened non-linked parent at verified primary with same repo_key"},
+      "expected": {"reuseParent": true, "renameParent": false, "closeParent": false},
+      "verification": "native PR 2 pending"
+    },
+    {
+      "id": "independent-clone", "criteria": ["AC3"],
+      "given": {"live": "same repository name but different commonDir"},
+      "expected": {"adoptOtherClone": false},
+      "verification": "native PR 2 pending"
+    },
+    {
+      "id": "ambiguous-run", "criteria": ["AC3", "AC5"],
+      "given": {"live": "two workspaces at assigned cwd with same repo_key and linked kind"},
+      "expected": {"refuse": true, "mutations": 0},
+      "verification": "native PR 2 pending"
+    },
+    {
+      "id": "changed-run-identity", "criteria": ["AC3", "AC5"],
+      "given": {"savedWorkspace": "live checkout_path or repo_key contradicts assignment; no unique valid run match"},
+      "expected": {"refuse": true, "mutations": 0},
+      "verification": "native PR 2 pending"
+    },
+    {
+      "id": "malformed-registry", "criteria": ["AC4"],
+      "given": {"registry": "invalid JSON", "live": "verified unique run and area tab"},
+      "expected": {"registryIgnored": true, "registryUnchanged": true, "reuseRun": true},
+      "verification": "native PR 2 pending"
+    },
+    {
+      "id": "status-index-only", "criteria": ["AC4"],
+      "given": {"runIndex": "clone A", "registry": "clone B only", "runs": "one readable status in each clone"},
+      "expected": {"listedClones": ["A"], "registryRead": false},
+      "verification": "native PR 2 pending"
+    },
+    {
+      "id": "adopted-parent-cleanup", "criteria": ["AC5"],
+      "given": {"parent": "adopted; no durable creation custody", "runs": "none open"},
+      "expected": {"parentClosed": false, "result": false},
+      "verification": "native PR 2 pending"
+    },
+    {
+      "id": "changed-root-cleanup", "criteria": ["AC5"],
+      "given": {"run": "changed root terminal OR extra tab OR split pane"},
+      "expected": {"runClosed": false, "gitCheckoutRemoved": false},
+      "verification": "native PR 2 pending"
+    }
+  ]
+}

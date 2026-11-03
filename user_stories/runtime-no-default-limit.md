@@ -23,6 +23,6 @@ PDD_MAX_UPLOADS accepts positive safe decimal integers, including leading zeros;
 
 ## Native cases for the code step
 
-[Native cases](../test/runtime-admission/runtime-no-default-limit.json) describe fake-interpreter barriers, shared-process cap preservation and refusal recovery.
+[Native cases](../test/runtime-admission/runtime-no-default-limit-cases.json) describe fake-interpreter barriers, shared-process cap preservation and refusal recovery.
 
 Runtime check: NOT REPLAYED; native Git capture, shared filesystem ownership, process concurrency and dispatch timing lack a complete Runtime interface. Ordinary Node tests use a fake runtime; no Runtime call or AI pass is claimed.

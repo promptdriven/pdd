@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runs.prompt.md (sha256: 78b372efeb7a16cb63de1a6a202ec79985e23e4329d229394046100b7c489ef4).
+// Generated from prompts/cli/workflow-runs.prompt.md (sha256: e6482ef0e46bf4b43943a0505097ee45284d0198feda8cddd4af8e110f69d8ca).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import * as nativeRunFiles from 'node:fs';
@@ -42,13 +42,9 @@ function runsIn(commonDir, { cancelled = false } = {}) {
     .sort((a, b) => a.number - b.number);
 }
 
-// Every run on this machine: repositories come from the run index and the Herdr layout registry.
+// Every run on this machine: repositories come only from the run index.
 export function allRuns({ cancelled = false } = {}, ports = {}) {
   const commonDirs = new Set(readIndex(ports).map(entry => typeof entry.runDir === 'string' ? join(entry.runDir, '..', '..', '..') : null).filter(Boolean));
-  try {
-    const registry = JSON.parse(readFileSync(join(ports.layoutDirectory ?? join(stateDirFor(ports), 'herdr-layout'), 'registry.json'), 'utf8'));
-    for (const repository of Array.isArray(registry?.repositories) ? registry.repositories : []) if (typeof repository?.commonDir === 'string') commonDirs.add(repository.commonDir);
-  } catch { /* No registry yet. */ }
   const seen = new Set();
   return [...commonDirs].flatMap(commonDir => runsIn(commonDir, { cancelled }))
     .filter(run => !seen.has(run.runDir) && seen.add(run.runDir));

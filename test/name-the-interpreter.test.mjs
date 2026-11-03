@@ -7,7 +7,8 @@ import { fakeRuntime, harbor, portsFor, sink } from './runtime-fake.mjs';
 
 // Rules of user_stories/name-the-interpreter.md for lines that need an interpreter answer: pdd's own
 // error, progress and status lines call the hosted service the interpreter. Machine-read words and
-// server texts that pdd prints as it got them keep "runtime".
+// server texts that pdd prints as it got them keep "runtime". The approved plain busy-check
+// message is an exception and names PDD without interpreter terminology.
 // The last one is this test's own temporary folder name (runtime-fake.mjs), shown in --json `repo`.
 const KEEP = [/PDD_RUNTIME_URL/g, /Runtime check\b/g, /[Rr]untime interface/g, /prompt-runtime\.[a-z.-]+/g, /pdd check --read/g, /pdd-runtime-\w+/g];
 // `marker` finds the line that the case is about; that line must name the interpreter.
@@ -40,7 +41,13 @@ for (const [name, answer, exit, marker, options = {}] of CASES) test(`interprete
   const { ports } = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin });
   const code = await runCheck({ words: ['place-order'], cwd: setup.repo, options }, ports);
   if (exit !== null) assert.equal(code, exit, ports.stdout.text + ports.stderr.text);
-  wordRule(ports.stdout.text + ports.stderr.text, marker);
+  const output = ports.stdout.text + ports.stderr.text;
+  if (name === 'queue progress') {
+    const queued = output.split('\n').find(line => marker.test(line));
+    assert.equal(queued, '⏳ PDD is busy right now. Your check is in line (2 ahead of you) and starts by itself. You are not charged while you wait.');
+    assert.doesNotMatch(queued, /interpreter|slot|pool|model|login|account/i);
+  }
+  wordRule(output, name === 'queue progress' ? null : marker);
 });
 
 test('interpreter words: an address that is not reachable, with --json stdout kept apart', async t => {
