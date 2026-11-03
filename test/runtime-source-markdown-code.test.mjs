@@ -90,7 +90,7 @@ test('SOURCE-MARKDOWN: actual repository source captures the real guides without
   for (const path of row.excluded_files) assert.ok(!selected.has(path), path);
 });
 
-test('SOURCE-MARKDOWN: pdd check --lint --local on actual repository selected source makes no network calls', async t => {
+test('SOURCE-MARKDOWN: pdd lint --local on actual repository selected source makes no network calls', async t => {
   const row = fixture.repository_cases.find(row => row.id === 'actual-repository-local-lint');
   const selected = repositoryTests(row);
   const { ports, calls } = offline(temp(t));

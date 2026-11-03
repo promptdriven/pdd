@@ -1,43 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, mkdir, stat, realpath } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { allocateIssueWorktree } from '../src/workflow-worktree.mjs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
-async function fixture(t){
- const root=await realpath(await mkdtemp(join(tmpdir(),'pdd-layout-')));t.after(()=>rm(root,{recursive:true,force:true}));
- const sourceRoot=join(root,'coffee'),cwd=join(root,'run');await mkdir(sourceRoot);await mkdir(cwd);
- const git=async(root,...args)=>promisify(execFile)('git',args,{cwd:root});
- const init=async(root,repository)=>{await git(root,'init','-q','-b','main');await git(root,'-c','user.name=Test','-c','user.email=test@example.invalid','commit','--allow-empty','-qm','Base');await git(root,'remote','add','origin','https://github.com/'+repository+'.git');};
- await init(sourceRoot,'alice/coffee');
- const input={runId:randomUUID(),repository:'alice/coffee',sourceRoot,commonDir:join(sourceRoot,'.git'),cwd,issueNumber:2,workflowName:'small-change',stageId:'scope'};
- const calls=[],workspaces=[];let id=0;
- const command=async args=>{
-  calls.push(args);const [group,verb]=args,val=flag=>args[args.indexOf(flag)+1];
-  if(group==='workspace'&&verb==='list')return {id:'cli:workspace:list',result:{type:'workspace_list',workspaces:structuredClone(workspaces)}};
-  if(group==='workspace'&&verb==='rename'){workspaces.find(w=>w.workspace_id===args[2]).label=args[3];return {id:'cli:workspace:rename',result:{type:'workspace_info',workspace:workspaces.find(w=>w.workspace_id===args[2])}};}
-  if(group==='workspace'&&verb==='create'||group==='worktree'&&verb==='open'){
-   const parent=workspaces.find(w=>w.workspace_id===val('--workspace'));
-   const path=group==='workspace'?val('--cwd'):val('--path');
-   const workspace={workspace_id:`w${++id}`,label:val('--label'),worktree:{checkout_path:path,repo_key:parent?.worktree.repo_key??join(path,'.git'),is_linked_worktree:group==='worktree'}};workspaces.push(workspace);
-   return {id:`cli:${group}:${verb}`,result:{type:group==='workspace'?'workspace_created':'worktree_opened',workspace,
-    tab:{tab_id:`${workspace.workspace_id}:t1`},root_pane:{pane_id:`${workspace.workspace_id}:p1`,terminal_id:`term${id}`}}};
-  }
-  if(group==='workspace'&&verb==='close'){workspaces.splice(workspaces.findIndex(w=>w.workspace_id===args[2]),1);return {id:'cli:workspace:close',result:{type:'ok'}};}
-  if(group==='pane'&&verb==='list'){const w=workspaces.find(w=>w.workspace_id===val('--workspace'));return {id:'cli:pane:list',result:{type:'pane_list',panes:[{workspace_id:w.workspace_id,tab_id:w.workspace_id+':t1',pane_id:w.workspace_id+':p1',terminal_id:'term'+w.workspace_id.slice(1),cwd:w.worktree?.checkout_path}]}};}
-  if(group==='tab'&&verb==='list')return {id:'cli:tab:list',result:{type:'tab_list',tabs:[{tab_id:val('--workspace')+':t1'}]}};
-  if(group==='tab'&&verb==='create')return {id:'cli:tab:create',result:{type:'tab_created',tab:{tab_id:`${val('--workspace')}:t${++id}`},root_pane:{pane_id:`${val('--workspace')}:p${id}`,terminal_id:`term${id}`}}};
-  throw Error(`Unexpected command ${JSON.stringify(args)}`);
- };
- const ports={command,directory:join(root,'state'),checkpoint:async()=>{}};
- const module=await import('../src/workflow-herdr-layout.mjs');
- const open=(extra={})=>module.withHerdrLayoutLock(()=>module.openHerdrRunLayout({...input,...extra},ports),ports);
- return {module,root,input,ports,calls,workspaces,open,init};
-}
+import {fixture} from './helpers/herdr-layout-fixture.mjs';
+
 test('repository reuse, one worktree per run, issue/workflow label and stage tabs',async t=>{
  const f=await fixture(t),a=await f.open(),b=await f.open({stageId:'change'});
  assert.equal(a.repoWorkspaceId,b.repoWorkspaceId);assert.equal(a.workspaceId,b.workspaceId);assert.notEqual(a.tabId,b.tabId);
@@ -57,21 +28,21 @@ test('a busy layout lock fails at once instead of waiting; a later run shares th
  assert.equal(a.repoWorkspaceId,b.repoWorkspaceId);assert.notEqual(a.workspaceId,b.workspaceId);
  assert.deepEqual(f.workspaces.map(w=>w.label),['coffee','coffee#2 small-change','coffee#3 small-change']);
 });
-test('repo-name clash qualifies both owned labels and preserves existing run',async t=>{
+test('repo-name clash preserves the existing layout and qualifies the new parent',async t=>{
  const f=await fixture(t),a=await f.open(),other=join(f.root,'other');await mkdir(other);await f.init(other,'bob/coffee');
  await f.open({runId:randomUUID(),repository:'bob/coffee',sourceRoot:other,commonDir:join(other,'.git'),cwd:other});
- assert.deepEqual(f.workspaces.map(w=>w.label),['alice/coffee','coffee#2 small-change','bob/coffee','coffee#2 small-change']);assert.equal(f.workspaces[1].workspace_id,a.workspaceId);
+ assert.deepEqual(f.workspaces.map(w=>w.label),['coffee','coffee#2 small-change','bob/coffee','coffee#2 small-change']);assert.equal(f.workspaces[1].workspace_id,a.workspaceId);
 });
 test('run cleanup closes only run workspace, retaining repository and git checkout',async t=>{
  const f=await fixture(t),layout=await f.open();
- await f.module.withHerdrLayoutLock(()=>f.module.closeHerdrRunLayout({...f.input,layout},f.ports),f.ports);
- assert.deepEqual(f.workspaces.map(w=>w.label),['coffee']);assert.deepEqual(f.calls.filter(a=>a[1]==='close'),[['workspace','close',layout.workspaceId]]);
+ await f.module.withHerdrLayoutLock(()=>f.close({...f.input,layout},f.ports),f.ports);
+ assert.deepEqual(f.workspaces.map(w=>w.label),['coffee']);assert.deepEqual(f.calls.filter(a=>a[0]==='workspace'&&a[1]==='close'),[['workspace','close',layout.workspaceId]]);
  assert(!f.calls.some(a=>a[0]==='worktree'&&a[1]==='remove'));assert((await stat(f.input.cwd)).isDirectory());
 });
 test('unrelated workspace untouched, allocation reply loss never repeats creation',async t=>{
  const f=await fixture(t);f.workspaces.push({workspace_id:'personal',label:'notes'});const command=f.ports.command;
  f.ports.command=async args=>{const response=await command(args);if(args[0]==='worktree')throw Error('reply lost');return response;};
- await assert.rejects(f.open(),/reply lost/);f.ports.command=command;await assert.rejects(f.open(),/layout_allocation_uncertain/);
+ await assert.rejects(f.open(),/reply lost/);f.ports.command=command;await assert.doesNotReject(f.open(),'Explicit retry adopts the unique live allocation');
  assert.deepEqual(f.workspaces[0],{workspace_id:'personal',label:'notes'});assert.equal(f.calls.filter(a=>a[0]==='worktree').length,1);
 });
 
@@ -80,16 +51,16 @@ test('missing or changed worktree identity cannot authorize run reuse or close',
   const f=await fixture(t),layout=await f.open();
   const row=f.workspaces.find(w=>w.workspace_id===layout.workspaceId);row.worktree=patch;
   await assert.rejects(f.open(),/herdr_layout_identity_changed/);
-  await assert.rejects(f.module.withHerdrLayoutLock(()=>f.module.closeHerdrRunLayout({...f.input,layout},f.ports),f.ports),/herdr_layout_identity_changed/);
-  assert(!f.calls.some(a=>a[1]==='close'));
+  await assert.rejects(f.module.withHerdrLayoutLock(()=>f.close({...f.input,layout},f.ports),f.ports),/herdr_layout_identity_changed/);
+  assert(!f.calls.some(a=>a[0]==='workspace'&&a[1]==='close'));
  }
 });
 test('changed root terminal or an extra tab prevents run cleanup',async t=>{
  for(const kind of ['terminal','tab','pane']) {
   const f=await fixture(t),layout=await f.open();const original=f.ports.command;
   f.ports.command=async args=>{const response=await original(args);if(kind==='terminal'&&args[0]==='pane')response.result.panes[0].terminal_id='replacement';if(kind==='pane'&&args[0]==='pane')response.result.panes.push({pane_id:'person-pane'});if(kind==='tab'&&args[0]==='tab'&&args[1]==='list')response.result.tabs.push({tab_id:'user-tab'});return response;};
-  await assert.rejects(f.module.withHerdrLayoutLock(()=>f.module.closeHerdrRunLayout({...f.input,layout},f.ports),f.ports),/herdr_layout_identity_changed|run_has_open_tabs/);
-  assert(!f.calls.some(a=>a[1]==='close'));
+  await assert.rejects(f.module.withHerdrLayoutLock(()=>f.close({...f.input,layout},f.ports),f.ports),/herdr_layout_identity_changed|run_has_open_tabs/);
+  assert(!f.calls.some(a=>a[0]==='workspace'&&a[1]==='close'));
  }
 });
 test('Ctrl+C leaves a proved-dead layout owner recoverable by the next process',async t=>{
@@ -135,25 +106,26 @@ for (const origin of ['https://github.com/Acme/Project.git',
 test('HD2: an occupied owner/repo label refuses without adopting or renaming another folder',async t=>{
  const f=await fixture(t),other=join(f.root,'another-folder');await mkdir(other);
  f.workspaces.push({workspace_id:'short',label:'coffee',worktree:{checkout_path:other}},
-  {workspace_id:'qualified',label:'alice/coffee',worktree:{checkout_path:other}});
+  {workspace_id:'qualified',label:'alice/coffee',worktree:{checkout_path:other}},
+  {workspace_id:'final',label:'alice/coffee@'+createHash('sha256').update(f.input.commonDir).digest('hex').slice(0,12)});
  const before=structuredClone(f.workspaces);
  await assert.rejects(f.open(),/repository_label_unavailable/);
  assert.deepEqual(f.workspaces,before);
  assert(f.calls.every(args=>args[0]==='workspace'&&args[1]==='list'));
 });
-test('the repository workspace closes only when no run of it is open and it holds just its one shell',async t=>{
+test('repository workspace stays open without durable parent creation custody',async t=>{
  const f=await fixture(t),layout=await f.open(),idle=()=>f.module.withHerdrLayoutLock(()=>f.module.closeHerdrRepoLayoutIfIdle({repository:f.input.repository,commonDir:f.input.commonDir},f.ports),f.ports);
  assert.equal(await idle(),false,'a run is still open');
- await f.module.withHerdrLayoutLock(()=>f.module.closeHerdrRunLayout({...f.input,layout},f.ports),f.ports);
+ await f.module.withHerdrLayoutLock(()=>f.close({...f.input,layout},f.ports),f.ports);
  const command=f.ports.command;
  f.ports.command=async args=>{const reply=await command(args);if(args[0]==='tab'&&args[1]==='list'&&args[3]===layout.repoWorkspaceId)reply.result.tabs.push({tab_id:'person-tab'});return reply;};
  assert.equal(await idle(),false,'the person opened another tab there');assert.deepEqual(f.workspaces.map(w=>w.label),['coffee']);
  f.ports.command=command;
- assert.equal(await idle(),true);assert.deepEqual(f.workspaces,[]);
- assert.equal(await idle(),false,'nothing left to close');
+ assert.equal(await idle(),false);assert.deepEqual(f.workspaces.map(w=>w.label),['coffee']);
+ assert.equal(await idle(),false,'Repeated cleanup still has no creation custody');
 });
 
-test('2531: a pinned parent without Git metadata supports safe reuse and idle cleanup',async t=>{
+test('2531: a parent without Git metadata stays untouched while the verified run remains reusable',async t=>{
  const f=await fixture(t),layout=await f.open();
  f.workspaces.find(w=>w.workspace_id===layout.repoWorkspaceId).worktree=null;
  // Pane cwd remains the pinned parent even before Herdr has populated worktree metadata.
@@ -163,12 +135,12 @@ test('2531: a pinned parent without Git metadata supports safe reuse and idle cl
   return reply;
  };
  await f.open({stageId:'change'});
- await f.module.withHerdrLayoutLock(()=>f.module.closeHerdrRunLayout({...f.input,layout},f.ports),f.ports);
+ await f.module.withHerdrLayoutLock(()=>f.close({...f.input,layout},f.ports),f.ports);
  const closed=await f.module.withHerdrLayoutLock(()=>f.module.closeHerdrRepoLayoutIfIdle({repository:f.input.repository,commonDir:f.input.commonDir},f.ports),f.ports);
- assert.equal(closed,true);assert.deepEqual(f.workspaces,[]);
+ assert.equal(closed,false);assert.deepEqual(f.workspaces.map(w=>w.label),['coffee']);
 });
 
-test('2531: a pinned null-metadata parent can be qualified on a repository-name clash',async t=>{
+test('2531: a null-metadata parent is never renamed on a repository-name clash',async t=>{
  const f=await fixture(t),layout=await f.open(),other=join(f.root,'other-repo');await mkdir(other);await f.init(other,'bob/coffee');
  f.workspaces.find(w=>w.workspace_id===layout.repoWorkspaceId).worktree=null;
  const original=f.ports.command;f.ports.command=async args=>{
@@ -176,10 +148,10 @@ test('2531: a pinned null-metadata parent can be qualified on a repository-name 
   return reply;
  };
  await f.open({runId:randomUUID(),repository:'bob/coffee',sourceRoot:other,commonDir:join(other,'.git'),cwd:other});
- assert.equal(f.workspaces.find(w=>w.workspace_id===layout.repoWorkspaceId).label,'alice/coffee');
+ assert.equal(f.workspaces.find(w=>w.workspace_id===layout.repoWorkspaceId).label,'coffee');
 });
 
-test('2531: missing parent Git metadata never permits changed root identities',async t=>{
+test('2531: unverifiable parent metadata is never cleanup custody',async t=>{
  for(const kind of ['terminal','cwd','tab','pane','linked-metadata']){
   const f=await fixture(t),layout=await f.open(),row=f.workspaces.find(w=>w.workspace_id===layout.repoWorkspaceId);
   if(kind==='linked-metadata')row.worktree.is_linked_worktree=true;else row.worktree=null;
@@ -193,6 +165,146 @@ test('2531: missing parent Git metadata never permits changed root identities',a
    if(kind==='tab'&&args[0]==='tab'&&args[1]==='list'&&args[3]===layout.repoWorkspaceId)reply.result.tabs.push({tab_id:'unknown'});
    return reply;
   };
-  await assert.rejects(f.open({stageId:'change'}),/herdr_layout_identity_changed|run_has_open_tabs/,kind);
+  assert.equal(await f.module.closeHerdrRepoLayoutIfIdle({repository:f.input.repository,commonDir:f.input.commonDir},f.ports),false,kind);
+  assert(f.workspaces.includes(row));
+  assert(!f.calls.some(a=>a[0]==='workspace'&&a[1]==='close'));
  }
+});
+
+// A shared Herdr session can already contain a workflow from another clone of
+// this exact origin. IDs and Git common directories must stay checkout-scoped.
+test('2615: independent clones start, reopen and cancel without rebinding peer workspaces', async t => {
+ const f=await fixture(t),first=await f.open(),original=structuredClone(f.workspaces);
+ const secondSource=join(f.root,'second-clone'),secondCwd=join(f.root,'second-run');
+ await mkdir(secondSource);await mkdir(secondCwd);await f.init(secondSource,'alice/coffee');
+ const second={runId:randomUUID(),sourceRoot:secondSource,commonDir:join(secondSource,'.git'),cwd:secondCwd};
+ let layout;
+ await assert.doesNotReject(async()=>{layout=await f.open(second);},'another clone must not be mistaken for changed ownership');
+ assert.notEqual(layout.repoWorkspaceId,first.repoWorkspaceId);
+ assert.deepEqual(f.workspaces.slice(0,original.length),original,'peer labels and Git identities stay unchanged');
+ assert.equal(f.workspaces.find(w=>w.workspace_id===layout.repoWorkspaceId).label,'alice/coffee');
+ assert.equal(f.workspaces.find(w=>w.workspace_id===layout.workspaceId).worktree.repo_key,second.commonDir);
+ const reopened=await f.open({...second,stageId:'change'});
+ assert.equal(reopened.workspaceId,layout.workspaceId);assert.notEqual(reopened.tabId,layout.tabId);
+ const thirdSource=join(f.root,'third-clone'),thirdCwd=join(f.root,'third-run');
+ await mkdir(thirdSource);await mkdir(thirdCwd);await f.init(thirdSource,'alice/coffee');
+ const third={runId:randomUUID(),sourceRoot:thirdSource,commonDir:join(thirdSource,'.git'),cwd:thirdCwd};
+ const thirdLayout=await f.open(third);
+ const thirdLabel=f.workspaces.find(w=>w.workspace_id===thirdLayout.repoWorkspaceId).label;
+ assert(thirdLabel.startsWith('alice/coffee@'));
+ assert(!original.some(w=>w.label===thirdLabel));
+ assert.notEqual(thirdLabel,'alice/coffee');
+ await f.module.withHerdrLayoutLock(()=>f.close({...f.input,...second,layout},f.ports),f.ports);
+ assert.equal(await f.module.closeHerdrRepoLayoutIfIdle({repository:f.input.repository,commonDir:second.commonDir},f.ports),false);
+ assert(f.workspaces.some(w=>w.workspace_id===layout.repoWorkspaceId));
+ assert.deepEqual(f.workspaces.slice(0,original.length),original);
+ assert(f.workspaces.some(w=>w.workspace_id===thirdLayout.repoWorkspaceId));
+ const restart={...second,runId:randomUUID()},restarted=await f.open(restart);
+ assert.notEqual(restarted.workspaceId,layout.workspaceId);
+ assert.equal((await f.open({...restart,stageId:'change'})).workspaceId,restarted.workspaceId);
+ const peer=f.workspaces.find(w=>w.workspace_id===first.workspaceId);peer.worktree.checkout_path='/changed';
+ await assert.rejects(f.open(),/herdr_layout_identity_changed/,'multiple checkouts must not weaken identity checks');
+ assert(!f.calls.some(args=>args[0]==='workspace'&&args[1]==='rename'));
+});
+
+test('2615: duplicate legacy parent rows are ignored and any verified live parent can be reused', async t => {
+ const f=await fixture(t),first=await f.open();
+ const {writeFile,readFile}=await import('node:fs/promises'),file=join(f.ports.directory,'registry.json');
+ const bytes=JSON.stringify({repositories:[{workspaceId:'missing'},{workspaceId:'missing'}],runs:[{phase:'intent'}]});await writeFile(file,bytes);
+ const other=await f.ports.command(['workspace','create','--cwd',f.input.sourceRoot,'--label','person-parent','--no-focus']);
+ const result=await f.open({stageId:'change'});
+ assert.equal(result.workspaceId,first.workspaceId);
+ assert([first.repoWorkspaceId,other.result.workspace.workspace_id].includes(result.repoWorkspaceId));
+ assert.equal(await readFile(file,'utf8'),bytes);
+ assert(!f.calls.some(a=>['rename','remove'].includes(a[1])));
+});
+
+
+async function assertOpen(f,input={}) {
+ let result;
+ await assert.doesNotReject(async()=>{result=await f.open(input);},'the requested owned layout must remain available');
+ return result;
+}
+
+test('2615: a new clone uses the free short label despite a closed peer workspace in the registry', async t => {
+ const f=await fixture(t),first=await assertOpen(f);
+ f.workspaces.splice(f.workspaces.findIndex(w=>w.workspace_id===first.repoWorkspaceId),1);
+ const peers=structuredClone(f.workspaces),sourceRoot=join(f.root,'fresh-clone'),cwd=join(f.root,'fresh-run');
+ await mkdir(sourceRoot);await mkdir(cwd);await f.init(sourceRoot,'alice/coffee');
+ const next=await assertOpen(f,{runId:randomUUID(),sourceRoot,commonDir:join(sourceRoot,'.git'),cwd});
+ assert.equal(f.workspaces.find(w=>w.workspace_id===next.repoWorkspaceId).label,'coffee');
+ assert.deepEqual(f.workspaces.slice(0,peers.length),peers);
+ assert(!f.calls.some(args=>args[0]==='workspace'&&args[1]==='rename'));
+});
+
+test('2615: canceling a run retains its short-label parent while another clone stays open', async t => {
+ const f=await fixture(t),first=await assertOpen(f),sourceRoot=join(f.root,'peer'),cwd=join(f.root,'peer-run');
+ await mkdir(sourceRoot);await mkdir(cwd);await f.init(sourceRoot,'alice/coffee');
+ const peer=await assertOpen(f,{runId:randomUUID(),sourceRoot,commonDir:join(sourceRoot,'.git'),cwd});
+ await f.module.withHerdrLayoutLock(async()=>{
+  await f.close({...f.input,layout:first},f.ports);
+  assert.equal(await f.module.closeHerdrRepoLayoutIfIdle({repository:f.input.repository,commonDir:f.input.commonDir},f.ports),false);
+ },f.ports);
+ const peerRows=structuredClone(f.workspaces),newCwd=join(f.root,'restart');await mkdir(newCwd);
+ const restarted=await assertOpen(f,{runId:randomUUID(),cwd:newCwd});
+ assert.equal(f.workspaces.find(w=>w.workspace_id===restarted.repoWorkspaceId).label,'coffee');
+ assert.deepEqual(f.workspaces.slice(0,peerRows.length),peerRows);
+ assert(f.workspaces.some(w=>w.workspace_id===peer.repoWorkspaceId));
+});
+
+for(const holder of ['free owner/repo label','unrelated workspace']) {
+ test(`2615: different-repository qualification preserves stable peer labels with ${holder}`, async t => {
+  const f=await fixture(t),first=await assertOpen(f);
+  const clone=async name=>{
+   const sourceRoot=join(f.root,name),cwd=join(f.root,name+'-run');
+   await mkdir(sourceRoot);await mkdir(cwd);await f.init(sourceRoot,'alice/coffee');
+   const input={runId:randomUUID(),sourceRoot,commonDir:join(sourceRoot,'.git'),cwd};
+   return {input,layout:await assertOpen(f,input)};
+  };
+  const second=await clone('second'),third=await clone('third');
+  const stable=f.workspaces.find(w=>w.workspace_id===third.layout.repoWorkspaceId).label;
+  assert(stable.startsWith('alice/coffee@'));
+  // Leave two active alice/coffee clones: the short name and a stable qualified name.
+  await f.module.withHerdrLayoutLock(async()=>{
+   await f.close({...f.input,...second.input,layout:second.layout},f.ports);
+   assert.equal(await f.module.closeHerdrRepoLayoutIfIdle({repository:f.input.repository,commonDir:second.input.commonDir},f.ports),false);
+  },f.ports);
+  let unrelated;
+  if(holder==='unrelated workspace') {
+   unrelated={workspace_id:'personal',label:'alice/coffee',worktree:{checkout_path:'/personal'}};
+   f.workspaces.push(structuredClone(unrelated));
+  }
+  const before=f.calls.length,sourceRoot=join(f.root,'bob'),cwd=join(f.root,'bob-run');
+  await mkdir(sourceRoot);await mkdir(cwd);await f.init(sourceRoot,'bob/coffee');
+  const bob=await assertOpen(f,{runId:randomUUID(),repository:'bob/coffee',sourceRoot,commonDir:join(sourceRoot,'.git'),cwd});
+  const label=f.workspaces.find(w=>w.workspace_id===first.repoWorkspaceId).label;
+  if(unrelated) {
+   assert.equal(label,'coffee');assert.notEqual(label,stable);
+   assert.deepEqual(f.workspaces.find(w=>w.workspace_id===unrelated.workspace_id),unrelated);
+  } else assert.equal(label,'coffee');
+  assert.equal(f.workspaces.find(w=>w.workspace_id===third.layout.repoWorkspaceId).label,stable,'qualification uses the common directory and does not replace a stable peer label');
+  assert.equal(f.workspaces.find(w=>w.workspace_id===bob.repoWorkspaceId).label,'bob/coffee');
+  assert.deepEqual(f.calls.slice(before).filter(args=>args[0]==='workspace'&&args[1]==='rename'),
+   [],'Existing workspace labels stay intact');
+ });
+}
+
+test('lost run-close acknowledgement retains intent and never repeats the close',async t=>{
+ const f=await fixture(t),layout=await f.open(),command=f.ports.command,checkpoints=[];
+ f.ports.checkpoint=async()=>checkpoints.push(layout.phase);
+ f.ports.command=async args=>{const reply=await command(args);if(args[0]==='workspace'&&args[1]==='close')throw Error('close reply lost');return reply;};
+ await assert.rejects(f.module.withHerdrLayoutLock(()=>f.close({...f.input,layout}),f.ports),/close reply lost/);
+ assert.deepEqual(checkpoints,['close_intent']);assert.equal(layout.phase,'close_intent');
+ f.ports.command=command;
+ await assert.rejects(f.module.closeHerdrRunLayout({...f.input,layout},f.ports),{code:'layout_cleanup_uncertain'});
+ assert.equal(f.calls.filter(a=>a[0]==='workspace'&&a[1]==='close').length,1);
+});
+test('checkpoint failure prevents the next allocation or close effect',async t=>{
+ const f=await fixture(t),fail=async()=>{throw Error('checkpoint failed');};
+ f.ports.checkpoint=fail;await assert.rejects(f.open(),/checkpoint failed/);
+ assert(!f.calls.some(a=>['create','open'].includes(a[1])));
+ f.ports.checkpoint=async()=>{};const layout=await f.open();
+ for(const tab of f.herdr.tabs.filter(t=>t.workspace_id===layout.workspaceId&&t.tab_id!==layout.root.tabId))await f.ports.command(['tab','close',tab.tab_id]);
+ f.ports.checkpoint=fail;await assert.rejects(f.module.closeHerdrRunLayout({...f.input,layout},f.ports),/checkpoint failed/);
+ assert(!f.calls.some(a=>a[0]==='workspace'&&a[1]==='close'));
 });

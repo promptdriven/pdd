@@ -88,7 +88,7 @@ test('small-change publication commits first, pushes to a real bare remote and p
   const f=fixture(t);writeFileSync(join(f.root,'test/a.mjs'),changed);
   const result=await f.done('Runtime check: ✓ 1/1 criteria');assert.equal(result.exitCode,0,result.message);
   assert.match(f.prs[0].body,/Tests vs base: "test\/a.mjs" 2 → 2 tests. Removed: 1 \(`"gone"`\)/);
-  const inventoryAt=f.prs[0].body.indexOf('Test inventory commits:'),runtimeAt=f.prs[0].body.indexOf('Runtime check:');
+  const inventoryAt=f.prs[0].body.indexOf('Test inventory commits:'),runtimeAt=f.prs[0].body.indexOf('Prompt tests:');
   assert.ok(inventoryAt>=0&&inventoryAt<runtimeAt);
   proveCurrent(f,artifact(f));assert.equal(artifact(f).saved,true);assert.ok(artifact(f).details.includes('assert.equal(value, 1)'));
 });

@@ -69,7 +69,7 @@ test('2675: two same-process retries send one check and keep its receipt and acc
   assert.equal(checks(r.fake).length - before, 1, 'only one held check may be sent');
   assert.equal(results.filter(r => r.code === 0).length, 1);
   passed(results.find(r => r.code === 0));
-  const busy = results.find(r => r.code !== 0); assert.equal(busy.code, 3); assert.match(busy.err, /pdd check --read/);
+  const busy = results.find(r => r.code !== 0); assert.equal(busy.code, 3); assert.match(busy.err, /pdd test --read/);
   const ids = read(r.file).rows[0].request_ids;
   assert.deepEqual(ids, [checks(r.fake).at(-1).request.requestId]);
   assert.equal(read(join(r.folder, `${ids[0]}.json`)).usage.calls, 4);
@@ -104,7 +104,7 @@ test('2675: separate processes admit one retry and refuse the live competitor', 
   assert.equal(checks(r.fake).length - before, 1, 'an in-memory lock is insufficient');
   assert.equal(results.filter(r => r.code === 0).length, 1);
   passed(results.find(r => r.code === 0));
-  const busy = results.find(r => r.code !== 0); assert.equal(busy.code, 3); assert.match(busy.err, /pdd check --read/);
+  const busy = results.find(r => r.code !== 0); assert.equal(busy.code, 3); assert.match(busy.err, /pdd test --read/);
   assert.deepEqual(read(r.file).rows[0].request_ids, [results.find(r => r.code === 0).json.rows[0].request_id]);
 });
 
@@ -183,7 +183,7 @@ test('2675: ownership refusal, sends nothing and preserves saved data', async t 
   const result = await r.run({ '--retry': r.batch }, [], {
     acquireBatchLock: async folder => { attempts++; assert.equal(folder, r.folder); throw Object.assign(new Error('busy'), { code: 'BATCH_LOCK_BUSY' }); }
   });
-  assert.equal(attempts, 1); assert.equal(result.code, 3); assert.match(result.err, /another command|using batch/i); assert.match(result.err, new RegExp(`pdd check --read ${r.batch}`));
+  assert.equal(attempts, 1); assert.equal(result.code, 3); assert.match(result.err, /another command|using batch/i); assert.match(result.err, new RegExp(`pdd test --read ${r.batch}`));
   assert.equal(r.fake.posts.length, before); assert.deepEqual(readFileSync(r.file), batch); assert.deepEqual(readFileSync(join(r.folder, 'summary.json')), summary);
 });
 
@@ -230,7 +230,7 @@ test('2675: native live-owner refusal leaves persisted data and the live owner i
   const owner = read(join(r.folder, 'batch.lock'));
   for (const [options, words] of [[{ '--retry': r.batch }, []], [{ '--read': true }, [r.batch]], [{ '--read': true }, []]]) {
     const result = await r.run(options, words);
-    assert.equal(result.code, 3); assert.match(result.err, /pdd check --read/); assert.equal(result.err.trim().split('\n').length, 1);
+    assert.equal(result.code, 3); assert.match(result.err, /pdd test --read/); assert.equal(result.err.trim().split('\n').length, 1);
     assert.ok(result.err.includes(String(owner.pid))); assert.ok(result.err.includes(owner.started_at));
     assert.deepEqual(readFileSync(r.file), bytes); assert.deepEqual(readFileSync(join(r.folder, 'summary.json')), summary);
     assert.equal(r.fake.posts.length, before); assert.equal(r.fake.gets.length, gets); assert.equal(result.clock.gh.length, 0);

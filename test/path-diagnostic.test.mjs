@@ -62,18 +62,16 @@ test('PATH3: an unreportable version stays visible and help makes no version pro
 test('PATH4: workflow startup gives a one-line shadow warning before normal dispatch', async t => {
   const f = fixture(t), stdout = { text: '', write(s) { this.text += s; } }, stderr = { text: '', write(s) { this.text += s; } };
   let called = false;
-  assert.equal(await runPdd(['workflow', 'start', 'small-change', '17'], { cwd: f.cwd, env: f.env, stdout, stderr,
+  assert.equal(await runPdd(['workflow', 'run', 'small-change', '17'], { cwd: f.cwd, env: f.env, stdout, stderr,
     workflowRunner: { startRun: async () => { called = true; return { exitCode: 0, message: 'Local dispatch proof' }; } } }), 0);
   assert.equal(called, true); assert.equal(stdout.text, 'Local dispatch proof\n');
   assert.equal(stderr.text.trim().split('\n').length, 1);
   assert.match(stderr.text, /PATH selects:.*0\.0\.305\.dev214/); assert.ok(stderr.text.includes(bin));
-  // The former name prints its notice first, then the same PATH line, and dispatches the same way.
-  const old = { text: '', write(s) { this.text += s; } };
-  assert.equal(await runPdd(['workflow', 'run', 'small-change', '17'], { cwd: f.cwd, env: f.env, stdout: { write() {} }, stderr: old,
+  // The quiet `workflow start` prints the same PATH line and dispatches the same way, with no extra line.
+  const quiet = { text: '', write(s) { this.text += s; } };
+  assert.equal(await runPdd(['workflow', 'start', 'small-change', '17'], { cwd: f.cwd, env: f.env, stdout: { write() {} }, stderr: quiet,
     workflowRunner: { startRun: async () => ({ exitCode: 0, message: 'Local dispatch proof' }) } }), 0);
-  const [notice, ...rest] = old.text.trim().split('\n');
-  assert.ok(notice.includes('pdd workflow run') && notice.includes('pdd workflow start'), notice);
-  assert.deepEqual(rest, stderr.text.trim().split('\n'));
+  assert.equal(quiet.text, stderr.text);
 });
 
 test('PATH5: without which, relative PATH entries and symlinked Alpha still resolve correctly', t => {

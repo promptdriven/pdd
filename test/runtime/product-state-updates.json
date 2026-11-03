@@ -28,7 +28,7 @@
     "locks": [],
     "unlocks": []
   },
-  "simulation": {
+  "simulation": {"savedChecks.evidence": {"action":"port.write","world_pointer":"/requests","result_template":{"json":"{\"stories\":[],\"warnings\":[]}"}},
     "productState.lock": {
       "action": "port.write",
       "world_pointer": "/locks",

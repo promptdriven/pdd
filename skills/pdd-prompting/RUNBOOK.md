@@ -21,13 +21,13 @@ When the person asks you to report a problem with pdd itself, follow
 |---|---|
 | `prompts/<job>.prompt.md` | The program in plain English, then `## Dependencies`, then one Runtime interface block. |
 | `user_stories/<story>.md` | One story with a numbered `## Acceptance criteria` list. pdd skips index files: `PLAN.md`, `README.md` and any file with no `## Acceptance criteria` heading. |
-| `tests/<story>.json` | The test for that story. pdd finds tests in any folder. If the repo's own tests are in `tests/` or `test/`, use `tests/runtime/` or `test/runtime/`. |
+| `tests/<story>.json` | The test for that story. pdd finds it by its name and folder: `<story>.json` with a folder named `tests` or `test` anywhere in its path, not only as the direct parent (`tests/`, `test/runtime/`, `runtime/tests/`). pdd does not look inside other JSON files to find tests, and a test can have any size up to the upload limit (section 1). Every `.json` file in a `tests` or `test` folder named `<story>.json` or `<story>.<word>.json` is a test of that story, so give fixtures and other data files other names. If the repo's own tests are in `tests/` or `test/`, use `tests/runtime/` or `test/runtime/`. |
 
 **1 story = 1 test file = many cases.** Each case is one step. Steps run in order and share the saved data.
 Across its steps, the test file must check every criterion of its story.
 
 Keep each test step small. One step = one action, or a short run of actions (about 10 moves, rows or calls). Split a long replay into steps with the expected state after each part. The server stops a step after 10 minutes.
-Add a second file only for a case that needs a different starting world. That file also checks every criterion.
+Add a second file only for a case that needs a different starting world. Name it `<story>.<world>.json`, for example `tests/place-order.empty-shop.json`. That file also checks every criterion. pdd prints every story with no test (and the path it expects), one line for the `.json` files in test folders that match no story (`pdd test --files` lists them), and two files with the same name for one story as an error that names both.
 
 **One rule, one prompt.** Before you write a prompt, look in `prompts/` for a prompt that owns the rule. Change that
 prompt. Two prompts must never state the same rule. A command-line program has one program prompt (section 6).
@@ -42,10 +42,30 @@ The block of Harbor Coffee's `place_order` (schemas cut):
 ```
 - Every schema follows section 3. List every error that the prose can return in `errors`.
 - Do not write `prose_sha256`: `pdd test --fill-hash` fills it.
-- To approve a prompt, the person runs `pdd approve <path>` (agents never set approved). It shows the interface in
-  plain words and asks y/n. An approved story at a workflow gate is not an approved prompt.
+- Show the gate. Judge the person's later reply in any chat. A question, change request or earlier message is not approval. No exact phrase is needed. Never invent a decision or edit approval fields. See [Record a chat approval](https://github.com/promptdriven/pdd/blob/alpha/docs/cli.md#record-a-chat-approval).
+- After actual approval, record the exact words for the ready gate and all its drafts:
+
+```sh
+pdd workflow approve N --said - <<'PDD_SAID'
+<the person's exact words>
+PDD_SAID
+```
+
+For one prompt:
+
+```sh
+pdd approve PROMPT --said - <<'PDD_SAID'
+<the person's exact words>
+PDD_SAID
+```
+
+Choose a delimiter absent as a whole line from the payload. Keep it quoted. Never interpolate the words into shell code or shell quotes. `--said -` records stdin exactly, including newlines. Blank input is refused; pdd does not grade nonblank words.
+- The gate saves selected prompt paths and prose hashes when shown. If a prompt changes, show the gate again before approval. Output lists the paths and hashes.
+- Without --said, a person at a normal terminal can answer y/N once for the listed gate and all its drafts. `pdd approve PATH` approves one prompt. An agent or caller outside a normal terminal gets a plain instruction: ask the person, then run with --said and their words. Native Herdr area-chat evidence may record history but never authorizes approval. Only an explicit approve call passes an approval gate; steps, `workflow done` and chat messages never do. Warn, without blocking, when a workflow has no approve gate before code.
+- Workflow approval reads `pdd.json` from the main checkout (`sourceRoot`), outside the agent's run worktree. Standalone `pdd approve PATH` reads it from the Git root of the current checkout. Root `pdd.json` with `"strict_approvals": true` permits only a person terminal; absent/false is easy mode. Strict mode refuses --said. Prompt approval records the invoking actor, time, route, exact words and path/hash; PR evidence shows matching approvals safely quoted in code spans. Gate approval does not approve the later code-or-stop gate. A person decides expected values; never change them on your own.
+- pdd never merges and has no merge command. An agent may merge only after the person's explicit chat request. Resolve the PR's exact current head and require at least one check and all required checks green for that head; missing, failed or pending checks stop. First post a PR comment beginning `Merge requested by the person: "…"`, preserving the exact request safely in a Markdown code span (use a fence longer than any backtick run; JSON-quote controls/newlines). Use a body file, never interpolate the words into shell code. A failed comment stops. Recheck head/checks, then run `gh pr merge PR --merge --match-head-commit <head>` with that same head. A changed head stops; obtain green checks for its current head before retrying.
 - To change an approved prompt (prose or interface), set `"status": "draft"`, run `pdd test --fill-hash` and ask the
-  person to run `pdd approve <path>` again.
+  person to approve again through these routes.
 
 **The story** has one line for each criterion. Number from 1. Use straight quotes (`"`), not curly quotes. Text copied
 from a GitHub issue often has curly quotes. Put real values in the text: "$10.65", "2026-11-02". Write what a user
@@ -91,7 +111,7 @@ For extra source, put an include list in the repository root's `pdd-source.json`
 This file contains only `include`, an array of repository-relative file paths, not globs or directories. These files
 are added to the test and dependency selection. Included Markdown and prompts also have their dependencies followed.
 The config is read locally and is not automatically uploaded. Selected files must be Git-visible regular files.
-Secret-looking names, symlinks (including symlink ancestors), missing files and paths outside the repository are refused.
+Safe in-repository file links and linked folders send the final Git-visible regular target bytes under the authored path. Both authored and target names must be safe and Git-visible. Secret-looking names, outside targets, broken links and loops are refused. The bindings inventory and executable/write destinations retain their strict no-link rules.
 
 ## 3. Schema rules
 
@@ -497,12 +517,12 @@ Cut from the Harbor Coffee app map (`…` marks cut parts):
 
 ## 15. PR text
 
-Put the `Runtime check` line(s) that `pdd test` prints, with their report links, at the top of the PR text. One
-Story gives one line, `Runtime check (<story>): …`. 2 or more Stories give one line each and a last `Runtime check:`
+Put the `Prompt tests` line(s) that `pdd test` prints, with their report links, at the top of the PR text. One
+Story gives one line, `Prompt tests (<story>): …`. 2 or more Stories give one line each and a last `Prompt tests:`
 line for all. The link expires after 7 days. Anyone with the link can open it. Do not paste logs, warnings or full
 paths of this computer (`/Users/…`). PR 1 cannot merge while a prompt in it is still draft.
 ```
-Runtime check (place-order): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call
+Prompt tests (place-order): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call
 Report: https://…/r/617480ac-…
 ```
 
@@ -569,11 +589,11 @@ In verify after the last commit, run one `pdd workflow prove <run> --test "<comm
 **Structured record for a workflow run.**
 New bundled feature/bug code areas opt in with `replay_evidence: "pdd.replay-evidence.v1"`. Saved areas and
 custom workflows without that field keep their publication behavior; small-change has no replay policy.
-After each prompt-space publication or push, pdd refreshes the changed scenario files, their original byte
+For ordinary runs, after each prompt-space publication or push, pdd refreshes the changed scenario files, their original byte
 hashes and step/check identities in `status.json` as `replayBaseline`, including empty or blocked selections.
 This continues through the final approval publication before code space. Final approval refuses unpublished
 scenario edits; publish approved edits in prompt space first. On entry into code space the published anchor
-freezes; a code-space retry cannot replace it. No selected vectors means not replayed.
+freezes; a code-space retry cannot replace it. No selected vectors means not replayed. Adopted runs instead keep their frozen declared scenario inventory, bytes and authority through prompt publication, code entry and every retry; publication never refreshes that adopted anchor.
 
 Before completing each code-space step, the agent writes `<run-folder>/replay-evidence.json`; update it
 with the formal result after that step. Use the versioned contract in the package's `docs/replay-evidence.md`.
@@ -633,7 +653,7 @@ repo file and link it under `## Dependencies`. Test data goes in the test (`inpu
 `--shell` opens bash or zsh with that PATH. Each command uses your gh login and the same simulation's saved data.
 `pdd simulate --save-last` appends the last command and its observed result to the original test file; review the
 recorded expectation and its saved-data setup. `pdd simulate --stop STORY` stops the session. A wrapper error prints
-**pdd try:** on stderr and exits 125; program errors preserve the program's other exit codes.
+**pdd:** on stderr and exits 125; program errors preserve the program's other exit codes.
 
 `pdd simulate STORY --serve 8080` exposes named HTTP routes at `http://127.0.0.1:8080`. A prompt names an inbound
 route by setting the entry's `input_schema.title`, for example `"title": "HTTP GET /api/books"`. Each entry names
@@ -650,7 +670,7 @@ A JSON body is parsed; a string `body` receives exact UTF-8 text. Inputs still m
 Return `status`, an optional object of response `headers`, and `body` (a string or JSON value). An existing
 result such as `{"status":200,"books":[...]}` returns `{"books":[...]}` as its JSON body. HTTP status and headers
 come from the prompt; hop-by-hop headers are removed and Content-Length is calculated by pdd. An unknown
-route returns 404 without an AI call. Interpreter or wrapper trouble returns 502 with a plain **pdd try:** reason.
+route returns 404 without an AI call. Interpreter or wrapper trouble returns 502 with a plain **pdd:** reason.
 The listener binds only to loopback and accepts browser requests only from its own origin. Ctrl-C closes the
 local server while the simulation keeps its data. Use curl or fetch for API routes; browser page, image, script and
 stylesheet loads cannot spend calls through an API route.

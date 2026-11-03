@@ -41,7 +41,7 @@ test('VIEW1: view combines saved gates, approvals, issue, authored files, runtim
   for (const text of ['Read-only review', 'State: waiting', 'Gate: prompt-pr', 'story', 'approved', 'Pending', 'prompt-pr', 'draft',
     f.run.issue.url, f.run.pr[0].url, 'https://runtime.example.test/r/report-id', 'https://runtime.example.test/s/review-token/', 'Runtime check (greet)', f.run.baseSha]) assert.ok(r.stdout.includes(text), text+'\n'+r.stdout);
   for (const path of ['user_stories/greet.md', 'user_stories/PLAN.md', 'prompts/greet.prompt.md', 'tests/greet.json', '.git/pdd/runs/2442/verify.md']) assert.ok(r.stdout.includes(pathToFileURL(join(f.repo, path)).href), path);
-  assert.match(r.stdout, /uncommitted/); assert.match(r.stdout, /current files/); assert.match(r.stdout, /separate.*prompt approval/i);
+  assert.match(r.stdout, /uncommitted/); assert.match(r.stdout, /current files/); assert.match(r.stdout, /(?:gate|approval)[^\n]*draft[^\n]*(?:together|one|cover)|(?:one|together)[^\n]*(?:gate|approval)[^\n]*draft/i);
 });
 
 test('VIEW2: view performs only local reads and leaves run, index, HOME and authored files unchanged', t => {
@@ -101,4 +101,29 @@ test('RELEASE5: ancestor aliases show artifacts and notes; redirected notes are 
   const blocked = f.cli('workflow', 'view', '2442');
   assert.match(blocked.stdout, /Gate notes unavailable/);
   assert.doesNotMatch(blocked.stdout, /private.md/);
+});
+
+// user_stories/prompt-tests-line.md: view shows Prompt tests lines and older Runtime check lines alike, and the Try links.
+test('VIEW-PROMPT-TESTS: view shows new and old summary lines, joined with "; " or one per line, and Try links', t => {
+  const f = fixture(t);
+  f.run.done = { check: { summary: 'Prompt tests (greet) (DRAFT): ✓ 1 of 1 criterion; Runtime check (wave): ✗ 0 of 1 criterion; Report: https://runtime.example.test/r/report-id' },
+    verify: { summary: 'Prompt tests (greet): ✓ 1 of 1 criterion\nPrompt tests: ✓ 1 of 1 criterion' },
+    try: { summary: 'Try: https://runtime.example.test/s/review-token/' } }; f.save();
+  const r = f.cli('workflow', 'view', '2442'); assert.equal(r.status, 0, r.stderr);
+  const lines = r.stdout.split('\n');
+  for (const start of ['Prompt tests (greet) (DRAFT):', 'Runtime check (wave):', 'Prompt tests (greet):', 'Prompt tests:']) assert.ok(lines.some(line => line.startsWith(start)), start);
+  assert.ok(!lines.some(line => /^(?:Prompt tests|Runtime check).*(?:Prompt tests|Runtime check)/.test(line)), 'one line each');
+  assert.ok(lines.includes('Try: https://runtime.example.test/s/review-token/'), r.stdout);
+});
+
+// Wrong (#2580): a test over 1 MiB was not read, so the view called it "Test/app map" and linked no Story or prompt.
+test('VIEW-BIG-TEST: a 2.4 MB test is found by its name and links its Story and prompt', t => {
+  const f = fixture(t);
+  const doc = { notes: 'x'.repeat(2_400_000), schema_version: 'prompt-runtime.program-scenario.v1', story_path: 'user_stories/greet.md', steps: [{ entry_path: 'prompts/greet.prompt.md' }] };
+  writeFileSync(join(f.repo, 'tests/greet.json'), JSON.stringify(doc));
+  writeFileSync(join(f.repo, 'tests/greet-notes.json'), JSON.stringify({ schema_version: 'prompt-runtime.program-scenario.v1', story_path: 'user_stories/greet.md' }));
+  const r = f.cli('workflow', 'view', '2442');
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(r.stdout.includes(`Test cases: ${pathToFileURL(join(f.repo, 'tests/greet.json')).href}`), r.stdout);
+  assert.ok(r.stdout.includes(`Test/app map: ${pathToFileURL(join(f.repo, 'tests/greet-notes.json')).href}`), r.stdout);
 });

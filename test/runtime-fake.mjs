@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,6 +23,16 @@ export function harbor(t, edit) {
   edit?.(repo);
   git(repo, 'init', '-q'); git(repo, 'add', '-A'); git(repo, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-qm', 'init');
   return { sandbox, repo, home, state: join(sandbox, 'state') };
+}
+
+// One more Story with its own test, a copy of Place an order: user_stories/<name>.md and tests/<name>.json
+// (a test is found by its name and folder).
+export function storyTest(repo, name, folder = 'tests') {
+  const harborFile = path => readFileSync(join(root, 'test/fixtures/harbor', path), 'utf8');
+  writeFileSync(join(repo, `user_stories/${name}.md`), harborFile('user_stories/place-order.md'));
+  const doc = JSON.parse(harborFile('tests/place-order.json'));
+  mkdirSync(join(repo, folder), { recursive: true });
+  writeFileSync(join(repo, folder, `${name}.json`), JSON.stringify({ ...doc, story_path: `user_stories/${name}.md` }, null, 2));
 }
 
 const usage = calls => ({ calls, model: 'unknown', requested_model: calls ? 'gpt-6.1-sol' : 'unknown', seconds: 10.4686, input_tokens: calls ? 6835 : 'unknown', output_tokens: calls ? 110 : 'unknown' });
@@ -60,8 +70,15 @@ export async function fakeRuntime(t, answer) {
   fake.origin = `http://127.0.0.1:${server.address().port}`;
   fake.job = (id, command, state, result = null, calls = 0) => ({ requestId: id, id, command, state, engine_sha: 'eae2202a68d00ab762fcbbf1eba0d8607a132a15',
     result, usage: usage(calls), report_url: `${fake.origin}/r/${createHash('sha256').update(id).digest('hex').slice(0, 32)}` });
-  fake.lint = (id, prompts = [{ path: PLACE, state: 'approved', admission_state: 'approved', interface: { calls: [] } }], refused = []) =>
-    fake.job(id, 'lint', 'passed', { exitCode: 0, refusals: [], report: { verdict: 'passed', program: { prompts, refused_prompts: refused } } });
+  // Like the server: per-test verdicts only for a lint that asked for complete results; this fake passes every uploaded JSON file.
+  fake.lint = (id, prompts = [{ path: PLACE, state: 'approved', admission_state: 'approved', interface: { calls: [] } }], refused = []) => {
+    const post = fake.posts.find(post => post.command === 'lint' && post.request.requestId === id);
+    const listing = post?.request.complete === true ? spawnSync('tar', ['-tf', '-'], { input: post.tar, encoding: 'utf8' }) : null;
+    if (listing) assert.equal(listing.status, 0, listing.stderr);
+    const tests = (listing?.stdout.split('\n') ?? []).filter(path => path.endsWith('.json')).map(path => ({ path, verdict: 'passed' }));
+    return fake.job(id, 'lint', 'passed', { exitCode: 0, refusals: [],
+      report: { verdict: 'passed', lint: { complete: !!listing, tests }, program: { prompts, refused_prompts: refused } } });
+  };
   fake.check = (id, state = 'passed', checks = PASSED_CHECKS, refusals = []) => fake.job(id, 'check', state, ['queued', 'running'].includes(state) ? null
     : { exitCode: state === 'passed' ? 0 : 1, outcome: state === 'passed' ? 'Pass' : ['refused', 'unknown'].includes(state) ? 'Inconclusive' : 'Fail', refusals, who: null, why: state === 'passed' ? 'All checked criteria passed.' : ['refused', 'unknown'].includes(state) ? 'No verdict. The runtime could not judge this test.' : 'Checks failed.',
       next_step: ['refused', 'unknown'].includes(state) ? 'Tell the person the reason. Do not resend it automatically.' : null, report: { samples: [{ sample: 1, steps: [{ checks }] }], evaluation: { requested_model: 'gpt-6.1-sol' },

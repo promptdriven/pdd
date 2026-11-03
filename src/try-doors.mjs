@@ -1,4 +1,4 @@
-// Generated from prompts/cli/try-doors.prompt.md (sha256: 81527229faba4c628b6b7cf6f7e67a5b662caf33b57fd83e36bb573374fb108a).
+// Generated from prompts/cli/try-doors.prompt.md (sha256: ccc07d843164a4c3f48e1269b420a5b0f617d8e1d0b1e75171e5b46a8848e94f).
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { accessSync, chmodSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
@@ -17,10 +17,10 @@ function checkEffectivePrompts(root, rawHashes, effectiveHashes) {
   const visible=new Set(gitFiles(root));
   for (const path of Object.keys(rawHashes ?? {})) {
     const prompt=readPrompt(root,visible,path);
-    if (!prompt.text) fail('A prompt is unavailable. Run pdd try STORY --cli --new.');
+    if (!prompt.text) fail('A prompt is unavailable. Run pdd simulate STORY --cli --new.');
     if (effectiveHashes?.[path]) {
-      if (hash(prompt.text)!==effectiveHashes[path]) fail('A prompt or shared contract changed since this Try. Run pdd try STORY --cli --new.');
-    } else if (prompt.references?.length) fail('This Try reference baseline is unavailable. Run pdd try STORY --cli --new.');
+      if (hash(prompt.text)!==effectiveHashes[path]) fail('A prompt or shared contract changed since this Try. Run pdd simulate STORY --cli --new.');
+    } else if (prompt.references?.length) fail('This Try reference baseline is unavailable. Run pdd simulate STORY --cli --new.');
   }
 }
 function regular(path) {
@@ -68,8 +68,8 @@ export async function openCli(context, test, sessionId, options) {
   const { root, ports, store, identity, origin } = context;
   const { step, prompt, entry, name } = cliEntry(context, test);
   const record = store.repo(root).tries?.[test.path];
-  if (record?.prompt_hashes?.[step.entry_path] !== hash(readFileSync(join(root,step.entry_path)))) fail('The CLI prompt changed or this Try has no source record. Run pdd try STORY --cli --new.');
-  for (const [path, expected] of Object.entries(record.prompt_hashes)) if (hash(readFileSync(join(root, path))) !== expected) fail('A prompt dependency changed since this Try. Run pdd try STORY --cli --new.');
+  if (record?.prompt_hashes?.[step.entry_path] !== hash(readFileSync(join(root,step.entry_path)))) fail('The CLI prompt changed or this Try has no source record. Run pdd simulate STORY --cli --new.');
+  for (const [path, expected] of Object.entries(record.prompt_hashes)) if (hash(readFileSync(join(root, path))) !== expected) fail('A prompt dependency changed since this Try. Run pdd simulate STORY --cli --new.');
   checkEffectivePrompts(root,record.prompt_hashes,record.effective_prompt_hashes);
   const bin = safeBin(root), shim = join(bin, name);
   if (existsSync(shim)) {
@@ -87,7 +87,7 @@ export async function openCli(context, test, sessionId, options) {
   const ignored = existsSync(exclude) ? readFileSync(exclude, 'utf8') : '';
   if (!ignored.split('\n').includes('/.pdd/try/')) writeFileSync(exclude, `${ignored}${ignored.endsWith('\n') || !ignored ? '' : '\n'}/.pdd/try/\n`);
   const descriptorPath = join(store.folder('tries'), `${sessionId}.door.json`);
-  if (existsSync(descriptorPath) && read(descriptorPath).promptHash !== hash(prompt.text)) fail('The CLI prompt changed since this Try. Run pdd try STORY --cli --new.');
+  if (existsSync(descriptorPath) && read(descriptorPath).promptHash !== hash(prompt.text)) fail('The CLI prompt changed since this Try. Run pdd simulate STORY --cli --new.');
   const ghPath = (ports.env.PATH || process.env.PATH || '').split(':').map(folder => join(folder, 'gh')).find(path => { try { accessSync(path, constants.X_OK); return (lstatSync(path).isFile() || lstatSync(path).isSymbolicLink()) && !readFileSync(path).subarray(0, 64).toString().includes('PDD Try launcher v1'); } catch { return false; } });
   let metadata;
   try { const reply = await context.runtime.send(`/v1/try/${sessionId}/model`, { method: 'GET' }, 30_000); if (reply.status === 200) metadata = reply.json; } catch { /* Accounting cannot block an otherwise usable CLI. */ }
@@ -99,7 +99,7 @@ export async function openCli(context, test, sessionId, options) {
     promptHash: hash(prompt.text), stateDir: store.dir, repoState: join(store.folder('repos'), `${store.repoKey(root)}.json`) };
   writePrivate(descriptorPath, descriptor);
   const moduleUrl = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), 'try-doors.mjs')).href;
-  const script = `import(process.argv[1]).then(async ({ runShim }) => { process.exitCode = await runShim(process.argv[2], process.argv.slice(3)); }).catch(() => { process.stderr.write('pdd try: The installed adapter could not load. Run pdd try STORY --cli again.\\n'); process.exitCode = 125; });`;
+  const script = `import(process.argv[1]).then(async ({ runShim }) => { process.exitCode = await runShim(process.argv[2], process.argv.slice(3)); }).catch(() => { process.stderr.write('pdd: The installed adapter could not load. Run pdd simulate STORY --cli again.\\n'); process.exitCode = 125; });`;
   const code = `#!/bin/sh\n# PDD Try launcher v1\nexec ${quote(process.execPath)} --input-type=commonjs -e ${quote(script)} -- ${quote(moduleUrl)} ${quote(descriptorPath)} \"$@\"\n`;
   const fd = openSync(shim, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, 0o700);
   try { writeFileSync(fd, code); } finally { closeSync(fd); }
@@ -129,9 +129,9 @@ export async function runShim(descriptorPath, argv, givenPorts = {}) {
   try {
     regular(descriptorPath);
     const d = read(descriptorPath);
-    if (d.version !== 1 || !d.sessionId || !d.root || realpathSync(d.root) !== d.root) fail('The Try session record is invalid. Run pdd try STORY --cli again.');
+    if (d.version !== 1 || !d.sessionId || !d.root || realpathSync(d.root) !== d.root) fail('The Try session record is invalid. Run pdd simulate STORY --cli again.');
     const last = invalidate(d, descriptorPath), input = { argv };
-    if (Object.entries(d.promptHashes ?? { [d.prompt]: d.promptHash }).some(([path, expected]) => hash(readFileSync(join(d.root, path))) !== expected)) fail('The CLI prompt changed since this Try. Run pdd try STORY --cli --new.');
+    if (Object.entries(d.promptHashes ?? { [d.prompt]: d.promptHash }).some(([path, expected]) => hash(readFileSync(join(d.root, path))) !== expected)) fail('The CLI prompt changed since this Try. Run pdd simulate STORY --cli --new.');
     checkEffectivePrompts(d.root,d.promptHashes ?? {[d.prompt]:d.promptHash},d.effectivePromptHashes);
     if (d.inputSchema.properties?.stdin && !ports.stdin.isTTY) {
       const parts = []; let bytes = 0;
@@ -140,7 +140,7 @@ export async function runShim(descriptorPath, argv, givenPorts = {}) {
       input.stdin = value;
     } else if (d.inputSchema.required?.includes('stdin')) input.stdin = '';
     // A person at a terminal sees that a slow command still runs; a pipe or an agent gets only the program's output.
-    const note = ports.stderr.isTTY ? setTimeout(() => ports.stderr.write(`pdd try: running ${d.name ?? 'the command'} on the Try…\n`), 2000) : null;
+    const note = ports.stderr.isTTY ? setTimeout(() => ports.stderr.write(`pdd: running ${d.name ?? 'the command'} on the Try…\n`), 2000) : null;
     let answer;
     try { answer = await runDoorCall(d, input, { ...ports, ghPath: d.ghPath, env: { ...ports.env, PDD_STATE_DIR: d.stateDir } }); } finally { clearTimeout(note); }
     const result = answer.result;
@@ -150,15 +150,15 @@ export async function runShim(descriptorPath, argv, givenPorts = {}) {
     ports.stderr.write(`${result.stderr && !result.stderr.endsWith('\n') ? '\n' : ''}${tryUsageLine(answer.usage, { command: true })}\n`);
     return result.exit_code;
   } catch (e) {
-    const reason = e.code === 'ENOENT' ? 'No Try session is available. Run pdd try STORY --cli again.'
+    const reason = e.code === 'ENOENT' ? 'No Try session is available. Run pdd simulate STORY --cli again.'
       : e instanceof TypeError && /encoded data/.test(e.message) ? 'Piped stdin must be UTF-8 text.' : cleanText(e.message || 'The command could not run.');
-    ports.stderr.write(`pdd try: ${reason}\n${tryUsageLine(e.tryUsage ?? tryUsage({}), { command: true })}\n`); return WRAPPER_EXIT;
+    ports.stderr.write(`pdd: ${reason}\n${tryUsageLine(e.tryUsage ?? tryUsage({}), { command: true })}\n`); return WRAPPER_EXIT;
   }
 }
 
 export async function saveLast({ root, store, identity, ports }) {
   const pointer = store.repo(root).last_door;
-  if (!pointer) fail('No last command is available. Run the Try command first.');
+  if (!pointer) fail('No last command is available. Run a command through the Try command first.');
   regular(pointer.descriptor); regular(pointer.last);
   const d = read(pointer.descriptor), last = read(pointer.last);
   if (d.root !== root || identity.login !== d.login) fail(`This Try belongs to ${d.login}. Run: gh auth switch -u ${d.login}`);

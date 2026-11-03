@@ -1,0 +1,23 @@
+# Keep my workflow change request while a chat starts
+
+I can request changes immediately after approving an area and trust pdd to wait briefly for the new chat, or keep my one-line request and show me how to retry.
+
+## Acceptance criteria
+
+1. Immediately after `pdd workflow approve 2` starts the prompt-pr chat, `pdd workflow changes 2 "Add the retry example"` waits within the chat's 30-second startup window and submits once to that original chat. During startup, idle, working or done means ready; blocked means answer its dialog, and unknown status waits. Outside startup, an alive agent still receives the request even with unknown status.
+2. If the chat never becomes ready, pdd stops within the original deadline, says it is still starting, keeps the request durably, and shows brief wait/open advice followed by one clearly quoted retry command. Retrying or changing the clock does not extend the wait. A genuinely stopped old chat still says "The prompt-pr chat is not running".
+3. Retrying the same pending request sends it once. Different pending requests for the same target keep their order. Identical overlapping commands of the same answer/change kind share one request; their replies accurately report in-progress or delivered state without a false retry promise. An ordinary identical request after acknowledgement is new, including a later answer "yes". Answers and changes never consume each other's request.
+4. A blocked or unavailable chat keeps the request and shows an actionable recovery step. An uncertain submission is never automatically resent, including when I repeat its text; it does not stop a later new request. A repeat says it may already be in the chat and tells me to type it there if absent.
+5. Requests keep today's one-line behavior: whitespace collapses and trims, while quote characters stay intact. A request submitted while the agent works reaches the same ready chat once without waiting for its current turn to finish.
+6. Changes keep approval gates open, answers retain their existing meaning, and delivery neither approves nor advances an area, restarts an agent, nor overwrites progress or newer questions saved while it waits. Other workflow commands cannot undo saved delivery and cause it to be sent again.
+7. Brief journal contention retries for at most 250 ms per acquisition, including after a successful send, so it does not lose the acknowledgement or change round. Abandoned claims can be recovered without disturbing a live or unverifiable owner. Interruption before submission leaves the request retryable; possible submission is never automatically resent.
+8. If the area has no chat record, pdd immediately says clearly how to open it and accepts no request. After I open it, retrying my command can wait for the fresh chat to become ready and actually send once. Requests already tied to a pane are never redirected to another pane or area.
+
+## Rules to check
+
+- The startup deadline is 30 seconds after the latest start or resume, capped by the original elapsed budget. At or after the deadline, a missing old agent is reported promptly. Unknown or missing status may wait within that window; outside it an alive agent receives the request. Other inspection failures are reported promptly.
+- Save custody and submission intent before transport; a failed save sends nothing. Saved request state is separate from ordinary workflow progress, so an older status, step or question update cannot turn delivered back into pending.
+- Pending identity includes original target, normalized text and answer/change kind. Joined callers retain their accepted id through acknowledgement. Under a short journal claim only one caller may record submission intent; in-flight or delivered observations cannot cause a second send or a false promise to retry. After acknowledgement a newly accepted identical command is new. Uncertain entries are skipped for later new work; an earlier definite pending failure still holds later pending work for that target.
+- Journal ownership uses PID and hostname. Reclaim only confirmed dead owners on the same host; preserve live, foreign-host, malformed and unverifiable owners. A stray unrelated file cannot block acquisition. Journal claims never cover readiness waiting or transport, with no long dispatch claim, start-time or signal machinery.
+- No chat record means no custody and no wait for a record to appear. Opening a fresh chat gives a later command that chat's startup window; an earlier no-chat reply cannot poison future retries.
+- Submission acknowledgement is not proof that an agent acted on the request. Native waiting-stub evidence checks consumption; actual Codex/Claude turn semantics need separate evidence.

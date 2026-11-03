@@ -4,9 +4,9 @@ I can wait for lint or use the saved recovery command to finish my original Stor
 
 ## Acceptance criteria
 
-1. `pdd check p06 --max-calls 6 --timeout 4` waits past 120 seconds for passing lint, then checks only p06 with its original ceiling of 6 calls.
+1. `pdd test p06 --max-calls 6 --timeout 4` waits past 120 seconds for passing lint, then checks only p06 with its original ceiling of 6 calls.
 2. Without an explicit timeout, an agent stops waiting at 90 seconds; a terminal Check has no separate lint limit, and standalone remote lint follows the same caller wait.
-3. After pending lint passes, `pdd check --read BATCH` or `pdd check --retry BATCH` continues the original held checks using the saved selection and call ceilings without a redundant lint upload or new lint; check POSTs retain their required source multipart.
+3. After pending lint passes, `pdd test --read BATCH` or `pdd test --retry BATCH` continues the original held checks using the saved selection and call ceilings without a redundant lint upload or new lint; check POSTs retain their required source multipart.
 4. Recovery refuses a changed owner, repository or captured source before allocating a check ID or sending a check, and always uses the saved runtime origin.
 5. Repeated or concurrent recovery and interrupted or lost replies never send the same paid check twice; previous IDs, answers and usage remain intact.
 6. A standalone lint read sends no paid checks; ambiguous legacy intent, unresolved lint and lint refusals cannot authorize checks.

@@ -7,4 +7,4 @@
 - For a behavior change, add a test through the public interface. Take its expected result from the plan, not from the code.
 - Keep existing tests unless the plan changes them. No unrelated refactors or new dependencies.
 - If you changed a prompt that has a test file, run `pdd test` on every Story of that prompt, as RUNBOOK.md says, before verify. Never send the same check on the same files again: to see its result, run `pdd test --read`. Keep its notes out of verify.md.
-- After a ✗, read `Why:`, `Next:` and the report. Tell the person the kind, the evidence and the proposed fix. Follow RUNBOOK “After a ✗”. After 2 fix rounds for the same ✗, stop and ask the person. In your `done` summary put the `Runtime check` line and the report link.
+- After a ✗, read `Why:`, `Next:` and the report. Tell the person the kind, the evidence and the proposed fix. Follow RUNBOOK “After a ✗”. After 2 fix rounds for the same ✗, stop and ask the person. In your `done` summary put the `Prompt tests` line and the report link.

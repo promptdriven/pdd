@@ -23,7 +23,7 @@ test('STEP-TIME1: check names the timed-out authored step, reports minutes and s
   assert.match(r.ports.stdout.text, /Step sam-orders-espressos-and-a-muffin took more than 3 minutes and was stopped\./);
   assert.ok(r.ports.stdout.text.includes(advice)); assert.doesNotMatch(r.ports.stdout.text, /FAILED|expected.*got|the AI provider failed/);
   assert.equal(r.fake.posts.filter(p => p.command === 'check').length, 1);
-  const batch = /pdd check --read (\S+)/.exec(r.ports.stderr.text)[1], count = r.fake.posts.length;
+  const batch = /pdd test --read (\S+)/.exec(r.ports.stderr.text)[1], count = r.fake.posts.length;
   const ports = portsFor({ HOME: r.setup.home, PDD_STATE_DIR: r.setup.state, PDD_RUNTIME_URL: r.fake.origin }).ports;
   assert.equal(await runCheck({ cwd: r.setup.repo, words: [batch], options: { '--read': true, '--json': true } }, ports), 3);
   const row = JSON.parse(ports.stdout.text).rows[0]; assert.equal(row.time_limit.minutes, 3); assert.equal(row.calls, 3);
