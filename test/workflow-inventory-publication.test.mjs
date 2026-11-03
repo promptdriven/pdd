@@ -334,15 +334,16 @@ test('combined labels cover both PRs, real machine proof, reserved inventory ord
   const phase=(exitCode,expectedFound=false)=>({exitCode,signal:'',timedOut:false,outputLimited:false,stdoutTail:[],stderrTail:[],expectedFound,error:'',setupError:'',observedError:''});
   writeFileSync(join(run.runDir,'old-code-proof.json'),JSON.stringify({v:2,origin:'pdd.workflow-prove.v2',interruptSignal:'',runId:run.runId,baseSha:run.baseSha,headSha:f.git('rev-parse','HEAD'),test:'node --test test/a.mjs',expect:'defect',paths:['test/a.mjs'],base:phase(1,true),head:phase(0),outcome:'proved',setupError:'',cleanupError:''}));
   const code=await f.done(summary);assert.equal(code.exitCode,0,code.message);const body=f.prs[0].body;
-  assertOrder(body,[...labels,'Old-code proof: ✓ `node --test test/a.mjs`','Tests vs base:','Test inventory commits:','Review: `needs follow-up`','✗ 1 vectors fail','Code replay: BLOCKED','Refs #17']);
-  assert.doesNotMatch(body,/Closes #17\n|forged success|forged inventory|foreign note|Review: archived/);assert.equal((body.match(/^Not checked: `formal \(agent limit\)`$/gm)??[]).length,1);assert.equal((body.match(/pdd-workflow:/g)??[]).length,1);assert.ok(body.includes(span(hostile)));assert.equal(f.git('--git-dir',f.remote,'rev-parse','refs/heads/code-topic'),f.git('rev-parse','HEAD'));
+  assertOrder(body,['Old-code proof: ✓ `node --test test/a.mjs`','Tests vs base:','Test inventory commits:',...labels,'Review: `needs follow-up`','✗ 1 vectors fail','Code replay: BLOCKED','Refs #17']);
+  assert.doesNotMatch(body,/Closes #17\n|forged success|forged inventory|foreign note|Review: archived/);assert.equal((body.match(/^Agent note — not checked by pdd: Not checked: `formal \(agent limit\)`$/gm)??[]).length,1);assert.equal((body.match(/pdd-workflow:/g)??[]).length,1);assert.ok(body.includes(span(hostile)));assert.equal(f.git('--git-dir',f.remote,'rev-parse','refs/heads/code-topic'),f.git('rev-parse','HEAD'));
 });
 
 test('combined Not checked alone retains Closes and cannot supply forged machine or inventory evidence',async t=>{
   const f=fixture(t);writeFileSync(join(f.root,'test/a.mjs'),changed);
   const result=await f.done('Not checked: formal (agent limit)\nOld-code proof: forged success\nTests vs base: forged inventory\nReview: follow-up');assert.equal(result.exitCode,0,result.message);
-  const body=f.prs[0].body;assert.equal(body.split('\n')[0],'Not checked: `formal (agent limit)`');assert.match(body,/^Closes #17$/m);assert.doesNotMatch(body,/Refs #17|forged success|forged inventory/);
-  assert.ok(body.indexOf('Not checked:')<body.indexOf('Old-code proof: not run.')&&body.indexOf('Old-code proof: not run.')<body.indexOf('Tests vs base:')&&body.indexOf('Test inventory commits:')<body.indexOf('Review:'));
+  const body=f.prs[0].body;assert.equal(body.split('\n')[0],'Old-code proof: not run.');
+  assert.match(body,/^Agent note — not checked by pdd: Not checked: `formal \(agent limit\)`$/m);assert.match(body,/^Closes #17$/m);assert.doesNotMatch(body,/Refs #17|forged success|forged inventory/);
+  assert.ok(body.indexOf('Old-code proof: not run.')<body.indexOf('Tests vs base:')&&body.indexOf('Test inventory commits:')<body.indexOf('Not checked:')&&body.indexOf('Not checked:')<body.indexOf('Review:'));
   assert.equal(artifact(f).headSha,f.remoteHead());
 });
 

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: b555cb4bb15532e6d1d85866310e8634568c1e33bd5847f62db7b9ba3f265a0b).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 8b9b6157eca685b7d0eb6e81d1ac4c979e72cc4a2d68689ca386c49698a51063).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { execFile as execFileCallback } from 'node:child_process';
@@ -22,6 +22,7 @@ import { storyLines, PROMPT_TESTS_LABEL, PROMPT_TESTS_WORDS } from './runtime-ou
 import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
 import { causeText } from './runtime-output.mjs';
 import { preparePrEvidence } from './workflow-pr-evidence.mjs';
+import { validateProofRecord } from './workflow-prove.mjs';
 import { collectTestInventory } from './workflow-inventory.mjs';
 import {adoptReplayCorpus,REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinReplayVectors,readReplayEvidence,formatReplayEvidence} from './workflow-replay.mjs';
 
@@ -564,28 +565,31 @@ function runtimeTop(text) {
   if (!stories.length) return lines.map(line => line.line);
   return [...stories.map(line => line.line), ...(stories.length > 1 ? [totalLine(stories)] : [])];
 }
-export function matchesSource(record, root, fingerprint) {
+export function matchesSource(record, root, fingerprint, capture = captureSource) {
   const source = record.source;
   if (!source?.sha256) return false;
   if (source.kind === 'git-content-v1') return fingerprint !== null && fingerprint === source.sha256;
   if (source.kind === 'runtime-capture-v1') {
-    try { return captureSource(root, { tests: source.tests, appMap: null }).sha256 === source.sha256; } catch { return false; }
+    try { return capture(root, { tests: source.tests, appMap: null }).sha256 === source.sha256; } catch { return false; }
   }
   return false;
 }
-export function storyCount(run) {
+export function storyCount(run, ports = {}) {
   const records = [...(run.runtimeHistory ?? []), ...Object.values(run.done ?? {}), ...(run.evidence ?? [])]
     .filter(record => runtimeLines(record.summary).length).sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
   if (!records.length) return null;
-  const fingerprint = gitFingerprint(run.root), compatible = records.filter(record => matchesSource(record, run.root, fingerprint));
-  const lines = (compatible.length ? compatible : records).flatMap(record => runtimeLines(record.summary));
-  const named = latestStories(lines), counted = named.length ? named : lines.slice(-1);
-  const unknown = line => !compatible.length || !line.pass && !line.result.includes('✗');
-  const result = { pass: compatible.length ? counted.filter(line => line.pass).length : 0, total: counted.length,
+  const fingerprint = (ports.fingerprint ?? gitFingerprint)(run.root), compatible = records.filter(record => matchesSource(record, run.root, fingerprint, ports.capture));
+  const current = latestStories(compatible.flatMap(record => runtimeLines(record.summary)));
+  const all = latestStories(records.flatMap(record => runtimeLines(record.summary)));
+  const currentByStory = new Map(current.map(line => [line.story, line]));
+  const counted = all.length ? all.map(line => currentByStory.get(line.story) ?? line) : (compatible.length ? compatible : records).flatMap(record => runtimeLines(record.summary)).slice(-1);
+  const known = line => currentByStory.has(line.story) || !all.length && compatible.length > 0;
+  const unknown = line => !known(line) || !line.pass && !line.result.includes('✗');
+  const result = { pass: counted.filter(line => known(line) && line.pass).length, total: counted.length,
     failing: counted.filter(line => !unknown(line) && !line.pass && line.story).map(line => line.story) };
   const unresolved = counted.filter(unknown).map(line => line.story ?? 'all Stories');
   if (unresolved.length) result.unknown = unresolved;
-  if (!compatible.length) result.evidence = 'Source changed, unavailable, or not recorded; saved results are unverified.';
+  if (counted.some(line => !known(line))) result.evidence = 'Source changed, unavailable, or not recorded; saved results are unverified.';
   return result;
 }
 export function storyEvidence(run, { comparisonRoot } = {}) {
@@ -661,8 +665,8 @@ const withoutTags = line => line.replace(/((?<!`)(`+)(?!`).*?(?<!`)\2(?!`))|<\/?
 // verify.md in at most `room` characters: the whole report when it fits. Else each <details> block becomes one line; if it is
 // still too long, its first lines that fit (cut at a line end, a code fence closed), then the lines of the cut part that report
 // a failure. A note says that this is a summary and where the full report is, so no failure is dropped in silence.
-function verifyFit(text, room, env, description = false) {
-  const full = description ? text : verifyBody(text);
+function verifyFit(text, room, env, description = false, formatted = false) {
+  const full = description || formatted ? text : verifyBody(text);
   if (characters(full) <= room) return full;
   const note = what => description
     ? `_The existing PR 1 description has ${characters(text).toLocaleString('en-US')} characters. It was shortened to fit the complete description's 60,000-character budget: ${what}._`
@@ -729,12 +733,41 @@ async function publicationEvidence(run, area, p) {
   const saved = { runId: run.runId, runDir: run.runDir, root: run.root, baseSha: run.baseSha, baseBranch:run.baseBranch, workflow:run.workflow, number: run.number,
     decisions: run.decisions ?? [], promptApprovals: await matchingPromptApprovals(run, p),
     steps: run.areas.flatMap(item => item.steps).map(step => ({ step, summary: run.done[step]?.summary ?? '' })) };
-  return preparePrEvidence({ run: saved, isCode: prLabel(run, area) !== 'PR 1' }, {
+  let observedHead, observedProof;
+  const proofFiles = p.fs ?? { lstatSync, readFileSync };
+  const evidence = await preparePrEvidence({ run: saved, isCode: prLabel(run, area) !== 'PR 1' }, {
     currentHead: async ({ root, baseBranch }) => {
-      try { await git(p,root,'check-ref-format',`refs/heads/${baseBranch}`);await git(p,root,'fetch','origin',`refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`);const headSha=await git(p,root,'rev-parse','--verify','HEAD^{commit}');return {headSha,baseSha:await git(p,root,'merge-base',headSha,`refs/remotes/origin/${baseBranch}`),error:''}; }
+      try { await git(p,root,'check-ref-format',`refs/heads/${baseBranch}`);await git(p,root,'fetch','origin',`refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`);const headSha=await git(p,root,'rev-parse','--verify','HEAD^{commit}');return observedHead = {headSha,baseSha:await git(p,root,'merge-base',headSha,`refs/remotes/origin/${baseBranch}`),error:''}; }
       catch { return { headSha: '', baseSha:'', error: 'Current Git head unavailable.' }; }
+    },
+    readOldCodeProof: async ({runDir}) => {
+      try {
+        const path = join(runDir, 'old-code-proof.json');
+        if (!proofFiles.lstatSync(path).isFile()) return {content:'',error:'Proof is not a regular file.'};
+        observedProof = proofFiles.readFileSync(path, 'utf8');
+        return {content:observedProof,error:''};
+      } catch (error) { return {content:'',error:error.code === 'ENOENT' ? 'missing' : 'Proof could not be read.'}; }
     }
   });
+  if (prLabel(run, area) !== 'PR 1') {
+    evidence.nativeLine = 'Native tests: unknown (no current machine counts).';
+    try {
+      const record = JSON.parse(observedProof);
+      if (validateProofRecord(record) && record.runId === run.runId && record.headSha === observedHead?.headSha && record.baseSha === observedHead?.baseSha
+          && !record.interruptSignal && [0,1].includes(record.head.exitCode) && !record.head.signal && !record.head.timedOut && !record.head.outputLimited && !record.head.error && !record.head.setupError) {
+        const facts = new Map();
+        for (const line of record.head.stdoutTail) {
+          const match = /^# (tests|pass|fail|cancelled|skipped|todo) (\d+)$/.exec(line);
+          if (match) { if (facts.has(match[1])) throw Error('Ambiguous test summary'); facts.set(match[1], Number(match[2])); }
+        }
+        const total = facts.get('tests'), passed = facts.get('pass'), failed = facts.get('fail');
+        if ([total, passed, failed].every(Number.isSafeInteger) && total >= 0 && passed + failed + (facts.get('cancelled') ?? 0) + (facts.get('skipped') ?? 0) + (facts.get('todo') ?? 0) === total)
+          evidence.nativeLine = `Native tests (current old-code proof, new-code output): ${passed}/${total} passed; ${failed} failed.`;
+      }
+    } catch { /* Missing, stale or unparseable machine output supplies no counts. */ }
+  }
+  if (run.publicationPending) evidence.lines.unshift('Check evidence: publication-pending (source is being published).');
+  return evidence;
 }
 function evidenceFit(lines, room, env) {
   if (characters(lines.join('\n')) <= room) return lines;
@@ -778,6 +811,7 @@ function publicationFit(lines, approvals, room, env) {
 // closed block keeps every whole summary as inert code spans: no summary line starts a body line, so its labels, HTML,
 // mentions and markers stay text. The block has the lowest priority in the body budget. When it does not fit, the longest
 // summaries are shortened first, each cut shows " …", and one line names each shortened step and what was left out.
+const AGENT_NOTE = 'Agent note — not checked by pdd';
 const FULL_SUMMARIES = '<details><summary>Full step summaries</summary>', SLOT = '\u0000';
 function codeSpan(line) {
   const text = line.replaceAll('pdd-workflow:', 'pdd-workflow\\u003a').replaceAll('pdd-product:', 'pdd-product\\u003a');
@@ -801,7 +835,8 @@ function prSteps(run, area) {
   const index = run.areas.findIndex(item => item.name === area.name), from = run.areas.slice(0, index).map((item, at) => item.gate === 'pr' ? at + 1 : 0).reduce((a, b) => Math.max(a, b), 0);
   return run.areas.slice(from, index + 1).flatMap(item => item.steps).filter(step => run.done[step]);
 }
-const cleanSummary = (run, step) => hideLocalPaths(redactTry(withoutForgedMachineLines(run.done[step].summary)), run);
+const noteRuntime = text => String(text).replace(LINE_PATTERN, match => `Saved runtime receipt (unverified in this agent note): ${match}`);
+const cleanSummary = (run, step) => hideLocalPaths(redactTry(noteRuntime(withoutForgedMachineLines(run.done[step].summary))), run);
 // render(section) is the whole body with that block; the block takes the room that is left: whole when it fits, else one
 // common length for the longest summaries, as large as the search finds within the limit.
 function withSummaries(steps, texts, render, limit) {
@@ -818,17 +853,35 @@ function fullSummaries(steps, texts, size) {
     if (!texts[step]) return `- **${step}**: done`;
     const kept = summaryStart(texts[step], size), left = characters(texts[step]) - characters(kept);
     if (left) shortened.push(`${step} (${left.toLocaleString('en-US')} characters left out)`);
-    return `- **${step}**: ${kept.split('\n').filter(Boolean).map(codeSpan).join('<br>')}${left ? `${kept ? ' ' : ''}…` : ''}`;
+    return `- **${step}**: ${AGENT_NOTE}: ${kept.split('\n').filter(Boolean).map(codeSpan).join('<br>')}${left ? `${kept ? ' ' : ''}…` : ''}`;
   });
   const notice = shortened.length ? [`_${shortened.length} step ${shortened.length === 1 ? 'summary was' : 'summaries were'} shortened to fit the PR size limit: ${listed(shortened)}. The PR author has the full summaries in the run folder._`, ''] : [];
   return [...notice, FULL_SUMMARIES, '', ...items, '', '</details>'];
+}
+function publicationRuntime(run, env) {
+  if (run.publicationPending) return [];
+  const fingerprint = gitFingerprint(run.root);
+  const records = [...(run.runtimeHistory ?? []), ...Object.values(run.done ?? {}), ...(run.evidence ?? [])]
+    .filter(record => runtimeLines(record.summary).length && matchesSource(record, run.root, fingerprint)).sort((a,b) => (a.at ?? 0) - (b.at ?? 0));
+  const stories = new Map();
+  for (const record of records) for (const line of runtimeLines(record.summary)) if (line.story) stories.set(line.story, { line, record });
+  if (!stories.size) {
+    const record = records.at(-1);
+    return record ? [...runtimeTop(record.summary), ...reportLinks(record.summary, env)] : [];
+  }
+  const selected = [...stories.values()];
+  const reports = selected.flatMap(({line, record}) => reportLinks(record.summary, env).filter(report => {
+    const name = /^Report \(([^)]+)\):/.exec(report)?.[1];
+    return !name || name === line.story;
+  }));
+  return [...selected.map(item => item.line.line), ...(selected.length > 1 ? [totalLine(selected.map(item => item.line))] : []), ...new Set(reports)];
 }
 function prBody(run, area, env, drafts = [], tests = true, evidence) {
   const steps = prSteps(run, area);
   const raw = Object.fromEntries(steps.map(step => [step, cleanSummary(run, step)]));
   const summaries = Object.fromEntries(steps.map(step => [step, oneLine(raw[step])]));
   // Agent text is inert everywhere in the body: the short Steps line is a code span too.
-  const lines = steps.map(step => `- **${step}**: ${summaries[step] ? codeSpan(shortLine(summaries[step])) : 'done'}`);
+  const lines = steps.map(step => `- **${step}**: Agent note — not checked by pdd: ${summaries[step] ? codeSpan(shortLine(summaries[step])) : 'done'}`);
   const full = Object.fromEntries(steps.map(step => [step, keepLines(raw[step])]));
   // Only a PR that covers a verify step carries verify.md (PR 1 never does).
   let verify = null;
@@ -841,27 +894,25 @@ function prBody(run, area, env, drafts = [], tests = true, evidence) {
       ...(run.prBase && run.prBase !== run.baseBranch ? [`It is stacked on PR 1's branch \`${run.prBase}\`: merge PR 1 first.`] : [])]
     : [evidence.issueReference];
   // verify writes "✗ N vectors fail" as its first line when cases still fail; the person must see it first.
-  const failing = verify?.split('\n').find(row => row.trim())?.trim().startsWith('✗') ? [verify.split('\n').find(row => row.trim()).trim()] : [];
+  const failing = verify?.split('\n').find(row => row.trim())?.trim().startsWith('✗') ? [`Agent note — not checked by pdd: ${verify.split('\n').find(row => row.trim()).trim()}`] : [];
+  if (verify !== null) verify = `${AGENT_NOTE}:\n\n${verifyBody(noteRuntime(verify))}`;
   // The Prompt tests line and its report link go on top (#18).
   // The check step's result wins; else the latest step that reports a Prompt tests line. One line per Story (0.1.6), then the overall line.
   // Lines are read from the summary as stored, with its line breaks.
-  const checked = PROMPT_TESTS.test(raw.check ?? '') ? raw.check : Object.values(raw).reverse().find(text => PROMPT_TESTS.test(text));
-  // A bug check starts its summary with the verdict and "Before ✗ … → after ✓ …" (0.1.7): they go above the Prompt tests
-  // lines, and their report links are not listed again.
-  const sources = [raw.check, ...Object.values(raw).reverse()].filter(Boolean);
-  const verdict = sources.map(text => verdictLine(text)).find(Boolean), change = sources.map(text => changeLine(text)).find(Boolean);
+  const sources = [run.done.check?.summary, ...steps.toReversed().map(step => run.done[step]?.summary)].filter(Boolean);
+  const verdict = sources.map(verdictLine).find(Boolean), change = sources.map(changeLine).find(Boolean);
   const shown = change?.match(/https?:\/\/[^\s;]+/g) ?? [];
-  const reports = checked ? reportLinks(checked, env).filter(row => !shown.some(url => row.includes(` ${url} `))) : [];
-  const report = reports[0] ?? null, noted = report || (change && hasReportLink(change, env));
-  const runtime = checked ? [...runtimeTop(checked), ...reports] : [];
+  const runtime = publicationRuntime(run, env).filter(line => !line.startsWith('Report') || !shown.some(url => line.includes(` ${url} `)));
+  const noted = runtime.some(line => hasReportLink(line, env)) || change && hasReportLink(change, env);
   const replay = area.replay_evidence === REPLAY_POLICY ? [formatReplayEvidence(run.replayEvidence ?? readReplayEvidence(run)), ''] : [];
   const prefix = [...failing, ...replay];
-  const top = [...(verdict ? [verdict] : []), ...(change ? [hasReportLink(change, env) ? `${change} (report links expire after 7 days)` : change] : []), ...runtime];
+  const top = [...(verdict ? [`${AGENT_NOTE}: ${verdict}`] : []), ...(change ? [`${AGENT_NOTE}: ${change}${hasReportLink(change, env) ? ' (report links expire after 7 days)' : ''}`] : []), ...runtime];
   if (evidence.lines.some(line => line.includes('pdd-workflow:'))) throw Error('Remove supplied workflow ownership markers from the report; pdd preserves its own marker.');
   const inventory = run.testInventory && label !== 'PR 1' ? [run.testInventory.text.trimEnd(), ...(run.testInventory.saved ? [] : ['warning: The full test inventory report was not saved.']), inventoryCommits(run.testInventory)] : [];
-  const reviewAt = evidence.lines.findIndex(line => line.startsWith('Review:') || line.startsWith('Approved in '));
-  const slot = reviewAt < 0 ? evidence.lines.length : reviewAt;
-  const preparedLines = [...evidence.lines.slice(0, slot), ...inventory, ...evidence.lines.slice(slot)].map(line => hideLocalPaths(redactTry(line), run));
+  const slot = evidence.lines.findIndex(line => line.startsWith(`${AGENT_NOTE}:`));
+  const machineEnd = slot < 0 ? evidence.lines.length : slot;
+  const native = evidence.nativeLine ? [run.publicationPending ? 'Native tests: publication-pending.' : evidence.nativeLine] : [];
+  const preparedLines = [...evidence.lines.slice(0, machineEnd), ...native, ...inventory, ...evidence.lines.slice(machineEnd)].map(line => hideLocalPaths(redactTry(line), run));
   const body = (text, lifted, approvals = [], section = []) => hideLocalPaths([...lifted, ...prefix, ...top, ...(prefix.length || lifted.length || top.length ? [''] : []), ...head, ...(approvals.length ? ['', ...approvals] : []), ...(run.productMarker ? ['', run.productMarker] : []), ...(drafts.length ? ['', draftLine(drafts)] : []), '', `Made with \`pdd workflow run ${run.workflow}\`.`, '', '## Steps', ...lines,
     ...(section.length ? ['', ...section] : []),
     ...(!noted && hasReportLink([...lines, ...Object.values(full), ...preparedLines, verify ?? ''].join('\n'), env) ? ['', 'Interpreter report links expire after 7 days.'] : []),
@@ -871,7 +922,7 @@ function prBody(run, area, env, drafts = [], tests = true, evidence) {
   // approvals and verify.md then fit as before, and the full summaries get the room that is left.
   const least = fullSummaries(steps, full, 0);
   const { lifted, approvals } = publicationFit(preparedLines, approvalLines, Math.max(0, BODY_BUDGET - 200 - (verify === null ? 0 : 1000) - characters(body(null, [], [], least))), env);
-  const verifyText = verify === null ? null : verifyFit(hideLocalPaths(verify, run), BODY_BUDGET - 200 - characters(body('', lifted, approvals, least)), env);
+  const verifyText = verify === null ? null : verifyFit(hideLocalPaths(verify, run), BODY_BUDGET - 200 - characters(body('', lifted, approvals, least)), env, false, true);
   return withSummaries(steps, full, section => body(verifyText, lifted, approvals, section), BODY_BUDGET - 200);
 }
 
@@ -938,8 +989,8 @@ async function publishAreaPr(run, area, p, lines, retry) {
   const bodyDrafts = label === 'PR 1' ? await draftPrompts(run, p, run.branch, bodyBase) : [];
   const bodyTests = label === 'PR 1' ? (await worktreeContents(run, p)).tests.length > 0 : true;
   const markedReplayBody = (replay, pending = false) => {
-    const evidence = pending && label !== 'PR 1' ? { ...prepared, lines: prepared.lines.map(line => line.startsWith('Old-code proof:') ? 'Old-code proof: publication-pending (source is being published).' : line) } : prepared;
-    const body=prBody({...run,replayEvidence:replay},area,p.env,bodyDrafts,bodyTests,evidence);
+    const evidence = pending ? { ...prepared, lines: ['Check evidence: publication-pending (source is being published).', ...prepared.lines.map(line => line.startsWith('Old-code proof:') ? 'Old-code proof: publication-pending (source is being published).' : line)] } : prepared;
+    const body=prBody({...run,replayEvidence:replay,publicationPending:pending},area,p.env,bodyDrafts,bodyTests,evidence);
     if(body.includes('pdd-workflow:')) throw Error('Remove supplied workflow ownership markers from the report; pdd preserves its own marker.');
     return body+`\n<!-- pdd-workflow:${run.runId}:${area.name} -->\n`;
   };
@@ -964,7 +1015,7 @@ async function publishAreaPr(run, area, p, lines, retry) {
         inventoryOnly = remote.trim() === `${run.testInventory.headSha}\trefs/heads/${run.branch}`;
       } catch { /* Unavailable remote identity cannot weaken proof safety. */ }
     }
-    if (!inventoryOnly && (opted || label !== 'PR 1')) {
+    if (!inventoryOnly) {
       let pending;
       try { pending=markedReplayBody({...run.replayEvidence,outcome:'blocked',reason:'Publication pending; source-bound replay status will be refreshed after the push.'},true); }
       catch (error) {
@@ -978,6 +1029,7 @@ async function publishAreaPr(run, area, p, lines, retry) {
     }
     catch (error) {
     if(error?.code==='workflow_progress_refused')throw error; return fail([...lines, `git push to ${run.branch} failed (${causeOf(error)}). Check the network and gh auth, then ${retry}.`].join('\n')); }
+    if (codePr && await git(p,run.root,'rev-parse','--verify','HEAD^{commit}') !== run.testInventory.headSha) return fail('Source was pushed; the local head changed. The PR stays publication-pending; retry from the pushed source.');
     prepared = await publicationEvidence(run, area, p);
     let finalBody;
     try { finalBody=markedReplayBody(run.replayEvidence); }
@@ -1227,8 +1279,12 @@ async function syncPr1(run, p) {
     return { drafts, lines: await draftDescription(run, pr1, drafts, p) };
   }
   const adoption=await adoptionFailure(run,p);if(adoption)return {failed:adoption};
-  try { await rawGit(p,run.root,'push','origin',`HEAD:refs/heads/${run.branch}`); }
+  const pushedHead = await git(p,run.root,'rev-parse','--verify','HEAD^{commit}');
+  const pending = await draftDescription({...run, publicationPending:true}, pr1, before, p);
+  if (pending.some(line => line.startsWith('warning:'))) return { failed: `${pending.join('\n')} No source was pushed. ${again}` };
+  try { await rawGit(p,run.root,'push','origin',`${pushedHead}:refs/heads/${run.branch}`); }
   catch { return { failed: `pdd could not push ${what ?? `the worktree's new commit${ahead > 1 ? 's' : ''}`} to PR 1. Run: ${go}git push origin HEAD:refs/heads/${run.branch}\n${again}` }; }
+  if (await git(p,run.root,'rev-parse','--verify','HEAD^{commit}') !== pushedHead) return { failed: 'Source was pushed; the local head changed. PR 1 stays publication-pending; retry from the pushed source.' };
   await refreshReplayBaseline(run,p);
   const drafts = await pr1Drafts(run, p);
   return { drafts, lines: [what ? `pdd committed ${what} and pushed it to PR 1.` : `pdd pushed ${ahead} new commit${ahead > 1 ? 's' : ''} from the worktree to PR 1.`, ...await draftDescription(run, pr1, drafts, p)] };
@@ -1243,15 +1299,20 @@ async function draftDescription(run, pr1, drafts, p) {
     const draftBody = !old ? body : drafts.length ? body.replace(old, draftLine(drafts)) : body.replace(`\n\n${old}`, '').replace(old, '');
     const area = askArea(run), evidence = await publicationEvidence(run, area, p), marker = `<!-- pdd-workflow:${run.runId}:${area.name} -->`;
     if (evidence.lines.some(line => line.includes('pdd-workflow:')) || String(draftBody).replace(marker, '').includes('pdd-workflow:')) throw Error('Remove supplied workflow ownership markers.');
-    const owned = /^(?:Not fixed yet:|Not checked:|Defect:|Not caught because:|Proof \(defect fixed\):|Proof \(gap closed\):|Old-code proof:|Tests vs base:|Review:|Evidence omitted:)/;
+    const owned = /^(?:Check evidence: publication-pending|Agent note — not checked by pdd: (?:Not fixed yet:|Not checked:|Defect:|Not caught because:|Proof \(defect fixed\):|Proof \(gap closed\):|Review:|Verdict:|Before[ :])|Not fixed yet:|Not checked:|Defect:|Not caught because:|Proof \(defect fixed\):|Proof \(gap closed\):|Old-code proof:|Tests vs base:|Review:|Evidence omitted:)/;
     const reference = new RegExp(`^(?:Part of|Closes|Refs) #${run.number}$`);
     const rows = String(draftBody).replace(marker, '').split('\n');
     let at = 0;
-    while (at < rows.length && owned.test(rows[at])) at++;
+    const labelledTop = [];
+    while (at < rows.length && owned.test(rows[at])) {
+      if (/^Agent note — not checked by pdd: (?:Verdict:|Before[ :])/.test(rows[at])) labelledTop.push(rows[at]);
+      at++;
+    }
     while (at < rows.length && !rows[at].trim()) at++;
     const headerStart = at;
-    while (at < rows.length && new RegExp(String.raw`^(?:Verdict:|Before |Before:|${PROMPT_TESTS_WORDS}|Report(?: \([^)]*\))?:)`).test(rows[at])) at++;
-    const ordinaryTop = rows.slice(headerStart, at);
+    while (at < rows.length && new RegExp(String.raw`^(?:Agent note — not checked by pdd: (?:Verdict:|Before[ :])|Verdict:|Before |Before:|${PROMPT_TESTS_WORDS}|Report(?: \([^)]*\))?:)`).test(rows[at])) at++;
+    const priorTop = rows.slice(headerStart, at);
+    const ordinaryTop = [...new Set([...labelledTop, ...priorTop.filter(line => /^(?:Agent note — not checked by pdd: )?(?:Verdict:|Before[ :])/.test(line)).map(line => line.startsWith(`${AGENT_NOTE}: `) ? line : `${AGENT_NOTE}: ${line}`)]), ...publicationRuntime(run, p.env)];
     const introduction = [];
     while (at < rows.length && !rows[at].trim()) at++;
     if (reference.test(rows[at] ?? '')) {
@@ -1260,14 +1321,22 @@ async function draftDescription(run, pr1, drafts, p) {
       // Newly created PRs put their one-line introduction before approvals;
       // refreshed descriptions put it with the remaining ordinary prose.
       if (/^PR 1 of this run:/.test(rows[at] ?? '')) {
-        introduction.push(rows[at++], '');
+        at++;
+        const contents = await worktreeContents(run, p);
+        introduction.push(`PR 1 of this run: ${contents.tests.length ? 'the prompt, Story and test cases' : 'the prompt and the Story'}. The code comes in PR 2 only when the person asks for it.`, '');
         while (at < rows.length && !rows[at].trim()) at++;
       }
       while (at < rows.length && (/^Approved in (?:chat|terminal|area chat): /.test(rows[at]) || /^Evidence omitted: \d+ approval evidence records omitted\./.test(rows[at]))) at++;
       while (at < rows.length && !rows[at].trim()) at++;
     }
     // pdd's own full step summaries (with their cut notice) leave the rest; they come back fitted like a new PR body.
-    const rest = [...introduction, ...rows.slice(at)], start = rest.indexOf(FULL_SUMMARIES), end = start < 0 ? -1 : rest.indexOf('</details>', start);
+    const remaining = rows.slice(at), overview = remaining.indexOf('## Steps');
+    // Only the runner's contiguous overview is rewritten. Reviewer examples and
+    // fenced prose elsewhere retain their exact text.
+    if (overview >= 0) for (let index = overview + 1; /^- \*\*[^*]+\*\*:/.test(remaining[index] ?? ''); index++) {
+      if (!remaining[index].includes(AGENT_NOTE)) remaining[index] = noteRuntime(remaining[index]).replace(/(:) /, `$1 ${AGENT_NOTE}: `);
+    }
+    const rest = [...introduction, ...remaining], start = rest.indexOf(FULL_SUMMARIES), end = start < 0 ? -1 : rest.indexOf('</details>', start);
     const from = end < 0 ? -1 : start >= 2 && !rest[start - 1] && SHORTENED.test(rest[start - 2]) ? start - 2 : start;
     const steps = from < 0 ? [] : prSteps(run, area), texts = Object.fromEntries(steps.map(step => [step, keepLines(cleanSummary(run, step))]));
     const reserved = from < 0 ? 0 : characters(fullSummaries(steps, texts, 0).join('\n')) + 2;
@@ -1285,7 +1354,7 @@ async function draftDescription(run, pr1, drafts, p) {
     if (reply.code !== undefined && reply.code !== 0) throw Object.assign(Error('PR 1 description update failed.'), { code: reply.code });
     return [`pdd updated the PR 1 description: ${drafts.length ? `draft prompts left: ${drafts.join(', ')}` : 'no draft prompts are left'}.`];
   } catch (error) {
-    if(error?.code==='workflow_progress_refused')throw error; return [`warning: pdd could not update the PR 1 description (${error.code ?? 'error'}). Its "Draft prompts" line is out of date.`]; }
+    if(error?.code==='workflow_progress_refused')throw error; return [`warning: pdd could not update the PR 1 description (${error.code ?? 'error'}). ${run.publicationPending ? 'No source was pushed.' : 'The PR retains its previous evidence; after a source push it stays publication-pending.'}`]; }
 }
 
 // A terminal in the run's own chat pane (Herdr session pdd) belongs to the chat; a person's other Herdr tab does not.
