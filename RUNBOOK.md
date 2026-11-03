@@ -276,7 +276,8 @@ node `<file>--op-<operation>--hex-<operation name in hex>`. `printf add | xxd -p
 - A step costs 1 AI call when the prompt only answers, 2 to 3 when it uses saved data or calls another prompt, and up
   to 4 when it calls a prompt that uses saved data. A 3-step Harbor test used 9. A 9-step test (`app` calls `store`) used 34.
 - `pdd test` gives each test 12 calls for each step, at least 18 and at most 1000. Override it with `--max-calls N` from 1 through 1000, the interpreter maximum.
-- **Choose a ceiling of at least 3 times your worst-case estimate** when setting `--max-calls` for a check or a simulation. Include child calls, saved-data operations, redraws and all the moves you plan to try. The budget is a ceiling, not a charge: you are charged only for calls that run. If the estimate does not fit the server maximum, report that limit; do not silently reduce the margin or change expected values.
+- For a failed check, the runtime can automatically run each of at most 3 failed steps up to 2 more times to diagnose stability: at most 6 additional AI calls, within the original `--max-calls` ceiling.
+- **Choose a ceiling of at least 3 times your worst-case estimate** when setting `--max-calls` for a check or a simulation. Include child calls, saved-data operations, redraws, all the moves you plan to try and, for a check, the automatic rerun allowance above. The budget is a ceiling, not a charge: you are charged only for calls that run. If the estimate does not fit the server maximum, report that limit; do not silently reduce the margin or change expected values.
 - A new `pdd simulate` requests a session budget of 400 calls. `pdd simulate STORY --max-calls 600` chooses a different ceiling when starting a new simulation. The CLI cannot raise an existing simulation’s ceiling; `--new` starts fresh saved data. The output shows the interpreter-confirmed total and remaining calls. Reusing a simulation without this option keeps its current budget.
 - Too few calls left gives the refusal `repository-graph-catalog-error`. It is not a prompt error. The interface `limits` do not set this budget.
 - **Worst case of a step:** 1, plus for each entry in its prompt's `calls`: `max_calls` × (worst case of the called
@@ -307,6 +308,15 @@ A failed check shows the criterion, the path, the expected value and the answer:
 The report preview shows the first 256 characters of a longer string followed by `…`. The check still compares
 the full value exactly. Preview clipping and sensitive-value redaction do not shorten the value being checked.
 A draft prompt is checked too. Its row and its report say DRAFT. A DRAFT pass is not an approval.
+The `Prompt tests` line's total AI calls already includes automatic reruns reported by the server. For example,
+`5 AI calls (2 for reruns)` means 5 total, of which 2 were for reruns; never add the rerun share again.
+For a failed step, pdd prints at most one `Rerun:` verdict:
+
+- `Rerun: failed 3 of 3 (stable). A recheck of the same files will not help.` means the failure repeated consistently.
+- `Rerun: failed 1 of 3 (unstable). Make the rule in the prompt firmer.` means the answers varied.
+- `Rerun: passed M of M reruns.` means all reported reruns passed; the original failed check still needs investigation.
+- `Rerun: skipped (<reason>).` means the runtime skipped diagnosis, for example `more-than-3-failed-steps` or `budget`. A skipped or unavailable diagnosis, including a single run, supplies no stability verdict. A refusal is not a failed expectation and has no verdict.
+
 In a person's terminal, `pdd test` waits until every check ends and prints `Still running: …` every 30 s. In an
 agent's shell it returns after about 90 s with `Still running` and the batch; then run `pdd test --read` about every
 minute, doing other work in between, until every Story has a result. Never send the same check again.
@@ -884,6 +894,79 @@ The native `lookup(service, id)` uses the supplied callback; resource `service.l
 ```
 
 Passing prompt check (DRAFT): [2/2 checks · 2 AI calls](https://runtime.promptdriven.ai/r/53737185-9685-408f-83ca-be9e13c6ae79).
+
+### Return a different port reply on each call
+
+This synthetic example uses one counter for `service.lookup`, starting at zero. Each case has exactly `args`, `call_index`, and `result`: `args` is the literal complete argument object, and `call_index` is a unique positive one-based integer. Other case properties, including `world_result_bindings`, are refused. The counter progresses per operation across steps, so indices must follow that operation's actual call order. The empty result pointer replaces the whole result template with the selected literal result. This binding does not supply a request log or arbitrary world mutations; use an appropriate separate boundary and native tests for effects.
+
+Copy these three files into a repository, fill the draft hash with `pdd test --fill-hash`, and use `pdd lint varying-port` for zero-AI fixture/schema admission. Lint does not prove execution behavior or a live service effect.
+
+`prompts/varying-port.prompt.md`:
+
+````markdown
+# Varying port
+
+`varying-port.mjs` exports module function `lookup(service, id)`. Call the injected `service.lookup` with `{id}` once and return its `{label}` reply unchanged. The service owns outside access.
+
+## Dependencies
+
+None.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "status": "draft",
+  "prose_sha256": "",
+  "entries": [{"operation": "lookup", "input_schema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"], "additionalProperties": false}, "result_schema": {"type": "object", "properties": {"label": {"type": "string"}}, "required": ["label"], "additionalProperties": false}, "errors": []}],
+  "calls": [],
+  "resources": [{"name": "service", "kind": "port", "access": "write", "operations": [{"name": "lookup", "access": "write", "arguments_schema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"], "additionalProperties": false}, "result_schema": {"type": "object", "properties": {"label": {"type": "string"}}, "required": ["label"], "additionalProperties": false}}]}],
+  "limits": {"max_steps": 12, "max_model_calls": 6},
+  "conventions": []
+}
+```
+</details>
+````
+
+`user_stories/varying-port.md`:
+
+```markdown
+# Varying port
+
+I can look up the same item twice and see each supplied reply.
+
+## Acceptance criteria
+
+1. The first lookup of book-7 returns Available and the second returns Reserved.
+```
+
+`test/runtime/varying-port.json`:
+
+```json
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/varying-port.md",
+  "criteria": [{"id": "AC1", "text": "The first lookup of book-7 returns Available and the second returns Reserved."}],
+  "initial_world": {"fixture_counters": {"lookup": 0}},
+  "simulation": {
+    "service.lookup": {
+      "action": "fixture.lookup",
+      "world_pointer": "/fixture_counters/lookup",
+      "cases": [
+        {"args": {"id": "book-7"}, "call_index": 1, "result": {"label": "Available"}},
+        {"args": {"id": "book-7"}, "call_index": 2, "result": {"label": "Reserved"}}
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    }
+  },
+  "context": [],
+  "steps": [
+    {"step_id": "first", "entry_path": "prompts/varying-port.prompt.md", "operation": "lookup", "input": {"id": "book-7"}, "checks": [{"criterion_id": "AC1", "target": "result", "path": "/label", "op": "equals", "value": "Available"}], "model": "gpt-6.1-sol"},
+    {"step_id": "second", "entry_path": "prompts/varying-port.prompt.md", "operation": "lookup", "input": {"id": "book-7"}, "checks": [{"criterion_id": "AC1", "target": "result", "path": "/label", "op": "equals", "value": "Reserved"}], "model": "gpt-6.1-sol"}
+  ]
+}
+```
 
 ### Separate decide from do
 

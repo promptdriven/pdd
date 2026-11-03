@@ -14,6 +14,7 @@ function fixture(t) {
   const old = join(root, 'conda-bin'), alpha = join(root, 'alpha-bin'), nodeBin = join(root, 'node-bin'), home = join(root, 'home'), cwd = join(root, 'project');
   for (const path of [old, alpha, nodeBin, home, cwd]) mkdirSync(path);
   symlinkSync(process.execPath, join(nodeBin, 'node'));
+  writeFileSync(join(nodeBin, 'codex'), '#!/bin/sh\necho Logged in\n', { mode: 0o755 });
   const legacy = '#!/bin/sh\nprintf "pdd, version 0.0.305.dev214\\n"\n';
   writeFileSync(join(old, 'pdd'), legacy, { mode: 0o755 });
   symlinkSync(bin, join(alpha, 'pdd'));
