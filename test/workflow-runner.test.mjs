@@ -810,7 +810,7 @@ test('#18: the PR body puts the Runtime check and report link on top, cuts steps
   assert.equal(top[1], 'Report: https://rt.example.test/r/d379-42 (report links expire after 7 days)');
   assert.equal(top[3], 'Part of #17');
   const stepsList = body.split('\n## Steps\n')[1].split('\n\n')[0].split('\n');
-  assert.ok(stepsList.length > 0); for (const row of stepsList) assert.ok(row.startsWith('- **') && row.length <= 220 + 'Agent note — not checked by pdd: '.length, row);
+  assert.ok(stepsList.length > 0); for (const row of stepsList) assert.ok(row.startsWith('- **') && row.length <= 220, row);
   assert.doesNotMatch(body, /\/Users\/|\/home\/|\/private\/|\/var\/folders/);
   assert.doesNotMatch(body, /## Verify/, 'PR 1 has no verify step, so no verify.md');
   assert.match(body, /test\/x\.test\.mjs/, 'a worktree path stays as a repo path');
