@@ -2,6 +2,9 @@
 
 1. [Keep the built screen aligned with its drawing](svg-layout-spec.md): local prompt/drawing warnings and a failing browser comparison for missing layout parts.
 
+## Draft interface compaction
+
+- [Compact a draft interface before checking it](compact-draft-interface.md) — [native cases](../test/fixtures/fill-hash/compact-cases.json). Runtime check: NOT REPLAYED; Git discovery, file writes, CLI output and early option rejection need native verification. Default hash-only behavior stays unchanged.
 # Adopt an existing approved regression corpus
 
 1. [Adopt the complete unchanged approved corpus](adopt-approved-corpus.md): start a fresh evidence-enabled workflow with preserved content authorization and explicit external-assertion trust.
