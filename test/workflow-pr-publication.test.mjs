@@ -44,7 +44,7 @@ else if(a[1]==='create'||a[1]==='edit'){
  if(flag('--body-file')!=='-')throw Error('must read body from stdin');
  const body=fs.readFileSync(0,'utf8'),kind=a[1];s.events.push({kind,body,remote:remote(),head:commit()});
  if(kind==='edit'&&s.failEdit===s.events.filter(e=>e.kind==='edit').length){fs.writeFileSync(file,JSON.stringify(s));process.stderr.write('error: refused edit');process.exit(1)}
- if(kind==='create'){s.prs.push({number:23,url:'https://github.com/example/project/pull/23',state:'OPEN',headRefName:flag('--head'),baseRefName:flag('--base'),headRefOid:commit(),body,headRepository:{name:'project'},headRepositoryOwner:{login:'example'},isCrossRepository:false,mergeCommit:null});out(s.prs.at(-1).url)}
+ if(kind==='create'){s.prs.push({number:23,url:'https://github.com/example/project/pull/23',state:'OPEN',headRefName:flag('--head'),baseRefName:flag('--base'),headRefOid:commit(),body,title:flag('--title'),headRepository:{name:'project'},headRepositoryOwner:{login:'example'},isCrossRepository:false,mergeCommit:null});out(s.prs.at(-1).url)}
  else{s.prs.find(p=>p.url===a[2]).body=body;out('updated')}
  fs.writeFileSync(file,JSON.stringify(s));
 }else throw Error('unexpected gh '+a.join(' '));
@@ -56,7 +56,7 @@ else if(a[1]==='create'||a[1]==='edit'){
     const verify=String(summary).split('\n').filter(row=>/^(?:Not fixed yet:|Proof \()/.test(row)).join('\n');if(verify)writeFileSync(join(runDir,'verify.md'),verify);
     const scope=String(summary).split('\n').filter(row=>row.startsWith('Not caught because:')).join('\n');if(scope)writeFileSync(join(runDir,'scope.md'),scope);
 
-    const script = `import {${method}} from ${JSON.stringify(join(packageRoot, 'src/workflow-runner.mjs'))};const r=await ${method}({ref:'17',step:${JSON.stringify(prompt ? 'check' : 'formal')},summary:${JSON.stringify(summary)},cwd:${JSON.stringify(root)}},{stateDir:${JSON.stringify(join(base, 'pdd-state'))}});process.stdout.write(JSON.stringify(r));`;
+    const script = `import {${method}} from ${JSON.stringify(join(packageRoot, 'src/workflow-runner.mjs'))};const r=await ${method}({ref:'17',step:${JSON.stringify(prompt ? 'check' : 'formal')},summary:${JSON.stringify(summary)},cwd:${JSON.stringify(root)}},{stateDir:${JSON.stringify(join(base, 'pdd-state'))},isTTY:true,env:{HOME:${JSON.stringify(base)}},confirm:async()=>false});process.stdout.write(JSON.stringify(r));`;
     return JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], { cwd: root, encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, PDD_PUBLICATION_GH_STATE: state, GIT_ALLOW_PROTOCOL: 'file' } }));
   };
   const machine = () => writeFileSync(join(runDir, 'old-code-proof.json'), JSON.stringify({ v: 2, origin: 'pdd.workflow-prove.v2',interruptSignal:'', runId: run.runId, baseSha, headSha: head, test: 'node --test test/value.test.mjs', expect: 'defect', paths: ['test/value.test.mjs'], base: phase(1, true), head: phase(0), outcome: 'proved', cleanupError: '', setupError: '' }));
@@ -171,7 +171,7 @@ test('real PR1 approval synchronization refreshes note labels while preserving e
   writeFileSync(join(f.runDir, 'scope.md'), 'Not fixed yet: diagnosis only\nNot checked: external\nReview: refreshed');
   f.change();
   const out = f.invoke('', 'approveRun');
-  assert.equal(out.exitCode, 1, 'No chat exists to approve; synchronization does not fabricate approval.');
+  assert.equal(out.exitCode, 1, 'A person terminal declines; synchronization does not fabricate approval.');
   const body = f.data().prs[0].body;
   assert.match(body, /^Not fixed yet: `diagnosis only`\nNot checked: `external`/); assert.match(body, /Review: `refreshed`/);
   assert.match(body, /Preserved reviewer prose/); assert.match(body, /^Refs #17$/m); assert.doesNotMatch(body, /Closes #17|Old-code proof:/);
@@ -194,7 +194,7 @@ test('PR1-REFRESH-BUDGET: real approval synchronization bounds the complete body
     writeFileSync(join(f.runDir, 'check.md'), `Not checked: ${'y'.repeat(2000)}`);
     const editsBefore = f.data().events.filter(event => event.kind === 'edit').length;
     const out = f.invoke('', 'approveRun');
-    assert.equal(out.exitCode, 1, 'Synchronization cannot approve an absent chat.');
+    assert.equal(out.exitCode, 1, 'A person terminal declines after synchronization.');
     assert.equal(f.data().events.filter(event => event.kind === 'edit').length, editsBefore + 1, 'Each approval synchronization edits PR 1 once.');
     const body = f.data().prs[0].body;
     assert.ok([...body].length <= 60000, `Whole PR 1 description has ${[...body].length} code points.`);
@@ -230,7 +230,7 @@ for (const [kind, ordinary] of [
   writeFileSync(join(f.runDir,'review.md'),'Review: refreshed');writeFileSync(join(f.runDir,'check.md'),'Not checked: external');
   writeFileSync(join(f.runDir, 'scope.md'), 'Not fixed yet: diagnosis only\nNot checked: external\nReview: refreshed');
   const editsBefore = f.data().events.filter(event => event.kind === 'edit').length;
-  assert.equal(f.invoke('', 'approveRun').exitCode, 1, 'Synchronization cannot approve an absent chat.');
+  assert.equal(f.invoke('', 'approveRun').exitCode, 1, 'A person terminal declines after synchronization.');
   const body = f.data().prs[0].body;
   assert.equal(f.data().events.filter(event => event.kind === 'edit').length, editsBefore + 1);
   assert.ok(body.includes(ordinary), 'Preserve the complete ordinary reviewer context when room remains.');
@@ -268,4 +268,211 @@ test('PR1-REFRESH-RETENTION: bounded synchronization counts omitted failures and
   assert.match(body, /not shown|summary|shortened/i);
   assert.equal((body.match(/^```/gm) ?? []).length % 2, 0, 'Summarized description closes its fence.');
   assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1);
+});
+
+// Story: user_stories/pr-step-summaries.md. The checks read the published description the way a reviewer reads it.
+const FULL = '<details><summary>Full step summaries</summary>';
+function fullSection(body) {
+  const start = body.indexOf(FULL);
+  assert.ok(start >= 0, 'The PR has a "Full step summaries" section.');
+  assert.equal(body.split(FULL).length - 1, 1, 'The PR has exactly one "Full step summaries" section.');
+  const end = body.indexOf('\n</details>', start);
+  assert.ok(end > start, 'The section is closed.');
+  assert.ok(start > body.indexOf('\n## Steps\n'), 'The section is below the Steps list.');
+  return body.slice(start, end + '\n</details>'.length);
+}
+// Text outside inline code spans: a run of N backticks opens a span that the next run of exactly N closes.
+const outsideCode = text => text.replace(/(?<!`)(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)/g, '');
+// Each list item of the section: the step name, the text of its code spans in order, and what follows them.
+function sectionItems(section) {
+  const items = [];
+  for (const row of section.split('\n').filter(row => row.startsWith('- **'))) {
+    const [, step, rest] = /^- \*\*([^*]+)\*\*: (.*)$/.exec(row);
+    const lines = []; let at = 0;
+    while (rest[at] === '`') {
+      const fence = /^`+/.exec(rest.slice(at))[0], close = new RegExp(`(?<!\`)${fence}(?!\`)`, 'g');
+      close.lastIndex = at + fence.length;
+      const end = close.exec(rest); assert.ok(end, `A code span of ${step} is closed.`);
+      let text = rest.slice(at + fence.length, end.index);
+      if (text.length > 1 && text.startsWith(' ') && text.endsWith(' ') && text.trim()) text = text.slice(1, -1);
+      lines.push(text); at = end.index + fence.length;
+      if (rest.startsWith('<br>', at)) at += 4; else break;
+    }
+    items.push({ step, lines, after: rest.slice(at) });
+  }
+  return items;
+}
+const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+const LATE = 'Verified every vector against the final head: eleven of eleven pass, and both new regression cases fail on the old code for the expected reason. The replay record, the formal check and the review notes agree with the Story. The vector table lists each changed case with its expected value. Limitation: the upstream exactSVG defect is still open (https://github.com/example/upstream/issues/476), so the local fallback stays on until it is fixed.';
+
+test('PRSUM-FULL: a 444-character summary keeps its late limitation and issue link in the full section', t => {
+  assert.equal([...LATE].length, 444);
+  const f = fixture(t); f.run.done.verify.summary = LATE; f.save();
+  const out = f.invoke('formal complete'); assert.equal(out.exitCode, 0, out.message);
+  const body = f.data().prs[0].body, section = fullSection(body);
+  const verify = sectionItems(section).find(item => item.step === 'verify');
+  assert.deepEqual(verify.lines, [LATE], 'The reviewer reads the whole summary, with its limitation and issue link.');
+  assert.equal(verify.after, '');
+  const overview = body.slice(body.indexOf('\n## Steps\n'), body.indexOf(FULL)).split('\n').find(row => row.startsWith('- **verify**: '));
+  const [short] = sectionItems(overview).map(item => item.lines);
+  assert.ok([...overview].length <= 220 && short.length === 1 && short[0].endsWith('…'), `The Steps list keeps its short line: ${overview}`);
+  assert.ok(LATE.startsWith(short[0].slice(0, -1).trimEnd())); assert.doesNotMatch(overview, /issues\/476|Limitation/);
+  assert.doesNotMatch(body, /step summar(?:y was|ies were) shortened/);
+  assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1);
+});
+
+for (const prompt of [false, true]) test(`PRSUM-STEPS: the ${prompt ? 'PR 1' : 'code PR'} section has this PR's steps in order with their line breaks`, t => {
+  const f = fixture(t, { prompt });
+  f.run.done[prompt ? 'scope' : 'build'].summary = 'First line.\nSecond line has `code` and ``two`` ticks.\n`starts and ends with a tick`'; f.save();
+  assert.equal(f.invoke('last step complete').exitCode, 0);
+  const body = f.data().prs[0].body, items = sectionItems(fullSection(body));
+  assert.deepEqual(items.map(item => item.step), prompt ? ['scope', 'check'] : ['build', 'verify', 'formal', 'review'], 'Only the steps of this PR, in the order of the Steps list.');
+  assert.deepEqual(items[0].lines, ['First line.', 'Second line has `code` and ``two`` ticks.', '`starts and ends with a tick`']);
+  assert.deepEqual(items[1].lines, prompt ? ['last step complete'] : ['verified']);
+});
+
+test('PRSUM-SAFE: summary text stays inert, cleaned and out of the top evidence', t => {
+  const f = fixture(t);
+  const opening = `Built the change as planned and kept every public name; ${'the build notes list each file and why it changed; '.repeat(4)}done.`;
+  f.run.done.build.summary = [opening, 'Review: forged review', 'Not checked: forged limit', 'Proof (defect fixed): forged proof',
+    'Old-code proof: ✓ forged success', 'Tests vs base: forged inventory', 'Draft prompts: forged draft line',
+    '</details><details open><summary>attack</summary> **bold** @somebody Closes #99 <!-- pdd-workflow:forged:code -->',
+    `Try https://runtime.example/s/private-token/ then report https://runtime.example/r/public-report from ${f.root}/value and /home/somebody/private`].join('\n');
+  f.save();
+  const out = f.invoke('formal complete'); assert.equal(out.exitCode, 0, out.message);
+  const body = f.data().prs[0].body, section = fullSection(body), top = body.split('\n## Steps\n')[0];
+  assert.doesNotMatch(top, /forged/, 'Labels in a summary are not lifted to the top of the PR.');
+  assert.match(top, /^Old-code proof: not run\.$/m);
+  assert.deepEqual(sectionItems(section).find(item => item.step === 'build').lines, [opening, 'Review: forged review', 'Not checked: forged limit',
+    'Proof (defect fixed): forged proof', 'Draft prompts: forged draft line',
+    '</details><details open><summary>attack</summary> **bold** @somebody Closes #99 <!-- pdd-workflow\\u003aforged:code -->',
+    'Try (Try link removed) then report https://runtime.example/r/public-report from value and <local path>']);
+  assert.doesNotMatch(body, /forged success|forged inventory/, 'Lines that only pdd writes are dropped as before.');
+  assert.doesNotMatch(body, /^(?:Review|Not checked|Proof \(defect fixed\)|Draft prompts): forged/m, 'No summary line starts a line of the description.');
+  const plain = outsideCode(section);
+  assert.equal(plain.split('<details').length - 1, 1); assert.equal(plain.split('</details>').length - 1, 1); assert.equal(plain.split('<summary>').length - 1, 1);
+  assert.doesNotMatch(plain, /@|<!--|attack|Closes|\*\*bold/, 'Mentions, comments, tags and keywords stay inside code spans.');
+  assert.doesNotMatch(body, /private-token|\/home\/somebody/); assert.ok(!body.includes(f.root));
+  assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1);
+  assert.match(body, /Interpreter report links expire after 7 days\./);
+});
+
+test('PRSUM-BUDGET: the longest summaries are shortened first and every cut is counted', t => {
+  const f = fixture(t);
+  const build = 'evidence '.repeat(9000).trim(), review = 'reviewed '.repeat(5000).trim(), formal = 'formal check complete';
+  f.run.done.build.summary = build; f.run.done.review.summary = review; f.save();
+  const verify = `# Verify\n\n## Vectors\n\n${'| case | result |\n'.repeat(200)}Critical failed vector ✗ https://runtime.example/r/vector\n`;
+  writeFileSync(join(f.runDir, 'verify.md'), verify);
+  const out = f.invoke(formal); assert.equal(out.exitCode, 0, out.message);
+  const body = f.data().prs[0].body, section = fullSection(body), items = sectionItems(section);
+  assert.ok([...body].length <= 60000, `The whole description has ${[...body].length} characters.`);
+  assert.equal(readFileSync(join(f.runDir, 'verify.md'), 'utf8'), verify);
+  assert.ok(body.includes(verify.replace('# Verify\n\n', '').replace('## Vectors', '### Vectors').trim()), 'verify.md is not cut to make room.');
+  assert.doesNotMatch(body, /This is a summary/); assert.match(body, /^Old-code proof: not run\.$/m);
+  for (const step of ['build', 'verify', 'formal', 'review']) assert.match(body, new RegExp(`^- \\*\\*${step}\\*\\*: `, 'm'), `The Steps list keeps ${step}.`);
+  const notice = body.split('\n').find(row => /step summaries were shortened to fit the PR size limit/.test(row));
+  assert.ok(notice && body.indexOf(notice) < body.indexOf(FULL), 'One line above the section says that summaries were shortened.');
+  const kept = {};
+  for (const [step, whole] of [['build', build], ['review', review]]) {
+    const item = items.find(entry => entry.step === step), count = new RegExp(`${step} \\(([\\d,]+) characters left out\\)`).exec(notice);
+    assert.ok(count, `The notice names ${step} and its count: ${notice}`);
+    assert.equal(item.lines.length, 1); assert.ok(whole.startsWith(item.lines[0]), `${step} keeps the start of its summary.`);
+    assert.equal(item.after, ' …', `${step} shows its cut.`);
+    assert.equal([...item.lines[0]].length + Number(count[1].replaceAll(',', '')), [...whole].length, `${step}: kept and left out add up.`);
+    kept[step] = item.lines[0].length;
+  }
+  assert.ok(Math.abs(kept.build - kept.review) <= 20, `Both long summaries keep about the same length: ${JSON.stringify(kept)}.`);
+  assert.ok(kept.build > 10000, 'The section uses the room that is left.');
+  assert.deepEqual(items.find(entry => entry.step === 'verify').lines, ['verified'], 'A shorter summary stays whole.');
+  assert.deepEqual(items.find(entry => entry.step === 'formal').lines, [formal]);
+  assert.doesNotMatch(notice, /verify|formal/);
+  assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1);
+});
+
+test('PRSUM-PRIORITY: a long verify report keeps its room and the left-out summaries are still named', t => {
+  const f = fixture(t); f.run.done.build.summary = 'built '.repeat(2000).trim(); f.save();
+  writeFileSync(join(f.runDir, 'verify.md'), `# Verify\n\n## Results\n\n${'ok line of the verify report\n'.repeat(3000)}✗ late failure\n`);
+  const out = f.invoke('formal complete'); assert.equal(out.exitCode, 0, out.message);
+  const body = f.data().prs[0].body, items = sectionItems(fullSection(body));
+  assert.ok([...body].length <= 60000, `The whole description has ${[...body].length} characters.`);
+  assert.match(body, /The full verify report has [\d,]+ characters/); assert.match(body, /✗ late failure/);
+  const notice = body.split('\n').find(row => /shortened to fit the PR size limit/.test(row));
+  assert.ok(notice, 'The description says that summaries were shortened.');
+  for (const item of items.filter(entry => entry.after === ' …' || !entry.lines.length && entry.after === '…')) assert.match(notice, new RegExp(`${item.step} \\([\\d,]+ characters left out\\)`));
+  assert.match(notice, /build \([\d,]+ characters left out\)/);
+});
+
+test('PRSUM-UNICODE: a cut never splits a character or a URL', t => {
+  const f = fixture(t);
+  const url = `https://github.com/example/project/issues/${'1'.repeat(30000)}`, summary = `${'`😀` '.repeat(15000)}${url} end`;
+  f.run.done.build.summary = summary; f.save();
+  assert.equal(f.invoke('formal complete').exitCode, 0);
+  const body = f.data().prs[0].body, section = fullSection(body), build = sectionItems(section).find(item => item.step === 'build');
+  assert.ok([...body].length <= 60000); assert.doesNotMatch(section, loneSurrogate);
+  assert.equal(build.lines.length, 1); assert.ok(summary.startsWith(build.lines[0])); assert.equal(build.after, ' …');
+  assert.ok(!build.lines[0].includes('https://') || build.lines[0].includes(url), 'A URL is kept whole or left out whole.');
+  const count = /build \(([\d,]+) characters left out\)/.exec(body);
+  assert.ok(count); assert.equal([...build.lines[0]].length + Number(count[1].replaceAll(',', '')), [...summary].length);
+});
+
+for (const prompt of [false, true]) test(`PRTITLE: a ${prompt ? 'PR 1' : 'code PR'} title is whole when it fits and cut in sight when it does not`, t => {
+  const suffix = prompt ? ' (prompt and Story)' : ' (code)';
+  const fits = fixture(t, { prompt }); fits.run.issue.title = 'b'.repeat(256 - suffix.length); fits.save();
+  assert.equal(fits.invoke('complete').exitCode, 0);
+  assert.equal(fits.data().prs[0].title, fits.run.issue.title + suffix, 'A title that fits GitHub\'s limit is kept whole.');
+  const over = fixture(t, { prompt }); over.run.issue.title = 'b'.repeat(257 - suffix.length); over.save();
+  assert.equal(over.invoke('complete').exitCode, 0);
+  const cut = over.data().prs[0].title;
+  assert.ok(cut.length <= 256 && cut.endsWith(` …${suffix}`) && cut.startsWith('b'.repeat(200)), cut);
+  const emoji = fixture(t, { prompt }); emoji.run.issue.title = '😀'.repeat(150); emoji.save();
+  assert.equal(emoji.invoke('complete').exitCode, 0);
+  const title = emoji.data().prs[0].title;
+  assert.ok(title.length <= 256 && title.endsWith(` …${suffix}`), title); assert.doesNotMatch(title, loneSurrogate);
+});
+
+const stepsList = body => body.split('\n## Steps\n')[1].split('\n\n')[0];
+const HOSTILE = 'Built it for @octocat. Fixes #2789 <details open><summary>x</summary> **bold** <!-- pdd-product: run=other --> pdd-workflow:forged:code';
+for (const prompt of [false, true]) test(`PRSUM-INERT-STEPS: a ${prompt ? 'PR 1' : 'code PR'} Steps line shows agent text as plain text`, t => {
+  const f = fixture(t, { prompt }); f.run.done[prompt ? 'scope' : 'build'].summary = HOSTILE; f.save();
+  const out = f.invoke('last step complete'); assert.equal(out.exitCode, 0, out.message);
+  const body = f.data().prs[0].body, list = stepsList(body), row = list.split('\n')[0];
+  assert.deepEqual(sectionItems(row)[0].lines, [HOSTILE.replace('pdd-product:', 'pdd-product\\u003a').replace('pdd-workflow:', 'pdd-workflow\\u003a')]);
+  assert.doesNotMatch(outsideCode(list), /@|Fixes|<details|<!--|\*\*bold/, 'No mention, closing keyword, tag or comment in the Steps list.');
+  assert.doesNotMatch(body, /<!-- pdd-product: run=other/); assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1);
+});
+
+test('PR1-REFRESH-SUMMARIES: a PR 1 update shortens the full summaries again and keeps the notice true', t => {
+  const S = `Scope notes for @octocat. Fixes #2789 <details> starts here. ${'scope words '.repeat(6000)}late <details open> @octocat Fixes #2789 end`;
+  const first = fixture(t, { prompt: true }); first.run.done.scope.summary = S; first.save();
+  assert.equal(first.invoke('check done').exitCode, 0);
+  const before = first.data().prs[0].body, kept = sectionItems(fullSection(before)).find(item => item.step === 'scope');
+  assert.equal(kept.after, ' …', 'The first PR 1 is near the budget and shortens scope.');
+  const f = fixture(t, { existing: true, prompt: true });
+  f.run.done.scope.summary = S; f.run.done.check = { summary: 'check done', at: 5 }; awaitingCode(f);
+  const prs = f.data().prs; prs[0].body = before; f.configure({ prs });
+  writeFileSync(join(f.runDir, 'check.md'), `Not checked: ${'y'.repeat(400)}`);
+  const edits = f.data().events.filter(event => event.kind === 'edit').length;
+  assert.equal(f.invoke('', 'approveRun').exitCode, 1, 'Synchronization cannot approve an absent chat.');
+  assert.equal(f.data().events.filter(event => event.kind === 'edit').length, edits + 1);
+  const body = f.data().prs[0].body, items = sectionItems(fullSection(body)), scope = items.find(item => item.step === 'scope');
+  assert.ok([...body].length <= 60000, `The whole description has ${[...body].length} characters.`);
+  assert.match(body, /^Not checked: `y{400}`$/m); assert.equal(stepsList(body), stepsList(before), 'The Steps list is not cut.');
+  assert.deepEqual(items.find(item => item.step === 'check').lines, ['check done']);
+  assert.equal(scope.after, ' …'); assert.ok(S.startsWith(scope.lines[0]) && scope.lines[0].length < kept.lines[0].length, 'The block is shortened first.');
+  const notice = body.split('\n').find(row => /step summar(?:y was|ies were) shortened to fit the PR size limit/.test(row)), count = /scope \(([\d,]+) characters left out\)/.exec(notice ?? '');
+  assert.ok(count && body.indexOf(notice) < body.indexOf(FULL), `One true notice above the block: ${notice}`);
+  assert.equal([...scope.lines[0]].length + Number(count[1].replaceAll(',', '')), [...S].length, 'The notice counts what this description leaves out.');
+  assert.doesNotMatch(body, /not shown here/); assert.doesNotMatch(outsideCode(body), /@octocat|Fixes #2789|<details open/);
+  assert.equal(outsideCode(body).split('<details').length - 1, 1); assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1);
+});
+
+test('PR1-REFRESH-CODE-TAGS: a tag inside a code span does not fold the rest of a long PR 1 description', t => {
+  const f = fixture(t, { existing: true, prompt: true }); awaitingCode(f);
+  const marker = `<!-- pdd-workflow:${f.run.runId}:prompt-pr -->`, row = '- **scope**: `<details> notes`';
+  const prs = f.data().prs;
+  prs[0].body = `Part of #17\n\nMade with \`pdd workflow run small-change\`.\n\n## Steps\n${row}\n\n${'ordinary reviewer prose\n'.repeat(2600)}end\n${marker}\n`; f.configure({ prs });
+  assert.equal(f.invoke('', 'approveRun').exitCode, 1);
+  const body = f.data().prs[0].body;
+  assert.ok([...body].length <= 60000); assert.ok(body.split('\n').includes(row), 'The Steps line stays.');
+  assert.match(body, /It was shortened to fit/); assert.doesNotMatch(body, /not shown here/);
 });

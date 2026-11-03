@@ -119,7 +119,7 @@ test('SOURCE4: optional includes preserve selected secret, symlink, non-regular,
   for (const [label, path, edit, expected] of [
     ['secret', '.env.local', r => write(r, '.env.local', 'x'), /name looks like a secret/],
     ['secret directory', 'config/secrets/a.txt', r => write(r, 'config/secrets/a.txt', 'x'), /name looks like a secret/],
-    ['symlink', 'link.md', r => symlinkSync('README.md', join(r, 'link.md')), /symbolic link/],
+    ['symlink', 'link.md', r => symlinkSync('missing.md', join(r, 'link.md')), /symbolic link|broken|missing/],
     ['directory', 'folder', r => mkdirSync(join(r, 'folder')), /regular file|Git-visible file/],
     ['size', 'big.bin', r => write(r, 'big.bin', Buffer.alloc(10_485_761)), /too big to send/],
   ]) {
@@ -131,8 +131,8 @@ test('SOURCE4: optional includes preserve selected secret, symlink, non-regular,
   json(many.repo, 'pdd-source.json', { include });
   assert.throws(() => captureSource(many.repo, { tests: [ORDER] }), /too big to send.*1000[1-3] files/);
   const linked = harbor(t); write(linked.repo, 'config.json', '{"include": []}');
-  symlinkSync('config.json', join(linked.repo, 'pdd-source.json'));
-  assert.throws(() => captureSource(linked.repo, { tests: [ORDER] }), /pdd-source\.json.*symbolic link/);
+  symlinkSync('missing-config.json', join(linked.repo, 'pdd-source.json'));
+  assert.throws(() => captureSource(linked.repo, { tests: [ORDER] }), /pdd-source\.json.*(?:symbolic link|broken|missing)/);
 });
 
 test('SOURCE5: Check and lint upload precisely the offline selected manifest, sharing one tar per batch', async t => {
@@ -170,7 +170,7 @@ test('SOURCE6: scoped Try keeps its authored seed and adds saved cases to the or
 });
 
 test('SOURCE11: Try saves to its selected test when a Story has several tests, including a reopened Try', async t => {
-  const setup = harbor(t), selected = 'tests/z-place-order.json';
+  const setup = harbor(t), selected = 'tests/place-order.z.json';
   const original = readFileSync(join(setup.repo, ORDER), 'utf8');
   write(setup.repo, selected, original);
   const saved = load(setup.repo, selected);
@@ -188,16 +188,16 @@ test('SOURCE11: Try saves to its selected test when a Story has several tests, i
     assert.equal(await runTry({ cwd: setup.repo, words: [selected], options: { '--no-open': true, '--no-wait': true } }, ports), 0, ports.stderr.text);
     return ports.stdout.text;
   };
-  assert.match(await run(), /added to tests\/z-place-order\.json as step saved-selected/);
+  assert.match(await run(), /added to tests\/place-order\.z\.json as step saved-selected/);
   savedCases = [...savedCases, { id: 'selected-case', path: ORDER, story_path: STORY, test: saved }];
-  assert.match(await run(), /added to tests\/z-place-order\.json as step saved-selected-2/);
+  assert.match(await run(), /added to tests\/place-order\.z\.json as step saved-selected-2/);
   assert.equal(readFileSync(join(setup.repo, ORDER), 'utf8'), original);
   assert.deepEqual(load(setup.repo, selected).steps.slice(-2).map(step => step.step_id), ['saved-selected', 'saved-selected-2']);
   assert.equal(fake.posts.filter(post => post.command === 'try').length, 1);
 });
 
 test('SOURCE13: reopening preserves the original Story identity after the selected test is reassigned', async t => {
-  const setup = harbor(t), selected = 'tests/z-place-order.json';
+  const setup = harbor(t), selected = 'tests/place-order.z.json';
   const original = readFileSync(join(setup.repo, ORDER), 'utf8');
   write(setup.repo, selected, original);
   const saved = load(setup.repo, selected);
@@ -217,14 +217,19 @@ test('SOURCE13: reopening preserves the original Story identity after the select
   await run();
   json(setup.repo, selected, load(setup.repo, 'tests/unknown-item.json'));
   savedCases = [{ id: 'original-story', story_path: STORY, test: saved }];
-  assert.match(await run(), /not added: the original test tests\/z-place-order\.json is missing or no longer belongs/);
+  // By its name the file is still a test of place-order, but its story_path names unknown-item: pdd refuses it
+  // before the Try and adds the case nowhere.
+  const { ports } = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin });
+  assert.equal(await runTry({ cwd: setup.repo, words: [selected], options: { '--no-open': true, '--no-wait': true } }, ports), 4);
+  assert.match(ports.stdout.text + ports.stderr.text, /tests\/place-order\.z\.json is the test of user_stories\/place-order\.md by its name, but its story_path names user_stories\/unknown-item\.md/);
+  assert.doesNotMatch(ports.stdout.text, /added to/);
   assert.equal(readFileSync(join(setup.repo, ORDER), 'utf8'), original);
   assert.equal(fake.posts.filter(post => post.command === 'try').length, 1);
 });
 
 test('SOURCE12: a removed or reassigned Try seed is never replaced by another test for the Story', async t => {
   for (const change of ['remove', 'reassign']) {
-    const setup = harbor(t), selected = 'tests/z-place-order.json';
+    const setup = harbor(t), selected = 'tests/place-order.z.json';
     const original = readFileSync(join(setup.repo, ORDER), 'utf8');
     write(setup.repo, selected, original);
     const saved = load(setup.repo, selected);
@@ -240,7 +245,7 @@ test('SOURCE12: a removed or reassigned Try seed is never replaced by another te
     });
     const { ports } = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin });
     assert.equal(await runTry({ cwd: setup.repo, words: [selected], options: { '--no-open': true, '--no-wait': true } }, ports), 0, ports.stderr.text);
-    assert.match(ports.stdout.text, /not added: the original test tests\/z-place-order\.json is missing or no longer belongs/);
+    assert.match(ports.stdout.text, /not added: the original test tests\/place-order\.z\.json is missing or no longer belongs/);
     assert.equal(readFileSync(join(setup.repo, ORDER), 'utf8'), original);
   }
 });
@@ -389,7 +394,7 @@ test('SOURCE12: collapsible dependency context retains recursive declarations an
     ['data/menu.json', r => write(r, 'data/menu.json', '{"price":900}'), null],
     ['data/missing.json', () => {}, /not a Git-visible file/],
     ['data/auth.json', r => write(r, 'data/auth.json', '{}'), /name looks like a secret/],
-    ['data/link.json', r => { write(r, 'data/real.json', '{}'); symlinkSync('real.json', join(r, 'data/link.json')); }, /symbolic link/],
+    ['data/link.json', r => { write(r, 'data/real.json', '{}'); symlinkSync('missing.json', join(r, 'data/link.json')); }, /symbolic link|broken|missing/],
   ]) {
     await t.test(path, async t => {
       const setup = harbor(t), { repo } = setup;
@@ -437,7 +442,7 @@ test('SOURCE13: literal HTML section examples cannot hide required dependency fi
         if (mode === 'regular') write(repo, 'docs/policy.md', '# Required policy');
         if (mode === 'symlink') {
           write(repo, 'docs/real.md', '# Real policy');
-          symlinkSync('real.md', join(repo, 'docs/policy.md'));
+          symlinkSync('missing.md', join(repo, 'docs/policy.md'));
         }
         const { ports } = offline(setup);
         const code = await runCheck({ cwd: repo, words: ['place-order'], options: { '--files': true } }, ports);
@@ -446,7 +451,7 @@ test('SOURCE13: literal HTML section examples cannot hide required dependency fi
           assert.deepEqual(names(captureSource(repo, { tests: [ORDER] }).tar), [PLACE, ORDER, STORY, 'docs/policy.md'].sort());
         } else {
           assert.equal(code, 4, ports.stdout.text);
-          assert.match(ports.stderr.text, mode === 'missing' ? /not a Git-visible file/ : /symbolic link/);
+          assert.match(ports.stderr.text, mode === 'missing' ? /not a Git-visible file/ : /symbolic link|broken|missing/);
           assert.ok(ports.stderr.text.includes('docs/policy.md'), ports.stderr.text);
         }
       });

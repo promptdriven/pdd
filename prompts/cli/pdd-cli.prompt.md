@@ -1,8 +1,8 @@
 # Local authoring-kit CLI
 
-Own `src/pdd-cli.mjs`; export `renderHelp(prefix)` and `runPdd(argv, dependencies)`. Help, version, completion and recipe discovery operate using public local files only. pdd prints no guide; the agent loads the pdd-prompting skill. Parse with `parseArgv` from the required argument-parser contract before reading skills or workflows; unsupported input gets a finite stderr diagnostic/exit2 and no private fallback.
+Own `src/pdd-cli.mjs`; export `renderHelp(prefix, packageRoot)` (packageRoot defaults to this package's root) and `runPdd(argv, dependencies)`. Help, version, completion and recipe discovery operate using public local files only. pdd prints no guide text: help names the installed guide files and gives a short summary ([Learn PDD](command-catalog.prompt.md#learn-pdd)); the agent loads the pdd-prompting skill. Parse with `parseArgv` from the required argument-parser contract before reading skills or workflows; unsupported input gets a finite stderr diagnostic/exit2 and no private fallback.
 
-Use the package-root metadata version. For `--version`, print only that version followed by one newline, without the package name or any prefix. Then call [skills install](skills-install.prompt.md) `findSkills` with the same arguments as setup, and for each agent result whose `stale` is `'older'` print the stale line below to stderr (0.1.8 tester: no command showed that the installed skills were older than pdd). A failure of that check prints nothing and never changes the exit code. `workflow list` reads the bundled workflow areas only; it does not start work. Preserve stdout for successful values and stderr for errors. `setup` does two things, in this order. First it calls [skills install](skills-install.prompt.md) `setupSkills({packageRoot, cwd, home, claudeConfigDir})` with home from the HOME environment value (else `os.homedir()`) and `CLAUDE_CONFIG_DIR`. For each agent result it prints `Updated N PDD skills in ROOT: NAMES` when it updated copies, then, when found, `PDD skills found in FOLDER`, or when `stale` is set the stale line `PDD skills in FOLDER are older than pdd VERSION. To update them, run: npx skills add promptdriven/pdd#alpha -g -a codex -a claude-code -y` (`differ from the skills of pdd VERSION` for `'differs'`; VERSION from the package metadata; leave out ` -g` when FOLDER is `<cwd>/.agents/skills` or `<cwd>/.claude/skills`). Print this `npx skills add` command, never `npx skills update`: update changes only skills that `npx skills add` recorded, and says "No global skills tracked" for copies that pdd setup or a person made (0.1.8 tester). `add` replaces any copy, and later `update` works too, else `Installed N PDD skills to ROOT: NAMES` when it copied any. NAMES are the skill folder names, joined by `, `, in the order of `PDD_SKILL_NAMES`. Use `skill` instead of `skills` when N is 1. An agent error prints `pdd setup: the PDD skills could not be installed in ROOT (REASON).` to stderr. Then it calls [project setup](project-setup.prompt.md) `setupProject({cwd, packageRoot})` and prints `Wrote the PDD block in FILE.` or `FILE already has this PDD block. No change.`; its error prints `pdd setup: ` and the message to stderr. Each part runs even when the other fails. Exit 1 if any part failed, else 0. No other command installs skills. pdd starts chats through the workflow runner; `product start` may delegate to a normal feature run. Keep imports and injection defaults self-contained, with no private transport/backend dependency.
+Use the package-root metadata version. For `--version`, print only that version followed by one newline, without the package name or any prefix. Then call [skills install](skills-install.prompt.md) `findSkills` with the same arguments as setup, and for each agent result whose `stale` is `'older'` print the stale line below to stderr (0.1.8 tester: no command showed that the installed skills were older than pdd). A failure of that check prints nothing and never changes the exit code. `workflow list` reads the bundled workflow areas only; it does not start work. Preserve stdout for successful values and stderr for errors. `setup` runs the existing setup actions only after the admission below permits them. Within that action, first it calls [skills install](skills-install.prompt.md) `setupSkills({packageRoot, cwd, home, claudeConfigDir})` with home from the HOME environment value (else `os.homedir()`) and `CLAUDE_CONFIG_DIR`. For each agent result it prints `Updated N PDD skills in ROOT: NAMES` when it updated copies, then, when found, `PDD skills found in FOLDER`, or when `stale` is set the stale line `PDD skills in FOLDER are older than pdd VERSION. To update them, run: npx skills add promptdriven/pdd -g -a codex -a claude-code -y` (`differ from the skills of pdd VERSION` for `'differs'`; VERSION from the package metadata; leave out ` -g` when FOLDER is `<cwd>/.agents/skills` or `<cwd>/.claude/skills`). Print this `npx skills add` command, never `npx skills update`: update changes only skills that `npx skills add` recorded, and says "No global skills tracked" for copies that pdd setup or a person made (0.1.8 tester). `add` replaces any copy, and later `update` works too, else `Installed N PDD skills to ROOT: NAMES` when it copied any. NAMES are the skill folder names, joined by `, `, in the order of `PDD_SKILL_NAMES`. Use `skill` instead of `skills` when N is 1. An agent error prints `pdd setup: the PDD skills could not be installed in ROOT (REASON).` to stderr. Then it calls [project setup](project-setup.prompt.md) `setupProject({cwd, packageRoot})` and prints `Wrote the PDD block in FILE.` or `FILE already has this PDD block. No change.`; its error prints `pdd setup: ` and the message to stderr. Each part runs even when the other fails. Exit 1 if any part failed, else 0. No other command installs skills. pdd starts chats through the workflow runner; `product start` may delegate to a normal feature run. Keep imports and injection defaults self-contained, with no private transport/backend dependency.
 
 For setup, version reporting and workflow startup, use [PATH diagnostics](path-diagnostic.prompt.md). Print the returned lines to stderr. Setup uses the full report; `--version` uses its conflict-only mode while stdout remains exactly the package version and newline; the `workflow-run` plan uses its compact shadowing warning before dispatch. Other commands, help and invalid syntax do not discover or probe PATH. A diagnostic failure must not prevent the requested command. No installer script is part of this package; setup is the supported install check.
 
@@ -10,13 +10,15 @@ For a `CommandInputError`, print its message once to stderr, leave stdout empty
 and return its exitCode (2). Every line written to stdout or stderr ends with
 one newline. Preserve other commands and their existing dispatch and effects.
 
-When the plan has a `notice` ([former names](argument-parser.prompt.md#former-names)), print it once to stderr before any other line, help and PATH lines included, then run the plan as usual. Never print it to stdout, so `--json` output stays exact. A `CommandInputError` has no notice.
+A [removed name](argument-parser.prompt.md#removed-names) is a `CommandInputError`, so pdd prints its one line and runs nothing: no help, PATH probe, skill check, sign-in, file read or interpreter call.
 
 ## Authoring
 
 Read the entire [Prompting guide](../../docs/prompting-guide.md) before authoring prompts or Stories. Follow [public alpha boundary](public-boundary.prompt.md) for native authoring/generation scope and shared local command policy. Runtime parsing/forwarding receives no guide input; applicable concrete validation and route facts remain with the required parser/catalog contracts.
 
 ## Dependencies
+
+- [Command catalog](command-catalog.prompt.md): required authoring/generation/runtime/verification/testing context for route facts, complete help entries and `PUBLIC_HELP_TEXT` heading, closing, Learn PDD and prompting topic templates. This module renders the common help wrapper and forwards parsed values; it does not own a second help table.
 
 - [Contract commands](contracts.prompt.md): required generation and verification
   context for local list/sync dispatch; the syntax-only Runtime entry does not
@@ -29,11 +31,18 @@ Read the entire [Prompting guide](../../docs/prompting-guide.md) before authorin
   generation, runtime, verification and testing: it owns command validation and
   exact input-error messages. The CLI owns only their stream and exit handling.
 
-Native authoring/generation uses existing imported project APIs and their owner contracts linked in the route sections below. Those links are the native integration context for the existing commands; the Runtime prove transport uses only its declared callback plus the pure parser/catalog facts, and does not simulate unrelated command effects.
+- [Workflow admission](workflow-agents.prompt.md): required authoring/generation/runtime/verification/testing context; owns readiness, default preference, explicit choice and safe refusal messages.
+- [Setup admission adapter](workflow-setup.prompt.md): required authoring/generation/runtime/verification/testing context; owns guarding the supplied setup action.
+
+- [Skills install](skills-install.prompt.md), [project setup](project-setup.prompt.md), [agent MCP setup](agent-mcp-setup.prompt.md), and [PATH diagnostics](path-diagnostic.prompt.md): required authoring/generation/runtime/verification/testing context for the existing setup actions, their streams and consent, and optional PATH reporting.
+
+Native integration uses the public APIs linked in the route sections below. Runtime bindings cover only the declared operations and supplied replies; unrelated command effects remain native.
 
 ## Workflow dispatch
 
-The runner routes (run, done, ask, approve, changes, cancel, status, open) call the matching export of `src/workflow-runner.mjs` (startRun, stepDone, askPerson, approveRun, changeRun, cancelRun, runStatus, openRun) with the parsed values, cwd and packageRoot. For startRun, pass `base` only when `--base` was given, using its text unchanged; the runner owns branch validation and selection. For status, pass `all`, `cancelled` and `json` only when their flag is given. Tests may inject the runner module. Print the returned message once: stdout when exitCode is 0, stderr otherwise. Return the exitCode. A missing export, an invalid reply or a thrown error prints one finite line and returns 1; never retry.
+The runner routes (run, done, ask, approve, changes, cancel, status, open) call the matching export of `src/workflow-runner.mjs` (startRun, stepDone, askPerson, approveRun, changeRun, cancelRun, runStatus, openRun) with the parsed values, cwd and packageRoot. Only for startRun, obtain admission below before importing or invoking the runner, and pass the selected agent instead of an unconditional default. Pass the caller env unchanged as runner `ports.env`, alongside `say`, so agent configuration follows the same environment as readiness. For startRun, pass `base` only when `--base` was given, using its text unchanged; the runner owns branch validation and selection. For startRun, pass `adoptCorpus` only when `--adopt-corpus` was given, using its text unchanged; the runner owns adoption policy. For approveRun, pass `said: options["--said"]` only when supplied, without trimming or joining. Forward the literal `-` marker unchanged; dispatch never reads stdin or interprets person words. For status, pass `all`, `cancelled` and `json` only when their flag is given. For open, pass `area` only when the optional area operand was given and `newSession: true` only when --new was given; otherwise preserve the existing openRun arguments. The runner owns selection, replacement safety and persistence. Tests may inject the runner module. Print the returned message once: stdout when exitCode is 0, stderr otherwise. Return the exitCode. A missing export, an invalid reply or a thrown error prints one finite line and returns 1; never retry.
+
+For catalog route `workflow.request-uptake`, require nonblank `--summary` before importing or invoking the runner; missing summary returns 2 with one finite diagnostic. Reuse normal parser validation for missing/extra operands, duplicate/blank options and help/completion. Call the actual module function `acknowledgeRequest({requestId: operands[0], summary: options['--summary'], cwd}, ports)` on the existing injectable `workflowRunner`, using the workflow stream/error handling above. Derive command hints from the catalog prefix by stable id; dispatch on the catalog's stable disposition, never a second public verb. `bin/pdd.mjs` remains a thin entry point. Interpreter resource `dispatch.requestUptake` binds this same injected module function, not native journal execution.
 
 workflow list uses `listWorkflowAreas({packageRoot,cwd,home})` (home from the HOME environment value) and `formatWorkflowList` from [workflow areas](workflow-areas.prompt.md). A read failure returns 1. Local help/version/skill/completion do not import the runner.
 
@@ -53,63 +62,13 @@ authentication or runtime-client import belongs to these routes.
 
 ## Help contract
 
-The first help line is exactly `PDD: prompt-driven development for your coding agent.` Root help (`pdd`, `pdd --help`, `pdd -h`, `pdd help`) prints that line, one empty line, every line of the [help forms](#help-forms) below, in order, one empty line, then the three closing lines below. `pdd WORDS --help` prints the same layout with only the help-form lines whose form starts with `pdd WORDS`. For a [former name](argument-parser.prompt.md#former-names) these are the lines of its new route: `pdd check --help` gives the `pdd test` lines (not the `pdd lint` lines), `pdd check --lint --help` gives the `pdd lint` lines, `pdd try --help` the `pdd simulate` lines and `pdd workflow run --help` the `pdd workflow start` line. `pdd sim --help` gives the `pdd simulate` lines with no notice. Print each help-form line exactly as the catalog lists it, never a made-up `Usage:` line. The three closing lines are exactly:
+The required [catalog help text](command-catalog.prompt.md#help-text) owns the heading and closing lines. Root help (`pdd`, `pdd --help`, `pdd -h`, `pdd help`) prints the heading, one empty line, every complete [catalog help entry](command-catalog.prompt.md#help-forms) in order, one empty line, the learn line and the two path lines of [Learn PDD](command-catalog.prompt.md#learn-pdd), one empty line, then the closing lines. `pdd WORDS --help` prints the heading, one empty line, only the complete catalog help entries whose form starts with `pdd WORDS`, one empty line and the closing lines, with no learn or path lines. A [quiet name](argument-parser.prompt.md#quiet-names) gets the lines of its route: `pdd sim --help` gives the `pdd simulate` lines and `pdd workflow start --help` the `pdd workflow run` line. A removed name gets no help, also with a help flag or after `help`. Print each help entry exactly as the catalog lists it, including quoted heredocs, never a made-up `Usage:` line.
 
-```text
-Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex, /pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting).
-workflow start opens the first area chat in Herdr session pdd and exits. The person approves each area; after the last step pdd pushes the branch and opens a real PR.
-pdd never merges.
-```
-
-(`start` is the [NAMES](command-catalog.prompt.md#names) word. Codex calls a skill with `$name`, Claude Code with `/name`.) Help is exit 0 and local, with no runner, network or auth effects.
-
+Render `pdd help prompting` from the catalog's heading, one empty line, prompting lines, one empty line and the two path lines. Substitute `PACKAGE_ROOT` with the absolute `packageRoot` of `runPdd`, defaulting to the parent folder of `src/`, never cwd or the person's repo. Read no file to print the paths. Help is exit 0, writes nothing to stderr and is local, with no runner, network or auth effects.
 
 ## Help forms
 
-Help prints exactly these lines, in this order. Each line is two spaces, the form, two spaces and its description. The [catalog](command-catalog.prompt.md) routes own them; the first words after `pdd` are the route prefix.
-
-```text
-  pdd product status [--json]  Count Stories by part and slice from the product plan; no interpreter calls.
-  pdd product next  Show ready planned runs and their start commands; no interpreter calls.
-  pdd product start RUN [--no-run] [--agent codex|claude]  Create or reuse the run issue and start a normal feature run; --no-run only prepares the issue. No interpreter calls.
-  pdd workflow start NAME ISSUE [--agent codex|claude] [--base BRANCH]  Start the first area chat for a GitHub issue in Herdr and exit; --base selects an existing origin branch (default: repository default); pdd later pushes the issue branch and opens a real PR.
-  pdd workflow prove ISSUE --test COMMAND --expect TEXT  Run committed changed tests on the fetched base branch merge-base and committed head with a 120-second limit per phase; save a non-gating report.
-  pdd workflow done STEP [--summary TEXT]  For the agent in a run worktree: record a step and print what to do next.
-  pdd workflow evidence ISSUE --summary FILE  Record source-verified saved check JSON without rerunning steps, gates or publication.
-  pdd workflow ask QUESTION  For the agent in a run worktree: show the person that the chat waits for their answer.
-  pdd workflow approve [ISSUE]  Approve the area at its gate and start the next area in a new chat. Only a person approves.
-  pdd workflow changes ISSUE TEXT  Send a change request to the same area chat; the gate stays open.
-  pdd workflow cancel ISSUE  Cancel the run and close its Herdr tabs; keep the worktree and branch.
-  pdd workflow status [ISSUE] [--all] [--cancelled] [--json]  Show this repo's runs, or one run with its area, gate, chat and PRs. --all (or outside a repo): every run on this machine, people-waiting first.
-  pdd workflow view ISSUE  Read-only review of gates, approvals, files, PRs and Simulator links; never start or resume a chat.
-  pdd workflow open ISSUE  Focus or attach the current area chat; resume it if its session ended.
-  pdd  Show local commands.
-  pdd --help  Show local commands.
-  pdd -h  Show local commands.
-  pdd help  Show local commands.
-  pdd --version  Show this package version.
-  pdd completion bash|zsh  Print local shell completion.
-  pdd workflow list [--json]  List the bundled workflows with their areas and gates.
-  pdd test [STORY...] [--json] [--details] [--timeout MIN] [--max-calls N]  Check stories on the PDD interpreter with your gh login: sends the named Stories (every Story when you name none) and their dependencies, waits for every check (no limit in a terminal, at most 90 s for an agent; --timeout MIN sets the limit) with a progress line every 30 s, then prints one table with report links. Defaults to 12 calls per step, at least 18 and at most 1000; --max-calls accepts 1 to 1000.
-  pdd test --read [BATCH|CALL_ID] [--json] [--timeout MIN]  Read saved results; a normal Check held for lint may continue its original checks. Other reads send no work.
-  pdd test --retry BATCH [--json] [--details] [--timeout MIN]  Retry only confirmed unstarted checks from a saved batch, with the same source and call caps; preserve completed and uncertain runs.
-  pdd test --fill-hash  Fill prose_sha256 of draft runtime interfaces; no network.
-  pdd test --files [STORY...] [--app-map PATH]  List the exact selected upload files and byte sizes; no network. --app-map selects the Simulator's app map.
-  pdd test --screen URL --drawing PATH [--json]  Compare a real page with its drawing at the drawing viewport in installed headless Chrome/Chromium; no AI or interpreter calls.
-  pdd lint [STORY...] [--json] [--timeout MIN]  Print local SVG layout warnings, then the PDD interpreter lint (0 AI calls) on selected Stories and their dependencies; sends no checks.
-  pdd lint --local [STORY...] [--json]  Check linked SVG layout parts locally with warning diagnostics and 0 AI/network calls.
-  pdd approve PROMPT  Show a prompt's runtime interface and its text changes since the last approval, and set it to approved after you answer y. For a person at a terminal only.
-  pdd simulate [STORY] [--max-calls N] [--tab call|screen|terminal|world] [--app-map PATH] [--new] [--no-open] [--no-wait] [--agent NAME]  Open the Story in the PDD Simulator: make a link on the PDD interpreter with your gh login and open it in your browser; it ends in 24 hours. Short form: pdd sim. A new simulation defaults to 400 calls; --max-calls accepts 1 to 1000. With terminal stdout or explicit --agent, it stays running to connect your own agent; otherwise it reads saved cases once and returns. --agent selects a configured name or a default Codex, Claude or Gemini; --no-wait skips the bridge. In a terminal it adds each test saved in the Simulator to the story's test file.
-  pdd simulate [STORY] --cli [--shell] [--max-calls N] [--new]  Run your program in your terminal through a Simulator session; prints a PATH line, or opens a shell with --shell.
-  pdd simulate [STORY] --serve [PORT] [--max-calls N] [--new]  Serve real HTTP requests through your Simulator session on localhost (default port 8080).
-  pdd simulate --save-last  Save the last terminal command and its output in the original Story test file.
-  pdd simulate --stop [STORY]  Stop the open Simulator link of a story.
-  pdd jobs  List active and waiting interpreter jobs on this machine without contacting the interpreter.
-  pdd contracts  List shared records, their users and Stories stale since their last check; local working files only.
-  pdd contracts sync [--write]  Show proposed changes for moving schema copies to references; apply only with --write. No interpreter calls.
-  pdd mcp  Serve the current repository’s Try tools over stdio MCP.
-  pdd setup  Install the PDD skills for Codex and Claude if they are missing, and add the short PDD block to CLAUDE.md, else AGENTS.md. Offer detected Codex, Claude Code and Gemini MCP registrations after showing exact config changes and one y/N question. A second run changes nothing.
-```
+The required [command catalog](command-catalog.prompt.md#help-forms) owns every route form, description, order and multiline approval example. Render its complete selected help entries, including quoted heredocs. The catalog also owns the Learn PDD lines and prompting topic text. This dispatcher owns only the common wrapper, package-root path substitution and route-prefix filtering above. Do not keep a separate exact help table here.
 
 ## Local jobs
 
@@ -117,9 +76,9 @@ For `runtime-jobs`, dynamically import [runtime slots](runtime-slots.prompt.md),
 
 ## Runtime commands
 
-For the `prompt-approve` plan, import [prompt approve](prompt-approve.prompt.md) dynamically and return `runApprove({words, cwd}, {stdout, stderr})` unchanged.
+For the `prompt-approve` plan, import [prompt approve](prompt-approve.prompt.md) dynamically and return `runApprove({words, cwd, ...(options["--said"] !== undefined ? {said: options["--said"]} : {})}, {stdout, stderr, env})` unchanged.
 
-For the `runtime-check` and `runtime-try` plans, import the [runtime client](runtime-client.prompt.md) dynamically and call `runCheck` or `runTry` with the operands, the options and cwd, plus stdout, stderr and the injected env. Return its exit code unchanged. The runtime client also owns local `check --lint --local` and `check --screen URL --drawing PATH`; dispatch them with the same operands, options, cwd and ports, without adding runtime authentication in this router. Help for check and try stays local. If the client throws, write `pdd stopped with an internal error. If it sent checks, read them with pdd check --read. Do not send them again.` to stderr and return 3, because checks may have been sent.
+For the `runtime-check` and `runtime-try` plans, import the [runtime client](runtime-client.prompt.md) dynamically and call `runCheck` or `runTry` with the operands, the options and cwd, plus stdout, stderr and the injected env. Pass `cache:true` for every `runtime-check` plan (test and lint); the runtime client decides which modes use it. Return its exit code unchanged. The runtime client also owns local `lint --local` and `test --screen URL --drawing PATH`; dispatch them with the same operands, options, cwd and ports, without adding runtime authentication in this router. Help for test, lint and simulate stays local. If the client throws, write `pdd stopped with an internal error. If it sent checks, read them with pdd test --read. Do not send them again.` to stderr and return 3, because checks may have been sent.
 
 For `workflow-view`, dynamically import [read-only review](workflow-view.prompt.md) and call `viewRun({ref: operands[0], cwd})`. Print the result once (stdout on success, stderr on failure) and return its exit code. This route must not import the workflow runner, inspect Herdr, or execute PATH version probes.
 
@@ -138,13 +97,35 @@ For local `mcp`, dynamically import [Try MCP](try-mcp.prompt.md) and return `run
 
 After setup's existing skills and project-block actions, dynamically import [agent MCP setup](agent-mcp-setup.prompt.md) and await `setupAgentMcp({env, packageRoot}, {stdin, stdout, stderr, confirm})`. Combine its failure with the existing exit status; preserve the earlier actions even if registration is declined or fails. Accept stdin (default process.stdin) and optional confirm as ports. Only registration is covered by its consent; the existing setup actions retain their behavior.
 
-Runtime resource `dispatch.prove` binds the actual injected `workflowProve.proveRun` module function; call it once only for valid prove input. Resource arguments preserve the forwarded native input; the module's operation ports remain its dependency injection. Optional Runtime input `cwd` binds existing `dependencies.cwd` (default `.` in this transport); it is not a new argv option. Other effects are not simulated by this entry.
+Runtime resource `dispatch.prove` binds the actual injected `workflowProve.proveRun` module function; call it once only for valid prove input. Resource arguments preserve the forwarded native input; the module's operation ports remain its dependency injection. Optional Runtime input `cwd` binds existing `dependencies.cwd` (default `.` in this transport); it is not a new argv option. The admission and setup/startRun bindings below also apply; unrelated native effects remain outside this entry.
 
 The `runPdd` entry observes the existing public module function in
 `src/pdd-cli.mjs`: supply argv and capture its stdout/stderr ports and returned
 exit code as the result fields below. This transport does not change that
 function's signature. Invalid syntax is resolved locally before any dependency
 with external effects is invoked; no runtime resource is called for that path.
+
+## Setup and workflow admission
+
+`runPdd` is the public module function owning when admission occurs. For valid `setup`, call existing `setupWithWorkflowAgent({cwd,env}, ports)` with stderr, the optional injected status-process port and one setup callback containing the existing skills/project/MCP sequence. Follow the adapter's outcome unchanged. For valid `workflow-run`, call existing `checkWorkflowAgents({cwd,env,requested}, ports)` once, supplying `requested` only for explicit `--agent`. On refusal, print its safe message to stderr and exit 1, with empty stdout and no runner import, allocation or launch. Unexpected readiness failure uses the setup adapter's safe status-command recovery line and exit 1; never expose raw authentication output or retry. Other routes do not call either admission function. PATH diagnostics retain their existing position and failure policy.
+
+```mermaid
+flowchart TD
+    C{Admitted command?} -->|Setup| S[Setup admission adapter]
+    C -->|Workflow run| W[Workflow readiness]
+    C -->|Other| O[Existing route]
+    S --> A{Ready selection?}
+    W --> A
+    A -->|No| E[Safe refusal; no setup or start]
+    A -->|Yes, setup| P[Existing setup callback]
+    A -->|Yes, workflow| R[Start with selected agent]
+```
+
+Optional fields in the existing `dependencies` object may inject the existing `workflowAgents` module for workflow admission, `workflowAgentPorts` for the adapter/helper's status-process port, and existing `setupSkills`, `setupProject`, `setupAgentMcp` and `pathDiagnostic` functions. Defaults remain the public package modules; these are dependency substitutions, not argv options or new operations. The setup adapter remains the setup gate; its selected agent does not restrict which existing setup actions run or change MCP consent.
+
+Runtime `agents.checkWorkflowAgents` represents that existing module function, including the adapter's internal call on setup. Supply exact cwd/env and omit requested when absent; use the supplied reply rather than inspecting files or running programs. Runtime `setup.setupSkills`, `setup.setupProject`, `setup.setupAgentMcp` and `diagnostics.pathDiagnostic` bind those actual module functions. The first wraps its native array as `{results}`, MCP wraps its integer as `{exitCode}`, and diagnostics wraps its array as `{lines}`. The MCP function retains its stdin/stdout/stderr/confirm ports and consent internally; its fixture returns only the exit code and cannot establish real config writes or consent. The setup callback invokes each bound action once in existing order after admission, with the arguments already specified above.
+
+Runtime `dispatch.startRun` binds existing `workflowRunner.startRun(input, ports)`: its `input` member is the unchanged native first argument, and `env` maps to second-argument `ports.env`; progress `say` remains the captured stderr port. Preserve optional base/adoptCorpus fields and stream/exit handling. Optional Runtime cwd/packageRoot/env fields bind existing dependencies (transport defaults `.`, `.`, and an empty fixture env respectively); native defaults remain unchanged. Runtime env is a closed fixture projection of HOME, PATH, CODEX_HOME and CLAUDE_CONFIG_DIR, not a restriction or filtered copy of the native environment. The fake readiness reply proves admission dispatch only, not native probing or credential validity.
 
 ## Local contract commands
 
@@ -160,37 +141,17 @@ finite local cause and returns 5. Catalog owns all syntax.
 
 ```json
 {
-  "status": "draft",
-  "prose_sha256": "86727a845600e628f756afffa5abfe5f4f0b08504a9e3a1643a514dfa16d05ea",
-  "entries": [{
-    "operation": "runPdd",
-    "input_schema": {
-      "type": "object",
-      "properties": {"argv": {"type": "array", "items": {"type": "string"}}, "cwd": {"type": "string"}},
-      "required": ["argv"], "additionalProperties": false
-    },
-    "result_schema": {
-      "type": "object",
-      "properties": {
-        "exit_code": {"type": "integer"},
-        "stdout": {"type": "string"}, "stderr": {"type": "string"}
-      },
-      "required": ["exit_code", "stdout", "stderr"], "additionalProperties": false
-    },
-    "errors": []
-  }],
+  "status": "approved",
+  "prose_sha256": "40f41cab1c1318faca6d66aa05e59d814be6cd71fd2fe37d79d0bd0772a715f1",
+  "entries": [{"operation": "runPdd","input_schema": {"type": "object","properties": {"argv": {"type": "array","items": {"type": "string"}},"cwd": {"type": "string"},"env": {"type": "object","properties": {"HOME": {"type": "string"},"PATH": {"type": "string"},"CODEX_HOME": {"type": "string"},"CLAUDE_CONFIG_DIR": {"type": "string"}},"required": [],"additionalProperties": false},"packageRoot": {"type": "string"}},"required": ["argv"],"additionalProperties": false},"result_schema": {"type": "object","properties": {"exit_code": {"type": "integer"},"stdout": {"type": "string"},"stderr": {"type": "string"}},"required": ["exit_code","stdout","stderr"],"additionalProperties": false},"errors": []}],
   "calls": [],
-  "resources": [{"name": "dispatch", "kind": "port", "access": "write", "operations": [{
-    "name": "prove", "access": "write",
-    "arguments_schema": {"type": "object", "properties": {
-      "ref": {"type": "string"}, "test": {"type": "string"},
-      "expect": {"type": "string"}, "cwd": {"type": "string"}},
-      "required": ["ref", "test", "expect", "cwd"], "additionalProperties": false},
-    "result_schema": {"type": "object", "properties": {
-      "exitCode": {"type": "integer"}, "message": {"type": "string"}},
-      "required": ["exitCode", "message"], "additionalProperties": false}
-  }]}],
-  "limits": {"max_steps": 2, "max_model_calls": 3},
+  "resources": [
+    {"name": "dispatch","kind": "port","access": "write","operations": [{"name": "prove","access": "write","arguments_schema": {"type": "object","properties": {"ref": {"type": "string"},"test": {"type": "string"},"expect": {"type": "string"},"cwd": {"type": "string"}},"required": ["ref","test","expect","cwd"],"additionalProperties": false},"result_schema": {"type": "object","properties": {"exitCode": {"type": "integer"},"message": {"type": "string"}},"required": ["exitCode","message"],"additionalProperties": false}},{"name": "requestUptake","access": "write","arguments_schema": {"type": "object","properties": {"requestId": {"type": "string"},"summary": {"type": "string"},"cwd": {"type": "string"}},"required": ["requestId","summary","cwd"],"additionalProperties": false},"result_schema": {"type": "object","properties": {"exitCode": {"type": "integer"},"message": {"type": "string"}},"required": ["exitCode","message"],"additionalProperties": false}},{"name": "startRun","access": "write","arguments_schema": {"type": "object","properties": {"input": {"type": "object","properties": {"name": {"type": "string"},"issue": {"type": "string"},"agent": {"type": "string","enum": ["codex","claude"]},"cwd": {"type": "string"},"packageRoot": {"type": "string"},"base": {"type": "string"},"adoptCorpus": {"type": "string"}},"required": ["name","issue","agent","cwd","packageRoot"],"additionalProperties": false},"env": {"type": "object","properties": {"HOME": {"type": "string"},"PATH": {"type": "string"},"CODEX_HOME": {"type": "string"},"CLAUDE_CONFIG_DIR": {"type": "string"}},"required": [],"additionalProperties": false}},"required": ["input","env"],"additionalProperties": false},"result_schema": {"type": "object","properties": {"exitCode": {"type": "integer"},"message": {"type": "string"}},"required": ["exitCode","message"],"additionalProperties": false}}]},
+    {"name": "agents","kind": "port","access": "write","operations": [{"name": "checkWorkflowAgents","access": "write","arguments_schema": {"type": "object","properties": {"cwd": {"type": "string"},"env": {"type": "object","properties": {"HOME": {"type": "string"},"PATH": {"type": "string"},"CODEX_HOME": {"type": "string"},"CLAUDE_CONFIG_DIR": {"type": "string"}},"required": [],"additionalProperties": false},"requested": {"type": "string","enum": ["codex","claude"]}},"required": ["cwd","env"],"additionalProperties": false},"result_schema": {"type": "object","properties": {"ok": {"type": "boolean"},"agent": {"oneOf": [{"type": "string","enum": ["codex","claude"]},{"type": "null"}]},"message": {"type": "string"}},"required": ["ok","agent","message"],"additionalProperties": false}}]},
+    {"name": "diagnostics","kind": "port","access": "write","operations": [{"name": "pathDiagnostic","access": "write","arguments_schema": {"type": "object","properties": {"packageRoot": {"type": "string"},"cwd": {"type": "string"},"env": {"type": "object","properties": {"HOME": {"type": "string"},"PATH": {"type": "string"},"CODEX_HOME": {"type": "string"},"CLAUDE_CONFIG_DIR": {"type": "string"}},"required": [],"additionalProperties": false},"mode": {"type": "string","enum": ["setup","version","workflow"]}},"required": ["packageRoot","cwd","env","mode"],"additionalProperties": false},"result_schema": {"type": "object","properties": {"lines": {"type": "array","items": {"type": "string"}}},"required": ["lines"],"additionalProperties": false}}]},
+    {"name": "setup","kind": "port","access": "write","operations": [{"name": "setupSkills","access": "write","arguments_schema": {"type": "object","properties": {"packageRoot": {"type": "string"},"cwd": {"type": "string"},"home": {"type": "string"},"claudeConfigDir": {"type": "string"}},"required": ["packageRoot","cwd","home"],"additionalProperties": false},"result_schema": {"type": "object","properties": {"results": {"type": "array","items": {"type": "object","properties": {"agent": {"type": "string"},"root": {"type": "string"},"found": {"oneOf": [{"type": "string"},{"type": "null"}]},"stale": {"oneOf": [{"type": "string"},{"type": "null"}]},"installed": {"type": "array","items": {"type": "string"}},"updated": {"type": "array","items": {"type": "string"}}},"required": ["agent","root","found","stale","installed","updated"],"additionalProperties": false}}},"required": ["results"],"additionalProperties": false}},{"name": "setupProject","access": "write","arguments_schema": {"type": "object","properties": {"cwd": {"type": "string"},"packageRoot": {"type": "string"}},"required": ["cwd","packageRoot"],"additionalProperties": false},"result_schema": {"type": "object","properties": {"file": {"type": "string"},"changed": {"type": "boolean"}},"required": ["file","changed"],"additionalProperties": false}},{"name": "setupAgentMcp","access": "write","arguments_schema": {"type": "object","properties": {"env": {"type": "object","properties": {"HOME": {"type": "string"},"PATH": {"type": "string"},"CODEX_HOME": {"type": "string"},"CLAUDE_CONFIG_DIR": {"type": "string"}},"required": [],"additionalProperties": false},"packageRoot": {"type": "string"}},"required": ["env","packageRoot"],"additionalProperties": false},"result_schema": {"type": "object","properties": {"exitCode": {"type": "integer"}},"required": ["exitCode"],"additionalProperties": false}}]}
+  ],
+  "limits": {"max_steps": 10,"max_model_calls": 12},
   "conventions": []
 }
 ```

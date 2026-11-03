@@ -14,7 +14,7 @@ const temp=t=>{const p=mkdtempSync(join(tmpdir(),'pdd-caller-'));t.after(()=>rmS
 test('a free safe NAME reaches startRun; the areas module decides whether that workflow exists',async t=>{
  const calls=[],stdout=capture(),stderr=capture();
  const runner={startRun:async input=>{calls.push(input);return {exitCode:1,message:'There is no my-team-workflow workflow. Workflows: bug, feature, small-change.'};}};
- assert.equal(await runPdd(['workflow','run','my-team-workflow','octo/repo#12','--agent','claude'],{workflowRunner:runner,cwd:'/assigned invoker',packageRoot:'/package',stdout,stderr}),1);
+ assert.equal(await runPdd(['workflow','run','my-team-workflow','octo/repo#12','--agent','claude'],{workflowAgents: { checkWorkflowAgents: async ({ requested }) => ({ ok: true, agent: requested ?? 'codex', message: '' }) }, workflowRunner:runner,cwd:'/assigned invoker',packageRoot:'/package',stdout,stderr}),1);
  assert.deepEqual(calls,[{name:'my-team-workflow',issue:'octo/repo#12',agent:'claude',cwd:'/assigned invoker',packageRoot:'/package'}]);
  assert.equal(stdout.text,'');assert.match(stderr.text,/no my-team-workflow workflow/);
  for(const name of ['../bad','/bad','Bad','a--b','a-','a'.repeat(65)])assert.throws(()=>parseArgv(['workflow','run',name,'1']));
@@ -40,7 +40,7 @@ test('bash/zsh NAME completion reads local definition listing as data, including
  writeFileSync(join(bin,'pdd'),`#!${process.execPath}\nimport fs from 'node:fs';const args=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(receipt)},JSON.stringify(args)+'\\n');if(JSON.stringify(args)!==JSON.stringify(['workflow','list','--json']))process.exit(9);console.log(JSON.stringify({workflows:[{name:'team-review',source:'project'},{name:'feature',source:'bundled'},{name:${JSON.stringify('$(touch '+marker+')')},source:'project'}],default:null}));`,{mode:0o755});
  for(const shell of ['bash','zsh']){
   const file=join(cwd,'completion.'+shell);writeFileSync(file,renderCompletion(shell));
-  const code=shell==='bash'?'source "$1"; COMP_WORDS=(pdd workflow start ""); COMP_CWORD=3; _pdd_complete; printf "%s\\n" "${COMPREPLY[@]}"':'autoload -Uz compinit; compinit -D; source "$1"; _describe() { print -rl -- "${choices[@]}"; }; words=(pdd workflow start ""); CURRENT=4; _pdd';
+  const code=shell==='bash'?'source "$1"; COMP_WORDS=(pdd workflow run ""); COMP_CWORD=3; _pdd_complete; printf "%s\\n" "${COMPREPLY[@]}"':'autoload -Uz compinit; compinit -D; source "$1"; _describe() { print -rl -- "${choices[@]}"; }; words=(pdd workflow run ""); CURRENT=4; _pdd';
   const result=spawnSync(shell,shell==='bash'?['--noprofile','--norc','-c',code,'test',file]:['-f','-c',code,'test',file],{cwd,env:{PATH:bin+':'+dirname(process.execPath)+':'+process.env.PATH,HOME:cwd},encoding:'utf8',timeout:5000});
   assert.equal(result.status,0,result.stderr);assert.deepEqual(result.stdout.trim().split('\n').sort(),['feature','team-review']);
  }

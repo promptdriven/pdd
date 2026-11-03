@@ -36,6 +36,7 @@ for (const cap of domain.cap) for (const schedule of domain.schedule) {
       if (currentLint === 'passed') return { status: 200, json: f.lint(id) };
       if (currentLint === 'refused') {
         const receipt = f.lint(id);
+        receipt.result.report.lint.tests = [];
         receipt.result.refusals = [{ code: 'global-refusal', message: 'Lint refused' }];
         return { status: 200, json: receipt };
       }
@@ -87,7 +88,7 @@ for (const cap of domain.cap) for (const schedule of domain.schedule) {
       for (const result of firstTwo) {
         if (result.code === 3) {
           assert.equal(result.ports.stdout.text, '', 'live-owner refusal has no JSON stdout');
-          assert.match(result.ports.stderr.text, /pdd check --read/);
+          assert.match(result.ports.stderr.text, /pdd test --read/);
           assert.equal(result.clock.uuids, 0, 'live-owner refusal precedes identity allocation');
           assert.equal(result.clock.gh.length, 0, 'live-owner refusal precedes authentication');
         } else {

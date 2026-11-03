@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-judge.prompt.md (sha256: afb58872596571b151a52e5370aa58d9cb2eae54d487a4e9f5676dc1817e54cf).
+// Generated from prompts/cli/agent-judge.prompt.md (sha256: 1f1b319ce2b65c859531b654773135e9ec5fbff098cde31f5c6d8b8e356f59ab).
 import {isDeepStrictEqual} from 'node:util';
 const clone=value=>JSON.parse(JSON.stringify(value));
 const own=(x,k)=>x!==null&&typeof x==='object'&&Object.hasOwn(x,k);
@@ -23,7 +23,7 @@ export function createRunJudge({scenario,checkPassed=[]}){
    for(const c of criteria){const checks=(s.checks??[]).filter(ch=>ch.criterion_id===c.id);if(!checks.length)continue;const item={id:c.id,state:'tried',compared:0,unchecked:[]};
     const skip=reason=>{if(!item.unchecked.includes(reason))item.unchecked.push(reason);};
     for(const ch of checks){
-     if(ch.target==='calls'){skip('calls not checked here: pdd check covers them');continue;}
+     if(ch.target==='calls'){skip('calls not checked here: pdd test covers them');continue;}
      if(ch.op!=='equals'||!['result','world'].includes(ch.target)||!validPointer(ch.path)||!own(ch,'value')){skip('unsupported check not checked here');continue;}
      if(references(ch.value)){skip('step-result reference not checked here');continue;}
      if(ch.target==='world'&&!same){skip('world not checked: different or unknown starting data');continue;}

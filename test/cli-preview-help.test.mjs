@@ -13,7 +13,7 @@ const forbidden=()=>assert.fail('Help must not invoke native/workflow/definition
 
 test('launch help is local and keeps the PR warning for root and every runner route without admitting a workflow',async()=>{
  const forms=[[],['--help'],['-h'],['help'],['workflow','--help']];
- for(const command of ['start','done','approve','changes','cancel','status','open'])forms.push(['workflow',command,'--help'],['workflow',command,'-h'],['help','workflow',command]);
+ for(const command of ['run','done','approve','changes','cancel','status','open'])forms.push(['workflow',command,'--help'],['workflow',command,'-h'],['help','workflow',command]);
  for(const words of forms){
   const stdout=capture(),stderr=capture();
   const exit=await runPdd(words,{stdout,stderr,cwd:'/missing/project',packageRoot:'/missing/package',

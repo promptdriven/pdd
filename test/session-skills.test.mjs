@@ -15,7 +15,7 @@ const ROOTS = ['.agents/skills', '.claude/skills'];
 const version = () => JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
 const MARKER = '.pdd-skill.json';
 // npx skills update changes only skills that npx skills add recorded; this command replaces any copy (0.1.8 tester).
-const UPDATE = 'npx skills add promptdriven/pdd#alpha -g -a codex -a claude-code -y';
+const UPDATE = 'npx skills add promptdriven/pdd -g -a codex -a claude-code -y';
 
 // A copied package in a quoted path, so install never depends on the source checkout.
 function packageCopy(t) {
@@ -24,7 +24,10 @@ function packageCopy(t) {
   for (const name of ['src', 'bin', 'package.json', 'docs', 'skills']) cpSync(join(root, name), join(pkg, name), { recursive: true });
   const home = join(sandbox, 'home'), project = join(sandbox, 'project $(x) "q"');
   for (const dir of [home, project]) mkdirSync(dir);
-  const env = { ...process.env, HOME: home, CODEX_HOME: join(home, '.codex') };
+  const agentBin = join(sandbox, 'agent-bin');
+  mkdirSync(agentBin);
+  writeFileSync(join(agentBin, 'codex'), '#!/bin/sh\necho Logged in\n', { mode: 0o755 });
+  const env = { ...process.env, HOME: home, CODEX_HOME: join(home, '.codex'), PATH: `${agentBin}:/usr/bin:/bin` };
   delete env.CLAUDE_CONFIG_DIR;
   const run = (args, extra = {}) => spawnSync(process.execPath, [join(pkg, 'bin/pdd.mjs'), ...args],
     { cwd: project, env: { ...env, ...extra }, encoding: 'utf8', timeout: 10000 });

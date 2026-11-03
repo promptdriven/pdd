@@ -1,0 +1,42 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/prompt-tests-line.md",
+  "criteria": [
+    {"id": "AC1", "text": "When the Story `place-order` passed, `pdd test --json` gives it the Story line \"Prompt tests (place-order): …\" and the total line \"Prompt tests: …\", and neither line says \"Runtime check\"."},
+    {"id": "AC2", "text": "When the Stories `place-order` and `split-bill` both ran, `pdd test --json` gives each Story its own line, \"Prompt tests (place-order): …\" and \"Prompt tests (split-bill): …\", and the total line \"Prompt tests: …\", and no line says \"Runtime check\"."}
+  ],
+  "initial_world": {},
+  "simulation": {},
+  "context": [],
+  "steps": [
+    {
+      "step_id": "one-story-passed",
+      "entry_path": "prompts/cli/runtime-output.prompt.md",
+      "operation": "renderJson",
+      "input": {"rows": [{"story": "place-order", "title": "Place an order", "test": "test/runtime/place-order.json", "state": "passed"}], "repo": "example/coffee", "exitCode": 0},
+      "checks": [
+        {"criterion_id": "AC1", "target": "result", "path": "/rows/0/summary_line", "op": "contains", "value": "Prompt tests (place-order): "},
+        {"criterion_id": "AC1", "target": "result", "path": "/rows/0/summary_line", "op": "not_contains", "value": "Runtime check"},
+        {"criterion_id": "AC1", "target": "result", "path": "/rows/0/summary_line", "op": "not_equals", "value": "Runtime check (place-order): ✓ 0 of 0 criteria · 0/0 checks · 0 AI calls"},
+        {"criterion_id": "AC1", "target": "result", "path": "/summary_line", "op": "contains", "value": "Prompt tests: "},
+        {"criterion_id": "AC1", "target": "result", "path": "/summary_line", "op": "not_contains", "value": "Runtime check"},
+        {"criterion_id": "AC1", "target": "result", "path": "/summary_line", "op": "not_equals", "value": "Runtime check: ✓ 0 of 0 criteria · 0/0 checks · 0 AI calls"}
+      ]
+    },
+    {
+      "step_id": "two-stories",
+      "entry_path": "prompts/cli/runtime-output.prompt.md",
+      "operation": "renderJson",
+      "input": {"rows": [{"story": "place-order", "title": "Place an order", "test": "test/runtime/place-order.json", "state": "passed"}, {"story": "split-bill", "title": "Split the bill", "test": "test/runtime/split-bill.json", "state": "failed"}], "repo": "example/coffee", "exitCode": 1},
+      "checks": [
+        {"criterion_id": "AC2", "target": "result", "path": "/rows", "op": "count", "value": 2},
+        {"criterion_id": "AC2", "target": "result", "path": "/rows/0/summary_line", "op": "contains", "value": "Prompt tests (place-order): "},
+        {"criterion_id": "AC2", "target": "result", "path": "/rows/1/summary_line", "op": "contains", "value": "Prompt tests (split-bill): "},
+        {"criterion_id": "AC2", "target": "result", "path": "/summary_line", "op": "contains", "value": "Prompt tests: "},
+        {"criterion_id": "AC2", "target": "result", "path": "/rows/0/summary_line", "op": "not_contains", "value": "Runtime check"},
+        {"criterion_id": "AC2", "target": "result", "path": "/rows/1/summary_line", "op": "not_contains", "value": "Runtime check"},
+        {"criterion_id": "AC2", "target": "result", "path": "/summary_line", "op": "not_contains", "value": "Runtime check"}
+      ]
+    }
+  ]
+}
