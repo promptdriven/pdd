@@ -45,7 +45,7 @@ test('admission: runtime queue progress keeps the accepted ID and JSON output', 
   const { ports } = makePorts(setup, fake);
   const code = await runCheck({ words: ['place-order'], cwd: setup.repo, options: { '--json': true } }, ports);
   assert.equal(code, 0); assert.equal(checkPosts(fake).length, 1); assert.equal(JSON.parse(ports.stdout.text).rows[0].state, 'passed');
-  assert.match(ports.stderr.text, /5 ahead.*8 of 8/);
+  assert.ok(ports.stderr.text.split('\n').includes('⏳ PDD is busy right now. Your check is in line (5 ahead of you) and starts by itself. You are not charged while you wait.'));
 });
 
 test('maintenance: authenticated capacity window waits, rechecks and submits only afterward', async t => {

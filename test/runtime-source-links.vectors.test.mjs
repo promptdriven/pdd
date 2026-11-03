@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 test('LINK native inventory replay: every frozen case executes its named public-boundary test',()=>{
-  const inventory=JSON.parse(readFileSync(new URL('./runtime/read-in-repo-links.json',import.meta.url),'utf8'));
+  const inventory=JSON.parse(readFileSync(new URL('./runtime/read-in-repo-links-cases.json',import.meta.url),'utf8'));
   assert.equal(inventory.schema_version,'pdd.native-cases.v1');
   const files=[...new Set([inventory.native_test,...(inventory.command.match(/test\/[^ ]+\.test\.mjs/g) ?? [])])];
   assert.ok(files.length>0);

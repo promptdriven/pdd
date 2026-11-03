@@ -168,7 +168,7 @@ for (const vector of vectors.cases) test(`TEST-CACHE ${vector.id} (${vector.crit
     return;
   }
   if (id === 'sibling') {
-    const path = join(ctx.repo, 'tests/place-order-extra.json'); write(path, read(join(ctx.repo, 'tests/place-order.json')));
+    const path = join(ctx.repo, 'tests/place-order.extra.json'); write(path, read(join(ctx.repo, 'tests/place-order.json')));
     assert.equal((await ctx.invoke(['tests/place-order.json'])).sent, 1);
     assert.equal((await ctx.invoke(['place-order'])).sent, 2, 'partial sibling pass cannot cache complete Story');
     assert.equal((await ctx.invoke(['place-order'])).sent, 0); return;
@@ -218,11 +218,11 @@ for (const vector of vectors.cases) test(`TEST-CACHE ${vector.id} (${vector.crit
     const outside = join(ctx.sandbox, 'outside.json'); writeFileSync(outside, 'outside sentinel\n');
     const { unlinkSync } = await import('node:fs'); unlinkSync(path); symlinkSync(outside, path);
     const result = await ctx.invoke(); assert.equal(result.sent, 3); assert.equal(readFileSync(outside, 'utf8'), 'outside sentinel\n');
-    assert.equal(result.json.warnings.filter(w => /cache/i.test(typeof w === 'string' ? w : JSON.stringify(w))).length, 1); return;
+    assert.equal(result.json.warnings.filter(w => /^Warning: (?:test cache |recovered stale cache )/.test(typeof w === 'string' ? w : JSON.stringify(w))).length, 1); return;
   }
   writeFileSync(path, id === 'malformed' ? '{broken' : '{"schema_version":"unknown","stories":[]}');
   const result = await ctx.invoke(); assert.equal(result.sent, 3);
-  assert.equal(result.json.warnings.filter(w => /cache/i.test(typeof w === 'string' ? w : JSON.stringify(w))).length, 1, 'one damaged-cache warning');
+  assert.equal(result.json.warnings.filter(w => /^Warning: (?:test cache |recovered stale cache )/.test(typeof w === 'string' ? w : JSON.stringify(w))).length, 1, 'one damaged-cache warning');
 });
 
 async function pending(ctx) {
@@ -323,11 +323,11 @@ for (const damage of ['missing', 'malformed', 'inconsistent']) test(`TEST-CACHE 
   else { const doc = read(path); doc.generation += 1; write(path, doc); }
   const result = await ctx.invoke(['independent'], { '--lf': true });
   assert.equal(result.sent, 1, 'untrusted last-failed metadata cannot suppress selected checks');
-  assert.equal(result.json.warnings.filter(w => /cache/i.test(String(w))).length, 1);
+  assert.equal(result.json.warnings.filter(w => /^Warning: (?:test cache |recovered stale cache )/.test(String(w))).length, 1);
   assert.ok(result.json.rows.every(row => !row.cached));
   const healed = await ctx.invoke(['independent'], { '--lf': true });
   assert.equal(healed.sent, 0); assert.equal(healed.json.rows.length, 1);
-  assert.equal(healed.json.warnings.filter(w => /cache/i.test(String(w))).length, 0);
+  assert.equal(healed.json.warnings.filter(w => /^Warning: (?:test cache |recovered stale cache )/.test(String(w))).length, 0);
 });
 
 test('TEST-CACHE lf actually reads lastfailed through the injected filesystem', async t => {

@@ -358,8 +358,8 @@ test('RUNTIME-TRY16: hostile saved cases write nothing outside tests/ or into no
   assert.equal(existsSync(join(named.repo, '../x.json')), false); assert.equal(existsSync(join(named.repo, 'x.json')), false);
   assert.ok(existsSync(join(named.repo, 'tests/refund.json')));
   const linked = harbor(t, repo => {
-    addRefund(repo); mkdirSync(join(repo, 'scenarios'));
-    for (const name of ['place-order.json', 'unknown-item.json']) writeFileSync(join(repo, 'scenarios', name), readFileSync(join(repo, 'tests', name)));
+    addRefund(repo); mkdirSync(join(repo, 'runtime/test'), { recursive: true });
+    for (const name of ['place-order.json', 'unknown-item.json']) writeFileSync(join(repo, 'runtime/test', name), readFileSync(join(repo, 'tests', name)));
     rmSync(join(repo, 'tests'), { recursive: true }); symlinkSync(outside, join(repo, 'tests')); writeFileSync(join(repo, '.gitignore'), 'tests\n');
   });
   const viaLink = await run(linked, savedCase('c', refund));
@@ -370,8 +370,10 @@ test('RUNTIME-TRY16: hostile saved cases write nothing outside tests/ or into no
     writeFileSync(join(repo, 'package.json'), JSON.stringify(doc)); rmSync(join(repo, 'tests/place-order.json'));
   });
   const before = readFileSync(join(pkg.repo, 'package.json'), 'utf8');
+  // A test is found by its name and folder, so package.json is never a test that pdd could add steps to.
   const intoPackage = await run(pkg, savedCase('d'));
-  assert.match(intoPackage.out, /^not added: package\.json is not a file pdd adds steps to\. Move the test to tests\/\.$/m);
+  assert.equal(intoPackage.code, 2);
+  assert.match(intoPackage.err, /^user_stories\/place-order\.md has no test: expected tests\/place-order\.json \(or place-order\.json in any test or tests folder\)\.$/m);
   assert.equal(readFileSync(join(pkg.repo, 'package.json'), 'utf8'), before);
 });
 

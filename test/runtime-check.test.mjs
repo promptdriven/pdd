@@ -300,14 +300,22 @@ test('RUNTIME-DRAFT1: a draft interface with a current hash passes preflight and
 });
 
 // Wrong: a second test file for a story (another starting world) is refused (lead, Oct 27: P11 removed).
-test('RUNTIME-RULES4: a story may have two test files; each one must still cover every criterion', async t => {
-  const { repo, home } = harbor(t), second = join(repo, 'tests/place-order-2.json');
+test('RUNTIME-RULES4: a story may have two test files (S.json and S.<variant>.json); each one must still cover every criterion', async t => {
+  const { repo, home } = harbor(t), second = join(repo, 'tests/place-order.second-world.json');
   cpSync(join(repo, 'tests/place-order.json'), second);
   const both = await check(repo, home, ['place-order']);
   assert.equal(both.code, 5, both.err); assert.equal(both.calls.gh, 1);
   const doc = readJson(second); doc.criteria.pop(); doc.steps[0].checks = doc.steps[0].checks.filter(c => c.criterion_id !== 'AC3'); writeJson(second, doc);
-  const partial = await check(repo, home, ['tests/place-order-2.json']);
+  const partial = await check(repo, home, ['tests/place-order.second-world.json']);
   assert.equal(partial.code, 4); assert.equal(partial.json.rows[0].refusals[0].code, 'story-criterion-mismatch');
+  // Another name is not a test of the Story; two files with one name are an error that names both.
+  cpSync(join(repo, 'tests/place-order.json'), join(repo, 'tests/place-order-2.json'));
+  const unknown = await check(repo, home, ['tests/place-order-2.json'], {});
+  assert.equal(unknown.code, 2); assert.match(unknown.err, /^Unknown story "tests\/place-order-2\.json"\. Stories:$/m);
+  mkdirSync(join(repo, 'test/runtime'), { recursive: true }); cpSync(join(repo, 'tests/place-order.json'), join(repo, 'test/runtime/place-order.json'));
+  const two = await check(repo, home, ['tests/place-order.json']);
+  assert.equal(two.code, 4); assert.deepEqual(two.calls, { fetch: 0, gh: 0 });
+  assert.equal(two.json.rows[0].refusals[0].message, 'user_stories/place-order.md has 2 files named place-order.json: test/runtime/place-order.json and tests/place-order.json. Keep one.');
 });
 
 // Wrong: a credential file with a common name goes up with the source (review R6).
@@ -444,9 +452,10 @@ test('RUNTIME-OWNER1: pdd test warns once when two prompts name the same source 
 });
 
 // Wrong: an agent wrote its own test format and *.prompt files, and pdd only says "No tests found".
-test('RUNTIME-NOTESTS1: with no tests, pdd test says why: foreign test JSON, *.prompt names, prompts with no interface (5 lines at most)', async t => {
+test('RUNTIME-NOTESTS1: with no tests, pdd test says why: Stories with no test, test-folder JSON that matches no Story, *.prompt names, prompts with no interface (5 lines at most)', async t => {
   const sandbox = temp(t), repo = join(sandbox, 'repo'), home = join(sandbox, 'home');
-  mkdirSync(join(repo, 'tests/unit'), { recursive: true }); mkdirSync(join(repo, 'prompts')); mkdirSync(home);
+  mkdirSync(join(repo, 'tests/unit'), { recursive: true }); mkdirSync(join(repo, 'prompts')); mkdirSync(join(repo, 'user_stories')); mkdirSync(home);
+  writeFileSync(join(repo, 'user_stories/play.md'), '# Play\n\n## Acceptance criteria\n\n1. A move scores 4.\n');
   writeFileSync(join(repo, 'tests/game.json'), '{"cases": [{"input": 2, "expected": 4}]}\n');
   writeFileSync(join(repo, 'tests/unit/board.json'), '{"name": "board"}\n');
   writeFileSync(join(repo, 'package.json'), '{"name": "game"}\n');
@@ -456,15 +465,16 @@ test('RUNTIME-NOTESTS1: with no tests, pdd test says why: foreign test JSON, *.p
   const result = await check(repo, home, [], {});
   assert.equal(result.code, 2); assert.equal(result.out, '');
   assert.deepEqual(result.err.trimEnd().split('\n'), [
-    'No tests found. A test is a Git-visible *.json file with "schema_version": "prompt-runtime.program-scenario.v1".',
-    'tests/game.json is not a PDD test file (it has no "schema_version": "prompt-runtime.program-scenario.v1"). See RUNBOOK.md §2.',
-    'tests/unit/board.json is not a PDD test file (it has no "schema_version": "prompt-runtime.program-scenario.v1"). See RUNBOOK.md §2.',
+    'No tests found. The test of Story user_stories/S.md is S.json in a test or tests folder. See RUNBOOK.md §2.',
+    'user_stories/play.md has no test: expected tests/play.json (or play.json in any test or tests folder).',
+    'tests/game.json matches no Story (user_stories/**/game.md).',
+    'tests/unit/board.json matches no Story (user_stories/**/board.md).',
     'PDD prompts must end in .prompt.md: rename prompts/board.prompt to prompts/board.prompt.md.',
     'prompts/engine.prompt.md has no Runtime interface block. See RUNBOOK.md §2.']);
   for (let index = 0; index < 4; index += 1) writeFileSync(join(repo, `tests/extra-${index}.json`), '{}\n');
   const many = await check(repo, home, [], {});
   const lines = many.err.trimEnd().split('\n');
-  assert.equal(lines.length, 7); assert.equal(lines.at(-1), '…and 3 more');
+  assert.equal(lines.length, 7); assert.equal(lines.at(-1), '…and 4 more');
 });
 
 // Wrong: an index file (PLAN.md, README.md, a story with no criteria) gets "has no test" on every multi-Story run (2048 session, 0.1.6).
@@ -476,5 +486,5 @@ test('RUNTIME-STORIES1: PLAN.md, README.md and story files with no acceptance cr
   writeFileSync(join(repo, 'user_stories/refund.md'), '# Refund\n\n## Acceptance criteria\n\n1. A refund returns the total.\n');
   const found = (await import('../src/runtime-preflight.mjs')).findTests({ root: repo });
   assert.deepEqual(found.stories.map(story => story.path).sort(), ['user_stories/place-order.md', 'user_stories/refund.md', 'user_stories/unknown-item.md']);
-  assert.deepEqual(found.warnings, ['Warning: user_stories/refund.md has no test.']);
+  assert.deepEqual(found.warnings, ['Warning: user_stories/refund.md has no test: expected tests/refund.json (or refund.json in any test or tests folder).']);
 });
