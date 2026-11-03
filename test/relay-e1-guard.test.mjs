@@ -25,11 +25,11 @@ for (const kind of ['410', 'wrong-id']) test(`E1 guard vs fresh ${kind} in same 
   });
   const env = { HOME: h.home, PDD_STATE_DIR: h.state, PDD_RUNTIME_URL: f.origin };
   const first = portsFor(env);
-  assert.equal(await runCheck({ cwd: h.repo, words: ['tests/place-order.json', 'tests/second.json'], options: { '--json': true, '--max-calls': 6 } }, first.ports), 3);
+  assert.equal(await runCheck({ cwd: h.repo, words: ['tests/place-order.json', 'tests/second.json'], options: { '--json': true, '--max-calls': 6, '--timeout': 1 } }, first.ports), 3);
   const batch = readdirSync(join(h.state, 'batches'), { withFileTypes: true }).find(e => e.isDirectory()).name;
   lintPassed = true;
   const p = portsFor(env);
-  const code = await runCheck({ cwd: h.repo, words: [batch], options: { '--read': true, '--json': true } }, p.ports);
+  const code = await runCheck({ cwd: h.repo, words: [batch], options: { '--read': true, '--json': true, '--timeout': 1 } }, p.ports);
   const json = JSON.parse(p.ports.stdout.text);
   const a = json.rows.find(r => r.test === 'tests/place-order.json'), b = json.rows.find(r => r.test === 'tests/second.json');
   const getsA = f.gets.filter(g => g.url.endsWith(aId)).length;
@@ -48,7 +48,7 @@ test('E3 interrupted read keeps verified running cache', async t => {
   });
   const env = { HOME: h.home, PDD_STATE_DIR: h.state, PDD_RUNTIME_URL: f.origin };
   const first = portsFor(env);
-  await runCheck({ cwd: h.repo, words: ['place-order'], options: { '--json': true } }, first.ports);
+  await runCheck({ cwd: h.repo, words: ['place-order'], options: { '--json': true, '--timeout': 1 } }, first.ports);
   const batch = readdirSync(join(h.state, 'batches'), { withFileTypes: true }).find(e => e.isDirectory()).name;
   const gets = f.gets.length;
   const p = portsFor(env, { onInterrupt: handler => { handler(); return () => {}; } });

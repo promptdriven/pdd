@@ -126,7 +126,7 @@ for (const mode of ['pending', 'unavailable']) test(`2655: saved passed label wi
   const r = await fixture(t); r.mode(mode);
   rmSync(join(r.folder, `${r.id}.json`));
   const posts = r.fake.posts.length;
-  const result = await r.run({ '--read': r.batch });
+  const result = await r.run({ '--read': r.batch, ...(mode === 'pending' ? { '--timeout': 1 } : {}) });
   assert.equal(r.fake.posts.length, posts);
   assert.equal(result.clock.uuids, 0);
   assert.equal(result.code, 3, 'saved passed label cannot replace unavailable terminal evidence');

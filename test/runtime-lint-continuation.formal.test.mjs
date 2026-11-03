@@ -45,7 +45,7 @@ for (const cap of domain.cap) for (const schedule of domain.schedule) {
     const env = { HOME: h.home, PDD_STATE_DIR: h.state, PDD_RUNTIME_URL: f.origin };
     const initial = portsFor(env);
     assert.equal(await runCheck({ cwd: h.repo, words: ['place-order'], options: {
-      '--json': true, ...(intent === 'lint' ? { '--lint': true } : { '--max-calls': cap }),
+      '--json': true, ...(intent === 'lint' ? { '--lint': true } : { '--max-calls': cap, '--timeout': 1 }),
     } }, initial.ports), 3, 'initial lint is held');
     const batch = readdirSync(join(h.state, 'batches'), { withFileTypes: true }).find(e => e.isDirectory()).name;
     const path = join(h.state, 'batches', batch, 'batch.json');
@@ -62,7 +62,8 @@ for (const cap of domain.cap) for (const schedule of domain.schedule) {
     async function recover(which = mode) {
       const p = portsFor(env);
       const code = await runCheck({ cwd: h.repo, words: which === 'read' ? [batch] : [],
-        options: { [which === 'read' ? '--read' : '--retry']: which === 'read' ? true : batch, '--json': true } }, p.ports);
+        options: { [which === 'read' ? '--read' : '--retry']: which === 'read' ? true : batch, '--json': true,
+          ...(which === 'read' && lint === 'running' ? { '--timeout': 1 } : {}) } }, p.ports);
       return { ...p, code };
     }
     const firstTwo = schedule === 'concurrent' ? await Promise.all([recover(), recover()]) : [await recover(), await recover()];

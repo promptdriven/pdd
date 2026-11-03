@@ -7,10 +7,11 @@ When the interpreter is busy and confirms that lint did not start, `pdd test`,
 
 pdd follows the server's requested delay and keeps trying until your wait ends.
 There is no fixed number of attempts. It keeps the same selected files and saves
-every request ID. Check and remote lint use `--timeout` when you set it; otherwise
-an agent waits 90 seconds and a terminal Check has no limit. `pdd simulate` keeps its
-five-minute setup allowance and 90-second agent default. Waiting, retries and
-lint all use the same time allowance.
+every request ID. Check and saved-batch reads have no default wait limit in any shell; `--timeout`
+sets an explicit limit. Standalone remote lint retains its 90-second agent default
+and unlimited interactive wait, with `--timeout` override. `pdd simulate` follows the
+[Try lint deadline policy](../prompts/cli/runtime-client.prompt.md#retry-confirmed-lint-capacity-refusals).
+Waiting, retries and lint stay within their applicable deadline.
 
 If the server stays busy, pdd says that no checks ran and asks you to run the same
 command again later. Check and lint exit with code 5; the `--cli` and `--serve`
@@ -31,8 +32,8 @@ The read shows the latest result and any prompt problems the interpreter found.
 After saved lint passes, a normal Check can start its original checks that were
 waiting for lint. pdd verifies the same owner and selected files, keeps the
 original interpreter address and call limits, and starts each check at most once,
-even if reads overlap or stop halfway through. The read waits for `--timeout`,
-or 90 seconds by default. Reading standalone lint never starts checks. pdd also
+even if reads overlap or stop halfway through. The saved-batch read keeps waiting until completion unless `--timeout` is explicit
+or it is interrupted; explicit retry retains its finite default. Reading standalone lint never starts checks. pdd also
 leaves checks alone if they were already sent or their history is uncertain.
 A missing or mismatched reply never counts as a pass.
 

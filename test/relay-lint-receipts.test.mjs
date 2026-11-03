@@ -23,7 +23,7 @@ for (const retry of [false, true]) test(`RELAY lint-held ${retry ? 'retry' : 're
     const code = await runCheck({ cwd: h.repo, words, options: { '--json': true, ...options } }, p.ports);
     return { code, json: JSON.parse(p.ports.stdout.text), p };
   }
-  const initial = await run({ '--max-calls': 6 }, ['place-order']);
+  const initial = await run({ '--max-calls': 6, '--timeout': 1 }, ['place-order']);
   assert.equal(initial.code, 3);
   assert.equal(initial.json.rows[0].calls, 0);
   assert.equal(f.posts.filter(p => p.command === 'check').length, 0);
@@ -33,7 +33,7 @@ for (const retry of [false, true]) test(`RELAY lint-held ${retry ? 'retry' : 're
   assert.equal(original.rows[0].phase, 'lint');
   mode = 'running';
   const recover = () => run({ [retry ? '--retry' : '--read']: retry ? batch : true }, retry ? [] : [batch]);
-  const open = await recover();
+  const open = await run({ [retry ? '--retry' : '--read']: retry ? batch : true, '--timeout': 1 }, retry ? [] : [batch]);
   assert.equal(open.code, 3);
   assert.equal(open.json.rows[0].state, 'running');
   const paid = f.posts.filter(p => p.command === 'check');
