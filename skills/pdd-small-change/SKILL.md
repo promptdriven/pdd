@@ -2,7 +2,7 @@
 name: pdd-small-change
 description: PDD small-change workflow. Use when the person asks for a small, contained change that is easy to undo, such as a typo, a config value or a small fix. Plan it, make it, verify it, one PR.
 metadata:
-  pdd-skills: 0.1.12
+  pdd-skills: 0.1.14
 ---
 
 # PDD small change
@@ -18,7 +18,7 @@ Each area is one main chat. Step briefs are in `steps/`.
 ## Rules
 
 - The main chat coordinates and talks with the person; no code or checks.
-- Use fresh subagents; never reuse builders or let them check their code. Give the step file and paths at once, not chat history. Wait once with a long time-out; no small follow-ups.
+- Use fresh subagents; never reuse builders or let them check their code. Give the step file and paths at once, not chat history. Wait once with a long time-out; no small follow-ups. Check/read: RUNBOOK §11 once.
 - Checks: fresh first. Only verify/formal may reuse after startup failure; wrote no code, tests or prompts this run.
 - Read pdd-prompting RUNBOOK §17 before checks: cleanup, unrun checks, recovery and result replacement.
 - At gates, show results, ask and stop. Revise changes and ask again. Outside runs, ask before opening PRs. In runs, pdd opens them. Only the main chat may merge on explicit person request under RUNBOOK §2.

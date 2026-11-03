@@ -2,7 +2,7 @@
 name: pdd-feature
 description: Use when the person asks for a new feature or new behavior in a PDD project.
 metadata:
-  pdd-skills: 0.1.12
+  pdd-skills: 0.1.14
 ---
 
 # PDD feature
@@ -15,7 +15,7 @@ Step briefs are in `steps/`. `?` means optional.
 3. code: build, verify, formal, review → gate: pr
 
 - Main chat: coordinate; no code or checks.
-- Use fresh subagents; never reuse builders or let them check their code. Give the step file and paths at once, not chat history. Wait once with a long time-out; no small follow-ups.
+- Use fresh subagents; never reuse builders or let them check their code. Give the step file and paths at once, not chat history. Wait once with a long time-out; no small follow-ups. Check/read: RUNBOOK §11 once.
 - Checks: fresh first. Only verify/formal may reuse after startup failure; wrote no code, tests or prompts this run.
 - Review: always fresh; no build, verify, formal, prior reviews or their context. Blocked: RUNBOOK §17.
 - Read pdd-prompting RUNBOOK §17 before checks: cleanup, unrun checks, recovery and result replacement.

@@ -21,13 +21,13 @@ When the person asks you to report a problem with pdd itself, follow
 |---|---|
 | `prompts/<job>.prompt.md` | The program in plain English, then `## Dependencies`, then one Runtime interface block. |
 | `user_stories/<story>.md` | One story with a numbered `## Acceptance criteria` list. pdd skips index files: `PLAN.md`, `README.md` and any file with no `## Acceptance criteria` heading. |
-| `tests/<story>.json` | The test for that story. pdd finds tests in any folder. If the repo's own tests are in `tests/` or `test/`, use `tests/runtime/` or `test/runtime/`. |
+| `tests/<story>.json` | The test for that story. pdd finds it by its name and folder: `<story>.json` with a folder named `tests` or `test` anywhere in its path, not only as the direct parent (`tests/`, `test/runtime/`, `runtime/tests/`). pdd does not look inside other JSON files to find tests, and a test can have any size up to the upload limit (section 1). Every `.json` file in a `tests` or `test` folder named `<story>.json` or `<story>.<word>.json` is a test of that story, so give fixtures and other data files other names. If the repo's own tests are in `tests/` or `test/`, use `tests/runtime/` or `test/runtime/`. |
 
 **1 story = 1 test file = many cases.** Each case is one step. Steps run in order and share the saved data.
 Across its steps, the test file must check every criterion of its story.
 
 Keep each test step small. One step = one action, or a short run of actions (about 10 moves, rows or calls). Split a long replay into steps with the expected state after each part. The server stops a step after 10 minutes.
-Add a second file only for a case that needs a different starting world. That file also checks every criterion.
+Add a second file only for a case that needs a different starting world. Name it `<story>.<world>.json`, for example `tests/place-order.empty-shop.json`. That file also checks every criterion. pdd prints every story with no test (and the path it expects), one line for the `.json` files in test folders that match no story (`pdd test --files` lists them), and two files with the same name for one story as an error that names both.
 
 **One rule, one prompt.** Before you write a prompt, look in `prompts/` for a prompt that owns the rule. Change that
 prompt. Two prompts must never state the same rule. A command-line program has one program prompt (section 6).
@@ -276,7 +276,8 @@ node `<file>--op-<operation>--hex-<operation name in hex>`. `printf add | xxd -p
 - A step costs 1 AI call when the prompt only answers, 2 to 3 when it uses saved data or calls another prompt, and up
   to 4 when it calls a prompt that uses saved data. A 3-step Harbor test used 9. A 9-step test (`app` calls `store`) used 34.
 - `pdd test` gives each test 12 calls for each step, at least 18 and at most 1000. Override it with `--max-calls N` from 1 through 1000, the interpreter maximum.
-- **Choose a ceiling of at least 3 times your worst-case estimate** when setting `--max-calls` for a check or a simulation. Include child calls, saved-data operations, redraws and all the moves you plan to try. The budget is a ceiling, not a charge: you are charged only for calls that run. If the estimate does not fit the server maximum, report that limit; do not silently reduce the margin or change expected values.
+- For a failed check, the runtime can automatically run each of at most 3 failed steps up to 2 more times to diagnose stability: at most 6 additional AI calls, within the original `--max-calls` ceiling.
+- **Choose a ceiling of at least 3 times your worst-case estimate** when setting `--max-calls` for a check or a simulation. Include child calls, saved-data operations, redraws, all the moves you plan to try and, for a check, the automatic rerun allowance above. The budget is a ceiling, not a charge: you are charged only for calls that run. If the estimate does not fit the server maximum, report that limit; do not silently reduce the margin or change expected values.
 - A new `pdd simulate` requests a session budget of 400 calls. `pdd simulate STORY --max-calls 600` chooses a different ceiling when starting a new simulation. The CLI cannot raise an existing simulation’s ceiling; `--new` starts fresh saved data. The output shows the interpreter-confirmed total and remaining calls. Reusing a simulation without this option keeps its current budget.
 - Too few calls left gives the refusal `repository-graph-catalog-error`. It is not a prompt error. The interface `limits` do not set this budget.
 - **Worst case of a step:** 1, plus for each entry in its prompt's `calls`: `max_calls` × (worst case of the called
@@ -307,9 +308,20 @@ A failed check shows the criterion, the path, the expected value and the answer:
 The report preview shows the first 256 characters of a longer string followed by `…`. The check still compares
 the full value exactly. Preview clipping and sensitive-value redaction do not shorten the value being checked.
 A draft prompt is checked too. Its row and its report say DRAFT. A DRAFT pass is not an approval.
-In a person's terminal, `pdd test` waits until every check ends and prints `Still running: …` every 30 s. In an
-agent's shell it returns after about 90 s with `Still running` and the batch; then run `pdd test --read` about every
-minute, doing other work in between, until every Story has a result. Never send the same check again.
+The `Prompt tests` line's total AI calls already includes automatic reruns reported by the server. For example,
+`5 AI calls (2 for reruns)` means 5 total, of which 2 were for reruns; never add the rerun share again.
+For a failed step, pdd prints at most one `Rerun:` verdict:
+
+- `Rerun: failed 3 of 3 (stable). A recheck of the same files will not help.` means the failure repeated consistently.
+- `Rerun: failed 1 of 3 (unstable). Make the rule in the prompt firmer.` means the answers varied.
+- `Rerun: passed M of M reruns.` means all reported reruns passed; the original failed check still needs investigation.
+- `Rerun: skipped (<reason>).` means the runtime skipped diagnosis, for example `more-than-3-failed-steps` or `budget`. A skipped or unavailable diagnosis, including a single run, supplies no stability verdict. A refusal is not a failed expectation and has no verdict.
+
+`pdd test` and saved-batch `pdd test --read BATCH` wait until every Story ends in every shell, with
+`Still running: …` on stderr every 30 s. Use the shell tool's longest timeout or a background task that notifies
+on exit (Claude Code: `run_in_background`; Codex: a long `timeout_ms`). `--timeout MIN` sets an explicit limit.
+pdd prints the recovery `--read` command before the first check. If the tool stops pdd, run that command once
+to keep waiting on the saved batch. Never poll every minute or send the same check again.
 Before `pdd test` or `pdd simulate`, tell the person in one line what you run and that it can take a few minutes. pdd prints
 a progress line on stderr before each slow step (lint, upload, the queue, the simulation setup). When it fails, it says what
 failed, the real reason and what to do next: pass that line on as it is.
@@ -320,7 +332,7 @@ failed, the real reason and what to do next: pass that line on as it is.
 | 1 | failed | Find the cause first ("After a ✗" below). Fix only what the evidence shows. A person decides expected values. |
 | 4 | refused | Nothing was judged (`no verdict ·`): a file breaks a rule, or the AI service failed. Read the reason and the next step under the line. When the reason names a file rule, fix that file (table below); for an AI-service cause, change no file. If a fix changes an expected value, ask the person. |
 | 5 | not run | Sign-in, network, server busy or no AI room. Run `gh auth status`. Wait, then run again. If it stays, tell the person. |
-| 3 | unknown or still running | Run `pdd test --read` about every minute until every Story has a result. Never send the check again. |
+| 3 | unknown or still running | Run `pdd test --read BATCH` once with a long shell timeout or exit notification; it waits until every Story ends. Never resend the check. |
 | 2 | command error | Wrong command or story name. Run `pdd test --help`. |
 
 **After a ✗ (exit 1).** Find the real cause first, then fix it. Never send the same files again to get another answer.
@@ -884,6 +896,79 @@ The native `lookup(service, id)` uses the supplied callback; resource `service.l
 ```
 
 Passing prompt check (DRAFT): [2/2 checks · 2 AI calls](https://runtime.promptdriven.ai/r/53737185-9685-408f-83ca-be9e13c6ae79).
+
+### Return a different port reply on each call
+
+This synthetic example uses one counter for `service.lookup`, starting at zero. Each case has exactly `args`, `call_index`, and `result`: `args` is the literal complete argument object, and `call_index` is a unique positive one-based integer. Other case properties, including `world_result_bindings`, are refused. The counter progresses per operation across steps, so indices must follow that operation's actual call order. The empty result pointer replaces the whole result template with the selected literal result. This binding does not supply a request log or arbitrary world mutations; use an appropriate separate boundary and native tests for effects.
+
+Copy these three files into a repository, fill the draft hash with `pdd test --fill-hash`, and use `pdd lint varying-port` for zero-AI fixture/schema admission. Lint does not prove execution behavior or a live service effect.
+
+`prompts/varying-port.prompt.md`:
+
+````markdown
+# Varying port
+
+`varying-port.mjs` exports module function `lookup(service, id)`. Call the injected `service.lookup` with `{id}` once and return its `{label}` reply unchanged. The service owns outside access.
+
+## Dependencies
+
+None.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "status": "draft",
+  "prose_sha256": "",
+  "entries": [{"operation": "lookup", "input_schema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"], "additionalProperties": false}, "result_schema": {"type": "object", "properties": {"label": {"type": "string"}}, "required": ["label"], "additionalProperties": false}, "errors": []}],
+  "calls": [],
+  "resources": [{"name": "service", "kind": "port", "access": "write", "operations": [{"name": "lookup", "access": "write", "arguments_schema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"], "additionalProperties": false}, "result_schema": {"type": "object", "properties": {"label": {"type": "string"}}, "required": ["label"], "additionalProperties": false}}]}],
+  "limits": {"max_steps": 12, "max_model_calls": 6},
+  "conventions": []
+}
+```
+</details>
+````
+
+`user_stories/varying-port.md`:
+
+```markdown
+# Varying port
+
+I can look up the same item twice and see each supplied reply.
+
+## Acceptance criteria
+
+1. The first lookup of book-7 returns Available and the second returns Reserved.
+```
+
+`test/runtime/varying-port.json`:
+
+```json
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/varying-port.md",
+  "criteria": [{"id": "AC1", "text": "The first lookup of book-7 returns Available and the second returns Reserved."}],
+  "initial_world": {"fixture_counters": {"lookup": 0}},
+  "simulation": {
+    "service.lookup": {
+      "action": "fixture.lookup",
+      "world_pointer": "/fixture_counters/lookup",
+      "cases": [
+        {"args": {"id": "book-7"}, "call_index": 1, "result": {"label": "Available"}},
+        {"args": {"id": "book-7"}, "call_index": 2, "result": {"label": "Reserved"}}
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    }
+  },
+  "context": [],
+  "steps": [
+    {"step_id": "first", "entry_path": "prompts/varying-port.prompt.md", "operation": "lookup", "input": {"id": "book-7"}, "checks": [{"criterion_id": "AC1", "target": "result", "path": "/label", "op": "equals", "value": "Available"}], "model": "gpt-6.1-sol"},
+    {"step_id": "second", "entry_path": "prompts/varying-port.prompt.md", "operation": "lookup", "input": {"id": "book-7"}, "checks": [{"criterion_id": "AC1", "target": "result", "path": "/label", "op": "equals", "value": "Reserved"}], "model": "gpt-6.1-sol"}
+  ]
+}
+```
 
 ### Separate decide from do
 

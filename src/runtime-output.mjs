@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: 8a554f36e15c336ae9a41046f2ccf985f0f8fdee5cc54b8079f43a13729dd501).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: 71f986858b86600655abc326b72234ac594d215e8848b93f3a387e492b919229).
 import { hasProgress, outcomeExitCode, outcomeFor, outcomeText, progressText } from './runtime-outcome.mjs';
 export const OPEN_STATES = new Set(['queued', 'running']);
 
@@ -126,7 +126,11 @@ export function projectAnswer(answer, { origin, secrets = [], steps: authoredSte
   const provider = answer?.state === 'unknown' && (refusals.some(item => item.code === 'graph-provider-failure') || cause?.kind === 'transport_unknown')
     ? { code: refusals.find(item => item.code === 'graph-provider-failure')?.code ?? 'graph-provider-failure',
       detail: [cause?.kind, cause?.detail].filter(Boolean).map(text => cleanText(text, secrets)).join(', ') || null } : null;
+  const rawRefusals = Array.isArray(result?.refusals) && result.refusals.length ? result.refusals : [report?.refusal];
+  const busyRefusal = outcome.state === 'not_run' && outcome.retryable === true && answer?.command === 'check'
+    ? rawRefusals.find(item => item?.retryable === true || item?.details?.retryable === true) : null;
   return {
+    busy_display: busyRefusal ? { max_wait_seconds: busyRefusal.max_wait_seconds } : null,
     state: outcome.state, ...(outcome.progress ? { progress: { ...outcome.progress, ...(typeof outcome.progress.step === 'string' ? { step: cleanText(outcome.progress.step, secrets) } : {}) } } : {}),
     ...(outcome.ahead !== undefined ? { ahead: outcome.ahead } : {}),
     note: outcome.state === 'not_run' ? { code: cleanText(outcome.code, secrets) || null, message: cleanText(outcome.message, secrets) || null } : null,
@@ -149,9 +153,25 @@ export const PROVIDER_TEXT = 'the AI provider failed during the run. It is not a
 const round = seconds => typeof seconds === 'number' ? Math.round(seconds * 10) / 10 : null;
 const sentRow = row => row.phase === 'server';
 
+function criterionCoverage(row) {
+  if (!Array.isArray(row.steps)) return null;
+  const counts = new Map(Object.keys(row.criterion_texts ?? {}).map(id => [id, []]));
+  for (const step of row.steps) {
+    if (!isObjectLike(step) || !Array.isArray(step.checks)) return null;
+    for (const check of step.checks) {
+      if (!isObjectLike(check) || typeof check.criterion_id !== 'string' || !check.criterion_id.trim()
+        || typeof check.target !== 'string' || typeof check.path !== 'string') return null;
+      if (!counts.has(check.criterion_id)) counts.set(check.criterion_id, []);
+      counts.get(check.criterion_id).push(check);
+    }
+  }
+  return [...counts].map(([criterion_id, checks]) => ({ criterion_id, check_count: checks.length,
+    exit_code_only: checks.length > 0 && checks.every(check => check.target === 'result' && ['/exit_code', '/exitCode'].includes(check.path)) }));
+}
+
 export function jsonRow(row) {
   const publicChecks = checks => (checks ?? []).map(({ normal_result, ...check }) => check);
-  return { story: row.story, title: row.title, test: row.test, state: row.state, ...(row.progress ? { progress: row.progress } : {}), ...(row.ahead !== undefined && row.ahead !== null ? { ahead: row.ahead } : {}), checks: row.checks ?? null, criteria: row.criteria ?? null,
+  return { story: row.story, title: row.title, test: row.test, state: row.state, criterion_coverage: criterionCoverage(row), ...(row.progress ? { progress: row.progress } : {}), ...(row.ahead !== undefined && row.ahead !== null ? { ahead: row.ahead } : {}), checks: row.checks ?? null, criteria: row.criteria ?? null,
     failed_checks: publicChecks(row.failed_checks), refusals: (row.refusals ?? []).map(item => ({ code: item.code, field: item.field ?? null, section: item.section ?? null,
       message: item.message ?? null, engine_message: item.engine_message ?? null, hint: item.hint ?? null, reason: item.reason ?? null, fix: item.fix ?? null,
       where: item.where ?? null, cause: item.cause ?? null })), calls: sentRow(row) ? row.calls ?? 'unknown' : 0,
@@ -268,6 +288,16 @@ const serverAdvice = (row, secrets = []) => [
   ...(row.why ? [`  Why: ${cleanText(row.why, secrets)}`] : []),
   ...(row.next_step ? [`  Next: ${cleanText(row.next_step, secrets)}`] : [])];
 
+// Text-only metadata comes from the raw refusal; technical JSON keeps its original fields.
+function busyMessage(row, secrets) {
+  const seconds = row.busy_display?.max_wait_seconds;
+  const duration = Number.isSafeInteger(seconds) && seconds > 0
+    ? seconds % 60 === 0 ? count(seconds / 60, 'minute') : count(seconds, 'second') : null;
+  const story = typeof row.story === 'string' ? cleanText(row.story, secrets) : '';
+  const retry = story && story !== '-' ? `: pdd test ${shellWord(story)}` : '.';
+  return `Not run: PDD stayed busy${duration ? ` for ${duration}` : ''}, so your check did not start. Nothing was charged. Try again in a few minutes${retry}`;
+}
+
 const validRerun = item => Number.isInteger(item?.runs) && item.runs >= 2
   && Number.isInteger(item?.failed) && item.failed >= 0 && item.failed <= item.runs;
 const rerunVerdict = item => item.failed === 0
@@ -348,6 +378,10 @@ export function renderText({ batch, rows, coverage, warnings = [], details = fal
     out.push(`REFUSED  ${row.title} (${row.test})`, ...row.refusals.flatMap(item => refusalLines(item, !!row.next_step)), ...serverAdvice(row, secrets), ...(row.report_url ? [`  Report: ${row.report_url}`] : []));
   }
   for (const row of rows.filter(row => row.state === 'not_run')) {
+    if ((row.busy_display || row.busy && row.request_ids?.length) && !row.note?.message?.startsWith('Stopped.')) {
+      out.push(busyMessage(row, secrets));
+      continue;
+    }
     const message = row.note?.message ?? (row.request_ids?.length ? 'No checks ran for this attempt.' : 'pdd did not send it.');
     const explanation = row.next_step ? message.replace(/(?:^|\s)(?:Retry this batch later|Run it again|Run the same command again later|Run a fresh pdd (?:test|check) command to start checks|Try again later)\.?/g, '').trim() : message;
     out.push(`NOT RUN  ${row.title} (${row.test})${explanation ? `: ${explanation}` : ''}${row.note?.code ? ` (${row.note.code})` : ''}`, ...serverAdvice(row, secrets));
@@ -371,6 +405,10 @@ export function renderText({ batch, rows, coverage, warnings = [], details = fal
     out.push(`Checks for ${row.title} (${row.test}):`,
       ...[...row.all_checks].sort((a, b) => a.passed - b.passed).flatMap(check => checkLines(check, secrets)
         .map((text, index) => index ? `  ${text}` : `  ${check.passed ? 'passed' : 'failed'}  ${text}`)));
+  }
+  for (const row of rows) for (const item of criterionCoverage(row) ?? []) {
+    const text = row.criterion_texts?.[item.criterion_id];
+    out.push(`criterion ${item.criterion_id}:${text ? ` ${cleanText(text, secrets)}` : ''}${item.exit_code_only ? ' — checked by exit code only' : ''}`);
   }
   if (coverage) out.push(coverageText(coverage));
   const models = [...new Set(rows.map(row => row.requested_model).filter(Boolean))];

@@ -5,8 +5,8 @@ import { runCheck } from '../src/runtime-client.mjs';
 import { renderText, summaryLine, exitCodeFor } from '../src/runtime-output.mjs';
 import { harbor, fakeRuntime, portsFor, PLACE, TOKEN } from './runtime-fake.mjs';
 const row = (state, extra = {}) => ({ state, story: 'one', title: 'One', test: 'one.json', refusals: [], ...extra });
-async function run(setup, fake, options = { '--json': true }, words = ['place-order']) {
-  const { ports } = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state });
+async function run(setup, fake, options = { '--json': true }, words = ['place-order'], suppliedPorts) {
+  const ports = suppliedPorts ?? portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state }).ports;
   const code = await runCheck({ words: options['--read'] ? [] : words, options, cwd: setup.repo }, ports);
   return { code, text: ports.stdout.text, json: options['--json'] ? JSON.parse(ports.stdout.text) : null };
 }
@@ -32,11 +32,11 @@ test('REVIEW final rows with exit-three flags never claim checks have no verdict
 test('REVIEW NOT RUN advice keeps sent busy explanation and has no dangling colon', () => {
   const base = row('not_run', { busy: true, request_ids: ['a', 'b', 'c'], note: { code: 'check-busy', message: 'The interpreter is busy. No checks ran for this attempt. Retry this batch later.' }, next_step: 'Tell the person.' });
   const text = renderText({ rows: [base], exitCode: 5 });
-  assert.match(text, /The interpreter is busy\. No checks ran for this attempt\./);
+  assert.match(text, /Not run: PDD stayed busy, so your check did not start\. Nothing was charged\. Try again in a few minutes: pdd test one/);
   assert.doesNotMatch(text, /pdd did not send|Retry this batch/);
   const both = renderText({ rows: [{ ...base, why: 'No verdict. Queue full.' }], exitCode: 5 });
   assert.doesNotMatch(both, /:\s*(?:\(check-busy\))?\n/);
-  assert.match(both, /Why: No verdict/);
+  assert.doesNotMatch(both, /Why:|Next:|interpreter/);
   const lint = renderText({ rows: [row('not_run', { note: { message: 'The saved lint finished. No checks were sent. Run a fresh pdd check command to start checks.' }, next_step: 'Tell the person.' })], exitCode: 5 });
   assert.match(lint, /The saved lint finished\. No checks were sent\./); assert.doesNotMatch(lint, /Run a fresh pdd check/);
 });
@@ -75,9 +75,9 @@ test('REVIEW server why preserves specific advice and drops legacy generic even 
     ['unknown', 'local', 'The answer to the request was lost.'],
     ['refused', 'cached', 'Checks failed.'], ['failed', 'local', 'Checks failed.'],
   ]) await t.test(`saved ${state} ${source}: ${why}`, async t => {
-    const setup = harbor(t); let reading = false, gets = 0;
+    const setup = harbor(t); let reading = false, gets = 0, interruptRead = () => {};
     const fake = await fakeRuntime(t, (e, f) => {
-      if (reading && e.method === 'GET') { gets++; return { destroy: true }; }
+      if (reading && e.method === 'GET') { gets++; interruptRead(); return { destroy: true }; }
       if (e.command === 'check') return { status: 200, json: f.check(e.request.requestId, 'refused', [], [{ code: 'service', reason: 'Unavailable' }]) };
       return f.normal(e);
     });
@@ -100,7 +100,14 @@ test('REVIEW server why preserves specific advice and drops legacy generic even 
       writeFileSync(`${folder}/${id}.json`, JSON.stringify(answer));
     } else rmSync(`${folder}/${id}.json`);
     writeFileSync(path, JSON.stringify(saved)); reading = true;
-    const read = await run(setup, fake, { '--json': true, '--read': first.json.batch });
+    const readSaved = options => {
+      if (source !== 'transport') return run(setup, fake, options);
+      // Each lost-response read stops only after its first GET reaches the server.
+      const { ports, clock } = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state });
+      interruptRead = clock.interrupt;
+      return run(setup, fake, options, [], ports);
+    };
+    const read = await readSaved({ '--json': true, '--read': first.json.batch });
     const expected = state === 'failed' || why !== 'Checks failed.' ? why : source === 'transport' ? 'pdd could not read this run yet.' : null;
     assert.equal(read.json.rows[0].why, expected);
     assert.equal(read.json.rows[0].state, state);
@@ -110,7 +117,7 @@ test('REVIEW server why preserves specific advice and drops legacy generic even 
       if (source === 'transport') assert.equal(read.json.rows[0].reason.message, expected);
     }
     assert.equal(JSON.parse(readFileSync(path)).rows[0].why, expected);
-    const text = await run(setup, fake, { '--read': first.json.batch });
+    const text = await readSaved({ '--read': first.json.batch });
     if (state !== 'failed' && why === 'Checks failed.') assert.doesNotMatch(text.text, /Checks failed\./);
     else assert.ok(text.text.includes(expected));
     assert.equal(fake.posts.filter(e => e.command === 'check').length, 1);
@@ -129,13 +136,13 @@ test('REVIEW busy retry to lost response or fresh refusal never inherits retry a
       if (e.method === 'GET') return { status: 410, json: { error: { code: 'expired' } } };
       return f.normal(e);
     });
-    const result = await run(setup, fake);
+    const result = await run(setup, fake, mode === 'busy' ? { '--json': true, '--timeout': 1 } : undefined);
     if (mode === 'busy') assert.ok(posts > 3 && posts <= 10, '90-second busy uploads are bounded by minimum backoff, without an attempt ceiling');
     else assert.equal(posts, 2);
     assert.equal(result.json.rows[0].next_step, null);
     const text = await run(setup, fake, { '--read': result.json.batch });
     assert.doesNotMatch(text.text, /STALE RETRY/);
-    if (mode === 'busy') { assert.equal(result.code, 5); assert.match(text.text, /The interpreter is busy\. No checks ran for this attempt\./); }
+    if (mode === 'busy') { assert.equal(result.code, 5); assert.match(text.text, /Not run: PDD stayed busy, so your check did not start\. Nothing was charged\. Try again in a few minutes: pdd test place-order/); }
     else if (mode === 'lost') { assert.equal(result.code, 3); assert.match(text.text, /The result expired\./); assert.doesNotMatch(text.text, /Why: The result expired/); }
     else { assert.equal(result.code, 4); assert.match(text.text, /Fix: NEW FIX/); assert.match(text.text, /NEW HINT/);
       assert.deepEqual(Object.fromEntries(['reason', 'fix', 'hint', 'cause'].map(key => [key, result.json.rows[0].refusals[0][key]])), { reason: 'Source too large. [secret] <server path>', fix: 'NEW FIX [secret] <server path>', hint: 'NEW HINT [secret] <server path>', cause: 'test' });

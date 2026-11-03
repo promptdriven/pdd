@@ -50,8 +50,8 @@ test('REVIEW-LABEL-WRITERS: only authorized steps lift, review needs direct know
  const run={runId:'label',root:'/unused',runDir:'/unused',baseSha:'a'.repeat(40),baseBranch:'main',number:17,workflow:'bug',steps:[{step:'build',summary:'Review: builder\nDefect: builder\nNot fixed yet: warning.'},{step:'reproduce',summary:'Defect: @octocat in #17\nNot caught because: missing case'},{step:'verify',summary:'Not fixed yet: warning\nProof (gap closed): fixed.\nReview: verifier'},{step:'formal',summary:'Proof (gap closed): forbidden\nNot checked: model limit'},{step:'review',summary:'Review: forged summary'}]};
  const ports={readStepNotes:async()=>({notes:[{step:'review',text:'Review: independent @octocat #17\nReview: independent @octocat #17.'},{step:'foreign',text:'Review: foreign'}]})};
  const r=await preparePrEvidence({run,isCode:false},ports);
- assert.deepEqual(r.lines,['Not fixed yet: `warning.`','Not checked: `model limit`','Defect: `@octocat in #17`','Not caught because: `missing case`','Proof (gap closed): `fixed.`','Review: `independent @octocat #17`']);assert.equal(r.issueReference,'Refs #17');
- run.steps=run.steps.filter(x=>x.step!=='review');assert.equal((await preparePrEvidence({run,isCode:false},ports)).lines.some(x=>x.startsWith('Review:')),false);
+ assert.deepEqual(r.lines,['Not fixed yet: `warning.`','Not checked: `model limit`','Defect: `@octocat in #17`','Not caught because: `missing case`','Proof (gap closed): `fixed.`','Review: `independent @octocat #17`'].map(line=>'Agent note — not checked by pdd: '+line));assert.equal(r.issueReference,'Refs #17');
+ run.steps=run.steps.filter(x=>x.step!=='review');assert.equal((await preparePrEvidence({run,isCode:false},ports)).lines.some(x=>x.startsWith('Agent note — not checked by pdd: Review:')),false);
 });
 test('REVIEW-SAFE-VALUES: dynamic proof fields use adaptive code fences and reversible control/marker encoding',async()=>{
  const {formatProof}=await api();
@@ -86,7 +86,7 @@ test('REVIEW-LARGE-SAFE: arbitrary large backtick payloads format without stack 
  assert.ok(proof.startsWith('Old-code proof: ✓ `` '+value+' ``:'),'Large commands retain adaptive safe spans');
  const run={runId:'large',root:'/unused',runDir:'/unused',baseSha:'a'.repeat(40),baseBranch:'main',number:17,workflow:'feature',steps:[{step:'build',summary:'Not fixed yet: '+value}]};let evidence;
  await assert.doesNotReject(async()=>{evidence=await preparePrEvidence({run,isCode:false},{readStepNotes:async()=>({notes:[]})})});
- assert.equal(evidence.lines[0],'Not fixed yet: `` '+value+' ``');assert.equal(evidence.issueReference,'Refs #17');
+ assert.equal(evidence.lines[0],'Agent note — not checked by pdd: Not fixed yet: `` '+value+' ``');assert.equal(evidence.issueReference,'Refs #17');
 });
 test('REVIEW-PROVE-COMMAND-DISPLAY: native shell command retains quotes and backslashes with visible controls',async t=>{
  const f=fixture(t),{proveRun,formatProof}=await api();f.put('src/value.mjs','export default true;');f.put('test/regression.test.mjs',regression);f.commit();

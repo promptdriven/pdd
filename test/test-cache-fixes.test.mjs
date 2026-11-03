@@ -67,7 +67,7 @@ async function successful(ctx, words = [], options = {}) {
 }
 for (const readMode of ['batch', 'uuid']) test(`TEST-CACHE-FIX late ${readMode} read retains original sample age`, async t => {
   const ctx = await setup(t); ctx.state.running = true;
-  const started = ctx.clock.now, first = await ctx.invoke(['independent']);
+  const started = ctx.clock.now, first = await ctx.invoke(['independent'], { '--timeout': 1 });
   assert.equal(first.code, 3); assert.equal(first.sent, 1);
   ctx.state.running = false; ctx.clock.now += 9 * day;
   const id = readMode === 'batch' ? first.json.batch : ctx.fake.posts.find(x => x.command === 'check').request.requestId;
@@ -108,7 +108,7 @@ test('TEST-CACHE-FIX sibling-only reached prompt does not poison selected test',
   const ctx = await setup(t, repo => {
     const doc = read(join(repo, 'tests/place-order.json'));
     for (const step of doc.steps) step.entry_path = 'prompts/independent.prompt.md';
-    write(join(repo, 'tests/place-order-2.json'), doc);
+    write(join(repo, 'tests/place-order.second.json'), doc);
   });
   assert.equal((await successful(ctx)).sent, 4);
   assert.equal((await successful(ctx, selected)).sent, 0);
@@ -147,7 +147,7 @@ for (const stop of ['timeout', 'interrupt']) test(`TEST-CACHE-FIX identity rerun
   const ctx = await setup(t); assert.equal((await successful(ctx)).sent, 3);
   changeIndependent(ctx); ctx.state.identity.engine_sha = 'b'.repeat(40); ctx.state.running = true;
   if (stop === 'interrupt') ctx.ports.sleep = async ms => { ctx.clock.now += ms; ctx.clock.interrupt(); };
-  const result = await ctx.invoke([], { '--json': false });
+  const result = await ctx.invoke([], { '--json': false, ...(stop === 'timeout' ? { '--timeout': 1 } : {}) });
   assert.equal(result.code, 3); assert.equal(result.sent, 1);
   assert.equal((result.stderr.match(/Lint passed\./g) ?? []).length, 1, 'no second lint/send claim without dispatch');
   assert.doesNotMatch(result.stderr, /Sending 2 more/);

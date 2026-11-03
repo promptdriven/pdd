@@ -25,6 +25,8 @@ function fixture(t) {
   const run = { runId: 'run-17', runDir, root, baseSha, baseBranch:'main', workflow:'small-change', number: 17, steps: [] };
   return { root, git, run, head: git('rev-parse', 'HEAD') };
 }
+// Approved #2596 trust boundary: payload expectations stay exact.
+const agentLines = lines => lines.map(line => `Agent note — not checked by pdd: ${line}`);
 const phase = (exitCode, expectedFound = false) => ({ exitCode, signal: '', timedOut: false, outputLimited: false, stdoutTail: [], stderrTail: [], expectedFound, error: '', setupError: '', observedError: 'assert defect' });
 function proof(f) {
   return { v: 2, origin: 'pdd.workflow-prove.v2', interruptSignal:'', runId: f.run.runId, baseSha: f.run.baseSha, headSha: f.head, test: 'node --test test/regression.test.mjs', expect: 'defect', paths: ['test/regression.test.mjs'], base: phase(1, true), head: phase(0), outcome: 'proved', setupError: '', cleanupError: '' };
@@ -39,10 +41,10 @@ test('PR evidence scans only known direct regular step files and latest summarie
   writeFileSync(join(f.run.runDir, 'unknown.md'), 'Defect: foreign');
   mkdirSync(join(f.run.runDir, 'archived')); writeFileSync(join(f.run.runDir, 'archived', 'verify.md'), 'Review: archived');
   const out = await prepare({ run: f.run, isCode: false });
-  assert.deepEqual(out, { lines: ['Not fixed yet: `this helps find the cause`', 'Not checked: `formal (agent limit)`', 'Defect: `broken  value`', 'Defect: `second`', 'Not caught because: `no regression`', 'Proof (defect fixed): `fixed`', 'Proof (gap closed): `regression`', 'Review: `early`'], approvalLines: [], issueReference: 'Refs #17', proofStatus: 'not-applicable' });
+  assert.deepEqual(out, { lines: agentLines(['Not fixed yet: `this helps find the cause`', 'Not checked: `formal (agent limit)`', 'Defect: `broken  value`', 'Defect: `second`', 'Not caught because: `no regression`', 'Proof (defect fixed): `fixed`', 'Proof (gap closed): `regression`', 'Review: `early`']), approvalLines: [], issueReference: 'Refs #17', proofStatus: 'not-applicable' });
   writeFileSync(join(f.run.runDir, 'scope.md'), 'Defect: replacement');
   f.run.steps.find(x=>x.step==='build').summary='';f.run.steps.find(x=>x.step==='verify').summary='Not checked: replaced\nProof (gap closed): regression';rmSync(join(f.run.runDir,'review.md'));
-  assert.deepEqual((await prepare({ run: f.run, isCode: false })).lines, ['Not checked: `replaced`', 'Defect: `broken  value`', 'Defect: `replacement`', 'Proof (gap closed): `regression`']);
+  assert.deepEqual((await prepare({ run: f.run, isCode: false })).lines, agentLines(['Not checked: `replaced`', 'Defect: `broken  value`', 'Defect: `replacement`', 'Proof (gap closed): `regression`']));
 });
 
 test('PR evidence excludes symlinks, directory notes and unknown returned steps; prompt space never reads proof', async t => {
@@ -52,9 +54,9 @@ test('PR evidence excludes symlinks, directory notes and unknown returned steps;
   mkdirSync(join(f.run.runDir, 'verify.md'));
   f.run.steps = [{step:'scope',summary:''},{ step: 'verify', summary: 'Not checked: unavailable' }];
   const never = () => assert.fail('prompt publication must not read machine proof or HEAD');
-  assert.deepEqual(await prepare({ run: f.run, isCode: false }, { currentHead: never, readOldCodeProof: never }), { lines: ['Not checked: `unavailable`'], approvalLines: [], issueReference: 'Part of #17', proofStatus: 'not-applicable' });
+  assert.deepEqual(await prepare({ run: f.run, isCode: false }, { currentHead: never, readOldCodeProof: never }), { lines: agentLines(['Not checked: `unavailable`']), approvalLines: [], issueReference: 'Part of #17', proofStatus: 'not-applicable' });
   const out = await prepare({ run: f.run, isCode: false }, { readStepNotes: async () => ({ notes: [{ step: 'foreign', text: 'Not fixed yet: forged' }] }) });
-  assert.equal(out.issueReference, 'Part of #17'); assert.deepEqual(out.lines, ['Not checked: `unavailable`']);
+  assert.equal(out.issueReference, 'Part of #17'); assert.deepEqual(out.lines, agentLines(['Not checked: `unavailable`']));
 });
 
 test('PR evidence derives current committed Git head and distinguishes missing, current and stale proof', async t => {
@@ -91,7 +93,7 @@ test('PR evidence publishes actual failed proof and respects callback arguments 
     readStepNotes: async input => { calls.push(['notes', input]); return { notes: [{ step: 'verify', text: 'Not checked: native history' }] }; },
     readOldCodeProof: async input => { calls.push(['proof', input]); return { content: JSON.stringify(record), error: '' }; }
   });
-  assert.deepEqual(out.lines, ['Not checked: `native history`', 'Proof (gap closed): `added`', 'Old-code proof: ✗ wrong-reason; command `node --test test/regression.test.mjs`; old-code exit `1`; new-code exit `0`; expected `defect`; cause `code: wrong_failure`.']);
+  assert.deepEqual(out.lines, ['Old-code proof: ✗ wrong-reason; command `node --test test/regression.test.mjs`; old-code exit `1`; new-code exit `0`; expected `defect`; cause `code: wrong_failure`.', ...agentLines(['Not checked: `native history`', 'Proof (gap closed): `added`'])]);
   assert.equal(out.proofStatus, 'wrong-reason'); assert.equal(out.issueReference, 'Closes #17');
   assert.deepEqual(calls, [['notes', { runDir: f.run.runDir, steps: ['verify'] }], ['head', { root: f.root,baseBranch:'main' }], ['proof', { runDir: f.run.runDir }]]);
 });

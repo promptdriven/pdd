@@ -134,7 +134,7 @@ test('ALPHA7: each runner route calls its own export once with parsed values, cw
   for (const [argv, name, input] of cases) {
     const calls = [], stdout = capture(), stderr = capture();
     const runner = { [name]: async value => { calls.push(value); return { exitCode: 0, message: `${name} ok` }; } };
-    assert.equal(await runPdd(argv, { workflowRunner: runner, cwd: '/chosen', packageRoot: '/bundle', stdout, stderr }), 0, argv.join(' '));
+    assert.equal(await runPdd(argv, { workflowAgents: { checkWorkflowAgents: async ({ requested }) => ({ ok: true, agent: requested ?? 'codex', message: '' }) }, workflowRunner: runner, cwd: '/chosen', packageRoot: '/bundle', stdout, stderr }), 0, argv.join(' '));
     assert.deepEqual(calls, [{ ...input, cwd: '/chosen', packageRoot: '/bundle' }]);
     assert.equal(stdout.text, `${name} ok\n`); assert.equal(stderr.text, '');
   }
@@ -187,7 +187,7 @@ test('2640 CLI parses and forwards --adopt-corpus exactly and retains startup ex
   const cwd=temp(t),stdout=capture(),stderr=capture();let input;
   const args=['workflow','run','replay','17','--base','main','--adopt-corpus','/approval folder/corpus.json'];
   assert.equal(parseArgv(args).options['--adopt-corpus'],'/approval folder/corpus.json');
-  const code=await runPdd(args,{cwd,stdout,stderr,env:{HOME:cwd,PATH:''},workflowRunner:{startRun:async value=>{input=value;return {exitCode:2,message:'Cannot adopt (content-mismatch).'};}}});
+  const code=await runPdd(args,{cwd,stdout,stderr,env:{HOME:cwd,PATH:''},workflowAgents: { checkWorkflowAgents: async ({ requested }) => ({ ok: true, agent: requested ?? 'codex', message: '' }) }, workflowRunner:{startRun:async value=>{input=value;return {exitCode:2,message:'Cannot adopt (content-mismatch).'};}}});
   assert.equal(code,2);assert.equal(input.adoptCorpus,'/approval folder/corpus.json');assert.equal(input.name,'replay');assert.equal(input.base,'main');assert.match(stderr.text,/Cannot adopt/);assert.equal(stdout.text,'');
   for(const option of [[],[''],['a','--adopt-corpus','b']])assert.throws(()=>parseArgv(['workflow','run','replay','17','--adopt-corpus',...option]),CommandInputError);
   for(const shell of ['bash','zsh'])assert.match(renderCompletion(shell),/--adopt-corpus/);

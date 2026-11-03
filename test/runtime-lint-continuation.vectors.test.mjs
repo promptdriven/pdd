@@ -7,15 +7,15 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { runCheck, runTry } from '../src/runtime-client.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
-import { harbor, fakeRuntime, portsFor, PLACE, TOKEN } from './runtime-fake.mjs';
+import { harbor, fakeRuntime, portsFor, PLACE, TOKEN, storyTest } from './runtime-fake.mjs';
 
 // Native replay of the approved Story's case table. There are no executable Runtime
 // vectors for this native boundary (#2548); this suite does not claim a Runtime pass.
 const START = Date.parse('2026-10-27T16:27:47Z');
 async function setup(t, { mode = 'check', interactive = false, timeout, multiple = false } = {}) {
   const h = harbor(t, repo => {
-    if (multiple === 'mixed') { const doc = JSON.parse(readFileSync(join(repo, 'tests/place-order.json'))); doc.steps = []; writeFileSync(join(repo, 'tests/second-1.json'), JSON.stringify(doc)); }
-    for (let i = 1; multiple !== 'mixed' && i < (multiple === true || multiple === 'mixed' ? 2 : multiple || 1); i++) copyFileSync(join(repo, 'tests/place-order.json'), join(repo, `tests/second-${i}.json`));
+    if (multiple === 'mixed') { storyTest(repo, 'second-1'); const doc = JSON.parse(readFileSync(join(repo, 'tests/second-1.json'))); doc.steps = []; writeFileSync(join(repo, 'tests/second-1.json'), JSON.stringify(doc)); }
+    for (let i = 1; multiple !== 'mixed' && i < (multiple === true || multiple === 'mixed' ? 2 : multiple || 1); i++) storyTest(repo, `second-${i}`);
   });
   const state = { lint: 'running', checks: 'passed', lost: false, clock: null, readyAt: Infinity };
   const f = await fakeRuntime(t, async (e, f) => {
@@ -68,7 +68,7 @@ const paid = r => r.f.posts.filter(e => e.command === 'check');
 
 for (const [name, config, expect, elapsed] of [
   ['explicit wait', { timeout: 4 }, 0, 150000],
-  ['agent default', {}, 3, 90000],
+  ['agent default', {}, 0, 150000],
   ['interactive', { interactive: true }, 0, 150000],
   ['lint-only wait', { mode: 'lint', timeout: 4 }, 0, 150000],
   ['Try interactive', { mode: 'try', interactive: true }, 0, 150000],
@@ -81,8 +81,29 @@ for (const [name, config, expect, elapsed] of [
   assert.equal(paid(r).length, code === 0 && r.mode === 'check' ? 1 : 0);
   if (paid(r).length) assert.equal(paid(r)[0].request.max_calls, 6);
 });
+// A saved read must keep the original accepted lint ID pending beyond the old cutoff.
+for (const interactive of [false, true]) test(`CONTINUATION one-call saved pending lint (${interactive ? 'person' : 'agent'})`, async t => {
+  const r = await setup(t, { timeout: 1 });
+  const seed = await r.first();
+  assert.equal(seed.code, 3); assert.equal(paid(r).length, 0);
+  const lintId = r.f.posts.find(e => e.command === 'lint').request.requestId;
+  r.state.readyAt = START + 150000;
+  const before = r.f.gets.length;
+  const next = await recovery(r, seed.batch, false, { interactive });
+  assert.equal(next.code, 0, 'saved read waits through pending lint and dispatches original held check once');
+  assert.equal(next.clock.now - START, 150000);
+  assert.equal(r.f.posts.filter(e => e.command === 'lint').length, 1);
+  assert.ok(r.f.gets.slice(before).length > 1);
+  assert.ok(r.f.gets.slice(before).every(e => e.url.endsWith(lintId)));
+  assert.equal(paid(r).length, 1); assert.equal(paid(r)[0].request.max_calls, 6);
+  assert.equal(saved(r, seed.batch).doc.timeout_min, null);
+  const again = await recovery(r, seed.batch, false, { interactive });
+  assert.equal(again.code, 0); assert.equal(again.clock.uuids, 0);
+  assert.equal(paid(r).length, 1);
+  assert.equal(again.json.rows[0].request_id, next.json.rows[0].request_id);
+});
 for (const retry of [false, true]) test(`CONTINUATION native table: ${retry ? 'retry' : 'read'} and repeat`, async t => {
-  const r = await setup(t); const { batch } = await r.first(); r.state.lint = 'passed';
+  const r = await setup(t, { timeout: 1 }); const { batch } = await r.first(); r.state.lint = 'passed';
   const next = await recovery(r, batch, retry); assert.equal(next.code, 0, next.ports.stderr.text);
   assert.equal(paid(r).length, 1); assert.equal(paid(r)[0].request.max_calls, 6);
   assert.equal(r.f.posts.filter(e => e.command === 'lint').length, 1);
@@ -91,7 +112,7 @@ for (const retry of [false, true]) test(`CONTINUATION native table: ${retry ? 'r
   assert.equal(again.json.rows[0].request_id, next.json.rows[0].request_id);
 });
 for (const retry of [false, true]) test(`CONTINUATION native table: concurrent read/${retry ? 'retry' : 'read'}`, async t => {
-  const r = await setup(t, { multiple: true }); const { batch } = await r.first(); r.state.lint = 'passed';
+  const r = await setup(t, { timeout: 1, multiple: true }); const { batch } = await r.first(); r.state.lint = 'passed';
   const replies = await Promise.all([recovery(r, batch), recovery(r, batch, retry)]);
   assert.equal(paid(r).length, 2, 'one POST per original held row');
   assert.equal(new Set(paid(r).map(e => e.request.scenario)).size, 2);
@@ -105,17 +126,17 @@ for (const retry of [false, true]) test(`CONTINUATION native table: concurrent r
 });
 
 test('CONTINUATION native table: lost POST and repeated recovery preserve ID and unknown usage', async t => {
-  const r = await setup(t); const { batch } = await r.first(); r.state.lint = 'passed'; r.state.lost = true;
-  const next = await recovery(r, batch); assert.equal(next.code, 3);
+  const r = await setup(t, { timeout: 1 }); const { batch } = await r.first(); r.state.lint = 'passed'; r.state.lost = true;
+  const next = await recovery(r, batch, false, {}, { '--timeout': 1 }); assert.equal(next.code, 3);
   const id = paid(r)[0].request.requestId;
   for (let i = 0; i < 2; i++) {
-    const again = await recovery(r, batch); assert.equal(again.code, 3); assert.equal(again.clock.uuids, 0);
+    const again = await recovery(r, batch, false, {}, { '--timeout': 1 }); assert.equal(again.code, 3); assert.equal(again.clock.uuids, 0);
     assert.equal(again.json.rows[0].request_id, id); assert.equal(again.json.rows[0].calls, 'unknown');
   }
   assert.equal(paid(r).length, 1);
 });
 for (const change of ['owner', 'repo', 'source']) test(`CONTINUATION native table: changed ${change} refuses before UUID`, async t => {
-  const r = await setup(t); const { batch } = await r.first(); r.state.lint = 'passed';
+  const r = await setup(t, { timeout: 1 }); const { batch } = await r.first(); r.state.lint = 'passed';
   if (change === 'repo') { const s = saved(r, batch); s.doc.root += '-elsewhere'; writeFileSync(s.path, JSON.stringify(s.doc)); }
   if (change === 'source') writeFileSync(join(r.h.repo, PLACE), readFileSync(join(r.h.repo, PLACE), 'utf8') + '\nChanged.\n');
   const extra = change === 'owner' ? { gh: args => ({ status: 0, stdout: args[0] === 'auth' ? 'token' : 'other 123' }) } : {};
@@ -123,8 +144,8 @@ for (const change of ['owner', 'repo', 'source']) test(`CONTINUATION native tabl
   if (change === 'source') { assert.equal(next.code, 5); assert.equal(next.json.rows.length, 1); assert.match(next.ports.stderr.text, /No checks were sent.*source changed/); } else assert.ok([2, 5].includes(next.code)); assert.equal(next.clock.uuids, 0); assert.equal(paid(r).length, 0);
 });
 for (const lint of ['running', 'wrong-id', 'wrong-command', 'unknown', 'missing', 'reached', 'global']) test(`CONTINUATION native table: ${lint} lint never authorizes checks`, async t => {
-  const r = await setup(t); const { batch } = await r.first(); r.state.lint = lint;
-  const next = await recovery(r, batch); assert.notEqual(next.code, 0); assert.equal(next.clock.uuids, 0); assert.equal(paid(r).length, 0);
+  const r = await setup(t, { timeout: 1 }); const { batch } = await r.first(); r.state.lint = lint;
+  const next = await recovery(r, batch, false, {}, { '--timeout': 1 }); assert.notEqual(next.code, 0); assert.equal(next.clock.uuids, 0); assert.equal(paid(r).length, 0);
 });
 for (const legacy of [false, true]) test(`CONTINUATION native table: standalone ${legacy ? 'legacy' : 'new'} never dispatches`, async t => {
   const r = await setup(t, { mode: 'lint' }); const { batch } = await r.first(); r.state.lint = 'passed';
@@ -133,7 +154,7 @@ for (const legacy of [false, true]) test(`CONTINUATION native table: standalone 
   assert.equal(paid(r).length, 0);
 });
 for (const form of ['pending', 'already-read', 'prior-unknown']) test(`CONTINUATION native table: legacy ${form} omitted calls`, async t => {
-  const r = await setup(t); const { batch } = await r.first(); r.state.lint = 'passed';
+  const r = await setup(t, { timeout: 1 }); const { batch } = await r.first(); r.state.lint = 'passed';
   const s = saved(r, batch); delete s.doc.intent; delete s.doc.rows[0].calls;
   if (form === 'already-read') {
     s.doc.lint = { ...s.doc.lint, state: 'passed', unknown: false, pending: false };
@@ -144,7 +165,7 @@ for (const form of ['pending', 'already-read', 'prior-unknown']) test(`CONTINUAT
   const next = await recovery(r, batch); assert.equal(next.code, 0, next.ports.stderr.text); assert.equal(paid(r).length, 1);
 });
 for (const bad of ['positive', 'unknown', 'null', 'cap', 'criteria', 'steps', 'intent', 'version', 'incomplete']) test(`CONTINUATION native table: ambiguous legacy ${bad} fails closed`, async t => {
-  const r = await setup(t); const { batch } = await r.first(); r.state.lint = 'passed'; const s = saved(r, batch); delete s.doc.intent;
+  const r = await setup(t, { timeout: 1 }); const { batch } = await r.first(); r.state.lint = 'passed'; const s = saved(r, batch); delete s.doc.intent;
   if (bad === 'positive') s.doc.rows[0].calls = 1;
   if (bad === 'unknown') s.doc.rows[0].calls = 'unknown';
   if (bad === 'null') s.doc.rows[0].calls = null;
@@ -158,20 +179,20 @@ for (const bad of ['positive', 'unknown', 'null', 'cap', 'criteria', 'steps', 'i
   assert.equal(next.code, 5); assert.equal(next.json.rows.length, 1); assert.equal(next.clock.uuids, 0); assert.equal(paid(r).length, 0); assert.match(next.ports.stderr.text, /intent|proof/i);
 });
 test('CONTINUATION native table: saved origin and selected source only', async t => {
-  const r = await setup(t); const { batch } = await r.first(); r.state.lint = 'passed';
+  const r = await setup(t, { timeout: 1 }); const { batch } = await r.first(); r.state.lint = 'passed';
   r.env.PDD_RUNTIME_URL = 'https://changed.example';
   // New unrelated untracked files do not enter the saved selected capture.
   writeFileSync(join(r.h.repo, 'user_stories/unrelated.md'), '# Unrelated\n');
   const next = await recovery(r, batch); assert.equal(next.code, 0); assert.equal(paid(r).length, 1);
   assert.equal(paid(r)[0].request.scenario, 'tests/place-order.json');
 });
-for (const timeout of [undefined, 4]) test(`CONTINUATION native table: fresh deadline ${timeout ?? 'default'}`, async t => {
-  const r = await setup(t); const { batch } = await r.first(); r.state.lint = 'passed'; r.state.checks = 'running';
-  const next = await recovery(r, batch, false, {}, timeout ? { '--timeout': timeout } : {});
-  assert.equal(next.code, 3); assert.equal(next.clock.now - START, (timeout ?? 1.5) * 60000); assert.equal(paid(r).length, 1);
+for (const timeout of [1, 4]) test(`CONTINUATION native table: fresh explicit deadline ${timeout}`, async t => {
+  const r = await setup(t, { timeout: 1 }); const { batch } = await r.first(); r.state.lint = 'passed'; r.state.checks = 'running';
+  const next = await recovery(r, batch, false, {}, { '--timeout': timeout || 1 });
+  assert.equal(next.code, 3); assert.equal(next.clock.now - START, (timeout ?? 1) * 60000); assert.equal(paid(r).length, 1);
 });
 for (const when of ['before-claim', 'after-claim', 'incomplete-claim']) test(`CONTINUATION native table: interruption ${when}`, async t => {
-  const r = await setup(t); const { batch } = await r.first(); r.state.lint = 'passed';
+  const r = await setup(t, { timeout: 1 }); const { batch } = await r.first(); r.state.lint = 'passed';
   let interrupt;
   const extra = { onInterrupt: handler => { interrupt = handler; if (when === 'before-claim') handler(); return () => {}; } };
   if (when === 'after-claim') extra.randomUUID = () => { interrupt(); return '11111111-1111-4111-8111-111111111111'; };
@@ -192,7 +213,7 @@ test('CONTINUATION native table: parser accepts timeout on remote lint and saved
 });
 
 test('CONTINUATION native table: posted completed/running/lost/unknown IDs remain read-only beside a held row', async t => {
-  const r = await setup(t, { multiple: 5 }); const { batch } = await r.first(); r.state.lint = 'passed';
+  const r = await setup(t, { timeout: 1, multiple: 5 }); const { batch } = await r.first(); r.state.lint = 'passed';
   const s = saved(r, batch);
   const states = ['passed', 'running', 'unknown', 'sending'];
   const ids = states.map((_, i) => `22222222-2222-4222-8222-22222222222${i}`);
@@ -209,7 +230,7 @@ test('CONTINUATION native table: posted completed/running/lost/unknown IDs remai
 // Story AC5 and Recovery deadline: authentication and receipt refresh share the
 // caller's minute; local evidence is still readable after that minute expires.
 async function budgetFixture(t, { unknown = false, terminalLint = false, openCheck = false } = {}) {
-  const r = await setup(t, { multiple: openCheck ? 3 : true }), { batch } = await r.first();
+  const r = await setup(t, { timeout: 1, multiple: openCheck ? 3 : true }), { batch } = await r.first();
   const s = saved(r, batch), folder = join(r.h.state, 'batches', batch);
   const id = '44444444-4444-4444-8444-444444444444', receipt = r.f.check(id);
   Object.assign(s.doc.rows[1], { request_ids: [id], state: 'passed', phase: 'server', note: null });
@@ -346,15 +367,15 @@ for (const retry of [false, true]) test(`CONTINUATION repair2: interrupted ${ret
 });
 
 for (const retry of [false, true]) test(`CONTINUATION repair1: completed receipt survives slow held ${retry ? 'retry' : 'read'}`, async t => {
-  const r = await setup(t, { multiple: true }); const { batch } = await r.first();
+  const r = await setup(t, { timeout: 1, multiple: true }); const { batch } = await r.first();
   const s = saved(r, batch), completed = s.doc.rows[1], id = '22222222-2222-4222-8222-222222222222';
   Object.assign(completed, { request_ids: [id], state: 'passed', phase: 'server', note: null });
   const receipt = r.f.check(id), folder = join(r.h.state, 'batches', batch);
   writeFileSync(join(folder, id + '.json'), JSON.stringify(receipt));
   writeFileSync(s.path, JSON.stringify(s.doc));
   r.state.lint = 'passed'; r.state.checks = 'running';
-  const next = await recovery(r, batch, retry);
-  assert.equal(next.code, 3); assert.equal(next.clock.now - START, 90000);
+  const next = await recovery(r, batch, retry, {}, { '--timeout': 1 });
+  assert.equal(next.code, 3); assert.equal(next.clock.now - START, 60000);
   assert.equal(paid(r).length, 1, 'only the held row gets a first POST');
   assert.equal(new Set(paid(r).map(post => post.request.requestId)).size, 1, 'only the held row receives a new request ID'); assert.equal(paid(r)[0].request.scenario, s.doc.rows[0].test);
   assert.equal(paid(r)[0].request.max_calls, 6);
@@ -370,14 +391,14 @@ for (const retry of [false, true]) test(`CONTINUATION repair1: completed receipt
   assert.deepEqual(saved(r, batch).doc.rows[1].request_ids, [id]);
   assert.deepEqual(JSON.parse(readFileSync(join(folder, id + '.json'))), receipt);
   assert.ok(r.f.gets.every(entry => !entry.url.endsWith(id)), 'saved terminal answer needs no GET');
-  const again = await recovery(r, batch, retry);
+  const again = await recovery(r, batch, retry, {}, { '--timeout': 1 });
   assert.equal(again.code, 3); assert.equal(again.clock.uuids, 0); assert.equal(paid(r).length, 1);
   assert.deepEqual(again.json.rows.find(row => row.test === completed.test), prior);
 });
 
 for (const legacy of [false, true]) for (const retry of [false, true]) {
   for (const cap of [undefined, null, 0, 1001, 1.5, '6']) test(`CONTINUATION repair1: ${legacy ? 'legacy' : 'current'} ${retry ? 'retry' : 'read'} rejects saved cap ${String(cap)}`, async t => {
-    const r = await setup(t); const { batch } = await r.first(); r.state.lint = 'passed';
+    const r = await setup(t, { timeout: 1 }); const { batch } = await r.first(); r.state.lint = 'passed';
     const s = saved(r, batch), folder = join(r.h.state, 'batches', batch);
     if (legacy) delete s.doc.intent;
     if (cap === undefined) delete s.doc.rows[0].max_calls;
@@ -408,7 +429,7 @@ for (const legacy of [false, true]) for (const retry of [false, true]) {
 }
 
 for (const legacy of [false, true]) for (const cap of [1, 1000]) test(`CONTINUATION repair1: ${legacy ? 'legacy' : 'current'} retains boundary ceiling ${cap}`, async t => {
-  const r = await setup(t); const { batch } = await r.first(); r.state.lint = 'passed';
+  const r = await setup(t, { timeout: 1 }); const { batch } = await r.first(); r.state.lint = 'passed';
   const s = saved(r, batch); if (legacy) delete s.doc.intent;
   s.doc.rows[0].max_calls = cap; writeFileSync(s.path, JSON.stringify(s.doc));
   const next = await recovery(r, batch);
@@ -417,7 +438,7 @@ for (const legacy of [false, true]) for (const cap of [1, 1000]) test(`CONTINUAT
 });
 
 for (const legacy of [false, true]) test(`CONTINUATION repair1: missing ${legacy ? 'legacy' : 'current'} held ceiling does not block independent busy row`, async t => {
-  const r = await setup(t, { multiple: true }); const { batch } = await r.first(); r.state.lint = 'passed';
+  const r = await setup(t, { timeout: 1, multiple: true }); const { batch } = await r.first(); r.state.lint = 'passed';
   const s = saved(r, batch), [held, busy] = s.doc.rows;
   if (legacy) delete s.doc.intent;
   delete held.max_calls;
@@ -437,7 +458,7 @@ for (const legacy of [false, true]) test(`CONTINUATION repair1: missing ${legacy
 });
 
 for (const broken of [null, {}, { criterion_id: '' }]) test(`CONTINUATION native table: malformed legacy authored check ${JSON.stringify(broken)}`, async t => {
-  const r = await setup(t); const { batch } = await r.first(); r.state.lint = 'passed';
+  const r = await setup(t, { timeout: 1 }); const { batch } = await r.first(); r.state.lint = 'passed';
   const s = saved(r, batch); delete s.doc.intent; s.doc.rows[0].steps[0].checks = [broken]; writeFileSync(s.path, JSON.stringify(s.doc));
   const next = await recovery(r, batch); assert.equal(next.code, 5); assert.equal(next.json.rows.length, 1); assert.equal(paid(r).length, 0); assert.equal(next.clock.uuids, 0);
 });
@@ -447,7 +468,7 @@ test('CONTINUATION native table: parsed remote lint timeout and parsed recovery 
   const plan = parseArgv(['lint', 'place-order', '--timeout', '4', '--json']);
   assert.equal(await runCheck({ cwd: lint.h.repo, words: plan.operands, options: plan.options }, lint.p.ports), 0);
   assert.equal(lint.p.clock.now - START, 150000); assert.equal(paid(lint).length, 0);
-  const r = await setup(t); const { batch } = await r.first(); r.state.lint = 'passed'; r.state.checks = 'running';
+  const r = await setup(t, { timeout: 1 }); const { batch } = await r.first(); r.state.lint = 'passed'; r.state.checks = 'running';
   const readPlan = parseArgv(['test', '--read', batch, '--timeout', '4', '--json']);
   const p = portsFor(r.env); r.state.clock = p.clock;
   assert.equal(await runCheck({ cwd: r.h.repo, words: readPlan.operands, options: readPlan.options }, p.ports), 3);
@@ -455,7 +476,7 @@ test('CONTINUATION native table: parsed remote lint timeout and parsed recovery 
 });
 
 test('CONTINUATION preservation: concurrent legacy capacity retries adopt claims after historical IDs', async t => {
-  const r = await setup(t); const { batch } = await r.first();
+  const r = await setup(t, { timeout: 1 }); const { batch } = await r.first();
   const s = saved(r, batch), oldId = '33333333-3333-4333-8333-333333333333';
   const folder = join(r.h.state, 'batches', batch), lintId = s.doc.lint.request_ids.at(-1);
   Object.assign(s.doc.lint, { state: 'passed', pending: false, unknown: false });
@@ -470,7 +491,7 @@ test('CONTINUATION preservation: concurrent legacy capacity retries adopt claims
 });
 
 for (const legacy of [false, true]) test(`CONTINUATION: ${legacy ? 'legacy' : 'current'} batch local refusal does not block valid held row`, async t => {
-  const r = await setup(t, { multiple: 'mixed' }); const { batch } = await r.first(); r.state.lint = 'passed';
+  const r = await setup(t, { timeout: 1, multiple: 'mixed' }); const { batch } = await r.first(); r.state.lint = 'passed';
   assert.equal(saved(r, batch).doc.rows.find(row => row.test === 'tests/second-1.json').state, 'refused');
   if (legacy) { const s = saved(r, batch); delete s.doc.intent; writeFileSync(s.path, JSON.stringify(s.doc)); }
   const next = await recovery(r, batch);
@@ -480,7 +501,7 @@ for (const legacy of [false, true]) test(`CONTINUATION: ${legacy ? 'legacy' : 'c
 });
 
 for (const legacy of [false, true]) test(`CONTINUATION H: refused ${legacy ? 'legacy' : 'current'} held proof does not stop independent busy retry`, async t => {
-  const r = await setup(t, { multiple: true }); const { batch, code } = await r.first();
+  const r = await setup(t, { timeout: 1, multiple: true }); const { batch, code } = await r.first();
   assert.equal(code, 3); assert.equal(paid(r).length, 0);
   r.state.lint = 'passed';
   const s = saved(r, batch), [held, busy] = s.doc.rows;
@@ -526,7 +547,7 @@ for (const legacy of [false, true]) test(`CONTINUATION H: refused ${legacy ? 'le
 });
 
 test('CONTINUATION: two real CLI read processes send the original held check exactly once', { timeout: 30000 }, async t => {
-  const r = await setup(t); const { batch } = await r.first(); r.state.lint = 'passed';
+  const r = await setup(t, { timeout: 1 }); const { batch } = await r.first(); r.state.lint = 'passed';
   r.state.checkDelay = 250; // Keep the winning POST in flight while the other process adopts its claim.
   const bin = join(r.h.sandbox, 'bin'); mkdirSync(bin);
   writeFileSync(join(bin, 'gh'), '#!/bin/sh\nif [ "$1" = auth ]; then echo local-fake-token; else echo "octo 4242"; fi\n', { mode: 0o755 });
@@ -552,7 +573,7 @@ test('CONTINUATION: two real CLI read processes send the original held check exa
 });
 
 test('CONTINUATION: deleting a selected test preserves saved rows and refuses before UUID', async t => {
-  const r = await setup(t); const { batch } = await r.first(); r.state.lint = 'passed';
+  const r = await setup(t, { timeout: 1 }); const { batch } = await r.first(); r.state.lint = 'passed';
   unlinkSync(join(r.h.repo, 'tests/place-order.json'));
   for (let i = 0; i < 2; i++) {
     const next = await recovery(r, batch);

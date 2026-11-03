@@ -4,13 +4,12 @@ import { readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { runCheck } from '../src/runtime-client.mjs';
 import { acquireRuntimeSlot, releaseRuntimeSlot, listRuntimeJobs } from '../src/runtime-slots.mjs';
-import { fakeRuntime, harbor, portsFor, sha } from './runtime-fake.mjs';
+import { fakeRuntime, harbor, portsFor, sha, storyTest } from './runtime-fake.mjs';
 
 function selected(t, count) {
   return harbor(t, repo => {
-    const source = readFileSync(join(repo, 'tests/place-order.json'));
     rmSync(join(repo, 'tests/unknown-item.json'));
-    for (let i = 1; i < count; i++) writeFileSync(join(repo, `tests/place-order-${i}.json`), source);
+    for (let i = 1; i < count; i++) storyTest(repo, `place-order-${i}`);
   });
 }
 
@@ -135,7 +134,7 @@ test('2704 S3: uncapped busy drops dispatch to one while accepted work runs', as
     return f.normal(entry);
   });
   made = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin }); made.ports.pollMs = 10000;
-  assert.equal(await runCheck({ cwd: setup.repo, words: [], options: { '--json': true } }, made.ports), 3);
+  assert.equal(await runCheck({ cwd: setup.repo, words: [], options: { '--json': true, '--timeout': 1 } }, made.ports), 3);
   assert.equal(first.size, 3); assert.equal(busyAt.length, 2); assert.ok(polls > 0);
   assert.deepEqual(retries, [], 'window one must hold every busy retry behind still-running accepted work');
   assert.equal(fake.posts.filter(p => p.request.requestId === acceptedId).length, 1);

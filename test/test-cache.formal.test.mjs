@@ -64,7 +64,8 @@ for (const foreign of ['tracked-story', 'tracked-nested', 'copied-state', 'copie
     assert.equal(result.sent, 1, 'foreign/tracked cache cannot authorize skipped checks');
     assert.equal(result.code, 1, 'actual failing checks cannot become a false green');
     assert.ok(result.json.rows.every(row => !row.cached));
-    if (foreign.startsWith('tracked')) assert.equal(result.json.warnings.filter(w => /cache/i.test(String(w))).length, 1);
+    if (foreign.startsWith('tracked')) assert.equal(result.json.warnings.filter(w => /^Warning: (?:test cache |recovered stale cache )/.test(String(w))).length, 1);
+    if (foreign === 'tracked-story') assert.ok(result.json.warnings.includes('Warning: .pdd/cache/test/stories.json matches no Story (user_stories/**/stories.md).'));
   });
 }
 for (const noVerdict of ['auth', 'unknown', 'refused', 'incomplete', 'interrupt', 'timeout']) {
@@ -73,7 +74,7 @@ for (const noVerdict of ['auth', 'unknown', 'refused', 'incomplete', 'interrupt'
     assert.equal((await ctx.invoke()).code, 1);
     ctx.mode(['interrupt', 'timeout'].includes(noVerdict) ? 'running' : noVerdict === 'refused' ? 'refused' : noVerdict === 'unknown' ? 'unknown' : 'passed');
     ctx.incomplete(noVerdict === 'incomplete');
-    const attempt = await ctx.invoke({ options: { '--lf': true }, trouble: noVerdict });
+    const attempt = await ctx.invoke({ options: { '--lf': true, ...(noVerdict === 'timeout' ? { '--timeout': 1 } : {}) }, trouble: noVerdict });
     assert.equal(attempt.sent, noVerdict === 'auth' ? 0 : 1, 'exercise declared no-verdict attempt');
     if (noVerdict === 'auth') assert.equal(attempt.code, 5);
     if (['interrupt', 'timeout'].includes(noVerdict)) assert.equal(attempt.code, 3);
@@ -146,16 +147,16 @@ for (const damage of ['malformed', 'symlink']) for (const clear of [false, true]
     if (damage === 'symlink') { unlinkSync(path); symlinkSync(outside, path); } else writeFileSync(path, '{broken');
     const got = await ctx.invoke({ options: { '--cache-clear': clear } });
     assert.equal(got.sent, 1); assert.equal(got.code, 0); assert.ok(got.json.rows.every(row => !row.cached));
-    assert.equal(got.json.warnings.filter(w => /cache/i.test(String(w))).length, 1);
+    assert.equal(got.json.warnings.filter(w => /^Warning: (?:test cache |recovered stale cache )/.test(String(w))).length, 1);
     assert.ok(got.json.warnings.some(w => String(w).includes('pdd test --cache-clear')));
     assert.equal(readFileSync(outside, 'utf8'), 'outside sentinel');
     if (damage === 'malformed') assert.equal((await ctx.invoke()).sent, 0, 'regular cache heals');
   });
 }
-for (const selected of ['place-order.json', 'place-order-extra.json']) {
+for (const selected of ['place-order.json', 'place-order.extra.json']) {
   test(`bounded incomplete sibling=${selected}`, async t => {
     const ctx = await fixture(t);
-    writeFileSync(join(ctx.repo, 'tests/place-order-extra.json'), readFileSync(join(ctx.repo, 'tests/place-order.json')));
+    writeFileSync(join(ctx.repo, 'tests/place-order.extra.json'), readFileSync(join(ctx.repo, 'tests/place-order.json')));
     assert.equal((await ctx.invoke({ words: [`tests/${selected}`] })).sent, 1);
     const complete = await ctx.invoke();
     assert.equal(complete.sent, 2, 'partial sibling evidence never authorizes whole Story pass');

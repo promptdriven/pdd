@@ -9,7 +9,7 @@ import { captureSource } from '../src/runtime-preflight.mjs';
 import { productStatus, productNext } from '../src/product.mjs';
 import { harbor, portsFor, fakeRuntime, sha } from './runtime-fake.mjs';
 
-const vectors = JSON.parse(readFileSync(new URL('./fixtures/product-unsent-checks.json', import.meta.url)));
+const vectors = JSON.parse(readFileSync(new URL('./fixtures/product-unsent-checks-cases.json', import.meta.url)));
 const productScenario = JSON.parse(readFileSync(new URL('./runtime/product-saved-checks.json', import.meta.url)));
 const copy = value => structuredClone(value);
 const own = (value, key) => Object.hasOwn(value, key);
@@ -193,7 +193,7 @@ for (const stop of authentic.stop_variants) for (const intent of ['check', 'abse
     const output = later.ports.stderr;
     later.ports.stderr = { write(text) { output.write(text); if (text.includes('If pdd stops, read the results with:')) interrupt(); return true; } };
   }
-  await runtime.runCheck({ words: f.selected, options: { '--json': true }, cwd: f.repo }, later.ports);
+  await runtime.runCheck({ words: f.selected, options: { '--json': true, ...(mode === 'hold' ? { '--timeout': 1 } : {}) }, cwd: f.repo }, later.ports);
   assert.equal(fake.posts.filter(row => row.command === 'check').length, 4, 'later batch never POSTed any Check');
   const latest = readdirSync(join(f.state, 'batches')).find(name => name !== earlier);
   assert.ok(latest); assert.ok(latest > earlier);

@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync, readdirSync, copyFileSync } from 'node:fs'
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { runCheck } from '../src/runtime-client.mjs';
-import { harbor, fakeRuntime, portsFor } from './runtime-fake.mjs';
+import { harbor, fakeRuntime, portsFor, storyTest } from './runtime-fake.mjs';
 const CLAIMED = '99999999-9999-4999-8999-999999999999';
 const WHY = 'No verdict. The judge service was unavailable for this check.';
 const NEXT = 'Tell the person; do not change expected values.';
@@ -15,7 +15,7 @@ const cases = [
   ['ready', 'missing'], ['local', 'missing'], ['local', 'refused'],
 ];
 for (const [shape, server] of cases) for (const mode of ['read', 'retry']) test(`RELAY claim without ID: ${shape} row, server ${server}, via ${mode}`, async t => {
-  const h = harbor(t, repo => copyFileSync(join(repo, 'tests/place-order.json'), join(repo, 'tests/second.json')));
+  const h = harbor(t, repo => storyTest(repo, 'second'));
   let lintPassed = false;
   const f = await fakeRuntime(t, (e, f) => {
     const id = e.request?.requestId ?? e.url.split('/').at(-1);
@@ -35,7 +35,7 @@ for (const [shape, server] of cases) for (const mode of ['read', 'retry']) test(
     return { status: 200, json: f.check(id) };
   });
   const env = { HOME: h.home, PDD_STATE_DIR: h.state, PDD_RUNTIME_URL: f.origin };
-  assert.equal(await runCheck({ cwd: h.repo, words: ['tests/place-order.json', 'tests/second.json'], options: { '--json': true, '--max-calls': 6 } }, portsFor(env).ports), 3);
+  assert.equal(await runCheck({ cwd: h.repo, words: ['tests/place-order.json', 'tests/second.json'], options: { '--json': true, '--max-calls': 6, '--timeout': 1 } }, portsFor(env).ports), 3);
   assert.equal(f.posts.filter(p => p.command === 'check').length, 0);
   const batch = readdirSync(join(h.state, 'batches'), { withFileTypes: true }).find(e => e.isDirectory()).name;
   const folder = join(h.state, 'batches', batch), path = join(folder, 'batch.json');
@@ -50,7 +50,7 @@ for (const [shape, server] of cases) for (const mode of ['read', 'retry']) test(
   writeFileSync(join(folder, `${key}.0.dispatch.json`), server === 'incomplete' ? '' : JSON.stringify({ id: CLAIMED }));
   lintPassed = true;
   const p = portsFor(env);
-  const code = await runCheck({ cwd: h.repo, words: mode === 'retry' ? [] : [batch], options: { [mode === 'retry' ? '--retry' : '--read']: mode === 'retry' ? batch : true, '--json': true } }, p.ports);
+  const code = await runCheck({ cwd: h.repo, words: mode === 'retry' ? [] : [batch], options: { [mode === 'retry' ? '--retry' : '--read']: mode === 'retry' ? batch : true, '--json': true, ...(mode === 'read' && server === 'running' ? { '--timeout': 1 } : {}) } }, p.ports);
   const out = JSON.parse(p.ports.stdout.text).rows[0];
   const paid = f.posts.filter(p => p.command === 'check');
   // The claimed row is never replayed; only the second (genuinely held) row may get its first POST.
@@ -82,7 +82,7 @@ for (const [shape, server] of cases) for (const mode of ['read', 'retry']) test(
   assert.notEqual(kept.phase, 'local');
   // Text mode must not call it "not sent, 0 AI calls".
   const q = portsFor(env);
-  await runCheck({ cwd: h.repo, words: [batch], options: { '--read': true } }, q.ports);
+  await runCheck({ cwd: h.repo, words: [batch], options: { '--read': true, ...(server === 'running' ? { '--timeout': 1 } : {}) } }, q.ports);
   assert.doesNotMatch(q.ports.stdout.text, /not sent, 0 AI calls|stopped before sending/);
   assert.equal(q.clock.uuids, 0);
 });

@@ -80,7 +80,7 @@ test('RUNTIME-SERVER3: 429 server-full gives a new ID after Retry-After and keep
   assert.equal(result.code, 0, result.err + result.out);
   const checks = fake.posts.filter(post => post.command === 'check');
   assert.equal(checks.length, 2); assert.notEqual(checks[0].request.requestId, checks[1].request.requestId);
-  assert.match(result.err, /Server busy: 0 checks running, 1 waiting for a free slot\./);
+  assert.ok(result.err.split('\n').includes('⏳ PDD is busy right now. 1 of your checks is waiting to start. You are not charged while you wait.'));
   const saved = batchFile(setup, result.batch);
   assert.deepEqual(saved.rows[0].request_ids, checks.map(post => post.request.requestId));
   for (const post of checks) assert.ok(existsSync(join(setup.state, 'batches', result.batch, `${post.request.requestId}.posted`)));
@@ -187,7 +187,7 @@ test('RUNTIME-SERVER8: lint refuses tests that reach a bad prompt; unknown lint 
   assert.equal(refused.code, 4); assert.deepEqual(draft.posts.map(post => post.command), ['lint']);
   assert.deepEqual(refused.json.rows.map(row => row.refusals[0].code), ['interface-stale', 'interface-stale']);
   const lost = await fakeRuntime(t, entry => entry.method === 'POST' ? { destroy: true } : { status: 404, json: { error: { code: 'not-found' } } });
-  const unknown = await check(setup, lost, []);
+  const unknown = await check(setup, lost, [], { '--timeout': 1 });
   assert.equal(unknown.code, 3); assert.deepEqual(lost.posts.map(post => post.command), ['lint']);
   assert.match(unknown.out, /^pdd test --read /);
 });
@@ -329,6 +329,40 @@ test('RUNTIME-XFIX4: reruns attach to each failed check, use diagnosis data, and
     return { status: 200, json: answer };
   }), ['place-order'], { '--json': true });
   assert.equal(invalid.json.rows[0].rerun.calls, undefined); assert.equal(invalid.json.rows[0].rerun.steps[0].runs, undefined); assert.equal(invalid.json.rows[0].rerun.steps[0].failed, undefined);
+});
+
+test('RUNTIME-RERUN-REFUSED: an admission refusal has no rerun verdict or share and starts no follow-up check', async t => {
+  for (const options of [{}, { '--json': true }]) {
+    const setup = harbor(t);
+    const fake = await fakeRuntime(t, (entry, f) => {
+      if (entry.method !== 'GET') return f.normal(entry);
+      const answer = f.check(entry.url.split('/').at(-1), 'refused', [], [{ code: 'run-admission-failed',
+        message: 'The step needs more AI calls than the run ceiling allows.', cause: 'call-budget' }]);
+      answer.result.exitCode = 4;
+      answer.usage.calls = 0;
+      return { status: 200, json: answer };
+    });
+    const result = await check(setup, fake, ['place-order'], options);
+    assert.equal(result.code, 4, result.err + result.out);
+    assert.deepEqual(fake.posts.map(post => post.command), ['lint', 'check']);
+    if (options['--json']) {
+      assert.equal(result.json.exit_code, 4);
+      assert.equal(result.json.rows.length, 1);
+      const row = result.json.rows[0];
+      assert.equal(row.state, 'refused');
+      assert.equal(row.calls, 0);
+      assert.equal(row.rerun, null);
+      assert.deepEqual(row.failed_checks, []);
+      assert.equal(row.refusals[0].code, 'run-admission-failed');
+      assert.match(row.summary_line, /^Prompt tests \(place-order\): no verdict · [^\n]*1 refused · 0 AI calls$/);
+      assert.doesNotMatch(result.json.summary_line, /\(\d+ for reruns\)|\((?:un)?stable\)|✗/);
+    } else {
+      assert.match(result.out, /REFUSED/);
+      assert.match(result.out, /run-admission-failed/);
+      assert.match(result.out, /^Prompt tests \(place-order\): no verdict · [^\n]*1 refused · 0 AI calls$/m);
+      assert.doesNotMatch(result.out, /Rerun:|\(\d+ for reruns\)|\((?:un)?stable\)|✗|FAILED/);
+    }
+  }
 });
 
 test('RUNTIME-XFIX5: multiline values, result targets and run-level diagnosis sources stay guarded', async t => {
@@ -552,7 +586,7 @@ test('RUNTIME-WAIT3: Ctrl-C after 12 min prints the read line and exits 3; --rea
 });
 
 // Wrong: an agent's shell tool (Claude Code: 2 min) cuts pdd off before pdd prints anything (owner, Oct 27).
-test('RUNTIME-WAIT4: with no terminal pdd waits at most 90 s, prints the table and the read line, and exits 3; --timeout overrides', async t => {
+test('RUNTIME-WAIT4: agent default waits to completion; explicit timeout preserves pending output', async t => {
   const setup = harbor(t);
   let clock;
   const sent = new Map(), fake = await fakeRuntime(t, (entry, f) => {
@@ -567,16 +601,18 @@ test('RUNTIME-WAIT4: with no terminal pdd waits at most 90 s, prints the table a
     const code = await runCheck({ words: ['place-order'], options, cwd: setup.repo }, made.ports);
     return { code, out: made.ports.stdout.text, err: made.ports.stderr.text, batch: /pdd test --read (\S+)/.exec(made.ports.stderr.text)?.[1] };
   };
-  const agent = await run({}, { interactive: false });
+  const unlimited = await run({}, { interactive: false });
+  assert.equal(unlimited.code, 0, unlimited.err + unlimited.out);
+  assert.equal(JSON.parse(readFileSync(join(setup.state, 'batches', unlimited.batch, 'batch.json'), 'utf8')).timeout_min, null);
+  const agent = await run({ '--timeout': 1 }, { interactive: false });
   assert.equal(agent.code, 3, agent.err + agent.out);
   assert.match(agent.out, /^Place a coffee order +tests\/place-order\.json +running +- +-$/m);
-  assert.match(agent.out, /^STILL RUNNING after 90 s: Place a coffee order\. Do not send it again\.$/m);
+  assert.match(agent.out, /^STILL RUNNING after 1 min: Place a coffee order\. Do not send it again\.$/m);
   const err = agent.err.trimEnd().split('\n');
-  assert.deepEqual(err.filter(text => text.startsWith('Still running:')), ['Still running: 0 of 1 Story done · 1 AI call so far · 30 s',
-    'Still running: 0 of 1 Story done · 1 AI call so far · 1 min']);
+  assert.deepEqual(err.filter(text => text.startsWith('Still running:')), ['Still running: 0 of 1 Story done · 1 AI call so far · 30 s']);
   assert.equal(err.at(-1), `Still running. Read the results later with: pdd test --read ${agent.batch}`);
   assert.equal(err.filter(text => text.startsWith('If pdd stops')).length, 1);
-  assert.equal(JSON.parse(readFileSync(join(setup.state, 'batches', agent.batch, 'batch.json'), 'utf8')).timeout_min, 1.5);
+  assert.equal(JSON.parse(readFileSync(join(setup.state, 'batches', agent.batch, 'batch.json'), 'utf8')).timeout_min, 1);
   const longer = await run({ '--timeout': '20' }, { interactive: false });
   assert.equal(longer.code, 0, longer.err + longer.out);
   assert.doesNotMatch(longer.err, /Read the results later/);
@@ -742,7 +778,7 @@ test('RUNTIME-SERVER17: --read of a still-running row names no wait time', async
   const fake = await fakeRuntime(t, (entry, f) => entry.method === 'GET' ? { status: 200, json: f.check(entry.url.split('/').at(-1), 'running') } : f.normal(entry));
   const first = await check(setup, fake, ['place-order'], { '--timeout': '1' });
   assert.equal(first.code, 3);
-  const read = await check(setup, fake, [], { '--read': true });
+  const read = await check(setup, fake, [], { '--read': true, '--timeout': 1 });
   assert.equal(read.code, 3); assert.match(read.out, /^STILL RUNNING: Place a coffee order\. Do not send it again\.$/m);
 });
 
@@ -768,12 +804,12 @@ test('RUNTIME-SERVER18: after a POST timeout pdd reads the same ID for at least 
     return { code, out: made.ports.stdout.text };
   };
   const late = await fakeRuntime(t, slow(220_000));
-  const appeared = await run(late, { '--timeout': '1' });
+  const appeared = await run(late, {});
   assert.equal(appeared.code, 0, appeared.out);
   assert.equal(late.posts.filter(post => post.command === 'check').length, 1);
   assert.ok(late.gets.every(get => get.url === `/v1/runs/${late.posts[1].request.requestId}`));
   const never = await fakeRuntime(t, slow(null));
-  const lost = await run(never, { '--timeout': '1' });
+  const lost = await run(never, {});
   assert.equal(lost.code, 3);
   assert.ok(never.gets.length >= 149, String(never.gets.length));
   assert.match(lost.out, /^Place a coffee order +tests\/place-order\.json +unknown/m);
@@ -792,13 +828,13 @@ test('RUNTIME-WAIT2: in a terminal with no --timeout a lost POST answer is read 
 });
 
 // Wrong: a lost POST answer keeps an agent's pdd reading for 5 min, past its shell tool's limit.
-test('RUNTIME-WAIT5: with no terminal a lost POST answer is read until 90 s, then exit 3 with the read line and no new POST', async t => {
+test('RUNTIME-WAIT5: with explicit timeout a lost POST answer is read until 1 min, then exit 3 with the read line and no new POST', async t => {
   const setup = harbor(t);
   const fake = await fakeRuntime(t, (entry, f) => entry.method === 'POST' && entry.command === 'check' ? { destroy: true }
     : entry.method === 'GET' ? { status: 404, json: NOT_STARTED } : f.normal(entry));
-  const result = await check(setup, fake, ['place-order']);
+  const result = await check(setup, fake, ['place-order'], { '--timeout': 1 });
   assert.equal(result.code, 3);
-  assert.ok(fake.gets.length >= 44 && fake.gets.length <= 45, String(fake.gets.length));
+  assert.ok(fake.gets.length >= 29 && fake.gets.length <= 30, String(fake.gets.length));
   assert.equal(fake.posts.filter(post => post.command === 'check').length, 1);
   assert.equal(result.err.trimEnd().split('\n').at(-1), `Still running. Read the results later with: pdd test --read ${result.batch}`);
 });
@@ -1099,7 +1135,7 @@ test('RUNTIME-READLINE1: "If pdd stops" prints after lint passes and before the 
 
 // Wrong: many Stories in one run give one blended line, so the gate and PR 1 cannot say which Story failed (0.1.6).
 test('RUNTIME-STORYLINE1: one paste line per Story after the table, the overall line last, and summary_line on each --json row', async t => {
-  const setup = harbor(t, repo => cpSync(join(repo, 'tests/place-order.json'), join(repo, 'tests/place-order-2.json')));
+  const setup = harbor(t, repo => cpSync(join(repo, 'tests/place-order.json'), join(repo, 'tests/place-order.second.json')));
   const fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
   const result = await check(setup, fake, []);
   assert.equal(result.code, 0, result.err);
@@ -1108,8 +1144,8 @@ test('RUNTIME-STORYLINE1: one paste line per Story after the table, the overall 
     'Prompt tests (unknown-item): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call', 'Prompt tests: ✓ 3 of 3 criteria · 3/3 checks · 3 AI calls']);
   const json = await check(setup, fake, [], { '--json': true });
   assert.deepEqual(json.json.rows.map(row => [row.test, row.summary_line]), [
-    ['tests/place-order-2.json', 'Prompt tests (place-order): ✓ 2 of 2 criteria · 2/2 checks · 2 AI calls'],
     ['tests/place-order.json', 'Prompt tests (place-order): ✓ 2 of 2 criteria · 2/2 checks · 2 AI calls'],
+    ['tests/place-order.second.json', 'Prompt tests (place-order): ✓ 2 of 2 criteria · 2/2 checks · 2 AI calls'],
     ['tests/unknown-item.json', 'Prompt tests (unknown-item): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call']]);
   assert.equal(json.json.summary_line, 'Prompt tests: ✓ 3 of 3 criteria · 3/3 checks · 3 AI calls');
   const draft = await check(draftRepo(t), await fakeRuntime(t, (entry, f) => draftLint(entry, f) ?? f.normal(entry)), ['place-order']);

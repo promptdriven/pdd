@@ -196,7 +196,7 @@ test('LEAD native read and selected count boundaries allow equality and deduplic
 });
 
 test('LEAD Story footprints are independent of selected sibling tests without uploading them',t=>{
-  const {repo}=harbor(t),one='tests/place-order.json',two='tests/sibling.json',story='user_stories/place-order.md';
+  const {repo}=harbor(t),one='tests/place-order.json',two='tests/place-order.sibling.json',story='user_stories/place-order.md';
   const sibling=JSON.parse(readFileSync(join(repo,one),'utf8'));
   sibling.steps.forEach(step=>step.entry_path='prompts/sibling.prompt.md');
   write(repo,two,sibling);write(repo,'docs/sibling.txt','original');
