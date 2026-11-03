@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 14abece2d8b148fe02da8d04cd72a1cd39f74145e5f2dc2e37140c2083aa9285).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: af491649ad1f2a7ca8fa0673beb5e2740c8e755a4b4e383af2fb93ad16b7e2fc).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
