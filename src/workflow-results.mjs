@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-results.prompt.md (sha256: 6dcf703826ff312566181752b67ffe7aa14ba2a84595cb3167763065d58ee7da).
+// Generated from prompts/cli/workflow-results.prompt.md (sha256: 68e5c97b8a2de9584648e9926c7b61d760d28c34841729310c826216882af0a5).
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -27,8 +27,10 @@ const iso = ms => Number.isFinite(ms) ? new Date(ms).toISOString().replace(/\.\d
 const first = values => values.find(value => typeof value === 'string' && value.trim() && value.trim().toLowerCase() !== 'unknown');
 const unique = values => [...new Set(values.filter(value => typeof value === 'string' && value.trim()).map(value => text(value, 200)))];
 // The request ids and report links that pdd saved for a batch's rows.
-const requestsOf = rows => unique(rows.flatMap(row => Array.isArray(row?.request_ids) ? row.request_ids : [])).slice(0, 50);
-const reportsOf = rows => unique(rows.map(row => row?.report_url)).filter(url => /^https?:\/\/\S+$/.test(url)).slice(0, 50);
+const requestsOf = rows => unique(rows.flatMap(row => Array.isArray(row?.request_ids) ? row.request_ids : []));
+const reportsOf = rows => unique(rows.map(row => row?.report_url)).filter(url => /^https?:\/\/\S+$/.test(url));
+// A pdd result line shows this many requests and reports; it names how many more the run record keeps.
+const SHOWN = 10;
 function gitLine(root, args) {
   try { return String(execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })).trim(); } catch { return ''; }
 }
@@ -89,6 +91,10 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
   return results;
 }
 
+function more({ requests = [], reports = [] }) {
+  const left = [[requests.length - SHOWN, 'request'], [reports.length - SHOWN, 'report']].filter(([count]) => count > 0).map(([count, word]) => `${count} more ${word}${count === 1 ? '' : 's'}`);
+  return left.length ? [`${left.join(' and ')} not shown (all in the run record)`] : [];
+}
 // One line per result, each starting with "pdd result:", so a reader can tell pdd's own results from agent notes.
 export function resultLines(results, { kinds = null } = {}) {
   const shown = (results ?? []).filter(result => !kinds || kinds.includes(result.kind));
@@ -96,9 +102,9 @@ export function resultLines(results, { kinds = null } = {}) {
   return shown.map(result => {
     const facts = [result.batch && `batch ${result.batch}`, iso(result.at), result.source && `source ${result.source}`,
       result.engine && `engine ${result.engine}`, result.model && `model ${result.model}`,
-      result.requests?.length && `request${result.requests.length > 1 ? 's' : ''} ${result.requests.join(' ')}`,
+      result.requests?.length && `request${result.requests.length > 1 ? 's' : ''} ${result.requests.slice(0, SHOWN).join(' ')}`,
       result.headSha && `head ${result.headSha.slice(0, 7)}`].filter(Boolean).join(', ');
     return `${PDD_RESULT}: ${result.kind} (${facts}): ${[result.summary, ...(result.stories ?? []).filter(line => line !== result.summary),
-      ...(result.reports ?? []).map(url => `Report: ${url} (report links expire after 7 days)`)].join('; ')}`;
+      ...(result.reports ?? []).slice(0, SHOWN).map(url => `Report: ${url} (report links expire after 7 days)`), ...more(result)].join('; ')}`;
   });
 }

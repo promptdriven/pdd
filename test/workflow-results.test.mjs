@@ -111,3 +111,16 @@ test('2904: the step reader and the PR renderer give the same proof line for the
     assert.equal(usableResult(step), name === 'current', name);
   }
 });
+
+test('2904: a 51-row batch keeps every request id and report link in the record; the line names how many it does not show', t => {
+  const f = folders(t), id = i => `${String(i).padStart(8, '0')}-1111-4111-8111-111111111111`;
+  f.batch('20261103-120000-bbbb', { intent: 'check', created_at: '2026-11-03T12:00:00Z',
+    rows: Array.from({ length: 51 }, (_, i) => ({ test: `tests/t${i}.json`, request_ids: [id(i)], report_url: `https://rt.example.test/r/report-${i}` })) }, { summary_line: 'Prompt tests: ✓ 51 of 51 criteria' });
+  const [result] = readRunResults({ root: f.root, since }, { env: f.env, capture: () => { throw Error('no capture'); } });
+  assert.equal(result.requests.length, 51); assert.equal(result.requests.at(-1), id(50));
+  assert.equal(result.reports.length, 51); assert.equal(result.reports.at(-1), 'https://rt.example.test/r/report-50');
+  const [line] = resultLines([result]);
+  assert.ok(line.includes(id(9)) && !line.includes(id(10)));
+  assert.ok(line.includes('report-9 ') && !line.includes('report-10 '));
+  assert.ok(line.endsWith('; 41 more requests and 41 more reports not shown (all in the run record)'), line.slice(-120));
+});

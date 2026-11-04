@@ -2704,3 +2704,18 @@ test('2904: done check with only a stale or fake proof warns, shows it plainly, 
   assert.match(out.message, /\(pdd:no-verdict\)\.$/m);
   assert.match(out.message, /Next step: try/);
 });
+
+test('2904: a 51-row pdd test batch keeps all requests and reports in the step record, and the PR top says how many it does not show', async t => {
+  const { f, run, done } = await featureWithOwnResults(t, { results: false });
+  const id = i => `${String(i).padStart(8, '0')}-1111-4111-8111-111111111111`;
+  saveBatch(f.ports.env.PDD_STATE_DIR, '20261027-180000-abcd', { root: run.root, created_at: '2026-10-27T18:00:00.000Z', intent: 'check',
+    rows: Array.from({ length: 51 }, (_, i) => ({ test: `tests/t${i}.json`, state: 'passed', request_ids: [id(i)], report_url: `https://rt.example.test/r/report-${i}` })) },
+    { summary_line: 'Prompt tests: ✓ 51 of 51 criteria', rows: [] });
+  await done('check', {});
+  const [own] = f.record().done.check.pddResults;
+  assert.equal(own.requests.length, 51); assert.equal(own.reports.length, 51);
+  await done('try', { skipped: 'No person at the Try step.' });
+  const top = f.prs[0].body.split('\n')[0];
+  assert.match(top, /^pdd result: pdd test \(batch 20261027-180000-abcd, /);
+  assert.ok(top.endsWith('; 41 more requests and 41 more reports not shown (all in the run record)'), top.slice(-160));
+});
