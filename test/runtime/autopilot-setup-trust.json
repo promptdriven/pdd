@@ -28,13 +28,12 @@
     "lookups": [],
     "mode_questions": [],
     "names_questions": [],
-    "read_config": {},
     "lookup_counter": 0
   },
   "simulation": {
     "config.read": {
       "action": "key-value.get",
-      "world_pointer": "/read_config",
+      "world_pointer": "/kv",
       "key_argument_pointer": "/key",
       "value_argument_pointer": null,
       "item_key_pointer": null,
