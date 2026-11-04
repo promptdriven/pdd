@@ -11,7 +11,7 @@ async function tryStory(setup, fake, words, options = {}, extra = {}) {
   const opened = [];
   const { ports, clock } = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state },
     { openUrl: async url => { opened.push(url); return true; }, ...extra });
-  const code = await runTry({ words, options, cwd: setup.repo }, ports);
+  const code = await runTry({ words, options, cwd: extra.cwd ?? setup.repo }, ports);
   return { code, opened, clock, out: ports.stdout.text, err: ports.stderr.text };
 }
 
@@ -52,19 +52,63 @@ test('RUNTIME-TRY1: pdd simulate lints, posts one Try with the test as seed, ope
   assert.equal(fake.posts[3].request.tab, 'screen');
 });
 
-// Wrong: --stop sends no request ID, or forgets the Try before the stop is confirmed.
-test('RUNTIME-TRY2: --stop sends DELETE with X-Request-Id, reads the stop job and forgets the Try', async t => {
-  const setup = harbor(t), fake = await fakeRuntime(t, trying());
+// Wrong: --stop sends no request ID, forgets the Try before the stop is confirmed, or fails when given the Story path (#2757).
+test('RUNTIME-TRY2: --stop sends DELETE with X-Request-Id, reads the stop job, accepts Story paths and forgets only the stopped Try', async t => {
+  const setup = harbor(t, repo => {
+    const story = readFileSync(join(repo, 'user_stories/place-order.md'), 'utf8')
+      .replace('# Place a coffee order', '# I can control test events while I try Pocket');
+    mkdirSync(join(repo, 'user_stories/fakes'), { recursive: true });
+    writeFileSync(join(repo, 'user_stories/fakes/tester-panel.md'), story);
+    const doc = JSON.parse(readFileSync(join(repo, 'tests/place-order.json'), 'utf8'));
+    writeFileSync(join(repo, 'tests/tester-panel.json'), JSON.stringify({ ...doc, story_path: 'user_stories/fakes/tester-panel.md' }, null, 2));
+  });
+  const fake = await fakeRuntime(t, trying());
   assert.equal((await tryStory(setup, fake, ['place-order'])).code, 0);
+  assert.equal((await tryStory(setup, fake, ['user_stories/fakes/tester-panel.md'])).code, 0);
+  const reposDir = join(setup.state, 'repos');
+  const repoStateFile = join(reposDir, readdirSync(reposDir)[0]);
+  const initialSaved = JSON.parse(readFileSync(repoStateFile, 'utf8'));
+  const placeSavedBefore = structuredClone(initialSaved.tries['tests/place-order.json']);
+  for (const field of ['seed_scenario', 'story_sha256', 'prompt_hashes', 'effective_prompt_hashes', 'contract_references']) {
+    assert.ok(Object.hasOwn(placeSavedBefore, field), `expected real saved Try record to include ${field}`);
+  }
+  const missing = await tryStory(setup, fake, ['user_stories/fakes/other.md'], { '--stop': true });
+  assert.equal(missing.code, 2);
+  assert.equal(missing.err, 'No open Try for "user_stories/fakes/other.md". Open Try links: place-order, tester-panel.\n');
+  assert.equal(fake.deletes.length, 0);
+  const stoppedByPath = await tryStory(setup, fake, ['user_stories/fakes/tester-panel.md'], { '--stop': true });
+  assert.equal(stoppedByPath.code, 0, stoppedByPath.err);
+  assert.equal(stoppedByPath.err, 'Stopping the Try for "I can control test events while I try Pocket"…\n');
+  assert.equal(stoppedByPath.out, 'The Try link for "I can control test events while I try Pocket" is stopped.\n');
+  assert.equal(fake.deletes.length, 1);
+  const firstStopId = fake.deletes[0].headers['x-request-id'];
+  assert.match(firstStopId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  assert.ok(fake.gets.some(get => get.url === `/v1/runs/${firstStopId}`));
+  const afterFirstStop = JSON.parse(readFileSync(repoStateFile, 'utf8'));
+  assert.deepEqual(Object.keys(afterFirstStop.tries), ['tests/place-order.json']);
+  assert.deepEqual(afterFirstStop.tries['tests/place-order.json'], placeSavedBefore);
+  for (const selector of [
+    ['./user_stories/fakes/tester-panel.md', {}],
+    ['user_stories/fakes/../fakes/tester-panel.md', {}],
+    ['fakes/tester-panel.md', { cwd: join(setup.repo, 'user_stories') }],
+    ['./tests/tester-panel.json', {}],
+  ]) {
+    assert.equal((await tryStory(setup, fake, ['user_stories/fakes/tester-panel.md'])).code, 0);
+    const res = await tryStory(setup, fake, [selector[0]], { '--stop': true }, selector[1]);
+    assert.equal(res.code, 0, `${selector[0]}: ${res.err}`);
+  }
+  // Legacy saved Try record without storyPath still stops by its Story path.
+  assert.equal((await tryStory(setup, fake, ['user_stories/fakes/tester-panel.md'])).code, 0);
+  const withLegacy = JSON.parse(readFileSync(repoStateFile, 'utf8'));
+  delete withLegacy.tries['tests/tester-panel.json'].storyPath;
+  writeFileSync(repoStateFile, JSON.stringify(withLegacy, null, 2));
+  const legacyStop = await tryStory(setup, fake, ['user_stories/fakes/tester-panel.md'], { '--stop': true });
+  assert.equal(legacyStop.code, 0, legacyStop.err);
   const stopped = await tryStory(setup, fake, ['place-order'], { '--stop': true });
   assert.equal(stopped.code, 0, stopped.err);
-  assert.equal(fake.deletes.length, 1);
-  const id = fake.deletes[0].headers['x-request-id'];
-  assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
-  assert.ok(fake.gets.some(get => get.url === `/v1/runs/${id}`));
   assert.equal(stopped.out, 'The Try link for "Place a coffee order" is stopped.\n');
   const none = await tryStory(setup, fake, ['place-order'], { '--stop': true });
-  assert.equal(none.code, 2); assert.equal(fake.deletes.length, 1);
+  assert.equal(none.code, 2);
 });
 
 // Wrong: pdd opens a link that points to another host, plain HTTP or a wrong path (spec 11 link checks).

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 968f5c72c403d2dd588d3e44b8e3a6db8a9443e2cf6fe0b054c64ddc8a17e26e).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 4b1d24f423647966ec01825f27e8701eacf681ca58654f38828a9d441e7079e0).
 import { hasProgress, outcomeDone, outcomeFor, outcomeOverall, outcomeText, progressText } from './runtime-outcome.mjs';
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
@@ -8,7 +8,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, constants, fstatSync, fsyncSync, lstatSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, readSync, renameSync, rmdirSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
 import { homedir, hostname } from 'node:os';
-import { basename, dirname, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, join, posix, relative, resolve, sep } from 'node:path';
 import { DRAFT_SERVER_TEXT, NO_TESTS, PreflightError, TEST_SCHEMA, captureSource, checkInput, expectedTestPath, fillHashes, sharedSourceFiles, whyNoTests, findTests, formatSize, gitFiles, otherFiles,
   discoveryRefusal, preflight, interfaceBlocks, readPrompt, selectTests, sourceFilePort, sha256, STALE_HINT, staleHint } from './runtime-preflight.mjs';
 import { catalogRecords, compareCopies } from './contract-refs.mjs';
@@ -2861,12 +2861,38 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
   } finally { release(); await Promise.all([...(context.reservations ?? [])].map(reservation => releaseRuntimeSlot(reservation, { ended: false }, slotPorts(context)))); }
 }
 
-// pdd simulate --stop [STORY]: find the Try by its story name in the state record, so it works on any branch (real-user issue 14).
+// pdd simulate --stop [STORY]: find the Try by its story name or path in the state record, so it works on any branch (real-user issue 14, #2757).
+function normalizeTryPath(value) {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.replaceAll('\\', '/').trim();
+  if (!trimmed) return '';
+  const normalized = posix.normalize(trimmed).replace(/^\.\//, '');
+  return !normalized || normalized === '.' || normalized === '..' || normalized.startsWith('../') || normalized.startsWith('/') ? '' : normalized;
+}
+
+function matchesTryRecord(path, record, rawWord, cwd, root) {
+  const word = rawWord.replace(/^\.\//, '');
+  const candidates = new Set([normalizeTryPath(rawWord)].filter(Boolean));
+  if (cwd && root) {
+    try {
+      const rel = relative(realpathSync(root), resolve(realpathSync(cwd), rawWord)).split(sep).join('/');
+      const normRel = normalizeTryPath(rel);
+      if (normRel) candidates.add(normRel);
+    } catch {}
+  }
+  const testPath = normalizeTryPath(path) || path;
+  if (word === record?.story || word === path || word === testPath || word === basename(testPath, '.json')) return true;
+  if ([...candidates].includes(testPath)) return true;
+  const storyPath = normalizeTryPath(record?.storyPath);
+  if (storyPath) return [...candidates].includes(storyPath);
+  return Boolean(record?.story) && [...candidates].some(candidate => candidate.startsWith('user_stories/') && posix.basename(candidate) === `${record.story}.md`);
+}
+
 async function stopByName(context, cwd, words, origin) {
   const { ports } = context, root = repoRoot(cwd), store = stateFor(ports.env, root), repoState = store.repo(root);
-  const entries = Object.entries(repoState.tries ?? {}), word = words[0]?.replace(/^\.\//, '');
+  const entries = Object.entries(repoState.tries ?? {}), rawWord = words[0], word = rawWord?.replace(/^\.\//, '');
   const names = entries.map(([path, record]) => record.story ?? basename(path, '.json')).join(', ') || 'none';
-  const hits = word === undefined ? entries : entries.filter(([path, record]) => [record.story, path, basename(path, '.json')].includes(word));
+  const hits = rawWord === undefined ? entries : entries.filter(([path, record]) => matchesTryRecord(path, record, rawWord, cwd, root));
   if (hits.length !== 1) {
     throw new Stop(2, word !== undefined ? `No open Try for "${cleanText(word)}". Open Try links: ${names}.`
       : entries.length ? `Name the Try to stop. Open Try links: ${names}.` : 'No open Try in this repository.');
