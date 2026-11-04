@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: fbeb06a227abe20f8257146f78b4a3d8ccd2152517d05b8de4fc55dc1e748de7).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 09be014cefaf23df4fca24e15c28aaa7d2fc6dbfbba2d59a5d29cee64470ad4b).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText, promptSchemaProblems } from './prompt-approve.mjs';
 import { execFile as execFileCallback } from 'node:child_process';
