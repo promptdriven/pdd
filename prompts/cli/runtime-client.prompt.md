@@ -100,7 +100,8 @@ The default `gh` port likewise ignores stdin and captures stdout and stderr; it 
 ## Sign-in
 
 - Token = `gh auth token`, in memory only: never in files, logs, argv, URLs or error text. No `gh`: exit 5, `Install the GitHub CLI, then run gh auth login`. Empty: exit 5, `Run gh auth login`.
-- `gh api user --jq '.login + " " + (.id|tostring)'` once per batch; save the login and the user ID.
+- Read the token locally on each sign-in. Cache only the `gh api user --jq '.login + " " + (.id|tostring)'` lookup in `github-identity.json` under the external runtime state directory: login, user ID, lookup time and the token's SHA-256, never the token. Reuse that identity across commands and repositories while the token hash matches, including saved-batch `--read`; these hits make no GitHub API request. A new token requires one fresh lookup and replaces the cache. Missing or unreadable cache data requires a lookup; cache bookkeeping failure must not block a successful sign-in. No age limit applies.
+- On HTTP 401 from the interpreter, invalidate the matching cached identity and retry that request once after a fresh GitHub user lookup; retain its request ID and body. This applies independently to parallel requests. A second 401 for the same request invalidates the cache and follows the existing sign-in failure outcome. Other server failures do not trigger this recovery. If the fresh lookup is blocked by GitHub's rate limit and a matching-token identity was available, use it with a plain stderr warning; never use another token's identity or persist the rate-limit error as an identity. Preserve existing lookup errors when no matching identity can be used. Hidden `--request` reads use this same external cache while retaining their ability to run outside a Git repository.
 - Every call sends `Authorization: Bearer <token>` with TLS on and `redirect: 'manual'`.
 
 ## `pdd test`
