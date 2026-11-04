@@ -123,6 +123,18 @@ For explicit complete lint, print every canonical diagnostic from `result.proble
 
 For lint-only JSON, `lint_state` summarizes selected outcomes under the Outcome contract below. Keep every returned diagnostic in `problems`, including unselected refusals.
 
+**Saved standalone lint.** For a saved batch with explicit lint-only intent,
+`--read BATCH` (including latest-batch reads) reports the same selected lint
+outcomes, diagnostics, lint summary and exit policy as explicit complete lint
+above, in text and JSON. This holds whether the original command ended pending
+or already passed. A confirmed passing lint row remains `passed`, never
+`not_run` or `lint-finished` merely because no Check was requested. A fully passing
+read exits 0 with `Lint: N of M tests pass. 0 AI calls. No checks were sent.`;
+refusals remain refused with exit 4. Send no fresh lint or paid Check and give no
+advice to start a fresh Check for this lint-only read. Preserve unresolved-lint
+handling and the existing [saved Check intent and continuation policy](#continue-the-original-saved-check),
+including its legacy classification; passing lint alone never establishes Check intent.
+
 Order:
 1. [Preflight](runtime-preflight.prompt.md), scoped capture and sign-in. Nothing is sent yet. If every selected test is refused locally, print the result and exit 4 with no sign-in. The result warnings include the preflight warning about source files that two prompts name. Before a check of ALL stories (no STORY word), print to stderr `Checking all N stories: about A AI calls (at most M).`: A estimates declared work for each step: one entry execution, one use of each declared saved-data resource operation, and prompt-call max_calls multiplied by the target prompt estimate (including its resource operations and calls); cut dependency cycles rather than recursing forever. Conditional operations may use fewer calls. Bound the estimate by the unchanged hard cap; M = the sum of the tests' `max_calls` (cli 12b).
 2. Batch ID `YYYYMMDD-HHMMSS-xxxx` (local time). Allocate one new `crypto.randomUUID()` for lint at batch creation and write `batch.json`. Allocate each test's first check UUID only at its first authorized dispatch after the applicable dispatch gates; pending lint allocates no check UUID. Print to stderr `If pdd stops, read the results with: pdd test --read <batch>` after lint passes and right before the first check POST, and again at the end of an exit 3. A pending lint also has a saved result to read: name its batch when the wait limit ends.
