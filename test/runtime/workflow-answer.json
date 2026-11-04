@@ -1,0 +1,228 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/workflow-answer.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "When run #2576 waits in the `story` chat for \"Which date format?\", `pdd workflow answer 2576 \"ISO\"` sends \"The person answers your question: ISO Go on with the step.\" to the `story` chat, saves round 1 in the #2576 run log with text \"ISO\" and `answer` set to `true`, clears the open question, sets the #2576 run state to \"running\", prints \"Sent your answer to the story chat of #2576. The agent goes on with the step.\" and exits with code 0."
+    },
+    {
+      "id": "AC2",
+      "text": "When run #2576 has no open question, `pdd workflow answer 2576 \"ISO\"` prints \"No question is open for promptdriven/pdd#2576.\" to stderr, exits with code 1, sends 0 chat messages and saves nothing."
+    },
+    {
+      "id": "AC3",
+      "text": "With no open question left on run #2576, `pdd workflow changes 2576 \"Use ISO dates\"` sends \"The person asks for changes: Use ISO dates\\nRevise in this chat, run done again for the step you changed, then show the result and ask again.\" to the `story` chat, saves round 2 in the #2576 run log with text \"Use ISO dates\" and no `answer` flag, prints \"Sent your change request to the story chat of #2576.\" and exits with code 0."
+    }
+  ],
+  "initial_world": {
+    "runs": {
+      "2576": {
+        "repo": "promptdriven/pdd",
+        "number": 2576,
+        "area": "story",
+        "state": "waiting",
+        "gate": null,
+        "question": {
+          "text": "Which date format?",
+          "at": 1699999900000,
+          "area": "story"
+        },
+        "changes": []
+      }
+    },
+    "chat_messages": []
+  },
+  "simulation": {
+    "runs.load": {
+      "action": "key-value.get",
+      "world_pointer": "/runs",
+      "key_argument_pointer": "/ref",
+      "value_argument_pointer": null,
+      "item_key_pointer": null,
+      "item_value_pointer": null,
+      "result_template": {
+        "run": null
+      },
+      "result_value_pointer": "/run"
+    },
+    "runs.save": {
+      "action": "key-value.put",
+      "world_pointer": "/runs",
+      "key_argument_pointer": "/ref",
+      "value_argument_pointer": "/run",
+      "item_key_pointer": null,
+      "item_value_pointer": null,
+      "result_template": {
+        "saved": true
+      },
+      "result_value_pointer": null
+    },
+    "chat.send": {
+      "action": "port.write",
+      "world_pointer": "/chat_messages",
+      "result_template": {
+        "ok": true
+      }
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "answer-open-question",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "answerRun",
+      "input": {
+        "ref": "2576",
+        "text": "ISO",
+        "cwd": "/work/repo"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": "Sent your answer to the story chat of #2576. The agent goes on with the step."
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/chat_messages/0",
+          "op": "equals",
+          "value": {
+            "area": "story",
+            "number": 2576,
+            "text": "The person answers your question: ISO Go on with the step."
+          }
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/runs/2576/state",
+          "op": "equals",
+          "value": "running"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/runs/2576/question",
+          "op": "equals",
+          "value": null
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/runs/2576/changes/0",
+          "op": "equals",
+          "value": {
+            "stage": "story",
+            "round": 1,
+            "text": "ISO",
+            "at": 1700000000000,
+            "answer": true
+          }
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "refuse-when-no-question-open",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "answerRun",
+      "input": {
+        "ref": "2576",
+        "text": "ISO",
+        "cwd": "/work/repo"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": "No question is open for promptdriven/pdd#2576."
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/workflow-runner-chat-send",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/workflow-runner-runs-save",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "changes-records-change-request",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "changeRun",
+      "input": {
+        "ref": "2576",
+        "text": "Use ISO dates",
+        "cwd": "/work/repo"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": "Sent your change request to the story chat of #2576."
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "world",
+          "path": "/chat_messages/1",
+          "op": "equals",
+          "value": {
+            "area": "story",
+            "number": 2576,
+            "text": "The person asks for changes: Use ISO dates\nRevise in this chat, run done again for the step you changed, then show the result and ask again."
+          }
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "world",
+          "path": "/runs/2576/changes/1",
+          "op": "equals",
+          "value": {
+            "stage": "story",
+            "round": 2,
+            "text": "Use ISO dates",
+            "at": 1700000000000
+          }
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

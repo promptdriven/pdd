@@ -39,6 +39,7 @@ For `workflow.run`, accept optional `--adopt-corpus FILE`, a nonempty text path 
 - workflow.ask `workflow ask QUESTION…`: the question words join into one text; `--` ends options.
 - workflow.approve `workflow approve [ISSUE] [--said WORDS]`, workflow.status `workflow status [ISSUE] [--all] [--cancelled] [--json]` (flags).
 - workflow.changes `workflow changes ISSUE TEXT…`: the text words join into one request; `--` ends options.
+- workflow.answer `workflow answer ISSUE TEXT…` (local `workflow-answer`): one required issue operand and one or more text words that join into one answer; `--` ends options. Help says it sends an answer to the area chat that waits for one.
 - workflow.cancel `workflow cancel ISSUE`.
 - workflow.open `workflow open ISSUE [AREA] [--new]`: optional AREA uses the existing `workflow-name` operand type (the parser's safe name validator); --new is a flag. Help distinguishes focusing/resuming a saved area from replacing the current area's native session, keeping the run and approvals. The runner owns area existence/history checks; the catalog does not inspect saved runs.
 - workflow.view `workflow view ISSUE` (local `workflow-view`): one required issue operand, no options. Help says it shows a read-only review of gates, approvals, files, PRs and Simulator links without starting or resuming a chat.
@@ -120,6 +121,7 @@ The ordered help-form list consists of the lines below in their displayed order,
   pdd workflow ask QUESTION  For the agent in a run worktree: show the person that the chat waits for their answer.
   pdd workflow approve [ISSUE] [--said WORDS]  Use --said - with the shared quoted-heredoc template to record chat words for the gate and all its drafts, or use terminal y/N; strict mode requires a person terminal.
   pdd workflow changes ISSUE TEXT  Send a change request to the same area chat; the gate stays open.
+  pdd workflow answer ISSUE TEXT  Send an answer to the area chat that waits for one.
   pdd workflow cancel ISSUE  Cancel the run and close its Herdr tabs; keep the worktree and branch.
   pdd workflow status [ISSUE] [--all] [--cancelled] [--json]  Show this repo's runs, or one run with its area, gate, chat and PRs. --all (or outside a repo): every run on this machine, people-waiting first.
   pdd workflow view ISSUE  Read-only review of gates, approvals, files, PRs and Simulator links; never start or resume a chat.
