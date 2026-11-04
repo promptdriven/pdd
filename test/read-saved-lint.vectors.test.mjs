@@ -28,7 +28,10 @@ async function setup(t, vector, { extraStory = false } = {}) {
   const invoke = async argv => {
     const p = portsFor(env), plan = parseArgv(argv);
     const code = await runCheck({ cwd: h.repo, words: plan.operands, options: plan.options }, p.ports);
-    return { code, ...p, json: plan.options['--json'] ? JSON.parse(p.ports.stdout.text) : null };
+    // Check the expected command outcome before decoding its JSON output.
+    return { code, ...p, get json() {
+      return plan.options['--json'] ? JSON.parse(p.ports.stdout.text) : null;
+    } };
   };
   const isCheck = vector.given.intent === 'explicit normal Check';
   const seed = await invoke(isCheck ? ['test', 'place-order', '--max-calls', '6', '--timeout', '1', '--json']
