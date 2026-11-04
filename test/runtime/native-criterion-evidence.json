@@ -273,6 +273,19 @@
           "result": {
             "content": "{\"schema\":\"pdd.native-assessment-context.v1\",\"runId\":\"story-missing\",\"protected\":{\"profileId\":\"prepared\",\"requirementsId\":\"synthetic-reviewed-a\",\"promptPath\":\"prompts/example-native.prompt.md\",\"sourceRoot\":\"/trusted-source\",\"approvalRef\":\"synthetic-matching-prompt-approval\",\"review\":\"approved\",\"requiredIds\":[\"test/native.test.mjs::checkout@10:1\",\"test/native.test.mjs::pane@20:1\"],\"requiredGates\":[\"native-suite\"],\"fixtures\":[{\"id\":\"fixture\",\"artifactId\":\"synthetic-artifact-a\"}],\"mappings\":[{\"storyPath\":\"user_stories/example-native.md\",\"criterionId\":\"AC1\",\"criterionText\":\"The prepared checkout contains the expected file.\",\"nativeIds\":[\"test/native.test.mjs::checkout@10:1\",\"test/native.test.mjs::pane@20:1\"]}]},\"candidate\":{\"sourceId\":\"synthetic-source-a\",\"implementationId\":\"synthetic-native-a\",\"testsId\":\"synthetic-tests-a\",\"requirementsId\":\"synthetic-reviewed-a\"},\"intake\":{\"origin\":\"external-machine\",\"admission\":\"verified\",\"originalRef\":\"synthetic-original-machine-report\",\"verificationRef\":\"synthetic-intake-verification\",\"limits\":[\"External original; command was not observed by PDD.\"]},\"report\":{\"format\":\"pdd.native-node-report.v1\",\"producer\":\"pdd-node-test-events\",\"producerVersion\":\"1.0.0\",\"runner\":\"node:test\",\"runnerVersion\":\"synthetic-node-runner-v1\",\"runtimeVersion\":\"synthetic-node-v1\",\"profileId\":\"prepared\",\"requirementsId\":\"synthetic-reviewed-a\",\"source\":{\"sourceId\":\"synthetic-source-a\",\"implementationId\":\"synthetic-native-a\",\"testsId\":\"synthetic-tests-a\",\"requirementsId\":\"synthetic-reviewed-a\"},\"complete\":true,\"exitCode\":0,\"gates\":[{\"id\":\"native-suite\",\"outcome\":\"passed\"}],\"prerequisites\":[{\"id\":\"fixture\",\"artifactId\":\"synthetic-artifact-a\",\"state\":\"verified\",\"verificationRef\":\"synthetic-fixture-observation\"}],\"observations\":[{\"occurrenceId\":\"occ-1\",\"testId\":\"test/native.test.mjs::checkout@10:1\",\"selected\":true,\"started\":true,\"outcome\":\"passed\",\"skipReason\":null},{\"occurrenceId\":\"occ-2\",\"testId\":\"test/native.test.mjs::pane@20:1\",\"selected\":true,\"started\":true,\"outcome\":\"passed\",\"skipReason\":null},{\"occurrenceId\":\"occ-3\",\"testId\":\"test/native.test.mjs::live-probe@30:1\",\"selected\":true,\"started\":false,\"outcome\":\"skipped\",\"skipReason\":\"optional live probe disabled\"}],\"capture\":{\"selectionComplete\":true,\"terminalSeen\":true,\"processEnded\":true,\"eventRef\":\"synthetic-original-events\"}},\"baseline\":null}"
           }
+        },
+        {
+          "args": {
+            "root": "/candidate",
+            "runDir": "/saved-run",
+            "runId": "historical-pr1-not-current-native-code",
+            "profileId": "prepared",
+            "storyPath": "user_stories/example-native.md"
+          },
+          "call_index": 19,
+          "result": {
+            "content": "{\"schema\":\"pdd.native-assessment-context.v1\",\"runId\":\"historical-pr1-not-current-native-code\",\"protected\":{\"profileId\":\"prepared\",\"requirementsId\":\"synthetic-reviewed-a\",\"promptPath\":\"prompts/example-native.prompt.md\",\"sourceRoot\":\"/trusted-source\",\"approvalRef\":\"synthetic-matching-prompt-approval\",\"review\":\"approved\",\"requiredIds\":[\"test/native.test.mjs::checkout@10:1\",\"test/native.test.mjs::pane@20:1\"],\"requiredGates\":[\"native-suite\"],\"fixtures\":[{\"id\":\"fixture\",\"artifactId\":\"synthetic-artifact-a\"}],\"mappings\":[{\"storyPath\":\"user_stories/example-native.md\",\"criterionId\":\"AC1\",\"criterionText\":\"The prepared checkout contains the expected file.\",\"nativeIds\":[\"test/native.test.mjs::checkout@10:1\",\"test/native.test.mjs::pane@20:1\"]}]},\"candidate\":{\"sourceId\":\"synthetic-source-a\",\"implementationId\":\"synthetic-native-a\",\"testsId\":\"synthetic-tests-a\",\"requirementsId\":\"synthetic-reviewed-a\"},\"story\":{\"path\":\"user_stories/example-native.md\",\"criteria\":[{\"id\":\"AC1\",\"text\":\"The prepared checkout contains the expected file.\"}]},\"intake\":{\"origin\":\"external-machine\",\"admission\":\"verified\",\"originalRef\":\"synthetic-original-machine-report\",\"verificationRef\":\"synthetic-intake-verification\",\"limits\":[\"Original PR 1 stage retained; canonical workspace association does not prove current code source.\"],\"stage\":\"pr1\",\"sourceRef\":\"synthetic-frozen-pr1-source\"},\"report\":{\"format\":\"pdd.native-node-report.v1\",\"producer\":\"pdd-node-test-events\",\"producerVersion\":\"1.0.0\",\"runner\":\"node:test\",\"runnerVersion\":\"synthetic-node-runner-v1\",\"runtimeVersion\":\"synthetic-node-v1\",\"profileId\":\"prepared\",\"requirementsId\":\"synthetic-reviewed-a\",\"source\":{\"sourceId\":\"synthetic-source-a\",\"implementationId\":\"synthetic-native-pr1\",\"testsId\":\"synthetic-tests-a\",\"requirementsId\":\"synthetic-reviewed-a\"},\"complete\":true,\"exitCode\":0,\"gates\":[{\"id\":\"native-suite\",\"outcome\":\"passed\"}],\"prerequisites\":[{\"id\":\"fixture\",\"artifactId\":\"synthetic-artifact-a\",\"state\":\"verified\",\"verificationRef\":\"synthetic-fixture-observation\"}],\"observations\":[{\"occurrenceId\":\"occ-1\",\"testId\":\"test/native.test.mjs::checkout@10:1\",\"selected\":true,\"started\":true,\"outcome\":\"passed\",\"skipReason\":null},{\"occurrenceId\":\"occ-2\",\"testId\":\"test/native.test.mjs::pane@20:1\",\"selected\":true,\"started\":true,\"outcome\":\"passed\",\"skipReason\":null},{\"occurrenceId\":\"occ-3\",\"testId\":\"test/native.test.mjs::live-probe@30:1\",\"selected\":true,\"started\":false,\"outcome\":\"skipped\",\"skipReason\":\"optional live probe disabled\"}],\"capture\":{\"selectionComplete\":true,\"terminalSeen\":true,\"processEnded\":true,\"eventRef\":\"synthetic-original-events\"}},\"baseline\":null}"
+          }
         }
       ],
       "result_template": null,
@@ -1134,6 +1147,49 @@
           "path": "/storyNativeProof",
           "op": "equals",
           "value": "none"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "historical-pr1-not-current-native-code",
+      "entry_path": "prompts/cli/workflow-results.prompt.md",
+      "operation": "assessNativeEvidence",
+      "input": {
+        "root": "/candidate",
+        "runDir": "/saved-run",
+        "runId": "historical-pr1-not-current-native-code",
+        "profileId": "prepared",
+        "storyPath": "user_stories/example-native.md"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/sourceState",
+          "op": "equals",
+          "value": "stale"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/profileNativeProof",
+          "op": "equals",
+          "value": "none"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/storyNativeProof",
+          "op": "equals",
+          "value": "none"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/identity/stage",
+          "op": "equals",
+          "value": "pr1"
         }
       ],
       "model": "gpt-6.1-sol"

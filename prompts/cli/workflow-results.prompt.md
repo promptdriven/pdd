@@ -14,19 +14,29 @@ Export `resultLines(results, {kinds})`. Each result becomes one line that starts
 
 ## Native profile and criterion assessment (draft)
 
+The existing [preflight capture owner](runtime-preflight.prompt.md#source-capture)
+remains authoritative for the supplied capture callback; this link is navigation.
 This module also owns the shared native judgment for
 [profile completeness](../../user_stories/native-validation-profile.md) and
 [criterion support](../../user_stories/native-criterion-evidence.md). These links
 are navigation only. Preserve all existing exports and saved-result behavior.
 Generic `usableResult` does not establish native proof. Lint, workflow and PR
 consumers must use this single assessment; they must not invent another policy.
+`readRunResults` appends native evidence records selected from that run's native
+evidence history after its existing result kinds. Each has `kind:"native evidence"`,
+original saved time/source/stage and the same assessment, including proof origin,
+criteria, references and limits. `resultLines` renders that distinct kind without
+changing existing Runtime/lint/prove lines or their counts. A native record with
+no current proof remains visible with its reason and cannot become a usable
+current-pass claim through generic `usableResult`.
 
 New public module function
 `assessNativeEvidence({root,runDir,runId,profileId,storyPath}, {readNativeContext})`
 returns the assessment below. It calls the injected read-only
 `readNativeContext` once with these selectors; its Runtime resource is
-`native.read_context`. The native default reads saved originals and trusted
-source facts. This is a production assessment/read boundary for lint and
+`native.read_context`. The native default is this module's `readNativeContext` below. It obtains
+originals and derives checked facts; it does not accept a stored assessment as
+authority. This is a production assessment/read boundary for lint and
 workflow consumers. Selector runId/profileId/storyPath must match the reader's
 saved association, protected profile and current Story. A foreign or unknown
 association yields unverified/unknown without fallback. No read executes tests, fetches, probes, downloads, repairs
@@ -48,23 +58,125 @@ never masks the selected current report. This coverage judgment does not change
 ordinary process exit or add a merge, publication or all-project-test gate.
 
 <details>
-<summary>Proposed producer, original evidence and protected requirements</summary>
+<summary>Original intake, report interpretation and protected requirements</summary>
 
-**Draft format, not approved configuration.** The proposed first producer is
-`pdd-node-test-events`, major version 1, with report format
-`pdd.native-node-report.v1`. Its later native implementation captures the
-[Node 22 TestsStream](https://nodejs.org/download/release/v22.18.0/docs/api/test.html#class-testsstream)
-and a selection/process envelope. This producer is not shipped by this draft.
-V1 parsing must retain event order and locations. Enqueue/dequeue and terminal
-pass/fail observations have different meanings. A pass/fail event marked skip or
-todo is not executed proof. Do not rely on later Node testId/parentId fields.
-When file/name/location and hierarchy cannot resolve an ID, retain the event as
-unknown. Enqueue records discovery, dequeue records execution scheduling, and terminal
-pass/fail records the outcome. A dequeue plus an unqualified terminal pass can
-establish executed completion; test:start is reporting order only. Selection,
-start and completion detail unavailable from capture remains unknown. An
-aggregate TAP total, replay manifest or typed JSON is not this machine report.
-Other producers or incompatible major versions remain incompatible until reviewed.
+### Original evidence route and admission owner
+
+This module owns native report interpretation and admission. New public module
+function `prepareNativeEvidence({root,runDir,runId,summaryFile}, ports={})` reads
+an import descriptor and returns `{originals,record,assessment}` for the existing
+workflow evidence writer. It changes no file. New public module function
+`readNativeContext({root,runDir,runId,profileId,storyPath}, ports={})` reads saved
+originals and reconstructs the context for `assessNativeEvidence`. Both use the
+same checks below. The default assessor calls this reader. A caller-injected
+`readNativeContext` is an outside port for supplied facts, as in the synthetic
+scenarios; it does not remove any default-reader obligation.
+
+Use the existing `pdd workflow evidence ISSUE --summary FILE` route. A native
+FILE is a descriptor with `schema:"pdd.native-evidence-import.v1"`, `profileId`,
+`storyPath`, and `originals:[{path,role}]`; optional `baseline` names a separate
+descriptor. Roles are `report`, `source`, `selection`, `execution`, `fixture` or
+`gate`. Paths resolve from FILE's directory to existing local regular files,
+under the existing evidence-file safety rules. Require one unambiguous report.
+Source/fixture/gate records are original companion evidence when available,
+never newly typed success substitutes. A descriptor references bytes; its
+fields, agent annotations, `verified` flags and origin claims prove nothing.
+Keep every original byte unchanged, with original filename/report identity,
+runner/version, source, stage, time and limits. Store the descriptor, original
+copies and derived admission record separately in the run's existing append-only
+evidence history. Do not re-encode an old report as a PDD capture. Unavailable
+originals remain unavailable; do not run a replacement command.
+
+The default reader must obtain and recheck the following finite facts through
+injected native `files`, `source`, `approvals` and `workspace` adapters. Defaults
+use existing local file/Git/journal/run readers. No supplied normalized snapshot,
+stored `verified` value or reference string is a substitute:
+
+1. Obtain original report and companion bytes from the owned evidence record,
+   or from the descriptor during preparation. Check readable regular-file
+   identity and retained-byte agreement. Identify a PDD-owned capture only from
+   its saved command/capture association. Otherwise identify imported external
+   machine evidence from a parseable runner result; plain prose, summaries and
+   agent-authored result assertions remain notes. Parsing does not authenticate
+   a runner or speaker.
+2. Obtain the selected run/repository, producer root, exact selected test paths,
+   stage and source anchor from the canonical workspace owner's eligibility
+   callback. The runner supplies its actual owned association result, not fields
+   from FILE. Same-worktree eligibility and alternate-root registration keep
+   that owner's existing rules. Missing, contradictory or ineligible association
+   cannot establish admission. Do not infer association from equal hashes,
+   nesting or a shared remote. Frozen PR 1 evidence keeps that original stage.
+3. Resolve the reviewed profile snapshot below. Bind selected implementation,
+   native test inventory and requirements to actual source bytes using the
+   existing capture/Git readers, including declared native implementation/test
+   paths, not only the Runtime upload. Compare those observations with the
+   original source/capture references. Bind test names/locations to that selected
+   test source. A report's asserted source/profile identity alone is unverified.
+4. Parse the original format under the reviewed reader rules below. Preserve
+   each occurrence, outcome, skip reason and available selection/start/completion
+   fact. Check terminal/completeness evidence against that format's actual
+   records. Aggregate totals never supply absent rows, starts or selection.
+5. Resolve every relevant original fixture/artifact and gate reference. Check
+   its actual observed identity, result, source and stage against the reviewed
+   requirement and report occurrence. A path, expected value, report flag or
+   copied reference cannot establish a verified fixture or executed gate.
+
+The derived record lists original references and, for each check, the checked
+facts, mismatches, unavailable facts and validation limits. Contradiction is
+unverified; unavailable detail stays unknown. `intake.admission` is `verified`
+only when these checks establish the report's origin/association and its claimed
+identities; unknown optional observations stay explicit. Required unknown facts
+still prevent acceptance under the assessment rules. Qualified external evidence
+means checked original evidence with these exact limits. It never means PDD
+observed execution or authenticated an external speaker. On read, recheck
+originals, association, review and source; a saved prior judgment is no authority.
+No new cryptographic guarantee, receipt-policy engine or global gate is added.
+
+### Read existing runner reports
+
+There is no required Node producer. The reviewed profile names the original
+`reportFormat` and its interpretation. Support `junit-xml`, `tap13` and structured
+`json` originals, as well as optional `pdd.native-node-report.v1` captures.
+For structured JSON, the profile's `reader` gives JSON Pointers for the report
+identity/versions, source references, occurrence array and each row's ID,
+selection, start, terminal outcome and skip reason, plus explicit outcome-value
+mapping. `reader` is `{rows,fields,outcomes}`: rows is an absolute JSON
+Pointer to the original occurrence array; fields maps the named normalized
+report fields to absolute pointers and observation fields to row-relative
+pointers; outcomes maps original literal outcome strings to the defined outcome
+names. Optional fields identify completeness, gate and fixture reference rows.
+Preserve pointer-to-original-row references in the admission record. No mapping
+may assert constants as observed facts. Pointers extract data only: no executable parser code or arbitrary evaluation.
+Missing fields have unknown meaning; a pointer cannot manufacture a fact.
+
+JUnit reads suite/testcase identity, file/class/name/location where present,
+failure/error/skipped records and original properties/references. An otherwise
+terminal testcase records reported completion/pass under that runner's declared
+JUnit semantics. TAP reads version, nested test/result identity, plan, terminal
+results, skip/TODO directives and bailout/truncation. A plan is not selection or
+execution; a skipped/TODO result is not an executed pass. For both, bind names to
+reviewed native IDs; absent/ambiguous locations remain unresolved. A terminal
+executed outcome can establish start only when the identified runner/format
+semantics entail execution; record that interpretation and its external limit.
+Missing runner/version, source, start, complete selection or fixture information
+stays unknown. Preserve any supplied aggregate with its unit; never invent its
+underlying rows. XML entity/network retrieval is not part of reading a report.
+
+Other or ambiguous formats retain original bytes and known observations, with
+`incompatible`/unknown interpretation and explicit unsupported fields. They need
+an identified reader contract before proof; they do not need a new execution or
+PDD producer. The private retained report format/bytes are unavailable here.
+These parser choices do not claim that the actual retained pair was read or
+that every external format can be authenticated.
+
+The optional `pdd-node-test-events` major-1 capture uses
+`pdd.native-node-report.v1` and original Node TestsStream events plus its saved
+selection/process envelope. Retain event order and locations. Enqueue means
+discovery; dequeue plus an unqualified terminal pass can establish executed
+completion; test:start is reporting order only. Skip/TODO never passes required
+execution. Do not rely on later testId/parentId fields. Unresolved nested
+file/name/location identity stays unknown. Capture is optional and unimplemented
+by this draft; importing an older external report never assigns this producer.
 
 The reader returns `{content}`: UTF-8 JSON for
 `pdd.native-assessment-context.v1`. This internal read transport is not a CLI
@@ -73,17 +185,27 @@ fields are `schema,runId,protected,candidate,story,intake,report,baseline`.
 Report/baseline may be null. Judge unavailable Story facts separately below;
 missing/null/unknown Story facts do not invalidate a readable profile snapshot.
 Unreadable, malformed or unknown essential profile content
-returns unverified/unknown, never a native pass. Ignore claimed origin fields
-inside the original report; trust facts come from the separate intake record.
+returns unverified/unknown, never a native pass. Ignore claimed origin or admission fields
+inside any report or wrapper. The owner derives intake facts from originals and
+the independent run, source, workspace and approval readers above.
 
 - `protected` has `profileId,requirementsId,promptPath,sourceRoot,approvalRef,
   review,requiredIds,requiredGates,fixtures,mappings`. Review is `approved`,
-  `missing` or `unknown`. Requirements live in selected module prompt prose
-  from the saved run's trusted sourceRoot, outside candidate-local edits. The
-  reader matches that path and current prose identity with the existing prompt
-  approval journal. ApprovalRef names the matching event; it does not
-  authenticate a speaker. Missing/mismatched review cannot bind requirements.
-  Arbitrary candidate profile JSON cannot supply that authority.
+  `missing` or `unknown`. Requirements come from a matched approved prompt
+  snapshot, including newly approved bytes in the workflow worktree. Match
+  repository-relative path and prose identity with the existing common-directory
+  approval journal. For workflow gate approval also match its saved prompt
+  snapshot/decision; standalone approval uses its existing journal event without
+  inventing a gate. Resolve the actual
+  bytes from that worktree or its retained stage snapshot; the journal's hash
+  alone cannot reconstruct missing content. `sourceRoot` remains the repository
+  approval-configuration home, not the sole location of approved prompt bytes.
+  ApprovalRef names the matching existing event; it does not authenticate a
+  speaker. Do not add approval fields or edit the journal during reads.
+  Missing, changed or unavailable matched bytes cannot bind current proof.
+  Keep the last matched protected inventory until matching later review accepts
+  a replacement. Candidate-local JSON or prose cannot lower it. Retained older
+  bytes can explain historical requirements without proving current source.
 - Required IDs and gates are distinct ordered inventories, not counts. Fixtures
   are `{id,artifactId}`. Mappings are
   `{storyPath,criterionId,criterionText,nativeIds}`. Every mapped ID must be a
@@ -102,41 +224,61 @@ inside the original report; trust facts come from the separate intake record.
   text. An index alone cannot preserve a mapping after the criterion changes.
 - `intake` has `origin,admission,originalRef,verificationRef,limits`. Origin is
   `pdd-observed,external-machine,agent-note,modeled,unknown`; admission is
-  `verified` or `unverified`. These are trusted reader observations, separate
-  from report assertions. PDD-observed requires its saved command/capture.
-  External-machine requires original machine bytes, explicit run/workspace
-  association, checked source/producer/report identity and a verification record
-  stating what was and was not checked. Parsing or a claimed origin cannot
-  establish admission. An unavailable chain stays unverified. Reuse preserves
-  original origin, references and limits.
+  `verified` or `unverified`. These are derived owner observations, separate
+  from report/wrapper assertions. The finite admission checks above supply
+  them; the normalized resource reply only transports their result. PDD-observed
+  requires its saved command/capture. External-machine keeps the checked and
+  unchecked facts. An unavailable chain stays unverified. Reuse preserves
+  original origin, references, source/stage and limits.
+  Optional `stage` is the independently resolved original `current` or `pr1`
+  association stage; unavailable stage is `unknown`. `sourceRef` identifies the
+  checked original source record. Existing contexts without these facts retain
+  unknown values; the native default cannot omit an unavailable-stage limit.
+
 
 The proposed profile declaration is one fenced JSON object inside a disclosure
 whose summary is `Native validation profile: PROFILE_ID` in the owning module
 prompt. It is part of approved prompt prose, not the Runtime interface block.
 Its fields are `schema:"pdd.native-profile.v1",profileId,reportFormat,requiredIds,
-requiredGates,fixtures,mappings`, with the list/row shapes defined above.
-ReportFormat is `pdd.native-node-report.v1` for this first reviewed parser.
+requiredGates,fixtures,mappings,sourcePaths,testPaths`, with the list/row shapes
+defined above. SourcePaths/testPaths are exact safe authored-relative path arrays
+for the native implementation and native tests, captured with required closure.
+ReportFormat identifies the original parser above; optional `reader` supplies
+the structured-JSON interpretation. An explicit stable anchor
+`native-validation-profile-PROFILE_ID` identifies the declaration for the
+Story's native-owner link. Native source/test paths needed for source binding
+are part of the reviewed profile, separate from Runtime bindings.
 Require at least one required test or gate. Multiple declarations for one
 profile or ambiguous mappings leave it unverified. The reader derives
 requirementsId from prompt path, profileId and the matching approved prose
 identity; an authored requirementsId cannot substitute for that binding.
-This declaration syntax is a concrete draft choice for the person to review.
+The declaration and reader syntax are draft technical representation.
+Review binds requirements, never execution. The existing workflow journal and
+workspace owner remain authoritative; replay and Runtime import alone do not
+supply native admission. The native default and intake described here still
+require implementation and native verification.
 
-Reuse existing approval/source/result mechanisms. Review binds requirements,
-not execution. The external intake verification route and producer/capture
-design need person review before implementation; today's replay and Runtime
-import do not supply them. Without those facts, this reader gives no native proof.
+Originals created before PDD profile support need no PDD profile identifier or
+requirements digest. The owner binds the internal profile/requirements selectors
+to the reviewed snapshot and checked original source/test selection; mark that
+binding as derived in its record. Do not insert it into the original or claim
+the original runner recorded it. If the originals and source readers cannot
+establish the relationship, it stays unknown.
 
 The report has `format,producer,producerVersion,runner,runnerVersion,
 runtimeVersion,profileId,requirementsId,source,capture,complete,exitCode,gates,
 prerequisites,observations`. Source has the four candidate identity fields.
-Versions and identities must be known and nonblank. Runner is `node:test`;
-the runtime version names the actual Node version. Complete requires the
-selection envelope, terminal report marker and completed process capture.
-Capture is `{selectionComplete,terminalSeen,processEnded,eventRef}`, with three
-Boolean observations and a reference to original event bytes admitted with the
-report. Complete requires all three true and a verified eventRef. Missing
-terminal capture cannot be repaired by a typed `complete:true`.
+This is the internal normalized view; `format`, producer and runner remain
+those of the original, never of normalization. Versions/identities must be known
+and nonblank for current proof. For optional Node capture, `capture` is
+`{selectionComplete,terminalSeen,processEnded,eventRef}`; all three must be true
+and eventRef checked against original saved events. External reports use their
+own original terminal/completeness records and companion selection/execution
+evidence. The reader may represent those observations in the same internal
+fields while keeping their original format and references. Unknown capture
+detail stays unknown; typed `complete:true` cannot repair missing terminal or
+selection evidence. A complete report must account for the selected scope and
+its terminal outcomes; ordinary exit zero alone establishes neither.
 
 Gates are `{id,outcome}`, with `passed,failed,skipped,unknown`.
 Prerequisites are `{id,artifactId,state,verificationRef}`, with state
@@ -148,7 +290,8 @@ private fixture bytes or secret paths in public output.
 Observations are `{occurrenceId,testId,selected,started,outcome,skipReason}`.
 Selected/started are Boolean or null (unknown). Outcome is
 `passed,failed,skipped,todo,not-completed,unknown`; skipReason is text or null.
-Capture assigns distinct occurrence IDs at discovery. Test identity binds
+Retain original occurrence IDs, or assign stable row references in original
+order without claiming discovery was observed. Test identity binds
 repository-relative file, full nested name and source declaration location.
 Ambiguous identity stays unknown. A pass requires actual completed execution;
 false or unknown started cannot establish it. A required todo/unknown start is
@@ -165,8 +308,9 @@ where defined; otherwise use first observation order. Deduplicate ID lists,
 never original occurrences. Keep all observations and reasons.
 
 - ReceiptState is `missing` for no report, `incompatible` for unsupported
-  producer/format, `unknown` for malformed/unknown essential facts, `partial`
-  without complete terminal capture, else `accepted`. A captured failed test
+  format/interpretation (or incompatible PDD capture producer), `unknown` for
+  malformed/unknown essential facts, `partial` without complete original scope
+  and terminal evidence, else `accepted`. A captured failed test
   does not make a report partial. SourceState is `current` only if every
   candidate source field and profile/requirements identity matches the report
   and protected requirements; known difference is `stale`, absent identity
@@ -213,7 +357,8 @@ unknown receipt/source, no proof and incomparable/unknown comparison.
   cannot establish it. Always retain origin and limits.
 - Identity retains candidate source/implementation/tests/requirements,
   protected prompt/approval, original/verification references and producer,
-  report, runner/runtime versions. Use `unknown` for unavailable values.
+  report, runner/runtime versions. Also return original `stage` and `sourceRef`
+  from independently checked intake; use `unknown` for unavailable values.
 - Criteria is empty when current Story/criteria facts are unavailable; never
   invent criteria from old mappings. Otherwise it has one row per current
   Story criterion, in authored order:
@@ -260,20 +405,46 @@ and relevant physical effects.
 
 ## Dependencies
 
-- [Runtime client](runtime-client.prompt.md): required context for the saved batch files (`batch.json`, `summary.json`) that `pdd test` and `pdd lint` write.
-- [Preflight](runtime-preflight.prompt.md): required for `captureSource`, the default `capture`.
+- Existing batch readers supply the saved `batch.json`/`summary.json` facts
+  stated in the preserved result contract above. The runtime-client link is
+  navigation only; native consumers do not load that caller back into this
+  module's required context.
+- Existing `capture(root,{tests,appMap:null}) -> {sha256}` is the injected
+  preflight `captureSource` callback used by the preserved batch reader. Its
+  default is that existing production export. The callback performs canonical
+  selection, safety and complete source capture; this module compares its result
+  and does not recreate its resolver or capture policy. The native `source`
+  adapter likewise supplies checked selected native source identities and
+  unavailable reasons through that owner's safe source capability. These
+  supplied interfaces provide required source facts without loading the client
+  or preflight caller into the native assessment context.
 - [Old-code proof](workflow-prove.prompt.md): required context for `old-code-proof.json`.
 - [PR evidence](workflow-pr-evidence.prompt.md): required for `judgeOldCodeProof`, the one freshness rule for a saved proof.
 
-- [Approval policy](approval-policy.prompt.md): required for trusted sourceRoot selection and the existing path/prose approval journal. Native requirements reuse this authority.
+- [Approval policy](approval-policy.prompt.md): required for configuration-root
+  policy and the existing path/prose approval journal. Native review also uses
+  the saved gate snapshot/decision supplied by the run reader.
+- Native `files` supplies original bytes and safe identity; `source` supplies
+  selected native implementation/test bytes and current identities; `approvals`
+  supplies journal events, saved gate snapshot and actual matching prompt bytes.
+  `workspace` supplies the canonical run owner's eligibility result with owned
+  run/repository, producer root, exact tests, original stage/source anchor and
+  eligible/unknown reason. These are real outside-reader boundaries for the
+  production intake, not report-controlled JSON. The runner supplies association
+  eligibility under its existing workspace rule; this module never registers or
+  reimplements association. The callback contract here is the required supplied
+  interface; loading the runner/client caller is unnecessary and would cycle.
+  Native original-byte intake, parser/source binding and association/approval
+  lookup have no complete Runtime binding in this draft. `native.read_context`
+  fakes only the derived context for assessment, never those physical checks.
 
 <details><summary>Runtime interface</summary>
 
 ```json
 {
   "status": "draft",
-  "prose_sha256": "369455a623b50d001eb55b12fdd71b6c0ca680c9b18628fa15409382c80fabc6",
-  "entries": [{"operation":"assessNativeEvidence","input_schema":{"type":"object","properties":{"root":{"type":"string"},"runDir":{"type":"string"},"runId":{"type":"string"},"profileId":{"type":"string"},"storyPath":{"type":"string"}},"required":["root","runDir","runId","profileId","storyPath"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"profileId":{"type":"string"},"profileState":{"type":"string"},"sourceState":{"type":"string"},"receiptState":{"type":"string"},"origin":{"type":"string"},"requiresReview":{"type":"boolean"},"requiredIds":{"type":"array","items":{"type":"string"}},"missingIds":{"type":"array","items":{"type":"string"}},"failedIds":{"type":"array","items":{"type":"string"}},"skippedIds":{"type":"array","items":{"type":"string"}},"unknownIds":{"type":"array","items":{"type":"string"}},"unexecutedGates":{"type":"array","items":{"type":"string"}},"prerequisiteProblems":{"type":"array","items":{"type":"string"}},"optionalSkippedIds":{"type":"array","items":{"type":"string"}},"duplicateIds":{"type":"array","items":{"type":"string"}},"occurrenceCount":{"oneOf":[{"type":"integer","minimum":0},{"type":"null"}]},"uniqueIdCount":{"oneOf":[{"type":"integer","minimum":0},{"type":"null"}]},"observations":{"type":"array","items":{"type":"object","properties":{"occurrenceId":{"type":"string"},"testId":{"type":"string"},"selected":{"oneOf":[{"type":"boolean"},{"type":"null"}]},"started":{"oneOf":[{"type":"boolean"},{"type":"null"}]},"outcome":{"type":"string"},"skipReason":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["occurrenceId","testId","selected","started","outcome","skipReason"],"additionalProperties":false}},"identity":{"type":"object","properties":{"sourceId":{"type":"string"},"implementationId":{"type":"string"},"testsId":{"type":"string"},"requirementsId":{"type":"string"},"profilePrompt":{"type":"string"},"profileApproval":{"type":"string"},"originalRef":{"type":"string"},"verificationRef":{"type":"string"},"producer":{"type":"string"},"producerVersion":{"type":"string"},"reportFormat":{"type":"string"},"runnerVersion":{"type":"string"},"runtimeVersion":{"type":"string"}},"required":["sourceId","implementationId","testsId","requirementsId","profilePrompt","profileApproval","originalRef","verificationRef","producer","producerVersion","reportFormat","runnerVersion","runtimeVersion"],"additionalProperties":false},"criteria":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"},"state":{"type":"string"},"nativeIds":{"type":"array","items":{"type":"string"}},"reason":{"type":"string"}},"required":["id","text","state","nativeIds","reason"],"additionalProperties":false}},"comparison":{"type":"object","properties":{"state":{"type":"string"},"reason":{"type":"string"},"lostIds":{"type":"array","items":{"type":"string"}},"changes":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"before":{"type":"string"},"after":{"type":"string"}},"required":["id","before","after"],"additionalProperties":false}}},"required":["state","reason","lostIds","changes"],"additionalProperties":false},"limits":{"type":"array","items":{"type":"string"}},"profileNativeProof":{"type":"string"},"storyNativeProof":{"type":"string"},"gates":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"outcome":{"type":"string"}},"required":["id","outcome"],"additionalProperties":false}},"prerequisites":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"expectedArtifactId":{"type":"string"},"artifactId":{"type":"string"},"state":{"type":"string"},"verificationRef":{"type":"string"}},"required":["id","expectedArtifactId","artifactId","state","verificationRef"],"additionalProperties":false}}},"required":["profileId","profileState","sourceState","receiptState","origin","profileNativeProof","requiresReview","requiredIds","missingIds","failedIds","skippedIds","unknownIds","unexecutedGates","prerequisiteProblems","optionalSkippedIds","duplicateIds","occurrenceCount","uniqueIdCount","observations","identity","criteria","comparison","limits","storyNativeProof","gates","prerequisites"],"additionalProperties":false},"errors":[]}],
+  "prose_sha256": "e9a6eeda4c20216bdc87ec8ff6241eae71083be95f68b96b22bd3ddc7bc002f1",
+  "entries": [{"operation":"assessNativeEvidence","input_schema":{"type":"object","properties":{"root":{"type":"string"},"runDir":{"type":"string"},"runId":{"type":"string"},"profileId":{"type":"string"},"storyPath":{"type":"string"}},"required":["root","runDir","runId","profileId","storyPath"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"profileId":{"type":"string"},"profileState":{"type":"string"},"sourceState":{"type":"string"},"receiptState":{"type":"string"},"origin":{"type":"string"},"requiresReview":{"type":"boolean"},"requiredIds":{"type":"array","items":{"type":"string"}},"missingIds":{"type":"array","items":{"type":"string"}},"failedIds":{"type":"array","items":{"type":"string"}},"skippedIds":{"type":"array","items":{"type":"string"}},"unknownIds":{"type":"array","items":{"type":"string"}},"unexecutedGates":{"type":"array","items":{"type":"string"}},"prerequisiteProblems":{"type":"array","items":{"type":"string"}},"optionalSkippedIds":{"type":"array","items":{"type":"string"}},"duplicateIds":{"type":"array","items":{"type":"string"}},"occurrenceCount":{"oneOf":[{"type":"integer","minimum":0},{"type":"null"}]},"uniqueIdCount":{"oneOf":[{"type":"integer","minimum":0},{"type":"null"}]},"observations":{"type":"array","items":{"type":"object","properties":{"occurrenceId":{"type":"string"},"testId":{"type":"string"},"selected":{"oneOf":[{"type":"boolean"},{"type":"null"}]},"started":{"oneOf":[{"type":"boolean"},{"type":"null"}]},"outcome":{"type":"string"},"skipReason":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["occurrenceId","testId","selected","started","outcome","skipReason"],"additionalProperties":false}},"identity":{"type":"object","properties":{"sourceId":{"type":"string"},"implementationId":{"type":"string"},"testsId":{"type":"string"},"requirementsId":{"type":"string"},"profilePrompt":{"type":"string"},"profileApproval":{"type":"string"},"originalRef":{"type":"string"},"verificationRef":{"type":"string"},"producer":{"type":"string"},"producerVersion":{"type":"string"},"reportFormat":{"type":"string"},"runnerVersion":{"type":"string"},"runtimeVersion":{"type":"string"},"stage":{"type":"string"},"sourceRef":{"type":"string"}},"required":["sourceId","implementationId","testsId","requirementsId","profilePrompt","profileApproval","originalRef","verificationRef","producer","producerVersion","reportFormat","runnerVersion","runtimeVersion","stage","sourceRef"],"additionalProperties":false},"criteria":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"},"state":{"type":"string"},"nativeIds":{"type":"array","items":{"type":"string"}},"reason":{"type":"string"}},"required":["id","text","state","nativeIds","reason"],"additionalProperties":false}},"comparison":{"type":"object","properties":{"state":{"type":"string"},"reason":{"type":"string"},"lostIds":{"type":"array","items":{"type":"string"}},"changes":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"before":{"type":"string"},"after":{"type":"string"}},"required":["id","before","after"],"additionalProperties":false}}},"required":["state","reason","lostIds","changes"],"additionalProperties":false},"limits":{"type":"array","items":{"type":"string"}},"profileNativeProof":{"type":"string"},"storyNativeProof":{"type":"string"},"gates":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"outcome":{"type":"string"}},"required":["id","outcome"],"additionalProperties":false}},"prerequisites":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"expectedArtifactId":{"type":"string"},"artifactId":{"type":"string"},"state":{"type":"string"},"verificationRef":{"type":"string"}},"required":["id","expectedArtifactId","artifactId","state","verificationRef"],"additionalProperties":false}}},"required":["profileId","profileState","sourceState","receiptState","origin","profileNativeProof","requiresReview","requiredIds","missingIds","failedIds","skippedIds","unknownIds","unexecutedGates","prerequisiteProblems","optionalSkippedIds","duplicateIds","occurrenceCount","uniqueIdCount","observations","identity","criteria","comparison","limits","storyNativeProof","gates","prerequisites"],"additionalProperties":false},"errors":[]}],
   "calls": [],
   "resources": [{"name":"native","kind":"port","access":"read","operations":[{"name":"read_context","access":"read","arguments_schema":{"type":"object","properties":{"root":{"type":"string"},"runDir":{"type":"string"},"runId":{"type":"string"},"profileId":{"type":"string"},"storyPath":{"type":"string"}},"required":["root","runDir","runId","profileId","storyPath"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"content":{"type":"string"}},"required":["content"],"additionalProperties":false}}]}],
   "limits": {"max_steps":12,"max_model_calls":6},

@@ -133,4 +133,4 @@ The seven workflow Stories retain their separately approved contracts and all 28
 1. [Native validation profile](native-validation-profile.md) — https://github.com/promptdriven/pdd/issues/2961. Cases: `test/runtime/native-validation-profile.json`.
 2. [Native criterion evidence](native-criterion-evidence.md) — https://github.com/promptdriven/pdd/issues/2954. Cases: `test/runtime/native-criterion-evidence.json`. Uses the same profile assessment.
 
-Prompt tests: not run. No hosted lint, simulation, native capture, implementation or gate approval.
+Prompt tests: not run. Source-only contract repair defines original-report intake, existing-journal snapshots and bounded native lint/workflow/PR consumers. All scenarios remain unjudged. No hosted lint, simulation, native capture, implementation or gate approval.

@@ -1,0 +1,30 @@
+# Move projection state to authored source
+
+Own the new `src/runtime-workspace-migration.mjs`. Provide a local preview/apply operation to stop needing a copied Runtime Git projection. Preserve original evidence, pending cases, source/reference meanings and known jobs. This module orchestrates migration; it grants no evidence authority and performs no Runtime work.
+
+Module function `migrateRuntimeWorkspace({root,projectionRoot,mappings,write=false},ports={})` returns `{state,mappings,items,unresolved}`. Roots are canonical absolute repository roots; `mappings` is an array of exact `{from,to}` repository-relative file pairs, not prefix substitution or globs. Each item names its original record and outcome `ready`, `applied`, `pending`, `conflict` or `unavailable`, with a reason and recovery location where applicable. `state` is `preview`, `applied` or `incomplete`. Default preview changes no file or private state. Apply is an explicit invocation with `write:true`, not inferred from source equality.
+
+The person's agent can call this native module with a reviewed mapping. Initial delivery exposes this module operation; no new CLI command is silently assumed. The returned preview provides complete migration instructions and exact unresolved mappings before a write. A future command syntax remains with the CLI owner.
+
+## Preview and transfer
+
+Inventory owned repository-keyed Try/batch/cache records, exact selected test sets, last-door pointers, launch descriptors, receipts and received-case ledgers from the runtime client's existing private store. Use injected existing Git/filesystem/state/hash ports. Private control reads are not authored Runtime context. Validate destination authored content under the workspace policy, preserving strict no-link mutation/infrastructure targets. Unknown/unowned state is retained and listed; it cannot be adopted just because paths/content match.
+
+Preview every old-to-authored Story/test/prompt/dependency/reference mapping. Compare exact selected source, raw/effective prompt identity, used contract/seed values and authored reference resolution. An unchanged textual `contracts/x.json` may name different data under the parent Git root. Reject ambiguous/missing/duplicate destinations, changed required source or altered reference meaning; list the needed authored repair without changing expected values or widening policy. A changed archive member name is a changed source identity even if mapped file bytes agree; do not invent current evidence from prefix equivalence. Preserve all selected tests, including several tests for one Story. Never shorten selection to manufacture equivalence.
+
+Consume the [workflow evidence owner's](workflow-runner.prompt.md#workspace-evidence-association) separate owned association/eligibility result. It owns association creation, run/stage/source eligibility and evidence import. This module requests that result; it never creates a parallel permission rule or rewrites receipt `repo`, source, request/session, origin, owner/login or saved bytes. Keep original receipts byte for byte and store destination associations separately through that owner. Eligible historical PR 1 evidence stays evidence of that stage; source drift does not make it proof of the current code head. Unknown/stale/unavailable evidence remains labeled as such by consumers.
+
+Transfer every pending, conflicting and already-applied received case through the runtime client's durable import/recovery owner. Preserve complete original payload, identity, association, expected values and application state. Resolve exact original destination mappings before authored mutation. A handled-ID list alone does not prove prior application. Recover crash-window imports without duplicate append or loss; unresolved cases remain available at their recovery locations.
+
+For each simulator/door record, preserve its owner, runtime origin, exact test, request/session identity, source identity and known state. Only after source/owner validation may apply build a local destination pointer or regenerate a PDD-owned launcher descriptor. These local artifacts are not Runtime executions. Running, paused, pending or unknown work keeps the original read/recovery command. Missing local pointers, uncertain reads and ended sessions never cause a new Try, check, reopen, replay or replacement request merely for migration. No authentication, network, model metadata or paid calls are needed. Keep records that cannot yet be mapped; do not forget uncertain work.
+
+Use the runtime client's cooperating-writer ownership and durable state update/recovery contract for publication. A repeated unchanged apply is a no-op. An interrupted mapping publication leaves original records/receipts usable and resumes or reports conflict, never a half-applied current result. Do not delete the old projection/state by default. Report how to stop using it only after resolved authored checks; keep it while any pending job/case remains.
+
+## Dependencies
+
+- [Workspace authority](runtime-workspace.prompt.md): required for destination authored permission.
+- [Preflight](runtime-preflight.prompt.md): required for source capture, exact selected source/reference identity and safe source access.
+- [Runtime client](runtime-client.prompt.md): required for private state layouts, received-case transaction, currentness and local descriptors.
+- [Workflow evidence owner](workflow-runner.prompt.md#workspace-evidence-association): required for its association/eligibility API only. The exact integration follows that owner's reviewed interface; do not infer permission from an unavailable interface.
+
+Host filesystem publication, concurrent writers, state durability, real process controls and receipt byte retention require native verification. No JSON transport for those effects is declared here. Native case drafts name the real operation and faults; their unexecuted results are not hosted passes.
