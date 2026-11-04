@@ -17,9 +17,10 @@ for (const name of stories) test(`autopilot-${name}: replay approved Story cases
   const world = clone(scenario.initial_world), counts = {}, ports = {};
   for (const [binding, rule] of Object.entries(scenario.simulation)) {
     const [resource, operation] = binding.split('.');
+    const key = `/resources/autopilot-${resource}-${operation}`;
+    counts[key] = 0;
     (ports[resource] ??= {})[operation] = async args => {
-      const key = `/resources/${resource}-${operation}`;
-      counts[key] = (counts[key] ?? 0) + 1;
+      counts[key]++;
       const result = clone(rule.result_template);
       if (rule.action === 'port.write') { at(world, rule.world_pointer).push(clone(args)); return result; }
       if (rule.action === 'fixture.lookup') {
@@ -41,7 +42,8 @@ for (const name of stories) test(`autopilot-${name}: replay approved Story cases
     for (const key of Object.keys(counts)) counts[key] = 0;
     const result = await runAutopilot(step.input, ports);
     for (const check of step.checks) {
-      const value = check.target === 'calls' ? counts[check.path] ?? 0 : at(check.target === 'world' ? world : result, check.path);
+      if (check.target === 'calls') assert.ok(Object.hasOwn(counts, check.path), `Unknown call-count path: ${check.path}`);
+      const value = check.target === 'calls' ? counts[check.path] : at(check.target === 'world' ? world : result, check.path);
       const label = `${name}/${step.step_id}/${check.criterion_id} ${check.target} ${check.path}`;
       if (check.op === 'equals') assert.deepEqual(value, check.value, label);
       else if (check.op === 'contains') assert.ok(value.includes(check.value), label);
@@ -94,9 +96,11 @@ test('autopilot-invalid-mode/type: every invalid saved mode stays unchanged unti
   for (const value of ['turbo', false, true, 0, null, [], {}]) {
     const raw = JSON.stringify({ mode: value, trust: [] }), m = memory(raw);
     const result = await runAutopilot({ action: 'setup', interactive: true, inRepo: true }, m.ports);
-    assert.equal(result.exitCode, 0); assert.equal(result.mode, 'off'); assert.match(result.message, /invalid.*off/);
+    assert.equal(result.exitCode, 0); assert.equal(result.mode, 'off');
+    assert.equal(result.message.split('\n')[0], `Saved Autopilot mode ${JSON.stringify(value)} is invalid; using off and leaving it unchanged.`);
     assert.equal(m.raw(), raw); assert.deepEqual(m.calls, []);
-    await runAutopilot({ action: 'mode', mode: 'auto' }, m.ports);
+    const replaced = await runAutopilot({ action: 'mode', mode: 'auto' }, m.ports);
+    assert.ok(!replaced.message.includes('leaving it unchanged'));
     assert.deepEqual(JSON.parse(m.raw()), { mode: 'auto', trust: [] });
   }
   for (const saved of [false, 'auto', null, ['auto']]) {

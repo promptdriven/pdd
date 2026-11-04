@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { renderCompletion } from '../src/completion.mjs';
 
@@ -91,6 +91,49 @@ test('autopilot-setup: CLI does not ask or save without a terminal or outside Gi
   assert.equal((await invoke(cwd, ['setup'], setupOptions({ stdin: { isTTY: false }, autopilotPorts: noQuestions }))).exitCode, 0);
   assert.throws(() => readFileSync(join(cwd, 'pdd.json')), { code: 'ENOENT' });
   const context = async () => null;
-  assert.equal((await invoke(outside, ['setup'], setupOptions({ gitContext: context, autopilotPorts: noQuestions }))).exitCode, 0);
+  const result = await invoke(outside, ['setup'], setupOptions({ gitContext: context, autopilotPorts: noQuestions }));
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.stdout, 'AGENTS.md already has this PDD block. No change.\n');
+  assert.equal(result.stderr, '');
   assert.throws(() => readFileSync(join(outside, 'pdd.json')), { code: 'ENOENT' });
+});
+
+
+test('autopilot-trust: trust and untrust preserve a saved non-object value until a mode command replaces it', async t => {
+  const cwd = repo(t), file = join(cwd, 'pdd.json');
+  for (const value of ['auto', false, null, ['auto'], 7]) {
+    const before = JSON.stringify({ strict_approvals: true, autopilot: value }) + '\n';
+    writeFileSync(file, before);
+    for (const action of ['trust', 'untrust']) {
+      const result = await invoke(cwd, ['autopilot', action, 'Dana']);
+      assert.equal(result.exitCode, 0, result.stderr);
+      assert.match(result.stdout, /saved value.*unchanged/i);
+      assert.equal(readFileSync(file, 'utf8'), before, `${action} ${JSON.stringify(value)}`);
+    }
+    assert.equal((await invoke(cwd, ['autopilot', 'auto'])).exitCode, 0);
+    assert.deepEqual(JSON.parse(readFileSync(file)), { strict_approvals: true, autopilot: { mode: 'auto', trust: [] } });
+  }
+});
+
+test('autopilot-setup: default terminal consumes piped mode and names answers in order', t => {
+  // Explicit interactive context tests the actual terminal adapter with real stdin;
+  // CLI non-terminal admission remains covered separately and asks nothing.
+  for (const mode of ['', 'auto', 'observe']) {
+    const cwd = repo(t);
+    const script = `
+      import { runAutopilot } from ${JSON.stringify(new URL('../src/autopilot.mjs', import.meta.url).href)};
+      const result = await runAutopilot({ action: 'setup', interactive: true, inRepo: true }, {
+        github: { lookup: async () => ({ owner: 'Ada', writers: ['Bo'], complete: true }) },
+      });
+      console.log('\\nSETUP_RESULT ' + JSON.stringify(result));
+      process.exitCode = result.exitCode;
+    `;
+    const child = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+      cwd, input: `${mode}\nDana Eli\n`, encoding: 'utf8', timeout: 5000,
+    });
+    assert.equal(child.status, 0, `${mode || 'blank'}: ${child.stderr} ${child.stdout}`);
+    assert.match(child.stdout, /Autopilot for this repo/);
+    assert.match(child.stdout, /Add anyone else/);
+    assert.deepEqual(JSON.parse(readFileSync(join(cwd, 'pdd.json'))).autopilot, { mode: mode || 'off', trust: ['Dana', 'Eli'] });
+  }
 });

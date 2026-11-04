@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot.prompt.md (sha256: d769a930f40696fc79d1ef2d7ced93ee0cd54617dbac71f3fb438839e823c3ee).
+// Generated from prompts/cli/autopilot.prompt.md (sha256: 911c1f57ae11585631551abaedf15ec970fdc76a4021f30d9477b5cfd8e59f02).
 import * as nativeFs from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -44,12 +44,14 @@ function nativeConfig(root, fs) {
   };
 }
 function nativeTerminal(stdin, stdout) {
+  const rl = createInterface({ input: stdin, output: stdout });
+  const answers = rl[Symbol.asyncIterator]();
   const ask = async text => {
-    const rl = createInterface({ input: stdin, output: stdout });
-    try { return await rl.question(text); }
-    finally { rl.close(); }
+    stdout.write(text);
+    return (await answers.next()).value ?? '';
   };
   return {
+    close: () => rl.close(),
     mode: async () => ({ answer: await ask('Autopilot for this repo (off/observe/auto) [off]: ') }),
     names: async info => {
       stdout.write(`${describe(info)}${info.complete ? '' : ` ${notice}`}\n`);
@@ -79,12 +81,13 @@ export async function runAutopilot(input, ports = {}) {
     || action === 'mode' && !modes.includes(input.mode)
     || ['trust', 'untrust'].includes(action) && (!Array.isArray(names) || !names.length || names.some(name => !named(name)) || action === 'untrust' && names.length !== 1)
     || action === 'isTrusted' && !named(author)) return result(2, 'Invalid Autopilot arguments. Use pdd autopilot --help.');
+  if (action === 'setup' && !input.inRepo) return result(0, '');
   try {
     const cwd = ports.cwd ?? process.cwd(), exec = ports.execFile ?? execute;
     let root = cwd;
     if (!ports.config) {
       try { root = String((await exec('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8' })).stdout).trim(); }
-      catch { return action === 'setup' ? result(0, 'Autopilot: off (outside a Git repository).') : result(1, 'Autopilot settings need a Git repository.'); }
+      catch { return action === 'setup' ? result(0, '') : result(1, 'Autopilot settings need a Git repository.'); }
     }
     const config = ports.config ?? nativeConfig(root, ports.fs ?? nativeFs);
     const { raw } = await config.read({ key: 'autopilot' });
@@ -92,7 +95,10 @@ export async function runAutopilot(input, ports = {}) {
     mode = modes.includes(setting.mode) ? setting.mode : 'off';
     trust = unique(Array.isArray(setting.trust) ? setting.trust : []);
     const invalid = raw !== null && (!object(saved) || Object.hasOwn(setting, 'mode') && !modes.includes(setting.mode));
-    if (invalid) warnings.push(`Autopilot has an invalid saved mode ${JSON.stringify(object(saved) ? setting.mode : saved)}; treating it as off.`);
+    if (invalid) warnings.push(`Saved Autopilot mode ${JSON.stringify(object(saved) ? setting.mode : saved)} is invalid; ${action === 'mode' ? 'treating it as off.' : 'using off and leaving it unchanged.'}`);
+    if (['trust', 'untrust'].includes(action) && raw !== null && !object(saved)) {
+      return result(0, 'Autopilot saved value is unchanged; use pdd autopilot off, observe or auto to replace it.');
+    }
     const save = async value => config.save({ key: 'autopilot', raw: JSON.stringify(value) });
     const lookup = async () => {
       try { return await (ports.github ?? nativeGithub(root, exec)).lookup({}); }
@@ -101,22 +107,24 @@ export async function runAutopilot(input, ports = {}) {
     if (action === 'setup') {
       if (!input.interactive || !input.inRepo) return result(0, `Autopilot: ${mode}.`);
       const terminal = ports.terminal ?? nativeTerminal(ports.stdin ?? process.stdin, ports.stdout ?? process.stdout);
-      if (raw === null) {
-        const { answer } = await terminal.mode({});
-        mode = answer.trim() || 'off';
-        if (!modes.includes(mode)) return result(2, 'Invalid Autopilot mode. Choose off, observe or auto.');
-      }
-      const info = await lookup();
-      if (!info.complete || !info.owner && !info.writers.length) warnings.push(notice);
-      const additions = (await terminal.names(info)).names;
-      const nextTrust = unique([...trust, ...additions]);
-      if (raw === null || additions.length) {
-        // Preserve an existing invalid mode verbatim until a mode command replaces it.
-        const next = raw === null ? { mode, trust: nextTrust } : { ...setting, trust: nextTrust };
-        if (!object(saved) && raw !== null) return result(0, `${describe(info)} Autopilot: ${mode}; saved value unchanged.`);
-        await save(next); trust = nextTrust;
-      }
-      return result(0, `${describe(info)} Autopilot: ${mode}. Explicit trust: ${trust.join(', ') || '(none)'}.`);
+      try {
+        if (raw === null) {
+          const { answer } = await terminal.mode({});
+          mode = answer.trim() || 'off';
+          if (!modes.includes(mode)) return result(2, 'Invalid Autopilot mode. Choose off, observe or auto.');
+        }
+        const info = await lookup();
+        if (!info.complete || !info.owner && !info.writers.length) warnings.push(notice);
+        const additions = (await terminal.names(info)).names;
+        const nextTrust = unique([...trust, ...additions]);
+        if (raw === null || additions.length) {
+          // Preserve an existing invalid mode verbatim until a mode command replaces it.
+          const next = raw === null ? { mode, trust: nextTrust } : { ...setting, trust: nextTrust };
+          if (!object(saved) && raw !== null) return result(0, `${describe(info)} Autopilot: ${mode}; saved value unchanged.`);
+          await save(next); trust = nextTrust;
+        }
+        return result(0, `${describe(info)} Autopilot: ${mode}. Explicit trust: ${trust.join(', ') || '(none)'}.`);
+      } finally { if (!ports.terminal) terminal.close(); }
     }
     if (action === 'isTrusted') {
       const info = await lookup();

@@ -125,14 +125,14 @@
         {
           "criterion_id": "AC2",
           "target": "calls",
-          "path": "/resources/config-save",
+          "path": "/resources/autopilot-config-save",
           "op": "equals",
           "value": 0
         },
         {
           "criterion_id": "AC2",
           "target": "calls",
-          "path": "/resources/terminal-mode",
+          "path": "/resources/autopilot-terminal-mode",
           "op": "equals",
           "value": 0
         }
@@ -151,21 +151,21 @@
         {
           "criterion_id": "AC3",
           "target": "calls",
-          "path": "/resources/config-save",
+          "path": "/resources/autopilot-config-save",
           "op": "equals",
           "value": 0
         },
         {
           "criterion_id": "AC3",
           "target": "calls",
-          "path": "/resources/terminal-mode",
+          "path": "/resources/autopilot-terminal-mode",
           "op": "equals",
           "value": 0
         },
         {
           "criterion_id": "AC3",
           "target": "calls",
-          "path": "/resources/terminal-names",
+          "path": "/resources/autopilot-terminal-names",
           "op": "equals",
           "value": 0
         }
@@ -184,21 +184,21 @@
         {
           "criterion_id": "AC4",
           "target": "calls",
-          "path": "/resources/config-save",
+          "path": "/resources/autopilot-config-save",
           "op": "equals",
           "value": 0
         },
         {
           "criterion_id": "AC4",
           "target": "calls",
-          "path": "/resources/terminal-mode",
+          "path": "/resources/autopilot-terminal-mode",
           "op": "equals",
           "value": 0
         },
         {
           "criterion_id": "AC4",
           "target": "calls",
-          "path": "/resources/terminal-names",
+          "path": "/resources/autopilot-terminal-names",
           "op": "equals",
           "value": 0
         }

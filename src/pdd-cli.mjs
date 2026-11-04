@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 6e56f23d5dd639e0f88aa7a85b4557319349e49095e6115af0440a4e3750b3a3).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: b38fabb9f45bbd04b7eff6f2555408f22c49d84aec9bbbb159dab21ae11c1fa7).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -178,7 +178,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         const module = autopilot ?? await import('./autopilot.mjs');
         const result = await module.runAutopilot({ action: 'setup', interactive: !!stdin.isTTY, inRepo: !!context?.toplevel },
           { cwd: context?.toplevel ?? cwd, stdin, stdout, ...autopilotPorts });
-        line(result.exitCode === 0 ? stdout : stderr, result.message);
+        if (result.message) line(result.exitCode === 0 ? stdout : stderr, result.message);
         if (result.exitCode) code = result.exitCode;
       } catch (error) { line(stderr, `Autopilot settings failed.${reason(error)}`); code = 1; }
       return code;
