@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 9b8617f4c60d6eae3adbab0c0a5f51047251001f6ee5824c5ec8d513e7dc5d0f).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 4260b4b90c4731ad20fda6ae839e4942277fbd30694f698a437efdf3fdcaca1f).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { execFile as execFileCallback } from 'node:child_process';
@@ -220,8 +220,12 @@ async function changedFiles(run, p, strict = false) {
 const isScenario = text => JSON.parse(text)?.schema_version === 'prompt-runtime.program-scenario.v1';
 async function scenarioInventory(run, p) {
   const paths = [];
+  const saved=new Set(run.replayBaseline?.vectors?.map(vector=>vector.path)??[]);
   for (const path of await changedFiles(run,p,true)) {
-    if (path.endsWith('.json') && isScenario(readFileSync(join(run.root,path),'utf8'))) paths.push(path);
+    if(!path.endsWith('.json'))continue;
+    // The replay reader reports deleted/malformed saved files with their value diff.
+    if(saved.has(path)){paths.push(path);continue;}
+    if(isScenario(readFileSync(join(run.root,path),'utf8')))paths.push(path);
   }
   return paths;
 }
@@ -234,11 +238,17 @@ async function adoptionFailure(run,p) {
     return reason;
   };
   if (!run.replayAdoption) return null;
-  const result = await adoptReplayCorpus(run.root,join(run.runDir,'replay-adoption.json'));
+  const code=run.areas[run.area]?.replay_evidence===REPLAY_POLICY;
+  let snapshot;
+  const result = await adoptReplayCorpus(run.root,join(run.runDir,'replay-adoption.json'),{
+    ...(code ? {scenarioReference:run.replayAdoption.provenance.commit} : {}),onSnapshot:value=>{snapshot=value;}
+  });
   if (result.outcome !== 'adopted' || JSON.stringify(result.provenance) !== JSON.stringify(run.replayAdoption.provenance))
     return blocked(`Corpus adoption cannot be reused (${result.reason || 'frozen provenance changed'}${result.cause ? `: ${result.cause}` : ''}). Start an ordinary approval workflow for changed requirements.`);
-  const anchor=pinReplayVectors(run.root,result.paths);
-  if(anchor.outcome || JSON.stringify(anchor)!==JSON.stringify(run.replayBaseline))
+  const facts=vectors=>vectors?.map(v=>({path:v.path,sha256:v.sha256,checks:v.checks.map(c=>typeof c==='string'?c:
+    JSON.stringify([c.vector,c.step_id,c.check_index,c.entry_path,c.operation,c.criterion_id,c.target,c.path,c.op]))})).sort((a,b)=>a.path.localeCompare(b.path));
+  const anchor=code ? snapshot.approved_vectors : pinReplayVectors(run.root,result.paths).vectors;
+  if(JSON.stringify(facts(anchor))!==JSON.stringify(facts(run.replayBaseline?.vectors)))
     return blocked('The adopted original anchor changed. Start an ordinary approval workflow for changed requirements.');
   return null;
 }
@@ -251,12 +261,11 @@ async function refreshReplayBaseline(run,p) {
 }
 async function currentReplayEvidence(run,p,validated=false) {
   let reason = validated ? null : await adoptionFailure(run,p);
+  let paths;
   try {
-    const saved = new Set(run.replayBaseline?.vectors?.map(vector=>vector.path) ?? []);
-    const missing = (await scenarioInventory(run,p)).filter(path=>!saved.has(path));
-    if (missing.length) reason = `Current scenario paths are missing from the approved anchor: ${missing.join(', ')}. Return to prompt space.`;
+    paths=await scenarioInventory(run,p);
   } catch { reason = 'The current changed scenario inventory is unavailable; repair unreadable or malformed JSON candidates and Git listing failures.'; }
-  const evidence = readReplayEvidence(run);
+  const evidence = readReplayEvidence(run,paths);
   return reason ? {...evidence,outcome:'blocked',reason} : evidence;
 }
 async function unpublishedScenarios(run,p) {
@@ -982,7 +991,6 @@ async function publishAreaPr(run, area, p, lines, retry) {
   if (opted) {run.replayEvidence=await currentReplayEvidence(run,p,true);
     const last=area.steps.filter(step=>run.done[step]).at(-1),evidence=run.replayEvidence,applyPublication=publicationUpdate(run,['replayEvidence',...(codePr?['testInventory']:[])]);
     commitRun(run,p,latest=>{applyPublication(latest);if(last&&latest.done[last])latest.done[last].replayEvidence=evidence;});
-    if(run.replayAdoption && /(?:missing from the approved anchor|changed scenario inventory is unavailable)/.test(run.replayEvidence.reason))return fail(`${run.replayEvidence.reason} Start an ordinary approval workflow for changed requirements.`);
   }
 
   const bodyBase = run.prBase ?? run.baseBranch;
