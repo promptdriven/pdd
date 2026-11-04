@@ -59,6 +59,7 @@ The way to call a skill depends on your agent. You can also write "Use the pdd-f
 | `pdd-small-change` | make a small change that is easy to undo |
 | `pdd-prompting` | write or review prompts with the [Prompting guide](docs/prompting-guide.md) |
 | `pdd-setup` | set up a repo for PDD |
+| `pdd-autopilot`, `pdd-check`, `pdd-merge` | with Autopilot on, pick issues, check PRs with a fresh agent and merge them |
 
 The agent writes these files in prompt space:
 

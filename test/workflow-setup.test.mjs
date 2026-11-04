@@ -8,7 +8,7 @@ import {setupSkills} from '../src/skills-install.mjs';
 import {setupProject} from '../src/project-setup.mjs';
 import {setupWithWorkflowAgent} from '../src/workflow-setup.mjs';
 const fixture=state=>async agent=>{
- const value=agent==='gemini'?'missing':state[agent];
+ const value=['gemini','agy'].includes(agent)?'missing':state[agent];
  if(value==='missing')throw Object.assign(Error('synthetic private command path'),{code:'ENOENT',executableMissing:true});
  return agent==='codex'?{code:value==='ready'?0:1,stdout:'',stderr:value==='ready'?'Logged in using ChatGPT':'Not logged in'}
  :{code:value==='ready'?0:1,stdout:JSON.stringify({loggedIn:value==='ready'}),stderr:''};
@@ -19,8 +19,8 @@ for(const [codex,claude,agent] of cases)test(`2451 setup adapter: ${codex}/${cla
  const code=await setupWithWorkflowAgent({cwd:'/scratch/project',env},{run:fixture({codex,claude}),stderr:{write:s=>out.push(s)},setup:async input=>{calls.push(input);return 0;}});
  assert.equal(code,agent?0:1);assert.equal(calls.length,agent?1:0);
  if(agent){assert.equal(calls[0].agent,agent);assert.equal(calls[0].env,env);assert.equal(calls[0].cwd,'/scratch/project');assert.equal(out.join(''),'');}
- else if(codex==='missing')assert.match(out.join(''),/Install Codex, Claude Code or Gemini CLI first/);
- else assert.deepEqual(out.join('').trim().split('\n'),['Codex is not signed in. Run: codex login','Claude Code is not signed in. Run: claude auth login','Gemini CLI is not installed. Install: https://geminicli.com/docs/get-started/installation/']);
+ else if(codex==='missing')assert.match(out.join(''),/Install Codex, Claude Code, Gemini CLI or Antigravity CLI first/);
+ else assert.deepEqual(out.join('').trim().split('\n'),['Codex is not signed in. Run: codex login','Claude Code is not signed in. Run: claude auth login','Gemini CLI is not installed. Install: https://geminicli.com/docs/get-started/installation/','Antigravity CLI is not installed. Install: https://antigravity.google/docs/cli/']);
 });
 test('2451 setup adapter preserves nonzero action results without repeating effects',async()=>{
  let calls=0;const code=await setupWithWorkflowAgent({}, {run:fixture({codex:'ready',claude:'signed_out'}),setup:async()=>{calls++;return 7;}});

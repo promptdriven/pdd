@@ -1,0 +1,237 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/autopilot-setup-trust.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Setup shows owner Ada and write collaborators Bo and Cy."
+    },
+    {
+      "id": "AC2",
+      "text": "An empty additional names answer adds nobody."
+    },
+    {
+      "id": "AC3",
+      "text": "Setup warns when the trusted list may be incomplete and continues."
+    },
+    {
+      "id": "AC4",
+      "text": "Setup warns and continues when GitHub provides neither owner nor writers."
+    }
+  ],
+  "initial_world": {
+    "kv": {},
+    "lookups": [],
+    "mode_questions": [],
+    "names_questions": [],
+    "read_config": {},
+    "lookup_counter": 0
+  },
+  "simulation": {
+    "config.read": {
+      "action": "key-value.get",
+      "world_pointer": "/read_config",
+      "key_argument_pointer": "/key",
+      "value_argument_pointer": null,
+      "item_key_pointer": null,
+      "item_value_pointer": null,
+      "result_template": {
+        "raw": null
+      },
+      "result_value_pointer": "/raw"
+    },
+    "config.save": {
+      "action": "key-value.put",
+      "world_pointer": "/kv",
+      "key_argument_pointer": "/key",
+      "value_argument_pointer": "/raw",
+      "item_key_pointer": null,
+      "item_value_pointer": null,
+      "result_template": {
+        "raw": null
+      },
+      "result_value_pointer": "/raw"
+    },
+    "github.lookup": {
+      "action": "fixture.lookup",
+      "world_pointer": "/lookup_counter",
+      "cases": [
+        {
+          "args": {},
+          "call_index": 1,
+          "result": {
+            "owner": "Ada",
+            "writers": [
+              "Bo",
+              "Cy"
+            ],
+            "complete": false
+          }
+        },
+        {
+          "args": {},
+          "call_index": 2,
+          "result": {
+            "owner": "Ada",
+            "writers": [
+              "Bo",
+              "Cy"
+            ],
+            "complete": false
+          }
+        },
+        {
+          "args": {},
+          "call_index": 3,
+          "result": {
+            "owner": "",
+            "writers": [],
+            "complete": false
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "terminal.mode": {
+      "action": "port.write",
+      "world_pointer": "/mode_questions",
+      "result_template": {
+        "answer": ""
+      }
+    },
+    "terminal.names": {
+      "action": "port.write",
+      "world_pointer": "/names_questions",
+      "result_template": {
+        "names": []
+      }
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "case-1",
+      "entry_path": "prompts/cli/autopilot.prompt.md",
+      "operation": "runAutopilot",
+      "input": {
+        "action": "setup",
+        "interactive": true,
+        "inRepo": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/trust",
+          "op": "equals",
+          "value": []
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/names_questions/0/owner",
+          "op": "equals",
+          "value": "Ada"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/names_questions/0/writers",
+          "op": "equals",
+          "value": [
+            "Bo",
+            "Cy"
+          ]
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/message",
+          "op": "contains",
+          "value": "Ada"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/message",
+          "op": "contains",
+          "value": "Bo"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/message",
+          "op": "contains",
+          "value": "Cy"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/message",
+          "op": "contains",
+          "value": "owner"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/message",
+          "op": "contains",
+          "value": "write"
+        }
+      ]
+    },
+    {
+      "step_id": "case-2",
+      "entry_path": "prompts/cli/autopilot.prompt.md",
+      "operation": "runAutopilot",
+      "input": {
+        "action": "setup",
+        "interactive": true,
+        "inRepo": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/message",
+          "op": "contains",
+          "value": "incomplete"
+        }
+      ]
+    },
+    {
+      "step_id": "case-3",
+      "entry_path": "prompts/cli/autopilot.prompt.md",
+      "operation": "runAutopilot",
+      "input": {
+        "action": "setup",
+        "interactive": true,
+        "inRepo": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/message",
+          "op": "contains",
+          "value": "incomplete"
+        }
+      ]
+    }
+  ]
+}

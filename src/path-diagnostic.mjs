@@ -1,4 +1,4 @@
-// Generated from prompts/cli/path-diagnostic.prompt.md (sha256: b3eeb7218fb2ce08a0cb650184459f46c1425cb1d987b1e14780efbb2228db6b).
+// Generated from prompts/cli/path-diagnostic.prompt.md (sha256: 9b8faed5c5dd1d1911c3237af02ef1a32d2e830d86ee6cb1aabeb80b40216a1e).
 import { spawnSync } from 'node:child_process';
 import { accessSync, constants, readFileSync, realpathSync, statSync } from 'node:fs';
 import { basename, delimiter, dirname, join, resolve } from 'node:path';
@@ -44,7 +44,7 @@ export function pathDiagnostic({ packageRoot, cwd, env, mode }) {
   }
   const absolute = `${quote(process.execPath)} ${quote(running)}`;
   const selection = selected ? `PATH selects: ${clean(selected)} (${selectedVersion}).` : 'PATH has no executable named pdd.';
-  if (mode === 'workflow') return [`${selection} Running pdd ${version}: ${clean(running)}. Use ${absolute}; activate environments before correcting PATH.`];
+  if (mode === 'workflow') return [`${selection} Running pdd ${version}: ${clean(running)}. In workflow chats use "$PDD_BIN"; activate environments before correcting PATH.`];
   const lines = [`Running pdd ${version}: ${clean(running)}.`, ...paths.map((path, i) => `  PATH ${i + 1}: ${clean(path)}`), selection];
   if (conflict || !selected) {
     lines.push('Later environment activation (for example conda) can reorder PATH and shadow this pdd again.', `Use this pdd directly: ${absolute}`);

@@ -65,5 +65,5 @@ test('ROUND2 empty-lock recovery preserves an owner published during inspection'
 
 for(const drafts of [false,true])test(`ROUND2 publication exact person text with ${drafts?'draft prompts':'approved prompts'}`,async t=>{
  const f=await prGate(t,{direct:true,drafts});const r=f.record();const out=await stepDone({step:r.areas[r.area].steps.at(-1),summary:'Repeat completed publication step',cwd:r.root},f.agentPorts());assert.equal(out.exitCode,0,out.message);
- const quoted=[...out.message.matchAll(/(?:Tell the person exactly|ask exactly|tell them exactly): "([\s\S]*?)" (?:Stop|pdd never)/g)].map(m=>m[1]);assert.ok(quoted.length,'done contains exact text for the person');for(const text of quoted)personLine(text);assert.doesNotMatch(out.message,/\/abs\/|\/bin\/pdd\.mjs/);if(!drafts)assert.match(out.message,/<pdd> workflow approve 17 --said -/);
+ const quoted=[...out.message.matchAll(/(?:Tell the person exactly|ask exactly|tell them exactly): "([\s\S]*?)" (?:Stop|pdd never)/g)].map(m=>m[1]);assert.ok(quoted.length,'done contains exact text for the person');for(const text of quoted)personLine(text);assert.doesNotMatch(out.message,/\/abs\/|\/bin\/pdd\.mjs/);if(!drafts)assert.match(out.message,/"\$PDD_BIN" workflow approve 17 --said -/);
 });

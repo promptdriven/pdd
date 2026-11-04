@@ -14,12 +14,13 @@ Step briefs are in `steps/`. `?` means optional.
 2. prompt-pr: check, try? → approve, then gate: pr, then ask
 3. code: build, verify, formal, review → gate: pr
 
+- If Autopilot is `observe` or `auto`, read `steps/autopilot.md` first.
 - Main chat: coordinate; no code or checks.
 - Use fresh subagents; never reuse builders or let them check their code. Give the step file and paths at once, not chat history. Wait once with a long time-out; no small follow-ups. Check/read: RUNBOOK §11 once.
 - Checks: fresh first. Only verify/formal may reuse after startup failure; wrote no code, tests or prompts this run.
 - Review: always fresh; no build, verify, formal, prior reviews or their context. Blocked: RUNBOOK §17.
 - Read pdd-prompting RUNBOOK §17 before checks: cleanup, unrun checks, recovery and result replacement.
-- At gates, show results, ask and stop. Revise and ask again. Outside runs, ask before PRs. In runs, pdd opens them. Main chat merges only on person request under RUNBOOK §2.
+- At gates, show results, ask and stop. Revise and ask again. Outside runs, ask before PRs. In runs, pdd opens them. Main chat merges only on person request (RUNBOOK §2).
 - Use full URLs.
 - Before an optional step, ask the person and wait for the answer: "Do you want a visual design step? yes/no". In a run, run `<pdd> workflow ask` first. For a page or a screen, recommend visual: it makes the app map.
 - At the story gate, give the full paths of the Story files and the plan, and show the plan list. They can say "make it one Story", "split part 5" or "change Story 5: …". A change request names a Story: redo only that Story and its test file. For issue-only prompts, offer "adopt PDD for this module" later. You may offer `pdd simulate <story>` before the check. If visual made an app map, tell the person to run `pdd simulate <story> --new`. Ask for approval or changes in their own words.
@@ -31,7 +32,7 @@ Step briefs are in `steps/`. `?` means optional.
 
 ## Try tools
 
-`try_open`, `try_state`, `try_run`, `try_check`, `try_save_case` if asked. AI calls; Simulator history. Person reviews expected values.
+`try_open`, `try_state`, `try_run`, `try_check`, `try_save_case` if asked. AI calls; Simulator history.
 
 ## In a run
 
@@ -45,4 +46,4 @@ Step briefs are in `steps/`. `?` means optional.
 PDD_SAID
 ```
 
-Quote a delimiter absent as a whole line in the words. Stdin keeps newlines. Blank input fails; no word grading. RUNBOOK §2.
+Quote a delimiter absent as a whole line in the words. Blank input fails. RUNBOOK §2.

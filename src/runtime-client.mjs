@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 5e69f60ed9f7af053439feaaef0eb2f71bd89f30985ef1d2b217ee9fe2df5de7).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 2a9e9fd8f77e7b641ed9ba90092806aea4812e70a114b367311fa953d91c84b7).
 import { hasProgress, outcomeDone, outcomeFor, outcomeOverall, outcomeText, progressText } from './runtime-outcome.mjs';
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
@@ -3210,9 +3210,9 @@ export const saveDoorCase = (root, saved, options = {}) => {
     const folder = join(root, 'tests'), stat = statOrNull(folder);
     if (stat && (!stat.isDirectory() || stat.isSymbolicLink()) || stat && !inRepo(root, 'tests')) return 'not added: tests/ must be a real folder inside the repository.';
     if (!stat) mkdirSync(folder);
-    const id = slug(saved.id), story = slug(original.story);
+    const id = slug(saved.id), story = original.story;
     if (!id || !story) return 'not added: the recorded case has no safe identity.';
-    const path = `tests/${story}-try-${id}.json`, file = join(root, path), existing = statOrNull(file);
+    const path = `tests/${story}.try-${id}.json`, file = join(root, path), existing = statOrNull(file);
     if (existing) {
       if (!existing.isFile() || existing.isSymbolicLink() || !inRepo(root, path)) return 'not added: the recorded case path is not a regular repository file.';
       if (isDeepStrictEqual(JSON.parse(readFileSync(file, 'utf8')), test)) return `already saved to ${path}`;

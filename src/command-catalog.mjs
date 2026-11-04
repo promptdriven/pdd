@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: f4f6fe58da927cdff540f999a15e3587afd52be29f03c6b19f93f2920b55daef).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 21daca1a551dde50f9dd60b636499dd8846c722c7002391ca0ad2c8e9e5ef2b0).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -20,13 +20,13 @@ const routes = [
     forms: [form('pdd product status [--json]', 'Count Stories by part and slice from the product plan; no interpreter calls.')] },
   { id: 'product.next', prefix: ['product', 'next'], local: 'product-next', operands: [], options: [],
     forms: [form('pdd product next', 'Show ready planned runs and their start commands; no interpreter calls.')] },
-  { id: 'product.start', prefix: ['product', 'start'], local: 'product-start', operands: [{name:'run',type:'text'}], options: [{name:'--no-run',kind:'flag'},{name:'--agent',kind:'value',choices:['codex','claude','gemini']}],
-    forms: [form('pdd product start RUN [--no-run] [--agent codex|claude|gemini]', 'Create or reuse the run issue and start a normal feature run; --no-run only prepares the issue. No interpreter calls.')] },
+  { id: 'product.start', prefix: ['product', 'start'], local: 'product-start', operands: [{name:'run',type:'text'}], options: [{name:'--no-run',kind:'flag'},{name:'--agent',kind:'value',choices:['codex','claude','gemini','agy']}],
+    forms: [form('pdd product start RUN [--no-run] [--agent codex|claude|gemini|agy]', 'Create or reuse the run issue and start a normal feature run; --no-run only prepares the issue. No interpreter calls.')] },
   // `workflow start` is a quiet word for now; a later change moves it to `removed`: one data edit.
   { id: 'workflow.run', prefix: ['workflow', run], local: 'workflow-run', quiet: ['workflow', 'start'],
     operands: [{name:'name',type:'workflow-name'},{name:'issue',type:'issue'}],
-    options:[{name:'--agent',kind:'value',choices:['codex','claude','gemini']},{name:'--base',kind:'text'},{name:'--adopt-corpus',kind:'text'}],
-    forms:[form(`pdd workflow ${run} NAME ISSUE [--agent codex|claude|gemini] [--base BRANCH]`, 'Start the first area chat for a GitHub issue in Herdr and exit; --base selects an existing origin branch (default: repository default); --adopt-corpus FILE adopts exact unchanged approved content for a fresh replay-evidence-enabled workflow; pdd later pushes the issue branch and opens a real PR.')] },
+    options:[{name:'--agent',kind:'value',choices:['codex','claude','gemini','agy']},{name:'--base',kind:'text'},{name:'--adopt-corpus',kind:'text'}],
+    forms:[form(`pdd workflow ${run} NAME ISSUE [--agent codex|claude|gemini|agy] [--base BRANCH]`, 'Start the first area chat for a GitHub issue in Herdr and exit; --base selects an existing origin branch (default: repository default); --adopt-corpus FILE adopts exact unchanged approved content for a fresh replay-evidence-enabled workflow; pdd later pushes the issue branch and opens a real PR.')] },
   { id: 'workflow.prove', prefix: ['workflow', 'prove'], local: 'workflow-prove',
     operands: [{name:'issue',type:'issue'}], options: [{name:'--test',kind:'text'},{name:'--expect',kind:'text'}],
     forms: [form('pdd workflow prove ISSUE --test COMMAND --expect TEXT', 'Run committed changed tests on the fetched base branch merge-base and committed head with a 120-second limit per phase; save a non-gating report.')] },
@@ -109,8 +109,13 @@ const routes = [
     forms: [form('pdd contracts sync [--write]', 'Show proposed changes for moving schema copies to references; apply only with --write. No interpreter calls.')] },
   { id: 'mcp', prefix: ['mcp'], local: 'mcp', operands: [], options: [],
     forms: [form('pdd mcp', 'Serve the current repository’s Try tools over stdio MCP.')] },
+  { id: 'autopilot.off', prefix: ['autopilot', 'off'], local: 'autopilot.off', operands: [], options: [], forms: [form('pdd autopilot off', 'Set the repository Autopilot mode to off.')] },
+  { id: 'autopilot.observe', prefix: ['autopilot', 'observe'], local: 'autopilot.observe', operands: [], options: [], forms: [form('pdd autopilot observe', 'Set the repository Autopilot mode to observe.')] },
+  { id: 'autopilot.auto', prefix: ['autopilot', 'auto'], local: 'autopilot.auto', operands: [], options: [], forms: [form('pdd autopilot auto', 'Set the repository Autopilot mode to auto.')] },
+  { id: 'autopilot.trust', prefix: ['autopilot', 'trust'], local: 'autopilot-trust', operands: [{name:'name',type:'text',repeat:true}], options: [], forms: [form('pdd autopilot trust NAME...', 'Add explicitly trusted GitHub names.')] },
+  { id: 'autopilot.untrust', prefix: ['autopilot', 'untrust'], local: 'autopilot-untrust', operands: [{name:'name',type:'text'}], options: [], forms: [form('pdd autopilot untrust NAME', 'Remove an explicitly trusted GitHub name.')] },
   { id: 'setup', prefix: ['setup'], local: 'setup', operands: [], options: [],
-    forms: [form('pdd setup', 'Install the PDD skills for Codex and Claude if they are missing, and add the short PDD block to CLAUDE.md, else AGENTS.md. Offer detected Codex, Claude Code and Gemini MCP registrations after showing exact config changes and one y/N question. A second run changes nothing.')] },
+    forms: [form('pdd setup', 'Install the PDD skills for Codex and Claude if they are missing, and add the short PDD block to CLAUDE.md, else AGENTS.md. Offer detected Codex, Claude Code and Gemini MCP registrations after showing exact config changes and one y/N question. Offer Autopilot settings in a Git repository with a terminal; keep an existing mode on repeat setup.')] },
 ];
 export const PUBLIC_COMMAND_ROUTES = Object.freeze(routes.map(route => Object.freeze({ ...route,
   prefix: Object.freeze(route.prefix), ...(route.quiet ? { quiet: Object.freeze(route.quiet) } : {}),
