@@ -21,7 +21,7 @@ Codex child environment and native session lookup. An unrelated server/pane
 HOME or CODEX_HOME must never choose the child's default home or lookup root.
 A later terminal cannot replace an already saved machine home.
 
-For an existing saved conversation, ordinary open launches zero new conversations:
+For an existing saved Codex conversation, ordinary open launches zero new conversations:
 a positively ended owned chat may
 resume only its exact saved UUID. Live, blocked-dialog, unknown, unconfirmed,
 cancelled and completed controls retain their existing dispatch restrictions.
@@ -29,9 +29,11 @@ A quota error alone is insufficient end evidence. Observations may update only
 the same run/area/chat identity; late results must not revive or rewind progress.
 
 Pending request retry preserves accepted identity and existing delivery rules.
-When the original native conversation is known, the same pane with a different
+When the original Codex conversation is known, the same pane with a different
 UUID, or an unavailable required identity, must send zero prompts and retain
 that request's identity, original custody and workflow progress.
+Other agents keep their existing area/pane and readiness rules, including delivery
+without an observed native UUID.
 Do not replay an acknowledged or possibly dispatched request, redirect a stale
 target, or treat submission acknowledgement as proof the agent acted.
 
