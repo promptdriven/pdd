@@ -34,6 +34,47 @@ Settings live in the repository's `pdd.json`, for example `{"autopilot":{"mode":
 
 These commands store settings and determine trust. Selecting a mode starts no run and makes no interpreter call. Approval policy, including `strict_approvals`, stays independent.
 
+## Autopilot on this machine
+
+| Command | What it does |
+|---|---|
+| `pdd autopilot start [--runs N]` | Check sign-ins and the running pdd version, open a dedicated interactive Herdr session and check for work immediately. A user timer checks again every 30 minutes. `--runs` sets an optional concurrent-run cap; omission has no fixed cap |
+| `pdd autopilot stop` | Disable this repo's timer on this machine and let the current agent step finish |
+| `pdd autopilot status` | Show this machine's repo, agent, timer state and next tick without contacting GitHub or waking an agent |
+| `pdd autopilot add N...` | Label named issues `pdd:autopilot`, allowing Autopilot to take older issues |
+
+The launcher uses the repository settings module to read root `pdd.json`. An
+active mode is `observe` or `auto`; missing or invalid settings count as `off`. It uses an
+installed, signed-in Codex, Claude Code, agy or Gemini agent. Missing dependencies
+get one actionable line. Linux uses a systemd user timer; macOS uses a
+LaunchAgent. On Linux, start warns when user-session lingering is off or
+unavailable: `loginctl enable-linger` keeps the timer after logout. The tick
+service preserves a Herdr server it starts when the tick exits. See the chat with
+`herdr session attach pdd-autopilot`.
+
+A tick checks GitHub with ETags and wakes the agent only for a repo's first
+start-up recipe or an unseen trusted issue, comment or related PR change.
+Already-seen issues stay quiet across unchanged ticks, including stuck,
+code-pending, claimed and observe-mode issues waiting for a person. Busy agents
+receive no tick prompt; pending changes are coalesced until they are idle.
+Empty ticks use no AI. This applies to Claude
+Code too: the user timer keeps empty ticks out of the conversation. Paginated
+queues revalidate every cached page; changed candidates may require comment and
+write-permission lookups. GitHub rate limits wait until the reset time.
+
+Only issues created since the first start, or carrying `pdd:autopilot`, enter the
+queue. On an outsider's issue, a static reply says "thanks, a maintainer will
+look" until a trusted person comments. The agent receives only trusted people's
+text, including comments. Owners, people with write access and configured trusted
+names count as trusted. The `pdd-autopilot` skill owns the start-up recipe,
+`pdd:working` claim and one comment across machines, capacity and progress
+tracking. Related PRs are associated through same-repository closing references;
+trusted PR discussion comments and state transitions can wake waiting work once.
+Claimed issues stay identified as claimed when a trusted change needs attention.
+`add` rejects foreign repository references before writing any labels. Status
+reports unavailable Herdr instead of claiming a healthy running session. Stop
+leaves the interactive session open.
+
 ## Runs on a GitHub issue
 
 | Command | What it does |

@@ -28,6 +28,17 @@ The `check`, `try` and `workflow.run` routes keep their ids and local dispositio
 
 Help forms and completion name only the `NAMES` words.
 
+## Autopilot routes
+
+Catalog four local routes before the product routes: `autopilot.start` (`autopilot start`, local `autopilot-start`, no operands, optional text --runs); `autopilot.stop` and `autopilot.status` (matching prefixes/dispositions, no operands/options); `autopilot.add` (`autopilot add`, local `autopilot-add`, required repeated issue operands). Forms and descriptions:
+
+- `pdd autopilot start [--runs N]`: Start this repo in an interactive Herdr agent; check now and every 30 minutes without AI on empty ticks. --runs optionally caps concurrent runs.
+- `pdd autopilot stop`: Stop this machine's timer; let the current agent step finish.
+- `pdd autopilot status`: Show this machine's repo, agent and next tick.
+- `pdd autopilot add N...`: Mark named old issues with pdd:autopilot so Autopilot may take them.
+
+The [launcher](autopilot-launcher.prompt.md) owns behavior and --runs numeric interpretation. No fixed run cap, headless flag or additional setup question. Include routes in help and completion. Preserve all unrelated forms and ordering.
+
 ## Public routes
 
 Catalog local routes `autopilot.off`, `autopilot.observe`, and `autopilot.auto` with prefixes `autopilot off`, `autopilot observe`, and `autopilot auto`, dispositions of the same names, no operands and no options. Catalog `autopilot.trust` with prefix `autopilot trust`, local `autopilot-trust`, one or more text name operands and no options; catalog `autopilot.untrust` with prefix `autopilot untrust`, local `autopilot-untrust`, exactly one text name operand and no options. The parser and completion consume these routes; dispatch uses their stable dispositions. Include all five in the manifest and help as below.

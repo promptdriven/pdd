@@ -2147,13 +2147,14 @@ test('2530: valid replay and real assertion failures both publish with canonical
   }
 });
 
-test('2530: vector edits after prompt-space approval cannot replace the saved original hashes',async t=>{
+test('2870: vector edits after prompt-space approval warn and replay without replacing the anchor',async t=>{
   const {f,run,vector}=await replayArea(t);const original=f.record().replayBaseline;
   vector.steps[0].checks[0].value=999;writeFileSync(join(run.root,'tests/add.json'),JSON.stringify(vector));
   writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
   writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
   const out=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());assert.equal(out.exitCode,0,out.message);
-  assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nNative tests: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\nCode replay: BLOCKED/);assert.match(f.prs[1].body,/Original vectors changed/);
+  assert.match(f.prs[1].body,/Code replay: PASS/);assert.match(f.prs[1].body.replaceAll('&#47;','/'),/warning: Saved test values changed:.*\/value.*3.*999/);
+  assert.match(out.message,/warning: Saved test values changed:/);
   assert.deepEqual(f.record().replayBaseline,original);
 });
 
@@ -2255,7 +2256,8 @@ test('2553: legacy single-vector baseline cannot publish PASS after another scen
   const out = await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
   assert.equal(out.exitCode,0,out.message);
   assert.equal(f.prs.length,2);
-  assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nNative tests: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\nCode replay: BLOCKED/);
+  assert.match(f.prs[1].body,/Code replay: NOT REPLAYED/);
+  assert.match(f.prs[1].body.replaceAll('&#47;','/'),/warning: Saved test values changed: tests\/refund\.json/);
   assert.doesNotMatch(f.prs[1].body,/Replay evidence is stale/);
   assert.deepEqual(f.record().replayBaseline,original,'code publication cannot repin saved originals');
 });
@@ -2302,7 +2304,7 @@ test('2553: exact whitespace paths survive anchoring and code inventory checks',
   const saved=f.record();saved.replayBaseline.vectors=saved.replayBaseline.vectors.filter(v=>v.path!==path);
   writeFileSync(join(run.runDir,'status.json'),JSON.stringify(saved));
   const result=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
-  assert.equal(result.exitCode,0,result.message);assert.match(f.record().replayEvidence.reason,/missing from the approved anchor/);
+  assert.equal(result.exitCode,0,result.message);assert.ok(f.record().replayEvidence.warnings.some(w=>w.vector===path));
 });
 
 for(const failure of ['listing','missing','malformed']) {
@@ -2325,6 +2327,10 @@ for(const failure of ['listing','missing','malformed']) {
     const result=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
     assert.equal(result.exitCode,0,result.message);assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nNative tests: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\nCode replay: BLOCKED/);
     assert.match(f.record().replayEvidence.reason,/inventory is unavailable/);
+    if(failure==='malformed'){
+      assert.match(f.record().replayEvidence.reason,/tests\/broken\.json/);
+      assert.match(f.record().replayEvidence.reason,/JSON/);
+    }
     assert.match(result.message,/Code replay: BLOCKED/);
   });
 }
@@ -2337,7 +2343,7 @@ test('2553: irrelevant JSON mentioning the schema never becomes a scenario',asyn
   assert.deepEqual(f.record().replayBaseline.vectors.map(v=>v.path),['tests/add.json']);
 });
 
-test('2553: an open code PR update guards newly added scenarios and preserves the frozen anchor',async t=>{
+test('2870: an open code PR lists newly added scenarios without locking and preserves the anchor',async t=>{
   const {f,run,vector}=await replayArea(t);const saved=f.record().replayBaseline;
   writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
   writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
@@ -2346,7 +2352,9 @@ test('2553: an open code PR update guards newly added scenarios and preserves th
   writeFileSync(join(run.root,'tests/refund.json'),JSON.stringify(vector));
   writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
   const result=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
-  assert.equal(result.exitCode,0,result.message);assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nNative tests: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\nCode replay: BLOCKED.*refund\.json/);
+  assert.equal(result.exitCode,0,result.message);assert.match(f.prs[1].body,/Code replay: NOT REPLAYED/);
+  assert.match(f.prs[1].body.replaceAll('&#47;','/'),/warning: Saved test values changed: tests\/refund\.json/);
+  assert.doesNotMatch(result.message,/Return to prompt space/);
   assert.deepEqual(f.record().replayBaseline,saved);assert.equal(f.edits.filter(n=>n===f.prs[1].number).length,2);
 });
 
@@ -2422,7 +2430,7 @@ test('2640 same custom first code area without adoption stays truthful BLOCKED',
   writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
   const out=await stepDone({step:'verify',summary:'PASS in prose',cwd:run.root},f.agentPorts());assert.equal(out.exitCode,0,out.message);assert.match(f.prs[0].body,/^Code replay: BLOCKED/m);
 });
-for(const mode of ['prompt','dependency','vector','added','removed','frozen-declaration'])test(`2640 adopted code publication refuses ${mode} changes without repinning`,async t=>{
+for(const mode of ['prompt','dependency','vector','added','removed','frozen-declaration'])test(`2640 adopted code publication handles ${mode} changes without repinning`,async t=>{
   const {f,vector}=await adoptedCorpusRun(t),run=f.record(),anchor=structuredClone(run.replayBaseline);
   writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
   if(mode==='prompt')writeFileSync(join(run.root,'prompts/add.prompt.md'),'Changed prompt.\n');
@@ -2431,7 +2439,16 @@ for(const mode of ['prompt','dependency','vector','added','removed','frozen-decl
   if(mode==='added')writeFileSync(join(run.root,'tests/new.json'),JSON.stringify(vector));
   if(mode==='removed')rmSync(join(run.root,'tests/add.json'));
   if(mode==='frozen-declaration')writeFileSync(join(run.runDir,'replay-adoption.json'),'{}');
-  const out=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());assert.equal(out.exitCode,1,out.message);assert.match(out.message,/ordinary approval workflow/);assert.equal(f.prs.length,0);assert.equal(f.pushes.length,0);assert.deepEqual(f.record().replayBaseline,anchor);
+  const out=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
+  if(['vector','added','removed'].includes(mode)){
+    assert.equal(out.exitCode,0,out.message);assert.equal(f.prs.length,1);
+    assert.match(f.prs[0].body,/warning: Saved test values changed:/);
+    assert.doesNotMatch(out.message,/ordinary approval workflow/);
+  }else{
+    assert.equal(out.exitCode,1,out.message);assert.match(out.message,/ordinary approval workflow/);
+    assert.equal(f.prs.length,0);assert.equal(f.pushes.length,0);
+  }
+  assert.deepEqual(f.record().replayBaseline,anchor);
 });
 test('2640 startup validates selected base rather than dirty caller tree',async t=>{
   const {f,begin}=await adoptedCorpusRun(t,{start:false});writeFileSync(join(f.source,'rules/add.md'),'Dirty caller rule.\n');
@@ -2467,6 +2484,23 @@ test('2640 publication retry revalidates frozen context before updating an open 
   assert.equal((await stepDone({step:'verify',summary:'Replay',cwd:run.root},f.agentPorts())).exitCode,0);
   const pushes=f.pushes.length,edits=f.edits.length;writeFileSync(join(run.root,'rules/add.md'),'Changed after publication.\n');
   const out=await stepDone({step:'verify',summary:'Retry',cwd:run.root},f.agentPorts());assert.equal(out.exitCode,1,out.message);assert.match(out.message,/ordinary approval workflow/);assert.equal(f.pushes.length,pushes);assert.equal(f.edits.length,edits);assert.deepEqual(f.record().replayBaseline,anchor);assert.equal(f.record().replayEvidence.outcome,'blocked');assert.equal(f.record().done.verify.replayEvidence.outcome,'blocked');
+});
+
+for(const change of ['corrected','removed','moved','added'])test(`2870: adopted code publication warns for ${change} scenarios without a lock`,async t=>{
+  const {f,vector}=await adoptedCorpusRun(t),run=f.record(),anchor=structuredClone(run.replayBaseline);
+  const path=join(run.root,'tests/add.json');
+  if(change==='corrected'){vector.steps[0].checks[0].value=8;writeFileSync(path,JSON.stringify(vector));}
+  if(change==='removed')rmSync(path);
+  if(change==='moved'){writeFileSync(join(run.root,'tests/moved.json'),readFileSync(path));rmSync(path);}
+  if(change==='added')writeFileSync(join(run.root,'tests/extra.json'),JSON.stringify(vector));
+  if(change==='corrected')writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
+  const out=await stepDone({step:'verify',summary:'Checked current cases',cwd:run.root},f.agentPorts());
+  assert.equal(out.exitCode,0,out.message);assert.equal(f.prs.length,1);
+  assert.match(out.message,/warning: Saved test values changed:/);
+  assert.match(f.prs[0].body,/warning: Saved test values changed:/);
+  assert.doesNotMatch(out.message,/ordinary approval workflow|Return to prompt space/);
+  if(change==='corrected')assert.match(f.prs[0].body,/Code replay: PASS/);
+  assert.deepEqual(f.record().replayBaseline,anchor);
 });
 test('2640 invalid adoption preserves cancelled historical run and its claim before restart',async t=>{
   const {f,begin,declaration}=await adoptedCorpusRun(t);const run=f.record();assert.equal((await cancelRun({ref:'17',cwd:f.source},f.ports)).exitCode,0);
