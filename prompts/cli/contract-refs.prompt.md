@@ -12,6 +12,11 @@ Module function `expandSource({path,text,format}, files)` returns
 use this same function and port, without an alternate checking API. Native
 failures throw an Error with the declared code and a diagnostic message.
 
+## Bounded file ports
+
+Callers supply the [workspace authority](runtime-workspace.prompt.md) through the existing native file port, before stat/read, including nested `$contract` and `$seed` targets. A boundary failure retains the originating consumer, requested target, referring chain, boundary location and remedy through error wrapping; expose it as declared `workspace-path-outside`, never a missing-file or partial-expansion success. The permission check does not rebase repository-root references or automatically upload raw targets. Existing no-reference byte preservation remains exact.
+
+
 ## Where references have meaning
 
 For `prompt`, expand only schema roots in Runtime interface entries
@@ -214,6 +219,8 @@ A second plan after applying the edits has no further edits.
 
 ## Dependencies
 
+- [Workspace authority](runtime-workspace.prompt.md): required generation/runtime/verification context for opt-in permission.
+
 The caller supplies complete source text and the actual `files` port.
 Preflight owns safe native reads; the contract command owns discovery and writes;
 the runtime client owns saved Check provenance and freshness judgments.
@@ -222,7 +229,7 @@ the runtime client owns saved Check provenance and freshness judgments.
 
 ```json
 {
-  "status": "draft", "prose_sha256": "4ccf86b2b020563b8aedf6322cd1a53564b5c54c88e76e4ffbc8cd61659ff5d0",
+  "status": "draft", "prose_sha256": "6bb0382ab17f4e58e0e6d156ac6d9ab995f2237d1a2808f2f900e5f6ef961834",
   "entries": [{
     "operation": "expandSource",
     "input_schema": {
@@ -251,7 +258,7 @@ the runtime client owns saved Check provenance and freshness judgments.
       "required": ["text", "references"], "additionalProperties": false
     },
     "errors": ["contract-invalid", "contract-missing", "contract-ambiguous", "contract-cycle",
-               "contract-unsafe", "seed-invalid"]
+               "contract-unsafe", "seed-invalid", "workspace-path-outside"]
   }],
   "calls": [],
   "resources": [{

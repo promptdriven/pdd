@@ -4,6 +4,11 @@ Own `src/svg-layout.mjs`. Its module function `lintSvgLayouts({root, files, prom
 
 `root` is the repository root; `files` is its Git-visible repository-relative file list. With `promptPaths`, inspect those prompts only; without it, inspect every Git-visible `*.prompt.md`. Read local inline and reference-style Markdown image/link destinations ending in `.ui.svg`, relative to their prompt; ignore remote links, fragments and duplicate destinations. Files must stay inside root and be regular files with no symlink ancestors. An unreadable, missing, escaping or malformed drawing produces a warning naming the prompt and drawing; never silently claim it matches.
 
+## Workspace advice
+
+Use the [workspace authority](runtime-workspace.prompt.md) before prompt/drawing content access, including no-Story local scans. Filter optional excluded candidates without opening them; report unavailable advice where relevant. Required linked drawings remain preflight's capture responsibility and cannot be silently pruned. Keep advisory warnings advisory and retain strict no-link reads.
+
+
 ## Parts and advice
 
 The drawing is the layout spec for its declared state: visible parts, words, order and stable ids. Prose owns behavior and dynamic value sources. Ignore Runtime interface JSON, valid comments and SVG `title`, `desc`, `defs`, hidden elements and their descendants. A context-only region, marked `data-context-only="true"` or class `context-only`, and its descendants are outside the owned layout. Decode XML entities and normalize whitespace and case when comparing labels; preserve original spelling in diagnostics. Reject malformed or nested comments with a source/drawing warning; never remove delimiters and reinterpret the result as active markup. CDATA remains literal SVG text. Do not execute SVG scripts or load external resources.
@@ -21,5 +26,7 @@ Explicit prose such as `region score`, `id="score"`, or “score box” acknowle
 Warnings start `Warning: SVG layout`, are deduplicated and ordered by prompt path, drawing path and part. A 2048-like screen with four direction buttons only in prose and SCORE/SEED boxes and a READY bar only in the drawing must warn about directions, READY and the unspecified score/seed layout regions, even when prose mentions score and seed data.
 
 ## Dependencies
+
+- [Workspace authority](runtime-workspace.prompt.md): required generation/runtime/verification context for opt-in permission.
 
 - [Screen rules](../../RUNBOOK.md#13-give-your-app-a-screen-app-map): authoring and verification context; the CLI exposes this advisory through [Check](runtime-client.prompt.md).

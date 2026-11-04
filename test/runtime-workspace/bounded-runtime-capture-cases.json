@@ -1,0 +1,288 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/bounded-runtime-capture.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "An allowed simulation subtree permits only the selected complete in-bound source; selection forms and repository-relative reference meanings stay unchanged."
+    },
+    {
+      "id": "AC2",
+      "text": "A required excluded file refuses before authentication, network, model metadata or dispatch and names the referring chain, requested target, boundary and remedy."
+    },
+    {
+      "id": "AC3",
+      "text": "The same ceiling covers includes, recursive dependencies, test context, calls, contract and seed references, app maps, stylesheets and preparation inputs and outputs."
+    },
+    {
+      "id": "AC4",
+      "text": "Excluded optional discovery and footprint files are not opened or a reason to refuse independent selected work; incomplete footprints cannot establish a current pass."
+    },
+    {
+      "id": "AC5",
+      "text": "For stable source, --files names the actual upload paths and sizes; separate non-upload reads are disclosed, and a changed capture snapshot is retried consistently."
+    },
+    {
+      "id": "AC6",
+      "text": "Existing unconfigured behavior, secret, regular-file, symlink and ancestor, size and stricter write or executable safeguards remain in force."
+    }
+  ],
+  "binding_status": "unbound-unexecuted",
+  "native_effects": [
+    "Git discovery and actual content-read events",
+    "source-link/ancestor identity checks",
+    "Buffer/tar bytes and deterministic SHA",
+    "prepareSource native callbacks and snapshot races",
+    "authentication/network dispatch barriers"
+  ],
+  "cases": [
+    {
+      "id": "bounded-selected-subtree",
+      "criterion_id": "AC1",
+      "operation": "captureSource",
+      "given": {
+        "policy": {
+          "allowed_paths": [
+            "simulation/"
+          ]
+        },
+        "selection": [
+          "simulation/tests/order.second.json"
+        ],
+        "other_allowed_test": "simulation/tests/other.json",
+        "excluded_file": "private/ordinary.md"
+      },
+      "expected": {
+        "uploads": "exact selected test, its Story and complete required in-bound closure",
+        "not_uploaded": [
+          "simulation/tests/other.json",
+          "private/ordinary.md"
+        ],
+        "excluded_content_reads": 0,
+        "nested_git_repositories": 0
+      }
+    },
+    {
+      "id": "selection-forms-and-prefix",
+      "criterion_id": "AC1",
+      "operation": "selectTests + captureSource",
+      "given": {
+        "policy": {
+          "allowed_paths": [
+            "simulation/",
+            "shared/rules.md"
+          ]
+        },
+        "selections": [
+          "exact test path",
+          "Story path",
+          "Story name",
+          "test basename",
+          "invocation-relative directory"
+        ],
+        "prefix_trap": "simulation-private/tests/order.json"
+      },
+      "expected": {
+        "all_forms": "retain current selection meaning with component-bounded directories",
+        "prefix_trap_reads": 0,
+        "allowing_shared_selects_it": false,
+        "reference_base": "original authored owner or existing repository-root rule"
+      }
+    },
+    {
+      "id": "include-ceiling",
+      "criterion_id": "AC3",
+      "operation": "captureSource",
+      "given": {
+        "policy": {
+          "allowed_paths": [
+            "simulation/"
+          ]
+        },
+        "source_control": {
+          "include": [
+            "private/harmless.json"
+          ]
+        }
+      },
+      "expected": {
+        "exit_code": 4,
+        "auth_calls": 0,
+        "network_calls": 0,
+        "excluded_content_reads": 0,
+        "required_observation": "include remains additive but cannot widen policy"
+      }
+    },
+    {
+      "id": "required-ordinary-dependency",
+      "criterion_id": "AC2",
+      "operation": "runCheck",
+      "given": {
+        "selected": "simulation/tests/order.json",
+        "chain": [
+          "simulation/tests/order.json",
+          "simulation/prompts/order.prompt.md",
+          "docs/tax.json"
+        ],
+        "required_target": "docs/tax.json",
+        "policy": {
+          "allowed_paths": [
+            "simulation/"
+          ]
+        }
+      },
+      "expected": {
+        "exit_code": 4,
+        "auth_calls": 0,
+        "network_calls": 0,
+        "model_metadata_calls": 0,
+        "dispatch_calls": 0,
+        "excluded_content_reads": 0,
+        "diagnostic_fields": [
+          "referring chain",
+          "requested target",
+          "pdd-workspace.json",
+          "remedy"
+        ],
+        "content_in_diagnostic": false
+      }
+    },
+    {
+      "id": "complete-required-traversal",
+      "criterion_id": "AC3",
+      "operation": "captureSource",
+      "given": {
+        "each_independent_case": [
+          "test.story_path",
+          "step.entry_path",
+          "entry_paths",
+          "context.prompt_path",
+          "context.paths",
+          "Runtime calls target",
+          "inline Dependencies link",
+          "reference-style Dependencies link",
+          "leading backtick dependency",
+          "local Markdown image",
+          "nested contract target",
+          "nested seed target",
+          "app-map screen/router/routes/handlers/after prompts",
+          "app-map stylesheets"
+        ],
+        "in_bound_then_crossing_target": "docs/ordinary.md"
+      },
+      "expected": {
+        "in_bound": "complete closure retained with authored paths",
+        "crossing": "refuse before reading target or authentication",
+        "navigation_remote_code_examples": "remain nonrequirements under existing parser rules",
+        "raw_reference_targets": "not upload members unless independently selected"
+      }
+    },
+    {
+      "id": "preparation-input-output",
+      "criterion_id": "AC3",
+      "operation": "captureSource(...,{prepareSource})",
+      "given": {
+        "attempts": [
+          "readFile excluded raw path",
+          "statFile excluded raw path",
+          "return excluded virtual output",
+          "return excluded replacement",
+          "replace bootstrap policy with wider source"
+        ],
+        "control": "allowed raw input with in-bound replacement"
+      },
+      "expected": {
+        "crossing": "local refusal before authentication",
+        "excluded_content_reads": 0,
+        "policy_widened": false,
+        "control": "retain existing virtual/replaced effective-byte semantics and limits"
+      }
+    },
+    {
+      "id": "filter-before-content",
+      "criterion_id": "AC4",
+      "operation": "findTests + captureSource",
+      "given": {
+        "allowed_selected": "simulation/tests/order.json",
+        "excluded_candidates": [
+          "private/user_stories/order.md",
+          "private/test/order.json"
+        ],
+        "excluded_test_content": "malformed JSON with PRIVATE-MARKER",
+        "in_bound_sibling": "simulation/test/order.other.json requires private/harmless.json"
+      },
+      "expected": {
+        "excluded_content_reads": 0,
+        "selected_action": "continues if own required closure is complete",
+        "footprint_state": "unavailable with boundary cause",
+        "freshness_claim": false,
+        "explicit_excluded_selection": "useful local boundary refusal"
+      }
+    },
+    {
+      "id": "manifest-read-disclosure",
+      "criterion_id": "AC5",
+      "operation": "runCheck --files then captureSource",
+      "given": {
+        "stable_selection": "simulation/tests/order.json",
+        "non_upload_inputs": [
+          "contract record source",
+          "preparation raw input",
+          "unselected sibling footprint",
+          "discovery-only Story"
+        ],
+        "prepared_outputs": "in-bound effective bytes"
+      },
+      "expected": {
+        "listed_files": "same sorted paths and effective sizes as actual tar members",
+        "list_network_calls": 0,
+        "separate_reads": "actual non-upload paths with reference/preparation/footprint/discovery roles",
+        "raw_reference_upload_inferred": false
+      }
+    },
+    {
+      "id": "capture-policy-instability",
+      "criterion_id": "AC5",
+      "operation": "captureSource",
+      "given": {
+        "interleavings": [
+          "policy changes between discovery and capture",
+          "ancestor/link changes between stat and read",
+          "required dependency changes before final observation"
+        ]
+      },
+      "expected": {
+        "result": "discard whole attempt and revalidate policy and all source",
+        "mixed_snapshot": false,
+        "exhausted_attempts_exit": 5,
+        "network_calls": 0
+      }
+    },
+    {
+      "id": "links-and-existing-safety",
+      "criterion_id": "AC6",
+      "operation": "captureSource + createStrictSourceAccess",
+      "given": {
+        "variants": [
+          "in-bound link to in-bound regular Git-visible target",
+          "allowed authored link to excluded target",
+          "ancestor link escapes",
+          "link leaves ceiling then returns",
+          "broken link",
+          "loop",
+          "secret target",
+          "nonregular target",
+          "oversize raw read"
+        ],
+        "unconfigured_control": "same source with no workspace policy"
+      },
+      "expected": {
+        "safe_control": "keep authored archive path and final target bytes",
+        "crossing_reads": 0,
+        "strict_access": "reject every symlink including otherwise source-safe links",
+        "unconfigured": "same capture bytes, tar identity and existing refusals",
+        "limits": "existing equality limits, secret ordering and snapshot rules retained"
+      }
+    }
+  ]
+}

@@ -1,0 +1,196 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/bounded-workspace-migration.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "A preview shows exact original-to-authored file mappings, complete selected tests, source and reference meaning, owned records and unresolved items, and writes nothing."
+    },
+    {
+      "id": "AC2",
+      "text": "Apply consumes the shared workflow evidence association owner, keeps original receipt bytes and request or session provenance, and does not turn historical PR 1 proof into current code-head proof."
+    },
+    {
+      "id": "AC3",
+      "text": "Pending, conflicting, applied and interrupted saved cases keep their full payload and exact original destination mapping, with applied-once recovery or a clear unresolved result."
+    },
+    {
+      "id": "AC4",
+      "text": "Known running, paused, pending, ended and unknown simulator or job state keeps its original identity and recovery command; migration never dispatches, recreates, reopens or replays a job."
+    },
+    {
+      "id": "AC5",
+      "text": "Repeated or interrupted apply preserves original state and receipts, resumes without duplication or reports conflict, and retains the old projection while unresolved items remain."
+    }
+  ],
+  "binding_status": "unbound-unexecuted",
+  "native_effects": [
+    "real repository mappings and reference resolution",
+    "private state publication/recovery",
+    "byte-for-byte receipt retention",
+    "2899 association API integration remains separately owned",
+    "no Runtime calls; exact original read commands retained"
+  ],
+  "cases": [
+    {
+      "id": "preview-exact-map",
+      "criterion_id": "AC1",
+      "operation": "migrateRuntimeWorkspace",
+      "given": {
+        "root": "/authored",
+        "projectionRoot": "/authored/.pdd-runtime/project",
+        "write": false,
+        "mappings": [
+          {
+            "from": "tests/order.json",
+            "to": "simulation/tests/order.json"
+          },
+          {
+            "from": "tests/order.second.json",
+            "to": "simulation/tests/order.second.json"
+          }
+        ],
+        "related_files": "explicit Story/prompt/contract/seed/dependency maps",
+        "records": "two-test completed batch, pending case, Try and last-door descriptor"
+      },
+      "expected": {
+        "state": "preview",
+        "writes": 0,
+        "network_calls": 0,
+        "shown": "every old/new path, full selection and unresolved mapping",
+        "reference_meaning": "compared with actual old/new authored roots, not assumed from prefix"
+      }
+    },
+    {
+      "id": "invalid-reference-map",
+      "criterion_id": "AC1",
+      "operation": "migrateRuntimeWorkspace",
+      "given": {
+        "each_independent_variant": [
+          "duplicate destination",
+          "missing map",
+          "ambiguous map",
+          "same root-relative contract name now resolves different record",
+          "selected source changed",
+          "wrong original test set",
+          "destination excluded"
+        ]
+      },
+      "expected": {
+        "result": "incomplete preview/apply with precise unresolved cause",
+        "current_pass_claim": false,
+        "receipt_or_expected_edits": 0,
+        "policy_widened": false
+      }
+    },
+    {
+      "id": "consume-owned-eligibility",
+      "criterion_id": "AC2",
+      "operation": "migrateRuntimeWorkspace + shared workflow evidence owner",
+      "given": {
+        "owner_supplied_results": [
+          "owned exact-source PR1 association",
+          "missing association",
+          "unowned result",
+          "stale source",
+          "wrong login/run",
+          "historical PR1 while current code source differs"
+        ],
+        "receipt": "retain exact original bytes"
+      },
+      "expected": {
+        "eligible": "only owner-supplied stage-scoped result",
+        "unavailable": "no invented pass or association",
+        "receipt_bytes": "unchanged",
+        "request_session_origin_login": "unchanged",
+        "historical_PR1": "PR1 proof only, not current code proof",
+        "replacement_checks": 0
+      }
+    },
+    {
+      "id": "migrate-all-case-states",
+      "criterion_id": "AC3",
+      "operation": "migrateRuntimeWorkspace + applyPendingCase",
+      "given": {
+        "cases": [
+          "durable pending case-A",
+          "conflicting payloads case-B",
+          "applied case-C",
+          "published-before-ledger case-D"
+        ],
+        "mapping": "exact original selected second test"
+      },
+      "expected": {
+        "all_payloads": "retained unchanged",
+        "case_A": "pending/apply via owned transaction",
+        "case_B": "both variants retained as conflict",
+        "case_C": "no duplicate append",
+        "case_D": "recover established application or pending/conflict",
+        "first_test_fallback": false
+      }
+    },
+    {
+      "id": "job-state-matrix",
+      "criterion_id": "AC4",
+      "operation": "migrateRuntimeWorkspace",
+      "given": {
+        "each_job_state": [
+          "running",
+          "paused",
+          "pending",
+          "unknown",
+          "confirmed ended",
+          "missing local pointer with unknown remote state"
+        ],
+        "identity": "original root, owner, origin, source, exact test, session/request and read command"
+      },
+      "expected": {
+        "network_calls": 0,
+        "model_metadata_calls": 0,
+        "dispatch_calls": 0,
+        "reopen_calls": 0,
+        "new_session_calls": 0,
+        "same_original_read_command": true,
+        "unresolved_state": "retained with reason",
+        "local_descriptor": "may be rebuilt only after owned source validation"
+      }
+    },
+    {
+      "id": "interrupted-publication-and-repeat",
+      "criterion_id": "AC5",
+      "operation": "migrateRuntimeWorkspace(write=true) twice with restart",
+      "given": {
+        "fault_points": [
+          "before association consumption",
+          "during local mapping publication",
+          "after case handoff before ledger update",
+          "after local pointer before completion"
+        ],
+        "original_projection": "retained",
+        "original_receipt_bytes": "retained"
+      },
+      "expected": {
+        "originals": "usable and unchanged",
+        "repeat": "no duplicate case or mapping, no replacement Runtime work",
+        "recovery": "resume established changes or conflict",
+        "old_projection_deleted": false,
+        "unresolved": "recovery location and original command retained"
+      }
+    },
+    {
+      "id": "evidence-consumer-continuity",
+      "criterion_id": "AC2",
+      "operation": "buildProjectCard + readContractHistory + savedStoryEvidence + workflow status",
+      "given": {
+        "associated_historical_receipt": "exact PR1 source, immutable original root",
+        "current_source": "same or drifted, separately"
+      },
+      "expected": {
+        "all_consumers": "consume shared eligibility/currentness without rewriting receipt",
+        "drift": "historical status remains scoped to original stage",
+        "ineligible_or_missing": "unknown/stale/unavailable, not pass",
+        "network_calls": 0
+      }
+    }
+  ]
+}

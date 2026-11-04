@@ -14,7 +14,7 @@ flowchart TD
  V -->|Run| C[One door call]
  V -->|State or open| D[Current owner data]
  V -->|Check| J[Judge confirmed run]
- V -->|Save| A[Append observed case]
+ V -->|Save| A[Retain or save observed case]
 ```
 
 State includes Story criteria, judge bindings, admitted entries and schemas, actual current saved data, known runs, server action history, budget metadata and judge progress. Read actual data from authenticated GET `/v1/try/ID/state` with `{world:...}`; never substitute initial test data when unavailable. Return a clear unavailable reason. Runs use runDoorCall once; preserve its confirmed before/after worlds and lossless result. `entry` is `prompt_path#operation`, `input` is a JSON object. Alternatively `argv` is a string array for the single admitted CLI entry, preserving words exactly. Never execute a project program or shell. Reject incompatible run arguments and unknown entries before dispatch. Every run spends the existing Try budget and appears in the server history through the door API. No automatic retry of an uncertain run; block subsequent runs in this connection after a door error carrying unknownOutcome: true, regardless of its message text.
@@ -25,7 +25,16 @@ Expose honest MCP annotations: open/run/save change state, check/state are read-
 
 Support initialize with version negotiation (2025-06-18, 2025-03-26, 2024-11-05; default newest), ping, tools/list, tools/call and notifications. Invalid JSON gets -32700, invalid envelopes -32600, invalid method parameters -32602, unknown methods -32601. Ignore valid notifications without executing tool calls. Reject batches. Bound incoming lines and response replay memory; never print tokens, stacks or private owner URLs. Closing input waits for queued requests; it does not close the Try.
 
+## Workspace and save association
+
+Carry the [workspace authority](runtime-workspace.prompt.md) through owner lookup, source refresh and every tool. Required source validation precedes authentication, model metadata or dispatch. Exact original selected test/session association comes from the runtime client, never the first test for a Story. Durable received-case import, not an in-memory saved flag, owns duplicate safety.
+
+Preserve the current isolated observed-world save operation. It still uses the native save transaction and bounded no-link variant target, retains original test association and requires the confirmed `world_before`. When an exact-original append is requested, delegate to the runtime client: if that starting world cannot hold after the authored prior steps, retain the case pending. Do not change original `initial_world`, invent reset steps or silently substitute a variant for requested append. An explicitly selected isolated variant remains a separate reviewed action with honest partial coverage.
+
+
 ## Dependencies
+
+- [Workspace authority](runtime-workspace.prompt.md): required generation/runtime/verification context for opt-in permission.
 
 - [Runtime client](runtime-client.prompt.md): required generation/runtime context for selection, owner identity, opening, current owner reads, door execution and safe case append.
 - [Runtime preflight](runtime-preflight.prompt.md): required generation/runtime context for Story selection.
