@@ -1,6 +1,9 @@
 # Local command catalog
 
-Own `src/command-catalog.mjs`; export only `PUBLIC_COMMAND_ROUTES`, `PUBLIC_COMMAND_IDS`, `PUBLIC_COMMAND_MANIFEST`, `NAMES` ([Names](#names)), `PUBLIC_HELP_TEXT` ([Help text](#help-text)) and `BUNDLED_WORKFLOW_NAMES` (feature, bug, small-change, product). Catalog the complete small alpha surface: root help, --version, completion bash|zsh, workflow list [--json] and setup (`pdd setup`, local `setup`, no operands or options; its help says that it installs the PDD skills for Codex and Claude if they are missing, adds the short PDD block to CLAUDE.md, else AGENTS.md, and that a second run changes nothing). Each route has stable id, exact prefix, local disposition, operand/option specs and plain help forms. Expose no excluded command, private schema/type, service flag or hosted execution operation. Help, parser and completion share this one authority.
+
+The public command catalog also includes `pdd autopilot off`, `pdd autopilot observe`, `pdd autopilot auto`, `pdd autopilot trust <name>...`, and `pdd autopilot untrust <name>`. Expose these forms in help and completion; reject missing or extra operands through the existing parser contract.
+
+Own `src/command-catalog.mjs`; export only `PUBLIC_COMMAND_ROUTES`, `PUBLIC_COMMAND_IDS`, `PUBLIC_COMMAND_MANIFEST`, `NAMES` ([Names](#names)), `PUBLIC_HELP_TEXT` ([Help text](#help-text)) and `BUNDLED_WORKFLOW_NAMES` (feature, bug, small-change, product). Catalog the complete small alpha surface: root help, --version, completion bash|zsh, workflow list [--json] and setup (`pdd setup`, local `setup`, no operands or options; its help says that it installs the PDD skills for Codex and Claude if they are missing, adds the short PDD block to CLAUDE.md, else AGENTS.md, and that repeat setup keeps an existing Autopilot mode). Each route has stable id, exact prefix, local disposition, operand/option specs and plain help forms. Expose no excluded command, private schema/type, service flag or hosted execution operation. Help, parser and completion share this one authority.
 
 ## Authoring
 
@@ -26,6 +29,8 @@ The `check`, `try` and `workflow.run` routes keep their ids and local dispositio
 Help forms and completion name only the `NAMES` words.
 
 ## Public routes
+
+Catalog local routes `autopilot.off`, `autopilot.observe`, and `autopilot.auto` with prefixes `autopilot off`, `autopilot observe`, and `autopilot auto`, dispositions of the same names, no operands and no options. Catalog `autopilot.trust` with prefix `autopilot trust`, local `autopilot-trust`, one or more text name operands and no options; catalog `autopilot.untrust` with prefix `autopilot untrust`, local `autopilot-untrust`, exactly one text name operand and no options. The parser and completion consume these routes; dispatch uses their stable dispositions. Include all five in the manifest and help as below.
 
 There is no `session` route and no `workflow feature|bug|small-change` chat route: people call the PDD skills in their own chat. No arbitrary path or workflow creation route.
 
@@ -153,7 +158,12 @@ The ordered help-form list consists of the lines below in their displayed order,
   pdd contracts  List shared records, their users and Stories stale since their last check; local working files only.
   pdd contracts sync [--write]  Show proposed changes for moving schema copies to references; apply only with --write. No interpreter calls.
   pdd mcp  Serve the current repository’s Try tools over stdio MCP.
-  pdd setup  Install the PDD skills for Codex and Claude if they are missing, and add the short PDD block to CLAUDE.md, else AGENTS.md. Offer detected Codex, Claude Code and Gemini MCP registrations after showing exact config changes and one y/N question. A second run changes nothing.
+  pdd autopilot off  Set the repository Autopilot mode to off.
+  pdd autopilot observe  Set the repository Autopilot mode to observe.
+  pdd autopilot auto  Set the repository Autopilot mode to auto.
+  pdd autopilot trust NAME...  Add explicitly trusted GitHub names.
+  pdd autopilot untrust NAME  Remove an explicitly trusted GitHub name.
+  pdd setup  Install the PDD skills for Codex and Claude if they are missing, and add the short PDD block to CLAUDE.md, else AGENTS.md. Offer detected Codex, Claude Code and Gemini MCP registrations after showing exact config changes and one y/N question. Offer Autopilot settings in a Git repository with a terminal; keep an existing mode on repeat setup.
 ```
 
 

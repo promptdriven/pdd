@@ -76,7 +76,7 @@ chat 3  code (only when you ask): build, verify, formal, review
 you     review and merge on GitHub
 ```
 
-1. `pdd workflow run` reads the issue, makes the branch, the worktree and the run folder, and opens the first chat in Herdr. It refuses an issue that already has an active run. Then it returns. You can close the terminal.
+1. `pdd workflow run` reads the issue, makes the branch, the worktree and the run folder, and opens the first chat in Herdr. An issue has one active run. A second `pdd workflow run` on the same issue still starts: it marks the old active run replaced and names it (id, worktree, last activity) in one warning. The old worktree and branch stay. Then it returns. You can close the terminal.
 2. The first message of the chat is short. It names the skill, the issue, the worktree, the run folder and the area with its steps.
 3. The main chat coordinates and talks with you. It writes no code and performs no checks.
 4. The main chat gives steps to fresh subagents; builders are never reused and never check their own code. Before checking, close finished agents if supported and try fresh startup. Only after startup fails may verify or formal reuse an agent that wrote no code, tests or prompts in this run. Review always needs a fresh agent with no build, verify, formal or prior review of this change and no prior review context, including every repair round. If no fresh reviewer can start, write `Not checked: review (agent limit)`, stop and tell the person. Follow pdd-prompting RUNBOOK §17 for missing-check records, new-session recovery and replacing them after actual checks. Each subagent gets its full brief at once, with file paths, not chat history; the chat waits once with a long time-out and no small follow-ups.

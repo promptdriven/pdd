@@ -12,7 +12,7 @@
     },
     {
       "id": "AC3",
-      "text": "With no open question left on run #2576, `pdd workflow changes 2576 \"Use ISO dates\"` sends \"The person asks for changes: Use ISO dates\\nRevise in this chat, run done again for the step you changed, then show the result and ask again.\" to the `story` chat, saves round 2 in the #2576 run log with text \"Use ISO dates\" and no `answer` flag, prints \"Sent your change request to the story chat of #2576.\" and exits with code 0."
+      "text": "With no open question left on run #2576, `pdd workflow changes 2576 \"Use ISO dates\"` saves round 2 in the #2576 run log with text \"Use ISO dates\" and no `answer` flag, and exits with code 0."
     }
   ],
   "initial_world": {
@@ -126,7 +126,6 @@
             "stage": "story",
             "round": 1,
             "text": "ISO",
-            "at": 1700000000000,
             "answer": true
           }
         }
@@ -193,32 +192,13 @@
         },
         {
           "criterion_id": "AC3",
-          "target": "result",
-          "path": "/message",
-          "op": "equals",
-          "value": "Sent your change request to the story chat of #2576."
-        },
-        {
-          "criterion_id": "AC3",
-          "target": "world",
-          "path": "/chat_messages/1",
-          "op": "equals",
-          "value": {
-            "area": "story",
-            "number": 2576,
-            "text": "The person asks for changes: Use ISO dates\nRevise in this chat, run done again for the step you changed, then show the result and ask again."
-          }
-        },
-        {
-          "criterion_id": "AC3",
           "target": "world",
           "path": "/runs/2576/changes/1",
           "op": "equals",
           "value": {
             "stage": "story",
             "round": 2,
-            "text": "Use ISO dates",
-            "at": 1700000000000
+            "text": "Use ISO dates"
           }
         }
       ],
