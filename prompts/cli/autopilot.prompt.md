@@ -288,7 +288,7 @@ Actions outside the stated set, invalid mode operands and missing or blank names
     "max_model_calls": 6
   },
   "conventions": [],
-  "prose_sha256": "1f1493a20a3cc14a0081876882e91391791564261f96be66e58f533eaf09fb4f"
+  "prose_sha256": "60ab3759e57dc40bcc748300a37889a4c1af82b6670990193548e46b5e091985"
 }
 ```
 </details>
