@@ -122,6 +122,7 @@ test('ALPHA7: each runner route calls its own export once with parsed values, cw
     [['workflow','start','bug','2','--base','round3/tipjar-workflow-base'], 'startRun', { name: 'bug', issue: '2', agent: 'codex', base: 'round3/tipjar-workflow-base' }],
     [['workflow','done','prompt-story','--summary','Story and cases written'], 'stepDone', { step: 'prompt-story', summary: 'Story and cases written' }],
     [['workflow','done','scope'], 'stepDone', { step: 'scope' }],
+    [['workflow','done','try','--skipped','No person at the Try step'], 'stepDone', { step: 'try', skipped: 'No person at the Try step' }],
     [['workflow','approve'], 'approveRun', { ref: undefined }],
     [['workflow','ask','--','Should','-h','work?'], 'askPerson', { text: 'Should -h work?' }],
     [['workflow','approve','https://github.com/o/r/issues/7'], 'approveRun', { ref: 'https://github.com/o/r/issues/7' }],

@@ -7,3 +7,5 @@ If the pdd-prompting skill has a RUNBOOK.md, run `pdd simulate STORY` as it says
 - Report what ran and what you saw. A link or a mockup is not a try.
 
 To try a CLI, run `pdd simulate <story> --cli`, then run the command.
+
+If no person is there to try it, run `pdd workflow done try --skipped "REASON"`. Never write run files such as try.md by hand.
