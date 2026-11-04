@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 424747280e02e114b56e6b14b19b6faf42f05eb70931620ce7c2a88dd26c1a68).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 5c0c0c67380e2ed2681bceefc4aefae45bc525b544d6fe4948c907c07c41468e).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -44,6 +44,9 @@ const routes = [
   { id: 'workflow.evidence', prefix: ['workflow', 'evidence'], local: 'workflow-evidence',
     operands: [{name:'issue',type:'issue'}], options: [{name:'--summary',kind:'text'}],
     forms: [form('pdd workflow evidence ISSUE --summary FILE', 'Record source-verified saved check JSON without rerunning steps, gates or publication.')] },
+  { id: 'workflow.evidence-associate', prefix: ['workflow', 'evidence-associate'], local: 'workflow-evidence-associate',
+    operands: [{name:'issue',type:'issue'}], options: [{name:'--workspace',kind:'text'},{name:'--stage',kind:'value',choices:['current','pr1']},{name:'--test',kind:'text-list'}],
+    forms: [form('pdd workflow evidence-associate ISSUE --workspace PATH --stage current|pr1 --test PATH...', "Register this run's evidence workspace, stage and selected tests; no checks or workflow progress.")] },
   { id: 'workflow.ask', prefix: ['workflow', 'ask'], local: 'workflow-ask',
     operands: [{name:'question',type:'text',repeat:true}], options: [],
     forms: [form('pdd workflow ask QUESTION', 'For the agent in a run worktree: show the person that the chat waits for their answer.')] },
