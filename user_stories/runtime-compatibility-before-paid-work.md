@@ -16,7 +16,9 @@ Draft expectations for person review. No expectation is approved.
 
 ## Rules to check
 
-Paid dispatch requires the selected normal lint pass and the admitted compatibility evidence. Concrete selected blockers refuse. Ended unknown readiness is not run. Open lint remains recoverable by the same ID. The forbidden result is a paid POST for a held test, duplicate uncertain dispatch or widening of selected source. Missing physical proof alone adds no new global gate.
+Paid dispatch requires the selected normal lint pass and the admitted compatibility evidence. For criteria 2 and 3, source/build association comes first: unavailable or mismatched association stays unknown and ends held with exit 5, preserving any raw server blocker as reported. With matched association, a concrete selected blocker refuses with exit 4 even with incomplete selected coverage. Without that blocker, ended incomplete or unknown readiness is held with exit 5. A test's own refusal or a reached prompt's refusal still applies. Open lint keeps exit 3 and same-ID recovery.
+
+The forbidden result is a paid POST for a held test, duplicate uncertain dispatch or widening of selected source. Missing physical proof alone adds no new global gate.
 
 ## Native cases for the code step
 

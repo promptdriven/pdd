@@ -146,16 +146,20 @@ disagreement gives `association:mismatch`, `state:unknown` and
 This client mismatch is not an invented server `source-mismatch` reason.
 
 After existing own/reached-prompt refusal rules, a normal selected lint pass
-needs matched association, a complete selected report and its authoritative
-aggregate `supported`. Known authoritative `invalid-source`,
-`unsupported-capability` or `missing-binding` gives `refused`, preserving those
-codes and rows, even with incomplete coverage. Unavailable association cannot
-turn a valid concrete blocker into admission. With no concrete refusal,
-terminal unknown/incomplete/missing/conflicting compatibility gives `not_run`;
-unfinished/lost lint keeps its existing open outcome. Existing exit policy gives
-4 for refusal, 5 for ended unavailable readiness and 3 for open lint. Keep the
-compatibility state unknown even when the outer outcome is final `not_run`.
-Unknown compatibility is never a reason to retry or send paid work.
+first needs matched source/build association. A mismatch or unavailable
+association keeps client `state:unknown`; any raw server blocker stays in
+`reported` with its original codes and rows. It does not classify the current
+source as supported or blocked. Ended lint is `not_run` (exit 5).
+
+With matched association, admission needs a complete selected report and its
+authoritative aggregate `supported`. Known authoritative `invalid-source`,
+`unsupported-capability` or `missing-binding` gives `refused` (exit 4), preserving
+those codes and rows, even with incomplete selected coverage. Without such a
+concrete blocker, ended unknown/incomplete/missing/conflicting compatibility
+gives `not_run` (exit 5). Unfinished/lost lint keeps its existing open outcome
+(exit 3). Keep the compatibility state unknown even when the outer outcome is
+final `not_run`. Unknown compatibility is never a reason to retry or send paid
+work.
 
 A matched report establishes structural support as reported for configured
 build metadata. It does not attest which installed executable ran, prove a host
