@@ -194,3 +194,18 @@ for(const proofState of ['current','stale','missing']) for(const total of [0,2])
       : 'Native tests: unknown (no current machine counts).']);
     assert.ok(body.split('\n').some(line=>line.startsWith('Agent note — not checked by pdd:') && line.includes(claim)), 'agent claim retains its explicit trust label');
   });
+
+// #2904: a proof saved before the run started is stale on the PR top too, and gives no native counts.
+test('2904 native publication: a proof file older than the run start is stale and gives no Native tests counts', async t => {
+  const { utimesSync } = await import('node:fs');
+  const f = fixture(t); f.run.startedAt = Date.now(); f.save(); f.machine();
+  const path = join(f.runDir, 'old-code-proof.json'), record = JSON.parse(readFileSync(path, 'utf8'));
+  record.head.stdoutTail = ['# tests 1', '# pass 1', '# fail 0']; writeFileSync(path, JSON.stringify(record));
+  const old = new Date(f.run.startedAt - 3600000); utimesSync(path, old, old);
+  const out = f.invoke('Proof (defect fixed): checked');
+  assert.equal(out.exitCode, 0, JSON.stringify(out));
+  const body = f.data().prs[0].body.split('\n');
+  assert.ok(body.includes('Old-code proof: stale (saved before this run started; rerun pdd workflow prove).'), body.slice(0, 6).join('\n'));
+  assert.ok(body.includes('Native tests: unknown (no current machine counts).'));
+  assert.ok(!body.some(line => line.startsWith('Old-code proof: ✓')));
+});
