@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot.prompt.md (sha256: cf0a970489a514416144f87fce611e00e5690aacc2a348de59114cbd49620fbc).
+// Generated from prompts/cli/autopilot.prompt.md (sha256: 6dce639945fb8645d79768449211043aa6bd207a8a8a50d974e7b273e0f44fe1).
 import * as nativeFs from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -63,14 +63,39 @@ function nativeTerminal(stdin, stdout) {
 }
 function nativeGithub(root, exec) {
   return { lookup: async () => {
-    let owner = '', writers = [];
-    try {
-      const repo = JSON.parse((await exec('gh', ['repo', 'view', '--json', 'nameWithOwner,owner'], { cwd: root, encoding: 'utf8' })).stdout);
-      owner = repo.owner?.login ?? '';
-      const pages = JSON.parse((await exec('gh', ['api', `repos/${repo.nameWithOwner}/collaborators`, '--paginate', '--slurp'], { cwd: root, encoding: 'utf8' })).stdout);
-      writers = unique(pages.flat().filter(person => person.permissions?.push || person.permissions?.maintain || person.permissions?.admin).map(person => person.login));
-      return { owner, writers, complete: !!owner };
-    } catch { return { owner, writers, complete: false }; }
+    let owner = '', writers = [], expired = false, complete = false, child;
+    const stop = () => {
+      if (!child) return;
+      const owned = child;
+      try { owned.kill('SIGTERM'); } catch {}
+      const escalation = setTimeout(() => { try { owned.kill('SIGKILL'); } catch {} }, 250);
+      escalation.unref();
+      owned.once('exit', () => clearTimeout(escalation));
+    };
+    const command = async args => {
+      if (expired) throw Error('GitHub lookup timed out');
+      const pending = exec('gh', args, { cwd: root, encoding: 'utf8' });
+      child = pending.child;
+      try { return await pending; } finally { child = undefined; }
+    };
+    let timer;
+    const deadline = new Promise(resolve => {
+      timer = setTimeout(() => { expired = true; stop(); resolve(); }, 5000);
+    });
+    const work = (async () => {
+      try {
+        const repo = JSON.parse((await command(['repo', 'view', '--json', 'nameWithOwner,owner'])).stdout);
+        if (expired) return;
+        owner = repo.owner?.login ?? '';
+        const pages = JSON.parse((await command(['api', `repos/${repo.nameWithOwner}/collaborators`, '--paginate', '--slurp'])).stdout);
+        if (expired) return;
+        writers = unique(pages.flat().filter(person => person.permissions?.push || person.permissions?.maintain || person.permissions?.admin).map(person => person.login));
+        complete = !!owner;
+      } catch { /* Keep the people confirmed before the failure. */ }
+    })();
+    await Promise.race([work, deadline]);
+    clearTimeout(timer);
+    return { owner, writers, complete: !expired && complete };
   } };
 }
 
