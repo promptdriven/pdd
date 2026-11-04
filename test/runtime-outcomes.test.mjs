@@ -178,8 +178,35 @@ test('OUTCOME empty results cannot succeed or imply criterion passes', () => {
   const line = summaryLine([{ state: 'passed', story: 'one', criteria_total: 3 }]);
   assert.match(line, /: ✓ passed · criteria details not reported · /);
   assert.doesNotMatch(line, /\d+ of 3 criteria/);
+  assert.equal(
+    summaryLine([{ state: 'passed', story: 'one', criteria_total: 3 }], 'one'),
+    'Prompt tests (one): ✓ passed · criteria details not reported · 0/0 checks · 0 AI calls'
+  );
   const mixed = summaryLine([{ state: 'passed', story: 'one', criteria_total: 3 }, { state: 'passed', story: 'one', criteria_total: 2, criteria: { passed: 2, total: 2 } }]);
   assert.match(mixed, /: ✓ 2 of 2 criteria · criteria details not reported · /);
+  // A row that is not passed and has no criterion_results counts its test's criteria (criteria_total, or 0 when absent), with 0 passed.
+  assert.equal(
+    summaryLine([{ state: 'refused', story: 'place-order', criteria_total: 3 }], 'place-order'),
+    'Prompt tests (place-order): no verdict · 0 of 3 criteria · 0/0 checks · 1 refused · 0 AI calls'
+  );
+  assert.equal(
+    summaryLine([{ state: 'running', phase: 'server', story: 'place-order', criteria_total: 3 }], 'place-order'),
+    'Prompt tests (place-order): running · 0 of 3 criteria · 0/0 checks · 1 running · 0 AI calls + 1 unknown'
+  );
+  assert.equal(
+    summaryLine([
+      { state: 'passed', story: 'one', criteria: { passed: 1, total: 1 }, checks: { passed: 1, total: 1 }, phase: 'server', calls: 1 },
+      { state: 'refused', story: 'two', criteria_total: 3 }
+    ]),
+    'Prompt tests: no verdict · 1 of 4 criteria · 1/1 checks · 1 refused · 1 AI call'
+  );
+  for (const [state, suffix] of [
+    ['not_run', 'no verdict · 0 of 3 criteria · 0/0 checks · 1 not run · 0 AI calls'],
+    ['unknown', 'no verdict · 0 of 3 criteria · 0/0 checks · 1 unknown · 0 AI calls'],
+    ['failed', '✗ 0 of 3 criteria · 0/0 checks · 0 AI calls']
+  ]) {
+    assert.equal(summaryLine([{ state, story: 'place-order', criteria_total: 3 }], 'place-order'), `Prompt tests (place-order): ${suffix}`);
+  }
 });
 
 for (const [check, code, said] of [['pool', 'pool-copy-unavailable', /No model login is available/], ['login-queue', 'login-queue-timeout', /Waited too long for a model login/]])
