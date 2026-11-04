@@ -504,7 +504,7 @@ owner API binding for this raise is pending the planner's contract; do not inven
 - A Try setup that the server refuses (the POST or the job; runtime team, Oct 27) is not a check: no table and no `pdd test` advice, exit 4. Two plain lines: `The Try could not start: the app map was refused (<code>: <reason>).` and `Fix <app map path> (RUNBOOK §13), then run pdd simulate <story> --new.` It is the app map when one was sent and the code is `ambiguous-handler`, `template-reference-schema` or `app-map-*`, or the section names the app map. Else `the server refused it (…)` and `Fix what it names, then run pdd simulate <story> --new.`, with ` Details: <report link>` when there is one. Many refusals join with `; `; a refusal with a `where` (prompt-runtime #379) adds `; at <where>` after its reason. The reason is the server's `reason` (on each `result.refusals[]` item, or on `result.report.refusal` with the same code), else pdd's plain rule (`ambiguous-handler`: on one screen, all taps of one kind must match by the same key; `template-reference-schema`: a field that gets a value from the screen (`$ref`) must be a plain {"type": "string"}), else the engine message, else the server message unless it is the generic `The runtime refused this job…`. A server `fix` takes the place of pdd's fix words: `<fix> Then run pdd simulate <story> --new.` A Try that is ready but has an invalid link is exit 3 with one line and no table: `Try link refused: it points at <link origin>, not <configured address>. The server's address setting may be wrong; tell the PDD team.` (or `Try link refused: it is not a valid Try link. Tell the PDD team.` when the origin matches). pdd keeps its record so `pdd simulate --stop` can end it, a later `pdd simulate` says the same, and pdd never prints that link.
 - A reused link says `It keeps its original 24-hour expiry; stop it with: pdd simulate --stop <story>`, so reopening never promises a fresh 24 hours.
 - Open a newly created link with `open` (macOS) or `xdg-open` (Linux) and print the end line `Try ready for "<title>": <link> (open in your browser). It ends in 24 hours, or with: pdd simulate --stop <story>`. `--no-open`, or a failed open, prints `Try ready for "<title>": <link>` and then how to open it.
-- `--stop [STORY]` finds the Try in the state record by story name, test path or test file name, so it works on a branch without the story (real-user issue 14). No STORY stops the one open Try; none or several is exit 2 with the open names. It sends DELETE `/v1/try/<id>` with the header `X-Request-Id: <new UUID>`; read the stop job until `passed`; then forget the Try. A DELETE answer 404 or 410 counts as stopped. A GET 404 or 410 on a recorded Try counts as ended. In both cases pdd deletes the record, so the next `pdd simulate` makes a new Try; the person never edits a state file.
+- `--stop [STORY]` finds the Try in the state record by story name, story path (normalized relative to the repo root, or by `<story>.md` under `user_stories/` when an older saved record has no `storyPath`), test path (also normalized relative to the repo root) or test file name, so it works with the same Story path that started the Try as well as on a branch without the story (real-user issue 14). No STORY stops the one open Try; none or several is exit 2 with `No open Try for "<STORY>". Open Try links: <names>.` on stderr and keeps the saved Try records unchanged. When matched, it sends DELETE `/v1/try/<id>` with the header `X-Request-Id: <new UUID>`; read the stop job until `passed`; then forget the Try from the saved open Try records, print `The Try link for "<title>" is stopped.` and exit 0. A DELETE answer 404 or 410 counts as stopped. A GET 404 or 410 on a recorded Try counts as ended. In both cases pdd deletes the record, so the next `pdd simulate` makes a new Try; the person never edits a state file.
 - The note on other files prints once per command, in calm words, to stderr. `pdd test` folds it into its send line: `Lint passed. Sent 2 checks at 10:47:49: 11 files, 55 KB (4 are not prompt, story or test files; run \`pdd test --files\` to see them).` `pdd simulate` folds it into its start line: `Starting your Try: sending M files, SIZE (N are not prompt, story or test files; run \`pdd test --files\` to see them)…`. It is not a warning.
 - Confirmed not-started 429 server-full or 503 check-queue-full/lint-queue-full during new Try setup waits under admission recovery within the existing setup allowance; accepted setup is read by its ID. Other 429 replies make no new attempt: exit 5 with the server's message, else `Too many Try links are open. Stop one with pdd simulate --stop`.
 - Approvals from the Try page (#9, agreed fields): with the saved cases, pdd reads `GET /v1/try/<id>/approvals` (`{approvals: [{id, prompt_path, prose_sha256, requested_at, state}]}`). For each `pending` request in a person's terminal it uses [prompt approve](prompt-approve.prompt.md): the path must be a Git-visible `*.prompt.md` inside the repo (else declined), the request's `prose_sha256` must equal the local prose hash (else declined: `the prompt changed since you clicked Approve`), an approved and current prompt is done with no question, otherwise it shows the interface and asks the same y/n; one reader serves all questions. Then it sends `POST /v1/try/<id>/approvals/<request id>` with `{"state": "done" | "declined"}` (JSON). `tries/<id>.approvals.json` keeps each answer, so pdd never asks twice and resends only an answer whose POST failed. Without a terminal (an agent) pdd only prints `The Try page asks to approve <path>. A person answers it in a terminal: pdd simulate <story>` once and answers nothing. A missing endpoint (404) is skipped. Waiting needs both stdin and stdout to be terminals.
@@ -749,3 +749,229 @@ not current. root still identifies the saved records when comparisonRoot names
 a merged run's current base. Missing state is empty. Malformed or unreadable
 records produce finite warnings and no invented pass, while unrelated readable
 batches remain usable. Do not recover by a network read or change saved caches.
+
+## Runtime binding for Try stop
+
+The `runTryStop` entry binds the `--stop [STORY]` lookup and state update of `runTry` in `src/runtime-client.mjs`. Given `story` (and optional `cwd` relative to the repository root), read the open Try list once with `state.load` and key `"tries"`. Each item has `test_path`, `id`, `story`, optional `storyPath` and `title`. Match `story` against `item.story`, `item.storyPath`, `item.test_path`, the `item.test_path` file name without `.json`, or `<item.story>.md` under `user_stories/` when `item.storyPath` is absent (normalizing relative paths from `cwd` to the repository root). When one open Try matches, save the remaining items once with `state.save` and key `"tries"`, return `exit_code: 0`, `stdout: "The Try link for \"<title>\" is stopped.\n"` and `stderr: ""`. When none matches, do not call `state.save`; return `exit_code: 2`, `stdout: ""` and `stderr: "No open Try for \"<story>\". Open Try links: <comma-joined item.story values>.\n"`. Every non-empty `stdout` or `stderr` ends with one newline.
+
+<details>
+<summary>Runtime interface</summary>
+
+```json
+{
+  "status": "draft",
+  "prose_sha256": "f3a78753ac3120c3487fb7e276d159c941625cce7c3de84ed75f3a07fe367bfd",
+  "entries": [
+    {
+      "operation": "runTryStop",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "story": {
+            "type": "string",
+            "minLength": 1
+          },
+          "cwd": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "story"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "exit_code": {
+            "type": "integer"
+          },
+          "stdout": {
+            "type": "string"
+          },
+          "stderr": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "exit_code",
+          "stdout",
+          "stderr"
+        ],
+        "additionalProperties": false
+      },
+      "errors": []
+    }
+  ],
+  "calls": [],
+  "resources": [
+    {
+      "name": "state",
+      "kind": "key-value",
+      "access": "write",
+      "operations": [
+        {
+          "name": "load",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string",
+                "enum": [
+                  "tries"
+                ]
+              }
+            },
+            "required": [
+              "key"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "test_path": {
+                          "type": "string"
+                        },
+                        "id": {
+                          "type": "string"
+                        },
+                        "story": {
+                          "type": "string"
+                        },
+                        "storyPath": {
+                          "type": "string"
+                        },
+                        "title": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "test_path",
+                        "id",
+                        "story",
+                        "title"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                ]
+              }
+            },
+            "required": [
+              "value"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "save",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string",
+                "enum": [
+                  "tries"
+                ]
+              },
+              "value": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "test_path": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "story": {
+                      "type": "string"
+                    },
+                    "storyPath": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "test_path",
+                    "id",
+                    "story",
+                    "title"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "key",
+              "value"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "test_path": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "story": {
+                      "type": "string"
+                    },
+                    "storyPath": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "test_path",
+                    "id",
+                    "story",
+                    "title"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "value"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  ],
+  "limits": {
+    "max_steps": 4,
+    "max_model_calls": 4
+  },
+  "conventions": []
+}
+```
+</details>
