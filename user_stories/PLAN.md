@@ -127,3 +127,10 @@ The seven workflow Stories retain their separately approved contracts and all 28
 ## Tests found by name (#2580)
 
 1. [Find each Story's test by its name and folder](tests-found-by-name.md): the tests of Story `S` are `S.json` and `S.<variant>.json` in a `test` or `tests` folder; pdd opens no JSON file to find tests, reads a matched test in full at any size, prints every Story with no test (with the expected path), one line for the test-folder JSON files that match no Story (`--files` lists them) and every conflict, and names the selected tests in the lint request when the interpreter supports it. Native cases: `test/tests-found-by-name.test.mjs`. Interpreter test: none (native effects).
+
+## Native evidence pair (draft; review required)
+
+1. [Native validation profile](native-validation-profile.md) — https://github.com/promptdriven/pdd/issues/2961. Cases: `test/runtime/native-validation-profile.json`.
+2. [Native criterion evidence](native-criterion-evidence.md) — https://github.com/promptdriven/pdd/issues/2954. Cases: `test/runtime/native-criterion-evidence.json`. Uses the same profile assessment.
+
+Prompt tests: not run. No hosted lint, simulation, native capture, implementation or gate approval.
