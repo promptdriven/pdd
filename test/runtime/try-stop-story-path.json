@@ -17,9 +17,15 @@
         {
           "test_path": "tests/tester-panel.json",
           "id": "try-1",
+          "request_ids": [
+            "try-1"
+          ],
+          "reservation": null,
           "story": "tester-panel",
           "storyPath": "user_stories/fakes/tester-panel.md",
-          "title": "I can control test events while I try Pocket"
+          "title": "I can control test events while I try Pocket",
+          "origin": "https://runtime.promptdriven.ai",
+          "login": "tester"
         }
       ]
     }
@@ -55,9 +61,14 @@
     {
       "step_id": "stop-missing-story-path",
       "entry_path": "prompts/cli/runtime-client.prompt.md",
-      "operation": "runTryStop",
+      "operation": "runTry",
       "input": {
-        "story": "user_stories/fakes/other.md"
+        "words": [
+          "user_stories/fakes/other.md"
+        ],
+        "options": {
+          "--stop": true
+        }
       },
       "checks": [
         {
@@ -86,9 +97,14 @@
     {
       "step_id": "stop-open-try-by-story-path",
       "entry_path": "prompts/cli/runtime-client.prompt.md",
-      "operation": "runTryStop",
+      "operation": "runTry",
       "input": {
-        "story": "user_stories/fakes/tester-panel.md"
+        "words": [
+          "user_stories/fakes/tester-panel.md"
+        ],
+        "options": {
+          "--stop": true
+        }
       },
       "checks": [
         {
@@ -97,6 +113,13 @@
           "path": "/stdout",
           "op": "equals",
           "value": "The Try link for \"I can control test events while I try Pocket\" is stopped.\n"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/stderr",
+          "op": "equals",
+          "value": "Stopping the Try for \"I can control test events while I try Pocket\"…\n"
         },
         {
           "criterion_id": "AC1",
