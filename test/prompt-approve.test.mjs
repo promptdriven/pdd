@@ -1,11 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { approvePromptText, runApprove } from '../src/prompt-approve.mjs';
 import { proseSha256 } from '../src/runtime-preflight.mjs';
+import { approveRun, stepDone } from '../src/workflow-runner.mjs';
+import { fixture } from './helpers/workflow-delivery-fixture.mjs';
 import { PLACE, harbor, root, sink } from './runtime-fake.mjs';
 
 const GOLDEN = 'd5958a8577dcb8dd6ff25c8df4ea3b85e8c5dcf7c16863d8e502a24095db6abb';
@@ -120,4 +122,74 @@ test('APPROVE5: pdd approve is a CLI route with help, and refuses in a pipe', t 
   const piped = pdd('approve', PLACE);
   assert.equal(piped.status, 2); assert.match(piped.stderr, /pdd approve is for a person at a terminal/);
   assert.equal(pdd('approve').status, 2);
+});
+
+const CONTRACT_DOC = '# Shared contracts\n\n### row\n\n```json\n{"type":"object","properties":{"itemId":{"type":"string"},"size":{"type":"string","enum":["S","M","L"]},"quantity":{"type":"integer","minimum":1,"maximum":20}},"required":["itemId","size","quantity"],"additionalProperties":false}\n```\n';
+const CONTRACT_PROMPT = ref => `# Order\n\n## Dependencies\n\n- [Shared contracts](../contracts/x.md)\n\n<details><summary>Runtime interface</summary>\n\n\`\`\`json\n{"status": "draft", "prose_sha256": "", "entries": [{"operation": "place_order", "input_schema": {"type": "object", "properties": {"row": {"$contract": "${ref}"}}, "required": ["row"], "additionalProperties": false}, "result_schema": {"type": "integer"}, "errors": []}], "calls": [], "resources": [], "limits": {"max_steps": 1, "max_model_calls": 1}, "conventions": []}\n\`\`\`\n</details>\n`;
+
+// Wrong: pdd approve or pdd workflow approve rejects a valid {"$contract": ...} schema with graph-schema-type-invalid ("has no type") or rewrites the prompt's own unexpanded bytes.
+test('APPROVE8: pdd approve (--said) and pdd workflow approve expand $contract references before schema validation and keep the prompt bytes', async t => {
+  const draft = CONTRACT_PROMPT('contracts/x.md#row');
+  const expected = draft.replace('"status": "draft", "prose_sha256": ""', `"status": "approved", "prose_sha256": "${proseSha256(draft)}"`);
+  const setup = harbor(t, repo => {
+    mkdirSync(join(repo, 'contracts'), { recursive: true });
+    writeFileSync(join(repo, 'contracts/x.md'), CONTRACT_DOC);
+    writeFileSync(join(repo, PLACE), draft);
+  });
+  const ports = { stdout: sink(), stderr: sink(), stdin: Readable.from([]), interactive: false };
+  const code = await runApprove({ words: [PLACE], cwd: setup.repo, said: 'I approve' }, ports);
+  assert.equal(code, 0, `${ports.stderr.text}\n${ports.stdout.text}`);
+  assert.equal(readFileSync(join(setup.repo, PLACE), 'utf8'), expected);
+
+  const f = await fixture(t, { name: 'feature' });
+  assert.equal((await f.run()).exitCode, 0);
+  const run = f.record();
+  mkdirSync(join(run.root, 'contracts'), { recursive: true });
+  mkdirSync(join(run.root, 'prompts'), { recursive: true });
+  writeFileSync(join(run.root, 'contracts/x.md'), CONTRACT_DOC);
+  writeFileSync(join(run.root, PLACE), draft);
+  for (const step of ['understand', 'visual', 'prompt-story']) {
+    f.tick();
+    assert.equal((await stepDone({ step, summary: 'Draft prompt with contract ref', cwd: run.root }, f.agentPorts())).exitCode, 0);
+  }
+  f.herdr.idle();
+  const out = await approveRun({ ref: '17', cwd: run.root, said: 'I approve' }, f.agentPorts());
+  assert.equal(out.exitCode, 0, out.message);
+  assert.equal(readFileSync(join(run.root, PLACE), 'utf8'), expected);
+});
+
+// Wrong: a broken $contract reference reports "has no type" (graph-schema-type-invalid) instead of the contract problem code.
+test('APPROVE9: broken $contract references report the lint contract problem code in pdd approve and pdd workflow approve', async t => {
+  for (const ref of ['contracts/missing.md#row', 'contracts/x.md#missing']) {
+    const draft = CONTRACT_PROMPT(ref);
+    const setup = harbor(t, repo => {
+      mkdirSync(join(repo, 'contracts'), { recursive: true });
+      writeFileSync(join(repo, 'contracts/x.md'), CONTRACT_DOC);
+      writeFileSync(join(repo, PLACE), draft);
+    });
+    const ports = { stdout: sink(), stderr: sink(), stdin: Readable.from([]), interactive: false };
+    const code = await runApprove({ words: [PLACE], cwd: setup.repo, said: 'I approve' }, ports);
+    assert.equal(code, 4, ref);
+    assert.match(ports.stdout.text, /contract-missing/);
+    assert.doesNotMatch(ports.stdout.text + ports.stderr.text, /graph-schema-type-invalid|has no type/);
+    assert.equal(readFileSync(join(setup.repo, PLACE), 'utf8'), draft);
+
+    const f = await fixture(t, { name: 'feature' });
+    assert.equal((await f.run()).exitCode, 0);
+    const run = f.record();
+    mkdirSync(join(run.root, 'contracts'), { recursive: true });
+    mkdirSync(join(run.root, 'prompts'), { recursive: true });
+    writeFileSync(join(run.root, 'contracts/x.md'), CONTRACT_DOC);
+    writeFileSync(join(run.root, PLACE), draft);
+    for (const step of ['understand', 'visual', 'prompt-story']) {
+      f.tick();
+      assert.equal((await stepDone({ step, summary: 'Draft prompt with broken contract ref', cwd: run.root }, f.agentPorts())).exitCode, 0);
+    }
+    f.herdr.idle();
+    const out = await approveRun({ ref: '17', cwd: run.root, said: 'I approve' }, f.agentPorts());
+    assert.notEqual(out.exitCode, 0, ref);
+    assert.match(out.message, /contract-missing/);
+    assert.doesNotMatch(out.message, /graph-schema-type-invalid|has no type/);
+    assert.equal(readFileSync(join(run.root, PLACE), 'utf8'), draft);
+  }
 });

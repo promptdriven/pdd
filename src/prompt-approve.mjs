@@ -1,12 +1,13 @@
-// Generated from prompts/cli/prompt-approve.prompt.md (sha256: 8821baa81e0596ba99db30d9ddb283c968e280c83edabf35ea22a9dca8c00d9c).
+// Generated from prompts/cli/prompt-approve.prompt.md (sha256: 4eb44f1db4fc56d5e57b20770c57519a61a77fda7d06d76fe5f5ffd70a111098).
 import { approvalActor, readApprovalPolicy, readSaidWords, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
+import { expandSource } from './contract-refs.mjs';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { lstatSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { relative, resolve, sep, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { isDeepStrictEqual } from 'node:util';
-import { gitFiles, interfaceBlocks, interfaceSchemaProblems, proseSha256 } from './runtime-preflight.mjs';
+import { gitFiles, interfaceBlocks, interfaceSchemaProblems, proseSha256, sourceFilePort } from './runtime-preflight.mjs';
 
 class Stop extends Error { constructor(exitCode, message) { super(message); this.exitCode = exitCode; } }
 const line = (stream, text) => stream.write(`${text}\n`);
@@ -195,6 +196,18 @@ export function lineReader(stdin) {
   return { ask: () => lines.length ? Promise.resolve(lines.shift()) : closed ? Promise.resolve('') : new Promise(done => waiting.push(done)), close: () => reader.close() };
 }
 
+// Expand $contract references in the Runtime interface before running interfaceSchemaProblems.
+export function promptSchemaProblems(root, path, text) {
+  let expanded;
+  try {
+    expanded = expandSource({ path, text, format: 'prompt' }, sourceFilePort(root)).text;
+  } catch (error) {
+    if (error.code) return [{ code: error.code, pointer: '', rule: error.message }];
+    throw error;
+  }
+  return interfaceSchemaProblems(JSON.parse(interfaceBlocks(expanded)[0][1]));
+}
+
 // Show one prompt, ask the person, and approve on y. expectedHash (from the Try page) must equal the local prose hash.
 // Returns {state: 'done' | 'declined', exitCode, message}; prints the view and the question to stdout.
 export async function askApproval({ root, path, stdout, answers, expectedHash, said, commit }) {
@@ -208,7 +221,7 @@ export async function askApproval({ root, path, stdout, answers, expectedHash, s
     return { state: 'declined', exitCode: 4, message: `${path}: the prompt changed since you clicked Approve. Not approved; look at the new text, then click Approve again.` };
   }
   if (iface.status === 'approved' && current) return { state: 'done', exitCode: 0, message: `${path} is already approved and current.` };
-  const problems = interfaceSchemaProblems(iface);
+  const problems = promptSchemaProblems(root, path, text);
   if (problems.length) {
     for (const problem of problems) line(stdout, `  ${problem.code}  ${problem.pointer}  ${problem.rule}`);
     return { state: 'declined', exitCode: 4, message: `Fix these in ${path} before you approve.` };

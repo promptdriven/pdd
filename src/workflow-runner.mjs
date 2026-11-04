@@ -1,6 +1,6 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 22be7243be25683c739f60e3627bbbd5ad1d63c7762171d81fe6afe6f7cc5c0f).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 99d6f0fc542ba9d361dd93c8e27994dc5f35e16a41244a2453e09c8b8f2ffd81).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
-import { approvePromptText } from './prompt-approve.mjs';
+import { approvePromptText, promptSchemaProblems } from './prompt-approve.mjs';
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { constants, openSync, closeSync, fsyncSync, unlinkSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
@@ -17,7 +17,7 @@ import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, readWorkflo
 import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mjs';
 import { allRuns, currentChat, gitContext, listRuns, readRun, readRunOwnership, resolveRun, runDirFor, runForWorktree, updateRun, writeRun } from './workflow-runs.mjs';
 import { startChat, sendToChat, herdrCommand, chatSession, openChat, restartChat, validSessionId, closeChats, expandHome, homeVariable, isFolder, observeLifecycle, applyLifecycle, launchAnchor, sessionEvidenceDue, ownSession, observedSession, START_GRACE_MS } from './workflow-chat.mjs';
-import { captureSource, findTests, gitFiles, interfaceBlocks, interfaceSchemaProblems, proseSha256 } from './runtime-preflight.mjs';
+import { captureSource, findTests, gitFiles, interfaceBlocks, proseSha256 } from './runtime-preflight.mjs';
 import { storyLines, PROMPT_TESTS_LABEL, PROMPT_TESTS_WORDS } from './runtime-output.mjs';
 import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
 import { causeText } from './runtime-output.mjs';
@@ -1449,7 +1449,7 @@ async function approveGatePrompts(run, p, snapshot = null) {
     if (blocks.length !== 1) throw Error(`${path} must have one Runtime interface block.`);
     let iface;
     try { iface = JSON.parse(blocks[0][1]); } catch { throw Error(`${path} has invalid Runtime interface JSON.`); }
-    const problems = interfaceSchemaProblems(iface);
+    const problems = promptSchemaProblems(run.root, path, text);
     if (problems.length) throw Error(`${path}: ${problems.map(item => `${item.code} ${item.pointer} ${item.rule}`).join('; ')}`);
     const hash = proseSha256(text);
     if (iface.status === 'approved' && iface.prose_sha256 === hash) continue;
