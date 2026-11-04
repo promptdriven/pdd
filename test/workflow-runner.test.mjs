@@ -324,12 +324,69 @@ for (const name of ['bug', 'feature']) {
   });
 }
 
-test('a second run for the same issue is refused and points at the first one', async t => {
+// #2871: an old active run (stuck, abandoned or left from a crash) never blocks a new run on its issue.
+test('a second run on an issue with an active run starts, names the old run in one warning and marks it replaced', async t => {
   const f = await fixture(t);
-  await f.run();
+  await f.run(); const old = f.record();
+  f.tick(90 * 60000);
   const again = await f.run();
-  assert.equal(again.exitCode, 1); assert.match(again.message, /already has a run/); assert.match(again.message, /pdd workflow open 17/);
-  assert.equal(f.herdr.panes.filter(p => p.commands).length, 1);
+  assert.equal(again.exitCode, 0, again.message);
+  assert.deepEqual(f.prompts, [], 'no person is asked');
+  assert.equal(again.message.match(/had an active run/g).length, 1);
+  assert.ok(again.message.includes(`warning: Issue #17 had an active run ${old.runId} (small-change). pdd marked it replaced`), again.message);
+  assert.ok(again.message.includes(old.root) && again.message.includes(old.branch) && again.message.includes(old.sourceRoot));
+  assert.match(again.message, /Last activity: 90 min ago\./); assert.doesNotMatch(again.message, /may still be working/);
+  const fresh = f.record(), archived = `${old.runDir}-cancelled-${old.runId.slice(0, 8)}`, replaced = JSON.parse(readFileSync(join(archived, 'status.json'), 'utf8'));
+  assert.equal(fresh.state, 'running'); assert.notEqual(fresh.runId, old.runId); assert.notEqual(fresh.root, old.root);
+  assert.equal(replaced.runId, old.runId); assert.equal(replaced.state, 'cancelled'); assert.deepEqual(replaced.cancelled, { state: 'replaced', at: f.clock }); assert.equal(replaced.gate, null);
+  assert.deepEqual(fresh.previous.map(item => item.runId), [old.runId]);
+  assert.equal(f.herdr.panes.filter(p => p.commands).length, 2);
+  const listed = await runStatus({ cwd: f.source, cancelled: true }, f.ports);
+  assert.match(listed.message, /replaced/);
+});
+
+test('a replacement soon after the old run was active says that the old run may still be working', async t => {
+  const f = await fixture(t);
+  await f.run(); f.tick(5 * 60000);
+  const again = await f.run();
+  assert.equal(again.exitCode, 0, again.message);
+  assert.match(again.message, /Last activity: 5 min ago\. It may still be working; close its chat if it is\./);
+});
+
+test('a replaced run cannot write over the new run: late steps from its worktree and its in-flight delivery leave the new run unchanged', async t => {
+  const f = await fixture(t);
+  await f.run(); const old = f.record(), oldPane = old.chats[0].paneId;
+  let replacement = null;
+  const herdr = f.ports.herdr;
+  f.ports.herdr = async args => {
+    // The new run starts while the old run's change request is in flight to its chat.
+    if (!replacement && args[0] === 'agent' && args[1] === 'prompt' && args[2] === oldPane) { f.tick(); replacement = await f.run(); }
+    return herdr(args);
+  };
+  f.tick();
+  const late = await changeRun({ ref: '17', text: 'Also explain why.', cwd: f.source }, f.ports);
+  assert.equal(replacement?.exitCode, 0, replacement?.message);
+  assert.notEqual(late.exitCode, 0, late.message);
+  const fresh = f.record();
+  assert.notEqual(fresh.runId, old.runId); assert.deepEqual(fresh.changes, []);
+  assert.equal(existsSync(join(fresh.runDir, 'delivery-journal.json')), false, 'the old request stays out of the new run journal');
+  const done = await stepDone({ step: 'scope', summary: 'late', cwd: old.root }, f.agentPorts());
+  assert.notEqual(done.exitCode, 0);
+  assert.deepEqual(f.record(), fresh);
+});
+
+test('a replaced run cannot put its change request into the new run journal when the new run starts while the request waits for the journal claim', async t => {
+  const f = await fixture(t);
+  await f.run(); const old = f.record(), lock = join(old.runDir, '.delivery-journal.lock');
+  mkdirSync(lock); writeFileSync(join(lock, 'owner-other.json'), JSON.stringify({ pid: process.pid, hostname: 'another-host', token: 'other' }));
+  let replacement = null;
+  const late = await changeRun({ ref: '17', text: 'Old request.', cwd: f.source }, { ...f.ports,
+    journalSleep: async () => { if (!replacement) { f.tick(); replacement = await f.run(); } } });
+  assert.equal(replacement?.exitCode, 0, replacement?.message);
+  assert.notEqual(late.exitCode, 0, late.message);
+  const fresh = f.record();
+  assert.notEqual(fresh.runId, old.runId);
+  assert.equal(existsSync(join(fresh.runDir, 'delivery-journal.json')), false, 'the old request stays out of the new run journal');
 });
 
 test('cancel closes the run tabs, keeps the worktree and branch, and done then tells the agent to stop', async t => {
@@ -416,8 +473,8 @@ test('after cancel a new run on the same issue gets a fresh worktree and branch,
   const archived = `${old.runDir}-cancelled-${old.runId.slice(0, 8)}`;
   assert.equal(JSON.parse(readFileSync(join(archived, 'status.json'), 'utf8')).state, 'cancelled');
   assert.deepEqual(fresh.previous.map(item => [item.root, item.branch, item.runDir]), [[old.root, old.branch, archived]]);
-  const refused = await f.run();
-  assert.equal(refused.exitCode, 1); assert.match(refused.message, /already has a run/);
+  const replaced = await f.run();
+  assert.equal(replaced.exitCode, 0, replaced.message); assert.match(replaced.message, /had an active run/);
 });
 
 const featureAreas = { version: 2, areas: [

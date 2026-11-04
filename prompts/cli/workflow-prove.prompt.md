@@ -86,7 +86,9 @@ Runtime fakes establish forwarding and classification only. Native Git isolation
             "type": "string"
           },
           "timeoutMinutes": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 120
           }
         },
         "required": [
