@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readRunResults, resultLines, noResultLine } from '../src/workflow-results.mjs';
+import { readRunResults, resultLines, noResultLine, usableResult } from '../src/workflow-results.mjs';
+import { validateProofRecord } from '../src/workflow-prove.mjs';
 
 function folders(t) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-results-'))); t.after(() => rmSync(base, { recursive: true, force: true }));
@@ -33,16 +34,51 @@ test('2904: reads the newest check and lint of this worktree since the run start
     'pdd result: pdd lint (batch 20261103-113000-eeee, 2026-11-03T11:30:00Z): Lint: result unknown (the lint did not finish).']);
 });
 
-test('2904: reads this run\'s prove record only, and says pdd:no-verdict when there is no result', t => {
+const phase = extra => ({ exitCode: null, signal: '', timedOut: false, outputLimited: false, stdoutTail: [], stderrTail: [], expectedFound: false, error: '', setupError: '', observedError: '', ...extra });
+const proof = (runId, headSha, baseSha) => ({ v: 2, origin: 'pdd.workflow-prove.v2', runId, baseSha, headSha, test: 'node --test test/a.test.mjs', expect: 'defect-x',
+  paths: ['test/a.test.mjs'], base: phase({ exitCode: 1, expectedFound: true, observedError: 'defect-x' }), head: phase({ exitCode: 0 }), outcome: 'proved', cleanupError: '', setupError: '', interruptSignal: '' });
+const HEAD = 'c'.repeat(40), BASE = 'b'.repeat(40);
+
+test('2904: a prove record counts only when it is valid, this run\'s, made in this run and for the current head and base', t => {
+  const f = folders(t), file = join(f.runDir, 'old-code-proof.json'), git = (root, args) => args[0] === 'rev-parse' ? HEAD : BASE;
+  const read = (extra = {}) => readRunResults({ root: f.root, runDir: f.runDir, runId: 'run-1', since, baseBranch: 'main', ...extra }, { env: f.env, git });
+  assert.deepEqual(read(), [], 'no file, no result');
+  assert.equal(validateProofRecord(proof('run-1', HEAD, BASE)), true);
+  for (const record of [{ runId: 'run-1', outcome: 'proved', headSha: HEAD }, proof('other', HEAD, BASE), { ...proof('run-1', HEAD, BASE), outcome: 'old-passes' }]) {
+    writeFileSync(file, JSON.stringify(record));
+    const [result] = read();
+    assert.deepEqual([result.state, result.summary], ['unavailable', 'Old-code proof: unavailable (not a valid pdd proof record for this run).']);
+    assert.equal(usableResult(result), false);
+  }
+  writeFileSync(file, JSON.stringify(proof('run-1', 'd'.repeat(40), BASE)));
+  assert.equal(read()[0].summary, 'Old-code proof: stale (base or head changed; rerun pdd workflow prove).');
+  writeFileSync(file, JSON.stringify(proof('run-1', HEAD, 'e'.repeat(40))));
+  assert.equal(read()[0].state, 'stale', 'a changed base is stale too');
+  writeFileSync(file, JSON.stringify(proof('run-1', HEAD, BASE)));
+  assert.equal(read({ since: Date.now() + 3600000 })[0].summary, 'Old-code proof: stale (saved before this run started; rerun pdd workflow prove).');
+  const [current] = read();
+  assert.equal(current.state, 'current'); assert.equal(usableResult(current), true);
+  assert.match(resultLines([current])[0], /^pdd result: pdd workflow prove \(\d{4}-\d\d-\d\dT[\d:]+Z, head ccccccc\): Old-code proof: ✓ `node --test test\/a\.test\.mjs`: old-code exit `1`; output contains `defect-x`; new-code exit `0`\.$/);
+  assert.equal(readRunResults({ root: f.root, runDir: f.runDir, runId: 'run-1', since }, { env: f.env, git: () => '' })[0].summary, 'Old-code proof: unavailable (current Git head unavailable).');
+});
+
+test('2904: test and lint results keep pdd\'s saved request ids and report links, with no agent summary', t => {
   const f = folders(t);
-  assert.deepEqual(readRunResults({ root: f.root, runDir: f.runDir, runId: 'run-1', since }, { env: f.env }), []);
+  f.batch('20261103-120000-bbbb', { intent: 'check', created_at: '2026-11-03T12:00:00Z', rows: [
+    { test: 'tests/a.json', request_ids: ['11111111-1111-4111-8111-111111111111'], report_url: 'https://rt.example.test/r/actual-report' },
+    { test: 'tests/b.json', request_ids: ['22222222-2222-4222-8222-222222222222'], report_url: 'not a link' }] }, { summary_line: 'Prompt tests: ✓ 2 of 2 criteria' });
+  f.batch('20261103-113000-eeee', { intent: 'lint-only', created_at: '2026-11-03T11:30:00Z', lint: { state: 'passed', request_ids: ['33333333-3333-4333-8333-333333333333'] } });
+  const results = readRunResults({ root: f.root, since }, { env: f.env, capture: () => { throw Error('no capture'); } });
+  assert.deepEqual(results[0].requests, ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222']);
+  assert.deepEqual(results[0].reports, ['https://rt.example.test/r/actual-report']);
+  assert.deepEqual(results[1].requests, ['33333333-3333-4333-8333-333333333333']);
+  assert.deepEqual(resultLines(results), [
+    'pdd result: pdd test (batch 20261103-120000-bbbb, 2026-11-03T12:00:00Z, source unknown, requests 11111111-1111-4111-8111-111111111111 22222222-2222-4222-8222-222222222222): Prompt tests: ✓ 2 of 2 criteria; Report: https://rt.example.test/r/actual-report (report links expire after 7 days)',
+    'pdd result: pdd lint (batch 20261103-113000-eeee, 2026-11-03T11:30:00Z, request 33333333-3333-4333-8333-333333333333): Lint: 1 of 1 tests pass. 0 AI calls.']);
+});
+
+test('2904: says pdd:no-verdict when there is no result', () => {
   assert.deepEqual(resultLines([]), [noResultLine()]);
   assert.equal(noResultLine(['pdd test', 'pdd lint']), 'pdd result: none. pdd has no pdd test or pdd lint result of its own for this run (pdd:no-verdict).');
-  writeFileSync(join(f.runDir, 'old-code-proof.json'), JSON.stringify({ runId: 'other', outcome: 'proved' }));
-  assert.deepEqual(readRunResults({ root: f.root, runDir: f.runDir, runId: 'run-1', since }, { env: f.env }), []);
-  writeFileSync(join(f.runDir, 'old-code-proof.json'), JSON.stringify({ runId: 'run-1', outcome: 'proved', headSha: 'c'.repeat(40) }));
-  const [proof] = readRunResults({ root: f.root, runDir: f.runDir, runId: 'run-1', since }, { env: f.env });
-  assert.equal(proof.kind, 'pdd workflow prove');
-  assert.match(resultLines([proof])[0], /^pdd result: pdd workflow prove \(\d{4}-\d\d-\d\dT[\d:]+Z, head ccccccc\): Old-code proof: proved$/);
-  assert.deepEqual(resultLines([proof], { kinds: ['pdd test'] }), ['pdd result: none. pdd has no pdd test result of its own for this run (pdd:no-verdict).']);
+  assert.deepEqual(resultLines([{ kind: 'pdd workflow prove', at: 0, state: 'current', summary: 'x' }], { kinds: ['pdd test'] }), ['pdd result: none. pdd has no pdd test result of its own for this run (pdd:no-verdict).']);
 });

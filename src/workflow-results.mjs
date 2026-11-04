@@ -1,8 +1,10 @@
-// Generated from prompts/cli/workflow-results.prompt.md (sha256: d567cc802ab5aadd375ed90e0bb4504a713876587427082929c14a31742efc16).
+// Generated from prompts/cli/workflow-results.prompt.md (sha256: 38db44ea25aa76c3f71cefe025aac95486764ab6ecbb709c82d4640eca105ffb).
+import { execFileSync } from 'node:child_process';
 import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { captureSource } from './runtime-preflight.mjs';
+import { formatProof, validateProofRecord } from './workflow-prove.mjs';
 
 const BATCH = /^\d{8}-\d{6}-[a-z0-9]{4}$/;
 export const PDD_RESULT = 'pdd result';
@@ -23,11 +25,36 @@ function readJson(path) {
 }
 const iso = ms => Number.isFinite(ms) ? new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z') : 'time unknown';
 const first = values => values.find(value => typeof value === 'string' && value.trim() && value.trim().toLowerCase() !== 'unknown');
+const sha = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value);
+const unique = values => [...new Set(values.filter(value => typeof value === 'string' && value.trim()).map(value => text(value, 200)))];
+// The request ids and report links that pdd saved for a batch's rows.
+const requestsOf = rows => unique(rows.flatMap(row => Array.isArray(row?.request_ids) ? row.request_ids : [])).slice(0, 50);
+const reportsOf = rows => unique(rows.map(row => row?.report_url)).filter(url => /^https?:\/\/\S+$/.test(url)).slice(0, 50);
+function gitLine(root, args) {
+  try { return String(execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })).trim(); } catch { return ''; }
+}
+// The prove record as the PR renderer trusts it: valid, this run's, made in this run, for the current head and base.
+function proveResult(path, { runId, since, root, baseBranch }, git) {
+  let stat;
+  try { stat = lstatSync(path); } catch { return null; }
+  const at = Math.round(stat.mtimeMs), record = readJson(path);
+  const result = (state, summary, extra = {}) => ({ kind: 'pdd workflow prove', at, state, summary, ...extra });
+  if (!record || !validateProofRecord(record) || !sha(record.baseSha) || !sha(record.headSha) || record.runId !== runId)
+    return result('unavailable', 'Old-code proof: unavailable (not a valid pdd proof record for this run).');
+  if (at < since) return result('stale', 'Old-code proof: stale (saved before this run started; rerun pdd workflow prove).', { headSha: record.headSha });
+  const head = git(root, ['rev-parse', '--verify', 'HEAD^{commit}']);
+  if (!sha(head)) return result('unavailable', 'Old-code proof: unavailable (current Git head unavailable).', { headSha: record.headSha });
+  const base = baseBranch ? git(root, ['merge-base', 'HEAD', `refs/remotes/origin/${baseBranch}`]) : '';
+  if (head !== record.headSha || sha(base) && base !== record.baseSha) return result('stale', 'Old-code proof: stale (base or head changed; rerun pdd workflow prove).', { headSha: record.headSha });
+  return result('current', text(formatProof(record), 600), { outcome: record.outcome, headSha: record.headSha });
+}
+// A prove result that is not current is shown, but it is never pdd's proof.
+export const usableResult = result => result.kind !== 'pdd workflow prove' || result.state === 'current';
 
 // pdd's own saved results for one run: the newest `pdd test` check batch, the newest `pdd lint` batch (both from the
 // runtime state folder, for this worktree, made at or after the run started) and the run's `pdd workflow prove` record.
 // It reads files only. It never runs a test, calls the interpreter or changes a file.
-export function readRunResults({ root, runDir = null, runId = null, since = 0 }, { env = process.env, capture = captureSource } = {}) {
+export function readRunResults({ root, runDir = null, runId = null, since = 0, baseBranch = null }, { env = process.env, capture = captureSource, git = gitLine } = {}) {
   const results = [], wanted = real(root);
   const directory = join(resolve(env.PDD_STATE_DIR || join(env.HOME || homedir(), '.pdd', 'runtime')), 'batches');
   let names = [];
@@ -49,21 +76,18 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0 },
       if (/^[a-f0-9]{64}$/.test(batch.source_sha256 ?? '') && tests.length) source = capture(root, { tests, appMap: null }).sha256 === batch.source_sha256 ? 'current' : 'changed';
     } catch { source = 'unknown'; }
     const stories = Array.isArray(summary?.rows) ? [...new Set(summary.rows.map(row => text(row?.summary_line)).filter(Boolean))] : [];
-    results.push({ kind: 'pdd test', batch: check.name, at: check.at, source,
+    results.push({ kind: 'pdd test', batch: check.name, at: check.at, source, requests: requestsOf(batch.rows), reports: reportsOf(batch.rows),
       summary: text(summary?.summary_line) || 'result not saved (the check did not finish)', stories,
       engine: text(first(batch.rows.map(row => row?.engine_sha)), 12) || null, model: text(first(batch.rows.map(row => row?.requested_model)), 80) || null });
   }
   if (lint) {
     const rows = lint.batch.rows.filter(row => row && typeof row === 'object');
     const passing = rows.filter(row => row.state === 'passed').length, ended = ['passed', 'failed', 'refused'].includes(lint.batch.lint?.state) || rows.every(row => ['passed', 'failed', 'refused'].includes(row.state));
-    results.push({ kind: 'pdd lint', batch: lint.name, at: lint.at, summary: ended ? `Lint: ${passing} of ${rows.length} tests pass. 0 AI calls.` : 'Lint: result unknown (the lint did not finish).' });
+    results.push({ kind: 'pdd lint', batch: lint.name, at: lint.at, requests: requestsOf([lint.batch.lint]), summary: ended ? `Lint: ${passing} of ${rows.length} tests pass. 0 AI calls.` : 'Lint: result unknown (the lint did not finish).' });
   }
   if (runDir) {
-    const path = join(runDir, 'old-code-proof.json'), proof = readJson(path);
-    if (proof && proof.runId === runId && typeof proof.outcome === 'string') {
-      let at = NaN; try { at = lstatSync(path).mtimeMs; } catch { /* no time */ }
-      results.push({ kind: 'pdd workflow prove', at: Math.round(at), summary: `Old-code proof: ${text(proof.outcome, 40)}`, baseSha: text(proof.baseSha, 40), headSha: text(proof.headSha, 40) });
-    }
+    const proof = proveResult(join(runDir, 'old-code-proof.json'), { runId, since, root, baseBranch }, git);
+    if (proof) results.push(proof);
   }
   return results;
 }
@@ -75,7 +99,9 @@ export function resultLines(results, { kinds = null } = {}) {
   return shown.map(result => {
     const facts = [result.batch && `batch ${result.batch}`, iso(result.at), result.source && `source ${result.source}`,
       result.engine && `engine ${result.engine}`, result.model && `model ${result.model}`,
+      result.requests?.length && `request${result.requests.length > 1 ? 's' : ''} ${result.requests.join(' ')}`,
       result.headSha && `head ${result.headSha.slice(0, 7)}`].filter(Boolean).join(', ');
-    return `${PDD_RESULT}: ${result.kind} (${facts}): ${[result.summary, ...(result.stories ?? []).filter(line => line !== result.summary)].join('; ')}`;
+    return `${PDD_RESULT}: ${result.kind} (${facts}): ${[result.summary, ...(result.stories ?? []).filter(line => line !== result.summary),
+      ...(result.reports ?? []).map(url => `Report: ${url} (report links expire after 7 days)`)].join('; ')}`;
   });
 }

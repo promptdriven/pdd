@@ -2673,3 +2673,34 @@ test('2904: with no pdd result of its own, done check warns and goes on, and the
   assert.match(f.prs[0].body, /^Agent note — not checked by pdd: Prompt tests: ✓ 3 of 3 criteria · 10\/10 checks · 1 AI call$/m);
   assert.doesNotMatch(f.prs[0].body, /^Prompt tests: ✓/m);
 });
+
+test('2904: with no agent summary, the step record and the PR trace pdd\'s result to its saved requests and reports; a fake proof is not pdd\'s proof', async t => {
+  const { f, run, done } = await featureWithOwnResults(t, { results: false });
+  saveBatch(f.ports.env.PDD_STATE_DIR, '20261027-180000-abcd', { root: run.root, created_at: '2026-10-27T18:00:00.000Z', intent: 'check',
+    rows: [{ test: 'tests/value.json', state: 'passed', request_ids: ['11111111-1111-4111-8111-111111111111'], report_url: 'https://rt.example.test/r/actual-report' }] },
+    { summary_line: 'Prompt tests: ✓ 1 of 1 criteria · 1/1 checks · 1 AI call', rows: [] });
+  // A file that only looks like a proof: it is shown plainly and never as pdd's proof.
+  writeFileSync(join(run.runDir, 'old-code-proof.json'), JSON.stringify({ runId: run.runId, outcome: 'proved', headSha: f.git(run.root, 'rev-parse', 'HEAD') }));
+  const check = await done('check', {});
+  assert.match(check.message, /^pdd recorded its own results with this step:$/m);
+  assert.match(check.message, /^pdd result: pdd workflow prove \([^)]*\): Old-code proof: unavailable \(not a valid pdd proof record for this run\)\.$/m);
+  assert.doesNotMatch(check.message, /Old-code proof: proved|Old-code proof: ✓/);
+  const saved = f.record().done.check;
+  assert.equal(saved.summary, '');
+  assert.deepEqual(saved.pddResults[0].requests, ['11111111-1111-4111-8111-111111111111']);
+  assert.deepEqual(saved.pddResults[0].reports, ['https://rt.example.test/r/actual-report']);
+  assert.equal(saved.pddResults[1].state, 'unavailable');
+  await done('try', { skipped: 'No person at the Try step.' });
+  const top = f.prs[0].body.split('\n')[0];
+  assert.match(top, /^pdd result: pdd test \(batch 20261027-180000-abcd, [^)]*request 11111111-1111-4111-8111-111111111111\): Prompt tests: ✓ 1 of 1 criteria · 1\/1 checks · 1 AI call; Report: https:\/\/rt\.example\.test\/r\/actual-report \(report links expire after 7 days\)$/);
+});
+
+test('2904: done check with only a stale or fake proof warns, shows it plainly, says pdd:no-verdict and goes on', async t => {
+  const { f, run, done } = await featureWithOwnResults(t, { results: false });
+  writeFileSync(join(run.runDir, 'old-code-proof.json'), '{"runId":"x"}');
+  const out = await done('check', { summary: 'checked' });
+  assert.match(out.message, /^warning: pdd has no result of its own for this run yet\./m);
+  assert.match(out.message, /Old-code proof: unavailable \(not a valid pdd proof record for this run\)\./);
+  assert.match(out.message, /\(pdd:no-verdict\)\.$/m);
+  assert.match(out.message, /Next step: try/);
+});

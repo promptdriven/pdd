@@ -529,13 +529,16 @@ Cut from the Harbor Coffee app map (`…` marks cut parts):
 
 ## 15. PR text
 
-Put the `Prompt tests` line(s) that `pdd test` prints, with their report links, at the top of the PR text. One
-Story gives one line, `Prompt tests (<story>): …`. 2 or more Stories give one line each and a last `Prompt tests:`
-line for all. The link expires after 7 days. Anyone with the link can open it. Do not paste logs, warnings or full
-paths of this computer (`/Users/…`). PR 1 cannot merge while a prompt in it is still draft.
+In a pdd workflow run, pdd writes the PR text. Its top starts with pdd's own `pdd result:` lines, read from the
+saved `pdd test` and `pdd lint` results (or `pdd result: none. … (pdd:no-verdict)`). Put the `Prompt tests` line(s)
+that `pdd test` prints, with their report links, in your check summary. pdd shows them below its own lines, each
+starting with `Agent note — not checked by pdd:`. One Story gives one line, `Prompt tests (<story>): …`. 2 or more
+Stories give one line each and a last `Prompt tests:` line for all. The link expires after 7 days. Anyone with the
+link can open it. Do not paste logs, warnings or full paths of this computer (`/Users/…`). PR 1 cannot merge while
+a prompt in it is still draft.
 ```
-Prompt tests (place-order): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call
-Report: https://…/r/617480ac-…
+pdd result: pdd test (batch 20261103-120000-k3f9, 2026-11-03T12:00:00Z, source current): Prompt tests (place-order): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call; Report: https://…/r/617480ac-… (report links expire after 7 days)
+Agent note — not checked by pdd: Prompt tests (place-order): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call
 ```
 
 ## 16. Known limits today
