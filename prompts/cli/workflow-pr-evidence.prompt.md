@@ -47,7 +47,7 @@ Every dynamic value, including actor, timestamp, route, path/hash and words, is 
 
 ```json
 {
-  "status": "draft",
+  "status": "approved",
   "prose_sha256": "e677a7334f6e05a16ec5d8cb8b0ae990513bdb617c8164198aa9911613877bd5",
   "entries": [
     {
