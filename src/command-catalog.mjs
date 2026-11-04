@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 9f044bfe9a05079fbcf4040f1d46507108c82b13b81d74c15ff8a90f0eb2a3bf).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 6ec9a896ed4d7e0c5091c724b0af2d66d83d4bba04416ecd1fdf632deb802131).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -32,7 +32,7 @@ const routes = [
     forms: [form('pdd workflow prove ISSUE --test COMMAND --expect TEXT [--timeout MIN]', 'Run committed changed tests on the fetched base branch merge-base and committed head with a limit per phase (default 10 minutes; --timeout sets 1 to 120); save a non-gating report that pull requests show as pdd\'s own result.')] },
   { id: 'workflow.done', prefix: ['workflow', 'done'], local: 'workflow-done',
     operands: [{name:'step',type:'workflow-name'}], options: [{name:'--summary',kind:'text'},{name:'--skipped',kind:'text'}],
-    forms: [form('pdd workflow done STEP [--summary TEXT] [--skipped REASON]', 'For the agent in a run worktree: record a step with pdd\'s own latest pdd test, pdd lint and prove results (the summary is an agent note) and print what to do next; --skipped records that the step was skipped, and why.')] },
+    forms: [form('pdd workflow done STEP [--summary TEXT] [--skipped REASON]', `For the agent in a run worktree: record a step with pdd's own latest pdd ${test}, pdd ${lint} and prove results (the summary is an agent note) and print what to do next; --skipped records that the step was skipped, and why.`)] },
   { id: 'workflow.evidence', prefix: ['workflow', 'evidence'], local: 'workflow-evidence',
     operands: [{name:'issue',type:'issue'}], options: [{name:'--summary',kind:'text'}],
     forms: [form('pdd workflow evidence ISSUE --summary FILE', 'Record source-verified saved check JSON without rerunning steps, gates or publication.')] },
