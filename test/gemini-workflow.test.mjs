@@ -82,7 +82,9 @@ test('Gemini run opens and reopens the same Herdr chat; recorded words approve w
  assert.equal((await f.run()).exitCode,0);
  let run=f.record();assert.equal(run.agent,'gemini');
  const launches=()=>f.herdr.calls.filter(a=>a[0]==='pane'&&a[1]==='run');
- assert.match(launches()[0][3],/gemini --yolo --prompt-interactive/);
+ assert.match(launches()[0][3],/gemini --yolo .*--prompt-interactive/);
+ assert.ok(launches()[0][3].includes(`'${join(run.commonDir,'pdd/runs')}'`));
+ assert.ok(launches()[0][3].includes(`'${run.sourceRoot}.pdd-worktrees'`));
  assert.match(readFileSync(run.chats[0].messageFile,'utf8'),/pdd-small-change.*SKILL\.md/);
  assert.equal((await openRun({ref:'17',cwd:run.root},f.ports)).exitCode,0);assert.equal(launches().length,1);
  assert.equal((await stepDone({step:'scope',summary:'Scope ready',cwd:run.root},f.agentPorts())).exitCode,0);
@@ -107,5 +109,19 @@ test('Gemini missing read-only feature names that feature in one line and never 
   const expected=`Gemini Try read-only mode requires ${flag}; update Gemini CLI.`;
   const got=await askAgent({agent:'gemini',env:{},run});assert.equal(got.error.message,expected);assert.deepEqual(calls,[['--help']]);
   const discovered=await discoverAgents({definitions:[{id:'gemini',name:'Gemini',kind:'gemini',command:'gemini',env:{}}],run});assert.equal(discovered[0].detail,expected);
+ }
+});
+
+
+test('Gemini passes both external folders as separate shell arguments on start and resume', t => {
+ const root=mkdtempSync(join(tmpdir(), "pdd paths '$-"));t.after(()=>rmSync(root,{recursive:true,force:true}));
+ const bin=join(root,'bin');mkdirSync(bin);
+ writeFileSync(join(bin,'gemini'),`#!${process.execPath}\nconsole.log(JSON.stringify(process.argv.slice(2)));`,{mode:0o755});
+ const commonDir=join(root,"clone '$;/.git"),sourceRoot=join(root,"clone '$;");
+ for(const options of [{messageFile:join(root,'msg')},{resumeId:'11111111-1111-4111-8111-111111111111'}]) {
+  if(options.messageFile)writeFileSync(options.messageFile,'hello');
+  const cmd=chatCommand({agent:'gemini',cwd:root,commonDir,sourceRoot,...options});
+  const args=JSON.parse(execFileSync('/bin/sh',['-c',cmd],{env:{PATH:`${bin}:/usr/bin:/bin`},encoding:'utf8'}));
+  assert.deepEqual(args.slice(0,5),['--yolo','--include-directories',join(commonDir,'pdd/runs'),'--include-directories',`${sourceRoot}.pdd-worktrees`], "Defect: `src/workflow-chat.mjs` launches Gemini without including the external run and worktree folders, so its file tools cannot read them. Separately, startup PATH diagnostics and workflow instructions in `src/path-diagnostic.mjs` and `src/workflow-runner.mjs` suggest long absolute executable commands; such commands have triggered Gemini's safety dialog.");
  }
 });

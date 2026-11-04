@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
 
@@ -13,7 +14,7 @@ async function fixture(t, options = {}) {
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const cwd = join(dir, 'repo'), home = join(dir, 'home');
   mkdirSync(cwd); mkdirSync(home);
-  writeFileSync(join(cwd, 'pdd.json'), JSON.stringify({ autopilot: options.mode ?? { mode: 'auto', trust: ['helper'] } }));
+  writeFileSync(join(cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: options.mode ?? 'auto', trust: ['helper'] } }));
   const f = { cwd, home, time: Date.parse('2026-11-04T00:00:00Z'), polls: [], prompts: [], runs: [], timers: [], comments: [], ack: [], issues: [], etag: '"one"', active: false };
   f.ports = {
     stateRoot: join(home, 'state'), now: () => f.time,
@@ -76,13 +77,14 @@ test('start installs a timer and runs the recipe immediately; unchanged empty ti
   assert.equal(f.prompts.length, 1); assert.deepEqual(f.polls, [undefined, '"one"', '"one"']);
 });
 
-test('new issues and named backlog run; old backlog, PRs, closed and working issues do not', async t => {
+test('new and named issues are eligible; claimed work is distinguished and closed/old issues excluded', async t => {
   const f = await fixture(t); await f.invoke('start');
   f.issues = [issue(1), issue(2, { created_at: '2026-01-01T00:00:00Z' }), issue(3, { created_at: '2026-01-01T00:00:00Z', labels: [{ name: 'pdd:autopilot' }] }), issue(4, { pull_request: {} }), issue(5, { state: 'closed' }), issue(6, { labels: [{ name: 'pdd:working' }] })];
   await f.tick();
   const prompt = f.prompts.at(-1);
   assert.match(prompt, /"number":1,/); assert.match(prompt, /"number":3,/);
-  for (const n of [2, 4, 5, 6]) assert.doesNotMatch(prompt, new RegExp(`"number":${n},`));
+  for (const n of [2, 4, 5]) assert.doesNotMatch(prompt, new RegExp(`"number":${n},`));
+  assert.equal(JSON.parse(prompt.trim().split('\n').at(-1)).issues.find(x => x.number === 6).claimed, true);
   await f.tick(); assert.equal(f.prompts.length, 3); // Unclaimed work is offered again when room may have changed.
   await f.invoke('stop'); f.time += 3600000; await f.invoke('start');
   assert.equal(f.state().activatedAt, '2026-11-04T00:00:00.000Z');
@@ -137,7 +139,7 @@ test('off and missing dependencies give one actionable line without starting an 
   const f = await fixture(t, { mode: 'off' });
   const result = await f.invoke('start'); assert.equal(result.exitCode, 0); assert.match(result.message, /off/);
   assert.equal(f.prompts.length, 0); assert.equal(f.timers.length, 0);
-  writeFileSync(join(f.cwd, 'pdd.json'), '{"autopilot":"auto"}');
+  writeFileSync(join(f.cwd, 'pdd.json'), '{"autopilot":{"mode":"auto","trust":[]}}');
   f.ports.selectAgent = async () => null;
   const missing = await f.invoke('start'); assert.equal(missing.message.split('\n').length, 1); assert.match(missing.message, /sign in/i);
 });
@@ -149,7 +151,7 @@ test('two machine launchers offer the same issue to the skill without making a c
   assert.match(a.prompts[0], /"number":21,/); assert.match(b.prompts[0], /"number":21,/);
   assert.equal(a.ack.length + b.ack.length, 0);
   assert.match(a.prompts[0], /pdd:working/);
-  // The unmerged #2890 skill owns the atomic claim; this proves independent launch state, not that claim.
+  // The bundled skill owns the cross-machine claim; this proves separate launcher state.
 });
 
 test('native Linux and macOS user timers pin Node, script, state and environment without a shell', async t => {
@@ -247,7 +249,7 @@ test('native sign-in probes choose each supported interactive provider without a
       return run(command, args, opts);
     };
     assert.equal((await f.invoke('start')).exitCode, 0); assert.equal(f.state().agent.kind, provider);
-    assert.ok(probes.every(([, args]) => ['login', 'auth', 'agents', '--version'].includes(args[0])));
+    assert.ok(probes.every(([, args]) => ['login', 'auth', 'models', '--version'].includes(args[0])));
     assert.doesNotMatch(readFileSync(f.stateFile(), 'utf8'), /synthetic-test-token/);
     const launch = f.herdrCalls.find(args => args[0] === 'pane' && args[1] === 'run')[3];
     assert.doesNotMatch(launch, /\bexec\b|--print|\s-p\b/);
@@ -267,16 +269,44 @@ test('failed timer installation leaves stopped state and launches no agent', asy
   assert.equal(f.state().enabled, false); assert.equal(f.prompts.length, 0);
 });
 
-test('a fresh repo runs real setup actions, then the active-switch seam delivers recipe before work', async t => {
+test('fresh setup and mode/trust commands feed the launcher and bundled skills without a settings stub', async t => {
   const f = await fixture(t); rmSync(join(f.cwd, 'pdd.json'));
+  execFileSync('git', ['init', '--quiet', f.cwd]);
   const stdout = capture(), stderr = capture();
   const env = { HOME: f.home, PATH: process.env.PATH };
-  assert.equal(await runPdd(['setup'], { cwd: f.cwd, packageRoot: root, env, stdout, stderr,
-    pathDiagnostic: () => [], workflowAgents: { checkWorkflowAgents: async () => ({ ok: true, agent: 'codex', message: '' }) }, setupAgentMcp: async () => 0 }), 0);
+  const dependencies = { cwd: f.cwd, packageRoot: root, env, stdout, stderr };
+  assert.equal(await runPdd(['setup'], { ...dependencies, stdin: { isTTY: false },
+    pathDiagnostic: () => [], workflowAgents: { checkWorkflowAgents: async () => ({ ok: true, agent: 'codex', message: '' }) }, setupAgentMcp: async () => 0 }), 0, stderr.text);
   assert.ok(readFileSync(join(f.cwd, 'AGENTS.md'), 'utf8').includes('pdd:start'));
-  // #2852 owns this saved switch, and #2890 owns executing the recipe. Neither is in alpha yet.
-  writeFileSync(join(f.cwd, 'pdd.json'), '{"autopilot":"auto"}');
-  await f.invoke('start'); assert.match(f.prompts[0], /"recipeFirst":true/);
+  for (const skill of ['pdd-autopilot', 'pdd-check', 'pdd-merge']) {
+    assert.equal(readFileSync(join(f.home, '.agents', 'skills', skill, 'SKILL.md'), 'utf8'), readFileSync(join(root, 'skills', skill, 'SKILL.md'), 'utf8'));
+  }
+  assert.equal(await runPdd(['autopilot', 'auto'], dependencies), 0, stderr.text);
+  assert.equal(await runPdd(['autopilot', 'trust', 'Helper', 'helper'], dependencies), 0, stderr.text);
+  const saved = readFileSync(join(f.cwd, 'pdd.json'), 'utf8');
+  assert.deepEqual(JSON.parse(saved).autopilot, { mode: 'auto', trust: ['Helper'] });
+  f.issues = [issue(60, { user: { login: 'helper' }, author_association: 'NONE' })];
+  assert.equal(await runPdd(['autopilot', 'start'], { ...dependencies, autopilotLauncherPorts: f.ports }), 0, stderr.text);
+  assert.match(f.prompts[0], /"recipeFirst":true/);
+  assert.match(f.prompts[0], /"number":60,/);
+  assert.ok(f.prompts[0].includes(JSON.stringify(join(root, 'skills', 'pdd-autopilot', 'SKILL.md'))));
+  assert.equal(readFileSync(join(f.cwd, 'pdd.json'), 'utf8'), saved, 'Launcher settings reads must not write');
+  assert.equal(await runPdd(['autopilot', 'untrust', 'HELPER'], dependencies), 0);
+  await f.tick(); assert.equal(f.prompts.length, 1, 'Removed explicit trust must be reflected on the next tick');
+  assert.equal(await runPdd(['autopilot', 'off'], dependencies), 0);
+  const polls = f.polls.length; await f.tick(); assert.equal(f.polls.length, polls);
+});
+
+test('launcher preserves the shared settings module invalid-value notice and saved bytes', async t => {
+  const f = await fixture(t);
+  for (const value of ['auto', { mode: 'turbo' }]) {
+    const text = JSON.stringify({ keep: true, autopilot: value });
+    writeFileSync(join(f.cwd, 'pdd.json'), text);
+    const result = await f.invoke('start');
+    assert.equal(result.exitCode, 0); assert.match(result.message, /invalid/);
+    assert.equal(readFileSync(join(f.cwd, 'pdd.json'), 'utf8'), text);
+    assert.equal(f.prompts.length, 0); assert.equal(f.timers.length, 0);
+  }
 });
 
 test('permission lookup rate limiting defers all work without sending the outsider reply', async t => {
@@ -334,4 +364,30 @@ test('a later stop retries timer cleanup after a transient failure', async t => 
   assert.equal((await f.invoke('stop')).exitCode, 1); assert.equal(f.state().enabled, false);
   assert.equal((await f.invoke('stop')).exitCode, 0); assert.equal(attempts, 2);
   assert.equal(f.state().timerInstalled, false);
+});
+
+test('claimed-only work wakes the bundled skill for progress monitoring', async t => {
+  const f = await fixture(t); await f.invoke('start');
+  f.issues = [issue(61, { labels: [{ name: 'pdd:working' }] })];
+  f.time += 3600000; await f.tick();
+  assert.equal(f.prompts.length, 2);
+  const packet = JSON.parse(f.prompts[1].trim().split('\n').at(-1));
+  assert.equal(packet.issues[0].number, 61); assert.equal(packet.issues[0].claimed, true);
+  assert.equal(packet.recipeFirst, false);
+});
+
+test('agy sign-in uses the merged non-model readiness probe, not an unsigned agent listing', async t => {
+  const f = await fixture(t); delete f.ports.selectAgent; const run = f.ports.run; const probes = [];
+  f.ports.run = async (command, args, opts) => {
+    if (['codex', 'claude', 'agy', 'gemini'].includes(command)) {
+      probes.push([command, args]);
+      if (command === 'agy' && args[0] === 'agents') return { code: 0, stdout: 'default agent', stderr: '' };
+      return { code: 1, stdout: '', stderr: 'Please sign in to view available models.' };
+    }
+    return run(command, args, opts);
+  };
+  const result = await f.invoke('start');
+  assert.equal(result.exitCode, 1); assert.match(result.message, /Sign in/);
+  assert.deepEqual(probes.filter(([command]) => command === 'agy'), [['agy', ['models']]]);
+  assert.equal(f.prompts.length, 0);
 });

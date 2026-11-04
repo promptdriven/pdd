@@ -159,7 +159,7 @@ test('shell completion offers only the main names', t => {
     assert.ok(choices(shell, [LINT]).includes('--local'));
     assert.ok(choices(shell, [SIMULATE]).includes('--stop'));
     assert.deepEqual(choices(shell, [SIMULATE, '--tab']).sort(), ['call', 'screen', 'terminal', 'world']);
-    assert.deepEqual(choices(shell, ['workflow', RUN, 'bug', '7', '--agent']).sort(), ['claude', 'codex', 'gemini']);
+    assert.deepEqual(choices(shell, ['workflow', RUN, 'bug', '7', '--agent']).sort(), ['agy', 'claude', 'codex', 'gemini']);
   }
 });
 

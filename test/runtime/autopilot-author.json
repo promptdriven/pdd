@@ -1,0 +1,196 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/autopilot-author.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "An issue by owner Ada is trusted."
+    },
+    {
+      "id": "AC2",
+      "text": "An issue by write collaborator Bo is trusted."
+    },
+    {
+      "id": "AC3",
+      "text": "An issue by explicitly trusted Dana is trusted when GitHub provides neither owner nor writers."
+    },
+    {
+      "id": "AC4",
+      "text": "An issue by outside author Eve is not trusted when GitHub provides neither owner nor writers."
+    }
+  ],
+  "initial_world": {
+    "kv": {
+      "autopilot": "{\"mode\":\"off\",\"trust\":[\"Dana\"]}"
+    },
+    "lookups": [],
+    "mode_questions": [],
+    "names_questions": [],
+    "lookup_counter": 0
+  },
+  "simulation": {
+    "config.read": {
+      "action": "key-value.get",
+      "world_pointer": "/kv",
+      "key_argument_pointer": "/key",
+      "value_argument_pointer": null,
+      "item_key_pointer": null,
+      "item_value_pointer": null,
+      "result_template": {
+        "raw": null
+      },
+      "result_value_pointer": "/raw"
+    },
+    "config.save": {
+      "action": "key-value.put",
+      "world_pointer": "/kv",
+      "key_argument_pointer": "/key",
+      "value_argument_pointer": "/raw",
+      "item_key_pointer": null,
+      "item_value_pointer": null,
+      "result_template": {
+        "raw": null
+      },
+      "result_value_pointer": "/raw"
+    },
+    "github.lookup": {
+      "action": "fixture.lookup",
+      "world_pointer": "/lookup_counter",
+      "cases": [
+        {
+          "args": {},
+          "call_index": 1,
+          "result": {
+            "owner": "Ada",
+            "writers": [
+              "Bo",
+              "Cy"
+            ],
+            "complete": true
+          }
+        },
+        {
+          "args": {},
+          "call_index": 2,
+          "result": {
+            "owner": "Ada",
+            "writers": [
+              "Bo",
+              "Cy"
+            ],
+            "complete": true
+          }
+        },
+        {
+          "args": {},
+          "call_index": 3,
+          "result": {
+            "owner": "",
+            "writers": [],
+            "complete": false
+          }
+        },
+        {
+          "args": {},
+          "call_index": 4,
+          "result": {
+            "owner": "",
+            "writers": [],
+            "complete": false
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "terminal.mode": {
+      "action": "port.write",
+      "world_pointer": "/mode_questions",
+      "result_template": {
+        "answer": ""
+      }
+    },
+    "terminal.names": {
+      "action": "port.write",
+      "world_pointer": "/names_questions",
+      "result_template": {
+        "names": []
+      }
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "case-1",
+      "entry_path": "prompts/cli/autopilot.prompt.md",
+      "operation": "runAutopilot",
+      "input": {
+        "action": "isTrusted",
+        "author": "Ada"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/trusted",
+          "op": "equals",
+          "value": true
+        }
+      ]
+    },
+    {
+      "step_id": "case-2",
+      "entry_path": "prompts/cli/autopilot.prompt.md",
+      "operation": "runAutopilot",
+      "input": {
+        "action": "isTrusted",
+        "author": "Bo"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/trusted",
+          "op": "equals",
+          "value": true
+        }
+      ]
+    },
+    {
+      "step_id": "case-3",
+      "entry_path": "prompts/cli/autopilot.prompt.md",
+      "operation": "runAutopilot",
+      "input": {
+        "action": "isTrusted",
+        "author": "Dana"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/trusted",
+          "op": "equals",
+          "value": true
+        }
+      ]
+    },
+    {
+      "step_id": "case-4",
+      "entry_path": "prompts/cli/autopilot.prompt.md",
+      "operation": "runAutopilot",
+      "input": {
+        "action": "isTrusted",
+        "author": "Eve"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/trusted",
+          "op": "equals",
+          "value": false
+        }
+      ]
+    }
+  ]
+}

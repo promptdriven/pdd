@@ -379,3 +379,37 @@ for (const variant of ['saved-peer', 'unknown', 'relabelled-allocation', 'wrong-
     }
   });
 }
+
+
+test('Gemini replacement uses the run external directories', async t => {
+ const f=await protocolStarted(t);
+ f.saved.agent='gemini'; f.original.agent='gemini';
+ const native=f.herdr.paneOf(f.original).agent; native.agent='gemini'; if(native.agent_session)native.agent_session.agent='gemini';
+ const replacement=await restart(f);
+ assert.equal(replacement.agent,'gemini');
+ const command=calls(f,'pane','run')[0][3];
+ assert.match(command,/gemini --yolo/);
+ assert.ok(command.includes(`'${join(f.saved.commonDir,'pdd/runs')}'`));
+ assert.ok(command.includes(`'${f.saved.sourceRoot}.pdd-worktrees'`));
+ assert.equal((command.match(/--include-directories/g)||[]).length,2);
+});
+
+test('Gemini interrupted replacement resumes with both external directories', async t => {
+ const f=await protocolStarted(t);
+ f.saved.agent='gemini'; f.original.agent='gemini';
+ const native=f.herdr.paneOf(f.original).agent; native.agent='gemini'; if(native.agent_session)native.agent_session.agent='gemini';
+ const disk=f.record(); disk.agent='gemini'; disk.chats.at(-1).agent='gemini'; writeFileSync(join(disk.runDir,'status.json'),JSON.stringify(disk));
+ await assert.rejects(() => restart(f,{checkpoint:async record=>{
+  const saved=f.record();saved.chatReplacement=copy(record);saved.abandonedChats=[{...record.original,replacementId:record.id,abandonedAt:record.at,reason:'explicit-new-session'}];
+  writeFileSync(join(saved.runDir,'status.json'),JSON.stringify(saved));throw Error('interrupted');
+ }}),/interrupted/);
+ f.herdr.paneOf(f.original).agent=null;
+ const healthy=f.ports.herdr;
+ f.ports.herdr=async args=>{if(args[0]==='pane'&&args[1]==='run'){f.herdr.calls.push(args);throw lost();}return healthy(args);};
+ await open(f);
+ const command=calls(f,'pane','run')[0][3];
+ assert.match(command,/gemini --yolo .*--resume/);
+ assert.ok(command.includes(`'${join(f.saved.commonDir,'pdd/runs')}'`));
+ assert.ok(command.includes(`'${f.saved.sourceRoot}.pdd-worktrees'`));
+ assert.equal((command.match(/--include-directories/g)||[]).length,2);
+});

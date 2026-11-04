@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 9afee9eabfe72dc3fd91b0e83bde0b3f586e9720945da9999203d4796ee07843).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 0012b2bbce8b0019412e4bc2f351a71f68fe3e385b59f05b249fc8e0a5958420).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -45,8 +45,8 @@ export function renderHelp(prefix = [], packageRoot = PACKAGE_ROOT) {
 export async function runPdd(argv, { stdout = process.stdout, stderr = process.stderr,
   cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, workflowRunner, workflowAreas,
   stdin = process.stdin, confirm, mcpServer, runtimeSlots, contracts, product, productPorts, gitContext, workflowProve, provePorts,
-  autopilotLauncher, autopilotPorts = {}, workflowAgents = { checkWorkflowAgents }, workflowAgentPorts = {}, setupSkills = defaultSetupSkills,
-  setupProject = defaultSetupProject, setupAgentMcp, pathDiagnostic = defaultPathDiagnostic } = {}) {
+  autopilotLauncher, autopilotLauncherPorts = {}, workflowAgents = { checkWorkflowAgents }, workflowAgentPorts = {}, setupSkills = defaultSetupSkills,
+  setupProject = defaultSetupProject, setupAgentMcp, autopilot, autopilotPorts = {}, pathDiagnostic = defaultPathDiagnostic } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
@@ -63,7 +63,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     case 'autopilot-start': case 'autopilot-stop': case 'autopilot-status': case 'autopilot-add': {
       try {
         const module = autopilotLauncher ?? await import('./autopilot-launcher.mjs');
-        const result = await module.runAutopilotLauncher({ command: plan.local.slice(10), issues: [...plan.operands], runs: plan.options['--runs'], cwd, packageRoot, env }, autopilotPorts);
+        const result = await module.runAutopilotLauncher({ command: plan.local.slice(10), issues: [...plan.operands], runs: plan.options['--runs'], cwd, packageRoot, env }, autopilotLauncherPorts);
         if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255 || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid Autopilot reply');
         line(result.exitCode === 0 ? stdout : stderr, result.message); return result.exitCode;
       } catch (error) { line(stderr, `The Autopilot command failed.${reason(error)}`); return 1; }
@@ -79,6 +79,17 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         } catch { /* The skills check never changes --version. */ }
         return 0;
       } catch { line(stderr, 'This PDD package has no readable version metadata.');return 1; }
+    case 'autopilot.off': case 'autopilot.observe': case 'autopilot.auto': case 'autopilot-trust': case 'autopilot-untrust': {
+      try {
+        const module = autopilot ?? await import('./autopilot.mjs');
+        const input = plan.local.startsWith('autopilot.')
+          ? { action: 'mode', mode: plan.local.slice(10) }
+          : { action: plan.local.slice(10), names: [...plan.operands] };
+        const result = await module.runAutopilot(input, { cwd, stdin, stdout, ...autopilotPorts });
+        line(result.exitCode === 0 ? stdout : stderr, result.message);
+        return result.exitCode;
+      } catch (error) { line(stderr, `Autopilot settings failed.${reason(error)}`); return 1; }
+    }
     case 'product-status': case 'product-next': case 'product-start': {
       try {
         const context = await (gitContext ?? (await import('./workflow-runs.mjs')).gitContext)(cwd, productPorts);
@@ -107,6 +118,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         try { selected = await workflowAgents.checkWorkflowAgents({ cwd, env, ...(plan.options['--agent'] !== undefined ? { requested: plan.options['--agent'] } : {}) }, workflowAgentPorts); }
         catch { line(stderr, 'Agent sign-in could not be checked. Run codex login status or claude auth status.'); return 1; }
         if (!selected?.ok) { line(stderr, selected?.message || 'Agent sign-in could not be checked. Run codex login status or claude auth status.'); return 1; }
+        if (typeof selected.hint === 'string' && selected.hint) line(stderr, selected.hint);
         input.agent = selected.agent;
       }
       try {
@@ -169,6 +181,14 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         const action = setupAgentMcp ?? (await import('./agent-mcp-setup.mjs')).setupAgentMcp;
         if (await action({ env, packageRoot }, { stdin, stdout, stderr, confirm })) code = 1;
       } catch (error) { line(stderr, `pdd setup: MCP registration failed.${reason(error)}`); code = 1; }
+      try {
+        const context = await (gitContext ?? (await import('./workflow-runs.mjs')).gitContext)(cwd);
+        const module = autopilot ?? await import('./autopilot.mjs');
+        const result = await module.runAutopilot({ action: 'setup', interactive: !!stdin.isTTY, inRepo: !!context?.toplevel },
+          { cwd: context?.toplevel ?? cwd, stdin, stdout, ...autopilotPorts });
+        if (result.message) line(result.exitCode === 0 ? stdout : stderr, result.message);
+        if (result.exitCode) code = result.exitCode;
+      } catch (error) { line(stderr, `Autopilot settings failed.${reason(error)}`); code = 1; }
       return code;
       } });
     }
