@@ -48,6 +48,8 @@ export function fakeHerdr() {
       }
       return {};
     }
+    // The plain-text screen of a pane (empty unless a test draws one, for example an agent dialog).
+    if (group === 'pane' && verb === 'read') return (h.panes.find(p => p.pane_id === rest[0]) ?? fail('pane_not_found')).screen ?? '';
     if (group === 'agent' && verb === 'get') { const p = h.panes.find(p => p.pane_id === rest[0]); if (!p?.agent) fail('agent_not_found'); return { result: { agent: { ...p.agent, pane_id: p.pane_id } } }; }
     if (group === 'agent' && verb === 'prompt') { const p = h.panes.find(p => p.pane_id === rest[0]); if (!p?.agent) fail('agent_not_found'); if (p.agent.agent_status === 'blocked') fail('agent_blocked'); p.agent.prompts.push(rest[1]); return { result: { type: 'agent_prompted' } }; }
     fail(`unexpected herdr ${args.join(' ')}`);

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 1b6e64bc039edafab63fee7505dc5caf103a7429faff57e3e9ce4befc044b83a).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 56a85c5ccddd03c93191d18ad8018dcd42bbd37bf27e6deb03d17427bd747b40).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
@@ -101,6 +101,8 @@ export function herdrCommand(ports = {}) {
       let reply; try { reply = JSON.parse(error.stderr || error.stdout); } catch { /* Not a Herdr JSON error. */ }
       throw problem(reply?.error?.code ?? (error.code === 'ENOENT' ? 'herdr_not_installed' : 'herdr_failed'), reply?.error?.message);
     }
+    // `pane read` prints the screen as plain text, not JSON.
+    if (args[0] === 'pane' && args[1] === 'read') return String(stdout);
     if (!String(stdout).trim()) return {};
     const reply = JSON.parse(stdout);
     if (reply?.error) throw problem(reply.error.code ?? 'herdr_failed', reply.error.message);
@@ -181,6 +183,29 @@ export async function startChat({ run, area, message }, ports = {}) {
   return chat;
 }
 
+// A dialog footer hint: Codex "Press enter to confirm or esc to go back", Claude "Enter to confirm · Esc to cancel",
+// Gemini "(Use Enter to select)". Gemini's working timer "(esc to cancel, 5s)" is not a dialog.
+const DIALOG_HINT = /enter to (?:confirm|select)|esc to go back|esc to cancel(?!,\s*\d)/i;
+const RULE_LINE = /^[\s\u2500-\u259f\-_=]+$/, EDGES = /^[\s\u2500-\u259f]+|[\s\u2500-\u259f]+$/g;
+// The first line of the dialog that the screen shows, or null when no dialog footer is in its last 3 nonblank lines.
+export function screenDialog(screen) {
+  const lines = String(screen).split(/\r?\n/), blank = i => !lines[i]?.trim();
+  let hint = -1;
+  for (let i = lines.length - 1, seen = 0; i >= 0 && seen < 3; i--) {
+    if (blank(i)) continue;
+    seen++;
+    if (DIALOG_HINT.test(lines[i])) { hint = i; break; }
+  }
+  if (hint < 0) return null;
+  let start = hint;
+  for (let i = hint - 1; i >= 0 && hint - i <= 15; i--) {
+    if (!blank(i) && RULE_LINE.test(lines[i]) || blank(i) && blank(i - 1)) break;
+    start = i;
+  }
+  return lines.slice(start, hint + 1).find(line => line.trim()).replace(EDGES, '').slice(0, 160);
+}
+const dialogReason = line => line ? `the chat shows a dialog: ${line}` : 'the chat shows a dialog';
+
 export async function sendToChat(chat, text, ports = {}) {
   const now = ports.now ?? Date.now, elapsedNow = ports.elapsedNow ?? (() => Number(process.hrtime.bigint() / 1_000_000n));
   const sleep = ports.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
@@ -189,6 +214,13 @@ export async function sendToChat(chat, text, ports = {}) {
   const budget = Math.min(START_GRACE_MS, Math.max(0, deadline - now())), began = elapsedNow();
   const remaining = () => Math.min(deadline - now(), budget - Math.max(0, elapsedNow() - began));
   const herdr = herdrCommand(ports);
+  // One read of the screen bottom; a failed read or a reply that is not text is never proof that no dialog shows.
+  const readScreen = async () => {
+    try {
+      const screen = await herdr(['pane', 'read', chat.paneId, '--source', 'detection']);
+      return typeof screen === 'string' ? { dialog: screenDialog(screen) } : { error: 'herdr_reply_not_text' };
+    } catch (error) { return { error: error.code ?? 'herdr_failed' }; }
+  };
   let retry = false;
   const wait = async () => {
     const left = remaining();
@@ -199,7 +231,7 @@ export async function sendToChat(chat, text, ports = {}) {
   while (true) {
     if (retry && remaining() <= 0) return { ok: false, code: 'chat_still_starting' };
     const live = await chatSession(chat, ports);
-    if (live.status === 'blocked' && live.alive) return { ok: false, code: 'agent_blocked' };
+    if (live.status === 'blocked' && live.alive) return { ok: false, code: 'agent_blocked', reason: dialogReason((await readScreen()).dialog) };
     const ready = live.alive && (['idle', 'working', 'done'].includes(live.status) || !retry && budget <= 0);
     if (!ready) {
       if (!live.alive && live.code !== 'agent_not_found') return { ok: false, code: live.code ?? 'herdr_status_unknown' };
@@ -208,6 +240,10 @@ export async function sendToChat(chat, text, ports = {}) {
       retry = true; continue;
     }
     if (retry && remaining() <= 0) return { ok: false, code: 'chat_still_starting' };
+    // Text and Enter that reach an open dialog answer it, so a dialog or an unread screen sends nothing.
+    const screen = await readScreen();
+    if (screen.error) return { ok: false, code: 'pane_unreadable', reason: `pdd could not read the chat screen (${screen.error})` };
+    if (screen.dialog) return { ok: false, code: 'agent_dialog', reason: dialogReason(screen.dialog) };
     try {
       if (ports.beforeSubmit && !await ports.beforeSubmit()) return { ok: false, code: 'chat_target_changed' };
     } catch { return { ok: false, code: 'chat_target_changed' }; }
@@ -220,7 +256,7 @@ export async function sendToChat(chat, text, ports = {}) {
         if (!await wait()) return { ok: false, code: withinStartup || retry ? 'chat_still_starting' : code };
         retry = true; continue;
       }
-      return { ok: false, code, ...(code === 'agent_blocked' ? {} : { uncertain: true }) };
+      return { ok: false, code, ...(code === 'agent_blocked' ? { reason: dialogReason() } : { uncertain: true }) };
     }
   }
 }

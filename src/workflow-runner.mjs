@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 08ad4a1c2999af3759cb7aff7218adea6fe04a074ec43ae1eb1c146661ee9087).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 701d750b436e0d2ce5eb1ef3f6c42a294fb6885a85636648d83387a888b09245).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { execFile as execFileCallback } from 'node:child_process';
@@ -1717,7 +1717,7 @@ function requestSnapshot(run, p) {
     const entries = readDeliveryJournal(run, p).requests;
     return { requests: entries.filter(entry => entry.kind === 'change' && entry.state === 'delivered')
       .map(entry => ({ id: entry.id, text: entry.text, area: entry.area, deliveredAt: entry.deliveredAt ?? null, ackedAt: entry.ackedAt ?? null, ackSummary: entry.ackSummary ?? null })),
-      pendingRequests: entries.filter(entry => !entry.inFlight && entry.state === 'pending').map(({ id, text, area, paneId }) => ({ id, text, area, paneId })),
+      pendingRequests: entries.filter(entry => !entry.inFlight && entry.state === 'pending').map(({ id, text, area, paneId, reason }) => ({ id, text, area, paneId, ...(typeof reason === 'string' && reason ? { reason } : {}) })),
       uncertainRequests: entries.filter(entry => !entry.inFlight && entry.state === 'uncertain').map(({ id, text, area, paneId }) => ({ id, text, area, paneId })),
       inFlightRequests: entries.filter(entry => entry.inFlight).map(({ id, text, area, paneId }) => ({ id, text, area, paneId })) };
   } catch { return { requests: null, inFlightRequests: null, pendingRequests: null, uncertainRequests: null, requestWarning: 'Change-request visibility unavailable: could not read the delivery journal. Check the run folder.' }; }
@@ -1726,7 +1726,7 @@ const protectedRequestAdvice = entry => `Request ${entry.id}: ${entry.text}. Ori
 function requestLines(snapshot, { openOnly = false, agent = false, ended = false, p = {} } = {}) {
   if (snapshot.requestWarning) return [snapshot.requestWarning];
   return [...snapshot.requests.filter(entry => (!ended || !openOnly) && (!openOnly || entry.ackedAt == null)).map(entry =>
-    `${uptakeReceipt(entry, p)} Area ${entry.area}: ${entry.text}${agent ? `\nTell the person about this outstanding request. After actually addressing this request, run: ${uptakeCommand(entry.id, p)}` : ""}`), ...snapshot.pendingRequests.map(entry => `Request ${entry.id}: ${ended ? 'pending, not sent; run ended. Original' : 'pending, saved for the original'} ${entry.area} chat, pane ${entry.paneId}: ${entry.text}`), ...snapshot.uncertainRequests.map(entry => `Request ${entry.id}: uncertain, may already be in the original ${entry.area} chat, pane ${entry.paneId}: ${entry.text}. Check that original chat.`), ...snapshot.inFlightRequests.map(entry => agent ? `Request ${entry.id}: delivery in progress. Tell the person about this outstanding request.` : protectedRequestAdvice(entry))];
+    `${uptakeReceipt(entry, p)} Area ${entry.area}: ${entry.text}${agent ? `\nTell the person about this outstanding request. After actually addressing this request, run: ${uptakeCommand(entry.id, p)}` : ""}`), ...snapshot.pendingRequests.map(entry => `Request ${entry.id}: ${ended ? 'pending, not sent; run ended. Original' : 'pending, saved for the original'} ${entry.area} chat, pane ${entry.paneId}: ${entry.text}${entry.reason ? ` Not sent: ${entry.reason}.` : ''}`), ...snapshot.uncertainRequests.map(entry => `Request ${entry.id}: uncertain, may already be in the original ${entry.area} chat, pane ${entry.paneId}: ${entry.text}. Check that original chat.`), ...snapshot.inFlightRequests.map(entry => agent ? `Request ${entry.id}: delivery in progress. Tell the person about this outstanding request.` : protectedRequestAdvice(entry))];
 }
 function doneWithRequests(result, run, p) {
   if (result.exitCode !== 0) return result;
@@ -1808,7 +1808,8 @@ Nothing was sent to the chat.` };
     if (sent.uncertain) return uncertain();
     if (sent.code === 'chat_target_changed') return fail(`The original ${area.name} chat target changed. ${kept}`);
     if (sent.code === 'chat_still_starting') return fail(`The ${area.name} chat is still starting. ${kept}`);
-    if (sent.code === 'agent_blocked') return fail(`The ${area.name} chat shows a question dialog. Answer it in the chat: pdd workflow open ${run.number}. ${kept}`);
+    if (sent.code === 'agent_blocked' || sent.code === 'agent_dialog') return fail(`The ${area.name} chat did not get your request: ${sent.reason ?? 'the chat shows a dialog'}. pdd sent nothing and did not answer the dialog. Answer it in the chat yourself, then retry. ${kept}`);
+    if (sent.code === 'pane_unreadable') return fail(`The ${area.name} chat did not get your request: ${sent.reason}. pdd sends nothing when it cannot see the chat. ${kept}`);
     if (sent.code === 'agent_not_found') return fail(`The ${area.name} chat is not running. ${kept}`);
     return fail(`pdd could not send the text to the ${area.name} chat (${sent.code}). ${kept}`);
   };
@@ -1863,10 +1864,12 @@ Nothing was sent to the chat.` };
         observed = await deliveryJournal(run, p, journal => {
           const saved = journal.requests.find(item => item.id === entry.id);
           if (!saved) throw Error('Saved request unavailable');
-          if (!claimed || saved.owner?.token !== owner.token) return { ...saved };
+          // A pending request keeps the reason of its latest unsent delivery (a dialog or an unread screen) for status.
+          const keepReason = () => { if (sent.reason) saved.reason = sent.reason; else delete saved.reason; };
+          if (!claimed || saved.owner?.token !== owner.token) { if (!claimed && !sent.ok && saved.state === 'pending' && !saved.inFlight) keepReason(); return { ...saved }; }
           delete saved.inFlight; delete saved.owner;
-          if (!sent.ok) { saved.state = sent.uncertain ? 'uncertain' : 'pending'; saved.code = sent.code; return { ...saved }; }
-          const now = p.now(); saved.state = 'delivered'; saved.deliveredAt = now; delete saved.code;
+          if (!sent.ok) { saved.state = sent.uncertain ? 'uncertain' : 'pending'; saved.code = sent.code; keepReason(); return { ...saved }; }
+          const now = p.now(); saved.state = 'delivered'; saved.deliveredAt = now; delete saved.code; delete saved.reason;
           commitRun(run,p,current=>{
           current.changes.push({ stage: entry.area, round: current.changes.filter(change => change.stage === entry.area).length + 1, text: entry.text, at: now, ...(entry.kind === 'answer' ? { answer: true } : {}) });
           if (targetCurrent(current)) {
