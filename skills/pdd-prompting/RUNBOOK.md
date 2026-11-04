@@ -129,7 +129,8 @@ and to an app map's `state_schema`. Local preflight reports schema problems in t
 7. Use only these keywords. string: `minLength`, `maxLength`, `pattern`. integer and number: `minimum`, `maximum`,
    `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`. array: `items`, `minItems`, `maxItems`, `uniqueItems`.
    object: `properties`, `required`, `additionalProperties`, `minProperties`, `maxProperties`. All types: `enum`,
-   `const`, `title`, `description`, `default`, `examples`, `format`. All others are refused: `$ref`, `$defs`, `anyOf`, `if` …
+   `const`, `title`, `description`, `default`, `examples`, `format`, `writeOnly` (`true` or `false`).
+   All others are refused: `$ref`, `$defs`, `anyOf`, `if` …
 8. Each `enum` value has the right type and comes one time. A `default` must match its own schema.
 
 Integer bounds in schemas (`minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum` and `multipleOf`) must lie
@@ -871,6 +872,30 @@ The `simulation` entry of the scenario:
 `hash_json` hashes the interpreter's canonical JSON: keys sorted by UTF-16 code units, no spaces, and the interpreter's own spelling of numbers (a subset of RFC 8785). An application's own serializer can give other bytes, for example for floats or non-ASCII keys. To hash exact bytes that the application made, use `hash_utf8`. Native tests must prove that the hash and the serializer match.
 
 Lint accepts this declaration also when the native code hashes inside (for example with Python `hashlib`) and takes no `compute` argument. Keep the native signature. [Module binding coverage](https://github.com/promptdriven/pdd/blob/alpha/docs/runtime-bindings.md) checks that the prompt can reach its operations. It does not run native hashing. Native tests own that, and a lint pass is not a behavior pass.
+
+### Use made-up sign-in data
+
+A test may hold made-up sign-in data, for example `"secret": "test-only-attempt-proof"` or a fake `claim_token`.
+The interpreter does not refuse test data because of a field name or the shape of a value. A value is secret only
+when it comes from a real credential channel: a `credential_ref`, the environment, live sign-in of a resource or
+live HTTP headers.
+- Use plainly fake values. Never put a real credential in a test, a prompt or the repo.
+- To hide a value in the report, mark its result field `"writeOnly": true`. The check still compares the real value.
+  The report also hides fields whose names look secret (for example `secret`, `token`).
+- To declare that a live resource returns credentials, add `"returns_credentials": true` to that resource
+  in the Runtime interface. This optional field accepts only the Booleans `true` and `false`; absence means false.
+  For a marked live resource, every present response value must have a declared normal position in its result
+  schema or be refused. A `"writeOnly": true` field is secret and is always refused, including null and empty
+  containers. Each nested object property and array item needs its own schema position. Unknown fields and
+  values that no unique `oneOf` branch can safely place are refused before the model, reports, saved state
+  or live recordings. Refusal paths keep declared field names and actual array indexes; each undeclared live
+  property name appears as `<extra-field>`, since a service can return a credential as a property name.
+  Declared normal fields still pass whatever their names or
+  value formats. False or absent keeps existing live behavior; authored fixtures keep their existing behavior.
+  No field name, value shape or lint guess supplies this declaration.
+- In a live resource's result schema, `"writeOnly": true` declares a secret that the live service returns. The
+  interpreter refuses that value where it enters, so it never reaches the model, the report or saved data.
+- What a person types into a Simulator form is still checked by field name.
 
 ### Inject a fixed-answer callback
 
