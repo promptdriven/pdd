@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-results.prompt.md (sha256: c26420a6a9ef1967d07c422ad0ad5415296d8449a4e6ee2e5565a2999c10ebce).
+// Generated from prompts/cli/workflow-results.prompt.md (sha256: 175e0969d09702e17ce36a942bd3121b5dc0121edf820e90e9347e602b1d7981).
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -83,12 +83,12 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
   if (check) {
     const { batch } = check, summary = readJson(join(directory, check.name, 'summary.json'));
     let source = 'unknown';
-    try {
-      const tests = [...new Set(batch.rows.map(row => row?.test).filter(test => typeof test === 'string'))].sort();
-      if (/^[a-f0-9]{64}$/.test(batch.source_sha256 ?? '') && tests.length) source = capture(root, { tests, appMap: null }).sha256 === batch.source_sha256 ? 'current' : 'changed';
-    } catch { source = 'unknown'; }
+    const tests = [...new Set(batch.rows.map(row => row?.test).filter(test => typeof test === 'string'))].sort();
+    const sha256 = /^[a-f0-9]{64}$/.test(batch.source_sha256 ?? '') ? batch.source_sha256 : null;
+    try { if (sha256 && tests.length) source = capture(root, { tests, appMap: null }).sha256 === sha256 ? 'current' : 'changed'; }
+    catch { source = 'unknown'; }
     const stories = Array.isArray(summary?.rows) ? [...new Set(summary.rows.map(row => text(row?.summary_line)).filter(Boolean))] : [];
-    results.push({ kind: 'pdd test', batch: check.name, at: check.at, source, requests: requestsOf(batch.rows), reports: reportsOf(batch.rows),
+    results.push({ kind: 'pdd test', batch: check.name, at: check.at, source, sourceSha256: sha256, tests, requests: requestsOf(batch.rows), reports: reportsOf(batch.rows),
       summary: text(summary?.summary_line) || 'result not saved (the check did not finish)', stories,
       ...identity(batch.rows) });
   }
