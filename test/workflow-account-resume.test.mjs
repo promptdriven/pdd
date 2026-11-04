@@ -1,7 +1,8 @@
 // Synthetic profile directories and injected Herdr only: no account files or native agents.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { join, relative } from 'node:path';
 import { openRun, stepDone, approveRun, askPerson, changeRun, cancelRun } from '../src/workflow-runner.mjs';
@@ -9,6 +10,13 @@ import { restartChat, expandHome } from '../src/workflow-chat.mjs';
 import { fixture, packageRoot } from './helpers/workflow-runner-fixture.mjs';
 
 const quote = value => `'${value.replace(/'/g, `'\\''`)}'`;
+// Admit only literal single-quoted chunks and escaped quotes, then let a real
+// POSIX shell parse the recorded token. No expansion or command syntax is admitted.
+function parsedSelectedPath(command) {
+  const match = /(?:^| )CODEX_HOME=((?:'[^']*'|\\')+) codex /.exec(command);
+  assert.ok(match, 'Recorded CODEX_HOME must consist only of shell literal chunks');
+  return execFileSync('/bin/sh', ['-c', `printf '%s' ${match[1]}`], { encoding: 'utf8', env: {} });
+}
 const calls = (f, group, verb) => f.herdr.calls.filter(args => args[0] === group && args[1] === verb);
 const effects = f => f.herdr.calls.filter(args => args[0] === 'pane' && args[1] === 'run'
   || ['tab', 'workspace', 'worktree'].includes(args[0]) && ['create', 'close', 'open'].includes(args[1]));
@@ -109,11 +117,84 @@ for (const form of ['absolute', 'tilde-child', 'tilde-home', 'relative', 'quotes
   assert.equal(f.record().configDir, expected);
   assert.equal(f.record().chatReplacement.configDir, expected);
   assert.ok(calls(f, 'pane', 'run')[0][3].includes(`CODEX_HOME=${quote(expected)}`));
+  assert.equal(parsedSelectedPath(calls(f, 'pane', 'run')[0][3]), expected, 'The actual shell parser must round-trip the selected path as literal bytes');
 });
 
 test('2907 HOME fallback uses the existing home expansion policy', () => {
   assert.equal(expandHome('~', {}), homedir());
   assert.equal(expandHome('~/work5', {}), join(homedir(), 'work5'));
+});
+
+test('2907 full replacement expands tilde with OS home when HOME is absent', async t => {
+  const f = await started(t);
+  delete f.ports.env.HOME; f.ports.env.CODEX_HOME = '~';
+  const result = await open(f, { newSession: true });
+  assert.equal(result.exitCode, 0, result.message);
+  assert.equal(f.record().configDir, homedir());
+  assert.equal(f.record().chatReplacement.configDir, homedir());
+  assert.equal(f.record().chats.at(-1).configDir, homedir());
+  assert.equal(parsedSelectedPath(calls(f, 'pane', 'run')[0][3]), homedir());
+});
+
+for (const broken of [false, true]) test(`2907 selected ${broken ? 'broken' : 'directory'} symlink follows startup directory policy`, async t => {
+  const f = await started(t), selected = join(f.base, 'Work5 profile link');
+  symlinkSync(broken ? join(f.base, 'absent-target') : f.work5, selected, 'dir');
+  f.ports.env.CODEX_HOME = selected;
+  const before = bytes(f), result = await open(f, { newSession: true });
+  assert.equal(result.exitCode, broken ? 1 : 0, result.message);
+  if (broken) {
+    assert.equal(result.message, `CODEX_HOME is "${selected}", but that folder does not exist. Fix CODEX_HOME and run the command again.`);
+    assert.ok(bytes(f).equals(before)); assert.deepEqual(effects(f), []);
+  } else {
+    assert.equal(f.record().configDir, selected, 'Keep the selected symlink path without realpath account resolution');
+    assert.equal(f.record().chatReplacement.configDir, selected);
+    assert.equal(parsedSelectedPath(calls(f, 'pane', 'run')[0][3]), selected);
+  }
+});
+
+test('2907 bounded profile-selection matrix (12 saved/selection/close combinations)', async t => {
+  const inventory = JSON.parse(readFileSync(new URL('./fixtures/workflow-open-replacement.json', import.meta.url), 'utf8'));
+  const domain = inventory.cases.find(row => row.id === 'codex-account-selection-matrix').input;
+  // Oracle: Story AC2 and Rules to check. These are approved input bounds,
+  // independent of the implementation's selection or checkpoint helpers.
+  for (const saved of domain.savedProfiles) for (const incoming of domain.incomingSelections) for (const close of domain.closeOutcomes) {
+    await t.test(`saved=${saved}, incoming=${incoming}, close=${close}`, async row => {
+      const f = await started(row, { saved }), before = f.record(), original = before.chats.at(-1);
+      const selected = incoming === 'Work5' ? f.work5 : f.oldConfig;
+      if (incoming === 'unset') delete f.ports.env.CODEX_HOME;
+      else f.ports.env.CODEX_HOME = incoming === 'empty' ? '' : f.work5;
+      const healthy = f.ports.herdr;
+      f.ports.herdr = async args => {
+        if (args[0] === 'tab' && args[1] === 'close') {
+          const attempt = f.record().chatReplacement;
+          assert.equal(attempt.configDir, selected, 'Pin the selected profile before predecessor closure');
+          assert.equal(f.record().configDir, f.oldConfig, 'Before launch installation, keep the inherited run profile');
+          const reply = await healthy(args);
+          if (close === 'unknown') throw lost();
+          return reply;
+        }
+        if (args[0] === 'pane' && args[1] === 'run') {
+          const installed = f.record();
+          assert.equal(installed.chatReplacement.phase, 'launchRequested');
+          assert.equal(installed.chatReplacement.configDir, selected);
+          assert.equal(installed.chats.at(-1).configDir, selected);
+          assert.equal(installed.configDir, selected, 'Commit inheritance with the active replacement before native dispatch');
+          assert.equal(f.herdr.tabs.some(tab => tab.tab_id === original.tabId), false);
+          if (selected === null) assert.doesNotMatch(args[3], /CODEX_HOME=/);
+          else assert.equal(parsedSelectedPath(args[3]), selected, '2907 replacement must use explicit Work5 CODEX_HOME');
+        }
+        return healthy(args);
+      };
+      const result = await open(f, { newSession: true }), after = f.record();
+      assert.equal(result.exitCode, close === 'confirmed' ? 0 : 1, result.message);
+      assert.equal(after.chatReplacement.configDir, selected);
+      assert.equal(after.configDir, close === 'confirmed' ? selected : f.oldConfig);
+      assert.equal(after.chatReplacement.phase, close === 'confirmed' ? 'launched' : 'closeRequested');
+      assert.equal(calls(f, 'pane', 'run').length, close === 'confirmed' ? 1 : 0);
+      assert.equal(calls(f, 'tab', 'create').length, close === 'confirmed' ? 1 : 0);
+      assert.deepEqual(progress(after), progress(before));
+    });
+  }
 });
 
 for (const invalid of ['missing', 'regular-file']) test(`2907 ${invalid} selected folder refuses before intent or effects`, async t => {
@@ -407,6 +488,58 @@ for (const action of ['advance', 'cancel']) test(`2907 historical ${action} reco
   assert.deepEqual(progress(f.record()), progress(before));
   assert.equal(f.record().configDir, f.oldConfig);
   assert.deepEqual(effects(f), []);
+});
+
+for (const delay of ['before-launch-checkpoint', 'after-native-dispatch']) test(`2907 delayed ${delay} preserves newer progress and excludes a competing account commit`, async t => {
+  const f = await started(t), healthy = f.ports.herdr;
+  f.ports.env.CODEX_HOME = f.work5;
+  let enter, release, paused = false;
+  const reached = new Promise(resolve => { enter = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  const opening = open(f, { newSession: true }, { ...f.ports, herdr: async args => {
+    const attempt = f.record().chatReplacement;
+    const target = attempt?.replacement;
+    const selected = !paused && (delay === 'before-launch-checkpoint'
+      ? args[0] === 'agent' && args[1] === 'get' && args[2] === target?.paneId && attempt.phase === 'prepared'
+      : args[0] === 'pane' && args[1] === 'run');
+    if (selected) {
+      paused = true;
+      if (delay === 'after-native-dispatch') await healthy(args);
+      enter(); await gate;
+      if (delay === 'after-native-dispatch') return {};
+    }
+    if (args[0] === 'pane' && args[1] === 'process-info') return {
+      result: { type: 'pane_process_info', process_info: { pane_id: args[3], shell_pid: 41,
+        foreground_process_group_id: 41, foreground_processes: [{ pid: 41, name: 'bash' }] } },
+    };
+    return healthy(args);
+  } });
+  let newer;
+  try {
+    assert.equal(await Promise.race([reached.then(() => true), opening.then(() => false)]), true, 'Replacement must reach the delayed native boundary');
+    assert.equal(f.record().configDir, delay === 'before-launch-checkpoint' ? f.oldConfig : f.work5);
+    f.ports.env.CODEX_HOME = f.work6;
+    await advance(f);
+    newer = f.record();
+    const refused = await open(f, { newSession: true });
+    assert.equal(refused.exitCode, 1);
+    assert.match(refused.message, /Another open operation/);
+    assert.deepEqual(f.record(), newer, 'The competing account route cannot commit while replacement holds the run lock');
+  } finally { release(); }
+  const completed = await opening;
+  assert.equal(completed.exitCode, 0, completed.message);
+  const after = f.record();
+  assert.deepEqual(progress(after), progress(newer));
+  assert.equal(after.configDir, newer.configDir);
+  assert.deepEqual(after.chats.filter(chat => chat.area === 'build'), newer.chats.filter(chat => chat.area === 'build'));
+  assert.equal(calls(f, 'pane', 'run').filter(args => parsedSelectedPath(args[3]) === f.work5).length, delay === 'after-native-dispatch' ? 2 : 0,
+    'Only the already committed replacement and the publicly advanced area can use Work5');
+  // Once the old writer has finished, a separate supported current-area account
+  // selection can commit Work6; no saved-state account edits manufacture the race.
+  const selected = await open(f, { newSession: true });
+  assert.equal(selected.exitCode, 0, selected.message);
+  assert.equal(f.record().configDir, f.work6);
+  assert.equal(f.record().chats.at(-1).configDir, f.work6);
 });
 
 for (const guard of ['agent-caller', 'self-pane', 'unknown-caller', 'foreign-workspace', 'terminal', 'startup']) test(`2907 Work5 selection preserves ${guard} refusal and saved custody`, async t => {
