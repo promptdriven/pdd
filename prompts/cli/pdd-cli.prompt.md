@@ -16,7 +16,11 @@ A [removed name](argument-parser.prompt.md#removed-names) is a `CommandInputErro
 
 Read the entire [Prompting guide](../../docs/prompting-guide.md) before authoring prompts or Stories. Follow [public alpha boundary](public-boundary.prompt.md) for native authoring/generation scope and shared local command policy. Runtime parsing/forwarding receives no guide input; applicable concrete validation and route facts remain with the required parser/catalog contracts.
 
+For admitted setup, after the existing skills, project and MCP actions in the setup callback, call [Autopilot settings](autopilot.prompt.md) `runAutopilot({action: "setup", interactive, inRepo}, ports)` once; derive terminal and repository context from actual stdin and Git, and supply real terminal-question, config and GitHub ports or their injected substitutes. Include its failure in the setup exit status while retaining other actions; print a setup message only when nonempty, so outside-repository setup adds no Autopilot output. Dispatch catalog dispositions `autopilot.off`, `autopilot.observe`, `autopilot.auto`, `autopilot-trust` and `autopilot-untrust` to the same function, with action mode and the named mode, or trust/untrust and parsed names respectively. Print its message once to stdout on exit 0, stderr otherwise, and return its exit code. Permit injected module and ports; a thrown error yields one finite diagnostic and exit 1. No Autopilot route starts a workflow or interpreter.
+
 ## Dependencies
+
+- [Autopilot settings](autopilot.prompt.md): required authoring, generation, runtime, verification and testing context for setup and Autopilot dispatch.
 
 - [Command catalog](command-catalog.prompt.md): required authoring/generation/runtime/verification/testing context for route facts, complete help entries and `PUBLIC_HELP_TEXT` heading, closing, Learn PDD and prompting topic templates. This module renders the common help wrapper and forwards parsed values; it does not own a second help table.
 
@@ -142,7 +146,7 @@ finite local cause and returns 5. Catalog owns all syntax.
 ```json
 {
   "status": "approved",
-  "prose_sha256": "1ff14581614e67bac26f5d5d62d4521e6d37b3bdf13f9eec691d468e2d5c36b6",
+  "prose_sha256": "8f625bfbceb7e7fc0537105b93b80dff29ac39a95ccb4339237215f82170cda6",
   "entries": [{"operation": "runPdd","input_schema": {"type": "object","properties": {"argv": {"type": "array","items": {"type": "string"}},"cwd": {"type": "string"},"env": {"type": "object","properties": {"HOME": {"type": "string"},"PATH": {"type": "string"},"CODEX_HOME": {"type": "string"},"CLAUDE_CONFIG_DIR": {"type": "string"}},"required": [],"additionalProperties": false},"packageRoot": {"type": "string"}},"required": ["argv"],"additionalProperties": false},"result_schema": {"type": "object","properties": {"exit_code": {"type": "integer"},"stdout": {"type": "string"},"stderr": {"type": "string"}},"required": ["exit_code","stdout","stderr"],"additionalProperties": false},"errors": []}],
   "calls": [],
   "resources": [

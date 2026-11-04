@@ -1,0 +1,128 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/autopilot-invalid-mode.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Setup treats saved invalid mode turbo as off and leaves it unchanged."
+    },
+    {
+      "id": "AC2",
+      "text": "Running `pdd autopilot auto` replaces saved invalid mode turbo with auto."
+    }
+  ],
+  "initial_world": {
+    "kv": {
+      "autopilot": "{\"mode\":\"turbo\",\"trust\":[]}"
+    },
+    "lookups": [],
+    "mode_questions": [],
+    "names_questions": []
+  },
+  "simulation": {
+    "config.read": {
+      "action": "key-value.get",
+      "world_pointer": "/kv",
+      "key_argument_pointer": "/key",
+      "value_argument_pointer": null,
+      "item_key_pointer": null,
+      "item_value_pointer": null,
+      "result_template": {
+        "raw": null
+      },
+      "result_value_pointer": "/raw"
+    },
+    "config.save": {
+      "action": "key-value.put",
+      "world_pointer": "/kv",
+      "key_argument_pointer": "/key",
+      "value_argument_pointer": "/raw",
+      "item_key_pointer": null,
+      "item_value_pointer": null,
+      "result_template": {
+        "raw": null
+      },
+      "result_value_pointer": "/raw"
+    },
+    "github.lookup": {
+      "action": "port.write",
+      "world_pointer": "/lookups",
+      "result_template": {
+        "owner": "Ada",
+        "writers": [
+          "Bo",
+          "Cy"
+        ],
+        "complete": false
+      }
+    },
+    "terminal.mode": {
+      "action": "port.write",
+      "world_pointer": "/mode_questions",
+      "result_template": {
+        "answer": ""
+      }
+    },
+    "terminal.names": {
+      "action": "port.write",
+      "world_pointer": "/names_questions",
+      "result_template": {
+        "names": []
+      }
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "invalid",
+      "entry_path": "prompts/cli/autopilot.prompt.md",
+      "operation": "runAutopilot",
+      "input": {
+        "action": "setup",
+        "interactive": true,
+        "inRepo": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/mode",
+          "op": "equals",
+          "value": "off"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/message",
+          "op": "contains",
+          "value": "invalid"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/kv/autopilot",
+          "op": "equals",
+          "value": "{\"mode\":\"turbo\",\"trust\":[]}"
+        }
+      ]
+    },
+    {
+      "step_id": "replace",
+      "entry_path": "prompts/cli/autopilot.prompt.md",
+      "operation": "runAutopilot",
+      "input": {
+        "action": "mode",
+        "mode": "auto"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/kv/autopilot",
+          "op": "equals",
+          "value": "{\"mode\":\"auto\",\"trust\":[]}"
+        }
+      ]
+    }
+  ]
+}
