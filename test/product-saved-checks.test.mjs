@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import * as runtime from '../src/runtime-client.mjs';
 import { productStatus, productNext } from '../src/product.mjs';
 import { harbor, portsFor, fakeRuntime, filesUnder, sha } from './runtime-fake.mjs';
@@ -190,7 +191,7 @@ else if(args[0]==='api' && args[1]==='repos/example/coffee/issues/81') console.l
 else {console.error('Forbidden fixture gh '+JSON.stringify(args));process.exit(91);}
 `); chmodSync(executable, 0o755);
   const before = snapshot(f.state);
-  const result = spawnSync(process.execPath, [new URL('../bin/pdd.mjs', import.meta.url).pathname, 'product', 'status', '--json'], {
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL('../bin/pdd.mjs', import.meta.url)), 'product', 'status', '--json'], {
     cwd: f.repo, encoding: 'utf8', env: { ...f.env, PATH: `${bin}:${process.env.PATH}`, PDD_RUNTIME_URL: 'invalid-reader-must-not-resolve-runtime' }, timeout: 30000,
   });
   assert.equal(result.status, 0, result.stderr + result.stdout);

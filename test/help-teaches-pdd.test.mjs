@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { CommandInputError, parseArgv } from '../src/argument-parser.mjs';
 import { PUBLIC_COMMAND_MANIFEST } from '../src/command-catalog.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
@@ -85,7 +85,7 @@ for(const key of ['readFileSync','readdirSync','statSync','lstatSync','existsSyn
 syncBuiltinESMExports();`);
   const env = { HOME: home, PATH: '', CLAUDE_CONFIG_DIR: '' };
   for (const argv of [...ROOT_HELP, TOPIC]) {
-    const result = spawnSync(process.execPath, ['--import', guard, join(root, 'bin', 'pdd.mjs'), ...argv], { cwd, env, encoding: 'utf8', timeout: 5000 });
+    const result = spawnSync(process.execPath, ['--import', pathToFileURL(guard).href, join(root, 'bin', 'pdd.mjs'), ...argv], { cwd, env, encoding: 'utf8', timeout: 5000 });
     assert.equal(result.status, 0, `${argv.join(' ')}: ${result.stderr}`); assert.equal(result.stderr, '', argv.join(' '));
     assertPackagePaths(result.stdout, root);
   }

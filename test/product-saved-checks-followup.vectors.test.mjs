@@ -4,6 +4,7 @@ import childProcess, { spawnSync } from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import { chmodSync, cpSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import * as runtime from '../src/runtime-client.mjs';
 import { productStatus, productNext, productStart } from '../src/product.mjs';
 import { harbor, portsFor, fakeRuntime, filesUnder, sha } from './runtime-fake.mjs';
@@ -290,7 +291,7 @@ else if(args[0]==='api' && args[1]==='repos/example/coffee/issues/81') console.l
 else {console.error('Forbidden gh '+JSON.stringify(args));process.exit(91);}
 `); chmodSync(executable, 0o755);
   const unchanged = readGuard(f);
-  const result = spawnSync(process.execPath, [new URL('../bin/pdd.mjs', import.meta.url).pathname, 'product', 'status', '--json'], { cwd: f.repo, encoding: 'utf8', env: { ...f.env, PATH: `${bin}:${process.env.PATH}`, PDD_RUNTIME_URL: 'invalid-reader-must-not-resolve-runtime' }, timeout: 30000 });
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL('../bin/pdd.mjs', import.meta.url)), 'product', 'status', '--json'], { cwd: f.repo, encoding: 'utf8', env: { ...f.env, PATH: `${bin}:${process.env.PATH}`, PDD_RUNTIME_URL: 'invalid-reader-must-not-resolve-runtime' }, timeout: 30000 });
   assert.equal(result.status, 0, result.stderr + result.stdout); checkProductExpected(expected, JSON.parse(result.stdout)); unchanged();
   const calls = readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line));
   assert.ok(calls.every(args => args[0] !== 'auth' && !(args[0] === 'api' && args[1] === 'user')));

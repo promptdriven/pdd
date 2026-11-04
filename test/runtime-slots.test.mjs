@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { chmodSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs, runJobs } from '../src/runtime-slots.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { harbor, fakeRuntime, sink, temp, root } from './runtime-fake.mjs';
@@ -117,7 +118,7 @@ test('jobs: real CLI outside Git, no auth or runtime calls; errors never look em
 const stop=()=>{throw Error('Forbidden jobs side effect');}; globalThis.fetch=stop; process.kill=stop;
 for(const mod of [http,https]){mod.request=stop;mod.get=stop;}net.connect=stop;net.createConnection=stop;
 for(const key of ['spawn','spawnSync','exec','execFile','execSync','execFileSync','fork'])child[key]=stop;syncBuiltinESMExports();`);
-  const argv = ['--import', guard, join(root, 'bin/pdd.mjs'), 'jobs'];
+  const argv = ['--import', pathToFileURL(guard).href, join(root, 'bin/pdd.mjs'), 'jobs'];
   const empty = await child(argv, { cwd: sandbox, env });
   assert.equal(empty.code, 0); assert.equal(empty.stderr, ''); assert.ok(empty.stdout.trim());
   seed(stateDir, record('wait', { state: 'waiting', pid: 222, kind: 'try', started_at: 20, request_ids: [] }));
