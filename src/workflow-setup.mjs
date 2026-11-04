@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-setup.prompt.md (sha256: 18143e3f5385068b9659cdb0fbaa9d2891072566a5ae580db4cf4525874973cf).
+// Generated from prompts/cli/workflow-setup.prompt.md (sha256: 37195d39837196bbf574fe3fb24de8fab1765a62ffcb084e39ba94e67ccc22fe).
 import { checkWorkflowAgents } from './workflow-agents.mjs';
 
 const recovery = 'Agent sign-in could not be checked. Run codex login status or claude auth status.';
@@ -12,6 +12,7 @@ export async function setupWithWorkflowAgent({ cwd = process.cwd(), env = proces
   try { selected = await (ports.checkWorkflowAgents ?? checkWorkflowAgents)({ cwd, env }, ports); }
   catch { stderr.write(`${recovery}\n`); return 1; }
   if (!selected.ok) { stderr.write(`${selected.message}\n`); return 1; }
+  if (typeof selected.hint === 'string' && selected.hint) stderr.write(`${selected.hint}\n`);
   try {
     const code = await ports.setup({ agent: selected.agent, cwd, env });
     if (Number.isInteger(code) && code >= 0 && code <= 255) return code;

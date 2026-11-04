@@ -30,7 +30,7 @@ Help forms and completion name only the `NAMES` words.
 There is no `session` route and no `workflow feature|bug|small-change` chat route: people call the PDD skills in their own chat. No arbitrary path or workflow creation route.
 
 Catalog the area-chat runner routes ([runner](workflow-runner.prompt.md)):
-- workflow.run `workflow run NAME ISSUE [--agent codex|claude|gemini] [--base BRANCH]`: NAME is a safe workflow name, ISSUE is a number, `owner/repo#number` or `https://github.com/owner/repo/issues/number`. Default agent codex. `--base` is a text option naming an existing origin branch; omitted means the actual repository default. Help describes that selection.
+- workflow.run `workflow run NAME ISSUE [--agent codex|claude|gemini|agy] [--base BRANCH]`: NAME is a safe workflow name, ISSUE is a number, `owner/repo#number` or `https://github.com/owner/repo/issues/number`. Default agent codex. `--base` is a text option naming an existing origin branch; omitted means the actual repository default. Help describes that selection.
 
 For `workflow.run`, accept optional `--adopt-corpus FILE`, a nonempty text path to an existing-approved-corpus declaration. Its help description says it adopts exact unchanged approved content for a fresh replay-evidence-enabled workflow; keep the existing help form unchanged. Example: `pdd workflow run feature 2640 --adopt-corpus approved-corpus.json`. The runner and replay owner define validation and trust, not the parser.
 
@@ -72,7 +72,7 @@ Help forms: `pdd simulate [STORY] --cli [--shell] [--max-calls N] [--new]`, `pdd
 into its original test. --shell compatibility and mode conflicts belong to runtime-client.
 
 `pdd workflow evidence ISSUE --summary FILE` records newer source-verified saved check JSON without rerunning workflow steps or publication; require ISSUE and --summary, no extra operands/options.
-Try catalogs --agent as nonempty text NAME: accept quoted custom display names as one argument as well as the default codex, claude and gemini names. Agent discovery and unknown-name errors belong to the local agent bridge; parsing does not read configuration or execute a launcher. Workflow --agent keeps its codex|claude|gemini value choices. Completion must not present a fixed provider-only list for Try agent names. Its help says pdd stays running to connect the person’s own agent when stdout is a terminal or --agent is explicit; ordinary non-terminal Try returns after collecting saved cases once. --agent selects a configured name and --no-wait skips the bridge. Runtime-client owns conflicts/lifecycle.
+Try catalogs --agent as nonempty text NAME: accept quoted custom display names as one argument as well as the default codex, claude and gemini names. Agent discovery and unknown-name errors belong to the local agent bridge; parsing does not read configuration or execute a launcher. Workflow --agent keeps its codex|claude|gemini|agy value choices. Completion must not present a fixed provider-only list for Try agent names. Its help says pdd stays running to connect the person’s own agent when stdout is a terminal or --agent is explicit; ordinary non-terminal Try returns after collecting saved cases once. --agent selects a configured name and --no-wait skips the bridge. Runtime-client owns conflicts/lifecycle.
 
 Catalog `mcp` (local `mcp`) with the form `pdd mcp`, no operands or options. Help describes a stdio MCP server for the current repository's Try tools. Setup help says "show exact config changes", without a preview-status label, and states that it offers detected Codex, Claude Code and Gemini registrations after showing exact config changes and asking once with y/N.
 
@@ -95,9 +95,9 @@ in root help and completion; do not import the runtime client for parsing/help.
 Catalog `product.status` (`product status`, local `product-status`, optional flag
 `--json`), `product.next` (`product next`, local `product-next`, no operands or
 options), and `product.start` (`product start`, local `product-start`, required
-text operand RUN, flags `--no-run` and value `--agent` with codex|claude). Forms:
+text operand RUN, flags `--no-run` and value `--agent` with codex|claude|gemini|agy). Forms:
 `pdd product status [--json]`, `pdd product next`, and
-`pdd product start RUN [--no-run] [--agent codex|claude|gemini]`. Help says status counts
+`pdd product start RUN [--no-run] [--agent codex|claude|gemini|agy]`. Help says status counts
 Stories by part and slice, next shows ready runs, and start creates or reuses one
 issue then starts a normal feature run unless `--no-run`. All three make zero
 interpreter calls, and their help says "no interpreter calls". [Product](product.prompt.md) owns their behavior.
@@ -112,8 +112,8 @@ The ordered help-form list consists of the lines below in their displayed order,
 ```text
   pdd product status [--json]  Count Stories by part and slice from the product plan; no interpreter calls.
   pdd product next  Show ready planned runs and their start commands; no interpreter calls.
-  pdd product start RUN [--no-run] [--agent codex|claude|gemini]  Create or reuse the run issue and start a normal feature run; --no-run only prepares the issue. No interpreter calls.
-  pdd workflow run NAME ISSUE [--agent codex|claude|gemini] [--base BRANCH]  Start the first area chat for a GitHub issue in Herdr and exit; --base selects an existing origin branch (default: repository default); --adopt-corpus FILE adopts exact unchanged approved content for a fresh replay-evidence-enabled workflow; pdd later pushes the issue branch and opens a real PR.
+  pdd product start RUN [--no-run] [--agent codex|claude|gemini|agy]  Create or reuse the run issue and start a normal feature run; --no-run only prepares the issue. No interpreter calls.
+  pdd workflow run NAME ISSUE [--agent codex|claude|gemini|agy] [--base BRANCH]  Start the first area chat for a GitHub issue in Herdr and exit; --base selects an existing origin branch (default: repository default); --adopt-corpus FILE adopts exact unchanged approved content for a fresh replay-evidence-enabled workflow; pdd later pushes the issue branch and opens a real PR.
   pdd workflow prove ISSUE --test COMMAND --expect TEXT  Run committed changed tests on the fetched base branch merge-base and committed head with a 120-second limit per phase; save a non-gating report.
   pdd workflow done STEP [--summary TEXT]  For the agent in a run worktree: record a step and print what to do next.
   pdd workflow evidence ISSUE --summary FILE  Record source-verified saved check JSON without rerunning steps, gates or publication.

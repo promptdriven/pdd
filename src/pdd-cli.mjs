@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: fd696b0b6c4a89c698ab20307d48bef51bedd343477b2ecb4cf53703be27ead8).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 6ecc31c5efb735fbeb55e158176779ea060f3c24147e609eabf77c94137d8808).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -99,6 +99,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         try { selected = await workflowAgents.checkWorkflowAgents({ cwd, env, ...(plan.options['--agent'] !== undefined ? { requested: plan.options['--agent'] } : {}) }, workflowAgentPorts); }
         catch { line(stderr, 'Agent sign-in could not be checked. Run codex login status or claude auth status.'); return 1; }
         if (!selected?.ok) { line(stderr, selected?.message || 'Agent sign-in could not be checked. Run codex login status or claude auth status.'); return 1; }
+        if (typeof selected.hint === 'string' && selected.hint) line(stderr, selected.hint);
         input.agent = selected.agent;
       }
       try {
