@@ -254,7 +254,7 @@ let an agent's free-form PASS summary replace this status.
 
 ```json
 {
-  "status": "draft",
+  "status": "approved",
   "prose_sha256": "852ac6e549fe5bba8ea3e9a94f4b1ee265bb704df3986015522e812838df5446",
   "entries": [
     {
