@@ -17,6 +17,10 @@
     {
       "id": "AC4",
       "text": "Setup warns and continues when GitHub provides neither owner nor writers."
+    },
+    {
+      "id": "AC5",
+      "text": "If GitHub does not answer within a short time, setup warns that the trusted list may be incomplete and continues, keeping confirmed people trusted without trusting unconfirmed people."
     }
   ],
   "initial_world": {
@@ -85,6 +89,24 @@
           "call_index": 3,
           "result": {
             "owner": "",
+            "writers": [],
+            "complete": false
+          }
+        },
+        {
+          "args": {},
+          "call_index": 4,
+          "result": {
+            "owner": "Ada",
+            "writers": [],
+            "complete": false
+          }
+        },
+        {
+          "args": {},
+          "call_index": 5,
+          "result": {
+            "owner": "Ada",
             "writers": [],
             "complete": false
           }
@@ -230,6 +252,70 @@
           "path": "/message",
           "op": "contains",
           "value": "incomplete"
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/message",
+          "op": "contains",
+          "value": "incomplete"
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "world",
+          "path": "/names_questions/2/owner",
+          "op": "equals",
+          "value": ""
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "world",
+          "path": "/names_questions/2/writers",
+          "op": "equals",
+          "value": []
+        }
+      ]
+    },
+    {
+      "step_id": "confirmed-owner",
+      "entry_path": "prompts/cli/autopilot.prompt.md",
+      "operation": "runAutopilot",
+      "input": {
+        "action": "isTrusted",
+        "author": "Ada"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/trusted",
+          "op": "equals",
+          "value": true
+        }
+      ]
+    },
+    {
+      "step_id": "unconfirmed-author",
+      "entry_path": "prompts/cli/autopilot.prompt.md",
+      "operation": "runAutopilot",
+      "input": {
+        "action": "isTrusted",
+        "author": "Bo"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/trusted",
+          "op": "equals",
+          "value": false
         }
       ]
     }
