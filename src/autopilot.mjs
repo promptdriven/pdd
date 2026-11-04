@@ -47,7 +47,8 @@ function nativeTerminal(stdin, stdout) {
   const rl = createInterface({ input: stdin, output: stdout });
   const answers = rl[Symbol.asyncIterator]();
   const ask = async text => {
-    stdout.write(text);
+    rl.setPrompt(text);
+    rl.prompt();
     return (await answers.next()).value ?? '';
   };
   return {

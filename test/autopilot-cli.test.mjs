@@ -4,6 +4,8 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { PassThrough } from 'node:stream';
+import { runAutopilot } from '../src/autopilot.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { renderCompletion } from '../src/completion.mjs';
 
@@ -135,5 +137,45 @@ test('autopilot-setup: default terminal consumes piped mode and names answers in
     assert.match(child.stdout, /Autopilot for this repo/);
     assert.match(child.stdout, /Add anyone else/);
     assert.deepEqual(JSON.parse(readFileSync(join(cwd, 'pdd.json'))).autopilot, { mode: mode || 'off', trust: ['Dana', 'Eli'] });
+  }
+});
+
+
+test('autopilot-setup: default terminal redraws each question after backspace and preserves answers', async t => {
+  const modeQuestion = 'Autopilot for this repo (off/observe/auto) [off]: ';
+  const namesQuestion = 'Add anyone else? GitHub names, separated by spaces (optional): ';
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  for (const mode of ['', 'auto']) {
+    // readline infers terminal:true from output.isTTY; its actual line editor
+    // handles the key presses and emits the redraw, without a terminal-port fake.
+    const stdin = new PassThrough(), stdout = new PassThrough();
+    stdin.isTTY = true; stdin.setRawMode = () => {};
+    stdout.isTTY = true; stdout.columns = 120;
+    t.after(() => { stdin.destroy(); stdout.destroy(); });
+    let output = '', raw = null;
+    stdout.on('data', chunk => { output += chunk; });
+    const result = runAutopilot({ action: 'setup', interactive: true, inRepo: true }, {
+      stdin, stdout,
+      config: { read: async () => ({ raw }), save: async args => { raw = args.raw; return args; } },
+      github: { lookup: async () => ({ owner: 'Ada', writers: ['Bo'], complete: true }) },
+    });
+    await flush();
+    assert.ok(output.includes(modeQuestion));
+    stdin.write(`${mode}x`);
+    const modeRedraw = output.length;
+    stdin.write('\x7f');
+    await flush();
+    assert.ok(output.slice(modeRedraw).includes(modeQuestion), 'Backspace must redraw the mode question');
+    stdin.write('\r');
+    await flush();
+    assert.ok(output.includes(namesQuestion));
+    stdin.write('Danx');
+    const namesRedraw = output.length;
+    stdin.write('\x7f');
+    await flush();
+    assert.ok(output.slice(namesRedraw).includes(namesQuestion), 'Backspace must redraw the additional names question');
+    stdin.write('a Eli\r');
+    assert.equal((await result).exitCode, 0);
+    assert.deepEqual(JSON.parse(raw), { mode: mode || 'off', trust: ['Dana', 'Eli'] });
   }
 });
