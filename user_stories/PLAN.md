@@ -127,3 +127,12 @@ The seven workflow Stories retain their separately approved contracts and all 28
 ## Tests found by name (#2580)
 
 1. [Find each Story's test by its name and folder](tests-found-by-name.md): the tests of Story `S` are `S.json` and `S.<variant>.json` in a `test` or `tests` folder; pdd opens no JSON file to find tests, reads a matched test in full at any size, prints every Story with no test (with the expected path), one line for the test-folder JSON files that match no Story (`--files` lists them) and every conflict, and names the selected tests in the lint request when the interpreter supports it. Native cases: `test/tests-found-by-name.test.mjs`. Interpreter test: none (native effects).
+
+## Selected interpreter compatibility (#2791)
+
+Draft expectations for person review. No code or native readiness claim.
+
+1. [See selected interpreter compatibility](selected-runtime-compatibility.md) — [native cases](../test/runtime-compatibility/selected-runtime-compatibility-cases.json). Prompt tests: NOT REPLAYED; real capture/transport/projection/terminal effects need native fake-engine checks.
+2. [Check compatibility before paid work](runtime-compatibility-before-paid-work.md) — [native cases](../test/runtime-compatibility/runtime-compatibility-before-paid-work-cases.json). Prompt tests: NOT REPLAYED; dispatch, saved state and recovery guards need native fake-engine checks.
+
+Proposed policy: missing/unknown selected compatibility stops new paid dispatch; ended unavailable readiness exits 5, explicit blockers exit 4, open lint retains exit 3. Matched configured structural support permits the existing dispatch gate but does not attest an installed engine or prove host/physical behavior. Missing physical proof alone adds no new global gate. Native validation profiles stay separately owned. These expectations require person review before implementation.
