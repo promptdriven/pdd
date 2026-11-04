@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 9b8617f4c60d6eae3adbab0c0a5f51047251001f6ee5824c5ec8d513e7dc5d0f).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 7c353be00d3aa4fa17244f2760d04d3bcce8e6f6ce88d99205f6ca9c93441dda).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { execFile as execFileCallback } from 'node:child_process';
@@ -127,7 +127,7 @@ function causeOf(error) {
   return causeText(error?.stderr || error?.detail) || String(error?.code ?? 'error');
 }
 export const pddCommand = (packageRoot = PACKAGE_ROOT) => [process.execPath, join(packageRoot, 'bin', 'pdd.mjs')].map(shell).join(' ');
-const pddFor = (p, packageRoot) => p.pdd ?? pddCommand(packageRoot ?? PACKAGE_ROOT);
+const pddFor = (p, packageRoot) => p.pdd ?? (p.env?.PDD_AGENT_SESSION && p.env?.PDD_BIN ? '"$PDD_BIN"' : pddCommand(packageRoot ?? PACKAGE_ROOT));
 async function git(p, cwd, ...args) { return String((await p.execFile('git', args, { cwd })).stdout ?? '').trim(); }
 
 // Command effects are explicit callbacks over the latest ordinary record. Keep the
@@ -268,7 +268,7 @@ async function unpublishedScenarios(run,p) {
 }
 
 async function areaMessage(run, index, p, packageRoot) {
-  const area = run.areas[index], pdd = p.pdd, earlier = run.areas.slice(0, index).flatMap(item => item.steps);
+  const area = run.areas[index], pdd = '"$PDD_BIN"', earlier = run.areas.slice(0, index).flatMap(item => item.steps);
   const summaries = earlier.filter(step => run.done[step]).map(step => `${step}: ${oneLine(run.done[step].summary).replace(/[.\s]+$/, '') || 'done'}`);
   const files = index ? await changedFiles(run, p) : [];
   return [
@@ -291,10 +291,10 @@ async function areaMessage(run, index, p, packageRoot) {
 
 // The one sentence a person gets when they stop at PR 1 (0.1.4: testers saw the chat drop it when it was a hint).
 const approvalGuide = run => `Show the gate and ask the person. One approval covers the gate and all its selected draft prompts. Relay their exact later words with:
-<pdd> workflow approve ${run.number} --said - <<'PDD_SAID'
+"$PDD_BIN" workflow approve ${run.number} --said - <<'PDD_SAID'
 <the person's exact words>
 PDD_SAID
-Choose a quoted delimiter absent as a whole payload line. Resolve <pdd> to this package's shell-quoted executable command when running it. Or the person can use terminal y/N: pdd workflow approve ${run.number} in a normal terminal.`;
+Choose a quoted delimiter absent as a whole payload line. Or the person can use terminal y/N: pdd workflow approve ${run.number} in a normal terminal.`;
 const approvalRetry = (run, prefix) => `The saved approval remains usable for this same gate. Retry with its exact recorded words; no new approval is needed. ${approvalGuide(run, prefix).replace('Show the gate and ask the person. One approval covers the gate and all its selected draft prompts. Relay their exact later words with:', 'Use the saved words with:')}`;
 const codeLater = run => `To make the code PR later, tell your agent, or run pdd workflow approve ${run.number} in a terminal.`;
 const prOf = (run, name) => (run.pr ?? []).find(pr => pr.stage === name) ?? null;

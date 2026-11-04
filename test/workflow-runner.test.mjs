@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync, realpathSync, readdirSync, chmodSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { execFile as callbackExec, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { proseSha256 } from '../src/runtime-preflight.mjs';
@@ -26,7 +26,7 @@ function assertSafeApprovalAdvice(text) {
   assert.match(text,/show the gate.*ask the person/i);
   const command=text.split('\n').find(line=>line.endsWith(" workflow approve 17 --said - <<'PDD_SAID'"));
   assert.ok(command,'show the actual quoted-heredoc stdin command');
-  assert.match(command,/^<pdd> workflow approve 17/, 'agent template uses the portable package placeholder');
+  assert.match(command, /^"\$PDD_BIN" workflow approve 17/, 'agent template uses the portable package placeholder');
   assert.match(text,/\nPDD_SAID(?:\n|$)/);
   assert.match(text,/delimiter.*absent/i);
   assert.match(text,/terminal y\/N/);
@@ -150,10 +150,10 @@ test('small-change: run exits at once, done reaches the gate, changes go to the 
   assert.ok(existsSync(run.root) && run.root !== f.source); assert.match(run.branch, /^pdd\/small-change-17-/);
   const first = run.chats[0], pane = f.herdr.paneOf(first);
   assert.equal(pane.commands.length, 1);
-  assert.match(pane.commands[0], /^env PDD_AGENT_SESSION=1 CLAUDE_CONFIG_DIR=\S+ claude --dangerously-skip-permissions --session-id [0-9a-f-]{36} "\$\(cat '.+plan-start\.md'\)"$/);
+  assert.match(pane.commands[0], /^env PDD_AGENT_SESSION=1 PDD_BIN=\S+ CLAUDE_CONFIG_DIR=\S+ claude --dangerously-skip-permissions --session-id [0-9a-f-]{36} "\$\(cat '.+plan-start\.md'\)"$/);
   assert.equal(first.session.id, pane.agent.agent_session.value);
   const message = readFileSync(join(run.runDir, 'plan-start.md'), 'utf8');
-  for (const part of [`Use the pdd-small-change skill: ${join(packageRoot, 'skills/pdd-small-change/SKILL.md')}`, '#17', 'Use value two', issueUrl, run.root, run.runDir, 'plan', 'scope', '/abs/node /abs/pdd.mjs workflow done'])
+  for (const part of [`Use the pdd-small-change skill: ${join(packageRoot, 'skills/pdd-small-change/SKILL.md')}`, '#17', 'Use value two', issueUrl, run.root, run.runDir, 'plan', 'scope', '"$PDD_BIN" workflow done'])
     assert.ok(message.includes(part), part);
   assert.ok(message.split('\n').length <= 14, message);
   assert.doesNotMatch(message, /Prompting guide/);
@@ -288,7 +288,7 @@ for (const name of ['bug', 'feature']) {
     assert.equal((await f.run()).exitCode, 0);
     let run = f.record();
     assert.deepEqual(areas.map(([area]) => area), ['story', 'prompt-pr', 'code']);
-    assert.match(f.herdr.paneOf(run.chats[0]).commands[0], /^env PDD_AGENT_SESSION=1 codex --no-daemon --dangerously-bypass-approvals-and-sandbox -c 'projects=\{".+"=\{trust_level="trusted"\}\}' "\$\(cat '.+story-start\.md'\)"$/);
+    assert.match(f.herdr.paneOf(run.chats[0]).commands[0], /^env PDD_AGENT_SESSION=1 PDD_BIN=\S+ codex --no-daemon --dangerously-bypass-approvals-and-sandbox -c 'projects=\{".+"=\{trust_level="trusted"\}\}' "\$\(cat '.+story-start\.md'\)"$/);
     for (const [index, [area, steps]] of areas.entries()) {
       assert.equal(f.record().area, index); assert.equal(f.record().chats.at(-1).area, area);
       const optional = JSON.parse(readFileSync(join(packageRoot, `skills/pdd-${name}/workflow.json`), 'utf8')).areas[index].optional;
@@ -851,7 +851,7 @@ test('#18: the check step\'s Runtime check wins the top of PR 1; the code questi
   assert.match(f.prs[0].body, /^Prompt tests: ✓ 2 of 2 criteria\nReport: https:\/\/rt\.example\.test\/r\/second /);
   assert.match(gate.message, /ask exactly: "Do you want the code PR now, or stop here and merge PR 1 first\?/);
   assert.match(gate.message, /show the gate.*ask the person/i);
-  assert.ok(gate.message.includes(`<pdd> workflow approve 17 --said - <<'PDD_SAID'\n`), 'safe agent template uses the portable package placeholder and quoted heredoc');
+  assert.ok(gate.message.includes(`"$PDD_BIN" workflow approve 17 --said - <<'PDD_SAID'\n`), 'safe agent template uses the portable package placeholder and quoted heredoc');
   assert.match(gate.message, /\nPDD_SAID(?:\n|$)/);
   assert.match(gate.message, /terminal y\/N/);
 });
@@ -1011,7 +1011,7 @@ test('0.1.7 #1: run expands a leading ~ in CODEX_HOME and CLAUDE_CONFIG_DIR and 
   assert.equal(started.exitCode, 0, started.message);
   const run = f.record();
   assert.equal(run.configDir, folder); assert.equal(run.chats[0].configDir, folder);
-  assert.ok(f.herdr.paneOf(run.chats[0]).commands[0].startsWith(`env PDD_AGENT_SESSION=1 CODEX_HOME='${folder}' codex `), f.herdr.paneOf(run.chats[0]).commands[0]);
+  assert.ok(f.herdr.paneOf(run.chats[0]).commands[0].includes(` CODEX_HOME='${folder}' codex `), f.herdr.paneOf(run.chats[0]).commands[0]);
 
   const claude = await fixture(t), claudeHome = claude.ports.env.HOME;
   claude.ports.env = { HOME: claudeHome, CLAUDE_CONFIG_DIR: '~/missing' };
@@ -1030,7 +1030,7 @@ test('0.1.7 #1: a saved "~" config folder is expanded when pdd resumes or starts
   pane.agent = null;
   const inside = { ...f.ports, env: { ...f.ports.env, HERDR_ENV: '1' } };
   assert.equal((await openRun({ ref: '17', cwd: f.source }, inside)).exitCode, 0);
-  assert.ok(pane.commands[1].startsWith(`env PDD_AGENT_SESSION=1 CLAUDE_CONFIG_DIR='${dir}' claude `), pane.commands[1]);
+  assert.ok(pane.commands[1].includes(` CLAUDE_CONFIG_DIR='${dir}' claude `), pane.commands[1]);
   f.tick(); await stepDone({ step: 'scope', summary: 'plan', cwd: run.root }, f.agentPorts());
   rmSync(dir, { recursive: true });
   const missing = `This run uses CLAUDE_CONFIG_DIR "${dir}", but that folder does not exist. Make that folder, or cancel the run (pdd workflow cancel 17) and start it again with the right CLAUDE_CONFIG_DIR.`;
@@ -1043,7 +1043,7 @@ test('0.1.7 #1: a saved "~" config folder is expanded when pdd resumes or starts
   assert.equal(notOpened.exitCode, 1); assert.equal(notOpened.message, missing); assert.equal(pane.commands.length, 2);
   mkdirSync(dir);
   assert.equal((await approveRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
-  assert.ok(f.herdr.paneOf(f.record().chats[1]).commands[0].startsWith(`env PDD_AGENT_SESSION=1 CLAUDE_CONFIG_DIR='${dir}' claude `));
+  assert.ok(f.herdr.paneOf(f.record().chats[1]).commands[0].includes(` CLAUDE_CONFIG_DIR='${dir}' claude `));
 });
 
 // Tester B2–B4: the chat died at its start, and for 10 minutes status said "State: the agent works on understand".
@@ -2525,4 +2525,19 @@ test('Prompt tests lines: workflow evidence records a saved result with the new 
   assert.equal(f.record().evidence.length, 2);
   const stories = JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0].stories;
   assert.equal(stories.pass, 2); assert.equal(stories.total, 2);
+});
+
+
+test('chat and approval hints use the running package under PATH shadowing', async t => {
+ const f=await fixture(t); await f.run(); const run=f.record();
+ const hint=readFileSync(run.chats[0].messageFile,'utf8').split('\n').find(line=>line.startsWith('After each step, run: '));
+ assert.match(hint,/run: "\$PDD_BIN" workflow done/);
+ assert.doesNotMatch(hint,/\/abs\/node|bin\/pdd\.mjs/);
+ const executable=hint.match(/run: ("\$PDD_BIN")/)[1];
+ const old=join(f.base,'old');mkdirSync(old);writeFileSync(join(old,'pdd'),'#!/bin/sh\necho old\n',{mode:0o755});
+ const version=JSON.parse(readFileSync(join(packageRoot,'package.json'),'utf8')).version;
+ const result=execFileSync('/bin/sh',['-c',`${executable} --version`],{env:{...process.env,PATH:`${old}:${dirname(process.execPath)}:/usr/bin:/bin`,PDD_BIN:join(packageRoot,'bin/pdd.mjs'),PDD_AGENT_SESSION:'1'},encoding:'utf8'});
+ assert.equal(result.trim(),version);
+ const gate=await stepDone({step:'scope',summary:'ready',cwd:run.root},f.agentPorts());
+ assert.match(gate.message,/"\$PDD_BIN" workflow approve 17 --said -/);
 });

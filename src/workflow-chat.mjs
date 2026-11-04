@@ -1,9 +1,11 @@
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 9305703de0416ce79f7651e70a9337130ded43706890addb2fb918a1e0ebaae3).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 9118aead560d02193e2f3510796b2506fc8121cecd02694cb302e9d91f024ab0).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+const PACKAGE_BIN = join(dirname(dirname(fileURLToPath(import.meta.url))), 'bin/pdd.mjs');
 import { promisify } from 'node:util';
 import { PDD_HERDR_SESSION, withHerdrLayoutLock, openHerdrRunLayout, closeHerdrRunLayout, closeHerdrRepoLayoutIfIdle, samePath } from './workflow-herdr-layout.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
@@ -102,13 +104,13 @@ export function herdrCommand(ports = {}) {
   };
 }
 
-export function chatCommand({ agent, cwd, messageFile, sessionId, resumeId, configDir }) {
+export function chatCommand({ agent, cwd, messageFile, sessionId, resumeId, configDir, commonDir, sourceRoot }) {
   if (resumeId !== undefined && !validSessionId(resumeId)) throw problem('invalid_session_id', 'The saved native session id is not a UUID, so pdd will not resume it.');
   if (resumeId !== undefined) resumeId = quote(resumeId);
   // Gemini asks a hidden "trust this folder?" question in a new worktree; trust the run worktree for this session.
-  const env = ['env', 'PDD_AGENT_SESSION=1', ...(configDir ? [`${homeVariable(agent)}=${quote(configDir)}`] : []), ...(agent === 'gemini' ? ['GEMINI_CLI_TRUST_WORKSPACE=true'] : [])];
+  const env = ['env', 'PDD_AGENT_SESSION=1', `PDD_BIN=${quote(PACKAGE_BIN)}`, ...(configDir ? [`${homeVariable(agent)}=${quote(configDir)}`] : []), ...(agent === 'gemini' ? ['GEMINI_CLI_TRUST_WORKSPACE=true'] : [])];
   const message = messageFile ? [`"$(cat ${quote(messageFile)})"`] : [];
-  if (agent === 'gemini') return [...env, 'gemini', '--yolo', ...(resumeId ? ['--resume', resumeId] : []), ...(messageFile ? ['--prompt-interactive', ...message] : [])].join(' ');
+  if (agent === 'gemini') return [...env, 'gemini', '--yolo', ...(commonDir && sourceRoot ? ['--include-directories', quote(join(commonDir, 'pdd/runs')), '--include-directories', quote(`${sourceRoot}.pdd-worktrees`)] : []), ...(resumeId ? ['--resume', resumeId] : []), ...(messageFile ? ['--prompt-interactive', ...message] : [])].join(' ');
   if (agent === 'claude') return [...env, 'claude', '--dangerously-skip-permissions', ...(resumeId ? ['--resume', resumeId] : ['--session-id', sessionId]), ...message].join(' ');
   return [...env, 'codex', ...(resumeId ? ['resume', resumeId] : []), '--no-daemon', '--dangerously-bypass-approvals-and-sandbox',
     '-c', quote(`projects={${JSON.stringify(cwd)}={trust_level="trusted"}}`), ...message].join(' ');
@@ -162,7 +164,7 @@ export async function startChat({ run, area, message }, ports = {}) {
     await checkpoint(layout);
     return {layout, chat};
   }, { directory: ports.layoutDirectory });
-  try { await herdr(['pane', 'run', layout.paneId, chatCommand({ agent: run.agent, cwd: run.root, messageFile, sessionId, configDir })]); }
+  try { await herdr(['pane', 'run', layout.paneId, chatCommand({ commonDir: run.commonDir, sourceRoot: run.sourceRoot, agent: run.agent, cwd: run.root, messageFile, sessionId, configDir })]); }
   catch (error) {
     const failed = problem(error.code ?? 'herdr_failed', error.message);
     failed.chat = { ...chat, startUnconfirmed: true };
@@ -291,7 +293,7 @@ export async function openChat({ run, chat }, ports = {}) {
     }
     // Herdr sees the agent only after it starts; the shared grace counts from this resume request.
     chat.resumedAt = now(); applyLifecycle(chat, { state: 'starting' });
-    try { await herdr(['pane', 'run', chat.paneId, chatCommand({ agent: run.agent, cwd: run.root, resumeId: id, configDir })]); }
+    try { await herdr(['pane', 'run', chat.paneId, chatCommand({ commonDir: run.commonDir, sourceRoot: run.sourceRoot, agent: run.agent, cwd: run.root, resumeId: id, configDir })]); }
     catch (error) { chat.startUnconfirmed = true; throw error; }
     resumed = true;
   }
@@ -485,7 +487,7 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
           if(!validSessionId(original.session?.id)) throw uncertain();
           record.recovery={...record.recovery,resumeRequested:true};
           await save(record.phase);await reconcileHistorical();
-          await herdr(['pane','run',original.paneId,chatCommand({agent:original.agent??run.agent,cwd:run.root,resumeId:original.session.id,configDir:expandHome(original.configDir,env)})]);
+          await herdr(['pane','run',original.paneId,chatCommand({commonDir:run.commonDir,sourceRoot:run.sourceRoot,agent:original.agent??run.agent,cwd:run.root,resumeId:original.session.id,configDir:expandHome(original.configDir,env)})]);
         }
         await save('rolledBack');return {...original,messageFile:original.originalMessageFile};
       }
@@ -544,7 +546,7 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
           record.recovery={...record.recovery,unsentProof:{requestId:request.id,requestAt:request.at,observedAt:now(),...proof}};
           requestIntent();
           await save('launchRequested');await reconcileHistorical();
-          try {await herdr(['pane','run',target.paneId,chatCommand({agent,cwd:run.root,messageFile:target.messageFile,sessionId:target.session?.id,configDir})]);}
+          try {await herdr(['pane','run',target.paneId,chatCommand({commonDir:run.commonDir,sourceRoot:run.sourceRoot,agent,cwd:run.root,messageFile:target.messageFile,sessionId:target.session?.id,configDir})]);}
           catch(error){error.chat={...target};throw error;}
           delete record.replacement.startUnconfirmed;await save('launched');return record.replacement;
         }
@@ -555,7 +557,7 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
         record.recovery={...record.recovery,resumeRequested:true};
         record.replacement.resumedAt=now();
         await save('launchRequested');await reconcileHistorical();
-        try { await herdr(['pane','run',record.replacement.paneId,chatCommand({agent,cwd:run.root,resumeId:found.id,configDir})]); }
+        try { await herdr(['pane','run',record.replacement.paneId,chatCommand({commonDir:run.commonDir,sourceRoot:run.sourceRoot,agent,cwd:run.root,resumeId:found.id,configDir})]); }
         catch(error) {error.chat={...record.replacement};throw error;}
       }
       if(native?.agent_session?.value) record.replacement.session={agent,id:native.agent_session.value};
@@ -567,7 +569,7 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
     if(await observe(record.replacement)) throw invalid();
     // The checkpoint rereads cancellation. Legacy cancel may still arrive after that check.
     record.replacement.startUnconfirmed=true;requestIntent();await save('launchRequested');await reconcileHistorical(true);
-    try {await herdr(['pane','run',record.replacement.paneId,chatCommand({agent,cwd:run.root,messageFile:record.replacement.messageFile,sessionId:record.replacement.session?.id,configDir})]);}
+    try {await herdr(['pane','run',record.replacement.paneId,chatCommand({commonDir:run.commonDir,sourceRoot:run.sourceRoot,agent,cwd:run.root,messageFile:record.replacement.messageFile,sessionId:record.replacement.session?.id,configDir})]);}
     catch(error){error.chat={...record.replacement};throw error;}
     delete record.replacement.startUnconfirmed;await save('launched');return record.replacement;
   },{directory:ports.layoutDirectory});
