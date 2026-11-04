@@ -85,7 +85,8 @@ test('try-stop-story-path: replay approved Story cases on native code', async t 
     for (const check of step.checks) {
       if (check.target === 'calls') assert.ok(Object.hasOwn(counts, check.path), `Unknown call-count path: ${check.path}`);
       const value = check.target === 'calls' ? counts[check.path] : at(check.target === 'world' ? world : result, check.path);
-      const label = `try-stop-story-path/${step.step_id}/${check.criterion_id} ${check.target} ${check.path}`;
+      const detail = check.target === 'result' && result.stderr ? ` (stderr: ${result.stderr.trim()})` : '';
+      const label = `try-stop-story-path/${step.step_id}/${check.criterion_id} ${check.target} ${check.path}${detail}`;
       if (check.op === 'equals') assert.deepEqual(value, check.value, label);
       else if (check.op === 'contains') assert.ok(value.includes(check.value), label);
       else assert.fail(`Unmapped assertion ${check.op}: ${label}`);
