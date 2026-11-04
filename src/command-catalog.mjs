@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: f4f6fe58da927cdff540f999a15e3587afd52be29f03c6b19f93f2920b55daef).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 9d55076db0e49af2609d032173b764e9e018e238c6176bb45cc05ba94f045a24).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -16,6 +16,14 @@ ${command} --said - <<'PDD_SAID'
 PDD_SAID
 Choose a delimiter absent as a whole line from the words. Keep the delimiter quoted. --said - reads all UTF-8 stdin, including trailing newlines. Simple words may use --said WORDS. Without --said, a person can use terminal y/N. Root pdd.json strict_approvals true requires a person terminal.`;
 const routes = [
+  { id: 'autopilot.start', prefix: ['autopilot', 'start'], local: 'autopilot-start', operands: [], options: [{name:'--runs',kind:'text'}],
+    forms: [form('pdd autopilot start [--runs N]', 'Start this repo in an interactive Herdr agent; check now and every 30 minutes without AI on empty ticks. --runs optionally caps concurrent runs.')] },
+  { id: 'autopilot.stop', prefix: ['autopilot', 'stop'], local: 'autopilot-stop', operands: [], options: [],
+    forms: [form('pdd autopilot stop', "Stop this machine's timer; let the current agent step finish.")] },
+  { id: 'autopilot.status', prefix: ['autopilot', 'status'], local: 'autopilot-status', operands: [], options: [],
+    forms: [form('pdd autopilot status', "Show this machine's repo, agent and next tick.")] },
+  { id: 'autopilot.add', prefix: ['autopilot', 'add'], local: 'autopilot-add', operands: [{name:'issue',type:'issue',repeat:true}], options: [],
+    forms: [form('pdd autopilot add N...', 'Mark named old issues with pdd:autopilot so Autopilot may take them.')] },
   { id: 'product.status', prefix: ['product', 'status'], local: 'product-status', operands: [], options: [{name:'--json',kind:'flag'}],
     forms: [form('pdd product status [--json]', 'Count Stories by part and slice from the product plan; no interpreter calls.')] },
   { id: 'product.next', prefix: ['product', 'next'], local: 'product-next', operands: [], options: [],

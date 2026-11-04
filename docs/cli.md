@@ -18,6 +18,36 @@ Setup previews the exact MCP configuration changes for the Codex, Claude Code an
 
 Setup also reports the running pdd executable and version, the `pdd` paths in order, and which path and version a plain `pdd` selects. A PATH conflict report includes the absolute command for this pdd and explains that environment activation, such as conda, must come before correcting PATH. It keeps other installations. `--version` preserves its version-only stdout; PATH diagnostics go to stderr. `workflow run` gives a one-line warning when another pdd comes first.
 
+## Autopilot on this machine
+
+| Command | What it does |
+|---|---|
+| `pdd autopilot start [--runs N]` | Check sign-ins and the running pdd version, open a dedicated interactive Herdr session and check for work immediately. A user timer checks again every 30 minutes. `--runs` sets an optional concurrent-run cap; omission has no fixed cap |
+| `pdd autopilot stop` | Disable this repo's timer on this machine and let the current agent step finish |
+| `pdd autopilot status` | Show this machine's repo, agent, timer state and next tick without contacting GitHub or waking an agent |
+| `pdd autopilot add N...` | Label named issues `pdd:autopilot`, allowing Autopilot to take older issues |
+
+The launcher reads the `autopilot` setting in root `pdd.json`. An active mode is
+`observe` or `auto`; missing or invalid settings count as `off`. It uses an
+installed, signed-in Codex, Claude Code, agy or Gemini agent. Missing dependencies
+get one actionable line. Linux uses a systemd user timer; macOS uses a
+LaunchAgent. See the chat with `herdr session attach pdd-autopilot`.
+
+A tick checks GitHub with ETags and wakes the agent only for a repo's first
+start-up recipe or eligible work. Empty ticks use no AI. This applies to Claude
+Code too: the user timer keeps empty ticks out of the conversation. Paginated
+queues revalidate every cached page; changed candidates may require comment and
+write-permission lookups. GitHub rate limits wait until the reset time.
+
+Only issues created since the first start, or carrying `pdd:autopilot`, enter the
+queue. On an outsider's issue, a static reply says "thanks, a maintainer will
+look" until a trusted person comments. The agent receives only trusted people's
+text, including comments. Owners, people with write access and configured trusted
+names count as trusted. The `pdd-autopilot` skill owns the start-up recipe,
+`pdd:working` claim and one comment across machines, capacity and progress
+tracking. An issue offered to the skill stays eligible until claimed, so a later
+tick can use newly available room. Stop leaves the interactive session open.
+
 ## Runs on a GitHub issue
 
 | Command | What it does |

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: fd696b0b6c4a89c698ab20307d48bef51bedd343477b2ecb4cf53703be27ead8).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 9afee9eabfe72dc3fd91b0e83bde0b3f586e9720945da9999203d4796ee07843).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -45,7 +45,7 @@ export function renderHelp(prefix = [], packageRoot = PACKAGE_ROOT) {
 export async function runPdd(argv, { stdout = process.stdout, stderr = process.stderr,
   cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, workflowRunner, workflowAreas,
   stdin = process.stdin, confirm, mcpServer, runtimeSlots, contracts, product, productPorts, gitContext, workflowProve, provePorts,
-  workflowAgents = { checkWorkflowAgents }, workflowAgentPorts = {}, setupSkills = defaultSetupSkills,
+  autopilotLauncher, autopilotPorts = {}, workflowAgents = { checkWorkflowAgents }, workflowAgentPorts = {}, setupSkills = defaultSetupSkills,
   setupProject = defaultSetupProject, setupAgentMcp, pathDiagnostic = defaultPathDiagnostic } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
@@ -60,6 +60,14 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     } catch { /* An optional PATH diagnostic never prevents the requested command. */ }
   }
   switch (plan.local) {
+    case 'autopilot-start': case 'autopilot-stop': case 'autopilot-status': case 'autopilot-add': {
+      try {
+        const module = autopilotLauncher ?? await import('./autopilot-launcher.mjs');
+        const result = await module.runAutopilotLauncher({ command: plan.local.slice(10), issues: [...plan.operands], runs: plan.options['--runs'], cwd, packageRoot, env }, autopilotPorts);
+        if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255 || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid Autopilot reply');
+        line(result.exitCode === 0 ? stdout : stderr, result.message); return result.exitCode;
+      } catch (error) { line(stderr, `The Autopilot command failed.${reason(error)}`); return 1; }
+    }
     case 'help': line(stdout, plan.topic ? renderTopic(plan.topic, packageRoot) : renderHelp(plan.helpPrefix, packageRoot));return 0;
     case 'version':
       try { const metadata = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'));
