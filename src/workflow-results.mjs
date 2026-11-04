@@ -1,10 +1,10 @@
-// Generated from prompts/cli/workflow-results.prompt.md (sha256: 38db44ea25aa76c3f71cefe025aac95486764ab6ecbb709c82d4640eca105ffb).
+// Generated from prompts/cli/workflow-results.prompt.md (sha256: 6dcf703826ff312566181752b67ffe7aa14ba2a84595cb3167763065d58ee7da).
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { captureSource } from './runtime-preflight.mjs';
-import { formatProof, validateProofRecord } from './workflow-prove.mjs';
+import { judgeOldCodeProof } from './workflow-pr-evidence.mjs';
 
 const BATCH = /^\d{8}-\d{6}-[a-z0-9]{4}$/;
 export const PDD_RESULT = 'pdd result';
@@ -25,7 +25,6 @@ function readJson(path) {
 }
 const iso = ms => Number.isFinite(ms) ? new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z') : 'time unknown';
 const first = values => values.find(value => typeof value === 'string' && value.trim() && value.trim().toLowerCase() !== 'unknown');
-const sha = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value);
 const unique = values => [...new Set(values.filter(value => typeof value === 'string' && value.trim()).map(value => text(value, 200)))];
 // The request ids and report links that pdd saved for a batch's rows.
 const requestsOf = rows => unique(rows.flatMap(row => Array.isArray(row?.request_ids) ? row.request_ids : [])).slice(0, 50);
@@ -33,20 +32,18 @@ const reportsOf = rows => unique(rows.map(row => row?.report_url)).filter(url =>
 function gitLine(root, args) {
   try { return String(execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })).trim(); } catch { return ''; }
 }
-// The prove record as the PR renderer trusts it: valid, this run's, made in this run, for the current head and base.
+// The prove record, judged by the PR renderer's own freshness rule, so a step record and a PR top always agree.
 function proveResult(path, { runId, since, root, baseBranch }, git) {
   let stat;
   try { stat = lstatSync(path); } catch { return null; }
-  const at = Math.round(stat.mtimeMs), record = readJson(path);
-  const result = (state, summary, extra = {}) => ({ kind: 'pdd workflow prove', at, state, summary, ...extra });
-  if (!record || !validateProofRecord(record) || !sha(record.baseSha) || !sha(record.headSha) || record.runId !== runId)
-    return result('unavailable', 'Old-code proof: unavailable (not a valid pdd proof record for this run).');
-  if (at < since) return result('stale', 'Old-code proof: stale (saved before this run started; rerun pdd workflow prove).', { headSha: record.headSha });
-  const head = git(root, ['rev-parse', '--verify', 'HEAD^{commit}']);
-  if (!sha(head)) return result('unavailable', 'Old-code proof: unavailable (current Git head unavailable).', { headSha: record.headSha });
-  const base = baseBranch ? git(root, ['merge-base', 'HEAD', `refs/remotes/origin/${baseBranch}`]) : '';
-  if (head !== record.headSha || sha(base) && base !== record.baseSha) return result('stale', 'Old-code proof: stale (base or head changed; rerun pdd workflow prove).', { headSha: record.headSha });
-  return result('current', text(formatProof(record), 600), { outcome: record.outcome, headSha: record.headSha });
+  let saved;
+  try { saved = stat.isFile() ? { content: readFileSync(path, 'utf8'), error: '', savedAt: stat.mtimeMs } : { content: '', error: 'Proof is not a regular file.' }; }
+  catch { saved = { content: '', error: 'Proof could not be read.' }; }
+  const head = git(root, ['rev-parse', '--verify', 'HEAD^{commit}']), base = baseBranch ? git(root, ['merge-base', 'HEAD', `refs/remotes/origin/${baseBranch}`]) : '';
+  const judged = judgeOldCodeProof(saved, { runId, startedAt: since, headSha: head, baseSha: base });
+  const state = ['stale', 'unavailable', 'not-run'].includes(judged.status) ? judged.status : 'current';
+  return { kind: 'pdd workflow prove', at: Math.round(stat.mtimeMs), state, summary: text(judged.line, 600),
+    ...(state === 'current' ? { outcome: judged.status } : {}), ...(judged.record ? { headSha: judged.record.headSha } : {}) };
 }
 // A prove result that is not current is shown, but it is never pdd's proof.
 export const usableResult = result => result.kind !== 'pdd workflow prove' || result.state === 'current';

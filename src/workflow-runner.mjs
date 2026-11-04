@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 4ce832e421d8bb5b35a65b825e26f4c33a864a77cead12e9e6e5f834251e0da6).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 958332fd517885c59ceaa528d10fed41fdf8881f882966d2b41054bf167604d5).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { execFile as execFileCallback } from 'node:child_process';
@@ -741,7 +741,7 @@ async function matchingPromptApprovals(run, p) {
   });
 }
 async function publicationEvidence(run, area, p) {
-  const saved = { runId: run.runId, runDir: run.runDir, root: run.root, baseSha: run.baseSha, baseBranch:run.baseBranch, workflow:run.workflow, number: run.number,
+  const saved = { runId: run.runId, ...(Number.isFinite(run.startedAt) ? { startedAt: run.startedAt } : {}), runDir: run.runDir, root: run.root, baseSha: run.baseSha, baseBranch:run.baseBranch, workflow:run.workflow, number: run.number,
     decisions: run.decisions ?? [], promptApprovals: await matchingPromptApprovals(run, p),
     steps: run.areas.flatMap(item => item.steps).map(step => ({ step, summary: run.done[step]?.summary ?? '' })) };
   let observedHead, observedProof;
@@ -756,7 +756,7 @@ async function publicationEvidence(run, area, p) {
         const path = join(runDir, 'old-code-proof.json');
         if (!proofFiles.lstatSync(path).isFile()) return {content:'',error:'Proof is not a regular file.'};
         observedProof = proofFiles.readFileSync(path, 'utf8');
-        return {content:observedProof,error:''};
+        return {content:observedProof,error:'',savedAt:proofFiles.lstatSync(path).mtimeMs};
       } catch (error) { return {content:'',error:error.code === 'ENOENT' ? 'missing' : 'Proof could not be read.'}; }
     }
   });
@@ -764,7 +764,7 @@ async function publicationEvidence(run, area, p) {
     evidence.nativeLine = 'Native tests: unknown (no current machine counts).';
     try {
       const record = JSON.parse(observedProof);
-      if (validateProofRecord(record) && record.runId === run.runId && record.headSha === observedHead?.headSha && record.baseSha === observedHead?.baseSha
+      if (!['not-run','stale','unavailable'].includes(evidence.proofStatus) && validateProofRecord(record) && record.runId === run.runId && record.headSha === observedHead?.headSha && record.baseSha === observedHead?.baseSha
           && !record.interruptSignal && [0,1].includes(record.head.exitCode) && !record.head.signal && !record.head.timedOut && !record.head.outputLimited && !record.head.error && !record.head.setupError) {
         const facts = new Map();
         for (const line of record.head.stdoutTail) {

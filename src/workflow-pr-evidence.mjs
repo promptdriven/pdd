@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-pr-evidence.prompt.md (sha256: 15721d4610fd404f75597d839457053c8b33d72d79df49a5fd6573d35b48b3be).
+// Generated from prompts/cli/workflow-pr-evidence.prompt.md (sha256: 3d0b9197555affad0a7ff3e666489d02c4b1fa3e759c614ff8c186ce82ec0675).
 import { execFile } from 'node:child_process';
 import { lstatSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -70,10 +70,28 @@ const defaults = {
     try {
       const path = join(runDir, 'old-code-proof.json');
       if (!lstatSync(path).isFile()) return { content: '', error: 'Proof is not a regular file.' };
-      return { content: readFileSync(path, 'utf8'), error: '' };
+      return { content: readFileSync(path, 'utf8'), error: '', savedAt: lstatSync(path).mtimeMs };
     } catch (error) { return { content: '', error: error.code === 'ENOENT' ? 'missing' : 'Proof could not be read.' }; }
   }
 };
+
+// One freshness rule for a saved old-code proof (#2904): the PR renderer and the step reader both call it, so they never disagree.
+const UNAVAILABLE = { line: 'Old-code proof: unavailable.', status: 'unavailable' };
+export function judgeOldCodeProof({ content = '', error = '', savedAt } = {}, { runId, startedAt, headSha, baseSha } = {}) {
+  if (!sha(headSha) || !sha(baseSha)) return UNAVAILABLE;
+  if (error === 'missing') return { line: 'Old-code proof: not run.', status: 'not-run' };
+  if (error) return UNAVAILABLE;
+  let record;
+  try { record = JSON.parse(content); } catch { return UNAVAILABLE; }
+  if (!validateProofRecord(record) || !sha(record.baseSha) || !sha(record.headSha) || record.runId !== runId) return UNAVAILABLE;
+  if (Number.isFinite(startedAt)) {
+    if (!Number.isFinite(savedAt)) return UNAVAILABLE;
+    if (savedAt < startedAt) return { line: 'Old-code proof: stale (saved before this run started; rerun pdd workflow prove).', status: 'stale' };
+  }
+  const head = { headSha, baseSha };
+  if (record.headSha !== head.headSha || record.baseSha !== head.baseSha) return { line: 'Old-code proof: stale (base or head changed; rerun pdd workflow prove).', status: 'stale' };
+  return { line: formatProof(record), status: record.outcome, record };
+}
 
 export async function preparePrEvidence({ run, isCode }, ports = {}) {
   const p = { ...defaults, ...ports }, steps = run.steps.filter(item => safeStep(item.step));
@@ -101,16 +119,7 @@ export async function preparePrEvidence({ run, isCode }, ports = {}) {
     try {
       const head = await p.currentHead({ root: run.root, baseBranch:run.baseBranch });
       const saved = await p.readOldCodeProof({ runDir: run.runDir });
-      if (!head.error && sha(head.headSha) && sha(head.baseSha)) {
-        if (saved.error === 'missing') { line = 'Old-code proof: not run.'; proofStatus = 'not-run'; }
-        else if (!saved.error) {
-          const record = JSON.parse(saved.content);
-          if (validateProofRecord(record) && sha(record.baseSha) && sha(record.headSha) && record.runId === run.runId) {
-            if (record.headSha !== head.headSha || record.baseSha !== head.baseSha) { line = 'Old-code proof: stale (base or head changed; rerun pdd workflow prove).'; proofStatus = 'stale'; }
-            else { line = formatProof(record); proofStatus = record.outcome; }
-          }
-        }
-      }
+      ({ line, status: proofStatus } = judgeOldCodeProof(saved, { runId: run.runId, startedAt: run.startedAt, headSha: head.error ? '' : head.headSha, baseSha: head.error ? '' : head.baseSha }));
     } catch { /* Publication retains an explicit unavailable result. */ }
     lines.push(line);
   }

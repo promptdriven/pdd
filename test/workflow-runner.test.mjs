@@ -2683,7 +2683,7 @@ test('2904: with no agent summary, the step record and the PR trace pdd\'s resul
   writeFileSync(join(run.runDir, 'old-code-proof.json'), JSON.stringify({ runId: run.runId, outcome: 'proved', headSha: f.git(run.root, 'rev-parse', 'HEAD') }));
   const check = await done('check', {});
   assert.match(check.message, /^pdd recorded its own results with this step:$/m);
-  assert.match(check.message, /^pdd result: pdd workflow prove \([^)]*\): Old-code proof: unavailable \(not a valid pdd proof record for this run\)\.$/m);
+  assert.match(check.message, /^pdd result: pdd workflow prove \([^)]*\): Old-code proof: unavailable\.$/m);
   assert.doesNotMatch(check.message, /Old-code proof: proved|Old-code proof: ✓/);
   const saved = f.record().done.check;
   assert.equal(saved.summary, '');
@@ -2700,7 +2700,7 @@ test('2904: done check with only a stale or fake proof warns, shows it plainly, 
   writeFileSync(join(run.runDir, 'old-code-proof.json'), '{"runId":"x"}');
   const out = await done('check', { summary: 'checked' });
   assert.match(out.message, /^warning: pdd has no result of its own for this run yet\./m);
-  assert.match(out.message, /Old-code proof: unavailable \(not a valid pdd proof record for this run\)\./);
+  assert.match(out.message, /Old-code proof: unavailable\./);
   assert.match(out.message, /\(pdd:no-verdict\)\.$/m);
   assert.match(out.message, /Next step: try/);
 });
