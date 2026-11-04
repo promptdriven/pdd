@@ -921,7 +921,7 @@ test('#18: the check step\'s Runtime check wins the top of PR 1; the code questi
 // 0.1.6 items 6 and 7: many Stories in one run.
 const storyLines = 'Runtime check (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call; Runtime check (merge-tiles) (DRAFT): ✗ 2 of 3 criteria · 8/10 checks · 2 AI calls; '
   + 'Runtime check (score): ✓ 2 of 2 criteria · 6/6 checks · 1 AI call; Runtime check: ✗ 7 of 8 criteria · 24/26 checks · 4 AI calls; Report: https://rt.example.test/r/batch-1';
-test('0.1.6: PR 1 starts with one Runtime check line per Story, then the total pdd adds up and the report; status counts the Stories that pass', async t => {
+test('0.1.6: PR 1 starts with one Runtime check line per Story (as agent notes), then the total pdd adds up and the report; status shows no pdd result for typed lines', async t => {
   const { f, run } = await featureAtTryGate(t);
   f.ports.timeZone = 'UTC';
   f.tick(); await stepDone({ step: 'check', summary: storyLines, cwd: run.root }, f.agentPorts());
@@ -944,14 +944,14 @@ test('0.1.6: PR 1 starts with one Runtime check line per Story, then the total p
     NOTE + 'Report: https://rt.example.test/r/batch-1 (report links expire after 7 days)', '']);
 });
 
-test('0.1.6: a single overall Runtime check line counts as one Story', async t => {
+test('0.1.6: a single typed overall Runtime check line gives no Story count in status (no pdd result)', async t => {
   const { f, run } = await featureAtTryGate(t);
   assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^Stories: no pdd result \(pdd:no-verdict\)$/m);
   f.tick(); await stepDone({ step: 'check', summary: 'Runtime check (DRAFT): ✗ 1 of 2 criteria · 3/5 checks · 1 AI call', cwd: run.root }, f.agentPorts());
   assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^Stories: no pdd result \(pdd:no-verdict\)$/m);
 });
 
-test('0.1.6: the skills format (one line each, with a Report line per Story) gives the same PR 1 top and count', async t => {
+test('0.1.6: the skills format (one line each, with a Report line per Story) gives the same PR 1 top, and status shows no pdd result', async t => {
   const { f, run } = await featureAtTryGate(t);
   const summary = ['Runtime check (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call', 'Checked each Story.', 'Report: https://rt.example.test/r/one',
     'Runtime check (merge-tiles) (DRAFT): ✗ 2 of 3 criteria · 8/10 checks · 2 AI calls', 'Report (DRAFT): https://rt.example.test/r/two',
@@ -1032,7 +1032,7 @@ test('0.1.6: a summary with no overall line works; a Story checked again takes i
     NOTE + 'Report (merge-tiles): https://rt.example.test/r/three (report links expire after 7 days)', '']);
 });
 
-// pdd check prints only the Story's own line when there is one Story (0.1.7): PR 1 lifts it and status counts it.
+// pdd check prints only the Story's own line when there is one Story (0.1.7): PR 1 lifts it as an agent note, and status (pdd results only) shows no pdd result.
 test('0.1.7: a summary with only one named Runtime check line lifts that line into PR 1', async t => {
   const { f, run } = await featureAtTryGate(t);
   f.tick(); await stepDone({ step: 'check', summary: 'Runtime check (unread-filter) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call; Report (unread-filter): https://rt.example.test/r/one', cwd: run.root }, f.agentPorts());
@@ -2565,7 +2565,7 @@ test('product association: conflicting markers warn and ordinary issues keep the
 });
 
 // user_stories/prompt-tests-line.md: pdd writes `Prompt tests`; every reader takes old `Runtime check` lines the same way.
-test('Prompt tests lines: PR 1 top, total and Story count read new and old labels alike; a verdict stops at either label', async t => {
+test('Prompt tests lines: the PR 1 top and total read new and old labels alike, status never counts them, and a verdict stops at either label', async t => {
   const { f, run } = await featureAtTryGate(t);
   const summary = ['Verdict: the bug is in the PROMPT.', 'Prompt tests (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
     'Runtime check (merge-tiles) (DRAFT): ✗ 2 of 3 criteria · 8/10 checks · 2 AI calls', 'Report (move-tiles): https://rt.example.test/r/one'].join('; ');
@@ -2805,4 +2805,72 @@ test('2904: product evidence reads pdd\'s own records and receipts, never typed 
   const body = ['pdd result: pdd test (batch b1, 2026-11-03T12:00:00Z, source current): Prompt tests (P02-order): ✓ 2 of 2 criteria',
     'Agent note — not checked by pdd: Prompt tests (P01-menu): ✓ 3 of 3 criteria', 'Prompt tests (P03-ready): ✗ 0 of 1 criteria', '', 'Part of #17'].join('\n');
   assert.deepEqual(recordedRuntimeLines(body).map(row => row.story), ['P02-order', 'P03-ready']);
+});
+
+test('2904: every Prompt tests form that summaryLine prints stays whole, and agent words after it are cut off', async () => {
+  const { runtimeLines } = await import('../src/workflow-runner.mjs');
+  const { summaryLine } = await import('../src/runtime-output.mjs');
+  const S = { phase: 'server', request_ids: ['a'] };
+  const groups = [
+    [{ ...S, state: 'failed', criteria: { passed: 0, total: 1 }, checks: { passed: 0, total: 0 }, rerun: { calls: 2 }, unknown_calls: 1 }],
+    [{ ...S, state: 'passed', criteria: { passed: 3, total: 3 }, checks: { passed: 10, total: 10 }, calls: 4, rerun: { calls: 1 } }],
+    [{ ...S, state: 'failed', criteria: { passed: 1, total: 3 }, checks: { passed: 3, total: 10 }, calls: 2 }, { ...S, state: 'unknown', criteria_total: 2 }],
+    [{ ...S, state: 'running', criteria_total: 2, progress: { step: 'pay', steps_done: 1, steps_total: 5, calls_settled: 3, calls_open: 1 } }],
+    [{ ...S, state: 'running', criteria_total: 2, progress: { calls_settled: 1 } }, { ...S, state: 'running', criteria_total: 1, progress: { calls_settled: 2, calls_open: 2 } }],
+    [{ state: 'refused', criteria_total: 8, request_ids: [], calls: 0 }],
+    [{ state: 'passed', cached: true, story: 's', criteria: { passed: 1, total: 1 }, checks: { passed: 1, total: 1 }, calls: 0, request_ids: [] }],
+    [{ ...S, state: 'passed', checks: { passed: 1, total: 1 }, calls: 1 }],
+    [{ state: 'not_run', busy: true, criteria_total: 1, request_ids: [], calls: 0 }],
+    [{ ...S, state: 'queued', criteria_total: 1 }]];
+  for (const rows of groups) for (const story of [null, 's']) {
+    const line = summaryLine(rows, story), result = line.slice(line.indexOf(': ') + 2);
+    for (const tail of ['', '. Public full suite: 4085 passed, no skips.', ' and all native tests pass', ' · the rest is fine'])
+      assert.deepEqual(runtimeLines(`${line}${tail}`).map(row => row.result), [result], `${line}${tail}`);
+  }
+  for (const [text, result] of [['Prompt tests: UNKNOWN and all native tests pass', 'UNKNOWN'], ['Runtime check (a): unknown · 0 of 1 criteria · 1/1 checks · 1 AI call and more', 'unknown · 0 of 1 criteria · 1/1 checks · 1 AI call']])
+    assert.deepEqual(runtimeLines(text).map(row => row.result), [result], text);
+});
+
+// #2921: product reads a real, runner-generated PR body: only pdd's own result lines count, never Steps rows or full summaries.
+async function productStatusFor(t, body) {
+  const { productStatus } = await import('../src/product.mjs');
+  const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-product-body-'))); t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  const { cpSync } = await import('node:fs');
+  cpSync(join(packageRoot, 'examples/coffee-pickup'), cwd, { recursive: true });
+  const marker = '<!-- pdd-product: run=phone-1 -->', issue = { number: 81, body: marker, user: { login: 'member' }, author_association: 'MEMBER', created_at: '2026-10-01T00:00:00Z' };
+  const pr = { number: 61, url: 'https://github.com/example/coffee/pull/61', state: 'MERGED', isDraft: false, updatedAt: '2026-10-02T00:00:00Z', headRefName: 'topic-61', isCrossRepository: false,
+    headRepository: { name: 'coffee' }, headRepositoryOwner: { login: 'example' },
+    body: `${marker}\n<!-- pdd-workflow:instance-61:code -->\n${body.replace(/^<!-- pdd-workflow:[^\n]*-->$/gm, '')}` };
+  let saved = null;
+  const ports = { lockProductState: async () => ({ handle: 'lock' }), unlockProductState: async () => ({}), readProductState: async () => ({ json: saved }), writeProductState: async ({ json }) => { saved = json; return {}; },
+    now: async () => ({ milliseconds: Date.parse('2026-10-03T00:00:00Z') }), issueByNumber: async ({ number }) => number === 81 ? issue : null, listRuns: async () => [],
+    resolveRepository: async () => ({ repository: 'example/coffee', defaultBranch: 'alpha' }), planOnBase: async () => true, storyEvidence: async () => [],
+    issuePage: async args => { const items = issue.body.includes(args.marker) ? [issue] : []; return { items: items.slice((args.page - 1) * args.perPage, args.page * args.perPage), total_count: items.length, incomplete_results: false }; },
+    timelinePage: async args => args.issue === 81 && args.page === 1 ? [{ event: 'cross-referenced', source: { issue: { pull_request: { html_url: pr.url } } } }] : [],
+    pullRequest: async ({ number }) => number === 61 ? pr : null, currentActor: async () => ({ login: 'person' }),
+    openBaseSource: async () => ({ root: cwd, handle: null }), closeBaseSource: async () => ({}), execFile: async () => assert.fail('no process') };
+  return productStatus({ cwd }, ports);
+}
+
+test('2921: product counts nothing from a generated PR body whose only Prompt tests lines are agent notes, and a real pdd ✗ wins over them', async t => {
+  const typed = 'Prompt tests (P01-menu): ✓ 8 of 8 criteria · 8/8 checks · 1 AI call';
+  { // No pdd result: the body has the agent-note top line, a Steps row and the full summary, all saying ✓.
+    const { f, done } = await featureWithOwnResults(t, { results: false });
+    await done('check', { summary: typed }); await done('try', { skipped: 'No person at the Try step.' });
+    const body = f.prs[0].body;
+    assert.match(body, /^- \*\*check\*\*: Agent note — not checked by pdd: `Saved runtime receipt \(unverified in this agent note\): Prompt tests \(P01-menu\): ✓/m);
+    const status = await productStatusFor(t, body);
+    assert.equal(status.parts[0].pass, 0, JSON.stringify(status.parts[0]));
+  }
+  { // pdd's own check failed P01-menu; the agent typed a pass.
+    const { f, run, done } = await featureWithOwnResults(t, { results: false });
+    saveBatch(f.ports.env.PDD_STATE_DIR, '20261027-180000-abcd', { root: run.root, created_at: '2026-10-27T18:00:00.000Z', intent: 'check', rows: [{ test: 'tests/value.json', state: 'failed', request_ids: [] }] },
+      { summary_line: 'Prompt tests: ✗ 0 of 8 criteria · 0/8 checks · 1 AI call', rows: [{ summary_line: 'Prompt tests (P01-menu): ✗ 0 of 8 criteria · 0/8 checks · 1 AI call' }] });
+    await done('check', { summary: typed }); await done('try', { skipped: 'No person at the Try step.' });
+    const body = f.prs[0].body;
+    assert.match(body.split('\n')[0], /^pdd result: pdd test .*Prompt tests \(P01-menu\): ✗ 0 of 8 criteria/);
+    const status = await productStatusFor(t, body);
+    assert.equal(status.parts[0].pass, 0, JSON.stringify(status.parts[0]));
+    assert.equal(status.runs.find(row => row.run === 'phone-1').fromPr, 61, 'the pdd result line still names the PR as the evidence source');
+  }
 });

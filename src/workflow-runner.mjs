@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 2c49e04e449000a17e9d984c6c61f00a3cf27e8ba5b0cbabf4f8209ad0563362).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 32c8df00c505ca544ea5feabb67c356768038d4e7bdfddf0b21016769169f38b).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { execFile as execFileCallback } from 'node:child_process';
@@ -546,7 +546,7 @@ const LABEL_START = new RegExp(`^${PROMPT_TESTS_WORDS}`);
 const LINE_PATTERN = new RegExp(`${PROMPT_TESTS_WORDS}((?:\\s*\\([^)]*\\))*):\\s*(.*?)(?=\\n|\\s*(?:;|\\bReport\\b|https?:\\/\\/|${PROMPT_TESTS_WORDS}|$))`, 'gs');
 // A result is only its pdd parts, joined by " · " (mark and criteria, checks, other states, AI calls). Words an agent
 // wrote after them on the same line ("… 2 AI calls. Full suite: 4085 passed.") are not part of the result.
-const RESULT_PART = /^(?:(?:✓|✗|no verdict|running|busy)(?: (?:\d+ of \d+ criteri(?:a|on)|passed))?|\d+ of \d+ criteri(?:a|on)|passed|criteria details not reported|\d+\/\d+ checks|\d+ AI calls?(?: \(\d+ for reruns\))?(?: \+ \d+ unknown)?|\d+ (?:for reruns|refused|not run|unknown|queued|running|ahead|not yet settled|Stor(?:y|ies) skipped)|\d+ AI calls? so far|queued|step \d+(?: of \d+)?(?: \([^)]*\))?)$/;
+const RESULT_PART = /^(?:(?:✓|✗|no verdict|running|busy|unknown|UNKNOWN|queued|refused|not run)(?: (?:\d+ of \d+ criteri(?:a|on)|passed))?|\d+ of \d+ criteri(?:a|on)|passed|criteria details not reported|\d+\/\d+ checks|(?:\d+ AI calls?(?: \(\d+ for reruns\))?|\d+ for reruns)(?: \+ \d+ unknown)?|\d+ (?:refused|not run|unknown|queued|running|ahead|not yet settled|Stor(?:y|ies) skipped)|\d+ AI calls? so far|step \d+(?: of \d+)?(?: \([^)]*\))?)$/;
 function resultParts(text) {
   const sentence = text.split(/\.\s/)[0].replace(/[.,]$/, ''), kept = [];
   for (const part of sentence.split(' · ')) {
@@ -555,7 +555,7 @@ function resultParts(text) {
     for (let size = words.length - 1; size > 0; size--) if (RESULT_PART.test(words.slice(0, size).join(' '))) { kept.push(words.slice(0, size).join(' ')); break; }
     break;
   }
-  return kept.length ? kept.join(' · ') : sentence;
+  return kept.length ? kept.join(' · ') : sentence.split(' ')[0];
 }
 export function runtimeLines(text) {
   return [...String(text ?? '').matchAll(LINE_PATTERN)].map(match => {
@@ -566,8 +566,16 @@ export function runtimeLines(text) {
       line: `${PROMPT_TESTS_LABEL}${match[1].replace(/\s+/g, ' ')}: ${result}`, pass: result.includes('✓') && !result.includes('✗') };
   });
 }
-// The Prompt tests lines of a PR body that pdd wrote as results: a line labeled as an agent note never counts.
-export const recordedRuntimeLines = text => runtimeLines(String(text ?? '').split('\n').filter(line => !line.startsWith('Agent note — not checked by pdd')).join('\n'));
+// The Prompt tests lines that pdd wrote as results in a PR body's top block: "pdd result:" lines and plain (receipt or older) lines.
+// The Steps overview, full summaries, Verify and every agent note are never read.
+export function recordedRuntimeLines(text) {
+  const lines = [];
+  for (const line of String(text ?? '').split('\n')) {
+    if (/^#{1,6}\s/.test(line) || /^<details\b/i.test(line)) break;
+    if (line.startsWith('pdd result:') || LABEL_START.test(line)) lines.push(line);
+  }
+  return runtimeLines(lines.join('\n'));
+}
 // One line per Story: a Story checked again keeps its place and takes its latest line.
 const latestStories = lines => [...new Map(lines.filter(line => line.story).map(line => [line.story, line])).values()];
 // The total over the Stories, added up by pdd: a pasted overall line can cover only the Stories checked last.
