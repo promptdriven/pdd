@@ -159,9 +159,20 @@ test('two machine launchers offer the same issue to the skill without making a c
 test('native Linux and macOS user timers pin Node, script, state and environment without a shell', async t => {
   for (const platform of ['linux', 'darwin']) {
     const f = await fixture(t); delete f.ports.timer; f.ports.platform = platform; f.ports.uid = 123;
-    const run = f.ports.run;
-    f.ports.run = async (command, args, opts) => ['systemctl', 'launchctl'].includes(command) ? (f.runs.push([command, args]), { code: 0, stdout: '', stderr: '' }) : run(command, args, opts);
-    assert.equal((await f.invoke('start')).exitCode, 0);
+    // Keep both platform branches independent of the host's XDG paths and user services.
+    const env = { HOME: f.home, PATH: '/fixture/bin', XDG_CONFIG_HOME: join(f.home, '.config') };
+    const run = f.ports.run, serviceCalls = [];
+    f.ports.run = async (command, args, opts) => {
+      if (['systemctl', 'launchctl', 'loginctl'].includes(command)) {
+        assert.equal(opts.env.HOME, env.HOME);
+        assert.equal(opts.env.XDG_CONFIG_HOME, env.XDG_CONFIG_HOME);
+        serviceCalls.push([command, args]);
+        return { code: 0, stdout: command === 'loginctl' ? 'yes\n' : '', stderr: '' };
+      }
+      return run(command, args, opts);
+    };
+    const started = await f.invoke('start', { env });
+    assert.equal(started.exitCode, 0, started.message);
     if (platform === 'linux') {
       const folder = join(f.home, '.config', 'systemd', 'user');
       const service = readdirSync(folder).find(x => x.endsWith('.service'));
@@ -171,14 +182,23 @@ test('native Linux and macOS user timers pin Node, script, state and environment
       assert.match(text, /^KillMode=process$/m);
       assert.doesNotMatch(text, /\/bin\/.*sh|TOKEN|API_KEY/);
       assert.match(readFileSync(join(folder, service.replace('.service', '.timer')), 'utf8'), /OnActiveSec=30min/);
+      assert.deepEqual(serviceCalls.filter(([command]) => command === 'systemctl').map(([, args]) => args), [
+        ['--user', 'daemon-reload'], ['--user', 'enable', service.replace('.service', '.timer')],
+        ['--user', 'restart', service.replace('.service', '.timer')],
+      ]);
+      assert.equal(serviceCalls.some(([command]) => command === 'launchctl'), false);
     } else {
       const folder = join(f.home, 'Library', 'LaunchAgents');
       const text = readFileSync(join(folder, readdirSync(folder)[0]), 'utf8');
       assert.ok(text.includes(process.execPath)); assert.match(text, /<integer>1800<\/integer>/);
       assert.match(text, /EnvironmentVariables/); assert.ok(text.includes(f.stateFile()));
-      assert.ok(f.runs.some(([cmd, args]) => cmd === 'launchctl' && args[0] === 'bootstrap' && args[1] === 'gui/123'));
+      const name = readdirSync(folder)[0];
+      assert.deepEqual(serviceCalls, [
+        ['launchctl', ['bootout', `gui/123/${name.slice(0, -6)}`]],
+        ['launchctl', ['bootstrap', 'gui/123', join(folder, name)]],
+      ]);
     }
-    await f.invoke('stop');
+    assert.equal((await f.invoke('stop', { env })).exitCode, 0);
     assert.equal(f.state().enabled, false);
     const definitions = platform === 'linux' ? join(f.home, '.config', 'systemd', 'user') : join(f.home, 'Library', 'LaunchAgents');
     assert.deepEqual(readdirSync(definitions), []);
