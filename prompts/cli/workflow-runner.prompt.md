@@ -42,12 +42,14 @@ After the automatic publication commit, perform one adoption validation scan per
 publication and reuse its result for replay and publication decisions. Retries use
 the frozen authority and revalidate current content; an invalid observation must
 clear any old PASS before publication, never briefly publish stale PASS.
-A changed, added, removed or unreadable covered file blocks reuse
+A changed, added, removed or unreadable covered prompt/dependency blocks reuse
 with advice to start an ordinary approval workflow for changed requirements; it must
 not replace the anchor or silently fall back to diff selection. Unrelated implementation
 changes remain allowed and bind subsequent replay to the current source fingerprint.
-The existing changed-scenario guard, public-boundary execution, mutation and formal
-checks still apply. Adoption supplies no PASS or fresh execution attestation.
+In code space revalidate using the replay owner's `scenarioReference` option, retaining original
+authority and prompt/dependency checks. Scenario changes follow its saved-value warning rule and
+do not block publication. Public-boundary execution, mutation and formal checks still apply.
+Adoption supplies no PASS or fresh execution attestation.
 
 ## Failed chat startup and recovery
 
@@ -296,9 +298,10 @@ An enumeration failure or unreadable/unclassifiable candidate makes the replay i
 never silently skip it or turn a failed read into an empty successful selection.
 Before every opted-in code publication, after automatic
 commits and also on retries or updates, independently enumerate current changed scenario files against the
-saved run base. If any current scenario path is absent from the frozen anchor, report BLOCKED with the missing
-paths even when the manifest covers every anchored check. An unavailable inventory cannot establish PASS.
-This guard precedes replay validation and does not require a new replay-module API.
+saved run base. Pass the union of current scenario paths and saved paths to readReplayEvidence, following
+its saved-value warning rule. A deleted saved path is handled by that rule rather than making discovery
+fail. Unavailable Git enumeration or unclassifiable new JSON still cannot establish PASS; a failed file
+read or JSON parse names the exact repo-relative file and the cleaned parser/read cause.
 For opted-in code steps, read and save the structured result as run.replayEvidence and on the step record;
 show its status separately from free-form summaries. Revalidate after automatic commits immediately before
 publication, including retries and updates of an existing code PR. The canonical report goes above every
@@ -306,6 +309,12 @@ Prompt tests, prose PASS claim or verify.md and retains assertion/formal failure
 malformed reports publish as BLOCKED/NOT REPLAYED, never PASS. Real assertion failures remain publishable;
 the policy qualifies evidence rather than preventing every failing review. The report and RUNBOOK explicitly
 state the CLI's structure/identity trust boundary; replay validation never executes tests or supplied commands; explicit old-code proof is separate.
+
+Keep every saved-value warning in status.json /replayEvidence/warnings. Give the replay formatter only
+the space left within the whole-description budget after its fixed report, ordinary evidence and minimum
+summary/verify notices. Its exact overflow count and run-record pointer keep all omitted changes reviewable.
+Fit warnings before verify text and full summaries consume the remaining space. A long list or an individual
+long JSON Pointer/value must not make publication exceed the budget or silently cut a change.
 
 For a previously opened opted-in code PR, replace its body with a prominent BLOCKED publication-pending
 report before pushing changed source, then set the final newly validated report after a successful push.
@@ -469,6 +478,6 @@ The Interpreter entries below name the actual public `changeRun` and `acknowledg
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"bf9c9dda7930a291f7c0bbbea21e890df5e40f53d1e1800a6c1c587b3bb09156","entries":[{"operation":"changeRun","input_schema":{"type":"object","properties":{"ref":{"type":"string"},"text":{"type":"string"},"cwd":{"type":"string"}},"required":["ref","text","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]},{"operation":"acknowledgeRequest","input_schema":{"type":"object","properties":{"requestId":{"type":"string"},"summary":{"type":"string"},"cwd":{"type":"string"}},"required":["requestId","summary","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]},{"operation":"storyCount","input_schema":{"type":"object","properties":{"root":{"type":"string"},"runtimeHistory":{"type":"array","items":{"type":"object","properties":{"summary":{"type":"string"},"at":{"type":"integer"},"source":{"type":"object","properties":{"kind":{"type":"string"},"sha256":{"type":"string"},"tests":{"type":"array","items":{"type":"string"}}},"required":["kind","sha256"],"additionalProperties":false}},"required":["summary","at"],"additionalProperties":false}},"done":{"type":"object","properties":{},"required":[],"additionalProperties":false},"evidence":{"type":"array","items":{"type":"object","properties":{"summary":{"type":"string"},"at":{"type":"integer"},"source":{"type":"object","properties":{"kind":{"type":"string"},"sha256":{"type":"string"},"tests":{"type":"array","items":{"type":"string"}}},"required":["kind","sha256"],"additionalProperties":false}},"required":["summary","at"],"additionalProperties":false}}},"required":["root","runtimeHistory","done","evidence"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"pass":{"type":"integer"},"total":{"type":"integer"},"failing":{"type":"array","items":{"type":"string"}},"unknown":{"type":"array","items":{"type":"string"}},"evidence":{"type":"string"}},"required":["pass","total","failing"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[{"name":"source","kind":"port","access":"read","operations":[{"name":"fingerprint","access":"read","arguments_schema":{"type":"object","properties":{"root":{"type":"string"}},"required":["root"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"value":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["value"],"additionalProperties":false}},{"name":"capture","access":"read","arguments_schema":{"type":"object","properties":{"root":{"type":"string"},"tests":{"type":"array","items":{"type":"string"}},"appMap":{"type":"null"}},"required":["root","tests","appMap"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"sha256":{"type":"string"},"error":{"type":"string"}},"required":["sha256","error"],"additionalProperties":false}}]}],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
+{"status":"draft","prose_sha256":"f07db4f44c42268e8c2a10749fec206001e61682bb5096578df616d66f5a898d","entries":[{"operation":"changeRun","input_schema":{"type":"object","properties":{"ref":{"type":"string"},"text":{"type":"string"},"cwd":{"type":"string"}},"required":["ref","text","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]},{"operation":"acknowledgeRequest","input_schema":{"type":"object","properties":{"requestId":{"type":"string"},"summary":{"type":"string"},"cwd":{"type":"string"}},"required":["requestId","summary","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]},{"operation":"storyCount","input_schema":{"type":"object","properties":{"root":{"type":"string"},"runtimeHistory":{"type":"array","items":{"type":"object","properties":{"summary":{"type":"string"},"at":{"type":"integer"},"source":{"type":"object","properties":{"kind":{"type":"string"},"sha256":{"type":"string"},"tests":{"type":"array","items":{"type":"string"}}},"required":["kind","sha256"],"additionalProperties":false}},"required":["summary","at"],"additionalProperties":false}},"done":{"type":"object","properties":{},"required":[],"additionalProperties":false},"evidence":{"type":"array","items":{"type":"object","properties":{"summary":{"type":"string"},"at":{"type":"integer"},"source":{"type":"object","properties":{"kind":{"type":"string"},"sha256":{"type":"string"},"tests":{"type":"array","items":{"type":"string"}}},"required":["kind","sha256"],"additionalProperties":false}},"required":["summary","at"],"additionalProperties":false}}},"required":["root","runtimeHistory","done","evidence"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"pass":{"type":"integer"},"total":{"type":"integer"},"failing":{"type":"array","items":{"type":"string"}},"unknown":{"type":"array","items":{"type":"string"}},"evidence":{"type":"string"}},"required":["pass","total","failing"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[{"name":"source","kind":"port","access":"read","operations":[{"name":"fingerprint","access":"read","arguments_schema":{"type":"object","properties":{"root":{"type":"string"}},"required":["root"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"value":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["value"],"additionalProperties":false}},{"name":"capture","access":"read","arguments_schema":{"type":"object","properties":{"root":{"type":"string"},"tests":{"type":"array","items":{"type":"string"}},"appMap":{"type":"null"}},"required":["root","tests","appMap"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"sha256":{"type":"string"},"error":{"type":"string"}},"required":["sha256","error"],"additionalProperties":false}}]}],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
 ```
 </details>
