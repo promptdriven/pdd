@@ -86,8 +86,8 @@ test('RUNTIME-SERVER3: 429 server-full gives a new ID after Retry-After and keep
   for (const post of checks) assert.ok(existsSync(join(setup.state, 'batches', result.batch, `${post.request.requestId}.posted`)));
 });
 
-// Wrong: no AI room, the gate or a bad token is retried or looks like a failed check.
-test('RUNTIME-SERVER4: 503 pool-low-room, the gate and 401 are not run (exit 5) with no new attempt', async t => {
+// Only an invalid sign-in permits one retry after a fresh identity lookup (#2914).
+test('RUNTIME-SERVER4: pool-low-room and the gate stop immediately; persistent 401 stops after one sign-in retry', async t => {
   const setup = harbor(t);
   const cases = [
     [{ status: 503, json: { requestId: null, command: 'check', state: 'refused', job_created: true, dispatch: 'not_started',
@@ -100,7 +100,12 @@ test('RUNTIME-SERVER4: 503 pool-low-room, the gate and 401 are not run (exit 5) 
     const fake = await fakeRuntime(t, (entry, f) => entry.method === 'POST' && entry.command === 'check' ? reply : f.normal(entry));
     const result = await check(setup, fake, ['place-order']);
     assert.equal(result.code, 5, result.err + result.out);
-    assert.equal(fake.posts.filter(post => post.command === 'check').length, 1); assert.equal(fake.gets.length, 0);
+    const checks = fake.posts.filter(post => post.command === 'check');
+    assert.equal(checks.length, reply.status === 401 ? 2 : 1); assert.equal(fake.gets.length, 0);
+    if (reply.status === 401) {
+      assert.deepEqual(checks[0].request, checks[1].request, 'sign-in recovery keeps the same request ID and body');
+      assert.ok(checks[0].tar.equals(checks[1].tar));
+    }
     assert.match(result.out + result.err, pattern);
   }
 });
@@ -131,7 +136,8 @@ test('RUNTIME-SERVER5: Ctrl-C prints the read line and exits 3; --read then GETs
   const last = await check(setup, fake, [], { '--read': true, '--json': true });
   assert.equal(last.code, 1); assert.equal(last.json.batch, batch); assert.equal(fake.posts.length, posts); assert.equal(last.clock.uuids, 0);
   assert.equal(last.json.rows[0].request_id, fake.posts[1].request.requestId);
-  const other = await check(setup, fake, [batch], { '--read': true }, { gh: args => args[0] === 'auth' ? { status: 0, stdout: TOKEN } : { status: 0, stdout: 'someone 7\n' } });
+  // Switching accounts changes the token; an unchanged token reuses its cached login (#2914).
+  const other = await check(setup, fake, [batch], { '--read': true }, { gh: args => args[0] === 'auth' ? { status: 0, stdout: 'gho_OTHER_synthetic_account_token' } : { status: 0, stdout: 'someone 7\n' } });
   assert.equal(other.code, 5); assert.match(other.err, /These runs belong to octo\. Run: gh auth switch -u octo/);
 });
 

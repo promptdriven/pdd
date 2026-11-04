@@ -113,6 +113,21 @@ test('doors: wrapper failures use 125, never call as another login or follow lau
   assert.match(denied.stderr.text, /symbolic link/);
 });
 
+test('doors: a refreshed owner must pass the same Try check before a call retry', async t => {
+  const setup = clip(t), ready = await opened(t, setup, {}, () => ({
+    status: 401, json: { error: { code: 'auth-invalid', message: 'Sign in again.' } },
+  }));
+  assert.equal(ready.code, 0, ready.ports.stderr.text);
+  const { runShim } = await import('../src/try-doors.mjs');
+  let lookups = 0;
+  const changed = ready.makePorts({ gh: args => ({ status: 0, stdout: args[0] === 'auth' ? TOKEN : ++lookups === 1 ? 'octo 4242' : 'renamed 4242' }) });
+  assert.equal(await runShim(ready.descriptor, ['--help'], changed), 125);
+  assert.match(changed.stderr.text, /This Try belongs to octo\. Run: gh auth switch -u octo/);
+  assert.equal(ready.fake.jsonPosts.length, 1, 'the changed account gets no call retry');
+  const descriptor = JSON.parse(readFileSync(ready.descriptor));
+  assert.equal(descriptor.login, 'octo');
+});
+
 
 test('doors: a lost POST reads the accepted ID and never dispatches twice', async t => {
   const setup = clip(t);
