@@ -41,8 +41,10 @@ async function started(t, { saved = 'old', agent = 'codex' } = {}) {
 }
 
 async function advance(f) {
-  assert.equal((await stepDone({ step: 'scope', summary: 'Keep approved scope and history.', cwd: f.record().root }, f.agentPorts())).exitCode, 0);
-  assert.equal((await approveRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
+  const completed = await stepDone({ step: 'scope', summary: 'Keep approved scope and history.', cwd: f.record().root }, f.agentPorts());
+  assert.equal(completed.exitCode, 0, completed.message);
+  const approved = await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  assert.equal(approved.exitCode, 0, approved.message);
   assert.equal(f.record().area, 1);
 }
 
@@ -519,8 +521,24 @@ for (const delay of ['before-launch-checkpoint', 'after-native-dispatch']) test(
     assert.equal(await Promise.race([reached.then(() => true), opening.then(() => false)]), true, 'Replacement must reach the delayed native boundary');
     assert.equal(f.record().configDir, delay === 'before-launch-checkpoint' ? f.oldConfig : f.work5);
     f.ports.env.CODEX_HOME = f.work6;
-    await advance(f);
+    // The runner's "Failed chat startup and recovery" contract keeps durable
+    // approval/progress when next-area startup fails. This replacement still
+    // owns the shared layout lock, so that next chat cannot allocate yet.
+    const done = await stepDone({ step: 'scope', summary: 'Keep approved progress during delayed replacement.', cwd: f.record().root }, f.agentPorts());
+    assert.equal(done.exitCode, 0, done.message);
+    const approved = await approveRun({ ref: '17', cwd: f.source }, f.ports);
+    assert.equal(approved.exitCode, 1, approved.message);
+    assert.match(approved.message, /Approved the plan area .* The build chat startup was not confirmed \(herdr_layout_busy\)/, approved.message);
     newer = f.record();
+    assert.equal(newer.area, 1, 'Approval must durably advance progress despite the startup refusal');
+    assert.equal(newer.configDir, delay === 'before-launch-checkpoint' ? f.oldConfig : f.work5, 'The approval terminal cannot select Work6');
+    assert.ok(newer.done.scope);
+    assert.ok(newer.approvalRecord);
+    assert.equal(newer.decisions.length, 1);
+    assert.equal(newer.state, 'waiting');
+    assert.equal(newer.chatFailure.area, 'build');
+    assert.equal(newer.chatFailure.code, 'herdr_layout_busy');
+    assert.equal(newer.chats.some(chat => chat.area === 'build'), false, 'Unavailable layout ownership cannot fabricate a next-area chat');
     const refused = await open(f, { newSession: true });
     assert.equal(refused.exitCode, 1);
     assert.match(refused.message, /Another open operation/);
@@ -532,8 +550,15 @@ for (const delay of ['before-launch-checkpoint', 'after-native-dispatch']) test(
   assert.deepEqual(progress(after), progress(newer));
   assert.equal(after.configDir, newer.configDir);
   assert.deepEqual(after.chats.filter(chat => chat.area === 'build'), newer.chats.filter(chat => chat.area === 'build'));
-  assert.equal(calls(f, 'pane', 'run').filter(args => parsedSelectedPath(args[3]) === f.work5).length, delay === 'after-native-dispatch' ? 2 : 0,
-    'Only the already committed replacement and the publicly advanced area can use Work5');
+  assert.deepEqual(after.chatFailure, newer.chatFailure, 'An old-area checkpoint cannot clear the newer startup failure');
+  assert.equal(calls(f, 'pane', 'run').filter(args => parsedSelectedPath(args[3]) === f.work5).length, delay === 'after-native-dispatch' ? 1 : 0,
+    'Only an already dispatched replacement can use Work5 while the next-area start is refused');
+  const recovered = await open(f);
+  assert.equal(recovered.exitCode, 0, recovered.message);
+  assert.equal(f.record().chats.at(-1).area, 'build');
+  assert.equal(f.record().chats.at(-1).configDir, newer.configDir, 'Explicit recovery inherits the profile preserved during the delayed old checkpoint');
+  assert.equal(f.record().configDir, newer.configDir);
+  assert.equal(f.record().chatFailure, undefined);
   // Once the old writer has finished, a separate supported current-area account
   // selection can commit Work6; no saved-state account edits manufacture the race.
   const selected = await open(f, { newSession: true });
