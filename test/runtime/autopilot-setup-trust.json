@@ -317,6 +317,20 @@
         },
         {
           "criterion_id": "AC5",
+          "target": "result",
+          "path": "/message",
+          "op": "contains",
+          "value": "Ada"
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/message",
+          "op": "contains",
+          "value": "owner"
+        },
+        {
+          "criterion_id": "AC5",
           "target": "world",
           "path": "/names_questions/3/owner",
           "op": "equals",
