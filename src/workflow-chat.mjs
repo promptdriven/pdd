@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 56a85c5ccddd03c93191d18ad8018dcd42bbd37bf27e6deb03d17427bd747b40).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 437f120cac793b9f5b4d609c69691e350543dae5da00d616906ccaf91a67057a).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
@@ -183,18 +183,28 @@ export async function startChat({ run, area, message }, ports = {}) {
   return chat;
 }
 
-// A dialog footer hint: Codex "Press enter to confirm or esc to go back", Claude "Enter to confirm · Esc to cancel",
-// Gemini "(Use Enter to select)". Gemini's working timer "(esc to cancel, 5s)" is not a dialog.
-const DIALOG_HINT = /enter to (?:confirm|select)|esc to go back|esc to cancel(?!,\s*\d)/i;
+// A live dialog footer holds only key hints: Codex "Press enter to confirm or esc to go back", Claude
+// "Enter to confirm · Esc to cancel", Gemini "(Use Enter to select)". Agent text that quotes a hint has other words on its
+// line, or the agent's input line follows it. Gemini's working line "(esc to cancel, 5s)" is not a footer.
+const KEY_HINT = String.raw`[^\s·,|()]+ to [a-z]+(?: [a-z]+){0,2}`, HINT_JOIN = /\s+or\s+|\s*[·,|]\s*/i;
+const FOOTER = new RegExp(String.raw`^\(?(?:(?:press|use) )?${KEY_HINT}(?:(?:\s+or\s+|\s*[·,|]\s*)${KEY_HINT})*\)?$`, 'i');
+const DIALOG_HINTS = new Set(['enter to confirm', 'enter to select', 'esc to go back', 'esc to cancel']);
+const INPUT_LINE = /^\s*[›>❯](?:\s|$)/;
 const RULE_LINE = /^[\s\u2500-\u259f\-_=]+$/, EDGES = /^[\s\u2500-\u259f]+|[\s\u2500-\u259f]+$/g;
-// The first line of the dialog that the screen shows, or null when no dialog footer is in its last 3 nonblank lines.
+const footerLine = line => {
+  const text = line.replace(EDGES, '').replace(/\s+/g, ' ');
+  return FOOTER.test(text) && text.replace(/^\(|\)$/g, '').replace(/^(?:press|use) /i, '').split(HINT_JOIN).some(hint => DIALOG_HINTS.has(hint.toLowerCase()));
+};
+// The first line of the dialog that the screen shows, or null when no live dialog footer is in its last 3 nonblank lines.
 export function screenDialog(screen) {
   const lines = String(screen).split(/\r?\n/), blank = i => !lines[i]?.trim();
   let hint = -1;
   for (let i = lines.length - 1, seen = 0; i >= 0 && seen < 3; i--) {
     if (blank(i)) continue;
     seen++;
-    if (DIALOG_HINT.test(lines[i])) { hint = i; break; }
+    // The agent shows its input line, so no dialog is open above it.
+    if (INPUT_LINE.test(lines[i])) break;
+    if (footerLine(lines[i])) { hint = i; break; }
   }
   if (hint < 0) return null;
   let start = hint;
