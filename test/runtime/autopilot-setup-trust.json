@@ -110,6 +110,15 @@
             "writers": [],
             "complete": false
           }
+        },
+        {
+          "args": {},
+          "call_index": 6,
+          "result": {
+            "owner": "Ada",
+            "writers": [],
+            "complete": false
+          }
         }
       ],
       "result_template": null,
@@ -280,6 +289,67 @@
           "path": "/names_questions/2/writers",
           "op": "equals",
           "value": []
+        }
+      ]
+    },
+    {
+      "step_id": "partial-confirmed-setup",
+      "entry_path": "prompts/cli/autopilot.prompt.md",
+      "operation": "runAutopilot",
+      "input": {
+        "action": "setup",
+        "interactive": true,
+        "inRepo": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/message",
+          "op": "contains",
+          "value": "incomplete"
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "world",
+          "path": "/names_questions/3/owner",
+          "op": "equals",
+          "value": "Ada"
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "world",
+          "path": "/names_questions/3/writers",
+          "op": "equals",
+          "value": []
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "world",
+          "path": "/names_questions/3/complete",
+          "op": "equals",
+          "value": false
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "world",
+          "path": "/names_questions",
+          "op": "count",
+          "value": 4
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "world",
+          "path": "/mode_questions",
+          "op": "count",
+          "value": 1
         }
       ]
     },
