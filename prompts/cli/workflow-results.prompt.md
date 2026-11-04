@@ -70,7 +70,9 @@ The reader returns `{content}`: UTF-8 JSON for
 `pdd.native-assessment-context.v1`. This internal read transport is not a CLI
 option, pdd.json key, bindings key or user-controlled admission token. Required
 fields are `schema,runId,protected,candidate,story,intake,report,baseline`.
-Report/baseline may be null. Unreadable, malformed or unknown essential content
+Report/baseline may be null. Judge unavailable Story facts separately below;
+missing/null/unknown Story facts do not invalidate a readable profile snapshot.
+Unreadable, malformed or unknown essential profile content
 returns unverified/unknown, never a native pass. Ignore claimed origin fields
 inside the original report; trust facts come from the separate intake record.
 
@@ -94,6 +96,8 @@ inside the original report; trust facts come from the separate intake record.
   `requiresReview`; retain the protected inventory until matching review
   accepts a replacement. No source edit silently lowers required coverage.
 - `story` has `path,criteria:[{id,text}]`, read from the current selected Story.
+  Missing, unknown or empty Story facts cannot establish whole-Story support.
+  They do not discard an otherwise valid profile completion fact.
   Mapping identity is Story path AND criterion ID AND exact current criterion
   text. An index alone cannot preserve a mapping after the criterion changes.
 - `intake` has `origin,admission,originalRef,verificationRef,limits`. Origin is
@@ -175,7 +179,18 @@ never original occurrences. Keep all observations and reasons.
   occurrences; duplicate passes never replace another missing ID. Label
   occurrenceCount and uniqueIdCount separately; use null without an inventory.
   OptionalSkippedIds and original observations retain optional skips/reasons.
-- UnexecutedGates are required gates absent or not passed.
+- Return Gates in protected required-gate order as `{id,outcome}`. Return
+  Prerequisites in protected fixture order as
+  `{id,expectedArtifactId,artifactId,state,verificationRef}`. Preserve observed
+  artifact identity and original verification reference; use `unknown` when
+  absent. State is `verified` only for a matching artifact whose reference is
+  verified through admitted original capture/intake, never a report flag alone.
+  Retain explicit observed `missing` or `incompatible`; absent evidence or an
+  unverified claimed success is `unknown`. Gate outcome comes from admitted
+  original execution; absent/unverified evidence is `unknown`. References alone
+  grant no trust. These rows expose successful evidence as well as problems,
+  with the same origin, original references and limits as the assessment.
+  UnexecutedGates are required gates absent or not passed.
   PrerequisiteProblems are required fixtures without matching verified evidence.
   Required skip, missing prerequisite or unexecuted gate stays visible at exit
   zero. Do not infer missing fixture facts from an expected result.
@@ -184,21 +199,24 @@ with known originalRef and verificationRef. A verified flag alone cannot
 authorize another origin or absent provenance. RequiresReview is true when
 protected review is absent/unknown or candidate requirements differ; otherwise
 false. On an unreadable/malformed snapshot, use empty ID/observation/criterion
-arrays, null counts and unknown identity/origin; return unverified profile,
+arrays (including Gates and Prerequisites), null counts and unknown
+identity/origin; return unverified profile,
 unknown receipt/source, no proof and incomparable/unknown comparison.
 
 - ProfileState is `unverified` if review/intake is unverified, requirements
   need review, source is not current or receipt is not accepted. Otherwise it
   is `incomplete` for any required ID/gate/prerequisite problem or process
   failure, else `complete`. Optional skips alone do not prevent complete.
-  NativeProof is `pdd-observed` or `qualified-external` only for a complete
+  ProfileNativeProof is `pdd-observed` or `qualified-external` only for a complete
   profile with corresponding verified origin; else `none`. Agent notes,
   modeled physical ports, typed counts, declarations, lint/schema and replay
   cannot establish it. Always retain origin and limits.
 - Identity retains candidate source/implementation/tests/requirements,
   protected prompt/approval, original/verification references and producer,
   report, runner/runtime versions. Use `unknown` for unavailable values.
-- Criteria has one row per current Story criterion, in authored order:
+- Criteria is empty when current Story/criteria facts are unavailable; never
+  invent criteria from old mappings. Otherwise it has one row per current
+  Story criterion, in authored order:
   `{id,text,state,nativeIds,reason}`. Determine the mapping first: no mapping
   is `unmapped`; same Story/ID with changed text is `criterion-changed`;
   empty, ambiguous or out-of-profile mapping is `invalid-mapping`.
@@ -206,6 +224,15 @@ unknown receipt/source, no proof and incomparable/unknown comparison.
   incomplete profile gives `profile-incomplete`; complete profile gives
   `supported`. State is `supported` only for that last reason, else
   `unproved`. Preserve mapped IDs and observed outcomes even without proof.
+- StoryNativeProof equals ProfileNativeProof only when the current selected
+  Story has known path and nonempty criteria, every criterion has known nonblank
+  ID/text with no duplicate identity, and every current criterion row is
+  `supported`. Otherwise it is `none`, including missing/unknown/empty Story
+  facts and unmapped, changed or invalid criteria. Preserve the exact criterion
+  reasons and the legitimate complete-profile fact. Lint/workflow/PR consumers
+  may label this Story natively proved only from StoryNativeProof, with its
+  `pdd-observed` or `qualified-external` origin/limits; ProfileNativeProof alone
+  never authorizes that label. This result/display rule adds no workflow gate.
 - Baseline, when supplied, has its own `intake,report`. Compare only verified,
   complete current and prior original reports with the same reviewed requirements, required
   scope, producer/report interpretation and known compatible runner/runtime
@@ -245,8 +272,8 @@ and relevant physical effects.
 ```json
 {
   "status": "draft",
-  "prose_sha256": "51dfca83af74e5cceded48e81ddbf6130de6a6fd2c9ce71399080859627a3a05",
-  "entries": [{"operation":"assessNativeEvidence","input_schema":{"type":"object","properties":{"root":{"type":"string"},"runDir":{"type":"string"},"runId":{"type":"string"},"profileId":{"type":"string"},"storyPath":{"type":"string"}},"required":["root","runDir","runId","profileId","storyPath"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"profileId":{"type":"string"},"profileState":{"type":"string"},"sourceState":{"type":"string"},"receiptState":{"type":"string"},"origin":{"type":"string"},"nativeProof":{"type":"string"},"requiresReview":{"type":"boolean"},"requiredIds":{"type":"array","items":{"type":"string"}},"missingIds":{"type":"array","items":{"type":"string"}},"failedIds":{"type":"array","items":{"type":"string"}},"skippedIds":{"type":"array","items":{"type":"string"}},"unknownIds":{"type":"array","items":{"type":"string"}},"unexecutedGates":{"type":"array","items":{"type":"string"}},"prerequisiteProblems":{"type":"array","items":{"type":"string"}},"optionalSkippedIds":{"type":"array","items":{"type":"string"}},"duplicateIds":{"type":"array","items":{"type":"string"}},"occurrenceCount":{"oneOf":[{"type":"integer","minimum":0},{"type":"null"}]},"uniqueIdCount":{"oneOf":[{"type":"integer","minimum":0},{"type":"null"}]},"observations":{"type":"array","items":{"type":"object","properties":{"occurrenceId":{"type":"string"},"testId":{"type":"string"},"selected":{"oneOf":[{"type":"boolean"},{"type":"null"}]},"started":{"oneOf":[{"type":"boolean"},{"type":"null"}]},"outcome":{"type":"string"},"skipReason":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["occurrenceId","testId","selected","started","outcome","skipReason"],"additionalProperties":false}},"identity":{"type":"object","properties":{"sourceId":{"type":"string"},"implementationId":{"type":"string"},"testsId":{"type":"string"},"requirementsId":{"type":"string"},"profilePrompt":{"type":"string"},"profileApproval":{"type":"string"},"originalRef":{"type":"string"},"verificationRef":{"type":"string"},"producer":{"type":"string"},"producerVersion":{"type":"string"},"reportFormat":{"type":"string"},"runnerVersion":{"type":"string"},"runtimeVersion":{"type":"string"}},"required":["sourceId","implementationId","testsId","requirementsId","profilePrompt","profileApproval","originalRef","verificationRef","producer","producerVersion","reportFormat","runnerVersion","runtimeVersion"],"additionalProperties":false},"criteria":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"},"state":{"type":"string"},"nativeIds":{"type":"array","items":{"type":"string"}},"reason":{"type":"string"}},"required":["id","text","state","nativeIds","reason"],"additionalProperties":false}},"comparison":{"type":"object","properties":{"state":{"type":"string"},"reason":{"type":"string"},"lostIds":{"type":"array","items":{"type":"string"}},"changes":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"before":{"type":"string"},"after":{"type":"string"}},"required":["id","before","after"],"additionalProperties":false}}},"required":["state","reason","lostIds","changes"],"additionalProperties":false},"limits":{"type":"array","items":{"type":"string"}}},"required":["profileId","profileState","sourceState","receiptState","origin","nativeProof","requiresReview","requiredIds","missingIds","failedIds","skippedIds","unknownIds","unexecutedGates","prerequisiteProblems","optionalSkippedIds","duplicateIds","occurrenceCount","uniqueIdCount","observations","identity","criteria","comparison","limits"],"additionalProperties":false},"errors":[]}],
+  "prose_sha256": "369455a623b50d001eb55b12fdd71b6c0ca680c9b18628fa15409382c80fabc6",
+  "entries": [{"operation":"assessNativeEvidence","input_schema":{"type":"object","properties":{"root":{"type":"string"},"runDir":{"type":"string"},"runId":{"type":"string"},"profileId":{"type":"string"},"storyPath":{"type":"string"}},"required":["root","runDir","runId","profileId","storyPath"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"profileId":{"type":"string"},"profileState":{"type":"string"},"sourceState":{"type":"string"},"receiptState":{"type":"string"},"origin":{"type":"string"},"requiresReview":{"type":"boolean"},"requiredIds":{"type":"array","items":{"type":"string"}},"missingIds":{"type":"array","items":{"type":"string"}},"failedIds":{"type":"array","items":{"type":"string"}},"skippedIds":{"type":"array","items":{"type":"string"}},"unknownIds":{"type":"array","items":{"type":"string"}},"unexecutedGates":{"type":"array","items":{"type":"string"}},"prerequisiteProblems":{"type":"array","items":{"type":"string"}},"optionalSkippedIds":{"type":"array","items":{"type":"string"}},"duplicateIds":{"type":"array","items":{"type":"string"}},"occurrenceCount":{"oneOf":[{"type":"integer","minimum":0},{"type":"null"}]},"uniqueIdCount":{"oneOf":[{"type":"integer","minimum":0},{"type":"null"}]},"observations":{"type":"array","items":{"type":"object","properties":{"occurrenceId":{"type":"string"},"testId":{"type":"string"},"selected":{"oneOf":[{"type":"boolean"},{"type":"null"}]},"started":{"oneOf":[{"type":"boolean"},{"type":"null"}]},"outcome":{"type":"string"},"skipReason":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["occurrenceId","testId","selected","started","outcome","skipReason"],"additionalProperties":false}},"identity":{"type":"object","properties":{"sourceId":{"type":"string"},"implementationId":{"type":"string"},"testsId":{"type":"string"},"requirementsId":{"type":"string"},"profilePrompt":{"type":"string"},"profileApproval":{"type":"string"},"originalRef":{"type":"string"},"verificationRef":{"type":"string"},"producer":{"type":"string"},"producerVersion":{"type":"string"},"reportFormat":{"type":"string"},"runnerVersion":{"type":"string"},"runtimeVersion":{"type":"string"}},"required":["sourceId","implementationId","testsId","requirementsId","profilePrompt","profileApproval","originalRef","verificationRef","producer","producerVersion","reportFormat","runnerVersion","runtimeVersion"],"additionalProperties":false},"criteria":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"},"state":{"type":"string"},"nativeIds":{"type":"array","items":{"type":"string"}},"reason":{"type":"string"}},"required":["id","text","state","nativeIds","reason"],"additionalProperties":false}},"comparison":{"type":"object","properties":{"state":{"type":"string"},"reason":{"type":"string"},"lostIds":{"type":"array","items":{"type":"string"}},"changes":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"before":{"type":"string"},"after":{"type":"string"}},"required":["id","before","after"],"additionalProperties":false}}},"required":["state","reason","lostIds","changes"],"additionalProperties":false},"limits":{"type":"array","items":{"type":"string"}},"profileNativeProof":{"type":"string"},"storyNativeProof":{"type":"string"},"gates":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"outcome":{"type":"string"}},"required":["id","outcome"],"additionalProperties":false}},"prerequisites":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"expectedArtifactId":{"type":"string"},"artifactId":{"type":"string"},"state":{"type":"string"},"verificationRef":{"type":"string"}},"required":["id","expectedArtifactId","artifactId","state","verificationRef"],"additionalProperties":false}}},"required":["profileId","profileState","sourceState","receiptState","origin","profileNativeProof","requiresReview","requiredIds","missingIds","failedIds","skippedIds","unknownIds","unexecutedGates","prerequisiteProblems","optionalSkippedIds","duplicateIds","occurrenceCount","uniqueIdCount","observations","identity","criteria","comparison","limits","storyNativeProof","gates","prerequisites"],"additionalProperties":false},"errors":[]}],
   "calls": [],
   "resources": [{"name":"native","kind":"port","access":"read","operations":[{"name":"read_context","access":"read","arguments_schema":{"type":"object","properties":{"root":{"type":"string"},"runDir":{"type":"string"},"runId":{"type":"string"},"profileId":{"type":"string"},"storyPath":{"type":"string"}},"required":["root","runDir","runId","profileId","storyPath"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"content":{"type":"string"}},"required":["content"],"additionalProperties":false}}]}],
   "limits": {"max_steps":12,"max_model_calls":6},

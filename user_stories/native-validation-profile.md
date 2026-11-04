@@ -12,7 +12,7 @@ Issue: https://github.com/promptdriven/pdd/issues/2961
 4. I can see selected, started and completed observations, duplicate occurrences and distinct IDs; duplicate passes cannot fill a missing required ID.
 5. A compatible prior report shows the actual lost test IDs even when totals match; an incompatible or unknown baseline is marked incomparable.
 6. Candidate edits cannot lower the reviewed required inventory without matching review; absent or changed review binding gives no current proof.
-7. Required gates and verified fixture identities must match; an unexecuted gate, failed test, unknown execution or incompatible artifact cannot pass.
+7. I can see required gate outcomes and relevant fixture/artifact identities, observed states and verification references; an unexecuted gate, failed test, unknown execution or incompatible artifact cannot pass.
 8. Reading saved evidence does no execution or repair; notes, typed origin claims, modeled results and declared counts cannot become native proof.
 
 ## Rules to check

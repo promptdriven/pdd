@@ -28,7 +28,7 @@
     },
     {
       "id": "AC7",
-      "text": "Required gates and verified fixture identities must match; an unexecuted gate, failed test, unknown execution or incompatible artifact cannot pass."
+      "text": "I can see required gate outcomes and relevant fixture/artifact identities, observed states and verification references; an unexecuted gate, failed test, unknown execution or incompatible artifact cannot pass."
     },
     {
       "id": "AC8",
@@ -411,6 +411,19 @@
           "result": {
             "content": "{broken"
           }
+        },
+        {
+          "args": {
+            "root": "/candidate",
+            "runDir": "/saved-run",
+            "runId": "artifact-claim-without-verification",
+            "profileId": "prepared",
+            "storyPath": "user_stories/example-native.md"
+          },
+          "call_index": 29,
+          "result": {
+            "content": "{\"schema\":\"pdd.native-assessment-context.v1\",\"runId\":\"artifact-claim-without-verification\",\"protected\":{\"profileId\":\"prepared\",\"requirementsId\":\"synthetic-reviewed-a\",\"promptPath\":\"prompts/example-native.prompt.md\",\"sourceRoot\":\"/trusted-source\",\"approvalRef\":\"synthetic-matching-prompt-approval\",\"review\":\"approved\",\"requiredIds\":[\"test/native.test.mjs::checkout@10:1\",\"test/native.test.mjs::pane@20:1\"],\"requiredGates\":[\"native-suite\"],\"fixtures\":[{\"id\":\"fixture\",\"artifactId\":\"synthetic-artifact-a\"}],\"mappings\":[{\"storyPath\":\"user_stories/example-native.md\",\"criterionId\":\"AC1\",\"criterionText\":\"The prepared checkout contains the expected file.\",\"nativeIds\":[\"test/native.test.mjs::checkout@10:1\",\"test/native.test.mjs::pane@20:1\"]}]},\"candidate\":{\"sourceId\":\"synthetic-source-a\",\"implementationId\":\"synthetic-native-a\",\"testsId\":\"synthetic-tests-a\",\"requirementsId\":\"synthetic-reviewed-a\"},\"story\":{\"path\":\"user_stories/example-native.md\",\"criteria\":[{\"id\":\"AC1\",\"text\":\"The prepared checkout contains the expected file.\"}]},\"intake\":{\"origin\":\"external-machine\",\"admission\":\"verified\",\"originalRef\":\"synthetic-original-machine-report\",\"verificationRef\":\"synthetic-intake-verification\",\"limits\":[\"External original; command was not observed by PDD.\"]},\"report\":{\"format\":\"pdd.native-node-report.v1\",\"producer\":\"pdd-node-test-events\",\"producerVersion\":\"1.0.0\",\"runner\":\"node:test\",\"runnerVersion\":\"synthetic-node-runner-v1\",\"runtimeVersion\":\"synthetic-node-v1\",\"profileId\":\"prepared\",\"requirementsId\":\"synthetic-reviewed-a\",\"source\":{\"sourceId\":\"synthetic-source-a\",\"implementationId\":\"synthetic-native-a\",\"testsId\":\"synthetic-tests-a\",\"requirementsId\":\"synthetic-reviewed-a\"},\"complete\":true,\"exitCode\":0,\"gates\":[{\"id\":\"native-suite\",\"outcome\":\"passed\"}],\"prerequisites\":[{\"id\":\"fixture\",\"artifactId\":\"synthetic-artifact-a\",\"state\":\"verified\",\"verificationRef\":\"\"}],\"observations\":[{\"occurrenceId\":\"occ-1\",\"testId\":\"test/native.test.mjs::checkout@10:1\",\"selected\":true,\"started\":true,\"outcome\":\"passed\",\"skipReason\":null},{\"occurrenceId\":\"occ-2\",\"testId\":\"test/native.test.mjs::pane@20:1\",\"selected\":true,\"started\":true,\"outcome\":\"passed\",\"skipReason\":null},{\"occurrenceId\":\"occ-3\",\"testId\":\"test/native.test.mjs::live-probe@30:1\",\"selected\":true,\"started\":false,\"outcome\":\"skipped\",\"skipReason\":\"optional live probe disabled\"}],\"capture\":{\"selectionComplete\":true,\"terminalSeen\":true,\"processEnded\":true,\"eventRef\":\"synthetic-original-events\"}},\"baseline\":null}"
+          }
         }
       ],
       "result_template": null,
@@ -459,7 +472,7 @@
         {
           "criterion_id": "AC1",
           "target": "result",
-          "path": "/nativeProof",
+          "path": "/profileNativeProof",
           "op": "equals",
           "value": "none"
         },
@@ -478,6 +491,21 @@
           "path": "/resources/workflow-results-native-read_context",
           "op": "equals",
           "value": 1
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/prerequisites",
+          "op": "equals",
+          "value": [
+            {
+              "id": "fixture",
+              "expectedArtifactId": "synthetic-artifact-a",
+              "artifactId": "synthetic-artifact-a",
+              "state": "missing",
+              "verificationRef": "unknown"
+            }
+          ]
         }
       ],
       "model": "gpt-6.1-sol"
@@ -504,7 +532,7 @@
         {
           "criterion_id": "AC2",
           "target": "result",
-          "path": "/nativeProof",
+          "path": "/profileNativeProof",
           "op": "equals",
           "value": "qualified-external"
         },
@@ -560,6 +588,47 @@
           "path": "/resources/workflow-results-native-read_context",
           "op": "equals",
           "value": 1
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/prerequisites",
+          "op": "equals",
+          "value": [
+            {
+              "id": "fixture",
+              "expectedArtifactId": "synthetic-artifact-a",
+              "artifactId": "synthetic-artifact-a",
+              "state": "verified",
+              "verificationRef": "synthetic-fixture-observation"
+            }
+          ]
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/gates",
+          "op": "equals",
+          "value": [
+            {
+              "id": "native-suite",
+              "outcome": "passed"
+            }
+          ]
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/identity/originalRef",
+          "op": "equals",
+          "value": "synthetic-original-machine-report"
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/identity/verificationRef",
+          "op": "equals",
+          "value": "synthetic-intake-verification"
         }
       ],
       "model": "gpt-6.1-sol"
@@ -586,7 +655,7 @@
         {
           "criterion_id": "AC3",
           "target": "result",
-          "path": "/nativeProof",
+          "path": "/profileNativeProof",
           "op": "equals",
           "value": "none"
         },
@@ -622,7 +691,7 @@
         {
           "criterion_id": "AC3",
           "target": "result",
-          "path": "/nativeProof",
+          "path": "/profileNativeProof",
           "op": "equals",
           "value": "none"
         },
@@ -658,7 +727,7 @@
         {
           "criterion_id": "AC3",
           "target": "result",
-          "path": "/nativeProof",
+          "path": "/profileNativeProof",
           "op": "equals",
           "value": "none"
         },
@@ -694,7 +763,7 @@
         {
           "criterion_id": "AC3",
           "target": "result",
-          "path": "/nativeProof",
+          "path": "/profileNativeProof",
           "op": "equals",
           "value": "none"
         },
@@ -730,7 +799,7 @@
         {
           "criterion_id": "AC3",
           "target": "result",
-          "path": "/nativeProof",
+          "path": "/profileNativeProof",
           "op": "equals",
           "value": "none"
         },
@@ -961,7 +1030,7 @@
         {
           "criterion_id": "AC6",
           "target": "result",
-          "path": "/nativeProof",
+          "path": "/profileNativeProof",
           "op": "equals",
           "value": "none"
         },
@@ -997,7 +1066,7 @@
         {
           "criterion_id": "AC6",
           "target": "result",
-          "path": "/nativeProof",
+          "path": "/profileNativeProof",
           "op": "equals",
           "value": "none"
         },
@@ -1042,7 +1111,7 @@
         {
           "criterion_id": "AC7",
           "target": "result",
-          "path": "/nativeProof",
+          "path": "/profileNativeProof",
           "op": "equals",
           "value": "none"
         },
@@ -1052,6 +1121,18 @@
           "path": "/resources/workflow-results-native-read_context",
           "op": "equals",
           "value": 1
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/gates",
+          "op": "equals",
+          "value": [
+            {
+              "id": "native-suite",
+              "outcome": "unknown"
+            }
+          ]
         }
       ],
       "model": "gpt-6.1-sol"
@@ -1080,7 +1161,7 @@
         {
           "criterion_id": "AC7",
           "target": "result",
-          "path": "/nativeProof",
+          "path": "/profileNativeProof",
           "op": "equals",
           "value": "none"
         },
@@ -1118,7 +1199,7 @@
         {
           "criterion_id": "AC7",
           "target": "result",
-          "path": "/nativeProof",
+          "path": "/profileNativeProof",
           "op": "equals",
           "value": "none"
         },
@@ -1156,7 +1237,7 @@
         {
           "criterion_id": "AC7",
           "target": "result",
-          "path": "/nativeProof",
+          "path": "/profileNativeProof",
           "op": "equals",
           "value": "none"
         },
@@ -1208,7 +1289,7 @@
         {
           "criterion_id": "AC7",
           "target": "result",
-          "path": "/nativeProof",
+          "path": "/profileNativeProof",
           "op": "equals",
           "value": "none"
         },
@@ -1246,7 +1327,7 @@
         {
           "criterion_id": "AC7",
           "target": "result",
-          "path": "/nativeProof",
+          "path": "/profileNativeProof",
           "op": "equals",
           "value": "none"
         },
@@ -1289,7 +1370,7 @@
         {
           "criterion_id": "AC8",
           "target": "result",
-          "path": "/nativeProof",
+          "path": "/profileNativeProof",
           "op": "equals",
           "value": "none"
         },
@@ -1336,7 +1417,7 @@
         {
           "criterion_id": "AC8",
           "target": "result",
-          "path": "/nativeProof",
+          "path": "/profileNativeProof",
           "op": "equals",
           "value": "none"
         },
@@ -1372,7 +1453,7 @@
         {
           "criterion_id": "AC8",
           "target": "result",
-          "path": "/nativeProof",
+          "path": "/profileNativeProof",
           "op": "equals",
           "value": "none"
         },
@@ -1444,7 +1525,7 @@
         {
           "criterion_id": "AC6",
           "target": "result",
-          "path": "/nativeProof",
+          "path": "/profileNativeProof",
           "op": "equals",
           "value": "none"
         },
@@ -1480,7 +1561,7 @@
         {
           "criterion_id": "AC3",
           "target": "result",
-          "path": "/nativeProof",
+          "path": "/profileNativeProof",
           "op": "equals",
           "value": "none"
         },
@@ -1516,7 +1597,7 @@
         {
           "criterion_id": "AC8",
           "target": "result",
-          "path": "/nativeProof",
+          "path": "/profileNativeProof",
           "op": "equals",
           "value": "none"
         },
@@ -1559,7 +1640,7 @@
         {
           "criterion_id": "AC7",
           "target": "result",
-          "path": "/nativeProof",
+          "path": "/profileNativeProof",
           "op": "equals",
           "value": "none"
         },
@@ -1604,7 +1685,7 @@
         {
           "criterion_id": "AC8",
           "target": "result",
-          "path": "/nativeProof",
+          "path": "/profileNativeProof",
           "op": "equals",
           "value": "none"
         },
@@ -1654,7 +1735,7 @@
         {
           "criterion_id": "AC3",
           "target": "result",
-          "path": "/nativeProof",
+          "path": "/profileNativeProof",
           "op": "equals",
           "value": "none"
         },
@@ -1664,6 +1745,73 @@
           "path": "/resources/workflow-results-native-read_context",
           "op": "equals",
           "value": 1
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/storyNativeProof",
+          "op": "equals",
+          "value": "none"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "artifact-claim-without-verification",
+      "entry_path": "prompts/cli/workflow-results.prompt.md",
+      "operation": "assessNativeEvidence",
+      "input": {
+        "root": "/candidate",
+        "runDir": "/saved-run",
+        "runId": "artifact-claim-without-verification",
+        "profileId": "prepared",
+        "storyPath": "user_stories/example-native.md"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/workflow-results-native-read_context",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/prerequisites",
+          "op": "equals",
+          "value": [
+            {
+              "id": "fixture",
+              "expectedArtifactId": "synthetic-artifact-a",
+              "artifactId": "synthetic-artifact-a",
+              "state": "unknown",
+              "verificationRef": "unknown"
+            }
+          ]
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/prerequisiteProblems",
+          "op": "equals",
+          "value": [
+            "fixture"
+          ]
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/profileState",
+          "op": "equals",
+          "value": "incomplete"
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/profileNativeProof",
+          "op": "equals",
+          "value": "none"
         }
       ],
       "model": "gpt-6.1-sol"
