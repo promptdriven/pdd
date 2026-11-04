@@ -1803,7 +1803,7 @@ async function deliverRunRequest(mode, { ref, text, cwd }, ports) {
     const round = updated.changes.filter(change => change.stage === area).length + 1;
     updated.changes.push({ stage: area, round, text: request, ...(answer ? { answer: true } : {}) });
     if (question) updated.question = null;
-    if (answer && !updated.gate && !updated.question) updated.state = 'running';
+    if (answer) updated.state = updated.gate || updated.question ? 'waiting' : 'running';
     await ports.runs.save({ ref: String(ref ?? ''), run: updated });
     return done(answer ? `Sent your answer to the ${area} chat of #${run.number}. The agent goes on with the step.`
       : `Sent your change request to the ${area} chat of #${run.number}.${run.gate ? ' The gate stays open.' : ''}`);
@@ -1895,7 +1895,7 @@ Nothing was sent to the chat.` };
           current.changes.push({ stage: entry.area, round: current.changes.filter(change => change.stage === entry.area).length + 1, text: entry.text, at: now, ...(entry.kind === 'answer' ? { answer: true } : {}) });
           if (targetCurrent(current)) {
             if (equalFact(current.question,entry.question))current.question=null;
-            if(entry.kind==='answer'){if(!current.gate&&!current.question)current.state='running';}
+            if(entry.kind==='answer')current.state=current.gate||current.question?'waiting':'running';
             else if(current.gate&&equalFact(current.gate,entry.gate)){current.gate.id=p.randomUUID();current.gate.at=now;delete current.gate.promptSnapshot;}
           }
           }); return {...saved};
