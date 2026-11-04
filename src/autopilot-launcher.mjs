@@ -1,7 +1,7 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 12bd60a88c4862d038670ee6cbb7dd1c36ddd3ce602c605fcf70d7d275e3fc91).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: d0adb1b97ce49e58d811f5ee22b8194a3d0acde6c6febd5ec495de25d92a57f0).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync, openSync, closeSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync, linkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,7 +40,7 @@ function portsFor(state, ports) {
   const run = ports.run ?? runAgentProcess;
   const execute = async (command, args, options = {}) => run(command, args, { cwd: state.cwd, env, timeoutMs: 10000, maxBytes: 8 * 1024 * 1024, ...options });
   const checked = async (command, args) => { const result = await execute(command, args); if (result.code !== 0) throw Error(`${command} failed; check its sign-in and retry.`); return result.stdout; };
-  return { ...ports, env, run, execute, checked, now: ports.now ?? Date.now };
+  return { ...ports, env, run, execute, checked, warn: ports.warn ?? (text => process.stderr.write(`${text}\n`)), now: ports.now ?? Date.now };
 }
 const keepEnv = env => Object.fromEntries(['HOME', 'PATH', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME', 'XDG_CONFIG_HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS'].filter(k => typeof env[k] === 'string').map(k => [k, env[k]]));
 async function selectAgent(state, p) {
@@ -99,7 +99,7 @@ async function userTimer(action, state, p) {
   }
   mkdirSync(folder, { recursive: true });
   const unit = value => JSON.stringify(String(value).replaceAll('%', '%%'));
-  writeFileSync(join(folder, `${name}.service`), `[Unit]\nDescription=PDD Autopilot tick\n[Service]\nType=oneshot\nExecStart=${[process.execPath, self, state.stateFile].map(unit).join(' ')}\n${Object.entries(state.environment).map(([k, v]) => `Environment=${unit(k + '=' + v)}\n`).join('')}`, { mode: 0o600 });
+  writeFileSync(join(folder, `${name}.service`), `[Unit]\nDescription=PDD Autopilot tick\n[Service]\nType=oneshot\nKillMode=process\nExecStart=${[process.execPath, self, state.stateFile].map(unit).join(' ')}\n${Object.entries(state.environment).map(([k, v]) => `Environment=${unit(k + '=' + v)}\n`).join('')}`, { mode: 0o600 });
   writeFileSync(join(folder, `${name}.timer`), `[Unit]\nDescription=PDD Autopilot every 30 minutes\n[Timer]\nOnActiveSec=30min\nOnUnitActiveSec=30min\nAccuracySec=1s\n[Install]\nWantedBy=timers.target\n`, { mode: 0o600 });
   await p.checked('systemctl', ['--user', 'daemon-reload']);
   await p.checked('systemctl', ['--user', 'enable', `${name}.timer`]);
@@ -139,7 +139,9 @@ function response(text) {
   if (boundary < 0) throw Error('GitHub returned no HTTP headers.');
   const headers = text.slice(0, boundary), body = text.slice(boundary).trim();
   const header = name => headers.match(new RegExp(`^${name}:\\s*(.+)$`, 'im'))?.[1]?.trim();
-  return { status: Number(headers.match(/^HTTP\/\S+\s+(\d+)/)?.[1]), etag: header('etag'), link: header('link'), resetAt: Number(header('x-ratelimit-reset')) * 1000, body };
+  const status = Number(headers.match(/^HTTP\/\S+\s+(\d+)/)?.[1]);
+  const rateLimited = status === 429 || status === 403 && (header('x-ratelimit-remaining') === '0' || /rate.?limit/i.test(body));
+  return { status, etag: header('etag'), link: header('link'), resetAt: Number(header('x-ratelimit-reset')) * 1000, rateLimited, body };
 }
 async function queryIssues(state, p) {
   let endpoint = `repos/${state.repo}/issues?state=open&sort=updated&direction=desc&per_page=100`;
@@ -149,7 +151,7 @@ async function queryIssues(state, p) {
     const args = ['api', '--include', '--method', 'GET', endpoint];
     if (old?.etag) args.push('-H', `If-None-Match: ${old.etag}`);
     const r = response((await p.execute('gh', args)).stdout);
-    if ([403, 429].includes(r.status) && r.resetAt) return { status: r.status, resetAt: r.resetAt };
+    if (r.rateLimited) return { status: r.status, rateLimited: true, resetAt: r.resetAt || p.now() + INTERVAL };
     let page;
     if (r.status === 304 && old) page = old;
     else {
@@ -165,7 +167,7 @@ async function queryIssues(state, p) {
 async function githubGet(endpoint, p) {
   const result = await p.execute('gh', ['api', '--include', '--method', 'GET', endpoint]);
   const r = response(result.stdout);
-  if ([403, 429].includes(r.status) && r.resetAt) throw Object.assign(Error('GitHub rate limited; waiting until reset.'), { resetAt: r.resetAt });
+  if (r.rateLimited) throw Object.assign(Error('GitHub rate limited; waiting until reset.'), { resetAt: r.resetAt || p.now() + INTERVAL });
   if (r.status === 404) return { ...r, value: null };
   if (r.status !== 200) throw Error('GitHub lookup unavailable; eligible work will be retried next tick.');
   return { ...r, value: JSON.parse(r.body) };
@@ -198,13 +200,16 @@ function message(state, issues) {
 }
 async function wake(state, text, p) {
   await openWorkspace(state, p);
-  let running = false;
-  try { running = Boolean((await herdr(['agent', 'get', state.paneId], p)).result?.agent); }
+  let agent;
+  try { agent = (await herdr(['agent', 'get', state.paneId], p)).result?.agent; }
   catch (e) {
     if (!['agent_not_found', 'pane_not_found', 'server_not_running'].includes(e.code)) throw e;
     if (e.code !== 'agent_not_found') { delete state.paneId; delete state.workspaceId; await openWorkspace(state, p); }
   }
-  if (running) { await herdr(['agent', 'prompt', state.paneId, text], p); return; }
+  if (agent) {
+    if (!['idle', 'done'].includes(agent.agent_status)) return false;
+    await herdr(['agent', 'prompt', state.paneId, text], p); return true;
+  }
   const file = state.stateFile.replace(/\.json$/, '.message.md');
   writeFileSync(file, text, { mode: 0o600 });
   let definition;
@@ -217,76 +222,164 @@ async function wake(state, text, p) {
   if (definition.kind === 'gemini') args.splice(0, 1, '--yolo');
   const env = Object.entries({ ...keepEnv(p.env), ...definition.env }).map(([k, v]) => `${k}=${quote(v)}`);
   await herdr(['pane', 'run', state.paneId, ['env', ...env, quote(definition.command), ...args].join(' ')], p);
+  return true;
+}
+
+function claimTickLock(file) {
+  const owner = `${file}.${randomUUID()}.owner`;
+  writeFileSync(owner, String(process.pid), { flag: 'wx', mode: 0o600 });
+  try {
+    for (;;) {
+      try { linkSync(owner, file); return true; }
+      catch (e) { if (e.code !== 'EEXIST') throw e; }
+      let text;
+      try { text = readFileSync(file, 'utf8'); } catch (e) { if (e.code === 'ENOENT') continue; throw e; }
+      const pid = Number(text);
+      if (/^[1-9][0-9]*$/.test(text) && Number.isSafeInteger(pid)) {
+        try { process.kill(pid, 0); return false; }
+        catch (e) { if (e.code !== 'ESRCH' && !(e instanceof RangeError)) return false; }
+      }
+      // A new lock is linked only after its owner is complete; an empty file is stale.
+      try { if (readFileSync(file, 'utf8') === text) unlinkSync(file); }
+      catch (e) { if (e.code !== 'ENOENT') throw e; }
+    }
+  } finally { unlinkSync(owner); }
+}
+function closingIssues(body, repo) {
+  const refs = [];
+  const pattern = /\b(?:fix(?:es|ed)?|close[sd]?|resolve[sd]?)\s+(?:(?:https:\/\/github\.com\/)?([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?:\/issues\/|#)|#)([1-9][0-9]*)/gi;
+  for (const match of String(body ?? '').matchAll(pattern)) if (!match[1] || match[1].toLowerCase() === repo.toLowerCase()) refs.push(Number(match[2]));
+  return refs;
+}
+function cachePullRequests(state) {
+  state.pullCache ??= {};
+  for (const saved of Object.values(state.pullCache)) saved.present = false;
+  for (const row of state.cachedIssues ?? []) if (row.pull_request) {
+    const refs = closingIssues(row.body, state.repo);
+    if (refs.length || state.pullCache[row.number]) state.pullCache[row.number] = { ...state.pullCache[row.number], row, refs, present: true };
+  }
+}
+async function relatedPullRequests(number, state, config, p) {
+  const result = [];
+  for (const saved of Object.values(state.pullCache)) {
+    if (!saved.refs.includes(number) || !await trusted(saved.row, state, config, p)) continue;
+    const version = `${saved.row.updated_at}:${saved.row.comments}`;
+    if (!saved.snapshot || saved.present && saved.version !== version || !saved.present && saved.snapshot.state === 'open') {
+      const detail = p.pullRequest ? await p.pullRequest(saved.row.number) : (await githubGet(`repos/${state.repo}/pulls/${saved.row.number}`, p)).value;
+      if (!['open', 'closed'].includes(detail?.state)) throw Error('Related PR state unavailable; retry next tick.');
+      saved.discussion = saved.row.comments ? await comments(saved.row.number, state, p) : [];
+      saved.snapshot = { number: saved.row.number, state: detail.state, draft: detail.draft === true, merged: detail.merged === true || Boolean(detail.merged_at), head: detail.head?.sha ?? null };
+      saved.version = version;
+    }
+    const discussion = [];
+    for (const row of saved.discussion ?? []) {
+      if (row.body !== ACK_TEXT && await trusted(row, state, config, p)) discussion.push({ id: row.id, updatedAt: row.updated_at, author: row.user.login, body: row.body });
+    }
+    result.push({ ...saved.snapshot, comments: discussion });
+  }
+  return result.sort((a, b) => a.number - b.number);
+}
+
+const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+async function revalidateView(view, state, config, p) {
+  const allowed = author => trusted({ user: { login: author } }, state, config, p);
+  const retain = async rows => {
+    const result = [];
+    for (const row of rows) if (await allowed(row.author)) result.push(row);
+    return result;
+  };
+  const pulls = [];
+  for (const pull of view.pulls) if (await allowed(pull.author)) pulls.push({ ...pull, comments: await retain(pull.comments) });
+  return { ...view, text: view.text && await allowed(view.text.author) ? view.text : undefined, comments: await retain(view.comments), pulls };
 }
 
 export async function tickAutopilot(stateFile, ports = {}) {
   let state = read(stateFile); if (!state?.enabled) return ok('Autopilot stopped.');
-  const p = portsFor(state, ports), config = await settings(state, p);
-  if (config.mode === 'off') return ok(line(config.message));
-  if (state.retryAt > p.now()) return ok(`GitHub rate limited; next attempt after ${new Date(state.retryAt).toISOString()}.`);
-  const lock = stateFile + '.lock'; let fd;
-  try { fd = openSync(lock, 'wx', 0o600); writeFileSync(fd, String(process.pid)); }
-  catch (e) {
-    if (e.code !== 'EEXIST') throw e;
-    const pid = Number(readFileSync(lock, 'utf8'));
-    try { process.kill(pid, 0); return ok('Autopilot tick already running.'); }
-    catch (error) { if (error.code !== 'ESRCH') return ok('Autopilot tick already running.'); }
-    unlinkSync(lock); return tickAutopilot(stateFile, ports);
-  }
+  const lock = stateFile + '.lock';
+  if (!claimTickLock(lock)) return ok('Autopilot tick already running.');
   try {
+    state = read(stateFile) ?? state;
+    if (!state.enabled) return ok('Autopilot stopped.');
+    const p = portsFor(state, ports), config = await settings(state, p);
+    if (config.mode === 'off') return ok(line(config.message));
+    if (state.retryAt > p.now()) return ok(`GitHub rate limited; next attempt after ${new Date(state.retryAt).toISOString()}.`);
     const result = p.queryIssues ? await p.queryIssues(state) : await queryIssues(state, p);
-    if ([403, 429].includes(result.status)) { state.retryAt = result.resetAt || p.now() + INTERVAL; return ok('GitHub rate limited; waiting until reset.'); }
+    if (result.status === 429 || result.rateLimited) { state.retryAt = result.resetAt || p.now() + INTERVAL; return ok('GitHub rate limited; waiting until reset.'); }
+    if (![200, 304].includes(result.status)) throw Error('GitHub issue check failed; check gh auth status.');
     delete state.retryAt;
     if (result.status !== 304) { state.cachedIssues = result.issues; state.etag = result.etag; if (result.pages) state.pages = result.pages; }
-    state.acknowledged ??= {}; state.commentCache ??= {};
-    const work = [];
+    state.acknowledged ??= {}; state.commentCache ??= {}; state.seen ??= {};
+    cachePullRequests(state);
+    const work = [], pending = {}, warnings = [];
     for (const issue of state.cachedIssues ?? []) {
       const labels = issue.labels?.map(x => typeof x === 'string' ? x : x.name) ?? [];
       if (issue.pull_request || issue.state !== 'open' || (Date.parse(issue.created_at) < Date.parse(state.activatedAt) && !labels.includes('pdd:autopilot'))) continue;
-      const version = `${issue.updated_at}:${issue.comments}`;
-      let rows = [];
-      if (issue.comments) {
-        const cached = state.commentCache[issue.number];
-        rows = cached?.version === version ? cached.rows : await comments(issue.number, state, p);
-        state.commentCache[issue.number] = { version, rows };
-      }
-      const trustedComments = []; let acknowledged = false;
-      for (const row of rows) {
-        if (await trusted(row, state, config, p)) {
-          if (row.body === ACK_TEXT) acknowledged = true;
-          else trustedComments.push(row);
+      try {
+        const version = `${issue.updated_at}:${issue.comments}`;
+        let rows = [];
+        if (issue.comments) {
+          const cached = state.commentCache[issue.number];
+          rows = cached?.version === version ? cached.rows : await comments(issue.number, state, p);
+          state.commentCache[issue.number] = { version, rows };
         }
-      }
-      const authorTrusted = await trusted(issue, state, config, p);
-      if (!authorTrusted && !trustedComments.length) {
-        if (!state.acknowledged[issue.number] && !acknowledged) {
-          const reply = await p.execute('gh', ['api', '--include', '--method', 'POST', `repos/${state.repo}/issues/${issue.number}/comments`, '-f', `body=${ACK_TEXT}`]);
-          if (reply.code !== 0) {
-            const failure = response(reply.stdout);
-            if ([403, 429].includes(failure.status) && failure.resetAt) throw Object.assign(Error('GitHub rate limited; waiting until reset.'), { resetAt: failure.resetAt });
-            throw Error('GitHub reply could not be sent; retry next tick.');
+        const related = Object.values(state.pullCache).filter(pull => pull.refs.includes(issue.number)).sort((a, b) => a.row.number - b.row.number);
+        const source = digest({ issue: [issue.title, issue.body, issue.updated_at, issue.comments, [...labels].sort()], comments: rows.map(row => [row.id, row.updated_at, row.user?.login, row.body]), pulls: related.map(pull => [pull.row.number, pull.present, pull.row.updated_at, pull.row.comments, pull.row.title, pull.row.body]) });
+        const previous = state.seen[issue.number];
+        if (previous?.source === source && previous.mode === config.mode) continue;
+        const trustedComments = []; let acknowledged = false;
+        for (const row of rows) {
+          if (await trusted(row, state, config, p)) {
+            if (row.body === ACK_TEXT) acknowledged = true;
+            else trustedComments.push(row);
           }
         }
-        state.acknowledged[issue.number] = true;
-        continue;
+        const authorTrusted = await trusted(issue, state, config, p);
+        if (!authorTrusted && !trustedComments.length) {
+          if (!state.acknowledged[issue.number] && !acknowledged) {
+            const reply = await p.execute('gh', ['api', '--include', '--method', 'POST', `repos/${state.repo}/issues/${issue.number}/comments`, '-f', `body=${ACK_TEXT}`]);
+            if (reply.code !== 0) {
+              const failure = response(reply.stdout);
+              if (failure.rateLimited) throw Object.assign(Error('GitHub rate limited; waiting until reset.'), { resetAt: failure.resetAt || p.now() + INTERVAL });
+              throw Error('GitHub reply could not be sent; retry next tick.');
+            }
+          }
+          state.acknowledged[issue.number] = true;
+          continue;
+        }
+        const pulls = await relatedPullRequests(issue.number, state, config, p);
+        const item = { number: issue.number, url: issue.html_url, ...(labels.includes('pdd:working') ? { claimed: true } : {}), ...(authorTrusted ? { title: issue.title, body: issue.body } : {}), comments: trustedComments.map(row => ({ author: row.user.login, body: row.body })), ...(pulls.length ? { pullRequests: pulls } : {}) };
+        const view = { text: authorTrusted ? { author: issue.user.login, title: item.title, body: item.body } : undefined, comments: trustedComments.map(row => ({ id: row.id, updatedAt: row.updated_at, author: row.user.login, body: row.body })), labels: labels.filter(name => !['pdd:working', 'pdd:stuck', 'pdd:code-pending'].includes(name)).sort(), pulls: pulls.map(pull => ({ ...pull, author: state.pullCache[pull.number].row.user.login })) };
+        const event = digest(view);
+        const blocked = labels.some(name => ['pdd:working', 'pdd:stuck', 'pdd:code-pending'].includes(name));
+        const waiting = blocked || config.mode === 'observe' && pulls.some(pr => pr.state === 'open');
+        const observed = { event, view, source, mode: config.mode, waiting, blocked };
+        const sameTrustedWork = previous?.view && digest(await revalidateView(previous.view, state, config, p)) === event;
+        const becameReady = previous && !waiting && (previous.blocked && !blocked || previous.mode === 'observe' && config.mode === 'auto');
+        if (!previous && waiting || sameTrustedWork && !becameReady) {
+          state.seen[issue.number] = observed; continue;
+        }
+        work.push(item); pending[issue.number] = observed;
+      } catch (error) {
+        if (error.resetAt) throw error;
+        warnings.push(`Deferred #${issue.number}: ${line(error.message)}`);
+        p.warn(warnings.at(-1));
       }
-      work.push({ number: issue.number, url: issue.html_url, ...(labels.includes('pdd:working') ? { claimed: true } : {}), ...(authorTrusted ? { title: issue.title, body: issue.body } : {}), comments: trustedComments.map(row => ({ author: row.user.login, body: row.body })) });
     }
-    // stop may have been requested while GitHub was in flight.
     if (!read(stateFile)?.enabled) return ok('Autopilot stopped.');
+    let delivered = false;
     if (work.length || !state.recipeDelivered) {
-      await wake(state, message(state, work), p);
-      state.recipeDelivered = true;
+      delivered = await wake(state, message(state, work), p);
+      if (delivered) { state.recipeDelivered = true; Object.assign(state.seen, pending); }
     }
-    return ok(work.length ? `Autopilot offered ${work.length} issue(s).` : 'Autopilot tick complete.');
+    return ok([delivered ? `Autopilot offered ${work.length} issue(s).` : 'Autopilot tick complete.', ...warnings].join(' '));
   } catch (e) {
     if (e.resetAt) { state.retryAt = e.resetAt; return ok('GitHub rate limited; waiting until reset.'); }
     throw e;
   } finally {
     const latest = read(stateFile);
     state.enabled = latest?.enabled === true; state.timerInstalled = latest?.timerInstalled;
-    state.nextTick = state.enabled ? p.now() + INTERVAL : null;
-    save(stateFile, state); closeSync(fd); unlinkSync(lock);
+    state.nextTick = state.enabled ? (ports.now ?? Date.now)() + INTERVAL : null;
+    save(stateFile, state); unlinkSync(lock);
   }
 }
 
@@ -303,7 +396,9 @@ export async function runAutopilotLauncher(input, ports = {}) {
     p = portsFor(state, { ...ports, env: input.env });
     if (command === 'status') {
       const active = Boolean(state.enabled && await timer('status', state, p));
-      return ok(`Autopilot ${active ? 'running' : 'stopped'}: ${state.repo ?? state.cwd} · ${state.agent?.id ?? 'no agent'} · next tick: ${active && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}`);
+      let server = true;
+      if (active) { try { server = (await herdr(['status', 'server', '--json'], p)).running === true; } catch { server = false; } }
+      return ok(`Autopilot ${active ? server ? 'running' : 'unavailable (Herdr is not running)' : 'stopped'}: ${state.repo ?? state.cwd} · ${state.agent?.id ?? 'no agent'} · next tick: ${active && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}`);
     }
     if (command === 'stop') {
       if (previous) { state.enabled = false; state.nextTick = null; save(stateFile, state); if (state.timerInstalled !== false) { await timer('stop', state, p); state.timerInstalled = false; save(stateFile, state); } }
@@ -317,13 +412,15 @@ export async function runAutopilotLauncher(input, ports = {}) {
     }
     if (!state.repo) state.repo = JSON.parse(await p.checked('gh', ['repo', 'view', '--json', 'nameWithOwner'])).nameWithOwner;
     if (command === 'add') {
+      const numbers = [];
+      for (const ref of issues) {
+        const match = String(ref).match(/^(?:([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#|https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/issues\/)?([1-9][0-9]*)\/?$/);
+        if (!match || (match[1] || match[2] || state.repo).toLowerCase() !== state.repo.toLowerCase()) return { exitCode: 2, message: `Use issue numbers or references to ${state.repo} with pdd autopilot add.` };
+        numbers.push(match[3]);
+      }
       const label = await p.execute('gh', ['api', '--method', 'POST', `repos/${state.repo}/labels`, '-f', 'name=pdd:autopilot', '-f', 'color=5319e7', '-f', 'description=Autopilot may take this old issue']);
       if (label.code !== 0 && !/already_exists/.test(label.stdout + label.stderr)) throw Error('Could not create pdd:autopilot; check gh auth status.');
-      for (const ref of issues) {
-        const number = String(ref).match(/(?:^|#|\/)([1-9][0-9]*)\/?$/)?.[1];
-        if (!number) return { exitCode: 2, message: 'Name an issue number for pdd autopilot add.' };
-        await p.checked('gh', ['api', '--method', 'POST', `repos/${state.repo}/issues/${number}/labels`, '-f', 'labels[]=pdd:autopilot']);
-      }
+      for (const number of numbers) await p.checked('gh', ['api', '--method', 'POST', `repos/${state.repo}/issues/${number}/labels`, '-f', 'labels[]=pdd:autopilot']);
       return ok(`Marked ${issues.length} issue(s) with pdd:autopilot.`);
     }
     if (command !== 'start') return { exitCode: 2, message: 'Use pdd autopilot start, stop, status or add.' };
@@ -344,8 +441,13 @@ export async function runAutopilotLauncher(input, ports = {}) {
     try { await timer('start', state, p); }
     catch { state.enabled = false; state.nextTick = null; save(stateFile, state); return bad('Autopilot timer could not start; enable your systemd user session on Linux or launchctl user session on macOS, then retry.'); }
     let warning = '';
+    if ((p.platform ?? process.platform) === 'linux') {
+      let linger = '';
+      try { const result = await p.execute('loginctl', ['show-user', String(p.uid ?? process.getuid()), '--property=Linger', '--value']); if (result.code === 0) linger = result.stdout.trim(); } catch { /* Optional session diagnostic. */ }
+      if (linger !== 'yes') warning = ' To keep Autopilot running after logout, enable lingering: loginctl enable-linger.';
+    }
     try { await tickAutopilot(stateFile, { ...ports, env: p.env }); }
-    catch (e) { warning = ` Warning: ${line(e.message)}; next tick will retry.`; }
+    catch (e) { warning += ` Warning: ${line(e.message)}; next tick will retry.`; }
     return ok(`Autopilot running: ${state.repo} · ${agent.id} · pdd ${version} · next tick: ${new Date(state.nextTick).toISOString()}. See: herdr session attach ${SESSION}.${warning}${warnings.length ? ' ' + warnings.map(line).join(' ') : ''}`);
   } catch (e) { return bad(`Autopilot: ${e.code === 'ENOENT' ? 'install git, gh and Herdr, and sign in to your agent, then retry.' : line(e.message)}`); }
 }

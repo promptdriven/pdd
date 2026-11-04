@@ -41,7 +41,10 @@ Optional --runs is a positive safe integer with no product maximum. Omission
 means no fixed cap. Persist only the selected launcher identity/config-folder
 paths, not credentials or the whole environment. A named user timer runs the
 Node script with absolute paths and the launcher's PATH and agent config paths.
-Linux uses a systemd user timer; macOS uses a LaunchAgent. No controller process
+Linux uses a systemd user timer whose oneshot service sets `KillMode=process`,
+so a Herdr server started by the tick survives its exit. macOS uses a LaunchAgent.
+On Linux, check user-session lingering without changing it; when it is off or
+cannot be checked, warn how `loginctl enable-linger` keeps the timer after logout. No controller process
 or polling loop remains running between ticks. Timer failure is actionable and
 does not leave status claiming it is running.
 
@@ -53,8 +56,13 @@ stop disables this repo's timer and queued ticks and removes its persistent
 timer definition, leaving the current step to
 finish. Repeated stop is harmless. Status reads local state and timer activity;
 show repo, agent, running/stopped, and next tick (or none), without waking AI or
-querying GitHub. Concurrent ticks for one local state serialize with a local
-lock; independent machines have separate state.
+querying GitHub. Report unavailable Herdr separately instead of claiming healthy
+running state when its server is absent. Concurrent ticks for one local state serialize with a local
+lock; independent machines have separate state. A lock blocks only for a valid
+live owner. Empty, malformed and dead-owner locks are reclaimed. Publish the
+owner PID atomically so another tick never sees an unfinished new lock. Reload
+state after acquiring it, before settings, cooldown or delivery decisions; a tick
+must not reuse a snapshot read before another tick completed.
 
 ## Tick and the skill boundary
 
@@ -66,7 +74,7 @@ flowchart TD
     T[Timer or immediate first tick] --> S{Enabled locally and in repo?}
     S -->|No| E[Return without AI]
     S -->|Yes| Q[Conditional GitHub issues request]
-    Q --> W{Recipe or eligible work?}
+    Q --> W{Recipe or unseen actionable change?}
     W -->|No| E
     W -->|Yes| P[Prepare trusted packet]
     P --> A[Start or wake interactive pdd-autopilot skill]
@@ -77,21 +85,53 @@ pagination only when GitHub supplies another page (never truncate a queue). Cach
 and revalidate each page separately, so a close on a later page is seen even
 when the first page is unchanged.
 HTTP 304 reuses metadata, not a model turn. On changed candidates only, fetch
-comments needed to identify trusted consent and filter their text. Rate-limit
-responses save the reset time; intervening timer firings do not retry. Other
-failures warn and leave the next scheduled tick available.
+comments needed to identify trusted consent and filter their text. HTTP 429 is
+a rate limit; HTTP 403 counts only when the remaining allowance is zero or its
+body says rate limit. Save its reset time; intervening timer firings do not retry.
+An ordinary forbidden response has no rate-limit cooldown. Candidate-specific
+lookup failures warn through an injected warning port (stderr by default,
+visible in timer logs) and defer that issue, while unrelated work continues.
 
 Only issues created at/after the original activation time, or explicitly labeled
-`pdd:autopilot`, can start. `add` creates that label if absent and applies it to
-all named issues, including old ones; it never changes the issue body. Ignore
-pull requests and closed issues. Issues carrying pdd:working remain owned by the
-skill and are not offered as new work. Include them with `claimed: true` in the
-trusted packet so the skill can inspect progress and stale claims, even when
-there is no unclaimed issue. A claimed issue is work, not an empty tick. The skill, not a local launch, makes the
-cross-machine claim (pdd:working plus one comment). A failed delivery is
-retryable: do not record it as delivered. Unclaimed eligible work remains work on later ticks: delivery is not evidence
-that the skill scheduled it. A conditional cache hit with eligible work wakes the
-skill again; a hit with no eligible work or recipe does not.
+`pdd:autopilot`, can start. `add` accepts numbers and references to this repository
+only, comparing repository names ignoring case. Validate every reference before
+any label mutation; a foreign reference returns exit 2 with one clear line and
+labels nothing. Create the label if absent and apply it to all named issues,
+including old ones; never change issue bodies. Ignore closed issues and treat PRs
+as related state rather than new issues.
+
+An open issue alone is not a reason to wake AI. Save a fingerprint of the trusted
+issue text/comments and related PR state successfully delivered to the agent.
+An unchanged fingerprint, including after HTTP 304, sends no prompt. Stranger
+comments and acknowledgement text do not change the trusted fingerprint. First
+observations of stuck, code-pending, claimed or observe-mode issues with an open
+PR establish a quiet baseline: they have no new work. A later trusted change,
+a related PR transition or becoming eligible again can wake the skill once.
+Removing one waiting reason or changing mode is not eligibility while another
+waiting reason remains.
+Keep claimed issues marked `claimed: true`, never present them as unclaimed.
+
+Use same-repository closing references in PR bodies to associate PRs with issues.
+Resolve trusted related PR metadata on change (state, draft, merge and head),
+including when a PR leaves the open list. Fetch PR discussion comments on changed
+comment metadata and include only trusted comments (with identity/edit metadata)
+in the packet and fingerprint; outsider comments alone must not wake AI. Never
+forward untrusted PR text. Cache details so unchanged ticks need no detail query.
+Revalidate cached PR commenters against current explicit trust and write access
+before delivery; revocation must not allow previously trusted text into a new
+packet. Cached data is not cached authority. Compare the previous and current
+trusted views under current authority, so revocation alone, or revocation plus
+an outsider comment, never becomes new work. If the cached issue/comment/PR
+source state and mode are unchanged, return quietly before permission lookups;
+revalidate authority when there is an actual source change to assess or deliver. A PR waiting for a person in
+observe mode is quiet until its relevant trusted state changes.
+
+Only a successful idle-agent delivery records the fingerprint. A failed or
+busy delivery remains pending. Never submit to a working, blocked or unknown
+agent; wait for idle/done on a later tick and coalesce pending changes. First
+recipe delivery obeys the same busy rule. The skill owns cross-machine claims
+(pdd:working plus one comment), room scheduling and running issue progress;
+launcher polling must not repeatedly prompt that owner about the same work.
 
 A trusted author/commenter is the repo owner, appears in configured trusted
 names, or has write/maintain/admin permission confirmed by GitHub. Association

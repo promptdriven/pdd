@@ -18,6 +18,7 @@ async function fixture(t, options = {}) {
   const f = { cwd, home, time: Date.parse('2026-11-04T00:00:00Z'), polls: [], prompts: [], runs: [], timers: [], comments: [], ack: [], issues: [], etag: '"one"', active: false };
   f.ports = {
     stateRoot: join(home, 'state'), now: () => f.time,
+    warn: text => { (f.warnings ??= []).push(text); },
     selectAgent: async () => ({ id: 'codex', kind: 'codex', command: 'codex', env: {} }),
     pathDiagnostic: () => [],
     run: async (command, args) => {
@@ -34,10 +35,11 @@ async function fixture(t, options = {}) {
     comments: async number => { f.comments.push(number); return f.issueComments?.[number] ?? []; },
     herdr: async args => {
       f.herdrCalls ??= []; f.herdrCalls.push(args);
+      if (args[0] === 'status') return { running: f.serverRunning !== false };
       if (args[0] === 'workspace') return { result: { workspace: { workspace_id: 'w1' }, root_pane: { pane_id: 'p1' } } };
       if (args[0] === 'agent' && args[1] === 'get') {
         if (!f.agentStarted) throw Object.assign(Error('agent_not_found'), { code: 'agent_not_found' });
-        return { result: { agent: { agent_status: 'idle' } } };
+        return { result: { agent: { agent_status: f.agentStatus ?? 'idle' } } };
       }
       if (args[0] === 'pane') {
         f.agentStarted = true;
@@ -83,9 +85,8 @@ test('new and named issues are eligible; claimed work is distinguished and close
   await f.tick();
   const prompt = f.prompts.at(-1);
   assert.match(prompt, /"number":1,/); assert.match(prompt, /"number":3,/);
-  for (const n of [2, 4, 5]) assert.doesNotMatch(prompt, new RegExp(`"number":${n},`));
-  assert.equal(JSON.parse(prompt.trim().split('\n').at(-1)).issues.find(x => x.number === 6).claimed, true);
-  await f.tick(); assert.equal(f.prompts.length, 3); // Unclaimed work is offered again when room may have changed.
+  for (const n of [2, 4, 5, 6]) assert.doesNotMatch(prompt, new RegExp(`"number":${n},`));
+  await f.tick(); assert.equal(f.prompts.length, 2); // Already-seen work must stay quiet.
   await f.invoke('stop'); f.time += 3600000; await f.invoke('start');
   assert.equal(f.state().activatedAt, '2026-11-04T00:00:00.000Z');
 });
@@ -121,8 +122,9 @@ test('trusted issue comments are filtered, and failed delivery is retried', asyn
 test('stop disables only the timer and status is local; runs is optional, never fixed', async t => {
   const f = await fixture(t); await f.invoke('start', { runs: '7' });
   assert.match(f.prompts[0], /"runs":7/);
-  const before = f.herdrCalls.length, polls = f.polls.length;
+  const polls = f.polls.length;
   const status = await f.invoke('status'); assert.match(status.message, /owner\/repo.*codex/); assert.match(status.message, /2026-11-04T00:30:00/);
+  const before = f.herdrCalls.length;
   await f.invoke('stop'); await f.tick(); await f.invoke('stop');
   assert.equal(f.herdrCalls.length, before); assert.equal(f.polls.length, polls);
   assert.match((await f.invoke('status')).message, /stopped/);
@@ -166,6 +168,7 @@ test('native Linux and macOS user timers pin Node, script, state and environment
       const text = readFileSync(join(folder, service), 'utf8');
       assert.ok(text.includes(process.execPath)); assert.ok(text.includes('/src/autopilot-launcher.mjs'));
       assert.ok(text.includes(f.stateFile())); assert.match(text, /Environment="PATH=/);
+      assert.match(text, /^KillMode=process$/m);
       assert.doesNotMatch(text, /\/bin\/.*sh|TOKEN|API_KEY/);
       assert.match(readFileSync(join(folder, service.replace('.service', '.timer')), 'utf8'), /OnActiveSec=30min/);
     } else {
@@ -329,7 +332,7 @@ test('an unavailable trust lookup does not misclassify a writer and send a reply
   const run = f.ports.run;
   f.ports.run = async (command, args, opts) => args.some(x => String(x).endsWith('/permission'))
     ? { code: 1, stderr: '', stdout: 'HTTP/2.0 503 Unavailable\r\n\r\n{}' } : run(command, args, opts);
-  await assert.rejects(f.tick(), /lookup unavailable/);
+  assert.match((await f.tick()).message, /Deferred #57:.*lookup unavailable/);
   assert.equal(f.ack.length, 0); assert.equal(f.prompts.length, 1);
 });
 
@@ -366,10 +369,12 @@ test('a later stop retries timer cleanup after a transient failure', async t => 
   assert.equal(f.state().timerInstalled, false);
 });
 
-test('claimed-only work wakes the bundled skill for progress monitoring', async t => {
+test('claimed work wakes the skill only after a trusted change', async t => {
   const f = await fixture(t); await f.invoke('start');
   f.issues = [issue(61, { labels: [{ name: 'pdd:working' }] })];
   f.time += 3600000; await f.tick();
+  assert.equal(f.prompts.length, 1);
+  f.issues[0].body = 'Please inspect this stalled run'; await f.tick();
   assert.equal(f.prompts.length, 2);
   const packet = JSON.parse(f.prompts[1].trim().split('\n').at(-1));
   assert.equal(packet.issues[0].number, 61); assert.equal(packet.issues[0].claimed, true);
@@ -389,5 +394,227 @@ test('agy sign-in uses the merged non-model readiness probe, not an unsigned age
   const result = await f.invoke('start');
   assert.equal(result.exitCode, 1); assert.match(result.message, /Sign in/);
   assert.deepEqual(probes.filter(([command]) => command === 'agy'), [['agy', ['models']]]);
+  assert.equal(f.prompts.length, 0);
+});
+
+const pr = (number, issueNumber, extra = {}) => issue(number, { pull_request: { url: `https://api.github.com/repos/owner/repo/pulls/${number}` }, body: `Fixes #${issueNumber}`, ...extra });
+for (const kind of ['stuck', 'code-pending', 'own working', 'observe PR waiting']) test(`${kind}: four unchanged 304 ticks send zero prompts`, async t => {
+  const f = await fixture(t, { mode: kind === 'observe PR waiting' ? 'observe' : 'auto' });
+  const labels = kind === 'observe PR waiting' ? [] : [{ name: `pdd:${kind === 'own working' ? 'working' : kind}` }];
+  f.issues = [issue(70, { labels })];
+  if (kind === 'observe PR waiting') {
+    f.issues.push(pr(90, 70));
+    f.ports.pullRequest = async () => ({ state: 'open', draft: false, merged: false, head: { sha: 'a' } });
+  }
+  await f.invoke('start'); f.prompts.length = 0; f.status = 304;
+  if (kind === 'own working') f.agentStatus = 'working';
+  for (let tick = 0; tick < 4; tick++) { f.time += 1800000; await f.tick(); }
+  assert.equal(f.prompts.length, 0);
+});
+
+test('an ordinary open issue is delivered once; only unseen trusted changes wake it again', async t => {
+  const f = await fixture(t); f.issues = [issue(71)]; await f.invoke('start');
+  f.prompts.length = 0; f.status = 304;
+  for (let tick = 0; tick < 4; tick++) await f.tick();
+  assert.equal(f.prompts.length, 0);
+  f.status = 200; f.issues[0].comments = 1; f.issues[0].updated_at = '2026-11-04T01:00:00Z';
+  f.issueComments = { 71: [{ id: 1, body: 'STRANGER', user: { login: 'outside' } }] };
+  await f.tick(); assert.equal(f.prompts.length, 0);
+  f.issues[0].comments = 2; f.issues[0].updated_at = '2026-11-04T02:00:00Z';
+  f.issueComments[71].push({ id: 2, body: 'Please also handle refresh', user: { login: 'owner' } });
+  await f.tick(); assert.equal(f.prompts.length, 1);
+  f.status = 304; for (let tick = 0; tick < 4; tick++) await f.tick();
+  assert.equal(f.prompts.length, 1);
+});
+
+test('new work stays pending while the agent is busy and is coalesced when idle', async t => {
+  const f = await fixture(t); await f.invoke('start'); f.prompts.length = 0;
+  f.agentStatus = 'working'; f.issues = [issue(72)];
+  for (let tick = 0; tick < 4; tick++) { await f.tick(); f.status = 304; }
+  assert.equal(f.prompts.length, 0);
+  f.agentStatus = 'idle'; await f.tick(); assert.equal(f.prompts.length, 1);
+  await f.tick(); assert.equal(f.prompts.length, 1);
+});
+
+test('trusted PR head and closure changes wake an observe issue once each', async t => {
+  const f = await fixture(t, { mode: 'observe' }); f.issues = [issue(73), pr(91, 73)];
+  let detail = { state: 'open', draft: false, merged: false, head: { sha: 'a' } }, queries = 0;
+  f.ports.pullRequest = async () => { queries++; return detail; };
+  await f.invoke('start'); f.prompts.length = 0;
+  detail = { ...detail, head: { sha: 'b' } }; f.issues[1].updated_at = '2026-11-04T01:00:00Z';
+  await f.tick(); assert.equal(f.prompts.length, 1);
+  assert.equal(JSON.parse(f.prompts[0].trim().split('\n').at(-1)).issues[0].pullRequests[0].head, 'b');
+  f.status = 304; for (let tick = 0; tick < 4; tick++) await f.tick();
+  assert.equal(f.prompts.length, 1); assert.equal(queries, 2);
+  f.status = 200; f.issues.pop(); detail = { ...detail, state: 'closed', merged: true };
+  await f.tick(); assert.equal(f.prompts.length, 2);
+  f.status = 304; await f.tick(); assert.equal(f.prompts.length, 2); assert.equal(queries, 3);
+});
+
+test('add rejects every foreign reference before mutating any label and accepts local qualified references', async t => {
+  const f = await fixture(t);
+  for (const ref of ['other/repo#12', 'https://github.com/other/repo/issues/12']) {
+    const result = await f.invoke('add', { issues: ['15', ref] });
+    assert.equal(result.exitCode, 2); assert.match(result.message, /owner\/repo/);
+    assert.equal(result.message.split('\n').length, 1); assert.equal(f.ack.length, 0);
+  }
+  assert.equal((await f.invoke('add', { issues: ['OWNER/REPO#12', 'https://github.com/owner/repo/issues/15'] })).exitCode, 0);
+  assert.equal(f.ack.length, 3);
+});
+
+test('empty and malformed owner locks do not block later ticks', async t => {
+  const f = await fixture(t); await f.invoke('start'); f.issues = [issue(74)];
+  for (const owner of ['', 'not-a-pid', '0', '-1']) {
+    writeFileSync(f.stateFile() + '.lock', owner);
+    f.issues[0].body += '!'; await f.tick();
+  }
+  assert.equal(f.prompts.length, 5);
+});
+
+test('a forbidden permission lookup with remaining quota defers only that issue', async t => {
+  const f = await fixture(t); await f.invoke('start');
+  f.issues = [issue(75, { user: { login: 'writer' } }), issue(76)];
+  const run = f.ports.run;
+  f.ports.run = async (cmd, args, opts) => args.some(x => String(x).endsWith('/writer/permission'))
+    ? { code: 1, stderr: '', stdout: `HTTP/2.0 403 Forbidden\r\nx-ratelimit-remaining: 499\r\nx-ratelimit-reset: ${f.time / 1000 + 3600}\r\n\r\n{"message":"Resource not accessible"}` } : run(cmd, args, opts);
+  const result = await f.tick();
+  assert.equal(f.state().retryAt, undefined); assert.match(result.message, /75/); assert.match(f.warnings[0], /75/);
+  assert.match(f.prompts.at(-1), /"number":76,/); assert.doesNotMatch(f.prompts.at(-1), /"number":75,/);
+});
+
+test('Linux start warns about logout when lingering is not enabled; status detects missing Herdr', async t => {
+  const f = await fixture(t); const run = f.ports.run;
+  f.ports.run = async (cmd, args, opts) => cmd === 'loginctl' ? { code: 0, stdout: 'no\n', stderr: '' } : run(cmd, args, opts);
+  const result = await f.invoke('start'); assert.equal(result.exitCode, 0); assert.match(result.message, /loginctl enable-linger/);
+  f.serverRunning = false; const status = await f.invoke('status');
+  assert.doesNotMatch(status.message, /Autopilot running/); assert.match(status.message, /Herdr/);
+});
+
+test('overlapping ticks cannot deliver twice from a snapshot read before lock acquisition', async t => {
+  const f = await fixture(t); await f.invoke('start'); f.prompts.length = 0; f.issues = [issue(77)];
+  const run = f.ports.run; let reads = 0, release;
+  f.ports.run = async (cmd, args, opts) => {
+    if (cmd === 'git' && ++reads === 2) await new Promise(resolve => { release = resolve; });
+    return run(cmd, args, opts);
+  };
+  const first = f.tick(), second = f.tick(); await first; release?.(); await second;
+  assert.equal(f.prompts.length, 1);
+});
+
+test('trusted PR comments wake a waiting issue once; outsider PR comments stay quiet', async t => {
+  const f = await fixture(t, { mode: 'observe' }); f.issues = [issue(78), pr(92, 78)];
+  f.ports.pullRequest = async () => ({ state: 'open', head: { sha: 'a' } });
+  await f.invoke('start'); f.prompts.length = 0;
+  f.issues[1].comments = 1; f.issues[1].updated_at = '2026-11-04T01:00:00Z';
+  f.issueComments = { 92: [{ id: 1, body: 'STRANGER PR COMMENT', user: { login: 'outside' } }] };
+  await f.tick(); assert.equal(f.prompts.length, 0);
+  f.issues[1].comments = 2; f.issues[1].updated_at = '2026-11-04T02:00:00Z';
+  f.issueComments[92].push({ id: 2, body: 'Please revise the timeout', user: { login: 'owner' } });
+  await f.tick(); assert.equal(f.prompts.length, 1);
+  assert.match(f.prompts[0], /Please revise the timeout/); assert.doesNotMatch(f.prompts[0], /STRANGER PR COMMENT/);
+  f.status = 304; for (let tick = 0; tick < 4; tick++) await f.tick();
+  assert.equal(f.prompts.length, 1);
+});
+
+test('a forbidden issue query with quota remaining has no rate-limit cooldown', async t => {
+  const f = await fixture(t); await f.invoke('start'); delete f.ports.queryIssues;
+  const run = f.ports.run;
+  f.ports.run = async (cmd, args, opts) => cmd === 'gh' && args.some(x => String(x).includes('/issues?'))
+    ? { code: 1, stderr: '', stdout: `HTTP/2.0 403 Forbidden\r\nx-ratelimit-remaining: 499\r\nx-ratelimit-reset: ${f.time / 1000 + 3600}\r\n\r\n{"message":"Resource not accessible"}` } : run(cmd, args, opts);
+  await assert.rejects(f.tick(), /GitHub issue check failed/);
+  assert.equal(f.state().retryAt, undefined);
+});
+
+test('a zero-remaining 403 defers until reset even without a rate-limit message', async t => {
+  const f = await fixture(t); await f.invoke('start'); f.issues = [issue(79, { user: { login: 'writer' } })];
+  const run = f.ports.run, resetAt = f.time + 3600000;
+  f.ports.run = async (cmd, args, opts) => args.some(x => String(x).endsWith('/writer/permission'))
+    ? { code: 1, stderr: '', stdout: `HTTP/2.0 403 Forbidden\r\nx-ratelimit-remaining: 0\r\nx-ratelimit-reset: ${resetAt / 1000}\r\n\r\n{"message":"Forbidden"}` } : run(cmd, args, opts);
+  await f.tick(); assert.equal(f.state().retryAt, resetAt);
+});
+
+test('a live lock owner still excludes another tick', async t => {
+  const f = await fixture(t); await f.invoke('start'); const polls = f.polls.length;
+  writeFileSync(f.stateFile() + '.lock', String(process.pid));
+  assert.match((await f.tick()).message, /already running/); assert.equal(f.polls.length, polls);
+});
+
+test('native related PR metadata is fetched once and cached across unchanged ticks', async t => {
+  const f = await fixture(t, { mode: 'observe' }); f.issues = [issue(80), pr(93, 80)];
+  const run = f.ports.run; let reads = 0;
+  f.ports.run = async (cmd, args, opts) => {
+    if (cmd === 'gh' && args.includes('repos/owner/repo/pulls/93')) {
+      reads++; assert.ok(args.includes('GET'));
+      return { code: 0, stderr: '', stdout: 'HTTP/2.0 200 OK\r\n\r\n{"state":"open","draft":false,"head":{"sha":"a"}}' };
+    }
+    return run(cmd, args, opts);
+  };
+  await f.invoke('start'); f.prompts.length = 0; f.status = 304;
+  for (let tick = 0; tick < 4; tick++) await f.tick();
+  assert.equal(reads, 1); assert.equal(f.prompts.length, 0);
+});
+
+test('cached PR comments are revalidated after explicit trust or write access is revoked', async t => {
+  for (const authority of ['explicit', 'write']) {
+    const f = await fixture(t, { mode: 'observe' }); f.issues = [issue(81), pr(94, 81, { comments: 1 })];
+    f.issueComments = { 94: [{ id: 1, body: 'REVOKED COMMENT', user: { login: 'helper' } }] };
+    f.ports.pullRequest = async () => ({ state: 'open', head: { sha: 'a' } });
+    let permission = 'write'; const run = f.ports.run;
+    if (authority === 'write') {
+      writeFileSync(join(f.cwd, 'pdd.json'), '{"autopilot":{"mode":"observe","trust":[]}}');
+      f.ports.run = async (cmd, args, opts) => args.some(x => String(x).endsWith('/helper/permission'))
+        ? { code: 0, stderr: '', stdout: `HTTP/2.0 200 OK\r\n\r\n{"permission":"${permission}"}` } : run(cmd, args, opts);
+    }
+    await f.invoke('start'); f.prompts.length = 0;
+    if (authority === 'explicit') writeFileSync(join(f.cwd, 'pdd.json'), '{"autopilot":{"mode":"observe","trust":[]}}');
+    else permission = 'read';
+    f.issues[0].body = 'New instruction from the owner'; await f.tick();
+    assert.equal(f.prompts.length, 1); assert.match(f.prompts[0], /New instruction from the owner/);
+    assert.doesNotMatch(f.prompts[0], /REVOKED COMMENT/);
+  }
+});
+
+test('trust removal and outsider-only updates stay quiet for issue and PR discussions', async t => {
+  for (const channel of ['issue', 'PR']) {
+    const f = await fixture(t, { mode: channel === 'PR' ? 'observe' : 'auto' });
+    f.issues = [issue(82, { comments: channel === 'issue' ? 1 : 0 })];
+    const number = channel === 'PR' ? 95 : 82;
+    if (channel === 'PR') { f.issues.push(pr(95, 82, { comments: 1 })); f.ports.pullRequest = async () => ({ state: 'open', head: { sha: 'a' } }); }
+    f.issueComments = { [number]: [{ id: 1, body: 'REVOKED TEXT', user: { login: 'helper' } }] };
+    await f.invoke('start'); f.prompts.length = 0;
+    writeFileSync(join(f.cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: channel === 'PR' ? 'observe' : 'auto', trust: [] } }));
+    const run = f.ports.run; let permissions = 0;
+    f.ports.run = async (cmd, args, opts) => { if (args.some(x => String(x).endsWith('/permission'))) permissions++; return run(cmd, args, opts); };
+    f.status = 304; for (let tick = 0; tick < 4; tick++) await f.tick();
+    assert.equal(f.prompts.length, 0); assert.equal(permissions, 0, 'Quiet ticks must not refresh cached permissions');
+    f.status = 200; const changed = f.issues.find(x => x.number === number); changed.comments = 2; changed.updated_at = '2026-11-04T01:00:00Z';
+    f.issueComments[number].push({ id: 2, body: 'OUTSIDER ONLY', user: { login: 'outside' } });
+    await f.tick(); assert.equal(f.prompts.length, 0);
+    changed.comments = 3; changed.updated_at = '2026-11-04T02:00:00Z';
+    f.issueComments[number].push({ id: 3, body: 'New owner feedback', user: { login: 'owner' } });
+    await f.tick(); assert.equal(f.prompts.length, 1);
+    assert.match(f.prompts[0], /New owner feedback/); assert.doesNotMatch(f.prompts[0], /REVOKED TEXT|OUTSIDER ONLY/);
+  }
+});
+
+test('revoking a PR author does not make its unchanged waiting issue newly actionable', async t => {
+  const f = await fixture(t, { mode: 'observe' });
+  f.issues = [issue(83), pr(96, 83, { user: { login: 'helper' } })];
+  f.ports.pullRequest = async () => ({ state: 'open', head: { sha: 'a' } });
+  await f.invoke('start'); f.prompts.length = 0;
+  writeFileSync(join(f.cwd, 'pdd.json'), '{"autopilot":{"mode":"observe","trust":[]}}');
+  f.issues[1].comments = 1; f.issues[1].updated_at = '2026-11-04T01:00:00Z';
+  f.issueComments = { 96: [{ id: 1, body: 'OUTSIDER ONLY', user: { login: 'outside' } }] };
+  await f.tick(); assert.equal(f.prompts.length, 0);
+});
+
+for (const change of ['unclaim with waiting PR', 'auto with stuck issue']) test(`${change} does not wake an issue that still waits`, async t => {
+  const f = await fixture(t, { mode: 'observe' });
+  f.issues = [issue(84, { labels: [{ name: change.startsWith('unclaim') ? 'pdd:working' : 'pdd:stuck' }] }), pr(97, 84)];
+  f.ports.pullRequest = async () => ({ state: 'open', head: { sha: 'a' } });
+  await f.invoke('start'); f.prompts.length = 0;
+  if (change.startsWith('unclaim')) f.issues[0].labels = [];
+  else writeFileSync(join(f.cwd, 'pdd.json'), '{"autopilot":{"mode":"auto","trust":[]}}');
+  for (let tick = 0; tick < 4; tick++) await f.tick();
   assert.equal(f.prompts.length, 0);
 });

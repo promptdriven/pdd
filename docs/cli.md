@@ -47,10 +47,17 @@ The launcher uses the repository settings module to read root `pdd.json`. An
 active mode is `observe` or `auto`; missing or invalid settings count as `off`. It uses an
 installed, signed-in Codex, Claude Code, agy or Gemini agent. Missing dependencies
 get one actionable line. Linux uses a systemd user timer; macOS uses a
-LaunchAgent. See the chat with `herdr session attach pdd-autopilot`.
+LaunchAgent. On Linux, start warns when user-session lingering is off or
+unavailable: `loginctl enable-linger` keeps the timer after logout. The tick
+service preserves a Herdr server it starts when the tick exits. See the chat with
+`herdr session attach pdd-autopilot`.
 
 A tick checks GitHub with ETags and wakes the agent only for a repo's first
-start-up recipe or eligible work. Empty ticks use no AI. This applies to Claude
+start-up recipe or an unseen trusted issue, comment or related PR change.
+Already-seen issues stay quiet across unchanged ticks, including stuck,
+code-pending, claimed and observe-mode issues waiting for a person. Busy agents
+receive no tick prompt; pending changes are coalesced until they are idle.
+Empty ticks use no AI. This applies to Claude
 Code too: the user timer keeps empty ticks out of the conversation. Paginated
 queues revalidate every cached page; changed candidates may require comment and
 write-permission lookups. GitHub rate limits wait until the reset time.
@@ -61,9 +68,12 @@ look" until a trusted person comments. The agent receives only trusted people's
 text, including comments. Owners, people with write access and configured trusted
 names count as trusted. The `pdd-autopilot` skill owns the start-up recipe,
 `pdd:working` claim and one comment across machines, capacity and progress
-tracking. Unclaimed issues stay eligible so a later tick can use newly available
-room. Claimed issues are identified as claimed for the skill to monitor progress
-and inspect stale claims. Stop leaves the interactive session open.
+tracking. Related PRs are associated through same-repository closing references;
+trusted PR discussion comments and state transitions can wake waiting work once.
+Claimed issues stay identified as claimed when a trusted change needs attention.
+`add` rejects foreign repository references before writing any labels. Status
+reports unavailable Herdr instead of claiming a healthy running session. Stop
+leaves the interactive session open.
 
 ## Runs on a GitHub issue
 
