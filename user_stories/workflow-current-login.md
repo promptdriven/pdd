@@ -29,6 +29,9 @@ A quota error alone is insufficient end evidence. Observations may update only
 the same run/area/chat identity; late results must not revive or rewind progress.
 
 Pending request retry preserves accepted identity and existing delivery rules.
+When the original native conversation is known, the same pane with a different
+UUID, or an unavailable required identity, must send zero prompts and retain
+that request's identity, original custody and workflow progress.
 Do not replay an acknowledged or possibly dispatched request, redirect a stale
 target, or treat submission acknowledgement as proof the agent acted.
 
