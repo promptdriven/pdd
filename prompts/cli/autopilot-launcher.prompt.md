@@ -11,6 +11,17 @@ issues (argv issue references), and optional runs text. Return `{exitCode,messag
 The CLI owns streams. Outside programs, timer installation, clock and state I/O
 are injectable ports; native defaults implement these on macOS and Linux.
 
+## Native Codex startup
+
+For a selected Codex launcher, apply invocation-only config overrides that trust
+the selected repository cwd and set `check_for_update_on_startup=false`. These
+prevent folder-trust and update dialogs from holding the automated launch.
+Preserve the configured executable, environment/profile, model and effort, native
+interactive/full-access flags and first-message content. Encode cwd as one exact
+project key and shell-quote arguments so spaces, quotes, backslashes and shell
+syntax stay literal. Do not write agent config or saved trust, or apply these
+Codex settings to another provider. Timer and later delivery behavior stay unchanged.
+
 ## Start and stop
 
 Resolve the Git root, repository identity and package version before starting.
