@@ -19,18 +19,20 @@ const limited = { status: 1, stderr: 'gh: API rate limit exceeded (HTTP 403)' };
 const envFor = (setup, fake) => ({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin });
 const receipt = (entry, f) => ({ status: 200, json: f.job(CALL, 'call', 'passed', { program_result: { stdout: 'saved\n', stderr: '', exit_code: 0 } }, 2) });
 
-async function read(setup, fake, { token = TOKEN, user = 'octo 4242\n', extra = {} } = {}) {
+async function invoke(setup, fake, { token = TOKEN, user = 'octo 4242\n', extra = {} } = {}, sending = false) {
   const calls = [];
   const { ports } = portsFor(envFor(setup, fake), { gh: args => {
     calls.push(args);
     return args[0] === 'auth' ? { status: 0, stdout: token } : typeof user === 'string' ? { status: 0, stdout: user } : user;
   }, ...extra });
-  const code = await runCheck({ cwd: setup.repo, words: [CALL], options: { '--read': true, '--json': true } }, ports);
+  const code = await runCheck({ cwd: setup.repo, words: sending ? ['place-order'] : [CALL], options: { ...(!sending ? { '--read': true } : {}), '--json': true } }, ports);
   return { code, calls, out: ports.stdout.text, err: ports.stderr.text,
     lookups: calls.filter(args => args[0] === 'api' && args[1] === 'user').length };
 }
+const read = (setup, fake, options) => invoke(setup, fake, options);
+const send = (setup, fake, options) => invoke(setup, fake, options, true);
 
-test('2914: saved-batch reads reuse identity with no GitHub API call, while reading the token locally', async t => {
+test('2914: saved-batch reads look up the current owner even with a matching-token cache', async t => {
   const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
   const first = portsFor(envFor(setup, fake));
   assert.equal(await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--json': true } }, first.ports), 0);
@@ -38,21 +40,19 @@ test('2914: saved-batch reads reuse identity with no GitHub API call, while read
   assert.equal(first.clock.gh.filter(args => args[0] === 'api').length, 1);
   const posts = fake.posts.length;
   for (let i = 0; i < 2; i++) {
-    const next = portsFor(envFor(setup, fake), { gh: args => {
-      assert.deepEqual(args, ['auth', 'token'], 'saved reads must not contact GitHub');
-      return { status: 0, stdout: TOKEN };
-    } });
+    const next = portsFor(envFor(setup, fake));
     assert.equal(await runCheck({ cwd: setup.repo, options: { '--read': batch, '--json': true } }, next.ports), 0, next.ports.stderr.text);
+    assert.equal(next.clock.gh.filter(args => args[0] === 'api').length, 1);
   }
   assert.equal(fake.posts.length, posts, 'saved terminal reads send no new work');
 });
 
 test('2914: identity persists across Node processes with only login, ID, time and token SHA-256', async t => {
-  const setup = harbor(t), fake = await fakeRuntime(t, receipt), log = join(setup.sandbox, 'gh-calls.jsonl');
+  const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => f.normal(entry)), log = join(setup.sandbox, 'gh-calls.jsonl');
   const script = `
     import { appendFileSync } from 'node:fs';
     import { runCheck } from ${JSON.stringify(new URL('../src/runtime-client.mjs', import.meta.url).href)};
-    const code = await runCheck({cwd: ${JSON.stringify(setup.repo)}, words: [${JSON.stringify(CALL)}], options: {'--read': true, '--json': true}}, {
+    const code = await runCheck({cwd: ${JSON.stringify(setup.repo)}, words: ['place-order'], options: {'--json': true}}, {
       env: ${JSON.stringify(envFor(setup, fake))}, interactive: false,
       gh(args) { appendFileSync(${JSON.stringify(log)}, JSON.stringify(args)+'\\n'); return {status: 0, stdout: args[0] === 'auth' ? ${JSON.stringify(TOKEN)} : 'octo 4242'}; }
     });
@@ -70,13 +70,13 @@ test('2914: identity persists across Node processes with only login, ID, time an
   assert.ok(!readFileSync(cachePath(setup), 'utf8').includes(TOKEN));
 });
 
-test('2914: matching identity has no expiry and is shared across repositories on this machine', async t => {
-  const setup = harbor(t), second = harbor(t), fake = await fakeRuntime(t, receipt);
-  assert.equal((await read(setup, fake)).code, 0);
+test('2914: plain sends share matching identity across repositories without an expiry', async t => {
+  const setup = harbor(t), second = harbor(t), fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
+  assert.equal((await send(setup, fake)).code, 0);
   const cached = readCache(setup); cached.checked_at = '2001-01-01T00:00:00Z';
   writeFileSync(cachePath(setup), JSON.stringify(cached));
   second.state = setup.state;
-  const result = await read(second, fake, { user: limited });
+  const result = await send(second, fake, { user: limited });
   assert.equal(result.code, 0, result.err); assert.equal(result.lookups, 0);
 });
 
@@ -91,7 +91,8 @@ test('2914: a changed token does one lookup, replaces identity, and preserves sa
   const changed = readCache(setup);
   assert.equal(changed.login, 'another'); assert.equal(changed.user_id, '8080'); assert.equal(changed.token_sha256, digest(OTHER_TOKEN));
   const again = await read(setup, await fakeRuntime(t, receipt), { token: OTHER_TOKEN, user: limited });
-  assert.equal(again.code, 0, again.err); assert.equal(again.lookups, 0);
+  assert.equal(again.code, 5, again.err); assert.equal(again.lookups, 1);
+  assert.match(again.err, /Wait for the GitHub rate limit to reset/);
 });
 
 test('2914: a rate-limited lookup never falls back to another token or an absent identity', async t => {
@@ -111,7 +112,7 @@ test('2914: HTTP 401 refreshes GitHub identity and retries the same read once', 
   let attempts = 0;
   const retry = await fakeRuntime(t, (entry, f) => ++attempts === 1 ? denied : receipt(entry, f));
   const result = await read(setup, retry);
-  assert.equal(result.code, 0, result.err); assert.equal(result.lookups, 1);
+  assert.equal(result.code, 0, result.err); assert.equal(result.lookups, 2);
   assert.deepEqual(retry.gets.map(entry => entry.url), [`/v1/runs/${CALL}`, `/v1/runs/${CALL}`]);
   assert.equal(result.calls.filter(args => args[0] === 'auth').length, 1);
 });
@@ -120,20 +121,18 @@ test('2914: a second HTTP 401 ends recovery and leaves no cached identity', asyn
   const setup = harbor(t), fake = await fakeRuntime(t, receipt);
   assert.equal((await read(setup, fake)).code, 0);
   const retry = await fakeRuntime(t, () => denied), result = await read(setup, retry);
-  assert.equal(result.code, 3, result.err); assert.equal(result.lookups, 1); assert.equal(retry.gets.length, 2);
+  assert.equal(result.code, 3, result.err); assert.equal(result.lookups, 2); assert.equal(retry.gets.length, 2);
   assert.match(result.out + result.err, /Run gh auth login/);
   assert.equal(existsSync(cachePath(setup)), false);
   assert.equal((await read(setup, fake)).lookups, 1, 'a later command must look up identity again');
 });
 
-test('2914: rate limiting during fresh lookup uses the matching identity with a warning', async t => {
+test('2914: a rate-limited owner lookup never trusts a matching cache without a reported reset', async t => {
   const setup = harbor(t), fake = await fakeRuntime(t, receipt);
   assert.equal((await read(setup, fake)).code, 0);
-  let attempts = 0;
-  const retry = await fakeRuntime(t, (entry, f) => ++attempts === 1 ? denied : receipt(entry, f));
-  const result = await read(setup, retry, { user: limited });
-  assert.equal(result.code, 0, result.err); assert.equal(result.lookups, 1); assert.equal(retry.gets.length, 2);
-  assert.match(result.err, /Warning:.*GitHub.*rate limit.*cached/i);
+  const gets = fake.gets.length, result = await read(setup, fake, { user: limited });
+  assert.equal(result.code, 5); assert.equal(result.lookups, 1); assert.equal(fake.gets.length, gets);
+  assert.match(result.err, /Wait for the GitHub rate limit to reset/);
   assert.ok(!(result.out + result.err + readFileSync(cachePath(setup), 'utf8')).includes(TOKEN));
 });
 
@@ -143,7 +142,7 @@ test('2914: non-auth server errors neither refresh identity nor retry the reques
   for (const status of [403, 429, 500]) {
     const other = await fakeRuntime(t, () => ({ status, json: { error: { code: 'other', message: 'unavailable' } } }));
     const result = await read(setup, other);
-    assert.equal(result.lookups, 0); assert.equal(other.gets.length, 1); assert.equal(readCache(setup).login, 'octo');
+    assert.equal(result.lookups, 1); assert.equal(other.gets.length, 1); assert.equal(readCache(setup).login, 'octo');
   }
 });
 
@@ -180,7 +179,7 @@ test('2914: parallel requests each retry their own initial HTTP 401 once', async
   assert.deepEqual([...attempts.values()], [2, 2]);
 });
 
-test('2914: hidden request reads retain support outside Git and reuse the external identity', async t => {
+test('2914: hidden request reads retain support outside Git and resolve identity freshly', async t => {
   const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => ({ status: 200, json: f.check(CALL, 'passed') }));
   const calls = [];
   for (let i = 0; i < 2; i++) {
@@ -189,7 +188,7 @@ test('2914: hidden request reads retain support outside Git and reuse the extern
     calls.push(...clock.gh);
   }
   assert.equal(calls.filter(args => args[0] === 'auth').length, 2);
-  assert.equal(calls.filter(args => args[0] === 'api').length, 1);
+  assert.equal(calls.filter(args => args[0] === 'api').length, 2);
   assert.equal(fake.gets.length, 2);
 });
 
@@ -212,7 +211,8 @@ for (const user of ['renamed 4242', 'octo 7777']) test(`2914 repair: refreshed o
   const file = join(folder, 'batch.json'), before = readFileSync(file, 'utf8'), saved = JSON.parse(before);
   unlinkSync(join(folder, `${saved.rows[0].request_ids.at(-1)}.json`));
   reading = true;
-  const next = portsFor(envFor(setup, fake), { gh: args => ({ status: 0, stdout: args[0] === 'auth' ? TOKEN : user }) });
+  let lookups = 0;
+  const next = portsFor(envFor(setup, fake), { gh: args => ({ status: 0, stdout: args[0] === 'auth' ? TOKEN : ++lookups === 1 ? 'octo 4242' : user }) });
   const gets = fake.gets.length;
   assert.equal(await runCheck({ cwd: setup.repo, options: { '--read': batch, '--json': true } }, next.ports), 5);
   assert.match(next.ports.stderr.text, /These runs belong to octo/);
@@ -240,4 +240,133 @@ test('2914 repair: a revoked-token refresh follows normal 401 JSON, row and slot
   const later = make();
   assert.equal(await runCheck({ cwd: setup.repo, options: { '--read': result.batch, '--json': true } }, later), 5);
   assert.equal(fake.gets.length, 0, 'a later read cannot poll a run that was never created');
+});
+
+for (const mode of ['--read', '--retry']) for (const user of ['renamed 4242', 'mallory 777']) {
+  test(`2914 decision b: ${mode} refuses same-token owner ${user} before any request`, async t => {
+    const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
+    const first = portsFor(envFor(setup, fake));
+    assert.equal(await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--json': true } }, first.ports), 0);
+    const batch = JSON.parse(first.ports.stdout.text).batch, file = join(setup.state, 'batches', batch, 'batch.json');
+    const before = readFileSync(file, 'utf8'), gets = fake.gets.length, posts = fake.posts.length;
+    const calls = [];
+    const next = portsFor(envFor(setup, fake), { gh: args => {
+      calls.push(args); return { status: 0, stdout: args[0] === 'auth' ? TOKEN : user };
+    } });
+    assert.equal(await runCheck({ cwd: setup.repo, options: { [mode]: batch, '--json': true } }, next.ports), 5);
+    assert.match(next.ports.stderr.text, /These runs belong to octo/);
+    assert.equal(calls.filter(args => args[0] === 'api').length, 1);
+    assert.equal(fake.gets.length, gets); assert.equal(fake.posts.length, posts);
+    assert.equal(readFileSync(file, 'utf8'), before, 'same-token account changes cannot rewrite saved ownership');
+  });
+}
+
+for (const user of ['octo 4242', 'renamed 4242']) test(`2914 decision b: saved read waits for reset then verifies ${user}`, async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
+  const first = portsFor(envFor(setup, fake));
+  assert.equal(await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--json': true } }, first.ports), 0);
+  const batch = JSON.parse(first.ports.stdout.text).batch, file = join(setup.state, 'batches', batch, 'batch.json');
+  const before = readFileSync(file, 'utf8'), gets = fake.gets.length, posts = fake.posts.length;
+  const next = portsFor(envFor(setup, fake)), reset = next.clock.now + 120000, sleeps = [];
+  let lookups = 0;
+  next.ports.gh = args => {
+    if (args[0] === 'auth') return { status: 0, stdout: TOKEN };
+    assert.equal(args[1], 'user'); lookups++;
+    if (lookups === 1) return { ...limited, stdout: `HTTP/2.0 403\r\nx-ratelimit-reset: ${reset / 1000}\r\n\r\n` };
+    assert.equal(next.clock.now, reset, 'no lookup before the reset');
+    return { status: 0, stdout: `HTTP/2.0 200\r\nx-ratelimit-remaining: 4999\r\n\r\n${user}\n` };
+  };
+  next.ports.sleep = async ms => { sleeps.push(ms); next.clock.now += ms; };
+  assert.equal(await runCheck({ cwd: setup.repo, options: { '--read': batch, '--json': true } }, next.ports), user.startsWith('octo') ? 0 : 5);
+  assert.equal(lookups, 2); assert.deepEqual(sleeps, [60000, 60000]);
+  assert.match(next.ports.stderr.text, /waiting until.*fresh owner lookup/);
+  assert.equal(fake.gets.length, gets); assert.equal(fake.posts.length, posts);
+  if (!user.startsWith('octo')) {
+    assert.match(next.ports.stderr.text, /These runs belong to octo/);
+    assert.equal(readFileSync(file, 'utf8'), before);
+  }
+});
+
+test('2914 decision b: reset wait respects the saved-read deadline without accepting cached ownership', async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
+  const first = portsFor(envFor(setup, fake));
+  assert.equal(await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--json': true } }, first.ports), 0);
+  const batch = JSON.parse(first.ports.stdout.text).batch, gets = fake.gets.length;
+  const next = portsFor(envFor(setup, fake)), start = next.clock.now;
+  let lookups = 0;
+  next.ports.gh = args => args[0] === 'auth' ? { status: 0, stdout: TOKEN } : (lookups++, {
+    ...limited, stdout: `HTTP/2.0 403\r\nx-ratelimit-reset: ${(start + 120000) / 1000}\r\n\r\n`,
+  });
+  assert.equal(await runCheck({ cwd: setup.repo, options: { '--read': batch, '--json': true, '--timeout': 1 } }, next.ports), 3);
+  assert.equal(lookups, 1); assert.equal(next.clock.now - start, 60000); assert.equal(fake.gets.length, gets);
+  assert.match(next.ports.stderr.text, /Read the saved result again after the rate limit resets/);
+});
+
+test('2914 decision b: missing response headers use rate-limit metadata before retrying lookup', async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, receipt), next = portsFor(envFor(setup, fake));
+  const reset = next.clock.now + 2000; let lookups = 0, metadata = 0;
+  next.ports.gh = args => {
+    if (args[0] === 'auth') return { status: 0, stdout: TOKEN };
+    if (args[1] === 'rate_limit') { metadata++; return { status: 0, stdout: String(reset / 1000) }; }
+    if (++lookups === 1) return limited;
+    assert.equal(next.clock.now, reset); return { status: 0, stdout: 'octo 4242' };
+  };
+  assert.equal(await runCheck({ cwd: setup.repo, words: [CALL], options: { '--read': true, '--json': true } }, next.ports), 0);
+  assert.equal(lookups, 2); assert.equal(metadata, 1); assert.equal(fake.gets.length, 1);
+});
+
+test('2914 decision b: interruption ends reset waiting without any owner request', async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, receipt), next = portsFor(envFor(setup, fake));
+  const reset = next.clock.now + 120000; let lookups = 0;
+  next.ports.gh = args => args[0] === 'auth' ? { status: 0, stdout: TOKEN } : (lookups++, {
+    ...limited, stdout: `HTTP/2.0 403\r\nx-ratelimit-reset: ${reset / 1000}\r\n\r\n`,
+  });
+  next.ports.sleep = async () => { next.clock.interrupt(); };
+  assert.equal(await runCheck({ cwd: setup.repo, words: [CALL], options: { '--read': true } }, next.ports), 3);
+  assert.equal(lookups, 1); assert.equal(fake.gets.length, 0);
+});
+
+test('2914 decision b: a UUID read respects its timeout while waiting for GitHub', async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, receipt), next = portsFor(envFor(setup, fake));
+  const start = next.clock.now; let lookups = 0;
+  next.ports.gh = args => args[0] === 'auth' ? { status: 0, stdout: TOKEN } : (lookups++, {
+    ...limited, stdout: 'HTTP/2.0 403\r\nretry-after: 10\r\n\r\n',
+  });
+  assert.equal(await runCheck({ cwd: setup.repo, words: [CALL], options: { '--read': true, '--timeout': 0.001 } }, next.ports), 3);
+  assert.equal(next.clock.now - start, 60); assert.equal(lookups, 1); assert.equal(fake.gets.length, 0);
+});
+
+test('2914 decision b: a read waits for both Retry-After and the later core reset', async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, receipt), next = portsFor(envFor(setup, fake));
+  const reset = next.clock.now + 10000; let lookups = 0;
+  next.ports.gh = args => {
+    if (args[0] === 'auth') return { status: 0, stdout: TOKEN };
+    if (++lookups === 1) return { ...limited, stdout: `HTTP/2.0 403\r\nretry-after: 1\r\nx-ratelimit-reset: ${reset / 1000}\r\n\r\n` };
+    assert.equal(next.clock.now, reset); return { status: 0, stdout: 'octo 4242' };
+  };
+  assert.equal(await runCheck({ cwd: setup.repo, words: [CALL], options: { '--read': true } }, next.ports), 0);
+  assert.equal(lookups, 2); assert.equal(fake.gets.length, 1);
+});
+
+for (const status of [403, 429]) test(`2914 decision b: HTTP ${status} limit headers need no rate-limit wording`, async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, receipt), next = portsFor(envFor(setup, fake));
+  const start = next.clock.now; let lookups = 0;
+  next.ports.gh = args => {
+    if (args[0] === 'auth') return { status: 0, stdout: TOKEN };
+    if (++lookups === 1) return { status: 1, stderr: `gh: HTTP ${status}`, stdout: `HTTP/2 ${status}\r\nretry-after: 2\r\n${status === 403 ? 'x-ratelimit-remaining: 0\r\n' : ''}\r\n` };
+    assert.equal(next.clock.now - start, 2000); return { status: 0, stdout: 'octo 4242' };
+  };
+  assert.equal(await runCheck({ cwd: setup.repo, words: [CALL], options: { '--read': true } }, next.ports), 0);
+  assert.equal(lookups, 2); assert.equal(fake.gets.length, 1);
+});
+
+for (const status of [401, 403]) test(`2914: an ordinary HTTP ${status} lookup is not retried as a rate limit`, async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, receipt), next = portsFor(envFor(setup, fake));
+  let lookups = 0;
+  next.ports.gh = args => args[0] === 'auth' ? { status: 0, stdout: TOKEN } : (lookups++, {
+    status: 1, stdout: `HTTP/2 ${status}\r\nx-ratelimit-remaining: ${status === 401 ? 0 : 4999}\r\nretry-after: 10\r\n\r\n`, stderr: status === 401 ? 'gh: Bad credentials (HTTP 401)' : 'gh: Forbidden',
+  });
+  next.ports.sleep = async () => assert.fail('ordinary forbidden responses do not wait for a reset');
+  assert.equal(await runCheck({ cwd: setup.repo, words: [CALL], options: { '--read': true } }, next.ports), 5);
+  assert.equal(lookups, 1); assert.equal(fake.gets.length, 0);
 });

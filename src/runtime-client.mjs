@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 6eb7dca7367aa2df0d1bc704947e79cd33f71d711d70e81076275745c465eb0b).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: cf704b8ecd2c2d202db2fa7d5035421e7a621f5a0a89651cb66927a5c429357e).
 import { hasProgress, outcomeDone, outcomeFor, outcomeOverall, outcomeText, progressText } from './runtime-outcome.mjs';
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
@@ -405,7 +405,7 @@ async function ownBatch(context, name) {
 }
 
 const identitySessions = new WeakMap();
-function signIn(ports, store) {
+async function signIn(ports, store, { reuse = false, waitForRateLimit = false, deadline = Infinity, signal } = {}) {
   const token = ports.gh(['auth', 'token']);
   if (token.error?.code === 'ENOENT') throw new Stop(5, 'Install the GitHub CLI, then run gh auth login');
   const value = token.status === 0 ? String(token.stdout ?? '').trim() : '';
@@ -423,26 +423,40 @@ function signIn(ports, store) {
     if (!path) return;
     try { if (store.read(path)?.token_sha256 === hash) unlinkSync(path); } catch { /* A fresh lookup can still recover. */ }
   };
-  const lookup = () => {
-    const user = ports.gh(['api', 'user', '--jq', '.login + " " + (.id|tostring)']);
-    const [login, id] = user.status === 0 ? String(user.stdout ?? '').trim().split(' ') : [];
-    const why = user.status === 0 ? '' : causeText(user.stderr || user.error?.code, [value]);
-    if (!login || !/^\d+$/.test(id ?? '')) {
-      if (cached && user.status !== 0 && /rate[ -]?limit/i.test(why)) {
-        line(ports.stderr, 'Warning: GitHub rate limit blocked the login lookup; using the cached identity for this token.');
-        persist(cached);
-        return cached;
+  const lookup = async (wait = false, end = deadline) => {
+    for (;;) {
+      const user = ports.gh(['api', 'user', ...(wait ? ['--include'] : []), '--jq', '.login + " " + (.id|tostring)']);
+      const raw = String(user.stdout ?? '').trim();
+      const [login, id] = user.status === 0 ? raw.split(/\r?\n/).at(-1).split(' ') : [];
+      const why = user.status === 0 ? '' : causeText(user.stderr || user.error?.code, [value]);
+      if (!login || !/^\d+$/.test(id ?? '')) {
+        const limited = user.status !== 0 && (/rate[ -]?limit/i.test(why)
+          || /^HTTP\/[\d.]+\s+429\b/im.test(raw)
+          || /^HTTP\/[\d.]+\s+403\b/im.test(raw) && /^x-ratelimit-remaining:\s*0\s*$/im.test(raw));
+        if (wait && limited) {
+          const reset = /^x-ratelimit-reset:\s*(\d+)/im.exec(raw), after = /^retry-after:\s*(\d+)/im.exec(raw);
+          let at = Math.max(after ? ports.now() + Number(after[1]) * 1000 : -Infinity, reset ? Number(reset[1]) * 1000 : -Infinity);
+          if (!Number.isFinite(at)) {
+            const limit = ports.gh(['api', 'rate_limit', '--jq', '.resources.core.reset']);
+            at = limit.status === 0 ? Number(String(limit.stdout ?? '').trim()) * 1000 : NaN;
+          }
+          if (!Number.isFinite(new Date(at).getTime()) || at <= ports.now()) throw new Stop(5, `pdd could not verify the saved owner (gh api user: ${why}). Wait for the GitHub rate limit to reset, then read again; GitHub did not report a future reset time.`);
+          line(ports.stderr, `GitHub rate limit: waiting until ${new Date(at).toISOString()} for a fresh owner lookup. Cached identity cannot verify the saved owner.`);
+          while (ports.now() < Math.min(at, end) && !signal?.aborted) await ports.sleep(Math.min(60_000, at - ports.now(), end - ports.now()), signal);
+          if (signal?.aborted || ports.now() >= end) throw new Stop(3, 'Still waiting for a fresh GitHub owner lookup. Read the saved result again after the rate limit resets.');
+          continue;
+        }
+        throw new Stop(5, `pdd could not read your GitHub login (gh api user${why ? `: ${why}` : ''}). Run gh auth status.`);
       }
-      throw new Stop(5, `pdd could not read your GitHub login (gh api user${why ? `: ${why}` : ''}). Run gh auth status.`);
+      const record = { login, user_id: id, checked_at: new Date(ports.now()).toISOString(), token_sha256: hash };
+      persist(record);
+      return cached = record;
     }
-    const record = { login, user_id: id, checked_at: new Date(ports.now()).toISOString(), token_sha256: hash };
-    persist(record);
-    return cached = record;
   };
-  const record = cached ?? lookup(), identity = { token: value, login: record.login, userId: record.user_id };
-  identitySessions.set(identity, { invalidate, refresh() {
+  const record = reuse && cached || await lookup(waitForRateLimit), identity = { token: value, login: record.login, userId: record.user_id };
+  identitySessions.set(identity, { invalidate, async refresh(end) {
     invalidate();
-    return lookup();
+    return lookup(waitForRateLimit, end);
   }, checkOwner(fresh) {
     // A refresh cannot change the account whose owner checks already passed.
     if (fresh.login !== identity.login || fresh.user_id !== identity.userId) {
@@ -498,7 +512,7 @@ class Runtime {
       const session = identitySessions.get(this.identity);
       if (session && !retried) {
         let fresh;
-        try { fresh = session.refresh(); }
+        try { fresh = await session.refresh(deadline); }
         catch {
           session.invalidate();
           return reply;
@@ -1516,7 +1530,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   context.warnings = [...svgWarnings, ...found.warnings,...drift,...(capture.warnings ?? [])];
   context.unmatched = unmatchedLines(found);
   if (!context.json) for (const warning of [...svgWarnings,...drift,...(capture.warnings ?? [])]) line(ports.stderr, warning);
-  const identity = signIn(ports, context.store), startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
+  const identity = await signIn(ports, context.store), startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
   const timeoutMin = options['--timeout'] !== undefined ? Number(options['--timeout']) : ports.interactive ? null : AGENT_WAIT_MIN;
   Object.assign(context, { origin, visible: found.visible, capture, identity, batch, startedAt, deadline: timeoutMin ? startedAt + timeoutMin * 60_000 : Infinity, rows, head: null,
     intent: 'lint-only', agentLimit: options['--timeout'] === undefined && !ports.interactive, secrets: [identity.token], lint: { request_ids: [], state: null }, timeoutMin });
@@ -1732,7 +1746,7 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
   const saved = store.read(join(context.folder, 'batch.json'));
   if (!saved) throw new Stop(2, `No saved batch ${name}.`);
   if (saved.root !== root) throw new Stop(2, 'This saved batch belongs to a different repository.');
-  const identity = signIn(ports, context.store);
+  const identity = await signIn(ports, context.store, { waitForRateLimit: !quiet, deadline: context.deadline, signal: context.signal });
   assertIdentityOwner(identity, saved.login, `These runs belong to ${saved.login}. Run: gh auth switch -u ${saved.login}`);
   Object.assign(context, { batch: name, origin: saved.origin, coverage: saved.coverage, identity, intent: saved.intent, secrets: [identity.token], warnings: saved.warnings ?? [],
     capture: { sha256: saved.source_sha256, files: saved.files.map(path => ({ path })), bytes: saved.bytes, stories:saved.contract_snapshots }, lint: saved.lint, head: saved.head, startedAt: Date.parse(saved.created_at) });
@@ -1876,7 +1890,7 @@ async function runRequest(context, id, cwd) {
   try { root = repoRoot(cwd); } catch { /* Request reads also work outside Git. */ }
   const directory = stateDirectory(context.ports.env);
   if (!root || !inside(realish(directory), realpathSync(root))) context.store ??= new StateStore(directory);
-  const { ports } = context, identity = signIn(ports, context.store), origin = runtimeOrigin(ports.env);
+  const { ports } = context, identity = await signIn(ports, context.store), origin = runtimeOrigin(ports.env);
   Object.assign(context, { origin, secrets: [identity.token] });
   const runtime = new Runtime({ origin, identity, ports, signal: context.signal });
   const row = { test: '-', story: '-', title: '-', phase: 'server', request_ids: [id], state: 'unknown', refusals: [], warnings: [] };
@@ -1923,14 +1937,16 @@ async function refreshCheckBatches(context, identity, origin, id, answer) {
 }
 
 // A read is observation only; it does not replay the call or settle backend accounting.
-async function runCallRead(context, id) {
+async function runCallRead(context, id, options = {}) {
   const { ports, store } = context;
+  context.deadline ??= options['--timeout'] === undefined ? Infinity : ports.now() + Number(options['--timeout']) * 60_000;
   const saved = store.read(join(store.dir, 'calls', `${id}.meta.json`));
-  const identity = signIn(ports, store);
+  const identity = await signIn(ports, store, { waitForRateLimit: true, deadline: context.deadline, signal: context.signal });
   if (saved) assertIdentityOwner(identity, saved.login, `These runs belong to ${saved.login}. Run: gh auth switch -u ${saved.login}`);
   const origin = runtimeOrigin(saved ? { PDD_RUNTIME_URL: saved.origin } : ports.env);
   const runtime = new Runtime({ origin, identity, ports, signal: context.signal });
-  const reply = await runtime.get(id), blocked = blockingAnswer(reply);
+  if (ports.now() >= context.deadline) throw new Stop(3, `Read the result later with: pdd test --read ${id}`);
+  const reply = await runtime.get(id, Math.min(GET_MS, context.deadline - ports.now())), blocked = blockingAnswer(reply);
   if (blocked) throw new Stop(5, blocked);
   const command = ['call', 'check'].includes(reply.json?.command) ? reply.json.command : null;
   const verified = [200, 202].includes(reply.status) && command && sameJob(reply.json, id, command)
@@ -2041,7 +2057,7 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
     context.root = root; context.store = stateFor(ports.env, root);
     return await withCheckRun(context, async () => {
       if (modes[0] === '--retry') { release = interruptible(context); return await runRetry(context, options['--retry'], options); }
-      if (modes[0] === '--read') { release = interruptible(context); return UUID.test(words[0] ?? '') ? await runCallRead(context, words[0]) : await runRead(context, words[0], false, options); }
+      if (modes[0] === '--read') { release = interruptible(context); return UUID.test(words[0] ?? '') ? await runCallRead(context, words[0], options) : await runRead(context, words[0], false, options); }
       if (modes[0] === '--lint') return await runLintOnly(context, cwd, words, options, value => { release = value; });
       return await runBatch(context, cwd, words, options, value => { release = value; });
     });
@@ -2584,7 +2600,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
   if (!words.length) line(ports.stderr, costLine(fresh.filter(row => row.state === 'ready'), root, found.visible));
   context.otherNote = otherNote(otherFiles(capture.files, found).length);
   let identity;
-  try { identity = signIn(ports, context.store); }
+  try { identity = await signIn(ports, context.store, { reuse: true }); }
   catch (error) {
     if (cache?.mark) await cacheTransaction(cache, data => {
       if (data.latest_identity?.in_progress) {
@@ -2774,7 +2790,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     if (doorModes.length > 1 || (options['--shell'] && !options['--cli']) || (doorModes.length && options['--stop'])
       || (options['--save-last'] && (words.length || Object.keys(options).length !== 1))) throw new Stop(2, 'Choose one of --cli, --serve, --save-last or --stop; --shell needs --cli.');
     if (options['--save-last']) {
-      const root = repoRoot(cwd), store = stateFor(ports.env, root), identity = signIn(ports, store);
+      const root = repoRoot(cwd), store = stateFor(ports.env, root), identity = await signIn(ports, store);
       return await (await import('./try-doors.mjs')).saveLast({ root, store, identity, ports });
     }
     if (options['--stop'] && (options['--tab'] || options['--new'] || options['--no-open'] || options['--no-wait'] || options['--app-map'] !== undefined || requestedBudget !== null)) throw new Stop(2, 'pdd simulate --stop takes only a STORY. Run pdd simulate --help.');
@@ -2800,7 +2816,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     }
     const capture = ports.captureSource(root, { tests: [test.path], appMap }), note = otherNote(otherFiles(capture.files, found).length);
     for (const warning of capture.warnings ?? []) line(ports.stderr, warning);
-    const identity = signIn(ports, context.store);
+    const identity = await signIn(ports, context.store);
     Object.assign(context, { capture, identity, secrets: [identity.token], startedAt: ports.now(), deadline: ports.now() + TRY_MS, lint: { request_ids: [], state: null },
       batch: null, rows: [row], timeoutMin: TRY_MS / 60_000, agentLimit: false, head: null });
     context.folder = store.folder('tries');
@@ -2943,7 +2959,7 @@ async function stopByName(context, cwd, words, origin) {
   }
   const [path, record] = hits[0], title = record.title ?? record.story ?? path;
   Object.assign(context, { root, store, origin });
-  const identity = signIn(ports, store);
+  const identity = await signIn(ports, store);
   context.secrets = [identity.token];
   context.runtime = new Runtime({ origin: record.origin ?? origin, identity, ports });
   line(ports.stderr, `Stopping the Try for "${title}"…`);
@@ -3255,7 +3271,7 @@ export const saveDoorCase = (root, saved, options = {}) => {
 };
 export async function runDoorCall(descriptor, input, givenPorts = {}) {
   const ports = withDefaults(givenPorts), { root, origin, sessionId, login, prompt, operation } = descriptor;
-  const store = stateFor(ports.env, root), identity = signIn(ports, store);
+  const store = stateFor(ports.env, root), identity = await signIn(ports, store);
   assertIdentityOwner(identity, login, `This Try belongs to ${login}. Run: gh auth switch -u ${login}`);
   if (runtimeOrigin({ PDD_RUNTIME_URL: origin }) !== origin) throw new Stop(2, 'The saved interpreter address is invalid.');
   const repo=store.read(join(store.dir,'repos',`${store.repoKey(root)}.json`));
@@ -3333,7 +3349,7 @@ export async function readTryOwner({ cwd = process.cwd(), story } = {}, givenPor
   let record = repo.tries?.[test.path];
   if (!record) { await openTry(); record = store.repo(root).tries?.[test.path]; }
   if (!record) throw new Error('No confirmed Try is recorded. Run pdd simulate STORY.');
-  const identity = signIn(ports, store);
+  const identity = await signIn(ports, store);
   assertIdentityOwner(identity, record.login, `This Try belongs to ${record.login}. Run: gh auth switch -u ${record.login}`);
   if (runtimeOrigin({ PDD_RUNTIME_URL: record.origin }) !== record.origin) throw new Error('The saved interpreter address is invalid.');
   const promptProblem=tryPromptProblem(root,found,test,record);

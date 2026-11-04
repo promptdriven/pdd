@@ -128,7 +128,7 @@ test('owner access refuses a Try recorded for another GitHub login before any ow
   });
   const { ports } = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state });
   assert.equal((await readTryOwner({ cwd: setup.repo }, ports)).record.login, 'octo');
-  const gets = fake.gets.length, other = { ...ports, gh: args => args[0] === 'auth' ? { status: 0, stdout: 'gho_OTHER_synthetic_mcp_token' } : { status: 0, stdout: 'mallory 777\n' } };
+  const gets = fake.gets.length, other = { ...ports, gh: args => args[0] === 'auth' ? ports.gh(args) : { status: 0, stdout: 'mallory 777\n' } };
   await assert.rejects(readTryOwner({ cwd: setup.repo }, other), /This Try belongs to octo\. Run: gh auth switch -u octo/);
   assert.equal(fake.gets.length, gets, 'another login gets no owner read');
   assert.equal(fake.posts.filter(p => p.command === 'try').length, 1);

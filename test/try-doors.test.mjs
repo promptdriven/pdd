@@ -100,7 +100,7 @@ test('doors: wrapper failures use 125, never call as another login or follow lau
   const setup = clip(t), ready = await opened(t, setup);
   assert.equal(ready.code, 0, ready.ports.stderr.text);
   const { runShim } = await import('../src/try-doors.mjs');
-  const wrong = ready.makePorts({ gh: args => args[0] === 'auth' ? { status: 0, stdout: 'gho_OTHER_synthetic_door_token' } : { status: 0, stdout: 'other 1234' } });
+  const wrong = ready.makePorts({ gh: args => args[0] === 'auth' ? { status: 0, stdout: TOKEN } : { status: 0, stdout: 'other 1234' } });
   assert.equal(await runShim(ready.descriptor, ['--help'], wrong), 125);
   assert.match(wrong.stderr.text, /^pdd:.*belong/);
   assert.equal(ready.fake.jsonPosts.length, 0);
@@ -119,7 +119,8 @@ test('doors: a refreshed owner must pass the same Try check before a call retry'
   }));
   assert.equal(ready.code, 0, ready.ports.stderr.text);
   const { runShim } = await import('../src/try-doors.mjs');
-  const changed = ready.makePorts({ gh: args => ({ status: 0, stdout: args[0] === 'auth' ? TOKEN : 'renamed 4242' }) });
+  let lookups = 0;
+  const changed = ready.makePorts({ gh: args => ({ status: 0, stdout: args[0] === 'auth' ? TOKEN : ++lookups === 1 ? 'octo 4242' : 'renamed 4242' }) });
   assert.equal(await runShim(ready.descriptor, ['--help'], changed), 125);
   assert.match(changed.stderr.text, /This Try belongs to octo\. Run: gh auth switch -u octo/);
   assert.equal(ready.fake.jsonPosts.length, 1, 'the changed account gets no call retry');

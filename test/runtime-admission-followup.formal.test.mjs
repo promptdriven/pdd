@@ -50,7 +50,7 @@ function caller(setup, origin, clock, extra = {}, owner = 'formal 4242') {
   const made = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: origin }, {
     now: () => clock.now,
     sleep: async ms => { assert.ok(ms > 0); clock.now += ms; await flush(); },
-    gh: args => args[0] === 'auth' ? { status: 0, stdout: `${TOKEN}_${owner.split(' ')[0]}\n` } : { status: 0, stdout: `${owner}\n` },
+    gh: args => args[0] === 'auth' ? { status: 0, stdout: `${TOKEN}\n` } : { status: 0, stdout: `${owner}\n` },
     ...extra,
   });
   const subscriptions = new Set(), subscribe = made.ports.onInterrupt;
