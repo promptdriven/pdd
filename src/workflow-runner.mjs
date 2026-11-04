@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 22be7243be25683c739f60e3627bbbd5ad1d63c7762171d81fe6afe6f7cc5c0f).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: afeb8f7c473c919f14f17956a384723cfbaaa1928e2f6067b9b5ab96a01c7f0b).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { execFile as execFileCallback } from 'node:child_process';
@@ -373,7 +373,7 @@ const revising = run => { const last = run.changes?.at(-1); return Boolean(last 
 // chat: what Herdr shows (chatState); facts: {drafts, nothing} read by the caller (gateFacts). describe itself makes no calls.
 function describe(run, chat = null, { drafts = [], nothing = false } = {}) {
   const area = run.areas[run.area], pr1 = askArea(run) && prOf(run, askArea(run).name);
-  if (run.state === 'cancelled') return 'cancelled';
+  if (run.state === 'cancelled') return run.cancelled?.state === 'replaced' ? 'replaced' : 'cancelled';
   if (activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting'].includes(chat)) return chatStatusWords(run, chat);
   if (openQuestion(run) && run.state !== 'completed') return `waiting for you: ${run.question.text.split('\n')[0]}`;
   if (chat === 'blocked' && run.state === 'running') return `waiting for you: the chat asks a question in its window (pdd workflow open ${run.number})`;
@@ -415,7 +415,7 @@ async function startRunCommand({ name, issue, agent = 'codex', base, adoptCorpus
   try { binding = await resolveWorkflowIssue({ cwd: context.toplevel, issue }, p.commandPorts); }
   catch (error) { return fail(`pdd could not read issue ${issue} with gh (${causeOf(error)}). Check "gh auth status", the origin remote and the issue number.`); }
   const number = binding.issue.number, runDir = runDirFor(context.commonDir, number), existing = readRun(runDir);
-  if (existing && existing.state !== 'cancelled') return fail(`Issue #${number} already has a run (${existing.workflow}, ${describe(existing)}). Open it: pdd workflow open ${number}. Status: pdd workflow status ${number}.`);
+  if (existing?.state === 'completed') return fail(`Issue #${number} already has a run (${existing.workflow}, ${describe(existing)}). Open it: pdd workflow open ${number}. Status: pdd workflow status ${number}.`);
   const warnings = [...(workflow.warnings ?? [])], baseBranch = explicitBase ? base : binding.defaultBranch;
   // A requested origin branch must be usable before releasing a cancelled run's claim.
   if (explicitBase) {
@@ -444,9 +444,19 @@ async function startRunCommand({ name, issue, agent = 'codex', base, adoptCorpus
     } catch(error) {const code=/^[A-Z0-9_-]{1,32}$/.test(String(error.code ?? '')) ? error.code : 'local-operation-failed';return {exitCode:2,message:`Cannot adopt the approved corpus (unavailable: source selection or declaration freezing failed; ${code}). Repair the declaration/source or start an ordinary approval workflow. No new run was started.`};}
   }
   if (existing) {
+    // An active run never blocks a new one (#2871): mark it replaced, name it once, then free it like a cancelled run.
+    const replacing = !ended(existing);
+    if (replacing) {
+      const last = existing.updatedAt ?? existing.startedAt, minutes = Number.isFinite(last) ? Math.max(0, Math.floor((p.now() - last) / 60000)) : null;
+      try { commitRun(existing, p, latest => { latest.state = 'cancelled'; latest.cancelled = { state: 'replaced', at: p.now() }; latest.gate = null; }); }
+      catch (error) { return fail(`Issue #${number} has an active run ${existing.runId}, but pdd could not mark it replaced (${oneLine(error.message)}). Retry in a moment.`); }
+      warnings.push(`warning: Issue #${number} had an active run ${existing.runId} (${existing.workflow}). pdd marked it replaced and starts a new run.`
+        + ` Its worktree stays at ${existing.root} (branch ${existing.branch}), from checkout ${existing.sourceRoot}. Last activity: ${minutes === null ? 'unknown' : `${minutes} min ago`}.`
+        + (minutes === null || minutes < 60 ? ' It may still be working; close its chat if it is.' : ''));
+    }
     const released = await releaseIssueClaim({ cwd: context.toplevel, runId: existing.runId, issueNumber: number }, p.commandPorts);
-    if (released.state !== 'released') return fail(`Issue #${number} has a cancelled run, but pdd could not free the issue: ${released.message}`);
-    warnings.push(`Issue #${number} had a cancelled run. Its worktree stays at ${existing.root} (branch ${existing.branch}). This run gets a new worktree and branch.`);
+    if (released.state !== 'released') return fail(`Issue #${number} has a ${replacing ? 'replaced' : 'cancelled'} run, but pdd could not free the issue: ${released.message}`);
+    if (!replacing) warnings.push(`Issue #${number} had a cancelled run. Its worktree stays at ${existing.root} (branch ${existing.branch}). This run gets a new worktree and branch.`);
   }
   if (!explicitBase && adoptCorpus === undefined) {
     p.say(`Fetching origin/${baseBranch}…`);
@@ -1754,6 +1764,8 @@ async function deliveryJournal(run, p, action, { recover = true } = {}) {
     }
   }
   try {
+    const saved = readRun(run.runDir);
+    if (saved && runIdentity(saved) !== runIdentity(run)) throw Error('The selected workflow run was replaced');
     const journal = readDeliveryJournal(run, p);
     const before = JSON.stringify(journal);
     if (recover) for (const entry of journal.requests) if (entry.inFlight) {
@@ -2004,7 +2016,7 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false } = 
   const group = run.state === 'cancelled' ? 'cancelled' : run.state === 'completed' ? 'done' : problem ? 'waiting' : writing ? 'working'
     : run.gate || question || running && ['blocked', 'stopped'].includes(chat) ? 'waiting' : prOf(run, area?.name) ? 'pr-open' : 'working';
   const step = area?.steps.find(item => !run.done[item]);
-  const words = group === 'cancelled' ? 'cancelled'
+  const words = group === 'cancelled' ? (run.cancelled?.state === 'replaced' ? 'replaced' : 'cancelled')
     : group === 'done' ? (run.gate?.kind === 'ask-code' ? 'done at PR 1' : 'done')
     : replacementPending ? `chat replacement pending at ${run.chatReplacement.phase}; run pdd workflow open ${run.number} --new`
     : problem ? chatStatusWords(run, chat)
