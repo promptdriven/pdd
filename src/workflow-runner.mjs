@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 22be7243be25683c739f60e3627bbbd5ad1d63c7762171d81fe6afe6f7cc5c0f).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 2c13d4b8d425a7942c0323f592998d4266d2c68dff203016ad316d449a588f93).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { execFile as execFileCallback } from 'node:child_process';
@@ -23,6 +23,7 @@ import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
 import { causeText } from './runtime-output.mjs';
 import { preparePrEvidence } from './workflow-pr-evidence.mjs';
 import { validateProofRecord } from './workflow-prove.mjs';
+import { readRunResults, resultLines } from './workflow-results.mjs';
 import { collectTestInventory } from './workflow-inventory.mjs';
 import {adoptReplayCorpus,REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinReplayVectors,readReplayEvidence,formatReplayEvidence} from './workflow-replay.mjs';
 
@@ -767,6 +768,8 @@ async function publicationEvidence(run, area, p) {
     } catch { /* Missing, stale or unparseable machine output supplies no counts. */ }
   }
   if (run.publicationPending) evidence.lines.unshift('Check evidence: publication-pending (source is being published).');
+  // pdd's own pdd test and pdd lint results lead the body; the code PR's prove result is its Old-code proof line.
+  evidence.pddLines = resultLines(ownResults(run, p), { kinds: ['pdd test', 'pdd lint'] });
   return evidence;
 }
 function evidenceFit(lines, room, env) {
@@ -865,23 +868,28 @@ function publicationRuntime(run, env) {
     .filter(record => runtimeLines(record.summary).length && matchesSource(record, run.root, fingerprint)).sort((a,b) => (a.at ?? 0) - (b.at ?? 0));
   const stories = new Map();
   for (const record of records) for (const line of runtimeLines(record.summary)) if (line.story) stories.set(line.story, { line, record });
+  // Lines that an agent typed or pasted into a step summary stay agent notes; only a receipt that pdd workflow evidence checked is not.
+  const receipts = new Set(run.evidence ?? []), note = (record, line) => receipts.has(record) ? line : `${AGENT_NOTE}: ${line}`;
   if (!stories.size) {
     const record = records.at(-1);
-    return record ? [...runtimeTop(record.summary), ...reportLinks(record.summary, env)] : [];
+    return record ? [...runtimeTop(record.summary), ...reportLinks(record.summary, env)].map(line => note(record, line)) : [];
   }
   const selected = [...stories.values()];
   const reports = selected.flatMap(({line, record}) => reportLinks(record.summary, env).filter(report => {
     const name = /^Report \(([^)]+)\):/.exec(report)?.[1];
     return !name || name === line.story;
-  }));
-  return [...selected.map(item => item.line.line), ...(selected.length > 1 ? [totalLine(selected.map(item => item.line))] : []), ...new Set(reports)];
+  }).map(report => note(record, report)));
+  const total = selected.length > 1 ? [totalLine(selected.map(item => item.line))].map(line => selected.every(item => receipts.has(item.record)) ? line : `${AGENT_NOTE}: ${line}`) : [];
+  return [...selected.map(item => note(item.record, item.line.line)), ...total, ...new Set(reports)];
 }
+// pdd's own result lines for the top of a PR; while source is being published they say so instead.
+const ownLines = (run, evidence) => evidence.pddLines?.length ? (run.publicationPending ? ['pdd result: publication-pending (source is being published).'] : evidence.pddLines) : [];
 function prBody(run, area, env, drafts = [], tests = true, evidence) {
   const steps = prSteps(run, area);
   const raw = Object.fromEntries(steps.map(step => [step, cleanSummary(run, step)]));
   const summaries = Object.fromEntries(steps.map(step => [step, oneLine(raw[step])]));
   // Agent text is inert everywhere in the body: the short Steps line is a code span too.
-  const lines = steps.map(step => `- **${step}**: Agent note — not checked by pdd: ${summaries[step] ? codeSpan(shortLine(summaries[step])) : 'done'}`);
+  const lines = steps.map(step => `- **${step}**: ${run.done[step].skipped ? 'skipped (recorded by pdd). ' : ''}Agent note — not checked by pdd: ${summaries[step] ? codeSpan(shortLine(summaries[step])) : 'done'}`);
   const full = Object.fromEntries(steps.map(step => [step, keepLines(raw[step])]));
   // Only a PR that covers a verify step carries verify.md (PR 1 never does).
   let verify = null;
@@ -902,11 +910,11 @@ function prBody(run, area, env, drafts = [], tests = true, evidence) {
   const sources = [run.done.check?.summary, ...steps.toReversed().map(step => run.done[step]?.summary)].filter(Boolean);
   const verdict = sources.map(verdictLine).find(Boolean), change = sources.map(changeLine).find(Boolean);
   const shown = change?.match(/https?:\/\/[^\s;]+/g) ?? [];
-  const runtime = publicationRuntime(run, env).filter(line => !line.startsWith('Report') || !shown.some(url => line.includes(` ${url} `)));
+  const runtime = publicationRuntime(run, env).filter(line => !line.replace(`${AGENT_NOTE}: `, '').startsWith('Report') || !shown.some(url => line.includes(` ${url} `)));
   const noted = runtime.some(line => hasReportLink(line, env)) || change && hasReportLink(change, env);
   const replay = area.replay_evidence === REPLAY_POLICY ? [formatReplayEvidence(run.replayEvidence ?? readReplayEvidence(run)), ''] : [];
   const prefix = [...failing, ...replay];
-  const top = [...(verdict ? [`${AGENT_NOTE}: ${verdict}`] : []), ...(change ? [`${AGENT_NOTE}: ${change}${hasReportLink(change, env) ? ' (report links expire after 7 days)' : ''}`] : []), ...runtime];
+  const top = [...ownLines(run, evidence), ...(verdict ? [`${AGENT_NOTE}: ${verdict}`] : []), ...(change ? [`${AGENT_NOTE}: ${change}${hasReportLink(change, env) ? ' (report links expire after 7 days)' : ''}`] : []), ...runtime];
   if (evidence.lines.some(line => line.includes('pdd-workflow:'))) throw Error('Remove supplied workflow ownership markers from the report; pdd preserves its own marker.');
   const inventory = run.testInventory && label !== 'PR 1' ? [run.testInventory.text.trimEnd(), ...(run.testInventory.saved ? [] : ['warning: The full test inventory report was not saved.']), inventoryCommits(run.testInventory)] : [];
   const slot = evidence.lines.findIndex(line => line.startsWith(`${AGENT_NOTE}:`));
@@ -1144,7 +1152,14 @@ async function recordEvidenceCommand({ ref, summaryFile, cwd }, ports) {
   return done(`Recorded source-verified saved evidence for ${run.repo}#${run.number}. Steps, gates and PRs are unchanged. This records evidence, not fresh execution or approval.`);
 }
 
-async function stepDoneCommand({ step, summary, cwd, packageRoot = PACKAGE_ROOT }, ports) {
+// pdd's own results for a run (pdd test, pdd lint, pdd workflow prove). A read problem gives no results, never a stop.
+function ownResults(run, p) {
+  try { return (p.readRunResults ?? readRunResults)({ root: run.root, runDir: run.runDir, runId: run.runId, since: run.startedAt ?? 0 }, { env: p.env }); }
+  catch { return []; }
+}
+// The steps whose done output shows pdd's own results, or a visible "no pdd result" warning.
+const PROOF_STEPS = ['check', 'try', 'verify'];
+async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACKAGE_ROOT }, ports) {
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
   const run = await runForWorktree(cwd, p);
   if (!run) return fail('pdd workflow done works only in a run worktree. cd to the worktree that pdd made for this run.');
@@ -1158,7 +1173,15 @@ async function stepDoneCommand({ step, summary, cwd, packageRoot = PACKAGE_ROOT 
     if (before.length) lines.push(`warning: ${before.join(', ')} ${before.length > 1 ? 'are' : 'is'} not done yet. pdd recorded ${step} anyway.`);
   }
   const observedQuestion=run.question, observedGate=run.gate;
-  const record = { at: p.now(), summary: keepLines(summary), area: area.name };
+  const reason = skipped === undefined ? null : keepLines(skipped) || 'no reason given';
+  const record = { at: p.now(), summary: keepLines(reason === null ? summary : [`skipped: ${reason}`, summary].filter(Boolean).join('\n')), area: area.name,
+    ...(reason === null ? {} : { skipped: { reason } }), ...(PROOF_STEPS.includes(step) ? { pddResults: ownResults(run, p) } : {}) };
+  if (PROOF_STEPS.includes(step) && reason === null) {
+    const shown = resultLines(record.pddResults);
+    lines.push(...(record.pddResults.length ? ['pdd recorded its own results with this step:'] : ['warning: pdd has no result of its own for this run yet. pdd recorded the step with the label "no pdd result".']), ...shown,
+      'Your summary is saved as an agent note, apart from pdd\'s results.');
+  }
+  if (reason !== null) lines.push(`pdd recorded that ${step} was skipped. Reason (agent note): ${oneLine(reason)}`);
   const hasRuntime=runtimeLines(record.summary).length>0;
   if(hasRuntime)record.source={kind:'git-content-v1',sha256:gitFingerprint(run.root)};
   const replay=area.replay_evidence===REPLAY_POLICY && (area.steps.some(item=>item!==step&&!run.done[item]) || area.gate!=='pr' || area.before==='approve'&&!prOf(run,area.name))?await currentReplayEvidence(run,p):null;
@@ -1310,9 +1333,9 @@ async function draftDescription(run, pr1, drafts, p) {
     }
     while (at < rows.length && !rows[at].trim()) at++;
     const headerStart = at;
-    while (at < rows.length && new RegExp(String.raw`^(?:Agent note — not checked by pdd: (?:Verdict:|Before[ :])|Verdict:|Before |Before:|${PROMPT_TESTS_WORDS}|Report(?: \([^)]*\))?:)`).test(rows[at])) at++;
+    while (at < rows.length && new RegExp(String.raw`^(?:pdd result: |Agent note — not checked by pdd: (?:Verdict:|Before[ :]|${PROMPT_TESTS_WORDS}|Report(?: \([^)]*\))?:)|Verdict:|Before |Before:|${PROMPT_TESTS_WORDS}|Report(?: \([^)]*\))?:)`).test(rows[at])) at++;
     const priorTop = rows.slice(headerStart, at);
-    const ordinaryTop = [...new Set([...labelledTop, ...priorTop.filter(line => /^(?:Agent note — not checked by pdd: )?(?:Verdict:|Before[ :])/.test(line)).map(line => line.startsWith(`${AGENT_NOTE}: `) ? line : `${AGENT_NOTE}: ${line}`)]), ...publicationRuntime(run, p.env)];
+    const ordinaryTop = [...ownLines(run, evidence), ...new Set([...labelledTop, ...priorTop.filter(line => /^(?:Agent note — not checked by pdd: )?(?:Verdict:|Before[ :])/.test(line)).map(line => line.startsWith(`${AGENT_NOTE}: `) ? line : `${AGENT_NOTE}: ${line}`)]), ...publicationRuntime(run, p.env)];
     const introduction = [];
     while (at < rows.length && !rows[at].trim()) at++;
     if (reference.test(rows[at] ?? '')) {

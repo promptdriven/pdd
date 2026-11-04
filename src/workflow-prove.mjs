@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-prove.prompt.md (sha256: 4cdd79111e2c52146c7f9b9df8d719c8e4ed69c225a27832a993e51da9394503).
+// Generated from prompts/cli/workflow-prove.prompt.md (sha256: b1aa98fd1e36cdebeedf950b63871c842b943b9e013ed919f52db4c9aa5320cf).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { constants, fchmodSync, closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
@@ -209,8 +209,11 @@ async function saveProof({runDir,record}) {
   catch(error){return {error:diagnostic(error)};} finally {rmSync(temporary,{force:true});}
 }
 const defaults={readRun,snapshot,createWorktree,overlay,runProcess,cleanup,saveProof};
-export async function proveRun({ref,test,expect,cwd},ports={}) {
+// The per-phase limit: 10 minutes by default (a changed test file can take minutes); the person sets 1 to 120 minutes.
+export const DEFAULT_PHASE_MINUTES=10;
+export async function proveRun({ref,test,expect,cwd,timeoutMinutes=DEFAULT_PHASE_MINUTES},ports={}) {
   if(typeof test!=='string'||!test.trim()||typeof expect!=='string'||!expect.trim())return {exitCode:2,message:'pdd workflow prove requires nonblank --test and --expect.'};
+  if(!Number.isInteger(timeoutMinutes)||timeoutMinutes<1||timeoutMinutes>120)return {exitCode:2,message:'pdd workflow prove --timeout takes whole minutes from 1 to 120.'};
   const p={...defaults,...ports};let run;
   const controller=new AbortController();let interruptSignal='';
   const handlers=new Map(['SIGINT','SIGTERM','SIGHUP'].map(signal=>[signal,()=>{if(!interruptSignal){interruptSignal=signal;controller.abort();}}]));
@@ -228,7 +231,7 @@ export async function proveRun({ref,test,expect,cwd},ports={}) {
         if(!interruptSignal){const copied=await p.overlay({root:run.root,headSha:record.headSha,worktree:worktrees[0],paths:record.paths});if(copied.error)throw Error(copied.error);}
         for(const [index,phase] of ['base','head'].entries()) {
           if(interruptSignal)break;
-          let response;try {const input={command:test,cwd:worktrees[index],timeoutMs:120000,killGraceMs:2000,outputLimitBytes:1048576};response=await (ports.runProcess ? p.runProcess(input) : runProcess(input,controller.signal));}catch(error){response={result:{exitCode:null,signal:'',timedOut:false,outputLimited:false,stdout:'',stderr:'',error:diagnostic(error),setupError:''}};}
+          let response;try {const input={command:test,cwd:worktrees[index],timeoutMs:timeoutMinutes*60000,killGraceMs:2000,outputLimitBytes:1048576};response=await (ports.runProcess ? p.runProcess(input) : runProcess(input,controller.signal));}catch(error){response={result:{exitCode:null,signal:'',timedOut:false,outputLimited:false,stdout:'',stderr:'',error:diagnostic(error),setupError:''}};}
           record[phase]=phaseRecord(response.result,expect);record.setupError ||= record[phase].error || record[phase].setupError;
         }
       }

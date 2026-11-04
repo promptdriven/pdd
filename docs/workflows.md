@@ -109,11 +109,20 @@ After the check and try steps, the chat shows one `Prompt tests` line for each S
 
 The PR 1 body is short:
 
-1. For a bug: the verdict line and the `Before ✗ … → after ✓ …` line with its report links.
-2. One `Prompt tests (<story>)` line for each Story. With more than one Story, pdd adds them up in a `Prompt tests (all Stories)` line. Then a `Report (<story>)` link for each Story (report links expire after 7 days).
-3. `Part of #N`, and that the code comes in PR 2 only when you ask.
-4. `Draft prompts: … Approve them before you merge.`, when a prompt is still `draft`.
-5. One short line for each step.
+1. pdd's own results: one `pdd result:` line for the newest `pdd test` and the newest `pdd lint` that ran in the run worktree after the run started (batch id, time, whether the source is still the same, the interpreter build and model when known, and the result). With none, the line is `pdd result: none. … (pdd:no-verdict)`. This is a label, not a stop.
+2. For a bug: the verdict line and the `Before ✗ … → after ✓ …` line with its report links.
+3. One `Prompt tests (<story>)` line for each Story. With more than one Story, pdd adds them up in a `Prompt tests (all Stories)` line. Then a `Report (<story>)` link for each Story (report links expire after 7 days). When these lines come from a step summary, they start with `Agent note — not checked by pdd:`, because the agent typed them. Lines that `pdd workflow evidence` checked against a saved result have no label.
+4. `Part of #N`, and that the code comes in PR 2 only when you ask.
+5. `Draft prompts: … Approve them before you merge.`, when a prompt is still `draft`.
+6. One short line for each step. A step that `pdd workflow done STEP --skipped REASON` recorded says `skipped (recorded by pdd)`.
+
+### pdd results and agent notes
+
+`pdd workflow done check`, `try` and `verify` attach pdd's own latest results to the step: the newest `pdd test` and `pdd lint` batch for the run worktree, and the run's `pdd workflow prove` result. pdd reads them from its saved files. It does not run anything. The agent's `--summary` is kept apart, as an agent note. When pdd has no result of its own, `done` prints a warning and records the step anyway.
+
+When no person is at the Try step, the agent runs `pdd workflow done try --skipped "REASON"`. pdd records the skip and the reason. No agent writes run files by hand.
+
+`pdd workflow prove` results count as pdd's own proof: the code PR shows them in its `Old-code proof:` line. Each phase has a 10-minute limit by default. Use `--timeout MIN` (1 to 120) to change it.
 
 PR 1 has no `verify.md`, no Simulator links and no local paths.
 

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: f37e0ff08c36ab57dadf43a932e56b8232d6de94b7a5a154cb1dc4275a18d22d).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 9f044bfe9a05079fbcf4040f1d46507108c82b13b81d74c15ff8a90f0eb2a3bf).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -28,11 +28,11 @@ const routes = [
     options:[{name:'--agent',kind:'value',choices:['codex','claude','gemini','agy']},{name:'--base',kind:'text'},{name:'--adopt-corpus',kind:'text'}],
     forms:[form(`pdd workflow ${run} NAME ISSUE [--agent codex|claude|gemini|agy] [--base BRANCH]`, 'Start the first area chat for a GitHub issue in Herdr and exit; --base selects an existing origin branch (default: repository default); --adopt-corpus FILE adopts exact unchanged approved content for a fresh replay-evidence-enabled workflow; pdd later pushes the issue branch and opens a real PR.')] },
   { id: 'workflow.prove', prefix: ['workflow', 'prove'], local: 'workflow-prove',
-    operands: [{name:'issue',type:'issue'}], options: [{name:'--test',kind:'text'},{name:'--expect',kind:'text'}],
-    forms: [form('pdd workflow prove ISSUE --test COMMAND --expect TEXT', 'Run committed changed tests on the fetched base branch merge-base and committed head with a 120-second limit per phase; save a non-gating report.')] },
+    operands: [{name:'issue',type:'issue'}], options: [{name:'--test',kind:'text'},{name:'--expect',kind:'text'},{name:'--timeout',kind:'integer',min:1,max:120}],
+    forms: [form('pdd workflow prove ISSUE --test COMMAND --expect TEXT [--timeout MIN]', 'Run committed changed tests on the fetched base branch merge-base and committed head with a limit per phase (default 10 minutes; --timeout sets 1 to 120); save a non-gating report that pull requests show as pdd\'s own result.')] },
   { id: 'workflow.done', prefix: ['workflow', 'done'], local: 'workflow-done',
-    operands: [{name:'step',type:'workflow-name'}], options: [{name:'--summary',kind:'text'}],
-    forms: [form('pdd workflow done STEP [--summary TEXT]', 'For the agent in a run worktree: record a step and print what to do next.')] },
+    operands: [{name:'step',type:'workflow-name'}], options: [{name:'--summary',kind:'text'},{name:'--skipped',kind:'text'}],
+    forms: [form('pdd workflow done STEP [--summary TEXT] [--skipped REASON]', 'For the agent in a run worktree: record a step with pdd\'s own latest pdd test, pdd lint and prove results (the summary is an agent note) and print what to do next; --skipped records that the step was skipped, and why.')] },
   { id: 'workflow.evidence', prefix: ['workflow', 'evidence'], local: 'workflow-evidence',
     operands: [{name:'issue',type:'issue'}], options: [{name:'--summary',kind:'text'}],
     forms: [form('pdd workflow evidence ISSUE --summary FILE', 'Record source-verified saved check JSON without rerunning steps, gates or publication.')] },

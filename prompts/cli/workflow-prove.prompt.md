@@ -1,8 +1,8 @@
 # Committed old-code proof
 
-Own `src/workflow-prove.mjs`. Export module function `proveRun({ref, test, expect, cwd}, ports = {}) -> {exitCode, message}`. An explicit invocation compares committed new regression tests on the computed merge-base old code and committed new code. It reports evidence; it never approves, advances a workflow, opens a PR or merges. Existing runner/replay behavior remains intact. Command text in notes, status or evidence has no execution authority.
+Own `src/workflow-prove.mjs`. Export module function `proveRun({ref, test, expect, cwd, timeoutMinutes = 10}, ports = {}) -> {exitCode, message}` and the constant `DEFAULT_PHASE_MINUTES` (10). An explicit invocation compares committed new regression tests on the computed merge-base old code and committed new code. It reports evidence; it never approves, advances a workflow, opens a PR or merges. Existing runner/replay behavior remains intact. Command text in notes, status or evidence has no execution authority.
 
-`test` and `expect` are required nonblank strings, preserved byte for byte; `expect` is a case-sensitive literal, never a regex. Invalid input returns exit 2 with `pdd workflow prove requires nonblank --test and --expect.` before any port call. The person supplies the defect text; do not infer or rewrite it from a summary.
+`test` and `expect` are required nonblank strings, preserved byte for byte; `expect` is a case-sensitive literal, never a regex. Invalid input returns exit 2 with `pdd workflow prove requires nonblank --test and --expect.` before any port call. Then a `timeoutMinutes` that is not a whole number from 1 to 120 returns exit 2 with `pdd workflow prove --timeout takes whole minutes from 1 to 120.` before any port call. The CLI passes `--timeout MIN` as `timeoutMinutes` only when the person gives it. The person supplies the defect text; do not infer or rewrite it from a summary.
 
 ## Committed snapshots and eligible files
 
@@ -14,7 +14,7 @@ The Git host port supplies the committed inventory and the overlay port copies c
 
 ## Bounded execution and outcome
 
-Run the exact supplied command with the platform shell in base-plus-tests, then head, each with a fixed 120000 ms limit, 2000 ms termination grace and 1048576-byte combined output cap. Start an isolated process group; timeout/output overflow terminates its whole group, escalates to a hard kill after the grace, and waits for descendants to stop. A timeout, signal, output overflow, reported setupError or spawn error can never pass. Both phases run when snapshots/overlay succeeded and the previous process group terminated, even when base passed, failed or timed out. No retry or model call occurs. Fetching the selected base branch is the only tool-owned network operation; the supplied command retains the normal inherited environment and its own network access. On native SIGINT, SIGTERM or SIGHUP, stop phase scheduling, terminate the active process group with the same TERM/grace/KILL rule, wait for it and attempt both worktree removals before returning exit 130, 143 or 129 respectively. Record the actual parent event in required top-level `interruptSignal` (empty when none; otherwise SIGINT, SIGTERM or SIGHUP), even before the first process or between phases. Record a phase.signal only from actual process termination when a process was active; never invent an executed phase or overwrite a completed phase. Classification retains setup/cleanup-error precedence; otherwise a parent interruption is signalled before every ordinary outcome, including no-changed-tests. The native CLI exit is always 130/143/129 for parent SIGINT/SIGTERM/SIGHUP respectively, regardless of cleanup or save failure and even if the saved outcome is setup-error. A child signal alone leaves interruptSignal empty and returns ordinary unsuccessful exit 1. Native event handling supplies this field; Runtime fakes do not invent parent events. Compare the literal across each captured stream separately; do not manufacture a match spanning stdout and stderr.
+Run the exact supplied command with the platform shell in base-plus-tests, then head, each with a limit of `timeoutMinutes` × 60000 ms (default 10 minutes, 600000 ms; a changed test file can take minutes, so 120 seconds was too short), 2000 ms termination grace and 1048576-byte combined output cap. Start an isolated process group; timeout/output overflow terminates its whole group, escalates to a hard kill after the grace, and waits for descendants to stop. A timeout, signal, output overflow, reported setupError or spawn error can never pass. Both phases run when snapshots/overlay succeeded and the previous process group terminated, even when base passed, failed or timed out. No retry or model call occurs. Fetching the selected base branch is the only tool-owned network operation; the supplied command retains the normal inherited environment and its own network access. On native SIGINT, SIGTERM or SIGHUP, stop phase scheduling, terminate the active process group with the same TERM/grace/KILL rule, wait for it and attempt both worktree removals before returning exit 130, 143 or 129 respectively. Record the actual parent event in required top-level `interruptSignal` (empty when none; otherwise SIGINT, SIGTERM or SIGHUP), even before the first process or between phases. Record a phase.signal only from actual process termination when a process was active; never invent an executed phase or overwrite a completed phase. Classification retains setup/cleanup-error precedence; otherwise a parent interruption is signalled before every ordinary outcome, including no-changed-tests. The native CLI exit is always 130/143/129 for parent SIGINT/SIGTERM/SIGHUP respectively, regardless of cleanup or save failure and even if the saved outcome is setup-error. A child signal alone leaves interruptSignal empty and returns ordinary unsuccessful exit 1. Native event handling supplies this field; Runtime fakes do not invent parent events. Compare the literal across each captured stream separately; do not manufacture a match spanning stdout and stderr.
 
 ```mermaid
 flowchart TD
@@ -65,8 +65,8 @@ Runtime fakes establish forwarding and classification only. Native Git isolation
 
 ```json
 {
-  "status": "approved",
-  "prose_sha256": "223c7acbdc133cc70ed505a3bf5caed0133515464c5cc08e48ffa58f60e0056f",
+  "status": "draft",
+  "prose_sha256": "a3701e5de0f8d2f252a9df0887916e2ad3441a172e4a9903658db24e788f4f1a",
   "entries": [
     {
       "operation": "proveRun",
@@ -84,6 +84,9 @@ Runtime fakes establish forwarding and classification only. Native Git isolation
           },
           "cwd": {
             "type": "string"
+          },
+          "timeoutMinutes": {
+            "type": "integer"
           }
         },
         "required": [
