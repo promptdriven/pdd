@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { renderHelp } from '../src/pdd-cli.mjs';
@@ -123,4 +123,14 @@ test('workflow-answer: CLI help, dispatch and native runner cover AC1, AC2, AC3 
   assert.equal(saved.changes[1].round, 2);
   assert.equal(saved.changes[1].text, 'Use ISO dates');
   assert.equal(Object.hasOwn(saved.changes[1], 'answer'), false);
+
+  // A question from a different area is not considered open for answerRun.
+  const withForeignQuestion = f.record();
+  withForeignQuestion.question = { text: 'Question from understand?', at: 999999, area: 'understand' };
+  writeFileSync(join(run.runDir, 'status.json'), JSON.stringify(withForeignQuestion, null, 2) + '\n');
+  f.tick();
+  const foreignArea = await callCli(['workflow', 'answer', '17', 'ISO']);
+  assert.equal(foreignArea.exitCode, 1);
+  assert.equal(foreignArea.stderr.trim(), 'No question is open for example/project#17.');
+  assert.equal(f.record().changes.length, 2);
 });

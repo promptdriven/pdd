@@ -807,6 +807,16 @@ test('#2576: pdd workflow answer answers an open question and refuses when no qu
   assert.equal(after.changes.length, 1);
   assert.equal(after.changes[0].answer, true);
   assert.equal(after.changes[0].text, 'ISO');
+
+  // A question recorded for another area is not open in the current area.
+  const withOtherAreaQuestion = f.record();
+  withOtherAreaQuestion.question = { text: 'Earlier area question?', at: 999999, area: 'other' };
+  writeFileSync(join(run.runDir, 'status.json'), JSON.stringify(withOtherAreaQuestion, null, 2) + '\n');
+  f.tick();
+  const wrongArea = await workflowRunnerModule.answerRun({ ref: '17', text: 'ISO', cwd: f.source }, f.ports);
+  assert.equal(wrongArea.exitCode, 1);
+  assert.equal(wrongArea.message, 'No question is open for example/project#17.');
+  assert.equal(f.record().changes.length, 1);
 });
 
 test('a chat that shows a question dialog is waiting for the person in status, and changes says to answer in the chat', async t => {
