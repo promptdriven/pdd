@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 4d2da2e1b639de4f9c1357c1eb861bfd87647b45441ab98f8dc018f1ffc627fb).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: c0a9bcf0e21a9ffef4a8e80a25e6e3c40346b24d8e876f173defe18d8a7fb9ed).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -46,7 +46,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
   cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, workflowRunner, workflowAreas,
   stdin = process.stdin, confirm, mcpServer, runtimeSlots, contracts, product, productPorts, gitContext, workflowProve, provePorts,
   workflowAgents = { checkWorkflowAgents }, workflowAgentPorts = {}, setupSkills = defaultSetupSkills,
-  setupProject = defaultSetupProject, setupAgentMcp, pathDiagnostic = defaultPathDiagnostic } = {}) {
+  setupProject = defaultSetupProject, setupAgentMcp, autopilot, autopilotPorts = {}, pathDiagnostic = defaultPathDiagnostic } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
@@ -71,6 +71,17 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         } catch { /* The skills check never changes --version. */ }
         return 0;
       } catch { line(stderr, 'This PDD package has no readable version metadata.');return 1; }
+    case 'autopilot.off': case 'autopilot.observe': case 'autopilot.auto': case 'autopilot-trust': case 'autopilot-untrust': {
+      try {
+        const module = autopilot ?? await import('./autopilot.mjs');
+        const input = plan.local.startsWith('autopilot.')
+          ? { action: 'mode', mode: plan.local.slice(10) }
+          : { action: plan.local.slice(10), names: [...plan.operands] };
+        const result = await module.runAutopilot(input, { cwd, stdin, stdout, ...autopilotPorts });
+        line(result.exitCode === 0 ? stdout : stderr, result.message);
+        return result.exitCode;
+      } catch (error) { line(stderr, `Autopilot settings failed.${reason(error)}`); return 1; }
+    }
     case 'product-status': case 'product-next': case 'product-start': {
       try {
         const context = await (gitContext ?? (await import('./workflow-runs.mjs')).gitContext)(cwd, productPorts);
@@ -162,6 +173,14 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         const action = setupAgentMcp ?? (await import('./agent-mcp-setup.mjs')).setupAgentMcp;
         if (await action({ env, packageRoot }, { stdin, stdout, stderr, confirm })) code = 1;
       } catch (error) { line(stderr, `pdd setup: MCP registration failed.${reason(error)}`); code = 1; }
+      try {
+        const context = await (gitContext ?? (await import('./workflow-runs.mjs')).gitContext)(cwd);
+        const module = autopilot ?? await import('./autopilot.mjs');
+        const result = await module.runAutopilot({ action: 'setup', interactive: !!stdin.isTTY, inRepo: !!context?.toplevel },
+          { cwd: context?.toplevel ?? cwd, stdin, stdout, ...autopilotPorts });
+        if (result.message) line(result.exitCode === 0 ? stdout : stderr, result.message);
+        if (result.exitCode) code = result.exitCode;
+      } catch (error) { line(stderr, `Autopilot settings failed.${reason(error)}`); code = 1; }
       return code;
       } });
     }

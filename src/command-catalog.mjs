@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 6ec9a896ed4d7e0c5091c724b0af2d66d83d4bba04416ecd1fdf632deb802131).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 09095e48aa5ce2c84bb9b8c07516c7bf0c4811e10b07a75869e1baf0693f33b8).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -109,8 +109,13 @@ const routes = [
     forms: [form('pdd contracts sync [--write]', 'Show proposed changes for moving schema copies to references; apply only with --write. No interpreter calls.')] },
   { id: 'mcp', prefix: ['mcp'], local: 'mcp', operands: [], options: [],
     forms: [form('pdd mcp', 'Serve the current repository’s Try tools over stdio MCP.')] },
+  { id: 'autopilot.off', prefix: ['autopilot', 'off'], local: 'autopilot.off', operands: [], options: [], forms: [form('pdd autopilot off', 'Set the repository Autopilot mode to off.')] },
+  { id: 'autopilot.observe', prefix: ['autopilot', 'observe'], local: 'autopilot.observe', operands: [], options: [], forms: [form('pdd autopilot observe', 'Set the repository Autopilot mode to observe.')] },
+  { id: 'autopilot.auto', prefix: ['autopilot', 'auto'], local: 'autopilot.auto', operands: [], options: [], forms: [form('pdd autopilot auto', 'Set the repository Autopilot mode to auto.')] },
+  { id: 'autopilot.trust', prefix: ['autopilot', 'trust'], local: 'autopilot-trust', operands: [{name:'name',type:'text',repeat:true}], options: [], forms: [form('pdd autopilot trust NAME...', 'Add explicitly trusted GitHub names.')] },
+  { id: 'autopilot.untrust', prefix: ['autopilot', 'untrust'], local: 'autopilot-untrust', operands: [{name:'name',type:'text'}], options: [], forms: [form('pdd autopilot untrust NAME', 'Remove an explicitly trusted GitHub name.')] },
   { id: 'setup', prefix: ['setup'], local: 'setup', operands: [], options: [],
-    forms: [form('pdd setup', 'Install the PDD skills for Codex and Claude if they are missing, and add the short PDD block to CLAUDE.md, else AGENTS.md. Offer detected Codex, Claude Code and Gemini MCP registrations after showing exact config changes and one y/N question. A second run changes nothing.')] },
+    forms: [form('pdd setup', 'Install the PDD skills for Codex and Claude if they are missing, and add the short PDD block to CLAUDE.md, else AGENTS.md. Offer detected Codex, Claude Code and Gemini MCP registrations after showing exact config changes and one y/N question. Offer Autopilot settings in a Git repository with a terminal; keep an existing mode on repeat setup.')] },
 ];
 export const PUBLIC_COMMAND_ROUTES = Object.freeze(routes.map(route => Object.freeze({ ...route,
   prefix: Object.freeze(route.prefix), ...(route.quiet ? { quiet: Object.freeze(route.quiet) } : {}),
