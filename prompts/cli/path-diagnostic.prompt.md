@@ -8,7 +8,7 @@ When setup requests the full report, identify this running pdd executable and ve
 
 For a conflict (the selected executable differs, or another distinct pdd is present), explain that a later environment activation, such as conda, can reorder PATH and shadow this pdd again. Give the verified absolute Node-plus-pdd command. If a verified executable named `pdd` on PATH points to this pdd, also give its bin-directory PATH correction, applied **after** environment activation, plus `hash -r`. Never suggest a PATH directory that lacks this pdd's command named `pdd`. Do not remove or replace another install, change PATH, ask a removal question, or run a package manager.
 
-`mode: 'workflow'` returns only a one-line shadowing warning for workflow startup, including the selected path/version and the absolute command for this pdd; no warning when PATH selects this pdd. `mode: 'version'` emits the full report only for a conflict. `mode: 'setup'` emits the report even without a conflict. Diagnostics remain local: no runtime, authentication or agent calls.
+`mode: 'workflow'` returns only a one-line shadowing warning for workflow startup, including the selected path/version and a short `"$PDD_BIN"` hint for workflow chats; no warning when PATH selects this pdd. `mode: 'version'` emits the full report only for a conflict. `mode: 'setup'` emits the report even without a conflict. Diagnostics remain local: no runtime, authentication or agent calls.
 
 ## Dependencies
 

@@ -132,7 +132,7 @@ The agents that PDD starts always get the full path of this pdd. They are not af
 
 ## 4. The PDD skills
 
-PDD is six skills. A skill is a folder of plain Markdown that your agent reads when it needs it. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name).
+PDD is nine skills. A skill is a folder of plain Markdown that your agent reads when it needs it. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name).
 
 | Skill | What it is |
 |---|---|
@@ -142,6 +142,9 @@ PDD is six skills. A skill is a folder of plain Markdown that your agent reads w
 | `pdd-bug` | A workflow for something that is broken |
 | `pdd-small-change` | A workflow for a small change that is easy to undo |
 | `pdd-setup` | Set up a repo for PDD. It does the same as `pdd setup` |
+| `pdd-autopilot` | With Autopilot on (`autopilot.mode` is `observe` or `auto` in `pdd.json`), pick ready issues, claim them and run each one |
+| `pdd-check` | A fresh checker's verdict on a PR at its head |
+| `pdd-merge` | Merge a PR that a fresh checker passed, or write "would merge" in `observe` |
 
 Where the skills go:
 
@@ -356,7 +359,7 @@ After a restart, run `pdd workflow open 42`. pdd resumes the chat of the current
 
 ### 6.10 Many issues at once
 
-Each issue gets its own branch, worktree and Herdr tab. You can start several runs. An issue can have only one active run: a second `pdd workflow run` on the same issue is refused. After `pdd workflow cancel N`, you can run it again, and the new run starts fresh. Each step is a full agent session on your machine. Many runs at once use a lot of memory and agent quota.
+Each issue gets its own branch, worktree and Herdr tab. You can start several runs. An issue has one active run. A second `pdd workflow run` on the same issue still starts: it marks the old active run replaced and names it in one warning. After `pdd workflow cancel N`, you can also run it again. The new run starts fresh. Each step is a full agent session on your machine. Many runs at once use a lot of memory and agent quota.
 
 <a id="7-check-prompts-on-the-pdd-runtime"></a>
 
@@ -547,7 +550,7 @@ This is a pre-release. These limits are known today:
 - A busy or rate-limited model (HTTP 429, capacity or quota) can stop a chat. Open it with `pdd workflow open N` and ask it to go on.
 - If your agent is not signed in, the chat stops at a sign-in screen. Check `codex login status` before you start.
 - With Claude Code, the first chat of a run can ask once to trust the new worktree. Answer it in the chat.
-- An issue can have only one active run. After `pdd workflow cancel N`, you can run it again.
+- An issue has one active run. A second `pdd workflow run` on the same issue still starts: it marks the old active run replaced and names it (id, worktree, last activity) in one warning.
 - Each step is a fresh subagent. A run uses a lot of agent quota.
 - Codex is the default agent. Claude Code works too.
 
@@ -561,7 +564,8 @@ This is a pre-release. These limits are known today:
 | A message about `refs/remotes/origin/...` or a missing base | Run `git fetch origin`. |
 | A GitHub error when the run starts | Check `git remote -v` (a GitHub `origin`), `gh auth status`, and that the issue exists in this repository. |
 | `approve` says that more than one run matches | Give the issue number, or `owner/repo#N`. |
-| `pdd workflow run` says that the issue already has a run | Use `pdd workflow open N` or `status N`. To start again, run `pdd workflow cancel N` first. |
+| `pdd workflow run` says that the issue already has a run | The issue has a completed run. Use `pdd workflow open N` or `status N`. |
+| `pdd workflow run` warns that the issue had an active run | pdd marked that run replaced and started a new one. If the warning says the old run may still be working, close its chat. Its worktree and branch stay. |
 | `pdd workflow run` prints a hint about Claude Code trust | Run `pdd workflow open N` and answer the trust question in the chat. |
 | `pdd workflow run` says that `CODEX_HOME` or `CLAUDE_CONFIG_DIR` does not exist | Set it to a folder that exists, for example `CODEX_HOME=$HOME/.codex`, and run the command again. |
 | Chat startup/open is not confirmed (`server_unavailable`) | Herdr could not handle the request. PDD keeps the same worktree, base and run and reports waiting. After Herdr is available, use `pdd workflow open N` for that run. A lost launch reply keeps the original tab identity; if no live agent can be confirmed there, inspect that tab before starting another agent. |

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: fd696b0b6c4a89c698ab20307d48bef51bedd343477b2ecb4cf53703be27ead8).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 092fb7a2635ca8d7e5a954f873053293cea5087cb02d8ecf38f65ba21c3f5912).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -46,7 +46,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
   cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, workflowRunner, workflowAreas,
   stdin = process.stdin, confirm, mcpServer, runtimeSlots, contracts, product, productPorts, gitContext, workflowProve, provePorts,
   workflowAgents = { checkWorkflowAgents }, workflowAgentPorts = {}, setupSkills = defaultSetupSkills,
-  setupProject = defaultSetupProject, setupAgentMcp, pathDiagnostic = defaultPathDiagnostic } = {}) {
+  setupProject = defaultSetupProject, setupAgentMcp, autopilot, autopilotPorts = {}, pathDiagnostic = defaultPathDiagnostic } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
@@ -71,6 +71,17 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         } catch { /* The skills check never changes --version. */ }
         return 0;
       } catch { line(stderr, 'This PDD package has no readable version metadata.');return 1; }
+    case 'autopilot.off': case 'autopilot.observe': case 'autopilot.auto': case 'autopilot-trust': case 'autopilot-untrust': {
+      try {
+        const module = autopilot ?? await import('./autopilot.mjs');
+        const input = plan.local.startsWith('autopilot.')
+          ? { action: 'mode', mode: plan.local.slice(10) }
+          : { action: plan.local.slice(10), names: [...plan.operands] };
+        const result = await module.runAutopilot(input, { cwd, stdin, stdout, ...autopilotPorts });
+        line(result.exitCode === 0 ? stdout : stderr, result.message);
+        return result.exitCode;
+      } catch (error) { line(stderr, `Autopilot settings failed.${reason(error)}`); return 1; }
+    }
     case 'product-status': case 'product-next': case 'product-start': {
       try {
         const context = await (gitContext ?? (await import('./workflow-runs.mjs')).gitContext)(cwd, productPorts);
@@ -99,6 +110,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         try { selected = await workflowAgents.checkWorkflowAgents({ cwd, env, ...(plan.options['--agent'] !== undefined ? { requested: plan.options['--agent'] } : {}) }, workflowAgentPorts); }
         catch { line(stderr, 'Agent sign-in could not be checked. Run codex login status or claude auth status.'); return 1; }
         if (!selected?.ok) { line(stderr, selected?.message || 'Agent sign-in could not be checked. Run codex login status or claude auth status.'); return 1; }
+        if (typeof selected.hint === 'string' && selected.hint) line(stderr, selected.hint);
         input.agent = selected.agent;
       }
       try {
@@ -161,6 +173,14 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         const action = setupAgentMcp ?? (await import('./agent-mcp-setup.mjs')).setupAgentMcp;
         if (await action({ env, packageRoot }, { stdin, stdout, stderr, confirm })) code = 1;
       } catch (error) { line(stderr, `pdd setup: MCP registration failed.${reason(error)}`); code = 1; }
+      try {
+        const context = await (gitContext ?? (await import('./workflow-runs.mjs')).gitContext)(cwd);
+        const module = autopilot ?? await import('./autopilot.mjs');
+        const result = await module.runAutopilot({ action: 'setup', interactive: !!stdin.isTTY, inRepo: !!context?.toplevel },
+          { cwd: context?.toplevel ?? cwd, stdin, stdout, ...autopilotPorts });
+        if (result.message) line(result.exitCode === 0 ? stdout : stderr, result.message);
+        if (result.exitCode) code = result.exitCode;
+      } catch (error) { line(stderr, `Autopilot settings failed.${reason(error)}`); code = 1; }
       return code;
       } });
     }
