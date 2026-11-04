@@ -565,8 +565,8 @@ identity only. It does not independently prove execution or prompt/code equivale
 In verify after the last commit, run one `pdd workflow prove <run> --test "<command>" --expect "<distinctive text printed by the failing test on old code>"` command that covers all new or changed tests; text the old-code run does not print gives `wrong-reason`. Its line goes on the PR. Fresh worktrees have no installed dependencies, so include any required installation in the command.
 
 **Test vectors: the approved cases, run on the real code.**
-- Expected values come from the Story and the person. If they need correction, show the proposed change.
-  pdd lists saved-value changes in warnings and the PR; code work continues, and the checker or person decides.
+- Use `tests/<story>.json` from prompt space as it is. Never edit it in code space. If an expected value looks
+  wrong, return to prompt space for the person's approval and start a run with the approved vectors.
 - In `build`, write one replay test in the repo's own test runner (for example `test/<story>.vectors.test.mjs`).
   It reads the JSON file when it runs, and for each step it calls the real public boundary named by `operation`
   (function, command or route). Steps run in order and share state, as on the interpreter.
@@ -615,9 +615,9 @@ Missing/unmapped checks need honest not-replayed outcomes, and a control that wa
 
 pdd revalidates immediately before publishing, after committing leftovers, and when updating an open PR.
 It independently inventories current changed scenario files against the saved run base with exact
-NUL-delimited Git paths, including non-ASCII names. Scenario changes produce warnings listing each changed JSON value, without locking the code step.
-Replay uses current readable scenarios; an older manifest without their hashes is not replayed.
-Absent, empty or unreadable vectors remain unproved; an unavailable inventory cannot establish PASS. Missing,
+NUL-delimited Git paths, including non-ASCII names. A scenario absent from the frozen anchor makes replay
+BLOCKED even when all anchored checks pass; an unavailable inventory cannot establish PASS.
+Changed, absent, empty or unreadable original files cannot pass even with a new source fingerprint. Missing,
 malformed or stale records produce prominent **BLOCKED** / **NOT REPLAYED** status above prose and prompt
 check results. Actual assertion or formal failures remain publishable with a failure line. An existing PR is
 marked publication-pending before source is pushed; a failed final description update leaves it pending.

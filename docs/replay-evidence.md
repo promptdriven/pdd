@@ -6,9 +6,13 @@ Read `status.json` for `runId`, `root` and `replayBaseline`. The saved baseline 
 raw SHA256 hashes, scenario snapshots and step/check identities. For ordinary runs, pdd refreshes it after every prompt-space publication/push,
 through the final approval publication before code space. Final approval refuses unpublished scenario edits;
 publish those approved edits in prompt space first. On entry into code space the published anchor is frozen.
-Do not replace the baseline or derive new expected values from code. Saved-value changes are advisory:
-pdd shows every changed JSON value with its file, JSON Pointer, before and after values in command
-output and the PR. The code step continues; the checker or person decides. Older anchors without
+Do not replace the baseline or derive new expected values from code. Agents still must not edit test
+values in code space. Saved-value diagnostics do not authorize edits. Saved-value changes are advisory:
+pdd keeps every changed JSON value with its file, full JSON Pointer, before and after values in
+status.json at /replayEvidence/warnings. Command output shows the complete list. The PR fits whole
+warning items within its description budget, naming the exact overflow count and that saved location.
+Escaped paths, URLs and Unicode remain distinct and reviewable. A long warning list never locks publication.
+The code step continues; the checker or person decides. Older anchors without
 snapshots show hash changes and say that original values are unavailable.
 
 The replay test must load the current scenario JSON, execute each public operation in order with shared state, and

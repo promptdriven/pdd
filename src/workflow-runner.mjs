@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: c048555db169f8408ee0421e383fb9981f9545cebc8a1c2116571f5074dd8b57).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: f0309eab9f5595caa6aa8ef58b3985008448472b004e3f4e51f8bbad0c5e55de).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { execFile as execFileCallback } from 'node:child_process';
@@ -225,7 +225,8 @@ async function scenarioInventory(run, p) {
     if(!path.endsWith('.json'))continue;
     // The replay reader reports deleted/malformed saved files with their value diff.
     if(saved.has(path)){paths.push(path);continue;}
-    if(isScenario(readFileSync(join(run.root,path),'utf8')))paths.push(path);
+    try {if(isScenario(readFileSync(join(run.root,path),'utf8')))paths.push(path);}
+    catch(error){throw Error(`${JSON.stringify(path)}: ${oneLine(error.message)}`);}
   }
   return paths;
 }
@@ -264,7 +265,7 @@ async function currentReplayEvidence(run,p,validated=false) {
   let paths;
   try {
     paths=await scenarioInventory(run,p);
-  } catch { reason = 'The current changed scenario inventory is unavailable; repair unreadable or malformed JSON candidates and Git listing failures.'; }
+  } catch(error) { reason = `The current changed scenario inventory is unavailable: ${oneLine(error.message)}. Repair unreadable or malformed JSON candidates and Git listing failures.`; }
   const evidence = readReplayEvidence(run,paths);
   return reason ? {...evidence,outcome:'blocked',reason} : evidence;
 }
@@ -923,7 +924,8 @@ function prBody(run, area, env, drafts = [], tests = true, evidence) {
   const shown = change?.match(/https?:\/\/[^\s;]+/g) ?? [];
   const runtime = publicationRuntime(run, env).filter(line => !line.startsWith('Report') || !shown.some(url => line.includes(` ${url} `)));
   const noted = runtime.some(line => hasReportLink(line, env)) || change && hasReportLink(change, env);
-  const replay = area.replay_evidence === REPLAY_POLICY ? [formatReplayEvidence(run.replayEvidence ?? readReplayEvidence(run)), ''] : [];
+  const replayResult = area.replay_evidence === REPLAY_POLICY ? run.replayEvidence ?? readReplayEvidence(run) : null;
+  const replay = replayResult ? [formatReplayEvidence(replayResult,{maxCharacters:0}), ''] : [];
   const prefix = [...failing, ...replay];
   const top = [...(verdict ? [`${AGENT_NOTE}: ${verdict}`] : []), ...(change ? [`${AGENT_NOTE}: ${change}${hasReportLink(change, env) ? ' (report links expire after 7 days)' : ''}`] : []), ...runtime];
   if (evidence.lines.some(line => line.includes('pdd-workflow:'))) throw Error('Remove supplied workflow ownership markers from the report; pdd preserves its own marker.');
@@ -941,6 +943,10 @@ function prBody(run, area, env, drafts = [], tests = true, evidence) {
   // approvals and verify.md then fit as before, and the full summaries get the room that is left.
   const least = fullSummaries(steps, full, 0);
   const { lifted, approvals } = publicationFit(preparedLines, approvalLines, Math.max(0, BODY_BUDGET - 200 - (verify === null ? 0 : 1000) - characters(body(null, [], [], least))), env);
+  if(replayResult){
+    const room=Math.max(0,BODY_BUDGET-200-(verify===null?0:1000)-characters(body(null,lifted,approvals,least)));
+    prefix[failing.length]=formatReplayEvidence(replayResult,{maxCharacters:characters(replay[0])+room});
+  }
   const verifyText = verify === null ? null : verifyFit(hideLocalPaths(verify, run), BODY_BUDGET - 200 - characters(body('', lifted, approvals, least)), env, false, true);
   return withSummaries(steps, full, section => body(verifyText, lifted, approvals, section), BODY_BUDGET - 200);
 }

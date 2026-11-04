@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-replay.prompt.md (sha256: 8ba1026f30d22ca1acfdc50109823dc3839b5c4070e043eb52104b0a8b71ffdc).
+// Generated from prompts/cli/workflow-replay.prompt.md (sha256: 68f00dc9a6e0f6bd05724ce92c1b5648d473f3f763de0dad3816c6a256a3cb26).
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -24,7 +24,8 @@ const controls = ['assertion_failure','crash','survived','not_run'];
 const sanitize = value => cleanText(String(value ?? '')).replace(/[\r\n\x00-\x1f]/g,' ').slice(0,1000)
   .replace(/https?:\/\/[^\s]+\/s\/[^\s]+/g,'(Try link removed)');
 const adoptionCause = value => sanitize(value).replace(/\b(?:Bearer|Basic)\s+[^\s]+/gi,'credential removed').replace(/\b(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+)\b/g,'credential removed').replace(/https?:\/\/[^\s]+/g,'(URL removed)').replace(/(?<![\w./-])(?:[A-Za-z]:[\\/]|\/)[^\s,;:]+/g,'(path removed)').replace(/(?:token|password|authorization|credential)[=: ]+[^\s]+/gi,'credential removed');
-const render = value => sanitize(value).replace(/[\\`*_[\]()|]/g,'\\$&')
+const inertMarkers = value => value.replaceAll('pdd-workflow:', 'pdd-workflow\\u003a').replaceAll('pdd-product:', 'pdd-product\\u003a');
+const render = value => inertMarkers(sanitize(value)).replace(/[\\`*_[\]()|]/g,'\\$&')
   .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
 export function sourceFingerprint(root) {
@@ -335,16 +336,20 @@ function valueChanges(before, after, path = '') {
   return [{path,before,after}];
 }
 const changeValue=value=>value===undefined ? '(missing)' : JSON.stringify(value);
-// Values can be long; retain every change while applying the existing output cleaning.
-const renderValue=value=>cleanText(String(value)).replace(/[\r\n\x00-\x1f]/g,' ')
-  .replace(/https?:\/\/[^\s]+\/s\/[^\s]+/g,'(Try link removed)')
+// JSON escaping keeps identities and values distinct. Entities display complete
+// separators without exposing URLs or matching the outer body's path cleaner.
+const renderValue=value=>inertMarkers(String(value).replace(/[^\x20-\x7e]/g,char=>'\\u'+char.charCodeAt(0).toString(16).padStart(4,'0')))
   .replace(/[\\`*_[\]()|]/g,'\\$&').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const reviewText=value=>renderValue(value).replaceAll('/','&#47;');
+const reviewIdentity=value=>reviewText(JSON.stringify(String(value)).slice(1,-1));
 export function readReplayEvidence(run, paths) {
   let result = {outcome:'blocked',reason:'Structured replay evidence is unavailable.',counts:emptyCounts(),vectors:[],warnings:[],source:null,manifest_sha256:null,operations:{total:0,executed:0},...(run.replayAdoption ? {adoption:run.replayAdoption.provenance} : {})};
   try {
     const baseline = run.replayBaseline;
     requireThat(baseline?.schema_version === 'pdd.replay-vectors.v1' && Array.isArray(baseline.vectors) && baseline.vectors.length <= 200, 'No approved original-vector anchor is saved; return to prompt space.');
-    if(baseline.outcome && !paths?.length)return {...result,outcome:baseline.outcome,reason:sanitize(baseline.reason)};
+    if(baseline.outcome){
+      requireThat(['blocked','not_replayed'].includes(baseline.outcome),'The saved replay anchor has an invalid outcome.');
+    }
     const originals=new Map(baseline.vectors.map(v=>[v.path,v]));
     const current={vectors:[]};let unavailable=false;
     for(const path of new Set([...originals.keys(),...(paths??[])])) {
@@ -368,6 +373,7 @@ export function readReplayEvidence(run, paths) {
       }
     }
     result.vectors=current.vectors.map(({path,sha256})=>({path,sha256}));
+    if(baseline.outcome)return {...result,outcome:baseline.outcome,reason:sanitize(baseline.reason)};
     if(unavailable || !current.vectors.length)return {...result,outcome:'not_replayed',reason:'Current scenario vectors are unavailable or empty; saved-value changes are advisory.'};
     const admitted=pinReplayVectors(run.root,current.vectors.map(v=>v.path));
     if(admitted.outcome)return {...result,outcome:'not_replayed',reason:admitted.reason};
@@ -422,13 +428,14 @@ export function readReplayEvidence(run, paths) {
     return {...result,outcome,reason:counts.blocked ? 'Some checks are blocked.' : counts.not_replayed ? 'Some current assertions or public operations were not replayed.' : !detected ? 'The semantic mutation control did not detect an assertion failure; a crash is not detection.' : outcome==='fail' ? 'Assertion or formal failures were recorded.' : 'All current assertions have source-bound public-boundary replay evidence.'};
   } catch (e) { return {...result,outcome:'blocked',reason:e.code==='ENOENT' ? 'Missing replay-evidence.json or an original vector; code replay is blocked.' : sanitize(e.message || 'Malformed replay evidence.')}; }
 }
-export function formatReplayEvidence(result) {
-  const counts=result.counts??emptyCounts(), label=String(result.outcome).replace('_',' ').toUpperCase();
+export function formatReplayEvidence(result, {maxCharacters=Infinity} = {}) {
+  const counts=result.counts??emptyCounts(), emptyPass=result.outcome==='pass' && !(Number.isSafeInteger(counts.total) && counts.total>0);
+  const label=String(emptyPass?'blocked':result.outcome).replace('_',' ').toUpperCase();
   const formalLabel={proved_bounded:'Proved (bounded)',proved_solver:'Proved (solver)',failed:'Failed + counterexample',not_run:'Not run',not_applicable:'Not applicable'};
-  return [ ...(counts.fail ? [`✗ ${counts.fail} replay assertions fail`] : []), ...(result.formal?.result==='failed' ? ['✗ Formal check failed (counterexample in replay-evidence.json).'] : []),
-    `Code replay: ${label} — ${render(result.reason)}`,`${counts.total} checks: ${counts.pass} passed, ${counts.fail} failed, ${counts.blocked} blocked, ${counts.not_replayed} not replayed.`,
-    ...(result.warnings??[]).map(w=>`warning: Saved test values changed: ${render(w.vector)} ${w.reason ? render(w.reason) : `${render(w.path)} ${renderValue(changeValue(w.before))} -> ${renderValue(changeValue(w.after))}`}`),
-    ...((result.warnings?.length??0) ? ['Saved-value changes are advisory; the checker or person decides.'] : []),
+  const head=[ ...(counts.fail ? [`✗ ${counts.fail} replay assertions fail`] : []), ...(result.formal?.result==='failed' ? ['✗ Formal check failed (counterexample in replay-evidence.json).'] : []),
+    `Code replay: ${label} — ${render(emptyPass?'Replay cannot pass with zero checks.':result.reason)}`,`${counts.total} checks: ${counts.pass} passed, ${counts.fail} failed, ${counts.blocked} blocked, ${counts.not_replayed} not replayed.`];
+  const warnings=(result.warnings??[]).map(w=>`warning: Saved test values changed: ${reviewIdentity(w.vector)} ${w.reason ? reviewIdentity(w.reason) : `${reviewIdentity(w.path)} ${reviewText(changeValue(w.before))} -> ${reviewText(changeValue(w.after))}`}`);
+  const tail=[...(warnings.length ? ['Saved-value changes are advisory; the checker or person decides.'] : []),
     ...(result.adoption ? [`Anchor adopted from ${render(result.adoption.repository)}@${render(result.adoption.commit)}; approval reference ${render(result.adoption.reference)} by ${render(result.adoption.asserted_by)}; external-assertion-unverified`] : []),
     `Public-boundary operations: ${result.operations?.executed??0}/${result.operations?.total??0} executed.`,
     `Semantic mutation control: ${result.mutation?.outcome??'not recorded'}${result.mutation ? ` (${result.mutation.failures} assertion failures)` : ''}.`,
@@ -437,5 +444,17 @@ export function formatReplayEvidence(result) {
     ...(result.vectors??[]).slice(0,12).map(v=>`Current vector: ${render(v.path)} — ${sha(v.sha256)?v.sha256:'unconfirmed'}.`),
     ...((result.vectors?.length??0)>12 ? [`${result.vectors.length-12} more current vector identities are in the full manifest.`] : []),
     'Agents execute the tests and supply this record. pdd validates structure and identity; it does not independently prove execution or prompt/code equivalence.',
-    'Full evidence: replay-evidence.json in the run folder.'].join('\n');
+    'Full evidence: replay-evidence.json in the run folder.'];
+  const characters=text=>[...text].length;
+  const report=items=>[...head,...items,...tail].join('\n');
+  if(characters(report(warnings))<=maxCharacters || !warnings.length)return report(warnings);
+  const notice=count=>`…and ${count} more saved-value changes (all listed in status.json at /replayEvidence/warnings).`;
+  const kept=[];
+  let used=characters(report([notice(warnings.length)]));
+  for(const warning of warnings){
+    const size=characters(warning)+1;
+    if(used+size>maxCharacters)break;
+    kept.push(warning);used+=size;
+  }
+  return report([...kept,notice(warnings.length-kept.length)]);
 }

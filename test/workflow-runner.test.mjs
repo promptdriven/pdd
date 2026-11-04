@@ -2133,7 +2133,7 @@ test('2870: vector edits after prompt-space approval warn and replay without rep
   writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
   writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
   const out=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());assert.equal(out.exitCode,0,out.message);
-  assert.match(f.prs[1].body,/Code replay: PASS/);assert.match(f.prs[1].body,/warning: Saved test values changed:.*\/value.*3.*999/);
+  assert.match(f.prs[1].body,/Code replay: PASS/);assert.match(f.prs[1].body.replaceAll('&#47;','/'),/warning: Saved test values changed:.*\/value.*3.*999/);
   assert.match(out.message,/warning: Saved test values changed:/);
   assert.deepEqual(f.record().replayBaseline,original);
 });
@@ -2237,7 +2237,7 @@ test('2553: legacy single-vector baseline cannot publish PASS after another scen
   assert.equal(out.exitCode,0,out.message);
   assert.equal(f.prs.length,2);
   assert.match(f.prs[1].body,/Code replay: NOT REPLAYED/);
-  assert.match(f.prs[1].body,/warning: Saved test values changed: tests\/refund\.json/);
+  assert.match(f.prs[1].body.replaceAll('&#47;','/'),/warning: Saved test values changed: tests\/refund\.json/);
   assert.doesNotMatch(f.prs[1].body,/Replay evidence is stale/);
   assert.deepEqual(f.record().replayBaseline,original,'code publication cannot repin saved originals');
 });
@@ -2307,6 +2307,10 @@ for(const failure of ['listing','missing','malformed']) {
     const result=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
     assert.equal(result.exitCode,0,result.message);assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nNative tests: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\nCode replay: BLOCKED/);
     assert.match(f.record().replayEvidence.reason,/inventory is unavailable/);
+    if(failure==='malformed'){
+      assert.match(f.record().replayEvidence.reason,/tests\/broken\.json/);
+      assert.match(f.record().replayEvidence.reason,/JSON/);
+    }
     assert.match(result.message,/Code replay: BLOCKED/);
   });
 }
@@ -2329,7 +2333,7 @@ test('2870: an open code PR lists newly added scenarios without locking and pres
   writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
   const result=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
   assert.equal(result.exitCode,0,result.message);assert.match(f.prs[1].body,/Code replay: NOT REPLAYED/);
-  assert.match(f.prs[1].body,/warning: Saved test values changed: tests\/refund\.json/);
+  assert.match(f.prs[1].body.replaceAll('&#47;','/'),/warning: Saved test values changed: tests\/refund\.json/);
   assert.doesNotMatch(result.message,/Return to prompt space/);
   assert.deepEqual(f.record().replayBaseline,saved);assert.equal(f.edits.filter(n=>n===f.prs[1].number).length,2);
 });

@@ -5,7 +5,7 @@ retaining approved prompt-space vectors for comparison. Validate structure and i
 prove equivalence, approve a prompt, or infer success from prose. Preserve existing runtime source fingerprints.
 
 Export REPLAY_POLICY (`pdd.replay-evidence.v1`), sourceFingerprint(root), pinReplayVectors(root, paths),
-readReplayEvidence(run, paths?), formatReplayEvidence(result), and adoptReplayCorpus(root, declarationPath, ports). The runner owns policy opt-in and publication.
+readReplayEvidence(run, paths?), formatReplayEvidence(result, options?), and adoptReplayCorpus(root, declarationPath, ports). The runner owns policy opt-in and publication.
 
 ## Original identities
 
@@ -140,6 +140,9 @@ a writer before the regular-file check. It requires a valid saved original ancho
 from code-space files. Bind run_id to run.runId and source to current sourceFingerprint(run.root).
 Missing/stale/malformed evidence returns blocked with a finite reason, never throws through publication.
 An empty current vector set is not_replayed, never pass.
+A saved anchor outcome may only be blocked or not_replayed and remains that outcome even when current
+paths are supplied; still collect comparable saved-value warnings before returning it. Any other saved
+outcome is malformed and blocked. A report with zero checks never displays PASS.
 
 ### Saved-value changes: show, do not lock
 
@@ -151,7 +154,20 @@ For older anchors without snapshots, report old/current hashes and say original 
 Unreadable, empty or malformed vectors get a warning with their path and cause.
 Warnings appear in command output and the PR, even when replay evidence is absent or stale.
 They never require returning to prompt space, block code work/publication or imply approval.
-The checker or person decides whether the changes are correct. Do not cap the list of changed values.
+The checker or person decides whether the changes are correct. These diagnostics do not authorize an
+agent to edit test values in code space; the authoring rules stay with the Prompting guide.
+Do not cap the saved list of changed values. The runner saves it in status.json at /replayEvidence/warnings.
+
+Render complete JSON Pointers and before/after JSON values reversibly, without path/URL cleaning or
+identity truncation. Distinct values must remain visibly distinct. Use JSON Unicode escapes for code
+units outside printable ASCII, including invisible and bidi characters. Escape Markdown, HTML, controls and
+path separators so outer body cleaning cannot collapse different paths or damage quoted URLs.
+Escape pdd-workflow: and pdd-product: as in the runner's inert summary text; they cannot become ownership markers.
+Missing is distinct from a literal string or null. The default report shows all warnings. Optional
+maxCharacters is a display budget for the entire replay section: retain its status, counts and trust
+boundary, show the longest prefix of whole warning items that fits, then name the exact omitted count
+and status.json /replayEvidence/warnings containing the complete list. Never silently omit or cut an item.
+The runner supplies space from its whole-description budget; a long warning list never locks publication.
 
 Validate the manifest against the current readable scenarios and their current hashes and identities.
 Missing current vectors/checks in an older manifest mean not_replayed, with the warning retained;
@@ -239,7 +255,7 @@ let an agent's free-form PASS summary replace this status.
 ```json
 {
   "status": "draft",
-  "prose_sha256": "76e2d31440c53029f6ed68ece57b19f2e6c9b66070960df9f718ff27602dae02",
+  "prose_sha256": "852ac6e549fe5bba8ea3e9a94f4b1ee265bb704df3986015522e812838df5446",
   "entries": [
     {
       "operation": "adoptReplayCorpus",
