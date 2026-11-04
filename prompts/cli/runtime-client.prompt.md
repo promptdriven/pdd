@@ -759,7 +759,7 @@ The `runTry` entry binds `runTry({words, options, cwd}, ports)` (and its `--stop
 
 ```json
 {
-  "status": "draft",
+  "status": "approved",
   "prose_sha256": "751b8c31d23081edf73b38c607c6ec988b6feff2cd61ebf8163cbf1effc52145",
   "entries": [
     {
