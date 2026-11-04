@@ -95,7 +95,7 @@ in root help and completion; do not import the runtime client for parsing/help.
 Catalog `product.status` (`product status`, local `product-status`, optional flag
 `--json`), `product.next` (`product next`, local `product-next`, no operands or
 options), and `product.start` (`product start`, local `product-start`, required
-text operand RUN, flags `--no-run` and value `--agent` with codex|claude). Forms:
+text operand RUN, flags `--no-run` and value `--agent` with codex|claude|gemini|agy). Forms:
 `pdd product status [--json]`, `pdd product next`, and
 `pdd product start RUN [--no-run] [--agent codex|claude|gemini|agy]`. Help says status counts
 Stories by part and slice, next shows ready runs, and start creates or reuses one

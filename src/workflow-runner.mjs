@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 1c330b28d5269a80d4b3aa3aea175bd2964f859829b8067212c2b886da13e026).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 22be7243be25683c739f60e3627bbbd5ad1d63c7762171d81fe6afe6f7cc5c0f).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { execFile as execFileCallback } from 'node:child_process';
@@ -127,7 +127,7 @@ function causeOf(error) {
   return causeText(error?.stderr || error?.detail) || String(error?.code ?? 'error');
 }
 export const pddCommand = (packageRoot = PACKAGE_ROOT) => [process.execPath, join(packageRoot, 'bin', 'pdd.mjs')].map(shell).join(' ');
-const pddFor = (p, packageRoot) => p.pdd ?? pddCommand(packageRoot ?? PACKAGE_ROOT);
+const pddFor = (p, packageRoot) => p.pdd ?? (p.env?.PDD_AGENT_SESSION && p.env?.PDD_BIN ? '"$PDD_BIN"' : pddCommand(packageRoot ?? PACKAGE_ROOT));
 async function git(p, cwd, ...args) { return String((await p.execFile('git', args, { cwd })).stdout ?? '').trim(); }
 
 // Command effects are explicit callbacks over the latest ordinary record. Keep the
@@ -268,7 +268,7 @@ async function unpublishedScenarios(run,p) {
 }
 
 async function areaMessage(run, index, p, packageRoot) {
-  const area = run.areas[index], pdd = p.pdd, earlier = run.areas.slice(0, index).flatMap(item => item.steps);
+  const area = run.areas[index], pdd = '"$PDD_BIN"', earlier = run.areas.slice(0, index).flatMap(item => item.steps);
   const summaries = earlier.filter(step => run.done[step]).map(step => `${step}: ${oneLine(run.done[step].summary).replace(/[.\s]+$/, '') || 'done'}`);
   const files = index ? await changedFiles(run, p) : [];
   return [
@@ -291,10 +291,10 @@ async function areaMessage(run, index, p, packageRoot) {
 
 // The one sentence a person gets when they stop at PR 1 (0.1.4: testers saw the chat drop it when it was a hint).
 const approvalGuide = run => `Show the gate and ask the person. One approval covers the gate and all its selected draft prompts. Relay their exact later words with:
-<pdd> workflow approve ${run.number} --said - <<'PDD_SAID'
+"$PDD_BIN" workflow approve ${run.number} --said - <<'PDD_SAID'
 <the person's exact words>
 PDD_SAID
-Choose a quoted delimiter absent as a whole payload line. Resolve <pdd> to this package's shell-quoted executable command when running it. Or the person can use terminal y/N: pdd workflow approve ${run.number} in a normal terminal.`;
+Choose a quoted delimiter absent as a whole payload line. Or the person can use terminal y/N: pdd workflow approve ${run.number} in a normal terminal.`;
 const approvalRetry = (run, prefix) => `The saved approval remains usable for this same gate. Retry with its exact recorded words; no new approval is needed. ${approvalGuide(run, prefix).replace('Show the gate and ask the person. One approval covers the gate and all its selected draft prompts. Relay their exact later words with:', 'Use the saved words with:')}`;
 const codeLater = run => `To make the code PR later, tell your agent, or run pdd workflow approve ${run.number} in a terminal.`;
 const prOf = (run, name) => (run.pr ?? []).find(pr => pr.stage === name) ?? null;
@@ -1390,6 +1390,17 @@ async function startNextChat(run, p, packageRoot) {
   }
 }
 
+function reviewSha256(text) {
+  for (const block of interfaceBlocks(text)) text = text.replace(block[0], '');
+  return createHash('sha256').update(text.replace(/\s+/g, ' ').trim()).digest('hex');
+}
+function samePromptReview(current, saved) {
+  return Array.isArray(saved) && current.length === saved.length && current.every((row, index) => {
+    const prior = saved[index];
+    return row.path === prior.path && (prior.reviewSha256 === undefined
+      ? row.proseSha256 === prior.proseSha256 : row.reviewSha256 === prior.reviewSha256);
+  });
+}
 async function gatePromptSnapshot(run, p) {
   const fs = p.fs ?? { lstatSync, realpathSync, readFileSync };
   const paths = new Set((await changedFiles(run, p, true)).filter(path => path.endsWith('.prompt.md')));
@@ -1404,7 +1415,8 @@ async function gatePromptSnapshot(run, p) {
     let stat;
     try { stat = fs.lstatSync(file); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
     if (!stat.isFile() || fs.realpathSync(file) !== file) throw Error(`Cannot inspect unsafe prompt: ${path}`);
-    rows.push({ path, proseSha256: proseSha256(fs.readFileSync(file, 'utf8')) });
+    const text = fs.readFileSync(file, 'utf8');
+    rows.push({ path, proseSha256: proseSha256(text), reviewSha256: reviewSha256(text) });
   }
   return rows;
 }
@@ -1422,9 +1434,9 @@ async function showGate(run, p) {
   }
 }
 // Validate the complete selection before mutating any prompt or the journal.
-async function approveGatePrompts(run, p) {
+async function approveGatePrompts(run, p, snapshot = null) {
   const fs = p.fs ?? { lstatSync, realpathSync, readFileSync, writeFileSync };
-  const snapshot = await gatePromptSnapshot(run, p);
+  snapshot ??= await gatePromptSnapshot(run, p);
   const paths = snapshot.map(row => row.path);
   const edits = [];
   for (const path of paths) {
@@ -1449,14 +1461,14 @@ async function approveGatePrompts(run, p) {
   readPromptApprovals(await promptApprovalContext(run, p), p);
   return edits;
 }
-async function saveGateApproval(run, area, record, edits, p) {
+async function saveGateApproval(run, area, record, edits, p, snapshot = run.gate?.promptSnapshot) {
   // An id-less legacy gate gets a current identity only; timestamps never authorize reuse.
   if (run.gate && !run.gate.id) { const id=p.randomUUID(); commitRun(run,p,latest=>{if(latest.gate)latest.gate.id??=id;}); }
   const gateId = run.gate?.id ?? p.randomUUID(), gateAt = run.gate?.at;
   const existing = run.decisions.find(decision => decision.gateId === gateId && decision.evidence);
   if (existing && !edits.length) { run.approvalRecord = { ...(run.approvalRecord?.gateId === gateId ? run.approvalRecord : {}), gateId, kind: existing.via, area: area.name, at: existing.at, evidence: existing.evidence }; return existing; }
   const at = p.now(), evidence = { id: p.randomUUID(), route: record.via, actor: approvalActor(p.env), at, words: record.text ?? null,
-    prompts: run.gate?.promptSnapshot ?? edits.map(({path,proseSha256}) => ({path,proseSha256})) };
+    prompts: (snapshot ?? edits).map(({path,proseSha256}) => ({path,proseSha256})) };
   p.inspectProgress?.();
   const fs = p.fs ?? { writeFileSync }, changed = [];
   try {
@@ -1512,7 +1524,7 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, packageRoot = 
   try {
     if (run.gate && area.steps.every(step => run.done[step])) {
       const current = await gatePromptSnapshot(run, p);
-      if (approvalWords !== undefined && JSON.stringify(current) !== JSON.stringify(run.gate.promptSnapshot)) return fail('The selected prompts changed or this gate has no saved review. Show the gate again with done and ask the person again.');
+      if (approvalWords !== undefined && !samePromptReview(current, run.gate.promptSnapshot)) return fail('The selected prompts changed or this gate has no saved review. Show the gate again with done and ask the person again.');
       edits = await approveGatePrompts(run, p);
       if (approvalWords === undefined) { p.say(snapshotLines(current).join('\n')); commitRun(run,p,latest=>{latest.gate.promptSnapshot=current;}); }
     } else readPromptApprovals(await promptApprovalContext(run, p), p);
@@ -1538,9 +1550,17 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, packageRoot = 
   }
   const invocationAt=p.now();
   p.inspectProgress();
-  try { if (run.gate?.promptSnapshot && JSON.stringify(await gatePromptSnapshot(run, p)) !== JSON.stringify(run.gate.promptSnapshot)) return fail('The selected prompts changed. Show the gate again and ask the person again.'); } catch (error) { return fail(`Cannot inspect selected prompts: ${error.message}. Show the gate again and ask the person again.`); }
+  let approvalSnapshot = run.gate?.promptSnapshot;
+  try {
+    if (approvalSnapshot) {
+      const current = await gatePromptSnapshot(run, p);
+      if (!samePromptReview(current, approvalSnapshot)) return fail('The selected prompts changed. Show the gate again and ask the person again.');
+      approvalSnapshot = current;
+      edits = await approveGatePrompts(run, p, current);
+    }
+  } catch (error) { return fail(`Cannot inspect selected prompts: ${error.message}. Show the gate again and ask the person again.`); }
   let saved;
-  try { if (run.gate || beforePr || !askCode) saved = await saveGateApproval(run, area, record, edits, p); }
+  try { if (run.gate || beforePr || !askCode) saved = await saveGateApproval(run, area, record, edits, p, approvalSnapshot); }
   catch (error) { return fail(`Approval failed: ${error.message}`); }
   carried.push(...edits.map(edit => `Approved ${edit.path} ${edit.proseSha256}`));
   if (askCode && run.gate?.kind === 'ask-code') {

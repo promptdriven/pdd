@@ -55,7 +55,7 @@ test('agy shell launch: full access, pdd run and worktree folders in its workspa
   const root = mkdtempSync(join(tmpdir(), "pdd-agy 'launch'-")); t.after(() => rmSync(root, { recursive: true, force: true }));
   const bin = join(root, 'bin'); mkdirSync(bin);
   writeFileSync(join(bin, 'agy'), `#!${process.execPath}\nconsole.log(JSON.stringify({args:process.argv.slice(2),marker:process.env.PDD_AGENT_SESSION,codex:process.env.CODEX_HOME??null}));`, { mode: 0o755 });
-  const run = { runDir: join(root, 'clone/.git/pdd/runs/17'), root: join(root, 'clone.pdd-worktrees/17-fix') };
+  const run = { commonDir: join(root, 'clone/.git'), sourceRoot: join(root, 'clone'), runDir: join(root, 'clone/.git/pdd/runs/17'), root: join(root, 'clone.pdd-worktrees/17-fix') };
   assert.equal(typeof chat.agentDirs, 'function');
   const dirs = chat.agentDirs(run);
   assert.deepEqual(dirs, [join(root, 'clone/.git/pdd/runs'), join(root, 'clone.pdd-worktrees')]);
@@ -66,6 +66,7 @@ test('agy shell launch: full access, pdd run and worktree folders in its workspa
   const id = '11111111-1111-4111-8111-111111111111';
   assert.deepEqual(launch(chatCommand({ agent: 'agy', cwd: run.root, resumeId: id, addDirs: dirs })).args,
     ['--dangerously-skip-permissions', '--settings', JSON.stringify({ trustedWorkspaces: [run.root] }), '--add-dir', dirs[0], '--add-dir', dirs[1], '--conversation', id]);
+  assert.deepEqual(chat.agentDirs({ runDir: run.runDir, root: run.root }), [], 'no folders without commonDir and sourceRoot');
   // Other agents ignore the folders.
   assert.doesNotMatch(chatCommand({ agent: 'claude', cwd: run.root, messageFile, sessionId: id, addDirs: dirs }), /--add-dir/);
 });
@@ -83,8 +84,9 @@ test('agy run starts and reopens the same Herdr chat with its folders; recorded 
   let run = f.record(); assert.equal(run.agent, 'agy'); assert.equal(run.configDir, null);
   const launches = () => f.herdr.calls.filter(a => a[0] === 'pane' && a[1] === 'run');
   const line = launches()[0][3];
-  assert.ok(line.startsWith(`env PDD_AGENT_SESSION=1 agy --dangerously-skip-permissions --settings '{"trustedWorkspaces":[${JSON.stringify(run.root)}]}' --add-dir `), line);
-  for (const dir of [dirname(run.runDir), dirname(run.root)]) assert.ok(line.includes(`--add-dir '${dir}'`), line);
+  assert.ok(line.replace(/ PDD_BIN='[^']*'/, '').startsWith(`env PDD_AGENT_SESSION=1 agy --dangerously-skip-permissions --settings '{"trustedWorkspaces":[${JSON.stringify(run.root)}]}' --add-dir `), line);
+  for (const dir of [join(run.commonDir, 'pdd/runs'), `${run.sourceRoot}.pdd-worktrees`]) assert.ok(line.includes(`--add-dir '${dir}'`), line);
+  assert.match(line, /PDD_BIN='/);
   assert.ok(run.chats[0].messageFile.startsWith(dirname(run.runDir)));
   assert.match(readFileSync(run.chats[0].messageFile, 'utf8'), /pdd-small-change.*SKILL\.md/);
   assert.equal((await openRun({ ref: '17', cwd: run.root }, f.ports)).exitCode, 0); assert.equal(launches().length, 1);

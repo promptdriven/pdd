@@ -101,3 +101,14 @@ test('PATH7: a hanging external version probe is bounded and leaves the installa
   assert.equal(r.status, 0); assert.match(r.stderr, /PATH selects:.*version unavailable/);
   assert.equal(readFileSync(join(f.old, 'pdd'), 'utf8'), hanging);
 });
+
+
+test('workflow warning gives a short executable chat hint that survives PATH shadowing', async t => {
+ const f=fixture(t), stdout={write(){}}, stderr={text:'',write(s){this.text+=s;}};
+ f.env.PDD_AGENT_SESSION='1'; f.env.PDD_BIN=bin;
+ await runPdd(['workflow','run','small-change','17'],{cwd:f.cwd,env:f.env,stdout,stderr,workflowRunner:{startRun:async()=>({exitCode:0,message:'ok'})}});
+ assert.match(stderr.text,/use "\$PDD_BIN"/);
+ assert.doesNotMatch(stderr.text,/Use '[^']+' '[^']+'/);
+ const result=spawnSync('/bin/sh',['-c','"$PDD_BIN" --version'],{cwd:f.cwd,env:f.env,encoding:'utf8'});
+ assert.equal(result.status,0);assert.equal(result.stdout,`${version}\n`);
+});
