@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 32c8df00c505ca544ea5feabb67c356768038d4e7bdfddf0b21016769169f38b).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 915fbee8ffdbda7857d2e0d3f20c17f06d107cdafdd67b9b878224e019fa257b).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { execFile as execFileCallback } from 'node:child_process';
@@ -551,6 +551,8 @@ function resultParts(text) {
   const sentence = text.split(/\.\s/)[0].replace(/[.,]$/, ''), kept = [];
   for (const part of sentence.split(' · ')) {
     if (RESULT_PART.test(part)) { kept.push(part); continue; }
+    // Without a step number, progress puts the step name directly after its own running marker.
+    if (part && kept.length > 1 && kept.at(-1) === 'running') { kept.push(part); continue; }
     const words = part.split(' ');
     for (let size = words.length - 1; size > 0; size--) if (RESULT_PART.test(words.slice(0, size).join(' '))) { kept.push(words.slice(0, size).join(' ')); break; }
     break;

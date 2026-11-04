@@ -2807,6 +2807,19 @@ test('2904: product evidence reads pdd\'s own records and receipts, never typed 
   assert.deepEqual(recordedRuntimeLines(body).map(row => row.story), ['P02-order', 'P03-ready']);
 });
 
+test('2921: named progress without step numbers keeps its accounting and cuts trailing agent words', async () => {
+  const { runtimeLines } = await import('../src/workflow-runner.mjs');
+  const { projectAnswer, summaryLine } = await import('../src/runtime-output.mjs');
+  const view = projectAnswer({ command: 'check', state: 'running', progress: { step: 'pay', calls_settled: 3, calls_open: 1 } });
+  const result = 'running · 0 of 2 criteria · 0/0 checks · running · pay · 3 AI calls so far · 1 not yet settled · 1 running';
+  for (const story of [null, 's']) {
+    const line = summaryLine([{ ...view, criteria_total: 2 }], story);
+    assert.equal(line, `Prompt tests${story ? ` (${story})` : ''}: ${result}`);
+    for (const tail of ['', '. Public full suite: 4085 passed, no skips.', ' and all native tests pass', ' · the rest is fine'])
+      assert.deepEqual(runtimeLines(`${line}${tail}`).map(row => row.result), [result], `${line}${tail}`);
+  }
+});
+
 test('2904: every Prompt tests form that summaryLine prints stays whole, and agent words after it are cut off', async () => {
   const { runtimeLines } = await import('../src/workflow-runner.mjs');
   const { summaryLine } = await import('../src/runtime-output.mjs');
