@@ -277,7 +277,7 @@ for (const [kind, ordinary] of [
   const body = f.data().prs[0].body;
   assert.equal(f.data().events.filter(event => event.kind === 'edit').length, editsBefore + 1);
   assert.ok(body.includes(ordinary), 'Preserve the complete ordinary reviewer context when room remains.');
-  assert.match(body, /^Agent note — not checked by pdd: Not fixed yet: `diagnosis only`\nAgent note — not checked by pdd: Not checked: `external`\nAgent note — not checked by pdd: Defect: `broken value`\nAgent note — not checked by pdd: Review: `refreshed`\n\nRefs #17\n\n/);
+  assert.match(body, /^Agent note — not checked by pdd: Not fixed yet: `diagnosis only`\nAgent note — not checked by pdd: Not checked: `external`\nAgent note — not checked by pdd: Defect: `broken value`\nAgent note — not checked by pdd: Review: `refreshed`\n\npdd result: none\. pdd has no pdd test or pdd lint result of its own for this run \(pdd:no-verdict\)\.\n\nRefs #17\n\n/);
   assert.doesNotMatch(body, /Review: old|Closes #17|Old-code proof:/);
   assert.equal(body.split(marker).length - 1, 1);
   assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1);
