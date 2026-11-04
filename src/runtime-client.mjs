@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 2a9e9fd8f77e7b641ed9ba90092806aea4812e70a114b367311fa953d91c84b7).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 6eb7dca7367aa2df0d1bc704947e79cd33f71d711d70e81076275745c465eb0b).
 import { hasProgress, outcomeDone, outcomeFor, outcomeOverall, outcomeText, progressText } from './runtime-outcome.mjs';
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
@@ -411,14 +411,16 @@ function signIn(ports, store) {
   const value = token.status === 0 ? String(token.stdout ?? '').trim() : '';
   if (!value) throw new Stop(5, 'Run gh auth login');
   if (store) store.secrets = [value];
-  const path = join(store.dir, 'github-identity.json'), hash = sha256(value);
-  const saved = store.read(path);
+  const path = store && join(store.dir, 'github-identity.json'), hash = sha256(value);
+  const saved = path && store.read(path);
   let cached = saved?.token_sha256 === hash && typeof saved.login === 'string' && saved.login
     && /^\d+$/.test(saved.user_id ?? '') && typeof saved.checked_at === 'string' ? saved : null;
   const persist = record => {
+    if (!path) return;
     try { store.folder(); store.write(path, record); } catch { /* Identity caching must not block sign-in. */ }
   };
   const invalidate = () => {
+    if (!path) return;
     try { if (store.read(path)?.token_sha256 === hash) unlinkSync(path); } catch { /* A fresh lookup can still recover. */ }
   };
   const lookup = () => {
@@ -440,10 +442,21 @@ function signIn(ports, store) {
   const record = cached ?? lookup(), identity = { token: value, login: record.login, userId: record.user_id };
   identitySessions.set(identity, { invalidate, refresh() {
     invalidate();
-    const fresh = lookup();
-    Object.assign(identity, { login: fresh.login, userId: fresh.user_id });
+    return lookup();
+  }, checkOwner(fresh) {
+    // A refresh cannot change the account whose owner checks already passed.
+    if (fresh.login !== identity.login || fresh.user_id !== identity.userId) {
+      throw new Stop(5, `These runs belong to ${identity.login}. Run: gh auth switch -u ${identity.login}`);
+    }
   } });
   return identity;
+}
+
+function assertIdentityOwner(identity, login, message, exitCode = 5) {
+  if (identity.login !== login) throw new Stop(exitCode, message);
+  identitySessions.get(identity).checkOwner = fresh => {
+    if (fresh.login !== login || fresh.user_id !== identity.userId) throw new Stop(exitCode, message);
+  };
 }
 
 // Retry-After in seconds (1 to 300); no header or a bad one means 5 s.
@@ -468,6 +481,7 @@ class Runtime {
   constructor({ origin, identity, ports, signal }) { Object.assign(this, { origin, identity, ports, signal }); this.sources = new WeakMap(); }
   async send(path, init, ms, retried = false) {
     if (this.signal?.aborted) return { lost: true };
+    const deadline = this.ports.now() + ms;
     const controller = new AbortController(), stop = () => controller.abort();
     const timer = setTimeout(stop, ms);
     this.signal?.addEventListener('abort', stop, { once: true });
@@ -482,7 +496,22 @@ class Runtime {
     } catch (error) { return lostReply(error, this.origin); } finally { clearTimeout(timer); this.signal?.removeEventListener('abort', stop); }
     if (reply.status === 401) {
       const session = identitySessions.get(this.identity);
-      if (session && !retried) { session.refresh(); return this.send(path, init, ms, true); }
+      if (session && !retried) {
+        let fresh;
+        try { fresh = session.refresh(); }
+        catch {
+          session.invalidate();
+          return reply;
+        }
+        try { session.checkOwner(fresh); }
+        catch (error) {
+          session.invalidate();
+          if (init.method === 'GET') throw error;
+          return { ...reply, ownerError: error.message };
+        }
+        const remaining = deadline - this.ports.now();
+        if (remaining > 0) return this.send(path, init, remaining, true);
+      }
       session?.invalidate();
     }
     return reply;
@@ -507,6 +536,7 @@ const UPDATE_TEXT = 'Please update pdd: npm install -g github:promptdriven/pdd';
 const NO_CLOUD_TEXT = 'Your GitHub account does not have PDD interpreter access yet. Sign up at https://promptdriven.ai/login with GitHub; you can use the interpreter when your account is approved.';
 const CLOUD_DOWN_TEXT = 'PDD Cloud could not confirm your access. Try again in a minute.';
 function blockingAnswer(reply) {
+  if (reply.ownerError) return reply.ownerError;
   // error.code first: for pdd 0.1.9 a server sends a top-level update-required over error.code no-cloud-access.
   const json = reply.json, error = isObject(json?.error) ? json.error : null, code = error?.code ?? json?.code;
   const said = () => [error?.message, json?.message].map(text => typeof text === 'string' ? cleanText(text).slice(0, 300) : '').find(Boolean);
@@ -1703,7 +1733,7 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
   if (!saved) throw new Stop(2, `No saved batch ${name}.`);
   if (saved.root !== root) throw new Stop(2, 'This saved batch belongs to a different repository.');
   const identity = signIn(ports, context.store);
-  if (identity.login !== saved.login) throw new Stop(5, `These runs belong to ${saved.login}. Run: gh auth switch -u ${saved.login}`);
+  assertIdentityOwner(identity, saved.login, `These runs belong to ${saved.login}. Run: gh auth switch -u ${saved.login}`);
   Object.assign(context, { batch: name, origin: saved.origin, coverage: saved.coverage, identity, intent: saved.intent, secrets: [identity.token], warnings: saved.warnings ?? [],
     capture: { sha256: saved.source_sha256, files: saved.files.map(path => ({ path })), bytes: saved.bytes, stories:saved.contract_snapshots }, lint: saved.lint, head: saved.head, startedAt: Date.parse(saved.created_at) });
   runtimeOrigin({ PDD_RUNTIME_URL: saved.origin });
@@ -1844,7 +1874,8 @@ async function runRequest(context, id, cwd) {
   if (!UUID.test(id)) throw new Stop(2, 'The request ID must be a UUID.');
   let root;
   try { root = repoRoot(cwd); } catch { /* Request reads also work outside Git. */ }
-  context.store ??= stateFor(context.ports.env, root);
+  const directory = stateDirectory(context.ports.env);
+  if (!root || !inside(realish(directory), realpathSync(root))) context.store ??= new StateStore(directory);
   const { ports } = context, identity = signIn(ports, context.store), origin = runtimeOrigin(ports.env);
   Object.assign(context, { origin, secrets: [identity.token] });
   const runtime = new Runtime({ origin, identity, ports, signal: context.signal });
@@ -1896,7 +1927,7 @@ async function runCallRead(context, id) {
   const { ports, store } = context;
   const saved = store.read(join(store.dir, 'calls', `${id}.meta.json`));
   const identity = signIn(ports, store);
-  if (saved && identity.login !== saved.login) throw new Stop(5, `These runs belong to ${saved.login}. Run: gh auth switch -u ${saved.login}`);
+  if (saved) assertIdentityOwner(identity, saved.login, `These runs belong to ${saved.login}. Run: gh auth switch -u ${saved.login}`);
   const origin = runtimeOrigin(saved ? { PDD_RUNTIME_URL: saved.origin } : ports.env);
   const runtime = new Runtime({ origin, identity, ports, signal: context.signal });
   const reply = await runtime.get(id), blocked = blockingAnswer(reply);
@@ -2777,7 +2808,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     context.runtime = new Runtime({ origin, identity, ports, signal: context.signal });
     if (record) {
       const needsOwner = context.doorMode || requestedBudget !== null || context.agentConnection;
-      if (needsOwner && record.login && record.login !== identity.login) throw new Stop(context.doorMode ? 125 : 5, `This Try belongs to ${record.login}. Run: gh auth switch -u ${record.login}`);
+      if (needsOwner && record.login) assertIdentityOwner(identity, record.login, `This Try belongs to ${record.login}. Run: gh auth switch -u ${record.login}`, context.doorMode ? 125 : 5);
       if (needsOwner && record.origin !== origin) throw new Stop(2, 'This Try belongs to another interpreter address. Use its original PDD_RUNTIME_URL, or stop it first.');
       const read = judgeGet(await context.runtime.get(record.id), record.id, 'try');
       if (read.kind === 'auth') throw new Stop(5, AUTH_TEXT);
@@ -3225,7 +3256,7 @@ export const saveDoorCase = (root, saved, options = {}) => {
 export async function runDoorCall(descriptor, input, givenPorts = {}) {
   const ports = withDefaults(givenPorts), { root, origin, sessionId, login, prompt, operation } = descriptor;
   const store = stateFor(ports.env, root), identity = signIn(ports, store);
-  if (identity.login !== login) throw new Stop(5, `This Try belongs to ${login}. Run: gh auth switch -u ${login}`);
+  assertIdentityOwner(identity, login, `This Try belongs to ${login}. Run: gh auth switch -u ${login}`);
   if (runtimeOrigin({ PDD_RUNTIME_URL: origin }) !== origin) throw new Stop(2, 'The saved interpreter address is invalid.');
   const repo=store.read(join(store.dir,'repos',`${store.repoKey(root)}.json`));
   const saved=Object.entries(repo?.tries ?? {}).find(([,record])=>record.id===sessionId);
@@ -3246,7 +3277,7 @@ export async function runDoorCall(descriptor, input, givenPorts = {}) {
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) }, ports.postMs);
     if (reply.status && ![200, 202].includes(reply.status)) {
       knownOutcome = reply.status >= 400 && reply.status < 500 && reply.status != 408;
-      throw new Stop(125, cleanText(reply.json?.error?.message || reply.json?.error?.code || `The interpreter refused the command (HTTP ${reply.status}).`, [identity.token]) + recovery);
+      throw new Stop(125, cleanText(reply.ownerError || reply.json?.error?.message || reply.json?.error?.code || `The interpreter refused the command (HTTP ${reply.status}).`, [identity.token]) + recovery);
     }
     const end = ports.now() + 900_000;
     let answer = null;
@@ -3303,7 +3334,7 @@ export async function readTryOwner({ cwd = process.cwd(), story } = {}, givenPor
   if (!record) { await openTry(); record = store.repo(root).tries?.[test.path]; }
   if (!record) throw new Error('No confirmed Try is recorded. Run pdd simulate STORY.');
   const identity = signIn(ports, store);
-  if (record.login !== identity.login) throw new Error(`This Try belongs to ${record.login}. Run: gh auth switch -u ${record.login}`);
+  assertIdentityOwner(identity, record.login, `This Try belongs to ${record.login}. Run: gh auth switch -u ${record.login}`);
   if (runtimeOrigin({ PDD_RUNTIME_URL: record.origin }) !== record.origin) throw new Error('The saved interpreter address is invalid.');
   const promptProblem=tryPromptProblem(root,found,test,record);
   if (record.storyPath !== test.storyPath || record.story_sha256 && createHash('sha256').update(readFileSync(join(root, test.storyPath))).digest('hex') !== record.story_sha256 || promptProblem)

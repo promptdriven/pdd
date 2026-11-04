@@ -65,7 +65,7 @@ for (const gate of gates) for (const before of [true, false]) test(`${before ? '
   const setup = harbor(t), fake = await fakeRuntime(t, () => gate), made = make(setup, fake);
   made.ports.fetch = (url, init) => new URL(url).pathname === '/v1/capacity' ? Promise.resolve(response(before ? gate : { status: 500, json: {} })) : fetch(url, init);
   assert.equal(await check(setup, made.ports), 5);
-  assert.equal(fake.posts.length, before ? 0 : 1); assert.equal(fake.gets.length, 0);
+  assert.equal(fake.posts.length, before ? 0 : gate.status === 401 ? 2 : 1); assert.equal(fake.gets.length, 0);
   assert.equal((await listRuntimeJobs({ stateDir: setup.state, origin: fake.origin })).jobs.length, 0);
 });
 

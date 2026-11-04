@@ -2,10 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { runCheck } from '../src/runtime-client.mjs';
+import { listRuntimeJobs } from '../src/runtime-slots.mjs';
 import { fakeRuntime, harbor, portsFor, TOKEN } from './runtime-fake.mjs';
 
 const CALL = '1b3b9253-8488-4c3a-a138-168d97db262a';
@@ -192,11 +193,51 @@ test('2914: hidden request reads retain support outside Git and reuse the extern
   assert.equal(fake.gets.length, 2);
 });
 
-test('2914: hidden request caching respects the existing external-state rule inside Git', async t => {
+test('2914: hidden request reads retain in-repo state overrides without caching in the repo', async t => {
   const setup = harbor(t), fake = await fakeRuntime(t, receipt);
   const state = join(setup.repo, 'runtime-state');
   const { ports, clock } = portsFor({ ...envFor(setup, fake), PDD_STATE_DIR: state });
-  assert.equal(await runCheck({ cwd: setup.repo, options: { '--request': CALL } }, ports), 2);
-  assert.match(ports.stderr.text, /PDD_STATE_DIR is inside this repository/);
-  assert.equal(clock.gh.length, 0); assert.equal(fake.gets.length, 0); assert.equal(existsSync(state), false);
+  const checkFake = await fakeRuntime(t, (entry, f) => ({ status: 200, json: f.check(CALL, 'passed') }));
+  ports.env.PDD_RUNTIME_URL = checkFake.origin;
+  assert.equal(await runCheck({ cwd: setup.repo, options: { '--request': CALL } }, ports), 0, ports.stderr.text);
+  assert.equal(clock.gh.length, 2); assert.equal(checkFake.gets.length, 1); assert.equal(existsSync(state), false);
+});
+
+for (const user of ['renamed 4242', 'octo 7777']) test(`2914 repair: refreshed owner ${user} cannot retry or rewrite a saved batch`, async t => {
+  const setup = harbor(t); let reading = false;
+  const fake = await fakeRuntime(t, (entry, f) => reading ? denied : f.normal(entry));
+  const first = portsFor(envFor(setup, fake));
+  assert.equal(await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--json': true } }, first.ports), 0);
+  const batch = JSON.parse(first.ports.stdout.text).batch, folder = join(setup.state, 'batches', batch);
+  const file = join(folder, 'batch.json'), before = readFileSync(file, 'utf8'), saved = JSON.parse(before);
+  unlinkSync(join(folder, `${saved.rows[0].request_ids.at(-1)}.json`));
+  reading = true;
+  const next = portsFor(envFor(setup, fake), { gh: args => ({ status: 0, stdout: args[0] === 'auth' ? TOKEN : user }) });
+  const gets = fake.gets.length;
+  assert.equal(await runCheck({ cwd: setup.repo, options: { '--read': batch, '--json': true } }, next.ports), 5);
+  assert.match(next.ports.stderr.text, /These runs belong to octo/);
+  assert.equal(fake.gets.length - gets, 1, 'owner mismatch must stop before the retry');
+  assert.equal(readFileSync(file, 'utf8'), before, 'saved owner and rows remain unchanged');
+  assert.equal(existsSync(cachePath(setup)), false);
+});
+
+test('2914 repair: a revoked-token refresh follows normal 401 JSON, row and slot cleanup', async t => {
+  const setup = harbor(t);
+  const fake = await fakeRuntime(t, (entry, f) => entry.command === 'check' ? denied : f.normal(entry));
+  let lookups = 0, restored = false;
+  const make = () => portsFor(envFor(setup, fake), { gh: args => args[0] === 'auth' ? { status: 0, stdout: TOKEN }
+    : ++lookups === 1 || restored ? { status: 0, stdout: 'octo 4242' } : { status: 1, stderr: 'gh: Bad credentials (HTTP 401)' } }).ports;
+  const ports = make();
+  assert.equal(await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--json': true } }, ports), 5);
+  const result = JSON.parse(ports.stdout.text), row = result.rows[0];
+  assert.equal(row.state, 'not_run'); assert.match(row.reason.message, /Run gh auth login/);
+  const saved = JSON.parse(readFileSync(join(setup.state, 'batches', result.batch, 'batch.json')));
+  assert.equal(saved.rows[0].state, 'not_run'); assert.equal(existsSync(cachePath(setup)), false);
+  assert.equal((await listRuntimeJobs({ stateDir: setup.state, origin: fake.origin })).jobs.length, 0);
+  assert.equal(fake.posts.filter(entry => entry.command === 'check').length, 1);
+  assert.equal(fake.gets.length, 0);
+  restored = true;
+  const later = make();
+  assert.equal(await runCheck({ cwd: setup.repo, options: { '--read': result.batch, '--json': true } }, later), 5);
+  assert.equal(fake.gets.length, 0, 'a later read cannot poll a run that was never created');
 });
