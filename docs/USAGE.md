@@ -142,7 +142,7 @@ PDD is nine skills. A skill is a folder of plain Markdown that your agent reads 
 | `pdd-bug` | A workflow for something that is broken |
 | `pdd-small-change` | A workflow for a small change that is easy to undo |
 | `pdd-setup` | Set up a repo for PDD. It does the same as `pdd setup` |
-| `pdd-autopilot` | With Autopilot on (`observe` or `auto` in `pdd.json`), pick ready issues, claim them and run each one |
+| `pdd-autopilot` | With Autopilot on (`autopilot.mode` is `observe` or `auto` in `pdd.json`), pick ready issues, claim them and run each one |
 | `pdd-check` | A fresh checker's verdict on a PR at its head |
 | `pdd-merge` | Merge a PR that a fresh checker passed, or write "would merge" in `observe` |
 

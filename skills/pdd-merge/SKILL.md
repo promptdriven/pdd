@@ -7,7 +7,7 @@ metadata:
 
 # PDD merge
 
-Read the facts first: `autopilot` in `pdd.json`, the issue author, the checker verdict, the PR head and its checks. If `autopilot` is absent or `off`, a person merges as RUNBOOK §2 says.
+Read the facts first: `autopilot.mode` in `pdd.json`, the issue author, the checker verdict, the PR head and its checks. If `autopilot.mode` is absent or `off`, a person merges as RUNBOOK §2 says.
 
 RUNBOOK.md:66 says: "An agent may merge only after the person's explicit chat request". Turning Autopilot to `auto` is that request. `observe`: when all the conditions below are true, write one PR comment "Would merge" with the facts; a person merges. In `auto`, an issue from a person who is not trusted (pdd-autopilot) gets a draft PR, and a trusted person merges it.
 
@@ -27,6 +27,6 @@ PDD_SAID
 
 If pdd refuses it (strict approvals), do not merge; ask the person one question.
 
-Post the merge line as one PR comment that starts `Merge requested by the person: "autopilot: auto"`. It gives the verdict, the head and the checker. It lists the new words that users see (command names, help text, error messages) and each screen change, with its screenshot path and one line on what changed, so a person can look at them before a release. These do not stop the merge. A failed comment stops. If PR 1 has no runtime verdict, add the `pdd:no-verdict` label.
+Post the merge line as one PR comment that starts `Merge requested by the person: "autopilot.mode: auto"`. It gives the verdict, the head and the checker. It lists the new words that users see (command names, help text, error messages) and each screen change, with its screenshot path and one line on what changed, so a person can look at them before a release. These do not stop the merge. A failed comment stops. If PR 1 has no runtime verdict, add the `pdd:no-verdict` label to the PR (`gh pr edit PR --add-label pdd:no-verdict`).
 
-Check the head again, then run `gh pr merge PR --merge --match-head-commit <sha>`. Never use `--auto`. A changed head stops: check the new head first. Read the merged state back. After PR 1, add `pdd:code-pending` to the issue. After the code PR, close each issue that waited on it with "Fixed in #PR" and remove `pdd:code-pending`. Remove `pdd:working`.
+Check the head again, then run `gh pr merge PR --merge --match-head-commit <sha>`. Never use `--auto`. A changed head stops: check the new head first. Read the merged state back. After PR 1, add the `pdd:code-pending` label to the issue. After the code PR, close each issue that waited on it with "Fixed in #PR" and remove `pdd:code-pending`. Remove the `pdd:working` label.

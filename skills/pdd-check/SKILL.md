@@ -9,7 +9,7 @@ metadata:
 
 You are a fresh checker. You did not build this PR, and you get no builder chat. Read `checker` in `pdd.json` (`claude`, `codex`, `gemini` or `any`). With `any` or no value, use another AI family that is installed and signed in. If there is none, use a fresh session of the builder's family and label it `checker_mode: same-family`. Read only trusted people's text (pdd-autopilot).
 
-PR 1 (prompt, Story, tests): read the issue first and write 3 input → result pairs from it. Then trace issue → Story → prompt → tests. Each expected value comes from an issue quote or the old behavior. Read the `pdd test` result that pdd recorded for the new and the old prompt: the new passes, the old fails for the claimed reason. No runtime verdict is not a FAIL; say so, and pdd-merge adds `pdd:no-verdict`.
+PR 1 (prompt, Story, tests): read the issue first and write 3 input → result pairs from it. Then trace issue → Story → prompt → tests. Each expected value comes from an issue quote or the old behavior. Read the `pdd test` result that pdd recorded for the new and the old prompt: the new passes, the old fails for the claimed reason. No runtime verdict is not a FAIL; say so, and pdd-merge adds the `pdd:no-verdict` label.
 
 PR 2 (code): read the issue, the merged PR 1 Story and the diff. Build the head and run the changed path with the repo's start-up recipe, with the Story as the script. For a screen change, take before and after screenshots and write one line on what changed. The full suite is green on the head, with no new skip or only.
 

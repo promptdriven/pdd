@@ -719,12 +719,12 @@ test('AUTOPILOT1: the Autopilot skills fit their byte limits and carry the packa
 test('AUTOPILOT2: off or absent keeps the person gates; observe and auto use steps/autopilot.md', () => {
   for (const name of WORKFLOWS) {
     has(`${name}/SKILL.md`, '- If Autopilot is `observe` or `auto`, read `steps/autopilot.md` first.', 'A person decides expected values.');
-    has(`${name}/steps/autopilot.md`, '`observe` or `auto`', 'With `off` or no value, SKILL.md applies as written.',
+    has(`${name}/steps/autopilot.md`, 'only when `autopilot.mode` in the root `pdd.json` is `observe` or `auto`', 'With `off` or no value, SKILL.md applies as written.',
       'A fresh pdd-check checker', 'Its PASS is the approval', 'Optional steps: do not ask.', 'Merge: pdd-merge, not a person.');
     assert.match(read(`${name}/SKILL.md`), /Before an optional step, ask the person and wait for the answer/, name);
   }
-  has('pdd-autopilot/SKILL.md', 'If `autopilot` is absent or `off`, do nothing: a person leads each run.', '`observe`: do all the work; a person merges.');
-  has('pdd-merge/SKILL.md', 'If `autopilot` is absent or `off`, a person merges as RUNBOOK §2 says.', '`observe`: when all the conditions below are true, write one PR comment "Would merge" with the facts; a person merges.');
+  has('pdd-autopilot/SKILL.md', 'If `autopilot.mode` is absent or `off`, do nothing; a person leads.', '`observe`: do all the work; a person merges.');
+  has('pdd-merge/SKILL.md', 'If `autopilot.mode` is absent or `off`, a person merges as RUNBOOK §2 says.', '`observe`: when all the conditions below are true, write one PR comment "Would merge" with the facts; a person merges.');
 });
 
 // Wrong: an outside author's text reaches the agent, or an outside author's PR merges without a trusted person.
@@ -769,7 +769,7 @@ test('AUTOPILOT7: auto names the RUNBOOK merge rule, records the checker decisio
   has('pdd-merge/SKILL.md', `RUNBOOK.md:66 says: "${rule}". Turning Autopilot to \`auto\` is that request.`,
     "pdd workflow approve N --said - <<'PDD_SAID'\nDecided by the checker: <verdict>, head <sha>, checker <family/session>\nPDD_SAID\n",
     'Never edit approval fields', 'If pdd refuses it (strict approvals), do not merge; ask the person one question.',
-    'Post the merge line as one PR comment that starts `Merge requested by the person: "autopilot: auto"`.');
+    'Post the merge line as one PR comment that starts `Merge requested by the person: "autopilot.mode: auto"`.');
 });
 
 // Wrong: a run never ends, retries forever, resends a failed check or spends past --max-calls.
@@ -779,8 +779,8 @@ test('AUTOPILOT8: outcomes, the owner note, retries and the money limits', () =>
     'Keep `--max-calls` and strict mode.', 'Stop with one comment if it is not a bug, has no repro, someone owns it or an open PR may fix it.',
     'ask one question on the issue; that issue waits and the others go on.', 'for a Story, use pdd-prompting.',
     'Write each decision on the issue or PR.', 'After a restart, read the issue and PR first and do not redo finished steps.',
-    'add `pdd:stuck`, write one comment with the cause, and take the next issue.', '60 minutes', '30M tokens');
-  has('pdd-merge/SKILL.md', 'If PR 1 has no runtime verdict, add the `pdd:no-verdict` label.');
+    'add the `pdd:stuck` label, write one comment with the cause, and take the next issue.', '60 minutes', '30M tokens');
+  has('pdd-merge/SKILL.md', 'If PR 1 has no runtime verdict, add the `pdd:no-verdict` label to the PR (`gh pr edit PR --add-label pdd:no-verdict`).');
   for (const name of WORKFLOWS) has(`${name}/steps/autopilot.md`, '`--max-calls`, strict mode, and never sending a failed check again.');
 });
 
@@ -804,7 +804,7 @@ test('AUTOPILOT10: the Autopilot text holds no team process, times, machines or 
 test('AUTOPILOT11: one fix round, then a premise check and a new plan before pdd:stuck', () => {
   for (const name of WORKFLOWS) {
     const text = has(`${name}/steps/autopilot.md`, 'After a FAIL, do one fix round.', 'After a second FAIL, check the premise',
-      'Write the cause and a new plan in one comment, add `pdd:stuck`', 'Never change a test to make it pass.',
+      'Write the cause and a new plan in one comment, add the `pdd:stuck` label (`gh issue edit N --add-label pdd:stuck`)', 'Never change a test to make it pass.',
       'A test runs a prompt that has no interface block: draft the block through pdd');
     assert.ok(text.indexOf('check the premise') < text.indexOf('new plan') && text.indexOf('new plan') < text.indexOf('pdd:stuck'), name);
   }
@@ -832,4 +832,17 @@ test('AUTOPILOT14: start-up recipe first, new issues only, and code right after 
     'A repo with a release starts the code PR right after PR 1. A new product waits for a person\'s "code now". One code PR per prompt file closes every issue that waits on it.');
   assert.ok(text.indexOf('start-up recipe') < text.indexOf('Ready:'));
   for (const name of ['pdd-bug', 'pdd-feature']) has(`${name}/steps/autopilot.md`, 'A new product waits for a person\'s "code now".');
+});
+
+// Wrong: the skills read another pdd.json shape than the switch writes, or the Autopilot states live only in comment text.
+test('AUTOPILOT15: the skills read autopilot.mode and autopilot.trust, and apply the pdd: states as real GitHub labels', () => {
+  has('pdd-autopilot/SKILL.md', '`{"autopilot":{"mode":"off|observe|auto","trust":[...]}}`',
+    'Labels: `pdd:working`, `pdd:stuck`, `pdd:no-verdict` and `pdd:code-pending` are GitHub labels.',
+    'Add one with `gh issue edit N --add-label NAME` (or `gh pr edit`); if it is missing, `gh label create NAME`.');
+  for (const file of [...AUTOPILOT_SKILLS.map(name => `${name}/SKILL.md`), ...WORKFLOWS.map(name => `${name}/steps/autopilot.md`)]) {
+    const text = read(file);
+    assert.doesNotMatch(text, /`autopilot` (?:is|in)\b/, `${file}: read autopilot.mode, not autopilot`);
+    for (const [label] of text.matchAll(/`pdd:[a-z-]+`/g)) assert.ok(['`pdd:working`', '`pdd:stuck`', '`pdd:no-verdict`', '`pdd:code-pending`'].includes(label), `${file}: ${label}`);
+  }
+  has('pdd-merge/SKILL.md', 'add the `pdd:code-pending` label to the issue', 'Remove the `pdd:working` label.');
 });

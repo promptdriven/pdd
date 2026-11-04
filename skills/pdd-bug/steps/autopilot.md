@@ -1,6 +1,6 @@
 # In Autopilot
 
-Use this file only when `autopilot` in the root `pdd.json` is `observe` or `auto` and pdd-autopilot started the run. With `off` or no value, SKILL.md applies as written.
+Use this file only when `autopilot.mode` in the root `pdd.json` is `observe` or `auto` and pdd-autopilot started the run. With `off` or no value, SKILL.md applies as written.
 
 It changes these rules of SKILL.md and RUNBOOK §2 and §4:
 - Gates: do not ask the person. A fresh pdd-check checker checks each PR at its head. Its PASS is the approval; pdd-merge records it with `pdd workflow approve N --said -`.
@@ -12,6 +12,6 @@ It changes these rules of SKILL.md and RUNBOOK §2 and §4:
 
 Still in force: product calls the issue does not settle, actions that cannot be undone, `--max-calls`, strict mode, and never sending a failed check again.
 
-After a FAIL, do one fix round. After a second FAIL, check the premise: is the issue, the Story or the plan wrong? Write the cause and a new plan in one comment, add `pdd:stuck`, and stop work on this issue.
+After a FAIL, do one fix round. After a second FAIL, check the premise: is the issue, the Story or the plan wrong? Write the cause and a new plan in one comment, add the `pdd:stuck` label (`gh issue edit N --add-label pdd:stuck`), and stop work on this issue.
 
 A test runs a prompt that has no interface block: draft the block through pdd, do not skip the test. No prompt covers the code: use the verdict "no prompt covers this yet".
