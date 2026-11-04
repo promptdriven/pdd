@@ -1,0 +1,137 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/autopilot-trust.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Running `pdd autopilot trust Dana` adds Dana to the saved trust list."
+    },
+    {
+      "id": "AC2",
+      "text": "Running `pdd autopilot untrust Dana` removes Dana from the saved trust list."
+    }
+  ],
+  "initial_world": {
+    "kv": {
+      "unrelated": {
+        "keep": "yes"
+      }
+    },
+    "lookups": [],
+    "mode_questions": [],
+    "names_questions": []
+  },
+  "simulation": {
+    "config.read": {
+      "action": "key-value.get",
+      "world_pointer": "/kv",
+      "key_argument_pointer": "/key",
+      "value_argument_pointer": null,
+      "item_key_pointer": null,
+      "item_value_pointer": null,
+      "result_template": {
+        "raw": null
+      },
+      "result_value_pointer": "/raw"
+    },
+    "config.save": {
+      "action": "key-value.put",
+      "world_pointer": "/kv",
+      "key_argument_pointer": "/key",
+      "value_argument_pointer": "/raw",
+      "item_key_pointer": null,
+      "item_value_pointer": null,
+      "result_template": {
+        "raw": null
+      },
+      "result_value_pointer": "/raw"
+    },
+    "github.lookup": {
+      "action": "port.write",
+      "world_pointer": "/lookups",
+      "result_template": {
+        "owner": "Ada",
+        "writers": [
+          "Bo",
+          "Cy"
+        ],
+        "complete": false
+      }
+    },
+    "terminal.mode": {
+      "action": "port.write",
+      "world_pointer": "/mode_questions",
+      "result_template": {
+        "answer": ""
+      }
+    },
+    "terminal.names": {
+      "action": "port.write",
+      "world_pointer": "/names_questions",
+      "result_template": {
+        "names": []
+      }
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "case-1",
+      "entry_path": "prompts/cli/autopilot.prompt.md",
+      "operation": "runAutopilot",
+      "input": {
+        "action": "trust",
+        "names": [
+          "Dana"
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/kv/autopilot",
+          "op": "equals",
+          "value": "{\"mode\":\"off\",\"trust\":[\"Dana\"]}"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/kv/unrelated",
+          "op": "equals",
+          "value": {
+            "keep": "yes"
+          }
+        }
+      ]
+    },
+    {
+      "step_id": "case-2",
+      "entry_path": "prompts/cli/autopilot.prompt.md",
+      "operation": "runAutopilot",
+      "input": {
+        "action": "untrust",
+        "names": [
+          "Dana"
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/kv/autopilot",
+          "op": "equals",
+          "value": "{\"mode\":\"off\",\"trust\":[]}"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/kv/unrelated",
+          "op": "equals",
+          "value": {
+            "keep": "yes"
+          }
+        }
+      ]
+    }
+  ]
+}

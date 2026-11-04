@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 99d6f0fc542ba9d361dd93c8e27994dc5f35e16a41244a2453e09c8b8f2ffd81).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: fbeb06a227abe20f8257146f78b4a3d8ccd2152517d05b8de4fc55dc1e748de7).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText, promptSchemaProblems } from './prompt-approve.mjs';
 import { execFile as execFileCallback } from 'node:child_process';
@@ -23,6 +23,7 @@ import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
 import { causeText } from './runtime-output.mjs';
 import { preparePrEvidence } from './workflow-pr-evidence.mjs';
 import { validateProofRecord } from './workflow-prove.mjs';
+import { readRunResults, resultLines, usableResult, noResultLine } from './workflow-results.mjs';
 import { collectTestInventory } from './workflow-inventory.mjs';
 import {adoptReplayCorpus,REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinReplayVectors,readReplayEvidence,formatReplayEvidence} from './workflow-replay.mjs';
 
@@ -373,7 +374,7 @@ const revising = run => { const last = run.changes?.at(-1); return Boolean(last 
 // chat: what Herdr shows (chatState); facts: {drafts, nothing} read by the caller (gateFacts). describe itself makes no calls.
 function describe(run, chat = null, { drafts = [], nothing = false } = {}) {
   const area = run.areas[run.area], pr1 = askArea(run) && prOf(run, askArea(run).name);
-  if (run.state === 'cancelled') return 'cancelled';
+  if (run.state === 'cancelled') return run.cancelled?.state === 'replaced' ? 'replaced' : 'cancelled';
   if (activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting'].includes(chat)) return chatStatusWords(run, chat);
   if (openQuestion(run) && run.state !== 'completed') return `waiting for you: ${run.question.text.split('\n')[0]}`;
   if (chat === 'blocked' && run.state === 'running') return `waiting for you: the chat asks a question in its window (pdd workflow open ${run.number})`;
@@ -415,7 +416,7 @@ async function startRunCommand({ name, issue, agent = 'codex', base, adoptCorpus
   try { binding = await resolveWorkflowIssue({ cwd: context.toplevel, issue }, p.commandPorts); }
   catch (error) { return fail(`pdd could not read issue ${issue} with gh (${causeOf(error)}). Check "gh auth status", the origin remote and the issue number.`); }
   const number = binding.issue.number, runDir = runDirFor(context.commonDir, number), existing = readRun(runDir);
-  if (existing && existing.state !== 'cancelled') return fail(`Issue #${number} already has a run (${existing.workflow}, ${describe(existing)}). Open it: pdd workflow open ${number}. Status: pdd workflow status ${number}.`);
+  if (existing?.state === 'completed') return fail(`Issue #${number} already has a run (${existing.workflow}, ${describe(existing)}). Open it: pdd workflow open ${number}. Status: pdd workflow status ${number}.`);
   const warnings = [...(workflow.warnings ?? [])], baseBranch = explicitBase ? base : binding.defaultBranch;
   // A requested origin branch must be usable before releasing a cancelled run's claim.
   if (explicitBase) {
@@ -444,9 +445,19 @@ async function startRunCommand({ name, issue, agent = 'codex', base, adoptCorpus
     } catch(error) {const code=/^[A-Z0-9_-]{1,32}$/.test(String(error.code ?? '')) ? error.code : 'local-operation-failed';return {exitCode:2,message:`Cannot adopt the approved corpus (unavailable: source selection or declaration freezing failed; ${code}). Repair the declaration/source or start an ordinary approval workflow. No new run was started.`};}
   }
   if (existing) {
+    // An active run never blocks a new one (#2871): mark it replaced, name it once, then free it like a cancelled run.
+    const replacing = !ended(existing);
+    if (replacing) {
+      const last = existing.updatedAt ?? existing.startedAt, minutes = Number.isFinite(last) ? Math.max(0, Math.floor((p.now() - last) / 60000)) : null;
+      try { commitRun(existing, p, latest => { latest.state = 'cancelled'; latest.cancelled = { state: 'replaced', at: p.now() }; latest.gate = null; }); }
+      catch (error) { return fail(`Issue #${number} has an active run ${existing.runId}, but pdd could not mark it replaced (${oneLine(error.message)}). Retry in a moment.`); }
+      warnings.push(`warning: Issue #${number} had an active run ${existing.runId} (${existing.workflow}). pdd marked it replaced and starts a new run.`
+        + ` Its worktree stays at ${existing.root} (branch ${existing.branch}), from checkout ${existing.sourceRoot}. Last activity: ${minutes === null ? 'unknown' : `${minutes} min ago`}.`
+        + (minutes === null || minutes < 60 ? ' It may still be working; close its chat if it is.' : ''));
+    }
     const released = await releaseIssueClaim({ cwd: context.toplevel, runId: existing.runId, issueNumber: number }, p.commandPorts);
-    if (released.state !== 'released') return fail(`Issue #${number} has a cancelled run, but pdd could not free the issue: ${released.message}`);
-    warnings.push(`Issue #${number} had a cancelled run. Its worktree stays at ${existing.root} (branch ${existing.branch}). This run gets a new worktree and branch.`);
+    if (released.state !== 'released') return fail(`Issue #${number} has a ${replacing ? 'replaced' : 'cancelled'} run, but pdd could not free the issue: ${released.message}`);
+    if (!replacing) warnings.push(`Issue #${number} had a cancelled run. Its worktree stays at ${existing.root} (branch ${existing.branch}). This run gets a new worktree and branch.`);
   }
   if (!explicitBase && adoptCorpus === undefined) {
     p.say(`Fetching origin/${baseBranch}…`);
@@ -730,7 +741,7 @@ async function matchingPromptApprovals(run, p) {
   });
 }
 async function publicationEvidence(run, area, p) {
-  const saved = { runId: run.runId, runDir: run.runDir, root: run.root, baseSha: run.baseSha, baseBranch:run.baseBranch, workflow:run.workflow, number: run.number,
+  const saved = { runId: run.runId, ...(Number.isFinite(run.startedAt) ? { startedAt: run.startedAt } : {}), runDir: run.runDir, root: run.root, baseSha: run.baseSha, baseBranch:run.baseBranch, workflow:run.workflow, number: run.number,
     decisions: run.decisions ?? [], promptApprovals: await matchingPromptApprovals(run, p),
     steps: run.areas.flatMap(item => item.steps).map(step => ({ step, summary: run.done[step]?.summary ?? '' })) };
   let observedHead, observedProof;
@@ -745,7 +756,7 @@ async function publicationEvidence(run, area, p) {
         const path = join(runDir, 'old-code-proof.json');
         if (!proofFiles.lstatSync(path).isFile()) return {content:'',error:'Proof is not a regular file.'};
         observedProof = proofFiles.readFileSync(path, 'utf8');
-        return {content:observedProof,error:''};
+        return {content:observedProof,error:'',savedAt:proofFiles.lstatSync(path).mtimeMs};
       } catch (error) { return {content:'',error:error.code === 'ENOENT' ? 'missing' : 'Proof could not be read.'}; }
     }
   });
@@ -753,7 +764,7 @@ async function publicationEvidence(run, area, p) {
     evidence.nativeLine = 'Native tests: unknown (no current machine counts).';
     try {
       const record = JSON.parse(observedProof);
-      if (validateProofRecord(record) && record.runId === run.runId && record.headSha === observedHead?.headSha && record.baseSha === observedHead?.baseSha
+      if (!['not-run','stale','unavailable'].includes(evidence.proofStatus) && validateProofRecord(record) && record.runId === run.runId && record.headSha === observedHead?.headSha && record.baseSha === observedHead?.baseSha
           && !record.interruptSignal && [0,1].includes(record.head.exitCode) && !record.head.signal && !record.head.timedOut && !record.head.outputLimited && !record.head.error && !record.head.setupError) {
         const facts = new Map();
         for (const line of record.head.stdoutTail) {
@@ -767,6 +778,8 @@ async function publicationEvidence(run, area, p) {
     } catch { /* Missing, stale or unparseable machine output supplies no counts. */ }
   }
   if (run.publicationPending) evidence.lines.unshift('Check evidence: publication-pending (source is being published).');
+  // pdd's own pdd test and pdd lint results lead the body; the code PR's prove result is its Old-code proof line.
+  evidence.pddLines = resultLines(ownResults(run, p), { kinds: ['pdd test', 'pdd lint'] });
   return evidence;
 }
 function evidenceFit(lines, room, env) {
@@ -865,23 +878,28 @@ function publicationRuntime(run, env) {
     .filter(record => runtimeLines(record.summary).length && matchesSource(record, run.root, fingerprint)).sort((a,b) => (a.at ?? 0) - (b.at ?? 0));
   const stories = new Map();
   for (const record of records) for (const line of runtimeLines(record.summary)) if (line.story) stories.set(line.story, { line, record });
+  // Lines that an agent typed or pasted into a step summary stay agent notes; only a receipt that pdd workflow evidence checked is not.
+  const receipts = new Set(run.evidence ?? []), note = (record, line) => receipts.has(record) ? line : `${AGENT_NOTE}: ${line}`;
   if (!stories.size) {
     const record = records.at(-1);
-    return record ? [...runtimeTop(record.summary), ...reportLinks(record.summary, env)] : [];
+    return record ? [...runtimeTop(record.summary), ...reportLinks(record.summary, env)].map(line => note(record, line)) : [];
   }
   const selected = [...stories.values()];
   const reports = selected.flatMap(({line, record}) => reportLinks(record.summary, env).filter(report => {
     const name = /^Report \(([^)]+)\):/.exec(report)?.[1];
     return !name || name === line.story;
-  }));
-  return [...selected.map(item => item.line.line), ...(selected.length > 1 ? [totalLine(selected.map(item => item.line))] : []), ...new Set(reports)];
+  }).map(report => note(record, report)));
+  const total = selected.length > 1 ? [totalLine(selected.map(item => item.line))].map(line => selected.every(item => receipts.has(item.record)) ? line : `${AGENT_NOTE}: ${line}`) : [];
+  return [...selected.map(item => note(item.record, item.line.line)), ...total, ...new Set(reports)];
 }
+// pdd's own result lines for the top of a PR; while source is being published they say so instead.
+const ownLines = (run, evidence) => evidence.pddLines?.length ? (run.publicationPending ? ['pdd result: publication-pending (source is being published).'] : evidence.pddLines) : [];
 function prBody(run, area, env, drafts = [], tests = true, evidence) {
   const steps = prSteps(run, area);
   const raw = Object.fromEntries(steps.map(step => [step, cleanSummary(run, step)]));
   const summaries = Object.fromEntries(steps.map(step => [step, oneLine(raw[step])]));
   // Agent text is inert everywhere in the body: the short Steps line is a code span too.
-  const lines = steps.map(step => `- **${step}**: Agent note — not checked by pdd: ${summaries[step] ? codeSpan(shortLine(summaries[step])) : 'done'}`);
+  const lines = steps.map(step => `- **${step}**: ${run.done[step].skipped ? 'skipped (recorded by pdd). ' : ''}Agent note — not checked by pdd: ${summaries[step] ? codeSpan(shortLine(summaries[step])) : 'done'}`);
   const full = Object.fromEntries(steps.map(step => [step, keepLines(raw[step])]));
   // Only a PR that covers a verify step carries verify.md (PR 1 never does).
   let verify = null;
@@ -902,11 +920,11 @@ function prBody(run, area, env, drafts = [], tests = true, evidence) {
   const sources = [run.done.check?.summary, ...steps.toReversed().map(step => run.done[step]?.summary)].filter(Boolean);
   const verdict = sources.map(verdictLine).find(Boolean), change = sources.map(changeLine).find(Boolean);
   const shown = change?.match(/https?:\/\/[^\s;]+/g) ?? [];
-  const runtime = publicationRuntime(run, env).filter(line => !line.startsWith('Report') || !shown.some(url => line.includes(` ${url} `)));
+  const runtime = publicationRuntime(run, env).filter(line => !line.replace(`${AGENT_NOTE}: `, '').startsWith('Report') || !shown.some(url => line.includes(` ${url} `)));
   const noted = runtime.some(line => hasReportLink(line, env)) || change && hasReportLink(change, env);
   const replay = area.replay_evidence === REPLAY_POLICY ? [formatReplayEvidence(run.replayEvidence ?? readReplayEvidence(run)), ''] : [];
   const prefix = [...failing, ...replay];
-  const top = [...(verdict ? [`${AGENT_NOTE}: ${verdict}`] : []), ...(change ? [`${AGENT_NOTE}: ${change}${hasReportLink(change, env) ? ' (report links expire after 7 days)' : ''}`] : []), ...runtime];
+  const top = [...ownLines(run, evidence), ...(verdict ? [`${AGENT_NOTE}: ${verdict}`] : []), ...(change ? [`${AGENT_NOTE}: ${change}${hasReportLink(change, env) ? ' (report links expire after 7 days)' : ''}`] : []), ...runtime];
   if (evidence.lines.some(line => line.includes('pdd-workflow:'))) throw Error('Remove supplied workflow ownership markers from the report; pdd preserves its own marker.');
   const inventory = run.testInventory && label !== 'PR 1' ? [run.testInventory.text.trimEnd(), ...(run.testInventory.saved ? [] : ['warning: The full test inventory report was not saved.']), inventoryCommits(run.testInventory)] : [];
   const slot = evidence.lines.findIndex(line => line.startsWith(`${AGENT_NOTE}:`));
@@ -1144,7 +1162,14 @@ async function recordEvidenceCommand({ ref, summaryFile, cwd }, ports) {
   return done(`Recorded source-verified saved evidence for ${run.repo}#${run.number}. Steps, gates and PRs are unchanged. This records evidence, not fresh execution or approval.`);
 }
 
-async function stepDoneCommand({ step, summary, cwd, packageRoot = PACKAGE_ROOT }, ports) {
+// pdd's own results for a run (pdd test, pdd lint, pdd workflow prove). A read problem gives no results, never a stop.
+function ownResults(run, p) {
+  try { return (p.readRunResults ?? readRunResults)({ root: run.root, runDir: run.runDir, runId: run.runId, since: run.startedAt ?? 0, baseBranch: run.baseBranch ?? null }, { env: p.env }); }
+  catch { return []; }
+}
+// The steps whose done output shows pdd's own results, or a visible "no pdd result" warning.
+const PROOF_STEPS = ['check', 'try', 'verify'];
+async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACKAGE_ROOT }, ports) {
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
   const run = await runForWorktree(cwd, p);
   if (!run) return fail('pdd workflow done works only in a run worktree. cd to the worktree that pdd made for this run.');
@@ -1158,7 +1183,15 @@ async function stepDoneCommand({ step, summary, cwd, packageRoot = PACKAGE_ROOT 
     if (before.length) lines.push(`warning: ${before.join(', ')} ${before.length > 1 ? 'are' : 'is'} not done yet. pdd recorded ${step} anyway.`);
   }
   const observedQuestion=run.question, observedGate=run.gate;
-  const record = { at: p.now(), summary: keepLines(summary), area: area.name };
+  const reason = skipped === undefined ? null : keepLines(skipped) || 'no reason given';
+  const record = { at: p.now(), summary: keepLines(reason === null ? summary : [`skipped: ${reason}`, summary].filter(Boolean).join('\n')), area: area.name,
+    ...(reason === null ? {} : { skipped: { reason } }), ...(PROOF_STEPS.includes(step) ? { pddResults: ownResults(run, p) } : {}) };
+  if (PROOF_STEPS.includes(step) && reason === null) {
+    const usable = record.pddResults.some(usableResult), shown = usable || !record.pddResults.length ? resultLines(record.pddResults) : [...resultLines(record.pddResults), noResultLine()];
+    lines.push(...(usable ? ['pdd recorded its own results with this step:'] : ['warning: pdd has no result of its own for this run yet. pdd recorded the step with the label "no pdd result".']), ...shown,
+      'Your summary is saved as an agent note, apart from pdd\'s results.');
+  }
+  if (reason !== null) lines.push(`pdd recorded that ${step} was skipped. Reason (agent note): ${oneLine(reason)}`);
   const hasRuntime=runtimeLines(record.summary).length>0;
   if(hasRuntime)record.source={kind:'git-content-v1',sha256:gitFingerprint(run.root)};
   const replay=area.replay_evidence===REPLAY_POLICY && (area.steps.some(item=>item!==step&&!run.done[item]) || area.gate!=='pr' || area.before==='approve'&&!prOf(run,area.name))?await currentReplayEvidence(run,p):null;
@@ -1310,9 +1343,9 @@ async function draftDescription(run, pr1, drafts, p) {
     }
     while (at < rows.length && !rows[at].trim()) at++;
     const headerStart = at;
-    while (at < rows.length && new RegExp(String.raw`^(?:Agent note — not checked by pdd: (?:Verdict:|Before[ :])|Verdict:|Before |Before:|${PROMPT_TESTS_WORDS}|Report(?: \([^)]*\))?:)`).test(rows[at])) at++;
+    while (at < rows.length && new RegExp(String.raw`^(?:pdd result: |Agent note — not checked by pdd: (?:Verdict:|Before[ :]|${PROMPT_TESTS_WORDS}|Report(?: \([^)]*\))?:)|Verdict:|Before |Before:|${PROMPT_TESTS_WORDS}|Report(?: \([^)]*\))?:)`).test(rows[at])) at++;
     const priorTop = rows.slice(headerStart, at);
-    const ordinaryTop = [...new Set([...labelledTop, ...priorTop.filter(line => /^(?:Agent note — not checked by pdd: )?(?:Verdict:|Before[ :])/.test(line)).map(line => line.startsWith(`${AGENT_NOTE}: `) ? line : `${AGENT_NOTE}: ${line}`)]), ...publicationRuntime(run, p.env)];
+    const ordinaryTop = [...ownLines(run, evidence), ...new Set([...labelledTop, ...priorTop.filter(line => /^(?:Agent note — not checked by pdd: )?(?:Verdict:|Before[ :])/.test(line)).map(line => line.startsWith(`${AGENT_NOTE}: `) ? line : `${AGENT_NOTE}: ${line}`)]), ...publicationRuntime(run, p.env)];
     const introduction = [];
     while (at < rows.length && !rows[at].trim()) at++;
     if (reference.test(rows[at] ?? '')) {
@@ -1754,6 +1787,8 @@ async function deliveryJournal(run, p, action, { recover = true } = {}) {
     }
   }
   try {
+    const saved = readRun(run.runDir);
+    if (saved && runIdentity(saved) !== runIdentity(run)) throw Error('The selected workflow run was replaced');
     const journal = readDeliveryJournal(run, p);
     const before = JSON.stringify(journal);
     if (recover) for (const entry of journal.requests) if (entry.inFlight) {
@@ -2004,7 +2039,7 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false } = 
   const group = run.state === 'cancelled' ? 'cancelled' : run.state === 'completed' ? 'done' : problem ? 'waiting' : writing ? 'working'
     : run.gate || question || running && ['blocked', 'stopped'].includes(chat) ? 'waiting' : prOf(run, area?.name) ? 'pr-open' : 'working';
   const step = area?.steps.find(item => !run.done[item]);
-  const words = group === 'cancelled' ? 'cancelled'
+  const words = group === 'cancelled' ? (run.cancelled?.state === 'replaced' ? 'replaced' : 'cancelled')
     : group === 'done' ? (run.gate?.kind === 'ask-code' ? 'done at PR 1' : 'done')
     : replacementPending ? `chat replacement pending at ${run.chatReplacement.phase}; run pdd workflow open ${run.number} --new`
     : problem ? chatStatusWords(run, chat)

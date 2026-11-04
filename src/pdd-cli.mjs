@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 6ecc31c5efb735fbeb55e158176779ea060f3c24147e609eabf77c94137d8808).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: da5d5b69ce6a1893b17954fb54b60a4cbdf7b00be004636c927852c012e0d6b9).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -26,7 +26,7 @@ const RUNNER_ROUTES = {
   'workflow-request-uptake': plan => ['acknowledgeRequest', { requestId: plan.operands[0], summary: plan.options['--summary'] }],
   'workflow-run': plan => ['startRun', { name: plan.operands[0], issue: plan.operands[1], agent: plan.options['--agent'] ?? 'codex', ...(plan.options['--base'] !== undefined ? { base: plan.options['--base'] } : {}), ...(plan.options['--adopt-corpus'] !== undefined ? { adoptCorpus: plan.options['--adopt-corpus'] } : {}) }],
   'workflow-evidence': plan => ['recordEvidence', { ref: plan.operands[0], summaryFile: plan.options['--summary'] }],
-  'workflow-done': plan => ['stepDone', { step: plan.operands[0], ...(plan.options['--summary'] !== undefined ? { summary: plan.options['--summary'] } : {}) }],
+  'workflow-done': plan => ['stepDone', { step: plan.operands[0], ...(plan.options['--summary'] !== undefined ? { summary: plan.options['--summary'] } : {}), ...(plan.options['--skipped'] !== undefined ? { skipped: plan.options['--skipped'] } : {}) }],
   'workflow-approve': plan => ['approveRun', { ref: plan.operands[0], ...(plan.options['--said'] !== undefined ? { said: plan.options['--said'] } : {}) }],
   'workflow-ask': plan => ['askPerson', { text: plan.operands.join(' ') }],
   'workflow-changes': plan => ['changeRun', { ref: plan.operands[0], text: plan.operands.slice(1).join(' ') }],
@@ -46,7 +46,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
   cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, workflowRunner, workflowAreas,
   stdin = process.stdin, confirm, mcpServer, runtimeSlots, contracts, product, productPorts, gitContext, workflowProve, provePorts,
   workflowAgents = { checkWorkflowAgents }, workflowAgentPorts = {}, setupSkills = defaultSetupSkills,
-  setupProject = defaultSetupProject, setupAgentMcp, pathDiagnostic = defaultPathDiagnostic } = {}) {
+  setupProject = defaultSetupProject, setupAgentMcp, autopilot, autopilotPorts = {}, pathDiagnostic = defaultPathDiagnostic } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
@@ -71,6 +71,17 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         } catch { /* The skills check never changes --version. */ }
         return 0;
       } catch { line(stderr, 'This PDD package has no readable version metadata.');return 1; }
+    case 'autopilot.off': case 'autopilot.observe': case 'autopilot.auto': case 'autopilot-trust': case 'autopilot-untrust': {
+      try {
+        const module = autopilot ?? await import('./autopilot.mjs');
+        const input = plan.local.startsWith('autopilot.')
+          ? { action: 'mode', mode: plan.local.slice(10) }
+          : { action: plan.local.slice(10), names: [...plan.operands] };
+        const result = await module.runAutopilot(input, { cwd, stdin, stdout, ...autopilotPorts });
+        line(result.exitCode === 0 ? stdout : stderr, result.message);
+        return result.exitCode;
+      } catch (error) { line(stderr, `Autopilot settings failed.${reason(error)}`); return 1; }
+    }
     case 'product-status': case 'product-next': case 'product-start': {
       try {
         const context = await (gitContext ?? (await import('./workflow-runs.mjs')).gitContext)(cwd, productPorts);
@@ -121,7 +132,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       }
       try {
         const module = workflowProve ?? await import('./workflow-prove.mjs');
-        const result = await module.proveRun({ ref: plan.operands[0], test: plan.options['--test'], expect: plan.options['--expect'], cwd }, provePorts);
+        const result = await module.proveRun({ ref: plan.operands[0], test: plan.options['--test'], expect: plan.options['--expect'], cwd, ...(plan.options['--timeout'] !== undefined ? { timeoutMinutes: Number(plan.options['--timeout']) } : {}) }, provePorts);
         if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255 || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid proof reply');
         line(result.exitCode === 0 ? stdout : stderr, result.message); return result.exitCode;
       } catch (error) {
@@ -162,6 +173,14 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         const action = setupAgentMcp ?? (await import('./agent-mcp-setup.mjs')).setupAgentMcp;
         if (await action({ env, packageRoot }, { stdin, stdout, stderr, confirm })) code = 1;
       } catch (error) { line(stderr, `pdd setup: MCP registration failed.${reason(error)}`); code = 1; }
+      try {
+        const context = await (gitContext ?? (await import('./workflow-runs.mjs')).gitContext)(cwd);
+        const module = autopilot ?? await import('./autopilot.mjs');
+        const result = await module.runAutopilot({ action: 'setup', interactive: !!stdin.isTTY, inRepo: !!context?.toplevel },
+          { cwd: context?.toplevel ?? cwd, stdin, stdout, ...autopilotPorts });
+        if (result.message) line(result.exitCode === 0 ? stdout : stderr, result.message);
+        if (result.exitCode) code = result.exitCode;
+      } catch (error) { line(stderr, `Autopilot settings failed.${reason(error)}`); code = 1; }
       return code;
       } });
     }

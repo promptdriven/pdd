@@ -76,7 +76,7 @@ chat 3  code (only when you ask): build, verify, formal, review
 you     review and merge on GitHub
 ```
 
-1. `pdd workflow run` reads the issue, makes the branch, the worktree and the run folder, and opens the first chat in Herdr. It refuses an issue that already has an active run. Then it returns. You can close the terminal.
+1. `pdd workflow run` reads the issue, makes the branch, the worktree and the run folder, and opens the first chat in Herdr. An issue has one active run. A second `pdd workflow run` on the same issue still starts: it marks the old active run replaced and names it (id, worktree, last activity) in one warning. The old worktree and branch stay. Then it returns. You can close the terminal.
 2. The first message of the chat is short. It names the skill, the issue, the worktree, the run folder and the area with its steps.
 3. The main chat coordinates and talks with you. It writes no code and performs no checks.
 4. The main chat gives steps to fresh subagents; builders are never reused and never check their own code. Before checking, close finished agents if supported and try fresh startup. Only after startup fails may verify or formal reuse an agent that wrote no code, tests or prompts in this run. Review always needs a fresh agent with no build, verify, formal or prior review of this change and no prior review context, including every repair round. If no fresh reviewer can start, write `Not checked: review (agent limit)`, stop and tell the person. Follow pdd-prompting RUNBOOK §17 for missing-check records, new-session recovery and replacing them after actual checks. Each subagent gets its full brief at once, with file paths, not chat history; the chat waits once with a long time-out and no small follow-ups.
@@ -109,11 +109,20 @@ After the check and try steps, the chat shows one `Prompt tests` line for each S
 
 The PR 1 body is short:
 
-1. For a bug: the verdict line and the `Before ✗ … → after ✓ …` line with its report links.
-2. One `Prompt tests (<story>)` line for each Story. With more than one Story, pdd adds them up in a `Prompt tests (all Stories)` line. Then a `Report (<story>)` link for each Story (report links expire after 7 days).
-3. `Part of #N`, and that the code comes in PR 2 only when you ask.
-4. `Draft prompts: … Approve them before you merge.`, when a prompt is still `draft`.
-5. One short line for each step.
+1. pdd's own results: one `pdd result:` line for the newest `pdd test` and the newest `pdd lint` that ran in the run worktree after the run started (batch id, time, whether the source is still the same, the interpreter build and model when known, and the result). With none, the line is `pdd result: none. … (pdd:no-verdict)`. This is a label, not a stop.
+2. For a bug: the verdict line and the `Before ✗ … → after ✓ …` line with its report links.
+3. One `Prompt tests (<story>)` line for each Story. With more than one Story, pdd adds them up in a `Prompt tests (all Stories)` line. Then a `Report (<story>)` link for each Story (report links expire after 7 days). When these lines come from a step summary, they start with `Agent note — not checked by pdd:`, because the agent typed them. Lines that `pdd workflow evidence` checked against a saved result have no label.
+4. `Part of #N`, and that the code comes in PR 2 only when you ask.
+5. `Draft prompts: … Approve them before you merge.`, when a prompt is still `draft`.
+6. One short line for each step. A step that `pdd workflow done STEP --skipped REASON` recorded says `skipped (recorded by pdd)`.
+
+### pdd results and agent notes
+
+`pdd workflow done check`, `try` and `verify` attach pdd's own latest results to the step: the newest `pdd test` and `pdd lint` batch for the run worktree, and the run's `pdd workflow prove` result. pdd reads them from its saved files. It does not run anything. The agent's `--summary` is kept apart, as an agent note. When pdd has no result of its own, `done` prints a warning and records the step anyway.
+
+When no person is at the Try step, the agent runs `pdd workflow done try --skipped "REASON"`. pdd records the skip and the reason. No agent writes run files by hand.
+
+`pdd workflow prove` results count as pdd's own proof: the code PR shows them in its `Old-code proof:` line. Each phase has a 10-minute limit by default. Use `--timeout MIN` (1 to 120) to change it.
 
 PR 1 has no `verify.md`, no Simulator links and no local paths.
 
@@ -159,7 +168,7 @@ pdd does not run tests. The agents do.
 - It runs the new cases, the regression tests and the repo's required checks. When it can, it shows that a new test fails on the old or wrong code, in a throwaway copy.
 - For a small-change behavior fix it writes `Proof (defect fixed):` and `Proof (gap closed):`, and a reason for each removed test or changed assertion.
 - It writes the exact commands, the exit codes and the real output to `verify.md`. It names what no test covers.
-- The body of PR 2, or of the one `small-change` PR, has the step summaries and `verify.md`. When a check on the PDD interpreter ran, the body starts with its `Prompt tests` lines and report links. Report links expire after 7 days.
+- The body of PR 2, or of the one `small-change` PR, has the step summaries and `verify.md`. It starts with pdd's own `pdd result:` lines (or `pdd result: none. … (pdd:no-verdict)`) and the `Old-code proof:` line. `Prompt tests` lines and report links that come from a step summary follow, each starting with `Agent note — not checked by pdd:`. Report links expire after 7 days.
 
 Bundled feature/bug code areas declare `replay_evidence: "pdd.replay-evidence.v1"`. The agent writes
 `replay-evidence.json` in the run folder using the [structured replay contract](replay-evidence.md).

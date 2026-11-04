@@ -1,0 +1,97 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/autopilot-setup-auto.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "In a fresh Git repository, selecting auto during terminal setup saves auto."
+    }
+  ],
+  "initial_world": {
+    "kv": {},
+    "lookups": [],
+    "mode_questions": [],
+    "names_questions": []
+  },
+  "simulation": {
+    "config.read": {
+      "action": "key-value.get",
+      "world_pointer": "/kv",
+      "key_argument_pointer": "/key",
+      "value_argument_pointer": null,
+      "item_key_pointer": null,
+      "item_value_pointer": null,
+      "result_template": {
+        "raw": null
+      },
+      "result_value_pointer": "/raw"
+    },
+    "config.save": {
+      "action": "key-value.put",
+      "world_pointer": "/kv",
+      "key_argument_pointer": "/key",
+      "value_argument_pointer": "/raw",
+      "item_key_pointer": null,
+      "item_value_pointer": null,
+      "result_template": {
+        "raw": null
+      },
+      "result_value_pointer": "/raw"
+    },
+    "github.lookup": {
+      "action": "port.write",
+      "world_pointer": "/lookups",
+      "result_template": {
+        "owner": "Ada",
+        "writers": [
+          "Bo",
+          "Cy"
+        ],
+        "complete": false
+      }
+    },
+    "terminal.mode": {
+      "action": "port.write",
+      "world_pointer": "/mode_questions",
+      "result_template": {
+        "answer": "auto"
+      }
+    },
+    "terminal.names": {
+      "action": "port.write",
+      "world_pointer": "/names_questions",
+      "result_template": {
+        "names": []
+      }
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "case-1",
+      "entry_path": "prompts/cli/autopilot.prompt.md",
+      "operation": "runAutopilot",
+      "input": {
+        "action": "setup",
+        "interactive": true,
+        "inRepo": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/mode",
+          "op": "equals",
+          "value": "auto"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/kv/autopilot",
+          "op": "equals",
+          "value": "{\"mode\":\"auto\",\"trust\":[]}"
+        }
+      ]
+    }
+  ]
+}
