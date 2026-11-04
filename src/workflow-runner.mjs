@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 08ad4a1c2999af3759cb7aff7218adea6fe04a074ec43ae1eb1c146661ee9087).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: cd47fe3517737bb2d360a63049f743f55bd5285daa150af77adede983c8cb991).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { execFile as execFileCallback } from 'node:child_process';
@@ -62,7 +62,8 @@ function clip(text, max) {
 }
 // The chat's open question. One asked before the current gate opened was answered when that gate opened (0.1.6 tester:
 // status showed "Do you approve … so PDD can open PR 1?" after PR 1 was open).
-const openQuestion = run => run.question && !(run.gate && run.question.at < run.gate.at) ? run.question : null;
+const runAreaName = run => typeof run.area === 'string' ? run.area : run.areas?.[run.area]?.name;
+const openQuestion = run => run.question && run.question.area === runAreaName(run) && !(run.gate && run.question.at < run.gate.at) ? run.question : null;
 const listed = items => items.length > 1 ? `${items.slice(0, -1).join(', ')} and ${items.at(-1)}` : items[0];
 // A plain approval sent with changes (0.1.6 tester: "I approve. The Story and the prompt look good now." reached the chat as
 // a change request, and the chat could not approve with it). An approval word with a change word is a change request.
@@ -1657,7 +1658,7 @@ async function askPersonCommand({ text, cwd }, ports) {
   commitRun(run,p,latest=>{latest.question=asked;if(!latest.gate)latest.state='waiting';});
   return done([`pdd shows the person: waiting for you: ${question.split('\n')[0]}`,
     'Now ask the question in a plain chat message (not a question dialog) and end your turn.',
-    `The person answers in this chat, or from their shell with: pdd workflow changes ${run.number} "answer". Then go on with the step and run done as usual.`].join('\n'));
+    `The person answers in this chat, or from their shell with: pdd workflow answer ${run.number} "answer" (or pdd workflow changes ${run.number} "answer"). Then go on with the step and run done as usual.`].join('\n'));
 }
 
 // Journal claims cover synchronous local reads/writes only; readiness and Herdr never hold one.
@@ -1784,21 +1785,44 @@ async function deliveryJournal(run, p, action, { recover = true } = {}) {
   } finally { release(); }
 }
 
-export async function changeRun({ ref, text, cwd }, ports) {
+async function deliverRunRequest(mode, { ref, text, cwd }, ports) {
+  if (ports?.runs?.load) {
+    const { run } = await ports.runs.load({ ref: String(ref ?? '') });
+    if (!run) return fail(`No pdd run found for #${ref}.`);
+    if (ended(run)) return fail(`The run for ${run.repo}#${run.number} is ${run.state}.`);
+    const request = oneLine(text), question = openQuestion(run), answer = mode === 'answer' || Boolean(question);
+    if (!request) return fail(mode === 'answer' ? 'Write the answer after the issue number.' : 'Write the change request after the issue number.');
+    if (mode === 'answer' && !question) return fail(`No question is open for ${run.repo}#${run.number}.`);
+    if (!answer && run.gate && looksLikeApproval(request)) return { exitCode: 2, message: `This looks like an approval. Tell your agent you approve this gate, or run pdd workflow approve ${run.number} in a terminal.\nNothing was sent to the chat.` };
+    const area = runAreaName(run);
+    const message = answer ? `${ANSWER_PREFIX}: ${request} Go on with the step.`
+      : `${CHANGE_PREFIX}: ${request} Revise in this chat, run done again for the step you changed, then show the result and ask again.`;
+    const sent = await ports.chat.send({ area, number: run.number, text: message });
+    if (!sent?.ok) return fail(`pdd could not send the text to the ${area} chat.`);
+    const updated = structuredClone(run);
+    const round = updated.changes.filter(change => change.stage === area).length + 1;
+    updated.changes.push({ stage: area, round, text: request, ...(answer ? { answer: true } : {}) });
+    if (question) updated.question = null;
+    if (answer && !updated.gate && !updated.question) updated.state = 'running';
+    await ports.runs.save({ ref: String(ref ?? ''), run: updated });
+    return done(answer ? `Sent your answer to the ${area} chat of #${run.number}. The agent goes on with the step.`
+      : `Sent your change request to the ${area} chat of #${run.number}.${run.gate ? ' The gate stays open.' : ''}`);
+  }
   const p = deps(ports), found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
   let run = found.run;
   const selectedIdentity=runIdentity(run);
   if (ended(run)) return fail(`The run for ${run.repo}#${run.number} is ${run.state}.`);
-  const request = oneLine(text), answer = Boolean(openQuestion(run)), kind = answer ? 'answer' : 'change';
-  if (!request) return fail('Write the change request after the issue number.');
+  const request = oneLine(text), question = openQuestion(run), answer = mode === 'answer' || Boolean(question), kind = answer ? 'answer' : 'change';
+  if (!request) return fail(mode === 'answer' ? 'Write the answer after the issue number.' : 'Write the change request after the issue number.');
+  if (mode === 'answer' && !question) return fail(`No question is open for ${run.repo}#${run.number}.`);
   if (!answer && run.gate && looksLikeApproval(request)) return { exitCode: 2, message: `This looks like an approval. Tell your agent you approve this gate, or run pdd workflow approve ${run.number} in a terminal.
 Nothing was sent to the chat.` };
   const area = run.areas[run.area], chat = currentChat(run);
   if (!chat) return fail(`The ${area.name} area has no chat. Start it: pdd workflow open ${run.number}`);
   const latest = () => readRun(run.runDir), matches = entry => entry.area === area.name && entry.paneId === chat.paneId;
   const targetCurrent = saved => saved && runIdentity(saved)===selectedIdentity && !ended(saved) && saved.areas[saved.area]?.name === area.name && currentChat(saved)?.paneId === chat.paneId;
-  const retry = `Retry: pdd workflow changes ${run.number} '${request.replace(/'/g, `'\\''`)}'`;
+  const retry = `Retry: pdd workflow ${mode === 'answer' ? 'answer' : 'changes'} ${run.number} '${request.replace(/'/g, `'\\''`)}'`;
   const kept = `Your request is kept. Wait briefly or open it: pdd workflow open ${run.number}. ${retry}`;
   const warning = `An earlier request is uncertain and may already be in the chat. Check the original chat: pdd workflow open ${run.number}; type it there if absent. pdd will not automatically resend it.`;
   const uncertain = () => fail(`Your request is uncertain and may already be in the chat. Check the original chat: pdd workflow open ${run.number}; type it there if absent. pdd will not automatically resend it.`);
@@ -1895,6 +1919,8 @@ Nothing was sent to the chat.` };
   } catch (error) { return fail(`Could not update the saved request. Wait briefly, then retry; check the original chat (${error.code ?? 'journal unavailable'}).`); }
   finally { activeDeliveries.delete(owner.token); }
 }
+export const changeRun = (input, ports) => deliverRunRequest('change', input, ports);
+export const answerRun = (input, ports) => deliverRunRequest('answer', input, ports);
 
 async function cancelRunCommand({ ref, cwd }, ports) {
   const p = deps(ports);

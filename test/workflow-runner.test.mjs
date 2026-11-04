@@ -6,7 +6,9 @@ import { dirname, join, resolve } from 'node:path';
 import { execFile as callbackExec, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { proseSha256 } from '../src/runtime-preflight.mjs';
+import * as workflowRunnerModule from '../src/workflow-runner.mjs';
 import { startRun, stepDone, approveRun, changeRun, cancelRun, runStatus, openRun, askPerson } from '../src/workflow-runner.mjs';
+import { runPdd, renderHelp } from '../src/pdd-cli.mjs';
 
 const exec = promisify(callbackExec);
 const packageRoot = resolve(import.meta.dirname, '..');
@@ -773,6 +775,38 @@ test('ask marks the run as waiting for the person; changes answers it in the sam
   assert.equal(f.record().question, null); assert.equal(f.record().gate.kind, 'approve');
   const outside = await askPerson({ text: 'x', cwd: f.source }, f.agentPorts());
   assert.equal(outside.exitCode, 1); assert.match(outside.message, /worktree/);
+});
+
+test('#2576: pdd workflow answer answers an open question and refuses when no question is open', async t => {
+  assert.equal(typeof workflowRunnerModule.answerRun, 'function', 'answerRun is exported');
+  assert.match(renderHelp(['workflow', 'answer']), /pdd workflow answer ISSUE TEXT\s+Send an answer to the area chat that waits for one\./);
+  const f = await fixture(t);
+  await f.run(); const run = f.record(), pane = f.herdr.paneOf(run.chats[0]); f.tick();
+  const noQuestion = await workflowRunnerModule.answerRun({ ref: '17', text: 'ISO', cwd: f.source }, f.ports);
+  assert.equal(noQuestion.exitCode, 1);
+  assert.equal(noQuestion.message, 'No question is open for example/project#17.');
+  assert.equal(f.record().changes.length, 0);
+
+  const asked = await askPerson({ text: 'Which date format?', cwd: run.root }, f.agentPorts());
+  assert.equal(asked.exitCode, 0, asked.message);
+  assert.match(asked.message, /pdd workflow answer 17 "answer"/);
+  f.tick();
+  let stdout = '', stderr = '';
+  const code = await runPdd(['workflow', 'answer', '17', 'ISO'], {
+    cwd: f.source,
+    stdout: { write: s => { stdout += s; } },
+    stderr: { write: s => { stderr += s; } },
+    workflowRunner: { answerRun: input => workflowRunnerModule.answerRun(input, f.ports) }
+  });
+  assert.equal(code, 0, stderr);
+  assert.equal(stdout.trim(), 'Sent your answer to the plan chat of #17. The agent goes on with the step.');
+  assert.equal(pane.agent.prompts.at(-1), 'The person answers your question: ISO Go on with the step.');
+  const after = f.record();
+  assert.equal(after.question, null);
+  assert.equal(after.state, 'running');
+  assert.equal(after.changes.length, 1);
+  assert.equal(after.changes[0].answer, true);
+  assert.equal(after.changes[0].text, 'ISO');
 });
 
 test('a chat that shows a question dialog is waiting for the person in status, and changes says to answer in the chat', async t => {

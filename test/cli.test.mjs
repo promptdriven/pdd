@@ -16,7 +16,7 @@ const capture = () => ({ text: '', write(value) { this.text += value; } });
 
 // Wrong: deleting the adapter leaves private catalog/validator routes or unknown help succeeds.
 test('ALPHA1: only local plans are admitted without Host disposition or forwarded arguments', () => {
-  assert.deepEqual(PUBLIC_COMMAND_IDS, ['product.status', 'product.next', 'product.start', 'workflow.run', 'workflow.prove', 'workflow.done', 'workflow.evidence', 'workflow.ask', 'workflow.request-uptake', 'workflow.approve', 'workflow.changes', 'workflow.cancel', 'workflow.status', 'workflow.view', 'workflow.open', 'help', 'version', 'completion', 'workflow.list', 'check', 'lint', 'approve', 'try', 'jobs', 'contracts', 'contracts.sync', 'mcp', 'autopilot.off', 'autopilot.observe', 'autopilot.auto', 'autopilot.trust', 'autopilot.untrust', 'setup']);
+  assert.deepEqual(PUBLIC_COMMAND_IDS, ['product.status', 'product.next', 'product.start', 'workflow.run', 'workflow.prove', 'workflow.done', 'workflow.evidence', 'workflow.ask', 'workflow.request-uptake', 'workflow.approve', 'workflow.changes', 'workflow.answer', 'workflow.cancel', 'workflow.status', 'workflow.view', 'workflow.open', 'help', 'version', 'completion', 'workflow.list', 'check', 'lint', 'approve', 'try', 'jobs', 'contracts', 'contracts.sync', 'mcp', 'autopilot.off', 'autopilot.observe', 'autopilot.auto', 'autopilot.trust', 'autopilot.untrust', 'setup']);
   for (const argv of [[], ['--help'], ['-h'], ['help'], ['--version'], ['completion', 'bash'],
     ['completion', 'zsh'], ['jobs'], ['mcp'], ['setup'], ['workflow', 'list'], ['workflow', 'list', '--json'], ['workflow', '--help']]) {
     const input = [...argv], plan = parseArgv(input);
@@ -126,6 +126,7 @@ test('ALPHA7: each runner route calls its own export once with parsed values, cw
     [['workflow','ask','--','Should','-h','work?'], 'askPerson', { text: 'Should -h work?' }],
     [['workflow','approve','https://github.com/o/r/issues/7'], 'approveRun', { ref: 'https://github.com/o/r/issues/7' }],
     [['workflow','changes','7','use','--','--blue'], 'changeRun', { ref: '7', text: 'use --blue' }],
+    [['workflow','answer','7','use','--','--blue'], 'answerRun', { ref: '7', text: 'use --blue' }],
     [['workflow','cancel','o/r#7'], 'cancelRun', { ref: 'o/r#7' }],
     [['workflow','status'], 'runStatus', { ref: undefined }],
     [['workflow','status','--all','--json'], 'runStatus', { ref: undefined, all: true, json: true }],
@@ -148,7 +149,7 @@ test('ALPHA8: runner argument failures and invalid replies are finite without a 
   const invalid = [['workflow','run'],['workflow','run','../unknown','1'],['workflow','run','feature','0'],['workflow','run','feature','42','extra'],
     ['workflow','run','feature','42','--agent','other'],['workflow','run','bug','2','--base'],
     ['workflow','run','bug','2','--base','one','--base','two'],['workflow','done'],['workflow','done','Scope'],['workflow','done','scope','--summary'],
-    ['workflow','approve','7','8'],['workflow','approve','a1234567-1234-4123-8123-123456789abc'],['workflow','changes','7'],['workflow','cancel'],
+    ['workflow','approve','7','8'],['workflow','approve','a1234567-1234-4123-8123-123456789abc'],['workflow','changes','7'],['workflow','answer','7'],['workflow','cancel'],
     ['workflow','open'],['workflow','resume','7'],['workflow','attach','7'],['workflow','status','7','--brief'],['workflow','status','--all','--all']];
   for (const args of invalid) assert.equal(await runPdd(args, { stdout: capture(), stderr: capture(), workflowRunner: new Proxy({}, { get: () => assert.fail('No runner') }) }), 2, args.join(' '));
   for (const answer of [undefined, { exitCode: NaN, message: 'no' }, { exitCode: 0, message: '' }]) {

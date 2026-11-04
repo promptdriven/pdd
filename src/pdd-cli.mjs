@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 092fb7a2635ca8d7e5a954f873053293cea5087cb02d8ecf38f65ba21c3f5912).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 9f2293f0ddcc3965d0a3829b35040ab541a90cde524be569f567461b1042003c).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -30,6 +30,7 @@ const RUNNER_ROUTES = {
   'workflow-approve': plan => ['approveRun', { ref: plan.operands[0], ...(plan.options['--said'] !== undefined ? { said: plan.options['--said'] } : {}) }],
   'workflow-ask': plan => ['askPerson', { text: plan.operands.join(' ') }],
   'workflow-changes': plan => ['changeRun', { ref: plan.operands[0], text: plan.operands.slice(1).join(' ') }],
+  'workflow-answer': plan => ['answerRun', { ref: plan.operands[0], text: plan.operands.slice(1).join(' ') }],
   'workflow-cancel': plan => ['cancelRun', { ref: plan.operands[0] }],
   'workflow-status': plan => ['runStatus', { ref: plan.operands[0], ...Object.fromEntries(['all', 'cancelled', 'json'].filter(name => plan.options[`--${name}`]).map(name => [name, true])) }],
   'workflow-open': plan => ['openRun', { ref: plan.operands[0], ...(plan.operands[1] !== undefined ? { area: plan.operands[1] } : {}), ...(plan.options['--new'] ? { newSession: true } : {}) }],
@@ -97,7 +98,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         return result.exitCode;
       } catch (error) { line(stderr, `The product command failed.${reason(error)}`); return 1; }
     }
-    case 'workflow-request-uptake': case 'workflow-run': case 'workflow-done': case 'workflow-ask': case 'workflow-approve': case 'workflow-changes':
+    case 'workflow-request-uptake': case 'workflow-run': case 'workflow-done': case 'workflow-ask': case 'workflow-approve': case 'workflow-changes': case 'workflow-answer':
     case 'workflow-cancel': case 'workflow-status': case 'workflow-open': case 'workflow-evidence': {
       if (plan.local === 'workflow-evidence' && !plan.options['--summary']) { line(stderr, 'Use pdd workflow evidence ISSUE --summary FILE.'); return 2; }
       if (plan.local === 'workflow-request-uptake' && !plan.options['--summary']?.trim()) {
