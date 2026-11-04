@@ -649,9 +649,11 @@ read turns into a lost, unknown row drops its old `progress`.
 
 [Agent configuration](agent-config.prompt.md) is required generation/runtime context for loading private named launchers before owner authentication.
 
-## Authoring and caller navigation
+Read the full [Prompting guide](../../docs/prompting-guide.md) before you change this prompt. Follow the [alpha boundary](public-boundary.prompt.md).
 
-Read the full [Prompting guide](../../docs/prompting-guide.md) before you change this prompt. Follow the [alpha boundary](public-boundary.prompt.md). The [CLI](pdd-cli.prompt.md) calls `runCheck` and `runTry`.
+## Caller navigation
+
+The [CLI](pdd-cli.prompt.md) calls `runCheck` and `runTry`.
 
 ## Terminal and HTTP doors
 
