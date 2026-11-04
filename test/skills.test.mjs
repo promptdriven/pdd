@@ -743,14 +743,16 @@ test('AUTOPILOT4: the checker is fresh, prefers another family, labels a same-fa
     'read the issue first and write 3 input → result pairs from it', 'Each expected value comes from an issue quote or the old behavior.',
     'For a screen change, take before and after screenshots', 'reruns each merged PR on main and gives its own risk 1-5',
     'A new test value needs no person when you (blind, from the Story, with a named rule) and the runtime agree; else it is a note.',
-    'Use a `pdd test` result for the new and the old prompt only when it is for the prompt text at this head; if there is none, run `pdd test` once.',
+    'A saved `pdd test` result for the new and the old prompt counts only when it matches the Story, the test cases and the prompt source at this head, and it was a fresh run (not cached).',
+    'Else run `CI=1 pdd test <story> --cache-clear --json` once. A result you cannot check is not a fresh pass.',
+    'PR 2 (code): read the issue, the PR 1 Story (open or merged) and the diff.',
     'Both PRs: the full suite is green on the head, with no new skip or only.', 'If no other family is available, say so; do not claim this review.');
 });
 
 // Wrong: a PASS for an old head merges new code, or the merge is not pinned to the head that was checked.
 test('AUTOPILOT5: merge needs a PASS for the current head or an equal patch-id with a green suite on the exact head', () => {
   assert.doesNotMatch(read('pdd-check/SKILL.md'), /sample/i, 'every merged PR gets the after-merge rerun');
-  const text = has('pdd-merge/SKILL.md', 'a fresh checker PASS (pdd-check) is for the current head.', 'the full suite is green on the exact merge head, for PR 1 and the code PR;',
+  const text = has('pdd-merge/SKILL.md', 'a fresh checker PASS (pdd-check) is for the current head.', 'the full suite is green on the exact merge head, for PR 1 and the code PR.',
     'A PASS for another head counts only when `git patch-id` of both heads is equal and the full suite is green on the exact current head.',
     'A conflict fix or any other change gives a new patch-id and needs a fresh PASS;',
     'at least one check ran, and all required checks are green on that head. A missing, pending or failed check: wait, do not merge;',
@@ -784,7 +786,7 @@ test('AUTOPILOT8: outcomes, the owner note, retries and the money limits', () =>
     'ask one question on the issue; that issue waits and the others go on.', 'for a Story, use pdd-prompting.',
     'Write each decision on the issue or PR.', 'After a restart, read the issue and PR first and do not redo finished steps.',
     'add the `pdd:stuck` label, write one comment with the cause, and take the next issue.', '60 minutes', '30M tokens');
-  has('pdd-merge/SKILL.md', 'If PR 1 has a PASS but no runtime verdict, it merges; add the `pdd:no-verdict` label to the PR (`gh pr edit PR --add-label pdd:no-verdict`).',
+  has('pdd-merge/SKILL.md', 'If PR 1 has a PASS but no runtime verdict, it merges; add the `pdd:no-verdict` label to the PR.',
     'A PR with no checker verdict (the checker could not run or gave none): add the `pdd:no-verdict` label, do not merge, and take the next issue.');
   const merge = read('pdd-merge/SKILL.md');
   assert.ok(merge.indexOf('A PR with no checker verdict') < merge.indexOf('Merge only when all of these are true'), 'no checker verdict is handled before the PASS gate');
@@ -836,9 +838,10 @@ test('AUTOPILOT14: start-up recipe first, new issues only, and code right after 
   const text = has('pdd-autopilot/SKILL.md', '1. First task on a repo that Autopilot has not worked on: run its start-up recipe (install, test, run a changed path). With no recipe, write it, run it once and keep it in the repo. Then pick issues.',
     'filed after Autopilot was turned on or named by a person (`pdd autopilot add N`)',
     '`pdd autopilot start` runs a tick with no AI that starts this skill only when there is work.',
-    'A repo with a release starts the code PR right after PR 1. A new product waits for a person\'s "code now". One code PR per prompt file closes every issue that waits on it.');
+    'A repo with a release starts the code PR as soon as PR 1 is open. A new product waits for a person\'s "code now". One code PR per prompt file closes every issue that waits on it.');
   assert.ok(text.indexOf('start-up recipe') < text.indexOf('Ready:'));
-  for (const name of ['pdd-bug', 'pdd-feature']) has(`${name}/steps/autopilot.md`, 'A new product waits for a person\'s "code now".');
+  for (const name of ['pdd-bug', 'pdd-feature']) has(`${name}/steps/autopilot.md`, 'A new product waits for a person\'s "code now".',
+    '- Code PR: a repo with a release starts it as soon as PR 1 is open, stacked on PR 1; do not wait for PR 1 to merge, in `observe` too.');
 });
 
 // Wrong: the skills read another pdd.json shape than the switch writes, or the Autopilot states live only in comment text.
@@ -865,4 +868,15 @@ test('AUTOPILOT16: the In Autopilot blocks keep links private, use the runtime-a
   has('pdd-bug/steps/autopilot.md', 'put the verdict line (§14) and the full Story paths in the PR 1 body.');
   has('pdd-feature/steps/autopilot.md', "put the checker's verdict line, the plan list and the full Story paths in the PR 1 body.");
   has('pdd-small-change/steps/autopilot.md', "put the scope and the checker's verdict line in the PR body.");
+});
+
+// Wrong (checker FAIL on f881d398): a PR 1 whose new native tests are red for the missing behavior merges alone and
+// leaves main red, or the pair can never merge because the code area waits for PR 1.
+test('AUTOPILOT17: a red-test PR 1 merges only together with its code PR, at the exact code head with a green suite', () => {
+  has('pdd-check/SKILL.md', 'One exception: new native tests in PR 1 may be red only for the missing behavior. Say so in the verdict; then PR 1 merges only together with its code PR.');
+  const text = has('pdd-merge/SKILL.md', "Red pair: if PR 1's new native tests are red only for the missing behavior, never merge PR 1 alone.",
+    "When both PRs have a PASS, set the code PR's base to PR 1's base (`gh pr edit CODE --base BASE`); merge the code PR, which carries PR 1, once the full suite is green on its exact head;",
+    '`gh pr merge PR --merge --match-head-commit <sha>`');
+  assert.ok(text.indexOf('Red pair') < text.indexOf('gh pr merge PR'));
+  for (const name of ['pdd-bug', 'pdd-feature']) assert.doesNotMatch(read(`${name}/steps/autopilot.md`), /after PR 1 merges/, name);
 });
