@@ -29,4 +29,8 @@ Warnings start `Warning: SVG layout`, are deduplicated and ordered by prompt pat
 
 - [Workspace authority](runtime-workspace.prompt.md): required generation/runtime/verification context for opt-in permission.
 
-- [Screen rules](../../RUNBOOK.md#13-give-your-app-a-screen-app-map): authoring and verification context; the CLI exposes this advisory through [Check](runtime-client.prompt.md).
+- [Screen rules](../../RUNBOOK.md#13-give-your-app-a-screen-app-map): authoring and verification context.
+
+## Caller navigation
+
+The CLI exposes this advisory through [Check](runtime-client.prompt.md).

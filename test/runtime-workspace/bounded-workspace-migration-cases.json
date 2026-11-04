@@ -191,6 +191,30 @@
         "ineligible_or_missing": "unknown/stale/unavailable, not pass",
         "network_calls": 0
       }
+    },
+    {
+      "id": "live-abort-mapping-publication",
+      "criterion_id": "AC5",
+      "operation": "migrateRuntimeWorkspace",
+      "given": {
+        "native_input": "AbortController.signal forwarded to ownership and case apply",
+        "each_independent_abort_point": [
+          "waiting for destination ownership",
+          "prepared before first mapping replacement",
+          "mapping replacement may have begun before ledger persistence"
+        ],
+        "pending_case": "complete original case-A",
+        "originals": "owned receipts and uncertain job descriptors"
+      },
+      "expected": {
+        "before_publication": "stop effects; originals and complete pending payload remain usable",
+        "after_publication": "reconcile actual mapping with durable records; applied only with established proof, otherwise pending/conflict",
+        "further_items_started": 0,
+        "new_Runtime_work": 0,
+        "old_projection_deleted": false,
+        "resources_released": "only operation-owned resources after custody retained",
+        "recovery": "location and original read commands retained"
+      }
     }
   ]
 }

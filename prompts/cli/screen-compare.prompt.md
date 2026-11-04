@@ -22,4 +22,8 @@ Keep one table row per required id/text occurrence in stable reference order, in
 
 ## Dependencies
 
-- [Screen rules](../../RUNBOOK.md#13-give-your-app-a-screen-app-map): generation and verification context. [Check](runtime-client.prompt.md) owns CLI routing, output and exit codes.
+- [Screen rules](../../RUNBOOK.md#13-give-your-app-a-screen-app-map): generation and verification context.
+
+## Caller navigation
+
+[Check](runtime-client.prompt.md) owns CLI routing, output and exit codes.

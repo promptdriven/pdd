@@ -19,4 +19,6 @@ Ports (tests inject them): `stdout`, `stderr`, `stdin`, `interactive` (default: 
 
 - [Approval policy and journal](approval-policy.prompt.md): required authoring/generation/native-production/verification/testing context for config, actor, evidence shape and storage.
 
+## Authoring and caller navigation
+
 Read the full [Prompting guide](../../docs/prompting-guide.md) before you change this prompt. Follow the [alpha boundary](public-boundary.prompt.md). The [CLI](pdd-cli.prompt.md) routes `pdd approve PROMPT` here. The [runtime client](runtime-client.prompt.md) uses the same view and edit for Try-page approvals.

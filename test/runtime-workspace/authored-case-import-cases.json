@@ -337,6 +337,52 @@
         "missing_world_before": "retained pending/refused, no invented initial world",
         "requested_incompatible_original_append": "pending, no silent variant substitution"
       }
+    },
+    {
+      "id": "live-abort-before-publication",
+      "criterion_id": "AC6",
+      "operation": "saveDoorCase + acquireCaseWriteOwnership + applyPendingCase",
+      "given": {
+        "native_input": "AbortController.signal propagated by collection",
+        "each_independent_abort_point": [
+          "already aborted on receipt",
+          "waiting for another owner",
+          "ownership acquired before preparation",
+          "prepared record durable before first target replacement"
+        ],
+        "received": "complete case-A including original selected test and expected values"
+      },
+      "expected": {
+        "state": "pending with cancellation reason and recovery path",
+        "complete_payload": "durably retained; receipt failure is reported without acknowledgment",
+        "authored_writes": 0,
+        "late_publication": false,
+        "released_resources": "only this operation ownership and temporaries",
+        "peer_ownership": "unchanged",
+        "retry": "explicit retained-case apply, no redispatch"
+      }
+    },
+    {
+      "id": "live-abort-during-commit-recovery",
+      "criterion_id": "AC6",
+      "operation": "applyPendingCase",
+      "given": {
+        "native_input": "AbortController abort after target replacement may have begun",
+        "each_independent_actual_target": [
+          "established proposed revision with durable commit",
+          "published proposed revision before ledger sync",
+          "conflicting later revision with insufficient publication proof"
+        ],
+        "original_receipt": "complete case-A retained"
+      },
+      "expected": {
+        "reconciliation": "under custody; established durable application committed, otherwise pending/conflict",
+        "additional_appends": 0,
+        "received_and_observed_versions": "retained with durable recovery path",
+        "success": "only after durable commit established",
+        "new_Runtime_work": 0,
+        "cleanup": "only owned resources after reconciliation or durable custody transfer"
+      }
     }
   ]
 }

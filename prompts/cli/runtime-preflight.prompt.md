@@ -305,6 +305,8 @@ attempt-local inputs; this module owns capture policy, not product composition.
   context for synchronous expansion and provenance; native adapters preserve
   this module's privacy, snapshot and capture rules.
 
+## Authoring and caller navigation
+
 Read the full [Prompting guide](../../docs/prompting-guide.md) before you change this prompt. Follow the [alpha boundary](public-boundary.prompt.md). The [runtime client](runtime-client.prompt.md) calls this module.
 
 ## Module binding inventory
