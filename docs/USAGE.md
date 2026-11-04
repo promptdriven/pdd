@@ -132,7 +132,7 @@ The agents that PDD starts always get the full path of this pdd. They are not af
 
 ## 4. The PDD skills
 
-PDD is six skills. A skill is a folder of plain Markdown that your agent reads when it needs it. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name).
+PDD is nine skills. A skill is a folder of plain Markdown that your agent reads when it needs it. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name).
 
 | Skill | What it is |
 |---|---|
@@ -142,6 +142,9 @@ PDD is six skills. A skill is a folder of plain Markdown that your agent reads w
 | `pdd-bug` | A workflow for something that is broken |
 | `pdd-small-change` | A workflow for a small change that is easy to undo |
 | `pdd-setup` | Set up a repo for PDD. It does the same as `pdd setup` |
+| `pdd-autopilot` | With Autopilot on (`observe` or `auto` in `pdd.json`), pick ready issues, claim them and run each one |
+| `pdd-check` | A fresh checker's verdict on a PR at its head |
+| `pdd-merge` | Merge a PR that a fresh checker passed, or write "would merge" in `observe` |
 
 Where the skills go:
 
