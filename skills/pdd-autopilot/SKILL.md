@@ -9,11 +9,11 @@ metadata:
 
 Read the root `pdd.json`: `{"autopilot":{"mode":"off|observe|auto","trust":[...]}}` and `checker`. If `autopilot.mode` is absent or `off`, do nothing; a person leads. `observe`: do all the work; a person merges. `auto`: pdd-merge merges. `pdd autopilot start` runs a tick with no AI that starts this skill only when there is work.
 
-Labels: `pdd:working`, `pdd:stuck`, `pdd:no-verdict` and `pdd:code-pending` are GitHub labels. Add one with `gh issue edit N --add-label NAME` (or `gh pr edit`); if it is missing, `gh label create NAME`.
+GitHub labels `pdd:working`, `pdd:stuck`, `pdd:no-verdict`, `pdd:code-pending`: add with `gh issue edit N --add-label NAME` (or `gh pr edit`); create a missing one with `gh label create NAME`.
 
-1. New repo: with no start-up recipe (install, test, run a changed path), the first task is to write it, run it once and keep it in the repo. Then pick issues.
+1. First task on a repo that Autopilot has not worked on: run its start-up recipe (install, test, run a changed path). With no recipe, write it, run it once and keep it in the repo. Then pick issues.
 2. Trust: trusted = the repo owner + write access + people added with `pdd autopilot trust`. Read only trusted people's text: the issue body and comments. On a public repo, do not read an issue from another author until a trusted person comments on it.
-3. Ready: open, filed after Autopilot was turned on or named by a person (`pdd autopilot add N`), no open "blocked by" issue, no open PR, not claimed. An older issue starts only by name.
+3. Ready: open, filed after Autopilot was turned on or named by a person (`pdd autopilot add N`), no open "blocked by" issue, no open PR, not claimed.
 4. Room: start only when the AI account is below its 5-hour and weekly limits (never paid credits), the machine has free CPU and memory, and a test slot is free. There is no fixed number of runs; `--runs N` sets a cap. At most 2 runs change one prompt file; skip a 3rd and take the next free issue.
 5. Claim: add the `pdd:working` label and one short comment that names this machine. If two machines claim at once, the earlier label event wins and the other backs off. Skip a claimed issue. Take it over only when the claim had no commit, comment or label refresh for about 1 hour. Remove the label when the run ends.
 6. Own it: one owner per issue. Give the owner the issue link and a note of at most 30 words; for a Story, use pdd-prompting. State the goal and the smallest change. Reproduce it. Stop with one comment if it is not a bug, has no repro, someone owns it or an open PR may fix it. For a product call no test settles, ask one question on the issue; that issue waits and the others go on.

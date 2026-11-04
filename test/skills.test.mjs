@@ -151,7 +151,7 @@ test('SKILLS8: after prompt work the agent runs pdd test on its own, offers pdd 
 const RUNBOOK = () => readFileSync(join(skills, 'pdd-prompting/RUNBOOK.md'), 'utf8');
 // Every "section N" that a skill names, with the RUNBOOK title it must have. Add a row when a skill names a new section.
 const RUNBOOK_SECTIONS = { 11: '`pdd test`', 21: 'Fake the outside world', 2: 'The files', 3: 'Schema rules', 4: 'Expected values', 6: 'Command-line programs (`cli`)',
-  7: 'A prompt that calls another prompt', 8: 'Check paths', 9: 'Money and dates', 10: 'AI calls', 13: 'Give your app a screen (app map)',
+  7: 'A prompt that calls another prompt', 8: 'Check paths', 9: 'Money and dates', 10: 'AI calls', 12: '`pdd simulate` and Save as test', 13: 'Give your app a screen (app map)',
   14: 'Bug workflow', 17: 'Code space: replay evidence and the formal check', 18: 'Patterns: a pure function and a state sequence' };
 const section14 = () => RUNBOOK().slice(RUNBOOK().indexOf(`## 17. ${RUNBOOK_SECTIONS[17]}`));
 
@@ -741,12 +741,16 @@ test('AUTOPILOT4: the checker is fresh, prefers another family, labels a same-fa
     'use a fresh session of the builder\'s family and label it `checker_mode: same-family`', '`verdict` (PASS, FAIL or NOT SURE)', '`head` (the SHA you checked)',
     '`risk` (1-5, before merge)', '`family`, `session`, `checker_mode`', 'Never send a failed check again on your own.',
     'read the issue first and write 3 input → result pairs from it', 'Each expected value comes from an issue quote or the old behavior.',
-    'For a screen change, take before and after screenshots', 'gives its own risk 1-5', 'If no other family is available, say so; do not claim this review.');
+    'For a screen change, take before and after screenshots', 'reruns each merged PR on main and gives its own risk 1-5',
+    'A new test value needs no person when you (blind, from the Story, with a named rule) and the runtime agree; else it is a note.',
+    'Use a `pdd test` result for the new and the old prompt only when it is for the prompt text at this head; if there is none, run `pdd test` once.',
+    'Both PRs: the full suite is green on the head, with no new skip or only.', 'If no other family is available, say so; do not claim this review.');
 });
 
 // Wrong: a PASS for an old head merges new code, or the merge is not pinned to the head that was checked.
 test('AUTOPILOT5: merge needs a PASS for the current head or an equal patch-id with a green suite on the exact head', () => {
-  const text = has('pdd-merge/SKILL.md', 'a fresh checker PASS (pdd-check) is for the current head.',
+  assert.doesNotMatch(read('pdd-check/SKILL.md'), /sample/i, 'every merged PR gets the after-merge rerun');
+  const text = has('pdd-merge/SKILL.md', 'a fresh checker PASS (pdd-check) is for the current head.', 'the full suite is green on the exact merge head, for PR 1 and the code PR;',
     'A PASS for another head counts only when `git patch-id` of both heads is equal and the full suite is green on the exact current head.',
     'A conflict fix or any other change gives a new patch-id and needs a fresh PASS;',
     'at least one check ran, and all required checks are green on that head. A missing, pending or failed check: wait, do not merge;',
@@ -780,7 +784,10 @@ test('AUTOPILOT8: outcomes, the owner note, retries and the money limits', () =>
     'ask one question on the issue; that issue waits and the others go on.', 'for a Story, use pdd-prompting.',
     'Write each decision on the issue or PR.', 'After a restart, read the issue and PR first and do not redo finished steps.',
     'add the `pdd:stuck` label, write one comment with the cause, and take the next issue.', '60 minutes', '30M tokens');
-  has('pdd-merge/SKILL.md', 'If PR 1 has no runtime verdict, add the `pdd:no-verdict` label to the PR (`gh pr edit PR --add-label pdd:no-verdict`).');
+  has('pdd-merge/SKILL.md', 'If PR 1 has a PASS but no runtime verdict, it merges; add the `pdd:no-verdict` label to the PR (`gh pr edit PR --add-label pdd:no-verdict`).',
+    'A PR with no checker verdict (the checker could not run or gave none): add the `pdd:no-verdict` label, do not merge, and take the next issue.');
+  const merge = read('pdd-merge/SKILL.md');
+  assert.ok(merge.indexOf('A PR with no checker verdict') < merge.indexOf('Merge only when all of these are true'), 'no checker verdict is handled before the PASS gate');
   for (const name of WORKFLOWS) has(`${name}/steps/autopilot.md`, '`--max-calls`, strict mode, and never sending a failed check again.');
 });
 
@@ -805,7 +812,7 @@ test('AUTOPILOT11: one fix round, then a premise check and a new plan before pdd
   for (const name of WORKFLOWS) {
     const text = has(`${name}/steps/autopilot.md`, 'After a FAIL, do one fix round.', 'After a second FAIL, check the premise',
       'Write the cause and a new plan in one comment, add the `pdd:stuck` label (`gh issue edit N --add-label pdd:stuck`)', 'Never change a test to make it pass.',
-      'A test runs a prompt that has no interface block: draft the block through pdd');
+      'Something runs a prompt (a test, a command or another prompt) that has no interface block: draft the block from the prompt text through pdd and save it. A prompt that nothing runs needs none.');
     assert.ok(text.indexOf('check the premise') < text.indexOf('new plan') && text.indexOf('new plan') < text.indexOf('pdd:stuck'), name);
   }
 });
@@ -826,8 +833,8 @@ test('AUTOPILOT13: runs start by room with no fixed cap, and at most 2 runs chan
 
 // Wrong: old backlog starts by itself, a new repo starts without a way to run its app, or code waits on every repo.
 test('AUTOPILOT14: start-up recipe first, new issues only, and code right after PR 1 in a repo with a release', () => {
-  const text = has('pdd-autopilot/SKILL.md', 'the first task is to write it, run it once and keep it in the repo. Then pick issues.',
-    'filed after Autopilot was turned on or named by a person (`pdd autopilot add N`)', 'An older issue starts only by name.',
+  const text = has('pdd-autopilot/SKILL.md', '1. First task on a repo that Autopilot has not worked on: run its start-up recipe (install, test, run a changed path). With no recipe, write it, run it once and keep it in the repo. Then pick issues.',
+    'filed after Autopilot was turned on or named by a person (`pdd autopilot add N`)',
     '`pdd autopilot start` runs a tick with no AI that starts this skill only when there is work.',
     'A repo with a release starts the code PR right after PR 1. A new product waits for a person\'s "code now". One code PR per prompt file closes every issue that waits on it.');
   assert.ok(text.indexOf('start-up recipe') < text.indexOf('Ready:'));
@@ -837,12 +844,25 @@ test('AUTOPILOT14: start-up recipe first, new issues only, and code right after 
 // Wrong: the skills read another pdd.json shape than the switch writes, or the Autopilot states live only in comment text.
 test('AUTOPILOT15: the skills read autopilot.mode and autopilot.trust, and apply the pdd: states as real GitHub labels', () => {
   has('pdd-autopilot/SKILL.md', '`{"autopilot":{"mode":"off|observe|auto","trust":[...]}}`',
-    'Labels: `pdd:working`, `pdd:stuck`, `pdd:no-verdict` and `pdd:code-pending` are GitHub labels.',
-    'Add one with `gh issue edit N --add-label NAME` (or `gh pr edit`); if it is missing, `gh label create NAME`.');
+    'GitHub labels `pdd:working`, `pdd:stuck`, `pdd:no-verdict`, `pdd:code-pending`: add with `gh issue edit N --add-label NAME` (or `gh pr edit`); create a missing one with `gh label create NAME`.');
   for (const file of [...AUTOPILOT_SKILLS.map(name => `${name}/SKILL.md`), ...WORKFLOWS.map(name => `${name}/steps/autopilot.md`)]) {
     const text = read(file);
     assert.doesNotMatch(text, /`autopilot` (?:is|in)\b/, `${file}: read autopilot.mode, not autopilot`);
     for (const [label] of text.matchAll(/`pdd:[a-z-]+`/g)) assert.ok(['`pdd:working`', '`pdd:stuck`', '`pdd:no-verdict`', '`pdd:code-pending`'].includes(label), `${file}: ${label}`);
   }
   has('pdd-merge/SKILL.md', 'add the `pdd:code-pending` label to the issue', 'Remove the `pdd:working` label.');
+});
+
+// Wrong (checker FAIL on 0b027c35): a bearer Simulator link in a PR, a person-decided new value with no D40 path,
+// unnamed RUNBOOK overrides, no cost note, or a feature PR 1 with no verdict line.
+test('AUTOPILOT16: the In Autopilot blocks keep links private, use the runtime-and-checker value rule and name the RUNBOOK rules they change', () => {
+  for (const name of WORKFLOWS) {
+    const text = has(`${name}/steps/autopilot.md`, 'Never put a Simulator link in a PR, issue or file.',
+      'A new test value needs no person when the runtime and the checker (blind, from the Story, with a named rule) agree. Else it is a note on the PR.',
+      'Cost (RUNBOOK "AI calls"): write the likely check cost on the issue or PR, and do not wait.', 'Gates (§2)', 'Expected values (§4)', '(§11', 'Skip', '(§12)');
+    assert.doesNotMatch(text, /may carry the Simulator|trusted person wrote/, name);
+  }
+  has('pdd-bug/steps/autopilot.md', 'put the verdict line (§14) and the full Story paths in the PR 1 body.');
+  has('pdd-feature/steps/autopilot.md', "put the checker's verdict line, the plan list and the full Story paths in the PR 1 body.");
+  has('pdd-small-change/steps/autopilot.md', "put the scope and the checker's verdict line in the PR body.");
 });
