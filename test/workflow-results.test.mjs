@@ -124,3 +124,16 @@ test('2904: a 51-row batch keeps every request id and report link in the record;
   assert.ok(line.includes('report-9 ') && !line.includes('report-10 '));
   assert.ok(line.endsWith('; 41 more requests and 41 more reports not shown (all in the run record)'), line.slice(-120));
 });
+
+test('2904: a cached row shows the build and model from its cache identity, marked as cached; direct values win', t => {
+  const f = folders(t);
+  f.batch('20261103-120000-bbbb', { intent: 'check', created_at: '2026-11-03T12:00:00Z',
+    rows: [{ test: 'tests/a.json', state: 'passed', cached: true, engine_sha: null, requested_model: 'unknown', cache_identity: { engine_sha: 'fedcba9876543210', requested_model: 'cached-model' } }] }, { summary_line: 'Prompt tests: ✓ 1 of 1 criteria' });
+  const [result] = readRunResults({ root: f.root, since }, { env: f.env, capture: () => { throw Error('no capture'); } });
+  assert.deepEqual([result.engine, result.engineCached, result.model, result.modelCached], ['fedcba987654', true, 'cached-model', true]);
+  assert.equal(resultLines([result])[0], 'pdd result: pdd test (batch 20261103-120000-bbbb, 2026-11-03T12:00:00Z, source unknown, engine fedcba987654 (cached), model cached-model (cached)): Prompt tests: ✓ 1 of 1 criteria');
+  f.batch('20261103-130000-cccc', { intent: 'check', created_at: '2026-11-03T13:00:00Z',
+    rows: [{ test: 'tests/a.json', cache_identity: { engine_sha: 'fedcba9876543210', requested_model: 'cached-model' } }, { test: 'tests/b.json', engine_sha: '0123456789abcdef', requested_model: 'live-model' }, { test: 'tests/c.json', cache_identity: 'not an object' }] }, { summary_line: 'Prompt tests: ✓ 2 of 2 criteria' });
+  const [mixed] = readRunResults({ root: f.root, since }, { env: f.env, capture: () => { throw Error('no capture'); } });
+  assert.deepEqual([mixed.engine, mixed.engineCached, mixed.model, mixed.modelCached], ['0123456789ab', undefined, 'live-model', undefined]);
+});

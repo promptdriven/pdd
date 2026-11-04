@@ -2719,3 +2719,15 @@ test('2904: a 51-row pdd test batch keeps all requests and reports in the step r
   assert.match(top, /^pdd result: pdd test \(batch 20261027-180000-abcd, /);
   assert.ok(top.endsWith('; 41 more requests and 41 more reports not shown (all in the run record)'), top.slice(-160));
 });
+
+test('2904: a cache-only pdd test row with no agent summary shows its cached build and model in the step record and the PR top', async t => {
+  const { f, run, done } = await featureWithOwnResults(t, { results: false });
+  saveBatch(f.ports.env.PDD_STATE_DIR, '20261027-180000-abcd', { root: run.root, created_at: '2026-10-27T18:00:00.000Z', intent: 'check',
+    rows: [{ test: 'tests/value.json', state: 'passed', cached: true, request_ids: [], cache_identity: { engine_sha: 'fedcba9876543210', requested_model: 'cached-model' } }] },
+    { summary_line: 'Prompt tests: ✓ 1 of 1 criteria · 1 Story skipped · 0 AI calls', rows: [] });
+  await done('check', {});
+  const [own] = f.record().done.check.pddResults;
+  assert.deepEqual([own.engine, own.engineCached, own.model, own.modelCached], ['fedcba987654', true, 'cached-model', true]);
+  await done('try', { skipped: 'No person at the Try step.' });
+  assert.match(f.prs[0].body.split('\n')[0], /^pdd result: pdd test \(batch 20261027-180000-abcd, [^)]*engine fedcba987654 \(cached\), model cached-model \(cached\)\): /);
+});

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-results.prompt.md (sha256: 68e5c97b8a2de9584648e9926c7b61d760d28c34841729310c826216882af0a5).
+// Generated from prompts/cli/workflow-results.prompt.md (sha256: c26420a6a9ef1967d07c422ad0ad5415296d8449a4e6ee2e5565a2999c10ebce).
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -47,6 +47,19 @@ function proveResult(path, { runId, since, root, baseBranch }, git) {
   return { kind: 'pdd workflow prove', at: Math.round(stat.mtimeMs), state, summary: text(judged.line, 600),
     ...(state === 'current' ? { outcome: judged.status } : {}), ...(judged.record ? { headSha: judged.record.headSha } : {}) };
 }
+// The interpreter build and model of a check: a row's direct fields, else the validated cache_identity of a reused (cached) pass.
+function identity(rows) {
+  const cached = rows.map(row => row?.cache_identity).filter(value => value && typeof value === 'object' && !Array.isArray(value));
+  const pick = (direct, fromCache, max) => {
+    const own = first(direct);
+    if (own) return [text(own, max), false];
+    const reused = first(fromCache);
+    return reused ? [text(reused, max), true] : [null, false];
+  };
+  const [engine, engineCached] = pick(rows.map(row => row?.engine_sha), cached.map(value => value.engine_sha), 12);
+  const [model, modelCached] = pick(rows.map(row => row?.requested_model), cached.map(value => value.requested_model), 80);
+  return { engine, model, ...(engineCached ? { engineCached } : {}), ...(modelCached ? { modelCached } : {}) };
+}
 // A prove result that is not current is shown, but it is never pdd's proof.
 export const usableResult = result => result.kind !== 'pdd workflow prove' || result.state === 'current';
 
@@ -77,7 +90,7 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
     const stories = Array.isArray(summary?.rows) ? [...new Set(summary.rows.map(row => text(row?.summary_line)).filter(Boolean))] : [];
     results.push({ kind: 'pdd test', batch: check.name, at: check.at, source, requests: requestsOf(batch.rows), reports: reportsOf(batch.rows),
       summary: text(summary?.summary_line) || 'result not saved (the check did not finish)', stories,
-      engine: text(first(batch.rows.map(row => row?.engine_sha)), 12) || null, model: text(first(batch.rows.map(row => row?.requested_model)), 80) || null });
+      ...identity(batch.rows) });
   }
   if (lint) {
     const rows = lint.batch.rows.filter(row => row && typeof row === 'object');
@@ -101,7 +114,7 @@ export function resultLines(results, { kinds = null } = {}) {
   if (!shown.length) return [noResultLine(kinds ?? KINDS)];
   return shown.map(result => {
     const facts = [result.batch && `batch ${result.batch}`, iso(result.at), result.source && `source ${result.source}`,
-      result.engine && `engine ${result.engine}`, result.model && `model ${result.model}`,
+      result.engine && `engine ${result.engine}${result.engineCached ? ' (cached)' : ''}`, result.model && `model ${result.model}${result.modelCached ? ' (cached)' : ''}`,
       result.requests?.length && `request${result.requests.length > 1 ? 's' : ''} ${result.requests.slice(0, SHOWN).join(' ')}`,
       result.headSha && `head ${result.headSha.slice(0, 7)}`].filter(Boolean).join(', ');
     return `${PDD_RESULT}: ${result.kind} (${facts}): ${[result.summary, ...(result.stories ?? []).filter(line => line !== result.summary),
