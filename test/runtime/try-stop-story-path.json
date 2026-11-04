@@ -28,9 +28,18 @@
           "login": "tester"
         }
       ]
-    }
+    },
+    "requests": []
   },
   "simulation": {
+    "runtime.stop": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "status": 200,
+        "state": "passed"
+      }
+    },
     "state.load": {
       "action": "key-value.get",
       "world_pointer": "/kv",
@@ -88,6 +97,13 @@
         {
           "criterion_id": "AC2",
           "target": "calls",
+          "path": "/resources/runtime-client-runtime-stop",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
           "path": "/resources/runtime-client-state-save",
           "op": "equals",
           "value": 0
@@ -127,6 +143,13 @@
           "path": "/exit_code",
           "op": "equals",
           "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/runtime-client-runtime-stop",
+          "op": "equals",
+          "value": 1
         },
         {
           "criterion_id": "AC1",

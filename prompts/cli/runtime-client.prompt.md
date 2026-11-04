@@ -504,7 +504,7 @@ owner API binding for this raise is pending the planner's contract; do not inven
 - A Try setup that the server refuses (the POST or the job; runtime team, Oct 27) is not a check: no table and no `pdd test` advice, exit 4. Two plain lines: `The Try could not start: the app map was refused (<code>: <reason>).` and `Fix <app map path> (RUNBOOK §13), then run pdd simulate <story> --new.` It is the app map when one was sent and the code is `ambiguous-handler`, `template-reference-schema` or `app-map-*`, or the section names the app map. Else `the server refused it (…)` and `Fix what it names, then run pdd simulate <story> --new.`, with ` Details: <report link>` when there is one. Many refusals join with `; `; a refusal with a `where` (prompt-runtime #379) adds `; at <where>` after its reason. The reason is the server's `reason` (on each `result.refusals[]` item, or on `result.report.refusal` with the same code), else pdd's plain rule (`ambiguous-handler`: on one screen, all taps of one kind must match by the same key; `template-reference-schema`: a field that gets a value from the screen (`$ref`) must be a plain {"type": "string"}), else the engine message, else the server message unless it is the generic `The runtime refused this job…`. A server `fix` takes the place of pdd's fix words: `<fix> Then run pdd simulate <story> --new.` A Try that is ready but has an invalid link is exit 3 with one line and no table: `Try link refused: it points at <link origin>, not <configured address>. The server's address setting may be wrong; tell the PDD team.` (or `Try link refused: it is not a valid Try link. Tell the PDD team.` when the origin matches). pdd keeps its record so `pdd simulate --stop` can end it, a later `pdd simulate` says the same, and pdd never prints that link.
 - A reused link says `It keeps its original 24-hour expiry; stop it with: pdd simulate --stop <story>`, so reopening never promises a fresh 24 hours.
 - Open a newly created link with `open` (macOS) or `xdg-open` (Linux) and print the end line `Try ready for "<title>": <link> (open in your browser). It ends in 24 hours, or with: pdd simulate --stop <story>`. `--no-open`, or a failed open, prints `Try ready for "<title>": <link>` and then how to open it.
-- `--stop [STORY]` finds the Try in the state record by story name, story path (normalized relative to the repo root, or by `<story>.md` under `user_stories/` when an older saved record has no `storyPath`), test path (also normalized relative to the repo root) or test file name, so it works with the same Story path that started the Try as well as on a branch without the story (real-user issue 14). With STORY, if none or several match, exit 2 with `No open Try for "<STORY>". Open Try links: <names>.` (`none` when none are open) on stderr and keep the saved Try records unchanged. No STORY stops the one open Try; none is exit 2 with `No open Try in this repository.` and several is exit 2 with `Name the Try to stop. Open Try links: <names>.` on stderr. When matched, it sends DELETE `/v1/try/<id>` with the header `X-Request-Id: <new UUID>`; read the stop job until `passed`; then forget the Try from the saved open Try records, print `The Try link for "<title>" is stopped.` and exit 0. A DELETE answer 404 or 410 counts as stopped. A GET 404 or 410 on a recorded Try counts as ended. In both cases pdd deletes the record, so the next `pdd simulate` makes a new Try; the person never edits a state file.
+- `--stop [STORY]` finds the Try in the state record by story name, story path (normalized relative to the repo root, or by `<story>.md` under `user_stories/`, including subfolders such as `user_stories/**/<story>.md`, when an older saved record has no `storyPath`), test path (also normalized relative to the repo root) or test file name, so it works with the same Story path that started the Try as well as on a branch without the story (real-user issue 14). With STORY, if none or several match, exit 2 with `No open Try for "<STORY>". Open Try links: <names>.` (`none` when none are open) on stderr and keep the saved Try records unchanged. No STORY stops the one open Try; none is exit 2 with `No open Try in this repository.` and several is exit 2 with `Name the Try to stop. Open Try links: <names>.` on stderr. When matched, it sends DELETE `/v1/try/<id>` with the header `X-Request-Id: <new UUID>`; read the stop job until `passed`; then forget the Try from the saved open Try records, print `The Try link for "<title>" is stopped.` and exit 0. A DELETE answer 404 or 410 counts as stopped. A GET 404 or 410 on a recorded Try counts as ended. In both cases pdd deletes the record, so the next `pdd simulate` makes a new Try; the person never edits a state file.
 - The note on other files prints once per command, in calm words, to stderr. `pdd test` folds it into its send line: `Lint passed. Sent 2 checks at 10:47:49: 11 files, 55 KB (4 are not prompt, story or test files; run \`pdd test --files\` to see them).` `pdd simulate` folds it into its start line: `Starting your Try: sending M files, SIZE (N are not prompt, story or test files; run \`pdd test --files\` to see them)…`. It is not a warning.
 - Confirmed not-started 429 server-full or 503 check-queue-full/lint-queue-full during new Try setup waits under admission recovery within the existing setup allowance; accepted setup is read by its ID. Other 429 replies make no new attempt: exit 5 with the server's message, else `Too many Try links are open. Stop one with pdd simulate --stop`.
 - Approvals from the Try page (#9, agreed fields): with the saved cases, pdd reads `GET /v1/try/<id>/approvals` (`{approvals: [{id, prompt_path, prose_sha256, requested_at, state}]}`). For each `pending` request in a person's terminal it uses [prompt approve](prompt-approve.prompt.md): the path must be a Git-visible `*.prompt.md` inside the repo (else declined), the request's `prose_sha256` must equal the local prose hash (else declined: `the prompt changed since you clicked Approve`), an approved and current prompt is done with no question, otherwise it shows the interface and asks the same y/n; one reader serves all questions. Then it sends `POST /v1/try/<id>/approvals/<request id>` with `{"state": "done" | "declined"}` (JSON). `tries/<id>.approvals.json` keeps each answer, so pdd never asks twice and resends only an answer whose POST failed. Without a terminal (an agent) pdd only prints `The Try page asks to approve <path>. A person answers it in a terminal: pdd simulate <story>` once and answers nothing. A missing endpoint (404) is skipped. Waiting needs both stdin and stdout to be terminals.
@@ -752,7 +752,7 @@ batches remain usable. Do not recover by a network read or change saved caches.
 
 ## Runtime binding for Try stop
 
-The `runTry` entry binds `runTry({words, options, cwd}, ports)` (and its `--stop` handler `stopByName`) in `src/runtime-client.mjs` when `options["--stop"]` is `true`. Given `words` (with optional `STORY` at `words[0]`), `options: {"--stop": true}` and optional `cwd` relative to the repository root, read the open Try list once with `state.load` and key `"tries"`. Each saved Try record has `test_path`, `id`, `request_ids`, `reservation`, `story`, optional `storyPath`, `title`, `origin` and `login`. Match `words[0]` against `item.story`, `item.storyPath`, `item.test_path`, the `item.test_path` file name without `.json`, or `<item.story>.md` under `user_stories/` when `item.storyPath` is absent (normalizing relative paths from `cwd` to the repository root). When one open Try matches, call `state.save` once with `key: "tries"`, `delete: "DELETE /v1/try/<item.id>"` and `value` set to the remaining items, and return `exit_code: 0`, `stdout: "The Try link for \"<title>\" is stopped.\n"` and `stderr: "Stopping the Try for \"<title>\"…\n"`. When none matches, do not call `state.save`; return `exit_code: 2`, `stdout: ""` and `stderr: "No open Try for \"<STORY>\". Open Try links: <comma-joined item.story values>.\n"` (or when `words` is empty: `"No open Try in this repository.\n"` when none are open and `"Name the Try to stop. Open Try links: <comma-joined item.story values>.\n"` when several are open). Every non-empty `stdout` or `stderr` ends with one newline.
+The `runTry` entry binds `runTry({words, options, cwd}, ports)` (and its `--stop` handler `stopByName`) in `src/runtime-client.mjs` when `options["--stop"]` is `true`. Given `words` (with optional `STORY` at `words[0]`), `options: {"--stop": true}` and optional `cwd` relative to the repository root, read the open Try list once with `state.load` and key `"tries"`. In `src/runtime-client.mjs`, `repoState.tries` is an object keyed by `test_path`, which maps to the `tries` entry list (`Object.entries(repoState.tries ?? {}).map(([test_path, record]) => ({test_path, ...record}))`) on `state.load` and back to `Object.fromEntries(value.map(({test_path, ...record}) => [test_path, record]))` on `state.save`. Each saved Try record has `test_path`, `id`, `request_ids`, `reservation`, `story`, optional `storyPath`, `title`, `origin` and `login`. Match `words[0]` against `item.story`, `item.storyPath`, `item.test_path`, the `item.test_path` file name without `.json`, or `<item.story>.md` under `user_stories/` (including subfolders such as `user_stories/**/<item.story>.md`) when `item.storyPath` is absent (normalizing relative paths from `cwd` to the repository root). When one open Try matches, call `runtime.stop` once with `{"id": item.id}` (sending `DELETE /v1/try/<item.id>`), then call `state.save` once with `key: "tries"` and `value` set to the remaining items, and return `exit_code: 0`, `stdout: "The Try link for \"<title>\" is stopped.\n"` and `stderr: "Stopping the Try for \"<title>\"…\n"`. When none matches, do not call `runtime.stop` or `state.save`; return `exit_code: 2`, `stdout: ""` and `stderr: "No open Try for \"<STORY>\". Open Try links: <comma-joined item.story values>.\n"` (or when `words` is empty: `"No open Try in this repository.\n"` when none are open and `"Name the Try to stop. Open Try links: <comma-joined item.story values>.\n"` when several are open). Every non-empty `stdout` or `stderr` ends with one newline.
 
 <details>
 <summary>Runtime interface</summary>
@@ -760,7 +760,7 @@ The `runTry` entry binds `runTry({words, options, cwd}, ports)` (and its `--stop
 ```json
 {
   "status": "draft",
-  "prose_sha256": "b1449ef6f34be649e5543d11ec4f1abb19bd4e2e438308aba32b063623a20ad6",
+  "prose_sha256": "9ddcf393ff0854b7df435a5e34fd95629a11dab06758bf4f5710539fc981f9b3",
   "entries": [
     {
       "operation": "runTry",
@@ -824,6 +824,46 @@ The `runTry` entry binds `runTry({words, options, cwd}, ports)` (and its `--stop
   ],
   "calls": [],
   "resources": [
+    {
+      "name": "runtime",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "stop",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "integer"
+              },
+              "state": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "state"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
     {
       "name": "state",
       "kind": "key-value",
@@ -945,10 +985,6 @@ The `runTry` entry binds `runTry({words, options, cwd}, ports)` (and its `--stop
                   "tries"
                 ]
               },
-              "delete": {
-                "type": "string",
-                "minLength": 1
-              },
               "value": {
                 "type": "array",
                 "items": {
@@ -1021,7 +1057,6 @@ The `runTry` entry binds `runTry({words, options, cwd}, ports)` (and its `--stop
             },
             "required": [
               "key",
-              "delete",
               "value"
             ],
             "additionalProperties": false
@@ -1109,7 +1144,7 @@ The `runTry` entry binds `runTry({words, options, cwd}, ports)` (and its `--stop
     }
   ],
   "limits": {
-    "max_steps": 4,
+    "max_steps": 6,
     "max_model_calls": 4
   },
   "conventions": []
