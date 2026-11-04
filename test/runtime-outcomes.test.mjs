@@ -209,6 +209,51 @@ test('OUTCOME empty results cannot succeed or imply criterion passes', () => {
   }
 });
 
+test('OUTCOME formal check: summaryLine criterion counting across row states and criteria shapes', () => {
+  const states = ['passed', 'failed', 'refused', 'not_run', 'unknown', 'queued', 'running'];
+  const criteriaShapes = [undefined, { passed: 0, total: 2 }, { passed: 2, total: 2 }];
+  const totals = [undefined, 0, 3];
+  const companions = [
+    null,
+    { state: 'passed', story: 'two', criteria: { passed: 1, total: 1 }, criteria_total: 1 },
+    { state: 'passed', story: 'two', criteria_total: 4 },
+    { state: 'refused', story: 'two', criteria_total: 4 },
+    { state: 'running', phase: 'server', story: 'two', criteria_total: 2 }
+  ];
+  let checked = 0;
+  for (const state of states) {
+    for (const criteria of criteriaShapes) {
+      for (const criteria_total of totals) {
+        for (const companion of companions) {
+          const first = {
+            state,
+            story: 'one',
+            ...(state === 'running' ? { phase: 'server' } : {}),
+            ...(criteria ? { criteria } : {}),
+            ...(criteria_total !== undefined ? { criteria_total } : {})
+          };
+          const rows = companion ? [first, companion] : [first];
+          const unreported = row => row.state === 'passed' && !row.criteria;
+          const countedRows = rows.filter(row => !unreported(row));
+          const notReported = rows.some(unreported);
+          const expectedPassed = countedRows.reduce((sum, row) => sum + (row.criteria ? row.criteria.passed : 0), 0);
+          const expectedTotal = countedRows.reduce((sum, row) => sum + (row.criteria ? row.criteria.total : (row.criteria_total ?? 0)), 0);
+          const expectedFragment = countedRows.length === 0 && notReported
+            ? 'passed · criteria details not reported'
+            : `${expectedPassed} of ${expectedTotal} ${expectedTotal === 1 ? 'criterion' : 'criteria'}${notReported ? ' · criteria details not reported' : ''}`;
+          const actual = summaryLine(rows);
+          assert.ok(
+            actual.includes(` ${expectedFragment} · `),
+            `rows=${JSON.stringify(rows)} expected fragment "${expectedFragment}" in "${actual}"`
+          );
+          checked += 1;
+        }
+      }
+    }
+  }
+  assert.equal(checked, 315);
+});
+
 for (const [check, code, said] of [['pool', 'pool-copy-unavailable', /No model login is available/], ['login-queue', 'login-queue-timeout', /Waited too long for a model login/]])
 test(`OUTCOME a retryable refusal before dispatch is not run in every output, whatever its code: ${code}`, async t => {
   const r = await setup(t, 'passed', { check });
