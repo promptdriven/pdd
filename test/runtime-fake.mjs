@@ -38,6 +38,20 @@ export function storyTest(repo, name, folder = 'tests') {
 const usage = calls => ({ calls, model: 'unknown', requested_model: calls ? 'gpt-6.1-sol' : 'unknown', seconds: 10.4686, input_tokens: calls ? 6835 : 'unknown', output_tokens: calls ? 110 : 'unknown' });
 const PASSED_CHECKS = [{ criterion_id: 'AC1', target: 'result', path: '/totalCents', op: 'equals', expected: 900, actual: 900, passed: true }];
 
+// Explicit ordinary-operation fake-engine input, not capability discovery or a real parser proof.
+// Its identities and byte manifest come from the selected uploaded scenario, never its expected checks.
+export function ordinaryCapabilities(sources, path) {
+  const scenario = sources.find(source => source.path === path), doc = JSON.parse(scenario.bytes.toString('utf8'));
+  const engine_build = 'eae2202a68d00ab762fcbbf1eba0d8607a132a15';
+  return { schema_version: 'prompt-runtime.program-capabilities.v1', capability_version: `program-capabilities.v1@${engine_build}`, engine_build,
+    source: { scenario_sha256: sha(scenario.bytes), closure_sha256: 'c'.repeat(64),
+      files: sources.map(source => ({ path: source.path, sha256: sha(source.bytes) })).sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0) },
+    complete: true, verdict: 'supported', operations: (doc.steps ?? []).map(step => ({
+      selection: { step_id: step.step_id, node_id: step.operation, prompt_path: step.entry_path, operation: step.operation },
+      feature: 'ordinary', binding_kind: 'none', resource_mode: 'simulated', evaluator_mode: 'default', execution_mode: 'ordinary', verdict: 'supported', reason_code: 'supported' })),
+    edges: [], diagnostics: [], provider_calls: 0, resource_calls: 0 };
+}
+
 // A fake PDD runtime on 127.0.0.1. `answer(entry, fake)` returns {status, json | text, headers} or {destroy: true}.
 export async function fakeRuntime(t, answer) {
   const fake = { posts: [], jsonPosts: [], gets: [], deletes: [], authorization: new Set(), jobs: new Map() };
@@ -75,8 +89,16 @@ export async function fakeRuntime(t, answer) {
     const post = fake.posts.find(post => post.command === 'lint' && post.request.requestId === id);
     const listing = post?.request.complete === true ? spawnSync('tar', ['-tf', '-'], { input: post.tar, encoding: 'utf8' }) : null;
     if (listing) assert.equal(listing.status, 0, listing.stderr);
-    const tests = (listing?.stdout.split('\n') ?? []).filter(path => path.endsWith('.json')).map(path => ({ path, verdict: 'passed' }));
+    const paths = (listing?.stdout.split('\n') ?? []).filter(Boolean);
+    const sources = paths.map(path => {
+      const file = spawnSync('tar', ['-xOf', '-', path], { input: post.tar });
+      assert.equal(file.status, 0, file.stderr.toString());
+      return { path, bytes: file.stdout };
+    });
+    const tests = sources.filter(source => { try { return JSON.parse(source.bytes).schema_version === 'prompt-runtime.program-scenario.v1'; } catch { return false; } })
+      .map(({ path }) => ({ path, verdict: 'passed', capabilities: ordinaryCapabilities(sources, path) }));
     return fake.job(id, 'lint', 'passed', { exitCode: 0, refusals: [],
+      capabilities: tests.map(item => ({ path: item.path, report: item.capabilities })), capabilities_complete: !!listing,
       report: { verdict: 'passed', lint: { complete: !!listing, tests }, program: { prompts, refused_prompts: refused } } });
   };
   fake.check = (id, state = 'passed', checks = PASSED_CHECKS, refusals = []) => fake.job(id, 'check', state, ['queued', 'running'].includes(state) ? null
