@@ -1,9 +1,12 @@
+import {loadRuntimeWorkspace,allowsRuntimePath,requireRuntimePath} from './runtime-workspace.mjs';
 // Generated from prompts/cli/runtime-bindings.prompt.md (sha256: 5b44de22d54982cc69e3bb046c106a1b1b908e37ea32ef66e3db988f2c465d81).
 import { lstatSync } from 'node:fs';
 import { join } from 'node:path';
-import { PreflightError, readPrompt, isSecretPath, sourceFilePort } from './runtime-preflight.mjs';
+import { PreflightError, readPrompt, isSecretPath, sourceFilePort,gitFiles } from './runtime-preflight.mjs';
 
 export function bindingCoverage({ root, found, selected }) {
+  const workspace=loadRuntimeWorkspace({root});
+  const controlVisible=new Set(gitFiles(root));
   const unavailable = { available: false, bound: null, total: null, modules: [] };
   const fail = (path, why) => { throw Object.assign(new PreflightError(4, `pdd-bindings.json: ${path}: ${why}`), { bindingInventory: true }); };
   const regular = path => {
@@ -15,7 +18,7 @@ export function bindingCoverage({ root, found, selected }) {
       let stat; try { stat = lstatSync(full); } catch { fail(path, 'file does not exist'); }
       if (stat.isSymbolicLink()) fail(path, 'symlinks are not allowed');
     }
-    if (!lstatSync(full).isFile() || !found.visible.has(path)) fail(path, 'must be a regular Git-visible file');
+    if (!lstatSync(full).isFile() || !(path==='pdd-bindings.json'?controlVisible:found.visible).has(path)) fail(path, 'must be a regular Git-visible file');
     return path;
   };
   try { lstatSync(join(root, 'pdd-bindings.json')); } catch (error) { if (error.code === 'ENOENT') return unavailable; throw error; }
@@ -40,6 +43,7 @@ export function bindingCoverage({ root, found, selected }) {
     if (!object(item)) fail(path, 'expected module declaration');
     const bound = Object.hasOwn(item, 'prompt');
     if (!keys(item, bound ? ['module', 'stories', 'prompt'] : ['module', 'stories', 'reason', 'port_attempt'])) fail(path, 'declare prompt or both reason and port_attempt, with no extra fields');
+    if(!allowsRuntimePath(workspace,item.module))continue;
     regular(item.module); if (seen.has(item.module)) fail(path, 'duplicate module'); seen.add(item.module);
     if (!Array.isArray(item.stories) || !item.stories.length || new Set(item.stories).size !== item.stories.length) fail(path, 'stories must be nonempty and unique');
     for (const story of item.stories) { regular(story); if (!stories.has(story)) fail(path, `unknown Story ${story}`); }

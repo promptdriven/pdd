@@ -53,6 +53,16 @@ function parseRoute(route, words, allowHelp = false) {
           options[word] = words[++index];
         } else options[word] = String(option.default);
       }
+      else if (option.kind === 'text-list') {
+        const values = [];
+        while (index + 1 < words.length && !words[index + 1].startsWith('-')) {
+          const value = words[++index];
+          if (!value.trim()) fail();
+          values.push(value);
+        }
+        if (!values.length) fail();
+        options[word] = Object.freeze(values);
+      }
       else {
         const value = words[++index];
         if (!optionValue(option, value)) fail();

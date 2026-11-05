@@ -1,3 +1,4 @@
+import {loadRuntimeWorkspace} from './runtime-workspace.mjs';
 // Generated from prompts/cli/agent-adapters.prompt.md (sha256: 9dc74bacd457bf58690744bdda2f33c50e2e0ee91f052784e9a7d6f28623fe30).
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -97,6 +98,7 @@ function geminiCapabilityError(help) {
  return missing?`Gemini Try read-only mode requires ${missing}; update Gemini CLI.`:null;
 }
 export async function discoverAgents({cwd=process.cwd(),env=process.env,run=runAgentProcess,definitions}={}) {
+ if((arguments[0]?.workspace??loadRuntimeWorkspace({root:cwd})).configured)return (arguments[0].definitions??AGENTS.map(([id,name])=>({id,name}))).map(d=>({id:d.id,name:d.name,state:'error',detail:'Bounded agent connection is unavailable: packet-only context cannot be established.'}));
  const result=[];
  for(const {id,name,kind,command,env:overrides} of definitions??loadAgentDefinitions({cwd,env})){
   const childEnv={...env,...overrides},opts={cwd,env:childEnv,timeoutMs:10000,maxBytes:131072};
@@ -129,7 +131,8 @@ function validFill(fill,entries){
  const entry=entries.find(e=>e.entry===fill.entry);if(!entry)return false;
  const result=checkInput(fill.input,entry.input_schema,0);return !result.refusals.length&&!result.warnings.length;
 }
-export async function askAgent({agent,definition,cwd,env=process.env,context={},entries=[],supportsApply=false,supportsRun=false,signal,run=runAgentProcess,timeoutMs=120000}={}) {
+export async function askAgent({agent,definition,cwd,env=process.env,context={},entries=[],supportsApply=false,supportsRun=false,workspace,signal,run=runAgentProcess,timeoutMs=120000}={}) {
+ if((workspace??(cwd?loadRuntimeWorkspace({root:cwd}):null))?.configured)return fail('error','Bounded agent connection is unavailable: native tool and automatic context controls cannot establish packet-only context.');
  const command=definition?.command??agent,name=definition?.name??AGENTS.find(([id])=>id===agent)?.[1];
  agent=definition?.kind??agent;env={...env,...definition?.env};
  if(!AGENTS.some(([id])=>id===agent))return fail('error','Choose Codex, Claude or Gemini.');

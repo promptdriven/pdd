@@ -136,13 +136,13 @@ test('owner access refuses a Try recorded for another GitHub login before any ow
 
 test('isolated save retains actual starting world and leaves original scenario bytes intact', async t => {
   const { harbor } = await import('./runtime-fake.mjs');
-  const { saveDoorCase } = await import('../src/runtime-client.mjs');
+  const { saveDoorCase,acquireCaseWriteOwnership } = await import('../src/runtime-client.mjs');
   const { findTests, selectTests } = await import('../src/runtime-preflight.mjs');
   const { readFileSync, readdirSync } = await import('node:fs');
   const { join } = await import('node:path');
   const setup = harbor(t), path = 'tests/place-order.json', original = readFileSync(join(setup.repo, path), 'utf8'), doc = JSON.parse(original);
   const saved = { id: 'confirmed-run', original_path: path, story_path: doc.story_path, test: { ...doc, initial_world: { kv: { exact: ['snapshot'] } }, steps: [{ ...doc.steps[0], step_id: 'recorded' }] } };
-  const answer = saveDoorCase(setup.repo, saved, { isolated: true });
+  const env={HOME:setup.home,PDD_STATE_DIR:setup.state};const lease=await acquireCaseWriteOwnership({root:setup.repo,testPath:path,handoff:{kind:'closed-editor',testPath:path}},{env});let answer;try{answer=saveDoorCase(setup.repo,saved,{isolated:true,env,writeOwnership:lease});}finally{lease.release();}
   assert.match(answer, /^added to tests\/place-order\.try-confirmed-run\.json/);
   assert.equal(readFileSync(join(setup.repo, path), 'utf8'), original);
   const record = JSON.parse(readFileSync(join(setup.repo, 'tests/place-order.try-confirmed-run.json'), 'utf8'));
@@ -151,9 +151,9 @@ test('isolated save retains actual starting world and leaves original scenario b
   assert.equal(record.steps.length, 1);
   const discovered = selectTests(findTests({ root: setup.repo }), ['place-order']);
   assert.ok(discovered.selected.some(item => item.files.includes('tests/place-order.try-confirmed-run.json') && item.storyPath === doc.story_path));
-  assert.match(saveDoorCase(setup.repo, saved, { isolated: true }), /^already saved /);
+  assert.match(saveDoorCase(setup.repo, saved, { isolated: true,env }), /^already saved /);
   assert.equal(readdirSync(join(setup.repo, 'tests')).filter(name => name.includes('try-confirmed-run')).length, 1);
-  assert.match(saveDoorCase(setup.repo, { ...saved, test: { ...saved.test, initial_world: {} } }, { isolated: true }), /^not added: a different case/);
+  assert.match(saveDoorCase(setup.repo, { ...saved, test: { ...saved.test, initial_world: {} } }, { isolated: true,env }), /^not added:.*different received payloads/);
 });
 
 test('saving without a runtime before-world fails instead of inventing test data', async () => {

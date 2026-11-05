@@ -1,3 +1,4 @@
+import {loadRuntimeWorkspace,allowsRuntimePath,requireRuntimePath} from './runtime-workspace.mjs';
 // Generated from prompts/cli/svg-layout.prompt.md (sha256: 36ddd7ebbc393416fcd6a69a2ef9efbe1097d0d403bd5323c07b096dbe050247).
 import { lstatSync, readFileSync } from 'node:fs';
 import { dirname, relative, resolve, sep } from 'node:path';
@@ -15,6 +16,7 @@ function decode(text) {
   });
 }
 function safeRead(root, path) {
+  requireRuntimePath(loadRuntimeWorkspace({root}),{path,from:'SVG advice'});
   const full = resolve(root, path), rel = relative(resolve(root), full);
   if (!rel || rel === '..' || rel.startsWith(`..${sep}`) || resolve(root, rel) !== full) throw Error('path escapes repository');
   const parts = rel.split(sep);
@@ -101,6 +103,7 @@ function links(text) {
 const mentioned = (prose, value) => new RegExp(`(^|[^\\p{L}\\p{N}_])${escaped(normalize(value))}($|[^\\p{L}\\p{N}_])`, 'u').test(normalize(prose));
 
 export function lintSvgLayouts({ root, files, promptPaths }) {
+  const workspace=loadRuntimeWorkspace({root});files=files.filter(path=>allowsRuntimePath(workspace,path));
   const warnings = [], add = (prompt, drawing, part, reason) => warnings.push({ key: `${prompt}\0${drawing}\0${part}\0${reason}`, text: `Warning: SVG layout ${prompt} -> ${drawing}: ${part}: ${reason}.` });
   for (const prompt of [...new Set(promptPaths ?? files.filter(path => path.endsWith('.prompt.md')))].sort()) {
     let source;

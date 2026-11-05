@@ -69,7 +69,7 @@ export function createTryTools({ cwd = process.cwd(), words = [], env } = {}, po
       const started = Date.now();
       let answer;
       try {
-        answer = await dependencies.runDoorCall({ root: owner.root, origin: owner.record.origin, sessionId: owner.record.id,
+        answer = await dependencies.runDoorCall({ root: owner.root, originalPath:owner.test.path, origin: owner.record.origin, sessionId: owner.record.id,
           login: owner.record.login, prompt: entry.entry_path, operation: entry.operation, callCap: owner.model.calls?.cap ?? null }, input, runtimePorts);
       } catch (error) {
         // The door owns dispatch/recovery. Conservatively block a second mutation when its outcome is unconfirmed.

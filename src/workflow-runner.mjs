@@ -1,9 +1,9 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 4e779368b6c7bb2449f1ddaabb54437bbde3d292c95a965565accae2d734457a).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 075b72dee1df2efe38e0746bad19446ec05bcab0f55a99b3f51496868bf0c3f0).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
-import { execFile as execFileCallback } from 'node:child_process';
+import { spawnSync, execFile as execFileCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { constants, openSync, closeSync, fsyncSync, unlinkSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { constants, openSync, closeSync, fsyncSync, unlinkSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 
 import * as nativeDeliveryFiles from 'node:fs';
 import { homedir, hostname, tmpdir } from 'node:os';
@@ -73,7 +73,7 @@ const looksLikeApproval = text => APPROVAL.test(text) && !CHANGE_WORDS.test(text
 
 function deps(ports = {}) {
   const env = ports.env ?? process.env;
-  const execFile = ports.execFile ?? ((file, args, options = {}) => execute(file, args, { ...options, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }));
+  const execFile = ports.execFile ?? ((file, args, options = {}) => execute(file, args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, ...options }));
   return { ...ports, env, execFile, commandPorts: ports.execFile ? { execFile: ports.execFile } : {}, now: ports.now ?? Date.now, randomUUID: ports.randomUUID ?? randomUUID,
     isTTY: ports.isTTY ?? Boolean(process.stdin.isTTY && process.stderr.isTTY), say: ports.say ?? (() => {}) };
 }
@@ -595,11 +595,127 @@ export function matchesSource(record, root, fingerprint, capture = captureSource
   }
   return false;
 }
+// Registration authority is independent of receipt content and source equality.
+const evidenceTests = tests => {
+  if (!Array.isArray(tests) || !tests.length || tests.some(path => typeof path !== 'string' || !path || /[\\\x00-\x1f\x7f]/.test(path)
+    || path.startsWith('/') || /^[A-Za-z]:/.test(path) || path.split('/').some(part => !part || part === '.' || part === '..' || part.toLowerCase() === '.git'))
+    || new Set(tests).size !== tests.length) throw Error('Select nonempty unique safe authored-relative test paths.');
+  return [...tests].sort();
+};
+const selectionEqual = (a,b) => sameFact(evidenceTests(a),evidenceTests(b));
+const associationKey = a => JSON.stringify([a.workspaceRoot,evidenceTests(a.tests),a.source_sha256]);
+function ownedPr1Head(run) {
+  const area = askArea(run), pr = area && prOf(run,area.name);
+  if (!pr || !Number.isSafeInteger(pr.number) || pr.url !== `https://github.com/${run.repo}/pull/${pr.number}` || !commitSha(pr.publishedHeadSha))
+    throw Error('The owned recorded PR 1 head is missing or unavailable.');
+  return pr.publishedHeadSha;
+}
+function selectedCapture(root,tests,capture=captureSource) {
+  const visible=new Set(gitFiles(root));
+  if(tests.some(path=>!visible.has(path)))throw Error('A selected authored source is missing or unavailable.');
+  return capture(root,{tests,appMap:null});
+}
+function frozenRoot(run,head) { return join(realpathSync(run.runDir),'evidence-pr1',head); }
+function checkedAssociation(run,a,capture=captureSource) {
+  if (a.runId !== run.runId || a.repo !== run.repo || !['current','pr1'].includes(a.stage)
+    || !/^[a-f0-9]{64}$/.test(a.source_sha256 ?? '') || realpathSync(a.workspaceRoot) !== a.workspaceRoot
+    || a.registration?.operation !== 'evidence-associate' || !Number.isFinite(a.registration.at)
+    || a.registration.cwd !== realpathSync(run.root)) throw Error('The evidence association has a different run, owner, producer or registration.');
+  evidenceTests(a.tests);
+  const root = a.stage === 'current' ? realpathSync(run.root) : frozenRoot(run,ownedPr1Head(run));
+  const head = a.stage === 'pr1' ? ownedPr1Head(run) : null;
+  if (a.sourceAnchor?.root !== root || a.sourceAnchor?.head !== head || realpathSync(root) !== root)
+    throw Error('The registered stage source anchor is missing, changed or unrelated.');
+  if (selectedCapture(root,a.tests,capture).sha256 !== a.source_sha256) throw Error('The registered stage source has changed or is unavailable.');
+  if (a.stage === 'current' && selectedCapture(a.workspaceRoot,a.tests,capture).sha256 !== a.source_sha256)
+    throw Error('The producer selected source has changed or is unavailable.');
+  return root;
+}
+// One eligibility rule for import, status/Story counts and prepared PR lines.
+function eligibleEvidence(run,record,{stage='current',root=run.root,fingerprint=null,capture=captureSource}={}) {
+  try {
+    if (record.association) {
+      const saved = record.association;
+      const a = (run.evidenceAssociations ?? []).find(a => associationKey(a) === associationKey(saved));
+      if (!a || a.stage !== saved.stage || !sameFact(a.sourceAnchor,saved.sourceAnchor) || a.runId !== saved.runId || a.repo !== saved.repo
+        || !(saved.stage === stage || stage==='pr1' && saved.stage==='current' && run.area<=run.areas.indexOf(askArea(run))) || record.source?.sha256 !== saved.source_sha256 || !selectionEqual(record.source?.tests,saved.tests)
+        || realpathSync(record.receipt?.repo) !== saved.workspaceRoot) return false;
+      checkedAssociation(run,a,capture);
+      return root===run.root || matchesSource(record,root,fingerprint,capture);
+    }
+    if (record.receipt) {
+      const producer=realpathSync(record.receipt.repo);
+      const a=(run.evidenceAssociations??[]).find(a=>a.workspaceRoot===producer && selectionEqual(a.tests,record.source?.tests) && a.source_sha256===record.source?.sha256);
+      if(a) { if(a.stage!=='current')return false; checkedAssociation(run,a,capture); }
+      else if(producer!==realpathSync(run.root))return false;
+    }
+    return matchesSource(record,root,fingerprint,capture);
+  } catch { return false; }
+}
+// Materialize local immutable commit objects inside the run folder, never a ref
+// or checkout in the authored repository. Canonical preflight still owns capture.
+async function retainPr1Source(run,head,p) {
+  const target = frozenRoot(run,head);
+  if (existsSync(target)) return target;
+  // A missing previously registered anchor must not be silently reconstructed.
+  if ((run.evidenceAssociations ?? []).some(a => a.stage === 'pr1' && a.sourceAnchor?.root === target)) throw Error('The retained PR 1 source is missing.');
+  const parent = dirname(target); mkdirSync(parent,{recursive:true,mode:0o700});
+  if(realpathSync(parent)!==parent)throw Error('The retained source folder cannot traverse a symlink.');
+  const temporary = mkdtempSync(join(parent,'.source-'));
+  try {
+    const tree = await p.execFile('git',['ls-tree','-r','-z',head],{cwd:run.root,encoding:'buffer'});
+    const entries = Buffer.from(tree.stdout).toString('utf8').split('\0').filter(Boolean).map(row => {
+      const match = /^(100644|100755|120000|160000) (blob|commit) ([a-f0-9]{40,64})\t(.+)$/.exec(row);
+      if (!match) throw Error('The PR 1 tree contains an unavailable source entry.');
+      evidenceTests([match[4]]);
+      return {mode:match[1],oid:match[3],path:match[4]};
+    });
+    const response = await p.execFile('git',['cat-file','--batch'],{cwd:run.root,input:entries.filter(e=>e.mode!=='160000').map(e=>e.oid+'\n').join(''),encoding:'buffer',maxBuffer:512*1024*1024});
+    const bytes = Buffer.from(response.stdout); let offset=0;
+    for (const entry of entries) {
+      if(entry.mode==='160000'){mkdirSync(join(temporary,entry.path),{recursive:true});continue;}
+      const end=bytes.indexOf(10,offset), header=bytes.subarray(offset,end).toString('utf8').split(' '), size=Number(header[2]);
+      if (end<0 || header[0]!==entry.oid || header[1]!=='blob' || !Number.isSafeInteger(size) || size<0 || end+1+size>=bytes.length) throw Error('The frozen PR 1 objects are unavailable.');
+      const content=bytes.subarray(end+1,end+1+size), path=join(temporary,entry.path); offset=end+2+size;
+      mkdirSync(dirname(path),{recursive:true});
+      if (entry.mode==='120000') symlinkSync(content.toString('utf8'),path);
+      else writeFileSync(path,content,{mode:entry.mode==='100755'?0o700:0o600,flag:'wx'});
+    }
+    await p.execFile('git',['init','-q',`--object-format=${head.length===64?'sha256':'sha1'}`],{cwd:temporary});
+    await p.execFile('git',['update-index','-z','--index-info'],{cwd:temporary,input:entries.map(e=>`${e.mode} ${e.oid}\t${e.path}\0`).join('')});
+    renameSync(temporary,target);
+    return target;
+  } finally {rmSync(temporary,{recursive:true,force:true});}
+}
+async function associateEvidenceWorkspaceCommand({ref,workspace,stage,tests,cwd},ports) {
+  const p=deps(ports),found=await resolveRun(ref,{cwd},p);
+  if(found.error)return fail(found.error);
+  const run=found.run;
+  try {
+    const owned=await gitContext(cwd,p),producer=typeof workspace==='string' && workspace.trim() && await gitContext(resolve(cwd,workspace),p);
+    if(!owned || owned.toplevel!==realpathSync(run.root) || owned.commonDir!==realpathSync(run.commonDir)
+      || realpathSync(run.runDir)!==realpathSync(runDirFor(owned.commonDir,run.number))) throw Error('Register evidence only from the selected run owned worktree.');
+    if(!producer || realpathSync(resolve(cwd,workspace))!==producer.toplevel) throw Error('Supply the exact existing producer Git root.');
+    if(!['current','pr1'].includes(stage))throw Error('Evidence stage must be current or pr1.');
+    const selection=evidenceTests(tests),head=stage==='pr1'?ownedPr1Head(run):null;
+    const root=stage==='pr1'?await retainPr1Source(run,head,p):owned.toplevel;
+    const captured=selectedCapture(root,selection);
+    if(stage==='current' && selectedCapture(producer.toplevel,selection).sha256!==captured.sha256)throw Error('The producer source does not match the current authored selection.');
+    const association={runId:run.runId,repo:run.repo,workspaceRoot:producer.toplevel,stage,sourceAnchor:{root,head},tests:selection,
+      source_sha256:captured.sha256,registration:{operation:'evidence-associate',cwd:owned.toplevel,at:p.now()}};
+    checkedAssociation(run,association);
+    commitRun(run,p,latest=>{
+      checkedAssociation(latest,association);
+      latest.evidenceAssociations=[...(latest.evidenceAssociations??[]).filter(a=>associationKey(a)!==associationKey(association)),association];
+    });
+    return done(`Registered ${stage === 'pr1'?'PR 1':'current'} evidence workspace for ${run.repo}#${run.number}. No check, approval or workflow progress was recorded.`);
+  } catch(error) {if(error?.code==='workflow_run_save_failed')throw error;return fail(`Evidence workspace not registered: ${oneLine(error.message)}`);}
+}
 export function storyCount(run, ports = {}) {
   const records = [...(run.runtimeHistory ?? []), ...Object.values(run.done ?? {}), ...(run.evidence ?? [])]
     .filter(record => runtimeLines(record.summary).length).sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
   if (!records.length) return null;
-  const fingerprint = (ports.fingerprint ?? gitFingerprint)(run.root), compatible = records.filter(record => matchesSource(record, run.root, fingerprint, ports.capture));
+  const fingerprint = (ports.fingerprint ?? gitFingerprint)(run.root), compatible = records.filter(record => eligibleEvidence(run,record,{stage:ports.stage,root:run.root,fingerprint,capture:ports.capture}));
   const current = latestStories(compatible.flatMap(record => runtimeLines(record.summary)));
   const all = latestStories(records.flatMap(record => runtimeLines(record.summary)));
   const currentByStory = new Map(current.map(line => [line.story, line]));
@@ -619,7 +735,7 @@ export function storyEvidence(run, { comparisonRoot } = {}) {
   const root = comparisonRoot === undefined ? run.root : comparisonRoot;
   const current = new Map(), older = new Map(), fingerprint = root === null ? null : gitFingerprint(root);
   for (const record of records) {
-    const compatible = root !== null && matchesSource(record, root, fingerprint);
+    const compatible = root !== null && eligibleEvidence(run,record,{root,fingerprint});
     for (const row of latestStories(runtimeLines(record.summary))) {
       (compatible ? current : older).set(row.story, { story: row.story, pass: row.pass, current: compatible, result: row.result, at: record.at ?? 0 });
     }
@@ -885,7 +1001,7 @@ function publicationRuntime(run, env) {
   if (run.publicationPending) return [];
   const fingerprint = gitFingerprint(run.root);
   const records = [...(run.runtimeHistory ?? []), ...Object.values(run.done ?? {}), ...(run.evidence ?? [])]
-    .filter(record => runtimeLines(record.summary).length && matchesSource(record, run.root, fingerprint)).sort((a,b) => (a.at ?? 0) - (b.at ?? 0));
+    .filter(record => runtimeLines(record.summary).length && eligibleEvidence(run,record,{root:run.root,fingerprint})).sort((a,b) => (a.at ?? 0) - (b.at ?? 0));
   const stories = new Map();
   for (const record of records) for (const line of runtimeLines(record.summary)) if (line.story) stories.set(line.story, { line, record });
   // Lines that an agent typed or pasted into a step summary stay agent notes; only a receipt that pdd workflow evidence checked is not.
@@ -2295,6 +2411,7 @@ const openRunCommand = (args, ports) => lockedMutation(args, ports, openRunLocke
 
 export const startRun=saveGuard(startRunCommand);
 
+export const associateEvidenceWorkspace=saveGuard(associateEvidenceWorkspaceCommand);
 export const recordEvidence=saveGuard(recordEvidenceCommand);
 
 export const stepDone=saveGuard(stepDoneCommand);
@@ -2314,3 +2431,38 @@ export const runStatus=saveGuard(async(options,ports)=>{
 });
 
 export const openRun=saveGuard(openRunCommand);
+
+// Canonical, read-only association admission for native workspace consumers.
+// The existing registered authority above remains the only permission rule.
+export function readEvidenceEligibility({root,producerRoot,tests,source_sha256,runId=null,stage=null},ports={}){
+  const canonical=ports.realpath??realpathSync,capture=ports.captureSource??captureSource;
+  let result={state:'unavailable',reason:'source or ownership unavailable',runId:null,repo:null,producerRoot:null,tests:[],stage:null,sourceAnchor:null,source_sha256:source_sha256??null};
+  try{
+    root=canonical(root);producerRoot=canonical(producerRoot);tests=evidenceTests(tests);
+    result={...result,producerRoot,tests};
+    if(!/^[a-f0-9]{64}$/.test(source_sha256??''))return{...result,state:'ineligible',reason:'original selected source identity is missing'};
+    const runs=(ports.allRuns??allRuns)({cancelled:true},ports);
+    // Only the consumer's owned source/run may authorize an alternate producer.
+    const candidates=[];
+    for(const run of runs){
+      if(!run||typeof run.root!=='string'||canonical(run.root)!==root)continue;
+      for(const association of run.evidenceAssociations??[]){
+        if(association.workspaceRoot===producerRoot&&selectionEqual(association.tests,tests)&&association.source_sha256===source_sha256)candidates.push({run,association});
+      }
+    }
+    if(candidates.length){
+      if(candidates.length!==1)return{...result,state:'ineligible',reason:'workspace association is ambiguous'};
+      const {run,association:a}=candidates[0];
+      if(runId!==null&&runId!==run.runId||stage!==null&&stage!==a.stage)return{...result,state:'ineligible',reason:'saved run or stage disagrees with the owned association'};
+      const inspect=ports.inspectRepository??(path=>{const git=spawnSync('git',['rev-parse','--path-format=absolute','--git-common-dir'],{cwd:path,encoding:'utf8'});if(git.status!==0)throw Error('repository ownership unavailable');return canonical(git.stdout.trim());});
+      const common=inspect(root);
+      if(canonical(run.commonDir)!==common||canonical(run.runDir)!==canonical(runDirFor(common,run.number))||typeof run.repo!=='string'||!run.runId)return{...result,state:'ineligible',reason:'run ownership is missing or contradictory'};
+      checkedAssociation(run,a,capture);
+      return{state:'eligible',reason:null,runId:run.runId,repo:run.repo,producerRoot,tests,stage:a.stage,sourceAnchor:{...a.sourceAnchor},source_sha256};
+    }
+    if(runId!==null||stage!==null&&stage!=='current')return{...result,state:'ineligible',reason:'saved run/stage has no matching owned association'};
+    if(root!==producerRoot)return{...result,state:'ineligible',reason:'alternate producer has no owned workspace association'};
+    if(capture(root,{tests,appMap:null}).sha256!==source_sha256)return{...result,state:'ineligible',reason:'the exact selected source has changed'};
+    return{state:'eligible',reason:null,runId:null,repo:null,producerRoot,tests,stage:'current',sourceAnchor:{root,head:null},source_sha256};
+  }catch(error){return{...result,reason:oneLine(error.message??error)};}
+}
