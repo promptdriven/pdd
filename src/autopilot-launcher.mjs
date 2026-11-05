@@ -113,7 +113,7 @@ async function herdr(args, p) {
   const result = await p.execute('herdr', ['--session', SESSION, ...args]);
   if (result.code === 0 && args[0] === 'pane' && args[1] === 'read') return result.stdout;
   let reply; try { reply = JSON.parse(result.code === 0 ? result.stdout : result.stderr || result.stdout); } catch { reply = {}; }
-  if (result.code !== 0 || reply.error) throw Object.assign(Error(reply.error?.message || 'Herdr could not deliver; run herdr --help.'), { code: reply.error?.code });
+  if (result.code !== 0 || reply.error) throw Object.assign(Error(reply.error?.message || 'Herdr could not deliver; run herdr --help.'), { code: reply.error?.code, confirmedRejection: Boolean(reply.error && typeof reply.error === 'object') });
   return reply;
 }
 async function openWorkspace(state, p) {
@@ -250,7 +250,7 @@ async function wake(state, text, p) {
   state.ownerLaunch = { paneId: state.paneId, startedAt: p.now() };
   save(state.stateFile, state);
   try { await herdr(['pane', 'run', state.paneId, ['env', ...unset, ...env, quote(definition.command), ...args].join(' ')], p); }
-  catch (error) { if (error.code === 'agent_not_found' || error.code === 'pane_not_found') delete state.ownerLaunch; throw error; }
+  catch (error) { if (error.confirmedRejection || error.code === 'agent_not_found' || error.code === 'pane_not_found') delete state.ownerLaunch; throw error; }
   return false;
 }
 

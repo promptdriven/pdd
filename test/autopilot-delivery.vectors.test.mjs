@@ -152,6 +152,32 @@ test('rejected submission retains work and uncertain submission is not resent', 
   }
 });
 
+test('confirmed launch rejection retries pending work; uncertain launch retains custody', async () => {
+  for (const confirmed of [true, false]) {
+    const f=fixture(`launch-retry-${confirmed}`,{afterLaunch:'idle'}), original=f.ports.herdr; let launches=0;
+    // Exercise the native adapter: structured error reply versus an ambiguous transport failure.
+    delete f.ports.herdr;
+    const run=f.ports.run;
+    f.ports.run=async (command,args)=>{
+      if(command!=='herdr' || args[0]!=='--session') return run(command,args);
+      const request=args.slice(2);
+      if(request[0]==='pane' && request[1]==='run' && ++launches===1) {
+        if(confirmed) return {code:1,stdout:'',stderr:JSON.stringify({error:{code:'permission_denied',message:'Denied'}})};
+        throw Error('transport lost');
+      }
+      const reply=await original(request);
+      return {code:0,stdout:typeof reply==='string'?reply:JSON.stringify(reply),stderr:''};
+    };
+    await f.start();
+    assert.equal(Boolean(f.state().ownerLaunch),!confirmed);
+    assert.equal(f.state().recipeDelivered,undefined); assert.equal(f.state().seen?.[101],undefined);
+    await f.tick();
+    assert.equal(launches,confirmed?2:1);
+    assert.equal(f.state().recipeDelivered,undefined); assert.equal(f.state().seen?.[101],undefined);
+    if(confirmed) { await f.tick(); assert.equal(f.state().recipeDelivered,true); assert.ok(f.state().seen[101]); }
+  }
+});
+
 test('packet carries bundled command and selected profile without unrelated values', async () => {
   const f=fixture('metadata',{native:'idle'});
   f.ports.env.CODEX_HOME='/selected/config'; f.ports.env.SECRET_VALUE='private';
