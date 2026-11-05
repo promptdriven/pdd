@@ -109,3 +109,35 @@ test('bounded launch, identity and acknowledgement outcomes', async () => {
     if(mode==='ack') { await f.tick(); assert.equal(attempts,1); }
   }
 });
+
+// A definite refusal leaves launch retryable; a lost reply may have started it.
+test('bounded launch rejection and uncertain custody', async () => {
+  for (const confirmed of [true, false]) {
+    const f=fixture(`launch-custody-${confirmed}`,{afterLaunch:'idle'});
+    const herdr=f.ports.herdr, run=f.ports.run; let launches=0;
+    delete f.ports.herdr;
+    f.ports.run=async (command,args)=>{
+      if(command!=='herdr' || args[0]!=='--session') return run(command,args);
+      const request=args.slice(2);
+      if(request[0]==='pane' && request[1]==='run' && ++launches===1) {
+        if(confirmed) return {code:1,stdout:'',stderr:JSON.stringify({error:{code:'permission_denied',message:'Denied'}})};
+        throw Error('transport lost');
+      }
+      const reply=await herdr(request);
+      return {code:0,stdout:typeof reply==='string'?reply:JSON.stringify(reply),stderr:''};
+    };
+    await f.start();
+    assert.equal(Boolean(f.state().recipeDelivered),false);
+    assert.equal(Boolean(f.state().seen?.[101]),false);
+    await f.tick();
+    assert.equal(launches,confirmed?2:1);
+    assert.equal(Boolean(f.state().recipeDelivered),false);
+    assert.equal(Boolean(f.state().seen?.[101]),false);
+    if(confirmed) {
+      await f.tick();
+      assert.equal(f.packets.length,1);
+      assert.equal(Boolean(f.state().recipeDelivered),true);
+      assert.equal(Boolean(f.state().seen?.[101]),true);
+    }
+  }
+});
