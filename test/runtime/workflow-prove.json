@@ -1883,7 +1883,7 @@
       "overlay": 0,
       "runProcess": 0,
       "cleanup": 0,
-      "snapshot": []
+      "snapshot": 0
     }
   },
   "simulation": {
