@@ -85,7 +85,7 @@ flowchart TD
     T[Timer or immediate first tick] --> S{Enabled locally and in repo?}
     S -->|No| E[Return without AI]
     S -->|Yes| Q[Conditional GitHub issues request]
-    Q --> W{Recipe or unseen actionable change?}
+    Q --> W{Recipe, unseen actionable change or due time rule?}
     W -->|No| E
     W -->|Yes| P[Prepare trusted packet]
     P --> A[Start or wake interactive pdd-autopilot skill]
@@ -121,6 +121,34 @@ a related PR transition or becoming eligible again can wake the skill once.
 Removing one waiting reason or changing mode is not eligibility while another
 waiting reason remains.
 Keep claimed issues marked `claimed: true`, never present them as unclaimed.
+
+Elapsed time can also offer work without a GitHub change or an AI call in the
+tick. Use the clock and local run-progress reader as injectable ports. Read this
+repository's active PDD run records in the Git common directory's
+`pdd/runs/*/status.json`; the file's last modification time is its last change.
+At 60 minutes without a change, offer one line naming the run number and asking
+the skill to follow its `pdd:stuck` rule. Completed and cancelled runs are over;
+missing or unreadable records supply no progress fact.
+
+For an eligible trusted issue with `pdd:working`, use the latest issue update or
+comment creation/edit time already returned and cached by the tick as claim
+activity (including label refresh). At 60 minutes, representing the skill's
+"about 1 hour", offer one line naming the issue number and asking the skill to
+inspect takeover. Keep it claimed. Do not fetch label events or make another
+query to measure age; an absent or unreadable activity time cannot be due.
+Revalidate trust before delivering a due claim, even when
+the cached source is unchanged; stranger text never enters a timed packet.
+
+Persist each successfully delivered time event by rule, run/issue number and
+last activity time. Unchanged overdue events stay quiet, including after a
+restart; a new activity time can become due again. Coalesce due reasons with
+trusted work in the packet's `timeRules` array, with one actionable `reason`
+line per event. Busy or failed delivery consumes no event; reassess current
+facts when idle so refreshed or ended events are not delivered stale. Neither
+timer marks, terminates or takes over a run itself; the skill owns those actions.
+The two 60-minute thresholds are constants, not settings, caps or hard stops.
+Account usage reset wakeups require readable local account usage data; when
+none is available, skip that rule without a network request or an invented reset.
 
 Use same-repository closing references in PR bodies to associate PRs with issues.
 Resolve trusted related PR metadata on change (state, draft, merge and head),
