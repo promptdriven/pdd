@@ -121,7 +121,7 @@ test('combined changed-source pending failure stops push, preserves the old body
   const f=fixture(t);writeFileSync(join(f.root,'test/a.mjs'),changed);assert.equal((await f.done()).exitCode,0);
   const previous=f.prs[0].body,oldHead=f.remoteHead();f.failEdit=true;f.events=[];writeFileSync(join(f.root,'test/a.mjs'),`test('third', () => {});\n`);
   const result=await f.done();assert.equal(result.exitCode,1,result.message);assert.equal(f.prs[0].body,previous);assert.ok(previous.includes(oldHead.slice(0,7)));
-  assert.match(result.message,/body update denied/);assert.match(result.message,/No source was pushed/);assert.match(result.message,/pdd workflow refresh-description 17 23/);
+  assert.match(result.message,/body update denied/);assert.match(result.message,/No source was pushed/);assert.match(result.message,/pdd workflow refresh-description 17 23/);assert.match(result.message,/run done formal again/);
   assert.equal(f.events.some(e=>e.kind==='git'&&e.args[0]==='push'),false);assert.equal(f.remoteHead(),oldHead);
   assert.equal(artifact(f).headSha,f.git('rev-parse','HEAD'));assert.notEqual(artifact(f).headSha,f.remoteHead());
   f.failEdit=false;assert.equal((await f.done()).exitCode,0);proveCurrent(f,artifact(f));

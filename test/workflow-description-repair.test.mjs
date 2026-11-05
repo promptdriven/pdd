@@ -47,6 +47,14 @@ async function scenario(mode="retry") {
   writeFileSync(join(run.root,'test/value.test.mjs'),"test('two', () => {});\n");out=await done('formal','Formal café 🧪\nsecond line');assert.equal(out.exitCode,0,out.message);assert.ok(pr);
   const old=pr.body,oldHead=record().testInventory.headSha;writeFileSync(join(run.root,'test/value.test.mjs'),"test('three', () => {});\ntest('four', () => {});\n");
   if(mode==='cancel'){injectCancel=true;const count=patches;out=await done('formal','Formal café 🧪\nsecond line');assert.equal(out.exitCode,1);assert.equal(patches,count);assert.equal(pr.body,old);assert.equal(record().state,'cancelled');return;}
+  if(mode==='prepush') {
+   failAt=patches+1;out=await done('formal','Formal café 🧪\nsecond line');assert.equal(out.exitCode,1,out.message);
+   assert.match(out.message,/No source was pushed/);assert.match(out.message,/pdd workflow refresh-description 17 23/);
+   const step=out.message.match(/To resume publication, run done (\w+) again\./)?.[1];assert.equal(step,'formal','pre-push failure must identify the publication step to retry');
+   const head=git(run.root,'rev-parse','HEAD');assert.notEqual(head,oldHead);assert.equal(git(run.root,'rev-parse','refs/remotes/origin/'+pr.headRefName),oldHead);assert.equal(pr.body,old);
+   let stderr='';const rc=await runPdd(['workflow','done',step,'--summary','Recovered publication'],{cwd:run.root,stdout:{write(){}},stderr:{write:x=>stderr+=x},workflowRunner:{stepDone:input=>stepDone(input,agent)}});
+   assert.equal(rc,0,stderr);assert.equal(git(run.root,'rev-parse','refs/remotes/origin/'+pr.headRefName),head);assert.equal(record().testInventory.headSha,head);assert.match(pr.body,/Recovered publication/);assert.doesNotMatch(pr.body,/publication-pending/);return;
+  }
   failAt=patches+2;out=await done('formal','Formal café 🧪\nsecond line');assert.equal(out.exitCode,1,out.message);const command=out.message.match(/pdd workflow refresh-description 17 23/)[0];assert.match(pr.body,/publication-pending/);assert.equal(record().testInventory.headSha,oldHead);
   const head=git(run.root,'rev-parse','HEAD');assert.notEqual(head,oldHead);let stderr='';
   const call=()=>runPdd(command.split(' ').slice(1),{cwd:source,stdout:{write(){}},stderr:{write:x=>stderr+=x},workflowRunner:{retryPrDescription:input=>retryPrDescription(input,ports)}});
@@ -58,5 +66,5 @@ async function scenario(mode="retry") {
   assert.equal(rc,0,stderr);assert.equal(pr.body,failedBody);assert.ok(pr.body.includes(`→ ${head.slice(0,7)}.`));assert.match(pr.body,/café 🧪`<br>`second line/);assert.doesNotMatch(pr.body,/publication-pending/);
  } finally {rmSync(dir,{recursive:true,force:true});}
 }
-for (const mode of process.env.PDD_REPAIR_CASE ? [process.env.PDD_REPAIR_CASE] : ['retry','cancel','concurrent','unavailable']) await scenario(mode);
+for (const mode of process.env.PDD_REPAIR_CASE ? [process.env.PDD_REPAIR_CASE] : ['prepush','retry','cancel','concurrent','unavailable']) await scenario(mode);
 console.log('repair boundary and retry passed');

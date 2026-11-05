@@ -1202,7 +1202,7 @@ async function publishAreaPr(run, area, p, lines, retry) {
   const editReplay = async (body,afterPush=false,informational=false) => {
     try {
       await patchDescription(run, existing, body, p);
-    } catch(error) {if(informational)return fail(descriptionCause(error));return fail([...lines,`The code-space PR description could not be updated (${descriptionCause(error)}). ${afterPush ? 'Source was pushed; the PR stays publication-pending.' : 'No source was pushed.'} ${descriptionRetry(run, existing)}.`].join('\n'));}
+    } catch(error) {if(informational)return fail(descriptionCause(error));return fail([...lines,`The code-space PR description could not be updated (${descriptionCause(error)}). ${afterPush ? 'Source was pushed; the PR stays publication-pending.' : 'No source was pushed.'} ${descriptionRetry(run, existing)}.${afterPush ? '' : ` To resume publication, ${retry}.`}`].join('\n'));}
     return null;
   };
   // Only an unchanged source and identical non-inventory body can be an
