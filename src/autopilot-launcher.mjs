@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 7cdc19fea16c0d8df1a69070162f439166514aafe2c6a0dc5341f2989e5403c9).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 6fce62abd6b1613170569258bbc1f1f5dcf90b3ecbc6290a2f4e1c976f2a81fc).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync } from 'node:fs';
@@ -235,7 +235,8 @@ async function wake(state, text, p) {
   try { definition = loadAgentDefinitions({ cwd: state.cwd, env: p.env }).find(x => x.id === state.agent.id); } catch { /* Report at launch if the selected command no longer works. */ }
   definition ??= state.agent;
   const input = `"$(cat ${quote(file)})"`;
-  const args = definition.kind === 'codex' ? ['--no-daemon', '--dangerously-bypass-approvals-and-sandbox', input]
+  const args = definition.kind === 'codex' ? ['--no-daemon', '--dangerously-bypass-approvals-and-sandbox',
+    '-c', quote(`projects={${JSON.stringify(state.cwd)}={trust_level="trusted"}}`), '-c', quote('check_for_update_on_startup=false'), input]
     : definition.kind === 'claude' ? ['--dangerously-skip-permissions', input]
     : ['--dangerously-skip-permissions', '--prompt-interactive', input];
   if (definition.kind === 'gemini') args.splice(0, 1, '--yolo');

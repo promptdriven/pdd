@@ -6,6 +6,7 @@ import {chmodSync,linkSync,mkdirSync,mkdtempSync,readFileSync,realpathSync,rmSyn
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 const hash=value=>createHash('sha256').update(value).digest('hex');
+const visible=text=>text.replaceAll('&#47;','/');
 async function fixture(t) {
   const api=await import('../src/workflow-replay.mjs');
   const base=realpathSync(mkdtempSync(join(tmpdir(),'pdd-replay-')));t.after(()=>rmSync(base,{recursive:true,force:true}));
@@ -78,18 +79,75 @@ test('2530: unexecuted or missing public operations invalidate supplied pass row
   }
 });
 
-test('2530: fresh source never blesses altered, missing, empty or unreadable original vectors',async t=>{
-  for(const kind of ['changed','missing','empty','unreadable','hardlink']){
+test('2530: unreadable or unsafe vectors remain unproved with advisory warnings',async t=>{
+  for(const kind of ['unreadable','hardlink']){
     const f=await fixture(t);
-    if(kind==='changed'){const doc=JSON.parse(readFileSync(f.vectorPath));doc.steps[0].checks[0].value=999;writeFileSync(f.vectorPath,JSON.stringify(doc));f.manifest.vectors[0].sha256=hash(readFileSync(f.vectorPath));}
-    if(kind==='missing')rmSync(f.vectorPath);
-    if(kind==='empty')writeFileSync(f.vectorPath,'');
     if(kind==='unreadable')chmodSync(f.vectorPath,0);
     if(kind==='hardlink')linkSync(f.vectorPath,join(f.base,'linked.json'));
     f.manifest.source.sha256=f.api.sourceFingerprint(f.root);f.save();
-    const r=f.api.readReplayEvidence(f.run);assert.equal(r.outcome,'blocked',kind);
+    const r=f.api.readReplayEvidence(f.run);assert.equal(r.outcome,'not_replayed',kind);assert.ok(r.warnings.length);
     if(kind==='unreadable')chmodSync(f.vectorPath,0o600);
   }
+});
+
+test('2870: corrected saved values and check paths replay with warnings and an unchanged anchor',async t=>{
+  const f=await fixture(t),anchor=structuredClone(f.run.replayBaseline);
+  const doc=JSON.parse(readFileSync(f.vectorPath));
+  doc.steps[0].checks[0].value=999;doc.steps[0].checks[1].path='/resources/store-save';
+  writeFileSync(f.vectorPath,JSON.stringify(doc));
+  f.manifest.vectors[0].sha256=hash(readFileSync(f.vectorPath));
+  f.manifest.checks[1].path='/resources/store-save';
+  f.manifest.source.sha256=f.api.sourceFingerprint(f.root);f.save();
+  const result=f.api.readReplayEvidence(f.run);
+  assert.equal(result.outcome,'pass',result.reason);
+  assert.deepEqual(f.run.replayBaseline,anchor);
+  const report=visible(f.api.formatReplayEvidence(result));
+  assert.match(report,/warning:.*saved test/i);
+  assert.match(report,/\/steps\/0\/checks\/0\/value.*3.*999/);
+  assert.match(report,/\/steps\/0\/checks\/1\/path.*save.*resources/);
+  assert.match(report,/Current vector: tests\/add\.json/);assert.doesNotMatch(report,/Original vector:/);
+});
+
+test('2870: every changed value is shown even without a manifest, including false, zero, null and missing',async t=>{
+  const f=await fixture(t),doc=JSON.parse(readFileSync(f.vectorPath));
+  // Synthetic requirements: all 20 edits must be visible, without a display cap.
+  doc.initial_world=Object.fromEntries(Array.from({length:20},(_,i)=>[`item${i}`,i]));
+  writeFileSync(f.vectorPath,JSON.stringify(doc));f.run.replayBaseline=f.api.pinReplayVectors(f.root,['tests/add.json']);
+  Object.assign(doc.initial_world,{item0:false,item1:null,item2:'',item3:0});delete doc.initial_world.item4;
+  for(let i=5;i<20;i++)doc.initial_world[`item${i}`]+=100;
+  writeFileSync(f.vectorPath,JSON.stringify(doc));
+  const report=visible(f.api.formatReplayEvidence(f.api.readReplayEvidence(f.run)));
+  for(let i=0;i<20;i++)assert.ok(report.includes(`/initial\\_world/item${i} `),report);
+  assert.match(report,/0.*false/);assert.match(report,/1.*null/);assert.match(report,/4.*missing/);
+  assert.doesNotMatch(report,/Return to prompt space/);
+});
+
+test('2870: a moved scenario can replay at its current path and lists removed and added values',async t=>{
+  const f=await fixture(t),old='tests/add.json',next='tests/moved.json';
+  writeFileSync(join(f.root,next),readFileSync(f.vectorPath));rmSync(f.vectorPath);
+  f.manifest.vectors[0].path=next;
+  for(const row of [...f.manifest.checks,...f.manifest.operations,...f.manifest.mutation.failed_checks])row.vector=next;
+  f.manifest.source.sha256=f.api.sourceFingerprint(f.root);f.save();
+  const result=f.api.readReplayEvidence(f.run,[old,next]);
+  assert.equal(result.outcome,'pass',result.reason);
+  const report=visible(f.api.formatReplayEvidence(result));
+  assert.match(report,/tests\/add\.json/);assert.match(report,/tests\/moved\.json/);assert.match(report,/missing/);
+});
+
+test('2870: older saved anchors report hash changes without inventing original values',async t=>{
+  const f=await fixture(t);delete f.run.replayBaseline.vectors[0].snapshot;
+  const doc=JSON.parse(readFileSync(f.vectorPath));doc.steps[0].checks[0].value=9;writeFileSync(f.vectorPath,JSON.stringify(doc));
+  f.manifest.vectors[0].sha256=hash(readFileSync(f.vectorPath));f.manifest.source.sha256=f.api.sourceFingerprint(f.root);f.save();
+  const result=f.api.readReplayEvidence(f.run);assert.equal(result.outcome,'pass',result.reason);
+  assert.match(f.api.formatReplayEvidence(result),/original values unavailable/);
+});
+
+for(const kind of ['missing','empty','malformed'])test(`2870: ${kind} saved scenario is warned and not replayed`,async t=>{
+  const f=await fixture(t);
+  if(kind==='missing')rmSync(f.vectorPath);else writeFileSync(f.vectorPath,kind==='empty'?'':'{');
+  f.manifest.source.sha256=f.api.sourceFingerprint(f.root);f.save();
+  const result=f.api.readReplayEvidence(f.run);
+  assert.equal(result.outcome,'not_replayed',result.reason);assert.match(visible(f.api.formatReplayEvidence(result)),/warning:.*tests\/add\.json/i);
 });
 
 test('2530: uncommitted, untracked and executable source edits make evidence stale; commits alone do not',async t=>{
@@ -169,4 +227,58 @@ test('2530: report metadata cannot hide counts or the trust boundary with HTML c
     assert.doesNotMatch(report,/<!--|<details>/,kind);
     assert.match(report,/&lt;!--/);assert.match(report,/checks:/);assert.match(report,/does not independently prove/);
   }
+});
+
+for(const saved of ['pass','fail','unknown','blocked','not_replayed'])for(const supplyPaths of [false,true])test(`2870 review: saved ${saved} anchor cannot fabricate PASS (paths=${supplyPaths})`,async t=>{
+  const f=await fixture(t);f.run.replayBaseline.outcome=saved;f.run.replayBaseline.reason='Saved anchor outcome';f.save();
+  const result=f.api.readReplayEvidence(f.run,supplyPaths?['tests/add.json']:undefined);
+  assert.equal(result.outcome,saved==='not_replayed'?'not_replayed':'blocked');
+  assert.doesNotMatch(f.api.formatReplayEvidence(result),/Code replay: PASS/);
+});
+
+test('2870 review: the report never renders PASS with zero checks',async t=>{
+  const f=await fixture(t);f.save();const result=f.api.readReplayEvidence(f.run);
+  result.counts={total:0,pass:0,fail:0,blocked:0,not_replayed:0};
+  assert.doesNotMatch(f.api.formatReplayEvidence(result),/Code replay: PASS/);
+});
+
+test('2870 review: a blocked anchor still shows comparable saved-value changes',async t=>{
+  const f=await fixture(t),doc=JSON.parse(readFileSync(f.vectorPath));
+  f.run.replayBaseline.outcome='blocked';f.run.replayBaseline.reason='One original scenario was unavailable';
+  doc.steps[0].checks[0].value=9;writeFileSync(f.vectorPath,JSON.stringify(doc));
+  const result=f.api.readReplayEvidence(f.run,['tests/add.json']);
+  assert.equal(result.outcome,'blocked');
+  assert.ok(result.warnings.some(w=>w.path==='/steps/0/checks/0/value'&&w.before===3&&w.after===9));
+});
+
+test('2870 review: path and Try values stay distinct, quoted and inert, and long pointers stay whole',async t=>{
+  const f=await fixture(t),result=f.api.readReplayEvidence(f.run);
+  const pointer='/initial_world/'+('long_key'.repeat(200))+'/suffix';
+  result.warnings=[
+    {vector:'tests/add.json',path:pointer,before:'/home/alice/one',after:'/home/alice/two'},
+    {vector:'tests/add.json',path:'/link',before:'https://runtime.example/s/first',after:'https://runtime.example/s/second'},
+    {vector:'tests/add.json',path:'/marker',before:'pdd-workflow:old',after:'pdd-workflow:new'},
+    {vector:'tests/add.json',path:'/literal',before:':',after:'\\u003a'},
+    {vector:'tests/add.json',path:'/unicode',before:'x',after:'x\u200b'}
+  ];
+  const report=f.api.formatReplayEvidence(result),shown=visible(report).replace(/\\([\\`*_[\]()|])/g,'$1');
+  assert.ok(shown.includes(pointer));
+  assert.ok(shown.includes('"/home/alice/one" -> "/home/alice/two"'),shown);
+  assert.ok(shown.includes('"https://runtime.example/s/first" -> "https://runtime.example/s/second"'),shown);
+  assert.doesNotMatch(report,/pdd-workflow:|https:\/\//);
+  assert.match(report,/pdd-workflow\\\\u003aold/);
+  assert.notEqual(result.warnings[3].before,result.warnings[3].after);
+  assert.match(report,/x\\\\u200b/);assert.doesNotMatch(report,/\u200b/);
+});
+
+test('2870 review: a display budget counts overflow and keeps the complete warning list',async t=>{
+  const f=await fixture(t),result=f.api.readReplayEvidence(f.run);
+  result.warnings=Array.from({length:800},(_,i)=>({vector:'tests/add.json',path:`/numbers/${i}`,before:i,after:i+1}));
+  const full=f.api.formatReplayEvidence(result),budget=3000;
+  const short=f.api.formatReplayEvidence(result,{maxCharacters:budget});
+  assert.ok([...full].length>budget);assert.ok([...short].length<=budget,short);
+  const count=(short.match(/warning: Saved test values changed:/g)??[]).length;
+  assert.match(short,new RegExp(`and ${800-count} more saved-value changes`));
+  assert.match(short,/status\.json.*replayEvidence\/warnings/);
+  assert.equal(result.warnings.length,800);
 });

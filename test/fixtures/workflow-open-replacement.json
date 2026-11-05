@@ -9,6 +9,32 @@
   "notes": "Native specification only; Interpreter effects remain unbound and NOT RUN. Herdr commands use injected fakes; Git/files use isolated resources. Executable replay paths are maintained separately by the test owner; no provider or staging calls.",
   "cases": [
     {
+      "id": "codex-account-selection-matrix",
+      "criteria": [2, 3, 6, 7, 9],
+      "action": "Enumerate every saved-profile, incoming-selection and close-outcome combination through public openRun --new",
+      "expected": "Nonempty Work5 selects Work5, otherwise retain saved null/old; pin at intent. Confirmed closure installs and commits that profile before exactly one fresh launch. Unknown close acknowledgement retains pending selection and the old run profile, with no allocation or launch. Preserve progress and human decisions.",
+      "input": {
+        "kind": "account-profile-matrix",
+        "savedProfiles": [null, "old"],
+        "incomingSelections": ["unset", "empty", "Work5"],
+        "closeOutcomes": ["confirmed", "unknown"]
+      }
+    },
+    {
+      "id": "codex-account-pinned-recovery",
+      "criteria": [2, 3, 7, 9],
+      "action": "Retry interrupted intent/closed/prepared/launchRequested and lost native launch with Work6, invalid or unset incoming profile",
+      "expected": "Keep the same attempt and pinned profile; original rollback uses the original folder; prepared continuation and replacement lookup use the pinned folder. Preserve uncertainty, progress, approvals, history and request custody; do not retarget inheritance on historical or later checkpoints.",
+      "input": {"kind": "account-pinned-recovery"}
+    },
+    {
+      "id": "codex-account-normalization",
+      "criteria": [2, 5, 9],
+      "action": "Select absolute, relative, tilde, quoted or symlink profile folders, then invalid paths/files",
+      "expected": "Apply startup normalization, including OS home fallback, and preserve literal shell arguments. Follow directory symlinks without replacing the selected path by its realpath. Missing folders, broken symlinks and regular files refuse before intent or native effects with unchanged run and delivery custody.",
+      "input": {"kind": "account-normalization"}
+    },
+    {
       "id": "ownership-checkout",
       "criteria": [
         5,

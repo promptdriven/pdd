@@ -25,6 +25,7 @@ function fixture() {
     planOnBase: async () => true,
     listRuns: async () => state.local ? [{ number: 81, state: 'running', pr: [], rows: state.rows }] : [],
     storyEvidence: async run => run.rows,
+    savedStoryEvidence: async () => ({ stories: [], warnings: [] }),
     startRun: async input => { state.starts.push(input); return { exitCode: 0, message: 'Started.' }; },
     execFile: async (file, args) => {
       assert.equal(file, 'gh');

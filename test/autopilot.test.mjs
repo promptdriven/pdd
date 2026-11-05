@@ -4,6 +4,7 @@ import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { runAutopilot } from '../src/autopilot.mjs';
 import { readApprovalPolicy } from '../src/approval-policy.mjs';
 
@@ -47,6 +48,7 @@ for (const name of stories) test(`autopilot-${name}: replay approved Story cases
       const label = `${name}/${step.step_id}/${check.criterion_id} ${check.target} ${check.path}`;
       if (check.op === 'equals') assert.deepEqual(value, check.value, label);
       else if (check.op === 'contains') assert.ok(value.includes(check.value), label);
+      else if (check.op === 'count') { assert.ok(Array.isArray(value), label); assert.equal(value.length, check.value, label); }
       else assert.fail(`Unmapped assertion ${check.op}: ${label}`);
     }
   }
@@ -165,6 +167,32 @@ test('autopilot-author: actual GitHub adapter uses only people with write access
     assert.equal(result.exitCode, 0); assert.equal(result.trusted, trusted, author);
   }
   assert.equal(calls.filter(([file]) => file === 'gh').length, 8);
+});
+
+test('native GitHub lookup times out across calls, terminates its child and retains the confirmed owner', async () => {
+  const m = memory('{"mode":"auto","trust":["Dana"]}');
+  delete m.ports.github;
+  const signals = [], child = new EventEmitter();
+  child.kill = signal => { signals.push(signal); return true; };
+  m.ports.execFile = (file, args) => {
+    assert.equal(file, 'gh');
+    if (args[0] === 'repo') return Promise.resolve({ stdout: JSON.stringify({ nameWithOwner: 'Org/repo', owner: { login: 'Ada' } }) });
+    const pending = new Promise(resolve => setTimeout(() => resolve({ stdout: '[]' }), 6000));
+    pending.child = child;
+    return pending;
+  };
+  let shown;
+  m.ports.terminal.names = async info => { shown = info; return { names: [] }; };
+  const outcome = await Promise.race([
+    runAutopilot({ action: 'setup', interactive: true, inRepo: true }, m.ports),
+    new Promise(resolve => setTimeout(() => resolve(null), 5800)),
+  ]);
+  assert.ok(outcome, 'lookup must finish within the five-second budget and termination grace');
+  assert.equal(outcome.exitCode, 0);
+  assert.match(outcome.message, /incomplete/);
+  assert.deepEqual(shown, { owner: 'Ada', writers: [], complete: false });
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.deepEqual(signals, ['SIGTERM', 'SIGKILL']);
 });
 
 test('autopilot-mode: approval policy stays independent for all modes and still enforces strict policy', t => {
