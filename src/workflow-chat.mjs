@@ -160,7 +160,10 @@ export async function startChat({ run, area, message }, ports = {}) {
   };
   const checkpoint = async layout => {
     if (!ports.checkpoint) return;
-    const custody = layout.root ? {repoWorkspaceId: layout.repoWorkspaceId, workspaceId: layout.workspaceId, ...layout.root} : layout;
+    const custody = layout.root ? {repoWorkspaceId: layout.repoWorkspaceId,
+      ...(Object.hasOwn(layout, 'repoRoot') ? {repoRoot: layout.repoRoot} : {}),
+      ...(Object.hasOwn(layout, 'repoCreateIntent') ? {repoCreateIntent: layout.repoCreateIntent} : {}),
+      workspaceId: layout.workspaceId, ...layout.root} : layout;
     await ports.checkpoint(layout.tabId ? identity(layout) : null, custody);
   };
   const {layout, chat} = await withHerdrLayoutLock(async () => {
