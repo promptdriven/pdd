@@ -38,7 +38,7 @@ Interpreter. No simulated outcome or prompt pass is claimed.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"draft","prose_sha256":"","entries":[],"calls":[],"resources":[],"limits":{"max_steps":1,"max_model_calls":1},"conventions":[]}
+{"status":"draft","prose_sha256":"056e9454c030e0a77e581b15f693ffd0f53375ced94c541d7d71a08034f6a915","entries":[],"calls":[],"resources":[],"limits":{"max_steps":1,"max_model_calls":1},"conventions":[]}
 ```
 
 </details>
