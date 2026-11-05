@@ -1,7 +1,7 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 850a65b73b487286aac5583532063bb8f5cf52d89f2f9951403448002674da17).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: ef10496beab5afc7a017290be6a7200a911c9a20ecb90c93c9daef37a87ded8f).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
-import { execFile as execFileCallback } from 'node:child_process';
+import { spawnSync, execFile as execFileCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { constants, openSync, closeSync, fsyncSync, unlinkSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 
@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 import { readWorkflowAreas } from './workflow-areas.mjs';
-import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, readWorkflowPrStatus } from './workflow-github.mjs';
+import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, reconcileWorkflowPr, readWorkflowPrStatus } from './workflow-github.mjs';
 import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mjs';
 import { allRuns, currentChat, gitContext, listRuns, readRun, readRunOwnership, resolveRun, runDirFor, runForWorktree, updateRun, writeRun } from './workflow-runs.mjs';
 import { startChat, sendToChat, herdrCommand, chatSession, openChat, restartChat, validSessionId, closeChats, expandHome, homeVariable, isFolder, observeLifecycle, applyLifecycle, launchAnchor, sessionEvidenceDue, ownSession, observedSession, START_GRACE_MS } from './workflow-chat.mjs';
@@ -23,7 +23,7 @@ import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
 import { causeText } from './runtime-output.mjs';
 import { preparePrEvidence } from './workflow-pr-evidence.mjs';
 import { validateProofRecord } from './workflow-prove.mjs';
-import { readRunResults, resultLines, usableResult, noResultLine, NO_VERDICT } from './workflow-results.mjs';
+import { readRunResults, resultLines, usableResult, noResultLine, NO_VERDICT, prepareNativeEvidence } from './workflow-results.mjs';
 import { collectTestInventory } from './workflow-inventory.mjs';
 import {adoptReplayCorpus,REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinReplayVectors,readReplayEvidence,formatReplayEvidence} from './workflow-replay.mjs';
 
@@ -636,8 +636,8 @@ function ownedPr1Head(run) {
   return pr.publishedHeadSha;
 }
 function selectedCapture(root,tests,capture=captureSource) {
-  const found = findTests({root});
-  if (tests.some(path => !found.tests.some(test => test.path === path && !test.problem))) throw Error('A selected authored test is missing or unavailable.');
+  const visible=new Set(gitFiles(root));
+  if(tests.some(path=>!visible.has(path)))throw Error('A selected authored source is missing or unavailable.');
   return capture(root,{tests,appMap:null});
 }
 function frozenRoot(run,head) { return join(realpathSync(run.runDir),'evidence-pr1',head); }
@@ -775,6 +775,7 @@ function ownStoryRecords(run) {
   for (const result of [...(run.pddHistory ?? []), ...Object.values(run.done ?? {}).flatMap(record => record?.pddResults ?? [])])
     if (result?.kind === 'pdd test' && result.sourceSha256 && Array.isArray(result.tests) && !batches.has(result.batch)) batches.set(result.batch, result);
   return [...batches.values()].map(result => ({ at: result.at, summary: (result.stories?.length ? result.stories : [result.summary]).join('\n'),
+    ...(result.association?{association:result.association,receipt:{repo:result.producerRoot}}:{}),
     source: { kind: 'runtime-capture-v1', sha256: result.sourceSha256, tests: result.tests } }));
 }
 // null when the run has no check claim at all; { none: true } when it has a check or typed lines but no pdd result.
@@ -949,7 +950,8 @@ async function publicationEvidence(run, area, p) {
   }
   if (run.publicationPending) evidence.lines.unshift('Check evidence: publication-pending (source is being published).');
   // pdd's own pdd test and pdd lint results lead the body; the code PR's prove result is its Old-code proof line.
-  evidence.pddLines = resultLines(ownResults(run, p), { kinds: ['pdd test', 'pdd lint'] });
+  const results=ownResults(run,p);
+  evidence.pddLines = resultLines(results, { kinds: ['pdd test', 'pdd lint', ...results.some(result=>result.kind==='native evidence')?['native evidence']:[]] });
   return evidence;
 }
 function evidenceFit(lines, room, env) {
@@ -1129,6 +1131,18 @@ function prTitle(issueTitle, suffix) {
 }
 
 const commitSha = value => /^(?:[a-f\d]{40}|[a-f\d]{64})$/i.test(value);
+// Updates use the same publication owner's identity checks as initial creation.
+// Local source supplies an expected intent, never authority for the saved head.
+async function readPublishedPr1(run, pr, p) {
+  const intent = await prepareWorkflowPr({cwd:run.root,runId:run.runId,stageId:pr.stage,repository:run.repo,
+    baseBranch:pr.base,title:prTitle(oneLine(run.issue.title) || `Issue #${run.number}`)},p.commandPorts);
+  if (intent.headBranch !== pr.branch) throw Error('The owned PR 1 branch changed.');
+  const outcome = await reconcileWorkflowPr({cwd:run.root,intent},p.commandPorts);
+  p.inspectProgress?.();
+  if (!['open','merged'].includes(outcome.state) || !outcome.pr || outcome.pr.number !== pr.number || outcome.pr.url !== pr.url)
+    throw Error('The published PR 1 head is unavailable or does not match the owned publication.');
+  return outcome.pr;
+}
 function inventoryCommits(inventory) {
   return commitSha(inventory.baseSha) && commitSha(inventory.headSha)
     ? `Test inventory commits: ${inventory.baseSha.slice(0,7)} → ${inventory.headSha.slice(0,7)}.`
@@ -1196,8 +1210,9 @@ async function publishAreaPr(run, area, p, lines, retry) {
   // Only an unchanged source and identical non-inventory body can be an
   // informational refresh. Missing prior custody always takes the safety path.
   const bodyIdentity = () => createHash('sha256').update(prBody({...run,testInventory:null},area,p.env,bodyDrafts,bodyTests,prepared)).digest('hex');
-  const rememberPublication = pr => {
+  const rememberPublication = (pr, observed) => {
     if (codePr) { pr.publishedHeadSha = run.testInventory.headSha; pr.publicationBodySha256 = bodyIdentity(); }
+    else if (commitSha(observed?.headSha)) pr.publishedHeadSha = observed.headSha;
   };
   if (existing) {
     let inventoryOnly = false;
@@ -1232,9 +1247,18 @@ async function publishAreaPr(run, area, p, lines, retry) {
     if (failed) {
       if (!inventoryOnly) return failed;
       lines.push(`warning: The code PR still shows the previous inventory; its displayed commit pair identifies the older comparison. The new comparison is ${commitSha(run.testInventory.baseSha)&&commitSha(run.testInventory.headSha)?`${run.testInventory.baseSha.slice(0,7)} → ${run.testInventory.headSha.slice(0,7)}`:'unavailable'}. The current full report ${run.testInventory.saved ? 'was saved locally in test-inventory.json in the run folder' : 'was not saved locally'}. Inventory refresh failed (${failed.message}); ${retry}.`);
-    } else rememberPublication(existing);
+    } else {
+      let observed;
+      if (!codePr) {
+        try { observed = await readPublishedPr1(run,existing,p); }
+        catch (error) {
+          if(error?.code==='workflow_progress_refused')throw error;
+          return fail([...lines,`${oneLine(error.message)} Source was pushed; PR 1 publication remains unconfirmed. ${retry}.`].join('\n'));
+        }
+      }
+      rememberPublication(existing,observed);
+    }
     const applyPublication=publicationUpdate(run,codePr?['testInventory']:[]);
-    if (!codePr) existing.publishedHeadSha=promptHead;
     const metadata=Object.fromEntries(['publishedHeadSha','publicationBodySha256'].filter(key=>Object.hasOwn(existing,key)).map(key=>[key,existing[key]]));
     commitRun(run,p,latest=>{applyPublication(latest);const pr=latest.pr.find(pr=>pr.url===existing.url&&pr.stage===existing.stage);if(pr)Object.assign(pr,metadata);});
     if (area.then === 'ask-code') await refreshReplayBaseline(run,p);
@@ -1265,8 +1289,8 @@ async function publishAreaPr(run, area, p, lines, retry) {
   if (!['open', 'merged'].includes(outcome.state) || !outcome.pr) return fail([...lines, `${label[0].toUpperCase()}${label.slice(1)} did not open: ${/ then try again\.$/.test(outcome.message)
     ? outcome.message.replace(/ then try again\.$/, ` then ${retry}.`) : `${outcome.message} ${retry[0].toUpperCase()}${retry.slice(1)} to retry.`}`].join('\n'));
   if (area.then === 'ask-code') await refreshReplayBaseline(run,p);
-  const published = { publishedHeadSha:intent.headSha, stage: area.name, number: outcome.pr.number, url: outcome.pr.url, branch: run.branch, base };
-  rememberPublication(published);
+  const published = { stage: area.name, number: outcome.pr.number, url: outcome.pr.url, branch: run.branch, base };
+  rememberPublication(published,outcome.pr);
   const applyPublication=publicationUpdate(run,codePr?['testInventory']:[]);
   commitRun(run,p,latest=>{applyPublication(latest);if(!latest.pr.some(pr=>pr.url===published.url&&pr.stage===published.stage))latest.pr.push(published);});
   return null;
@@ -1314,6 +1338,21 @@ async function recordEvidenceCommand({ ref, summaryFile, cwd }, ports) {
   try {
     if (!summaryFile || !lstatSync(resolve(cwd, summaryFile)).isFile() || lstatSync(resolve(cwd, summaryFile)).size > 2 * 1024 * 1024) throw Error('Supply a regular saved JSON file of at most 2 MiB.');
     receipt = JSON.parse(readFileSync(resolve(cwd, summaryFile), 'utf8'));
+    if (receipt.schema === 'pdd.native-evidence-import.v1') {
+      const prepared = prepareNativeEvidence({root:run.root,runDir:run.runDir,runId:run.runId,summaryFile:resolve(cwd,summaryFile)},
+        {workspace:input=>readEvidenceEligibility(input,p)});
+      const folder = join('evidence',p.randomUUID());
+      mkdirSync(join(run.runDir,folder),{recursive:true,mode:0o700});
+      const native = {...prepared.record,originals:prepared.record.originals.map((row,index)=> {
+        const savedPath = join(folder,String(index));
+        writeFileSync(join(run.runDir,savedPath),prepared.originals[index].bytes,{flag:'wx',mode:0o600});
+        return {...row,savedPath};
+      })};
+      const at = p.now();
+      writeFileSync(join(run.runDir,folder,'admission.json'),JSON.stringify(native,null,2)+'\n',{flag:'wx',mode:0o600});
+      commitRun(run,p,latest=>{(latest.evidence??=[]).push({at,native});});
+      return done(`Recorded native original evidence for ${run.repo}#${run.number}: profile ${prepared.assessment.profileState}; Story native proof ${prepared.assessment.storyNativeProof}. Originals and limits retained. Steps, gates and PRs are unchanged. This records evidence, not fresh execution or approval.`);
+    }
     if (!/^[a-f0-9]{64}$/.test(receipt.source_sha256 ?? '') || !Array.isArray(receipt.rows) || !receipt.rows.length) throw Error('Saved check JSON needs source_sha256 and nonempty rows.');
     const tests = receipt.rows.map(row => row?.test);
     evidenceTests(tests);
@@ -1354,7 +1393,7 @@ async function recordEvidenceCommand({ ref, summaryFile, cwd }, ports) {
 
 // pdd's own results for a run (pdd test, pdd lint, pdd workflow prove). A read problem gives no results, never a stop.
 function ownResults(run, p) {
-  try { return (p.readRunResults ?? readRunResults)({ root: run.root, runDir: run.runDir, runId: run.runId, since: run.startedAt ?? 0, baseBranch: run.baseBranch ?? null }, { env: p.env }); }
+  try { return (p.readRunResults ?? readRunResults)({ root: run.root, runDir: run.runDir, runId: run.runId, since: run.startedAt ?? 0, baseBranch: run.baseBranch ?? null }, { env: p.env, workspace:input=>readEvidenceEligibility(input,p) }); }
   catch { return []; }
 }
 // The steps whose done output shows pdd's own results, or a visible "no pdd result" warning.
@@ -1523,7 +1562,15 @@ async function syncPr1(run, p) {
     ahead = 0;
   }
   if (behind && replayEnabled(run)) return {failed:`The prompt branch is behind its published head. Update the worktree from origin/${run.branch}, then ${approvalGuide(run, p.pdd)}.`};
-  if (!ahead && !behind) await refreshReplayBaseline(run,p);
+  const rememberHead = async () => {
+    const observed = await readPublishedPr1(run,pr1,p);
+    commitRun(run,p,latest=>{const pr=latest.pr.find(pr=>pr.url===pr1.url&&pr.stage===pr1.stage);if(pr)pr.publishedHeadSha=observed.headSha;});
+  };
+  if (!ahead && !behind) {
+    try { await rememberHead(); }
+    catch (error) { if(error?.code==='workflow_progress_refused')throw error;return {failed:`${oneLine(error.message)} Check the published PR 1 head, then ${again}`}; }
+    await refreshReplayBaseline(run,p);
+  }
   if (ahead && behind && what) return { failed: `PR 1 has commits that this worktree does not have, so pdd did not push ${what}. Run: ${go}git pull --rebase origin ${shell(run.branch)} && git push origin HEAD:refs/heads/${run.branch}\n${again}` };
   if (!ahead || behind) {
     const drafts = approved.length ? await pr1Drafts(run, p) : before;
@@ -1536,8 +1583,9 @@ async function syncPr1(run, p) {
   try { await rawGit(p,run.root,'push','origin',`${pushedHead}:refs/heads/${run.branch}`); }
   catch { return { failed: `pdd could not push ${what ?? `the worktree's new commit${ahead > 1 ? 's' : ''}`} to PR 1. Run: ${go}git push origin HEAD:refs/heads/${run.branch}\n${again}` }; }
   if (await git(p,run.root,'rev-parse','--verify','HEAD^{commit}') !== pushedHead) return { failed: 'Source was pushed; the local head changed. PR 1 stays publication-pending; retry from the pushed source.' };
+  try { await rememberHead(); }
+  catch (error) { if(error?.code==='workflow_progress_refused')throw error;return {failed:`${oneLine(error.message)} Source was pushed; PR 1 publication remains unconfirmed. ${again}`}; }
   await refreshReplayBaseline(run,p);
-  commitRun(run,p,latest=>{const owned=prOf(latest,pr1.stage);if(owned)owned.publishedHeadSha=pushedHead;});
   const drafts = await pr1Drafts(run, p);
   return { drafts, lines: [what ? `pdd committed ${what} and pushed it to PR 1.` : `pdd pushed ${ahead} new commit${ahead > 1 ? 's' : ''} from the worktree to PR 1.`, ...await draftDescription(run, pr1, drafts, p)] };
 }
@@ -2318,8 +2366,9 @@ async function runStatusCommand({ ref, cwd, all = false, json = false, cancelled
   if(!ordinaryOwnership&&!snapshotOnly)await refreshPr(found.run, p);
   const run = found.run, facts = ended(run)||ordinaryOwnership||snapshotOnly ? {} : await gateFacts(run, p), chat = ordinaryOwnership||snapshotOnly?null:await chatState(run, p);
   const snapshot = requestSnapshot(run, p);
-  if (json) { const { line, ...item } = summary(run, p.timeZone, chat, facts); return done(JSON.stringify({ runs: [{ ...item, ...snapshot, ordinaryOwnership }] }, null, 2)); }
-  return done([detail(run, chat, facts), ...ownershipLines(ordinaryOwnership), ...requestLines(snapshot, { ended: ended(run), p })].join('\n'));
+  const nativeResults=ownResults(run,p).filter(result=>result.kind==='native evidence');
+  if (json) { const { line, ...item } = summary(run, p.timeZone, chat, facts); return done(JSON.stringify({ runs: [{ ...item, ...snapshot, ordinaryOwnership, nativeResults }] }, null, 2)); }
+  return done([detail(run, chat, facts), ...(nativeResults.length?resultLines(nativeResults):[]), ...ownershipLines(ordinaryOwnership), ...requestLines(snapshot, { ended: ended(run), p })].join('\n'));
 }
 
 const replacementPhases = ['intent', 'closeRequested', 'closed', 'createRequested', 'prepared', 'launchRequested', 'launched', 'rolledBack', 'ended'];
@@ -2537,3 +2586,38 @@ export const runStatus=saveGuard(async(options,ports)=>{
 });
 
 export const openRun=saveGuard(openRunCommand);
+
+// Canonical, read-only association admission for native workspace consumers.
+// The existing registered authority above remains the only permission rule.
+export function readEvidenceEligibility({root,producerRoot,tests,source_sha256,runId=null,stage=null},ports={}){
+  const canonical=ports.realpath??realpathSync,capture=ports.captureSource??captureSource;
+  let result={state:'unavailable',reason:'source or ownership unavailable',runId:null,repo:null,producerRoot:null,tests:[],stage:null,sourceAnchor:null,source_sha256:source_sha256??null};
+  try{
+    root=canonical(root);producerRoot=canonical(producerRoot);tests=evidenceTests(tests);
+    result={...result,producerRoot,tests};
+    if(!/^[a-f0-9]{64}$/.test(source_sha256??''))return{...result,state:'ineligible',reason:'original selected source identity is missing'};
+    const runs=(ports.allRuns??allRuns)({cancelled:true},ports);
+    // Only the consumer's owned source/run may authorize an alternate producer.
+    const candidates=[];
+    for(const run of runs){
+      if(!run||typeof run.root!=='string'||canonical(run.root)!==root)continue;
+      for(const association of run.evidenceAssociations??[]){
+        if(association.workspaceRoot===producerRoot&&selectionEqual(association.tests,tests)&&association.source_sha256===source_sha256)candidates.push({run,association});
+      }
+    }
+    if(candidates.length){
+      if(candidates.length!==1)return{...result,state:'ineligible',reason:'workspace association is ambiguous'};
+      const {run,association:a}=candidates[0];
+      if(runId!==null&&runId!==run.runId||stage!==null&&stage!==a.stage)return{...result,state:'ineligible',reason:'saved run or stage disagrees with the owned association'};
+      const inspect=ports.inspectRepository??(path=>{const git=spawnSync('git',['rev-parse','--path-format=absolute','--git-common-dir'],{cwd:path,encoding:'utf8'});if(git.status!==0)throw Error('repository ownership unavailable');return canonical(git.stdout.trim());});
+      const common=inspect(root);
+      if(canonical(run.commonDir)!==common||canonical(run.runDir)!==canonical(runDirFor(common,run.number))||typeof run.repo!=='string'||!run.runId)return{...result,state:'ineligible',reason:'run ownership is missing or contradictory'};
+      checkedAssociation(run,a,capture);
+      return{state:'eligible',reason:null,runId:run.runId,repo:run.repo,producerRoot,tests,stage:a.stage,sourceAnchor:{...a.sourceAnchor},source_sha256};
+    }
+    if(runId!==null||stage!==null&&stage!=='current')return{...result,state:'ineligible',reason:'saved run/stage has no matching owned association'};
+    if(root!==producerRoot)return{...result,state:'ineligible',reason:'alternate producer has no owned workspace association'};
+    if(capture(root,{tests,appMap:null}).sha256!==source_sha256)return{...result,state:'ineligible',reason:'the exact selected source has changed'};
+    return{state:'eligible',reason:null,runId:null,repo:null,producerRoot,tests,stage:'current',sourceAnchor:{root,head:null},source_sha256};
+  }catch(error){return{...result,reason:oneLine(error.message??error)};}
+}

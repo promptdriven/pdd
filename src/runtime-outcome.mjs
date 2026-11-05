@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-outcome.prompt.md (sha256: d8d9bf3b629ce74940b2d75c16d0fd0b5a4cd73ceffa44de287501ef772c712d).
+// Generated from prompts/cli/runtime-outcome.prompt.md (sha256: 83fa331108693f7464676e0dde1cab6e7fd6bd2380c44534060116c0d662eeb2).
 // What happened to one selected test: the one place that turns a server answer into an outcome.
 const objects = value => Array.isArray(value) ? value.filter(item => item && typeof item === 'object' && !Array.isArray(item)) : [];
 const count = value => Number.isSafeInteger(value) && value >= 0;

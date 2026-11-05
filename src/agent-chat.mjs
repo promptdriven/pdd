@@ -1,3 +1,5 @@
+import {loadRuntimeWorkspace} from './runtime-workspace.mjs';
+import {captureSource} from './runtime-preflight.mjs';
 // Generated from prompts/cli/agent-chat.prompt.md (sha256: 3e52b2cc81f23cc8046d0d1e605815e952069ee79fb6cd5f91cc50ccf783f9dd).
 import {discoverAgents,askAgent} from './agent-adapters.mjs';
 import {loadAgentDefinitions} from './agent-config.mjs';
@@ -18,6 +20,8 @@ function scrub(value,secrets){
  return value;
 }
 export async function createAgentBridge(context,test,tryId,options={},link){
+ const workspace=loadRuntimeWorkspace({root:context.root});
+ if(workspace.configured){captureSource(context.root,{tests:[test.path]});throw Error('Bounded agent connection is unavailable: native controls cannot establish packet-only context.');}
  const definitions=context.agentDefinitions??loadAgentDefinitions({cwd:context.root,env:context.ports.env});
  if(!definitions.length)throw Error('No agents are configured. Add an agent or enable defaults in agents.json.');
  const known=id=>definitions.some(d=>d.id===id),byChoice=value=>definitions.find(d=>d.name===value)??definitions.find(d=>['codex','claude','gemini'].includes(d.id)&&d.id===value);
