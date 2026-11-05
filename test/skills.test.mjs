@@ -835,11 +835,15 @@ test('AUTOPILOT13: runs start by room with no fixed cap, and at most 2 runs chan
 
 // Wrong: old backlog starts by itself, a new repo starts without a way to run its app, or code waits on every repo.
 test('AUTOPILOT14: start-up recipe first, new issues only, and code right after PR 1 in a repo with a release', () => {
-  const text = has('pdd-autopilot/SKILL.md', '1. First task on a repo that Autopilot has not worked on: run its start-up recipe (install, test, run a changed path). With no recipe, write it, run it once and keep it in the repo. Then pick issues.',
+  const text = has('pdd-autopilot/SKILL.md', 'run its start-up recipe (install, test, run a changed path)',
     'filed after Autopilot was turned on or named by a person (`pdd autopilot add N`)',
     '`pdd autopilot start` runs a tick with no AI that starts this skill only when there is work.',
     'A repo with a release starts the code PR as soon as PR 1 is open. A new product waits for a person\'s "code now". One code PR per prompt file closes every issue that waits on it.');
+  assert.match(text, /verification-setup\.md.*create and keep a missing recipe.*then pick issues/);
   assert.ok(text.indexOf('start-up recipe') < text.indexOf('Ready:'));
+  const setup = read('pdd-prompting/verification-setup.md');
+  assert.match(setup, /Before selecting issues, run the applicable install\/build and relevant tests/);
+  assert.match(setup, /Report any unavailable or inapplicable step and its reason/);
   for (const name of ['pdd-bug', 'pdd-feature']) has(`${name}/steps/autopilot.md`, 'A new product waits for a person\'s "code now".',
     '- Code PR: a repo with a release starts it as soon as PR 1 is open, stacked on PR 1; do not wait for PR 1 to merge, in `observe` too.');
 });
