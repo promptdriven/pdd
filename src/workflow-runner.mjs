@@ -160,7 +160,7 @@ function protectProgress(run,p,{approval=false}={}) {
   p.inspectProgress=inspect;
   const exec=p.execFile,herdr=herdrCommand(p);
   p.execFile=async(file,args,options)=>{
-    if((file==='git'&&['add','commit','push','checkout','switch','branch'].includes(args[0])) || (file==='gh'&&args[0]==='pr'&&['create','edit'].includes(args[1])))inspect();
+    if((file==='git'&&['add','commit','push','checkout','switch','branch'].includes(args[0])) || (file==='gh'&&((args[0]==='pr'&&['create','edit'].includes(args[1])) || (args[0]==='api'&&args.includes('PATCH')))))inspect();
     return exec(file,args,options);
   };
   p.commandPorts={...p.commandPorts,execFile:p.execFile};
@@ -1626,6 +1626,21 @@ export async function retryPrDescription(args, ports = {}) {
         const warning = messages.find(line => line.startsWith('warning:'));
         return warning ? fail(warning) : {exitCode:0,message:messages.join('\n') || 'The PR description is already current.'};
       }
+      // Rebuild the comparison from the public head: a failed final PATCH can
+      // leave the saved inventory describing the previously published source.
+      const ref = `refs/remotes/origin/${run.baseBranch}`;
+      await rawGit(p,run.root,'fetch','origin',`refs/heads/${run.baseBranch}:${ref}`);
+      const fetched = (await rawGit(p,run.root,'rev-parse','--verify',`${ref}^{commit}`)).trim();
+      const baseSha = (await rawGit(p,run.root,'merge-base',head,fetched)).trim();
+      if (!commitSha(fetched) || !commitSha(baseSha)) throw Error('The current test inventory cannot be verified.');
+      const inventory = await collectTestInventory({cwd:run.root,baseSha,headSha:head},p.commandPorts);
+      if (!inventory.available) throw Error('The current test inventory cannot be verified.');
+      let saved = false;
+      try {
+        const report = JSON.parse(readFileSync(join(run.runDir,'test-inventory.json'),'utf8'));
+        saved = report.saved === true && report.baseSha === baseSha && report.headSha === head && report.text === inventory.text;
+      } catch { /* A missing report is represented in the body. */ }
+      run.testInventory = {text:inventory.text,baseSha,headSha:head,saved};
       const evidence = await publicationEvidence(run,area,p);
       if (area.replay_evidence === REPLAY_POLICY) run.replayEvidence = await currentReplayEvidence(run,p,true);
       const body = prBody(run,area,p.env,[],true,evidence);
