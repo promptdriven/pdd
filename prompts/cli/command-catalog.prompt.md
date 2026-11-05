@@ -39,6 +39,32 @@ Catalog four local routes before the product routes: `autopilot.start` (`autopil
 
 The [launcher](autopilot-launcher.prompt.md) owns behavior and --runs numeric interpretation. No fixed run cap, headless flag or additional setup question. Include routes in help and completion. Preserve all unrelated forms and ordering.
 
+## Graph read route
+
+Catalog route `graph`, prefix `graph`, local disposition `issue-dependency-graph`,
+no operands, and optional flags `--open`, text `--issue N`, text `--repo OWNER/REPO`.
+Expose `pdd graph`, `pdd graph --open`, `pdd graph --issue N`, and the combined
+`pdd graph --open --issue N --repo OWNER/REPO` form in help/completion. `--repo`
+is graph-only. Its help says it reads native dependencies and saved reviews;
+--open opens the local viewer, --issue selects a root issue, and --repo names
+an explicit repository, including outside a checkout. No graph route starts AI.
+The [graph owner](issue-dependency-graph.prompt.md) owns reads/opening and validation.
+
+## Structured dependency intake routes
+
+Catalog `dependencies.prepare`, prefix `dependencies prepare`, local disposition
+`dependencies-prepare`, no operands and optional text --issue N. Help form:
+`pdd dependencies prepare [--issue N]`. It reads a scoped native-coordinator packet
+from the current repository without AI or GitHub writes.
+Catalog `dependencies.complete`, prefix `dependencies complete`, local disposition
+`dependencies-complete`, no operands and required text --input FILE. Its only
+supported value is literal `-`; help form `pdd dependencies complete --input -`.
+It reads one structured JSON completion from stdin, validates current context,
+saves the review and reconciles its intended native effects. CLI dispatch owns the
+required-value check. No --repo or agent/model option exists on these two routes.
+The [intake owner](issue-dependencies-intake.prompt.md) owns packet and result rules.
+Keep these forms separate from graph reads and unchanged workflow evidence forms.
+
 ## Public routes
 
 Catalog local routes `autopilot.off`, `autopilot.observe`, and `autopilot.auto` with prefixes `autopilot off`, `autopilot observe`, and `autopilot auto`, dispositions of the same names, no operands and no options. Catalog `autopilot.trust` with prefix `autopilot trust`, local `autopilot-trust`, one or more text name operands and no options; catalog `autopilot.untrust` with prefix `autopilot untrust`, local `autopilot-untrust`, exactly one text name operand and no options. The parser and completion consume these routes; dispatch uses their stable dispositions. Include all five in the manifest and help as below.

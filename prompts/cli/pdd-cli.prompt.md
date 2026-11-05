@@ -18,7 +18,35 @@ Read the entire [Prompting guide](../../docs/prompting-guide.md) before authorin
 
 For admitted setup, after the existing skills, project and MCP actions in the setup callback, call [Autopilot settings](autopilot.prompt.md) `runAutopilot({action: "setup", interactive, inRepo}, ports)` once; derive terminal and repository context from actual stdin and Git, and supply real terminal-question, config and GitHub ports or their injected substitutes. Include its failure in the setup exit status while retaining other actions; print a setup message only when nonempty, so outside-repository setup adds no Autopilot output. Dispatch catalog dispositions `autopilot.off`, `autopilot.observe`, `autopilot.auto`, `autopilot-trust` and `autopilot-untrust` to the same function, with action mode and the named mode, or trust/untrust and parsed names respectively. Print its message once to stdout on exit 0, stderr otherwise, and return its exit code. Permit injected module and ports; a thrown error yields one finite diagnostic and exit 1. No Autopilot settings route starts a workflow or interpreter.
 
+## Graph read dispatch
+
+Dispatch `issue-dependency-graph` to the injected graph module's public
+`runIssueGraph({cwd,repository,issue,open},graphPorts)`. Map catalog --repo to
+repository and --issue to issue; reject nonpositive issue numbers and invalid
+OWNER/REPO before any outside effect. Use empty strings for absent optional text
+and false for absent --open. Print its message once to stdout on exitCode 0,
+stderr otherwise, preserving one newline; return its exitCode. A thrown error
+gets one safe finite diagnostic and exit 1. This route never invokes the PDD
+interpreter or the native analysis route. Keep graphPorts separate from runtime
+and Autopilot settings ports.
+
+## Structured dependency intake dispatch
+
+Dispatch `dependencies-prepare` and `dependencies-complete` to an injected
+`dependencyIntake` module (default src/issue-dependencies-intake.mjs), using separate
+`dependencyIntakePorts`. Before reading stdin or importing a mutation path, require
+complete's --input to be exactly `-` and prepare's optional --issue to be a positive
+issue number. Pass prepare `{command:"prepare",cwd,issue}`; pass complete
+`{command:"complete",cwd,stdin}` with the exact UTF-8 stdin payload. The intake
+owner validates JSON. Print returned message once to stdout on exitCode 0,
+stderr otherwise, and return its exitCode. A finite throw returns 1 with one safe
+line and no automatic retry. No route silently chooses or calls an AI model.
+Preserve every existing evidence-associate route and --test text-list behavior.
+
 ## Dependencies
+
+- [Structured dependency intake](issue-dependencies-intake.prompt.md): required generation and verification context for prepare/complete dispatch.
+- [Graph reads](issue-dependency-graph.prompt.md): required generation and verification context for read/open dispatch.
 
 - [Autopilot launcher](autopilot-launcher.prompt.md): required native generation/verification context for launch, tick, stop, status and backlog selection. These native effects are not bound by the existing syntax transport. Launcher ports are separate from the settings module's `autopilotPorts`.
 
@@ -151,8 +179,8 @@ finite local cause and returns 5. Catalog owns all syntax.
 
 ```json
 {
-  "status": "approved",
-  "prose_sha256": "d740ad78a1586c7ec7b2742e0bebab423daa91c451d079de00eb863794303f6b",
+  "status": "draft",
+  "prose_sha256": "91839e7d1989c8bd9c4312b5d6dc508b33462e3d115db91627a1a04bfeadf48a",
   "entries": [{"operation": "runPdd","input_schema": {"type": "object","properties": {"argv": {"type": "array","items": {"type": "string"}},"cwd": {"type": "string"},"env": {"type": "object","properties": {"HOME": {"type": "string"},"PATH": {"type": "string"},"CODEX_HOME": {"type": "string"},"CLAUDE_CONFIG_DIR": {"type": "string"}},"required": [],"additionalProperties": false},"packageRoot": {"type": "string"}},"required": ["argv"],"additionalProperties": false},"result_schema": {"type": "object","properties": {"exit_code": {"type": "integer"},"stdout": {"type": "string"},"stderr": {"type": "string"}},"required": ["exit_code","stdout","stderr"],"additionalProperties": false},"errors": []}],
   "calls": [],
   "resources": [

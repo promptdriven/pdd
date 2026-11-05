@@ -1,0 +1,2277 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/dependencies-native-graph.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "A reviewed independent issue is current and dependency-clear; an unchecked issue is not eligible."
+    },
+    {
+      "id": "AC2",
+      "text": "CRM issue 42 waits for schema issue 42 in another repository; completed work releases the native blocker, but not-planned, unknown, reopened or required-deployment work does not."
+    },
+    {
+      "id": "AC3",
+      "text": "A native human edge with no saved reason remains visible. Merge alone does not satisfy an open prerequisite."
+    },
+    {
+      "id": "AC4",
+      "text": "Self edges, duplicate additions and same- or cross-repository cycles are refused. Existing native cycles remain visible."
+    },
+    {
+      "id": "AC5",
+      "text": "Claims, open PRs, stuck work, unknown trust and incomplete reads keep their separate holds and do not become eligible."
+    }
+  ],
+  "initial_world": {},
+  "simulation": {},
+  "context": [],
+  "steps": [
+    {
+      "step_id": "checked-empty",
+      "entry_path": "prompts/cli/issue-dependencies.prompt.md",
+      "operation": "projectIssueGraph",
+      "input": {
+        "snapshot": {
+          "repository": "example/crm",
+          "capturedAt": "2026-11-04T18:30:00Z",
+          "complete": true,
+          "issues": [
+            {
+              "key": "https://github.com/example/crm/issues/42",
+              "nodeId": "725042",
+              "title": "CRM import",
+              "revision": "req-1",
+              "state": "open",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            }
+          ],
+          "edges": [],
+          "reviews": [
+            {
+              "id": "r42",
+              "analysis": "a-r42",
+              "base": [],
+              "continuation": "",
+              "issue": "https://github.com/example/crm/issues/42",
+              "inputs": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "candidates": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "outcome": "complete",
+              "dependencies": [],
+              "questions": [],
+              "intact": true,
+              "effects": "none",
+              "authority": "trusted"
+            }
+          ],
+          "impacts": [],
+          "inputs": []
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/nodes/0/reviewState",
+          "op": "equals",
+          "value": "current"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/nodes/0/dependencyState",
+          "op": "equals",
+          "value": "clear"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/nodes/0/eligible",
+          "op": "equals",
+          "value": true
+        }
+      ]
+    },
+    {
+      "step_id": "unchecked",
+      "entry_path": "prompts/cli/issue-dependencies.prompt.md",
+      "operation": "projectIssueGraph",
+      "input": {
+        "snapshot": {
+          "repository": "example/crm",
+          "capturedAt": "2026-11-04T18:30:00Z",
+          "complete": true,
+          "issues": [
+            {
+              "key": "https://github.com/example/crm/issues/42",
+              "nodeId": "725042",
+              "title": "CRM import",
+              "revision": "req-1",
+              "state": "open",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            }
+          ],
+          "edges": [],
+          "reviews": [],
+          "impacts": [],
+          "inputs": []
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/nodes/0/reviewState",
+          "op": "equals",
+          "value": "unchecked"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/nodes/0/eligible",
+          "op": "equals",
+          "value": false
+        }
+      ]
+    },
+    {
+      "step_id": "cross-repo-open",
+      "entry_path": "prompts/cli/issue-dependencies.prompt.md",
+      "operation": "projectIssueGraph",
+      "input": {
+        "snapshot": {
+          "repository": "example/crm",
+          "capturedAt": "2026-11-04T18:30:00Z",
+          "complete": true,
+          "issues": [
+            {
+              "key": "https://github.com/example/crm/issues/42",
+              "nodeId": "725042",
+              "title": "CRM import",
+              "revision": "req-1",
+              "state": "open",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            },
+            {
+              "key": "https://github.com/example/schema/issues/42",
+              "nodeId": "834217",
+              "title": "CRM schema",
+              "revision": "req-1",
+              "state": "open",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            }
+          ],
+          "edges": [
+            {
+              "dependent": "https://github.com/example/crm/issues/42",
+              "blocker": "https://github.com/example/schema/issues/42"
+            }
+          ],
+          "reviews": [
+            {
+              "id": "r42",
+              "analysis": "a-r42",
+              "base": [],
+              "continuation": "",
+              "issue": "https://github.com/example/crm/issues/42",
+              "inputs": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "candidates": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "outcome": "complete",
+              "dependencies": [
+                {
+                  "key": "https://github.com/example/schema/issues/42",
+                  "reason": "Schema is required.",
+                  "evidence": [
+                    "https://github.com/example/schema/issues/42"
+                  ]
+                }
+              ],
+              "questions": [],
+              "intact": true,
+              "effects": "none",
+              "authority": "trusted"
+            }
+          ],
+          "impacts": [],
+          "inputs": []
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/nodes/0/blockers",
+          "op": "equals",
+          "value": [
+            "https://github.com/example/schema/issues/42"
+          ]
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/nodes/0/dependencyState",
+          "op": "equals",
+          "value": "waiting"
+        }
+      ]
+    },
+    {
+      "step_id": "blocker-completed",
+      "entry_path": "prompts/cli/issue-dependencies.prompt.md",
+      "operation": "projectIssueGraph",
+      "input": {
+        "snapshot": {
+          "repository": "example/crm",
+          "capturedAt": "2026-11-04T18:30:00Z",
+          "complete": true,
+          "issues": [
+            {
+              "key": "https://github.com/example/crm/issues/42",
+              "nodeId": "725042",
+              "title": "CRM import",
+              "revision": "req-1",
+              "state": "open",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            },
+            {
+              "key": "https://github.com/example/schema/issues/42",
+              "nodeId": "834217",
+              "title": "CRM schema",
+              "revision": "req-1",
+              "state": "completed",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            }
+          ],
+          "edges": [
+            {
+              "dependent": "https://github.com/example/crm/issues/42",
+              "blocker": "https://github.com/example/schema/issues/42"
+            }
+          ],
+          "reviews": [
+            {
+              "id": "r42",
+              "analysis": "a-r42",
+              "base": [],
+              "continuation": "",
+              "issue": "https://github.com/example/crm/issues/42",
+              "inputs": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "candidates": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "outcome": "complete",
+              "dependencies": [
+                {
+                  "key": "https://github.com/example/schema/issues/42",
+                  "reason": "Schema is required.",
+                  "evidence": [
+                    "https://github.com/example/schema/issues/42"
+                  ]
+                }
+              ],
+              "questions": [],
+              "intact": true,
+              "effects": "none",
+              "authority": "trusted"
+            }
+          ],
+          "impacts": [],
+          "inputs": []
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/nodes/0/dependencyState",
+          "op": "equals",
+          "value": "clear"
+        }
+      ]
+    },
+    {
+      "step_id": "blocker-not_planned",
+      "entry_path": "prompts/cli/issue-dependencies.prompt.md",
+      "operation": "projectIssueGraph",
+      "input": {
+        "snapshot": {
+          "repository": "example/crm",
+          "capturedAt": "2026-11-04T18:30:00Z",
+          "complete": true,
+          "issues": [
+            {
+              "key": "https://github.com/example/crm/issues/42",
+              "nodeId": "725042",
+              "title": "CRM import",
+              "revision": "req-1",
+              "state": "open",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            },
+            {
+              "key": "https://github.com/example/schema/issues/42",
+              "nodeId": "834217",
+              "title": "CRM schema",
+              "revision": "req-1",
+              "state": "not_planned",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            }
+          ],
+          "edges": [
+            {
+              "dependent": "https://github.com/example/crm/issues/42",
+              "blocker": "https://github.com/example/schema/issues/42"
+            }
+          ],
+          "reviews": [
+            {
+              "id": "r42",
+              "analysis": "a-r42",
+              "base": [],
+              "continuation": "",
+              "issue": "https://github.com/example/crm/issues/42",
+              "inputs": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "candidates": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "outcome": "complete",
+              "dependencies": [
+                {
+                  "key": "https://github.com/example/schema/issues/42",
+                  "reason": "Schema is required.",
+                  "evidence": [
+                    "https://github.com/example/schema/issues/42"
+                  ]
+                }
+              ],
+              "questions": [],
+              "intact": true,
+              "effects": "none",
+              "authority": "trusted"
+            }
+          ],
+          "impacts": [],
+          "inputs": []
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/nodes/0/dependencyState",
+          "op": "equals",
+          "value": "waiting"
+        }
+      ]
+    },
+    {
+      "step_id": "blocker-unknown",
+      "entry_path": "prompts/cli/issue-dependencies.prompt.md",
+      "operation": "projectIssueGraph",
+      "input": {
+        "snapshot": {
+          "repository": "example/crm",
+          "capturedAt": "2026-11-04T18:30:00Z",
+          "complete": true,
+          "issues": [
+            {
+              "key": "https://github.com/example/crm/issues/42",
+              "nodeId": "725042",
+              "title": "CRM import",
+              "revision": "req-1",
+              "state": "open",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            },
+            {
+              "key": "https://github.com/example/schema/issues/42",
+              "nodeId": "834217",
+              "title": "CRM schema",
+              "revision": "req-1",
+              "state": "unknown",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            }
+          ],
+          "edges": [
+            {
+              "dependent": "https://github.com/example/crm/issues/42",
+              "blocker": "https://github.com/example/schema/issues/42"
+            }
+          ],
+          "reviews": [
+            {
+              "id": "r42",
+              "analysis": "a-r42",
+              "base": [],
+              "continuation": "",
+              "issue": "https://github.com/example/crm/issues/42",
+              "inputs": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "candidates": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "outcome": "complete",
+              "dependencies": [
+                {
+                  "key": "https://github.com/example/schema/issues/42",
+                  "reason": "Schema is required.",
+                  "evidence": [
+                    "https://github.com/example/schema/issues/42"
+                  ]
+                }
+              ],
+              "questions": [],
+              "intact": true,
+              "effects": "none",
+              "authority": "trusted"
+            }
+          ],
+          "impacts": [],
+          "inputs": []
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/nodes/0/dependencyState",
+          "op": "equals",
+          "value": "unknown"
+        }
+      ]
+    },
+    {
+      "step_id": "blocker-open",
+      "entry_path": "prompts/cli/issue-dependencies.prompt.md",
+      "operation": "projectIssueGraph",
+      "input": {
+        "snapshot": {
+          "repository": "example/crm",
+          "capturedAt": "2026-11-04T18:30:00Z",
+          "complete": true,
+          "issues": [
+            {
+              "key": "https://github.com/example/crm/issues/42",
+              "nodeId": "725042",
+              "title": "CRM import",
+              "revision": "req-1",
+              "state": "open",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            },
+            {
+              "key": "https://github.com/example/schema/issues/42",
+              "nodeId": "834217",
+              "title": "CRM schema",
+              "revision": "req-1",
+              "state": "open",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            }
+          ],
+          "edges": [
+            {
+              "dependent": "https://github.com/example/crm/issues/42",
+              "blocker": "https://github.com/example/schema/issues/42"
+            }
+          ],
+          "reviews": [
+            {
+              "id": "r42",
+              "analysis": "a-r42",
+              "base": [],
+              "continuation": "",
+              "issue": "https://github.com/example/crm/issues/42",
+              "inputs": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "candidates": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "outcome": "complete",
+              "dependencies": [
+                {
+                  "key": "https://github.com/example/schema/issues/42",
+                  "reason": "Schema is required.",
+                  "evidence": [
+                    "https://github.com/example/schema/issues/42"
+                  ]
+                }
+              ],
+              "questions": [],
+              "intact": true,
+              "effects": "none",
+              "authority": "trusted"
+            }
+          ],
+          "impacts": [],
+          "inputs": []
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/nodes/0/dependencyState",
+          "op": "equals",
+          "value": "waiting"
+        }
+      ]
+    },
+    {
+      "step_id": "blocker-completed-deployment",
+      "entry_path": "prompts/cli/issue-dependencies.prompt.md",
+      "operation": "projectIssueGraph",
+      "input": {
+        "snapshot": {
+          "repository": "example/crm",
+          "capturedAt": "2026-11-04T18:30:00Z",
+          "complete": true,
+          "issues": [
+            {
+              "key": "https://github.com/example/crm/issues/42",
+              "nodeId": "725042",
+              "title": "CRM import",
+              "revision": "req-1",
+              "state": "open",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            },
+            {
+              "key": "https://github.com/example/schema/issues/42",
+              "nodeId": "834217",
+              "title": "CRM schema",
+              "revision": "req-1",
+              "state": "completed",
+              "authority": "trusted",
+              "conditions": [
+                "Deploy schema"
+              ],
+              "execution": "idle",
+              "holds": []
+            }
+          ],
+          "edges": [
+            {
+              "dependent": "https://github.com/example/crm/issues/42",
+              "blocker": "https://github.com/example/schema/issues/42"
+            }
+          ],
+          "reviews": [
+            {
+              "id": "r42",
+              "analysis": "a-r42",
+              "base": [],
+              "continuation": "",
+              "issue": "https://github.com/example/crm/issues/42",
+              "inputs": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "candidates": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "outcome": "complete",
+              "dependencies": [
+                {
+                  "key": "https://github.com/example/schema/issues/42",
+                  "reason": "Schema is required.",
+                  "evidence": [
+                    "https://github.com/example/schema/issues/42"
+                  ]
+                }
+              ],
+              "questions": [],
+              "intact": true,
+              "effects": "none",
+              "authority": "trusted"
+            }
+          ],
+          "impacts": [],
+          "inputs": []
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/nodes/0/dependencyState",
+          "op": "equals",
+          "value": "waiting"
+        }
+      ]
+    },
+    {
+      "step_id": "human-edge-merged-open",
+      "entry_path": "prompts/cli/issue-dependencies.prompt.md",
+      "operation": "projectIssueGraph",
+      "input": {
+        "snapshot": {
+          "repository": "example/crm",
+          "capturedAt": "2026-11-04T18:30:00Z",
+          "complete": true,
+          "issues": [
+            {
+              "key": "https://github.com/example/crm/issues/42",
+              "nodeId": "725042",
+              "title": "CRM import",
+              "revision": "req-1",
+              "state": "open",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            },
+            {
+              "key": "https://github.com/example/schema/issues/42",
+              "nodeId": "834217",
+              "title": "CRM schema",
+              "revision": "req-1",
+              "state": "open",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            }
+          ],
+          "edges": [
+            {
+              "dependent": "https://github.com/example/crm/issues/42",
+              "blocker": "https://github.com/example/schema/issues/42"
+            }
+          ],
+          "reviews": [
+            {
+              "id": "r42",
+              "analysis": "a-r42",
+              "base": [],
+              "continuation": "",
+              "issue": "https://github.com/example/crm/issues/42",
+              "inputs": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "candidates": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "outcome": "complete",
+              "dependencies": [],
+              "questions": [],
+              "intact": true,
+              "effects": "none",
+              "authority": "trusted"
+            }
+          ],
+          "impacts": [],
+          "inputs": []
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/edges/0/reason",
+          "op": "equals",
+          "value": "GitHub dependency; no saved reason"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/nodes/0/eligible",
+          "op": "equals",
+          "value": false
+        }
+      ]
+    },
+    {
+      "step_id": "self",
+      "entry_path": "prompts/cli/issue-dependencies.prompt.md",
+      "operation": "validateDependencyChange",
+      "input": {
+        "snapshot": {
+          "repository": "example/crm",
+          "capturedAt": "2026-11-04T18:30:00Z",
+          "complete": true,
+          "issues": [
+            {
+              "key": "https://github.com/example/crm/issues/42",
+              "nodeId": "725042",
+              "title": "CRM import",
+              "revision": "req-1",
+              "state": "open",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            },
+            {
+              "key": "https://github.com/example/schema/issues/42",
+              "nodeId": "834217",
+              "title": "CRM schema",
+              "revision": "req-1",
+              "state": "open",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            },
+            {
+              "key": "https://github.com/example/crm/issues/17",
+              "nodeId": "725017",
+              "title": "CRM schema",
+              "revision": "req-1",
+              "state": "open",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            }
+          ],
+          "edges": [],
+          "reviews": [
+            {
+              "id": "r42",
+              "analysis": "a-r42",
+              "base": [],
+              "continuation": "",
+              "issue": "https://github.com/example/crm/issues/42",
+              "inputs": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "candidates": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "outcome": "complete",
+              "dependencies": [],
+              "questions": [],
+              "intact": true,
+              "effects": "none",
+              "authority": "trusted"
+            }
+          ],
+          "impacts": [],
+          "inputs": []
+        },
+        "dependent": "https://github.com/example/crm/issues/42",
+        "blocker": "https://github.com/example/crm/issues/42"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/allowed",
+          "op": "equals",
+          "value": false
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/reason",
+          "op": "equals",
+          "value": "self"
+        }
+      ]
+    },
+    {
+      "step_id": "duplicate",
+      "entry_path": "prompts/cli/issue-dependencies.prompt.md",
+      "operation": "validateDependencyChange",
+      "input": {
+        "snapshot": {
+          "repository": "example/crm",
+          "capturedAt": "2026-11-04T18:30:00Z",
+          "complete": true,
+          "issues": [
+            {
+              "key": "https://github.com/example/crm/issues/42",
+              "nodeId": "725042",
+              "title": "CRM import",
+              "revision": "req-1",
+              "state": "open",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            },
+            {
+              "key": "https://github.com/example/schema/issues/42",
+              "nodeId": "834217",
+              "title": "CRM schema",
+              "revision": "req-1",
+              "state": "open",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            },
+            {
+              "key": "https://github.com/example/crm/issues/17",
+              "nodeId": "725017",
+              "title": "CRM schema",
+              "revision": "req-1",
+              "state": "open",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            }
+          ],
+          "edges": [
+            {
+              "dependent": "https://github.com/example/crm/issues/42",
+              "blocker": "https://github.com/example/schema/issues/42"
+            }
+          ],
+          "reviews": [
+            {
+              "id": "r42",
+              "analysis": "a-r42",
+              "base": [],
+              "continuation": "",
+              "issue": "https://github.com/example/crm/issues/42",
+              "inputs": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "candidates": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "outcome": "complete",
+              "dependencies": [],
+              "questions": [],
+              "intact": true,
+              "effects": "none",
+              "authority": "trusted"
+            }
+          ],
+          "impacts": [],
+          "inputs": []
+        },
+        "dependent": "https://github.com/example/crm/issues/42",
+        "blocker": "https://github.com/example/schema/issues/42"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/allowed",
+          "op": "equals",
+          "value": false
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/reason",
+          "op": "equals",
+          "value": "duplicate"
+        }
+      ]
+    },
+    {
+      "step_id": "cross-cycle",
+      "entry_path": "prompts/cli/issue-dependencies.prompt.md",
+      "operation": "validateDependencyChange",
+      "input": {
+        "snapshot": {
+          "repository": "example/crm",
+          "capturedAt": "2026-11-04T18:30:00Z",
+          "complete": true,
+          "issues": [
+            {
+              "key": "https://github.com/example/crm/issues/42",
+              "nodeId": "725042",
+              "title": "CRM import",
+              "revision": "req-1",
+              "state": "open",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            },
+            {
+              "key": "https://github.com/example/schema/issues/42",
+              "nodeId": "834217",
+              "title": "CRM schema",
+              "revision": "req-1",
+              "state": "open",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            },
+            {
+              "key": "https://github.com/example/crm/issues/17",
+              "nodeId": "725017",
+              "title": "CRM schema",
+              "revision": "req-1",
+              "state": "open",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            }
+          ],
+          "edges": [
+            {
+              "dependent": "https://github.com/example/schema/issues/42",
+              "blocker": "https://github.com/example/crm/issues/42"
+            }
+          ],
+          "reviews": [
+            {
+              "id": "r42",
+              "analysis": "a-r42",
+              "base": [],
+              "continuation": "",
+              "issue": "https://github.com/example/crm/issues/42",
+              "inputs": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "candidates": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "outcome": "complete",
+              "dependencies": [],
+              "questions": [],
+              "intact": true,
+              "effects": "none",
+              "authority": "trusted"
+            }
+          ],
+          "impacts": [],
+          "inputs": []
+        },
+        "dependent": "https://github.com/example/crm/issues/42",
+        "blocker": "https://github.com/example/schema/issues/42"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/allowed",
+          "op": "equals",
+          "value": false
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/reason",
+          "op": "equals",
+          "value": "cycle"
+        }
+      ]
+    },
+    {
+      "step_id": "same-cycle",
+      "entry_path": "prompts/cli/issue-dependencies.prompt.md",
+      "operation": "validateDependencyChange",
+      "input": {
+        "snapshot": {
+          "repository": "example/crm",
+          "capturedAt": "2026-11-04T18:30:00Z",
+          "complete": true,
+          "issues": [
+            {
+              "key": "https://github.com/example/crm/issues/42",
+              "nodeId": "725042",
+              "title": "CRM import",
+              "revision": "req-1",
+              "state": "open",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            },
+            {
+              "key": "https://github.com/example/schema/issues/42",
+              "nodeId": "834217",
+              "title": "CRM schema",
+              "revision": "req-1",
+              "state": "open",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            },
+            {
+              "key": "https://github.com/example/crm/issues/17",
+              "nodeId": "725017",
+              "title": "CRM schema",
+              "revision": "req-1",
+              "state": "open",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            }
+          ],
+          "edges": [
+            {
+              "dependent": "https://github.com/example/crm/issues/17",
+              "blocker": "https://github.com/example/crm/issues/42"
+            }
+          ],
+          "reviews": [
+            {
+              "id": "r42",
+              "analysis": "a-r42",
+              "base": [],
+              "continuation": "",
+              "issue": "https://github.com/example/crm/issues/42",
+              "inputs": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "candidates": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "outcome": "complete",
+              "dependencies": [],
+              "questions": [],
+              "intact": true,
+              "effects": "none",
+              "authority": "trusted"
+            }
+          ],
+          "impacts": [],
+          "inputs": []
+        },
+        "dependent": "https://github.com/example/crm/issues/42",
+        "blocker": "https://github.com/example/crm/issues/17"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/allowed",
+          "op": "equals",
+          "value": false
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/reason",
+          "op": "equals",
+          "value": "cycle"
+        }
+      ]
+    },
+    {
+      "step_id": "existing-human-cycle",
+      "entry_path": "prompts/cli/issue-dependencies.prompt.md",
+      "operation": "projectIssueGraph",
+      "input": {
+        "snapshot": {
+          "repository": "example/crm",
+          "capturedAt": "2026-11-04T18:30:00Z",
+          "complete": true,
+          "issues": [
+            {
+              "key": "https://github.com/example/crm/issues/42",
+              "nodeId": "725042",
+              "title": "CRM import",
+              "revision": "req-1",
+              "state": "open",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            },
+            {
+              "key": "https://github.com/example/schema/issues/42",
+              "nodeId": "834217",
+              "title": "CRM schema",
+              "revision": "req-1",
+              "state": "open",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            }
+          ],
+          "edges": [
+            {
+              "dependent": "https://github.com/example/crm/issues/42",
+              "blocker": "https://github.com/example/schema/issues/42"
+            },
+            {
+              "dependent": "https://github.com/example/schema/issues/42",
+              "blocker": "https://github.com/example/crm/issues/42"
+            }
+          ],
+          "reviews": [
+            {
+              "id": "r42",
+              "analysis": "a-r42",
+              "base": [],
+              "continuation": "",
+              "issue": "https://github.com/example/crm/issues/42",
+              "inputs": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "candidates": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "outcome": "complete",
+              "dependencies": [
+                {
+                  "key": "https://github.com/example/schema/issues/42",
+                  "reason": "Schema is required.",
+                  "evidence": [
+                    "https://github.com/example/schema/issues/42"
+                  ]
+                }
+              ],
+              "questions": [],
+              "intact": true,
+              "effects": "none",
+              "authority": "trusted"
+            }
+          ],
+          "impacts": [],
+          "inputs": []
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/nodes/0/dependencyState",
+          "op": "equals",
+          "value": "cycle"
+        }
+      ]
+    },
+    {
+      "step_id": "claimed",
+      "entry_path": "prompts/cli/issue-dependencies.prompt.md",
+      "operation": "projectIssueGraph",
+      "input": {
+        "snapshot": {
+          "repository": "example/crm",
+          "capturedAt": "2026-11-04T18:30:00Z",
+          "complete": true,
+          "issues": [
+            {
+              "key": "https://github.com/example/crm/issues/42",
+              "nodeId": "725042",
+              "title": "CRM import",
+              "revision": "req-1",
+              "state": "open",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "running",
+              "holds": [
+                "Owned elsewhere"
+              ]
+            }
+          ],
+          "edges": [],
+          "reviews": [
+            {
+              "id": "r42",
+              "analysis": "a-r42",
+              "base": [],
+              "continuation": "",
+              "issue": "https://github.com/example/crm/issues/42",
+              "inputs": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "candidates": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "outcome": "complete",
+              "dependencies": [],
+              "questions": [],
+              "intact": true,
+              "effects": "none",
+              "authority": "trusted"
+            }
+          ],
+          "impacts": [],
+          "inputs": []
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/nodes/0/eligible",
+          "op": "equals",
+          "value": false
+        }
+      ]
+    },
+    {
+      "step_id": "open-pr",
+      "entry_path": "prompts/cli/issue-dependencies.prompt.md",
+      "operation": "projectIssueGraph",
+      "input": {
+        "snapshot": {
+          "repository": "example/crm",
+          "capturedAt": "2026-11-04T18:30:00Z",
+          "complete": true,
+          "issues": [
+            {
+              "key": "https://github.com/example/crm/issues/42",
+              "nodeId": "725042",
+              "title": "CRM import",
+              "revision": "req-1",
+              "state": "open",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": [
+                "Open PR"
+              ]
+            }
+          ],
+          "edges": [],
+          "reviews": [
+            {
+              "id": "r42",
+              "analysis": "a-r42",
+              "base": [],
+              "continuation": "",
+              "issue": "https://github.com/example/crm/issues/42",
+              "inputs": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "candidates": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "outcome": "complete",
+              "dependencies": [],
+              "questions": [],
+              "intact": true,
+              "effects": "none",
+              "authority": "trusted"
+            }
+          ],
+          "impacts": [],
+          "inputs": []
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/nodes/0/eligible",
+          "op": "equals",
+          "value": false
+        }
+      ]
+    },
+    {
+      "step_id": "stuck",
+      "entry_path": "prompts/cli/issue-dependencies.prompt.md",
+      "operation": "projectIssueGraph",
+      "input": {
+        "snapshot": {
+          "repository": "example/crm",
+          "capturedAt": "2026-11-04T18:30:00Z",
+          "complete": true,
+          "issues": [
+            {
+              "key": "https://github.com/example/crm/issues/42",
+              "nodeId": "725042",
+              "title": "CRM import",
+              "revision": "req-1",
+              "state": "open",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": [
+                "Stuck"
+              ]
+            }
+          ],
+          "edges": [],
+          "reviews": [
+            {
+              "id": "r42",
+              "analysis": "a-r42",
+              "base": [],
+              "continuation": "",
+              "issue": "https://github.com/example/crm/issues/42",
+              "inputs": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "candidates": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "outcome": "complete",
+              "dependencies": [],
+              "questions": [],
+              "intact": true,
+              "effects": "none",
+              "authority": "trusted"
+            }
+          ],
+          "impacts": [],
+          "inputs": []
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/nodes/0/eligible",
+          "op": "equals",
+          "value": false
+        }
+      ]
+    },
+    {
+      "step_id": "unknown-trust",
+      "entry_path": "prompts/cli/issue-dependencies.prompt.md",
+      "operation": "projectIssueGraph",
+      "input": {
+        "snapshot": {
+          "repository": "example/crm",
+          "capturedAt": "2026-11-04T18:30:00Z",
+          "complete": true,
+          "issues": [
+            {
+              "key": "https://github.com/example/crm/issues/42",
+              "nodeId": "725042",
+              "title": "CRM import",
+              "revision": "req-1",
+              "state": "open",
+              "authority": "unknown",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            }
+          ],
+          "edges": [],
+          "reviews": [
+            {
+              "id": "r42",
+              "analysis": "a-r42",
+              "base": [],
+              "continuation": "",
+              "issue": "https://github.com/example/crm/issues/42",
+              "inputs": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "candidates": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "outcome": "complete",
+              "dependencies": [],
+              "questions": [],
+              "intact": true,
+              "effects": "none",
+              "authority": "trusted"
+            }
+          ],
+          "impacts": [],
+          "inputs": []
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/nodes/0/eligible",
+          "op": "equals",
+          "value": false
+        }
+      ]
+    },
+    {
+      "step_id": "partial",
+      "entry_path": "prompts/cli/issue-dependencies.prompt.md",
+      "operation": "projectIssueGraph",
+      "input": {
+        "snapshot": {
+          "repository": "example/crm",
+          "capturedAt": "2026-11-04T18:30:00Z",
+          "complete": false,
+          "issues": [
+            {
+              "key": "https://github.com/example/crm/issues/42",
+              "nodeId": "725042",
+              "title": "CRM import",
+              "revision": "req-1",
+              "state": "open",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            }
+          ],
+          "edges": [],
+          "reviews": [
+            {
+              "id": "r42",
+              "analysis": "a-r42",
+              "base": [],
+              "continuation": "",
+              "issue": "https://github.com/example/crm/issues/42",
+              "inputs": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "candidates": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "outcome": "complete",
+              "dependencies": [],
+              "questions": [],
+              "intact": true,
+              "effects": "none",
+              "authority": "trusted"
+            }
+          ],
+          "impacts": [],
+          "inputs": []
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/nodes/0/eligible",
+          "op": "equals",
+          "value": false
+        }
+      ]
+    },
+    {
+      "step_id": "completed-but-saved-deploy-question",
+      "entry_path": "prompts/cli/issue-dependencies.prompt.md",
+      "operation": "projectIssueGraph",
+      "input": {
+        "snapshot": {
+          "repository": "example/crm",
+          "capturedAt": "2026-11-04T18:30:00Z",
+          "complete": true,
+          "issues": [
+            {
+              "key": "https://github.com/example/crm/issues/42",
+              "nodeId": "725042",
+              "title": "CRM import",
+              "revision": "req-1",
+              "state": "open",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            },
+            {
+              "key": "https://github.com/example/schema/issues/42",
+              "nodeId": "834217",
+              "title": "CRM schema",
+              "revision": "req-1",
+              "state": "completed",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            }
+          ],
+          "edges": [
+            {
+              "dependent": "https://github.com/example/crm/issues/42",
+              "blocker": "https://github.com/example/schema/issues/42"
+            }
+          ],
+          "reviews": [
+            {
+              "id": "r42",
+              "analysis": "a-r42",
+              "base": [],
+              "continuation": "",
+              "issue": "https://github.com/example/crm/issues/42",
+              "inputs": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "candidates": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "outcome": "complete",
+              "dependencies": [
+                {
+                  "key": "https://github.com/example/schema/issues/42",
+                  "reason": "Schema is required.",
+                  "evidence": [
+                    "https://github.com/example/schema/issues/42"
+                  ]
+                }
+              ],
+              "questions": [],
+              "intact": true,
+              "effects": "none",
+              "authority": "trusted"
+            },
+            {
+              "id": "schema-question",
+              "analysis": "analysis-schema-question",
+              "base": [],
+              "continuation": "",
+              "issue": "https://github.com/example/schema/issues/42",
+              "inputs": [
+                {
+                  "key": "https://github.com/example/schema/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "candidates": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "outcome": "question",
+              "dependencies": [],
+              "questions": [
+                "Deploy schema first"
+              ],
+              "intact": true,
+              "effects": "none",
+              "authority": "trusted"
+            }
+          ],
+          "impacts": [],
+          "inputs": []
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/nodes/0/dependencyState",
+          "op": "equals",
+          "value": "waiting"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/nodes/0/eligible",
+          "op": "equals",
+          "value": false
+        }
+      ]
+    },
+    {
+      "step_id": "terminal-subject-completed",
+      "entry_path": "prompts/cli/issue-dependencies.prompt.md",
+      "operation": "projectIssueGraph",
+      "input": {
+        "snapshot": {
+          "repository": "example/crm",
+          "capturedAt": "2026-11-04T18:30:00Z",
+          "complete": true,
+          "issues": [
+            {
+              "key": "https://github.com/example/crm/issues/42",
+              "nodeId": "725042",
+              "title": "Issue",
+              "revision": "req-1",
+              "state": "completed",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            }
+          ],
+          "edges": [],
+          "reviews": [
+            {
+              "id": "9001",
+              "analysis": "a-9001",
+              "base": [],
+              "continuation": "",
+              "issue": "https://github.com/example/crm/issues/42",
+              "inputs": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "candidates": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "outcome": "complete",
+              "dependencies": [],
+              "questions": [],
+              "intact": true,
+              "effects": "none",
+              "authority": "trusted"
+            }
+          ],
+          "impacts": [],
+          "inputs": []
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/nodes/0/eligible",
+          "op": "equals",
+          "value": false
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/nodes/0/nativeState",
+          "op": "equals",
+          "value": "completed"
+        }
+      ]
+    },
+    {
+      "step_id": "terminal-subject-not_planned",
+      "entry_path": "prompts/cli/issue-dependencies.prompt.md",
+      "operation": "projectIssueGraph",
+      "input": {
+        "snapshot": {
+          "repository": "example/crm",
+          "capturedAt": "2026-11-04T18:30:00Z",
+          "complete": true,
+          "issues": [
+            {
+              "key": "https://github.com/example/crm/issues/42",
+              "nodeId": "725042",
+              "title": "Issue",
+              "revision": "req-1",
+              "state": "not_planned",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            }
+          ],
+          "edges": [],
+          "reviews": [
+            {
+              "id": "9001",
+              "analysis": "a-9001",
+              "base": [],
+              "continuation": "",
+              "issue": "https://github.com/example/crm/issues/42",
+              "inputs": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "candidates": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "outcome": "complete",
+              "dependencies": [],
+              "questions": [],
+              "intact": true,
+              "effects": "none",
+              "authority": "trusted"
+            }
+          ],
+          "impacts": [],
+          "inputs": []
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/nodes/0/eligible",
+          "op": "equals",
+          "value": false
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/nodes/0/nativeState",
+          "op": "equals",
+          "value": "not_planned"
+        }
+      ]
+    },
+    {
+      "step_id": "saved-deploy-question-facts-after-restart",
+      "entry_path": "prompts/cli/issue-dependencies.prompt.md",
+      "operation": "projectIssueGraph",
+      "input": {
+        "snapshot": {
+          "repository": "example/crm",
+          "capturedAt": "2026-11-04T18:30:00Z",
+          "complete": true,
+          "issues": [
+            {
+              "key": "https://github.com/example/crm/issues/42",
+              "nodeId": "725042",
+              "title": "Issue",
+              "revision": "req-1",
+              "state": "open",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            },
+            {
+              "key": "https://github.com/example/schema/issues/42",
+              "nodeId": "834217",
+              "title": "Issue",
+              "revision": "req-1",
+              "state": "completed",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            }
+          ],
+          "edges": [
+            {
+              "dependent": "https://github.com/example/crm/issues/42",
+              "blocker": "https://github.com/example/schema/issues/42"
+            }
+          ],
+          "reviews": [
+            {
+              "id": "9001",
+              "analysis": "a-9001",
+              "base": [],
+              "continuation": "",
+              "issue": "https://github.com/example/crm/issues/42",
+              "inputs": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "candidates": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "outcome": "complete",
+              "dependencies": [],
+              "questions": [],
+              "intact": true,
+              "effects": "none",
+              "authority": "trusted"
+            },
+            {
+              "id": "9401",
+              "analysis": "a-9401",
+              "base": [],
+              "continuation": "",
+              "issue": "https://github.com/example/schema/issues/42",
+              "inputs": [
+                {
+                  "key": "https://github.com/example/schema/issues/42",
+                  "revision": "req-1"
+                },
+                {
+                  "key": "https://github.com/example/crm/blob/HEAD/src/import.mjs",
+                  "revision": "source-1"
+                }
+              ],
+              "candidates": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "outcome": "question",
+              "dependencies": [],
+              "questions": [
+                "Deploy schema first"
+              ],
+              "intact": true,
+              "effects": "none",
+              "authority": "trusted"
+            }
+          ],
+          "impacts": [],
+          "inputs": [
+            {
+              "key": "https://github.com/example/crm/blob/HEAD/src/import.mjs",
+              "revision": "source-1"
+            }
+          ]
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/nodes/0/facts",
+          "op": "equals",
+          "value": [
+            {
+              "kind": "question",
+              "text": "Deploy schema first",
+              "issue": "https://github.com/example/schema/issues/42",
+              "source": "https://github.com/example/schema/issues/42#issuecomment-9401",
+              "inputs": [
+                {
+                  "key": "https://github.com/example/schema/issues/42",
+                  "revision": "req-1"
+                },
+                {
+                  "key": "https://github.com/example/crm/blob/HEAD/src/import.mjs",
+                  "revision": "source-1"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/nodes/1/nativeState",
+          "op": "equals",
+          "value": "completed"
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/nodes/0/eligible",
+          "op": "equals",
+          "value": false
+        }
+      ]
+    },
+    {
+      "step_id": "trusted-deploy-replacement-facts",
+      "entry_path": "prompts/cli/issue-dependencies.prompt.md",
+      "operation": "projectIssueGraph",
+      "input": {
+        "snapshot": {
+          "repository": "example/crm",
+          "capturedAt": "2026-11-04T18:30:00Z",
+          "complete": true,
+          "issues": [
+            {
+              "key": "https://github.com/example/crm/issues/42",
+              "nodeId": "725042",
+              "title": "Issue",
+              "revision": "req-1",
+              "state": "open",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            },
+            {
+              "key": "https://github.com/example/schema/issues/42",
+              "nodeId": "834217",
+              "title": "Issue",
+              "revision": "req-1",
+              "state": "completed",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            }
+          ],
+          "edges": [
+            {
+              "dependent": "https://github.com/example/crm/issues/42",
+              "blocker": "https://github.com/example/schema/issues/42"
+            }
+          ],
+          "reviews": [
+            {
+              "id": "9001",
+              "analysis": "a-9001",
+              "base": [],
+              "continuation": "",
+              "issue": "https://github.com/example/crm/issues/42",
+              "inputs": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "candidates": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "outcome": "complete",
+              "dependencies": [],
+              "questions": [],
+              "intact": true,
+              "effects": "none",
+              "authority": "trusted"
+            },
+            {
+              "id": "9401",
+              "analysis": "a-9401",
+              "base": [],
+              "continuation": "",
+              "issue": "https://github.com/example/schema/issues/42",
+              "inputs": [
+                {
+                  "key": "https://github.com/example/schema/issues/42",
+                  "revision": "req-1"
+                },
+                {
+                  "key": "https://github.com/example/crm/blob/HEAD/src/import.mjs",
+                  "revision": "source-1"
+                }
+              ],
+              "candidates": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "outcome": "question",
+              "dependencies": [],
+              "questions": [
+                "Deploy schema first"
+              ],
+              "intact": true,
+              "effects": "none",
+              "authority": "trusted"
+            },
+            {
+              "id": "9402",
+              "analysis": "a-9402",
+              "base": [
+                "9401"
+              ],
+              "continuation": "",
+              "issue": "https://github.com/example/schema/issues/42",
+              "inputs": [
+                {
+                  "key": "https://github.com/example/schema/issues/42",
+                  "revision": "req-1"
+                },
+                {
+                  "key": "https://github.com/example/crm/blob/HEAD/src/import.mjs",
+                  "revision": "source-1"
+                }
+              ],
+              "candidates": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "outcome": "complete",
+              "dependencies": [],
+              "questions": [],
+              "intact": true,
+              "effects": "none",
+              "authority": "trusted"
+            }
+          ],
+          "impacts": [],
+          "inputs": [
+            {
+              "key": "https://github.com/example/crm/blob/HEAD/src/import.mjs",
+              "revision": "source-1"
+            }
+          ]
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/nodes/0/facts",
+          "op": "equals",
+          "value": []
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/nodes/0/dependencyState",
+          "op": "equals",
+          "value": "clear"
+        }
+      ]
+    },
+    {
+      "step_id": "supplied-condition-source-facts",
+      "entry_path": "prompts/cli/issue-dependencies.prompt.md",
+      "operation": "projectIssueGraph",
+      "input": {
+        "snapshot": {
+          "repository": "example/crm",
+          "capturedAt": "2026-11-04T18:30:00Z",
+          "complete": true,
+          "issues": [
+            {
+              "key": "https://github.com/example/crm/issues/42",
+              "nodeId": "725042",
+              "title": "Issue",
+              "revision": "req-1",
+              "state": "open",
+              "authority": "trusted",
+              "conditions": [],
+              "execution": "idle",
+              "holds": []
+            },
+            {
+              "key": "https://github.com/example/schema/issues/42",
+              "nodeId": "834217",
+              "title": "Issue",
+              "revision": "req-1",
+              "state": "completed",
+              "authority": "trusted",
+              "conditions": [
+                "Install schema package"
+              ],
+              "execution": "idle",
+              "holds": [],
+              "conditionSources": [
+                {
+                  "text": "Install schema package",
+                  "source": "https://github.com/example/schema/issues/42#issuecomment-9410",
+                  "inputs": [
+                    {
+                      "key": "https://github.com/example/schema/issues/42",
+                      "revision": "req-1"
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "edges": [
+            {
+              "dependent": "https://github.com/example/crm/issues/42",
+              "blocker": "https://github.com/example/schema/issues/42"
+            }
+          ],
+          "reviews": [
+            {
+              "id": "9001",
+              "analysis": "a-9001",
+              "base": [],
+              "continuation": "",
+              "issue": "https://github.com/example/crm/issues/42",
+              "inputs": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "candidates": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "revision": "req-1"
+                }
+              ],
+              "outcome": "complete",
+              "dependencies": [],
+              "questions": [],
+              "intact": true,
+              "effects": "none",
+              "authority": "trusted"
+            }
+          ],
+          "impacts": [],
+          "inputs": [
+            {
+              "key": "https://github.com/example/crm/blob/HEAD/src/import.mjs",
+              "revision": "source-1"
+            }
+          ]
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/nodes/0/facts",
+          "op": "equals",
+          "value": [
+            {
+              "kind": "condition",
+              "issue": "https://github.com/example/schema/issues/42",
+              "text": "Install schema package",
+              "source": "https://github.com/example/schema/issues/42#issuecomment-9410",
+              "inputs": [
+                {
+                  "key": "https://github.com/example/schema/issues/42",
+                  "revision": "req-1"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/nodes/0/eligible",
+          "op": "equals",
+          "value": false
+        }
+      ]
+    }
+  ]
+}

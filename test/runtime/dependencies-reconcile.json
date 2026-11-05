@@ -1,0 +1,3025 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/dependencies-reconcile.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Off keeps saved graph data readable and queues no automatic analysis or start. Restart and fallback reads catch up from current GitHub."
+    },
+    {
+      "id": "AC2",
+      "text": "Completing a prerequisite releases the dependency hold; reopening blocks it again. An unchanged tick needs no semantic delivery."
+    },
+    {
+      "id": "AC3",
+      "text": "Busy or dialog-blocked delivery stays pending. A current remote owner is skipped before execution handoff."
+    },
+    {
+      "id": "AC4",
+      "text": "A bad event signature queues nothing. A duplicate delivery queues nothing twice, and an old event queues a fresh reread rather than applying its payload state."
+    },
+    {
+      "id": "AC5",
+      "text": "Event status is disabled by default. Configured, installed and delivery-verified remain distinct; polling does not depend on a verified receiver."
+    },
+    {
+      "id": "AC6",
+      "text": "A restart recovers a fresh saved pending intent before semantic delivery, without adding an already present edge. Two unchanged ticks of a saved question do not deliver analysis again. Observe can return eligible issue work."
+    },
+    {
+      "id": "AC7",
+      "text": "After a packet is prepared, a new owner, another coordinator on the same machine, or Off prevents an automatic workflow start. The existing run, claim and chat stay unchanged. The current winning coordinator can start its first eligible work; manual starts and active-run resume keep their current behavior. The existing concurrent-run cap counts starting and unconfirmed slots, allows existing-issue reuse without another slot, and defers an unknown count."
+    }
+  ],
+  "initial_world": {
+    "pendingWrites": [],
+    "deliveries": [],
+    "eventWrites": [],
+    "hints": [],
+    "snapshots-read": 0,
+    "owners-read": 0,
+    "pending-read": 0,
+    "evidence-read": 0,
+    "signature-verify": 0,
+    "scope-read": 0,
+    "events-read": 0,
+    "recovered": [],
+    "earlierPacket": {
+      "coordinator": {
+        "repository": "example/crm",
+        "coordinatorId": "coordinator-a",
+        "machine": "shared-machine",
+        "activation": "2026-11-04T18:00:00Z",
+        "claim": {
+          "commentId": "9601",
+          "labelEventId": "9602"
+        }
+      },
+      "issues": [
+        "https://github.com/example/crm/issues/42"
+      ],
+      "eligible": [
+        "https://github.com/example/crm/issues/42"
+      ]
+    },
+    "settings-read": 0
+  },
+  "simulation": {
+    "snapshots.read": {
+      "action": "fixture.lookup",
+      "world_pointer": "/snapshots-read",
+      "cases": [
+        {
+          "args": {
+            "cwd": "/crm",
+            "repository": "example/crm"
+          },
+          "call_index": 1,
+          "result": {
+            "snapshot": {
+              "repository": "example/crm",
+              "capturedAt": "2026-11-04T18:30:00Z",
+              "complete": true,
+              "issues": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "nodeId": "725042",
+                  "title": "CRM import",
+                  "revision": "req-1",
+                  "state": "open",
+                  "authority": "trusted",
+                  "conditions": [],
+                  "execution": "idle",
+                  "holds": []
+                },
+                {
+                  "key": "https://github.com/example/schema/issues/42",
+                  "nodeId": "834217",
+                  "title": "CRM schema",
+                  "revision": "req-1",
+                  "state": "open",
+                  "authority": "trusted",
+                  "conditions": [],
+                  "execution": "idle",
+                  "holds": []
+                }
+              ],
+              "edges": [
+                {
+                  "dependent": "https://github.com/example/crm/issues/42",
+                  "blocker": "https://github.com/example/schema/issues/42"
+                }
+              ],
+              "reviews": [
+                {
+                  "id": "r42",
+                  "analysis": "a-r42",
+                  "base": [],
+                  "continuation": "",
+                  "issue": "https://github.com/example/crm/issues/42",
+                  "inputs": [
+                    {
+                      "key": "https://github.com/example/crm/issues/42",
+                      "revision": "req-1"
+                    }
+                  ],
+                  "candidates": [
+                    {
+                      "key": "https://github.com/example/crm/issues/42",
+                      "revision": "req-1"
+                    }
+                  ],
+                  "outcome": "complete",
+                  "dependencies": [
+                    {
+                      "key": "https://github.com/example/schema/issues/42",
+                      "reason": "Schema is required.",
+                      "evidence": [
+                        "https://github.com/example/schema/issues/42"
+                      ]
+                    }
+                  ],
+                  "questions": [],
+                  "intact": true,
+                  "effects": "none",
+                  "authority": "trusted"
+                }
+              ],
+              "impacts": [],
+              "inputs": []
+            }
+          }
+        },
+        {
+          "args": {
+            "cwd": "/crm",
+            "repository": "example/crm"
+          },
+          "call_index": 2,
+          "result": {
+            "snapshot": {
+              "repository": "example/crm",
+              "capturedAt": "2026-11-04T18:30:00Z",
+              "complete": true,
+              "issues": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "nodeId": "725042",
+                  "title": "CRM import",
+                  "revision": "req-1",
+                  "state": "open",
+                  "authority": "trusted",
+                  "conditions": [],
+                  "execution": "idle",
+                  "holds": []
+                },
+                {
+                  "key": "https://github.com/example/schema/issues/42",
+                  "nodeId": "834217",
+                  "title": "CRM schema",
+                  "revision": "req-1",
+                  "state": "completed",
+                  "authority": "trusted",
+                  "conditions": [],
+                  "execution": "idle",
+                  "holds": []
+                }
+              ],
+              "edges": [
+                {
+                  "dependent": "https://github.com/example/crm/issues/42",
+                  "blocker": "https://github.com/example/schema/issues/42"
+                }
+              ],
+              "reviews": [
+                {
+                  "id": "r42",
+                  "analysis": "a-r42",
+                  "base": [],
+                  "continuation": "",
+                  "issue": "https://github.com/example/crm/issues/42",
+                  "inputs": [
+                    {
+                      "key": "https://github.com/example/crm/issues/42",
+                      "revision": "req-1"
+                    }
+                  ],
+                  "candidates": [
+                    {
+                      "key": "https://github.com/example/crm/issues/42",
+                      "revision": "req-1"
+                    }
+                  ],
+                  "outcome": "complete",
+                  "dependencies": [
+                    {
+                      "key": "https://github.com/example/schema/issues/42",
+                      "reason": "Schema is required.",
+                      "evidence": [
+                        "https://github.com/example/schema/issues/42"
+                      ]
+                    }
+                  ],
+                  "questions": [],
+                  "intact": true,
+                  "effects": "none",
+                  "authority": "trusted"
+                }
+              ],
+              "impacts": [],
+              "inputs": []
+            }
+          }
+        },
+        {
+          "args": {
+            "cwd": "/crm",
+            "repository": "example/crm"
+          },
+          "call_index": 3,
+          "result": {
+            "snapshot": {
+              "repository": "example/crm",
+              "capturedAt": "2026-11-04T18:30:00Z",
+              "complete": true,
+              "issues": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "nodeId": "725042",
+                  "title": "CRM import",
+                  "revision": "req-1",
+                  "state": "open",
+                  "authority": "trusted",
+                  "conditions": [],
+                  "execution": "idle",
+                  "holds": []
+                },
+                {
+                  "key": "https://github.com/example/schema/issues/42",
+                  "nodeId": "834217",
+                  "title": "CRM schema",
+                  "revision": "req-1",
+                  "state": "open",
+                  "authority": "trusted",
+                  "conditions": [],
+                  "execution": "idle",
+                  "holds": []
+                }
+              ],
+              "edges": [
+                {
+                  "dependent": "https://github.com/example/crm/issues/42",
+                  "blocker": "https://github.com/example/schema/issues/42"
+                }
+              ],
+              "reviews": [
+                {
+                  "id": "r42",
+                  "analysis": "a-r42",
+                  "base": [],
+                  "continuation": "",
+                  "issue": "https://github.com/example/crm/issues/42",
+                  "inputs": [
+                    {
+                      "key": "https://github.com/example/crm/issues/42",
+                      "revision": "req-1"
+                    }
+                  ],
+                  "candidates": [
+                    {
+                      "key": "https://github.com/example/crm/issues/42",
+                      "revision": "req-1"
+                    }
+                  ],
+                  "outcome": "complete",
+                  "dependencies": [
+                    {
+                      "key": "https://github.com/example/schema/issues/42",
+                      "reason": "Schema is required.",
+                      "evidence": [
+                        "https://github.com/example/schema/issues/42"
+                      ]
+                    }
+                  ],
+                  "questions": [],
+                  "intact": true,
+                  "effects": "none",
+                  "authority": "trusted"
+                }
+              ],
+              "impacts": [],
+              "inputs": []
+            }
+          }
+        },
+        {
+          "args": {
+            "cwd": "/crm",
+            "repository": "example/crm"
+          },
+          "call_index": 4,
+          "result": {
+            "snapshot": {
+              "repository": "example/crm",
+              "capturedAt": "2026-11-04T18:30:00Z",
+              "complete": true,
+              "issues": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "nodeId": "725042",
+                  "title": "CRM import",
+                  "revision": "req-1",
+                  "state": "open",
+                  "authority": "trusted",
+                  "conditions": [],
+                  "execution": "idle",
+                  "holds": []
+                }
+              ],
+              "edges": [],
+              "reviews": [],
+              "impacts": [],
+              "inputs": []
+            }
+          }
+        },
+        {
+          "args": {
+            "cwd": "/crm",
+            "repository": "example/crm"
+          },
+          "call_index": 5,
+          "result": {
+            "snapshot": {
+              "repository": "example/crm",
+              "capturedAt": "2026-11-04T18:30:00Z",
+              "complete": true,
+              "issues": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "nodeId": "725042",
+                  "title": "CRM import",
+                  "revision": "req-1",
+                  "state": "open",
+                  "authority": "trusted",
+                  "conditions": [],
+                  "execution": "idle",
+                  "holds": []
+                },
+                {
+                  "key": "https://github.com/example/schema/issues/42",
+                  "nodeId": "834217",
+                  "title": "CRM schema",
+                  "revision": "req-1",
+                  "state": "completed",
+                  "authority": "trusted",
+                  "conditions": [],
+                  "execution": "idle",
+                  "holds": []
+                }
+              ],
+              "edges": [
+                {
+                  "dependent": "https://github.com/example/crm/issues/42",
+                  "blocker": "https://github.com/example/schema/issues/42"
+                }
+              ],
+              "reviews": [
+                {
+                  "id": "r42",
+                  "analysis": "a-r42",
+                  "base": [],
+                  "continuation": "",
+                  "issue": "https://github.com/example/crm/issues/42",
+                  "inputs": [
+                    {
+                      "key": "https://github.com/example/crm/issues/42",
+                      "revision": "req-1"
+                    }
+                  ],
+                  "candidates": [
+                    {
+                      "key": "https://github.com/example/crm/issues/42",
+                      "revision": "req-1"
+                    }
+                  ],
+                  "outcome": "complete",
+                  "dependencies": [
+                    {
+                      "key": "https://github.com/example/schema/issues/42",
+                      "reason": "Schema is required.",
+                      "evidence": [
+                        "https://github.com/example/schema/issues/42"
+                      ]
+                    }
+                  ],
+                  "questions": [],
+                  "intact": true,
+                  "effects": "none",
+                  "authority": "trusted"
+                }
+              ],
+              "impacts": [],
+              "inputs": []
+            }
+          }
+        },
+        {
+          "args": {
+            "cwd": "",
+            "repository": "example/crm"
+          },
+          "call_index": 6,
+          "result": {
+            "snapshot": {
+              "repository": "example/crm",
+              "capturedAt": "2026-11-04T18:30:00Z",
+              "complete": true,
+              "issues": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "nodeId": "725042",
+                  "title": "Issue",
+                  "revision": "req-1",
+                  "state": "open",
+                  "authority": "trusted",
+                  "conditions": [],
+                  "execution": "idle",
+                  "holds": []
+                },
+                {
+                  "key": "https://github.com/example/schema/issues/42",
+                  "nodeId": "834217",
+                  "title": "Issue",
+                  "revision": "req-1",
+                  "state": "completed",
+                  "authority": "trusted",
+                  "conditions": [],
+                  "execution": "idle",
+                  "holds": []
+                }
+              ],
+              "edges": [
+                {
+                  "dependent": "https://github.com/example/crm/issues/42",
+                  "blocker": "https://github.com/example/schema/issues/42"
+                }
+              ],
+              "reviews": [
+                {
+                  "id": "9501",
+                  "analysis": "a-9501",
+                  "base": [],
+                  "continuation": "",
+                  "issue": "https://github.com/example/crm/issues/42",
+                  "inputs": [
+                    {
+                      "key": "https://github.com/example/crm/issues/42",
+                      "revision": "req-1"
+                    }
+                  ],
+                  "candidates": [
+                    {
+                      "key": "https://github.com/example/crm/issues/42",
+                      "revision": "req-1"
+                    }
+                  ],
+                  "outcome": "pending",
+                  "dependencies": [
+                    {
+                      "key": "https://github.com/example/schema/issues/42",
+                      "reason": "Schema first",
+                      "evidence": [
+                        "https://github.com/example/schema/issues/42"
+                      ]
+                    }
+                  ],
+                  "questions": [],
+                  "intact": true,
+                  "effects": "pending",
+                  "authority": "trusted"
+                }
+              ],
+              "impacts": [],
+              "inputs": []
+            }
+          }
+        },
+        {
+          "args": {
+            "cwd": "",
+            "repository": "example/crm"
+          },
+          "call_index": 7,
+          "result": {
+            "snapshot": {
+              "repository": "example/crm",
+              "capturedAt": "2026-11-04T18:30:00Z",
+              "complete": true,
+              "issues": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "nodeId": "725042",
+                  "title": "Issue",
+                  "revision": "req-1",
+                  "state": "open",
+                  "authority": "trusted",
+                  "conditions": [],
+                  "execution": "idle",
+                  "holds": []
+                },
+                {
+                  "key": "https://github.com/example/schema/issues/42",
+                  "nodeId": "834217",
+                  "title": "Issue",
+                  "revision": "req-1",
+                  "state": "completed",
+                  "authority": "trusted",
+                  "conditions": [],
+                  "execution": "idle",
+                  "holds": []
+                }
+              ],
+              "edges": [
+                {
+                  "dependent": "https://github.com/example/crm/issues/42",
+                  "blocker": "https://github.com/example/schema/issues/42"
+                }
+              ],
+              "reviews": [
+                {
+                  "id": "9501",
+                  "analysis": "a-9501",
+                  "base": [],
+                  "continuation": "",
+                  "issue": "https://github.com/example/crm/issues/42",
+                  "inputs": [
+                    {
+                      "key": "https://github.com/example/crm/issues/42",
+                      "revision": "req-1"
+                    }
+                  ],
+                  "candidates": [
+                    {
+                      "key": "https://github.com/example/crm/issues/42",
+                      "revision": "req-1"
+                    }
+                  ],
+                  "outcome": "pending",
+                  "dependencies": [
+                    {
+                      "key": "https://github.com/example/schema/issues/42",
+                      "reason": "Schema first",
+                      "evidence": [
+                        "https://github.com/example/schema/issues/42"
+                      ]
+                    }
+                  ],
+                  "questions": [],
+                  "intact": true,
+                  "effects": "pending",
+                  "authority": "trusted"
+                },
+                {
+                  "id": "9502",
+                  "analysis": "a-9501",
+                  "base": [],
+                  "continuation": "9501",
+                  "issue": "https://github.com/example/crm/issues/42",
+                  "inputs": [
+                    {
+                      "key": "https://github.com/example/crm/issues/42",
+                      "revision": "req-1"
+                    }
+                  ],
+                  "candidates": [
+                    {
+                      "key": "https://github.com/example/crm/issues/42",
+                      "revision": "req-1"
+                    }
+                  ],
+                  "outcome": "complete",
+                  "dependencies": [
+                    {
+                      "key": "https://github.com/example/schema/issues/42",
+                      "reason": "Schema first",
+                      "evidence": [
+                        "https://github.com/example/schema/issues/42"
+                      ]
+                    }
+                  ],
+                  "questions": [],
+                  "intact": true,
+                  "effects": "confirmed",
+                  "authority": "trusted"
+                }
+              ],
+              "impacts": [],
+              "inputs": []
+            }
+          }
+        },
+        {
+          "args": {
+            "cwd": "",
+            "repository": "example/crm"
+          },
+          "call_index": 8,
+          "result": {
+            "snapshot": {
+              "repository": "example/crm",
+              "capturedAt": "2026-11-04T18:30:00Z",
+              "complete": true,
+              "issues": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "nodeId": "725042",
+                  "title": "Issue",
+                  "revision": "req-1",
+                  "state": "open",
+                  "authority": "trusted",
+                  "conditions": [],
+                  "execution": "idle",
+                  "holds": []
+                }
+              ],
+              "edges": [],
+              "reviews": [
+                {
+                  "id": "9510",
+                  "analysis": "a-9510",
+                  "base": [],
+                  "continuation": "",
+                  "issue": "https://github.com/example/crm/issues/42",
+                  "inputs": [
+                    {
+                      "key": "https://github.com/example/crm/issues/42",
+                      "revision": "req-1"
+                    }
+                  ],
+                  "candidates": [
+                    {
+                      "key": "https://github.com/example/crm/issues/42",
+                      "revision": "req-1"
+                    }
+                  ],
+                  "outcome": "question",
+                  "dependencies": [],
+                  "questions": [
+                    "Deploy schema first"
+                  ],
+                  "intact": true,
+                  "effects": "none",
+                  "authority": "trusted"
+                }
+              ],
+              "impacts": [],
+              "inputs": []
+            }
+          }
+        },
+        {
+          "args": {
+            "cwd": "",
+            "repository": "example/crm"
+          },
+          "call_index": 9,
+          "result": {
+            "snapshot": {
+              "repository": "example/crm",
+              "capturedAt": "2026-11-04T18:30:00Z",
+              "complete": true,
+              "issues": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "nodeId": "725042",
+                  "title": "Issue",
+                  "revision": "req-1",
+                  "state": "open",
+                  "authority": "trusted",
+                  "conditions": [],
+                  "execution": "idle",
+                  "holds": []
+                }
+              ],
+              "edges": [],
+              "reviews": [
+                {
+                  "id": "9510",
+                  "analysis": "a-9510",
+                  "base": [],
+                  "continuation": "",
+                  "issue": "https://github.com/example/crm/issues/42",
+                  "inputs": [
+                    {
+                      "key": "https://github.com/example/crm/issues/42",
+                      "revision": "req-1"
+                    }
+                  ],
+                  "candidates": [
+                    {
+                      "key": "https://github.com/example/crm/issues/42",
+                      "revision": "req-1"
+                    }
+                  ],
+                  "outcome": "question",
+                  "dependencies": [],
+                  "questions": [
+                    "Deploy schema first"
+                  ],
+                  "intact": true,
+                  "effects": "none",
+                  "authority": "trusted"
+                }
+              ],
+              "impacts": [],
+              "inputs": []
+            }
+          }
+        },
+        {
+          "args": {
+            "cwd": "",
+            "repository": "example/crm"
+          },
+          "call_index": 10,
+          "result": {
+            "snapshot": {
+              "repository": "example/crm",
+              "capturedAt": "2026-11-04T18:30:00Z",
+              "complete": true,
+              "issues": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "nodeId": "725042",
+                  "title": "Issue",
+                  "revision": "req-1",
+                  "state": "open",
+                  "authority": "trusted",
+                  "conditions": [],
+                  "execution": "idle",
+                  "holds": []
+                },
+                {
+                  "key": "https://github.com/example/schema/issues/42",
+                  "nodeId": "834217",
+                  "title": "Issue",
+                  "revision": "req-1",
+                  "state": "open",
+                  "authority": "trusted",
+                  "conditions": [],
+                  "execution": "idle",
+                  "holds": []
+                }
+              ],
+              "edges": [],
+              "reviews": [
+                {
+                  "id": "9520",
+                  "analysis": "a-9520",
+                  "base": [],
+                  "continuation": "",
+                  "issue": "https://github.com/example/crm/issues/42",
+                  "inputs": [
+                    {
+                      "key": "https://github.com/example/crm/issues/42",
+                      "revision": "req-1"
+                    },
+                    {
+                      "key": "https://github.com/example/crm/blob/HEAD/src/import.mjs",
+                      "revision": "source-1"
+                    }
+                  ],
+                  "candidates": [
+                    {
+                      "key": "https://github.com/example/crm/issues/42",
+                      "revision": "req-1"
+                    }
+                  ],
+                  "outcome": "pending",
+                  "dependencies": [
+                    {
+                      "key": "https://github.com/example/schema/issues/42",
+                      "reason": "Schema first",
+                      "evidence": [
+                        "https://github.com/example/schema/issues/42"
+                      ]
+                    }
+                  ],
+                  "questions": [],
+                  "intact": true,
+                  "effects": "pending",
+                  "authority": "trusted"
+                }
+              ],
+              "impacts": [],
+              "inputs": [
+                {
+                  "key": "https://github.com/example/crm/blob/HEAD/src/import.mjs",
+                  "revision": "source-2"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "args": {
+            "cwd": "/start-packet-then-new-owner",
+            "repository": "example/crm"
+          },
+          "call_index": 11,
+          "result": {
+            "snapshot": {
+              "repository": "example/crm",
+              "capturedAt": "2026-11-04T18:30:00Z",
+              "complete": true,
+              "issues": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "nodeId": "725042",
+                  "title": "Issue",
+                  "revision": "req-1",
+                  "state": "open",
+                  "authority": "trusted",
+                  "conditions": [],
+                  "execution": "idle",
+                  "holds": []
+                }
+              ],
+              "edges": [],
+              "reviews": [
+                {
+                  "id": "9001",
+                  "analysis": "a-9001",
+                  "base": [],
+                  "continuation": "",
+                  "issue": "https://github.com/example/crm/issues/42",
+                  "inputs": [
+                    {
+                      "key": "https://github.com/example/crm/issues/42",
+                      "revision": "req-1"
+                    }
+                  ],
+                  "candidates": [
+                    {
+                      "key": "https://github.com/example/crm/issues/42",
+                      "revision": "req-1"
+                    }
+                  ],
+                  "outcome": "complete",
+                  "dependencies": [],
+                  "questions": [],
+                  "intact": true,
+                  "effects": "none",
+                  "authority": "trusted"
+                }
+              ],
+              "impacts": [],
+              "inputs": []
+            }
+          }
+        },
+        {
+          "args": {
+            "cwd": "/start-same-machine-other-coordinator",
+            "repository": "example/crm"
+          },
+          "call_index": 12,
+          "result": {
+            "snapshot": {
+              "repository": "example/crm",
+              "capturedAt": "2026-11-04T18:30:00Z",
+              "complete": true,
+              "issues": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "nodeId": "725042",
+                  "title": "Issue",
+                  "revision": "req-1",
+                  "state": "open",
+                  "authority": "trusted",
+                  "conditions": [],
+                  "execution": "idle",
+                  "holds": []
+                }
+              ],
+              "edges": [],
+              "reviews": [
+                {
+                  "id": "9001",
+                  "analysis": "a-9001",
+                  "base": [],
+                  "continuation": "",
+                  "issue": "https://github.com/example/crm/issues/42",
+                  "inputs": [
+                    {
+                      "key": "https://github.com/example/crm/issues/42",
+                      "revision": "req-1"
+                    }
+                  ],
+                  "candidates": [
+                    {
+                      "key": "https://github.com/example/crm/issues/42",
+                      "revision": "req-1"
+                    }
+                  ],
+                  "outcome": "complete",
+                  "dependencies": [],
+                  "questions": [],
+                  "intact": true,
+                  "effects": "none",
+                  "authority": "trusted"
+                }
+              ],
+              "impacts": [],
+              "inputs": []
+            }
+          }
+        },
+        {
+          "args": {
+            "cwd": "/start-off-after-packet",
+            "repository": "example/crm"
+          },
+          "call_index": 13,
+          "result": {
+            "snapshot": {
+              "repository": "example/crm",
+              "capturedAt": "2026-11-04T18:30:00Z",
+              "complete": true,
+              "issues": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "nodeId": "725042",
+                  "title": "Issue",
+                  "revision": "req-1",
+                  "state": "open",
+                  "authority": "trusted",
+                  "conditions": [],
+                  "execution": "idle",
+                  "holds": []
+                }
+              ],
+              "edges": [],
+              "reviews": [
+                {
+                  "id": "9001",
+                  "analysis": "a-9001",
+                  "base": [],
+                  "continuation": "",
+                  "issue": "https://github.com/example/crm/issues/42",
+                  "inputs": [
+                    {
+                      "key": "https://github.com/example/crm/issues/42",
+                      "revision": "req-1"
+                    }
+                  ],
+                  "candidates": [
+                    {
+                      "key": "https://github.com/example/crm/issues/42",
+                      "revision": "req-1"
+                    }
+                  ],
+                  "outcome": "complete",
+                  "dependencies": [],
+                  "questions": [],
+                  "intact": true,
+                  "effects": "none",
+                  "authority": "trusted"
+                }
+              ],
+              "impacts": [],
+              "inputs": []
+            }
+          }
+        },
+        {
+          "args": {
+            "cwd": "/start-own-winner",
+            "repository": "example/crm"
+          },
+          "call_index": 14,
+          "result": {
+            "snapshot": {
+              "repository": "example/crm",
+              "capturedAt": "2026-11-04T18:30:00Z",
+              "complete": true,
+              "issues": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "nodeId": "725042",
+                  "title": "Issue",
+                  "revision": "req-1",
+                  "state": "open",
+                  "authority": "trusted",
+                  "conditions": [],
+                  "execution": "running",
+                  "holds": [],
+                  "executionClaim": {
+                    "coordinatorId": "coordinator-a",
+                    "commentId": "9601",
+                    "labelEventId": "9602"
+                  },
+                  "runIds": []
+                }
+              ],
+              "edges": [],
+              "reviews": [
+                {
+                  "id": "9001",
+                  "analysis": "a-9001",
+                  "base": [],
+                  "continuation": "",
+                  "issue": "https://github.com/example/crm/issues/42",
+                  "inputs": [
+                    {
+                      "key": "https://github.com/example/crm/issues/42",
+                      "revision": "req-1"
+                    }
+                  ],
+                  "candidates": [
+                    {
+                      "key": "https://github.com/example/crm/issues/42",
+                      "revision": "req-1"
+                    }
+                  ],
+                  "outcome": "complete",
+                  "dependencies": [],
+                  "questions": [],
+                  "intact": true,
+                  "effects": "none",
+                  "authority": "trusted"
+                }
+              ],
+              "impacts": [],
+              "inputs": []
+            }
+          }
+        },
+        {
+          "args": {
+            "cwd": "/start-unknown-winner",
+            "repository": "example/crm"
+          },
+          "call_index": 15,
+          "result": {
+            "snapshot": {
+              "repository": "example/crm",
+              "capturedAt": "2026-11-04T18:30:00Z",
+              "complete": true,
+              "issues": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "nodeId": "725042",
+                  "title": "Issue",
+                  "revision": "req-1",
+                  "state": "open",
+                  "authority": "trusted",
+                  "conditions": [],
+                  "execution": "idle",
+                  "holds": []
+                }
+              ],
+              "edges": [],
+              "reviews": [
+                {
+                  "id": "9001",
+                  "analysis": "a-9001",
+                  "base": [],
+                  "continuation": "",
+                  "issue": "https://github.com/example/crm/issues/42",
+                  "inputs": [
+                    {
+                      "key": "https://github.com/example/crm/issues/42",
+                      "revision": "req-1"
+                    }
+                  ],
+                  "candidates": [
+                    {
+                      "key": "https://github.com/example/crm/issues/42",
+                      "revision": "req-1"
+                    }
+                  ],
+                  "outcome": "complete",
+                  "dependencies": [],
+                  "questions": [],
+                  "intact": true,
+                  "effects": "none",
+                  "authority": "trusted"
+                }
+              ],
+              "impacts": [],
+              "inputs": []
+            }
+          }
+        },
+        {
+          "args": {
+            "cwd": "/start-cap-starting-slot",
+            "repository": "example/crm"
+          },
+          "call_index": 16,
+          "result": {
+            "snapshot": {
+              "repository": "example/crm",
+              "capturedAt": "2026-11-04T18:30:00Z",
+              "complete": true,
+              "issues": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "nodeId": "725042",
+                  "title": "Issue",
+                  "revision": "req-1",
+                  "state": "open",
+                  "authority": "trusted",
+                  "conditions": [],
+                  "execution": "running",
+                  "holds": [],
+                  "executionClaim": {
+                    "coordinatorId": "coordinator-a",
+                    "commentId": "9601",
+                    "labelEventId": "9602"
+                  },
+                  "runIds": []
+                }
+              ],
+              "edges": [],
+              "reviews": [
+                {
+                  "id": "9001",
+                  "analysis": "a-9001",
+                  "base": [],
+                  "continuation": "",
+                  "issue": "https://github.com/example/crm/issues/42",
+                  "inputs": [
+                    {
+                      "key": "https://github.com/example/crm/issues/42",
+                      "revision": "req-1"
+                    }
+                  ],
+                  "candidates": [
+                    {
+                      "key": "https://github.com/example/crm/issues/42",
+                      "revision": "req-1"
+                    }
+                  ],
+                  "outcome": "complete",
+                  "dependencies": [],
+                  "questions": [],
+                  "intact": true,
+                  "effects": "none",
+                  "authority": "trusted"
+                }
+              ],
+              "impacts": [],
+              "inputs": []
+            }
+          }
+        },
+        {
+          "args": {
+            "cwd": "/start-cap-unconfirmed-slot",
+            "repository": "example/crm"
+          },
+          "call_index": 17,
+          "result": {
+            "snapshot": {
+              "repository": "example/crm",
+              "capturedAt": "2026-11-04T18:30:00Z",
+              "complete": true,
+              "issues": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "nodeId": "725042",
+                  "title": "Issue",
+                  "revision": "req-1",
+                  "state": "open",
+                  "authority": "trusted",
+                  "conditions": [],
+                  "execution": "running",
+                  "holds": [],
+                  "executionClaim": {
+                    "coordinatorId": "coordinator-a",
+                    "commentId": "9601",
+                    "labelEventId": "9602"
+                  },
+                  "runIds": []
+                }
+              ],
+              "edges": [],
+              "reviews": [
+                {
+                  "id": "9001",
+                  "analysis": "a-9001",
+                  "base": [],
+                  "continuation": "",
+                  "issue": "https://github.com/example/crm/issues/42",
+                  "inputs": [
+                    {
+                      "key": "https://github.com/example/crm/issues/42",
+                      "revision": "req-1"
+                    }
+                  ],
+                  "candidates": [
+                    {
+                      "key": "https://github.com/example/crm/issues/42",
+                      "revision": "req-1"
+                    }
+                  ],
+                  "outcome": "complete",
+                  "dependencies": [],
+                  "questions": [],
+                  "intact": true,
+                  "effects": "none",
+                  "authority": "trusted"
+                }
+              ],
+              "impacts": [],
+              "inputs": []
+            }
+          }
+        },
+        {
+          "args": {
+            "cwd": "/start-cap-unknown-count",
+            "repository": "example/crm"
+          },
+          "call_index": 18,
+          "result": {
+            "snapshot": {
+              "repository": "example/crm",
+              "capturedAt": "2026-11-04T18:30:00Z",
+              "complete": true,
+              "issues": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "nodeId": "725042",
+                  "title": "Issue",
+                  "revision": "req-1",
+                  "state": "open",
+                  "authority": "trusted",
+                  "conditions": [],
+                  "execution": "running",
+                  "holds": [],
+                  "executionClaim": {
+                    "coordinatorId": "coordinator-a",
+                    "commentId": "9601",
+                    "labelEventId": "9602"
+                  },
+                  "runIds": []
+                }
+              ],
+              "edges": [],
+              "reviews": [
+                {
+                  "id": "9001",
+                  "analysis": "a-9001",
+                  "base": [],
+                  "continuation": "",
+                  "issue": "https://github.com/example/crm/issues/42",
+                  "inputs": [
+                    {
+                      "key": "https://github.com/example/crm/issues/42",
+                      "revision": "req-1"
+                    }
+                  ],
+                  "candidates": [
+                    {
+                      "key": "https://github.com/example/crm/issues/42",
+                      "revision": "req-1"
+                    }
+                  ],
+                  "outcome": "complete",
+                  "dependencies": [],
+                  "questions": [],
+                  "intact": true,
+                  "effects": "none",
+                  "authority": "trusted"
+                }
+              ],
+              "impacts": [],
+              "inputs": []
+            }
+          }
+        },
+        {
+          "args": {
+            "cwd": "/start-cap-existing-issue-reuse",
+            "repository": "example/crm"
+          },
+          "call_index": 19,
+          "result": {
+            "snapshot": {
+              "repository": "example/crm",
+              "capturedAt": "2026-11-04T18:30:00Z",
+              "complete": true,
+              "issues": [
+                {
+                  "key": "https://github.com/example/crm/issues/42",
+                  "nodeId": "725042",
+                  "title": "Issue",
+                  "revision": "req-1",
+                  "state": "open",
+                  "authority": "trusted",
+                  "conditions": [],
+                  "execution": "running",
+                  "holds": [],
+                  "executionClaim": {
+                    "coordinatorId": "coordinator-a",
+                    "commentId": "9601",
+                    "labelEventId": "9602"
+                  },
+                  "runIds": []
+                }
+              ],
+              "edges": [],
+              "reviews": [
+                {
+                  "id": "9001",
+                  "analysis": "a-9001",
+                  "base": [],
+                  "continuation": "",
+                  "issue": "https://github.com/example/crm/issues/42",
+                  "inputs": [
+                    {
+                      "key": "https://github.com/example/crm/issues/42",
+                      "revision": "req-1"
+                    }
+                  ],
+                  "candidates": [
+                    {
+                      "key": "https://github.com/example/crm/issues/42",
+                      "revision": "req-1"
+                    }
+                  ],
+                  "outcome": "complete",
+                  "dependencies": [],
+                  "questions": [],
+                  "intact": true,
+                  "effects": "none",
+                  "authority": "trusted"
+                }
+              ],
+              "impacts": [],
+              "inputs": []
+            }
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "owners.read": {
+      "action": "fixture.lookup",
+      "world_pointer": "/owners-read",
+      "cases": [
+        {
+          "args": {
+            "repository": "example/crm",
+            "issues": [
+              "https://github.com/example/crm/issues/42"
+            ]
+          },
+          "call_index": 1,
+          "result": {
+            "json": "{\"localOwner\": \"local\", \"claims\": []}"
+          }
+        },
+        {
+          "args": {
+            "repository": "example/crm",
+            "issues": [
+              "https://github.com/example/crm/issues/42"
+            ]
+          },
+          "call_index": 2,
+          "result": {
+            "json": "{\"localOwner\": \"local\", \"claims\": []}"
+          }
+        },
+        {
+          "args": {
+            "repository": "example/crm",
+            "issues": [
+              "https://github.com/example/crm/issues/42"
+            ]
+          },
+          "call_index": 3,
+          "result": {
+            "json": "{\"localOwner\": \"local\", \"claims\": []}"
+          }
+        },
+        {
+          "args": {
+            "repository": "example/crm",
+            "issues": [
+              "https://github.com/example/crm/issues/42"
+            ]
+          },
+          "call_index": 4,
+          "result": {
+            "json": "{\"localOwner\": \"local\", \"claims\": [{\"issue\": \"https://github.com/example/crm/issues/42\", \"owner\": \"other-machine\", \"active\": true}]}"
+          }
+        },
+        {
+          "args": {
+            "repository": "example/crm",
+            "issues": [
+              "https://github.com/example/crm/issues/42"
+            ]
+          },
+          "call_index": 5,
+          "result": {
+            "json": "{\"localOwner\":\"local\",\"claims\":[]}"
+          }
+        },
+        {
+          "args": {
+            "repository": "example/crm",
+            "issues": [
+              "https://github.com/example/crm/issues/42"
+            ]
+          },
+          "call_index": 6,
+          "result": {
+            "json": "{\"localOwner\":\"local\",\"claims\":[]}"
+          }
+        },
+        {
+          "args": {
+            "repository": "example/crm",
+            "issues": [
+              "https://github.com/example/crm/issues/42"
+            ]
+          },
+          "call_index": 7,
+          "result": {
+            "json": "{\"localOwner\":\"local\",\"claims\":[]}"
+          }
+        },
+        {
+          "args": {
+            "repository": "example/crm",
+            "issues": [
+              "https://github.com/example/crm/issues/42"
+            ]
+          },
+          "call_index": 8,
+          "result": {
+            "json": "{\"localOwner\":\"local\",\"claims\":[]}"
+          }
+        },
+        {
+          "args": {
+            "repository": "example/crm",
+            "issues": [
+              "https://github.com/example/crm/issues/42"
+            ]
+          },
+          "call_index": 9,
+          "result": {
+            "json": "{\"localOwner\":\"coordinator-a\",\"claims\":[{\"issue\":\"https://github.com/example/crm/issues/42\",\"owner\":\"coordinator-b\",\"active\":true,\"coordinatorId\":\"coordinator-b\",\"machine\":\"other-machine\",\"commentId\":\"9701\",\"labelEventId\":\"9702\"}],\"runs\":[]}"
+          }
+        },
+        {
+          "args": {
+            "repository": "example/crm",
+            "issues": [
+              "https://github.com/example/crm/issues/42"
+            ]
+          },
+          "call_index": 10,
+          "result": {
+            "json": "{\"localOwner\":\"coordinator-a\",\"claims\":[{\"issue\":\"https://github.com/example/crm/issues/42\",\"owner\":\"coordinator-b\",\"active\":true,\"coordinatorId\":\"coordinator-b\",\"machine\":\"shared-machine\",\"commentId\":\"9601\",\"labelEventId\":\"9602\"}],\"runs\":[]}"
+          }
+        },
+        {
+          "args": {
+            "repository": "example/crm",
+            "issues": [
+              "https://github.com/example/crm/issues/42"
+            ]
+          },
+          "call_index": 11,
+          "result": {
+            "json": "{\"localOwner\":\"coordinator-a\",\"claims\":[{\"issue\":\"https://github.com/example/crm/issues/42\",\"owner\":\"coordinator-a\",\"active\":true,\"coordinatorId\":\"coordinator-a\",\"machine\":\"shared-machine\",\"commentId\":\"9601\",\"labelEventId\":\"9602\"}],\"runs\":[]}"
+          }
+        },
+        {
+          "args": {
+            "repository": "example/crm",
+            "issues": [
+              "https://github.com/example/crm/issues/42"
+            ]
+          },
+          "call_index": 12,
+          "result": {
+            "json": "{\"localOwner\":\"coordinator-a\",\"claims\":[{\"issue\":\"https://github.com/example/crm/issues/42\",\"owner\":\"coordinator-a\",\"active\":true,\"coordinatorId\":\"coordinator-a\",\"machine\":\"shared-machine\",\"commentId\":\"9601\",\"labelEventId\":\"9602\"}],\"runs\":[]}"
+          }
+        },
+        {
+          "args": {
+            "repository": "example/crm",
+            "issues": [
+              "https://github.com/example/crm/issues/42"
+            ]
+          },
+          "call_index": 13,
+          "result": {
+            "json": "{\"localOwner\":\"coordinator-a\",\"claims\":[{\"issue\":\"https://github.com/example/crm/issues/42\",\"owner\":\"\",\"active\":true,\"coordinatorId\":\"\",\"machine\":\"shared-machine\"}],\"runs\":[]}"
+          }
+        },
+        {
+          "args": {
+            "repository": "example/crm",
+            "issues": [
+              "https://github.com/example/crm/issues/42"
+            ]
+          },
+          "call_index": 14,
+          "result": {
+            "json": "{\"localOwner\": \"coordinator-a\", \"claims\": [{\"issue\": \"https://github.com/example/crm/issues/42\", \"owner\": \"coordinator-a\", \"active\": true, \"coordinatorId\": \"coordinator-a\", \"machine\": \"shared-machine\", \"commentId\": \"9601\", \"labelEventId\": \"9602\"}], \"runs\": [{\"issue\": \"https://github.com/example/crm/issues/17\", \"runId\": \"other-slot\", \"state\": \"starting\"}], \"runsKnown\": true}"
+          }
+        },
+        {
+          "args": {
+            "repository": "example/crm",
+            "issues": [
+              "https://github.com/example/crm/issues/42"
+            ]
+          },
+          "call_index": 15,
+          "result": {
+            "json": "{\"localOwner\": \"coordinator-a\", \"claims\": [{\"issue\": \"https://github.com/example/crm/issues/42\", \"owner\": \"coordinator-a\", \"active\": true, \"coordinatorId\": \"coordinator-a\", \"machine\": \"shared-machine\", \"commentId\": \"9601\", \"labelEventId\": \"9602\"}], \"runs\": [{\"issue\": \"https://github.com/example/crm/issues/17\", \"runId\": \"other-slot\", \"state\": \"unconfirmed\"}], \"runsKnown\": true}"
+          }
+        },
+        {
+          "args": {
+            "repository": "example/crm",
+            "issues": [
+              "https://github.com/example/crm/issues/42"
+            ]
+          },
+          "call_index": 16,
+          "result": {
+            "json": "{\"localOwner\": \"coordinator-a\", \"claims\": [{\"issue\": \"https://github.com/example/crm/issues/42\", \"owner\": \"coordinator-a\", \"active\": true, \"coordinatorId\": \"coordinator-a\", \"machine\": \"shared-machine\", \"commentId\": \"9601\", \"labelEventId\": \"9602\"}], \"runs\": [], \"runsKnown\": false}"
+          }
+        },
+        {
+          "args": {
+            "repository": "example/crm",
+            "issues": [
+              "https://github.com/example/crm/issues/42"
+            ]
+          },
+          "call_index": 17,
+          "result": {
+            "json": "{\"localOwner\": \"coordinator-a\", \"claims\": [{\"issue\": \"https://github.com/example/crm/issues/42\", \"owner\": \"coordinator-a\", \"active\": true, \"coordinatorId\": \"coordinator-a\", \"machine\": \"shared-machine\", \"commentId\": \"9601\", \"labelEventId\": \"9602\"}], \"runs\": [{\"issue\": \"https://github.com/example/crm/issues/42\", \"runId\": \"own-slot\", \"state\": \"starting\"}], \"runsKnown\": true}"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "pending.read": {
+      "action": "fixture.lookup",
+      "world_pointer": "/pending-read",
+      "cases": [
+        {
+          "args": {
+            "repository": "example/crm"
+          },
+          "call_index": 1,
+          "result": {
+            "json": "null"
+          }
+        },
+        {
+          "args": {
+            "repository": "example/crm"
+          },
+          "call_index": 2,
+          "result": {
+            "json": "null"
+          }
+        },
+        {
+          "args": {
+            "repository": "example/crm"
+          },
+          "call_index": 3,
+          "result": {
+            "json": "null"
+          }
+        },
+        {
+          "args": {
+            "repository": "example/crm"
+          },
+          "call_index": 4,
+          "result": {
+            "json": "null"
+          }
+        },
+        {
+          "args": {
+            "repository": "example/crm"
+          },
+          "call_index": 5,
+          "result": {
+            "json": "null"
+          }
+        },
+        {
+          "args": {
+            "repository": "example/crm"
+          },
+          "call_index": 6,
+          "result": {
+            "json": "null"
+          }
+        },
+        {
+          "args": {
+            "repository": "example/crm"
+          },
+          "call_index": 7,
+          "result": {
+            "json": "null"
+          }
+        },
+        {
+          "args": {
+            "repository": "example/crm"
+          },
+          "call_index": 8,
+          "result": {
+            "json": "null"
+          }
+        },
+        {
+          "args": {
+            "repository": "example/crm"
+          },
+          "call_index": 9,
+          "result": {
+            "json": "null"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "pending.deliver": {
+      "action": "port.write",
+      "world_pointer": "/deliveries",
+      "result_template": {
+        "state": "busy"
+      }
+    },
+    "pending.save": {
+      "action": "port.write",
+      "world_pointer": "/pendingWrites",
+      "result_template": {
+        "ok": true
+      }
+    },
+    "evidence.read": {
+      "action": "fixture.lookup",
+      "world_pointer": "/evidence-read",
+      "cases": [
+        {
+          "args": {
+            "cwd": "/crm",
+            "repository": "example/crm",
+            "issues": [
+              "https://github.com/example/crm/issues/42"
+            ]
+          },
+          "call_index": 1,
+          "result": {
+            "json": "{\"source\":[],\"requirements\":[]}"
+          }
+        },
+        {
+          "args": {
+            "cwd": "",
+            "repository": "example/crm",
+            "issues": [
+              "https://github.com/example/crm/issues/42"
+            ]
+          },
+          "call_index": 2,
+          "result": {
+            "json": "{\"source\": [{\"key\": \"https://github.com/example/crm/blob/HEAD/src/import.mjs\", \"revision\": \"source-2\", \"path\": \"src/import.mjs\", \"text\": \"Changed imports\", \"issues\": [\"https://github.com/example/crm/issues/42\"]}], \"requirements\": []}"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "signature.verify": {
+      "action": "fixture.lookup",
+      "world_pointer": "/signature-verify",
+      "cases": [
+        {
+          "args": {
+            "body": "{\"repository\": {\"full_name\": \"example/crm\"}, \"issue\": {\"number\": 42, \"state\": \"closed\"}}",
+            "signature": "bad"
+          },
+          "call_index": 1,
+          "result": {
+            "valid": false
+          }
+        },
+        {
+          "args": {
+            "body": "{\"repository\": {\"full_name\": \"example/crm\"}, \"issue\": {\"number\": 42, \"state\": \"closed\"}}",
+            "signature": "good"
+          },
+          "call_index": 2,
+          "result": {
+            "valid": true
+          }
+        },
+        {
+          "args": {
+            "body": "{\"repository\": {\"full_name\": \"example/crm\"}, \"issue\": {\"number\": 42, \"state\": \"closed\"}}",
+            "signature": "good"
+          },
+          "call_index": 3,
+          "result": {
+            "valid": true
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "scope.read": {
+      "action": "fixture.lookup",
+      "world_pointer": "/scope-read",
+      "cases": [
+        {
+          "args": {
+            "repository": "example/crm"
+          },
+          "call_index": 1,
+          "result": {
+            "issues": [
+              "https://github.com/example/schema/issues/42"
+            ]
+          }
+        },
+        {
+          "args": {
+            "repository": "example/crm"
+          },
+          "call_index": 2,
+          "result": {
+            "issues": [
+              "https://github.com/example/schema/issues/42"
+            ]
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "events.read": {
+      "action": "fixture.lookup",
+      "world_pointer": "/events-read",
+      "cases": [
+        {
+          "args": {
+            "repository": "example/crm"
+          },
+          "call_index": 1,
+          "result": {
+            "json": "{\"seen\":[],\"pending\":[]}"
+          }
+        },
+        {
+          "args": {
+            "repository": "example/crm"
+          },
+          "call_index": 2,
+          "result": {
+            "json": "{\"seen\":[\"delivery-1\"],\"pending\":[]}"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "events.save": {
+      "action": "port.write",
+      "world_pointer": "/eventWrites",
+      "result_template": {
+        "ok": true
+      }
+    },
+    "reconcile.hint": {
+      "action": "port.write",
+      "world_pointer": "/hints",
+      "result_template": {
+        "ok": true
+      }
+    },
+    "reviews.apply": {
+      "action": "port.write",
+      "world_pointer": "/recovered",
+      "result_template": {
+        "state": "confirmed",
+        "added": [],
+        "warnings": []
+      }
+    },
+    "settings.read": {
+      "action": "fixture.lookup",
+      "world_pointer": "/settings-read",
+      "cases": [
+        {
+          "args": {
+            "cwd": "/start-packet-then-new-owner",
+            "repository": "example/crm"
+          },
+          "call_index": 1,
+          "result": {
+            "mode": "auto",
+            "activation": "2026-11-04T18:00:00Z"
+          }
+        },
+        {
+          "args": {
+            "cwd": "/start-same-machine-other-coordinator",
+            "repository": "example/crm"
+          },
+          "call_index": 2,
+          "result": {
+            "mode": "auto",
+            "activation": "2026-11-04T18:00:00Z"
+          }
+        },
+        {
+          "args": {
+            "cwd": "/start-off-after-packet",
+            "repository": "example/crm"
+          },
+          "call_index": 3,
+          "result": {
+            "mode": "off",
+            "activation": "2026-11-04T18:00:00Z"
+          }
+        },
+        {
+          "args": {
+            "cwd": "/start-own-winner",
+            "repository": "example/crm"
+          },
+          "call_index": 4,
+          "result": {
+            "mode": "observe",
+            "activation": "2026-11-04T18:00:00Z"
+          }
+        },
+        {
+          "args": {
+            "cwd": "/start-unknown-winner",
+            "repository": "example/crm"
+          },
+          "call_index": 5,
+          "result": {
+            "mode": "auto",
+            "activation": "2026-11-04T18:00:00Z"
+          }
+        },
+        {
+          "args": {
+            "cwd": "/start-cap-starting-slot",
+            "repository": "example/crm"
+          },
+          "call_index": 6,
+          "result": {
+            "mode": "auto",
+            "activation": "2026-11-04T18:00:00Z",
+            "runs": 1
+          }
+        },
+        {
+          "args": {
+            "cwd": "/start-cap-unconfirmed-slot",
+            "repository": "example/crm"
+          },
+          "call_index": 7,
+          "result": {
+            "mode": "auto",
+            "activation": "2026-11-04T18:00:00Z",
+            "runs": 1
+          }
+        },
+        {
+          "args": {
+            "cwd": "/start-cap-unknown-count",
+            "repository": "example/crm"
+          },
+          "call_index": 8,
+          "result": {
+            "mode": "auto",
+            "activation": "2026-11-04T18:00:00Z",
+            "runs": 1
+          }
+        },
+        {
+          "args": {
+            "cwd": "/start-cap-existing-issue-reuse",
+            "repository": "example/crm"
+          },
+          "call_index": 9,
+          "result": {
+            "mode": "auto",
+            "activation": "2026-11-04T18:00:00Z",
+            "runs": 1
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "off-restart",
+      "entry_path": "prompts/cli/issue-dependencies-intake.prompt.md",
+      "operation": "reconcileDependencyIntake",
+      "input": {
+        "cwd": "/crm",
+        "repository": "example/crm",
+        "trigger": "startup",
+        "mode": "off"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/queued",
+          "op": "equals",
+          "value": []
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/eligible",
+          "op": "equals",
+          "value": []
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-pending-deliver",
+          "op": "equals",
+          "value": 0
+        }
+      ]
+    },
+    {
+      "step_id": "completed-prerequisite",
+      "entry_path": "prompts/cli/issue-dependencies-intake.prompt.md",
+      "operation": "reconcileDependencyIntake",
+      "input": {
+        "cwd": "/crm",
+        "repository": "example/crm",
+        "trigger": "completion",
+        "mode": "auto"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/eligible",
+          "op": "equals",
+          "value": [
+            "https://github.com/example/crm/issues/42"
+          ]
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-pending-deliver",
+          "op": "equals",
+          "value": 0
+        }
+      ]
+    },
+    {
+      "step_id": "reopened-current-state",
+      "entry_path": "prompts/cli/issue-dependencies-intake.prompt.md",
+      "operation": "reconcileDependencyIntake",
+      "input": {
+        "cwd": "/crm",
+        "repository": "example/crm",
+        "trigger": "tick",
+        "mode": "auto"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/eligible",
+          "op": "equals",
+          "value": []
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-pending-deliver",
+          "op": "equals",
+          "value": 0
+        }
+      ]
+    },
+    {
+      "step_id": "busy-semantic-work",
+      "entry_path": "prompts/cli/issue-dependencies-intake.prompt.md",
+      "operation": "reconcileDependencyIntake",
+      "input": {
+        "cwd": "/crm",
+        "repository": "example/crm",
+        "trigger": "tick",
+        "mode": "auto"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/pending",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/eligible",
+          "op": "equals",
+          "value": []
+        }
+      ]
+    },
+    {
+      "step_id": "remote-owner-before-handoff",
+      "entry_path": "prompts/cli/issue-dependencies-intake.prompt.md",
+      "operation": "reconcileDependencyIntake",
+      "input": {
+        "cwd": "/crm",
+        "repository": "example/crm",
+        "trigger": "refresh",
+        "mode": "auto"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/eligible",
+          "op": "equals",
+          "value": []
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/skipped",
+          "op": "equals",
+          "value": [
+            "https://github.com/example/crm/issues/42"
+          ]
+        }
+      ]
+    },
+    {
+      "step_id": "bad-signature",
+      "entry_path": "prompts/cli/issue-dependencies-events.prompt.md",
+      "operation": "acceptDependencyEvent",
+      "input": {
+        "repository": "example/crm",
+        "delivery": "delivery-1",
+        "event": "issues",
+        "body": "{\"repository\": {\"full_name\": \"example/crm\"}, \"issue\": {\"number\": 42, \"state\": \"closed\"}}",
+        "signature": "bad"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/accepted",
+          "op": "equals",
+          "value": false
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/reason",
+          "op": "equals",
+          "value": "signature"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-events-reconcile-hint",
+          "op": "equals",
+          "value": 0
+        }
+      ]
+    },
+    {
+      "step_id": "old-event-reread",
+      "entry_path": "prompts/cli/issue-dependencies-events.prompt.md",
+      "operation": "acceptDependencyEvent",
+      "input": {
+        "repository": "example/crm",
+        "delivery": "delivery-1",
+        "event": "issues",
+        "body": "{\"repository\": {\"full_name\": \"example/crm\"}, \"issue\": {\"number\": 42, \"state\": \"closed\"}}",
+        "signature": "good"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/accepted",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/reason",
+          "op": "equals",
+          "value": "queued"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-events-reconcile-hint",
+          "op": "equals",
+          "value": 1
+        }
+      ]
+    },
+    {
+      "step_id": "duplicate-event",
+      "entry_path": "prompts/cli/issue-dependencies-events.prompt.md",
+      "operation": "acceptDependencyEvent",
+      "input": {
+        "repository": "example/crm",
+        "delivery": "delivery-1",
+        "event": "issues",
+        "body": "{\"repository\": {\"full_name\": \"example/crm\"}, \"issue\": {\"number\": 42, \"state\": \"closed\"}}",
+        "signature": "good"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/accepted",
+          "op": "equals",
+          "value": false
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/reason",
+          "op": "equals",
+          "value": "duplicate"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-events-reconcile-hint",
+          "op": "equals",
+          "value": 0
+        }
+      ]
+    },
+    {
+      "step_id": "event-status-default",
+      "entry_path": "prompts/cli/issue-dependencies-events.prompt.md",
+      "operation": "dependencyEventStatus",
+      "input": {},
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/state",
+          "op": "equals",
+          "value": "disabled"
+        }
+      ]
+    },
+    {
+      "step_id": "event-status-configured",
+      "entry_path": "prompts/cli/issue-dependencies-events.prompt.md",
+      "operation": "dependencyEventStatus",
+      "input": {
+        "configured": true,
+        "installed": false,
+        "verified": false,
+        "error": ""
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/state",
+          "op": "equals",
+          "value": "configured"
+        }
+      ]
+    },
+    {
+      "step_id": "event-status-installed",
+      "entry_path": "prompts/cli/issue-dependencies-events.prompt.md",
+      "operation": "dependencyEventStatus",
+      "input": {
+        "configured": true,
+        "installed": true,
+        "verified": false,
+        "error": ""
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/state",
+          "op": "equals",
+          "value": "configured"
+        }
+      ]
+    },
+    {
+      "step_id": "event-status-verified",
+      "entry_path": "prompts/cli/issue-dependencies-events.prompt.md",
+      "operation": "dependencyEventStatus",
+      "input": {
+        "configured": true,
+        "installed": true,
+        "verified": true,
+        "error": ""
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/state",
+          "op": "equals",
+          "value": "active"
+        }
+      ]
+    },
+    {
+      "step_id": "restart-recovers-before-delivery",
+      "entry_path": "prompts/cli/issue-dependencies-intake.prompt.md",
+      "operation": "reconcileDependencyIntake",
+      "input": {
+        "cwd": "",
+        "repository": "example/crm",
+        "trigger": "startup",
+        "mode": "observe"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/eligible",
+          "op": "equals",
+          "value": [
+            "https://github.com/example/crm/issues/42"
+          ]
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-reviews-apply",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-pending-deliver",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "world",
+          "path": "/recovered/0",
+          "op": "equals",
+          "value": {
+            "cwd": "",
+            "repository": "example/crm",
+            "issue": "https://github.com/example/crm/issues/42",
+            "reviewId": "9501"
+          }
+        }
+      ]
+    },
+    {
+      "step_id": "unchanged-question-tick-first",
+      "entry_path": "prompts/cli/issue-dependencies-intake.prompt.md",
+      "operation": "reconcileDependencyIntake",
+      "input": {
+        "cwd": "",
+        "repository": "example/crm",
+        "trigger": "tick",
+        "mode": "auto"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/queued",
+          "op": "equals",
+          "value": []
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/eligible",
+          "op": "equals",
+          "value": []
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-pending-deliver",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-reviews-apply",
+          "op": "equals",
+          "value": 0
+        }
+      ]
+    },
+    {
+      "step_id": "unchanged-question-tick-second",
+      "entry_path": "prompts/cli/issue-dependencies-intake.prompt.md",
+      "operation": "reconcileDependencyIntake",
+      "input": {
+        "cwd": "",
+        "repository": "example/crm",
+        "trigger": "tick",
+        "mode": "auto"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/queued",
+          "op": "equals",
+          "value": []
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/eligible",
+          "op": "equals",
+          "value": []
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-pending-deliver",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-reviews-apply",
+          "op": "equals",
+          "value": 0
+        }
+      ]
+    },
+    {
+      "step_id": "restart-changed-source-queues-review",
+      "entry_path": "prompts/cli/issue-dependencies-intake.prompt.md",
+      "operation": "reconcileDependencyIntake",
+      "input": {
+        "cwd": "",
+        "repository": "example/crm",
+        "trigger": "startup",
+        "mode": "auto"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/eligible",
+          "op": "equals",
+          "value": []
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/queued",
+          "op": "equals",
+          "value": [
+            "https://github.com/example/crm/issues/42"
+          ]
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-reviews-apply",
+          "op": "equals",
+          "value": 0
+        }
+      ]
+    },
+    {
+      "step_id": "current-start-check-packet-then-new-owner",
+      "entry_path": "prompts/cli/issue-dependencies-intake.prompt.md",
+      "operation": "checkDependencyStart",
+      "input": {
+        "cwd": "/start-packet-then-new-owner",
+        "repository": "example/crm",
+        "issue": "https://github.com/example/crm/issues/42",
+        "coordinator": {
+          "repository": "example/crm",
+          "coordinatorId": "coordinator-a",
+          "machine": "shared-machine",
+          "activation": "2026-11-04T18:00:00Z",
+          "claim": {
+            "commentId": "9601",
+            "labelEventId": "9602"
+          }
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/allowed",
+          "op": "equals",
+          "value": false
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/reason",
+          "op": "equals",
+          "value": "owner"
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-snapshots-read",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-owners-read",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-reviews-apply",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-pending-deliver",
+          "op": "equals",
+          "value": 0
+        }
+      ]
+    },
+    {
+      "step_id": "current-start-check-same-machine-other-coordinator",
+      "entry_path": "prompts/cli/issue-dependencies-intake.prompt.md",
+      "operation": "checkDependencyStart",
+      "input": {
+        "cwd": "/start-same-machine-other-coordinator",
+        "repository": "example/crm",
+        "issue": "https://github.com/example/crm/issues/42",
+        "coordinator": {
+          "repository": "example/crm",
+          "coordinatorId": "coordinator-a",
+          "machine": "shared-machine",
+          "activation": "2026-11-04T18:00:00Z",
+          "claim": {
+            "commentId": "9601",
+            "labelEventId": "9602"
+          }
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/allowed",
+          "op": "equals",
+          "value": false
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/reason",
+          "op": "equals",
+          "value": "owner"
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-snapshots-read",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-owners-read",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-reviews-apply",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-pending-deliver",
+          "op": "equals",
+          "value": 0
+        }
+      ]
+    },
+    {
+      "step_id": "current-start-check-off-after-packet",
+      "entry_path": "prompts/cli/issue-dependencies-intake.prompt.md",
+      "operation": "checkDependencyStart",
+      "input": {
+        "cwd": "/start-off-after-packet",
+        "repository": "example/crm",
+        "issue": "https://github.com/example/crm/issues/42",
+        "coordinator": {
+          "repository": "example/crm",
+          "coordinatorId": "coordinator-a",
+          "machine": "shared-machine",
+          "activation": "2026-11-04T18:00:00Z",
+          "claim": {
+            "commentId": "9601",
+            "labelEventId": "9602"
+          }
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/allowed",
+          "op": "equals",
+          "value": false
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/reason",
+          "op": "equals",
+          "value": "off"
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-snapshots-read",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-owners-read",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-reviews-apply",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-pending-deliver",
+          "op": "equals",
+          "value": 0
+        }
+      ]
+    },
+    {
+      "step_id": "current-start-check-own-winner",
+      "entry_path": "prompts/cli/issue-dependencies-intake.prompt.md",
+      "operation": "checkDependencyStart",
+      "input": {
+        "cwd": "/start-own-winner",
+        "repository": "example/crm",
+        "issue": "https://github.com/example/crm/issues/42",
+        "coordinator": {
+          "repository": "example/crm",
+          "coordinatorId": "coordinator-a",
+          "machine": "shared-machine",
+          "activation": "2026-11-04T18:00:00Z",
+          "claim": {
+            "commentId": "9601",
+            "labelEventId": "9602"
+          }
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/allowed",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/reason",
+          "op": "equals",
+          "value": "ok"
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-snapshots-read",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-owners-read",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-reviews-apply",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-pending-deliver",
+          "op": "equals",
+          "value": 0
+        }
+      ]
+    },
+    {
+      "step_id": "current-start-check-unknown-winner",
+      "entry_path": "prompts/cli/issue-dependencies-intake.prompt.md",
+      "operation": "checkDependencyStart",
+      "input": {
+        "cwd": "/start-unknown-winner",
+        "repository": "example/crm",
+        "issue": "https://github.com/example/crm/issues/42",
+        "coordinator": {
+          "repository": "example/crm",
+          "coordinatorId": "coordinator-a",
+          "machine": "shared-machine",
+          "activation": "2026-11-04T18:00:00Z",
+          "claim": {
+            "commentId": "9601",
+            "labelEventId": "9602"
+          }
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/allowed",
+          "op": "equals",
+          "value": false
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/reason",
+          "op": "equals",
+          "value": "owner"
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-snapshots-read",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-owners-read",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-reviews-apply",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-pending-deliver",
+          "op": "equals",
+          "value": 0
+        }
+      ]
+    },
+    {
+      "step_id": "current-start-check-cap-starting-slot",
+      "entry_path": "prompts/cli/issue-dependencies-intake.prompt.md",
+      "operation": "checkDependencyStart",
+      "input": {
+        "cwd": "/start-cap-starting-slot",
+        "repository": "example/crm",
+        "issue": "https://github.com/example/crm/issues/42",
+        "coordinator": {
+          "repository": "example/crm",
+          "coordinatorId": "coordinator-a",
+          "machine": "shared-machine",
+          "activation": "2026-11-04T18:00:00Z",
+          "claim": {
+            "commentId": "9601",
+            "labelEventId": "9602"
+          },
+          "runs": 1
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/allowed",
+          "op": "equals",
+          "value": false
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/reason",
+          "op": "equals",
+          "value": "runs"
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-snapshots-read",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-owners-read",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-reviews-apply",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-pending-deliver",
+          "op": "equals",
+          "value": 0
+        }
+      ]
+    },
+    {
+      "step_id": "current-start-check-cap-unconfirmed-slot",
+      "entry_path": "prompts/cli/issue-dependencies-intake.prompt.md",
+      "operation": "checkDependencyStart",
+      "input": {
+        "cwd": "/start-cap-unconfirmed-slot",
+        "repository": "example/crm",
+        "issue": "https://github.com/example/crm/issues/42",
+        "coordinator": {
+          "repository": "example/crm",
+          "coordinatorId": "coordinator-a",
+          "machine": "shared-machine",
+          "activation": "2026-11-04T18:00:00Z",
+          "claim": {
+            "commentId": "9601",
+            "labelEventId": "9602"
+          },
+          "runs": 1
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/allowed",
+          "op": "equals",
+          "value": false
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/reason",
+          "op": "equals",
+          "value": "runs"
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-snapshots-read",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-owners-read",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-reviews-apply",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-pending-deliver",
+          "op": "equals",
+          "value": 0
+        }
+      ]
+    },
+    {
+      "step_id": "current-start-check-cap-unknown-count",
+      "entry_path": "prompts/cli/issue-dependencies-intake.prompt.md",
+      "operation": "checkDependencyStart",
+      "input": {
+        "cwd": "/start-cap-unknown-count",
+        "repository": "example/crm",
+        "issue": "https://github.com/example/crm/issues/42",
+        "coordinator": {
+          "repository": "example/crm",
+          "coordinatorId": "coordinator-a",
+          "machine": "shared-machine",
+          "activation": "2026-11-04T18:00:00Z",
+          "claim": {
+            "commentId": "9601",
+            "labelEventId": "9602"
+          },
+          "runs": 1
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/allowed",
+          "op": "equals",
+          "value": false
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/reason",
+          "op": "equals",
+          "value": "runs"
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-snapshots-read",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-owners-read",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-reviews-apply",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-pending-deliver",
+          "op": "equals",
+          "value": 0
+        }
+      ]
+    },
+    {
+      "step_id": "current-start-check-cap-existing-issue-reuse",
+      "entry_path": "prompts/cli/issue-dependencies-intake.prompt.md",
+      "operation": "checkDependencyStart",
+      "input": {
+        "cwd": "/start-cap-existing-issue-reuse",
+        "repository": "example/crm",
+        "issue": "https://github.com/example/crm/issues/42",
+        "coordinator": {
+          "repository": "example/crm",
+          "coordinatorId": "coordinator-a",
+          "machine": "shared-machine",
+          "activation": "2026-11-04T18:00:00Z",
+          "claim": {
+            "commentId": "9601",
+            "labelEventId": "9602"
+          },
+          "runs": 1
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/allowed",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/reason",
+          "op": "equals",
+          "value": "ok"
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-snapshots-read",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-owners-read",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-reviews-apply",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/issue-dependencies-intake-pending-deliver",
+          "op": "equals",
+          "value": 0
+        }
+      ]
+    }
+  ]
+}

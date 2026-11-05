@@ -1,0 +1,737 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/dependencies-interactive-graph.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "The graph shows search, status filters, the graph and selected issue reasons, with the last successful sync and refreshing or offline state."
+    },
+    {
+      "id": "AC2",
+      "text": "Search and filters retain matching nodes and their prerequisite context without changing readiness. Selecting issue 42 shows its blocker reason and evidence."
+    },
+    {
+      "id": "AC3",
+      "text": "A running filter uses actual execution state. Unknown work remains labeled unknown, and no matching issue gives an empty result rather than invented readiness."
+    },
+    {
+      "id": "AC4",
+      "text": "An offline update keeps the selected issue and its reasons. The layout stacks details below the graph when the panes cannot fit side by side."
+    },
+    {
+      "id": "AC5",
+      "text": "A saved deployment question shows its exact text, owning issue and source after restart. A trusted replacement updates those facts. With no cache the viewer shows \"No saved graph\" and no ready work."
+    }
+  ],
+  "initial_world": {},
+  "simulation": {},
+  "context": [],
+  "steps": [
+    {
+      "step_id": "initial-cached-view",
+      "entry_path": "prompts/cli/issue-dependency-graph-view.prompt.md",
+      "operation": "renderIssueGraph",
+      "input": {
+        "graph": {
+          "repository": "example/crm",
+          "capturedAt": "2026-11-04T18:30:00Z",
+          "complete": true,
+          "nodes": [
+            {
+              "key": "https://github.com/example/crm/issues/42",
+              "title": "CRM import",
+              "reviewState": "current",
+              "dependencyState": "waiting",
+              "executionState": "idle",
+              "eligible": false,
+              "reasons": [
+                "Open prerequisite"
+              ],
+              "blockers": [
+                "https://github.com/example/crm/issues/17"
+              ],
+              "review": "r42",
+              "nativeState": "open",
+              "facts": []
+            },
+            {
+              "key": "https://github.com/example/crm/issues/17",
+              "title": "CRM schema",
+              "reviewState": "current",
+              "dependencyState": "clear",
+              "executionState": "idle",
+              "eligible": true,
+              "reasons": [],
+              "blockers": [],
+              "review": "r17",
+              "nativeState": "open",
+              "facts": []
+            }
+          ],
+          "edges": [
+            {
+              "dependent": "https://github.com/example/crm/issues/42",
+              "blocker": "https://github.com/example/crm/issues/17",
+              "reason": "Schema must exist before import.",
+              "evidence": [
+                "https://github.com/example/crm/issues/42#issuecomment-1"
+              ]
+            }
+          ]
+        },
+        "query": "",
+        "filter": "all",
+        "selected": "https://github.com/example/crm/issues/42",
+        "sync": "refreshing",
+        "lastSync": "10:30"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/sync",
+          "op": "equals",
+          "value": "refreshing"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/visible",
+          "op": "equals",
+          "value": [
+            "https://github.com/example/crm/issues/42",
+            "https://github.com/example/crm/issues/17"
+          ]
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/selected",
+          "op": "equals",
+          "value": "https://github.com/example/crm/issues/42"
+        }
+      ]
+    },
+    {
+      "step_id": "search-keeps-prerequisite-context",
+      "entry_path": "prompts/cli/issue-dependency-graph-view.prompt.md",
+      "operation": "renderIssueGraph",
+      "input": {
+        "graph": {
+          "repository": "example/crm",
+          "capturedAt": "2026-11-04T18:30:00Z",
+          "complete": true,
+          "nodes": [
+            {
+              "key": "https://github.com/example/crm/issues/42",
+              "title": "CRM import",
+              "reviewState": "current",
+              "dependencyState": "waiting",
+              "executionState": "idle",
+              "eligible": false,
+              "reasons": [
+                "Open prerequisite"
+              ],
+              "blockers": [
+                "https://github.com/example/crm/issues/17"
+              ],
+              "review": "r42",
+              "nativeState": "open",
+              "facts": []
+            },
+            {
+              "key": "https://github.com/example/crm/issues/17",
+              "title": "CRM schema",
+              "reviewState": "current",
+              "dependencyState": "clear",
+              "executionState": "idle",
+              "eligible": true,
+              "reasons": [],
+              "blockers": [],
+              "review": "r17",
+              "nativeState": "open",
+              "facts": []
+            }
+          ],
+          "edges": [
+            {
+              "dependent": "https://github.com/example/crm/issues/42",
+              "blocker": "https://github.com/example/crm/issues/17",
+              "reason": "Schema must exist before import.",
+              "evidence": [
+                "https://github.com/example/crm/issues/42#issuecomment-1"
+              ]
+            }
+          ]
+        },
+        "query": "import",
+        "filter": "all",
+        "selected": "https://github.com/example/crm/issues/42",
+        "sync": "refreshing",
+        "lastSync": "10:30"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/visible",
+          "op": "equals",
+          "value": [
+            "https://github.com/example/crm/issues/42"
+          ]
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/context",
+          "op": "equals",
+          "value": [
+            "https://github.com/example/crm/issues/17"
+          ]
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/reasons",
+          "op": "equals",
+          "value": [
+            "Open prerequisite",
+            "Schema must exist before import."
+          ]
+        }
+      ]
+    },
+    {
+      "step_id": "ready-filter",
+      "entry_path": "prompts/cli/issue-dependency-graph-view.prompt.md",
+      "operation": "renderIssueGraph",
+      "input": {
+        "graph": {
+          "repository": "example/crm",
+          "capturedAt": "2026-11-04T18:30:00Z",
+          "complete": true,
+          "nodes": [
+            {
+              "key": "https://github.com/example/crm/issues/42",
+              "title": "CRM import",
+              "reviewState": "current",
+              "dependencyState": "waiting",
+              "executionState": "idle",
+              "eligible": false,
+              "reasons": [
+                "Open prerequisite"
+              ],
+              "blockers": [
+                "https://github.com/example/crm/issues/17"
+              ],
+              "review": "r42",
+              "nativeState": "open",
+              "facts": []
+            },
+            {
+              "key": "https://github.com/example/crm/issues/17",
+              "title": "CRM schema",
+              "reviewState": "current",
+              "dependencyState": "clear",
+              "executionState": "idle",
+              "eligible": true,
+              "reasons": [],
+              "blockers": [],
+              "review": "r17",
+              "nativeState": "open",
+              "facts": []
+            }
+          ],
+          "edges": [
+            {
+              "dependent": "https://github.com/example/crm/issues/42",
+              "blocker": "https://github.com/example/crm/issues/17",
+              "reason": "Schema must exist before import.",
+              "evidence": [
+                "https://github.com/example/crm/issues/42#issuecomment-1"
+              ]
+            }
+          ]
+        },
+        "query": "",
+        "filter": "ready",
+        "selected": "https://github.com/example/crm/issues/42",
+        "sync": "refreshing",
+        "lastSync": "10:30"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/visible",
+          "op": "equals",
+          "value": [
+            "https://github.com/example/crm/issues/17"
+          ]
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/selected",
+          "op": "equals",
+          "value": "https://github.com/example/crm/issues/42"
+        }
+      ]
+    },
+    {
+      "step_id": "no-running-work",
+      "entry_path": "prompts/cli/issue-dependency-graph-view.prompt.md",
+      "operation": "renderIssueGraph",
+      "input": {
+        "graph": {
+          "repository": "example/crm",
+          "capturedAt": "2026-11-04T18:30:00Z",
+          "complete": true,
+          "nodes": [
+            {
+              "key": "https://github.com/example/crm/issues/42",
+              "title": "CRM import",
+              "reviewState": "current",
+              "dependencyState": "waiting",
+              "executionState": "idle",
+              "eligible": false,
+              "reasons": [
+                "Open prerequisite"
+              ],
+              "blockers": [
+                "https://github.com/example/crm/issues/17"
+              ],
+              "review": "r42",
+              "nativeState": "open",
+              "facts": []
+            },
+            {
+              "key": "https://github.com/example/crm/issues/17",
+              "title": "CRM schema",
+              "reviewState": "current",
+              "dependencyState": "clear",
+              "executionState": "idle",
+              "eligible": true,
+              "reasons": [],
+              "blockers": [],
+              "review": "r17",
+              "nativeState": "open",
+              "facts": []
+            }
+          ],
+          "edges": [
+            {
+              "dependent": "https://github.com/example/crm/issues/42",
+              "blocker": "https://github.com/example/crm/issues/17",
+              "reason": "Schema must exist before import.",
+              "evidence": [
+                "https://github.com/example/crm/issues/42#issuecomment-1"
+              ]
+            }
+          ]
+        },
+        "query": "",
+        "filter": "running",
+        "selected": "https://github.com/example/crm/issues/42",
+        "sync": "refreshing",
+        "lastSync": "10:30"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/visible",
+          "op": "equals",
+          "value": []
+        }
+      ]
+    },
+    {
+      "step_id": "missing-match",
+      "entry_path": "prompts/cli/issue-dependency-graph-view.prompt.md",
+      "operation": "renderIssueGraph",
+      "input": {
+        "graph": {
+          "repository": "example/crm",
+          "capturedAt": "2026-11-04T18:30:00Z",
+          "complete": true,
+          "nodes": [
+            {
+              "key": "https://github.com/example/crm/issues/42",
+              "title": "CRM import",
+              "reviewState": "current",
+              "dependencyState": "waiting",
+              "executionState": "idle",
+              "eligible": false,
+              "reasons": [
+                "Open prerequisite"
+              ],
+              "blockers": [
+                "https://github.com/example/crm/issues/17"
+              ],
+              "review": "r42",
+              "nativeState": "open",
+              "facts": []
+            },
+            {
+              "key": "https://github.com/example/crm/issues/17",
+              "title": "CRM schema",
+              "reviewState": "current",
+              "dependencyState": "clear",
+              "executionState": "idle",
+              "eligible": true,
+              "reasons": [],
+              "blockers": [],
+              "review": "r17",
+              "nativeState": "open",
+              "facts": []
+            }
+          ],
+          "edges": [
+            {
+              "dependent": "https://github.com/example/crm/issues/42",
+              "blocker": "https://github.com/example/crm/issues/17",
+              "reason": "Schema must exist before import.",
+              "evidence": [
+                "https://github.com/example/crm/issues/42#issuecomment-1"
+              ]
+            }
+          ]
+        },
+        "query": "no-such-issue",
+        "filter": "all",
+        "selected": "https://github.com/example/crm/issues/42",
+        "sync": "refreshing",
+        "lastSync": "10:30"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/visible",
+          "op": "equals",
+          "value": []
+        }
+      ]
+    },
+    {
+      "step_id": "offline-keeps-reasons",
+      "entry_path": "prompts/cli/issue-dependency-graph-view.prompt.md",
+      "operation": "renderIssueGraph",
+      "input": {
+        "graph": {
+          "repository": "example/crm",
+          "capturedAt": "2026-11-04T18:30:00Z",
+          "complete": true,
+          "nodes": [
+            {
+              "key": "https://github.com/example/crm/issues/42",
+              "title": "CRM import",
+              "reviewState": "current",
+              "dependencyState": "waiting",
+              "executionState": "idle",
+              "eligible": false,
+              "reasons": [
+                "Open prerequisite"
+              ],
+              "blockers": [
+                "https://github.com/example/crm/issues/17"
+              ],
+              "review": "r42",
+              "nativeState": "open",
+              "facts": []
+            },
+            {
+              "key": "https://github.com/example/crm/issues/17",
+              "title": "CRM schema",
+              "reviewState": "current",
+              "dependencyState": "clear",
+              "executionState": "idle",
+              "eligible": true,
+              "reasons": [],
+              "blockers": [],
+              "review": "r17",
+              "nativeState": "open",
+              "facts": []
+            }
+          ],
+          "edges": [
+            {
+              "dependent": "https://github.com/example/crm/issues/42",
+              "blocker": "https://github.com/example/crm/issues/17",
+              "reason": "Schema must exist before import.",
+              "evidence": [
+                "https://github.com/example/crm/issues/42#issuecomment-1"
+              ]
+            }
+          ]
+        },
+        "query": "",
+        "filter": "all",
+        "selected": "https://github.com/example/crm/issues/42",
+        "sync": "offline",
+        "lastSync": "10:30"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/selected",
+          "op": "equals",
+          "value": "https://github.com/example/crm/issues/42"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/sync",
+          "op": "equals",
+          "value": "offline"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/reasons",
+          "op": "equals",
+          "value": [
+            "Open prerequisite",
+            "Schema must exist before import."
+          ]
+        }
+      ]
+    },
+    {
+      "step_id": "render-saved-deployment-facts",
+      "entry_path": "prompts/cli/issue-dependency-graph-view.prompt.md",
+      "operation": "renderIssueGraph",
+      "input": {
+        "graph": {
+          "repository": "example/crm",
+          "capturedAt": "2026-11-04T18:30:00Z",
+          "complete": true,
+          "nodes": [
+            {
+              "key": "https://github.com/example/crm/issues/42",
+              "title": "CRM import",
+              "reviewState": "question",
+              "dependencyState": "waiting",
+              "executionState": "idle",
+              "eligible": false,
+              "reasons": [
+                "Open prerequisite"
+              ],
+              "blockers": [
+                "https://github.com/example/crm/issues/17"
+              ],
+              "review": "r42",
+              "nativeState": "open",
+              "facts": [
+                {
+                  "kind": "question",
+                  "text": "Deploy schema first",
+                  "issue": "https://github.com/example/schema/issues/42",
+                  "source": "https://github.com/example/schema/issues/42#issuecomment-9401",
+                  "inputs": [
+                    {
+                      "key": "https://github.com/example/schema/issues/42",
+                      "revision": "req-1"
+                    },
+                    {
+                      "key": "https://github.com/example/crm/blob/HEAD/src/import.mjs",
+                      "revision": "source-1"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "key": "https://github.com/example/crm/issues/17",
+              "title": "CRM schema",
+              "reviewState": "current",
+              "dependencyState": "clear",
+              "executionState": "idle",
+              "eligible": true,
+              "reasons": [],
+              "blockers": [],
+              "review": "r17",
+              "nativeState": "open",
+              "facts": []
+            }
+          ],
+          "edges": [
+            {
+              "dependent": "https://github.com/example/crm/issues/42",
+              "blocker": "https://github.com/example/crm/issues/17",
+              "reason": "Schema must exist before import.",
+              "evidence": [
+                "https://github.com/example/crm/issues/42#issuecomment-1"
+              ]
+            }
+          ]
+        },
+        "query": "",
+        "filter": "all",
+        "selected": "https://github.com/example/crm/issues/42",
+        "sync": "refreshing",
+        "lastSync": "10:30"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/facts",
+          "op": "equals",
+          "value": [
+            {
+              "kind": "question",
+              "text": "Deploy schema first",
+              "issue": "https://github.com/example/schema/issues/42",
+              "source": "https://github.com/example/schema/issues/42#issuecomment-9401",
+              "inputs": [
+                {
+                  "key": "https://github.com/example/schema/issues/42",
+                  "revision": "req-1"
+                },
+                {
+                  "key": "https://github.com/example/crm/blob/HEAD/src/import.mjs",
+                  "revision": "source-1"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/html",
+          "op": "contains",
+          "value": "Deploy schema first"
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/emptyMessage",
+          "op": "equals",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "step_id": "render-trusted-replacement-facts",
+      "entry_path": "prompts/cli/issue-dependency-graph-view.prompt.md",
+      "operation": "renderIssueGraph",
+      "input": {
+        "graph": {
+          "repository": "example/crm",
+          "capturedAt": "2026-11-04T18:30:00Z",
+          "complete": true,
+          "nodes": [
+            {
+              "key": "https://github.com/example/crm/issues/42",
+              "title": "CRM import",
+              "reviewState": "current",
+              "dependencyState": "waiting",
+              "executionState": "idle",
+              "eligible": false,
+              "reasons": [
+                "Open prerequisite"
+              ],
+              "blockers": [
+                "https://github.com/example/crm/issues/17"
+              ],
+              "review": "r42",
+              "nativeState": "open",
+              "facts": []
+            },
+            {
+              "key": "https://github.com/example/crm/issues/17",
+              "title": "CRM schema",
+              "reviewState": "current",
+              "dependencyState": "clear",
+              "executionState": "idle",
+              "eligible": true,
+              "reasons": [],
+              "blockers": [],
+              "review": "r17",
+              "nativeState": "open",
+              "facts": []
+            }
+          ],
+          "edges": [
+            {
+              "dependent": "https://github.com/example/crm/issues/42",
+              "blocker": "https://github.com/example/crm/issues/17",
+              "reason": "Schema must exist before import.",
+              "evidence": [
+                "https://github.com/example/crm/issues/42#issuecomment-1"
+              ]
+            }
+          ]
+        },
+        "query": "",
+        "filter": "all",
+        "selected": "https://github.com/example/crm/issues/42",
+        "sync": "refreshing",
+        "lastSync": "10:30"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/facts",
+          "op": "equals",
+          "value": []
+        }
+      ]
+    },
+    {
+      "step_id": "render-no-cache-read-result",
+      "entry_path": "prompts/cli/issue-dependency-graph-view.prompt.md",
+      "operation": "renderIssueGraph",
+      "input": {
+        "graph": null,
+        "query": "",
+        "filter": "all",
+        "selected": "https://github.com/example/crm/issues/42",
+        "sync": "empty",
+        "lastSync": ""
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/emptyMessage",
+          "op": "equals",
+          "value": "No saved graph"
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/visible",
+          "op": "equals",
+          "value": []
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/selected",
+          "op": "equals",
+          "value": ""
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/facts",
+          "op": "equals",
+          "value": []
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/html",
+          "op": "contains",
+          "value": "No saved graph"
+        }
+      ]
+    }
+  ]
+}

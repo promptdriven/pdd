@@ -132,3 +132,23 @@ The seven workflow Stories retain their separately approved contracts and all 28
 
 1. [Follow a bounded authoring handoff](authoring-orchestration.md) — [native/manual cases](../test/authoring-guidance/authoring-orchestration-cases.json). Prompt tests and native/manual acceptance: NOT RUN.
 2. [Compare authoring guidance on one frozen task](authoring-orchestration-measurement.md) — [native/manual cases](../test/authoring-guidance/authoring-orchestration-measurement-cases.json). Prompt tests and native/manual acceptance: NOT RUN.
+
+
+## Native issue dependencies (#2964)
+
+1. [Project the native dependency graph](dependencies-native-graph.md) — `test/runtime/dependencies-native-graph.json`. Prompt tests (dependencies-native-graph): NOT RUN.
+2. [Save dependency reviews](dependencies-saved-review.md) — `test/runtime/dependencies-saved-review.json`. Prompt tests (dependencies-saved-review): NOT RUN.
+3. [Prepare and complete dependency analysis](dependencies-native-intake.md) — `test/runtime/dependencies-native-intake.json`. Prompt tests (dependencies-native-intake): NOT RUN.
+4. [Catch up dependency work safely](dependencies-reconcile.md) — `test/runtime/dependencies-reconcile.json`. Prompt tests (dependencies-reconcile): NOT RUN.
+5. [Read the graph from chat](dependencies-chat-graph.md) — `test/runtime/dependencies-chat-graph.json`. Prompt tests (dependencies-chat-graph): NOT RUN.
+6. [Explore the interactive dependency graph](dependencies-interactive-graph.md) — `test/runtime/dependencies-interactive-graph.json`. Prompt tests (dependencies-interactive-graph): NOT RUN.
+
+The interactive design uses `app/dependencies.app-map.json`. Native GitHub
+persistence, ordinary workflow startup/admission, default-login behavior, event
+delivery and actual browser interaction require separate code-stage verification.
+Independent native acceptance also covers a fresh install, setup and start; actual
+normal CLI and GitHub native edge/review save followed by a fresh empty-cache read;
+selected native analysis of a fresh CRM source tree without hidden evaluation
+material; new and edited issues; Off/on and restart; ownership and cap checks;
+the terminal overview; and the bundled viewer with refresh. Hosted Runtime
+evidence remains a separate requirement.

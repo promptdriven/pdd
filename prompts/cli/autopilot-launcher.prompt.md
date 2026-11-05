@@ -172,7 +172,34 @@ these rules with their skill owner rather than copying them into the launcher.
 The skill delegates review and merge work to pdd-check and pdd-merge. No fixed
 count, time-based run termination or new refusal is introduced by the launcher.
 
+## Dependency review and automatic-start context
+
+At startup/restart, tick, accepted event, completion and explicit refresh, use the
+same `reconcileDependencyIntake({cwd,repository,trigger,mode},ports)` production
+boundary before selecting new issue work. It recovers saved effects and returns
+queued/eligible/skipped/pending; it starts nothing. Keep existing conditional
+polling, recipe-first behavior, idle delivery, activation, trust, profiles, family
+choice and normal workflow handoff. Both observe and auto can work; Off starts no
+new automatic work. A graph read never invokes this route or AI.
+
+Persist an opaque coordinatorId with existing local launcher state, unique to this
+independent coordinator, retained across restart; a machine name is not identity.
+Pass `{repository,coordinatorId,machine,activation,runs?,claim}` as structured
+`PDD_AUTOPILOT_CONTEXT` JSON in native workflow-start environment. Claim references
+the actual winning existing GitHub comment/label event after the skill claims;
+never reuse a stale packet's ownership. The skill must retain the coordinator ID
+in its existing single claim comment and bind the current winner's identities to
+the environment. A missing/unknown winner defers the start. Forward no credentials.
+The ordinary workflow runner rereads current ownership/mode/dependencies before
+allocation/chat; a launcher tick or prompt reminder does not replace that check.
+Carry the current optional --runs concurrent cap; use current local active-run/
+allocation observations at ordinary start, including starting/unconfirmed slots.
+Actual issue reuse consumes no extra slot; an unknown count with a cap defers.
+No new claim lock, cap service or atomic cross-machine guarantee is introduced.
+
 ## Dependencies
+
+- [Dependency intake](issue-dependencies-intake.prompt.md): required generation, runtime and verification context for reconciliation and structured coordinator context. The [pure model](issue-dependencies.prompt.md) owns review and readiness.
 
 - [Autopilot settings](autopilot.prompt.md): required native generation and
   verification context for read-only settings resolution and notices.
