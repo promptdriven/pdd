@@ -22,7 +22,7 @@ export function fixture(t,{bounded=true}={}){
   if(bounded)json(root,'pdd-workspace.json',{allowed_paths:['simulation/']});
   const env={...process.env,PDD_STATE_DIR:join(temporary,'state')};
   const saved=(id='case-A',extra={})=>({id,name:id,story_path:story,original_path:second,world_before:{count:0},test:{...doc,steps:[{step_id:id,entry_path:prompt,operation:'order',input:{},checks:[{criterion_id:'AC1',target:'result',path:'',op:'equals',value:9},{criterion_id:'AC1',target:'world',path:'',op:'equals',value:{count:0}}]}]},...extra});
-  return{parent,root,state,env,story,prompt,test,second,doc,saved};
+  return{parent,lexicalParent:temporary,root,state,env,story,prompt,test,second,doc,saved};
 }
 export function pendingId(message){return message.match(/pending ([a-f0-9]{64}\.[a-f0-9]{64})/)?.[1];}
 export const stream=()=>({text:'',write(text){this.text+=text;},isTTY:false});

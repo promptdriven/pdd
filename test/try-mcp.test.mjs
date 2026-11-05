@@ -161,7 +161,7 @@ for (const mode of ['pending', 'owned', 'aborted']) test(`MCP native save preser
   const { existsSync, mkdirSync } = await import('node:fs');
   const { join } = await import('node:path');
   const { spawnSync } = await import('node:child_process');
-  const f = fixture(t), requested = join(f.parent, 'requested-state'), fallback = join(f.parent, 'fallback-state'), home = join(f.parent, 'home');
+  const f = fixture(t), requested = join(f.lexicalParent, 'requested-state'), fallback = join(f.parent, 'fallback-state'), home = join(f.parent, 'home');
   mkdirSync(home);
   json(f.root, 'pdd-workspace.json', { allowed_paths: ['simulation/', 'tests/'] });
   const original = read(f.root, f.second);
