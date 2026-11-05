@@ -172,7 +172,7 @@ test('Needs cycles and self-cycles are finite advice, not an explicit-start gate
 test('comparison-root evidence uses base files, including null as explicitly unavailable', t => {
   const f = fixture(t), base = fixture(t);
   for (const cwd of [f.cwd, base.cwd]) { execFileSync('git', ['init', '-q'], { cwd }); execFileSync('git', ['add', '.'], { cwd }); }
-  const run = { root: f.cwd, runtimeHistory: [{ at: 1, source: { kind: 'git-content-v1', sha256: sourceFingerprint(f.cwd) }, summary: 'Runtime check (P01-menu): ✓' }] };
+  const run = { root: f.cwd, evidence: [{ at: 1, source: { kind: 'git-content-v1', sha256: sourceFingerprint(f.cwd) }, summary: 'Runtime check (P01-menu): ✓' }] };
   writeFileSync(join(f.cwd, 'contracts/world.md'), 'changed run worktree');
   assert.equal(storyEvidence(run, { comparisonRoot: base.cwd })[0].current, true);
   assert.equal(storyEvidence(run, { comparisonRoot: null })[0].current, false);
@@ -195,7 +195,7 @@ test('actual Git base views prefer checked-out edits, isolate detached snapshots
   const oldRoot=mkdtempSync(join(tmpdir(),'pdd-retired-run-'));t.after(()=>rmSync(oldRoot,{recursive:true,force:true}));git('worktree','add','--detach',oldRoot,'HEAD');
   const baseSha=git('rev-parse','HEAD'), receipt={kind:'git-content-v1',sha256:sourceFingerprint(f.cwd)};
   f.state.issues=[item('phone-1')];f.state.events[81]=[xref(61)];f.state.prs=[pr('phone-1',61)];
-  f.state.runs=[{number:81,baseBranch:'alpha',root:oldRoot,runtimeHistory:[{at:1,source:receipt,summary:'Runtime check (P01-menu): ✓'}]}];
+  f.state.runs=[{number:81,baseBranch:'alpha',root:oldRoot,evidence:[{at:1,source:receipt,summary:'Runtime check (P01-menu): ✓'}]}];
   delete f.ports.openBaseSource;delete f.ports.closeBaseSource;delete f.ports.storyEvidence;
   const commands=[], snapshots=[];
   f.ports.execFile=async(file,args,options)=>{
