@@ -5,6 +5,7 @@ import {tmpdir} from 'node:os';
 import {after} from 'node:test';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {execFileSync} from 'node:child_process';
 
 // External read-only product controls. All writes are under this evidence folder.
 // The injected ports never execute a process, timer, agent, or live Herdr command.
@@ -142,11 +143,12 @@ test('safe done owner receives acknowledged work', async () => {
 
 test('rejected submission retains work and uncertain submission is not resent', async () => {
   for (const uncertain of [false,true]) {
-    const f=fixture(`submission-${uncertain}`,{native:'idle'}), original=f.ports.herdr;
-    f.ports.herdr=async args=>{ if(args[0]==='agent'&&args[1]==='prompt') throw Object.assign(Error('submission failed'),{code: uncertain?'transport_lost':'agent_not_found'}); return original(args); };
+    const f=fixture(`submission-${uncertain}`,{native:'idle'}), original=f.ports.herdr; let attempts=0;
+    f.ports.herdr=async args=>{ if(args[0]==='agent'&&args[1]==='prompt') { attempts++; throw Object.assign(Error('submission failed'),{code: uncertain?'transport_lost':'agent_not_found'}); } return original(args); };
     await f.start(); assert.equal(f.state().recipeDelivered,undefined); assert.equal(f.state().seen?.[101],undefined);
     const intent=Boolean(f.state().deliveryIntent); await f.tick();
-    if(uncertain) { assert.equal(intent,true); assert.equal(f.state().deliveryIntent != null,expected('uncertain-custody').custody==='uncertain'); }
+    if(uncertain) { assert.equal(intent,true); assert.equal(f.state().deliveryIntent != null,expected('uncertain-custody').custody==='uncertain'); assert.equal(attempts,1); }
+    else { assert.equal(intent,false); assert.equal(attempts,2); }
   }
 });
 
@@ -215,4 +217,42 @@ test('changed launcher family requires explicit start and preserves work', async
   assert.equal(f.state().recipeDelivered,undefined); assert.ok(warnings.some(x=>x.includes('pdd autopilot start')));
   const restarted=await runAutopilotLauncher({command:'start',cwd:f.cwd,packageRoot:product,env:f.ports.env},f.ports);
   assert.equal(restarted.exitCode,0); assert.equal(f.state().agent.kind,'claude');
+});
+
+test('failed launch leaves recipe and issue pending', async () => {
+  const f=fixture('launch-failure'), original=f.ports.herdr;
+  f.ports.herdr=async args=>{if(args[0]==='pane'&&args[1]==='run') throw Object.assign(Error('failed'),{code:'pane_not_found'});return original(args);};
+  const result=await runAutopilotLauncher({command:'start',cwd:f.cwd,packageRoot:product,env:f.ports.env},f.ports);
+  assert.equal(result.exitCode,0); // Timer installation succeeds even when the immediate tick warns.
+  f.stateFile=join(f.ports.stateRoot,readdirSync(f.ports.stateRoot).find(x=>x.endsWith('.json')));
+  assert.equal(f.state().recipeDelivered,undefined); assert.equal(f.state().seen?.[101],undefined);
+});
+
+test('recreated owner unsets absent config even when later environment supplies it', async () => {
+  const f=fixture('recreation-absent',{afterLaunch:'blocked'}); await f.start();
+  f.ports.env={HOME:'/later/home',CODEX_HOME:'/later/config'};
+  const original=f.ports.herdr; let missing=true;
+  f.ports.herdr=async args=>{if(missing&&args[0]==='agent'&&args[1]==='get'){missing=false;throw Object.assign(Error('missing'),{code:'pane_not_found'});}return original(args);};
+  await f.tick(); const run=f.calls.filter(c=>c.args?.[0]==='pane'&&c.args?.[1]==='run').at(-1).args[3];
+  assert.match(run,/-u CODEX_HOME/); assert.doesNotMatch(run,/\/later\/config/); assert.match(run,new RegExp(f.home));
+  assert.equal(f.state().recipeDelivered,undefined);
+});
+
+test('saved definition home reloads native command and non-profile environment on recreation', async () => {
+  const f=fixture('definition-reload',{afterLaunch:'blocked'}), config=join(f.home,'.config','pdd'); mkdirSync(config,{recursive:true});
+  const selectedHome=join(f.dir,'selected-home'), selectedConfig=join(f.dir,'selected-config'), log=join(f.dir,'child.jsonl');
+  const command=join(f.dir,'native-stub');
+  writeFileSync(command,`#!${process.execPath}\nrequire('node:fs').appendFileSync(${JSON.stringify(log)}, JSON.stringify({home:process.env.HOME,config:process.env.CODEX_HOME,other:process.env.VECTOR_VALUE,argv:process.argv.slice(2)})+'\\n');\n`,{mode:0o755});
+  const definition={name:'selected',kind:'codex',command,env:{HOME:selectedHome,CODEX_HOME:selectedConfig,VECTOR_VALUE:'original'}};
+  const writeDefinition=()=>writeFileSync(join(config,'agents.json'),JSON.stringify({include_defaults:false,agents:[definition]})); writeDefinition();
+  const {loadAgentDefinitions}=await import('../src/agent-config.mjs'); f.ports.selectAgent=async()=>loadAgentDefinitions({cwd:f.cwd,env:f.ports.env})[0];
+  const original=f.ports.herdr; let missing=false;
+  f.ports.herdr=async args=>{if(missing&&args[0]==='agent'&&args[1]==='get'){missing=false;throw Object.assign(Error('missing'),{code:'pane_not_found'});} const reply=await original(args); if(args[0]==='pane'&&args[1]==='run') execFileSync('/bin/sh',['-c',args[3]],{cwd:f.cwd,env:{HOME:'/caller',CODEX_HOME:'/caller-config',PATH:'/usr/bin:/bin'}});return reply;};
+  await f.start(); definition.env.CODEX_HOME='/changed-config'; definition.env.VECTOR_VALUE='reloaded'; writeDefinition();
+  f.ports.env={HOME:'/later',CODEX_HOME:'/later-config'}; missing=true; await f.tick();
+  const children=readFileSync(log,'utf8').trim().split('\n').map(JSON.parse); assert.equal(children.length,2);
+  assert.equal(children[1].home,selectedHome); assert.equal(children[1].config,selectedConfig); assert.equal(children[1].other,'reloaded');
+  assert.equal(f.state().recipeDelivered,undefined); f.native='idle'; await f.tick();
+  assert.equal(f.packets[0].workflow.home,selectedHome); assert.equal(f.packets[0].workflow.configHome.path,selectedConfig);
+  assert.equal(JSON.stringify(f.packets[0]).includes('reloaded'),false);
 });
