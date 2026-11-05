@@ -584,6 +584,7 @@ function nativeResultSummary(a) {
   for (const row of a.observations) rows.push(`${text(row.occurrenceId)} ${text(row.testId)}: ${text(row.outcome)}; selected ${row.selected ?? 'unknown'}, started ${row.started ?? 'unknown'}${row.skipReason ? `; ${text(row.skipReason)}` : ''}`);
   for (const row of a.gates) rows.push(`gate ${text(row.id)}: ${text(row.outcome)}`);
   for (const row of a.prerequisites) rows.push(`fixture ${text(row.id)}: ${text(row.state)}, artifact ${text(row.artifactId)}, reference ${text(row.verificationRef)}`);
+  rows.push(`baseline ${a.comparison.state} (${a.comparison.reason}); lost IDs ${a.comparison.lostIds.map(id=>text(id)).join(', ')||'none'}`);
   rows.push(`source ${text(a.identity.sourceId)}, implementation ${text(a.identity.implementationId)}, tests ${text(a.identity.testsId)}, profile prompt ${text(a.identity.profilePrompt)}, review ${text(a.identity.profileApproval)}`);
   rows.push(`original ${text(a.identity.originalRef)}, source reference ${text(a.identity.sourceRef)}, verification ${text(a.identity.verificationRef)}`);
   rows.push(...a.limits.map(limit=>`Limit: ${text(limit,1000)}`));

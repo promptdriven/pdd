@@ -24,6 +24,7 @@ export async function nativeFixture(t,{cli=process.env.PDD_NATIVE_CLI||join(pack
   const herdr=fakeHerdr();
   const ports={env,layoutDirectory:join(parent,'layout'),herdr:herdr.herdr,isTTY:false,findNativeSessions:stage=>herdr.findNativeSessions(stage),execFile:async(file,args,options)=>{
     if(file==='git'&&args[0]==='fetch')return {stdout:''};
+    if(file==='git'&&['push','ls-remote'].includes(args[0]))throw Error('Forbidden fixture publication; install explicit local command fakes.');
     if(file==='gh'&&args[0]==='repo')return {stdout:JSON.stringify({nameWithOwner:'example/project',defaultBranchRef:{name:'main'},url:'https://github.com/example/project'})};
     if(file==='gh'&&args[0]==='api')return {stdout:JSON.stringify({number:17,title:'Native fixture',body:'Native fixture only.',html_url:'https://github.com/example/project/issues/17'})};
     if(file==='gh')throw Error(`Forbidden fixture external call: ${args.join(' ')}`);

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync,readdirSync,writeFileSync,rmSync} from 'node:fs';
 import {join} from 'node:path';
-import {nativeFixture,put} from './helpers/native-cli-fixture.mjs';
+import {nativeFixture,put,git} from './helpers/native-cli-fixture.mjs';
 import {captureSource} from '../src/runtime-preflight.mjs';
 import {prepareNativeEvidence,readRunResults,resultLines} from '../src/workflow-results.mjs';
 import {readEvidenceEligibility,stepDone,runStatus} from '../src/workflow-runner.mjs';
@@ -81,4 +81,39 @@ test('mixed selection keeps native missing proof separate from local Runtime ref
   const mixed=f.command('lint','native','modeled','--json');assert.equal(mixed.status,4,mixed.stdout+mixed.stderr);
   const report=JSON.parse(mixed.stdout);assert.equal(report.native_assessments.length,1);assert.equal(report.rows.length,1);assert.equal(report.rows[0].story,'modeled');assert.equal(report.lint_state,'refused');
   const unknown=f.command('lint','native','not-a-story','--json');assert.equal(unknown.status,2);assert.match(unknown.stderr,/Unknown story/);
+});
+test('authorized PR preparation uses the same native judgment without promoting native-suite totals',async t=>{
+  const f=await nativeFixture(t),o=await originals(f);assert.equal(f.command('workflow','evidence','17','--summary',o.summaryFile).status,0);
+  const original=f.ports.execFile;let body='',pr=null;
+  const ports={...f.ports,execFile:async(file,args,options)=>{
+    if(file==='git'&&args[0]==='ls-remote')return {stdout:`${git(f.root,'rev-parse','HEAD')}\t${args.at(-1)}\n`};
+    if(file==='git'&&args[0]==='push')return {stdout:''};
+    if(file==='gh'&&args[0]==='pr') {
+      if(args[1]==='list')return {stdout:JSON.stringify(pr?[pr]:[])};
+      if(args[1]==='create') {
+        body=options.input;const value=key=>args[args.indexOf(key)+1];
+        pr={number:23,url:'https://github.com/example/project/pull/23',state:'OPEN',headRefName:value('--head'),baseRefName:value('--base'),headRefOid:git(f.root,'rev-parse','HEAD'),body,isCrossRepository:false,headRepository:{name:'project'},headRepositoryOwner:{login:'example'},mergeCommit:null};
+        return {stdout:pr.url};
+      }
+      if(args[1]==='view')return {stdout:JSON.stringify(pr)};
+    }
+    return original(file,args,options);
+  }};
+  for(const step of ['change','verify','formal']) {
+    const result=await stepDone({step,summary:'Synthetic local publication consumer.',cwd:f.root},ports);assert.equal(result.exitCode,0,result.message);
+  }
+  assert.match(body,/pdd result: native evidence/);assert.match(body,/AC1: supported/);assert.match(body,/qualified-external/);assert.match(body,/criterion Both native effects work/);assert.match(body,/Native tests: unknown/);
+  assert.doesNotMatch(body,/Native tests.*3\/3 passed/);
+});
+test('original baseline intake shows a lost required ID despite matching current report totals',async t=>{
+  const f=await nativeFixture(t),o=await originals(f);
+  for(const name of ['import.json','source.json','selection.json','execution.json','report.json'])put(o.directory,`baseline/${name}`,readFileSync(join(o.directory,name),'utf8'));
+  o.save('import.json',{...o.descriptor,baseline:'baseline/import.json'});
+  o.save('report.json',{...o.report,rows:[o.report.rows[0],{...o.report.rows[0],occurrenceId:'duplicate-A'},o.report.rows[2]]});
+  o.save('selection.json',{sourceId:o.source.sourceId,stage:'current',complete:true,testIds:[f.a,'optional-probe']});
+  const imported=f.command('workflow','evidence','17','--summary',o.summaryFile);assert.equal(imported.status,0,imported.stdout+imported.stderr);
+  const result=f.command('lint','native','--json');assert.equal(result.status,1,result.stdout+result.stderr);
+  const a=JSON.parse(result.stdout).native_assessments[0].assessment;
+  assert.equal(a.profileState,'incomplete');assert.equal(a.occurrenceCount,o.report.rows.length);assert.equal(a.comparison.state,'comparable');assert.deepEqual(a.comparison.lostIds,[f.b]);assert.deepEqual(a.comparison.changes,[{id:f.b,before:'passed',after:'missing'}]);
+  assert.match(f.command('lint','native').stdout,/baseline comparable.*lost IDs.*required B/);
 });
