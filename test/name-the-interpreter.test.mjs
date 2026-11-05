@@ -31,7 +31,17 @@ const CASES = [
     : e.method === 'GET' ? { status: 404, json: {} } : f.normal(e), 3, /HTTP 500/],
   ['not-invited', () => ({ status: 403, json: { code: 'not-invited', login: 'octo' } }), 5, /invite list/],
   ['no-cloud-access without a server message', () => ({ status: 403, json: { error: { code: 'no-cloud-access' } } }), 5, /Sign up/],
-  ['another engine build', (e, f) => { const reply = f.normal(e); reply.json.engine_sha = '7b03d3ea8cc0ffee'; return reply; }, 0, /^Warning: .*engine/],
+  ['another engine build', (e, f) => {
+    const reply = f.normal(e), build = '7b03d3ea8cc0ffee'.padEnd(40, '0');
+    // A synthetic identified deployment: the confirmed job and both supplied
+    // reports describe the same build; source stays bound to the actual upload.
+    reply.json.engine_sha = build;
+    for (const report of [...(reply.json.result?.capabilities ?? []).map(item => item.report),
+      ...(reply.json.result?.report?.lint?.tests ?? []).map(item => item.capabilities)].filter(Boolean)) {
+      report.engine_build = build; report.capability_version = `program-capabilities.v1@${build}`;
+    }
+    return reply;
+  }, 0, /^Warning: .*engine/],
   ['a confirmed restart', (e, f) => e.command === 'check' ? { status: 200, json: restart(f, e.request.requestId) } : f.normal(e), 3, /sends it again/],
   ['lint problems', (e, f) => e.command === 'lint' ? { status: 200, json: f.lint(e.request.requestId, [], [{ path: 'prompts/place_order.prompt.md', code: 'interface-stale', message: 'stale' }]) } : f.normal(e), null, /^Lint problems/, { '--lint': true }],
 ];
