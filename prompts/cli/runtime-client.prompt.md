@@ -134,7 +134,7 @@ Reuse/currentness compares the existing complete selected test set, effective so
 
 ## Received-case import
 
-This module owns append policy and the native durable transaction for browser collection, terminal Save, MCP saves and migrated pending cases. Keep `saveDoorCase(root,saved,options={})`; add `applyPendingCase({root,pendingId,writeOwnership},ports={})` to retry a retained case without server redispatch. Native ownership is an opaque capability, not payload JSON or a server permission. The private transaction and `applyPendingCase` return `{state,path,pendingId,reason,recoveryPath}`, with `state` one of `pending`, `conflict` or `committed`; a committed duplicate is a no-op. Keep `saveDoorCase`'s existing printable-string result for callers: success only for established publication; pending/conflict uses the existing `not added:` failure prefix with a reason and recovery location. A duplicate preserves its existing already-saved success meaning. No pending result starts with a success prefix.
+This module owns append policy and the native durable transaction for browser collection, terminal Save, MCP saves and migrated pending cases. Keep `saveDoorCase(root,saved,options={})`; add `applyPendingCase({root,pendingId,writeOwnership,signal},ports={})` to retry a retained case without server redispatch. Native ownership is an opaque capability, not payload JSON or a server permission. The private transaction and `applyPendingCase` return `{state,path,pendingId,reason,recoveryPath}`, with `state` one of `pending`, `conflict` or `committed`; a committed duplicate is a no-op. Keep `saveDoorCase`'s existing printable-string result for callers: success only for established publication; pending/conflict uses the existing `not added:` failure prefix with a reason and recovery location. A duplicate preserves its existing already-saved success meaning. No pending result starts with a success prefix.
 
 ### Original target and preservation
 
@@ -144,11 +144,11 @@ Before applying, require that exact target to be in-bound, Git-visible regular s
 
 A case's confirmed starting world must hold after the original prior steps for an append. No confirmed compatible continuation means pending with a world reason. Never change the original setup or invent reset steps. `isolated:true` remains an explicit separate action: preserve the current confirmed-world variant policy, original association, original bytes and honest partial coverage. Its no-overwrite variant target must also be allowed and no-link. Do not silently choose isolated mode to satisfy requested original append.
 
-### Supported writer ownership (draft choice)
+### Supported writer ownership
 
 Support cooperating PDD savers and editor integrations on local filesystems that provide exclusive create, complete-file atomic replacement and directory synchronization. PDD serializes by exact canonical destination in its private target-ownership record, reads the latest source while holding that ownership, and holds it through publication and durable ledger update. Competing savers wait or retain pending; they do not overwrite a peer. Editor integrations must hand over an exclusive target lease and stop editing until release. A person may explicitly close their editor and hand over the target for the apply operation. This handoff means no uncoordinated writer is active; it does not prove arbitrary-process exclusion. In the existing terminal collection and `--save-last` flows, offer one explicit closed-editor handoff for the named target and pending cases; this write handoff does not approve expectations. End it when the apply operation releases ownership. A noninteractive automatic collection with no supported handoff retains pending and shows its recovery path.
 
-Add native `acquireCaseWriteOwnership({root,testPath,handoff},ports={})`, returning an opaque ownership object with `release()`. `handoff` is a local supported-editor lease or explicit person-closed-editor event, never received case data. The private lock records process/owner/target identity; recover an abandoned lock only after proving its owner ended, otherwise retain pending. A lease from another target, released lease, missing handoff, unsupported filesystem or uncertain owner cannot authorize publication. No new global gate affects unconfigured capture or result reading. Existing automatic save behavior changes only as required by this save-safety contract and is a choice presented for review.
+Add native `acquireCaseWriteOwnership({root,testPath,handoff,signal},ports={})`, returning an opaque ownership object with `release()`. `handoff` is a local supported-editor lease or explicit person-closed-editor event, never received case data. The private lock records process/owner/target identity; recover an abandoned lock only after proving its owner ended, otherwise retain pending. A lease from another target, released lease, missing handoff, unsupported filesystem or uncertain owner cannot authorize publication. No new global gate affects unconfigured capture or result reading. While the person edits the target, keep the complete case durably pending until coordinated editor ownership or explicit confirmation that the named file is closed. Only that file save waits; independent work continues.
 
 An observed non-cooperating edit causes conflict with received payload and observed authored versions retained. For uncoordinated editors with no handoff, stage the received case and leave authored bytes unchanged. Exact byte/inode comparison and atomic rename alone cannot guarantee protection from an arbitrary editor; do not claim universal compare-and-swap or safely append through a known uncoordinated edit.
 
@@ -170,6 +170,14 @@ flowchart TD
 Before publication preserve original revision, proposed full bytes, append placement and recovery information durably. Prepare an exclusive temporary regular file beside the safe target, synchronize its complete content, publish only under supported ownership and synchronize the containing directory. Do not truncate the original in place. Keep the complete old or new JSON through interruption. Record the applied identity durably before reporting success; release ownership in bounded cleanup. Remove only operation-owned temporary files after recovery, never another writer's file.
 
 At restart, reconcile durable received/prepared/published/committed records and actual target bytes before another append. A matching established published revision resolves committed without adding again. Later changed bytes with insufficient proof remain conflict/pending; do not guess. Inject failures after receive, during preparation, before/after publication, before ledger persistence and during recovery. Preserve the received case and all observed authored revisions, valid complete target and original identities at each point. A failed append is not permanently handled merely because it was fetched. Native locks, races, fsync and power/interruption claims require native proof; fake replies cannot establish them.
+
+### Live cancellation and publication boundary
+
+The native cancellation input is optional standard `AbortSignal` `signal`: `saveDoorCase` accepts `options.signal`; `applyPendingCase` and `acquireCaseWriteOwnership` accept the named `signal`. Collection passes its invocation signal to the saver; the existing `onInterrupt` port aborts that same signal on SIGINT, SIGHUP or SIGTERM. Omitted signal preserves callers. A live abort interrupts ownership waits and prevents delayed acquisition/publication. An already-aborted save still retains the complete received case durably before returning pending; if durable receipt fails, report failure without acknowledging or discarding the case.
+
+Publication begins when the operation first attempts the target replacement that can make proposed bytes visible. Before that boundary, an abort stops further authored effects, leaves the complete receipt and prepared recovery data durably pending, and releases only this operation's acquired lease/lock and temporary files. Never release another saver/editor's resource. Check cancellation again under ownership immediately before publication; no late callback may publish after returning pending. Return the existing pending result and recovery location with cancellation as its reason.
+
+Once publication may have begun, abort stops new work but does not skip custody and reconciliation. Retain ownership for bounded reconciliation of actual target and durable received/prepared/published/committed records. Established durable application returns committed; insufficient or conflicting proof returns pending/conflict with retained payload, observed revisions and recovery path. If reconciliation cannot finish, preserve the durable recovery records before releasing owned resources. Never claim an aborted write was unsent, discard its receipt, append again on doubt, or restart Runtime work. Cancellation does not roll back a proven commit or restore a deliberately removed case.
 
 ## Projection migration caller
 
@@ -665,6 +673,8 @@ read turns into a lost, unknown row drops its old `progress`.
   assessment and visible proof limits. This is an unapproved native draft;
   copied workspace contracts remain their owner's unapproved draft context.
 
+- [Evidence eligibility read owner](workflow-runner.prompt.md#read-evidence-eligibility): required generation/runtime/verification context for `readEvidenceEligibility`, its inputs/result and accepted association policy. Use this binding for contract history, saved Story evidence and migration handoff; do not invoke registration on reads.
+
 - [Workspace authority](runtime-workspace.prompt.md): required generation/runtime/verification context for policy; native migration is invoked as a caller without loading it back into this module's required dependency closure.
 
 - [Runtime outcome](runtime-outcome.prompt.md): required for generation and tests; selected outcomes and exit policy.
@@ -684,7 +694,11 @@ read turns into a lost, unknown row drops its old `progress`.
 
 [Agent configuration](agent-config.prompt.md) is required generation/runtime context for loading private named launchers before owner authentication.
 
-Read the full [Prompting guide](../../docs/prompting-guide.md) before you change this prompt. Follow the [alpha boundary](public-boundary.prompt.md). The [CLI](pdd-cli.prompt.md) calls `runCheck` and `runTry`.
+Read the full [Prompting guide](../../docs/prompting-guide.md) before you change this prompt. Follow the [alpha boundary](public-boundary.prompt.md).
+
+## Caller navigation
+
+The [CLI](pdd-cli.prompt.md) calls `runCheck` and `runTry`.
 
 ## Terminal and HTTP doors
 
@@ -796,13 +810,12 @@ batch compares its own saved SHA separately. Capture each such key at most once
 per reader, including overlapping reads. Remember failed captures only for that
 reader; affected evidence stays unverified. A fresh reader retries the capture.
 
-Only check batches belonging to root supply evidence; lint and Try results do
-not. Explicit `intent: "check"` retains the normal identification rules. An
+Only check batches admitted by `readEvidenceEligibility` supply evidence; lint and Try results do
+not. Pass each batch's original producer, complete selection/source identity and saved run/stage association to that read binding. Preserve the same-root route and admit eligible associated originals without changing their recorded repository. Apply the remaining row/receipt rules below within the returned stage; historical PR 1 rows cannot become current-code evidence. Explicit `intent: "check"` retains the normal identification rules. An
 absent intent is eligible only when every saved row meets
 [saved Check row validity](#saved-check-row-validity); use the same row predicate,
 without a second legacy policy. Any explicit other intent, including null,
-lint-only or Try, is ineligible. For an otherwise readable batch belonging to
-root with absent intent and any invalid row, count none of its rows and emit
+lint-only or Try, is ineligible. For an otherwise readable eligible batch with absent intent and any invalid row, count none of its rows and emit
 one deduplicated hint explaining that older checks are not counted and advising
 the person to run `pdd test` again.
 This advice adds no gate or dispatch. Eligible legacy batches use the same

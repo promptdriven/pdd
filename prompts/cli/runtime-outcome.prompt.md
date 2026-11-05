@@ -135,7 +135,11 @@ Without `criterion_results`, an outcome proves no criterion passed.
 
 ## Dependencies
 
-None. The client owns transport, identity, saved evidence, capacity waits, local
+None.
+
+## Caller navigation
+
+The client owns transport, identity, saved evidence, capacity waits, local
 hints and text cleaning; [runtime output](runtime-output.prompt.md) renders the
 retained fields. Server answer shapes: prompt-runtime `server/lint_driver.py`
 (per-test verdicts with `--complete`), `server/runner.py` (`report.lint`) and

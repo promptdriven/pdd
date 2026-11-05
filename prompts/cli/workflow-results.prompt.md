@@ -2,9 +2,9 @@
 
 Own `src/workflow-results.mjs`. A person and a checker must tell which results pdd recorded and which ones an agent typed (#2904). This module reads pdd's own saved results for one workflow run. It reads files only: it never runs a test, calls the interpreter, changes a file or stops a command.
 
-Export `readRunResults({root, runDir, runId, since, baseBranch}, {env, capture, git})`. It returns a list, in this order, of what it finds:
+Export `readRunResults({root, runDir, runId, since, baseBranch}, {env, capture, git, workspace})`. It returns a list, in this order, of what it finds:
 
-- `pdd test`: the newest saved check batch (`intent` `check`) in the runtime state folder (`PDD_STATE_DIR`, else `~/.pdd/runtime`, then `batches/<BATCH>/`) whose `batch.json` names the same real folder as `root` and whose `created_at` is at or after `since` (epoch ms). Its result is the `summary_line` of its `summary.json` and each distinct per-Story `summary_line` (else `result not saved (the check did not finish)`). `source` is `current` when `capture(root, {tests, appMap: null})` of the batch's selected tests gives the batch's `source_sha256`, `changed` when it differs, else `unknown`. `engine` is the first known row `engine_sha` (12 characters) and `model` the first known `requested_model`, when known. A cached row (a pass that `pdd test` reused) keeps its identity only in `cache_identity`: when no row has a known direct value, use the first known `cache_identity.engine_sha` or `cache_identity.requested_model` of a row whose `cache_identity` is an object, and set `engineCached` or `modelCached` to true. A value is known when it is a nonblank string other than `unknown`. `requests` keeps every row's `request_ids` and `reports` every row's `report_url` (http or https), each once and with no cap, so a reader can trace the result to every saved report.
+- `pdd test`: the newest saved check batch (`intent` `check`) in the runtime state folder (`PDD_STATE_DIR`, else `~/.pdd/runtime`, then `batches/<BATCH>/`) whose original batch is admitted by the supplied canonical `ports.workspace` read binding (same-root or associated original, retaining original producer and stage) and whose `created_at` is at or after `since` (epoch ms). Its result is the `summary_line` of its `summary.json` and each distinct per-Story `summary_line` (else `result not saved (the check did not finish)`). `source` is `current` when `capture(root, {tests, appMap: null})` of the batch's selected tests gives the batch's `source_sha256`, `changed` when it differs, else `unknown`. `engine` is the first known row `engine_sha` (12 characters) and `model` the first known `requested_model`, when known. A cached row (a pass that `pdd test` reused) keeps its identity only in `cache_identity`: when no row has a known direct value, use the first known `cache_identity.engine_sha` or `cache_identity.requested_model` of a row whose `cache_identity` is an object, and set `engineCached` or `modelCached` to true. A value is known when it is a nonblank string other than `unknown`. `requests` keeps every row's `request_ids` and `reports` every row's `report_url` (http or https), each once and with no cap, so a reader can trace the result to every saved report.
 - `pdd lint`: the newest saved lint batch (`intent` `lint-only`) under the same rules. Its result is `Lint: N of M tests pass. 0 AI calls.` when the lint ended, else `Lint: result unknown (the lint did not finish).` `requests` keeps the batch's `lint.request_ids`.
 - `pdd workflow prove`: `<runDir>/old-code-proof.json` when the file exists, with the file time. pdd judges it with the PR renderer's own `judgeOldCodeProof` ([PR evidence](workflow-pr-evidence.prompt.md)), passing `runId`, `since` as `startedAt`, `git rev-parse --verify HEAD^{commit}` in `root` as the head and `git merge-base HEAD refs/remotes/origin/<baseBranch>` as the base (empty when `baseBranch` is unknown or the read fails; pdd does not fetch here). Its `line` is the result and its `status` gives `state`: `current` for an outcome, else `unavailable` or `stale`. So a step record and a PR top always say the same thing about a proof, a base that cannot be read is never current, and a missing file gives no result. None of these stops a command.
 
@@ -100,9 +100,9 @@ stored `verified` value or reference string is a substitute:
    agent-authored result assertions remain notes. Parsing does not authenticate
    a runner or speaker.
 2. Obtain the selected run/repository, producer root, exact selected test paths,
-   stage and source anchor from the canonical workspace owner's eligibility
-   callback. The runner supplies its actual owned association result, not fields
-   from FILE. Same-worktree eligibility and alternate-root registration keep
+   stage and source anchor from the actual `readEvidenceEligibility` binding supplied as
+   `ports.workspace` below. Pass selectors from original evidence/owned association,
+   never desired authority from FILE; revalidate the returned owner and stage. Same-worktree eligibility and alternate-root registration keep
    that owner's existing rules. Missing, contradictory or ineligible association
    cannot establish admission. Do not infer association from equal hashes,
    nesting or a shared remote. Frozen PR 1 evidence keeps that original stage.
@@ -403,21 +403,13 @@ and relevant physical effects.
 
 </details>
 
+The [workspace evidence owner](workflow-runner.prompt.md#read-evidence-eligibility) owns the read binding supplied below. This is navigation; the supplied interface closes this reader without loading its caller.
+
 ## Dependencies
 
-- Existing batch readers supply the saved `batch.json`/`summary.json` facts
-  stated in the preserved result contract above. The runtime-client link is
-  navigation only; native consumers do not load that caller back into this
-  module's required context.
-- Existing `capture(root,{tests,appMap:null}) -> {sha256}` is the injected
-  preflight `captureSource` callback used by the preserved batch reader. Its
-  default is that existing production export. The callback performs canonical
-  selection, safety and complete source capture; this module compares its result
-  and does not recreate its resolver or capture policy. The native `source`
-  adapter likewise supplies checked selected native source identities and
-  unavailable reasons through that owner's safe source capability. These
-  supplied interfaces provide required source facts without loading the client
-  or preflight caller into the native assessment context.
+- Existing local batch readers supply the `batch.json`/`summary.json` fields and original receipts declared above; the saved record is data, not an eligible/pass assertion.
+- Required supplied `ports.workspace` is the actual synchronous `src/workflow-runner.mjs` module function `readEvidenceEligibility({root,producerRoot,tests,source_sha256,runId=null,stage=null}, ports={})`, returning `{state,reason,runId,repo,producerRoot,tests,stage,sourceAnchor,source_sha256}`. State is `eligible`, `ineligible` or `unavailable`; only eligible resolves the owned identity and `current`/`pr1` stage/anchor. Null unresolved fields and reasons cannot authorize a result. The owner supplies this local read without registration/import or writes; this module consumes it without a second association policy.
+- Existing native `capture(root,{tests,appMap:null}) -> {sha256}` is the supplied preflight `captureSource` callback and default. It owns safe complete selection/capture; this module compares the returned hash and never recreates that policy.
 - [Old-code proof](workflow-prove.prompt.md): required context for `old-code-proof.json`.
 - [PR evidence](workflow-pr-evidence.prompt.md): required for `judgeOldCodeProof`, the one freshness rule for a saved proof.
 
@@ -427,9 +419,10 @@ and relevant physical effects.
 - Native `files` supplies original bytes and safe identity; `source` supplies
   selected native implementation/test bytes and current identities; `approvals`
   supplies journal events, saved gate snapshot and actual matching prompt bytes.
-  `workspace` supplies the canonical run owner's eligibility result with owned
-  run/repository, producer root, exact tests, original stage/source anchor and
-  eligible/unknown reason. These are real outside-reader boundaries for the
+  `workspace` is the same actual `readEvidenceEligibility` binding required above
+  for native intake and saved batch reads. Its eligible result supplies owned
+  run/repository, producer root, full tests/source and original stage/anchor;
+  ineligible/unavailable results retain reasons and establish no admission. These are real outside-reader boundaries for the
   production intake, not report-controlled JSON. The runner supplies association
   eligibility under its existing workspace rule; this module never registers or
   reimplements association. The callback contract here is the required supplied
@@ -443,7 +436,7 @@ and relevant physical effects.
 ```json
 {
   "status": "draft",
-  "prose_sha256": "e9a6eeda4c20216bdc87ec8ff6241eae71083be95f68b96b22bd3ddc7bc002f1",
+  "prose_sha256": "3d236cf884d37bba1f6aada90c7f6594d47d63031010e8641fb152e4e37ccc21",
   "entries": [{"operation":"assessNativeEvidence","input_schema":{"type":"object","properties":{"root":{"type":"string"},"runDir":{"type":"string"},"runId":{"type":"string"},"profileId":{"type":"string"},"storyPath":{"type":"string"}},"required":["root","runDir","runId","profileId","storyPath"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"profileId":{"type":"string"},"profileState":{"type":"string"},"sourceState":{"type":"string"},"receiptState":{"type":"string"},"origin":{"type":"string"},"requiresReview":{"type":"boolean"},"requiredIds":{"type":"array","items":{"type":"string"}},"missingIds":{"type":"array","items":{"type":"string"}},"failedIds":{"type":"array","items":{"type":"string"}},"skippedIds":{"type":"array","items":{"type":"string"}},"unknownIds":{"type":"array","items":{"type":"string"}},"unexecutedGates":{"type":"array","items":{"type":"string"}},"prerequisiteProblems":{"type":"array","items":{"type":"string"}},"optionalSkippedIds":{"type":"array","items":{"type":"string"}},"duplicateIds":{"type":"array","items":{"type":"string"}},"occurrenceCount":{"oneOf":[{"type":"integer","minimum":0},{"type":"null"}]},"uniqueIdCount":{"oneOf":[{"type":"integer","minimum":0},{"type":"null"}]},"observations":{"type":"array","items":{"type":"object","properties":{"occurrenceId":{"type":"string"},"testId":{"type":"string"},"selected":{"oneOf":[{"type":"boolean"},{"type":"null"}]},"started":{"oneOf":[{"type":"boolean"},{"type":"null"}]},"outcome":{"type":"string"},"skipReason":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["occurrenceId","testId","selected","started","outcome","skipReason"],"additionalProperties":false}},"identity":{"type":"object","properties":{"sourceId":{"type":"string"},"implementationId":{"type":"string"},"testsId":{"type":"string"},"requirementsId":{"type":"string"},"profilePrompt":{"type":"string"},"profileApproval":{"type":"string"},"originalRef":{"type":"string"},"verificationRef":{"type":"string"},"producer":{"type":"string"},"producerVersion":{"type":"string"},"reportFormat":{"type":"string"},"runnerVersion":{"type":"string"},"runtimeVersion":{"type":"string"},"stage":{"type":"string"},"sourceRef":{"type":"string"}},"required":["sourceId","implementationId","testsId","requirementsId","profilePrompt","profileApproval","originalRef","verificationRef","producer","producerVersion","reportFormat","runnerVersion","runtimeVersion","stage","sourceRef"],"additionalProperties":false},"criteria":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"},"state":{"type":"string"},"nativeIds":{"type":"array","items":{"type":"string"}},"reason":{"type":"string"}},"required":["id","text","state","nativeIds","reason"],"additionalProperties":false}},"comparison":{"type":"object","properties":{"state":{"type":"string"},"reason":{"type":"string"},"lostIds":{"type":"array","items":{"type":"string"}},"changes":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"before":{"type":"string"},"after":{"type":"string"}},"required":["id","before","after"],"additionalProperties":false}}},"required":["state","reason","lostIds","changes"],"additionalProperties":false},"limits":{"type":"array","items":{"type":"string"}},"profileNativeProof":{"type":"string"},"storyNativeProof":{"type":"string"},"gates":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"outcome":{"type":"string"}},"required":["id","outcome"],"additionalProperties":false}},"prerequisites":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"expectedArtifactId":{"type":"string"},"artifactId":{"type":"string"},"state":{"type":"string"},"verificationRef":{"type":"string"}},"required":["id","expectedArtifactId","artifactId","state","verificationRef"],"additionalProperties":false}}},"required":["profileId","profileState","sourceState","receiptState","origin","profileNativeProof","requiresReview","requiredIds","missingIds","failedIds","skippedIds","unknownIds","unexecutedGates","prerequisiteProblems","optionalSkippedIds","duplicateIds","occurrenceCount","uniqueIdCount","observations","identity","criteria","comparison","limits","storyNativeProof","gates","prerequisites"],"additionalProperties":false},"errors":[]}],
   "calls": [],
   "resources": [{"name":"native","kind":"port","access":"read","operations":[{"name":"read_context","access":"read","arguments_schema":{"type":"object","properties":{"root":{"type":"string"},"runDir":{"type":"string"},"runId":{"type":"string"},"profileId":{"type":"string"},"storyPath":{"type":"string"}},"required":["root","runDir","runId","profileId","storyPath"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"content":{"type":"string"}},"required":["content"],"additionalProperties":false}}]}],

@@ -24,6 +24,7 @@ Hash filling checks allowed draft targets and required reference inputs before r
 - Select tests by PATH or STORY words with the same rule: a test path (or any file of a conflict), a story path or a story name (all of that Story's tests), a test file name without `.json`, or a repository directory. Resolve relative paths from invocation cwd, including `.`; directories select bounded descendants by path components, never similarly prefixed sibling directories or outside-repository paths. A directory containing Story files selects their tests. Union multiple selections without duplicates. No word selects every test. A word that names a Story with no test stops with exit 2 and that Story's `has no test` line, never `Unknown story`. A word that names no Story and no test file is a command error that lists every Story with its test path, or `no test` and the expected path.
 
 
+
 ## Native Story discovery and selection (draft)
 
 For explicit `pdd lint` Story selection, retain ordinary name/path/directory
@@ -334,7 +335,11 @@ attempt-local inputs; this module owns capture policy, not product composition.
   context for synchronous expansion and provenance; native adapters preserve
   this module's privacy, snapshot and capture rules.
 
-Read the full [Prompting guide](../../docs/prompting-guide.md) before you change this prompt. Follow the [alpha boundary](public-boundary.prompt.md). The [runtime client](runtime-client.prompt.md) calls this module.
+Read the full [Prompting guide](../../docs/prompting-guide.md) before you change this prompt. Follow the [alpha boundary](public-boundary.prompt.md).
+
+## Caller navigation
+
+The [runtime client](runtime-client.prompt.md) calls this module.
 
 ## Module binding inventory
 
