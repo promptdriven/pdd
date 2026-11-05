@@ -512,18 +512,16 @@ function nativeContextFromOriginals(selectors,input,retained,ports) {
   if(!sourceMatches||!selectedPathsMatch)limits.push('Original source/test selection does not establish the current complete native source binding.');
   const sourceRef=source?.originalRef??'unknown';
   const companionMatches=row=>row&&known(row.sourceId)&&row.sourceId===assertedSource?.sourceId&&row.stage===association?.stage;
-  const executionValid=companionMatches(execution)&&Number.isInteger(execution.exitCode)&&execution.processEnded===true&&report.capture?.processEnded!==false&&
+  const executionIdentity=['producer','producerVersion','runner','runnerVersion','runtimeVersion'];
+  const executionValid=companionMatches(execution)&&Number.isInteger(execution.exitCode)&&execution.processEnded===true&&
+    (report.capture?.processEnded==null||report.capture.processEnded===true)&&
+    executionIdentity.every(key=>!known(report[key])||!known(execution[key])||report[key]===execution[key])&&
     (report.exitCode===null||report.exitCode===undefined||report.exitCode===execution.exitCode);
   checks.push({check:'original-process-completion',state:executionValid?'checked':'unavailable',originalRef:execution?.originalRef??'unknown'});
   if(executionValid) {
     report.exitCode=execution.exitCode;report.capture={...report.capture,processEnded:true};
-    for(const key of ['producer','producerVersion','runner','runnerVersion','runtimeVersion'])if(known(execution[key]))report[key]=execution[key];
+    for(const key of executionIdentity)if(!known(report[key])&&known(execution[key]))report[key]=execution[key];
   }else limits.push('Original process completion or runner/version identity is unavailable.');
-  const selectedValid=companionMatches(selectionEvidence)&&selectionEvidence.complete===true&&Array.isArray(selectionEvidence.testIds)&&selectionEvidence.testIds.every(id=>known(id));
-  if(selectedValid) {
-    report.capture={...report.capture,selectionComplete:true};
-    for(const row of array(report.observations))row.selected=selectionEvidence.testIds.includes(row.testId)?true:null;
-  }else limits.push('Original complete selection observation is unavailable.');
   const reportedGates=array(report.gates),reportedFixtures=array(report.prerequisites);
   report.gates=[];report.prerequisites=[];
   for(const row of input.originals.filter(row=>['gate','fixture'].includes(row.role))) {
@@ -544,10 +542,17 @@ function nativeContextFromOriginals(selectors,input,retained,ports) {
     }
   }
   bindNativeRows(report,profile,selection,limits);
-  if(selectedValid)for(const row of array(report.observations))row.selected=selectionEvidence.testIds.includes(row.testId)?true:null;
+  const selectedValid=companionMatches(selectionEvidence)&&selectionEvidence.complete===true&&Array.isArray(selectionEvidence.testIds)&&selectionEvidence.testIds.every(id=>known(id))&&
+    (report.capture?.selectionComplete==null||report.capture.selectionComplete===true)&&
+    array(report.observations).every(row=>row.selected==null||typeof row.selected==='boolean'&&row.selected===selectionEvidence.testIds.includes(row.testId));
+  checks.push({check:'original-selection',state:selectedValid?'checked':'unavailable',originalRef:selectionEvidence?.originalRef??'unknown'});
+  if(selectedValid) {
+    report.capture={...report.capture,selectionComplete:true};
+    for(const row of array(report.observations))if(row.selected==null)row.selected=selectionEvidence.testIds.includes(row.testId)?true:null;
+  }else limits.push('Original complete selection observation is unavailable or contradicts the report.');
   const identitiesBound=profile.requiredIds.every(id=>array(report.observations).filter(row=>row.testId===id).every(row=>row.identityBound===true));
   if(selectedValid&&selectionEvidence.testIds.some(id=>!report.observations.some(row=>row.testId===id)))report.complete=false;
-  const verified=associationValid&&sourceMatches&&selectedPathsMatch&&identitiesBound&&executionValid&&reviewed.review==='approved';
+  const verified=associationValid&&sourceMatches&&selectedPathsMatch&&identitiesBound&&executionValid&&selectedValid&&reviewed.review==='approved';
   const intake={origin:parsed?'external-machine':'unknown',admission:verified?'verified':'unverified',originalRef,verificationRef:verified?`derived:${digest(JSON.stringify(checks))}`:'',limits:distinct(limits),stage:associationValid?association.stage:'unknown',sourceRef};
   const context={schema:'pdd.native-assessment-context.v1',runId:selectors.runId,protected:protectedProfile,candidate,story:selection.story,intake,report,baseline:null};
   if(input.baseline) {

@@ -74,3 +74,32 @@ test('actual workflow approval custody rejects mismatched decision, snapshot and
   assert.equal(f.judge().assessment.storyNativeProof,'none','Absent custody cannot establish that a workflow event was standalone');
   writeFileSync(statusPath,saved);assert.equal(f.judge().assessment.storyNativeProof,'qualified-external');
 });
+
+
+test('actual CLI keeps contradictory original selection and execution facts unverified',async t=>{
+  const f=await originals(t);
+  for(const [name,change] of [
+    ['row selection',report=>{report.rows[1].selected=false;}],
+    ['complete selection',report=>{report.capture.selectionComplete=false;}],
+    ['process completion',report=>{report.capture.processEnded=false;}],
+    ['runner identity',report=>{report.runnerVersion='contradictory-version';}]
+  ]) {
+    const report=structuredClone(f.report);change(report);f.save('report.json',report);
+    const bytes=readFileSync(join(f.dir,'report.json'));f.importOriginals();
+    const before=readFileSync(join(f.runDir,'status.json')),actual=f.judge();
+    assert.equal(actual.assessment.storyNativeProof,'none',`CONTRADICTORY ORIGINAL MUST DENY STORY PROOF: ${name}`);
+    assert.equal(actual.assessment.profileNativeProof,'none',name);
+    assert.equal(actual.assessment.profileState,'unverified',name);
+    assert.notEqual(actual.exit,0,name);
+    assert.equal(actual.assessment.occurrenceCount,2,name);
+    assert.equal(actual.assessment.observations[1].selected,report.rows[1].selected,name);
+    assert.equal(actual.assessment.observations[1].started,true,name);
+    assert.equal(actual.assessment.observations[1].outcome,'passed',name);
+    assert.deepEqual(readFileSync(join(f.dir,'report.json')),bytes);
+    assert.deepEqual(readFileSync(join(f.runDir,'status.json')),before);
+  }
+  const report=structuredClone(f.report);delete report.capture.selectionComplete;
+  for(const row of report.rows)delete row.selected;
+  f.save('report.json',report);f.importOriginals();
+  assert.equal(f.judge().assessment.storyNativeProof,'qualified-external','Companions may fill unobserved selection facts');
+});
