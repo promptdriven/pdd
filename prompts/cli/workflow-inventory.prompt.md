@@ -66,7 +66,7 @@ None. Runtime `snapshot.read` supplies the native injected snapshot callback. Th
 
 ```json
 {
-  "status": "draft",
+  "status": "approved",
   "prose_sha256": "e522de9b31ae8f7beee17a0c3934e093e3ec633937badce30458c1614f934ab4",
   "entries": [
     {
