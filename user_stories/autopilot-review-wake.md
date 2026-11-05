@@ -16,4 +16,4 @@ Draft for review.
 - Use the current [launcher trust rule](../prompts/cli/autopilot-launcher.prompt.md#tick-and-the-skill-boundary) before delivery. Forbidden result: an untrusted review reaches the agent, including after trust is revoked while work is pending.
 - Record delivery only after it succeeds for an idle agent. Forbidden results: lose a pending review or send the same unchanged review twice.
 
-Keep the current timer and time rules, PR state and discussion wakes, start-up recipe, and person approval and merge rules.
+This Story depends on the [run and claim time-rule Story](autopilot-time-rules.md). Both timer and review wakes are in scope for this draft. Keep PR state and discussion wakes, start-up recipe, and person approval and merge rules.
