@@ -32,6 +32,7 @@ For admitted setup, after the existing skills, project and MCP actions in the se
 
 - [Runtime slots](runtime-slots.prompt.md): required generation/verification context for local jobs dispatch. The existing syntax-only Runtime entry does not bind its native filesystem effects.
 
+- [Workflow runner](workflow-runner.prompt.md#workspace-evidence-association): required authoring/generation/verification/testing context for the native evidence association dispatch. It owns registration, source and persistence policy; the syntax-only Interpreter entry does not bind this operation.
 - [Old-code proof](workflow-prove.prompt.md): required authoring/generation/runtime/verification context for the explicit prove dispatch and injected callback contract.
 - [Argument parser](argument-parser.prompt.md) is required for authoring,
   generation, runtime, verification and testing: it owns command validation and
@@ -56,6 +57,8 @@ For catalog route `workflow.refresh-description`, call the runner's module funct
 `retryPrDescription({ref: operands[0], pr: operands[1], cwd}, ports)` using the existing injectable
 runner and workflow stream/error handling. Parsing and help use the catalog. This
 route does not run admission or invoke another workflow command.
+
+For catalog disposition `workflow-evidence-associate`, require nonblank `--workspace`, `--stage` and a nonempty `--test` list before importing or invoking the runner; missing values return 2 with one finite diagnostic. Call module function `associateEvidenceWorkspace({ref: operands[0], workspace: options['--workspace'], stage: options['--stage'], tests: options['--test'], cwd}, ports)` in `src/workflow-runner.mjs` through the existing injectable `workflowRunner`. Forward parsed values unchanged and use the workflow stream, exit and unexpected-error handling above. The required workspace-association owner governs every registration effect. Help remains local.
 
 For catalog route `workflow.request-uptake`, require nonblank `--summary` before importing or invoking the runner; missing summary returns 2 with one finite diagnostic. Reuse normal parser validation for missing/extra operands, duplicate/blank options and help/completion. Call the actual module function `acknowledgeRequest({requestId: operands[0], summary: options['--summary'], cwd}, ports)` on the existing injectable `workflowRunner`, using the workflow stream/error handling above. Derive command hints from the catalog prefix by stable id; dispatch on the catalog's stable disposition, never a second public verb. `bin/pdd.mjs` remains a thin entry point. Interpreter resource `dispatch.requestUptake` binds this same injected module function, not native journal execution.
 
@@ -157,7 +160,7 @@ finite local cause and returns 5. Catalog owns all syntax.
 ```json
 {
   "status": "draft",
-  "prose_sha256": "6017c9b7c1cfca92cb54110b4c4b9754a7a965fd0a31ab250fb3accc1fbaf521",
+  "prose_sha256": "931743ae152725d7b1be77cc9fb433425761a79ee8c266176c6497052730860b",
   "entries": [{"operation": "runPdd","input_schema": {"type": "object","properties": {"argv": {"type": "array","items": {"type": "string"}},"cwd": {"type": "string"},"env": {"type": "object","properties": {"HOME": {"type": "string"},"PATH": {"type": "string"},"CODEX_HOME": {"type": "string"},"CLAUDE_CONFIG_DIR": {"type": "string"}},"required": [],"additionalProperties": false},"packageRoot": {"type": "string"}},"required": ["argv"],"additionalProperties": false},"result_schema": {"type": "object","properties": {"exit_code": {"type": "integer"},"stdout": {"type": "string"},"stderr": {"type": "string"}},"required": ["exit_code","stdout","stderr"],"additionalProperties": false},"errors": []}],
   "calls": [],
   "resources": [

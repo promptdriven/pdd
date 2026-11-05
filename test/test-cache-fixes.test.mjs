@@ -80,7 +80,7 @@ for (const readMode of ['batch', 'uuid']) test(`TEST-CACHE-FIX late ${readMode} 
   assert.equal(later.json.rows[0].cache_reason, 'runs again: saved pass is older than seven days');
   assert.ok(started < ctx.clock.now - 7 * day);
 });
-for (const scenario of ['unknown-kind', 'unknown-action', 'store-prompt', 'missing-sources']) test(`TEST-CACHE-FIX wrong skip ${scenario}`, async t => {
+for (const scenario of ['unknown-kind', 'unknown-action', 'store-prompt', 'missing-declarations']) test(`TEST-CACHE-FIX wrong skip ${scenario}`, async t => {
   const ctx = await setup(t, repo => {
     if (scenario === 'unknown-kind') editPrompt(repo, doc => { doc.resources = [resource('future-store')]; });
     if (['unknown-action', 'store-prompt'].includes(scenario)) {
@@ -89,11 +89,16 @@ for (const scenario of ['unknown-kind', 'unknown-action', 'store-prompt', 'missi
       doc.simulation = { 'gcloud.call': { action: scenario === 'store-prompt' ? 'service.prompt' : 'collection.query', target: 'prompts/independent.prompt.md' } }; write(path, doc);
     }
   });
-  if (scenario === 'missing-sources') ctx.ports.captureSource = (...args) => { const capture = captureSource(...args); delete capture.sources; return capture; };
+  if (scenario === 'missing-declarations') ctx.ports.captureSource = (...args) => {
+    const capture = captureSource(...args);
+    // Cache declarations are unavailable; actual effective source bytes remain captured.
+    delete capture.stories.find(story => story.story_path === 'user_stories/place-order.md').files;
+    return capture;
+  };
   assert.equal((await successful(ctx, selected)).sent, 1);
   const again = await successful(ctx, selected);
   assert.equal(again.sent, 1, 'uncertain declarations cannot authorize a skip');
-  assert.equal(again.json.rows[0].cache_reason, scenario === 'missing-sources' ? 'runs again: resource declarations unavailable' : fakeReason);
+  assert.equal(again.json.rows[0].cache_reason, scenario === 'missing-declarations' ? 'runs again: resource declarations unavailable' : fakeReason);
 });
 for (const action of ['collection.get-or-null', 'collection.merge', 'compute']) test(`TEST-CACHE-FIX documented deterministic ${action}`, async t => {
   const ctx = await setup(t, repo => {
