@@ -1,3 +1,5 @@
+import {loadRuntimeWorkspace,allowsRuntimePath} from './runtime-workspace.mjs';
+import {captureSource} from './runtime-preflight.mjs';
 // Generated from prompts/cli/agent-guide.prompt.md (sha256: 3553676cff839ba33793ee0836d1898eaeb89f65d408721ae5930cdcd6db9a21).
 import {createHash} from 'node:crypto';
 import {buildProjectCard,readAgentScenarios} from './agent-project.mjs';
@@ -64,20 +66,28 @@ function observed(current){const last=current.last_answer;if(!object(last)||type
 }
 export function createTryGuide({root,env={},model,test={},features=[],secrets=[],ports={}}){
  let closed=false,mode='chat',conversation=[],runs=[],ownCases=[],pending=null,lastContext=null,requestKind=null,card=null,sourceAtConnect=null,scenarios=[],scenarioHash=null,scenarioAtConnect=null,judges=[],coverage=null,count=0,savedCount=0;
- const seen=new Set(),savedIds=new Set(),surfaceEvidence=new Map();let coverageHash=null;const entries=(model.entries??[]).map(e=>({...e,entry:entryId(e)}));
+ const seen=new Set(),savedIds=new Set(),surfaceEvidence=new Map();let coverageHash=null;let workspace=loadRuntimeWorkspace({root}),policyKey=JSON.stringify(workspace);
+ let entries=(model.entries??[]).filter(e=>allowsRuntimePath(workspace,e.entry_path)).map(e=>({...e,entry:entryId(e)}));
  const storyPath=test.storyPath??model.seed?.story_path??null;
- const modelStories=Array.isArray(model.stories)?model.stories:Object.values(model.stories??{});
+ let modelStories=(Array.isArray(model.stories)?model.stories:Object.values(model.stories??{})).filter(s=>allowsRuntimePath(workspace,s.path));
  const currentStory=()=>storyPath??scenarios.find(s=>s.path===test.path)?.doc.story_path??modelStories[0]?.path??null;
  const validFill=fill=>{if(!object(fill)||!object(fill.input))return false;const e=entries.find(e=>e.entry===fill.entry);if(!e)return false;const checked=checkInput(fill.input,e.input_schema,0);return !checked.refusals.length&&!checked.warnings.length;};
  const safe=x=>clean(x,secrets);
  const finalFills=value=>{if(own(value,'run')&&(typeof value.run!=='boolean'||!features.includes('run')||!features.includes('apply')||!['chat','own','walk'].includes(requestKind)||(value.run===true&&(value.apply!==true||!validFill(value.fill)))))delete value.run;if(own(value,'fill')&&!validFill(value.fill)){value.fill=null;if(value.apply===true)delete value.apply;}if(object(value.next)&&own(value.next,'fill')&&!validFill(value.next.fill))delete value.next.fill;return value;};
  function refresh(){
-  const next=normalizeScenarios((ports.readAgentScenarios??readAgentScenarios)({root}));
+  const fresh=loadRuntimeWorkspace({root}),key=JSON.stringify(fresh);
+  if(key!==policyKey){workspace=fresh;policyKey=key;entries=(model.entries??[]).filter(e=>allowsRuntimePath(workspace,e.entry_path)).map(e=>({...e,entry:entryId(e)}));modelStories=(Array.isArray(model.stories)?model.stories:Object.values(model.stories??{})).filter(s=>allowsRuntimePath(workspace,s.path));conversation=[];runs=[];ownCases=[];pending=null;lastContext=null;card=null;scenarios=[];judges=[];coverage=null;coverageHash=null;surfaceEvidence.clear();seen.clear();}
+  if(workspace.configured&&test.path)captureSource(root,{tests:[test.path]});
+  const found=(ports.readAgentScenarios??readAgentScenarios)({root,workspace});
+  const permitted=(Array.isArray(found)?found:[]).filter(s=>!workspace.configured||object(s)&&allowsRuntimePath(workspace,s.path)&&allowsRuntimePath(workspace,s.doc?.story_path));
+  Object.defineProperty(permitted,'incomplete',{value:!Array.isArray(found)||found.incomplete===true||permitted.length!==found.length});
+  const next=normalizeScenarios(permitted);
   const digest=hash({rows:next,incomplete:next.incomplete,readerIncomplete:next.readerIncomplete});scenarioAtConnect??=digest;
   if(digest!==scenarioHash){scenarios=next;scenarioHash=digest;judges=scenarios.map(s=>{const base=createRunJudge({scenario:s.doc});return{path:s.path,story:s.doc.story_path,judge:s.incomplete?{record:r=>uncertain(base.record(r)),snapshot:()=>uncertain(base.snapshot()),bindings:()=>base.bindings()}:base};});for(const r of runs)if(!r.redacted)for(const j of judges)j.judge.record(r);}
  }
  function refreshCard(byStory){
-  card=(ports.buildProjectCard??buildProjectCard)({root,env,story:test.story??currentStory(),progress:byStory[currentStory()]??[],previousFingerprint:card?.fingerprint,secrets,entries,startWorld:model.seed?.initial_world,model,scenarios,seedTest:test.path,savedCount});
+  card=(ports.buildProjectCard??buildProjectCard)({root,workspace,env,story:test.story??currentStory(),progress:byStory[currentStory()]??[],previousFingerprint:card?.fingerprint,secrets,entries,startWorld:model.seed?.initial_world,model,scenarios,seedTest:test.path,savedCount});
+  card={...card,productRules:(card.productRules??[]).filter(rule=>allowsRuntimePath(workspace,rule.path))};
   sourceAtConnect??=card.sourceFingerprint??card.fingerprint;
   const digest=hash({scenarioHash,source:card.sourceFingerprint??card.fingerprint,rules:card.productRules??[]});
   if(!coverage||digest!==coverageHash){coverage=createCoverage({scenarios,model,productRules:card.productRules??[]});coverageHash=digest;}for(const r of surfaceEvidence.values())coverage.record(r);
@@ -88,7 +98,7 @@ export function createTryGuide({root,env={},model,test={},features=[],secrets=[]
   }return result;
  }
  function bindings(){const bound=[];for(const j of judges.filter(j=>j.story===currentStory()))for(const b of j.judge.bindings())if(!bound.some(x=>x.id===b.id))bound.push(b);
-  for(const b of model.criterion_bindings??[])if(b.story_path===currentStory()&&!bound.some(x=>x.id===b.criterion_id)){const fill={entry:entryId(b),input:b.input};if(validFill(fill))bound.push({id:b.criterion_id,...fill});}return bound;
+  for(const b of model.criterion_bindings??[])if(allowsRuntimePath(workspace,b.story_path)&&allowsRuntimePath(workspace,b.entry_path)&&b.story_path===currentStory()&&!bound.some(x=>x.id===b.criterion_id)){const fill={entry:entryId(b),input:b.input};if(validFill(fill))bound.push({id:b.criterion_id,...fill});}return bound;
  }
  function ensureOwn(name){let current=ownCases.at(-1);if(!current||current.state==='saved'){current={id:`own-${++count}`,name:safe(clip(name||`Own case ${count}`,100)),state:'planned'};ownCases.push(current);ownCases=ownCases.slice(-32);}return current;}
  function prepare(message){

@@ -136,13 +136,13 @@ test('owner access refuses a Try recorded for another GitHub login before any ow
 
 test('isolated save retains actual starting world and leaves original scenario bytes intact', async t => {
   const { harbor } = await import('./runtime-fake.mjs');
-  const { saveDoorCase } = await import('../src/runtime-client.mjs');
+  const { saveDoorCase,acquireCaseWriteOwnership } = await import('../src/runtime-client.mjs');
   const { findTests, selectTests } = await import('../src/runtime-preflight.mjs');
   const { readFileSync, readdirSync } = await import('node:fs');
   const { join } = await import('node:path');
   const setup = harbor(t), path = 'tests/place-order.json', original = readFileSync(join(setup.repo, path), 'utf8'), doc = JSON.parse(original);
   const saved = { id: 'confirmed-run', original_path: path, story_path: doc.story_path, test: { ...doc, initial_world: { kv: { exact: ['snapshot'] } }, steps: [{ ...doc.steps[0], step_id: 'recorded' }] } };
-  const answer = saveDoorCase(setup.repo, saved, { isolated: true });
+  const env={HOME:setup.home,PDD_STATE_DIR:setup.state};const lease=await acquireCaseWriteOwnership({root:setup.repo,testPath:path,handoff:{kind:'closed-editor',testPath:path}},{env});let answer;try{answer=saveDoorCase(setup.repo,saved,{isolated:true,env,writeOwnership:lease});}finally{lease.release();}
   assert.match(answer, /^added to tests\/place-order\.try-confirmed-run\.json/);
   assert.equal(readFileSync(join(setup.repo, path), 'utf8'), original);
   const record = JSON.parse(readFileSync(join(setup.repo, 'tests/place-order.try-confirmed-run.json'), 'utf8'));
@@ -151,9 +151,47 @@ test('isolated save retains actual starting world and leaves original scenario b
   assert.equal(record.steps.length, 1);
   const discovered = selectTests(findTests({ root: setup.repo }), ['place-order']);
   assert.ok(discovered.selected.some(item => item.files.includes('tests/place-order.try-confirmed-run.json') && item.storyPath === doc.story_path));
-  assert.match(saveDoorCase(setup.repo, saved, { isolated: true }), /^already saved /);
+  assert.match(saveDoorCase(setup.repo, saved, { isolated: true,env }), /^already saved /);
   assert.equal(readdirSync(join(setup.repo, 'tests')).filter(name => name.includes('try-confirmed-run')).length, 1);
-  assert.match(saveDoorCase(setup.repo, { ...saved, test: { ...saved.test, initial_world: {} } }, { isolated: true }), /^not added: a different case/);
+  assert.match(saveDoorCase(setup.repo, { ...saved, test: { ...saved.test, initial_world: {} } }, { isolated: true,env }), /^not added:.*different received payloads/);
+});
+
+for (const mode of ['pending', 'owned', 'aborted']) test(`MCP native save preserves supplied environment and ${mode} ownership`, async t => {
+  const { fixture, read, json } = await import('./helpers/runtime-workspace-fixture.mjs');
+  const { existsSync, mkdirSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { spawnSync } = await import('node:child_process');
+  const f = fixture(t), requested = join(f.parent, 'requested-state'), fallback = join(f.parent, 'fallback-state'), home = join(f.parent, 'home');
+  mkdirSync(home);
+  json(f.root, 'pdd-workspace.json', { allowed_paths: ['simulation/', 'tests/'] });
+  const original = read(f.root, f.second);
+  // Only owner/action observations are synthetic. A separate process runs the real MCP,
+  // native ownership and durable save transaction, with both possible state roots temporary.
+  const command = `import {createTryTools} from ${JSON.stringify(new URL('../src/try-mcp.mjs', import.meta.url).href)};
+    import {acquireCaseWriteOwnership} from ${JSON.stringify(new URL('../src/runtime-client.mjs', import.meta.url).href)};
+    const f=${JSON.stringify({ root: f.root, target: f.second, story: f.story, prompt: f.prompt, doc: f.doc, requested, mode })};
+    const env={...process.env,PDD_STATE_DIR:f.requested},controller=new AbortController();
+    const owner={root:f.root,test:{path:f.target,storyPath:f.story,doc:f.doc},record:{id:'synthetic-session',origin:'https://interpreter.example.invalid',login:'owner'},model:{entries:[{entry_path:f.prompt,operation:'order'}]}};
+    const lease=f.mode==='pending'?undefined:await acquireCaseWriteOwnership({root:f.root,testPath:f.target,handoff:{kind:'closed-editor',testPath:f.target}},{env});
+    if(f.mode==='aborted')controller.abort();
+    const tools=createTryTools({cwd:f.root,env},{signal:controller.signal,writeOwnership:lease,readTryOwner:async()=>owner,runDoorCall:async()=>({id:'native-action',result:9,inputWorld:{count:0},world:{count:0}})});
+    try{await tools.call('try_run',{entry:f.prompt+'#order',input:{}});try{const saved=await tools.call('try_save_case');process.stdout.write(saved.result);}catch(error){process.stdout.write(error.message);}}finally{lease?.release();}`;
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', command], {
+    cwd: f.root, env: { ...f.env, HOME: home, XDG_CONFIG_HOME: join(home, '.config'), PDD_STATE_DIR: fallback }, encoding: 'utf8',
+  });
+  assert.equal(child.status, 0, child.stderr);
+  assert.equal(existsSync(join(requested, 'case-import')), true, 'MCP pending receipt must use supplied env.PDD_STATE_DIR');
+  assert.equal(existsSync(join(fallback, 'case-import')), false, 'MCP must not fall back to the process state');
+  assert.equal(read(f.root, f.second), original);
+  const variant = 'tests/order.try-native-action.json';
+  assert.equal(existsSync(join(f.root, variant)), mode === 'owned');
+  if (mode === 'owned') {
+    assert.match(child.stdout, /^added to tests\/order\.try-native-action\.json/);
+    assert.deepEqual(JSON.parse(read(f.root, variant)).initial_world, { count: 0 });
+  } else {
+    assert.match(child.stdout, /^not added:.*pending/);
+    if (mode === 'aborted') assert.match(child.stdout, /case save cancelled/);
+  }
 });
 
 test('saving without a runtime before-world fails instead of inventing test data', async () => {

@@ -95,6 +95,11 @@ async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
     }
     if (args[0] === 'pr' && args[1] === 'list') {
       const head = args.includes('--head') ? args[args.indexOf('--head') + 1] : null, search = args.includes('--search') ? args[args.indexOf('--search') + 1].split('"')[1] : null;
+      // The synthetic remote-tracking refs model remote effects, including an external push.
+      for (const pr of f.prs) {
+        const observed = await exec('git', ['rev-parse', '--verify', `refs/remotes/origin/${pr.headRefName}`], {cwd:opts.cwd}).catch(()=>null);
+        if (observed) pr.headRefOid = observed.stdout.trim();
+      }
       return { stdout: JSON.stringify(f.prs.filter(pr => (!head || pr.headRefName === head) && (!search || pr.body.includes(search)))) };
     }
     if (args[0] === 'pr' && args[1] === 'view') {
@@ -1259,9 +1264,15 @@ test('0.1.7 #9: a prompt approval committed by hand is pushed to PR 1 before the
   const approval = f.git(run.root, 'rev-parse', 'HEAD');
   const capture = join(f.base, 'gh-body.txt'), gh = join(f.base, 'gh'), gitShim = join(f.base, 'git'), bodyFile = join(f.base, 'gh-pr-body.txt');
   writeFileSync(bodyFile, f.prs[0].body);
+  writeFileSync(bodyFile+'.identity.json',JSON.stringify(f.prs[0]));
   const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
   writeFileSync(gitShim, '#!/bin/sh\nif [ "$1" = fetch ]; then exit 0; fi\nif [ "$1" = push ]; then sha=$("' + realGit + '" rev-parse HEAD) || exit 1; ref=${3#*:}; local_ref=refs/remotes/origin/${ref#refs/heads/}; "' + realGit + '" update-ref "$local_ref" "$sha"; exit 0; fi\nexec "' + realGit + '" "$@"\n'); chmodSync(gitShim, 0o755);
   const ghScript = `#!/bin/sh
+if [ "$1" = repo ] && [ "$2" = view ]; then echo '{"nameWithOwner":"example/project","defaultBranchRef":{"name":"main"},"url":"https://github.com/example/project"}'; exit 0; fi
+if [ "$1" = pr ] && [ "$2" = list ]; then
+  node -e 'const fs=require("fs"),cp=require("child_process"),p=JSON.parse(fs.readFileSync(process.env.GH_PR_BODY_FILE+".identity.json","utf8"));p.body=fs.readFileSync(process.env.GH_PR_BODY_FILE,"utf8");p.headRefOid=cp.execFileSync("git",["rev-parse","refs/remotes/origin/"+p.headRefName],{encoding:"utf8"}).trim();process.stdout.write(JSON.stringify([p]));'
+  exit 0
+fi
 if [ "$1" = pr ] && [ "$2" = edit ]; then cat > "$GH_CAPTURE"; cp "$GH_CAPTURE" "$GH_PR_BODY_FILE"; exit 0; fi
 if [ "$1" = pr ] && [ "$2" = view ]; then
   if [ "$4" = --json ] && [ "$5" = body ]; then
