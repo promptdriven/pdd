@@ -12,6 +12,11 @@ Saved fields: `runId`, `workflow`, `repo`, `issue {number,title,url}`, `number`,
 
 `writeRun(record, ports)` adds the C3 view, increments `journalSeq`, sets `updatedAt`, and writes the file atomically (temporary file, then rename). It also updates the index of known runs in `<stateDir>/runs.json` (default `~/.local/state/pdd`). An index failure is ignored. `readRun(runDir)` returns the record or null.
 
+Preserve optional `home`, a nonempty absolute machine-home path for Codex runs,
+through writes, reads and projections. Its selection and legacy fallback belong
+to the [runner](workflow-runner.prompt.md#current-codex-login-and-saved-home).
+An older record without it remains valid; storage does not infer a home or login.
+
 ## Concurrent record updates
 
 Module function `updateRun(runDir, update, ports = {})` synchronously returns the
