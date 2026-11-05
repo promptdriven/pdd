@@ -6,7 +6,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { createHash } from 'node:crypto';
 import { readPromptApprovals } from './approval-policy.mjs';
 import { readRun } from './workflow-runs.mjs';
-import { captureSource, gitFiles, proseSha256 } from './runtime-preflight.mjs';
+import { captureSource, gitFiles, proseSha256, sourceFilePort } from './runtime-preflight.mjs';
 import { judgeOldCodeProof } from './workflow-pr-evidence.mjs';
 
 const BATCH = /^\d{8}-\d{6}-[a-z0-9]{4}$/;
@@ -64,7 +64,7 @@ function identity(rows) {
   return { engine, model, ...(engineCached ? { engineCached } : {}), ...(modelCached ? { modelCached } : {}) };
 }
 // A prove result that is not current is shown, but it is never pdd's proof.
-export const usableResult = result => result.kind === 'native evidence' ? result.assessment?.storyNativeProof !== 'none' && ['pdd-observed','qualified-external'].includes(result.assessment?.storyNativeProof) : result.kind !== 'pdd workflow prove' || result.state === 'current';
+export const usableResult = result => result.kind === 'native evidence' ? result.assessment?.identity?.stage !== 'pr1' && result.assessment?.storyNativeProof !== 'none' && ['pdd-observed','qualified-external'].includes(result.assessment?.storyNativeProof) : result.kind !== 'pdd workflow prove' || result.state === 'current';
 
 // pdd's own saved results for one run: the newest `pdd test` check batch, the newest `pdd lint` batch (both from the
 // runtime state folder, for this worktree, made at or after the run started) and the run's `pdd workflow prove` record.
@@ -148,7 +148,7 @@ function nativeReceipt(report) {
   if (report === null) return 'missing';
   if (!object(report)) return 'unknown';
   if (!nativeFormats.includes(report.format) || report.format === 'pdd.native-node-report.v1' && (report.producer !== 'pdd-node-test-events' || !/^1\./.test(report.producerVersion))) return 'incompatible';
-  if (!['producer','producerVersion','runner','runnerVersion','runtimeVersion','profileId','requirementsId'].every(key => known(report[key])) || !Array.isArray(report.observations) || !object(report.capture)) return 'unknown';
+  if (!['producer','producerVersion','runner','runnerVersion','runtimeVersion','profileId','requirementsId'].every(key => known(report[key])) || !Array.isArray(report.observations) || report.observations.some(row=>!object(row)||!known(row.occurrenceId)||!known(row.testId)||!['passed','failed','skipped','todo','not-completed','unknown'].includes(row.outcome)||![true,false,null].includes(row.selected)||![true,false,null].includes(row.started)) || !object(report.capture)) return 'unknown';
   if (report.complete !== true || !['selectionComplete','terminalSeen','processEnded'].every(key => report.capture[key] === true) || !known(report.capture.eventRef)) return 'partial';
   return 'accepted';
 }
@@ -213,7 +213,7 @@ function judgeNativeContext(selectors, context) {
     if(!rows.length)result.missingIds.push(id);
     if(rows.some(row=>row.outcome==='failed'))result.failedIds.push(id);
     if(rows.some(row=>row.outcome==='skipped'))result.skippedIds.push(id);
-    if(rows.some(row=>['todo','not-completed','unknown'].includes(row.outcome)||row.outcome==='passed'&&!executedPass(row)||row.selected===false&&row.started===true))result.unknownIds.push(id);
+    if(rows.some(row=>!['passed','failed','skipped'].includes(row.outcome)||row.outcome==='passed'&&!executedPass(row)||row.selected===false&&row.started===true))result.unknownIds.push(id);
   }
   result.gates=p.requiredGates.map(id=>{const rows=array(report?.gates).filter(row=>row.id===id);return {id,outcome:verified&&rows.length===1&&['passed','failed','skipped'].includes(rows[0].outcome)?rows[0].outcome:'unknown'};});
   result.unexecutedGates=result.gates.filter(row=>row.outcome!=='passed').map(row=>row.id);
@@ -230,7 +230,7 @@ function judgeNativeContext(selectors, context) {
   if(story?.path===selectors.storyPath&&Array.isArray(story.criteria))result.criteria=story.criteria.map(criterion=>{
     const mappings=p.mappings.filter(row=>row.storyPath===story.path&&row.criterionId===criterion.id), exact=mappings.filter(row=>row.criterionText===criterion.text);
     const ids=distinct(mappings.flatMap(row=>array(row.nativeIds)));
-    const reason=!mappings.length?'unmapped':!exact.length?'criterion-changed':exact.length!==1||!exact[0].nativeIds?.length||exact[0].nativeIds.some(id=>!p.requiredIds.includes(id))?'invalid-mapping':result.profileState==='unverified'?'profile-unverified':result.profileState==='incomplete'?'profile-incomplete':'supported';
+    const reason=!mappings.length?'unmapped':!exact.length?'criterion-changed':mappings.length!==1||exact.length!==1||!known(criterion.id)||!known(criterion.text)||!Array.isArray(exact[0].nativeIds)||!exact[0].nativeIds.length||exact[0].nativeIds.some(id=>!p.requiredIds.includes(id))?'invalid-mapping':result.profileState==='unverified'?'profile-unverified':result.profileState==='incomplete'?'profile-incomplete':'supported';
     return {id:criterion.id,text:criterion.text,state:reason==='supported'?'supported':'unproved',nativeIds:ids,reason};
   });
   if(result.criteria.length&&result.criteria.every(row=>known(row.id)&&known(row.text)&&row.state==='supported')&&new Set(result.criteria.map(row=>row.id)).size===result.criteria.length)result.storyNativeProof=result.profileNativeProof;
@@ -277,7 +277,8 @@ function profileIn(content, profileId) {
 }
 function nativeSelection(root,storyPath,profileId,ports) {
   const visible=new Set((ports.gitFiles ?? gitFiles)(root));
-  const read=path=>{nativePath(path);if(!visible.has(path))throw nativeError('Native source is not Git-visible.');return nativeBytes(join(root,path),ports.files).toString('utf8');};
+  const sourceFiles=(ports.sourceFilePort??sourceFilePort)(root,visible);
+  const read=path=>{nativePath(path);if(!visible.has(path))throw nativeError('Native source is not Git-visible.');return sourceFiles.read({path}).content;};
   const storyText=read(storyPath), section=/^## Native validation\s*\n([\s\S]*?)(?=^## |$(?![\s\S]))/m.exec(storyText)?.[1]??'';
   const links=[...section.matchAll(/\[[^\]]*\]\(([^)\s]+)#native-validation-profile-([^)\s]+)\)/g)];
   if(links.length!==1||links[0][2]!==profileId)throw nativeError('Native Story owner link is missing or ambiguous.');

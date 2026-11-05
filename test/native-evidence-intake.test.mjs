@@ -162,3 +162,12 @@ test('fixture proof checks original occurrence, actual artifact bytes and source
   f.save('fixture.json',{...original,path:undefined,verified:true});
   assert.equal(prepareNativeEvidence(f,{workspace:f.workspace}).assessment.prerequisites[0].state,'unknown');
 });
+test('malformed terminal outcomes and ambiguous criterion bindings never create proof',async()=>{
+  const scenario=JSON.parse(readFileSync(new URL('./runtime/native-criterion-evidence.json',import.meta.url))),context=JSON.parse(scenario.simulation['native.read_context'].cases[0].result.content),selectors=scenario.steps[0].input;
+  context.report.observations[1].outcome='unrecognized';
+  const malformed=await assessNativeEvidence(selectors,{readNativeContext:()=>({content:JSON.stringify(context)})});
+  assert.equal(malformed.profileNativeProof,'none');assert.equal(malformed.receiptState,'unknown');
+  context.report.observations[1].outcome='passed';context.protected.mappings.push({...context.protected.mappings[0],criterionText:'A different mapping for the same identity.'});
+  const ambiguous=await assessNativeEvidence(selectors,{readNativeContext:()=>({content:JSON.stringify(context)})});
+  assert.equal(ambiguous.profileState,'complete');assert.equal(ambiguous.storyNativeProof,'none');assert.equal(ambiguous.criteria[0].reason,'invalid-mapping');
+});
