@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 54516df3c85e0173e51a271fa6cc3f6f63cba2f412ff191dd370efafac2600ea).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: b74173bd0941c3feabdc41f3cc69b9d97950ee3250fa443cdadbdcae46ee3d69).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { execFile as execFileCallback } from 'node:child_process';
@@ -1386,12 +1386,38 @@ function ownResults(run, p) {
 }
 // The steps whose done output shows pdd's own results, or a visible "no pdd result" warning.
 const PROOF_STEPS = ['check', 'try', 'verify'];
+function canRefreshCodeReview(run, step) {
+  const area = run.areas[run.area];
+  return run.state === 'completed' && run.doneAt === 'PR 1'
+    && area?.then === 'ask-code' && run.gate?.kind === 'ask-code'
+    && run.gate.area === area.name && Boolean(prOf(run, area.name))
+    && area.steps.includes(step) && area.steps.every(item => run.done[item]);
+}
+async function refreshCompletedCodeReview(run, step, p) {
+  const selectedArea = run.area, selectedGate = structuredClone(run.gate);
+  try {
+    // Inspect before the short owned update. A failed inspection must retain
+    // the previous review and cannot turn an ended run into ordinary progress.
+    const snapshot = await gatePromptSnapshot(run, p);
+    const question = await askCodeLines(run, run.areas[run.area], p);
+    commitRun(run, p, latest => {
+      if (!canRefreshCodeReview(latest, step) || latest.area !== selectedArea
+        || ['id','area','kind','at'].some(key => latest.gate?.[key] !== selectedGate[key]))
+        throw Error('The run ended or the gate changed, look again.');
+      latest.gate.promptSnapshot = snapshot;
+    });
+    return doneWithRequests(done([...snapshotLines(snapshot), ...question].join('\n')), run, p);
+  } catch (error) {
+    return fail(`Cannot refresh the code-choice review: ${causeText(error?.stderr || error?.detail || error?.message) || causeOf(error)}. Repair the selection or inspect the current run and gate, then run done again and ask the person again.`);
+  }
+}
 async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACKAGE_ROOT }, ports) {
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
   const run = await runForWorktree(cwd, p);
   if (!run) return fail('pdd workflow done works only in a run worktree. cd to the worktree that pdd made for this run.');
   if (run.state === 'cancelled') return done(`The run for #${run.number} was cancelled. Stop working on it.`);
-  if (run.state === 'completed') return done(`The run for #${run.number} is complete. Stop.`);
+  if (run.state === 'completed') return canRefreshCodeReview(run, step)
+    ? refreshCompletedCodeReview(run, step, p) : done(`The run for #${run.number} is complete. Stop.`);
   protectProgress(run,p);
   const area = run.areas[run.area], lines = [];
   if (!area.steps.includes(step)) lines.push(`warning: "${step}" is not a step of the ${area.name} area (${area.steps.join(', ')}). pdd recorded it anyway.`);
