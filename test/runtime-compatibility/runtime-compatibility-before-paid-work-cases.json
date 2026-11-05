@@ -1,0 +1,143 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "status": "draft expectations; not executed",
+  "boundaries": [
+    "src/runtime-outcome.mjs:outcomeFor",
+    "src/runtime-output.mjs:projectAnswer",
+    "src/runtime-client.mjs:runCheck",
+    "src/runtime-client.mjs:runTry"
+  ],
+  "fixture_setup": {
+    "repository": "Use test/runtime-fake.mjs harbor with tests/place-order.json and its actual source capture; synthetic identities only. Add storyTest(repo, second) only in mixed-scope cases.",
+    "wire": "Use existing fakeRuntime POST/GET spies and fake.lint per-test/program admission. Attach complete v1 reports under result.capabilities and/or the legacy report.lint.tests entry as each case states. Echo the actual request IDs and lint command; default confirmed engine_sha is the build in report_template. Never accept a fixture as proof of live engine behavior.",
+    "source": "Construct each fake report source natively from exact captured effective sources: hash the selected scenario bytes and each selected returned file. Keep the server closure digest opaque: use the fixed synthetic 64-hex value below. This fixture is not a parser/projection proof. Compare actual uploaded archive bytes to capture; never take source data from an expected output or hash archive bytes as a closure.",
+    "synthetic_closure_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "report_template_without_source": {
+      "schema_version": "prompt-runtime.program-capabilities.v1",
+      "capability_version": "program-capabilities.v1@eae2202a68d00ab762fcbbf1eba0d8607a132a15",
+      "engine_build": "eae2202a68d00ab762fcbbf1eba0d8607a132a15",
+      "complete": true,
+      "verdict": "supported",
+      "operations": [
+        {
+          "selection": {
+            "step_id": "place",
+            "node_id": "place_order",
+            "prompt_path": "prompts/place_order.prompt.md",
+            "operation": "place_order"
+          },
+          "feature": "ordinary",
+          "binding_kind": "none",
+          "resource_mode": "simulated",
+          "evaluator_mode": "default",
+          "execution_mode": "ordinary",
+          "verdict": "supported",
+          "reason_code": "supported"
+        }
+      ],
+      "edges": [],
+      "diagnostics": [],
+      "provider_calls": 0,
+      "resource_calls": 0
+    },
+    "mutations": "Each named replacement below changes fake transport input before the real public function runs. It is not a final classification argument. Supply sourceFiles only from actual captured bytes for native pure calls. Unknown build/version reports use aggregate and all row verdicts unknown with reason engine-build-unknown. Incomplete ordinary reports use unknown/analysis-unavailable rows. source:null is complete:false with unknown analysis; keep concrete mode/binding/source blockers only when the delivered contract permits them. Deliberately malformed/conflicting report cases are the named exceptions; never accidentally present an inconsistent report as a valid server state.",
+    "effects": "Snapshot approval files and behavioral evidence records before each command. Observe actual requests, streams, current/saved source and state; no model, resource or live service is used."
+  },
+  "story_path": "user_stories/runtime-compatibility-before-paid-work.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "A selected test with its own normal lint pass, complete supported compatibility and matching captured source and confirmed job build can start paid work; its business result still requires execution."
+    },
+    {
+      "id": "AC2",
+      "text": "A selected invalid-source, unsupported-capability or missing-binding blocker stops that test before any paid check or Simulator setup is sent and exits 4 when it is the only selected test."
+    },
+    {
+      "id": "AC3",
+      "text": "A selected report that is absent, malformed, conflicting, incomplete or unknown, or whose source/build association is unavailable or mismatched, stops new paid work and exits 5 after lint ends; unfinished or lost lint keeps exit 3 and same-ID recovery."
+    },
+    {
+      "id": "AC4",
+      "text": "One blocked or unchecked test does not stop an independently admitted selected test, and unrelated inventory diagnostics do not become selected blockers."
+    },
+    {
+      "id": "AC5",
+      "text": "The same selected gate applies to new checks, Simulator setup, saved-lint continuation, retry and a confirmed restart replacement, with the same saved source, owner and dispatch guards."
+    },
+    {
+      "id": "AC6",
+      "text": "Compatibility analysis sends no wider source archive, supplies no missing fixture fact, alters no approval or behavioral evidence record, and never retries an uncertain paid dispatch."
+    },
+    {
+      "id": "AC7",
+      "text": "Unproved installed-engine, host or physical-observation claims stay unproved without a new global proof gate; known source/build disagreement still blocks structural admission."
+    }
+  ],
+  "cases": [
+    {
+      "id": "ready-public-dispatch",
+      "criterion_ids": [
+        "AC1"
+      ],
+      "given": "Matching source/build complete supported selected report and normal own lint pass. Run real runCheck and runTry independently against fake transport; check fake job then returns one passed criterion.",
+      "required_observation": "Exactly one selected /v1/check or /v1/try setup POST after lint, with original immutable archive and normal request identity/guards. Actual returned check alone supplies criterion evidence. Missing physical attestation alone does not hold this structurally admitted synthetic case."
+    },
+    {
+      "id": "concrete-blockers-no-post",
+      "criterion_ids": [
+        "AC2"
+      ],
+      "given": "Repeat each invalid-source/source-admission-refused, unsupported-capability/retained-mutation-unsupported, and resource-edge missing-binding/binding-missing input in lint, check and Try entry paths. Source/build association matches.",
+      "required_observation": "Selected lint outcome refused; standalone/check/Try exit 4; zero /v1/check and /v1/try setup POSTs, no paid request ID allocated, no product effects. Keep precise blocker and client advice."
+    },
+    {
+      "id": "ended-unknown-no-post",
+      "criterion_ids": [
+        "AC3"
+      ],
+      "given": "Repeat absent, malformed, conflict, incomplete, engine-build-unknown, source:null, unavailable sourceFiles and exact source/build/version disagreements. Lint job is terminal with own legacy pass.",
+      "required_observation": "Compatibility never admits. Terminal selected outcome not_run and command exit 5, zero paid/setup POSTs and zero paid calls. Preserve reported server facts and client issue; do not silently retry lint or invent native proof."
+    },
+    {
+      "id": "open-lint-same-id",
+      "criterion_ids": [
+        "AC3"
+      ],
+      "given": "Lint POST response lost or job running; caller timeout ends; saved read later retrieves the same lint ID, still unknown.",
+      "required_observation": "Exit 3 and held unsent work with 0 calls. Same-ID GET recovery only; no replacement lint or paid POST; pending/recovery intent and source/owner guards survive."
+    },
+    {
+      "id": "mixed-scope",
+      "criterion_ids": [
+        "AC4"
+      ],
+      "given": "Two selected tests, one blocked or not checked and one with own passed normal lint plus complete matched supported report; include unrelated inventory refusal and false global coverage flags.",
+      "required_observation": "Send only the admitted test once with the original selected archive; retain other outcome and diagnostics. Aggregate uses existing exit precedence. No source expansion or second upload capture."
+    },
+    {
+      "id": "all-dispatch-doors",
+      "criterion_ids": [
+        "AC5"
+      ],
+      "given": "Repeat one concrete blocker and one terminal unknown at new check, Try, saved-lint continuation, explicit retry and confirmed restart replacement. Repeat matched support with wrong owner, changed saved source, wrong intent and preexisting dispatch claim.",
+      "required_observation": "No door bypasses the selected gate or any old guard. Blocked/unknown work is never sent; wrong-owner/source/intent/claim cases remain stopped even when report says supported. Standalone saved lint stays GET-only under its owning contract."
+    },
+    {
+      "id": "privacy-accounting-records",
+      "criterion_ids": [
+        "AC6"
+      ],
+      "given": "Before lint, snapshot approval and behavioral evidence files; use fake source capture/transport spies. Separately seed a paid check whose POST reply is lost with unknown accounting; include capability zero-call data.",
+      "required_observation": "No wider files, fixture facts, approval changes or new behavioral evidence. Ordinary operational lint receipts remain allowed. Lost paid dispatch gets original-ID reads only and unknown usage, never zero or a repeated POST."
+    },
+    {
+      "id": "configured-versus-installed",
+      "criterion_ids": [
+        "AC7"
+      ],
+      "given": "Matching structural report identifies configured build, with no verified installed-engine/host/observation evidence. Separately provide a known report/job build disagreement.",
+      "required_observation": "First case remains structurally eligible under the proposed policy while native readiness is unknown/unproved. Known build disagreement is held not_run/5 with no paid POST. No invented attestation API, profile field or native proof gate."
+    }
+  ]
+}

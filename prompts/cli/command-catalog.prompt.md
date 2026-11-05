@@ -88,6 +88,9 @@ Help forms: `pdd simulate [STORY] --cli [--shell] [--max-calls N] [--new]`, `pdd
 into its original test. --shell compatibility and mode conflicts belong to runtime-client.
 
 `pdd workflow evidence ISSUE --summary FILE` records newer source-verified saved check JSON without rerunning workflow steps or publication; require ISSUE and --summary, no extra operands/options.
+
+Catalog `workflow.evidence-associate` with prefix `workflow evidence-associate`, local disposition `workflow-evidence-associate`, one required issue operand, and options `--workspace` (text), `--stage` (value, choices `current` and `pr1`) and `--test` (text-list). Dispatch requires all three before effects. Its form is `pdd workflow evidence-associate ISSUE --workspace PATH --stage current|pr1 --test PATH...`. Expose it in help and completion immediately after the evidence route. [Workspace evidence association](workflow-runner.prompt.md#workspace-evidence-association) owns registration and source validation; this catalog owns only the route facts.
+
 Try catalogs --agent as nonempty text NAME: accept quoted custom display names as one argument as well as the default codex, claude and gemini names. Agent discovery and unknown-name errors belong to the local agent bridge; parsing does not read configuration or execute a launcher. Workflow --agent keeps its codex|claude|gemini|agy value choices. Completion must not present a fixed provider-only list for Try agent names. Its help says pdd stays running to connect the person’s own agent when stdout is a terminal or --agent is explicit; ordinary non-terminal Try returns after collecting saved cases once. --agent selects a configured name and --no-wait skips the bridge. Runtime-client owns conflicts/lifecycle.
 
 Catalog `mcp` (local `mcp`) with the form `pdd mcp`, no operands or options. Help describes a stdio MCP server for the current repository's Try tools. Setup help says "show exact config changes", without a preview-status label, and states that it offers detected Codex, Claude Code and Gemini registrations after showing exact config changes and asking once with y/N.
@@ -133,6 +136,7 @@ The ordered help-form list consists of the lines below in their displayed order,
   pdd workflow prove ISSUE --test COMMAND --expect TEXT [--timeout MIN]  Run committed changed tests on the fetched base branch merge-base and committed head with a limit per phase (default 10 minutes; --timeout sets 1 to 120); save a non-gating report that pull requests show as pdd's own result.
   pdd workflow done STEP [--summary TEXT] [--skipped REASON]  For the agent in a run worktree: record a step with pdd's own latest pdd test, pdd lint and prove results (the summary is an agent note) and print what to do next; --skipped records that the step was skipped, and why.
   pdd workflow evidence ISSUE --summary FILE  Record source-verified saved check JSON without rerunning steps, gates or publication.
+  pdd workflow evidence-associate ISSUE --workspace PATH --stage current|pr1 --test PATH...  Register this run's evidence workspace, stage and selected tests; no checks or workflow progress.
   pdd workflow ask QUESTION  For the agent in a run worktree: show the person that the chat waits for their answer.
   pdd workflow approve [ISSUE] [--said WORDS]  Use --said - with the shared quoted-heredoc template to record chat words for the gate and all its drafts, or use terminal y/N; strict mode requires a person terminal.
   pdd workflow changes ISSUE TEXT  Send a change request to the same area chat; the gate stays open.
