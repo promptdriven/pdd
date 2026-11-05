@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-replay.prompt.md (sha256: 4cda00337a6cb1763308e4729306b234d2a768ac3a134348388c5db19cad9ed6).
+// Generated from prompts/cli/workflow-replay.prompt.md (sha256: 8a1d03508caf4633250e8f2c7037baf1566c939641e08c9dcae2a9b96f157686).
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -24,7 +24,8 @@ const controls = ['assertion_failure','crash','survived','not_run'];
 const sanitize = value => cleanText(String(value ?? '')).replace(/[\r\n\x00-\x1f]/g,' ').slice(0,1000)
   .replace(/https?:\/\/[^\s]+\/s\/[^\s]+/g,'(Try link removed)');
 const adoptionCause = value => sanitize(value).replace(/\b(?:Bearer|Basic)\s+[^\s]+/gi,'credential removed').replace(/\b(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+)\b/g,'credential removed').replace(/https?:\/\/[^\s]+/g,'(URL removed)').replace(/(?<![\w./-])(?:[A-Za-z]:[\\/]|\/)[^\s,;:]+/g,'(path removed)').replace(/(?:token|password|authorization|credential)[=: ]+[^\s]+/gi,'credential removed');
-const render = value => sanitize(value).replace(/[\\`*_[\]()|]/g,'\\$&')
+const inertMarkers = value => value.replaceAll('pdd-workflow:', 'pdd-workflow\\u003a').replaceAll('pdd-product:', 'pdd-product\\u003a');
+const render = value => inertMarkers(sanitize(value)).replace(/[\\`*_[\]()|]/g,'\\$&')
   .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
 export function sourceFingerprint(root) {
@@ -76,7 +77,7 @@ function scenario(path, bytes) {
       checks.push({...base,check_index,criterion_id:check.criterion_id,target:check.target,path:check.path,op:check.op});
     });
   }
-  return {path,sha256:hash(bytes),steps,checks};
+  return {path,sha256:hash(bytes),steps,checks,snapshot:doc};
 }
 export function pinReplayVectors(root, paths) {
   const anchor = {schema_version:'pdd.replay-vectors.v1',vectors:[]};
@@ -149,13 +150,19 @@ function batchBlobs(root, rows) {
 }
 // Build a disposable local view from exact tracked blobs or bounded current files.
 // No worktree, index, branch, run, or claim in the source repository is changed.
-function adoptionView(root, ref, scenarios, source) {
+function adoptionView(root, ref, scenarios, source, scenarioReference) {
   const temp = realpathSync(mkdtempSync(join(tmpdir(),'pdd-adoption-')));
   try {
-    const rows = ref ? localGit(root,'ls-tree','-r','-z','--full-tree',ref).toString('utf8').split('\0').filter(Boolean).map(row => {
+    const treeRows = tree => localGit(root,'ls-tree','-r','-z','--full-tree',tree).toString('utf8').split('\0').filter(Boolean).map(row => {
       const match = /^(\d+) (blob|commit) ([a-f0-9]+)\t([\s\S]+)$/.exec(row);
       requireThat(match, 'Invalid Git tree inventory.'); return {mode:match[1],oid:match[3],path:match[4]};
-    }) : [...new Set(localGit(root,'ls-files','-z','-co','--exclude-standard').toString('utf8').split('\0').filter(Boolean))].map(path=>({path}));
+    });
+    let rows = ref ? treeRows(ref) : [...new Set(localGit(root,'ls-files','-z','-co','--exclude-standard').toString('utf8').split('\0').filter(Boolean))].map(path=>({path}));
+    // Code-stage revalidation keeps the original scenario selection as context
+    // while independently reading current prompt/dependency bytes.
+    const originals = scenarioReference ? treeRows(scenarioReference).filter(row=>scenarios.includes(row.path)) : [];
+    const originalBytes = batchBlobs(root,originals);
+    if(scenarioReference)rows=[...rows.filter(row=>!scenarios.includes(row.path)),...originals];
     // Validate the complete tree before creating any source-controlled path.
     const names = new Set(), sources=new Map(), loaded=new Set();
     for (const row of rows) {
@@ -170,8 +177,8 @@ function adoptionView(root, ref, scenarios, source) {
       if(ref && row.mode==='120000')link=links.get(row.path).toString();
       if(!ref) {
         let stat;try{stat=lstatSync(join(root,row.path));}catch(error){if(error.code!=='ENOENT')throw error;}
-        if(stat?.isDirectory()){mkdirSync(full);continue;}
-        if(stat?.isSymbolicLink())link=readlinkSync(join(root,row.path));
+        if(!originalBytes.has(row.path) && stat?.isDirectory()){mkdirSync(full);continue;}
+        if(!originalBytes.has(row.path) && stat?.isSymbolicLink())link=readlinkSync(join(root,row.path));
       }
       if(link!==undefined)symlinkSync(link,full);else writeFileSync(full,'');
     }
@@ -184,7 +191,7 @@ function adoptionView(root, ref, scenarios, source) {
       const blobs=ref ? batchBlobs(root,pending.map(path=>sources.get(path))) : null;
       for(const path of pending) {
         let bytes;
-        try {bytes=ref ? blobs.get(path) : boundedFile(join(root,path),10*1024*1024,true);}
+        try {bytes=originalBytes.has(path) ? originalBytes.get(path) : ref ? blobs.get(path) : boundedFile(join(root,path),10*1024*1024,true);}
         catch(error) {if(error.code==='ENOENT')throw Error(`${source} source is missing ${path}.`);throw error;}
         writeFileSync(join(temp,path),bytes);loaded.add(path);
       }
@@ -272,7 +279,7 @@ function readNativeAdoptionSnapshot({root,declarationPath}, options) {
   requireThat(options.currentRef || before,'Current source is unreadable.');
   const approved=adoptionView(root,commit,declaration.scenarios,'Approved');let current;
   try {
-    current=adoptionView(root,options.currentRef,declaration.scenarios,'Current');
+    current=adoptionView(root,options.currentRef,declaration.scenarios,'Current',options.scenarioReference);
     const a=inspectAdoptionView(approved,declaration.prompts,declaration.scenarios),c=inspectAdoptionView(current,declaration.prompts,declaration.scenarios);
     requireThat(options.currentRef || nativeFingerprint(root)===before,'Current source changed while reading.');
     Object.assign(snapshot,{approved_vectors:a.vectors,current_vectors:c.vectors,approved_context:a.context,current_context:c.context});
@@ -317,17 +324,60 @@ export async function adoptReplayCorpus(root, declarationPath, ports = {}) {
 }
 
 const emptyCounts = (total=0) => ({total,pass:0,fail:0,blocked:0,not_replayed:total});
-export function readReplayEvidence(run) {
-  let result = {outcome:'blocked',reason:'Structured replay evidence is unavailable.',counts:emptyCounts(),vectors:[],source:null,manifest_sha256:null,operations:{total:0,executed:0},...(run.replayAdoption ? {adoption:run.replayAdoption.provenance} : {})};
+function valueChanges(before, after, path = '') {
+  if(JSON.stringify(before)===JSON.stringify(after))return [];
+  const container=value=>object(value)||Array.isArray(value);
+  if((container(before)||before===undefined) && (container(after)||after===undefined) &&
+      !(before!==undefined && after!==undefined && Array.isArray(before)!==Array.isArray(after))) {
+    const keys=[...new Set([...Object.keys(before??{}),...Object.keys(after??{})])];
+    const member=(value,key)=>value!==undefined && Object.hasOwn(value,key) ? value[key] : undefined;
+    if(keys.length)return keys.flatMap(key=>valueChanges(member(before,key),member(after,key),`${path}/${key.replace(/~/g,'~0').replace(/\//g,'~1')}`));
+  }
+  return [{path,before,after}];
+}
+const changeValue=value=>value===undefined ? '(missing)' : JSON.stringify(value);
+// JSON escaping keeps identities and values distinct. Entities display complete
+// separators without exposing URLs or matching the outer body's path cleaner.
+const renderValue=value=>inertMarkers(String(value).replace(/[^\x20-\x7e]/g,char=>'\\u'+char.charCodeAt(0).toString(16).padStart(4,'0')))
+  .replace(/[\\`*_[\]()|]/g,'\\$&').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const reviewText=value=>renderValue(value).replaceAll('/','&#47;');
+const reviewIdentity=value=>reviewText(JSON.stringify(String(value)).slice(1,-1));
+export function readReplayEvidence(run, paths) {
+  let result = {outcome:'blocked',reason:'Structured replay evidence is unavailable.',counts:emptyCounts(),vectors:[],warnings:[],source:null,manifest_sha256:null,operations:{total:0,executed:0},...(run.replayAdoption ? {adoption:run.replayAdoption.provenance} : {})};
   try {
     const baseline = run.replayBaseline;
     requireThat(baseline?.schema_version === 'pdd.replay-vectors.v1' && Array.isArray(baseline.vectors) && baseline.vectors.length <= 200, 'No approved original-vector anchor is saved; return to prompt space.');
-    result.vectors = baseline.vectors.map(({path,sha256})=>({path,sha256}));
-    if (baseline.outcome) return {...result,outcome:baseline.outcome === 'not_replayed' ? 'not_replayed':'blocked',reason:sanitize(baseline.reason)};
-    requireThat(baseline.vectors.length > 0, 'The original vector set is empty.');
-    const current = pinReplayVectors(run.root,baseline.vectors.map(v=>v.path));
-    requireThat(!current.outcome && JSON.stringify(current.vectors) === JSON.stringify(baseline.vectors), 'Original vectors changed, are absent, empty, unreadable or no longer match their approved hashes.');
-    const checks = baseline.vectors.flatMap(v=>v.checks), steps = baseline.vectors.flatMap(v=>v.steps);
+    if(baseline.outcome){
+      requireThat(['blocked','not_replayed'].includes(baseline.outcome),'The saved replay anchor has an invalid outcome.');
+    }
+    const originals=new Map(baseline.vectors.map(v=>[v.path,v]));
+    const current={vectors:[]};let unavailable=false;
+    for(const path of new Set([...originals.keys(),...(paths??[])])) {
+      const saved=originals.get(path), pinned=pinReplayVectors(run.root,[path]), vector=pinned.vectors[0];
+      if(pinned.outcome) {
+        result.warnings.push({vector:path,reason:pinned.reason});
+        // A removed vector no longer participates; an existing invalid file remains unproved.
+        let missing=false;
+        try {lstatSync(join(run.root,path));unavailable=true;} catch(error){if(error.code==='ENOENT')missing=true;else unavailable=true;}
+        if(missing && saved?.snapshot)for(const change of valueChanges(saved.snapshot,undefined))result.warnings.push({vector:path,...change});
+        continue;
+      }
+      current.vectors.push(vector);
+      if(!saved || saved.sha256!==vector.sha256) {
+        if(saved && !saved.snapshot)result.warnings.push({vector:path,reason:`SHA256 ${saved.sha256} -> ${vector.sha256}; original values unavailable.`});
+        else {
+          const changes=valueChanges(saved?.snapshot,vector.snapshot);
+          if(changes.length)for(const change of changes)result.warnings.push({vector:path,...change});
+          else result.warnings.push({vector:path,reason:`Bytes changed: SHA256 ${saved.sha256} -> ${vector.sha256}; JSON values unchanged.`});
+        }
+      }
+    }
+    result.vectors=current.vectors.map(({path,sha256})=>({path,sha256}));
+    if(baseline.outcome)return {...result,outcome:baseline.outcome,reason:sanitize(baseline.reason)};
+    if(unavailable || !current.vectors.length)return {...result,outcome:'not_replayed',reason:'Current scenario vectors are unavailable or empty; saved-value changes are advisory.'};
+    const admitted=pinReplayVectors(run.root,current.vectors.map(v=>v.path));
+    if(admitted.outcome)return {...result,outcome:'not_replayed',reason:admitted.reason};
+    const checks = current.vectors.flatMap(v=>v.checks), steps = current.vectors.flatMap(v=>v.steps);
     result.counts=emptyCounts(checks.length);result.operations.total=steps.length;
     const expected = new Map(checks.map(row=>[key(row),row])), expectedSteps = new Map(steps.map(row=>[stepKey(row),row]));
     requireThat(checks.length > 0 && checks.length <= MAX && expected.size === checks.length && steps.length <= MAX && expectedSteps.size === steps.length, 'Original assertion/operation identities are empty or duplicated.');
@@ -336,9 +386,11 @@ export function readReplayEvidence(run) {
     requireThat(object(doc) && doc.schema_version === REPLAY_POLICY && doc.run_id === run.runId, 'The replay manifest version or run identity is invalid.');
     const fingerprint = sourceFingerprint(run.root);
     requireThat(object(doc.source) && doc.source.kind === 'git-content-v1' && sha(doc.source.sha256) && fingerprint !== null && doc.source.sha256 === fingerprint, 'Replay evidence is stale or its source fingerprint is invalid.');result.source={kind:'git-content-v1',sha256:doc.source.sha256};
-    requireThat(Array.isArray(doc.vectors) && doc.vectors.length === baseline.vectors.length && new Set(doc.vectors.map(v=>v?.path)).size === doc.vectors.length, 'The manifest must name every original vector exactly once.');
-    const originals = new Map(result.vectors.map(v=>[v.path,v.sha256]));
-    requireThat(doc.vectors.every(v=>object(v) && sha(v.sha256) && originals.get(v.path) === v.sha256), 'The manifest changed or substituted an original vector hash.');
+    requireThat(Array.isArray(doc.vectors) && new Set(doc.vectors.map(v=>v?.path)).size === doc.vectors.length && doc.vectors.every(v=>object(v)&&sha(v.sha256)), 'The manifest must name each vector exactly once with a valid hash.');
+    const currentHashes = new Map(result.vectors.map(v=>[v.path,v.sha256]));
+    const matching=doc.vectors.length===current.vectors.length && doc.vectors.every(v=>currentHashes.get(v.path)===v.sha256);
+    if(!matching && result.warnings.length)return {...result,outcome:'not_replayed',reason:'Replay evidence does not cover the current scenario values; saved-value changes are advisory.'};
+    requireThat(matching, 'The manifest changed or substituted an original vector hash.');
     requireThat(Array.isArray(doc.checks) && doc.checks.length <= MAX && Array.isArray(doc.operations) && doc.operations.length <= MAX, 'The manifest needs bounded check and operation rows.');
     const rows = new Map(), operations = new Map();
     for (const row of doc.checks) {
@@ -373,21 +425,36 @@ export function readReplayEvidence(run) {
     const detected=mutation.outcome === 'assertion_failure' && mutation.exit_code !== 0 && failed.size > 0;
     requireThat(!formal.result.startsWith('proved_') || (detected && formal.control_outcome === 'assertion_failure'), 'A proved formal check needs semantic assertion-failure control, not a crash.');
     const outcome=counts.blocked ? 'blocked' : counts.not_replayed ? 'not_replayed' : !detected ? 'blocked' : counts.fail || formal.result === 'failed' ? 'fail' : 'pass';
-    return {...result,outcome,reason:counts.blocked ? 'Some checks are blocked.' : counts.not_replayed ? 'Some original assertions or public operations were not replayed.' : !detected ? 'The semantic mutation control did not detect an assertion failure; a crash is not detection.' : outcome==='fail' ? 'Assertion or formal failures were recorded.' : 'All original assertions have source-bound public-boundary replay evidence.'};
+    return {...result,outcome,reason:counts.blocked ? 'Some checks are blocked.' : counts.not_replayed ? 'Some current assertions or public operations were not replayed.' : !detected ? 'The semantic mutation control did not detect an assertion failure; a crash is not detection.' : outcome==='fail' ? 'Assertion or formal failures were recorded.' : 'All current assertions have source-bound public-boundary replay evidence.'};
   } catch (e) { return {...result,outcome:'blocked',reason:e.code==='ENOENT' ? 'Missing replay-evidence.json or an original vector; code replay is blocked.' : sanitize(e.message || 'Malformed replay evidence.')}; }
 }
-export function formatReplayEvidence(result) {
-  const counts=result.counts??emptyCounts(), label=String(result.outcome).replace('_',' ').toUpperCase();
+export function formatReplayEvidence(result, {maxCharacters=Infinity} = {}) {
+  const counts=result.counts??emptyCounts(), emptyPass=result.outcome==='pass' && !(Number.isSafeInteger(counts.total) && counts.total>0);
+  const label=String(emptyPass?'blocked':result.outcome).replace('_',' ').toUpperCase();
   const formalLabel={proved_bounded:'Proved (bounded)',proved_solver:'Proved (solver)',failed:'Failed + counterexample',not_run:'Not run',not_applicable:'Not applicable'};
-  return [ ...(counts.fail ? [`✗ ${counts.fail} replay assertions fail`] : []), ...(result.formal?.result==='failed' ? ['✗ Formal check failed (counterexample in replay-evidence.json).'] : []),
-    `Code replay: ${label} — ${render(result.reason)}`,`${counts.total} checks: ${counts.pass} passed, ${counts.fail} failed, ${counts.blocked} blocked, ${counts.not_replayed} not replayed.`,
+  const head=[ ...(counts.fail ? [`✗ ${counts.fail} replay assertions fail`] : []), ...(result.formal?.result==='failed' ? ['✗ Formal check failed (counterexample in replay-evidence.json).'] : []),
+    `Code replay: ${label} — ${render(emptyPass?'Replay cannot pass with zero checks.':result.reason)}`,`${counts.total} checks: ${counts.pass} passed, ${counts.fail} failed, ${counts.blocked} blocked, ${counts.not_replayed} not replayed.`];
+  const warnings=(result.warnings??[]).map(w=>`warning: Saved test values changed: ${reviewIdentity(w.vector)} ${w.reason ? reviewIdentity(w.reason) : `${reviewIdentity(w.path)} ${reviewText(changeValue(w.before))} -> ${reviewText(changeValue(w.after))}`}`);
+  const tail=[...(warnings.length ? ['Saved-value changes are advisory; the checker or person decides.'] : []),
     ...(result.adoption ? [`Anchor adopted from ${render(result.adoption.repository)}@${render(result.adoption.commit)}; approval reference ${render(result.adoption.reference)} by ${render(result.adoption.asserted_by)}; external-assertion-unverified`] : []),
     `Public-boundary operations: ${result.operations?.executed??0}/${result.operations?.total??0} executed.`,
     `Semantic mutation control: ${result.mutation?.outcome??'not recorded'}${result.mutation ? ` (${result.mutation.failures} assertion failures)` : ''}.`,
     `Formal check (agent reported): ${formalLabel[result.formal?.result]??'not recorded'}${result.formal ? `; scope: ${render(result.formal.scope)}; reason: ${render(result.formal.reason)}` : ''}.`,
     `Source: ${result.source?.sha256??'unconfirmed'}. Manifest SHA256: ${result.manifest_sha256??'unavailable'}.`,
-    ...(result.vectors??[]).slice(0,12).map(v=>`Original vector: ${render(v.path)} — ${sha(v.sha256)?v.sha256:'unconfirmed'}.`),
-    ...((result.vectors?.length??0)>12 ? [`${result.vectors.length-12} more original vector identities are in the full manifest.`] : []),
+    ...(result.vectors??[]).slice(0,12).map(v=>`Current vector: ${render(v.path)} — ${sha(v.sha256)?v.sha256:'unconfirmed'}.`),
+    ...((result.vectors?.length??0)>12 ? [`${result.vectors.length-12} more current vector identities are in the full manifest.`] : []),
     'Agents execute the tests and supply this record. pdd validates structure and identity; it does not independently prove execution or prompt/code equivalence.',
-    'Full evidence: replay-evidence.json in the run folder.'].join('\n');
+    'Full evidence: replay-evidence.json in the run folder.'];
+  const characters=text=>[...text].length;
+  const report=items=>[...head,...items,...tail].join('\n');
+  if(characters(report(warnings))<=maxCharacters || !warnings.length)return report(warnings);
+  const notice=count=>`…and ${count} more saved-value changes (all listed in status.json at /replayEvidence/warnings).`;
+  const kept=[];
+  let used=characters(report([notice(warnings.length)]));
+  for(const warning of warnings){
+    const size=characters(warning)+1;
+    if(used+size>maxCharacters)break;
+    kept.push(warning);used+=size;
+  }
+  return report([...kept,notice(warnings.length-kept.length)]);
 }

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: a82ccdd6ab05dfc91a284a7e0c482083d8a5f066408481a925cf2ad317de21e8).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: e37c517d9a90100c0610b0f0fc496f179640b4c6bc1e333d449651deb6aa3bd4).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { execFile as execFileCallback } from 'node:child_process';
@@ -23,6 +23,7 @@ import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
 import { causeText } from './runtime-output.mjs';
 import { preparePrEvidence } from './workflow-pr-evidence.mjs';
 import { validateProofRecord } from './workflow-prove.mjs';
+import { readRunResults, resultLines, usableResult, noResultLine, NO_VERDICT } from './workflow-results.mjs';
 import { collectTestInventory } from './workflow-inventory.mjs';
 import {adoptReplayCorpus,REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinReplayVectors,readReplayEvidence,formatReplayEvidence} from './workflow-replay.mjs';
 
@@ -220,8 +221,13 @@ async function changedFiles(run, p, strict = false) {
 const isScenario = text => JSON.parse(text)?.schema_version === 'prompt-runtime.program-scenario.v1';
 async function scenarioInventory(run, p) {
   const paths = [];
+  const saved=new Set(run.replayBaseline?.vectors?.map(vector=>vector.path)??[]);
   for (const path of await changedFiles(run,p,true)) {
-    if (path.endsWith('.json') && isScenario(readFileSync(join(run.root,path),'utf8'))) paths.push(path);
+    if(!path.endsWith('.json'))continue;
+    // The replay reader reports deleted/malformed saved files with their value diff.
+    if(saved.has(path)){paths.push(path);continue;}
+    try {if(isScenario(readFileSync(join(run.root,path),'utf8')))paths.push(path);}
+    catch(error){throw Error(`${JSON.stringify(path)}: ${oneLine(error.message)}`);}
   }
   return paths;
 }
@@ -234,11 +240,17 @@ async function adoptionFailure(run,p) {
     return reason;
   };
   if (!run.replayAdoption) return null;
-  const result = await adoptReplayCorpus(run.root,join(run.runDir,'replay-adoption.json'));
+  const code=run.areas[run.area]?.replay_evidence===REPLAY_POLICY;
+  let snapshot;
+  const result = await adoptReplayCorpus(run.root,join(run.runDir,'replay-adoption.json'),{
+    ...(code ? {scenarioReference:run.replayAdoption.provenance.commit} : {}),onSnapshot:value=>{snapshot=value;}
+  });
   if (result.outcome !== 'adopted' || JSON.stringify(result.provenance) !== JSON.stringify(run.replayAdoption.provenance))
     return blocked(`Corpus adoption cannot be reused (${result.reason || 'frozen provenance changed'}${result.cause ? `: ${result.cause}` : ''}). Start an ordinary approval workflow for changed requirements.`);
-  const anchor=pinReplayVectors(run.root,result.paths);
-  if(anchor.outcome || JSON.stringify(anchor)!==JSON.stringify(run.replayBaseline))
+  const facts=vectors=>vectors?.map(v=>({path:v.path,sha256:v.sha256,checks:v.checks.map(c=>typeof c==='string'?c:
+    JSON.stringify([c.vector,c.step_id,c.check_index,c.entry_path,c.operation,c.criterion_id,c.target,c.path,c.op]))})).sort((a,b)=>a.path.localeCompare(b.path));
+  const anchor=code ? snapshot.approved_vectors : pinReplayVectors(run.root,result.paths).vectors;
+  if(JSON.stringify(facts(anchor))!==JSON.stringify(facts(run.replayBaseline?.vectors)))
     return blocked('The adopted original anchor changed. Start an ordinary approval workflow for changed requirements.');
   return null;
 }
@@ -251,12 +263,11 @@ async function refreshReplayBaseline(run,p) {
 }
 async function currentReplayEvidence(run,p,validated=false) {
   let reason = validated ? null : await adoptionFailure(run,p);
+  let paths;
   try {
-    const saved = new Set(run.replayBaseline?.vectors?.map(vector=>vector.path) ?? []);
-    const missing = (await scenarioInventory(run,p)).filter(path=>!saved.has(path));
-    if (missing.length) reason = `Current scenario paths are missing from the approved anchor: ${missing.join(', ')}. Return to prompt space.`;
-  } catch { reason = 'The current changed scenario inventory is unavailable; repair unreadable or malformed JSON candidates and Git listing failures.'; }
-  const evidence = readReplayEvidence(run);
+    paths=await scenarioInventory(run,p);
+  } catch(error) { reason = `The current changed scenario inventory is unavailable: ${oneLine(error.message)}. Repair unreadable or malformed JSON candidates and Git listing failures.`; }
+  const evidence = readReplayEvidence(run,paths);
   return reason ? {...evidence,outcome:'blocked',reason} : evidence;
 }
 async function unpublishedScenarios(run,p) {
@@ -396,7 +407,7 @@ async function startRunCommand({ name, issue, agent = 'codex', base, adoptCorpus
   try { workflow = readWorkflowAreas({ packageRoot, name, cwd, home: p.env.HOME || homedir() }); } catch (error) { return fail(error.message); }
   if (adoptCorpus !== undefined && (typeof adoptCorpus !== 'string' || !adoptCorpus.trim() || !workflow.areas.some(area=>area.replay_evidence===REPLAY_POLICY))) return {exitCode:2,message:'--adopt-corpus requires a declaration path and an explicitly replay-evidence-enabled workflow.'};
   if (!['codex', 'claude', 'gemini', 'agy'].includes(agent)) return fail('Choose --agent codex, --agent claude, --agent gemini or --agent agy.');
-  // Every chat of the run uses this config folder; a missing one makes the agent stop at once (0.1.6 tester).
+  // Save the initial profile for later chats; explicit Codex replacement may select another.
   const variable = homeVariable(agent), configDir = variable && p.env[variable] ? resolve(cwd, expandHome(p.env[variable], p.env)) : null;
   if (configDir && !isFolder(configDir)) return fail(`${variable} is "${configDir}", but that folder does not exist. Fix ${variable} and run the command again.`);
   const explicitBase = base !== undefined;
@@ -543,14 +554,39 @@ function hideLocalPaths(text, run) {
 const PROMPT_TESTS = new RegExp(PROMPT_TESTS_WORDS);
 const LABEL_START = new RegExp(`^${PROMPT_TESTS_WORDS}`);
 const LINE_PATTERN = new RegExp(`${PROMPT_TESTS_WORDS}((?:\\s*\\([^)]*\\))*):\\s*(.*?)(?=\\n|\\s*(?:;|\\bReport\\b|https?:\\/\\/|${PROMPT_TESTS_WORDS}|$))`, 'gs');
+// A result is only its pdd parts, joined by " · " (mark and criteria, checks, other states, AI calls). Words an agent
+// wrote after them on the same line ("… 2 AI calls. Full suite: 4085 passed.") are not part of the result.
+const RESULT_PART = /^(?:(?:✓|✗|no verdict|running|busy|unknown|UNKNOWN|queued|refused|not run)(?: (?:\d+ of \d+ criteri(?:a|on)|passed))?|\d+ of \d+ criteri(?:a|on)|passed|criteria details not reported|\d+\/\d+ checks|(?:\d+ AI calls?(?: \(\d+ for reruns\))?|\d+ for reruns)(?: \+ \d+ unknown)?|\d+ (?:refused|not run|unknown|queued|running|ahead|not yet settled|Stor(?:y|ies) skipped)|\d+ AI calls? so far|step \d+(?: of \d+)?(?: \([^)]*\))?)$/;
+function resultParts(text) {
+  const sentence = text.split(/\.\s/)[0].replace(/[.,]$/, ''), kept = [];
+  for (const part of sentence.split(' · ')) {
+    if (RESULT_PART.test(part)) { kept.push(part); continue; }
+    // Without a step number, progress puts the step name directly after its own running marker.
+    if (part && kept.length > 1 && kept.at(-1) === 'running') { kept.push(part); continue; }
+    const words = part.split(' ');
+    for (let size = words.length - 1; size > 0; size--) if (RESULT_PART.test(words.slice(0, size).join(' '))) { kept.push(words.slice(0, size).join(' ')); break; }
+    break;
+  }
+  return kept.length ? kept.join(' · ') : sentence.split(' ')[0];
+}
 export function runtimeLines(text) {
   return [...String(text ?? '').matchAll(LINE_PATTERN)].map(match => {
     const groups = [...match[1].matchAll(/\(([^)]*)\)/g)].map(group => group[1].trim());
     const story = groups.find(group => group && group.toUpperCase() !== 'DRAFT' && group !== 'all Stories') ?? null;
-    const result = match[2].replace(/\s+/g, ' ').trim().replace(/[.,]$/, '');
+    const result = resultParts(match[2].replace(/\s+/g, ' ').trim());
     return { story, draft: groups.some(group => group.toUpperCase() === 'DRAFT'), result,
       line: `${PROMPT_TESTS_LABEL}${match[1].replace(/\s+/g, ' ')}: ${result}`, pass: result.includes('✓') && !result.includes('✗') };
   });
+}
+// The Prompt tests lines that pdd wrote as results in a PR body's top block: "pdd result:" lines and plain (receipt or older) lines.
+// The Steps overview, full summaries, Verify and every agent note are never read.
+export function recordedRuntimeLines(text) {
+  const lines = [];
+  for (const line of String(text ?? '').split('\n')) {
+    if (/^#{1,6}\s/.test(line) || /^<details\b/i.test(line)) break;
+    if (line.startsWith('pdd result:') || LABEL_START.test(line)) lines.push(line);
+  }
+  return runtimeLines(lines.join('\n'));
 }
 // One line per Story: a Story checked again keeps its place and takes its latest line.
 const latestStories = lines => [...new Map(lines.filter(line => line.story).map(line => [line.story, line])).values()];
@@ -603,7 +639,8 @@ export function storyCount(run, ports = {}) {
   return result;
 }
 export function storyEvidence(run, { comparisonRoot } = {}) {
-  const records = [...(run.runtimeHistory ?? []), ...Object.values(run.done ?? {}), ...(run.evidence ?? [])]
+  // Only pdd's own recorded pdd test batches and checked receipts; Prompt tests lines typed into a summary are not evidence.
+  const records = [...ownStoryRecords(run), ...(run.evidence ?? [])]
     .filter(record => runtimeLines(record.summary).length).sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
   const root = comparisonRoot === undefined ? run.root : comparisonRoot;
   const current = new Map(), older = new Map(), fingerprint = root === null ? null : gitFingerprint(root);
@@ -615,7 +652,25 @@ export function storyEvidence(run, { comparisonRoot } = {}) {
   }
   return [...new Map([...older, ...current]).values()];
 }
-const storyText = count => `${count.pass} of ${count.total} Stories pass${count.unknown?.length ? ` · ${count.unknown.length} unknown` : ''}`;
+// The Story count in status reads only pdd's own results: the pdd test batches that done recorded (pddHistory and step
+// pddResults) and receipts that pdd workflow evidence checked. Prompt tests lines an agent typed into a summary never count.
+function ownStoryRecords(run) {
+  const batches = new Map();
+  for (const result of [...(run.pddHistory ?? []), ...Object.values(run.done ?? {}).flatMap(record => record?.pddResults ?? [])])
+    if (result?.kind === 'pdd test' && result.sourceSha256 && Array.isArray(result.tests) && !batches.has(result.batch)) batches.set(result.batch, result);
+  return [...batches.values()].map(result => ({ at: result.at, summary: (result.stories?.length ? result.stories : [result.summary]).join('\n'),
+    source: { kind: 'runtime-capture-v1', sha256: result.sourceSha256, tests: result.tests } }));
+}
+// null when the run has no check claim at all; { none: true } when it has a check or typed lines but no pdd result.
+export function ownStoryCount(run, ports = {}) {
+  const own = [...(run.evidence ?? []), ...ownStoryRecords(run)];
+  // A Story that only typed lines name shows as unknown: without a source binding, storyCount never trusts its result.
+  const typed = [...(run.runtimeHistory ?? []), ...Object.values(run.done ?? {})].filter(record => runtimeLines(record?.summary).length).map(({ at, summary }) => ({ at, summary }));
+  if (own.length) return storyCount({ root: run.root, evidence: [...typed, ...own] }, ports);
+  const claimed = run.done?.check || typed.length;
+  return claimed ? { pass: 0, total: 0, failing: [], none: true } : null;
+}
+const storyText = count => count.none ? `no pdd result (${NO_VERDICT})` : `${count.pass} of ${count.total} Stories pass${count.unknown?.length ? ` · ${count.unknown.length} unknown` : ''}`;
 const shortLine = text => clip(text, 199);
 // Report links in a check summary, each once: "Report (<story>): <url>" keeps the Story name; a bare link has none.
 function reportLinks(text, env) {
@@ -740,7 +795,7 @@ async function matchingPromptApprovals(run, p) {
   });
 }
 async function publicationEvidence(run, area, p) {
-  const saved = { runId: run.runId, runDir: run.runDir, root: run.root, baseSha: run.baseSha, baseBranch:run.baseBranch, workflow:run.workflow, number: run.number,
+  const saved = { runId: run.runId, ...(Number.isFinite(run.startedAt) ? { startedAt: run.startedAt } : {}), runDir: run.runDir, root: run.root, baseSha: run.baseSha, baseBranch:run.baseBranch, workflow:run.workflow, number: run.number,
     decisions: run.decisions ?? [], promptApprovals: await matchingPromptApprovals(run, p),
     steps: run.areas.flatMap(item => item.steps).map(step => ({ step, summary: run.done[step]?.summary ?? '' })) };
   let observedHead, observedProof;
@@ -755,7 +810,7 @@ async function publicationEvidence(run, area, p) {
         const path = join(runDir, 'old-code-proof.json');
         if (!proofFiles.lstatSync(path).isFile()) return {content:'',error:'Proof is not a regular file.'};
         observedProof = proofFiles.readFileSync(path, 'utf8');
-        return {content:observedProof,error:''};
+        return {content:observedProof,error:'',savedAt:proofFiles.lstatSync(path).mtimeMs};
       } catch (error) { return {content:'',error:error.code === 'ENOENT' ? 'missing' : 'Proof could not be read.'}; }
     }
   });
@@ -763,7 +818,7 @@ async function publicationEvidence(run, area, p) {
     evidence.nativeLine = 'Native tests: unknown (no current machine counts).';
     try {
       const record = JSON.parse(observedProof);
-      if (validateProofRecord(record) && record.runId === run.runId && record.headSha === observedHead?.headSha && record.baseSha === observedHead?.baseSha
+      if (!['not-run','stale','unavailable'].includes(evidence.proofStatus) && validateProofRecord(record) && record.runId === run.runId && record.headSha === observedHead?.headSha && record.baseSha === observedHead?.baseSha
           && !record.interruptSignal && [0,1].includes(record.head.exitCode) && !record.head.signal && !record.head.timedOut && !record.head.outputLimited && !record.head.error && !record.head.setupError) {
         const facts = new Map();
         for (const line of record.head.stdoutTail) {
@@ -777,6 +832,8 @@ async function publicationEvidence(run, area, p) {
     } catch { /* Missing, stale or unparseable machine output supplies no counts. */ }
   }
   if (run.publicationPending) evidence.lines.unshift('Check evidence: publication-pending (source is being published).');
+  // pdd's own pdd test and pdd lint results lead the body; the code PR's prove result is its Old-code proof line.
+  evidence.pddLines = resultLines(ownResults(run, p), { kinds: ['pdd test', 'pdd lint'] });
   return evidence;
 }
 function evidenceFit(lines, room, env) {
@@ -875,23 +932,28 @@ function publicationRuntime(run, env) {
     .filter(record => runtimeLines(record.summary).length && matchesSource(record, run.root, fingerprint)).sort((a,b) => (a.at ?? 0) - (b.at ?? 0));
   const stories = new Map();
   for (const record of records) for (const line of runtimeLines(record.summary)) if (line.story) stories.set(line.story, { line, record });
+  // Lines that an agent typed or pasted into a step summary stay agent notes; only a receipt that pdd workflow evidence checked is not.
+  const receipts = new Set(run.evidence ?? []), note = (record, line) => receipts.has(record) ? line : `${AGENT_NOTE}: ${line}`;
   if (!stories.size) {
     const record = records.at(-1);
-    return record ? [...runtimeTop(record.summary), ...reportLinks(record.summary, env)] : [];
+    return record ? [...runtimeTop(record.summary), ...reportLinks(record.summary, env)].map(line => note(record, line)) : [];
   }
   const selected = [...stories.values()];
   const reports = selected.flatMap(({line, record}) => reportLinks(record.summary, env).filter(report => {
     const name = /^Report \(([^)]+)\):/.exec(report)?.[1];
     return !name || name === line.story;
-  }));
-  return [...selected.map(item => item.line.line), ...(selected.length > 1 ? [totalLine(selected.map(item => item.line))] : []), ...new Set(reports)];
+  }).map(report => note(record, report)));
+  const total = selected.length > 1 ? [totalLine(selected.map(item => item.line))].map(line => selected.every(item => receipts.has(item.record)) ? line : `${AGENT_NOTE}: ${line}`) : [];
+  return [...selected.map(item => note(item.record, item.line.line)), ...total, ...new Set(reports)];
 }
+// pdd's own result lines for the top of a PR; while source is being published they say so instead.
+const ownLines = (run, evidence) => evidence.pddLines?.length ? (run.publicationPending ? ['pdd result: publication-pending (source is being published).'] : evidence.pddLines) : [];
 function prBody(run, area, env, drafts = [], tests = true, evidence) {
   const steps = prSteps(run, area);
   const raw = Object.fromEntries(steps.map(step => [step, cleanSummary(run, step)]));
   const summaries = Object.fromEntries(steps.map(step => [step, oneLine(raw[step])]));
   // Agent text is inert everywhere in the body: the short Steps line is a code span too.
-  const lines = steps.map(step => `- **${step}**: Agent note — not checked by pdd: ${summaries[step] ? codeSpan(shortLine(summaries[step])) : 'done'}`);
+  const lines = steps.map(step => `- **${step}**: ${run.done[step].skipped ? 'skipped (recorded by pdd). ' : ''}Agent note — not checked by pdd: ${summaries[step] ? codeSpan(shortLine(summaries[step])) : 'done'}`);
   const full = Object.fromEntries(steps.map(step => [step, keepLines(raw[step])]));
   // Only a PR that covers a verify step carries verify.md (PR 1 never does).
   let verify = null;
@@ -912,11 +974,12 @@ function prBody(run, area, env, drafts = [], tests = true, evidence) {
   const sources = [run.done.check?.summary, ...steps.toReversed().map(step => run.done[step]?.summary)].filter(Boolean);
   const verdict = sources.map(verdictLine).find(Boolean), change = sources.map(changeLine).find(Boolean);
   const shown = change?.match(/https?:\/\/[^\s;]+/g) ?? [];
-  const runtime = publicationRuntime(run, env).filter(line => !line.startsWith('Report') || !shown.some(url => line.includes(` ${url} `)));
+  const runtime = publicationRuntime(run, env).filter(line => !line.replace(`${AGENT_NOTE}: `, '').startsWith('Report') || !shown.some(url => line.includes(` ${url} `)));
   const noted = runtime.some(line => hasReportLink(line, env)) || change && hasReportLink(change, env);
-  const replay = area.replay_evidence === REPLAY_POLICY ? [formatReplayEvidence(run.replayEvidence ?? readReplayEvidence(run)), ''] : [];
+  const replayResult = area.replay_evidence === REPLAY_POLICY ? run.replayEvidence ?? readReplayEvidence(run) : null;
+  const replay = replayResult ? [formatReplayEvidence(replayResult,{maxCharacters:0}), ''] : [];
   const prefix = [...failing, ...replay];
-  const top = [...(verdict ? [`${AGENT_NOTE}: ${verdict}`] : []), ...(change ? [`${AGENT_NOTE}: ${change}${hasReportLink(change, env) ? ' (report links expire after 7 days)' : ''}`] : []), ...runtime];
+  const top = [...ownLines(run, evidence), ...(verdict ? [`${AGENT_NOTE}: ${verdict}`] : []), ...(change ? [`${AGENT_NOTE}: ${change}${hasReportLink(change, env) ? ' (report links expire after 7 days)' : ''}`] : []), ...runtime];
   if (evidence.lines.some(line => line.includes('pdd-workflow:'))) throw Error('Remove supplied workflow ownership markers from the report; pdd preserves its own marker.');
   const inventory = run.testInventory && label !== 'PR 1' ? [run.testInventory.text.trimEnd(), ...(run.testInventory.saved ? [] : ['warning: The full test inventory report was not saved.']), inventoryCommits(run.testInventory)] : [];
   const slot = evidence.lines.findIndex(line => line.startsWith(`${AGENT_NOTE}:`));
@@ -932,6 +995,10 @@ function prBody(run, area, env, drafts = [], tests = true, evidence) {
   // approvals and verify.md then fit as before, and the full summaries get the room that is left.
   const least = fullSummaries(steps, full, 0);
   const { lifted, approvals } = publicationFit(preparedLines, approvalLines, Math.max(0, BODY_BUDGET - 200 - (verify === null ? 0 : 1000) - characters(body(null, [], [], least))), env);
+  if(replayResult){
+    const room=Math.max(0,BODY_BUDGET-200-(verify===null?0:1000)-characters(body(null,lifted,approvals,least)));
+    prefix[failing.length]=formatReplayEvidence(replayResult,{maxCharacters:characters(replay[0])+room});
+  }
   const verifyText = verify === null ? null : verifyFit(hideLocalPaths(verify, run), BODY_BUDGET - 200 - characters(body('', lifted, approvals, least)), env, false, true);
   return withSummaries(steps, full, section => body(verifyText, lifted, approvals, section), BODY_BUDGET - 200);
 }
@@ -992,7 +1059,6 @@ async function publishAreaPr(run, area, p, lines, retry) {
   if (opted) {run.replayEvidence=await currentReplayEvidence(run,p,true);
     const last=area.steps.filter(step=>run.done[step]).at(-1),evidence=run.replayEvidence,applyPublication=publicationUpdate(run,['replayEvidence',...(codePr?['testInventory']:[])]);
     commitRun(run,p,latest=>{applyPublication(latest);if(last&&latest.done[last])latest.done[last].replayEvidence=evidence;});
-    if(run.replayAdoption && /(?:missing from the approved anchor|changed scenario inventory is unavailable)/.test(run.replayEvidence.reason))return fail(`${run.replayEvidence.reason} Start an ordinary approval workflow for changed requirements.`);
   }
 
   const bodyBase = run.prBase ?? run.baseBranch;
@@ -1154,7 +1220,14 @@ async function recordEvidenceCommand({ ref, summaryFile, cwd }, ports) {
   return done(`Recorded source-verified saved evidence for ${run.repo}#${run.number}. Steps, gates and PRs are unchanged. This records evidence, not fresh execution or approval.`);
 }
 
-async function stepDoneCommand({ step, summary, cwd, packageRoot = PACKAGE_ROOT }, ports) {
+// pdd's own results for a run (pdd test, pdd lint, pdd workflow prove). A read problem gives no results, never a stop.
+function ownResults(run, p) {
+  try { return (p.readRunResults ?? readRunResults)({ root: run.root, runDir: run.runDir, runId: run.runId, since: run.startedAt ?? 0, baseBranch: run.baseBranch ?? null }, { env: p.env }); }
+  catch { return []; }
+}
+// The steps whose done output shows pdd's own results, or a visible "no pdd result" warning.
+const PROOF_STEPS = ['check', 'try', 'verify'];
+async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACKAGE_ROOT }, ports) {
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
   const run = await runForWorktree(cwd, p);
   if (!run) return fail('pdd workflow done works only in a run worktree. cd to the worktree that pdd made for this run.');
@@ -1168,7 +1241,15 @@ async function stepDoneCommand({ step, summary, cwd, packageRoot = PACKAGE_ROOT 
     if (before.length) lines.push(`warning: ${before.join(', ')} ${before.length > 1 ? 'are' : 'is'} not done yet. pdd recorded ${step} anyway.`);
   }
   const observedQuestion=run.question, observedGate=run.gate;
-  const record = { at: p.now(), summary: keepLines(summary), area: area.name };
+  const reason = skipped === undefined ? null : keepLines(skipped) || 'no reason given';
+  const record = { at: p.now(), summary: keepLines(reason === null ? summary : [`skipped: ${reason}`, summary].filter(Boolean).join('\n')), area: area.name,
+    ...(reason === null ? {} : { skipped: { reason } }), ...(PROOF_STEPS.includes(step) ? { pddResults: ownResults(run, p) } : {}) };
+  if (PROOF_STEPS.includes(step) && reason === null) {
+    const usable = record.pddResults.some(usableResult), shown = usable || !record.pddResults.length ? resultLines(record.pddResults) : [...resultLines(record.pddResults), noResultLine()];
+    lines.push(...(usable ? ['pdd recorded its own results with this step:'] : ['warning: pdd has no result of its own for this run yet. pdd recorded the step with the label "no pdd result".']), ...shown,
+      'Your summary is saved as an agent note, apart from pdd\'s results.');
+  }
+  if (reason !== null) lines.push(`pdd recorded that ${step} was skipped. Reason (agent note): ${oneLine(reason)}`);
   const hasRuntime=runtimeLines(record.summary).length>0;
   if(hasRuntime)record.source={kind:'git-content-v1',sha256:gitFingerprint(run.root)};
   const replay=area.replay_evidence===REPLAY_POLICY && (area.steps.some(item=>item!==step&&!run.done[item]) || area.gate!=='pr' || area.before==='approve'&&!prOf(run,area.name))?await currentReplayEvidence(run,p):null;
@@ -1181,6 +1262,8 @@ async function stepDoneCommand({ step, summary, cwd, packageRoot = PACKAGE_ROOT 
       lines.push(`warning: ${step} ran again after ${later.join(', ')}. pdd cleared ${later.length>1?'those steps':'that step'}; run ${later.length>1?'them':'it'} again.`);
     }
     if(hasRuntime)(latest.runtimeHistory??=[]).push({...record,step});
+    // pdd's own pdd test results, once per batch, so a later partial check keeps the Stories of an earlier one.
+    for(const result of record.pddResults??[])if(result.kind==='pdd test'&&!(latest.pddHistory??=[]).some(item=>item.batch===result.batch))latest.pddHistory.push(result);
     if(replay)latest.replayEvidence=replay;
     latest.done[step]=record;
   };
@@ -1320,9 +1403,9 @@ async function draftDescription(run, pr1, drafts, p) {
     }
     while (at < rows.length && !rows[at].trim()) at++;
     const headerStart = at;
-    while (at < rows.length && new RegExp(String.raw`^(?:Agent note — not checked by pdd: (?:Verdict:|Before[ :])|Verdict:|Before |Before:|${PROMPT_TESTS_WORDS}|Report(?: \([^)]*\))?:)`).test(rows[at])) at++;
+    while (at < rows.length && new RegExp(String.raw`^(?:pdd result: |Agent note — not checked by pdd: (?:Verdict:|Before[ :]|${PROMPT_TESTS_WORDS}|Report(?: \([^)]*\))?:)|Verdict:|Before |Before:|${PROMPT_TESTS_WORDS}|Report(?: \([^)]*\))?:)`).test(rows[at])) at++;
     const priorTop = rows.slice(headerStart, at);
-    const ordinaryTop = [...new Set([...labelledTop, ...priorTop.filter(line => /^(?:Agent note — not checked by pdd: )?(?:Verdict:|Before[ :])/.test(line)).map(line => line.startsWith(`${AGENT_NOTE}: `) ? line : `${AGENT_NOTE}: ${line}`)]), ...publicationRuntime(run, p.env)];
+    const ordinaryTop = [...ownLines(run, evidence), ...new Set([...labelledTop, ...priorTop.filter(line => /^(?:Agent note — not checked by pdd: )?(?:Verdict:|Before[ :])/.test(line)).map(line => line.startsWith(`${AGENT_NOTE}: `) ? line : `${AGENT_NOTE}: ${line}`)]), ...publicationRuntime(run, p.env)];
     const introduction = [];
     while (at < rows.length && !rows[at].trim()) at++;
     if (reference.test(rows[at] ?? '')) {
@@ -2000,7 +2083,7 @@ async function gateFacts(run, p) {
 }
 
 function detail(run, chat = null, facts = {}) {
-  const drafts = facts.drafts ?? [], stories = storyCount(run);
+  const drafts = facts.drafts ?? [], stories = ownStoryCount(run);
   const area = run.areas[run.area], tab = currentChat(run) ?? run.chats?.at(-1);
   const ci = pr => ({ passing: 'CI passing', failing: 'CI failing', pending: 'CI running', none: 'no CI checks' }[pr.ci] ?? 'CI unknown');
   const steps = (area?.steps ?? []).map(step => `${step} ${run.done[step] ? 'done' : 'to do'}${run.done[step]?.summary ? ` ("${clip(oneLine(run.done[step].summary), 120)}")` : ''}`);
@@ -2048,7 +2131,7 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false } = 
     : step ? `agent working on ${step}` : 'agent working';
   const ref = `${run.repo}#${run.number}`;
   const when = Number.isFinite(run.updatedAt) ? new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', ...(timeZone ? { timeZone } : {}) }).format(new Date(run.updatedAt)) : 'unknown time';
-  const prs = (run.pr ?? []).map(pr => ({ number: pr.number, url: pr.url, state: pr.state ?? 'open' })), stories = storyCount(run);
+  const prs = (run.pr ?? []).map(pr => ({ number: pr.number, url: pr.url, state: pr.state ?? 'open' })), stories = ownStoryCount(run);
   return { ref, repo: run.repo, number: run.number, workflow: run.workflow, area: area?.name ?? null, group, words, prs, stories,
     updatedAt: run.updatedAt ?? null, root: run.root, runDir: run.runDir, viewCommand: `pdd workflow view ${ref}`,
     line: [ref, run.workflow, area?.name ?? '?', words, ...(stories ? [storyText(stories)] : []), ...(prs.length ? [`PR ${prs.map(pr => `#${pr.number}`).join(' ')}`] : []), when].join(' · ') };
@@ -2096,7 +2179,9 @@ async function runStatusCommand({ ref, cwd, all = false, json = false, cancelled
 
 const replacementPhases = ['intent', 'closeRequested', 'closed', 'createRequested', 'prepared', 'launchRequested', 'launched', 'rolledBack', 'ended'];
 function validReplacement(record, run) {
-  if (!record || typeof record !== 'object' || Array.isArray(record) || Object.keys(record).some(key => !['id', 'area', 'phase', 'at', 'original', 'replacement', 'recovery'].includes(key)) || !validSessionId(record.id) || !Number.isSafeInteger(record.at) || record.at < 0 || !replacementPhases.includes(record.phase) || !run.areas.slice(0, run.area + 1).some(area => area.name === record.area)) return false;
+  if (!record || typeof record !== 'object' || Array.isArray(record) || Object.keys(record).some(key => !['id', 'area', 'phase', 'at', 'original', 'configDir', 'replacement', 'recovery'].includes(key)) || !validSessionId(record.id) || !Number.isSafeInteger(record.at) || record.at < 0 || !replacementPhases.includes(record.phase) || !run.areas.slice(0, run.area + 1).some(area => area.name === record.area)) return false;
+  if (Object.hasOwn(record, 'configDir') && (record.configDir !== null && (typeof record.configDir !== 'string' || !record.configDir.length)
+    || record.replacement && record.replacement.configDir !== record.configDir)) return false;
   const recovery = record.recovery;
   if (recovery !== undefined && (!recovery || typeof recovery !== 'object' || Array.isArray(recovery)
     || Object.keys(recovery).some(key => !['closeAcknowledged','resumeRequested','allocationLabel','tabIdsBefore','latestLaunchRequest','unsentProof'].includes(key))
@@ -2180,17 +2265,22 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
   let defaultOriginal = chat ? structuredClone(chat) : undefined;
   if (newSession && historical) return fail(`Select the current area ${run.areas[run.area].name} to start a new session; earlier areas cannot be replaced.`);
   if (newSession && !chat && (!run.chatReplacement || ['launched','rolledBack','ended'].includes(run.chatReplacement.phase))) return fail('The current area has no saved chat to replace. Open it first.');
-  const missing = missingHome(run, p.env);
-  if (missing) return fail(missing);
   const pending = run.chatReplacement;
   if (pending !== undefined) {
     if (!validReplacement(pending, run)) return fail('The saved chat replacement record is malformed or unknown. Inspect it before opening a chat.');
     if (!['launched', 'rolledBack', 'ended'].includes(pending.phase) && !newSession) return fail(`Chat replacement is pending at ${pending.phase}. Retry: pdd workflow open ${run.number} --new`);
   }
+  const recovering = pending && !['launched','rolledBack','ended'].includes(pending.phase);
+  const incoming = newSession && !recovering && run.agent === 'codex' && typeof p.env.CODEX_HOME === 'string' && p.env.CODEX_HOME.length ? p.env.CODEX_HOME : null;
+  const replacementConfig = incoming ? resolve(cwd, expandHome(incoming, p.env)) : run.configDir;
+  if (incoming && !isFolder(replacementConfig)) return fail(`CODEX_HOME is "${replacementConfig}", but that folder does not exist. Fix CODEX_HOME and run the command again.`);
+  // Pending recovery checks the profile of each effect, which may be the original
+  // chat's folder rather than either the current run or the retrying terminal.
+  const missing = !recovering && missingHome({ ...run, configDir: replacementConfig }, p.env);
+  if (missing) return fail(missing);
 
   try {
     if (newSession) {
-      const recovering = pending && !['launched','rolledBack','ended'].includes(pending.phase);
       if (recovering) chat = pending.original;
       const replacementArea = recovering ? run.areas.findIndex(item => item.name === pending.area) : run.area;
       const currentArea = run.areas[replacementArea];
@@ -2203,12 +2293,14 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
         ...(run.gate ? [`Open gate: ${run.gate.kind} for ${run.gate.area ?? currentArea.name}. Wait for the person to decide whether to approve or request changes; do not treat this new session as approval.`] : []),
         ...(openQuestion(run) ? [`Pending question: ${openQuestion(run).text}`] : []),
       ].join('\n') + '\n';
+      const replacementRun = { ...run, configDir: replacementConfig };
       const checkpoint = async record => {
         if (!validReplacement(record, run)) throw Object.assign(Error('Invalid replacement checkpoint'), { code: 'invalid_replacement_checkpoint' });
         const admit = fresh => {
           if (!fresh || ended(fresh)) throw Object.assign(Error('The run ended during replacement.'), {code:'run_ended'});
           const prior = fresh.chatReplacement;
           const sameAttempt = prior && prior.id === record.id && prior.at === record.at && sameFact(prior.original, record.original);
+          if (sameAttempt && Object.hasOwn(prior, 'configDir') && prior.configDir !== record.configDir) throw Error('Replacement configuration changed');
           if (record.phase === 'intent' && !sameAttempt) {
             if (prior && !['launched','rolledBack','ended'].includes(prior.phase)) throw Error('Replacement already pending');
             if (prior?.id === record.id) throw Error('Invalid replacement transition');
@@ -2218,15 +2310,21 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
         admit(readRun(run.runDir));
         commitRun(run, p, fresh => {
           if (!admit(fresh)) (fresh.abandonedChats ??= []).push({ ...record.original, replacementId: record.id, abandonedAt: record.at, reason: 'explicit-new-session' });
+          const priorPhase = fresh.chatReplacement?.phase;
           fresh.chatReplacement = structuredClone(record);
+          // Only the first current-area installation selects later-area inheritance.
+          // Observation/recovery checkpoints must not retarget a newer saved account.
+          if (record.phase === 'launchRequested' && record.area === fresh.areas[fresh.area]?.name
+            && !['launchRequested','launched'].includes(priorPhase)) fresh.configDir = record.configDir;
           if (['launchRequested', 'launched', 'rolledBack'].includes(record.phase)) {
             fresh.chats = fresh.chats.filter(item => item.area !== record.area);
             fresh.chats.push(record.phase === 'rolledBack' ? {...record.original, messageFile: record.original.originalMessageFile} : {...record.replacement});
           }
           if (['launched','rolledBack','ended'].includes(record.phase) && record.area === fresh.areas[fresh.area]?.name) clearChatFailure(fresh);
         });
+        Object.assign(replacementRun, run);
       };
-      chat = await restartChat({ run, chat, message, pending: pending && !['launched','rolledBack','ended'].includes(pending.phase) ? pending : undefined }, { ...p, checkpoint });
+      chat = await restartChat({ run: replacementRun, chat, message, pending: recovering ? pending : undefined }, { ...p, checkpoint });
       if (run.chatReplacement?.phase === 'ended') return done(`Ended the historical ${chat.area} replacement attempt without launching or resuming it. The current chat and progress are kept.`);
       if (run.chatReplacement?.phase === 'rolledBack') return done(`Restored the usable ${chat.area} chat. The same replacement attempt was rolled back.`);
       if (run.chatReplacement?.recovery?.resumeRequested) return done(`Resumed this attempt's ${chat.area} session in Herdr session pdd; no second first message was sent. The run, completed work, gates and approvals are kept.`);

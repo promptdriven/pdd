@@ -37,4 +37,4 @@ Each code module's `.prompt.md` is the source; code implements it.
 
 Without prompts, use code, callers and tests as evidence. Change no code until asked.
 
-Workflow skills: pdd-small-change, pdd-bug and pdd-feature.
+Workflow skills: pdd-small-change, pdd-bug, pdd-feature and pdd-product.

@@ -61,7 +61,7 @@ PDD_SAID
 
 Choose a delimiter absent as a whole line from the payload. Keep it quoted. Never interpolate the words into shell code or shell quotes. `--said -` records stdin exactly, including newlines. Blank input is refused; pdd does not grade nonblank words.
 - The gate saves selected prompt paths and prose hashes when shown. If a prompt changes, show the gate again before approval. Output lists the paths and hashes.
-- Without --said, a person at a normal terminal can answer y/N once for the listed gate and all its drafts. `pdd approve PATH` approves one prompt. An agent or caller outside a normal terminal gets a plain instruction: ask the person, then run with --said and their words. Native Herdr area-chat evidence may record history but never authorizes approval. Only an explicit approve call passes an approval gate; steps, `workflow done` and chat messages never do. Warn, without blocking, when a workflow has no approve gate before code.
+- Without --said, a person at a normal terminal can answer y/N once for the listed gate and all its drafts. `pdd approve PATH` approves one prompt. For a caller outside a normal terminal, `pdd workflow approve` instructs the agent to ask the person, then run with --said and their words; `pdd approve PATH` instructs the person to run that command. Native Herdr area-chat evidence may record history but never authorizes approval. Only an explicit approve call passes an approval gate; steps, `workflow done` and chat messages never do. Warn, without blocking, when a workflow has no approve gate before code.
 - Workflow approval reads `pdd.json` from the main checkout (`sourceRoot`), outside the agent's run worktree. Standalone `pdd approve PATH` reads it from the Git root of the current checkout. Root `pdd.json` with `"strict_approvals": true` permits only a person terminal; absent/false is easy mode. Strict mode refuses --said. Prompt approval records the invoking actor, time, route, exact words and path/hash; PR evidence shows matching approvals safely quoted in code spans. Gate approval does not approve the later code-or-stop gate. A person decides expected values; never change them on your own.
 - pdd never merges and has no merge command. An agent may merge only after the person's explicit chat request. Resolve the PR's exact current head and require at least one check and all required checks green for that head; missing, failed or pending checks stop. First post a PR comment beginning `Merge requested by the person: "…"`, preserving the exact request safely in a Markdown code span (use a fence longer than any backtick run; JSON-quote controls/newlines). Use a body file, never interpolate the words into shell code. A failed comment stops. Recheck head/checks, then run `gh pr merge PR --merge --match-head-commit <head>` with that same head. A changed head stops; obtain green checks for its current head before retrying.
 - To change an approved prompt (prose or interface), set `"status": "draft"`, run `pdd test --fill-hash` and ask the
@@ -116,8 +116,7 @@ Safe in-repository file links and linked folders send the final Git-visible regu
 ## 3. Schema rules
 
 These rules apply to every `input_schema` and `result_schema`, to each resource `arguments_schema` and `result_schema`,
-and to an app map's `state_schema`. Today the interpreter reports only one broken rule at a time, often with `"path": null`
-and no field name. So check every schema against ALL the rules before the first `pdd test`.
+and to an app map's `state_schema`. Local preflight reports schema problems in the prompt and called prompts with JSON Pointers at 0 AI calls. Check every schema against these rules before the first `pdd test`.
 
 1. The top of each schema is `"type": "object"`.
 2. Every object has `properties`, `required` and `"additionalProperties": false`. With no fields: `"properties": {}, "required": []`.
@@ -139,7 +138,7 @@ names the bad bound's JSON Pointer (for example `/properties/count/maximum`), th
 and the supported range (`supported_integer_range`).
 
 For an optional input field, leave it out of `required`. Do not use `oneOf` with `null` for it: the Simulator's form shows
-`oneOf` only as a raw JSON box, and pdd cannot check that input before it sends. A correct schema (`read` is optional):
+`oneOf` only as a raw JSON box. A correct schema (`read` is optional):
 ```json
 {"type": "object", "properties": {"title": {"type": "string", "minLength": 1}, "read": {"type": "boolean"},
    "tags": {"type": "array", "items": {"type": "string"}}, "note": {"oneOf": [{"type": "string"}, {"type": "null"}]}},
@@ -179,7 +178,7 @@ The AI cannot compute a hash. Declare a compute resource with hash_json or hash_
 
 Declare the data as a resource in the interface. The prose names each operation: "Read the tasks once with
 `store.load` and the key `todos`." This is the full `todo-cli` resource. `TASKS` is the list schema of the first
-line: write it out in full in all 3 places (`$ref` is not allowed). A missing key reads as `null`, so `load` uses `oneOf`.
+line: write it out in full in all 3 places, or use a `$contract` reference expanded locally before lint, test and simulate (JSON Schema `$ref` is not allowed). A missing key reads as `null`, so `load` uses `oneOf`.
 ```json
 TASKS = {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "integer", "minimum": 1},
          "text": {"type": "string"}, "done": {"type": "boolean"}}, "required": ["id", "text", "done"], "additionalProperties": false}}
@@ -297,12 +296,12 @@ node `<file>--op-<operation>--hex-<operation name in hex>`. `printf add | xxd -p
 
 ## 11. `pdd test`
 
-`pdd test --fill-hash` fills the hash of draft prompts. `pdd test` checks every test at the same time.
+`pdd test --fill-hash` fills the hash of draft prompts. `pdd test` checks discovered tests, reusing unchanged passing Stories from `.pdd/cache/test/`. Use `--lf` for last failures, `--cache-clear` to clear the cache, or `--retry` to retry confirmed unstarted checks in a saved batch.
 `pdd test place-order` checks one story. `pdd test --read` reads the last results again. `--fill-hash` sends nothing. A saved `--read` may continue original checks held for lint after it passes, using identical source, owner and call ceilings; other reads send nothing.
 Before you send a check, run `pdd lint` to find format problems (0 AI calls). Exit 0 means finished and passed; queued/running lint exits 3 with its saved read command. Never import pdd's source.
 `pdd lint [STORY…]` sends the files to the server's lint only. It makes no AI call, and it prints every problem
 the server finds.
-pdd checks the files on this computer first. Then it sends one check for each test. It shows one table (story, test,
+pdd checks the files on this computer first. Then it sends checks for tests without a reusable pass. It shows one table (story, test,
 result, checks, time), the AI calls and a report link for each test. Anyone with a report link can open it.
 A failed check shows the criterion, the path, the expected value and the answer: `AC1  result /totalCents  expected 899, got 900`.
 The report preview shows the first 256 characters of a longer string followed by `…`. The check still compares
@@ -360,7 +359,7 @@ failed, the real reason and what to do next: pass that line on as it is.
 
 | Refusal | Usual cause | Fix |
 |---|---|---|
-| `graph-schema-…` | A schema breaks a rule of section 3. `keyword` names the rule; `path: null` names no field | Check every schema against all of section 3. |
+| `graph-schema-…` | A schema breaks a rule of section 3. Local diagnostics give the rule and JSON Pointer | Check the named schema against section 3. |
 | `invalid-input` | A step input breaks the input schema: `"7pm"`, or a tax rate as a number | Fix the input. pdd shows the field and the rule. |
 | `story-criterion-mismatch` | A test criterion is not the story text: often curly quotes | Copy the story line exactly. |
 | `unchecked-criteria` | A criterion has no exact check | Add a check for it. |
@@ -427,7 +426,7 @@ screens. It holds no code. Without it, the person uses forms (or a terminal for 
 - `pdd simulate` uses `app-map.json` at the repo root, else `app/app-map.json`. For another file:
   `pdd simulate <story> --app-map <path> --new`. Without `--new`, pdd reuses the open simulation and does not send the map.
   Git must show the file. It must be an app map like the one below, not a page of your app (`public/index.html`).
-  pdd does not check the map. A wrong map may give only "The Try setup is not finished or its result is unknown".
+  pdd checks that the map is JSON with the app-map schema version and a name. A bad explicit map stops the command; a bad default map is skipped with a warning.
 - **A screen from an operation** (`"source": "operation"`): the operation draws the screen. `format` is `html`, `text`
   or `grid`. `result_pointer` selects the drawing: `/html` (a string) or `/lines` (a list of strings). `stylesheets` lists CSS files.
   The interpreter cleans the drawn html. It removes the `background` style, `list-style` and `aria-pressed`. Write
@@ -529,14 +528,15 @@ Cut from the Harbor Coffee app map (`…` marks cut parts):
 
 ## 15. PR text
 
-Put the `Prompt tests` line(s) that `pdd test` prints, with their report links, at the top of the PR text. One
-Story gives one line, `Prompt tests (<story>): …`. 2 or more Stories give one line each and a last `Prompt tests:`
-line for all. The link expires after 7 days. Anyone with the link can open it. Do not paste logs, warnings or full
-paths of this computer (`/Users/…`). PR 1 cannot merge while a prompt in it is still draft.
-```
-Prompt tests (place-order): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call
-Report: https://…/r/617480ac-…
-```
+In a pdd workflow run, pdd writes the PR text. Its top starts with pdd's own lines that begin with "pdd result:",
+read from the saved `pdd test` and `pdd lint` results (or one "pdd result: none" line with pdd:no-verdict). Put the `Prompt tests` line(s)
+that `pdd test` prints, with their report links, in your check summary. pdd shows them below its own lines, each
+starting with `Agent note — not checked by pdd:`. One Story gives one line, `Prompt tests (<story>): …`. 2 or more
+Stories give one line each and a last `Prompt tests:` line for all. The link expires after 7 days. Anyone with the
+link can open it. Do not paste logs, warnings or full paths of this computer (`/Users/…`). PR 1 cannot merge while
+a prompt in it is still draft.
+> pdd result: pdd test (batch 20261103-120000-k3f9, 2026-11-03T12:00:00Z, source current): Prompt tests (place-order): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call; Report: https://…/r/617480ac-… (report links expire after 7 days)<br>
+> Agent note — not checked by pdd: Prompt tests (place-order): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call
 
 ## 16. Known limits today
 
@@ -563,7 +563,7 @@ Agents replay the approved prompt-space cases against the real code. Checks of p
 that the code behaves the same. Agents execute the tests and supply the evidence; pdd validates structure and
 identity only. It does not independently prove execution or prompt/code equivalence.
 
-In verify after the last commit, run one `pdd workflow prove <run> --test "<command>" --expect "<Defect: text>"` command that covers all new or changed tests; its line goes on the PR. Fresh worktrees have no installed dependencies, so include any required installation in the command.
+In verify after the last commit, run one `pdd workflow prove <run> --test "<command>" --expect "<distinctive text printed by the failing test on old code>"` command that covers all new or changed tests; text the old-code run does not print gives `wrong-reason`. Its line goes on the PR. Fresh worktrees have no installed dependencies, so include any required installation in the command.
 
 **Test vectors: the approved cases, run on the real code.**
 - Use `tests/<story>.json` from prompt space as it is. Never edit it in code space. If an expected value looks
@@ -1042,4 +1042,38 @@ A prompt pass proves these synthetic cases against the declared fake world. It d
 
 The person's own agent can use the stdio server, `pdd mcp`, in the current repository. On the person's intent (for example, "try adding a bookmark with tag news"), use `try_open` to open or reuse the Story's simulation, `try_state` to inspect it, fill the input in `try_run`, `try_check` to check the run against the Story, and `try_save_case` to save a case. Follow the tools' returned input schemas and errors. Each run counts against the simulation's call budget and appears in the Simulator's history; inspect remaining calls before more work.
 
-Saved cases go to a separate `tests/<story>-try-<run-id>.json` with the run's exact starting data; the original scenario stays intact. A recorded case that covers only part of the Story must be completed before `pdd test`, which requires every criterion. Saved cases contain observed results. Review them against the Story with the person before treating them as expected values. Saving or checking a case never approves its expectations or a prompt. If the tools are unavailable, offer `pdd simulate STORY`.
+Saved cases go to a separate `tests/<story>.try-<run-id>.json` with the run's exact starting data; the original scenario stays intact. A recorded case that covers only part of the Story must be completed before `pdd test`, which requires every criterion. Saved cases contain observed results. Review them against the Story with the person before treating them as expected values. Saving or checking a case never approves its expectations or a prompt. If the tools are unavailable, offer `pdd simulate STORY`.
+
+## 22. Bounded handoffs and measurement
+
+This is an agent instruction example, not an executable Runtime program. The workflow skill owns gates, role eligibility and repair limits; §11 owns CHECK waiting, §17 owns code verification and §10 owns interpreter budgets. Keep those instructions available. No new wait API is needed.
+
+### A small handoff through a long check
+
+Use a small task such as a change to `examples/fakes/service.prompt.md`, its `user_stories/fake-service.md` and `test/runtime/fake-service.json`. The following is an illustrative route, not approval or a command to spend calls. The coordinator records the task, accepted decisions, source identity, exclusive file owners, current stage, unresolved failures/approvals and durable report paths in the run folder. It keeps that ledger between stages instead of each child's full conversation.
+
+| Role | Supplied context and exclusive writes | Durable handoff |
+|---|---|---|
+| Fresh author | Governing AGENTS/skill, prompt-story step, full prompting guide, relevant RUNBOOK sections, task/acceptance, owner prompt and required dependencies, relevant callers/cases. Write only the three assigned draft paths. No inherited chat. | Paths, changed behavior, required context still missing, case coverage and open choices. Coordinator shows drafts at the Story gate. |
+| Fresh CHECK agent | Governing instructions, check step, frozen selected drafts/dependencies/source, authorized call cap and §11. Write only run-folder check evidence. | Start `pdd test fake-service --max-calls 6` once after required lint and authorization; retain printed batch/read command, report links and each Story's actual verdict. |
+| Fresh repair author | Governing author instructions, failed criterion, exact input/expected/actual, relevant owning prompt/dependencies, failed report and authorized repair scope. Write only assigned repair paths. | Cause and minimal change; original failure stays visible. Never change an expected value to get a pass. Changed prompts return to the required gate; check only the affected Story. |
+| Fresh independent verifier and fresh reviewer | Each receives its own step, governing rules, approved cases, current source, required dependencies/regressions and failure evidence. Exclusive run-folder evidence; neither inherits the author's conversation. | After the person requests code and build completes, verifier runs the real public boundary and required regressions under §17. Reviewer remains separately eligible. An unrun or unmapped check is not a pass. |
+| Native validation supervisor | Governing rules, exact pinned VM/source/cwd, complete required command/coverage, runner controls and outside-repo evidence paths. Write only native execution evidence. | For example, run `node --test test/*.test.mjs` on the existing VM when authorized. Keep actual runner session ID or PID plus start time, command, stdout/stderr and terminal exit receipt. |
+
+For CHECK, use one completion-oriented tool wait with the longest supported timeout or exit notification. The CLI's 30-second stderr progress and its internal receipt polling do not require a coordinator model turn. On a tool interruption/explicit caller timeout, retain the original batch and use its printed `pdd test --read BATCH` command once to continue waiting. Reads can continue lint-held checks under §11; do not describe every read as GET-only. Do not resubmit an uncertain job. Preserve no-verdict, refused and failed Story results.
+
+For a long external native process, use that runner's completion wait or exit notification, not CHECK's batch API. Retain identity before waiting. Progress comes from the existing runner/log stream; report a compact stage or failure change. Cancel only the owned session/process through its supported control, then wait for termination and record the actual exit/signal or unknown result. If the runner cannot notify or wait until exit, state that limit and record the necessary bounded status turns. A missing receipt or lost connection is unknown, not success or permission to start a second process.
+
+The coordinator resumes reasoning on a stage change, actionable failure, user steering or completion. For example: author finished → show gate; delayed CHECK failure → retain expected Available/actual Reserved and send the failed criterion to repair; repaired draft → show its gate again; successful CHECK → existing prompt/Simulator review and person approval → PR 1 → ask for code; only after the person requests code → build → independent verify → formal → fresh independent review under §17; native failure → keep its first receipt and repair/rerun under the existing limit; interruption → record the incomplete result and recovery decision. Do not hide failed tests, source evidence, required dependencies or approvals to make a brief smaller. Request missing governing context before continuing. Try stays optional; ask the person and wait for agreement before it starts.
+
+In a synthetic prompt-only benchmark, independent draft verification stays a draft/manual review. It never claims that an unchanged native implementation fulfills the newly drafted rule, and it is separate from §17 code proof.
+
+### Freeze and measure before setting a target
+
+Keep the benchmark manifest, raw logs, context inventories, scripts and results in the task's run folder, outside product commits. Freeze one small task/source snapshot, acceptance and full coverage, model/effort, CLI/agent/shell/tool versions, permitted tools, cache state, run order/repetitions and repair/stop policy. Both arms get these same conditions. The baseline is current shipped guidance, including fresh agents and one-call CHECK; the revised arm changes only the selected guidance. Freeze each arm's bytes before starting. A version change or unequal outcome/coverage limits comparison.
+
+Record coordinator, each child and interpreter separately, by actual session/request identity with provenance. For each report requests, total input, cached input, uncached input, output, start/end, wall time and terminal outcome. Keep absent usage unknown. Derive uncached as total minus cached only when the receipt defines cached as a subset; do not add cached to a total that already includes it. Deduplicate provider receipts and nested interpreter accounting by request identity. Overall elapsed time is arm end minus start; never sum overlapping role durations.
+
+Record each role's initial brief, inheritance setting, supplied file paths/bytes, handoff bytes and tool/report output bytes. Distinguish supplied files from content actually read, and available per-request input from retained-history telemetry. File bytes do not establish token counts, cache reuse or what the model retained. If retained-history telemetry is unavailable, say so.
+
+Classify tool-internal polls, saved-report reads, model-driven waiting/status and actionable reasoning separately. A report read may be internal or model-driven; count actual model requests rather than report files. Include failed, aborted, refused and missing runs. Compare equivalent completed outcomes and disclose incomplete attribution. Synthetic accounting fixtures or fake-clock waits prove only their stated arithmetic/boundary; they do not establish model savings. Choose numeric regression targets only after the controlled baseline. Dollar claims also need authoritative measured usage and applicable rates. Present the frozen task and proposed per-arm authoring/interpreter ceilings for a person's budget decision before any live arm.
