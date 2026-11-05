@@ -127,3 +127,8 @@ The seven workflow Stories retain their separately approved contracts and all 28
 ## Tests found by name (#2580)
 
 1. [Find each Story's test by its name and folder](tests-found-by-name.md): the tests of Story `S` are `S.json` and `S.<variant>.json` in a `test` or `tests` folder; pdd opens no JSON file to find tests, reads a matched test in full at any size, prints every Story with no test (with the expected path), one line for the test-folder JSON files that match no Story (`--files` lists them) and every conflict, and names the selected tests in the lint request when the interpreter supports it. Native cases: `test/tests-found-by-name.test.mjs`. Interpreter test: none (native effects).
+
+## Bounded authoring guidance (#2795)
+
+1. [Follow a bounded authoring handoff](authoring-orchestration.md) — [native/manual cases](../test/authoring-guidance/authoring-orchestration-cases.json). Prompt tests and native/manual acceptance: NOT RUN.
+2. [Compare authoring guidance on one frozen task](authoring-orchestration-measurement.md) — [native/manual cases](../test/authoring-guidance/authoring-orchestration-measurement-cases.json). Prompt tests and native/manual acceptance: NOT RUN.
