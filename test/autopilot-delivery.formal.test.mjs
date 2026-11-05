@@ -183,3 +183,32 @@ test('bounded first launch continues safely in the same tick', async () => {
     if(ready) { assert.equal(f.packets[0].workflow.home,f.home); assert.equal(f.packets[0].workflow.agent,'codex'); }
   }
 });
+
+// The original startup window permits submission strictly before its deadline.
+// Exercise expiry at launch completion, screen read, and final target read.
+test('bounded first-launch deadline gates submission', async () => {
+  for (const stage of ['launch','screen','target']) {
+    for (const clock of ['wall','elapsed-rewind']) {
+      for (const age of [29999,30000,30001]) {
+        const f=fixture(`deadline-${stage}-${clock}-${age}`,{afterLaunch:'idle'});
+        const herdr=f.ports.herdr, warnings=[]; let elapsed=0, launched=false, gets=0;
+        f.ports.elapsedNow=()=>elapsed;
+        f.ports.warn=message=>warnings.push(message);
+        const advance=()=>{ if(clock==='wall') f.time+=age; else { f.time-=1000; elapsed=age; } };
+        f.ports.herdr=async args=>{
+          const reply=await herdr(args);
+          if(args[0]==='pane' && args[1]==='run') { launched=true; if(stage==='launch') advance(); }
+          if(launched && args[0]==='pane' && args[1]==='read' && stage==='screen') advance();
+          if(launched && args[0]==='agent' && args[1]==='get' && ++gets===2 && stage==='target') advance();
+          return reply;
+        };
+        await f.start();
+        const allowed=age<30000;
+        assert.equal(f.packets.length,Number(allowed),`${stage}/${clock}/${age}: packet`);
+        assert.equal(Boolean(f.state().recipeDelivered),allowed,`${stage}/${clock}/${age}: recipe`);
+        assert.equal(Boolean(f.state().seen?.[101]),allowed,`${stage}/${clock}/${age}: issue`);
+        if(!allowed) assert.ok(warnings.some(w=>/pending/i.test(w)),`${stage}/${clock}/${age}: pending reason`);
+      }
+    }
+  }
+});
