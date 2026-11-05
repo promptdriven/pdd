@@ -171,3 +171,13 @@ test('malformed terminal outcomes and ambiguous criterion bindings never create 
   const ambiguous=await assessNativeEvidence(selectors,{readNativeContext:()=>({content:JSON.stringify(context)})});
   assert.equal(ambiguous.profileState,'complete');assert.equal(ambiguous.storyNativeProof,'none');assert.equal(ambiguous.criteria[0].reason,'invalid-mapping');
 });
+test('contradictory report totals, duplicate plans and truncated diagnostics cannot supply completeness',async t=>{
+  const junit=await fixture(t,'junit-xml');
+  junit.save('report','<testsuite tests="2"><testcase file="test/native.mjs" name="required A" line="1" column="1"/></testsuite>');
+  assert.equal(prepareNativeEvidence(junit,{workspace:junit.workspace}).assessment.receiptState,'partial');
+  const tap=await fixture(t,'tap13');
+  for(const original of ['TAP version 13\nok 1 - first\n1..1\n1..1\n','TAP version 13\nok 2 - first\n1..1\n','TAP version 13\nok 1 - first\n  ---\n  location: test/native.mjs:1:1\n1..1\n']){
+    tap.save('report',original);const result=prepareNativeEvidence(tap,{workspace:tap.workspace}).assessment;
+    assert.equal(result.receiptState,'partial');assert.equal(result.profileNativeProof,'none');
+  }
+});

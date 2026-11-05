@@ -371,16 +371,19 @@ function nativeReport(bytes,profile,reference) {
       if(node.tag==='testcase') {
         const a=node.attrs,skip=node.children.find(row=>row.tag==='skipped'),failed=node.children.some(row=>['failure','error'].includes(row.tag));
         const fullName=[a.classname,a.name].filter(Boolean).join('::');
-        base.observations.push({occurrenceId:`${reference}/testcase/${count++}`,testId:known(a.file)&&known(a.line)&&known(a.column)?`${a.file}::${fullName}@${a.line}:${a.column}`:fullName||'unknown',selected:null,started:skip?false:true,outcome:skip?'skipped':failed?'failed':'passed',skipReason:skip?.attrs.message||skip?.text||null,reportedIdentity:{...a,suite:parents}});
+        base.observations.push({occurrenceId:`${reference}/testcase/${count++}`,testId:known(a.file)&&known(a.line)&&known(a.column)?`${a.file}::${fullName}@${a.line}:${a.column}`:fullName||'unknown',selected:null,started:skip?false:true,outcome:skip?'skipped':failed?'failed':'passed',skipReason:skip?.attrs.message||skip?.text||null,reportedIdentity:{...a,fullName,suite:parents}});
       }
       for(const child of node.children)visit(child,node.tag==='testsuite'?[...parents,node.attrs.name].filter(Boolean):parents);
     };visit(root);
     Object.assign(base,Object.fromEntries(['producer','producerVersion','runner','runnerVersion','runtimeVersion'].filter(key=>known(properties[key])).map(key=>[key,properties[key]])));
-    base.capture.terminalSeen=true; base.complete=true; base.aggregate={unit:'testcases',reported:root.attrs.tests??null};
+    const testcases=node=>node.tag==='testcase'?[node]:node.children.flatMap(testcases);
+    const suites=node=>['testsuite','testsuites'].includes(node.tag)?[node,...node.children.flatMap(suites)]:[];
+    const countsMatch=suites(root).every(suite=>{const rows=testcases(suite),counts={tests:rows.length,failures:rows.filter(row=>row.children.some(child=>child.tag==='failure')).length,errors:rows.filter(row=>row.children.some(child=>child.tag==='error')).length,skipped:rows.filter(row=>row.children.some(child=>child.tag==='skipped')).length};return Object.entries(counts).every(([key,count])=>!Object.hasOwn(suite.attrs,key)||/^\d+$/.test(suite.attrs[key])&&Number(suite.attrs[key])===count);});
+    base.capture.terminalSeen=countsMatch; base.complete=countsMatch; base.aggregate={unit:'testcases',reported:root.attrs.tests??null};
     return base;
   }
   if(profile.reportFormat==='tap13') {
-    const lines=bytes.toString('utf8').split(/\r?\n/),scopes=[{indent:-1,name:''}],seenPlans=[],resultCounts=new Map();let terminal=false,bail=false;
+    const lines=bytes.toString('utf8').split(/\r?\n/),scopes=[{indent:-1,name:''}],seenPlans=[],resultCounts=new Map();let terminal=false,bail=false,malformed=false;
     for(let index=0;index<lines.length;index++) {
       const line=lines[index],indent=/^ */.exec(line)[0].length;
       if(/^\s*Bail out!/i.test(line))bail=true;
@@ -388,19 +391,21 @@ function nativeReport(bytes,profile,reference) {
       if(subtest){while(scopes.length>1&&scopes.at(-1).indent>=indent)scopes.pop();scopes.push({indent,name:subtest[2],line:index});continue;}
       const scopeKey=level=>`${level}:${scopes.filter(row=>row.indent>=0&&row.indent<level).map(row=>row.line).join('/')}`;
       const plan=/^\s*(\d+)\.\.(\d+)(?:\s+#.*)?$/.exec(line);
-      if(plan){seenPlans.push({indent,key:scopeKey(indent),count:Number(plan[2])-Number(plan[1])+1});if(indent===0)terminal=true;continue;}
+      if(plan){if(plan[1]!=='1'||seenPlans.some(row=>row.key===scopeKey(indent)))malformed=true;seenPlans.push({indent,key:scopeKey(indent),count:Number(plan[2])-Number(plan[1])+1});if(indent===0)terminal=true;continue;}
       const result=/^( *)(not ok|ok)\s+(\d+)?(?:\s+-)?\s*(.*?)(?:\s+#\s*(SKIP|TODO)\b\s*(.*))?$/i.exec(line);
       if(!result)continue;
       while(scopes.length>1&&scopes.at(-1).indent>=indent)scopes.pop();
       const key=scopeKey(indent);resultCounts.set(key,(resultCounts.get(key)??0)+1);
+      if(result[3]&&Number(result[3])!==resultCounts.get(key))malformed=true;
       const name=result[4],directive=result[5]?.toUpperCase(),observed={occurrenceId:`${reference}/line/${index+1}`,testId:[...scopes.map(row=>row.name).filter(Boolean),name].join('::'),selected:null,started:directive?false:true,outcome:directive==='SKIP'?'skipped':directive==='TODO'?'todo':result[2]==='ok'?'passed':'failed',skipReason:directive?result[6]||directive:null,reportedIdentity:{name,fullName:[...scopes.map(row=>row.name).filter(Boolean),name].join('::'),file:null,line:null,column:null}};
-      const diagnostic=lines.slice(index+1,lines.findIndex((row,j)=>j>index&&/^\s*\.\.\.\s*$/.test(row))+1||index+1).join('\n');
+      let diagnostic='';
+      if(lines[index+1]?.trim()==='---'){let end=index+2;while(end<lines.length&&(!lines[end].trim()||/^ */.exec(lines[end])[0].length>indent)&&lines[end].trim()!=='...')end++;if(lines[end]?.trim()==='...')diagnostic=lines.slice(index+2,end).join('\n');else malformed=true;}
       const location=/\blocation:\s*['"]?(.+?):(\d+):(\d+)['"]?\s*$/m.exec(diagnostic);
       if(location){Object.assign(observed.reportedIdentity,{file:location[1],line:Number(location[2]),column:Number(location[3])});observed.testId=`${location[1]}::${observed.reportedIdentity.fullName}@${location[2]}:${location[3]}`;}
       base.observations.push(observed);
     }
     const plansComplete=seenPlans.every(plan=>(resultCounts.get(plan.key)??0)===plan.count);
-    base.capture.terminalSeen=terminal&&!bail&&plansComplete;base.complete=terminal&&!bail&&plansComplete; base.aggregate={unit:'planned-results',plans:seenPlans};
+    base.capture.terminalSeen=terminal&&!bail&&!malformed&&plansComplete;base.complete=terminal&&!bail&&!malformed&&plansComplete; base.aggregate={unit:'planned-results',plans:seenPlans};
     // A TAP plan asserts totals, never selected scope, starts, runner identity or process exit.
     base.capture.eventRef=reference;
     return base;
@@ -458,8 +463,8 @@ function nativeContextFromOriginals(selectors,input,retained,ports) {
   let candidate={sourceId:'unknown',implementationId:'unknown',testsId:'unknown',requirementsId:'unknown'};
   try{candidate=nativeSource(selectors,selection,reviewed,ports);checks.push({check:'selected-native-source',state:'checked',sourceId:candidate.sourceId});}catch(error){limits.push(`Native source capture unavailable: ${text(error.message)}.`);}
   const original=input.originals.find(row=>row.role==='report'),originalRef=`sha256:${original.sha256}`;
-  let report;
-  try{report=nativeReport(original.bytes,profile,originalRef);checks.push({check:'original-report',state:'read',format:profile.reportFormat,sha256:original.sha256,rowReferences:report.rowReferences});}
+  let report,parsed=false;
+  try{report=nativeReport(original.bytes,profile,originalRef);parsed=nativeFormats.includes(profile.reportFormat)&&!report.interpretation;checks.push({check:'original-report',state:'read',format:profile.reportFormat,sha256:original.sha256,rowReferences:report.rowReferences});}
   catch(error){limits.push(`Original report interpretation unavailable: ${text(error.message)}.`);report={format:profile.reportFormat,observations:[],interpretation:'unknown'};}
   const source=originalJson(input.originals,'source'),execution=originalJson(input.originals,'execution'),selectionEvidence=originalJson(input.originals,'selection');
   let association={state:'unavailable',reason:'Canonical workspace reader is unavailable.',stage:null};
@@ -515,7 +520,7 @@ function nativeContextFromOriginals(selectors,input,retained,ports) {
   const identitiesBound=profile.requiredIds.every(id=>array(report.observations).filter(row=>row.testId===id).every(row=>row.identityBound===true));
   if(selectedValid&&selectionEvidence.testIds.some(id=>!report.observations.some(row=>row.testId===id)))report.complete=false;
   const verified=associationValid&&sourceMatches&&selectedPathsMatch&&identitiesBound&&reviewed.review==='approved';
-  const intake={origin:array(report.observations).length?'external-machine':'unknown',admission:verified?'verified':'unverified',originalRef,verificationRef:verified?`derived:${digest(JSON.stringify(checks))}`:'',limits:distinct(limits),stage:associationValid?association.stage:'unknown',sourceRef};
+  const intake={origin:parsed?'external-machine':'unknown',admission:verified?'verified':'unverified',originalRef,verificationRef:verified?`derived:${digest(JSON.stringify(checks))}`:'',limits:distinct(limits),stage:associationValid?association.stage:'unknown',sourceRef};
   const context={schema:'pdd.native-assessment-context.v1',runId:selectors.runId,protected:protectedProfile,candidate,story:selection.story,intake,report,baseline:null};
   if(input.baseline) {
     const baseline=nativeContextFromOriginals(selectors,input.baseline,retained,ports).context;
