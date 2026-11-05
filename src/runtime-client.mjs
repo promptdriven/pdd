@@ -1,3 +1,5 @@
+import {readEvidenceEligibility} from './workflow-runner.mjs';
+import {loadRuntimeWorkspace,allowsRuntimePath,requireRuntimePath,RuntimeWorkspaceError} from './runtime-workspace.mjs';
 // Generated from prompts/cli/runtime-client.prompt.md (sha256: 968f5c72c403d2dd588d3e44b8e3a6db8a9443e2cf6fe0b054c64ddc8a17e26e).
 import { hasProgress, outcomeDone, outcomeFor, outcomeOverall, outcomeText, progressText } from './runtime-outcome.mjs';
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
@@ -76,7 +78,7 @@ function withDefaults(ports) {
     return () => { handlers.delete(handler); if (!handlers.size) { unsubscribe?.(); unsubscribe = null; } };
   };
   return {
-    env, cacheFiles: ports.cacheFiles ?? nativeCacheFiles, cacheHash: ports.cacheHash ?? sha256, acquireBatchLock: ports.acquireBatchLock ?? acquireRuntimeBatchLock, timers: ports.timers, random: ports.random, captureSource: ports.captureSource ?? captureSource, slotFiles: ports.slotFiles, isAlive: ports.isAlive, pid: ports.pid, agentBridge: ports.agentBridge, discoverAgents: ports.discoverAgents, askAgent: ports.askAgent, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
+    env, caseHandoff:ports.caseHandoff, cacheFiles: ports.cacheFiles ?? nativeCacheFiles, cacheHash: ports.cacheHash ?? sha256, acquireBatchLock: ports.acquireBatchLock ?? acquireRuntimeBatchLock, timers: ports.timers, random: ports.random, captureSource: ports.captureSource ?? captureSource, slotFiles: ports.slotFiles, isAlive: ports.isAlive, pid: ports.pid, agentBridge: ports.agentBridge, discoverAgents: ports.discoverAgents, askAgent: ports.askAgent, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
     gh: ports.gh ?? (args => {
       const executable = authExecutable(env, ports.ghPath);
       return executable ? spawnSync(executable, args, { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 })
@@ -140,7 +142,7 @@ function stateDirectory(env, root) {
 }
 function stateFor(env, root) { return new StateStore(stateDirectory(env,root)); }
 
-export function readContractHistory({root,env = process.env}) {
+export function readContractHistory({root,env = process.env},ports={}) {
   const warnings = [], latest = new Map();
   const empty = story_path => ({story_path,baseline:'not-checked',checked_at:null,result_state:null,files:[],references:[]});
   try {
@@ -157,7 +159,9 @@ export function readContractHistory({root,env = process.env}) {
     for (const name of entries.sort()) {
       if (!BATCH.test(name) || !statOrNull(join(directory,name))?.isDirectory() || statOrNull(join(directory,name))?.isSymbolicLink()) continue;
       const folder=join(directory,name), saved=read(join(folder,'batch.json'));
-      if (!saved || saved.root !== root || saved.intent === 'lint-only' || !Array.isArray(saved.rows)) continue;
+      if (!saved || saved.intent === 'lint-only' || !Array.isArray(saved.rows)) continue;
+      const eligibility=(ports.readEvidenceEligibility??readEvidenceEligibility)({root,producerRoot:saved.root,tests:saved.rows.filter(row=>!row.unsent).map(row=>row.test),source_sha256:saved.source_sha256,runId:saved.association?.runId??null,stage:saved.association?.stage??null},{env,...ports.evidencePorts});
+      if(eligibility.state!=='eligible'&&(saved.root!==root||saved.association))continue;
       for (const row of saved.rows) {
         const snapshot = saved.contract_snapshots?.find(item=>item.tests?.includes(row.test));
         const legacy = found.tests.find(test=>test.path===row.test && test.story===row.story);
@@ -787,7 +791,9 @@ function batchId(now, uuid) {
 
 // Local setup for a check or a try: root, tests, selected rows.
 function localSetup(cwd, words) {
-  const root = repoRoot(cwd), found = findTests({ root, files: gitFiles(root) });
+  const root = repoRoot(cwd), names=gitFiles(root), workspace=loadRuntimeWorkspace({root});
+  for(const word of words){const path=relative(realpathSync(root),resolve(realpathSync(cwd),word)).split(sep).join('/');if(names.includes(path))requireRuntimePath(workspace,{path,from:'Selected source'});}
+  const found = findTests({ root, files: names });
   const realCwd = realpathSync(cwd), realRoot = realpathSync(root);
   const normalized = words.map(word => {
     const rel = relative(realRoot, resolve(realCwd, word)).split(sep).join('/');
@@ -1378,6 +1384,7 @@ function runFiles(cwd, words, options, ports) {
   const capture = ports.captureSource(root, { tests, appMap });
   for (const warning of [...(capture.warnings ?? []), ...unmatchedLines(found)]) line(ports.stderr, warning);
   const other = otherFiles(capture.files, found), width = Math.max(0, ...capture.files.map(file => file.path.length));
+  for(const read of capture.reads??[])line(ports.stderr,`Local read (${read.roles.join(', ')}, not uploaded): ${read.path}`);
   for (const file of capture.files) line(ports.stdout, `  ${(file.path + (file.target ? ` -> ${file.target}` : '')).padEnd(width)}  ${file.size} bytes`);
   line(ports.stdout, `${capture.files.length} files, ${formatSize(capture.bytes)} (${capture.bytes} bytes). ${other.length} of them are not prompt, story or test files.`);
   line(ports.stderr, coverageText(coverage));
@@ -1666,6 +1673,7 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
   const saved = store.read(join(context.folder, 'batch.json'));
   if (!saved) throw new Stop(2, `No saved batch ${name}.`);
   if (saved.root !== root) throw new Stop(2, 'This saved batch belongs to a different repository.');
+  if(loadRuntimeWorkspace({root}).configured)ports.captureSource(root,{tests:saved.rows.filter(row=>!row.unsent).map(row=>row.test),appMap:null});
   const identity = signIn(ports.gh, context.store);
   if (identity.login !== saved.login) throw new Stop(5, `These runs belong to ${saved.login}. Run: gh auth switch -u ${saved.login}`);
   Object.assign(context, { batch: name, origin: saved.origin, coverage: saved.coverage, identity, intent: saved.intent, secrets: [identity.token], warnings: saved.warnings ?? [],
@@ -1948,7 +1956,7 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
     if (options['--local'] !== undefined) {
       if (options['--local'] !== true || options['--lint'] !== true || Object.keys(options).some(name => !['--lint', '--local', '--json'].includes(name))) throw new Stop(2, '--local requires --lint and accepts only Story words and --json.');
       try {
-        const root = repoRoot(cwd), files = gitFiles(root);
+        const root = repoRoot(cwd), workspace=loadRuntimeWorkspace({root}), files = gitFiles(root).filter(path=>allowsRuntimePath(workspace,path));
         let promptPaths;
         if (words.length) {
           const { found, normalized } = localSetup(cwd, words), selected = select(found, normalized, root);
@@ -1976,7 +1984,7 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
       return await runBatch(context, cwd, words, options, value => { release = value; });
     });
   } catch (error) {
-    if (error instanceof Stop || error instanceof PreflightError) {
+    if (error instanceof Stop || error instanceof PreflightError || error instanceof RuntimeWorkspaceError) {
       line(ports.stderr, error.message);
       if (context.json && error.bindingInventory) line(ports.stdout, JSON.stringify({ batch: null, repo: context.root, exit_code: 4, lint_state: 'refused',
         coverage: { available: false, bound: null, total: null, modules: [] }, problems: [{ code: 'binding-invalid', path: 'pdd-bindings.json', message: error.message }], rows: [], warnings: [] }));
@@ -2587,6 +2595,7 @@ function appMapFor(found, given, cwd, root, stderr) {
     return path && !problem ? path : null;
   }
   const rel = relative(realpathSync(root), resolve(realpathSync(cwd), given)).split(sep).join('/');
+  requireRuntimePath(loadRuntimeWorkspace({root}),{path:rel,from:'App map'});
   if (!found.visible.has(rel)) throw new Stop(2, `--app-map ${cleanText(given)} is not a Git-visible file in this repository.`);
   const problem = appMapProblem(root, rel);
   if (problem) throw new Stop(2, `--app-map ${cleanText(given)} is not an app map: ${problem}. An app map is a JSON file with "schema_version": "${APP_MAP_VERSION}". See RUNBOOK.md §13.`);
@@ -2704,7 +2713,10 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     if (doorModes.length > 1 || (options['--shell'] && !options['--cli']) || (doorModes.length && options['--stop'])
       || (options['--save-last'] && (words.length || Object.keys(options).length !== 1))) throw new Stop(2, 'Choose one of --cli, --serve, --save-last or --stop; --shell needs --cli.');
     if (options['--save-last']) {
-      const root = repoRoot(cwd), store = stateFor(ports.env, root), identity = signIn(ports.gh, store);
+      const root = repoRoot(cwd), store = stateFor(ports.env, root);
+      const pointer=store.repo(root).last_door,descriptor=pointer?.descriptor?store.read(pointer.descriptor):null;
+      if(descriptor?.originalPath)ports.captureSource(root,{tests:[descriptor.originalPath]});
+      const identity = signIn(ports.gh, store);
       return await (await import('./try-doors.mjs')).saveLast({ root, store, identity, ports });
     }
     if (options['--stop'] && (options['--tab'] || options['--new'] || options['--no-open'] || options['--no-wait'] || options['--app-map'] !== undefined || requestedBudget !== null)) throw new Stop(2, 'pdd simulate --stop takes only a STORY. Run pdd simulate --help.');
@@ -2730,6 +2742,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     }
     const capture = ports.captureSource(root, { tests: [test.path], appMap }), note = otherNote(otherFiles(capture.files, found).length);
     for (const warning of capture.warnings ?? []) line(ports.stderr, warning);
+    if(context.agentConnection&&loadRuntimeWorkspace({root}).configured)throw new Stop(5,'Bounded agent connection is unavailable: installed CLI controls do not establish packet-only context. Use the ordinary simulator without an agent connection.');
     const identity = signIn(ports.gh, context.store);
     Object.assign(context, { capture, identity, secrets: [identity.token], startedAt: ports.now(), deadline: ports.now() + TRY_MS, lint: { request_ids: [], state: null },
       batch: null, rows: [row], timeoutMin: TRY_MS / 60_000, agentLimit: false, head: null });
@@ -2856,9 +2869,9 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     return printTryProblem(context, row);
   } catch (error) {
     if (options['--cli'] || options['--serve'] || options['--save-last']) { line(ports.stderr, `pdd: ${cleanText(error.message || 'The Try could not start.', context.secrets ?? [])}`); return error.exitCode === 2 ? 2 : 125; }
-    if (error instanceof Stop || error instanceof PreflightError) { line(ports.stderr, error.message); return error.exitCode; }
+    if (error instanceof Stop || error instanceof PreflightError || error instanceof RuntimeWorkspaceError) { line(ports.stderr, error.message); return error.exitCode; }
     throw error;
-  } finally { release(); await Promise.all([...(context.reservations ?? [])].map(reservation => releaseRuntimeSlot(reservation, { ended: false }, slotPorts(context)))); }
+  } finally { release();for(const lease of context.caseWriteLeases?.values()??[])lease.release(); await Promise.all([...(context.reservations ?? [])].map(reservation => releaseRuntimeSlot(reservation, { ended: false }, slotPorts(context)))); }
 }
 
 // pdd simulate --stop [STORY]: find the Try by its story name in the state record, so it works on any branch (real-user issue 14).
@@ -2970,7 +2983,7 @@ async function showTry(context, test, link, options, tryId, reused = false, sess
 const slug = text => String(text ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
 
 // The [start, end) offsets of the top-level "steps" array in a JSON text, or null.
-function stepsArray(text) {
+function stepsArray(text, arrayName = 'steps') {
   let depth = 0, key = null, index = 0;
   const skipString = at => { let i = at + 1; while (i < text.length && text[i] !== '"') i += text[i] === '\\' ? 2 : 1; return i + 1; };
   while (index < text.length) {
@@ -2980,7 +2993,7 @@ function stepsArray(text) {
       if (depth === 1 && /^\s*:/.test(text.slice(end))) key = JSON.parse(text.slice(index, end));
       index = end; continue;
     }
-    if (char === '[' && depth === 1 && key === 'steps') {
+    if (char === '[' && depth === 1 && key === arrayName) {
       let inner = 0, at = index;
       while (at < text.length) {
         if (text[at] === '"') { at = skipString(at); continue; }
@@ -2997,6 +3010,13 @@ function stepsArray(text) {
   return null;
 }
 
+// Preserve each received object's exact JSON bytes independently of the envelope.
+function receivedCaseBytes(text,index){
+  const range=typeof text==='string'?stepsArray(text,'tests'):null;if(!range)return undefined;
+  let start=range[0]+1,depth=0,quoted=false,escaped=false,atIndex=0;
+  for(let i=start;i<range[1]-1;i++){const char=text[i];if(quoted){if(escaped)escaped=false;else if(char==='\\')escaped=true;else if(char==='"')quoted=false;continue;}if(char==='"'){quoted=true;continue;}if(char==='{'||char==='[')depth++;else if(char==='}'||char===']')depth--;else if(char===','&&depth===0){if(atIndex++===index)return text.slice(start,i).trim();start=i+1;}}
+  return atIndex===index?text.slice(start,range[1]-1).trim():undefined;
+}
 // Append one step and keep every other byte of the file; fall back to a plain rewrite.
 function appendStep(text, doc, step) {
   const want = { ...doc, steps: [...doc.steps, step] }, range = stepsArray(text);
@@ -3012,72 +3032,173 @@ function appendStep(text, doc, step) {
   return `${JSON.stringify(want, null, 2)}\n`;
 }
 
-// Anyone with a Try link can save a case, so a saved case is untrusted: pdd writes only to a real file inside the repo,
-// only to a scenario test file found by discovery or a new tests/<story>.json, and never follows a symbolic link.
 const NOT_TEST_FILES = /^(?:\..*|package(?:-lock)?\.json|tsconfig(?:\..+)?\.json|jsconfig\.json|composer\.json|deno\.json|bower\.json|app-map\.json|.+\.config\.json)$/;
 const inRepo = (realRoot, path) => { try { return realpathSync(join(realRoot, path)) === join(realRoot, path); } catch { return false; } };
 
-// One saved case → a new step in its story's test file. Returns the line to print ("added …" or "not added: …").
-function addSavedCase(root, saved, seedTest) {
-  try { return addSavedCaseSafely(realpathSync(root), saved, seedTest); } catch (error) { return `not added: pdd could not write the case (${cleanText(error.code ?? error.message)}).`; }
+// Received case custody and publication. All filesystem/process/time effects are
+// bound here; tests may replace the same ports used by the native adapter.
+const caseNativeFiles={lstat:lstatSync,read:readFileSync,open:openSync,write:writeFileSync,close:closeSync,sync:fsyncSync,stat:fstatSync,mkdir:mkdirSync,list:readdirSync,rename:renameSync,unlink:unlinkSync,link:linkSync,realpath:realpathSync};
+const caseLeases=new WeakMap();
+function casePorts(ports={}){return{files:ports.files??caseNativeFiles,env:ports.env??process.env,hash:ports.hash??sha256,nonce:ports.randomUUID??randomUUID,now:ports.now??Date.now,pid:ports.pid??process.pid,host:ports.host??hostname(),isAlive:ports.isAlive??(pid=>{try{process.kill(pid,0);return true;}catch(e){return e.code==='ESRCH'?false:null;}}),sleep:ports.sleep??((ms,signal)=>new Promise(done=>{if(signal?.aborted)return done();const finish=()=>{clearTimeout(timer);signal?.removeEventListener('abort',finish);done();};const timer=setTimeout(finish,ms);signal?.addEventListener('abort',finish,{once:true});})),fault:ports.fault??(()=>{})};}
+function caseStat(p,path){try{return p.files.lstat(path);}catch(e){if(e.code==='ENOENT')return null;throw e;}}
+function caseSafe(p,path,{directory=false,create=false}={}){
+  const full=resolve(path),parts=full.split(sep).filter(Boolean);let at=sep;
+  for(let i=0;i<parts.length;i++){at=join(at,parts[i]);const dir=i<parts.length-1||directory;let st=caseStat(p,at);
+    if(!st&&create&&dir){try{p.files.mkdir(at,{mode:0o700});}catch(e){if(e.code!=='EEXIST')throw e;}st=p.files.lstat(at);}
+    if(!st||st.isSymbolicLink()||(dir?!st.isDirectory():!st.isFile()))throw Error('unsafe or missing local path');
+  }return full;
 }
+function caseSyncDir(p,path){const fd=p.files.open(path,constants.O_RDONLY|constants.O_DIRECTORY|constants.O_NOFOLLOW);try{p.files.sync(fd);}finally{p.files.close(fd);}}
+function caseRead(p,path){caseSafe(p,path);const fd=p.files.open(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);try{const st=p.files.stat(fd);if(!st.isFile()||st.size>32*1024*1024)throw Error('unsafe case record');return p.files.read(fd,'utf8');}finally{p.files.close(fd);}}
+function caseWrite(p,path,text,{exclusive=false}={}){
+  caseSafe(p,dirname(path),{directory:true,create:true});if(caseStat(p,path))caseSafe(p,path);
+  const temp=`${path}.${p.pid}.${p.nonce()}.tmp`;let fd,owned;
+  try{fd=p.files.open(temp,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);p.files.write(fd,text);p.files.sync(fd);owned=p.files.stat(fd);p.files.close(fd);fd=undefined;
+    if(exclusive)p.files.link(temp,path);else p.files.rename(temp,path);
+    caseSyncDir(p,dirname(path));
+  }finally{if(fd!==undefined)p.files.close(fd);try{const remaining=caseStat(p,temp);if(owned&&remaining?.ino===owned.ino&&remaining.dev===owned.dev)p.files.unlink(temp);}catch(e){if(e.code!=='ENOENT')throw e;}}
+}
+function caseArea(root,p,{create=true}={}){
+  const dir=stateDirectory(p.env,root),area=join(dir,'case-import');
+  if(create)caseSafe(p,area,{directory:true,create:true});else if(caseStat(p,area))caseSafe(p,area,{directory:true});
+  return area;
+}
+const caseResult=(record,state,reason,extra={})=>({state,path:record.target??null,pendingId:record.pendingId,reason,recoveryPath:record.recoveryPath,...extra});
+function caseMessage(result){return result.state==='committed'?`${result.duplicate?'already saved to':'added to'} ${result.path}${result.steps?.length?' as step '+result.steps.join(', '):''}`:`not added: ${result.reason}. Case retained at ${result.recoveryPath} (pending ${result.pendingId}).`;}
+function retainCase(root,saved,options,p){
+  const original=options.seedTest??{path:saved?.original_path,storyPath:saved?.story_path??saved?.test?.story_path};
+  const identity={root,session:options.sessionId??saved?.session_id??null,action:saved?.id??null,original};
+  const raw=options.rawBytes===undefined?JSON.stringify(saved):Buffer.from(options.rawBytes).toString('utf8');
+  const unsafeNumbers=[];try{JSON.parse(raw,(_key,value,context)=>{if(typeof value==='number'&&context?.source&&(!Number.isFinite(value)||!Number.isSafeInteger(value)&&/^-?[0-9]+$/.test(context.source)))unsafeNumbers.push(context.source);return value;});}catch{}
+  const payload=JSON.stringify({saved,identity,isolated:options.isolated===true,...(unsafeNumbers.length?{unsafeNumbers}:{})});
+  const id=p.hash(Buffer.from(JSON.stringify(identity))),variant=p.hash(Buffer.from(payload));
+  const area=caseArea(root,p),dir=join(area,id);caseSafe(p,dir,{directory:true,create:true});
+  const recoveryPath=join(dir,`${variant}.received.json`),pendingId=`${id}.${variant}`;
+  const record={schema_version:'pdd.case-import.v1',pendingId,recoveryPath,identity,saved,raw,target:original.path??null,isolated:options.isolated===true};
+  try{caseWrite(p,recoveryPath,JSON.stringify(record),{exclusive:true});}catch(e){if(e.code!=='EEXIST')throw e;const previous=JSON.parse(caseRead(p,recoveryPath));if(!isDeepStrictEqual(previous.saved,saved)||!isDeepStrictEqual(previous.identity,identity))throw Error('received identity collision');if(previous.raw!==raw){const observation=join(dir,variant+'.raw-'+p.hash(Buffer.from(raw))+'.json');try{caseWrite(p,observation,raw,{exclusive:true});}catch(extra){if(extra.code!=='EEXIST')throw extra;}}}
+  p.fault('received',record);return record;
+}
+function readPending(root,pendingId,p){
+  if(typeof pendingId!=='string'||!/^([0-9a-f]{64})\.([0-9a-f]{64})$/.test(pendingId))throw Error('invalid pending case identity');
+  const [id,variant]=pendingId.split('.'),path=join(caseArea(root,p,{create:false}),id,`${variant}.received.json`);
+  const record=JSON.parse(caseRead(p,path));if(record.identity?.root!==root||record.pendingId!==pendingId||record.recoveryPath!==path)throw Error('pending case belongs to another repository');return record;
+}
+// A handoff is trusted local input. It is never derived from a received payload.
+export async function acquireCaseWriteOwnership({root,testPath,handoff,signal},ports={}){
+  const p=casePorts(ports);root=p.files.realpath(root);
+  if(signal?.aborted)throw Error('case save cancelled');
+  if(!handoff||!['closed-editor','editor-lease'].includes(handoff.kind)||handoff.testPath!==testPath||handoff.closed===false||handoff.kind==='editor-lease'&&typeof handoff.release!=='function')throw Error(`Close the editor for ${testPath} and explicitly hand over that file before applying its pending cases`);
+  requireRuntimePath(loadRuntimeWorkspace({root}),{path:testPath,from:'Case destination'});
+  const area=caseArea(root,p),path=join(area,`${p.hash(Buffer.from(root+'\0'+testPath))}.lock`),owner={pid:p.pid,host:p.host,token:p.nonce(),root,testPath};
+  const started=p.now(),maxWait=ports.maxWaitMs??2000;let lockStat;
+  for(;;){
+    if(signal?.aborted)throw Error('case save cancelled');
+    try{caseWrite(p,path,JSON.stringify(owner),{exclusive:true});lockStat=p.files.lstat(path);break;}
+    catch(e){if(e.code!=='EEXIST')throw e;const before=caseStat(p,path);let other;try{other=JSON.parse(caseRead(p,path));}catch{throw Error('case ownership is uncertain; keep pending');}
+      if(other.host===p.host&&Number.isSafeInteger(other.pid)&&p.isAlive(other.pid)===false){
+        // A separate exclusive recovery guard serializes abandoned-owner removal.
+        const guard=path+'.recover';let owned=false;try{caseWrite(p,guard,JSON.stringify(owner),{exclusive:true});owned=true;const now=caseStat(p,path);if(now&&now.ino===before?.ino&&now.dev===before?.dev&&caseRead(p,path)===JSON.stringify(other))p.files.unlink(path);}catch(recovery){if(recovery.code!=='EEXIST')throw recovery;}finally{if(owned)p.files.unlink(guard);}continue;
+      }
+      if(p.now()-started>=maxWait)throw Error('another saver or editor owns this file; keep pending');
+      await p.sleep(Math.min(25,maxWait),signal);
+    }
+  }
+  const record={root,testPath,p,path,owner,lockStat,released:false};
+  const lease={release(){if(record.released)return;record.released=true;try{const now=caseStat(p,path);if(now?.ino===lockStat.ino&&now.dev===lockStat.dev&&caseRead(p,path)===JSON.stringify(owner)){p.files.unlink(path);caseSyncDir(p,dirname(path));}}finally{handoff.kind==='editor-lease'&&handoff.release();}}};
+  caseLeases.set(lease,record);
+  if(signal?.aborted){lease.release();throw Error('case save cancelled');}return Object.freeze(lease);
+}
+function ownedCaseLease(lease,root,path){const record=caseLeases.get(lease);if(!record||record.released||record.root!==root||record.testPath!==path)throw Error('supported ownership for the exact original test is required');const now=caseStat(record.p,record.path);if(!now||now.ino!==record.lockStat.ino||now.dev!==record.lockStat.dev||caseRead(record.p,record.path)!==JSON.stringify(record.owner))throw Error('case write ownership was lost');return record;}
+function knownEndWorld(doc){
+  if(!doc.steps.length)return doc.initial_world;
+  const values=(doc.steps.at(-1)?.checks??[]).filter(c=>c.target==='world'&&c.path===''&&c.op==='equals').map(c=>c.value);
+  if(!values.length||!values.every(v=>isDeepStrictEqual(v,values[0])))return undefined;
+  if(JSON.stringify(values[0]).includes('"$step_result"'))return undefined;return values[0];
+}
+function prepareCase(root,record,p){
+  const saved=record.saved,test=saved?.test,story=record.identity.original.storyPath,path=record.target;
+  let unsafeNumber=false;const numeric=text=>{const match=/^(-?)([0-9]+)(?:\.([0-9]+))?(?:[eE]([+-]?[0-9]+))?$/.exec(text);if(!match)return text;let digits=(match[2]+(match[3]??'')).replace(/^0+/,'');if(!digits)return '0';const zeros=/0*$/.exec(digits)[0].length;return match[1]+digits.slice(0,digits.length-zeros)+'e'+(BigInt(match[4]??0)-BigInt((match[3]??'').length)+BigInt(zeros));};
+  try{JSON.parse(record.raw,(_key,value,context)=>{if(typeof value==='number'&&(!Number.isFinite(value)||context?.source&&numeric(context.source)!==numeric(String(value))))unsafeNumber=true;return value;});}catch{}
+  if(unsafeNumber)throw Error('received numeric expectation needs lossless handling; exact original bytes retained');
+  if(!isObject(test)||test.schema_version!==TEST_SCHEMA||!Array.isArray(test.steps)||!test.steps.length||typeof story!=='string'||test.story_path!==story||typeof path!=='string')throw Error('the exact original test association or complete received scenario is unavailable');
+  const workspace=loadRuntimeWorkspace({root});requireRuntimePath(workspace,{path,from:'Original selected test'});requireRuntimePath(workspace,{path:story,from:path});
+  const found=findTests({root}),original=found.tests.find(t=>t.path===path&&t.storyPath===story&&t.doc?.story_path===story);
+  if(!original?.doc||original.doc.schema_version!==TEST_SCHEMA||!Array.isArray(original.doc.steps)||NOT_TEST_FILES.test(basename(path)))throw Error(`the original test ${path} is missing or no longer belongs to ${story}. Restore it before importing the case`);
+  caseSafe(p,join(root,path));caseSafe(p,join(root,story));
+  const text=caseRead(p,join(root,path)),doc=JSON.parse(text);
+  if(!isDeepStrictEqual(doc,original.doc))throw Error('the original test changed while being inspected');
+  if(record.isolated){
+    if(!isObject(test.initial_world)||test.steps.length!==1||!isDeepStrictEqual(test.criteria,doc.criteria)||!isDeepStrictEqual(test.simulation??{},doc.simulation??{})||!isDeepStrictEqual(test.context??[],doc.context??[]))throw Error('recorded case lacks original criteria, simulation, context or confirmed starting world');
+    const id=slug(saved.id);if(!id)throw Error('case has no safe identity');
+    const variant=`tests/${original.story}.try-${id}.json`;requireRuntimePath(workspace,{path:variant,from:path});
+    return{path:variant,before:null,after:JSON.stringify(test,null,2)+'\n',steps:[test.steps[0].step_id],isolated:true};
+  }
+  const beforeWorld=Object.hasOwn(saved,'world_before')?saved.world_before:Object.hasOwn(test,'initial_world')?test.initial_world:undefined;
+  if(beforeWorld===undefined||!isDeepStrictEqual(knownEndWorld(doc),beforeWorld))throw Error('confirmed starting world does not match the original test continuation');
+  const byText=new Map((doc.criteria??[]).map(c=>[c.text,c.id])),savedText=new Map((test.criteria??[]).map(c=>[c.id,c.text]));
+  let after=text,current=doc;const steps=[];
+  for(const raw of test.steps){if(!isObject(raw)||!Array.isArray(raw.checks)||!raw.checks.length)throw Error('case has no mapped checks');const checks=raw.checks.map(c=>({...c,criterion_id:byText.get(savedText.get(c.criterion_id))}));if(checks.some(c=>!c.criterion_id))throw Error(`"${cleanText(saved.name??saved.id)}" checks a criterion that ${path} does not have; keep expected values and repair the mapping`);const taken=new Set(current.steps.map(s=>s.step_id));let id=slug(raw.step_id)||slug(saved.id)||'saved-case';for(let n=2,base=id;taken.has(id);n++)id=`${base}-${n}`;const step={...raw,step_id:id,checks};after=appendStep(after,current,step);current={...current,steps:[...current.steps,step]};steps.push(id);}
+  return{path,before:text,after,steps};
+}
+function applyPendingCaseSync({root,pendingId,writeOwnership,signal},ports={}){
+  const p=casePorts(ports);root=p.files.realpath(root);const record=readPending(root,pendingId,p),journal=record.recoveryPath.replace('.received.json','.transaction.json');
+  let temp,tempOwned,lease,transaction;const persist=value=>caseWrite(p,journal,JSON.stringify(value));
+  try{
+    lease=ownedCaseLease(writeOwnership,root,record.target);
+    const variants=p.files.list(dirname(record.recoveryPath)).filter(x=>x.endsWith('.received.json'));
+    if(variants.length!==1)return caseResult(record,'conflict','this identity has different received payloads; both are retained');
+    if(caseStat(p,journal)){transaction=JSON.parse(caseRead(p,journal));if(transaction.state==='committed')return caseResult(record,'committed','already applied',{path:transaction.path,duplicate:true});
+      if(transaction.after!==undefined){const actual=caseStat(p,join(root,transaction.path))?caseRead(p,join(root,transaction.path)):null;
+        if(actual===transaction.after){caseSyncDir(p,dirname(join(root,transaction.path)));persist({...transaction,state:'committed'});return caseResult(record,'committed','reconciled published case',{path:transaction.path,steps:transaction.steps});}
+        if(actual!==transaction.before){persist({...transaction,state:'conflict',observed:[...(transaction.observed??[]),actual]});return caseResult(record,'conflict','authored revision changed after preparation; received and observed revisions retained');}
+      }
+    }
+    if(signal?.aborted)return caseResult(record,'pending','case save cancelled');
+    const prepared=prepareCase(root,record,p);transaction={...prepared,state:'prepared',pendingId};persist(transaction);p.fault('prepared',record);
+    if(signal?.aborted)return caseResult(record,'pending','case save cancelled');
+    ownedCaseLease(writeOwnership,root,record.target);
+    requireRuntimePath(loadRuntimeWorkspace({root}),{path:prepared.path,from:'Case publication'});
+    const target=join(root,prepared.path);caseSafe(p,dirname(target),{directory:true,create:prepared.isolated});
+    const st=caseStat(p,target),before=st?caseRead(p,target):null;
+    if(before!==prepared.before){if(prepared.isolated&&before===prepared.after){persist({...transaction,state:'committed'});return caseResult(record,'committed','already saved',{path:prepared.path,duplicate:true});}persist({...transaction,state:'conflict',observed:[before]});return caseResult(record,'conflict','authored revision changed before publication');}
+    temp=join(dirname(target),`.pdd-case-${p.nonce()}.tmp`);caseWrite(p,temp,prepared.after,{exclusive:true});tempOwned=caseStat(p,temp);p.fault('before-publication',record);
+    ownedCaseLease(writeOwnership,root,record.target);
+    const latest=caseStat(p,target)?caseRead(p,target):null;
+    if(latest!==prepared.before){persist({...transaction,state:'conflict',observed:[latest]});return caseResult(record,'conflict','authored revision changed during preparation');}
+    if(signal?.aborted)return caseResult(record,'pending','case save cancelled');
+    // From this boundary onward, reconcile while custody remains held even on abort.
+    transaction={...transaction,state:'publishing'};persist(transaction);
+    if(prepared.isolated)p.files.link(temp,target);else p.files.rename(temp,target);
+    p.fault('published',record);caseSyncDir(p,dirname(target));
+    if(caseRead(p,target)!==prepared.after)throw Error('published target changed; reconciliation required');
+    p.fault('before-ledger',record);persist({...transaction,state:'committed'});p.fault('committed',record);
+    return caseResult(record,'committed','applied',{path:prepared.path,steps:prepared.steps});
+  }catch(error){
+    if(transaction?.state==='publishing'){
+      try{const actual=caseRead(p,join(root,transaction.path));if(actual===transaction.after){caseSyncDir(p,dirname(join(root,transaction.path)));persist({...transaction,state:'committed'});return caseResult(record,'committed','reconciled after publication',{path:transaction.path,steps:transaction.steps});}persist({...transaction,state:'conflict',observed:[actual]});}catch{/* durable prepared record retains custody */}
+    }
+    return caseResult(record,'pending',cleanText(error.message??error));
+  }finally{if(temp){try{const remaining=caseStat(p,temp);if(tempOwned&&remaining?.ino===tempOwned.ino&&remaining.dev===tempOwned.dev)p.files.unlink(temp);}catch(e){if(e.code!=='ENOENT'){} }} }
+}
+export async function applyPendingCase(input,ports={}){return applyPendingCaseSync(input,ports);}
+export const saveDoorCase=(root,saved,options={})=>{
+  const p=casePorts(options.ports??{env:options.env});let record;
+  try{root=p.files.realpath(root);record=retainCase(root,saved,options,p);const journal=record.recoveryPath.replace('.received.json','.transaction.json');
+    if(p.files.list(dirname(record.recoveryPath)).filter(n=>n.endsWith('.received.json')).length>1)return caseMessage(caseResult(record,'conflict','this identity has different received payloads; both are retained'));
+    if(caseStat(p,journal)){const prior=JSON.parse(caseRead(p,journal));if(prior.state==='committed')return caseMessage(caseResult(record,'committed','already applied',{path:prior.path,duplicate:true}));}
+    if(options.writeOwnership)return caseMessage(applyPendingCaseSync({root,pendingId:record.pendingId,writeOwnership:options.writeOwnership,signal:options.signal},options.ports??{env:options.env}));
+    let reason;try{prepareCase(root,record,p);}catch(error){reason=error.message;}
+    const result=caseResult(record,'pending',options.signal?.aborted?'case save cancelled':reason??'close the editor for the named original test and apply the retained case with supported ownership');return caseMessage(result);}
+  catch(error){return `not added: durable case receipt failed (${cleanText(error.message??error)}).${record?' Recovery: '+record.recoveryPath:''}`;}
+};
 
-function addSavedCaseSafely(root, saved, seedTest) {
-  const test = saved?.test, story = typeof saved?.story_path === 'string' ? saved.story_path : test?.story_path;
-  const label = cleanText(saved?.name || saved?.id || 'a saved case');
-  if (!isObject(test) || !Array.isArray(test.steps) || !test.steps.length || typeof story !== 'string') return `not added: "${label}" is not a test the interpreter can run.`;
-  const found = findTests({ root });
-  if (!story.endsWith('.md') || story.split('/').some(part => !part || part === '.' || part === '..') || !found.visible.has(story) || !inRepo(root, story)) {
-    return `not added: its story "${cleanText(story)}" is not a story file in this repository.`;
-  }
-  // The test name rule, with story_path inside the file as the cross-check.
-  const candidates = found.tests.filter(item => item.storyPath === story && item.doc?.story_path === story).sort((a, b) => a.path.localeCompare(b.path));
-  const seededStory = seedTest?.storyPath === story;
-  const target = seededStory ? candidates.find(item => item.path === seedTest.path)
-    : saved?.original_path ? candidates.find(item => item.path === saved.original_path) : candidates[0];
-  if (seededStory && !target) return `not added: the original test ${cleanText(seedTest.path)} is missing or no longer belongs to ${cleanText(story)}. Restore it before importing the case.`;
-  if (saved?.original_path && !target) return 'not added: the original test file is missing or its Story changed.';
-  const unusable = !target && found.tests.find(item => item.storyPath === story || item.storyPaths?.includes(story));
-  if (unusable) return `not added: ${cleanText(unusable.path)} is the test of ${cleanText(story)}, but pdd cannot use it. Fix it first.`;
-  if (!target) {
-    // A story with no test gets tests/<story>.json (the story's own file name, never a path from the server), so the
-    // test name rule finds it.
-    const folder = statOrNull(join(root, 'tests'));
-    if (folder?.isSymbolicLink()) return 'not added: tests/ is a symbolic link. pdd writes test files only inside the repository.';
-    if (folder && !folder.isDirectory()) return 'not added: tests is not a folder.';
-    const path = `tests/${story.split('/').at(-1).replace(/\.md$/, '')}.json`;
-    if (statOrNull(join(root, path))) return `not added: ${path} exists but is not the test of ${cleanText(story)}. Fix that file first.`;
-    if (!folder) mkdirSync(join(root, 'tests'));
-    if (!inRepo(root, 'tests')) return 'not added: tests/ is not inside the repository.';
-    writeFileSync(join(root, path), `${JSON.stringify(test, null, 2)}\n`, { flag: 'wx' });
-    return `added to ${path} as step ${cleanText(test.steps.map(step => step?.step_id).join(', '))}`;
-  }
-  if (!target.path.endsWith('.json') || NOT_TEST_FILES.test(target.path.split('/').at(-1))) {
-    return `not added: ${target.path} is not a file pdd adds steps to. Move the test to tests/.`;
-  }
-  const file = join(root, target.path), stat = statOrNull(file);
-  if (!stat?.isFile() || !inRepo(root, target.path)) return `not added: ${target.path} is not a regular file inside the repository.`;
-  const text = readFileSync(file, 'utf8'), doc = JSON.parse(text);
-  if (!isObject(doc) || doc.schema_version !== TEST_SCHEMA || !Array.isArray(doc.steps)) return `not added: ${target.path} is not a "${TEST_SCHEMA}" test.`;
-  const byText = new Map((Array.isArray(doc.criteria) ? doc.criteria : []).map(item => [item.text, item.id]));
-  const savedText = new Map((Array.isArray(test.criteria) ? test.criteria : []).map(item => [item.id, item.text]));
-  let next = text, current = doc;
-  const ids = [];
-  for (const raw of test.steps) {
-    const checks = Array.isArray(raw?.checks) ? raw.checks : [];
-    const mapped = checks.map(check => ({ ...check, criterion_id: byText.get(savedText.get(check?.criterion_id)) ?? (byText.has(savedText.get(check?.criterion_id)) ? check.criterion_id : null) }));
-    const lost = checks.find((check, index) => !mapped[index].criterion_id);
-    if (lost || !checks.length) return `not added: "${label}" checks a criterion that ${target.path} does not have ("${cleanText(savedText.get(lost?.criterion_id) ?? lost?.criterion_id ?? 'none')}"). Add it by hand.`;
-    const taken = new Set(current.steps.map(step => step?.step_id));
-    let id = slug(raw.step_id) || slug(saved.name) || slug(saved.id) || 'saved-case';
-    for (let number = 2, base = id; taken.has(id); number += 1) id = `${base}-${number}`;
-    const step = { ...raw, step_id: id, checks: mapped };
-    next = appendStep(next, current, step);
-    current = { ...current, steps: [...current.steps, step] };
-    ids.push(id);
-  }
-  writeFileSync(file, next);
-  return `added to ${target.path} as step ${ids.join(', ')}`;
+async function caseHandoff(context,testPath){
+  context.caseHandoffs??=new Map();if(context.caseHandoffs.has(testPath))return null;
+  context.caseHandoffs.set(testPath,true);
+  if(context.ports.caseHandoff)return context.ports.caseHandoff({root:context.root,testPath,signal:context.signal});
+  if(!context.ports.interactive||context.signal?.aborted)return null;
+  line(context.ports.stdout,`Close the editor for ${testPath}. Hand over this closed file for the pending case apply? y/N`);
+  const answers=lineReader(context.ports.stdin);try{const answer=await answers.ask();return /^y(?:es)?$/i.test(answer.trim())?{kind:'closed-editor',testPath}:null;}finally{answers.close();}
 }
 
 // Saved cases: add each new one once. Returns 'ok', 'missing' (no endpoint yet) or 'ended'.
@@ -3086,11 +3207,18 @@ async function collectSavedTests(context, tryId) {
   const reply = await context.runtime.send(`/v1/try/${tryId}/tests`, { method: 'GET' }, GET_MS);
   if ([401, 403, 410].includes(reply.status)) return 'ended';
   if (reply.status !== 200 || !Array.isArray(reply.json?.tests)) return reply.lost ? 'ok' : 'missing';
-  const done = store.read(path) ?? {};
-  for (const saved of reply.json.tests) {
+  const done = store.read(path) ?? {},writeLeases=context.caseWriteLeases??=new Map();
+  for (const [receivedIndex,saved] of reply.json.tests.entries()) {
     const key = typeof saved?.id === 'string' ? saved.id : null;
-    if (!key || done[key]) continue;
-    const said = addSavedCase(root, saved, context.seedTest);
+    if (!key) continue;
+    const p=casePorts({env:ports.env}),record=retainCase(root,saved,{seedTest:context.seedTest,sessionId:tryId,rawBytes:receivedCaseBytes(reply.text,receivedIndex)},p);
+    let result=caseResult(record,'pending','close the editor for the named original test and explicitly hand over the file');
+    let valid=true;try{prepareCase(root,record,p);}catch(error){valid=false;result=caseResult(record,'pending',error.message);}
+    const handoff=valid&&!writeLeases.has(record.target)?await caseHandoff(context,record.target):null;
+    if(handoff||writeLeases.has(record.target)){try{let lease=writeLeases.get(record.target);if(!lease){lease=await acquireCaseWriteOwnership({root,testPath:record.target,handoff,signal:context.signal},{env:ports.env});writeLeases.set(record.target,lease);}result=await applyPendingCase({root,pendingId:record.pendingId,writeOwnership:lease,signal:context.signal},{env:ports.env});}catch(error){result=caseResult(record,'pending',error.message);}}
+    const said=caseMessage(result);
+    if(result.duplicate&&done[key])continue;
+    if(done[key]?.result===said)continue;
     done[key] = { at: new Date(ports.now()).toISOString(), result: said };
     store.write(path, done);
     try { context.onAgentCaseSaved?.({ id: key, name: saved.name, story_path: saved.story_path ?? saved.test?.story_path, result: said }); } catch {}
@@ -3157,34 +3285,9 @@ async function watchSavedTests(context, tryId, wait, story) {
 
 
 // The doors use the same gh identity, private store, one-shot dispatch and owner-scoped ledger as Try.
-export const saveDoorCase = (root, saved, options = {}) => {
-  if (!options.isolated) return addSavedCase(root, saved);
-  try {
-    root = realpathSync(root);
-    const found = findTests({ root }), test = saved?.test;
-    const original = found.tests.find(item => item.path === saved.original_path && item.storyPath === saved.story_path);
-    if (!original?.doc || !inRepo(root, original.path) || !inRepo(root, saved.story_path)) return 'not added: the original Story or test is missing or changed.';
-    if (!isObject(test) || !isObject(test.initial_world) || !Array.isArray(test.steps) || test.steps.length !== 1 || test.story_path !== original.storyPath
-      || !isDeepStrictEqual(test.criteria, original.doc.criteria)
-      || !isDeepStrictEqual(test.simulation ?? {}, original.doc.simulation ?? {})
-      || !isDeepStrictEqual(test.context ?? [], original.doc.context ?? [])) return 'not added: the recorded case lacks its original Story criteria, simulation, context or confirmed starting world.';
-    const folder = join(root, 'tests'), stat = statOrNull(folder);
-    if (stat && (!stat.isDirectory() || stat.isSymbolicLink()) || stat && !inRepo(root, 'tests')) return 'not added: tests/ must be a real folder inside the repository.';
-    if (!stat) mkdirSync(folder);
-    const id = slug(saved.id), story = original.story;
-    if (!id || !story) return 'not added: the recorded case has no safe identity.';
-    const path = `tests/${story}.try-${id}.json`, file = join(root, path), existing = statOrNull(file);
-    if (existing) {
-      if (!existing.isFile() || existing.isSymbolicLink() || !inRepo(root, path)) return 'not added: the recorded case path is not a regular repository file.';
-      if (isDeepStrictEqual(JSON.parse(readFileSync(file, 'utf8')), test)) return `already saved to ${path}`;
-      return 'not added: a different case already uses this recorded run identity.';
-    }
-    writeFileSync(file, `${JSON.stringify(test, null, 2)}\n`, { flag: 'wx' });
-    return `added to ${path} as step ${cleanText(test.steps[0].step_id)}`;
-  } catch (error) { return `not added: pdd could not write the recorded case (${cleanText(error.code ?? error.message)}).`; }
-};
 export async function runDoorCall(descriptor, input, givenPorts = {}) {
   const ports = withDefaults(givenPorts), { root, origin, sessionId, login, prompt, operation } = descriptor;
+  if(loadRuntimeWorkspace({root}).configured)ports.captureSource(root,{tests:descriptor.originalPath?[descriptor.originalPath]:[descriptor.prompt].filter(Boolean)});
   const store = stateFor(ports.env, root), identity = signIn(ports.gh, store);
   if (identity.login !== login) throw new Stop(5, `This Try belongs to ${login}. Run: gh auth switch -u ${login}`);
   if (runtimeOrigin({ PDD_RUNTIME_URL: origin }) !== origin) throw new Stop(2, 'The saved interpreter address is invalid.');
@@ -3256,6 +3359,7 @@ export async function readTryOwner({ cwd = process.cwd(), story } = {}, givenPor
   if (selected.length > 1) { const live = selected.filter(test => repo.tries?.[test.path]); if (live.length === 1) selected = live; }
   if (selected.length !== 1) throw new Error(`Choose one Story${story ? ` matching "${story}"` : ''}. Available: ${found.tests.map(test => `${test.story} (${test.path})`).join(', ') || 'none'}.`);
   const test = selected[0];
+  ports.captureSource(root,{tests:[test.path]});
   async function openTry() {
     const code = await runTry({ cwd, words: [test.path], options: { '--no-open': true, '--no-wait': true } }, { ...ports, stdout: ports.stderr, interactive: false, agentBridge: false });
     if (code !== 0) throw new Error('The Try could not open. Read the progress on stderr and fix the reported problem.');
@@ -3263,6 +3367,7 @@ export async function readTryOwner({ cwd = process.cwd(), story } = {}, givenPor
   let record = repo.tries?.[test.path];
   if (!record) { await openTry(); record = store.repo(root).tries?.[test.path]; }
   if (!record) throw new Error('No confirmed Try is recorded. Run pdd simulate STORY.');
+  ports.captureSource(root,{tests:[test.path]});
   const identity = signIn(ports.gh, store);
   if (record.login !== identity.login) throw new Error(`This Try belongs to ${record.login}. Run: gh auth switch -u ${record.login}`);
   if (runtimeOrigin({ PDD_RUNTIME_URL: record.origin }) !== record.origin) throw new Error('The saved interpreter address is invalid.');
@@ -3286,4 +3391,47 @@ export async function readTryOwner({ cwd = process.cwd(), story } = {}, givenPor
   const state = await runtime.send(`/v1/try/${record.id}/state`, { method: 'GET' }, GET_MS);
   return { root, test: record.seed_scenario ? { ...test, doc: record.seed_scenario } : test, record, model: metadata.json, actions: Array.isArray(state.json?.actions) ? state.json.actions : null,
     ...(state.status === 200 && Object.hasOwn(state.json ?? {}, 'world') ? { data: state.json.world } : { data_error: `Current saved data unavailable${state.status ? ` (HTTP ${state.status})` : ''}; no initial data was substituted.` }) };
+}
+
+// Local migration ports use the same private custody/publication boundary.
+export function runtimeWorkspaceMigrationStore({root,projectionRoot,env=process.env},given={}){
+  const p=casePorts({...given,env}),directory=stateDirectory(env,root),oldKey=p.hash(Buffer.from(projectionRoot)).slice(0,16);
+  const readJson=path=>JSON.parse(caseRead(p,path));
+  const list=path=>{try{caseSafe(p,path,{directory:true});return p.files.list(path);}catch(e){if(e.code==='ENOENT'||!caseStat(p,path))return[];throw e;}};
+  return{
+    inventory(){
+      const records=[],repoPath=join(directory,'repos',oldKey+'.json');let repo;
+      if(caseStat(p,repoPath)){repo=readJson(repoPath);records.push({id:repoPath,kind:'repo',record:repo,raw:caseRead(p,repoPath)});}
+      for(const batch of list(join(directory,'batches'))){if(!BATCH.test(batch))continue;const folder=join(directory,'batches',batch),path=join(folder,'batch.json');if(!caseStat(p,path))continue;const record=readJson(path);if(record.root!==projectionRoot)continue;records.push({id:path,kind:'batch',record,raw:caseRead(p,path),receipts:list(folder).filter(n=>UUID.test(n.replace(/\.json$/,''))).map(n=>({path:join(folder,n),raw:caseRead(p,join(folder,n))}))});}
+      for(const id of new Set(Object.values(repo?.tries??{}).map(r=>r.id).filter(id=>UUID.test(id))))for(const suffix of ['.json','.door.json','.tests.json','.approvals.json']){const path=join(directory,'tries',id+suffix);if(caseStat(p,path))records.push({id:path,kind:'try',record:readJson(path),raw:caseRead(p,path)});}
+      const area=join(directory,'case-import');for(const name of list(area).filter(n=>/^[a-f0-9]{64}$/.test(n)))for(const file of list(join(area,name)).filter(n=>n.endsWith('.received.json'))){const path=join(area,name,file),record=readJson(path);if(record.identity?.root!==projectionRoot)continue;const journal=path.replace('.received.json','.transaction.json');records.push({id:path,kind:'case',record,raw:caseRead(p,path),transaction:caseStat(p,journal)?readJson(journal):null});}
+      return records;
+    },
+    readMapping(id){const folder=join(directory,'workspace-migrations',id);const records=list(folder).filter(n=>/^[a-f0-9]{64}\.json$/.test(n)).map(n=>readJson(join(folder,n)));return records.length?{...records[0],items:Object.assign({},...records.map(r=>r.items))}:null;},
+    publishMapping(id,record){
+      const itemId=record.activeItem,item=record.items[itemId],folder=join(directory,'workspace-migrations',id),path=join(folder,p.hash(Buffer.from(itemId))+'.json');
+      // Each item has its own atomic record; another item's update cannot be lost.
+      if(item.state==='applied'&&item.kind==='repo'){
+        const old=item.record,mapping=new Map(record.mappings.map(m=>[m.from,m.to])),target=join(directory,'repos',p.hash(Buffer.from(root)).slice(0,16)+'.json');
+        const current=caseStat(p,target)?readJson(target):{root,tries:{}};const tries={...current.tries};
+        for(const [from,value] of Object.entries(old.tries??{})){const to=mapping.get(from);if(!to)throw Error('original Try has no exact destination mapping');if(tries[to]&&tries[to].id!==value.id)throw Error('authored repository already has another Try at this test');tries[to]={...value,original_root:projectionRoot};}
+        const next={...old,...current,root,original_root:projectionRoot,tries,last_batch:current.last_batch??old.last_batch??null};
+        // Destination publication is separately prepared and recoverable. Original
+        // receipts/state remain untouched and the selected lease guards this item.
+        caseWrite(p,target,JSON.stringify(next));
+      }
+      caseWrite(p,path,JSON.stringify({...record,items:{[itemId]:item}}));return path;
+    },
+    transferCase(item,target){const old=item.record;
+      // Transfer every conflicting variant before any one variant can be applied.
+      for(const name of list(dirname(item.id)).filter(n=>n.endsWith('.received.json'))){const sibling=readJson(join(dirname(item.id),name));if(sibling.pendingId===old.pendingId)continue;if(sibling.identity?.root!==projectionRoot||!isDeepStrictEqual(sibling.identity,old.identity))throw Error('conflicting original case association is uncertain');const copy=retainCase(root,sibling.saved,{seedTest:{path:target,storyPath:item.mappedStory},sessionId:sibling.identity.session,isolated:sibling.isolated,rawBytes:sibling.raw},p);const origin=copy.recoveryPath.replace('.received.json','.origin.json');if(!caseStat(p,origin))caseWrite(p,origin,JSON.stringify({originalReceipt:caseRead(p,join(dirname(item.id),name)),originalIdentity:sibling.identity}),{exclusive:true});}
+      const retained=retainCase(root,old.saved,{seedTest:{path:target,storyPath:target?item.mappedStory:old.identity.original.storyPath},sessionId:old.identity.session,isolated:old.isolated,rawBytes:old.raw},p);
+      const originalPath=retained.recoveryPath.replace('.received.json','.origin.json');if(!caseStat(p,originalPath))caseWrite(p,originalPath,JSON.stringify({originalReceipt:item.raw,originalIdentity:old.identity,transaction:item.transaction??null}),{exclusive:true});
+      if(item.transaction?.after!==undefined){
+        const path=item.transaction.isolated?item.mappedVariant:target;
+        if(path&&caseStat(p,join(root,path))&&caseRead(p,join(root,path))===item.transaction.after&&caseStat(p,join(projectionRoot,item.transaction.path))&&caseRead(p,join(projectionRoot,item.transaction.path))===item.transaction.after)caseWrite(p,retained.recoveryPath.replace('.received.json','.transaction.json'),JSON.stringify({...item.transaction,path,state:'committed'}));
+      }
+      return retained;
+    }
+  };
 }

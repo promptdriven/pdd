@@ -1,0 +1,482 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/bounded-workspace-policy.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "With no pdd-workspace.json, policy loading reports unconfigured and does not read a missing file."
+    },
+    {
+      "id": "AC2",
+      "text": "A policy with allowed_paths [\"simulation/\", \"contracts/shared.md\"] retains those two entries in order and does not select Stories or add source includes."
+    },
+    {
+      "id": "AC3",
+      "text": "A present empty allowed_paths list reports a configured policy with no permitted authored paths."
+    },
+    {
+      "id": "AC4",
+      "text": "Malformed policy, unknown keys and unsafe path spellings are refused as workspace-config-invalid; no source content is read by policy loading."
+    },
+    {
+      "id": "AC5",
+      "text": "A linked or oversized policy is refused as workspace-config-unsafe before its content is read."
+    }
+  ],
+  "initial_world": {
+    "fixture_counters": {
+      "stat": 0,
+      "read": 0
+    }
+  },
+  "simulation": {
+    "files.stat": {
+      "action": "fixture.lookup",
+      "world_pointer": "/fixture_counters/stat",
+      "cases": [
+        {
+          "args": {
+            "path": "pdd-workspace.json"
+          },
+          "call_index": 1,
+          "result": {
+            "exists": false,
+            "is_symlink": false,
+            "size": 0
+          }
+        },
+        {
+          "args": {
+            "path": "pdd-workspace.json"
+          },
+          "call_index": 2,
+          "result": {
+            "exists": true,
+            "is_symlink": false,
+            "size": 55
+          }
+        },
+        {
+          "args": {
+            "path": "pdd-workspace.json"
+          },
+          "call_index": 3,
+          "result": {
+            "exists": true,
+            "is_symlink": false,
+            "size": 20
+          }
+        },
+        {
+          "args": {
+            "path": "pdd-workspace.json"
+          },
+          "call_index": 4,
+          "result": {
+            "exists": true,
+            "is_symlink": false,
+            "size": 1
+          }
+        },
+        {
+          "args": {
+            "path": "pdd-workspace.json"
+          },
+          "call_index": 5,
+          "result": {
+            "exists": true,
+            "is_symlink": false,
+            "size": 47
+          }
+        },
+        {
+          "args": {
+            "path": "pdd-workspace.json"
+          },
+          "call_index": 6,
+          "result": {
+            "exists": true,
+            "is_symlink": false,
+            "size": 44
+          }
+        },
+        {
+          "args": {
+            "path": "pdd-workspace.json"
+          },
+          "call_index": 7,
+          "result": {
+            "exists": true,
+            "is_symlink": false,
+            "size": 35
+          }
+        },
+        {
+          "args": {
+            "path": "pdd-workspace.json"
+          },
+          "call_index": 8,
+          "result": {
+            "exists": true,
+            "is_symlink": false,
+            "size": 31
+          }
+        },
+        {
+          "args": {
+            "path": "pdd-workspace.json"
+          },
+          "call_index": 9,
+          "result": {
+            "exists": true,
+            "is_symlink": false,
+            "size": 31
+          }
+        },
+        {
+          "args": {
+            "path": "pdd-workspace.json"
+          },
+          "call_index": 10,
+          "result": {
+            "exists": true,
+            "is_symlink": true,
+            "size": 2
+          }
+        },
+        {
+          "args": {
+            "path": "pdd-workspace.json"
+          },
+          "call_index": 11,
+          "result": {
+            "exists": true,
+            "is_symlink": false,
+            "size": 10485761
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "files.read": {
+      "action": "fixture.lookup",
+      "world_pointer": "/fixture_counters/read",
+      "cases": [
+        {
+          "args": {
+            "path": "pdd-workspace.json"
+          },
+          "call_index": 1,
+          "result": {
+            "content": "{\"allowed_paths\":[\"simulation/\",\"contracts/shared.md\"]}"
+          }
+        },
+        {
+          "args": {
+            "path": "pdd-workspace.json"
+          },
+          "call_index": 2,
+          "result": {
+            "content": "{\"allowed_paths\":[]}"
+          }
+        },
+        {
+          "args": {
+            "path": "pdd-workspace.json"
+          },
+          "call_index": 3,
+          "result": {
+            "content": "{"
+          }
+        },
+        {
+          "args": {
+            "path": "pdd-workspace.json"
+          },
+          "call_index": 4,
+          "result": {
+            "content": "{\"allowed_paths\":[],\"include\":[\"private/a.md\"]}"
+          }
+        },
+        {
+          "args": {
+            "path": "pdd-workspace.json"
+          },
+          "call_index": 5,
+          "result": {
+            "content": "{\"allowed_paths\":[\"simulation/../private/\"]}"
+          }
+        },
+        {
+          "args": {
+            "path": "pdd-workspace.json"
+          },
+          "call_index": 6,
+          "result": {
+            "content": "{\"allowed_paths\":[\"simulation/**\"]}"
+          }
+        },
+        {
+          "args": {
+            "path": "pdd-workspace.json"
+          },
+          "call_index": 7,
+          "result": {
+            "content": "{\"allowed_paths\":[\"/private/\"]}"
+          }
+        },
+        {
+          "args": {
+            "path": "pdd-workspace.json"
+          },
+          "call_index": 8,
+          "result": {
+            "content": "{\"allowed_paths\":\"simulation/\"}"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "absent",
+      "entry_path": "prompts/cli/runtime-workspace.prompt.md",
+      "operation": "loadRuntimeWorkspace",
+      "input": {
+        "root": "/synthetic/repo"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/configured",
+          "op": "equals",
+          "value": false
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/runtime-workspace-files-read",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "exact-policy",
+      "entry_path": "prompts/cli/runtime-workspace.prompt.md",
+      "operation": "loadRuntimeWorkspace",
+      "input": {
+        "root": "/synthetic/repo"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {
+            "configured": true,
+            "allowed_paths": [
+              "simulation/",
+              "contracts/shared.md"
+            ]
+          }
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "empty",
+      "entry_path": "prompts/cli/runtime-workspace.prompt.md",
+      "operation": "loadRuntimeWorkspace",
+      "input": {
+        "root": "/synthetic/repo"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {
+            "configured": true,
+            "allowed_paths": []
+          }
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "malformed",
+      "entry_path": "prompts/cli/runtime-workspace.prompt.md",
+      "operation": "loadRuntimeWorkspace",
+      "input": {
+        "root": "/synthetic/repo"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "workspace-config-invalid"
+        }
+      ],
+      "model": "gpt-6.1-sol",
+      "expected_error": "workspace-config-invalid"
+    },
+    {
+      "step_id": "unknown-key",
+      "entry_path": "prompts/cli/runtime-workspace.prompt.md",
+      "operation": "loadRuntimeWorkspace",
+      "input": {
+        "root": "/synthetic/repo"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "workspace-config-invalid"
+        }
+      ],
+      "model": "gpt-6.1-sol",
+      "expected_error": "workspace-config-invalid"
+    },
+    {
+      "step_id": "traversal",
+      "entry_path": "prompts/cli/runtime-workspace.prompt.md",
+      "operation": "loadRuntimeWorkspace",
+      "input": {
+        "root": "/synthetic/repo"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "workspace-config-invalid"
+        }
+      ],
+      "model": "gpt-6.1-sol",
+      "expected_error": "workspace-config-invalid"
+    },
+    {
+      "step_id": "glob",
+      "entry_path": "prompts/cli/runtime-workspace.prompt.md",
+      "operation": "loadRuntimeWorkspace",
+      "input": {
+        "root": "/synthetic/repo"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "workspace-config-invalid"
+        }
+      ],
+      "model": "gpt-6.1-sol",
+      "expected_error": "workspace-config-invalid"
+    },
+    {
+      "step_id": "absolute",
+      "entry_path": "prompts/cli/runtime-workspace.prompt.md",
+      "operation": "loadRuntimeWorkspace",
+      "input": {
+        "root": "/synthetic/repo"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "workspace-config-invalid"
+        }
+      ],
+      "model": "gpt-6.1-sol",
+      "expected_error": "workspace-config-invalid"
+    },
+    {
+      "step_id": "wrong-type",
+      "entry_path": "prompts/cli/runtime-workspace.prompt.md",
+      "operation": "loadRuntimeWorkspace",
+      "input": {
+        "root": "/synthetic/repo"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "workspace-config-invalid"
+        }
+      ],
+      "model": "gpt-6.1-sol",
+      "expected_error": "workspace-config-invalid"
+    },
+    {
+      "step_id": "linked-control",
+      "entry_path": "prompts/cli/runtime-workspace.prompt.md",
+      "operation": "loadRuntimeWorkspace",
+      "input": {
+        "root": "/synthetic/repo"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "workspace-config-unsafe"
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "calls",
+          "path": "/resources/runtime-workspace-files-read",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol",
+      "expected_error": "workspace-config-unsafe"
+    },
+    {
+      "step_id": "oversized-control",
+      "entry_path": "prompts/cli/runtime-workspace.prompt.md",
+      "operation": "loadRuntimeWorkspace",
+      "input": {
+        "root": "/synthetic/repo"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "workspace-config-unsafe"
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "calls",
+          "path": "/resources/runtime-workspace-files-read",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol",
+      "expected_error": "workspace-config-unsafe"
+    }
+  ]
+}

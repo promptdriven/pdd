@@ -4,9 +4,10 @@ import { createHash } from 'node:crypto';
 import { accessSync, chmodSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { gitFiles, readPrompt } from './runtime-preflight.mjs';
+import { gitFiles, readPrompt, captureSource } from './runtime-preflight.mjs';
+import {lineReader} from './prompt-approve.mjs';
 import { cleanText, tryUsage, tryUsageLine } from './runtime-output.mjs';
-import { runDoorCall, saveDoorCase } from './runtime-client.mjs';
+import { runDoorCall, saveDoorCase, acquireCaseWriteOwnership } from './runtime-client.mjs';
 
 const WRAPPER_EXIT = 125;
 const hash = text => createHash('sha256').update(text).digest('hex');
@@ -168,8 +169,12 @@ export async function saveLast({ root, store, identity, ports }) {
   checkEffectivePrompts(root,d.promptHashes ?? {[d.prompt]:d.promptHash},d.effectivePromptHashes);
   const step = { step_id: `try-${last.id}`, entry_path: d.prompt, operation: d.operation, input: last.input,
     checks: [{ criterion_id: d.criterion, target: 'result', path: '', op: 'equals', value: last.result }] };
-  const message = saveDoorCase(root, { id: last.id, name: 'Recorded terminal command', story_path: d.storyPath, original_path: d.originalPath,
-    test: { schema_version: 'prompt-runtime.program-scenario.v1', story_path: d.storyPath, criteria: d.criteria, steps: [step] } });
+  captureSource(root,{tests:[d.originalPath]});
+  let lease;
+  if(ports.caseHandoff){const handoff=await ports.caseHandoff({root,testPath:d.originalPath,signal:ports.signal});if(handoff)lease=await acquireCaseWriteOwnership({root,testPath:d.originalPath,handoff,signal:ports.signal},{env:ports.env});}
+  else if(ports.interactive){ports.stdout.write(`Close the editor for ${d.originalPath}. Hand over this closed file for the pending case apply? y/N\n`);const answers=lineReader(ports.stdin);try{if(/^y(?:es)?$/i.test((await answers.ask()).trim()))lease=await acquireCaseWriteOwnership({root,testPath:d.originalPath,handoff:{kind:'closed-editor',testPath:d.originalPath},signal:ports.signal},{env:ports.env});}finally{answers.close();}}
+  let message;try{message = saveDoorCase(root, { id: last.id, name: 'Recorded terminal command', story_path: d.storyPath, original_path: d.originalPath,
+    test: { schema_version: 'prompt-runtime.program-scenario.v1', story_path: d.storyPath, criteria: d.criteria, ...(Object.hasOwn(last,'inputWorld')?{initial_world:last.inputWorld}:{}), steps: [step] } },{writeOwnership:lease,signal:ports.signal,env:ports.env});}finally{lease?.release();}
   if (message.startsWith('not added:')) fail(message.slice(11));
   writePrivate(pointer.last, { ...last, saved: true });
   ports.stdout.write(`${message}\n`);

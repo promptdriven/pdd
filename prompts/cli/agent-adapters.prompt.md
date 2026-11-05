@@ -4,6 +4,13 @@
 
 Export asynchronous `discoverAgents({cwd,env,run,definitions})` and `askAgent({agent,definition,cwd,env,context,entries,supportsApply=false,supportsRun=false,signal,run,timeoutMs})`. Optional `run(command,args,{cwd,env,input,signal,timeoutMs,maxBytes})` is a process port returning `{code,stdout,stderr}`. Export `runAgentProcess(command,args,options)` as that default process port. It uses a direct subprocess without a shell. Discovery uses supplied private definitions, or loads them through the configuration owner. Without custom configuration its defaults are Codex, Claude and Gemini in that order. Return only metadata, each `{id,name,state,detail?}`. States are `ready`, `available`, `signed_out`, `quota`, `not_installed`, `error`. Check installation with help and authentication with cheap status commands; never spend a model call for discovery. Unsupported read-only/authentication flags yield an explanatory error rather than an unsafe invocation.
 
+## Bounded workspace invocation
+
+When a [workspace policy](runtime-workspace.prompt.md) is configured, `askAgent` receives that native capability as an additive `workspace` option. Only packet-supplied project context is permitted. Read-only sandbox, small stdin and disabled write tools do not bound reads. Suppress repository read/search/glob tools, automatic project/instruction discovery and every configured context injection path before starting a model process. Apply this to configured commands and all fallback invocations; a retry cannot remove a control needed for the boundary.
+
+Current unconfigured Claude Read/Grep/Glob permissions remain unchanged. They are insufficient in bounded mode. Current Codex read-only/ignore-rules/feature settings and Gemini deny-all overlay are also not proof that all automatic context loads are disabled. Establish supported native controls per installed CLI before bounded connection. If those controls cannot establish packet-only context, return a clear local unsupported-connection error before authentication/model invocation; never claim isolation from flags alone. No new OS sandbox is promised. Preserve the person's model/authentication and existing failure/secret handling.
+
+
 ## Shared credential-status interpretation
 
 Export pure module function `parseAgentAuthStatus({agent,result})`, returning `ready`, `signed_out` or `unavailable`. Both discovery and workflow readiness use this owner; neither keeps its own auth parser. Ready means credentials configured, not that a token is unexpired or a provider request would succeed. Never run a model request to prove readiness.
@@ -29,6 +36,8 @@ Successful replies must be one strict JSON object. `say` is required nonempty te
 Drop invalid optional fields independently while keeping a valid say; an invalid fill becomes null and its apply cannot survive. Do not send partial fields or invalidate a harmless explanation because its suggestion was wrong. Scrub successful say/fill/next and validate the scrubbed fill again. A process/transport/JSON/say failure still returns `{say,fill:null,error:{state,message}}` with a plain mapped state; optional-field rejection alone is not an agent-startup failure. Legacy replies with only say/fill remain accepted.
 
 ## Dependencies
+
+- [Workspace authority](runtime-workspace.prompt.md): required generation/runtime/verification context for opt-in permission.
 
 - [Agent packet](agent-packet.prompt.md), required during generation and verification: bounded stdin and v8 system/legacy wording.
 
