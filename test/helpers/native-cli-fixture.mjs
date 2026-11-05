@@ -8,7 +8,7 @@ import {fakeHerdr} from './fake-herdr.mjs';
 export const packageRoot=resolve(import.meta.dirname,'../..');
 export const git=(root,...args)=>execFileSync('git',args,{cwd:root,encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
 export const put=(root,path,value)=>{mkdirSync(dirname(join(root,path)),{recursive:true});writeFileSync(join(root,path),typeof value==='string'?value:JSON.stringify(value));};
-export async function nativeFixture(t,{cli=process.env.PDD_NATIVE_CLI||join(packageRoot,'bin/pdd.mjs')}={}) {
+export async function nativeFixture(t,{cli=process.env.PDD_NATIVE_CLI||join(packageRoot,'bin/pdd.mjs'),workflow='small-change'}={}) {
   const parent=mkdtempSync(join(tmpdir(),'pdd-native-cli-'));t.after(()=>rmSync(parent,{recursive:true,force:true}));
   const source=join(parent,'source'),home=join(parent,'home');mkdirSync(source);mkdirSync(home);
   git(source,'init','-q','-b','main');git(source,'config','user.name','Native fixture');git(source,'config','user.email','fixture@example.invalid');git(source,'remote','add','origin','https://github.com/example/project.git');
@@ -30,11 +30,13 @@ export async function nativeFixture(t,{cli=process.env.PDD_NATIVE_CLI||join(pack
     if(file==='gh')throw Error(`Forbidden fixture external call: ${args.join(' ')}`);
     const result=spawnSync(file,args,{cwd:options.cwd,encoding:'utf8',maxBuffer:8*1024*1024});return {stdout:result.stdout,stderr:result.stderr,code:result.status};
   }};
-  const started=await startRun({name:'small-change',issue:'17',agent:'codex',cwd:source,packageRoot},ports);assert.equal(started.exitCode,0,started.message);
+  const started=await startRun({name:workflow,issue:'17',agent:'codex',cwd:source,packageRoot},ports);assert.equal(started.exitCode,0,started.message);
   const commonDir=join(source,'.git'),runDir=join(commonDir,'pdd/runs/17');
   const readRun=()=>JSON.parse(readFileSync(join(runDir,'status.json'),'utf8'));
   const root=readRun().root;put(root,promptPath,prompt());git(root,'add',promptPath);
-  const shown=await stepDone({step:'scope',summary:'Synthetic fixture review.',cwd:root},ports);assert.equal(shown.exitCode,0,shown.message);
+  for(const step of workflow==='feature'?['understand','visual','prompt-story']:['scope']) {
+    const shown=await stepDone({step,summary:'Synthetic fixture review.',cwd:root},ports);assert.equal(shown.exitCode,0,shown.message);
+  }
   const approved=await approveRun({ref:'17',said:'Approve synthetic fixture requirements for this local test.',cwd:root,packageRoot},ports);assert.equal(approved.exitCode,0,approved.message);
   const command=(...args)=>spawnSync(process.execPath,[cli,...args],{cwd:root,env,encoding:'utf8',maxBuffer:8*1024*1024});
   return {parent,root,home,env,ports,source,runDir,readRun,command,profile,prompt,storyPath,promptPath,testPath,a,b};

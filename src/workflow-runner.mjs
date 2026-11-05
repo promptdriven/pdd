@@ -1221,6 +1221,9 @@ async function publishAreaPr(run, area, p, lines, retry) {
     ? outcome.message.replace(/ then try again\.$/, ` then ${retry}.`) : `${outcome.message} ${retry[0].toUpperCase()}${retry.slice(1)} to retry.`}`].join('\n'));
   if (area.then === 'ask-code') await refreshReplayBaseline(run,p);
   const published = { stage: area.name, number: outcome.pr.number, url: outcome.pr.url, branch: run.branch, base };
+  // The publication owner read this exact PR back and matched its source to
+  // the prepared intent. Keep that observed PR 1 head for frozen-source use.
+  if (!codePr && commitSha(outcome.pr.headSha)) published.publishedHeadSha = outcome.pr.headSha;
   rememberPublication(published);
   const applyPublication=publicationUpdate(run,codePr?['testInventory']:[]);
   commitRun(run,p,latest=>{applyPublication(latest);if(!latest.pr.some(pr=>pr.url===published.url&&pr.stage===published.stage))latest.pr.push(published);});

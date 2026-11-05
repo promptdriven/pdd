@@ -308,14 +308,14 @@ function nativeSelection(root,storyPath,profileId,ports,retained) {
   const criteria=[...criteriaSection.matchAll(/^\s*(\d+)\.\s+(.+)$/gm)].map(match=>({id:`AC${match[1]}`,text:match[2].trim()}));
   return {promptPath,content,profile,story:{path:storyPath,criteria},read};
 }
-function reviewedNative(selectors,selection,retained,ports) {
+function reviewedNative(selectors,selection,retained,ports,snapshotOnly=false) {
   if(ports.approvals)return ports.approvals({...selectors,...selection,retained});
   const commonDir=gitLine(selectors.root,['rev-parse','--path-format=absolute','--git-common-dir']);
   if(!commonDir)throw nativeError('Native approval journal is unavailable.');
   const journal=readPromptApprovals({commonDir}), run=selectors.runDir?readRun(selectors.runDir):null;
-  const candidates=[{content:selection.content},...(retained?.path===selection.promptPath?[retained]:[])];
+  const candidates=[{content:selection.content},...(!snapshotOnly&&retained?.path===selection.promptPath?[retained]:[])];
   // Actual retained Git bytes permit historical requirements lookup; hashes alone never reconstruct prose.
-  const commits=gitLine(selectors.root,['log','--all','--format=%H','--',selection.promptPath]).split('\n').filter(Boolean);
+  const commits=snapshotOnly?[]:gitLine(selectors.root,['log','--all','--format=%H','--',selection.promptPath]).split('\n').filter(Boolean);
   for(const sha of commits) {try{const content=execFileSync('git',['-C',selectors.root,'show',`${sha}:${selection.promptPath}`],{encoding:'utf8',stdio:['ignore','pipe','ignore']});candidates.push({content});}catch{}}
   for(const event of [...journal].reverse()) {
     const approved=event.prompts.find(row=>row.path===selection.promptPath);
@@ -479,21 +479,33 @@ function bindNativeRows(report,profile,selection,limits) {
     }catch{row.testId='unknown';limits.push(`Native source declaration unavailable at ${row.occurrenceId}.`);}
   }
 }
-function nativeContextFromOriginals(selectors,input,retained,ports) {
+function nativeSourceAgreement(report,originals,candidate,association,checks,limits) {
+  const expected={...candidate,source_sha256:candidate.source_sha256??candidate.sourceId,stage:association.stage,runId:association.runId,producerRoot:association.producerRoot};
+  const identities=['sourceId','implementationId','testsId','requirementsId','source_sha256','stage','runId','producerRoot'];
+  const records=[{reference:'parsed-report',value:report}];
+  for(const original of originals.filter(row=>row.role!=='report')) {
+    try{records.push({reference:`sha256:${original.sha256}`,value:JSON.parse(original.bytes.toString('utf8'))});}catch{}
+  }
+  let agrees=true;
+  for(const {reference,value} of records) {
+    for(const [location,facts] of [['',value],['source',value?.source],['capture',value?.capture],['capture.source',value?.capture?.source]]) {
+      if(!object(facts))continue;
+      for(const key of identities) {
+        if(!known(facts[key]))continue;
+        const observed=known(expected[key]),matches=observed&&facts[key]===expected[key];
+        const field=[location,key].filter(Boolean).join('.');
+        checks.push({check:'original-source-identity',originalRef:reference,field,asserted:facts[key],observed:expected[key]??null,state:matches?'checked':observed?'mismatch':'unavailable'});
+        if(!matches){agrees=false;limits.push(observed?`Original source identity contradicts the selected source at ${reference} ${field}.`:`Original source identity cannot be checked against unavailable selected source at ${reference} ${field}.`);}
+      }
+    }
+  }
+  return agrees;
+}
+function nativeContextFromOriginals(selectors,input,retained,ports,historical=false) {
   if(input.descriptor&&(input.descriptor.profileId!==selectors.profileId||input.descriptor.storyPath!==selectors.storyPath))throw nativeError('Original profile/Story selectors do not match.');
   const limits=['External original; command was not observed by PDD. Parsing does not authenticate the runner or speaker.'],checks=[];
-  const selection=nativeSelection(selectors.root,selectors.storyPath,selectors.profileId,ports,retained);selection.root=selectors.root;
-  const reviewed=reviewedNative(selectors,selection,retained,ports),profile=reviewed.profile;
-  const protectedProfile={...profile,requirementsId:reviewed.requirementsId,promptPath:reviewed.promptPath,sourceRoot:reviewed.sourceRoot,approvalRef:reviewed.approvalRef,review:reviewed.review};
-  let candidate={sourceId:'unknown',implementationId:'unknown',testsId:'unknown',requirementsId:'unknown'};
-  try{candidate=nativeSource(selectors,selection,reviewed,ports);checks.push({check:'selected-native-source',state:'checked',sourceId:candidate.sourceId});}catch(error){limits.push(`Native source capture unavailable: ${text(error.message)}.`);}
-  const original=input.originals.find(row=>row.role==='report'),originalRef=`sha256:${original.sha256}`;
-  let report,parsed=false;
-  try{report=nativeReport(original.bytes,profile,originalRef);parsed=nativeFormats.includes(profile.reportFormat)&&!report.interpretation;checks.push({check:'original-report',state:'read',format:profile.reportFormat,sha256:original.sha256,rowReferences:report.rowReferences});}
-  catch(error){limits.push(`Original report interpretation unavailable: ${text(error.message)}.`);report={format:profile.reportFormat,observations:[],interpretation:'unknown'};}
   const source=originalJson(input.originals,'source'),execution=originalJson(input.originals,'execution'),selectionEvidence=originalJson(input.originals,'selection');
   let association={state:'unavailable',reason:'Canonical workspace reader is unavailable.',stage:null};
-  const assertedSource=source?.source??report.source;
   const producerRoot=source?.producerRoot??source?.repo;
   const tests=source?.tests;
   if(ports.workspace&&known(producerRoot)&&Array.isArray(tests)&&known(source?.source_sha256)) {
@@ -503,10 +515,29 @@ function nativeContextFromOriginals(selectors,input,retained,ports) {
   const associationValid=association?.state==='eligible'&&(!selectors.runId||association.runId===selectors.runId||ownedSameRoot)&&['current','pr1'].includes(association.stage)&&known(association.producerRoot)&&Array.isArray(association.tests)&&association.tests.length===tests?.length&&association.tests.every(path=>tests.includes(path));
   checks.push({check:'workspace-association',state:associationValid?'checked':'unavailable',reason:association?.reason??'unknown',stage:association?.stage??'unknown'});
   if(!associationValid)limits.push(`Native run/source association is unverified: ${text(association?.reason||'unknown owner or stage')}.`);
-  const sourceMatches=object(assertedSource)&&['sourceId','implementationId','testsId'].every(key=>known(assertedSource[key])&&assertedSource[key]===candidate[key]);
+  // Only the canonical owner can choose a historical comparator. Current
+  // evidence always binds to the current selection, even for a PR 1 original.
+  const sourceRoot=historical&&associationValid?association.sourceAnchor?.root:selectors.root;
+  if(!known(sourceRoot))throw nativeError('Canonical historical source anchor is unavailable.');
+  const selection=nativeSelection(sourceRoot,selectors.storyPath,selectors.profileId,ports,retained);selection.root=sourceRoot;
+  const reviewed=reviewedNative(selectors,selection,retained,ports,historical),profile=reviewed.profile;
+  const protectedProfile={...profile,requirementsId:reviewed.requirementsId,promptPath:reviewed.promptPath,sourceRoot:reviewed.sourceRoot,approvalRef:reviewed.approvalRef,review:reviewed.review};
+  let candidate={sourceId:'unknown',implementationId:'unknown',testsId:'unknown',requirementsId:'unknown'};
+  try{candidate=nativeSource({...selectors,root:sourceRoot},selection,reviewed,ports);checks.push({check:'selected-native-source',state:'checked',sourceId:candidate.sourceId,sourceAnchor:historical?association.sourceAnchor:null});}catch(error){limits.push(`Native source capture unavailable: ${text(error.message)}.`);}
+  const original=input.originals.find(row=>row.role==='report'),originalRef=`sha256:${original.sha256}`;
+  let report,parsed=false;
+  try{report=nativeReport(original.bytes,profile,originalRef);parsed=nativeFormats.includes(profile.reportFormat)&&!report.interpretation;checks.push({check:'original-report',state:'read',format:profile.reportFormat,sha256:original.sha256,rowReferences:report.rowReferences});}
+  catch(error){limits.push(`Original report interpretation unavailable: ${text(error.message)}.`);report={format:profile.reportFormat,observations:[],interpretation:'unknown'};}
+  const assertedSource=Object.fromEntries(['sourceId','implementationId','testsId','requirementsId'].map(key=>[key,known(report.source?.[key])?report.source[key]:source?.source?.[key]]));
+  const sourceAgrees=nativeSourceAgreement(report,input.originals,candidate,association,checks,limits);
+  const sourceMatches=sourceAgrees&&object(assertedSource)&&['sourceId','implementationId','testsId'].every(key=>known(assertedSource[key])&&assertedSource[key]===candidate[key]);
   const selectedPathsMatch=Array.isArray(tests)&&Array.isArray(candidate.paths)&&tests.length===candidate.paths.length&&tests.every(path=>candidate.paths.includes(path));
-  if(object(assertedSource))report.source={...assertedSource,requirementsId:reviewed.requirementsId};
-  report.profileId=selectors.profileId;report.requirementsId=reviewed.requirementsId;
+  report.source=object(report.source)?{...report.source}:{};
+  for(const key of ['sourceId','implementationId','testsId','requirementsId'])if(!known(report.source[key]))report.source[key]=known(assertedSource?.[key])?assertedSource[key]:key==='requirementsId'?reviewed.requirementsId:'unknown';
+  const profileMatches=(!known(report.profileId)||report.profileId===selectors.profileId)&&(!known(report.requirementsId)||report.requirementsId===reviewed.requirementsId);
+  if(!profileMatches)limits.push('Original source/profile identity contradicts the reviewed requirements.');
+  if(!known(report.profileId))report.profileId=selectors.profileId;
+  if(!known(report.requirementsId))report.requirementsId=reviewed.requirementsId;
   // These selectors are derived from the matched reviewed bytes, never inserted into the original.
   checks.push({check:'reviewed-profile-binding',state:reviewed.review,approvalRef:reviewed.approvalRef,derivedSelectors:{profileId:selectors.profileId,requirementsId:reviewed.requirementsId}});
   if(!sourceMatches||!selectedPathsMatch)limits.push('Original source/test selection does not establish the current complete native source binding.');
@@ -552,12 +583,20 @@ function nativeContextFromOriginals(selectors,input,retained,ports) {
   }else limits.push('Original complete selection observation is unavailable or contradicts the report.');
   const identitiesBound=profile.requiredIds.every(id=>array(report.observations).filter(row=>row.testId===id).every(row=>row.identityBound===true));
   if(selectedValid&&selectionEvidence.testIds.some(id=>!report.observations.some(row=>row.testId===id)))report.complete=false;
-  const verified=associationValid&&sourceMatches&&selectedPathsMatch&&identitiesBound&&executionValid&&selectedValid&&reviewed.review==='approved';
+  const verified=associationValid&&sourceMatches&&profileMatches&&selectedPathsMatch&&identitiesBound&&executionValid&&selectedValid&&reviewed.review==='approved'&&candidate.requirementsId===reviewed.requirementsId;
   const intake={origin:parsed?'external-machine':'unknown',admission:verified?'verified':'unverified',originalRef,verificationRef:verified?`derived:${digest(JSON.stringify(checks))}`:'',limits:distinct(limits),stage:associationValid?association.stage:'unknown',sourceRef};
   const context={schema:'pdd.native-assessment-context.v1',runId:selectors.runId,protected:protectedProfile,candidate,story:selection.story,intake,report,baseline:null};
   if(input.baseline) {
-    const baseline=nativeContextFromOriginals(selectors,input.baseline,retained,ports).context;
-    context.baseline={intake:baseline.intake,report:baseline.report};
+    try {
+      const derived=nativeContextFromOriginals(selectors,input.baseline,retained,ports,true),baseline=derived.context;
+      context.baseline={intake:baseline.intake,report:baseline.report};
+      checks.push({check:'historical-baseline',stage:baseline.intake.stage,checks:derived.checks});
+      context.intake.limits=distinct([...context.intake.limits,...baseline.intake.limits.map(limit=>`Historical baseline (${baseline.intake.stage}): ${limit}`)]);
+    }catch(error){
+      const reason=`Historical source unavailable: ${text(error.message)}.`;
+      context.baseline={intake:{admission:'unverified',limits:[reason]},report:null};
+      context.intake.limits.push(reason);
+    }
   }
   return {context,checks,reviewedPrompt:{path:selection.promptPath,content:reviewed.content}};
 }
