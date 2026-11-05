@@ -1884,7 +1884,8 @@
       "runProcess": 0,
       "cleanup": 0,
       "snapshot": 0
-    }
+    },
+    "outside_requests": []
   },
   "simulation": {
     "host.readRun": {
@@ -4330,6 +4331,67 @@
         "exitCode": 0,
         "message": "Old-code proof: synthetic reply."
       }
+    },
+    "agents.checkWorkflowAgents": {
+      "action": "port.write",
+      "world_pointer": "/outside_requests",
+      "result_template": {
+        "ok": false,
+        "agent": null,
+        "message": ""
+      }
+    },
+    "diagnostics.pathDiagnostic": {
+      "action": "port.write",
+      "world_pointer": "/outside_requests",
+      "result_template": {
+        "lines": []
+      }
+    },
+    "dispatch.startRun": {
+      "action": "port.write",
+      "world_pointer": "/outside_requests",
+      "result_template": {
+        "exitCode": 1,
+        "message": ""
+      }
+    },
+    "setup.setupAgentMcp": {
+      "action": "port.write",
+      "world_pointer": "/outside_requests",
+      "result_template": {
+        "exitCode": 1
+      }
+    },
+    "setup.setupProject": {
+      "action": "port.write",
+      "world_pointer": "/outside_requests",
+      "result_template": {
+        "file": "",
+        "changed": false
+      }
+    },
+    "setup.setupSkills": {
+      "action": "port.write",
+      "world_pointer": "/outside_requests",
+      "result_template": {
+        "results": []
+      }
+    },
+    "source.capture": {
+      "action": "port.write",
+      "world_pointer": "/outside_requests",
+      "result_template": {
+        "sha256": "",
+        "error": ""
+      }
+    },
+    "source.fingerprint": {
+      "action": "port.write",
+      "world_pointer": "/outside_requests",
+      "result_template": {
+        "value": null
+      }
     }
   },
   "context": [],
@@ -5079,6 +5141,62 @@
               "cwd": "/repo/cli"
             }
           ]
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-agents-checkWorkflowAgents",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-diagnostics-pathDiagnostic",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-dispatch-startRun",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupAgentMcp",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupProject",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupSkills",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/workflow-runner-source-capture",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/workflow-runner-source-fingerprint",
+          "op": "equals",
+          "value": 0
         }
       ],
       "model": "gpt-6.1-sol"
@@ -5125,6 +5243,62 @@
           "path": "/stderr",
           "op": "equals",
           "value": "pdd workflow prove requires nonblank --test and --expect.\n"
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-agents-checkWorkflowAgents",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-diagnostics-pathDiagnostic",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-dispatch-startRun",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupAgentMcp",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupProject",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupSkills",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/workflow-runner-source-capture",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/workflow-runner-source-fingerprint",
+          "op": "equals",
+          "value": 0
         }
       ],
       "model": "gpt-6.1-sol"
@@ -5168,6 +5342,62 @@
           "path": "/resources/pdd-cli-dispatch-prove",
           "op": "equals",
           "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-agents-checkWorkflowAgents",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-diagnostics-pathDiagnostic",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-dispatch-startRun",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupAgentMcp",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupProject",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupSkills",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/workflow-runner-source-capture",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/workflow-runner-source-fingerprint",
+          "op": "equals",
+          "value": 0
         }
       ],
       "model": "gpt-6.1-sol"
@@ -5207,6 +5437,62 @@
           "criterion_id": "AC8",
           "target": "calls",
           "path": "/resources/pdd-cli-dispatch-prove",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-agents-checkWorkflowAgents",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-diagnostics-pathDiagnostic",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-dispatch-startRun",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupAgentMcp",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupProject",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupSkills",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/workflow-runner-source-capture",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/workflow-runner-source-fingerprint",
           "op": "equals",
           "value": 0
         }
@@ -5249,6 +5535,62 @@
           "criterion_id": "AC8",
           "target": "calls",
           "path": "/resources/pdd-cli-dispatch-prove",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-agents-checkWorkflowAgents",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-diagnostics-pathDiagnostic",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-dispatch-startRun",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupAgentMcp",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupProject",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupSkills",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/workflow-runner-source-capture",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/workflow-runner-source-fingerprint",
           "op": "equals",
           "value": 0
         }
