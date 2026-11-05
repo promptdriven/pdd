@@ -95,6 +95,11 @@ async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
     }
     if (args[0] === 'pr' && args[1] === 'list') {
       const head = args.includes('--head') ? args[args.indexOf('--head') + 1] : null, search = args.includes('--search') ? args[args.indexOf('--search') + 1].split('"')[1] : null;
+      // The synthetic remote-tracking refs model remote effects, including an external push.
+      for (const pr of f.prs) {
+        const observed = await exec('git', ['rev-parse', '--verify', `refs/remotes/origin/${pr.headRefName}`], {cwd:opts.cwd}).catch(()=>null);
+        if (observed) pr.headRefOid = observed.stdout.trim();
+      }
       return { stdout: JSON.stringify(f.prs.filter(pr => (!head || pr.headRefName === head) && (!search || pr.body.includes(search)))) };
     }
     if (args[0] === 'pr' && args[1] === 'view') {

@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 import { readWorkflowAreas } from './workflow-areas.mjs';
-import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, readWorkflowPrStatus } from './workflow-github.mjs';
+import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, reconcileWorkflowPr, readWorkflowPrStatus } from './workflow-github.mjs';
 import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mjs';
 import { allRuns, currentChat, gitContext, listRuns, readRun, readRunOwnership, resolveRun, runDirFor, runForWorktree, updateRun, writeRun } from './workflow-runs.mjs';
 import { startChat, sendToChat, herdrCommand, chatSession, openChat, restartChat, validSessionId, closeChats, expandHome, homeVariable, isFolder, observeLifecycle, applyLifecycle, launchAnchor, sessionEvidenceDue, ownSession, observedSession, START_GRACE_MS } from './workflow-chat.mjs';
@@ -1086,6 +1086,18 @@ function prTitle(issueTitle, suffix) {
 }
 
 const commitSha = value => /^(?:[a-f\d]{40}|[a-f\d]{64})$/i.test(value);
+// Updates use the same publication owner's identity checks as initial creation.
+// Local source supplies an expected intent, never authority for the saved head.
+async function readPublishedPr1(run, pr, p) {
+  const intent = await prepareWorkflowPr({cwd:run.root,runId:run.runId,stageId:pr.stage,repository:run.repo,
+    baseBranch:pr.base,title:prTitle(oneLine(run.issue.title) || `Issue #${run.number}`)},p.commandPorts);
+  if (intent.headBranch !== pr.branch) throw Error('The owned PR 1 branch changed.');
+  const outcome = await reconcileWorkflowPr({cwd:run.root,intent},p.commandPorts);
+  p.inspectProgress?.();
+  if (!['open','merged'].includes(outcome.state) || !outcome.pr || outcome.pr.number !== pr.number || outcome.pr.url !== pr.url)
+    throw Error('The published PR 1 head is unavailable or does not match the owned publication.');
+  return outcome.pr;
+}
 function inventoryCommits(inventory) {
   return commitSha(inventory.baseSha) && commitSha(inventory.headSha)
     ? `Test inventory commits: ${inventory.baseSha.slice(0,7)} → ${inventory.headSha.slice(0,7)}.`
@@ -1153,8 +1165,9 @@ async function publishAreaPr(run, area, p, lines, retry) {
   // Only an unchanged source and identical non-inventory body can be an
   // informational refresh. Missing prior custody always takes the safety path.
   const bodyIdentity = () => createHash('sha256').update(prBody({...run,testInventory:null},area,p.env,bodyDrafts,bodyTests,prepared)).digest('hex');
-  const rememberPublication = pr => {
+  const rememberPublication = (pr, observed) => {
     if (codePr) { pr.publishedHeadSha = run.testInventory.headSha; pr.publicationBodySha256 = bodyIdentity(); }
+    else if (commitSha(observed?.headSha)) pr.publishedHeadSha = observed.headSha;
   };
   if (existing) {
     let inventoryOnly = false;
@@ -1188,7 +1201,17 @@ async function publishAreaPr(run, area, p, lines, retry) {
     if (failed) {
       if (!inventoryOnly) return failed;
       lines.push(`warning: The code PR still shows the previous inventory; its displayed commit pair identifies the older comparison. The new comparison is ${commitSha(run.testInventory.baseSha)&&commitSha(run.testInventory.headSha)?`${run.testInventory.baseSha.slice(0,7)} → ${run.testInventory.headSha.slice(0,7)}`:'unavailable'}. The current full report ${run.testInventory.saved ? 'was saved locally in test-inventory.json in the run folder' : 'was not saved locally'}. Inventory refresh failed (${failed.message}); ${retry}.`);
-    } else rememberPublication(existing);
+    } else {
+      let observed;
+      if (!codePr) {
+        try { observed = await readPublishedPr1(run,existing,p); }
+        catch (error) {
+          if(error?.code==='workflow_progress_refused')throw error;
+          return fail([...lines,`${oneLine(error.message)} Source was pushed; PR 1 publication remains unconfirmed. ${retry}.`].join('\n'));
+        }
+      }
+      rememberPublication(existing,observed);
+    }
     const applyPublication=publicationUpdate(run,codePr?['testInventory']:[]);
     const metadata=Object.fromEntries(['publishedHeadSha','publicationBodySha256'].filter(key=>Object.hasOwn(existing,key)).map(key=>[key,existing[key]]));
     commitRun(run,p,latest=>{applyPublication(latest);const pr=latest.pr.find(pr=>pr.url===existing.url&&pr.stage===existing.stage);if(pr)Object.assign(pr,metadata);});
@@ -1221,10 +1244,7 @@ async function publishAreaPr(run, area, p, lines, retry) {
     ? outcome.message.replace(/ then try again\.$/, ` then ${retry}.`) : `${outcome.message} ${retry[0].toUpperCase()}${retry.slice(1)} to retry.`}`].join('\n'));
   if (area.then === 'ask-code') await refreshReplayBaseline(run,p);
   const published = { stage: area.name, number: outcome.pr.number, url: outcome.pr.url, branch: run.branch, base };
-  // The publication owner read this exact PR back and matched its source to
-  // the prepared intent. Keep that observed PR 1 head for frozen-source use.
-  if (!codePr && commitSha(outcome.pr.headSha)) published.publishedHeadSha = outcome.pr.headSha;
-  rememberPublication(published);
+  rememberPublication(published,outcome.pr);
   const applyPublication=publicationUpdate(run,codePr?['testInventory']:[]);
   commitRun(run,p,latest=>{applyPublication(latest);if(!latest.pr.some(pr=>pr.url===published.url&&pr.stage===published.stage))latest.pr.push(published);});
   return null;
@@ -1467,7 +1487,15 @@ async function syncPr1(run, p) {
     ahead = 0;
   }
   if (behind && replayEnabled(run)) return {failed:`The prompt branch is behind its published head. Update the worktree from origin/${run.branch}, then ${approvalGuide(run, p.pdd)}.`};
-  if (!ahead && !behind) await refreshReplayBaseline(run,p);
+  const rememberHead = async () => {
+    const observed = await readPublishedPr1(run,pr1,p);
+    commitRun(run,p,latest=>{const pr=latest.pr.find(pr=>pr.url===pr1.url&&pr.stage===pr1.stage);if(pr)pr.publishedHeadSha=observed.headSha;});
+  };
+  if (!ahead && !behind) {
+    try { await rememberHead(); }
+    catch (error) { if(error?.code==='workflow_progress_refused')throw error;return {failed:`${oneLine(error.message)} Check the published PR 1 head, then ${again}`}; }
+    await refreshReplayBaseline(run,p);
+  }
   if (ahead && behind && what) return { failed: `PR 1 has commits that this worktree does not have, so pdd did not push ${what}. Run: ${go}git pull --rebase origin ${shell(run.branch)} && git push origin HEAD:refs/heads/${run.branch}\n${again}` };
   if (!ahead || behind) {
     const drafts = approved.length ? await pr1Drafts(run, p) : before;
@@ -1480,6 +1508,8 @@ async function syncPr1(run, p) {
   try { await rawGit(p,run.root,'push','origin',`${pushedHead}:refs/heads/${run.branch}`); }
   catch { return { failed: `pdd could not push ${what ?? `the worktree's new commit${ahead > 1 ? 's' : ''}`} to PR 1. Run: ${go}git push origin HEAD:refs/heads/${run.branch}\n${again}` }; }
   if (await git(p,run.root,'rev-parse','--verify','HEAD^{commit}') !== pushedHead) return { failed: 'Source was pushed; the local head changed. PR 1 stays publication-pending; retry from the pushed source.' };
+  try { await rememberHead(); }
+  catch (error) { if(error?.code==='workflow_progress_refused')throw error;return {failed:`${oneLine(error.message)} Source was pushed; PR 1 publication remains unconfirmed. ${again}`}; }
   await refreshReplayBaseline(run,p);
   const drafts = await pr1Drafts(run, p);
   return { drafts, lines: [what ? `pdd committed ${what} and pushed it to PR 1.` : `pdd pushed ${ahead} new commit${ahead > 1 ? 's' : ''} from the worktree to PR 1.`, ...await draftDescription(run, pr1, drafts, p)] };
