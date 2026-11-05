@@ -212,3 +212,40 @@ test('bounded first-launch deadline gates submission', async () => {
     }
   }
 });
+
+// An existing owner has an observed identity even when its session is absent.
+// A newly launched owner may acquire its first actual session during startup.
+test('bounded owner identity remains tied to the observed coordinator', async () => {
+  for (const initial of ['absent','null','known']) {
+    for (const target of ['same','replacement']) {
+      const f=fixture(`identity-existing-${initial}-${target}`,{native:'idle'});
+      const herdr=f.ports.herdr; let gets=0;
+      const agent=(value)=>({result:{agent:{agent_status:'idle',...(value==='absent'?{}:{agent_session:value==='null'?null:value})}}});
+      f.ports.herdr=async args=>{
+        if(args[0]==='agent' && args[1]==='get') return agent(++gets===1?initial:(target==='same'?initial:'replacement'));
+        return herdr(args);
+      };
+      await f.start();
+      const allowed=target==='same';
+      assert.equal(f.packets.length,Number(allowed),`${initial}/${target}: packet`);
+      assert.equal(Boolean(f.state().recipeDelivered),allowed,`${initial}/${target}: recipe`);
+      assert.equal(Boolean(f.state().seen?.[101]),allowed,`${initial}/${target}: issue`);
+    }
+  }
+  for (const target of ['same','replacement']) {
+    const f=fixture(`identity-new-${target}`); const herdr=f.ports.herdr; let launched=false, gets=0;
+    f.ports.herdr=async args=>{
+      if(args[0]==='pane' && args[1]==='run') { launched=true; return herdr(args); }
+      if(launched && args[0]==='agent' && args[1]==='get') {
+        gets++;
+        return {result:{agent:gets===1?{agent_status:'starting'}:{agent_status:'idle',agent_session:gets===2||target==='same'?'original':'replacement'}}};
+      }
+      return herdr(args);
+    };
+    await f.start();
+    const allowed=target==='same';
+    assert.equal(f.packets.length,Number(allowed),`new/${target}: packet`);
+    assert.equal(Boolean(f.state().recipeDelivered),allowed,`new/${target}: recipe`);
+    assert.equal(Boolean(f.state().seen?.[101]),allowed,`new/${target}: issue`);
+  }
+});
