@@ -1,0 +1,13 @@
+{
+  "story_path": "user_stories/autopilot-workflow-handoff.md",
+  "purpose": "Requirement-derived native vectors; these are not Runtime scenarios or executed tests.",
+  "cases": [
+    {"id":"bundled-command-and-family","criteria":[1],"given":{"packageRoot":"/opt/pdd","selectedFamily":"codex"},"expect":{"pddBin":"/opt/pdd/bin/pdd.mjs","agent":"codex"}},
+    {"id":"saved-override-recreation","criteria":[2],"given":{"configuredHome":"/selected/home","configuredConfigHome":"/selected/config","laterCallerHome":"/later/home","paneRecreated":true},"expect":{"packetHome":"/selected/home","packetConfigHome":"/selected/config","coordinatorHome":"/selected/home","coordinatorConfigHome":"/selected/config"}},
+    {"id":"absent-config","criteria":[2],"given":{"savedConfigPath":null,"laterCallerConfigPath":"/later/config","paneRecreated":true},"expect":{"packetConfigPath":null,"coordinatorConfigVariable":"unset","coordinatorUsesSelectedHome":true}},
+    {"id":"family-mismatch-recovery","criteria":[2],"given":{"savedFamily":"codex","reloadedFamily":"different","workPending":true},"expect":{"replacementLaunches":0,"workPending":true,"reportsExplicitStartRequired":true,"explicitStartCanSelectNewProfile":true}},
+    {"id":"metadata-and-environment-boundary","criteria":[3],"given":{"credentials":"private","unrelatedEnvironment":"retained","issueText":"trusted","workPending":true},"expect":{"packetIncludesCredentials":false,"packetIncludesUnrelatedEnvironment":false,"otherNativeEnvironmentPreserved":true,"issueTextPreserved":true,"pendingDeliveryPreserved":true}},
+    {"id":"normal-workflow-order","criteria":[4],"given":{"issueClaimed":false,"activeRun":false},"expect":{"order":["recipe","claim","start normal PDD run","issue edits or delegation"],"runOwns":["worktree","chats","gates","PRs"]}},
+    {"id":"reuse-normal-workflow","criteria":[4],"given":{"activeRun":true},"expect":{"order":["recipe","claim","reuse normal PDD run","issue edits or delegation"],"runOwns":["worktree","chats","gates","PRs"]}}
+  ]
+}
