@@ -1,6 +1,6 @@
 {
   "story_path": "user_stories/commit-warning-paths.md",
-  "purpose": "Requirement-derived native case inventory for issues #2829 and #2944, not an executable Runtime scenario or test. Exercise the public stepDone publication boundary in independent scratch repositories with real Git; supply deterministic GitHub, Herdr, clock and other external replies. Verify the actual commit as well as the warning. Runtime does not bind the native Git, filesystem and publication effects. A code-area regression must execute these cases.",
+  "purpose": "Requirement-derived native case inventory for issues #2829 and #2944. The explicitly invoked baseline.test.mjs exercises the public stepDone publication boundary in independent scratch repositories with real Git and deterministic GitHub, Herdr, clock and other external replies. It verifies the actual commit as well as the warning. Runtime does not bind the native Git, filesystem and publication effects.",
   "matching": "warningPaths and committedPaths are unordered exact sets: compare membership and cardinality without requiring array order.",
   "cases": [
     {"id":"first-unstaged","criteria":[1,6],"given":{"modifiedTracked":["value.mjs"]},"expect":{"warningPaths":["value.mjs"],"committedPaths":["value.mjs"],"exitCode":0}},
