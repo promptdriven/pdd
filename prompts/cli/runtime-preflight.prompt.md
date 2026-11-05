@@ -23,6 +23,36 @@ Hash filling checks allowed draft targets and required reference inputs before r
 - No tests at all: say why, after `No tests found. The test of Story user_stories/S.md is S.json in a test or tests folder. See RUNBOOK.md §2.`, in at most 5 lines (then `…and N more`): the [test name rule](#test-name-rule) lines without the `Warning: ` prefix (each Story with no test, then each test-folder JSON file that matches no Story), each Git-visible `*.prompt` file (`PDD prompts must end in .prompt.md: rename prompts/board.prompt to prompts/board.prompt.md.`), and each `*.prompt.md` with no Runtime interface block (`prompts/x.prompt.md has no Runtime interface block. See RUNBOOK.md §2.`). This opens no JSON file. Exit 2.
 - Select tests by PATH or STORY words with the same rule: a test path (or any file of a conflict), a story path or a story name (all of that Story's tests), a test file name without `.json`, or a repository directory. Resolve relative paths from invocation cwd, including `.`; directories select bounded descendants by path components, never similarly prefixed sibling directories or outside-repository paths. A directory containing Story files selects their tests. Union multiple selections without duplicates. No word selects every test. A word that names a Story with no test stops with exit 2 and that Story's `has no test` line, never `Unknown story`. A word that names no Story and no test file is a command error that lists every Story with its test path, or `no test` and the expected path.
 
+
+
+## Native Story discovery and selection (draft)
+
+For explicit `pdd lint` Story selection, retain ordinary name/path/directory
+resolution and expose a separate `nativeSelections` list beside Runtime tests.
+A current Story can declare `## Native validation` with a local Markdown link
+to its owning module prompt's `#native-validation-profile-PROFILE_ID` anchor.
+Resolve that link from the Story path under the same workspace/source capability.
+Read only the selected Story and its explicitly linked native owner/required
+closure. Return `{storyPath,promptPath,profileId}` and actual selected source
+references; the shared results reader interprets the declaration, review and
+evidence. A link or declaration establishes no native pass.
+
+Do not scan excluded prompts or all repository source to find a guessed mapping.
+Missing, ambiguous, unreadable or excluded owner references retain their concrete
+reason; required boundary failures keep existing refusal precedence. A native
+candidate lets explicit lint select that Story even without a Runtime scenario,
+so the client can explain native proof or missing native evidence. An undeclared
+Story keeps its existing missing-test result. Preserve ordinary Runtime discovery,
+conflicts, P1-P10, capture and exact test-selection behavior. For mixed selection,
+keep native descriptors and Runtime test rows distinct, with no duplicate Story
+selection or silent widening. Other commands keep their existing unsupported
+Runtime behavior; a native link adds no executable Runtime entry or capability.
+
+This passage owns only bounded source discovery and selector output. Native
+profile syntax/admission/judgment belongs to the shared result reader called by
+the client; preflight does not assess or import evidence. No new CLI option,
+network request, native command or authored configuration key is introduced.
+
 <a id="test-name-rule"></a>
 <details>
 <summary>Required rules: test name rule</summary>

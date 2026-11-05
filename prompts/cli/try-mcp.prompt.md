@@ -23,6 +23,48 @@ Check a named confirmed run or the last run using createRunJudge; report unsuppo
 
 Expose honest MCP annotations: open/run/save change state, check/state are read-only observations although state can open a missing Try. All tools accept optional `story`; run accepts `entry`, `input`, `argv`; check/save accept optional `run_id`; save accepts optional `criterion_id` and `name`. Reject extra fields and malformed values. Tool failures are MCP `isError` results, not protocol crashes. Serialize tool calls so simultaneous mutations cannot open or run twice accidentally. Replayed JSON-RPC request IDs return the same response without redispatch; conflicting reuse is an invalid request. Keep stdout exclusively JSON-RPC. Send readable errors/progress to stderr, and `notifications/progress` only for a caller-supplied progress token. Emit progress during slow tools and clear timers afterwards.
 
+`try_save_case` also accepts an explicit retained-case apply mode: paired string
+arguments `pending_id` and `closed_editor_for`. `pending_id` is the existing
+received-case identity, two lowercase 64-hex components separated by a dot;
+`closed_editor_for` is a nonempty exact repository-relative original test path.
+The ordinary argument validator requires both and rejects `story`, `run_id`,
+`criterion_id` and `name` in this mode, plus all unknown fields. With neither new
+argument, preserve the current confirmed-run staging operation. Either new
+argument alone is invalid; no implicit last-run apply or replacement target.
+
+The tool description must state that `closed_editor_for` represents the person's
+actual confirmation that this named file is closed and handed over until the
+apply finishes. Obtain that specific confirmation; a physical close, missing
+lock, saved payload, generic tool approval or unrelated earlier message is not
+confirmation. It coordinates writing and does not approve expectations.
+
+Branch to the runtime client's [local retained-case application](runtime-client.prompt.md#local-retained-case-application)
+before `readTryOwner`, remote metadata or in-memory run lookup. Delegate with the
+server's `cwd`, explicit pending identity, the existing local closed-editor
+handoff type and invocation signal. Never supply a JSON opaque lease or rebuild
+the payload. This mode also works after MCP restart without a run in memory;
+it makes no HTTP/model/Runtime request and does not open a Try.
+It performs no gh authentication or credential lookup and requires no sign-in.
+
+Only the owner's typed committed result is success, including an established
+duplicate no-op; return its identical printable result associated with
+`pending_id`. Format the warning solely from the owner's coverage projection.
+For `original-story`, use the existing "Recorded case; covers N of M Story
+criteria" warning. For `retained-scenario`, say "Recorded case; references N of M
+retained scenario criteria. Whole-Story coverage is unavailable." For
+`unavailable`, say "Recorded case; criterion coverage is unavailable." In the
+latter two cases require completion of coverage before `pdd test`; keep the
+observed-output, expectation and saved-data review reminder in every case.
+Neither count nor warning claims passed criteria or current-source proof.
+Ordinary confirmed-run save wording/counts remain unchanged. Do not parse a
+message, read current Story criteria or change transaction outcome to fill
+missing coverage. Pending/conflict is an
+MCP `isError` with the owner's actual identity, reason and recovery location;
+failure is an error without an invented pending result. Reuse owner outcome
+classification and formatting, not English-message parsing or a second policy.
+Use a fresh JSON-RPC request ID for an apply attempt while preserving the pending
+identity; existing response replay and conflicting-ID refusal still apply.
+
 Support initialize with version negotiation (2025-06-18, 2025-03-26, 2024-11-05; default newest), ping, tools/list, tools/call and notifications. Invalid JSON gets -32700, invalid envelopes -32600, invalid method parameters -32602, unknown methods -32601. Ignore valid notifications without executing tool calls. Reject batches. Bound incoming lines and response replay memory; never print tokens, stacks or private owner URLs. Closing input waits for queued requests; it does not close the Try.
 
 ## Workspace and save association
@@ -36,7 +78,7 @@ Preserve the current isolated observed-world save operation. It still uses the n
 
 - [Workspace authority](runtime-workspace.prompt.md): required generation/runtime/verification context for opt-in permission.
 
-- [Runtime client](runtime-client.prompt.md): required generation/runtime context for selection, owner identity, opening, current owner reads, door execution and safe case append.
+- [Runtime client](runtime-client.prompt.md): required generation/runtime/verification context for selection, owner identity, opening, current owner reads, door execution, safe case append and local retained-case application through `applyPendingCaseWithHandoff`.
 - [Runtime preflight](runtime-preflight.prompt.md): required generation/runtime context for Story selection.
 - [Agent judge](agent-judge.prompt.md): required generation/runtime context for per-run comparison and progress.
 - [Prompting guide](../../docs/prompting-guide.md): required authoring context.

@@ -1,0 +1,60 @@
+{
+  "kind": "native-regression-cases",
+  "story_path": "user_stories/recover-guidance-code-review.md",
+  "criteria": [
+    {"id":"AC1","text":"A guidance-only PR 1 can be explicitly approved with an intentionally reviewed empty prompt selection, and its later code choice waits for a separate approval."},
+    {"id":"AC2","text":"After a change request invalidates that review and merged PR 1 completes the run, `pdd workflow done try` from its worktree displays and durably saves the current code-choice review, including an empty selection, without approving, publishing, allocating a chat or changing progress."},
+    {"id":"AC3","text":"After that current review is shown, a later explicit scoped approval starts the normal code continuation once, preserving the original run, PR 1, prior progress and approval evidence."},
+    {"id":"AC4","text":"An absent review refuses approval even when no prompts are selected; stale or revoked reviews and substantive prompt changes still require a current review and new approval."},
+    {"id":"AC5","text":"Cancelled runs and runs completed in code remain ended; attempting review recovery or approval cannot start code, change progress or add approval evidence."}
+  ],
+  "native_boundary": "Real bin/pdd.mjs workflow commands; temporary Git repository and local bare origin; deterministic executable gh/Herdr transports. No Runtime, model, live publication or real agent.",
+  "cases": [
+    {
+      "id":"reviewed-empty-pr1", "criteria":["AC1"],
+      "given":"Synthetic guidance-only change with no prompt files; prompt-pr check complete and try skipped through CLI.",
+      "commands":[["workflow","done","try","--skipped","Synthetic guidance needs no Try.","--summary","Review guidance."],["workflow","approve","17","--said","-"]],
+      "approval_input":"Synthetic fixture: approve this reviewed guidance PR1 only.\n",
+      "expected":{"exit_codes":[0,0],"reviewed_selection":[],"pr1_approval_selection":[],"pr1_decisions":1,"pending_gate":"ask-code","code_branches":0,"code_chats":0}
+    },
+    {
+      "id":"invalidate-and-complete", "criteria":["AC2","AC4"],
+      "given":"Previous case; deliver a nonapproval change request through CLI, then fake remote reports merged PR 1.",
+      "commands":[["workflow","changes","17","Prepare the bounded local verification plan; this is not code approval."],["workflow","status","17","--json"],["workflow","approve","17","--said","-"]],
+      "approval_input":"Synthetic fixture: approve code after current review.\n",
+      "expected":{"exit_codes":[0,0,1],"current_review_present":false,"state":"completed","done_at":"PR 1","gate":"ask-code","new_decisions":0,"approval_attempt_preserves_run_bytes":true,"code_branches":0,"code_chats":0}
+    },
+    {
+      "id":"recover-current-review", "criteria":["AC2"],
+      "given":"Previous case, retaining the original missing review and existing PR-1 approval.",
+      "commands":[["workflow","done","try","--summary","Show current code-choice review; do not approve."]],
+      "expected":{"exit_codes":[0],"current_review_present":true,"reviewed_selection":[],"current_code_question_displayed":true,"state":"completed","done_at":"PR 1","gate_identity_unchanged":true,"gate_time_unchanged":true,"steps_unchanged":true,"prior_evidence_unchanged":true,"new_decisions":0,"commits":0,"pushes":0,"publications":0,"chat_allocations":0,"area_advances":0}
+    },
+    {
+      "id":"approve-after-recovery", "criteria":["AC3"],
+      "given":"Previous case after review display; independently supply a later explicit approval through stdin.",
+      "commands":[["workflow","approve","17","--said","-"]],
+      "approval_input":"Synthetic fixture: approve this current code continuation only.\n",
+      "expected":{"exit_codes":[0],"new_code_decisions":1,"decision_bound_to_current_gate":true,"decision_selection":[],"code_branches":1,"code_chats":1,"code_base":"fetched saved base after PR 1 merge","same_run":true,"same_pr1":true,"previous_steps_preserved":true,"previous_approval_preserved":true}
+    },
+    {
+      "id":"review-refusal-controls", "criteria":["AC4"],
+      "given":"Independent ready-gate worlds: absent empty review, absent nonempty review, stale digest, changed selected path, changed prompt prose, and delivered change revoking a previously shown review.",
+      "commands":[["workflow","approve","17","--said","-"]],
+      "approval_input":"Synthetic fixture approval attempt; missing current review must refuse.\n",
+      "expected":{"exit_codes":[1],"run_bytes_unchanged":true,"prompt_bytes_unchanged":true,"new_decisions":0,"publications":0,"code_branches":0,"chat_allocations":0}
+    },
+    {
+      "id":"ended-controls", "criteria":["AC5"],
+      "given":"Independent cancelled ask-code and completed-code worlds; invoke recovery and approval separately from each unchanged starting world.",
+      "commands":[["workflow","done","try","--summary","Attempt review recovery."],["workflow","approve","17","--said","-"]],
+      "approval_input":"Synthetic fixture approval attempt; ended run must refuse.\n",
+      "expected":{"exit_codes":[0,1],"run_bytes_unchanged":true,"new_decisions":0,"publications":0,"code_branches":0,"chat_allocations":0}
+    },
+    {
+      "id":"preservation-controls", "criteria":["AC3","AC4","AC5"],
+      "given":"Independent ordinary ready prompt/code flow; strict supplied-approval refusal; wrong-run selection; missing config; and cancellation or gate replacement between selection and save.",
+      "expected":"Ordinary eligible flow keeps its existing outcome. Each invalid approval/recovery preserves the latest run and prior evidence, records no decision and causes no publication, branch or chat effect. A stale invocation cannot refresh or revive a replacement/cancelled run."
+    }
+  ]
+}
