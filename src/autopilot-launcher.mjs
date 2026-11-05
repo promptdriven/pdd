@@ -10,6 +10,7 @@ import { loadAgentDefinitions } from './agent-config.mjs';
 import { pathDiagnostic } from './path-diagnostic.mjs';
 import { runAutopilot } from './autopilot.mjs';
 import { checkWorkflowAgents } from './workflow-agents.mjs';
+import { sendToChat } from './workflow-chat.mjs';
 
 const INTERVAL = 30 * 60 * 1000;
 const SESSION = 'pdd-autopilot';
@@ -110,6 +111,7 @@ async function timer(action, state, p) { return p.timer ? p.timer(action, state)
 async function herdr(args, p) {
   if (p.herdr) return p.herdr(args);
   const result = await p.execute('herdr', ['--session', SESSION, ...args]);
+  if (result.code === 0 && args[0] === 'pane' && args[1] === 'read') return result.stdout;
   let reply; try { reply = JSON.parse(result.code === 0 ? result.stdout : result.stderr || result.stdout); } catch { reply = {}; }
   if (result.code !== 0 || reply.error) throw Object.assign(Error(reply.error?.message || 'Herdr could not deliver; run herdr --help.'), { code: reply.error?.code });
   return reply;
@@ -196,34 +198,60 @@ async function trusted(row, state, config, p) {
 function message(state, issues) {
   const skill = state.agent.kind === 'codex' ? '$pdd-autopilot' : '/pdd-autopilot';
   const skillPath = join(state.packageRoot ?? dirname(dirname(self)), 'skills', 'pdd-autopilot', 'SKILL.md');
-  return `${skill}\nLoad and follow the bundled skill at ${JSON.stringify(skillPath)}. Run its start-up recipe first when recipeFirst is true, then follow its room, pdd:working claim and stuck-run rules. Inspect claimed issues for progress and stale claims; do not treat them as unclaimed work. The packet contains only trusted text; further issue/comment reads must preserve that boundary. Use the skill's pdd-check and pdd-merge handoffs for review and merge work.\n${JSON.stringify({ repository: state.repo, activatedAt: state.activatedAt, recipeFirst: !state.recipeDelivered, ...(state.runs === undefined ? {} : { runs: state.runs }), issues })}\n`;
+  const variable = { codex: 'CODEX_HOME', claude: 'CLAUDE_CONFIG_DIR', gemini: 'GEMINI_CLI_HOME' }[state.agent.kind];
+  const path = variable && state.environment?.[variable] || null;
+  const workflow = { pddBin: join(state.packageRoot ?? dirname(dirname(self)), 'bin', 'pdd.mjs'), agent: state.agent.kind, home: state.environment?.HOME, configHome: path ? { variable, path } : null };
+  return `${skill}\nLoad and follow the bundled skill at ${JSON.stringify(skillPath)}. Run its start-up recipe first when recipeFirst is true, then follow its room, pdd:working claim and stuck-run rules. Inspect claimed issues for progress and stale claims; do not treat them as unclaimed work. The packet contains only trusted text; further issue/comment reads must preserve that boundary. Use the skill's pdd-check and pdd-merge handoffs for review and merge work.\n${JSON.stringify({ repository: state.repo, activatedAt: state.activatedAt, recipeFirst: !state.recipeDelivered, workflow, ...(state.runs === undefined ? {} : { runs: state.runs }), issues })}\n`;
 }
 async function wake(state, text, p) {
   await openWorkspace(state, p);
+  if (state.deliveryIntent) return false;
   let agent;
   try { agent = (await herdr(['agent', 'get', state.paneId], p)).result?.agent; }
   catch (e) {
     if (!['agent_not_found', 'pane_not_found', 'server_not_running'].includes(e.code)) throw e;
-    if (e.code !== 'agent_not_found') { delete state.paneId; delete state.workspaceId; await openWorkspace(state, p); }
+    if (e.code !== 'agent_not_found') { delete state.paneId; delete state.workspaceId; delete state.ownerLaunch; await openWorkspace(state, p); }
   }
   if (agent) {
     if (!['idle', 'done'].includes(agent.agent_status)) return false;
-    await herdr(['agent', 'prompt', state.paneId, text], p); return true;
+    const pane = state.paneId, workspace = state.workspaceId, launch = state.ownerLaunch;
+    const identity = JSON.stringify(agent.agent_session ?? null);
+    const result = await sendToChat({ paneId: pane, startedAt: launch?.startedAt }, text, {
+      herdr: args => herdr(args, p), now: p.now,
+      beforeSubmit: async () => {
+        const saved = read(state.stateFile);
+        if (!saved?.enabled || saved.paneId !== pane || saved.workspaceId !== workspace || JSON.stringify(saved.ownerLaunch) !== JSON.stringify(launch)) return false;
+        const current = (await herdr(['agent', 'get', pane], p)).result?.agent;
+        if (!current || !['idle', 'done'].includes(current.agent_status) || JSON.stringify(current.agent_session ?? null) !== identity) return false;
+        state.deliveryIntent = { paneId: pane, workspaceId: workspace, at: p.now() };
+        save(state.stateFile, state);
+        return true;
+      },
+    });
+    if (result.ok || !result.uncertain) delete state.deliveryIntent;
+    return result.ok;
   }
-  const file = state.stateFile.replace(/\.json$/, '.message.md');
-  writeFileSync(file, text, { mode: 0o600 });
+  if (state.ownerLaunch?.paneId === state.paneId) return false;
   let definition;
-  try { definition = loadAgentDefinitions({ cwd: state.cwd, env: p.env }).find(x => x.id === state.agent.id); } catch { /* Report at launch if the selected command no longer works. */ }
+  const selectedEnv = { ...p.env, HOME: state.definitionHome ?? state.environment.HOME };
+  try { definition = loadAgentDefinitions({ cwd: state.cwd, env: selectedEnv }).find(x => x.id === state.agent.id); } catch { /* Fall back to the saved command. */ }
   definition ??= state.agent;
-  const input = `"$(cat ${quote(file)})"`;
+  if (definition.kind !== state.agent.kind) { p.warn('Run pdd autopilot start to select the changed agent profile.'); return false; }
   const args = definition.kind === 'codex' ? ['--no-daemon', '--dangerously-bypass-approvals-and-sandbox',
-    '-c', quote(`projects={${JSON.stringify(state.cwd)}={trust_level="trusted"}}`), '-c', quote('check_for_update_on_startup=false'), input]
-    : definition.kind === 'claude' ? ['--dangerously-skip-permissions', input]
-    : ['--dangerously-skip-permissions', '--prompt-interactive', input];
+    '-c', quote(`projects={${JSON.stringify(state.cwd)}={trust_level="trusted"}}`), '-c', quote('check_for_update_on_startup=false')]
+    : definition.kind === 'claude' ? ['--dangerously-skip-permissions'] : ['--dangerously-skip-permissions'];
   if (definition.kind === 'gemini') args.splice(0, 1, '--yolo');
-  const env = Object.entries({ ...keepEnv(p.env), ...definition.env }).map(([k, v]) => `${k}=${quote(v)}`);
-  await herdr(['pane', 'run', state.paneId, ['env', ...env, quote(definition.command), ...args].join(' ')], p);
-  return true;
+  const childEnv = { ...keepEnv(p.env), ...definition.env, HOME: state.environment.HOME };
+  for (const variable of ['CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME']) {
+    if (state.environment[variable]) childEnv[variable] = state.environment[variable]; else delete childEnv[variable];
+  }
+  const env = Object.entries(childEnv).map(([k, v]) => `${k}=${quote(v)}`);
+  const unset = ['CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME'].filter(k => !state.environment[k]).flatMap(k => ['-u', k]);
+  state.ownerLaunch = { paneId: state.paneId, startedAt: p.now() };
+  save(state.stateFile, state);
+  try { await herdr(['pane', 'run', state.paneId, ['env', ...unset, ...env, quote(definition.command), ...args].join(' ')], p); }
+  catch (error) { if (error.code === 'agent_not_found' || error.code === 'pane_not_found') delete state.ownerLaunch; throw error; }
+  return false;
 }
 
 function claimTickLock(file) {
@@ -433,6 +461,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
     const version = read(join(packageRoot, 'package.json')).version;
     const warnings = (ports.pathDiagnostic ?? pathDiagnostic)({ cwd: state.cwd, packageRoot, env: p.env, mode: 'workflow' });
     state.agent = { id: agent.id, kind: agent.kind, command: agent.command };
+    state.definitionHome = p.env.HOME;
     state.environment = keepEnv({ ...p.env, ...agent.env });
     state.activatedAt ??= new Date(p.now()).toISOString();
     state.enabled = true; state.timerInstalled = true; state.nextTick = p.now() + INTERVAL;
