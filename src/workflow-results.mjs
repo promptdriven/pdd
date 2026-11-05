@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-results.prompt.md (sha256: 4804014e2209cf7909ad5c94a4977c0b79a61986027d30c506ccc39843149b28).
+// Generated from prompts/cli/workflow-results.prompt.md (sha256: 889481fd15c18d7e592a074046af2ee4b3e0f97361bfad926ea721c720b65ad2).
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -80,7 +80,7 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
     if (!batch || batch.batch !== name || typeof batch.root !== 'string' || !Array.isArray(batch.rows)) continue;
     let association=null;
     if(workspace) {
-      try { association=workspace({root,producerRoot:batch.root,tests:[...new Set(batch.rows.filter(row=>!row.unsent).map(row=>row.test))],source_sha256:batch.source_sha256,runId:batch.association?.runId??null,stage:batch.association?.stage??null}); } catch { continue; }
+      try { association=workspace({root,producerRoot:batch.root,tests:[...new Set(batch.rows.map(row=>row?.test))],source_sha256:batch.source_sha256,runId:batch.association?.runId??null,stage:batch.association?.stage??null}); } catch { continue; }
       if(association?.state!=='eligible') {
         // Ordinary same-worktree history remains readable when its source has
         // drifted or its legacy source identity is unavailable. It retains the
@@ -98,12 +98,15 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
   if (check) {
     const { batch } = check, summary = readJson(join(directory, check.name, 'summary.json'));
     let source = 'unknown';
-    try {
-      const tests = [...new Set(batch.rows.map(row => row?.test).filter(test => typeof test === 'string'))].sort();
-      if (/^[a-f0-9]{64}$/.test(batch.source_sha256 ?? '') && tests.length) source = capture(check.association?.sourceAnchor?.root ?? root, { tests, appMap: null }).sha256 === batch.source_sha256 ? 'current' : 'changed';
-    } catch { source = 'unknown'; }
+    const tests = [...new Set(batch.rows.map(row => row?.test).filter(test => typeof test === 'string'))].sort();
+    const sha256 = /^[a-f0-9]{64}$/.test(batch.source_sha256 ?? '') ? batch.source_sha256 : null;
+    try { if (sha256 && tests.length) source = capture(check.association?.sourceAnchor?.root ?? root, { tests, appMap: null }).sha256 === sha256 ? 'current' : 'changed'; }
+    catch { source = 'unknown'; }
     const stories = Array.isArray(summary?.rows) ? [...new Set(summary.rows.map(row => text(row?.summary_line)).filter(Boolean))] : [];
-    results.push({ kind: 'pdd test', batch: check.name, at: check.at, source, requests: requestsOf(batch.rows), reports: reportsOf(batch.rows),
+    results.push({ kind: 'pdd test', batch: check.name, at: check.at, source, sourceSha256: sha256, tests, requests: requestsOf(batch.rows), reports: reportsOf(batch.rows),
+      ...(check.association?.runId?{producerRoot:batch.root,association:{runId:check.association.runId,repo:check.association.repo,
+        workspaceRoot:check.association.producerRoot,tests:check.association.tests,source_sha256:check.association.source_sha256,
+        stage:check.association.stage,sourceAnchor:check.association.sourceAnchor}}:{}),
       ...(check.association?{stage:check.association.stage,sourceAnchor:check.association.sourceAnchor}:{}),summary: text(summary?.summary_line) || 'result not saved (the check did not finish)', stories,
       ...identity(batch.rows) });
   }

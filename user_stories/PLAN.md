@@ -146,3 +146,17 @@ Five slices, in build order. The first slice has a small policy Story and a nati
 6. [Move projection state without repeating old work](bounded-workspace-migration.md) — exact path mappings, pending/applied cases, private state and 2899-owned evidence continuity. Native cases: `test/runtime-workspace/bounded-workspace-migration-cases.json`. Prompt tests (bounded-workspace-migration): UNBOUND / NOT RUN; filesystem/state/evidence effects require native verification.
 
 Items 1–2 are slice 1; items 3–6 are slices 2–5. Proposed policy and migration helpers own their rules. Runtime client owns command ordering/currentness and received-case import. Workflow runner alone owns evidence association/eligibility for https://github.com/promptdriven/pdd/issues/2899. This feature consumes that result; that bug alone does not deliver these slices. No product screen applies.
+
+## Selected interpreter compatibility (#2791)
+
+Draft expectations for person review. No code or native readiness claim.
+
+1. [See selected interpreter compatibility](selected-runtime-compatibility.md) — [native cases](../test/runtime-compatibility/selected-runtime-compatibility-cases.json). Prompt tests: NOT REPLAYED; real capture/transport/projection/terminal effects need native fake-engine checks.
+2. [Check compatibility before paid work](runtime-compatibility-before-paid-work.md) — [native cases](../test/runtime-compatibility/runtime-compatibility-before-paid-work-cases.json). Prompt tests: NOT REPLAYED; dispatch, saved state and recovery guards need native fake-engine checks.
+
+Proposed policy: missing/unknown selected compatibility stops new paid dispatch; ended unavailable readiness exits 5, explicit blockers exit 4, open lint retains exit 3. Matched configured structural support permits the existing dispatch gate but does not attest an installed engine or prove host/physical behavior. Missing physical proof alone adds no new global gate. Native validation profiles stay separately owned. These expectations require person review before implementation.
+
+## Bounded authoring guidance (#2795)
+
+1. [Follow a bounded authoring handoff](authoring-orchestration.md) — [native/manual cases](../test/authoring-guidance/authoring-orchestration-cases.json). Prompt tests and native/manual acceptance: NOT RUN.
+2. [Compare authoring guidance on one frozen task](authoring-orchestration-measurement.md) — [native/manual cases](../test/authoring-guidance/authoring-orchestration-measurement-cases.json). Prompt tests and native/manual acceptance: NOT RUN.

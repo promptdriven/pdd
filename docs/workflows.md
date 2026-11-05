@@ -118,6 +118,8 @@ The PR 1 body is short:
 
 ### pdd results and agent notes
 
+`pdd workflow status` counts Stories only from these pdd results, never from `Prompt tests` lines in a summary.
+
 `pdd workflow done check`, `try` and `verify` attach pdd's own latest results to the step: the newest `pdd test` and `pdd lint` batch for the run worktree, and the run's `pdd workflow prove` result. pdd reads them from its saved files. It does not run anything. The agent's `--summary` is kept apart, as an agent note. When pdd has no result of its own, `done` prints a warning and records the step anyway.
 
 When no person is at the Try step, the agent runs `pdd workflow done try --skipped "REASON"`. pdd records the skip and the reason. No agent writes run files by hand.

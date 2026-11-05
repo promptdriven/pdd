@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: 008674b8a767e254c537cf458235cab0212382a527f2a6157348640f6cd5c6b0).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: 3a6b40f4cbb1946ff7602ecb1193d558751670527427042f48dcd511426fb389).
 import { hasProgress, outcomeExitCode, outcomeFor, outcomeText, progressText } from './runtime-outcome.mjs';
 export const OPEN_STATES = new Set(['queued', 'running']);
 
@@ -86,9 +86,28 @@ export const refusalView = (item, secrets = []) => ({
   cause: cleanText(item?.cause, secrets) || null });
 
 // The parts of a server answer that pdd shows.
-export function projectAnswer(answer, { origin, secrets = [], steps: authoredSteps = [], criterionTexts = {}, test } = {}) {
+export function projectAnswer(answer, { origin, secrets = [], steps: authoredSteps = [], criterionTexts = {}, test, sourceFiles } = {}) {
   const result = answer?.result ?? null, report = result?.report ?? null, time_limit = stepTimeLimit(answer, { steps: authoredSteps, secrets });
-  const outcome = outcomeFor(answer, { test, steps: authoredSteps, timeLimit: !!time_limit });
+  const outcome = outcomeFor(answer, { test, steps: authoredSteps, timeLimit: !!time_limit, sourceFiles });
+  const safeCompatibility = (value, key = '') => typeof value === 'string'
+    ? /^(?:path|prompt_path|target_path)$/.test(key) && /^(?:\/|[A-Za-z]:[\\/])/.test(value) ? '<server path>' : cleanText(value, secrets).replace(TOKENS, '[secret]')
+    : Array.isArray(value) ? value.map(item => safeCompatibility(item, key))
+    : isObjectLike(value) ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key, safeCompatibility(item, key)])) : value;
+  const advice = reason => {
+    if (reason === 'binding-missing') return { owner: 'application/binding author', next_step: 'Supply the actual binding.' };
+    if (['source-mismatch', 'source-admission-refused'].includes(reason)) return { owner: 'source/prompt author', next_step: 'Repair the reported source/admission problem.' };
+    if (['retained-attachment-unsupported', 'retained-mutation-unsupported', 'runtime-mode-unsupported'].includes(reason))
+      return { owner: 'interpreter owner', next_step: 'Review the unsupported capability or mode.' };
+    if (reason === 'engine-build-unknown') return { owner: 'interpreter deployment owner', next_step: 'Identify the executing build.' };
+    if (reason === 'supported') return { owner: 'application author', next_step: 'Behavioral execution remains required. Installed-engine, host/profile and physical-observation proof remains unproved.' };
+    return { owner: 'unresolved', next_step: reason === 'capability-association-mismatch'
+      ? 'Review captured source and interpreter deployment identity.' : 'Review the source and interpreter evidence.' };
+  };
+  const compatibility = outcome.compatibility ? safeCompatibility(outcome.compatibility) : null;
+  if (compatibility?.reported) for (const row of [...(compatibility.reported.operations ?? []), ...(compatibility.reported.edges ?? [])])
+    row.client_advice = advice(row.reason_code);
+  const client_advice = compatibility ? advice(compatibility.issue ?? (compatibility.state === 'supported' ? 'supported'
+    : [...(compatibility.reported?.operations ?? []), ...(compatibility.reported?.edges ?? [])].find(row => row.verdict === compatibility.state)?.reason_code)) : null;
   const steps = Array.isArray(report?.samples) && Array.isArray(report.samples[0]?.steps) ? report.samples[0].steps : [];
   const nonNegativeInt = value => Number.isInteger(value) && value >= 0 ? value : undefined;
   const rerunStep = item => ({
@@ -130,6 +149,7 @@ export function projectAnswer(answer, { origin, secrets = [], steps: authoredSte
   const busyRefusal = outcome.state === 'not_run' && outcome.retryable === true && answer?.command === 'check'
     ? rawRefusals.find(item => item?.retryable === true || item?.details?.retryable === true) : null;
   return {
+    ...(compatibility ? { compatibility, client_advice } : {}),
     busy_display: busyRefusal ? { max_wait_seconds: busyRefusal.max_wait_seconds } : null,
     state: outcome.state, ...(outcome.progress ? { progress: { ...outcome.progress, ...(typeof outcome.progress.step === 'string' ? { step: cleanText(outcome.progress.step, secrets) } : {}) } } : {}),
     ...(outcome.ahead !== undefined ? { ahead: outcome.ahead } : {}),
@@ -171,7 +191,7 @@ function criterionCoverage(row) {
 
 export function jsonRow(row) {
   const publicChecks = checks => (checks ?? []).map(({ normal_result, ...check }) => check);
-  return { story: row.story, title: row.title, test: row.test, state: row.state, criterion_coverage: criterionCoverage(row), ...(row.progress ? { progress: row.progress } : {}), ...(row.ahead !== undefined && row.ahead !== null ? { ahead: row.ahead } : {}), checks: row.checks ?? null, criteria: row.criteria ?? null,
+  return { story: row.story, title: row.title, test: row.test, state: row.state, ...(row.compatibility ? { compatibility: row.compatibility, client_advice: row.client_advice } : {}), criterion_coverage: criterionCoverage(row), ...(row.progress ? { progress: row.progress } : {}), ...(row.ahead !== undefined && row.ahead !== null ? { ahead: row.ahead } : {}), checks: row.checks ?? null, criteria: row.criteria ?? null,
     failed_checks: publicChecks(row.failed_checks), refusals: (row.refusals ?? []).map(item => ({ code: item.code, field: item.field ?? null, section: item.section ?? null,
       message: item.message ?? null, engine_message: item.engine_message ?? null, hint: item.hint ?? null, reason: item.reason ?? null, fix: item.fix ?? null,
       where: item.where ?? null, cause: item.cause ?? null })), calls: sentRow(row) ? row.calls ?? 'unknown' : 0,
@@ -410,6 +430,8 @@ export function renderText({ batch, rows, coverage, warnings = [], details = fal
     const text = row.criterion_texts?.[item.criterion_id];
     out.push(`criterion ${item.criterion_id}:${text ? ` ${cleanText(text, secrets)}` : ''}${item.exit_code_only ? ' — checked by exit code only' : ''}`);
   }
+  for (const row of rows.filter(row => row.compatibility)) out.push(`Compatibility (${cleanText(row.test, secrets)}): ${JSON.stringify(row.compatibility, null, 2)}`,
+    `  Client advice: ${JSON.stringify(row.client_advice)}`);
   if (coverage) out.push(coverageText(coverage));
   const models = [...new Set(rows.map(row => row.requested_model).filter(Boolean))];
   out.push(`${rows.filter(row => row.state === 'passed').length} of ${rows.length} stories passed.${models.length ? ` Model asked for: ${models.join(', ')}.` : ''}`);

@@ -299,6 +299,18 @@ For explicit complete lint, print every canonical diagnostic from `result.proble
 
 For lint-only JSON, `lint_state` summarizes selected outcomes under the Outcome contract below. Keep every returned diagnostic in `problems`, including unselected refusals.
 
+**Saved standalone lint.** For a saved batch with explicit lint-only intent,
+`--read BATCH` (including latest-batch reads) reports the same selected lint
+outcomes, diagnostics, lint summary and exit policy as explicit complete lint
+above, in text and JSON. This holds whether the original command ended pending
+or already passed. A confirmed passing lint row remains `passed`, never
+`not_run` or `lint-finished` merely because no Check was requested. A fully passing
+read exits 0 with `Lint: N of M tests pass. 0 AI calls. No checks were sent.`;
+refusals remain refused with exit 4. Send no fresh lint or paid Check and give no
+advice to start a fresh Check for this lint-only read. Preserve unresolved-lint
+handling and the existing [saved Check intent and continuation policy](#continue-the-original-saved-check),
+including its legacy classification; passing lint alone never establishes Check intent.
+
 Order:
 1. [Preflight](runtime-preflight.prompt.md), scoped capture and sign-in. Nothing is sent yet. If every selected test is refused locally, print the result and exit 4 with no sign-in. The result warnings include the preflight warning about source files that two prompts name. Before a check of ALL stories (no STORY word), print to stderr `Checking all N stories: about A AI calls (at most M).`: A estimates declared work for each step: one entry execution, one use of each declared saved-data resource operation, and prompt-call max_calls multiplied by the target prompt estimate (including its resource operations and calls); cut dependency cycles rather than recursing forever. Conditional operations may use fewer calls. Bound the estimate by the unchanged hard cap; M = the sum of the tests' `max_calls` (cli 12b).
 2. Batch ID `YYYYMMDD-HHMMSS-xxxx` (local time). Allocate one new `crypto.randomUUID()` for lint at batch creation and write `batch.json`. Allocate each test's first check UUID only at its first authorized dispatch after the applicable dispatch gates; pending lint allocates no check UUID. Print to stderr `If pdd stops, read the results with: pdd test --read <batch>` after lint passes and right before the first check POST, and again at the end of an exit 3. A pending lint also has a saved result to read: name its batch when the wait limit ends.
@@ -334,6 +346,50 @@ Order:
 
 
 Use one long shell call for ordinary Check and saved-batch read: the tool's longest timeout or a background task with an exit notification (Claude Code: `run_in_background`; Codex: a long `timeout_ms`). If the tool stops pdd, run the printed recovery read once to keep waiting. Never poll every minute. Final output remains owned by [runtime output](runtime-output.prompt.md), including its table, per-Story summary, reports, coverage, failures and single JSON document.
+
+## Selected compatibility consumption
+
+Use [selected compatibility](runtime-outcome.prompt.md#selected-compatibility)
+for the existing selected lint gate in `runCheck` and `runTry`. Supply its new
+`sourceFiles` context from native SHA-256 of the exact immutable capture's
+`sources[].bytes` under the uploaded paths. Forward the same context through
+`projectAnswer`; no new source crawl, endpoint, include, fixture fact or upload
+is authorized. Keep the archive hash, scenario hash and interpreter closure hash
+separate. Recovered lint evidence must still match the saved archive and current
+saved-source guards before its selected compatibility can authorize dispatch;
+unavailable reconstruction holds that test without fresh paid work.
+
+Standalone `pdd lint` text and JSON show each selected root/test, all reported
+operations and edges with exact selection and effective modes, safe source
+location, server verdict/reason, report source/build/capability identity,
+association and selected completeness. Preserve inventory diagnostics and the
+envelope coverage flag separately. Show unknown instead of an empty ready list.
+The selected outcome owns admission and exit; display cannot override it.
+
+Advice is visibly `client_advice:{owner,next_step}`, never a server fact. For `binding-missing`,
+name the application/binding author and advise supplying the actual binding.
+For `source-mismatch` or `source-admission-refused`, name the source/prompt author
+and advise repairing the reported source/admission problem. For retained
+attachment/mutation or mode refusal, name the interpreter owner and advise
+reviewing the unsupported capability/mode. For `engine-build-unknown`, name the
+interpreter deployment owner and advise identifying the executing build.
+For `analysis-unavailable`, `requirement-uninspectable`, conflicting/missing
+reports or unavailable association, owner is unresolved; advise source and
+interpreter review without guessed blame. Client association mismatch advises
+reviewing captured source and interpreter deployment identity. Supported rows
+need no repair advice; state that behavioral execution remains required.
+Preserve the server's closed code as-is; client issues use their own field.
+
+Use the shared output cleaning for every string. No token, host path, arbitrary
+fixture body or raw exception can enter compatibility text/JSON. Report
+configured build association separately from installed-engine, host/profile and
+physical-observation proof, which this wire contract does not supply. Keep those
+unknown/unproved; do not infer logical phases from physical call totals, effects
+from acceptance, or missing fixture facts from expected values. Report counts
+of zero capability provider/resource calls as preflight facts only; they never
+replace submitted-job accounting. This view makes no new approval or behavioral
+evidence record. Preserve auth, ownership, capacity, saved-read intent,
+continuation, identity, uncertain-job recovery and dispatch-claim guards.
 
 ## Check admission and confirmed capacity recovery
 
@@ -717,8 +773,8 @@ each sends the tests that pass and holds back the others:
 | unknown (the lint has not ended) | `not_run`, held for the saved-lint continuation | `The lint result is unknown, so pdd sent no checks.` | 3 |
 
 A job refusal refuses only the tests that have no verdict of their own; a test with
-its own passing verdict is sent. An incomplete lint holds back only the tests
-without their own pass. Unsent checks keep zero calls. The send line keeps
+its own passing verdict and admitting selected compatibility is sent. An
+incomplete lint holds back tests without their own admitting evidence. Unsent checks keep zero calls. The send line keeps
 `Lint passed.` only when every test passed; otherwise it says
 `Lint refused R of N tests.` and/or `Lint gave no verdict for U of N tests.` before
 `Sent K checks …`, and with no refused and no sent test there is no send line.
