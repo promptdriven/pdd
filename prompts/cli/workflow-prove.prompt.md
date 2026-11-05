@@ -65,7 +65,7 @@ Runtime fakes establish forwarding and classification only. Native Git isolation
 
 ```json
 {
-  "status": "draft",
+  "status": "approved",
   "prose_sha256": "c3f82e0ec441132a3f1f5b63402b4a36ec917c1ac9876e63a15a6a30f958e4da",
   "entries": [
     {
