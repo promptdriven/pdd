@@ -98,9 +98,27 @@ for (const scenario of cases) {
     let run = f.record();
     f.tick();
     const scope = await stepDone({ step: 'scope', summary: 'scope', cwd: run.root }, f.agentPorts());
+    const atGate = f.record();
+    await t.test('scope saves the plan approval gate before publication', () => {
+      assert.equal(start.exitCode, 0);
+      assert.equal(scope.exitCode, 0);
+      assert.equal(atGate.state, 'waiting');
+      assert.equal(atGate.areas[atGate.area].name, 'plan');
+      assert.equal(atGate.gate?.kind, 'approve');
+      assert.equal(atGate.gate?.area, 'plan');
+      assert.equal(f.prs.length, 0);
+      assert.equal(f.pushes.length, 0);
+    });
     f.tick();
     const approval = await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, env: { HOME: f.ports.env.HOME } });
     run = f.record();
+    await t.test('approval advances to the first build step', () => {
+      assert.equal(approval.exitCode, 0);
+      assert.equal(run.gate, null);
+      assert.equal(run.state, 'running');
+      assert.equal(run.areas[run.area].name, 'build');
+      assert.equal(run.areas[run.area].steps.find(step => !run.done[step]), 'change');
+    });
     // A clean worktree still needs a prior change for the PR to have a diff.
     if (scenario.id === 'clean') {
       writeFileSync(join(run.root, 'value.mjs'), 'already committed\n');
