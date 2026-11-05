@@ -125,7 +125,7 @@ function capabilityRow(row, edge) {
     || !['none', 'internal', 'fixture', 'prompt', 'live', 'missing'].includes(row.binding_kind)
     || !['simulated', 'live'].includes(row.resource_mode) || !text(row.evaluator_mode)
     || !['ordinary', 'checkpoint', 'resume'].includes(row.execution_mode)
-    || !Object.hasOwn(reasons, row.reason_code) || reasons[row.reason_code] !== row.verdict) return false;
+    || !text(row.reason_code) || !Object.hasOwn(reasons, row.reason_code) || reasons[row.reason_code] !== row.verdict) return false;
   if (!edge) return row.binding_kind === 'none';
   const e = row.selection.edge;
   if (!fields(e, ['edge_id', 'kind', 'call_operation', 'target_node_id', 'target_path', 'target_operation', 'resource_operation'])
@@ -146,6 +146,10 @@ function reportShape(report) {
     || !Array.isArray(report.diagnostics) || report.diagnostics.length > 10002 || !report.diagnostics.every(diagnostic)
     || !report.operations.every(row => capabilityRow(row, false)) || !report.edges.every(row => capabilityRow(row, true))
     || report.complete && (!report.source || !report.operations.length)) return false;
+  return true;
+}
+
+function reportConsistent(report) {
   const nodes = new Map(report.operations.map(row => [canonical([row.selection.step_id, row.selection.node_id]), row.selection]));
   for (const row of report.edges) {
     const s = row.selection, e = s.edge;
@@ -168,19 +172,24 @@ function selectedCompatibility(answer, test, sourceFiles) {
   const legacy = objects(result?.report?.lint?.tests).filter(item => item.path === test && Object.hasOwn(item, 'capabilities')).map(item => item.capabilities);
   const reports = [...top, ...legacy], report = reports[0];
   const unknown = (issue, reported = null, association = 'unknown') => ({ reported, state: 'unknown', association, issue });
-  if (!reports.length) return unknown('capability-report-unavailable');
+  const unavailable = value => {
+    const metadata = object(value) ? Object.fromEntries(['schema_version', 'engine_build', 'capability_version'].filter(key => text(value[key])).map(key => [key, value[key]])) : {};
+    if (typeof value?.complete === 'boolean') metadata.complete = value.complete;
+    if (sourceShape(value?.source)) metadata.source = structuredClone(value.source);
+    if (Array.isArray(value?.diagnostics)) metadata.diagnostics = structuredClone(value.diagnostics.filter(diagnostic).slice(0, 10002));
+    return unknown('capability-report-unavailable', Object.keys(metadata).length ? metadata : null);
+  };
+  if (!reports.length) return unavailable(null);
+  // Validate the closed, fixed-depth wire shape before cloning or comparing it.
+  // Unexpected fields and malformed identities can contain arbitrarily nested JSON.
+  const malformed = reports.findIndex(value => !reportShape(value));
+  if (malformed !== -1) return unavailable(reports[malformed]);
   if (reports.some(value => canonical(value) !== canonical(report))) return unknown('capability-report-conflict');
-  if (object(report)) for (const [name, key] of [['operations', row => [row?.selection?.step_id, row?.selection?.node_id]], ['edges', row => [row?.selection?.step_id, row?.selection?.edge?.edge_id]]]) {
-    if (Array.isArray(report[name]) && new Set(report[name].map(row => canonical(key(row)))).size !== report[name].length)
+  for (const [name, key] of [['operations', row => [row.selection.step_id, row.selection.node_id]], ['edges', row => [row.selection.step_id, row.selection.edge.edge_id]]]) {
+    if (new Set(report[name].map(row => canonical(key(row)))).size !== report[name].length)
       return unknown('capability-report-conflict');
   }
-  if (!reportShape(report)) {
-    const metadata = object(report) ? Object.fromEntries(['schema_version', 'engine_build', 'capability_version'].filter(key => text(report[key])).map(key => [key, report[key]])) : {};
-    if (typeof report?.complete === 'boolean') metadata.complete = report.complete;
-    if (sourceShape(report?.source)) metadata.source = structuredClone(report.source);
-    if (Array.isArray(report?.diagnostics)) metadata.diagnostics = structuredClone(report.diagnostics.filter(diagnostic).slice(0, 10002));
-    return unknown('capability-report-unavailable', Object.keys(metadata).length ? metadata : null);
-  }
+  if (!reportConsistent(report)) return unavailable(report);
   const reported = structuredClone(report);
   const knownBuild = hex(report.engine_build, 40), knownJob = hex(answer?.engine_sha, 40);
   let mismatch = knownBuild && knownJob && report.engine_build !== answer.engine_sha;

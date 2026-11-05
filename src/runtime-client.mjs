@@ -1528,8 +1528,10 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   saveBatch(context);
   const passing = rows.filter(row => row.state === 'passed').length, lintState = outcomeOverall(rows), exitCode = exitCodeFor(rows);
   const summary = `Lint: ${passing} of ${rows.length} tests pass. 0 AI calls. No checks were sent.`;
+  const reportedCoverage = answer?.result?.capabilities_complete ?? answer?.result?.report?.lint?.capabilities_complete;
+  const capabilityCoverage = typeof reportedCoverage === 'boolean' ? reportedCoverage : null;
   if (context.json) {
-    line(ports.stdout, JSON.stringify({ batch, repo: root, exit_code: exitCode, lint_state: lintState, summary_line: summary, capabilities_complete: answer?.result?.capabilities_complete ?? answer?.result?.report?.lint?.capabilities_complete ?? null, coverage: context.coverage, problems,
+    line(ports.stdout, JSON.stringify({ batch, repo: root, exit_code: exitCode, lint_state: lintState, summary_line: summary, capabilities_complete: capabilityCoverage, coverage: context.coverage, problems,
       rows: rows.map(row => ({ story: row.story, title: row.title, test: row.test, state: row.state, refusals: row.refusals, compatibility: row.compatibility, client_advice: row.client_advice, ...(row.note ? { reason: row.note } : {}) })), warnings: [...new Set([...context.warnings, ...context.unmatched])] }));
     return exitCode;
   }
@@ -1542,7 +1544,6 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
     : `${outcomeText(row)}${row.note ? `: ${row.note.message}` : ''}`}`);
   for (const row of rows.filter(row => row.compatibility)) out.push(`Compatibility (${cleanText(row.story, context.secrets)} / ${cleanText(row.test, context.secrets)}): ${JSON.stringify(row.compatibility, null, 2)}`,
     `  Client advice: ${JSON.stringify(row.client_advice)}`);
-  const capabilityCoverage = answer?.result?.capabilities_complete ?? answer?.result?.report?.lint?.capabilities_complete;
   if (typeof capabilityCoverage === 'boolean') out.push(`Capability inventory complete: ${capabilityCoverage}.`);
   out.push(summary, coverageText(context.coverage), ...found.warnings);
   ports.stdout.write(`${out.join('\n')}\n`);
@@ -1609,11 +1610,16 @@ async function readUnsentLint(context, rows) {
   const rawRefusals = [answer.result?.report?.refusal, ...(Array.isArray(answer.result?.refusals) ? answer.result.refusals : [])];
   const busy = answer.state === 'refused' && rawRefusals.some(item => lintQueueWait(item) !== null);
   Object.assign(lint, { state: answer.state, pending: false, unknown: false });
-  recoverSourceContext(context);
+  const sourceRecovered = recoverSourceContext(context);
   for (const [row, outcome] of judgeLint(answer, held, context.root, context.visible, context.secrets, context.capture)) {
     const [state, extra] = busy ? ['not_run', { refusals: [], note: { code: 'lint-busy', message: 'The saved lint could not get a slot. No checks ran. Run the same command again later.' } }]
       : outcome.state === 'passed' ? ['not_run', { refusals: [], note: { code: 'lint-finished', message: 'The saved lint finished. This check was not sent. Run a fresh pdd test command to start checks.' } }]
       : unsentByLint(outcome);
+    // These rows already have unsent lint-held producer evidence. Failed source
+    // reconstruction must retain it so later reads repeat the guarded source
+    // check and its actionable explanation, rather than silently ending recovery.
+    if (!busy && !sourceRecovered && state === 'not_run') extra.note = { code: 'lint-finished',
+      message: 'The saved lint finished. This check was not sent because the saved source could not be verified.' };
     Object.assign(row, { state, calls: 0, phase: 'lint', why: lintView.why, next_step: lintView.next_step, ...extra });
     if (!busy && outcome.state === 'unknown') context.lintUnknown = lint.unknown = true;
   }
