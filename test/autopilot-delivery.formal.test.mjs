@@ -249,3 +249,33 @@ test('bounded owner identity remains tied to the observed coordinator', async ()
     assert.equal(Boolean(f.state().seen?.[101]),allowed,`new/${target}: issue`);
   }
 });
+
+test('first launch readiness shares the original elapsed budget after wall rollback', async () => {
+  for (const ready of [false, true]) {
+    const f = fixture(`rollback-budget-${ready}`), warnings = [];
+    let elapsed = 0, launched = false, reads = 0;
+    const original = f.ports.herdr;
+    f.ports.elapsedNow = () => elapsed;
+    f.ports.sleep = async ms => { elapsed += ms; };
+    f.ports.warn = message => warnings.push(message);
+    f.ports.herdr = async args => {
+      if (args[0] === 'pane' && args[1] === 'run') {
+        const result = await original(args);
+        launched = true; elapsed += 25000; f.time -= 10000;
+        return result;
+      }
+      if (launched && args[0] === 'agent' && args[1] === 'get') {
+        reads++;
+        return {result:{agent:{agent_status: ready && elapsed >= 27000 ? 'idle' : 'unknown', agent_session:'original'}}};
+      }
+      return original(args);
+    };
+    await f.start();
+    assert.ok(reads > 1, 'readiness is polled');
+    assert.ok(elapsed <= 30000, `original elapsed window exceeded: ${elapsed}`);
+    assert.equal(f.packets.length, Number(ready));
+    assert.equal(Boolean(f.state().recipeDelivered), ready);
+    assert.equal(Boolean(f.state().seen?.[101]), ready);
+    if (!ready) assert.ok(warnings.some(message => /pending.*starting/i.test(message)), 'plain pending reason');
+  }
+});

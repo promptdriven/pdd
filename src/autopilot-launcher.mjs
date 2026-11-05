@@ -212,7 +212,7 @@ async function wake(state, text, p) {
     if (!['agent_not_found', 'pane_not_found', 'server_not_running'].includes(e.code)) throw e;
     if (e.code !== 'agent_not_found') { delete state.paneId; delete state.workspaceId; delete state.ownerLaunch; await openWorkspace(state, p); }
   }
-  const deliver = async (initial, withinLaunch = () => true) => {
+  const deliver = async (initial, withinLaunch = () => true, readinessClock = p.now) => {
     const pane = state.paneId, workspace = state.workspaceId, launch = state.ownerLaunch;
     let identity = initial ? JSON.stringify(initial.agent_session ?? null) : undefined;
     let changed = false, expired = false;
@@ -231,7 +231,7 @@ async function wake(state, text, p) {
             return { ...reply, result: { ...reply.result, agent: { ...observed, agent_status: 'starting' } } };
         }
         return reply;
-      }, now: p.now,
+      }, now: readinessClock, elapsedNow: p.elapsedNow, sleep: p.sleep,
       beforeSubmit: async () => {
         const saved = read(state.stateFile);
         if (changed || !saved?.enabled || saved.paneId !== pane || saved.workspaceId !== workspace || JSON.stringify(saved.ownerLaunch) !== JSON.stringify(launch)) return false;
@@ -274,7 +274,7 @@ async function wake(state, text, p) {
   save(state.stateFile, state);
   try { await herdr(['pane', 'run', state.paneId, ['env', ...unset, ...env, quote(definition.command), ...args].join(' ')], p); }
   catch (error) { if (error.confirmedRejection || error.code === 'agent_not_found' || error.code === 'pane_not_found') delete state.ownerLaunch; throw error; }
-  return deliver(undefined, withinLaunch);
+  return deliver(undefined, withinLaunch, () => Math.max(p.now(), state.ownerLaunch.startedAt + Math.max(0, elapsedNow() - began)));
 }
 
 function claimTickLock(file) {
