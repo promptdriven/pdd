@@ -3139,8 +3139,16 @@ export async function acquireCaseWriteOwnership({root,testPath,handoff,signal},p
   for(;;){
     if(signal?.aborted)throw Error('case save cancelled');
     try{caseWrite(p,path,JSON.stringify(owner),{exclusive:true});lockStat=p.files.lstat(path);break;}
-    catch(e){if(e.code!=='EEXIST')throw e;const before=caseStat(p,path);let other;try{other=JSON.parse(caseRead(p,path));}catch{throw Error('case ownership is uncertain; keep pending');}
-      if(other.host===p.host&&Number.isSafeInteger(other.pid)&&p.isAlive(other.pid)===false){
+    catch(e){if(e.code!=='EEXIST')throw e;const before=caseStat(p,path);let other,disappeared=!before;
+      if(before)try{other=JSON.parse(caseRead(p,path));}catch(readError){
+        // A supported owner can release between the collision, stat and read.
+        // Only a missing lock with safe ancestors permits another atomic try.
+        if(readError.code!=='ENOENT'&&readError.message!=='unsafe or missing local path')throw Error('case ownership is uncertain; keep pending');
+        caseSafe(p,dirname(path),{directory:true});
+        if(caseStat(p,path))throw Error('case ownership is uncertain; keep pending');
+        disappeared=true;
+      }
+      if(!disappeared&&other.host===p.host&&Number.isSafeInteger(other.pid)&&p.isAlive(other.pid)===false){
         // A separate exclusive recovery guard serializes abandoned-owner removal.
         const guard=path+'.recover';let owned=false;try{caseWrite(p,guard,JSON.stringify(owner),{exclusive:true});owned=true;const now=caseStat(p,path);if(now&&now.ino===before?.ino&&now.dev===before?.dev&&caseRead(p,path)===JSON.stringify(other))p.files.unlink(path);}catch(recovery){if(recovery.code!=='EEXIST')throw recovery;}finally{if(owned)p.files.unlink(guard);}continue;
       }
