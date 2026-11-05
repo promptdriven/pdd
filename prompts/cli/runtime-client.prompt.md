@@ -2,6 +2,46 @@
 
 Own `src/runtime-client.mjs`. Export `runCheck({words, options, cwd, cache=false}, ports)` and `runTry({words, options, cwd}, ports)`. Each returns an exit code. These commands and the Try MCP tools call the PDD interpreter with the person's `gh` login. Lines that pdd writes itself follow the [word rule](public-boundary.prompt.md#pdd-interpreter), except the plain busy-check messages owned below.
 
+## Native lint selection and display (draft)
+
+For explicit `pdd lint STORY` (including existing path/directory and multiple
+Story operands), obtain preflight's bounded `nativeSelections` with the ordinary
+Runtime selection. Resolve the owned run and exact Story/profile association
+from existing saved workflow evidence; if no unique owned run/profile exists,
+show that reason and no native proof. Do not pick a first report or create an
+association. For each selected native descriptor call the shared
+`assessNativeEvidence` with its actual root/run/profile/Story selectors and the
+production default reader. Use its current Story criteria, not an old mapping
+list. Missing/ambiguous/unreviewed declarations and missing evidence are native
+missing-proof results, not a bare Runtime missing-test line.
+
+Text and `--json` show one native assessment per selected Story/profile. Show
+every current criterion's identity/text, mapped native test IDs and observed
+outcomes, its supported/unproved reason, required gate/fixture rows, profile and
+source identity/currentness, original source/stage, origin, original references
+and limits. Keep unknown/empty Story facts explicit. Label a whole Story natively
+proved only from `storyNativeProof`; `profileNativeProof` alone is profile
+completion. Qualified external evidence keeps that qualifier and checked/unchecked
+limits. Missing fixtures, required skips, unexecuted gates and incomplete/stale/
+unknown evidence retain the shared judgment even at process exit zero.
+
+A native-only explicit lint reads this saved evidence locally and sends no
+hosted request. A missing native proof returns 1; complete current whole-Story
+native proof returns 0. Existing command/boundary errors retain their exits.
+For mixed/native-and-Runtime selection, process ordinary Runtime rows through
+their unchanged lint route and exit rules; any native missing proof prevents
+overall success without replacing a Runtime unknown/refused/not-run exit.
+Show native proof separately from hosted lint/schema verdicts, Runtime capability
+and modeled observations. Native results add no Runtime pass, check count, AI
+usage, capability claim or Try support. Do not alter saved-lint receipt policy,
+Runtime check dispatch, cache or the separate Story-count owner.
+
+The same saved association/assessment is available to workflow/PR readers; this
+client never promotes historical PR 1 evidence to current code proof. No reading
+executes a native test, repairs fixtures, asks for permissions or broadens source
+discovery. Physical reader, CLI display and mixed-selection integration require
+native tests; the supplied assessor scenarios do not prove them.
+
 ## Reuse complete Story passes
 
 Ordinary test CLI calls opt into local reuse with `cache:true`; direct `runCheck`
@@ -83,6 +123,142 @@ generation has made those older passes ineligible; concurrent failures must not
 be lost during recovery. Unreadable, oversized or unsafe recovery state also
 disables reuse and fails open to ordinary checks with the same single cache
 warning. This recovery state does not change saved-batch reads or retries.
+
+## Bounded authored source
+
+Use the [workspace authority](runtime-workspace.prompt.md) and preflight's shared capability before discovery, source hints, shared-source advice, local/server lint, `--files`, check/Try selection, guide connection and source-sensitive continuation. Carry it through retries, held lint, saved-answer refresh, doors, owner reads and contract history. Required-path refusal precedes gh authentication, capacity/model queries, network, listeners and dispatch. Validate current required source locally even on a reused Try before owner metadata. Pure result reads retain existing original-ID recovery and never create work to repair a boundary failure.
+
+Optional excluded app-map defaults, advice files and unrelated discovery candidates are not read. An explicitly selected map or selected program's required crossing refuses; no silent pruning. Bootstrap controls and private state are local metadata, not uploaded context. Keep `--files` exactly the capture `files` manifest and sizes. Disclose capture `reads` separately, plus any later guide/card/scenario reads; distinguish reference/preparation/footprint/discovery/guide roles from uploads. Do not claim a small tar bounds all local reads.
+
+Reuse/currentness compares the existing complete selected test set, effective source, raw pins and used reference baseline under today's permission. Narrowing permission can make source unavailable; unrelated excluded edits cannot stale selected source. Wider permission alone is not a new verdict. Hash filling uses preflight on authored targets, with existing approved/stale and byte-preservation semantics. Contract history and saved evidence consume the [workflow evidence owner](workflow-runner.prompt.md#workspace-evidence-association)'s association/eligibility result; retain original receipts and stage scope. A historical PR 1 pass is not current code-head proof.
+
+## Received-case import
+
+This module owns append policy and the native durable transaction for browser collection, terminal Save, MCP saves and migrated pending cases. Keep `saveDoorCase(root,saved,options={})`; add `applyPendingCase({root,pendingId,writeOwnership,signal},ports={})` to retry a retained case without server redispatch. Native ownership is an opaque capability, not payload JSON or a server permission. The private transaction and `applyPendingCase` return `{state,path,pendingId,reason,recoveryPath}`, with `state` one of `pending`, `conflict` or `committed`; a committed duplicate is a no-op. Keep `saveDoorCase`'s existing printable-string result for callers: success only for established publication; pending/conflict uses the existing `not added:` failure prefix with a reason and recovery location. A duplicate preserves its existing already-saved success meaning. No pending result starts with a success prefix.
+
+### Original target and preservation
+
+Retain full received bytes, parsed case and original root/session/action/selected-test association durably in private `<state>/case-import/` before any authored mutation. Use the existing state safety, owner-only modes and no-link directory rules. Failure to establish durable receipt refuses mutation and reports the failure; it never acknowledges/discards that case. The payload's path is not target authority. Exact original selected test comes from the original native session/action, preserved across reopen and migration. Several tests for one Story never permit first-match fallback. Another Story with no exact association remains pending until explicitly selected; do not silently create a substitute original.
+
+Before applying, require that exact target to be in-bound, Git-visible regular scenario JSON of the original Story with safe no-link ancestors. Missing, renamed, conflicting, malformed, out-of-bound or changed-identity target retains the case pending; it does not create a replacement. Preserve existing schema, metadata, criterion texts, initial world, simulation, context and every prior step/input/check/expected value. Retain the existing promise to keep every other authored byte; insert the append in the existing array's style. Map criterion IDs only by the existing criterion-text rule. Unknown criterion mapping is pending, never a rewritten expectation. Unique generated step names do not supply duplicate identity.
+
+A case's confirmed starting world must hold after the original prior steps for an append. No confirmed compatible continuation means pending with a world reason. Never change the original setup or invent reset steps. `isolated:true` remains an explicit separate action: preserve the current confirmed-world variant policy, original association, original bytes and honest partial coverage. Its no-overwrite variant target must also be allowed and no-link. Do not silently choose isolated mode to satisfy requested original append.
+
+### Supported writer ownership
+
+Support cooperating PDD savers and editor integrations on local filesystems that provide exclusive create, complete-file atomic replacement and directory synchronization. PDD serializes by exact canonical destination in its private target-ownership record, reads the latest source while holding that ownership, and holds it through publication and durable ledger update. Competing savers wait or retain pending; they do not overwrite a peer. Editor integrations must hand over an exclusive target lease and stop editing until release. A person may explicitly close their editor and hand over the target for the apply operation. This handoff means no uncoordinated writer is active; it does not prove arbitrary-process exclusion. In the existing terminal collection and `--save-last` flows, offer one explicit closed-editor handoff for the named target and pending cases; this write handoff does not approve expectations. End it when the apply operation releases ownership. A noninteractive automatic collection with no supported handoff retains pending and shows its recovery path.
+
+Add native `acquireCaseWriteOwnership({root,testPath,handoff,signal},ports={})`, returning an opaque ownership object with `release()`. `handoff` is a local supported-editor lease or explicit person-closed-editor event, never received case data. The private lock records process/owner/target identity; recover an abandoned lock only after proving its owner ended, otherwise retain pending. A lease from another target, released lease, missing handoff, unsupported filesystem or uncertain owner cannot authorize publication. No new global gate affects unconfigured capture or result reading. While the person edits the target, keep the complete case durably pending until coordinated editor ownership or explicit confirmation that the named file is closed. Only that file save waits; independent work continues.
+
+An observed non-cooperating edit causes conflict with received payload and observed authored versions retained. For uncoordinated editors with no handoff, stage the received case and leave authored bytes unchanged. Exact byte/inode comparison and atomic rename alone cannot guarantee protection from an arbitrary editor; do not claim universal compare-and-swap or safely append through a known uncoordinated edit.
+
+### Local retained-case application
+
+Export asynchronous native module function
+`applyPendingCaseWithHandoff({cwd,pendingId,handoff,signal},ports={})` for a retained
+case, including after the caller restarts. Resolve the canonical Git root from
+the server's `cwd`; neither the pending identity nor the handoff chooses a root.
+Use the existing pending reader, acquisition, apply, interrupt and formatter
+owners, returning the same [native outcome](#native-received-case-outcomes) as
+`saveDoorCaseResult`. Do not rebuild or normalize the saved case, change its raw
+bytes, payload fields, identity/equality inputs or isolated/append mode.
+
+Only this entry's `kind:'case'` outcome also carries read-only
+`coverage:{scope,covered,total}`; it changes neither `result` nor `message`.
+For well-formed nonempty retained scenario criteria with unique nonempty string IDs,
+`total` is that retained ID count and `covered` counts distinct referenced IDs
+that are valid members of that set, once each. Repeated checks add no coverage;
+pass/fail observations are irrelevant. Missing/malformed criteria or checks,
+duplicate criterion IDs, or an unknown referenced ID make `scope:'unavailable'`
+with both counts null; never repair IDs or fabricate a count.
+
+Normally use `scope:'retained-scenario'`: these counts describe that saved
+scenario, not the complete Story or mapped original criteria. Generic append
+can map by text and collapse distinct saved IDs; its retained counts are never
+claimed as mapped original coverage. Use `scope:'original-story'` only when
+already-retained original context establishes the complete original MCP Story
+criterion inventory and identical criterion identity. A matching selected
+`seed_scenario` alone does not establish complete Story scope. Do not read a
+current Story to supply a denominator, infer a missing original inventory, or
+add receipt/source metadata. Coverage is a projection after transaction
+classification, not an eligibility rule. Unavailable coverage cannot override a
+committed duplicate, change its historical result/message, reapply or restore a
+case, create a variant or claim current-source proof. Failure has no coverage.
+
+Before waiting, validate the private receipt's safe regular path, exact root and
+pending identity, retained original test/Story binding, and the named handoff's
+exact match to that original test. JSON input cannot supply an opaque lease or
+retarget a case. An invalid, unreadable or foreign receipt returns `kind:'failure'`
+without a pending claim, wait or publication authority. A valid receipt held by
+an unresolved confirmation, source, target or ownership condition retains its
+actual pending/conflict identity, reason and recovery location.
+
+Use one shared transaction classification, in this precedence:
+
+| Established observation | Result and permitted effect |
+|---|---|
+| Same identity has conflicting received payloads | Retain conflict; publish neither payload. |
+| Matching durable committed identity | Return the existing committed duplicate without authored mutation. Later source/target change or deliberate removal cannot restore it or create another variant. This is historical application, not current-source proof. |
+| An interrupted publication is proved by the owner's matching transaction and actual published bytes | Reconcile the ledger under existing custody rules; do not rewrite or restore the target. Changed or uncertain bytes retain the existing pending/conflict outcome. |
+| No application is established | New publication requires the original local authority below and the existing safe apply transaction. |
+
+For new publication, bind the retained action to the existing safe local
+`calls/<action>.meta.json`: its `id` equals that action, its `root` equals the
+canonical server root, and its `session_id` identifies exactly one owned
+repository Try entry. That entry's test-path key and `storyPath` must match the
+receipt's original test/Story. A nonnull retained session must agree; preserve a
+null retained session without filling it. Never choose the first or latest
+record, infer a replacement session or create an association. Missing, malformed,
+foreign or ambiguous local authority leaves the valid receipt held.
+
+Require that original record's `story_sha256`, complete `prompt_hashes` and
+`effective_prompt_hashes`, using the existing local source readers and pin
+comparison owner. Require its original `contract_references` baseline where
+those readers need it. Missing or legacy pins cannot be replaced with current
+bytes or a newly captured baseline.
+Stale or unavailable authority never authorizes new publication or current-source
+proof. Revalidate the original binding, saved pin set, current source and exact
+target after awaiting acquisition and before unapplied publication; changed,
+replaced or missing authority retains the case instead of writing.
+
+No gh authentication, credential lookup or sign-in is performed or required.
+This operation is local: no owner HTTP read, Try setup, model/provider request,
+saved read, retry or gate action. Hold supported ownership through the existing
+publication/ledger boundary. Forward the same standard `AbortSignal`; reuse the
+owner's SIGINT/SIGHUP/SIGTERM subscription and bounded cleanup. Before publication,
+abort prevents delayed writes; after it, preserve existing reconciliation.
+Release only this operation's lease/subscription.
+
+### Duplicate and interruption recovery
+
+Durable import identity is original session/action/saved-case identity plus exact selected target; retain payload bytes separately for equality. Identical committed payload is a no-op across process restart. Same identity with different payload retains both as conflict. Distinct cooperating savers each append once using the latest owned target. A later editor's deliberate removal of an applied step does not cause duplicate polling to restore it. Missing ledger proof does not mean no append occurred.
+
+```mermaid
+flowchart TD
+    R[Durably retain received case] --> V{Safe target, world and writer ownership?}
+    V -->|No| P[Keep pending or conflict]
+    V -->|Yes| B[Prepare complete replacement and recovery record]
+    B --> C{Source still owned and unchanged?}
+    C -->|No| P
+    C -->|Yes| W[Publish complete target]
+    W --> L[Durably record applied identity]
+```
+
+Before publication preserve original revision, proposed full bytes, append placement and recovery information durably. Prepare an exclusive temporary regular file beside the safe target, synchronize its complete content, publish only under supported ownership and synchronize the containing directory. Do not truncate the original in place. Keep the complete old or new JSON through interruption. Record the applied identity durably before reporting success; release ownership in bounded cleanup. Remove only operation-owned temporary files after recovery, never another writer's file.
+
+At restart, reconcile durable received/prepared/published/committed records and actual target bytes before another append. A matching established published revision resolves committed without adding again. Later changed bytes with insufficient proof remain conflict/pending; do not guess. Inject failures after receive, during preparation, before/after publication, before ledger persistence and during recovery. Preserve the received case and all observed authored revisions, valid complete target and original identities at each point. A failed append is not permanently handled merely because it was fetched. Native locks, races, fsync and power/interruption claims require native proof; fake replies cannot establish them.
+
+### Live cancellation and publication boundary
+
+The native cancellation input is optional standard `AbortSignal` `signal`: `saveDoorCase` accepts `options.signal`; `applyPendingCase` and `acquireCaseWriteOwnership` accept the named `signal`. Collection passes its invocation signal to the saver; the existing `onInterrupt` port aborts that same signal on SIGINT, SIGHUP or SIGTERM. Omitted signal preserves callers. A live abort interrupts ownership waits and prevents delayed acquisition/publication. An already-aborted save still retains the complete received case durably before returning pending; if durable receipt fails, report failure without acknowledging or discarding the case.
+
+Publication begins when the operation first attempts the target replacement that can make proposed bytes visible. Before that boundary, an abort stops further authored effects, leaves the complete receipt and prepared recovery data durably pending, and releases only this operation's acquired lease/lock and temporary files. Never release another saver/editor's resource. Check cancellation again under ownership immediately before publication; no late callback may publish after returning pending. Return the existing pending result and recovery location with cancellation as its reason.
+
+Once publication may have begun, abort stops new work but does not skip custody and reconciliation. Retain ownership for bounded reconciliation of actual target and durable received/prepared/published/committed records. Established durable application returns committed; insufficient or conflicting proof returns pending/conflict with retained payload, observed revisions and recovery path. If reconciliation cannot finish, preserve the durable recovery records before releasing owned resources. Never claim an aborted write was unsent, discard its receipt, append again on doubt, or restart Runtime work. Cancellation does not roll back a proven commit or restore a deliberately removed case.
+
+## Projection migration caller
+
+Expose the [workspace migration](runtime-workspace-migration.prompt.md) native operation using the existing private state and save transaction. Pass only the shared workflow evidence owner's separate eligibility result; do not duplicate its authorization or rewrite root provenance. Migration performs no new/replacement Runtime dispatch, model read, check, Try/reopen or paid call. Keep original recovery commands for unknown/pending jobs. Read-only status/history uses eligible stage-scoped associations without inferring current code proof from a frozen PR 1 result.
 
 ## Setup
 
@@ -564,7 +740,7 @@ owner API binding for this raise is pending the planner's contract; do not inven
 - The note on other files prints once per command, in calm words, to stderr. `pdd test` folds it into its send line: `Lint passed. Sent 2 checks at 10:47:49: 11 files, 55 KB (4 are not prompt, story or test files; run \`pdd test --files\` to see them).` `pdd simulate` folds it into its start line: `Starting your Try: sending M files, SIZE (N are not prompt, story or test files; run \`pdd test --files\` to see them)…`. It is not a warning.
 - Confirmed not-started 429 server-full or 503 check-queue-full/lint-queue-full during new Try setup waits under admission recovery within the existing setup allowance; accepted setup is read by its ID. Other 429 replies make no new attempt: exit 5 with the server's message, else `Too many Try links are open. Stop one with pdd simulate --stop`.
 - Approvals from the Try page (#9, agreed fields): with the saved cases, pdd reads `GET /v1/try/<id>/approvals` (`{approvals: [{id, prompt_path, prose_sha256, requested_at, state}]}`). For each `pending` request in a person's terminal it uses [prompt approve](prompt-approve.prompt.md): the path must be a Git-visible `*.prompt.md` inside the repo (else declined), the request's `prose_sha256` must equal the local prose hash (else declined: `the prompt changed since you clicked Approve`), an approved and current prompt is done with no question, otherwise it shows the interface and asks the same y/n; one reader serves all questions. Then it sends `POST /v1/try/<id>/approvals/<request id>` with `{"state": "done" | "declined"}` (JSON). `tries/<id>.approvals.json` keeps each answer, so pdd never asks twice and resends only an answer whose POST failed. Without a terminal (an agent) pdd only prints `The Try page asks to approve <path>. A person answers it in a terminal: pdd simulate <story>` once and answers nothing. A missing endpoint (404) is skipped. Waiting needs both stdin and stdout to be terminals.
-- Save as test: after the link is shown, pdd reads `GET /v1/try/<id>/tests` (`{tests: [{id, path, name, created, story_path, test}]}`, try-page DESIGN.md). For each saved case that it has not handled (`tries/<id>.tests.json` keeps the handled IDs), it appends the case's steps to the original authored test that seeded this Try when the saved story matches the seed's story, including when that Story has several test files. Keep this identity when reopening a Try. If that original test is missing or no longer belongs to the same story, refuse the import without choosing another test or creating a replacement. For another story, use its first test in path order found by the [test name rule](runtime-preflight.prompt.md#test-name-rule) whose `story_path` also names that story. It keeps every other byte of the file (a one-line `steps` array gets a one-line step). Criterion IDs map by criterion text; a case with a criterion the file does not have is `not added` with the reason. A saved case is untrusted (anyone with the link can save one): its story must be a Git-visible `*.md` file in the repo with no `..`; an existing target must be a regular `*.json` file whose real path is inside the repo, whose top-level `schema_version` is `prompt-runtime.program-scenario.v1`, and that is not `package.json`, a lock or config file or a dot file; a new file goes only to `tests/<story>.json`, where `<story>` is the story's file name without `.md`, so the test name rule finds it (never a path from the server), created exclusively, and never when `tests/` is a symbolic link or resolves outside the repo. When the story has a test that pdd cannot use (a conflict, an unreadable or invalid file, or a `story_path` that names another story), refuse: `not added: <test> is the test of <story path>, but pdd cannot use it. Fix it first.` When `tests/<story>.json` already exists but is not the story's test, refuse: `not added: tests/<story>.json exists but is not the test of <story path>. Fix that file first.` Each refusal prints `not added: <reason>` and writes nothing. Step IDs stay unique (`-2`, `-3`). Only a story with no test file gets a new file, `tests/<story>.json`. Print `added to tests/<file> as step <id>`. In a terminal (stdout is a TTY) pdd stays open and reads every 5 s until Ctrl-C or the Try ends; `--no-wait`, or no terminal (an agent), reads once and returns. A missing endpoint (404) prints `The interpreter does not keep saved tests yet.` only while waiting. Exit 0 = link ready or stopped; other exit codes as for `pdd test`.
+- Save as test: after the link is ready, fetch the existing `/v1/try/<id>/tests` endpoint with its unchanged response shape. Route every received case through [received-case import](#received-case-import); keep the exact seeded original test/session association across reopen. Do not use a first-test or handled-ID shortcut. Print successful append only after that owner establishes commit; pending/conflict reports its reason and recovery location. Terminal polling remains every 5 s until Ctrl-C/end; `--no-wait` or nonterminal reads once. Missing endpoint compatibility and Try exit handling remain unchanged. Collection of cases does not authorize an uncoordinated authored write.
 
 ## Progress and error causes
 
@@ -625,6 +801,15 @@ read turns into a lost, unknown row drops its old `progress`.
 
 ## Dependencies
 
+- [Native results](workflow-results.prompt.md#native-profile-and-criterion-assessment-draft):
+  required generation/runtime/verification context for native admission,
+  assessment and visible proof limits. This is an unapproved native draft;
+  copied workspace contracts remain their owner's unapproved draft context.
+
+- [Evidence eligibility read owner](workflow-runner.prompt.md#read-evidence-eligibility): required generation/runtime/verification context for `readEvidenceEligibility`, its inputs/result and accepted association policy. Use this binding for contract history, saved Story evidence and migration handoff; do not invoke registration on reads.
+
+- [Workspace authority](runtime-workspace.prompt.md): required generation/runtime/verification context for policy; native migration is invoked as a caller without loading it back into this module's required dependency closure.
+
 - [Runtime outcome](runtime-outcome.prompt.md): required for generation and tests; selected outcomes and exit policy.
 
 - [Preflight](runtime-preflight.prompt.md#source-capture): required generation and
@@ -642,7 +827,11 @@ read turns into a lost, unknown row drops its old `progress`.
 
 [Agent configuration](agent-config.prompt.md) is required generation/runtime context for loading private named launchers before owner authentication.
 
-Read the full [Prompting guide](../../docs/prompting-guide.md) before you change this prompt. Follow the [alpha boundary](public-boundary.prompt.md). The [CLI](pdd-cli.prompt.md) calls `runCheck` and `runTry`.
+Read the full [Prompting guide](../../docs/prompting-guide.md) before you change this prompt. Follow the [alpha boundary](public-boundary.prompt.md).
+
+## Caller navigation
+
+The [CLI](pdd-cli.prompt.md) calls `runCheck` and `runTry`.
 
 ## Terminal and HTTP doors
 
@@ -660,9 +849,21 @@ Refusals, unknown outcomes, stopped sessions and invalid replies throw a plain e
 Return normalized usage alongside the confirmed result (usage.calls and result.report.remaining_calls; unknown when absent/invalid). A refusal carries its known usage on the thrown error for wrappers. Never dispatch again to obtain usage. No wrapper progress or report text may enter a program's stdout; the door adapter owns the separate usage line on stderr. Session budgets and saved worlds belong
 to the runtime. Preserve paused-session refusals; never silently create a new world during a command.
 
-Export `saveDoorCase(root, saved)`, which applies the same safe append rules as a Try-page saved case, honoring
-its original `path` when it is a discovered test of that Story. This lets --save-last write into the selected
-original test even when another test covers the same Story. It must never create a replacement of that file.
+Export `saveDoorCase(root, saved, options={})` as the existing printable-result native entry to [received-case import](#received-case-import). Obtain target authority from the retained original native association; a supplied path alone is not authority. Keep its explicit isolated option under that same owner.
+
+<a id="native-received-case-outcomes"></a>
+
+The synchronous native module function `saveDoorCaseResult(root, saved, options={})`
+exposes that same operation as a typed outcome. Its normal branches return
+`{kind:'case', result, message}`: `result` is the existing transaction result,
+including its `pending`, `conflict` or `committed` state, and `message` is the
+identical printable string for that result. A failure returns
+`{kind:'failure', message}` with the same existing failure string and no `result`.
+It must not report an unknown or failed receipt as pending or authorize an
+ownership wait or publication. Both entries use the same receipt, payload,
+identity, equality and transaction policy. `saveDoorCase` remains synchronous
+with its existing signature and returns only this outcome's `message`, preserving
+all existing printable results.
 
 For CLI or HTTP setup every preflight, lint or runtime refusal is a wrapper failure on stderr prefixed `pdd:`
 and exits 125. Argument combinations alone may exit 2. Session records capture hashes of uploaded prompt files
@@ -721,7 +922,7 @@ Export `readTryOwner({cwd, story}={}, ports={})`. Resolve the Git root and disco
 
 New Try records pin the Story bytes as `story_sha256`; owner access rejects changed pinned Story bytes. Older records without this field retain their existing Story-path identity check. Return authenticated state action history as `actions` when available.
 
-`saveDoorCase(root, saved, {isolated:true})` records a confirmed observed scenario separately instead of appending. Require the original discovered test/Story identity, an object `initial_world`, original simulation/context, criteria and recorded step. Write a collision-safe, no-overwrite regular `tests/<story>.try-<run-id>.json` using the exact Story basename and a safe run ID inside the real repository; never follow symlinks. Identical existing content is a no-op, conflicting content is refused. Keep the original scenario bytes unchanged. The caller explains partial Story coverage; this operation does not waive runtime whole-Story admission rules.
+`saveDoorCase(root, saved, {isolated:true})` records a confirmed observed scenario separately instead of appending, through the same durable transaction and supported ownership. It is explicit isolated mode, never fallback for an incompatible requested append. Require the original discovered test/Story identity, an object `initial_world`, original simulation/context, criteria and recorded step. Write a collision-safe, no-overwrite regular `tests/<story>.try-<run-id>.json` using the exact Story basename and a safe run ID inside the real repository; never follow symlinks. Identical existing content is a no-op, conflicting content is refused. Keep the original scenario bytes unchanged. The caller explains partial Story coverage; this operation does not waive runtime whole-Story admission rules.
 New Try records retain `seed_scenario` as the original uploaded scenario; owner access returns that snapshot for judging, so local appended recorded cases cannot silently change expected values for an existing Try. Older records use their current discovered scenario.
 
 Door errors carry `unknownOutcome: true` whenever dispatch may have occurred and no confirmed terminal outcome is available, including lost replies, cancellation, mismatched receipts, or failed authenticated reads. This flag is independent of server error wording. Definite admission refusals and confirmed failed/refused terminal outcomes do not carry it; a passed receipt without its lossless program result remains uncertain. Callers must not infer dispatch certainty from error text.
@@ -756,13 +957,12 @@ batch compares its own saved SHA separately. Capture each such key at most once
 per reader, including overlapping reads. Remember failed captures only for that
 reader; affected evidence stays unverified. A fresh reader retries the capture.
 
-Only check batches belonging to root supply evidence; lint and Try results do
-not. Explicit `intent: "check"` retains the normal identification rules. An
+Only check batches admitted by `readEvidenceEligibility` supply evidence; lint and Try results do
+not. Pass each batch's original producer, complete selection/source identity and saved run/stage association to that read binding. Preserve the same-root route and admit eligible associated originals without changing their recorded repository. Apply the remaining row/receipt rules below within the returned stage; historical PR 1 rows cannot become current-code evidence. Explicit `intent: "check"` retains the normal identification rules. An
 absent intent is eligible only when every saved row meets
 [saved Check row validity](#saved-check-row-validity); use the same row predicate,
 without a second legacy policy. Any explicit other intent, including null,
-lint-only or Try, is ineligible. For an otherwise readable batch belonging to
-root with absent intent and any invalid row, count none of its rows and emit
+lint-only or Try, is ineligible. For an otherwise readable eligible batch with absent intent and any invalid row, count none of its rows and emit
 one deduplicated hint explaining that older checks are not counted and advising
 the person to run `pdd test` again.
 This advice adds no gate or dispatch. Eligible legacy batches use the same
@@ -795,13 +995,18 @@ under the existing receipt rules, even with incomplete sent coverage. An
 all-unsent Story supplies no summary. Aggregate before exposing one row per
 Story per batch, using its newest sent result time, otherwise batch creation time.
 
-Currentness belongs here, not to the product reader. Recapture the batch's full
-original selected test set using source capture with no app map, and compare
-that capture hash with the saved batch source hash. Never compare a one-test
-hash with a multi-test batch hash or shorten the selection to sent rows.
-Missing source identity, changed inputs,
-failed capture or explicit null comparisonRoot make the evidence unverified,
-not current. root still identifies the saved records when comparisonRoot names
-a merged run's current base. Missing state is empty. Malformed or unreadable
+Currentness belongs here, not to the product reader. For an associated original,
+compare its full original selected test set/source against the returned original
+stage and sourceAnchor through the owner's exact source readers, not the generic
+comparisonRoot. Retain that stage/anchor with the associated Story row and label
+compatible PR 1 evidence historical; it cannot set current=true for current-code
+proof. Ordinary same-root/current evidence keeps its existing comparisonRoot
+capture with no app map and no new run or association. Compare the full original
+selected set with the saved batch source hash; never use a one-test hash for a
+multi-test batch or shorten selection to sent rows. Missing source/anchor,
+changed inputs or failed capture leave affected compatibility unverified, not
+current. An explicit null comparisonRoot still disables ordinary same-root/current
+verification. root identifies saved records when comparisonRoot names a merged
+run's current base. Missing state is empty. Malformed or unreadable
 records produce finite warnings and no invented pass, while unrelated readable
 batches remain usable. Do not recover by a network read or change saved caches.
