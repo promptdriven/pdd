@@ -9,9 +9,9 @@ import { join, dirname, basename } from 'node:path';
 import { allocateIssueWorktree, lookupIssueWorktree, releaseIssueClaim, lookupRepositoryParent } from '../src/workflow-worktree.mjs';
 
 const execute = promisify(execFile);
-async function fixture(t) {
+async function fixture(t, retention = {}) {
   const temp = await realpath(await mkdtemp(join(tmpdir(), 'pdd-worktrees-'))), cwd = join(temp, 'project');
-  await mkdir(cwd); t.after(() => rm(temp, { recursive: true, force: true }));
+  await mkdir(cwd); t.after(() => retention.failed ? undefined : rm(temp, { recursive: true, force: true }));
   const gitAt = (path, ...args) => execute('git', args, { cwd: path, encoding: 'utf8' });
   const git = (...args) => gitAt(cwd, ...args);
   await git('init', '--initial-branch=main'); await git('config', 'user.name', 'Disposable test');
@@ -380,7 +380,8 @@ function subprocessAllocator(input, crash) {
 }
 
 test('separate processes allocate two issues with both index entries, commit isolation and dirty caller preserved', async t => {
-  const f = await fixture(t), aInput = f.input(201), bInput = f.input(202);
+  const retention = {}, f = await fixture(t, retention), aInput = f.input(201), bInput = f.input(202);
+  try {
   await writeFile(join(f.cwd, 'source.txt'), 'person dirty bytes\n');
   await writeFile(join(f.cwd, 'untracked.txt'), 'person untracked bytes\n');
   const before = (await f.git('status', '--porcelain=v1', '-z', '--untracked-files=all')).stdout;
@@ -406,6 +407,11 @@ test('separate processes allocate two issues with both index entries, commit iso
     const outcome = await lookupIssueWorktree({ cwd: f.cwd, runId: input.runId }, f.ports);
     assert.equal(outcome.state, 'ready'); assert.equal(outcome.assignment.issueNumber, input.issueNumber);
     assert.equal(JSON.parse(await readFile(metadata(f, input.runId), 'utf8')).worktreePath, outcome.assignment.worktreePath);
+  }
+  } catch (error) {
+    retention.failed = true;
+    t.diagnostic(`Preserved failed fixture: ${f.temp}. Resource pressure: unknown; shared Git contention: unknown. Allocation phase/error evidence is in the outcomes when available.`);
+    throw error;
   }
 });
 
@@ -665,4 +671,46 @@ test('release frees only its own issue claim and keeps the old worktree, branch 
   assert.notEqual(b.assignment.worktreePath, a.assignment.worktreePath); assert.notEqual(b.assignment.branch, a.assignment.branch);
   assert((await lstat(a.assignment.worktreePath)).isDirectory()); await lstat(metadata(f, first.runId));
   assert.equal((await f.git('branch', '--list', a.assignment.branch)).stdout.trim().replace(/^[*+] /, ''), a.assignment.branch);
+});
+
+test('unconfirmed add reports safe add and reconciliation evidence', async t => {
+  const f = await fixture(t), input = f.input(2653), original = f.ports.execFile;
+  f.ports.execFile = async (file, args, options) => {
+    if (args[0] === 'worktree' && args[1] === 'add') {
+      const error = new Error('secret /private/path'); error.code = 17; throw error;
+    }
+    return original(file, args, options);
+  };
+  const outcome = await allocateIssueWorktree(input, f.ports);
+  assert.equal(outcome.state, 'recovery_required'); assert.equal(outcome.assignment, null);
+  assert.match(outcome.message, /reconciliation/); assert.match(outcome.message, /Git exit status 17/);
+  assert.match(outcome.message, /native error ENOENT/);
+  assert(!outcome.message.includes('secret')); assert(!outcome.message.includes('/private/path'));
+  assert.match(outcome.message, /never repeat add or delete work/);
+  assert.equal((await lstat(metadata(f, input.runId))).nlink, 2);
+});
+
+test('lost add reply with verified identity returns ready', async t => {
+  const f = await fixture(t), input = f.input(2654), original = f.ports.execFile;
+  f.ports.execFile = async (file, args, options) => {
+    const value = await original(file, args, options);
+    if (args[0] === 'worktree' && args[1] === 'add') throw Object.assign(new Error('lost'), { code: 'arbitrary secret' });
+    return value;
+  };
+  const outcome = await allocateIssueWorktree(input, f.ports);
+  assert.equal(outcome.state, 'ready'); assert.equal(outcome.assignment.issueNumber, 2654);
+  assert.equal(adds(f.calls).length, 1);
+});
+
+
+test('arbitrary add error codes are unavailable and never echoed', async t => {
+  const f = await fixture(t), input = f.input(2655), original = f.ports.execFile;
+  f.ports.execFile = async (file, args, options) => {
+    if (args[0] === 'worktree' && args[1] === 'add') throw Object.assign(new Error('secret'), { code: 'secret-code' });
+    return original(file, args, options);
+  };
+  const outcome = await allocateIssueWorktree(input, f.ports);
+  assert.equal(outcome.state, 'recovery_required');
+  assert.match(outcome.message, /Git worktree add evidence: unavailable/);
+  assert(!outcome.message.includes('secret'));
 });

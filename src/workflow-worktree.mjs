@@ -2,6 +2,7 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
+import { constants as osConstants } from 'node:os';
 import { lstat, realpath, mkdir, open, link, unlink } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, sep } from 'node:path';
 import { promisify } from 'node:util';
@@ -18,6 +19,15 @@ const fail = () => { throw new Error('workflow_worktree_identity_unavailable'); 
 const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 class BareInDotGitError extends Error {}
+class GitExitError extends Error {
+  constructor(code) { super(); this.code = code; }
+}
+const nativeCodes = new Set(Object.keys(osConstants.errno));
+function evidence(error) {
+  if (error instanceof GitExitError) return `Git exit status ${error.code}`;
+  if (typeof error?.code === 'string' && nativeCodes.has(error.code)) return `native error ${error.code}`;
+  return 'unavailable';
+}
 
 function commands(ports) {
   const run = ports.execFile ?? ((file, args, { cwd }) => execute(file, args,
@@ -26,7 +36,7 @@ function commands(ports) {
     let response;
     try { response = await run('git', args, { cwd }); }
     catch (error) {
-      if (!Number.isInteger(error?.code) || error.code === 0) fail();
+      if (!Number.isInteger(error?.code) || error.code === 0) throw error;
       response = { stdout: error.stdout ?? '', code: error.code };
     }
     if (!response || typeof response.stdout !== 'string' || response.code !== undefined && !Number.isInteger(response.code)) fail();
@@ -34,7 +44,7 @@ function commands(ports) {
   }
   return { raw, async git(cwd, args) {
     const response = await raw(cwd, args);
-    if (response.code !== 0) fail();
+    if (response.code !== 0) throw new GitExitError(response.code);
     return response.stdout;
   } };
 }
@@ -222,7 +232,7 @@ export async function lookupIssueWorktree(input, ports = {}) {
 }
 
 export async function allocateIssueWorktree(input, ports = {}) {
-  let saved = false;
+  let saved = false, phase = 'unknown', addError;
   try {
     const { cwd, repository, issueNumber, runId, workflowName, baseRef } = structuredClone(input ?? {});
     if (!repoName(repository) || !safe(runId) || !safe(workflowName, 80) || !Number.isSafeInteger(issueNumber)
@@ -231,7 +241,7 @@ export async function allocateIssueWorktree(input, ports = {}) {
     if (!sameRepo(ctx.repository, repository)) return result('conflict', 'The requested repository does not match this checkout origin.');
     const p = locations(ctx.commonDir, runId, issueNumber);
     if (await exists(p.run)) {
-      saved = true;
+      saved = true; phase = 'reconciliation';
       const a = await ownedRecord(ctx, runId, c);
       if (!sameRepo(a.repository, repository) || a.issueNumber !== issueNumber || a.workflowName !== workflowName || a.baseRef !== baseRef)
         return result('conflict', 'This run already names a different issue, workflow or base.');
@@ -252,22 +262,26 @@ export async function allocateIssueWorktree(input, ports = {}) {
       worktreePath: join(worktrees, id), gitDir: join(ctx.commonDir, 'worktrees', id), branch, baseRef, baseSha };
     if (await exists(a.worktreePath) || await exists(a.gitDir)) return result('conflict', 'The intended worktree path or Git directory is already occupied.');
     let handle;
+    phase = 'run-file creation';
     try { handle = await open(p.run, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
     catch (error) { if (error.code === 'EEXIST') return result('recovery_required', 'This run was claimed concurrently. Read its original assignment; do not allocate again.'); throw error; }
-    saved = true;
+    saved = true; phase = 'run-file write/sync';
     try { await handle.writeFile(JSON.stringify(a) + '\n', 'utf8'); await handle.sync(); } finally { await handle.close(); }
     await syncDirectory(p.runs);
+    phase = 'issue claim/sync';
     try { await link(p.run, p.issue); }
     catch (error) { if (error.code === 'EEXIST') return result('conflict', 'Another run claimed this issue. This run intent is retained without allocating.'); throw error; }
     await syncDirectory(p.issues);
     // Intent and exclusive claim are durable. No existing intent can ever enter this add path again.
     if (!equal(await ownedRecord(ctx, runId, c), a)) fail();
+    phase = 'Git worktree add';
     try { await c.git(ctx.sourceRoot, ['worktree', 'add', '-b', a.branch, a.worktreePath, a.baseSha]); }
-    catch { /* A lost or rejected reply cannot justify a second add. Verify this same physical identity. */ }
+    catch (error) { addError = error; /* Verify the same physical identity. */ }
+    phase = 'reconciliation';
     return await reconcile(ctx, a, c);
   } catch (error) {
     return result('recovery_required', saved
-      ? 'Allocation is unconfirmed. Preserve the saved run and inspect its exact intended path; never repeat add or delete work.'
+      ? `Allocation is unconfirmed. Preserve the saved run and inspect its exact intended path; never repeat add or delete work. Last attempted phase: ${phase}; evidence: ${evidence(error)}.${addError ? ` Git worktree add evidence: ${evidence(addError)}.` : ''}`
       : error instanceof BareInDotGitError
         ? 'pdd does not support a bare repository stored in .git with linked worktrees. Make an independent normal clone and run the workflow there. No allocation record or issue claim was saved. No new worktree is confirmed.'
       : 'Cannot establish repository or allocation metadata identity. No allocation record or issue claim was saved. No new worktree is confirmed.');
