@@ -1,0 +1,177 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/bounded-simulator-context.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Project cards, product rules, code-presence facts, private scenarios, judges and input bindings use only permitted content, with incomplete coverage reported honestly."
+    },
+    {
+      "id": "AC2",
+      "text": "Guide and bridge refreshes revalidate permission, remove excluded retained source context and validate required source before authentication, model metadata or connection."
+    },
+    {
+      "id": "AC3",
+      "text": "Local contract catalogs and sibling footprints, shared-source and SVG advice, and binding coverage do not open excluded source or create new global refusal gates."
+    },
+    {
+      "id": "AC4",
+      "text": "Every test, lint, Try, terminal, HTTP, MCP, retry and owner-access path applies the same required-source boundary before its authentication, network or dispatch work."
+    },
+    {
+      "id": "AC5",
+      "text": "A bounded connected agent uses only the supplied packet; if its native tool and automatic-context controls cannot ensure this, connection fails locally with the reason and no provider switch."
+    }
+  ],
+  "binding_status": "unbound-unexecuted",
+  "native_effects": [
+    "real child argv/environment and native automatic instruction discovery",
+    "private project/test reader instrumentation and retained-memory inspection",
+    "bridge/background lifecycle",
+    "no model process executed for these drafts"
+  ],
+  "cases": [
+    {
+      "id": "private-card-and-judge-markers",
+      "criterion_id": "AC1",
+      "operation": "buildProjectCard + readAgentScenarios",
+      "given": {
+        "policy": {
+          "allowed_paths": [
+            "simulation/"
+          ]
+        },
+        "markers_outside": [
+          "README.md",
+          "prompts/private.prompt.md",
+          "user_stories/private.md",
+          "test/private.json"
+        ],
+        "selected": "simulation/test/order.json"
+      },
+      "expected": {
+        "excluded_content_reads": 0,
+        "packet_markers_present": false,
+        "private_judge_markers_present": false,
+        "code_filename_heuristic": "uses only eligible names",
+        "excluded_same_story_scenario": "marks inventory incomplete, prevents complete pass"
+      }
+    },
+    {
+      "id": "refresh-removes-prior-context",
+      "criterion_id": "AC2",
+      "operation": "createTryGuide.prepare + createAgentBridge",
+      "given": {
+        "initial_policy": [
+          "simulation/",
+          "shared/"
+        ],
+        "next_policy": [
+          "simulation/"
+        ],
+        "retained_shared_content": [
+          "product rule",
+          "criterion binding",
+          "judge",
+          "source-derived conversation excerpt"
+        ],
+        "trigger": "policy narrows between turns while background refresh runs"
+      },
+      "expected": {
+        "excluded_new_reads": 0,
+        "next_packet_shared_content": false,
+        "old_judge_reused": false,
+        "coverage": "rebuilt incomplete where evidence removed",
+        "required_crossing": "refuses before next model/relay work"
+      }
+    },
+    {
+      "id": "local-advice-and-footprints",
+      "criterion_id": "AC3",
+      "operation": "runContracts + lintSvgLayouts + bindingCoverage + sharedSourceFiles",
+      "given": {
+        "each_mode": [
+          "contracts list",
+          "contracts sync preview",
+          "contracts sync write",
+          "SVG no-word local lint",
+          "selected SVG lint",
+          "binding inventory",
+          "shared-source advice"
+        ],
+        "outside_markers": [
+          "contracts/private.md",
+          "prompts/private.prompt.md",
+          "views/private.ui.svg",
+          "test/private.json"
+        ]
+      },
+      "expected": {
+        "excluded_content_reads": 0,
+        "advice": "unavailable/advisory without global refusal",
+        "selected_required_crossing": "local refusal",
+        "sync_write": "in-bound no-link target only",
+        "inventory_grants_permission": false,
+        "partial_footprint_current_pass": false
+      }
+    },
+    {
+      "id": "all-entry-barriers",
+      "criterion_id": "AC4",
+      "operation": "public runCheck/runTry/runDoorCall/readTryOwner and Try tools",
+      "given": {
+        "each_independent_entry": [
+          "new Check",
+          "server lint",
+          "local lint",
+          "files mode",
+          "new Try",
+          "reused Try",
+          "held-lint continuation",
+          "saved-answer refresh",
+          "restart/retry",
+          "terminal CLI opening",
+          "terminal save-last",
+          "HTTP listener startup",
+          "MCP owner/open/run/save",
+          "readTryOwner",
+          "bridge refresh"
+        ],
+        "required_target": "private/ordinary.json"
+      },
+      "expected": {
+        "required_source_refusal": "before each entry authentication/network/model metadata/dispatch",
+        "excluded_content_reads": 0,
+        "pure_existing_result_read": "same original ID only, no recreation"
+      }
+    },
+    {
+      "id": "real-adapter-controls",
+      "criterion_id": "AC5",
+      "operation": "discoverAgents + askAgent",
+      "given": {
+        "each_adapter": [
+          "Codex default/custom definition",
+          "Claude default/custom definition",
+          "Gemini default/custom definition"
+        ],
+        "native_controls_to_probe": [
+          "read/search/glob access",
+          "automatic project/instruction files",
+          "plugins/hooks/MCP",
+          "configured context injections",
+          "Codex unknown-feature retry"
+        ],
+        "outside_marker": "private/ordinary.md"
+      },
+      "expected": {
+        "bounded_supported_route": "native probe cannot load excluded marker",
+        "unproved_or_unsupported_route": "local unsupported-connection failure before model invocation",
+        "claude_read_grep_glob": "disabled in bounded route or route unavailable",
+        "retry": "cannot remove boundary-critical control",
+        "unconfigured": "existing behavior preserved",
+        "provider_switches": 0
+      }
+    }
+  ]
+}

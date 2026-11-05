@@ -1,0 +1,388 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/authored-case-import.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "When a Story has two tests, an eligible received case appends once to the exact original selected test and leaves the other test byte for byte unchanged."
+    },
+    {
+      "id": "AC2",
+      "text": "An append preserves authored metadata, criteria, initial data, simulation, context, every prior step, input, check and expected value, and all other bytes promised by the existing append contract."
+    },
+    {
+      "id": "AC3",
+      "text": "Missing, changed, invalid, excluded, unsafe or ambiguous targets and incompatible starting worlds retain the full received case as pending or conflict with a reason and recovery location; no substitute original is chosen."
+    },
+    {
+      "id": "AC4",
+      "text": "Under supported exclusive writer ownership, two savers keep both distinct cases once; without an editor handoff, the case stays pending and authored bytes stay unchanged."
+    },
+    {
+      "id": "AC5",
+      "text": "An identical committed import is a no-op after restart; reused identity with different payload retains both as conflict, and later deliberate removal is not silently undone."
+    },
+    {
+      "id": "AC6",
+      "text": "Interruption during receipt, preparation, publication, ledger update or recovery leaves complete authored JSON and the received case recoverable; restart establishes applied once or pending or conflict."
+    },
+    {
+      "id": "AC7",
+      "text": "Terminal and MCP saves retain original association and confirmed starting data; an explicit isolated variant never rewrites original setup or pretends to satisfy an incompatible requested append."
+    }
+  ],
+  "binding_status": "unbound-unexecuted",
+  "native_effects": [
+    "native exclusive ownership and safe target opening",
+    "actual two-process saver/editor interleavings",
+    "fsync and directory publication faults on supported filesystem",
+    "exact byte-preserving append",
+    "private durable received/prepared/committed recovery records",
+    "MCP starting-world representation differs from ordinary append"
+  ],
+  "cases": [
+    {
+      "id": "exact-second-test",
+      "criterion_id": "AC1",
+      "operation": "runTry collection + saveDoorCase",
+      "given": {
+        "tests": [
+          "simulation/tests/order.json",
+          "simulation/tests/order.second.json"
+        ],
+        "original_selected": "simulation/tests/order.second.json",
+        "received_id": "case-A",
+        "compatible_world": true,
+        "writer": "supported exclusive handoff"
+      },
+      "expected": {
+        "destination": "simulation/tests/order.second.json",
+        "case_A_occurrences": 1,
+        "first_test_bytes": "unchanged",
+        "reopen_association": "same exact original test"
+      }
+    },
+    {
+      "id": "preserve-all-authored-values",
+      "criterion_id": "AC2",
+      "operation": "saveDoorCase",
+      "given": {
+        "original_fields": {
+          "metadata": {
+            "custom": "KEEP"
+          },
+          "criteria": [
+            {
+              "id": "AC1",
+              "text": "Keep value"
+            }
+          ],
+          "initial_world": {
+            "balance": 7
+          },
+          "simulation": {
+            "service.lookup": {
+              "action": "port.read"
+            }
+          },
+          "context": [
+            {
+              "prompt_path": "simulation/prompts/order.prompt.md",
+              "paths": [
+                "simulation/rules.md"
+              ]
+            }
+          ],
+          "steps": [
+            {
+              "step_id": "prior",
+              "input": {
+                "amount": 2
+              },
+              "checks": [
+                {
+                  "value": 9
+                }
+              ]
+            }
+          ]
+        },
+        "text": "include compact steps array and deliberate spacing"
+      },
+      "expected": {
+        "all_original_fields_and_values": "equal exactly",
+        "prior_expected_value": 9,
+        "unrelated_bytes": "unchanged",
+        "criterion_mapping": "existing criterion text rule only",
+        "new_step_names": "unique without deduplication by suffix"
+      }
+    },
+    {
+      "id": "unsafe-or-missing-original",
+      "criterion_id": "AC3",
+      "operation": "saveDoorCase",
+      "given": {
+        "each_independent_variant": [
+          "original deleted",
+          "original renamed",
+          "Story reassigned",
+          "malformed JSON",
+          "wrong scenario schema",
+          "target excluded",
+          "direct symlink",
+          "ancestor symlink",
+          "nonregular target",
+          "another Story lacks exact original association",
+          "unknown criterion mapping"
+        ]
+      },
+      "expected": {
+        "authored_writes": 0,
+        "substitute_test_chosen": false,
+        "full_received_payload": "durably pending/conflict",
+        "reported_saved": false,
+        "diagnostic": "reason and recovery path",
+        "retry_after_repair": "uses retained case without refetch or redispatch"
+      }
+    },
+    {
+      "id": "world-incompatibility",
+      "criterion_id": "AC3",
+      "operation": "saveDoorCase",
+      "given": {
+        "original_initial_world": {
+          "count": 0
+        },
+        "prior_steps_end_world": {
+          "count": 3
+        },
+        "received_world_before": {
+          "count": 17
+        },
+        "request": "append to original"
+      },
+      "expected": {
+        "state": "pending",
+        "original_setup": "unchanged",
+        "original_steps": "unchanged",
+        "invented_reset_steps": 0,
+        "received_world_before": {
+          "count": 17
+        },
+        "substitute_variant_created": false
+      }
+    },
+    {
+      "id": "two-savers-distinct",
+      "criterion_id": "AC4",
+      "operation": "saveDoorCase concurrently",
+      "given": {
+        "same_target": "simulation/tests/order.second.json",
+        "cases": [
+          "case-A",
+          "case-B"
+        ],
+        "interleaving": "hold saver A ownership through prepare/publication; start B; then release A",
+        "ownership": "supported local lease"
+      },
+      "expected": {
+        "case_A_occurrences": 1,
+        "case_B_occurrences": 1,
+        "lost_prior_steps": 0,
+        "target": "complete JSON",
+        "B": "latest owned target or intact pending, then apply once"
+      }
+    },
+    {
+      "id": "two-savers-identical",
+      "criterion_id": "AC5",
+      "operation": "saveDoorCase concurrently then restart",
+      "given": {
+        "same_target": "simulation/tests/order.second.json",
+        "same_identity": "case-A",
+        "same_payload": true,
+        "ownership": "supported local lease"
+      },
+      "expected": {
+        "case_A_occurrences": 1,
+        "second_result": "committed duplicate no-op",
+        "restart_duplicate_writes": 0
+      }
+    },
+    {
+      "id": "editor-lease-or-stage",
+      "criterion_id": "AC4",
+      "operation": "saveDoorCase + applyPendingCase",
+      "given": {
+        "interleavings": [
+          "cooperating editor completes edit before handoff",
+          "cooperating saver holds lease before editor resumes",
+          "uncoordinated inode-preserving edit during preparation",
+          "uncoordinated atomic-replace edit before publication"
+        ],
+        "uncoordinated_handoff": false
+      },
+      "expected": {
+        "cooperating": "serialize or conflict while preserving both",
+        "no_handoff": "received case durable pending, zero authored writes",
+        "observed_conflict": "retain received payload and observed authored versions",
+        "universal_CAS_claim": false
+      }
+    },
+    {
+      "id": "duplicate-payload-conflict",
+      "criterion_id": "AC5",
+      "operation": "saveDoorCase after restart",
+      "given": {
+        "same_identity": "case-A",
+        "original_payload": {
+          "expected": 5
+        },
+        "next_payload": {
+          "expected": 6
+        }
+      },
+      "expected": {
+        "state": "conflict",
+        "retained_payloads": [
+          {
+            "expected": 5
+          },
+          {
+            "expected": 6
+          }
+        ],
+        "authored_expected_values": "unchanged",
+        "second_append": false
+      }
+    },
+    {
+      "id": "later-editor-removal",
+      "criterion_id": "AC5",
+      "operation": "saveDoorCase repeated",
+      "given": {
+        "committed_identity": "case-A",
+        "later_edit": "person removes applied case under handoff",
+        "next_poll": "same case-A same payload"
+      },
+      "expected": {
+        "authored_writes": 0,
+        "case_restored": false,
+        "prior_application_provenance": "retained"
+      }
+    },
+    {
+      "id": "interruption-matrix",
+      "criterion_id": "AC6",
+      "operation": "saveDoorCase then applyPendingCase recovery",
+      "given": {
+        "fault_points": [
+          "before durable receipt succeeds",
+          "after durable receipt",
+          "during temp preparation",
+          "after prepared recovery record",
+          "before publication",
+          "after publication before directory sync",
+          "after publication before ledger sync",
+          "during recovery"
+        ],
+        "faults": [
+          "process stop",
+          "disk/write/sync error"
+        ],
+        "ownership": "supported local writer contract"
+      },
+      "expected": {
+        "before_durable_receipt": "no authored mutation and no received acknowledgment",
+        "after_durable_receipt": "received case and observed authored revisions recoverable",
+        "target": "complete valid old or new scenario, never truncated",
+        "restart": "establish applied once or pending/conflict without guessing",
+        "committed_message": "only with established durable application",
+        "unowned_temp_cleanup": false
+      }
+    },
+    {
+      "id": "prepare-and-ledger-window",
+      "criterion_id": "AC6",
+      "operation": "applyPendingCase restart twice",
+      "given": {
+        "prepared_revision": "retained before/proposed bytes and insertion association",
+        "actual_target": "already published proposed bytes",
+        "ledger": "not yet committed"
+      },
+      "expected": {
+        "recovery_state": "committed after establishing publication",
+        "additional_appends": 0,
+        "received_case": "retained by durable provenance",
+        "later_ambiguous_target": "pending/conflict rather than append again"
+      }
+    },
+    {
+      "id": "terminal-and-isolated-mcp",
+      "criterion_id": "AC7",
+      "operation": "saveLast + createTryTools try_save_case",
+      "given": {
+        "terminal_original": "simulation/tests/order.second.json",
+        "mcp_confirmed_world_before": {
+          "count": 17
+        },
+        "mcp_action": "explicit existing isolated save",
+        "variant_target": "must also fit policy"
+      },
+      "expected": {
+        "terminal": "exact original or recoverable pending via common transaction",
+        "mcp": "same confirmed world in explicit no-overwrite variant, original bytes intact",
+        "durable_duplicate_identity": "survives new tool process",
+        "partial_coverage": "honest",
+        "missing_world_before": "retained pending/refused, no invented initial world",
+        "requested_incompatible_original_append": "pending, no silent variant substitution"
+      }
+    },
+    {
+      "id": "live-abort-before-publication",
+      "criterion_id": "AC6",
+      "operation": "saveDoorCase + acquireCaseWriteOwnership + applyPendingCase",
+      "given": {
+        "native_input": "AbortController.signal propagated by collection",
+        "each_independent_abort_point": [
+          "already aborted on receipt",
+          "waiting for another owner",
+          "ownership acquired before preparation",
+          "prepared record durable before first target replacement"
+        ],
+        "received": "complete case-A including original selected test and expected values"
+      },
+      "expected": {
+        "state": "pending with cancellation reason and recovery path",
+        "complete_payload": "durably retained; receipt failure is reported without acknowledgment",
+        "authored_writes": 0,
+        "late_publication": false,
+        "released_resources": "only this operation ownership and temporaries",
+        "peer_ownership": "unchanged",
+        "retry": "explicit retained-case apply, no redispatch"
+      }
+    },
+    {
+      "id": "live-abort-during-commit-recovery",
+      "criterion_id": "AC6",
+      "operation": "applyPendingCase",
+      "given": {
+        "native_input": "AbortController abort after target replacement may have begun",
+        "each_independent_actual_target": [
+          "established proposed revision with durable commit",
+          "published proposed revision before ledger sync",
+          "conflicting later revision with insufficient publication proof"
+        ],
+        "original_receipt": "complete case-A retained"
+      },
+      "expected": {
+        "reconciliation": "under custody; established durable application committed, otherwise pending/conflict",
+        "additional_appends": 0,
+        "received_and_observed_versions": "retained with durable recovery path",
+        "success": "only after durable commit established",
+        "new_Runtime_work": 0,
+        "cleanup": "only owned resources after reconciliation or durable custody transfer"
+      }
+    }
+  ]
+}

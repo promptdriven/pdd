@@ -14,6 +14,7 @@ const STORY = 'user_stories/place-order.md';
 const write = (repo, path, text) => { mkdirSync(join(repo, path, '..'), { recursive: true }); writeFileSync(join(repo, path), text); };
 const json = (repo, path, value) => write(repo, path, JSON.stringify(value));
 const load = (repo, path) => JSON.parse(readFileSync(join(repo, path), 'utf8'));
+const confirmContinuation=repo=>{const doc=load(repo,ORDER);doc.steps.at(-1).checks.push({criterion_id:'AC1',target:'world',path:'',op:'equals',value:doc.initial_world});json(repo,ORDER,doc);};
 const names = tar => {
   const result = spawnSync('tar', ['-tf', '-'], { input: tar, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
@@ -151,6 +152,7 @@ test('SOURCE5: Check and lint upload precisely the offline selected manifest, sh
 
 test('SOURCE6: scoped Try keeps its authored seed and adds saved cases to the original test file', async t => {
   const setup = harbor(t, repo => write(repo, 'large-tracked.bin', Buffer.alloc(10_485_761)));
+  confirmContinuation(setup.repo);
   const before = load(setup.repo, ORDER), saved = structuredClone(before);
   saved.steps = [saved.steps[0]]; saved.steps[0].step_id = 'saved-scoped';
   const fake = await fakeRuntime(t, (entry, f) => {
@@ -160,6 +162,7 @@ test('SOURCE6: scoped Try keeps its authored seed and adds saved cases to the or
     return { status: 404, json: {} };
   });
   const { ports } = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin });
+  ports.caseHandoff=async({testPath})=>({kind:'closed-editor',testPath});
   assert.equal(await runTry({ cwd: setup.repo, words: ['place-order'], options: { '--no-open': true, '--no-wait': true } }, ports), 0, ports.stderr.text + ports.stdout.text);
   assert.equal(fake.posts[1].request.seed, ORDER);
   assert.deepEqual(names(fake.posts[1].tar), [PLACE, ORDER, STORY].sort());
@@ -171,6 +174,7 @@ test('SOURCE6: scoped Try keeps its authored seed and adds saved cases to the or
 
 test('SOURCE11: Try saves to its selected test when a Story has several tests, including a reopened Try', async t => {
   const setup = harbor(t), selected = 'tests/place-order.z.json';
+  confirmContinuation(setup.repo);
   const original = readFileSync(join(setup.repo, ORDER), 'utf8');
   write(setup.repo, selected, original);
   const saved = load(setup.repo, selected);
@@ -185,7 +189,8 @@ test('SOURCE11: Try saves to its selected test when a Story has several tests, i
   });
   const run = async () => {
     const { ports } = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin });
-    assert.equal(await runTry({ cwd: setup.repo, words: [selected], options: { '--no-open': true, '--no-wait': true } }, ports), 0, ports.stderr.text);
+    ports.caseHandoff=async({testPath})=>({kind:'closed-editor',testPath});
+  assert.equal(await runTry({ cwd: setup.repo, words: [selected], options: { '--no-open': true, '--no-wait': true } }, ports), 0, ports.stderr.text);
     return ports.stdout.text;
   };
   assert.match(await run(), /added to tests\/place-order\.z\.json as step saved-selected/);

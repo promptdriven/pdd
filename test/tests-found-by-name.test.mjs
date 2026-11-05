@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, cpSync, mkdirSync, readFileSync, readdirSync, truncateSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, truncateSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { captureSource, findTests, preflight, selectTests } from '../src/runtime-preflight.mjs';
 import { runCheck, saveDoorCase } from '../src/runtime-client.mjs';
@@ -256,9 +256,22 @@ test('NAME10: an unreadable test or a test over the upload limit is refused by n
 // Wrong: a saved Try case made a second test file for a Story whose test pdd could not use.
 test('NAME11: a saved case never makes a second test for a Story; a test path that is taken is refused', t => {
   const setup = repoWith(t, { 'user_stories/s.md': story('S'), 'runtime/tests/s.json': '{"schema_version":', 'user_stories/q.md': story('Q'), 'tests/q.json/notes.txt': 'x' });
-  const saved = storyPath => ({ id: 'c1', name: 'saved', story_path: storyPath, test: JSON.parse(scenario(storyPath)) });
-  assert.equal(saveDoorCase(setup.repo, saved('user_stories/s.md')), 'not added: runtime/tests/s.json is the test of user_stories/s.md, but pdd cannot use it. Fix it first.');
-  assert.equal(saveDoorCase(setup.repo, saved('user_stories/q.md')), 'not added: tests/q.json exists but is not the test of user_stories/q.md. Fix that file first.');
+  const env = { HOME: setup.home, PDD_STATE_DIR: join(setup.home, 'state') };
+  const saved = (storyPath, originalPath) => ({ id: 'c1', name: 'saved', original_path: originalPath, story_path: storyPath, test: JSON.parse(scenario(storyPath)) });
+  // The approved received-case contract retains invalid exact originals durably,
+  // rather than choosing or creating another Story test. No writer handoff is needed for refusal.
+  for (const [storyPath, originalPath] of [['user_stories/s.md', 'runtime/tests/s.json'], ['user_stories/q.md', 'tests/q.json']]) {
+    const received = saved(storyPath, originalPath), result = saveDoorCase(setup.repo, received, { env });
+    assert.ok(result.startsWith(`not added: the original test ${originalPath} is missing or no longer belongs to ${storyPath}. Restore it before importing the case`), result);
+    assert.match(result, /Case retained at .* \(pending [a-f0-9]+\.[a-f0-9]+\)\.$/);
+    const retained = JSON.parse(readFileSync(result.match(/Case retained at (.*) \(pending /)[1], 'utf8'));
+    assert.deepEqual(retained.saved, received, 'complete received case remains recoverable');
+    assert.equal(retained.raw, JSON.stringify(received));
+  }
+  assert.equal(readFileSync(join(setup.repo, 'runtime/tests/s.json'), 'utf8'), '{"schema_version":');
+  assert.equal(readFileSync(join(setup.repo, 'tests/q.json/notes.txt'), 'utf8'), 'x');
+  assert.equal(existsSync(join(setup.repo, 'tests/s.json')), false);
+  assert.deepEqual(readdirSync(join(setup.repo, 'tests')), ['q.json']);
 });
 
 // The selected tests declare the maps that lint must judge, even when the CLI names none.

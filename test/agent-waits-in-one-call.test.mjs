@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { runCheck } from '../src/runtime-client.mjs';
+import { captureSource } from '../src/runtime-preflight.mjs';
 import { PUBLIC_COMMAND_MANIFEST } from '../src/command-catalog.mjs';
-import { harbor, portsFor, PLACE } from './runtime-fake.mjs';
+import { harbor, portsFor, PLACE, ordinaryCapabilities } from './runtime-fake.mjs';
 
 // Offline public-boundary replay: every service reply and clock tick is injected.
 // No HTTP listener, native network, model call or renderer substitute.
@@ -19,7 +20,7 @@ function fixture(t, { multiple = false, failed = false, completeAt = 150000 } = 
   });
   const env = { HOME: h.home, PDD_STATE_DIR: h.state, PDD_RUNTIME_URL: 'https://offline.invalid' };
   const posts = [], gets = [], ids = new Map();
-  let current, start, interruptAt = Infinity;
+  let current, start, capture, interruptAt = Infinity;
   const job = (id, command, state, result = null) => ({ id, requestId: id, command, state, result,
     usage: { calls: command === 'check' ? 1 : 0 }, engine_sha: 'eae2202a68d00ab762fcbbf1eba0d8607a132a15',
     report_url: `https://offline.invalid/r/${id}` });
@@ -29,10 +30,14 @@ function fixture(t, { multiple = false, failed = false, completeAt = 150000 } = 
     if (init.method === 'POST') {
       const request = JSON.parse(await init.body.get('request').text()), command = path.split('/').at(-1);
       posts.push({ command, request });
+      assert.equal(request.source_sha256, capture.sha256);
+      assert.deepEqual(Buffer.from(await init.body.get('source').arrayBuffer()), capture.tar);
+      // Explicit synthetic ordinary support, bound to the actual immutable upload.
+      // This is supplied fixture input; the timing assertions establish no parser support.
       if (command === 'lint') return Response.json(job(request.requestId, command, 'passed', {
         exitCode: 0, refusals: [], report: { verdict: 'passed',
           lint: { complete: true, tests: ['tests/place-order.json', ...(multiple ? ['tests/second-order.json'] : [])]
-            .map(path => ({ path, verdict: 'passed' })) },
+            .map(path => ({ path, verdict: 'passed', capabilities: ordinaryCapabilities(capture.sources, path) })) },
           program: { prompts: [{ path: PLACE, admission_state: 'draft', interface: { calls: [] } }], refused_prompts: [] } }
       }));
       const recovery = /pdd test --read (\S+)/.exec(current.ports.stderr.text);
@@ -50,7 +55,8 @@ function fixture(t, { multiple = false, failed = false, completeAt = 150000 } = 
     } : null));
   };
   async function run(options = {}, { interactive = false, batch, interrupt = Infinity } = {}) {
-    current = portsFor(env, { fetch, interactive }); start = current.clock.now; interruptAt = interrupt;
+    current = portsFor(env, { fetch, interactive,
+      captureSource: (...args) => (capture = captureSource(...args)) }); start = current.clock.now; interruptAt = interrupt;
     const sleep = current.ports.sleep;
     current.ports.sleep = async ms => {
       await sleep(ms);
