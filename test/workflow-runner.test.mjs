@@ -101,9 +101,9 @@ async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
       const pr = f.prs.find(item => item.url === args[2]);
       return { stdout: JSON.stringify({ state: f.merged || f.mergedNumbers.includes(pr?.number) ? 'MERGED' : 'OPEN', mergedAt: null, statusCheckRollup: f.ci, body: pr?.body }) };
     }
-    if (args[0] === 'pr' && args[1] === 'edit') {
-      const pr = f.prs.find(item => item.url === args[2]) ?? assert.fail(`no PR ${args[2]}`);
-      pr.body = String(opts.input ?? ''); f.edits.push(pr.number); return { stdout: '' };
+    if (args[0] === 'api' && args[1] === '--method' && args[2] === 'PATCH') {
+      const pr = f.prs.find(item => args[3].endsWith(`/pulls/${item.number}`)) ?? assert.fail(`no PR ${args[3]}`);
+      pr.body = JSON.parse(opts.input).body; f.edits.push(pr.number); return { stdout: '' };
     }
     throw Error(`unexpected gh ${args.join(' ')}`);
   }
@@ -2174,7 +2174,7 @@ test('2530: failed description downgrade prevents pushing new source with an old
   writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
   await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());const pushes=f.pushes.length;
   writeFileSync(join(run.root,'value.mjs'),'export const value=3;\n');
-  const original=f.ports.execFile;f.ports.execFile=async(file,args,options)=>file==='gh'&&args[0]==='pr'&&args[1]==='edit'?{stdout:'',stderr:'description permission denied',code:1}:original(file,args,options);
+  const original=f.ports.execFile;f.ports.execFile=async(file,args,options)=>file==='gh'&&args[0]==='api'&&args[1]==='--method'&&args[2]==='PATCH'?{stdout:'',stderr:'description permission denied',code:1}:original(file,args,options);
   const out=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
   assert.equal(out.exitCode,1);assert.match(out.message,/description permission denied/);
   assert.equal(f.pushes.length,pushes);assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nNative tests: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\nCode replay: PASS/,'unchanged remote source still has its valid report');
@@ -2187,7 +2187,7 @@ test('2530: failed final description update leaves a pushed code PR publication-
   writeFileSync(join(run.root,'value.mjs'),'export const value=3;\n');
   writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
   const original=f.ports.execFile;let edits=0;
-  f.ports.execFile=async(file,args,options)=>{if(file==='gh'&&args[0]==='pr'&&args[1]==='edit'&&++edits===2)return {stdout:'',stderr:'final update rejected',code:1};return original(file,args,options);};
+  f.ports.execFile=async(file,args,options)=>{if(file==='gh'&&args[0]==='api'&&args[1]==='--method'&&args[2]==='PATCH'&&++edits===2)return {stdout:'',stderr:'final update rejected',code:1};return original(file,args,options);};
   const out=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
   assert.equal(out.exitCode,1);assert.match(out.message,/Source was pushed/);assert.match(f.prs[1].body,/Code replay: BLOCKED.*Publication pending/);
 });
