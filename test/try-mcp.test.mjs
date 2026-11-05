@@ -194,6 +194,38 @@ for (const mode of ['pending', 'owned', 'aborted']) test(`MCP native save preser
   }
 });
 
+test('MCP native save refuses a symlink at the configured state directory', async t => {
+  const { fixture, read, json } = await import('./helpers/runtime-workspace-fixture.mjs');
+  const { mkdirSync, readdirSync, symlinkSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const f = fixture(t), target = join(f.parent, 'state-target'), configured = join(f.parent, 'state-link');
+  mkdirSync(target); symlinkSync(target, configured);
+  json(f.root, 'pdd-workspace.json', { allowed_paths: ['simulation/', 'tests/'] });
+  const original = read(f.root, f.second), owner = {
+    root: f.root, test: { path: f.second, storyPath: f.story, doc: f.doc },
+    record: { id: 'synthetic-session', origin: 'https://interpreter.example.invalid', login: 'owner' },
+    model: { entries: [{ entry_path: f.prompt, operation: 'order' }] },
+  };
+  const stdin = new PassThrough(), stdout = new PassThrough(), stderr = new PassThrough();
+  let output = ''; stdout.on('data', data => output += data);
+  const promise = runMcp({ cwd: f.root, env: { ...f.env, PDD_STATE_DIR: configured } }, {
+    stdin, stdout, stderr, readTryOwner: async () => owner,
+    runDoorCall: async () => ({ id: 'native-action', result: 9, inputWorld: { count: 0 }, world: { count: 0 } }),
+  });
+  stdin.end([
+    request(1, 'tools/call', { name: 'try_run', arguments: { entry: `${f.prompt}#order`, input: {} } }),
+    request(2, 'tools/call', { name: 'try_save_case', arguments: {} }),
+  ].map(JSON.stringify).join('\n') + '\n');
+  assert.equal(await promise, 0);
+  const rows = output.trim().split('\n').map(line => JSON.parse(line));
+  assert.equal(rows.find(row => row.id === 1).result.structuredContent.run_id, 'native-action');
+  const refused = rows.find(row => row.id === 2).result;
+  assert.equal(refused.isError, true);
+  assert.match(refused.content[0].text, /unsafe or missing local path/);
+  assert.deepEqual(readdirSync(target), []);
+  assert.equal(read(f.root, f.second), original);
+});
+
 test('saving without a runtime before-world fails instead of inventing test data', async () => {
   const f = fixture({ runDoorCall: async () => ({ id: 'run', result: { stdout: 'Added\n' }, world: {} }) });
   const tools = createTryTools({}, f.ports);

@@ -3154,6 +3154,15 @@ const caseNativeFiles={lstat:lstatSync,read:readFileSync,open:openSync,write:wri
 const caseLeases=new WeakMap();
 function casePorts(ports={}){return{files:ports.files??caseNativeFiles,env:ports.env??process.env,hash:ports.hash??sha256,nonce:ports.randomUUID??randomUUID,now:ports.now??Date.now,pid:ports.pid??process.pid,host:ports.host??hostname(),isAlive:ports.isAlive??(pid=>{try{process.kill(pid,0);return true;}catch(e){return e.code==='ESRCH'?false:null;}}),sleep:ports.sleep??((ms,signal)=>new Promise(done=>{if(signal?.aborted)return done();const finish=()=>{clearTimeout(timer);signal?.removeEventListener('abort',finish);done();};const timer=setTimeout(finish,ms);signal?.addEventListener('abort',finish,{once:true});})),fault:ports.fault??(()=>{})};}
 function caseStat(p,path){try{return p.files.lstat(path);}catch(e){if(e.code==='ENOENT')return null;throw e;}}
+function caseStateDirectory(env,root,p){
+  const configured=resolve(env.PDD_STATE_DIR||join(env.HOME||homedir(),'.pdd','runtime'));
+  if(caseStat(p,configured)?.isSymbolicLink())throw Error('unsafe or missing local path');
+  const missing=[];let current=configured,canonical;
+  for(;;){try{canonical=p.files.realpath(current);break;}catch(e){if(e.code!=='ENOENT')throw e;const parent=dirname(current);if(parent===current)throw e;missing.push(current.slice(parent.length+1));current=parent;}}
+  const directory=join(canonical,...missing.reverse());
+  if(inside(directory,p.files.realpath(root)))throw new Stop(2,'PDD_STATE_DIR is inside this repository. pdd keeps run state outside the repo. Choose another folder.');
+  return directory;
+}
 function caseSafe(p,path,{directory=false,create=false}={}){
   const full=resolve(path),parts=full.split(sep).filter(Boolean);let at=sep;
   for(let i=0;i<parts.length;i++){at=join(at,parts[i]);const dir=i<parts.length-1||directory;let st=caseStat(p,at);
@@ -3172,7 +3181,7 @@ function caseWrite(p,path,text,{exclusive=false}={}){
   }finally{if(fd!==undefined)p.files.close(fd);try{const remaining=caseStat(p,temp);if(owned&&remaining?.ino===owned.ino&&remaining.dev===owned.dev)p.files.unlink(temp);}catch(e){if(e.code!=='ENOENT')throw e;}}
 }
 function caseArea(root,p,{create=true}={}){
-  const dir=stateDirectory(p.env,root),area=join(dir,'case-import');
+  const dir=caseStateDirectory(p.env,root,p),area=join(dir,'case-import');
   if(create)caseSafe(p,area,{directory:true,create:true});else if(caseStat(p,area))caseSafe(p,area,{directory:true});
   return area;
 }
@@ -3344,7 +3353,7 @@ export const saveDoorCase=(root,saved,options={})=>saveDoorCaseResult(root,saved
 function retainedCaseAuthority(root,record,p){
   const action=record.identity.action;
   if(typeof action!=='string'||!UUID.test(action))throw Error('original local call authority is unavailable');
-  const directory=stateDirectory(p.env,root),meta=JSON.parse(caseRead(p,join(directory,'calls',action+'.meta.json')));
+  const directory=caseStateDirectory(p.env,root,p),meta=JSON.parse(caseRead(p,join(directory,'calls',action+'.meta.json')));
   if(meta.id!==action||meta.root!==root||typeof meta.session_id!=='string'||!UUID.test(meta.session_id)
     ||record.identity.session!=null&&record.identity.session!==meta.session_id)throw Error('original local call authority does not match this receipt');
   const repo=JSON.parse(caseRead(p,join(directory,'repos',sha256(Buffer.from(root)).slice(0,16)+'.json')));
@@ -3661,7 +3670,7 @@ export function runtimeWorkspaceMigrationStore({root,projectionRoot,env=process.
       if(caseStat(p,repoPath)){repo=readJson(repoPath);records.push({id:repoPath,kind:'repo',record:repo,raw:caseRead(p,repoPath)});}
       for(const batch of list(join(directory,'batches'))){if(!BATCH.test(batch))continue;const folder=join(directory,'batches',batch),path=join(folder,'batch.json');if(!caseStat(p,path))continue;const record=readJson(path);if(record.root!==projectionRoot)continue;records.push({id:path,kind:'batch',record,raw:caseRead(p,path),receipts:list(folder).filter(n=>UUID.test(n.replace(/\.json$/,''))).map(n=>({path:join(folder,n),raw:caseRead(p,join(folder,n))}))});}
       for(const id of new Set(Object.values(repo?.tries??{}).map(r=>r.id).filter(id=>UUID.test(id))))for(const suffix of ['.json','.door.json','.tests.json','.approvals.json']){const path=join(directory,'tries',id+suffix);if(caseStat(p,path))records.push({id:path,kind:'try',record:readJson(path),raw:caseRead(p,path)});}
-      const area=join(directory,'case-import');for(const name of list(area).filter(n=>/^[a-f0-9]{64}$/.test(n)))for(const file of list(join(area,name)).filter(n=>n.endsWith('.received.json'))){const path=join(area,name,file),record=readJson(path);if(record.identity?.root!==projectionRoot)continue;const journal=path.replace('.received.json','.transaction.json');records.push({id:path,kind:'case',record,raw:caseRead(p,path),transaction:caseStat(p,journal)?readJson(journal):null});}
+      const area=join(caseStateDirectory(env,root,p),'case-import');for(const name of list(area).filter(n=>/^[a-f0-9]{64}$/.test(n)))for(const file of list(join(area,name)).filter(n=>n.endsWith('.received.json'))){const path=join(area,name,file),record=readJson(path);if(record.identity?.root!==projectionRoot)continue;const journal=path.replace('.received.json','.transaction.json');records.push({id:path,kind:'case',record,raw:caseRead(p,path),transaction:caseStat(p,journal)?readJson(journal):null});}
       return records;
     },
     readMapping(id){
