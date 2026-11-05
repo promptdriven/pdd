@@ -8,11 +8,12 @@ export class RuntimeWorkspaceError extends Error {
 }
 const fail=(code,reason)=>{throw new RuntimeWorkspaceError(code,`${CONTROL}: ${reason}. Correct this regular local policy file and retry.`);};
 export function nativeWorkspaceFiles(root){
-  let observed;
+  let observed,canonicalRoot;
   return {
     stat({path}){
-      const full=resolve(root,path);let at=parse(full).root;
       try{
+        canonicalRoot=realpathSync(root);
+        const full=resolve(canonicalRoot,path);let at=parse(full).root;
         for(const part of full.slice(at.length).split(sep).filter(Boolean)){
           at=join(at,part);const st=lstatSync(at);
           if(st.isSymbolicLink())throw Error('symbolic link');
@@ -20,12 +21,12 @@ export function nativeWorkspaceFiles(root){
           if(at===full){if(!st.isFile())throw Error('not regular');observed=st;}
         }
       }catch(error){if(error.code==='ENOENT')return{exists:false,is_symlink:false,size:0};throw error;}
-      const git=spawnSync('git',['ls-files','-z','-co','--exclude-standard','--',path],{cwd:root});
+      const git=spawnSync('git',['ls-files','-z','-co','--exclude-standard','--',path],{cwd:canonicalRoot});
       if(git.status!==0||!git.stdout.toString().split('\0').includes(path))throw Error('not Git-visible');
       return{exists:true,is_symlink:false,size:observed.size};
     },
     read({path}){
-      const fd=openSync(join(root,path),constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
+      const fd=openSync(join(canonicalRoot,path),constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
       try{const st=fstatSync(fd);if(!observed||!st.isFile()||st.size>MAX||st.ino!==observed.ino||st.dev!==observed.dev||st.mtimeMs!==observed.mtimeMs||st.ctimeMs!==observed.ctimeMs)throw Error('changed');
         const content=new TextDecoder('utf-8',{fatal:true}).decode(readFileSync(fd));
         const after=fstatSync(fd);if(after.size!==st.size||after.mtimeMs!==st.mtimeMs||after.ctimeMs!==st.ctimeMs)throw Error('changed');
