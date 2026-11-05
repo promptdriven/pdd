@@ -1,0 +1,12 @@
+{
+  "story_path": "user_stories/commit-warning-paths.md",
+  "purpose": "Requirement-derived native case inventory for issues #2829 and #2944, not an executable Runtime scenario or test. Exercise the public stepDone publication boundary in independent scratch repositories with real Git; supply deterministic GitHub, Herdr, clock and other external replies. Verify the actual commit as well as the warning. Runtime does not bind the native Git, filesystem and publication effects. A code-area regression must execute these cases.",
+  "cases": [
+    {"id":"first-unstaged","criteria":[1,6],"given":{"modifiedTracked":["value.mjs"]},"expect":{"warningPaths":["value.mjs"],"committedPaths":["value.mjs"],"exitCode":0}},
+    {"id":"multiple","criteria":[2,6],"given":{"modifiedTracked":["value.mjs"],"untracked":["z-new.txt"]},"expect":{"warningPaths":["value.mjs","z-new.txt"],"committedPaths":["value.mjs","z-new.txt"],"exitCode":0}},
+    {"id":"untracked","criteria":[3,6],"given":{"untracked":["new.txt"]},"expect":{"warningPaths":["new.txt"],"committedPaths":["new.txt"],"exitCode":0}},
+    {"id":"space-and-quote","criteria":[4,6],"given":{"untracked":["space name.txt","quote\"name.txt"]},"expect":{"warningPaths":["space name.txt","quote\"name.txt"],"committedPaths":["space name.txt","quote\"name.txt"],"exitCode":0}},
+    {"id":"rename","criteria":[5,6],"given":{"rename":{"from":"value.mjs","to":"renamed file.mjs"}},"expect":{"warningPaths":["renamed file.mjs"],"committedPaths":["renamed file.mjs"],"exitCode":0}},
+    {"id":"clean","criteria":[6],"given":{"uncommittedFiles":[]},"expect":{"automaticCommitWarning":false,"automaticCommit":false,"exitCode":0}}
+  ]
+}
