@@ -159,7 +159,7 @@ finite local cause and returns 5. Catalog owns all syntax.
 
 ```json
 {
-  "status": "draft",
+  "status": "approved",
   "prose_sha256": "931743ae152725d7b1be77cc9fb433425761a79ee8c266176c6497052730860b",
   "entries": [{"operation": "runPdd","input_schema": {"type": "object","properties": {"argv": {"type": "array","items": {"type": "string"}},"cwd": {"type": "string"},"env": {"type": "object","properties": {"HOME": {"type": "string"},"PATH": {"type": "string"},"CODEX_HOME": {"type": "string"},"CLAUDE_CONFIG_DIR": {"type": "string"}},"required": [],"additionalProperties": false},"packageRoot": {"type": "string"}},"required": ["argv"],"additionalProperties": false},"result_schema": {"type": "object","properties": {"exit_code": {"type": "integer"},"stdout": {"type": "string"},"stderr": {"type": "string"}},"required": ["exit_code","stdout","stderr"],"additionalProperties": false},"errors": []}],
   "calls": [],
