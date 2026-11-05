@@ -15,8 +15,20 @@
       "text": "An unchanged assertion produces no changed-assertion entry, and a newly added assertion shows (added) → its exact line."
     }
   ],
-  "initial_world": {},
-  "simulation": {},
+  "initial_world": {
+    "requests": []
+  },
+  "simulation": {
+    "snapshot.read": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "available": false,
+        "reason": "snapshot unavailable",
+        "files": []
+      }
+    }
+  },
   "context": [],
   "steps": [
     {

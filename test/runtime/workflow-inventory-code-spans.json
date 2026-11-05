@@ -19,8 +19,20 @@
       "text": "Names and source lines containing \"pdd-workflow:\" show every matching prefix colon as \"\\u003a\" inside their code spans, so the exact text can be recovered without becoming a workflow marker; later colons and different capitalization stay unchanged."
     }
   ],
-  "initial_world": {},
-  "simulation": {},
+  "initial_world": {
+    "requests": []
+  },
+  "simulation": {
+    "snapshot.read": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "available": false,
+        "reason": "snapshot unavailable",
+        "files": []
+      }
+    }
+  },
   "context": [],
   "steps": [
     {
