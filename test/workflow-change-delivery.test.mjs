@@ -20,7 +20,7 @@ test('2677 latest resume gives readiness time and working submits exact text onc
   let clock = 100_000, inspections = 0; const calls = [], text = '  x "quote"\n  tail  ';
   const result = await sendToChat({ paneId: 'original', startedAt: 0, resumedAt: clock }, text, {
     now: () => clock, elapsedNow: () => clock, sleep: async ms => { clock += ms; }, herdr: async args => {
-      calls.push(args); if (args[1] === 'get') { if (++inspections < 3) return missing(); return live; } return {};
+      calls.push(args); if (args[1] === 'read') return ''; if (args[1] === 'get') { if (++inspections < 3) return missing(); return live; } return {};
     }
   });
   assert.equal(inspections, 3); assert.equal(clock, 100_500); assert.deepEqual(result, { ok: true });
@@ -30,7 +30,7 @@ test('2677 missing submission retries readiness within the original deadline', a
   let clock = 0, inspections = 0, submits = 0;
   const result = await sendToChat({ paneId: 'original', startedAt: 0 }, 'retry', {
     now: () => clock, elapsedNow: () => clock, sleep: async ms => { clock += ms; }, herdr: async args => {
-      if (args[1] === 'get') { inspections++; return live; } if (++submits === 1) return missing(); return {};
+      if (args[1] === 'read') return ''; if (args[1] === 'get') { inspections++; return live; } if (++submits === 1) return missing(); return {};
     }
   });
   assert.deepEqual(result, { ok: true }); assert.equal(submits, 2); assert.equal(inspections, 2); assert.equal(clock, 250);
@@ -48,7 +48,7 @@ test('2677 ambiguous submission returns uncertainty and never retries', async ()
   let submits = 0, inspections = 0;
   const result = await sendToChat({ paneId: 'original', startedAt: 0 }, 'kept', { now: () => 0,
     sleep: async () => assert.fail('ambiguous submit must not wait'), herdr: async args => {
-      if (args[1] === 'get') { inspections++; return live; } submits++; throw Object.assign(Error('lost reply'), { code: 'herdr_failed' });
+      if (args[1] === 'read') return ''; if (args[1] === 'get') { inspections++; return live; } submits++; throw Object.assign(Error('lost reply'), { code: 'herdr_failed' });
     }
   });
   assert.deepEqual(result, { ok: false, code: 'herdr_failed', uncertain: true }); assert.equal(submits, 1); assert.equal(inspections, 1);
@@ -60,8 +60,8 @@ test('2677 first inspection permits an old live pane but refuses inspection fail
   });
   assert.deepEqual(result, { ok: false, code: 'server_unavailable' }); assert.deepEqual(calls, [['agent', 'get', 'old']]);
   const liveCalls = [];
-  assert.deepEqual(await sendToChat({ paneId: 'old', startedAt: 0 }, 'same', { now: () => 60_000, herdr: async args => { liveCalls.push(args); return live; } }), { ok: true });
-  assert.deepEqual(liveCalls, [['agent', 'get', 'old'], ['agent', 'prompt', 'old', 'same']]);
+  assert.deepEqual(await sendToChat({ paneId: 'old', startedAt: 0 }, 'same', { now: () => 60_000, herdr: async args => { liveCalls.push(args); return args[1] === 'read' ? '' : live; } }), { ok: true });
+  assert.deepEqual(liveCalls, [['agent', 'get', 'old'], ['pane', 'read', 'old', '--source', 'detection'], ['agent', 'prompt', 'old', 'same']]);
 });
 
 // These lifecycle cases complement the immutable vectors at the same public runner boundary.
@@ -77,7 +77,7 @@ test('2677 pending request stays on its pane while an independent target accepts
   await changeRun({ ref: '17', text: 'First request', cwd: f.source }, f.ports);
   const latest = f.record(); latest.chats.at(-1).paneId = 'independent'; writeRun(latest, f.ports);
   const prompts = [];
-  f.ports.herdr = async args => { if (args[1] === 'get') return live; if (args[1] === 'prompt') { prompts.push(args); return {}; } return healthy(args); };
+  f.ports.herdr = async args => { if (args[1] === 'get') return live; if (args[1] === 'read') return ''; if (args[1] === 'prompt') { prompts.push(args); return {}; } return healthy(args); };
   assert.equal((await changeRun({ ref: '17', text: 'Independent request', cwd: f.source }, f.ports)).exitCode, 0);
   assert.equal(f.journal().filter(r => r.paneId === first && r.state === 'pending').length, 1);
   assert.equal(prompts.length, 1); assert.equal(prompts[0][2], 'independent'); assert.ok(prompts[0][3].includes('Independent request'));
