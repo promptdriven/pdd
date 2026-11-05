@@ -287,10 +287,18 @@ function profileIn(content, profileId) {
   for(const path of [...p.sourcePaths,...p.testPaths])nativePath(path);
   return p;
 }
-function nativeSelection(root,storyPath,profileId,ports) {
+function nativeSelection(root,storyPath,profileId,ports,retained) {
   const visible=new Set((ports.gitFiles ?? gitFiles)(root));
   const sourceFiles=(ports.sourceFilePort??sourceFilePort)(root,visible);
   const read=path=>{nativePath(path);if(!visible.has(path))throw nativeError('Native source is not Git-visible.');return sourceFiles.read({path}).content;};
+  // A saved, reviewed owner can still explain profile completion when the
+  // current Story is absent. Recheck its actual prompt bytes and journal below;
+  // never reconstruct current criteria or support from the retained mapping.
+  if(retained?.path&&(!visible.has(storyPath)||!sourceFiles.stat({path:storyPath}).exists)) {
+    const content=read(retained.path),profile=profileIn(content,profileId);
+    if(!profile.mappings.some(row=>row.storyPath===storyPath))throw nativeError('Retained native owner does not map the selected Story.');
+    return {promptPath:retained.path,content,profile,story:null,read};
+  }
   const storyText=read(storyPath), section=/^## Native validation\s*\n([\s\S]*?)(?=^## |$(?![\s\S]))/m.exec(storyText)?.[1]??'';
   const links=[...section.matchAll(/\[[^\]]*\]\(([^)\s]+)#native-validation-profile-([^)\s]+)\)/g)];
   if(links.length!==1||links[0][2]!==profileId)throw nativeError('Native Story owner link is missing or ambiguous.');
@@ -469,7 +477,7 @@ function bindNativeRows(report,profile,selection,limits) {
 function nativeContextFromOriginals(selectors,input,retained,ports) {
   if(input.descriptor&&(input.descriptor.profileId!==selectors.profileId||input.descriptor.storyPath!==selectors.storyPath))throw nativeError('Original profile/Story selectors do not match.');
   const limits=['External original; command was not observed by PDD. Parsing does not authenticate the runner or speaker.'],checks=[];
-  const selection=nativeSelection(selectors.root,selectors.storyPath,selectors.profileId,ports);selection.root=selectors.root;
+  const selection=nativeSelection(selectors.root,selectors.storyPath,selectors.profileId,ports,retained);selection.root=selectors.root;
   const reviewed=reviewedNative(selectors,selection,retained,ports),profile=reviewed.profile;
   const protectedProfile={...profile,requirementsId:reviewed.requirementsId,promptPath:reviewed.promptPath,sourceRoot:reviewed.sourceRoot,approvalRef:reviewed.approvalRef,review:reviewed.review};
   let candidate={sourceId:'unknown',implementationId:'unknown',testsId:'unknown',requirementsId:'unknown'};

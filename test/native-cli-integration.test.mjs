@@ -117,3 +117,10 @@ test('original baseline intake shows a lost required ID despite matching current
   assert.equal(a.profileState,'incomplete');assert.equal(a.occurrenceCount,o.report.rows.length);assert.equal(a.comparison.state,'comparable');assert.deepEqual(a.comparison.lostIds,[f.b]);assert.deepEqual(a.comparison.changes,[{id:f.b,before:'passed',after:'missing'}]);
   assert.match(f.command('lint','native').stdout,/baseline comparable.*lost IDs.*required B/);
 });
+test('an absent current Story retains separately reviewed profile completion without current criterion support',async t=>{
+  const f=await nativeFixture(t),o=await originals(f);assert.equal(f.command('workflow','evidence','17','--summary',o.summaryFile).status,0);
+  rmSync(join(f.root,f.storyPath));
+  const status=await runStatus({ref:'17',cwd:f.root,json:true},f.ports);assert.equal(status.exitCode,0,status.message);
+  const a=JSON.parse(status.message).runs[0].nativeResults[0].assessment;
+  assert.equal(a.profileState,'complete');assert.equal(a.profileNativeProof,'qualified-external');assert.deepEqual(a.criteria,[]);assert.equal(a.storyNativeProof,'none');
+});
