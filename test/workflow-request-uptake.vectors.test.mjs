@@ -19,10 +19,40 @@ for(const v of vectors.cases.filter(v=>!v.id.startsWith('probe-I')))test(`2722 v
   for(const opts of viewOptions.filter(o=>!o.json))facts((await f.status(opts)).message,[entry.id]);break;
  }
  case 'joined-delivery-receipt':{
-  let release,entered;const start=new Promise(r=>entered=r),gate=new Promise(r=>release=r);let prompts=0;
-  const healthy=f.ports.herdr;f.ports.herdr=async a=>{if(a[0]==='agent'&&a[1]==='get'){entered();await gate;}if(a[0]==='agent'&&a[1]==='prompt')prompts++;return healthy(a);};
-  const first=f.change();await start;const second=f.change('Explain the chosen value',{...f.ports,herdr:async a=>{if(a[0]==='agent'&&a[1]==='get')await first;return healthy(a);}});await new Promise(r=>setTimeout(r,30));release();const results=await Promise.all([first,second]);
-  assert.equal(prompts,1);const saved=f.read()[0];for(const r of results){assert.equal(r.exitCode,0);facts(r.message,[saved.id,'delivered']);}break;
+  const acceptedId=v.given.joinedInvocationAcceptedId,prior=f.entry('previous-delivery',{text:'An earlier independent request'});
+  f.save([prior,f.entry(acceptedId,{state:'pending'})]);f.clock=v.given.deliveredChange.deliveredAt;f.ports.timeZone='UTC';
+  let release,entered,secondEntered,resolveEntered,resolveRelease;
+  const start=new Promise(r=>entered=r),gate=new Promise(r=>release=r),joined=new Promise(r=>secondEntered=r);
+  const resolving=new Promise(r=>resolveEntered=r),resolveGate=new Promise(r=>resolveRelease=r);
+  // The existing per-vector timeout also aborts this case. Unblock both parked
+  // callers immediately on cancellation, before the scratch fixture is removed.
+  const releaseGates=()=>{release();resolveRelease();};
+  t.signal.addEventListener('abort',releaseGates,{once:true});
+  t.after(()=>{t.signal.removeEventListener('abort',releaseGates);releaseGates();});
+  let prompts=0,joinedPrompts=0;const healthy=f.ports.herdr;
+  f.ports.herdr=async a=>{if(a[0]==='agent'&&a[1]==='get'){entered();await gate;}if(a[0]==='agent'&&a[1]==='prompt')prompts++;return healthy(a);};
+  const first=f.change();await start;
+  const second=f.change('Explain the chosen value',{...f.ports,
+   execFile:async(...args)=>{resolveEntered();await resolveGate;return f.ports.execFile(...args);},
+   herdr:async a=>{if(a[0]==='agent'&&a[1]==='get'){secondEntered();await first;}if(a[0]==='agent'&&a[1]==='prompt')joinedPrompts++;return healthy(a);}});
+  // Starting an invocation does not establish custody: slow Git resolution must
+  // finish and both callers must join the pending id before delivery is released.
+  await resolving;assert.equal(f.read().find(r=>r.id===acceptedId).state,'pending');assert.equal(prompts,0);
+  resolveRelease();await joined;release();const results=await Promise.all([first,second]);
+  assert.equal(prompts,1);assert.equal(joinedPrompts,e.sendCount);assert.equal(f.sent().length,1);
+  const saved=f.read();assert.equal(saved.length,2);assert.deepEqual(saved[0],prior);
+  assert.equal(saved[1].id,e.receiptId);assert.equal(saved[1].deliveredAt,e.receiptDeliveredAt);assert.equal(saved[1].state,'delivered');
+  const receipt=`Request ${e.receiptId}: delivered at Jan 1, 00:00; not yet acknowledged by the agent.`;
+  for(const r of results){assert.equal(r.exitCode,0);assert.equal(r.message.split('\n').at(-1),receipt);}
+  assert.ok(results[1].message.startsWith('Your request was already delivered'));
+  assert.equal(f.sent()[0][3].split('\n')[1],`Request ${e.receiptId}. After addressing it, record agent uptake with a short note:`);
+  // Acceptance after delivery is a fresh intent, even with identical text and
+  // tied clock values. Only this sequential call uses the fixed token port.
+  const freshId='later-independent-request';f.ports.deliveryToken=()=>freshId;
+  const later=await f.change();assert.equal(later.exitCode,0);assert.equal(f.sent().length,2);
+  assert.equal(later.message.split('\n').at(-1),`Request ${freshId}: delivered at Jan 1, 00:00; not yet acknowledged by the agent.`);
+  const after=f.read();assert.equal(after.length,3);assert.deepEqual(after.slice(0,2),saved);assert.equal(after[2].id,freshId);assert.notEqual(after[2].id,acceptedId);assert.equal(after[2].deliveredAt,e.receiptDeliveredAt);
+  assert.equal(f.sent()[1][3].split('\n')[1],`Request ${freshId}. After addressing it, record agent uptake with a short note:`);break;
  }
  case 'explicit-first-and-repeat':{
   f.save([f.entry(),f.orphan()]);const before=f.read(),run=JSON.stringify(f.record());f.ports.now=()=>2000;

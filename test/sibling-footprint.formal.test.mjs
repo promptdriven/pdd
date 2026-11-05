@@ -32,7 +32,8 @@ const scenario = (story, entry) => ({schema_version:'prompt-runtime.program-scen
   criteria:[{id:'AC1',text:'I can run the synthetic program.'}],initial_world:{},simulation:{},context:[],
   steps:[{step_id:'run',entry_path:entry,operation:'run',input:{},checks:[{criterion_id:'AC1',target:'result',path:'',op:'equals',value:{}}]}]});
 function fixture(t, refs = false) {
-  const root = fs.mkdtempSync(join(tmpdir(),'pdd-formal-sibling-'));
+  // The size/read port observes the same physical paths as source capture.
+  const root = fs.realpathSync(fs.mkdtempSync(join(tmpdir(),'pdd-formal-sibling-')));
   t.after(() => fs.rmSync(root,{recursive:true,force:true}));
   assert.equal(spawnSync('git',['init','-q'],{cwd:root}).status,0);
   for (const story of [A,B]) write(root,story,'# Synthetic Story\n\n## Acceptance criteria\n\n1. I can run the synthetic program.\n');

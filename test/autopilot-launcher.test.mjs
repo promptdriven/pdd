@@ -608,10 +608,24 @@ test('a forbidden permission lookup with remaining quota defers only that issue'
 
 test('Linux start warns about logout when lingering is not enabled; status detects missing Herdr', async t => {
   const f = await fixture(t); const run = f.ports.run;
+  f.ports.platform = 'linux';
   f.ports.run = async (cmd, args, opts) => cmd === 'loginctl' ? { code: 0, stdout: 'no\n', stderr: '' } : run(cmd, args, opts);
   const result = await f.invoke('start'); assert.equal(result.exitCode, 0); assert.match(result.message, /loginctl enable-linger/);
   f.serverRunning = false; const status = await f.invoke('status');
   assert.doesNotMatch(status.message, /Autopilot running/); assert.match(status.message, /Herdr/);
+});
+
+test('macOS start does not check Linux lingering or warn about loginctl', async t => {
+  const f = await fixture(t); const run = f.ports.run;
+  f.ports.platform = 'darwin';
+  let lingerChecks = 0;
+  f.ports.run = async (cmd, args, opts) => {
+    if (cmd === 'loginctl') { lingerChecks++; return { code: 0, stdout: 'no\n', stderr: '' }; }
+    return run(cmd, args, opts);
+  };
+  const result = await f.invoke('start');
+  assert.equal(result.exitCode, 0); assert.equal(lingerChecks, 0);
+  assert.doesNotMatch(result.message, /loginctl enable-linger/);
 });
 
 test('overlapping ticks cannot deliver twice from a snapshot read before lock acquisition', async t => {
