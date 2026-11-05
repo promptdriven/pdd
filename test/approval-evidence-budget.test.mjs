@@ -117,7 +117,7 @@ test('APPROVAL-BUDGET code PR creation and changed-source update preserve bounde
   const state = exactWords(f, words);
   const events = [], original = f.ports.execFile;
   f.ports.execFile = async (file, args, opts) => {
-    if (file === 'gh' && args[0] === 'pr' && args[1] === 'edit' && args[2] === f.prs[1].url) events.push({ kind: 'edit', body: opts.input });
+    if (file === 'gh' && args[0] === 'api' && args[2] === 'PATCH' && args[3].endsWith(`/pulls/${f.prs[1].number}`)) events.push({ kind: 'edit', body: JSON.parse(opts.input).body });
     if (file === 'git' && args[0] === 'push') events.push({ kind: 'push' });
     return original(file, args, opts);
   };

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 850a65b73b487286aac5583532063bb8f5cf52d89f2f9951403448002674da17).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: b74173bd0941c3feabdc41f3cc69b9d97950ee3250fa443cdadbdcae46ee3d69).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { execFile as execFileCallback } from 'node:child_process';
@@ -160,7 +160,7 @@ function protectProgress(run,p,{approval=false}={}) {
   p.inspectProgress=inspect;
   const exec=p.execFile,herdr=herdrCommand(p);
   p.execFile=async(file,args,options)=>{
-    if((file==='git'&&['add','commit','push','checkout','switch','branch'].includes(args[0])) || (file==='gh'&&args[0]==='pr'&&['create','edit'].includes(args[1])))inspect();
+    if((file==='git'&&['add','commit','push','checkout','switch','branch'].includes(args[0])) || (file==='gh'&&((args[0]==='pr'&&['create','edit'].includes(args[1])) || (args[0]==='api'&&args.includes('PATCH')))))inspect();
     return exec(file,args,options);
   };
   p.commandPorts={...p.commandPorts,execFile:p.execFile};
@@ -213,6 +213,7 @@ async function rawGit(p, root, ...args) {
 }
 async function changedFiles(run, p, strict = false) {
   try {
+    if (p.descriptionSource) return (await rawGit(p, run.root, 'diff', '--name-only', '-z', run.baseSha, p.descriptionSource.head)).split('\0').filter(Boolean);
     const tracked = (await rawGit(p, run.root, 'diff', '--name-only', '-z', run.baseSha)).split('\0');
     const untracked = (await rawGit(p, run.root, 'ls-files', '--others', '--exclude-standard', '-z')).split('\0');
     return [...new Set([...tracked, ...untracked].filter(Boolean))];
@@ -318,15 +319,15 @@ const statuses = text => interfaceBlocks(text).map(block => { try { return JSON.
 // The *.prompt.md files that a branch changes against its base and whose Runtime interface is still "draft".
 async function draftPrompts(run, p, branch, base) {
   try {
-    const files = (await git(p, run.root, 'diff', '--name-only', `refs/remotes/origin/${base}...${branch}`)).split('\n').filter(path => path.endsWith('.prompt.md'));
+    const files = (await git(p, run.root, 'diff', '--name-only', `refs/remotes/origin/${base}...${p.descriptionSource?.head ?? branch}`)).split('\n').filter(path => path.endsWith('.prompt.md'));
     const drafts = [];
     for (const path of files) {
       let text;
-      try { text = String((await p.execFile('git', ['show', `${branch}:${path}`], { cwd: run.root })).stdout ?? ''); } catch { continue; }
+      try { text = String((await p.execFile('git', ['show', `${p.descriptionSource?.head ?? branch}:${path}`], { cwd: run.root })).stdout ?? ''); } catch (error) { if (p.descriptionSource) throw error; continue; }
       if (statuses(text).includes('draft')) drafts.push(path);
     }
     return drafts;
-  } catch { return []; }
+  } catch (error) { if (p.descriptionSource) throw error; return []; }
 }
 const draftLine = drafts => `Draft prompts: ${drafts.join(', ')}. Approve them before you merge.`;
 // How the person approves PR 1's draft prompts before the code PR (0.1.6: pdd asked "Make the code PR now?" and then refused).
@@ -336,9 +337,19 @@ const approveFirst = (run, drafts) => `Approve this gate and its draft prompts (
 // What PR 1 holds, read from the worktree before pdd opens it (files the chat did not commit count, because pdd commits
 // them first): the changed prompts by Runtime interface status, the test files (prompt-runtime.program-scenario JSON)
 // and the number of Stories.
+async function descriptionSourceText(run, p, path) {
+  if (!p.descriptionSource) return readFileSync(join(run.root,path),'utf8');
+  const actual = readFileSync(join(p.descriptionSource.root,path));
+  const expected = await p.execFile('git',['show',`${p.descriptionSource.head}:${path}`],{cwd:run.root,encoding:'buffer'});
+  if (!actual.equals(Buffer.from(expected.stdout))) throw Error('The retained PR 1 source changed.');
+  return actual.toString('utf8');
+}
 async function worktreeContents(run, p) {
   const texts = new Map();
-  for (const path of await changedFiles(run, p)) { try { texts.set(path, readFileSync(join(run.root, path), 'utf8')); } catch { /* Deleted or not a file. */ } }
+  for (const path of await changedFiles(run, p)) { try { texts.set(path, await descriptionSourceText(run,p,path)); } catch (error) { if (p.descriptionSource) {
+    const exists = await p.execFile('git',['cat-file','-e',`${p.descriptionSource.head}:${path}`],{cwd:run.root}).then(() => true, () => false);
+    if (exists) throw error;
+  } } }
   const paths = [...texts.keys()], prompts = paths.filter(path => path.endsWith('.prompt.md')), status = path => statuses(texts.get(path));
   const drafts = prompts.filter(path => status(path).includes('draft')), approved = prompts.filter(path => !drafts.includes(path) && status(path).includes('approved'));
   return { drafts, approved, other: prompts.filter(path => !drafts.includes(path) && !approved.includes(path)),
@@ -903,7 +914,10 @@ async function matchingPromptApprovals(run, p) {
   const published = new Map();
   for (const path of await changedFiles(run, p, true)) {
     if (!path.endsWith('.prompt.md')) continue;
-    try { published.set(path, proseSha256(readFileSync(join(run.root, path), 'utf8'))); } catch { /* Deleted files have no current identity. */ }
+    try { published.set(path, proseSha256(await descriptionSourceText(run,p,path))); } catch (error) { if (p.descriptionSource) {
+      const exists = await p.execFile('git',['cat-file','-e',`${p.descriptionSource.head}:${path}`],{cwd:run.root}).then(() => true, () => false);
+      if (exists) throw error;
+    } }
   }
   return records.flatMap(record => {
     const prompts = record.prompts.filter(prompt => published.get(prompt.path) === prompt.proseSha256);
@@ -949,7 +963,7 @@ async function publicationEvidence(run, area, p) {
   }
   if (run.publicationPending) evidence.lines.unshift('Check evidence: publication-pending (source is being published).');
   // pdd's own pdd test and pdd lint results lead the body; the code PR's prove result is its Old-code proof line.
-  evidence.pddLines = resultLines(ownResults(run, p), { kinds: ['pdd test', 'pdd lint'] });
+  evidence.pddLines = p.descriptionSource ? [] : resultLines(ownResults(run, p), { kinds: ['pdd test', 'pdd lint'] });
   return evidence;
 }
 function evidenceFit(lines, room, env) {
@@ -1043,9 +1057,10 @@ function fullSummaries(steps, texts, size) {
 }
 function publicationRuntime(run, env, stage = 'current') {
   if (run.publicationPending) return [];
-  const fingerprint = gitFingerprint(run.root);
+  const sourceRoot = stage === 'pr1' && run.descriptionHistoricalRoot || run.root;
+  const fingerprint = sourceRoot === run.root ? gitFingerprint(run.root) : null;
   const records = [...(run.runtimeHistory ?? []), ...Object.values(run.done ?? {}), ...(run.evidence ?? [])]
-    .filter(record => runtimeLines(record.summary).length && eligibleEvidence(run,record,{stage,fingerprint})).sort((a,b) => (a.at ?? 0) - (b.at ?? 0));
+    .filter(record => runtimeLines(record.summary).length && eligibleEvidence(run,record,{stage,root:sourceRoot,fingerprint})).sort((a,b) => (a.at ?? 0) - (b.at ?? 0));
   const stories = new Map();
   for (const record of records) for (const line of runtimeLines(record.summary)) if (line.story) stories.set(line.story, { line, record });
   // Lines that an agent typed or pasted into a step summary stay agent notes; only a receipt that pdd workflow evidence checked is not.
@@ -1135,6 +1150,19 @@ function inventoryCommits(inventory) {
     : 'Test inventory commits: unavailable.';
 }
 
+// PATCH accepts a complete JSON body via stdin, avoiding gh pr edit's Projects query.
+async function patchDescription(run, pr, body, p) {
+  const match = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)\/?$/.exec(pr.url);
+  if (!match) throw Error('The recorded PR URL is invalid.');
+  await p.beforeDescriptionPatch?.();
+  const reply = await p.execFile('gh', ['api', '--method', 'PATCH', `repos/${match[1]}/${match[2]}/pulls/${match[3]}`, '--input', '-'],
+    {cwd:run.root, input:JSON.stringify({body})});
+  if (reply.code !== undefined && reply.code !== 0) throw Object.assign(Error('gh update failed'), {stderr:reply.stderr, code:reply.code});
+}
+const descriptionCause = error => (causeText(error?.stderr || error?.detail || error?.message) || 'gh update failed')
+  .replace(/(?:\/home|\/Users|\/tmp|\/private|\/var|\/opt|\/workspace)\/[^\s)]+/g, '<path>');
+const descriptionRetry = (run, pr) => `pdd workflow refresh-description ${run.number} ${String(pr.url).match(/\/pull\/(\d+)/)?.[1] ?? ''}`;
+
 // Commit leftovers, then push to the area's PR or open it. Returns a failure result, or null when the PR is there.
 async function publishAreaPr(run, area, p, lines, retry) {
   const label = prLabel(run, area), existing = prOf(run, area.name), title = oneLine(run.issue.title) || `Issue #${run.number}`;
@@ -1188,9 +1216,8 @@ async function publishAreaPr(run, area, p, lines, retry) {
   };
   const editReplay = async (body,afterPush=false,informational=false) => {
     try {
-      const reply=await p.execFile('gh',['pr','edit',existing.url,'--body-file','-'],{cwd:run.root,input:body});
-      if(reply.code !== undefined && reply.code !== 0) throw Object.assign(Error(reply.stderr||'gh pr edit failed'),{stderr:reply.stderr,code:reply.code});
-    } catch(error) {if(informational)return fail(causeOf(error));return fail([...lines,`The code-space PR description could not be updated (${causeOf(error)}). ${afterPush ? 'Source was pushed; the PR stays publication-pending.' : 'No source was pushed.'} ${retry}.`].join('\n'));}
+      await patchDescription(run, existing, body, p);
+    } catch(error) {if(informational)return fail(descriptionCause(error));return fail([...lines,`The code-space PR description could not be updated (${descriptionCause(error)}). ${afterPush ? 'Source was pushed; the PR stays publication-pending.' : 'No source was pushed.'} ${descriptionRetry(run, existing)}.${afterPush ? '' : ` To resume publication, ${retry}.`}`].join('\n'));}
     return null;
   };
   // Only an unchanged source and identical non-inventory body can be an
@@ -1231,7 +1258,7 @@ async function publishAreaPr(run, area, p, lines, retry) {
     const failed=await editReplay(finalBody,true,inventoryOnly);
     if (failed) {
       if (!inventoryOnly) return failed;
-      lines.push(`warning: The code PR still shows the previous inventory; its displayed commit pair identifies the older comparison. The new comparison is ${commitSha(run.testInventory.baseSha)&&commitSha(run.testInventory.headSha)?`${run.testInventory.baseSha.slice(0,7)} → ${run.testInventory.headSha.slice(0,7)}`:'unavailable'}. The current full report ${run.testInventory.saved ? 'was saved locally in test-inventory.json in the run folder' : 'was not saved locally'}. Inventory refresh failed (${failed.message}); ${retry}.`);
+      lines.push(`warning: The code PR still shows the previous inventory; its displayed commit pair identifies the older comparison. The new comparison is ${commitSha(run.testInventory.baseSha)&&commitSha(run.testInventory.headSha)?`${run.testInventory.baseSha.slice(0,7)} → ${run.testInventory.headSha.slice(0,7)}`:'unavailable'}. The current full report ${run.testInventory.saved ? 'was saved locally in test-inventory.json in the run folder' : 'was not saved locally'}. Inventory refresh failed (${failed.message}); ${descriptionRetry(run, existing)}.`);
     } else rememberPublication(existing);
     const applyPublication=publicationUpdate(run,codePr?['testInventory']:[]);
     if (!codePr) existing.publishedHeadSha=promptHead;
@@ -1602,11 +1629,81 @@ async function draftDescription(run, pr1, drafts, p) {
     const placed = section => { const text = section.join('\n'); return fitted.includes(SLOT) ? fitted.replace(SLOT, () => text) : `${fitted}\n\n${text}`; };
     const nextBody = from < 0 ? `${leading}${fitted}${footer}` : withSummaries(steps, texts, section => `${leading}${placed(section)}${footer}`, BODY_BUDGET);
     if (nextBody === body) return [];
-    const reply = await p.execFile('gh', ['pr', 'edit', pr1.url, '--body-file', '-'], { cwd: run.root, input: nextBody });
-    if (reply.code !== undefined && reply.code !== 0) throw Object.assign(Error('PR 1 description update failed.'), { code: reply.code });
+    await patchDescription(run, pr1, nextBody, p);
     return [`pdd updated the PR 1 description: ${drafts.length ? `draft prompts left: ${drafts.join(', ')}` : 'no draft prompts are left'}.`];
   } catch (error) {
-    if(error?.code==='workflow_progress_refused')throw error; return [`warning: pdd could not update the PR 1 description (${error.code ?? 'error'}). ${run.publicationPending ? 'No source was pushed.' : 'The PR retains its previous evidence; after a source push it stays publication-pending.'}`]; }
+    if(error?.code==='workflow_progress_refused')throw error; return [`warning: pdd could not update the PR 1 description (${descriptionCause(error)}). ${run.publicationPending ? 'No source was pushed.' : 'The PR retains its previous evidence; after a source push it stays publication-pending.'} ${descriptionRetry(run, pr1)}.`]; }
+}
+
+// Retry holds the run boundary and refuses unless evidence is bound to the public head.
+export async function retryPrDescription(args, ports = {}) {
+  return lockedMutation(args, ports, async ({ref, pr, cwd}, guarded) => {
+    const p = deps(guarded), found = await resolveRun(ref, {cwd}, p);
+    if (found.error) return fail(found.error);
+    const run = found.run, recorded = (run.pr ?? []).find(item => /\/pull\/(\d+)\/?$/.exec(item.url ?? '')?.[1] === String(pr));
+    if (!recorded) return fail('That PR is not recorded for this run.');
+    const retry = descriptionRetry(run, recorded), area = run.areas.find(item => item.name === recorded.stage), snapshot = JSON.stringify(run);
+    try {
+      if (!area) throw Error('The recorded PR area is unavailable.');
+      const readHead = async () => {
+        const response = await p.execFile('gh', ['pr', 'view', recorded.url, '--json', 'number,url,body,headRefOid,headRefName,baseRefName,isCrossRepository,headRepository,headRepositoryOwner'], {cwd:run.root});
+        if (response.code !== undefined && response.code !== 0) throw Object.assign(Error('PR read failed'), {stderr:response.stderr});
+        const value = JSON.parse(String(response.stdout ?? ''));
+        if (!Number.isSafeInteger(recorded.number) || recorded.number < 1 || recorded.url !== `https://github.com/${run.repo}/pull/${recorded.number}`
+          || typeof recorded.branch !== 'string' || !recorded.branch || typeof recorded.base !== 'string' || !recorded.base
+          || value.number !== recorded.number || value.url !== recorded.url || value.headRefName !== recorded.branch || value.baseRefName !== recorded.base
+          || value.isCrossRepository !== false || `${value.headRepositoryOwner?.login}/${value.headRepository?.name}`.toLowerCase() !== String(run.repo).toLowerCase()
+          || typeof value.body !== 'string' || value.body.split(`<!-- pdd-workflow:${run.runId}:${area.name} -->`).length !== 2 || value.body.replace(`<!-- pdd-workflow:${run.runId}:${area.name} -->`, '').includes('pdd-workflow:') || !commitSha(value.headRefOid)) throw Error('The owned public PR and head cannot be verified.');
+        return value;
+      };
+      const before = await readHead(), head = (await rawGit(p,run.root,'rev-parse','--verify','HEAD^{commit}')).trim();
+      const dirty = await rawGit(p,run.root,'status','--porcelain=v1','--untracked-files=all');
+      const historical = area.then === 'ask-code' && head !== before.headRefOid;
+      if (historical) {
+        if (Object.hasOwn(recorded, 'publishedHeadSha') && (!commitSha(recorded.publishedHeadSha) || recorded.publishedHeadSha !== before.headRefOid)) throw Error('The recorded PR 1 head does not match the public PR head.');
+        p.descriptionSource = {head:before.headRefOid, root:await retainPr1Source(run,before.headRefOid,p)};
+        run.descriptionHistoricalRoot = p.descriptionSource.root;
+        const through = run.areas.indexOf(area);
+        const steps = new Set(run.areas.slice(0,through + 1).flatMap(item => item.steps));
+        run.done = Object.fromEntries(Object.entries(run.done ?? {}).filter(([step]) => steps.has(step)));
+        run.runtimeHistory = (run.runtimeHistory ?? []).filter(record => steps.has(record.step));
+        run.evidence = (run.evidence ?? []).filter(record => record.association?.stage === 'pr1');
+      } else if (head !== before.headRefOid || dirty.trim()) throw Error('The working source does not match the public PR head.');
+      const current = await readHead();
+      if (current.headRefOid !== before.headRefOid || current.body !== before.body) throw Error('The public PR changed during refresh.');
+      p.beforeDescriptionPatch = async () => {
+        const latest = await readHead();
+        if (JSON.stringify(readRun(run.runDir)) !== snapshot) throw Error('The workflow changed during refresh.');
+        if (latest.headRefOid !== before.headRefOid || latest.body !== before.body || (await rawGit(p,run.root,'rev-parse','--verify','HEAD^{commit}')).trim() !== head || (!historical && (await rawGit(p,run.root,'status','--porcelain=v1','--untracked-files=all')).trim() !== dirty.trim())) throw Error('The public PR or working source changed during refresh.');
+      };
+      if (area.then === 'ask-code') {
+        const messages = await draftDescription(run, recorded, await pr1Drafts(run,p), p);
+        const warning = messages.find(line => line.startsWith('warning:'));
+        return warning ? fail(warning) : {exitCode:0,message:messages.join('\n') || 'The PR description is already current.'};
+      }
+      // Rebuild the comparison from the public head: a failed final PATCH can
+      // leave the saved inventory describing the previously published source.
+      const ref = `refs/remotes/origin/${run.baseBranch}`;
+      await rawGit(p,run.root,'fetch','origin',`refs/heads/${run.baseBranch}:${ref}`);
+      const fetched = (await rawGit(p,run.root,'rev-parse','--verify',`${ref}^{commit}`)).trim();
+      const baseSha = (await rawGit(p,run.root,'merge-base',head,fetched)).trim();
+      if (!commitSha(fetched) || !commitSha(baseSha)) throw Error('The current test inventory cannot be verified.');
+      const inventory = await collectTestInventory({cwd:run.root,baseSha,headSha:head},p.commandPorts);
+      if (!inventory.available) throw Error('The current test inventory cannot be verified.');
+      let saved = false;
+      try {
+        const report = JSON.parse(readFileSync(join(run.runDir,'test-inventory.json'),'utf8'));
+        saved = report.saved === true && report.baseSha === baseSha && report.headSha === head && report.text === inventory.text;
+      } catch { /* A missing report is represented in the body. */ }
+      run.testInventory = {text:inventory.text,baseSha,headSha:head,saved};
+      const evidence = await publicationEvidence(run,area,p);
+      if (area.replay_evidence === REPLAY_POLICY) run.replayEvidence = await currentReplayEvidence(run,p,true);
+      const body = prBody(run,area,p.env,[],true,evidence);
+      if (body.includes('pdd-workflow:')) throw Error('Remove supplied workflow ownership markers.');
+      await patchDescription(run,recorded,`${body}\n<!-- pdd-workflow:${run.runId}:${area.name} -->\n`,p);
+      return {exitCode:0,message:'The PR description was refreshed.'};
+    } catch (error) { return fail(`The PR description could not be refreshed (${descriptionCause(error)}). ${retry}.`); }
+  });
 }
 
 // A terminal in the run's own chat pane (Herdr session pdd) belongs to the chat; a person's other Herdr tab does not.

@@ -41,12 +41,12 @@ const remote=()=>{try{return cp.execFileSync('git',['ls-remote','origin','refs/h
 if(a[0]==='repo')out({nameWithOwner:'example/project',defaultBranchRef:{name:'main'},url:'https://github.com/example/project'});
 else if(a[1]==='list')out(s.prs.filter(p=>!a.includes('--head')||p.headRefName===flag('--head')));
 else if(a[1]==='view')out(s.prs.find(p=>p.url===a[2])||{body:''});
-else if(a[1]==='create'||a[1]==='edit'){
- if(flag('--body-file')!=='-')throw Error('must read body from stdin');
- const body=fs.readFileSync(0,'utf8'),kind=a[1];s.events.push({kind,body,remote:remote(),head:commit()});
+else if(a[1]==='create'||(a[0]==='api'&&a[2]==='PATCH')){
+ const patch=a[0]==='api'; if((patch?flag('--input'):flag('--body-file'))!=='-')throw Error('must read body from stdin');
+ const raw=fs.readFileSync(0,'utf8'),body=patch?JSON.parse(raw).body:raw,kind=patch?'edit':'create';s.events.push({kind,body,remote:remote(),head:commit()});
  if(kind==='edit'&&s.failEdit===s.events.filter(e=>e.kind==='edit').length){fs.writeFileSync(file,JSON.stringify(s));process.stderr.write('error: refused edit');process.exit(1)}
  if(kind==='create'){s.prs.push({number:23,url:'https://github.com/example/project/pull/23',state:'OPEN',headRefName:flag('--head'),baseRefName:flag('--base'),headRefOid:commit(),body,title:flag('--title'),headRepository:{name:'project'},headRepositoryOwner:{login:'example'},isCrossRepository:false,mergeCommit:null});out(s.prs.at(-1).url)}
- else{s.prs.find(p=>p.url===a[2]).body=body;out('updated')}
+ else{s.prs.find(p=>a[3].endsWith('/pulls/'+p.number)).body=body;out('updated')}
  fs.writeFileSync(file,JSON.stringify(s));
 }else throw Error('unexpected gh '+a.join(' '));
 `;
