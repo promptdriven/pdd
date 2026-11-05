@@ -33,5 +33,10 @@ cases do not claim Runtime coverage.
 - A rejected retry reports the safe one-line cause and the same executable retry
   command; it leaves publication-pending intact. A successful final update clears
   pending only when the existing final-body rules permit it.
+- A PR not recorded for the run refuses without changing the description,
+  publication-pending state or workflow progress.
+- When publication or the public head changes concurrently with retry, it does
+  not overwrite newer owned intent or progress or attach working-tree evidence
+  to a stale public head; a failed or refused update retains pending state.
 - Missing or extra operands and unsupported options are rejected by the real parser
   before the runner is invoked; help includes the description-only command.
