@@ -125,9 +125,12 @@ Keep claimed issues marked `claimed: true`, never present them as unclaimed.
 Use same-repository closing references in PR bodies to associate PRs with issues.
 Resolve trusted related PR metadata on change (state, draft, merge and head),
 including when a PR leaves the open list. Inspect reviews of related PRs for
-new reviews even when issue-list or PR metadata is unchanged. A new review from a trusted person is unseen work,
-including a request for changes; include its trusted identity and review text
-in the packet and fingerprint. An already delivered review must not wake the
+new reviews even when issue-list or PR metadata is unchanged, including HTTP
+304. Revalidate each review page and follow next-page links without truncation.
+A new submitted review from a trusted person, identified by PR number and
+review ID, is unseen work, including a request for changes; include its
+identity, trusted author, submission metadata, state and body in the packet
+and fingerprint. An already delivered review must not wake the
 agent again. Apply the existing quiet-baseline, current-authority, lookup-failure
 and pending-delivery rules to reviews as well. Never forward an untrusted
 review. Fetch PR discussion comments on changed
