@@ -480,8 +480,8 @@ function bindNativeRows(report,profile,selection,limits) {
   }
 }
 function nativeSourceAgreement(report,originals,candidate,association,checks,limits) {
-  const expected={...candidate,source_sha256:candidate.source_sha256??candidate.sourceId,stage:association.stage,runId:association.runId,producerRoot:association.producerRoot};
-  const identities=['sourceId','implementationId','testsId','requirementsId','source_sha256','stage','runId','producerRoot'];
+  const expected={...candidate,source_sha256:candidate.source_sha256??candidate.sourceId,stage:association.stage,runId:association.runId,producerRoot:association.producerRoot,repo:association.producerRoot};
+  const identities=['sourceId','implementationId','testsId','requirementsId','source_sha256','stage','runId','producerRoot','repo'];
   const records=[{reference:'parsed-report',value:report}];
   for(const original of originals.filter(row=>row.role!=='report')) {
     try{records.push({reference:`sha256:${original.sha256}`,value:JSON.parse(original.bytes.toString('utf8'))});}catch{}

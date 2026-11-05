@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {readFileSync,writeFileSync,rmSync} from 'node:fs';
 import {join} from 'node:path';
 import {nativeFixture,put,git} from './helpers/native-cli-fixture.mjs';
@@ -33,7 +34,7 @@ test('actual CLI preserves conflicting original source and capture identities wi
   const f=await originals(t);
   for(const [name,change] of [
     ...['sourceId','implementationId','testsId','requirementsId'].map(key=>[`report source ${key}`,report=>{report.source={...f.source,[key]:'foreign-original'};}]),
-    ...['sourceId','implementationId','testsId','requirementsId','source_sha256','stage','runId'].map(key=>[`report capture ${key}`,report=>{report.capture[key]='foreign-original';}])
+    ...['sourceId','implementationId','testsId','requirementsId','source_sha256','stage','runId','repo'].map(key=>[`report capture ${key}`,report=>{report.capture[key]='foreign-original';}])
   ]) {
     const report=structuredClone(f.report);change(report);f.save('report.json',report);
     const bytes=readFileSync(join(f.dir,'report.json'));f.importOriginals();
@@ -51,6 +52,12 @@ test('actual CLI preserves conflicting original source and capture identities wi
   }
   f.save('report.json',{...f.report,source:{sourceId:'unknown'}});f.importOriginals();
   assert.equal(f.judge().assessment.storyNativeProof,'qualified-external','Unobserved fields may be filled from checked originals');
+  for(const role of ['selection','execution']) {
+    const saved=JSON.parse(readFileSync(join(f.dir,role+'.json')));
+    f.save(role+'.json',{...saved,implementationId:'foreign-companion'});f.importOriginals();
+    assert.equal(f.judge().assessment.storyNativeProof,'none',`${role} cannot contradict canonical implementation identity`);
+    f.save(role+'.json',saved);
+  }
 });
 
 async function publishFixturePr1(f) {
@@ -106,16 +113,45 @@ test('actual CLI compares earlier candidate baseline at its canonical frozen PR 
   assert.equal(readFileSync(join(association.sourceAnchor.root,'source.mjs'),'utf8'),'export const value=1;\n');
   assert.equal(readFileSync(join(f.root,'source.mjs'),'utf8'),'export const value=2;\n');
   assert.equal(captureSource(association.sourceAnchor.root,{tests:f.tests}).sha256,f.source_sha256,'Canonical capture proves the historical bytes independently of current source');
+  const hashes=()=>Object.fromEntries(['import','source','selection','execution','report'].flatMap(name=>['','baseline/'].map(prefix=>{
+    const path=prefix+name+'.json';return [path,createHash('sha256').update(readFileSync(join(f.dir,path))).digest('hex')];
+  })));
+  const controlHashes=process.env.PDD_NATIVE_OLD_CLI?hashes():null;
+  if(controlHashes) {
+    const imported=f.commandAt(process.env.PDD_NATIVE_OLD_CLI,'workflow','evidence','17','--summary',f.summaryFile);
+    assert.equal(imported.status,0,imported.stdout+imported.stderr);
+    const old=f.commandAt(process.env.PDD_NATIVE_OLD_CLI,'lint','native','--json'),assessment=JSON.parse(old.stdout).native_assessments[0].assessment;
+    assert.equal(owner().state,'eligible');
+    assert.equal(assessment.identity.sourceId,source.sourceId);
+    assert.throws(()=>assert.equal(assessment.comparison.state,'comparable','EARLIER CANONICAL CANDIDATE BASELINE MUST REMAIN COMPARABLE'),{code:'ERR_ASSERTION'},'Old control must fail semantically after canonical admission');
+    assert.deepEqual(hashes(),controlHashes);
+    t.diagnostic(JSON.stringify({control:'old CLI on identical canonical fixture before repaired CLI replay',at:new Date().toISOString(),cli:process.env.PDD_NATIVE_OLD_CLI,owner:owner(),currentSource:source,historicalSource:f.source,hashes:controlHashes,oldExit:old.status,oldComparison:assessment.comparison}));
+  }
   f.importOriginals();const actual=f.judge();
   assert.equal(actual.assessment.profileState,'incomplete');assert.equal(actual.assessment.storyNativeProof,'none');
   assert.equal(actual.assessment.identity.sourceId,source.sourceId,'Current proof stays bound to current source');
   assert.equal(actual.assessment.comparison.state,'comparable','EARLIER CANONICAL CANDIDATE BASELINE MUST REMAIN COMPARABLE');
   assert.deepEqual(actual.assessment.comparison.lostIds,[f.b]);
   assert.deepEqual(actual.assessment.comparison.changes,[{id:f.b,before:'passed',after:'missing'}]);
+  if(controlHashes) {
+    assert.deepEqual(hashes(),controlHashes);
+    t.diagnostic(JSON.stringify({control:'repaired CLI on identical canonical fixture',at:new Date().toISOString(),hashes:hashes(),candidateIdentity:actual.assessment.identity,comparison:actual.assessment.comparison}));
+  }
   const checks=f.readRun().evidence.at(-1).native.checks.find(row=>row.check==='historical-baseline');
   assert.equal(checks.stage,'pr1');
   assert.equal(checks.checks.find(row=>row.check==='selected-native-source').sourceId,f.source.sourceId);
   assert.match(actual.assessment.limits.join('\n'),/Historical baseline \(pr1\)/);
+  const baselineReport=JSON.parse(readFileSync(join(f.dir,'baseline/report.json'))),baselineExecution=JSON.parse(readFileSync(join(f.dir,'baseline/execution.json')));
+  f.save('baseline/report.json',{...baselineReport,runnerVersion:'2'});
+  f.save('baseline/execution.json',{...baselineExecution,runnerVersion:'2'});
+  f.importOriginals();assert.deepEqual(f.judge().assessment.comparison,{state:'incomparable',reason:'scope-or-version',lostIds:[],changes:[]},'Historical admission cannot weaken runner-version compatibility');
+  f.save('baseline/report.json',baselineReport);f.save('baseline/execution.json',baselineExecution);
+  f.importOriginals();assert.deepEqual(f.judge().assessment.comparison.lostIds,[f.b]);
+  const baselineSource=JSON.parse(readFileSync(join(f.dir,'baseline/source.json')));
+  f.save('baseline/source.json',{...baselineSource,runId:'foreign-run'});f.importOriginals();
+  assert.equal(f.judge().assessment.comparison.state,'incomparable','A historical original cannot supply its own foreign ownership');
+  f.save('baseline/source.json',baselineSource);f.importOriginals();
+  assert.deepEqual(f.judge().assessment.comparison.lostIds,[f.b]);
   rmSync(join(association.sourceAnchor.root,'source.mjs'));
   const before=readFileSync(join(f.runDir,'status.json')),unavailable=f.judge().assessment;
   assert.equal(unavailable.comparison.state,'incomparable');

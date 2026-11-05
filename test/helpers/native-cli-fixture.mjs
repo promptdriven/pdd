@@ -38,6 +38,7 @@ export async function nativeFixture(t,{cli=process.env.PDD_NATIVE_CLI||join(pack
     const shown=await stepDone({step,summary:'Synthetic fixture review.',cwd:root},ports);assert.equal(shown.exitCode,0,shown.message);
   }
   const approved=await approveRun({ref:'17',said:'Approve synthetic fixture requirements for this local test.',cwd:root,packageRoot},ports);assert.equal(approved.exitCode,0,approved.message);
-  const command=(...args)=>spawnSync(process.execPath,[cli,...args],{cwd:root,env,encoding:'utf8',maxBuffer:8*1024*1024});
-  return {parent,root,home,env,ports,source,runDir,readRun,command,profile,prompt,storyPath,promptPath,testPath,a,b};
+  const commandAt=(entry,...args)=>spawnSync(process.execPath,[entry,...args],{cwd:root,env,encoding:'utf8',maxBuffer:8*1024*1024});
+  const command=(...args)=>commandAt(cli,...args);
+  return {parent,root,home,env,ports,source,runDir,readRun,command,commandAt,profile,prompt,storyPath,promptPath,testPath,a,b};
 }
