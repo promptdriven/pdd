@@ -167,7 +167,7 @@ function nativeReceipt(report) {
   if (report.complete !== true || !['selectionComplete','terminalSeen','processEnded'].every(key => report.capture[key] === true) || !known(report.capture.eventRef)) return 'partial';
   return 'accepted';
 }
-const executedPass = row => row.outcome === 'passed' && row.started === true && row.selected !== false;
+const executedPass = row => row.outcome === 'passed' && row.started === true && row.selected === true;
 function nativeComparison(current, baseline, intake) {
   const answer = {state:'absent',reason:'none',lostIds:[],changes:[]};
   if (!baseline) return answer;
