@@ -1,0 +1,54 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/authoring-orchestration.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "The example names each role's required context, exclusive writable files and durable handoff, while keeping governing instructions and unresolved evidence available."
+    },
+    {
+      "id": "AC2",
+      "text": "The example waits for a long check on its original batch and tells me when the coordinator resumes, without treating unchanged tool progress as a new decision."
+    },
+    {
+      "id": "AC3",
+      "text": "A delayed failure, repair and changed draft preserve the failed expectation and return to the required approval before further checking."
+    },
+    {
+      "id": "AC4",
+      "text": "Independent verification and a long external native process preserve coverage, process identity, progress, cancellation and unsuccessful or unknown outcomes."
+    }
+  ],
+  "cases": [
+    {
+      "id": "normal",
+      "given": "A fresh author finishes the three service drafts; CHECK remains running beyond 90 seconds then completes.",
+      "required_observation": "AC1, AC2: Inspect the supplied brief and owned paths, original batch and terminal result. No inherited transcript; required instructions/dependencies remain accessible. Tool progress alone does not create coordinator reasoning."
+    },
+    {
+      "id": "delayed-failure-repair",
+      "given": "The long CHECK reports expected Available, actual Reserved; an author changes the owning prompt.",
+      "required_observation": "AC3: Keep the failure and exact expectation. Repair receives the failed criterion and scope only with required context. Show changed drafts at their gate; never auto-approve or rewrite the expected value."
+    },
+    {
+      "id": "independent-check",
+      "given": "Drafts are approved and implementation is available for native verification.",
+      "required_observation": "AC4: A fresh eligible verifier calls the real boundary with approved cases and required regressions. A separate fresh reviewer receives governing rules and relevant contracts; neither is the author."
+    },
+    {
+      "id": "check-interruption",
+      "given": "The tool interrupts a running CHECK after its batch is saved.",
+      "required_observation": "AC2, AC4: Preserve batch and recovery command. Continue with the printed read once and long wait; retain original IDs and unknown/failed outcomes. Existing runCheck fake-engine test covers this CLI boundary only."
+    },
+    {
+      "id": "native-process",
+      "given": "A long authorized VM validation fails; a repaired rerun later passes.",
+      "required_observation": "AC4: Keep command/source/cwd, actual session or PID/start identity, stdout/stderr and exit receipt for both runs. Same required coverage. Use native runner completion control, never CHECK read as process supervision."
+    },
+    {
+      "id": "native-cancel-or-lost-receipt",
+      "given": "User cancellation or lost runner connection occurs during external validation.",
+      "required_observation": "AC1, AC4: Cancel only the owned runner identity and await its result when supported; absent receipt remains unknown. State notification/wait limits and count necessary status turns. Do not claim cancellation from a file or a Runtime scenario."
+    }
+  ]
+}
