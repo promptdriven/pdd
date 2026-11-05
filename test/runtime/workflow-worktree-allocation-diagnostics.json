@@ -1,0 +1,13 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/workflow-worktree-allocation-diagnostics.md",
+  "runtime_check": "NOT REPLAYED",
+  "reason": "The owner has no executable Runtime interface; execFile is injectable but native filesystem creation, writes, links, fsync, reads and identity, UUID generation and separate-process scheduling have no supplied bindings. A command fixture alone cannot drive the public boundary deterministically. No check-only API is proposed.",
+  "cases": [
+    {"name": "run creation or write/sync failure", "criterion_ids": ["AC1", "AC2"], "expected": "After intent creation, recovery_required and null assignment with attempted phase, safe available code or unavailable, preservation and no-repeat warning; no raw error text or path."},
+    {"name": "issue claim/sync failure", "criterion_ids": ["AC1", "AC2"], "expected": "Unconfirmed intent reports claim/sync and safe available code or unavailable, preserving intent and uncertainty."},
+    {"name": "add failure and reconciliation failure", "criterion_ids": ["AC1", "AC2"], "expected": "Recovery_required reports add and reconciliation evidence, including safe available codes or unavailable; no second add or deletion."},
+    {"name": "lost add reply with verified original identity", "criterion_ids": ["AC2"], "expected": "Ready with verified original assignment and no repeated add."},
+    {"name": "two distinct issues in separate processes", "criterion_ids": ["AC3"], "expected": "Both ready and isolated. On failure retain fixture and report its location, phase/error and bounded available resource and contention evidence; unavailable facts are unknown."}
+  ]
+}
