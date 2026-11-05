@@ -100,7 +100,7 @@ for (const kind of ['check', 'lint', 'try']) for (const reason of ['local slot',
     made.ports.env.PDD_MAX_JOBS = '1'; const directory = join(setup.state, 'slots', encodeURIComponent(new URL(fake.origin).host)); mkdirSync(directory, { recursive: true });
     writeFileSync(join(directory, 'busy.json'), JSON.stringify({ id: 'busy', state: 'active', pid: process.pid, kind: 'check', started_at: made.clock.now, request_ids: ['other'] }));
   } else fake.capacity = () => ({ status: 200, json: { maintenance: { until: new Date(made.clock.now + 600_000).toISOString(), reason: 'test window' } } });
-  made.ports.sleep = async ms => { made.clock.now += interrupted ? ms : kind === 'check' ? 60_000 : 90_000; if (interrupted) made.clock.interrupt(); };
+  made.ports.sleep = async ms => { made.clock.now += interrupted ? ms : kind === 'check' ? 60_000 : kind === 'try' ? 300_000 : 90_000; if (interrupted) made.clock.interrupt(); };
   const code = await (kind === 'try' ? startTry(setup, made.ports) : check(setup, made.ports, kind === 'lint' ? { '--lint': true } : { '--timeout': 1 }));
   assert.equal(code, interrupted && kind === 'check' ? 3 : 5); assert.equal(fake.posts.length, 0);
   const output = made.ports.stdout.text + made.ports.stderr.text; assert.match(output, new RegExp(reason)); assert.doesNotMatch(output, /after 0 lint attempts/);
@@ -118,18 +118,18 @@ function memorySlots(made, origin) {
   } };
 }
 
-test('lint-probe-deadline: Try dead-owner GET at 89950 is bounded by 50ms and no second GET or POST follows', async t => {
+test('lint-probe-deadline: Try dead-owner GET at 299950 is bounded by 50ms and no second GET or POST follows', async t => {
   const setup = harbor(t), fake = await fakeRuntime(t, () => { assert.fail('late lint posted'); }), made = make(setup, fake), start = made.clock.now;
   const mem = memorySlots(made, fake.origin); const realList = mem.files.listRecords; let moved = false, reads = 0, transportBound;
   for (const id of ['dead-a', 'dead-b']) mem.records.set(join(mem.directory, `${id}.json`), { id, state: 'active', pid: 99, kind: 'check', started_at: start, request_ids: [id] });
-  mem.files.listRecords = () => { if (!moved) { moved = true; made.clock.now = start + 89_950; } return realList(); };
+  mem.files.listRecords = () => { if (!moved) { moved = true; made.clock.now = start + 299_950; } return realList(); };
   made.ports.slotFiles = mem.files; made.ports.isAlive = pid => pid !== 99; made.ports.env.PDD_MAX_JOBS = '1';
   const schedule = globalThis.setTimeout;
   t.mock.method(globalThis, 'setTimeout', (fn, ms, ...args) => {
     if (ms !== 50) return schedule(fn, ms, ...args);
     transportBound = ms;
     const handle = schedule(() => {}, 30_000);
-    queueMicrotask(() => { made.clock.now = start + 90_000; fn(...args); });
+    queueMicrotask(() => { made.clock.now = start + 300_000; fn(...args); });
     return handle;
   });
   made.ports.fetch = async (url, init) => {
@@ -143,17 +143,17 @@ test('lint-probe-deadline: Try dead-owner GET at 89950 is bounded by 50ms and no
     return fetch(url, init);
   };
   assert.equal(await startTry(setup, made.ports), 5); assert.equal(reads, 1); assert.equal(transportBound, 50);
-  assert.equal(made.clock.now, start + 90_000); assert.equal(fake.posts.length, 0); assert.equal([...mem.records.values()].filter(row => row.state).length, 2);
+  assert.equal(made.clock.now, start + 300_000); assert.equal(fake.posts.length, 0); assert.equal([...mem.records.values()].filter(row => row.state).length, 2);
 });
 
-for (const interrupted of [false, true]) test(`lint-record-deadline: contended Try registration ends at 90000 (${interrupted ? 'interrupt' : 'deadline'})`, async t => {
+for (const interrupted of [false, true]) test(`lint-record-deadline: contended Try registration ends at 300000 (${interrupted ? 'interrupt' : 'deadline'})`, async t => {
   const setup = harbor(t), fake = await fakeRuntime(t, () => { assert.fail('registration posted'); }), made = make(setup, fake), start = made.clock.now;
   const mem = memorySlots(made, fake.origin), create = mem.files.exclusiveCreate; let claims = 0;
   mem.files.exclusiveCreate = (path, row) => path.endsWith('claim.json') && ++claims > 1 ? false : create(path, row);
   made.ports.env.PDD_MAX_JOBS = '4';
   made.ports.slotFiles = mem.files;
-  made.ports.sleep = async () => { made.clock.now = start + 90_000; if (interrupted) made.clock.interrupt(); };
-  assert.equal(await startTry(setup, made.ports), 5); assert.equal(made.clock.now, start + 90_000); assert.equal(fake.posts.length, 0);
+  made.ports.sleep = async () => { made.clock.now = start + 300_000; if (interrupted) made.clock.interrupt(); };
+  assert.equal(await startTry(setup, made.ports), 5); assert.equal(made.clock.now, start + 300_000); assert.equal(fake.posts.length, 0);
   assert.equal([...mem.records.values()].filter(row => row.state).length, 0);
   assert.doesNotMatch(made.ports.stdout.text + made.ports.stderr.text, /after 0 lint attempts/);
 });
@@ -246,7 +246,7 @@ for (const interrupted of [false, true]) test(`coalesced-probe-observer-deadline
   const transport = async (url, init) => {
     assert.equal(new URL(url).pathname, '/v1/runs/dead-paid'); reads++; probeSignal = init.signal;
     await new Promise(done => release = done);
-    madeA.clock.now = base + 90_000;
+    madeA.clock.now = base + 300_000;
     return Response.json(fake.check('dead-paid', 'running'));
   };
   for (const made of [madeA, madeB]) {
@@ -259,7 +259,7 @@ for (const interrupted of [false, true]) test(`coalesced-probe-observer-deadline
     clearInterval: timer => intervals.delete(timer),
   };
   const realList = mem.files.listRecords; let moved = false;
-  madeB.ports.slotFiles = { ...mem.files, listRecords: () => { if (!moved) { moved = true; madeB.clock.now = base + (interrupted ? 0 : 89_950); } return realList(); } };
+  madeB.ports.slotFiles = { ...mem.files, listRecords: () => { if (!moved) { moved = true; madeB.clock.now = base + (interrupted ? 0 : 299_950); } return realList(); } };
   const spin = async predicate => {
     let ended = false; const guard = setTimeout(() => ended = true, 30_000);
     try { while (!predicate() && !ended) await new Promise(done => setImmediate(done)); assert.equal(!!predicate(), true, 'observer causal boundary was not reached'); }
@@ -271,7 +271,7 @@ for (const interrupted of [false, true]) test(`coalesced-probe-observer-deadline
   try {
     await spin(() => observerTimer);
     if (interrupted) madeB.clock.interrupt();
-    else { assert.equal(observerTimer.ms, 50); madeB.clock.now = base + 90_000; observerTimer.fn(); }
+    else { assert.equal(observerTimer.ms, 50); madeB.clock.now = base + 300_000; observerTimer.fn(); }
     // A missing observer bound must fail a semantic causal assertion. The guard
     // releases transport only to allow cleanup; it is not a latency benchmark.
     let guard;
@@ -281,7 +281,7 @@ for (const interrupted of [false, true]) test(`coalesced-probe-observer-deadline
     assert.equal(await second, 5); assert.equal(reads, 1); assert.equal(fake.posts.length, 0);
     assert.deepEqual(mem.records.get(deadPath), paid); assert.equal(madeB.clock.uuids, 1);
     assert.equal(firstFinished, false); assert.equal(probeSignal.aborted, false); assert.equal(intervals.size, 0);
-  } finally { madeA.clock.now = madeB.clock.now = base + 90_000; release(); await Promise.all([first, second]); }
+  } finally { madeA.clock.now = madeB.clock.now = base + 300_000; release(); await Promise.all([first, second]); }
   assert.equal(firstFinished, true); assert.equal(secondFinished, true); assert.equal(reads, 1); assert.equal(fake.posts.length, 0);
   assert.deepEqual([...mem.records.values()].filter(row => row.state), [paid]);
 });
@@ -296,7 +296,7 @@ for (const kind of ['check', 'lint', 'try']) test(`cleared-maintenance-then-capa
   made = make(setup, fake); const base = made.clock.now; until = base + 7000;
   fake.capacity = () => { reads++; return { status: 200, json: { maintenance: made.clock.now < until ? { until: new Date(until).toISOString(), reason: 'brief window' } : null } }; };
   assert.equal(await (kind === 'try' ? startTry(setup, made.ports) : check(setup, made.ports, kind === 'lint' ? { '--lint': true } : { '--timeout': 1 })), 5);
-  assert.equal(made.clock.now, base + (kind === 'check' ? 60_000 : 90_000)); assert.equal(reads, 2); assert.equal(maintenanceCount(made.ports), 1);
+  assert.equal(made.clock.now, base + (kind === 'check' ? 60_000 : kind === 'try' ? 300_000 : 90_000)); assert.equal(reads, 2); assert.equal(maintenanceCount(made.ports), 1);
   assert.equal(fake.posts.length, 1); assert.equal(fake.gets.length, 0);
   const output = made.ports.stdout.text + made.ports.stderr.text;
   assert.match(output, /Your wait ended while pdd waited for server capacity\./);

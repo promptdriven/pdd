@@ -129,7 +129,7 @@ test('remote PR evidence is labelled and counts only exact leading Story ids', a
 test('shared evidence preserves partial compatible Stories and reports stale evidence separately', t => {
   const f = fixture(t); execFileSync('git', ['init', '-q'], { cwd: f.cwd }); execFileSync('git', ['add', '.'], { cwd: f.cwd });
   const sha256 = sourceFingerprint(f.cwd), source = { kind: 'git-content-v1', sha256 };
-  const run = { root: f.cwd, runtimeHistory: [
+  const run = { root: f.cwd, evidence: [
     { at: 1, source, summary: 'Runtime check (P01-menu): ✓\nRuntime check (P02-order): ✓' },
     { at: 2, source: { ...source, sha256: '0'.repeat(64) }, summary: 'Runtime check (P01-menu): ✗\nRuntime check (P03-ready): ✓' },
     { at: 3, source, summary: 'Runtime check (P02-order): ✗' },
@@ -296,7 +296,7 @@ for (const latestPass of [true, false]) {
       execFileSync('git', ['init', '-q'], { cwd });
       execFileSync('git', ['add', '.'], { cwd });
     }
-    const receipt = (cwd, at, pass) => ({ root: cwd, state: 'running', pr: [], runtimeHistory: [{
+    const receipt = (cwd, at, pass) => ({ root: cwd, state: 'running', pr: [], evidence: [{
       at, source: { kind: 'git-content-v1', sha256: sourceFingerprint(cwd) },
       summary: `Runtime check (P01-menu): ${pass ? '✓' : '✗'}`,
     }] });
@@ -313,7 +313,7 @@ for (const latestPass of [true, false]) {
     const phone = plan.split('\n').find(line => line.startsWith('| phone-1 |'));
     const barista = plan.split('\n').find(line => line.startsWith('| barista-1 |'));
     writeFileSync(planPath, plan.replace(phone, '__swap__').replace(barista, phone).replace('__swap__', barista));
-    f.state.runs[0].runtimeHistory[0].source.sha256 = sourceFingerprint(f.cwd);
+    f.state.runs[0].evidence[0].source.sha256 = sourceFingerprint(f.cwd);
     assert.deepEqual((await productStatus({ cwd: f.cwd }, f.ports)).parts[0], status.parts[0]);
   });
 }
