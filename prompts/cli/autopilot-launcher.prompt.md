@@ -197,6 +197,8 @@ count, time-based run termination or new refusal is introduced by the launcher.
 
 - [Agent configuration](agent-config.prompt.md): required native generation and
   verification context for existing configured launcher identities/environment.
+- [Area-chat delivery](workflow-chat.prompt.md#message-delivery): required authoring, native
+  generation and verification context for shared readiness and ordered submission.
 - [Workflow readiness](workflow-agents.prompt.md): required native generation
   and verification context for the shared agy readiness probe.
 - [Agent adapters](agent-adapters.prompt.md): required native generation and
