@@ -194,11 +194,49 @@ for (const mode of ['pending', 'owned', 'aborted']) test(`MCP native save preser
   }
 });
 
+test('MCP native save accepts a supplied state path under /tmp', async t => {
+  const { fixture, read, json } = await import('./helpers/runtime-workspace-fixture.mjs');
+  const { existsSync, mkdtempSync, rmSync } = await import('node:fs');
+  const { basename, join } = await import('node:path');
+  const { acquireCaseWriteOwnership } = await import('../src/runtime-client.mjs');
+  const f = fixture(t), temporary = mkdtempSync('/tmp/pdd-mcp-native-state-'), state = join('/tmp', basename(temporary));
+  t.after(() => rmSync(temporary, { recursive: true, force: true }));
+  const env = { ...f.env, PDD_STATE_DIR: state };
+  json(f.root, 'pdd-workspace.json', { allowed_paths: ['simulation/', 'tests/'] });
+  const original = read(f.root, f.second), owner = {
+    root: f.root, test: { path: f.second, storyPath: f.story, doc: f.doc },
+    record: { id: 'synthetic-session', origin: 'https://interpreter.example.invalid', login: 'owner' },
+    model: { entries: [{ entry_path: f.prompt, operation: 'order' }] },
+  };
+  const lease = await acquireCaseWriteOwnership({ root: f.root, testPath: f.second, handoff: { kind: 'closed-editor', testPath: f.second } }, { env });
+  try {
+    const stdin = new PassThrough(), stdout = new PassThrough(), stderr = new PassThrough();
+    let output = ''; stdout.on('data', data => output += data);
+    const promise = runMcp({ cwd: f.root, env }, {
+      stdin, stdout, stderr, writeOwnership: lease,
+      readTryOwner: async () => owner,
+      runDoorCall: async () => ({ id: 'native-action', result: 9, inputWorld: { count: 0 }, world: { count: 0 } }),
+    });
+    stdin.end([
+      request(1, 'tools/call', { name: 'try_run', arguments: { entry: `${f.prompt}#order`, input: {} } }),
+      request(2, 'tools/call', { name: 'try_save_case', arguments: {} }),
+    ].map(JSON.stringify).join('\n') + '\n');
+    assert.equal(await promise, 0);
+    const rows = output.trim().split('\n').map(line => JSON.parse(line));
+    assert.equal(rows.find(row => row.id === 1).result.structuredContent.run_id, 'native-action');
+    assert.ok(rows.find(row => row.id === 2).result.structuredContent);
+    assert.equal(existsSync(join(state, 'case-import')), true, 'MCP save must use the supplied /tmp state path');
+    assert.equal(existsSync(join(f.state, 'case-import')), false, 'MCP save must not fall back to the fixture state path');
+    assert.equal(existsSync(join(f.root, 'tests/order.try-native-action.json')), true);
+    assert.equal(read(f.root, f.second), original);
+  } finally { lease.release(); }
+});
+
 test('MCP native save refuses a symlink at the configured state directory', async t => {
   const { fixture, read, json } = await import('./helpers/runtime-workspace-fixture.mjs');
-  const { mkdirSync, readdirSync, symlinkSync } = await import('node:fs');
+  const { mkdirSync, readdirSync, realpathSync, symlinkSync } = await import('node:fs');
   const { join } = await import('node:path');
-  const f = fixture(t), target = join(f.parent, 'state-target'), configured = join(f.parent, 'state-link');
+  const f = fixture(t), parent = realpathSync(f.parent), target = join(parent, 'state-target'), configured = join(parent, 'state-link');
   mkdirSync(target); symlinkSync(target, configured);
   json(f.root, 'pdd-workspace.json', { allowed_paths: ['simulation/', 'tests/'] });
   const original = read(f.root, f.second), owner = {

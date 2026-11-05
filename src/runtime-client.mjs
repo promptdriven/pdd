@@ -3640,7 +3640,7 @@ export async function readTryOwner({ cwd = process.cwd(), story } = {}, givenPor
 
 // Local migration ports use the same private custody/publication boundary.
 export function runtimeWorkspaceMigrationStore({root,projectionRoot,env=process.env},given={}){
-  const p=casePorts({...given,env}),directory=stateDirectory(env,root),oldKey=p.hash(Buffer.from(projectionRoot)).slice(0,16);
+  const p=casePorts({...given,env}),directory=caseStateDirectory(env,root,p),oldKey=p.hash(Buffer.from(projectionRoot)).slice(0,16);
   const readJson=path=>JSON.parse(caseRead(p,path));
   const list=path=>{try{caseSafe(p,path,{directory:true});return p.files.list(path);}catch(e){if(e.code==='ENOENT'||!caseStat(p,path))return[];throw e;}};
   const destinationRepo=join(directory,'repos',p.hash(Buffer.from(root)).slice(0,16)+'.json');
