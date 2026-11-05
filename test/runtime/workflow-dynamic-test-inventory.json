@@ -264,6 +264,44 @@
       "model": "gpt-6.1-sol"
     },
     {
+      "step_id": "literal-loop-and-body-loop",
+      "entry_path": "prompts/cli/workflow-inventory.prompt.md",
+      "operation": "analyzeTestChanges",
+      "input": {
+        "files": [
+          {
+            "oldPath": "",
+            "newPath": "test/generated.test.mjs",
+            "before": "",
+            "after": "for (const row of [1,2]) {\n  test('repeated', () => {});\n}\ntest('healthy', () => {});\n"
+          },
+          {
+            "oldPath": "test/healthy.test.mjs",
+            "newPath": "test/healthy.test.mjs",
+            "before": "test('body', () => {\n  for (const row of [1,2]) {\n    assert.ok(row);\n  }\n});\n",
+            "after": "test('body', () => {\n  for (const row of [1,2]) {\n    assert.ok(row);\n  }\n});\n"
+          }
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "Tests vs base: \"test/generated.test.mjs\" unavailable (\"unknown dynamic test inventory\").\nTests vs base: \"test/healthy.test.mjs\" 1 → 1 tests. Removed: none.\nChanged assertions in kept tests: \"test/generated.test.mjs\" unavailable (\"unknown dynamic test inventory\").\nNew skips: \"test/generated.test.mjs\" unavailable (\"unknown dynamic test inventory\").\nStatic inventory only; this inventory did not run tests.\n"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/details",
+          "op": "equals",
+          "value": "Tests vs base: \"test/generated.test.mjs\" unavailable (\"unknown dynamic test inventory\").\nTests vs base: \"test/healthy.test.mjs\" 1 → 1 tests. Removed: none.\nChanged assertions in kept tests: \"test/generated.test.mjs\" unavailable (\"unknown dynamic test inventory\").\nNew skips: \"test/generated.test.mjs\" unavailable (\"unknown dynamic test inventory\").\nStatic inventory only; this inventory did not run tests.\n"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
       "step_id": "compact-unknown",
       "entry_path": "prompts/cli/workflow-inventory.prompt.md",
       "operation": "analyzeTestChanges",

@@ -28,7 +28,7 @@ Candidate JS/TS extensions are `.js`, `.mjs`, `.cjs`, `.jsx`, `.ts`, `.mts`, `.c
 
 Recognize line-leading JS `test(` or `it(`, optionally with `.only`, `.skip` or `.todo`, and `xit(` as a skipped test, whose first argument is a complete static single/double quoted name or a template name without interpolation on that line. Python recognizes `def test_NAME(` and `async def test_NAME(`; Go recognizes `func TestNAME(`. Ignore comment-only lines. This convention does not resolve aliases, computed names, parameterized/generated cases or declarations split across lines. It is an inventory of recognized declarations, not a semantic parser.
 
-A candidate JS/TS side is **unknown** when its non-comment source contains a line-leading `test`, `it` or `xit` call (including `.only`, `.skip`, `.todo` or `.each`) whose first name is not a complete static literal on that line; a line-leading `test.each` or `it.each` call; or an import binding that visibly aliases `test` or `it` and a line-leading call to that alias. Also treat a nonempty candidate JS/TS side with no recognized test declarations as unknown unless it contains only whitespace or comments. These are bounded textual signals, not a promise to detect every dynamic test. Do not execute source, evaluate expressions or load imports.
+A candidate JS/TS side is **unknown** when its non-comment source contains a line-leading `test`, `it` or `xit` call (including `.only`, `.skip`, `.todo` or `.each`) whose first name is not a complete static literal on that line; a line-leading `test.each` or `it.each` call; or an import binding that visibly aliases `test` or `it` and a line-leading call to that alias. Also treat as unknown a line-leading `for` or `while` statement with an opening `{` on that line and a line-leading test declaration inside its block, ending at a line containing `}` at the loop’s indentation. This signal applies even when the declaration has a static name. Ignore loops wholly inside a recognized test body under the body convention below; they do not alone make the file unknown. This bounded rule does not promise detection of other loop layouts. Also treat a nonempty candidate JS/TS side with no recognized test declarations as unknown unless it contains only whitespace or comments. These are bounded textual signals, not a promise to detect every dynamic test. Do not execute source, evaluate expressions or load imports.
 
 If either candidate side is unknown, the whole pair is unavailable in all three categories with the stable reason `unknown dynamic test inventory`, even when it also has recognized static cases. This takes precedence over recognized counts and comparison, including for additions, deletions and renames between candidate and noncandidate paths. A missing or noncandidate side is known zero; a truly empty or comment-only candidate side is known zero. Existing blob-unavailable reasons and whole-comparison limits take precedence over dynamic uncertainty. Other healthy pairs retain their evidence.
 
@@ -67,7 +67,7 @@ None. Runtime `snapshot.read` supplies the native injected snapshot callback. Th
 ```json
 {
   "status": "draft",
-  "prose_sha256": "61a3635178fe32b4ecc50eebb0f85c1cd3e772bae4ba0c28155ddbe37615573c",
+  "prose_sha256": "e522de9b31ae8f7beee17a0c3934e093e3ec633937badce30458c1614f934ab4",
   "entries": [
     {
       "operation": "analyzeTestChanges",
