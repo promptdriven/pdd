@@ -3158,7 +3158,7 @@ function caseStateDirectory(env,root,p){
   const configured=resolve(env.PDD_STATE_DIR||join(env.HOME||homedir(),'.pdd','runtime'));
   if(caseStat(p,configured)?.isSymbolicLink())throw Error('unsafe or missing local path');
   const missing=[];let current=configured,canonical;
-  for(;;){try{canonical=p.files.realpath(current);break;}catch(e){if(e.code!=='ENOENT')throw e;const parent=dirname(current);if(parent===current)throw e;missing.push(current.slice(parent.length+1));current=parent;}}
+  for(;;){try{canonical=p.files.realpath(current);break;}catch(e){if(e.code!=='ENOENT')throw e;const parent=dirname(current);if(parent===current)throw e;missing.push(basename(current));current=parent;}}
   const directory=join(canonical,...missing.reverse());
   if(inside(directory,p.files.realpath(root)))throw new Stop(2,'PDD_STATE_DIR is inside this repository. pdd keeps run state outside the repo. Choose another folder.');
   return directory;
@@ -3670,7 +3670,7 @@ export function runtimeWorkspaceMigrationStore({root,projectionRoot,env=process.
       if(caseStat(p,repoPath)){repo=readJson(repoPath);records.push({id:repoPath,kind:'repo',record:repo,raw:caseRead(p,repoPath)});}
       for(const batch of list(join(directory,'batches'))){if(!BATCH.test(batch))continue;const folder=join(directory,'batches',batch),path=join(folder,'batch.json');if(!caseStat(p,path))continue;const record=readJson(path);if(record.root!==projectionRoot)continue;records.push({id:path,kind:'batch',record,raw:caseRead(p,path),receipts:list(folder).filter(n=>UUID.test(n.replace(/\.json$/,''))).map(n=>({path:join(folder,n),raw:caseRead(p,join(folder,n))}))});}
       for(const id of new Set(Object.values(repo?.tries??{}).map(r=>r.id).filter(id=>UUID.test(id))))for(const suffix of ['.json','.door.json','.tests.json','.approvals.json']){const path=join(directory,'tries',id+suffix);if(caseStat(p,path))records.push({id:path,kind:'try',record:readJson(path),raw:caseRead(p,path)});}
-      const area=join(caseStateDirectory(env,root,p),'case-import');for(const name of list(area).filter(n=>/^[a-f0-9]{64}$/.test(n)))for(const file of list(join(area,name)).filter(n=>n.endsWith('.received.json'))){const path=join(area,name,file),record=readJson(path);if(record.identity?.root!==projectionRoot)continue;const journal=path.replace('.received.json','.transaction.json');records.push({id:path,kind:'case',record,raw:caseRead(p,path),transaction:caseStat(p,journal)?readJson(journal):null});}
+      const area=join(directory,'case-import');for(const name of list(area).filter(n=>/^[a-f0-9]{64}$/.test(n)))for(const file of list(join(area,name)).filter(n=>n.endsWith('.received.json'))){const path=join(area,name,file),record=readJson(path);if(record.identity?.root!==projectionRoot)continue;const journal=path.replace('.received.json','.transaction.json');records.push({id:path,kind:'case',record,raw:caseRead(p,path),transaction:caseStat(p,journal)?readJson(journal):null});}
       return records;
     },
     readMapping(id){
