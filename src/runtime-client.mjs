@@ -1943,7 +1943,7 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
   const context = { ports, cacheEnabled: cache || !!options['--lf'] || !!options['--cache-clear'], json: options['--json'] === true, details: options['--details'] === true, interrupted: false, warnings: [] };
   let release = () => {};
   try {
-    if (options['--lint'] === true && words.length && Object.keys(options).every(key => ['--lint','--local','--json','--timeout'].includes(key))) {
+    if (options['--lint'] === true && words.length && (options['--local']===undefined||options['--local']===true&&!Object.hasOwn(options,'--timeout')) && Object.keys(options).every(key => ['--lint','--local','--json','--timeout'].includes(key))) {
       const {root,found,normalized} = localSetup(cwd,words);
       const selection = selectTests(found,normalized,{native:true});
       if (selection.nativeSelections?.length) {
@@ -3452,7 +3452,10 @@ export function runtimeWorkspaceMigrationStore({root,projectionRoot,env=process.
       ||!Object.values(readJson(descriptor.repoState).tries??{}).some(row=>row.id===descriptor.sessionId))throw Error('original PDD-owned door identity is unavailable');
     const mapped=path=>{const target=mapping.get(path);if(!target)throw Error('door source has no exact destination mapping');return target;};
     const mapHashes=hashes=>Object.fromEntries(Object.entries(hashes??{}).map(([path,hash])=>[mapped(path),hash]));
-    const stem=join(directory,'tries',`${descriptor.sessionId}.authored-${p.hash(Buffer.from(root)).slice(0,16)}`),descriptorPath=stem+'.door.json',lastPath=stem+'.last.json';
+    // The launcher derives its last-result path from this directory and the
+    // original session ID. Give destination control files their own directory
+    // so a later command cannot overwrite the original producer's last bytes.
+    const stem=join(directory,'tries',`authored-${p.hash(Buffer.from(root)).slice(0,16)}`,descriptor.sessionId),descriptorPath=stem+'.door.json',lastPath=stem+'.last.json';
     const next={...descriptor,root,originalPath:mapped(descriptor.originalPath),storyPath:mapped(descriptor.storyPath),prompt:mapped(descriptor.prompt),promptHashes:mapHashes(descriptor.promptHashes),effectivePromptHashes:mapHashes(descriptor.effectivePromptHashes),repoState:destinationRepo,stateDir:directory,
       migration:{producerRoot:projectionRoot,originalDescriptor:pointer.descriptor,originalLast:pointer.last,readCommand:record.readCommand??null}};
     // This is a local destination descriptor. Original execution records and
@@ -3470,7 +3473,18 @@ export function runtimeWorkspaceMigrationStore({root,projectionRoot,env=process.
       const area=join(directory,'case-import');for(const name of list(area).filter(n=>/^[a-f0-9]{64}$/.test(n)))for(const file of list(join(area,name)).filter(n=>n.endsWith('.received.json'))){const path=join(area,name,file),record=readJson(path);if(record.identity?.root!==projectionRoot)continue;const journal=path.replace('.received.json','.transaction.json');records.push({id:path,kind:'case',record,raw:caseRead(p,path),transaction:caseStat(p,journal)?readJson(journal):null});}
       return records;
     },
-    readMapping(id){const folder=join(directory,'workspace-migrations',id);const records=list(folder).filter(n=>/^[a-f0-9]{64}\.json$/.test(n)).map(n=>readJson(join(folder,n)));return records.length?{...records[0],items:Object.assign({},...records.map(r=>r.items))}:null;},
+    readMapping(id){
+      const folder=join(directory,'workspace-migrations',id),records=list(folder).filter(n=>/^[a-f0-9]{64}\.json$/.test(n)).map(n=>readJson(join(folder,n)));
+      if(!records.length)return null;
+      const items=Object.assign({},...records.map(r=>r.items));
+      for(const item of Object.values(items))if(item.state==='applied'&&(item.kind==='repo'&&item.record.last_door||item.kind==='try'&&item.record.version===1&&item.record.originalPath)) {
+        try {
+          const pointer=readJson(destinationRepo).last_door,d=readJson(pointer.descriptor);caseRead(p,pointer.last);
+          if(d.root!==root||d.repoState!==destinationRepo||d.migration?.producerRoot!==projectionRoot)throw Error('destination door is unavailable');
+        }catch{item.state='prepared';}
+      }
+      return {...records[0],items};
+    },
     publishMapping(id,record){
       const itemId=record.activeItem,item=record.items[itemId],folder=join(directory,'workspace-migrations',id),path=join(folder,p.hash(Buffer.from(itemId))+'.json');
       // Each item has its own atomic record; another item's update cannot be lost.

@@ -10,7 +10,7 @@ import {captureSource} from '../src/runtime-preflight.mjs';
 import {associateEvidenceWorkspace,readEvidenceEligibility} from '../src/workflow-runner.mjs';
 import {writeRun} from '../src/workflow-runs.mjs';
 import {runtimeWorkspaceMigrationStore,runTry,saveDoorCase,acquireCaseWriteOwnership,applyPendingCase} from '../src/runtime-client.mjs';
-import {saveLast} from '../src/try-doors.mjs';
+import {saveLast,runShim} from '../src/try-doors.mjs';
 const hash=text=>createHash('sha256').update(text).digest('hex');
 async function migrationFixture(t){
  const f=fixture(t),old=fixture(t),workflowState=join(f.parent,'workflow-state');
@@ -46,7 +46,7 @@ test('public CLI registers native selected paths without Runtime JSON discovery'
 test('default migration store publishes a usable authored saveLast descriptor and preserves original recovery bytes',async t=>{
  const f=await migrationFixture(t),id=f.record.tries[f.test].id,descriptor=join(f.state,'tries',id+'.door.json'),last=join(f.state,'tries',id+'.last.json');
  const d={version:1,root:f.old.root,sessionId:id,login:'owner',origin:'https://interpreter.example.invalid',originalPath:f.test,storyPath:f.story,prompt:f.prompt,operation:'order',criterion:'AC1',criteria:f.doc.criteria,
-  promptHashes:{[f.prompt]:hash(read(f.old.root,f.prompt))},promptHash:hash(read(f.old.root,f.prompt)),storyHash:hash(read(f.old.root,f.story)),stateDir:f.state,repoState:join(f.state,'repos',hash(f.old.root).slice(0,16)+'.json')};
+  inputSchema:{type:'object',properties:{argv:{type:'array'}},required:[]},promptHashes:{[f.prompt]:hash(read(f.old.root,f.prompt))},promptHash:hash(read(f.old.root,f.prompt)),storyHash:hash(read(f.old.root,f.story)),stateDir:f.state,repoState:join(f.state,'repos',hash(f.old.root).slice(0,16)+'.json')};
  json(f.state,'tries/'+id+'.door.json',d);json(f.state,'tries/'+id+'.last.json',{state:'confirmed',id:'22222222-2222-4222-8222-222222222222',input:{},result:7,inputWorld:{count:0}});
  f.record.last_door={descriptor,last};json(f.state,'repos/'+hash(f.old.root).slice(0,16)+'.json',f.record);
  const before=[fs.readFileSync(descriptor),fs.readFileSync(last),read(f.state,'repos/'+hash(f.old.root).slice(0,16)+'.json')];
@@ -55,12 +55,15 @@ test('default migration store publishes a usable authored saveLast descriptor an
  assert.equal(applied.state,'applied',JSON.stringify(applied));
  assert.equal((await migrateRuntimeWorkspace({...f.input,write:true},f.ports)).state,'applied');
  const target=join(f.state,'repos',hash(f.root).slice(0,16)+'.json'),repo=JSON.parse(fs.readFileSync(target)),pointer=repo.last_door,mapped=JSON.parse(fs.readFileSync(pointer.descriptor));
+ fs.rmSync(pointer.descriptor);assert.equal((await migrateRuntimeWorkspace({...f.input,write:true},f.ports)).state,'applied');assert.ok(fs.existsSync(pointer.descriptor));
  assert.equal(mapped.root,f.root);assert.equal(mapped.originalPath,f.test);assert.equal(mapped.repoState,target);assert.equal(mapped.migration.producerRoot,f.old.root);assert.notEqual(pointer.descriptor,descriptor);assert.notEqual(pointer.last,last);
  let output='';const store={repo:()=>JSON.parse(fs.readFileSync(target))};
  const save=()=>saveLast({root:f.root,store,identity:{login:'owner'},ports:{env:f.env,stdout:{write:s=>{output+=s;}},caseHandoff:async({testPath})=>closed(testPath)}});
  const code=await runTry({cwd:f.root,options:{'--save-last':true}},{env:f.env,gh:args=>({status:0,stdout:args[0]==='auth'?'SYNTHETIC-NOT-A-CREDENTIAL':'owner 1'}),stdout:{write:s=>{output+=s;}},stderr:{write:s=>{output+=s;}},caseHandoff:async({testPath})=>closed(testPath)});
  assert.equal(code,0,output);assert.match(output,/added/i);assert.equal(JSON.parse(read(f.root,f.test)).steps.filter(row=>row.step_id.startsWith('try-')).length,1);
  assert.equal(await save(),0);assert.equal(JSON.parse(read(f.root,f.test)).steps.filter(row=>row.step_id.startsWith('try-')).length,1);
+ const shimCode=await runShim(pointer.descriptor,[],{env:f.env,stdin:{isTTY:true},stdout:{write(){}},stderr:{write(){}},gh:()=>({status:1,stdout:''}),fetch:()=>assert.fail('no hosted launcher request')});assert.equal(shimCode,125);
+ assert.equal(JSON.parse(fs.readFileSync(pointer.last)).state,'unknown');
  assert.deepEqual(fs.readFileSync(descriptor),before[0]);assert.deepEqual(fs.readFileSync(last),before[1]);assert.equal(read(f.state,'repos/'+hash(f.old.root).slice(0,16)+'.json'),before[2]);
 });
 
