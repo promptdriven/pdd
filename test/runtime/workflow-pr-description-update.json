@@ -115,6 +115,13 @@
           "path": "/cause",
           "op": "equals",
           "value": ""
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/workflow-github-process-execFile",
+          "op": "equals",
+          "value": 1
         }
       ],
       "model": "gpt-6.1-sol"
@@ -143,6 +150,13 @@
           "path": "/cause",
           "op": "equals",
           "value": ""
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/workflow-github-process-execFile",
+          "op": "equals",
+          "value": 1
         }
       ],
       "model": "gpt-6.1-sol"
@@ -171,6 +185,13 @@
           "path": "/cause",
           "op": "equals",
           "value": "GraphQL: Projects (classic) is deprecated"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/workflow-github-process-execFile",
+          "op": "equals",
+          "value": 1
         }
       ],
       "model": "gpt-6.1-sol"
