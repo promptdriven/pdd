@@ -140,6 +140,7 @@ test('2949 approval retains full notice and saved custody when the next chat lau
   assert.match(result.message, /startup was not confirmed/);
   assert.match(result.message, /warning: Request/);
   finalNotice(result.message, notice);
+  assert.ok(result.message.includes(`${notice.text}\nwarning: Last delivery reason: ${notice.reason}.`), 'approval retains the raw notice before its warning-prefixed delivery reason');
   assert.equal(f.record().areas[f.record().area].name, 'code');
   assert.deepEqual(readFileSync(join(f.record().runDir, 'delivery-journal.json')), before);
 });

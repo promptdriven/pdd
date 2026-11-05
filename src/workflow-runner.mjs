@@ -1925,7 +1925,7 @@ ${approvalGuide(run)}`, p, true);
   });
   approvalRecorded();
   const next = run.areas[run.area];
-  const finalNotices = requestSnapshot(run, p).pendingRequests?.filter(entry => entry.kind === 'notice' && entry.area === area.name && entry.area !== next.name).map(entry => `warning: ${finalNotice(entry)}`) ?? [];
+  const finalNotices = requestSnapshot(run, p).pendingRequests?.filter(entry => entry.kind === 'notice' && entry.area === area.name && entry.area !== next.name).map(entry => finalNotice(entry, false, 'warning: ')) ?? [];
   let chat;
   try { chat = await startNextChat(run, p, packageRoot); }
   catch (error) {
@@ -2019,7 +2019,7 @@ function requestSnapshot(run, p) {
   } catch { return { requests: null, inFlightRequests: null, pendingRequests: null, uncertainRequests: null, requestWarning: 'Change-request visibility unavailable: could not read the delivery journal. Check the run folder.' }; }
 }
 const protectedRequestAdvice = entry => `Request ${entry.id}: ${shownText(entry)}. Original area ${entry.area}, pane ${entry.paneId}. Wait for the current send to finish before checking the original chat or typing anything. If it remains stuck after waiting, pdd will not automatically clear or resend protected ownership. First verify the original chat before manually supplying anything absent.`;
-const finalNotice = (entry, ended = false) => `Request ${entry.id}: pdd notice was not sent and later changes will not send it.${ended ? " The run ended." : ""} Original ${entry.area} chat, pane ${entry.paneId}:\n${entry.text}\nLast delivery reason: ${entry.reason ?? "unknown"}.`;
+const finalNotice = (entry, ended = false, framingPrefix = '') => `${framingPrefix}Request ${entry.id}: pdd notice was not sent and later changes will not send it.${ended ? " The run ended." : ""} Original ${entry.area} chat, pane ${entry.paneId}:\n${entry.text}\n${framingPrefix}Last delivery reason: ${entry.reason ?? "unknown"}.`;
 function requestLines(snapshot, { openOnly = false, agent = false, ended = false, currentArea, p = {} } = {}) {
   if (snapshot.requestWarning) return [snapshot.requestWarning];
   return [...snapshot.requests.filter(entry => (!ended || !openOnly) && (!openOnly || entry.ackedAt == null)).map(entry =>
