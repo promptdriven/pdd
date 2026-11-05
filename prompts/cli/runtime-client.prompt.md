@@ -171,6 +171,50 @@ Order:
 
 Use one long shell call for ordinary Check and saved-batch read: the tool's longest timeout or a background task with an exit notification (Claude Code: `run_in_background`; Codex: a long `timeout_ms`). If the tool stops pdd, run the printed recovery read once to keep waiting. Never poll every minute. Final output remains owned by [runtime output](runtime-output.prompt.md), including its table, per-Story summary, reports, coverage, failures and single JSON document.
 
+## Selected compatibility consumption
+
+Use [selected compatibility](runtime-outcome.prompt.md#selected-compatibility)
+for the existing selected lint gate in `runCheck` and `runTry`. Supply its new
+`sourceFiles` context from native SHA-256 of the exact immutable capture's
+`sources[].bytes` under the uploaded paths. Forward the same context through
+`projectAnswer`; no new source crawl, endpoint, include, fixture fact or upload
+is authorized. Keep the archive hash, scenario hash and interpreter closure hash
+separate. Recovered lint evidence must still match the saved archive and current
+saved-source guards before its selected compatibility can authorize dispatch;
+unavailable reconstruction holds that test without fresh paid work.
+
+Standalone `pdd lint` text and JSON show each selected root/test, all reported
+operations and edges with exact selection and effective modes, safe source
+location, server verdict/reason, report source/build/capability identity,
+association and selected completeness. Preserve inventory diagnostics and the
+envelope coverage flag separately. Show unknown instead of an empty ready list.
+The selected outcome owns admission and exit; display cannot override it.
+
+Advice is visibly `client_advice:{owner,next_step}`, never a server fact. For `binding-missing`,
+name the application/binding author and advise supplying the actual binding.
+For `source-mismatch` or `source-admission-refused`, name the source/prompt author
+and advise repairing the reported source/admission problem. For retained
+attachment/mutation or mode refusal, name the interpreter owner and advise
+reviewing the unsupported capability/mode. For `engine-build-unknown`, name the
+interpreter deployment owner and advise identifying the executing build.
+For `analysis-unavailable`, `requirement-uninspectable`, conflicting/missing
+reports or unavailable association, owner is unresolved; advise source and
+interpreter review without guessed blame. Client association mismatch advises
+reviewing captured source and interpreter deployment identity. Supported rows
+need no repair advice; state that behavioral execution remains required.
+Preserve the server's closed code as-is; client issues use their own field.
+
+Use the shared output cleaning for every string. No token, host path, arbitrary
+fixture body or raw exception can enter compatibility text/JSON. Report
+configured build association separately from installed-engine, host/profile and
+physical-observation proof, which this wire contract does not supply. Keep those
+unknown/unproved; do not infer logical phases from physical call totals, effects
+from acceptance, or missing fixture facts from expected values. Report counts
+of zero capability provider/resource calls as preflight facts only; they never
+replace submitted-job accounting. This view makes no new approval or behavioral
+evidence record. Preserve auth, ownership, capacity, saved-read intent,
+continuation, identity, uncertain-job recovery and dispatch-claim guards.
+
 ## Check admission and confirmed capacity recovery
 
 A terminal same-ID `check` refusal is busy, not a test problem, when it is a queue/capacity/server-full refusal and proves no execution: `usage.calls` is exactly0, no check was evaluated, accounting is not incomplete, and the report says `dispatch:"not_started"` (the known check-queue-timeout contract also guarantees that signal). An explicitly unknown job or lost/wrong-ID response never qualifies. Read raw `result.report.refusal` as well as `result.refusals`; keep every ID and raw answer, including direct admission receipts and the absolute retry-after deadline. Direct check-queue-full/server-full backpressure also needs authoritative not-started admission. Do not retry invalid-source refusals or any request with executed checks, positive/unknown calls, or incomplete accounting.
@@ -553,8 +597,8 @@ each sends the tests that pass and holds back the others:
 | unknown (the lint has not ended) | `not_run`, held for the saved-lint continuation | `The lint result is unknown, so pdd sent no checks.` | 3 |
 
 A job refusal refuses only the tests that have no verdict of their own; a test with
-its own passing verdict is sent. An incomplete lint holds back only the tests
-without their own pass. Unsent checks keep zero calls. The send line keeps
+its own passing verdict and admitting selected compatibility is sent. An
+incomplete lint holds back tests without their own admitting evidence. Unsent checks keep zero calls. The send line keeps
 `Lint passed.` only when every test passed; otherwise it says
 `Lint refused R of N tests.` and/or `Lint gave no verdict for U of N tests.` before
 `Sent K checks …`, and with no refused and no sent test there is no send line.
