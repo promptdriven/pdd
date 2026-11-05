@@ -1,0 +1,144 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "status": "draft expectations; not executed",
+  "boundaries": [
+    "src/runtime-outcome.mjs:outcomeFor",
+    "src/runtime-output.mjs:projectAnswer",
+    "src/runtime-client.mjs:runCheck",
+    "src/runtime-client.mjs:runTry"
+  ],
+  "fixture_setup": {
+    "repository": "Use test/runtime-fake.mjs harbor with tests/place-order.json and its actual source capture; synthetic identities only. Add storyTest(repo, second) only in mixed-scope cases.",
+    "wire": "Use existing fakeRuntime POST/GET spies and fake.lint per-test/program admission. Attach complete v1 reports under result.capabilities and/or the legacy report.lint.tests entry as each case states. Echo the actual request IDs and lint command; default confirmed engine_sha is the build in report_template. Never accept a fixture as proof of live engine behavior.",
+    "source": "Construct each fake report source natively from exact captured effective sources: hash the selected scenario bytes and each selected returned file. Keep the server closure digest opaque: use the fixed synthetic 64-hex value below. This fixture is not a parser/projection proof. Compare actual uploaded archive bytes to capture; never take source data from an expected output or hash archive bytes as a closure.",
+    "synthetic_closure_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "report_template_without_source": {
+      "schema_version": "prompt-runtime.program-capabilities.v1",
+      "capability_version": "program-capabilities.v1@eae2202a68d00ab762fcbbf1eba0d8607a132a15",
+      "engine_build": "eae2202a68d00ab762fcbbf1eba0d8607a132a15",
+      "complete": true,
+      "verdict": "supported",
+      "operations": [
+        {
+          "selection": {
+            "step_id": "place",
+            "node_id": "place_order",
+            "prompt_path": "prompts/place_order.prompt.md",
+            "operation": "place_order"
+          },
+          "feature": "ordinary",
+          "binding_kind": "none",
+          "resource_mode": "simulated",
+          "evaluator_mode": "default",
+          "execution_mode": "ordinary",
+          "verdict": "supported",
+          "reason_code": "supported"
+        }
+      ],
+      "edges": [],
+      "diagnostics": [],
+      "provider_calls": 0,
+      "resource_calls": 0
+    },
+    "mutations": "Each named replacement below changes fake transport input before the real public function runs. It is not a final classification argument. Supply sourceFiles only from actual captured bytes for native pure calls. Unknown build/version reports use aggregate and all row verdicts unknown with reason engine-build-unknown. Incomplete ordinary reports use unknown/analysis-unavailable rows. source:null is complete:false with unknown analysis; keep concrete mode/binding/source blockers only when the delivered contract permits them. Deliberately malformed/conflicting report cases are the named exceptions; never accidentally present an inconsistent report as a valid server state.",
+    "effects": "Snapshot approval files and behavioral evidence records before each command. Observe actual requests, streams, current/saved source and state; no model, resource or live service is used."
+  },
+  "story_path": "user_stories/selected-runtime-compatibility.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "`pdd lint place-order` shows the selected Story and test, each operation and edge, its source location, exact server verdict and reason, and labelled client owner advice, without model work or product resource effects."
+    },
+    {
+      "id": "AC2",
+      "text": "The view keeps supported, unsupported-capability, missing-binding, invalid-source and unknown distinct, and keeps two edges to the same target and repeated steps separate."
+    },
+    {
+      "id": "AC3",
+      "text": "The view associates the report with the captured scenario and effective file bytes, the confirmed job build and its capability version; a known disagreement is unknown compatibility with a visible client association problem."
+    },
+    {
+      "id": "AC4",
+      "text": "An absent, malformed, conflicting or incomplete selected report never looks ready; a concrete reported blocker remains visible when coverage is incomplete."
+    },
+    {
+      "id": "AC5",
+      "text": "Unrelated inventory problems and incomplete reports for other tests stay visible without changing an independently admitted selected test."
+    },
+    {
+      "id": "AC6",
+      "text": "Configured build metadata does not prove the installed engine, a host profile, physical observations or business behavior; absent evidence stays unknown or unproved, and no missing fixture fact is filled from an expected result."
+    },
+    {
+      "id": "AC7",
+      "text": "Text and JSON keep the same selected facts and remove tokens, host paths and unsafe text; preflight zero-call facts never replace unknown paid-job usage."
+    }
+  ],
+  "cases": [
+    {
+      "id": "supported-top-and-legacy",
+      "criterion_ids": [
+        "AC1",
+        "AC3"
+      ],
+      "given": "Complete own passed lint; matching captured source/build; deliver once with top-level capabilities and once legacy-only. Call outcomeFor and projectAnswer with actual sourceFiles, then runCheck lint text and JSON.",
+      "required_observation": "All views retain reported supported and association matched; lint exit 0; selected path, operation, modes, scenario/files/closure hashes, build and capability version agree. Label owner/next step as client advice. Exactly one lint POST, zero check/Try POSTs, zero product effects."
+    },
+    {
+      "id": "five-authoritative-states",
+      "criterion_ids": [
+        "AC2"
+      ],
+      "given": "Five independent terminal answers: supported/supported ordinary operation; unsupported-capability/retained-mutation-unsupported retained-mutation operation; missing-binding/binding-missing resource edge with binding_kind missing; invalid-source/source-admission-refused operation; unknown/requirement-uninspectable uninspectable operation. Keep source/build matching.",
+      "required_observation": "Each exact verdict/reason survives. Blockers exit 4; terminal unknown exits 5. The missing binding is an edge with full resource_operation identity, not an operation with binding_kind missing. Do not infer these features from prose."
+    },
+    {
+      "id": "edge-and-step-identity",
+      "criterion_ids": [
+        "AC2"
+      ],
+      "given": "Add two internal edges with distinct edge_id and call_operation to the same declared target operation, with binding_kind internal; repeat the two operations and both edges in a second authored step with a different effective resource mode. Keep the report complete and identities unique.",
+      "required_observation": "The view keeps all operation and edge rows in server order; neither common target nor shared node name collapses distinct step/edge identities. Keep target path/operation and each effective mode."
+    },
+    {
+      "id": "source-build-association",
+      "criterion_ids": [
+        "AC3"
+      ],
+      "given": "From matching input, separately change one scenario byte, one returned effective file digest, report engine_build versus answer.engine_sha, capability version versus its full build, remove sourceFiles, remove source, and use literal unknown build/version. Do not modify expected values.",
+      "required_observation": "Each known disagreement gives client association mismatch and state unknown, without rewriting reported verdict or inventing a server reason. Missing association facts give unknown. Complete known source/build match remains matched; archive and closure digests are never compared."
+    },
+    {
+      "id": "unavailable-selected-coverage",
+      "criterion_ids": [
+        "AC4"
+      ],
+      "given": "Separately omit capabilities, supply unknown schema, conflicting top/legacy reports, duplicate operation identity, complete:false with unknown analysis-unavailable rows, and incomplete report retaining an unsupported-capability/runtime-mode-unsupported blocker.",
+      "required_observation": "First five unavailable/incomplete cases never display ready and end not_run/5. The incomplete concrete blocker remains reported and refused/4; selected completeness false stays visible. No empty-list inference of support."
+    },
+    {
+      "id": "selected-versus-inventory",
+      "criterion_ids": [
+        "AC5"
+      ],
+      "given": "Own supported complete report and normal own lint pass; global lint/capabilities_complete false for second test; unrelated refused prompt and inventory problem. Repeat with selected own refusal.",
+      "required_observation": "Own test remains passed; global flags, other-test gaps and diagnostics remain separately visible. Own refusal still refuses even with supported capabilities; capability support never overrides admission."
+    },
+    {
+      "id": "no-native-or-fixture-inference",
+      "criterion_ids": [
+        "AC6"
+      ],
+      "given": "A complete supported fixture binding and matched configured build; no installed-binary attestation, native profile, physical-observation mapping or supplementary fixture fact is supplied. A separate accept reply and raw call count are present.",
+      "required_observation": "Retain reported structural support; installed-engine, host/profile and physical-observation evidence remain unknown/unproved. No logical phase count or modeled-effect Boolean is invented. Missing fixture fact stays absent; no global proof gate is invented."
+    },
+    {
+      "id": "safe-text-json-and-accounting",
+      "criterion_ids": [
+        "AC7"
+      ],
+      "given": "Use synthetic control text, a fake redaction sentinel in diagnostic/selection text and host path /srv/private/source; separately project an already-submitted check with incomplete accounting and capability provider_calls/resource_calls 0.",
+      "required_observation": "Text and JSON remove unsafe text and host paths, retain safe relative location and exact identity/digest facts, and carry the same selected compatibility and labelled advice. Submitted check calls remain unknown; preflight zeros cannot manufacture usage or criterion passes."
+    }
+  ]
+}
