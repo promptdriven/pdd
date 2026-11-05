@@ -1152,9 +1152,15 @@ function inventoryCommits(inventory) {
 // Commit leftovers, then push to the area's PR or open it. Returns a failure result, or null when the PR is there.
 async function publishAreaPr(run, area, p, lines, retry) {
   const label = prLabel(run, area), existing = prOf(run, area.name), title = oneLine(run.issue.title) || `Issue #${run.number}`;
-  const status = await git(p, run.root, 'status', '--porcelain=v1', '--untracked-files=all');
+  const status = await rawGit(p, run.root, 'status', '--porcelain=v1', '-z', '--untracked-files=all');
   if (status) {
-    const files = status.split('\n').map(row => row.slice(3)).filter(Boolean);
+    const records = status.split('\0');
+    const files = [];
+    for (let i = 0; i < records.length && records[i]; i++) {
+      const row = records[i];
+      files.push(row.slice(3));
+      if (/[RC]/.test(row.slice(0, 2))) i++;
+    }
     await git(p, run.root, 'add', '-A');
     await git(p, run.root, 'commit', '-q', '-m', `${oneLine(run.issue.title)} (#${run.number})`);
     lines.push(`warning: pdd committed ${files.length} uncommitted file(s): ${files.slice(0, 10).join(', ')}${files.length > 10 ? ', …' : ''}.`);
