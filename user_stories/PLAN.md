@@ -134,3 +134,17 @@ The seven workflow Stories retain their separately approved contracts and all 28
 2. [Native criterion evidence](native-criterion-evidence.md) — https://github.com/promptdriven/pdd/issues/2954. Cases: `test/runtime/native-criterion-evidence.json`. Uses the same profile assessment.
 
 Prompt tests: not run. Source-only contract repair defines original-report intake, existing-journal snapshots and bounded native lint/workflow/PR consumers. All scenarios remain unjudged. No hosted lint, simulation, native capture, implementation or gate approval.
+
+## Selected interpreter compatibility (#2791)
+
+Draft expectations for person review. No code or native readiness claim.
+
+1. [See selected interpreter compatibility](selected-runtime-compatibility.md) — [native cases](../test/runtime-compatibility/selected-runtime-compatibility-cases.json). Prompt tests: NOT REPLAYED; real capture/transport/projection/terminal effects need native fake-engine checks.
+2. [Check compatibility before paid work](runtime-compatibility-before-paid-work.md) — [native cases](../test/runtime-compatibility/runtime-compatibility-before-paid-work-cases.json). Prompt tests: NOT REPLAYED; dispatch, saved state and recovery guards need native fake-engine checks.
+
+Proposed policy: missing/unknown selected compatibility stops new paid dispatch; ended unavailable readiness exits 5, explicit blockers exit 4, open lint retains exit 3. Matched configured structural support permits the existing dispatch gate but does not attest an installed engine or prove host/physical behavior. Missing physical proof alone adds no new global gate. Native validation profiles stay separately owned. These expectations require person review before implementation.
+
+## Bounded authoring guidance (#2795)
+
+1. [Follow a bounded authoring handoff](authoring-orchestration.md) — [native/manual cases](../test/authoring-guidance/authoring-orchestration-cases.json). Prompt tests and native/manual acceptance: NOT RUN.
+2. [Compare authoring guidance on one frozen task](authoring-orchestration-measurement.md) — [native/manual cases](../test/authoring-guidance/authoring-orchestration-measurement-cases.json). Prompt tests and native/manual acceptance: NOT RUN.

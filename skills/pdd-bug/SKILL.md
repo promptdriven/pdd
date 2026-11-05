@@ -2,7 +2,7 @@
 name: pdd-bug
 description: Use when fixing PDD bugs, errors or wrong results. Reproduce, prompt/tests PR 1, code PR 2 if asked.
 metadata:
-  pdd-skills: 0.1.15
+  pdd-skills: 0.1.17
 ---
 
 # PDD bug
@@ -16,7 +16,7 @@ Step briefs are in `steps/`. `?` means optional.
 
 - If Autopilot is `observe` or `auto`, read `steps/autopilot.md` first.
 - Main chat: coordinate; no code or checks.
-- Use fresh subagents; never reuse builders or let them check their code. Give the step file and paths at once, not chat history. Wait once with a long time-out; no small follow-ups. Check/read: RUNBOOK §11 once.
+- Fresh subagents; never reuse builders or let them check code. Step file/paths at once; no chat history. Wait once: long time-out; no small follow-ups. Read §11 once. See pdd-prompting RUNBOOK "Bounded handoffs".
 - Checks: fresh first. Only verify/formal may reuse after startup failure; wrote no code, tests or prompts this run.
 - Review: always fresh; no build, verify, formal, prior reviews or their context. Blocked: RUNBOOK §17.
 - Read pdd-prompting RUNBOOK §17 before checks: cleanup, unrun checks, recovery and result replacement.

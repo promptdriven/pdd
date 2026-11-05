@@ -1,9 +1,9 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 4e779368b6c7bb2449f1ddaabb54437bbde3d292c95a965565accae2d734457a).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 850a65b73b487286aac5583532063bb8f5cf52d89f2f9951403448002674da17).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { constants, openSync, closeSync, fsyncSync, unlinkSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { constants, openSync, closeSync, fsyncSync, unlinkSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 
 import * as nativeDeliveryFiles from 'node:fs';
 import { homedir, hostname, tmpdir } from 'node:os';
@@ -23,7 +23,7 @@ import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
 import { causeText } from './runtime-output.mjs';
 import { preparePrEvidence } from './workflow-pr-evidence.mjs';
 import { validateProofRecord } from './workflow-prove.mjs';
-import { readRunResults, resultLines, usableResult, noResultLine } from './workflow-results.mjs';
+import { readRunResults, resultLines, usableResult, noResultLine, NO_VERDICT } from './workflow-results.mjs';
 import { collectTestInventory } from './workflow-inventory.mjs';
 import {adoptReplayCorpus,REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinReplayVectors,readReplayEvidence,formatReplayEvidence} from './workflow-replay.mjs';
 
@@ -73,7 +73,7 @@ const looksLikeApproval = text => APPROVAL.test(text) && !CHANGE_WORDS.test(text
 
 function deps(ports = {}) {
   const env = ports.env ?? process.env;
-  const execFile = ports.execFile ?? ((file, args, options = {}) => execute(file, args, { ...options, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }));
+  const execFile = ports.execFile ?? ((file, args, options = {}) => execute(file, args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, ...options }));
   return { ...ports, env, execFile, commandPorts: ports.execFile ? { execFile: ports.execFile } : {}, now: ports.now ?? Date.now, randomUUID: ports.randomUUID ?? randomUUID,
     isTTY: ports.isTTY ?? Boolean(process.stdin.isTTY && process.stderr.isTTY), say: ports.say ?? (() => {}) };
 }
@@ -407,7 +407,7 @@ async function startRunCommand({ name, issue, agent = 'codex', base, adoptCorpus
   try { workflow = readWorkflowAreas({ packageRoot, name, cwd, home: p.env.HOME || homedir() }); } catch (error) { return fail(error.message); }
   if (adoptCorpus !== undefined && (typeof adoptCorpus !== 'string' || !adoptCorpus.trim() || !workflow.areas.some(area=>area.replay_evidence===REPLAY_POLICY))) return {exitCode:2,message:'--adopt-corpus requires a declaration path and an explicitly replay-evidence-enabled workflow.'};
   if (!['codex', 'claude', 'gemini', 'agy'].includes(agent)) return fail('Choose --agent codex, --agent claude, --agent gemini or --agent agy.');
-  // Every chat of the run uses this config folder; a missing one makes the agent stop at once (0.1.6 tester).
+  // Save the initial profile for later chats; explicit Codex replacement may select another.
   const variable = homeVariable(agent), configDir = variable && p.env[variable] ? resolve(cwd, expandHome(p.env[variable], p.env)) : null;
   if (configDir && !isFolder(configDir)) return fail(`${variable} is "${configDir}", but that folder does not exist. Fix ${variable} and run the command again.`);
   const explicitBase = base !== undefined;
@@ -554,14 +554,39 @@ function hideLocalPaths(text, run) {
 const PROMPT_TESTS = new RegExp(PROMPT_TESTS_WORDS);
 const LABEL_START = new RegExp(`^${PROMPT_TESTS_WORDS}`);
 const LINE_PATTERN = new RegExp(`${PROMPT_TESTS_WORDS}((?:\\s*\\([^)]*\\))*):\\s*(.*?)(?=\\n|\\s*(?:;|\\bReport\\b|https?:\\/\\/|${PROMPT_TESTS_WORDS}|$))`, 'gs');
+// A result is only its pdd parts, joined by " · " (mark and criteria, checks, other states, AI calls). Words an agent
+// wrote after them on the same line ("… 2 AI calls. Full suite: 4085 passed.") are not part of the result.
+const RESULT_PART = /^(?:(?:✓|✗|no verdict|running|busy|unknown|UNKNOWN|queued|refused|not run)(?: (?:\d+ of \d+ criteri(?:a|on)|passed))?|\d+ of \d+ criteri(?:a|on)|passed|criteria details not reported|\d+\/\d+ checks|(?:\d+ AI calls?(?: \(\d+ for reruns\))?|\d+ for reruns)(?: \+ \d+ unknown)?|\d+ (?:refused|not run|unknown|queued|running|ahead|not yet settled|Stor(?:y|ies) skipped)|\d+ AI calls? so far|step \d+(?: of \d+)?(?: \([^)]*\))?)$/;
+function resultParts(text) {
+  const sentence = text.split(/\.\s/)[0].replace(/[.,]$/, ''), kept = [];
+  for (const part of sentence.split(' · ')) {
+    if (RESULT_PART.test(part)) { kept.push(part); continue; }
+    // Without a step number, progress puts the step name directly after its own running marker.
+    if (part && kept.length > 1 && kept.at(-1) === 'running') { kept.push(part); continue; }
+    const words = part.split(' ');
+    for (let size = words.length - 1; size > 0; size--) if (RESULT_PART.test(words.slice(0, size).join(' '))) { kept.push(words.slice(0, size).join(' ')); break; }
+    break;
+  }
+  return kept.length ? kept.join(' · ') : sentence.split(' ')[0];
+}
 export function runtimeLines(text) {
   return [...String(text ?? '').matchAll(LINE_PATTERN)].map(match => {
     const groups = [...match[1].matchAll(/\(([^)]*)\)/g)].map(group => group[1].trim());
     const story = groups.find(group => group && group.toUpperCase() !== 'DRAFT' && group !== 'all Stories') ?? null;
-    const result = match[2].replace(/\s+/g, ' ').trim().replace(/[.,]$/, '');
+    const result = resultParts(match[2].replace(/\s+/g, ' ').trim());
     return { story, draft: groups.some(group => group.toUpperCase() === 'DRAFT'), result,
       line: `${PROMPT_TESTS_LABEL}${match[1].replace(/\s+/g, ' ')}: ${result}`, pass: result.includes('✓') && !result.includes('✗') };
   });
+}
+// The Prompt tests lines that pdd wrote as results in a PR body's top block: "pdd result:" lines and plain (receipt or older) lines.
+// The Steps overview, full summaries, Verify and every agent note are never read.
+export function recordedRuntimeLines(text) {
+  const lines = [];
+  for (const line of String(text ?? '').split('\n')) {
+    if (/^#{1,6}\s/.test(line) || /^<details\b/i.test(line)) break;
+    if (line.startsWith('pdd result:') || LABEL_START.test(line)) lines.push(line);
+  }
+  return runtimeLines(lines.join('\n'));
 }
 // One line per Story: a Story checked again keeps its place and takes its latest line.
 const latestStories = lines => [...new Map(lines.filter(line => line.story).map(line => [line.story, line])).values()];
@@ -595,11 +620,127 @@ export function matchesSource(record, root, fingerprint, capture = captureSource
   }
   return false;
 }
+// Registration authority is independent of receipt content and source equality.
+const evidenceTests = tests => {
+  if (!Array.isArray(tests) || !tests.length || tests.some(path => typeof path !== 'string' || !path || /[\\\x00-\x1f\x7f]/.test(path)
+    || path.startsWith('/') || /^[A-Za-z]:/.test(path) || path.split('/').some(part => !part || part === '.' || part === '..' || part.toLowerCase() === '.git'))
+    || new Set(tests).size !== tests.length) throw Error('Select nonempty unique safe authored-relative test paths.');
+  return [...tests].sort();
+};
+const selectionEqual = (a,b) => sameFact(evidenceTests(a),evidenceTests(b));
+const associationKey = a => JSON.stringify([a.workspaceRoot,evidenceTests(a.tests),a.source_sha256]);
+function ownedPr1Head(run) {
+  const area = askArea(run), pr = area && prOf(run,area.name);
+  if (!pr || !Number.isSafeInteger(pr.number) || pr.url !== `https://github.com/${run.repo}/pull/${pr.number}` || !commitSha(pr.publishedHeadSha))
+    throw Error('The owned recorded PR 1 head is missing or unavailable.');
+  return pr.publishedHeadSha;
+}
+function selectedCapture(root,tests,capture=captureSource) {
+  const found = findTests({root});
+  if (tests.some(path => !found.tests.some(test => test.path === path && !test.problem))) throw Error('A selected authored test is missing or unavailable.');
+  return capture(root,{tests,appMap:null});
+}
+function frozenRoot(run,head) { return join(realpathSync(run.runDir),'evidence-pr1',head); }
+function checkedAssociation(run,a,capture=captureSource) {
+  if (a.runId !== run.runId || a.repo !== run.repo || !['current','pr1'].includes(a.stage)
+    || !/^[a-f0-9]{64}$/.test(a.source_sha256 ?? '') || realpathSync(a.workspaceRoot) !== a.workspaceRoot
+    || a.registration?.operation !== 'evidence-associate' || !Number.isFinite(a.registration.at)
+    || a.registration.cwd !== realpathSync(run.root)) throw Error('The evidence association has a different run, owner, producer or registration.');
+  evidenceTests(a.tests);
+  const root = a.stage === 'current' ? realpathSync(run.root) : frozenRoot(run,ownedPr1Head(run));
+  const head = a.stage === 'pr1' ? ownedPr1Head(run) : null;
+  if (a.sourceAnchor?.root !== root || a.sourceAnchor?.head !== head || realpathSync(root) !== root)
+    throw Error('The registered stage source anchor is missing, changed or unrelated.');
+  if (selectedCapture(root,a.tests,capture).sha256 !== a.source_sha256) throw Error('The registered stage source has changed or is unavailable.');
+  if (a.stage === 'current' && selectedCapture(a.workspaceRoot,a.tests,capture).sha256 !== a.source_sha256)
+    throw Error('The producer selected source has changed or is unavailable.');
+  return root;
+}
+// One eligibility rule for import, status/Story counts and prepared PR lines.
+function eligibleEvidence(run,record,{stage='current',root=run.root,fingerprint=null,capture=captureSource}={}) {
+  try {
+    if (record.association) {
+      const saved = record.association;
+      const a = (run.evidenceAssociations ?? []).find(a => associationKey(a) === associationKey(saved));
+      if (!a || a.stage !== saved.stage || !sameFact(a.sourceAnchor,saved.sourceAnchor) || a.runId !== saved.runId || a.repo !== saved.repo
+        || !(saved.stage === stage || stage==='pr1' && saved.stage==='current' && run.area<=run.areas.indexOf(askArea(run))) || record.source?.sha256 !== saved.source_sha256 || !selectionEqual(record.source?.tests,saved.tests)
+        || realpathSync(record.receipt?.repo) !== saved.workspaceRoot) return false;
+      checkedAssociation(run,a,capture);
+      return root===run.root || matchesSource(record,root,fingerprint,capture);
+    }
+    if (record.receipt) {
+      const producer=realpathSync(record.receipt.repo);
+      const a=(run.evidenceAssociations??[]).find(a=>a.workspaceRoot===producer && selectionEqual(a.tests,record.source?.tests) && a.source_sha256===record.source?.sha256);
+      if(a) { if(a.stage!=='current')return false; checkedAssociation(run,a,capture); }
+      else if(producer!==realpathSync(run.root))return false;
+    }
+    return matchesSource(record,root,fingerprint,capture);
+  } catch { return false; }
+}
+// Materialize local immutable commit objects inside the run folder, never a ref
+// or checkout in the authored repository. Canonical preflight still owns capture.
+async function retainPr1Source(run,head,p) {
+  const target = frozenRoot(run,head);
+  if (existsSync(target)) return target;
+  // A missing previously registered anchor must not be silently reconstructed.
+  if ((run.evidenceAssociations ?? []).some(a => a.stage === 'pr1' && a.sourceAnchor?.root === target)) throw Error('The retained PR 1 source is missing.');
+  const parent = dirname(target); mkdirSync(parent,{recursive:true,mode:0o700});
+  if(realpathSync(parent)!==parent)throw Error('The retained source folder cannot traverse a symlink.');
+  const temporary = mkdtempSync(join(parent,'.source-'));
+  try {
+    const tree = await p.execFile('git',['ls-tree','-r','-z',head],{cwd:run.root,encoding:'buffer'});
+    const entries = Buffer.from(tree.stdout).toString('utf8').split('\0').filter(Boolean).map(row => {
+      const match = /^(100644|100755|120000|160000) (blob|commit) ([a-f0-9]{40,64})\t(.+)$/.exec(row);
+      if (!match) throw Error('The PR 1 tree contains an unavailable source entry.');
+      evidenceTests([match[4]]);
+      return {mode:match[1],oid:match[3],path:match[4]};
+    });
+    const response = await p.execFile('git',['cat-file','--batch'],{cwd:run.root,input:entries.filter(e=>e.mode!=='160000').map(e=>e.oid+'\n').join(''),encoding:'buffer',maxBuffer:512*1024*1024});
+    const bytes = Buffer.from(response.stdout); let offset=0;
+    for (const entry of entries) {
+      if(entry.mode==='160000'){mkdirSync(join(temporary,entry.path),{recursive:true});continue;}
+      const end=bytes.indexOf(10,offset), header=bytes.subarray(offset,end).toString('utf8').split(' '), size=Number(header[2]);
+      if (end<0 || header[0]!==entry.oid || header[1]!=='blob' || !Number.isSafeInteger(size) || size<0 || end+1+size>=bytes.length) throw Error('The frozen PR 1 objects are unavailable.');
+      const content=bytes.subarray(end+1,end+1+size), path=join(temporary,entry.path); offset=end+2+size;
+      mkdirSync(dirname(path),{recursive:true});
+      if (entry.mode==='120000') symlinkSync(content.toString('utf8'),path);
+      else writeFileSync(path,content,{mode:entry.mode==='100755'?0o700:0o600,flag:'wx'});
+    }
+    await p.execFile('git',['init','-q',`--object-format=${head.length===64?'sha256':'sha1'}`],{cwd:temporary});
+    await p.execFile('git',['update-index','-z','--index-info'],{cwd:temporary,input:entries.map(e=>`${e.mode} ${e.oid}\t${e.path}\0`).join('')});
+    renameSync(temporary,target);
+    return target;
+  } finally {rmSync(temporary,{recursive:true,force:true});}
+}
+async function associateEvidenceWorkspaceCommand({ref,workspace,stage,tests,cwd},ports) {
+  const p=deps(ports),found=await resolveRun(ref,{cwd},p);
+  if(found.error)return fail(found.error);
+  const run=found.run;
+  try {
+    const owned=await gitContext(cwd,p),producer=typeof workspace==='string' && workspace.trim() && await gitContext(resolve(cwd,workspace),p);
+    if(!owned || owned.toplevel!==realpathSync(run.root) || owned.commonDir!==realpathSync(run.commonDir)
+      || realpathSync(run.runDir)!==realpathSync(runDirFor(owned.commonDir,run.number))) throw Error('Register evidence only from the selected run owned worktree.');
+    if(!producer || realpathSync(resolve(cwd,workspace))!==producer.toplevel) throw Error('Supply the exact existing producer Git root.');
+    if(!['current','pr1'].includes(stage))throw Error('Evidence stage must be current or pr1.');
+    const selection=evidenceTests(tests),head=stage==='pr1'?ownedPr1Head(run):null;
+    const root=stage==='pr1'?await retainPr1Source(run,head,p):owned.toplevel;
+    const captured=selectedCapture(root,selection);
+    if(stage==='current' && selectedCapture(producer.toplevel,selection).sha256!==captured.sha256)throw Error('The producer source does not match the current authored selection.');
+    const association={runId:run.runId,repo:run.repo,workspaceRoot:producer.toplevel,stage,sourceAnchor:{root,head},tests:selection,
+      source_sha256:captured.sha256,registration:{operation:'evidence-associate',cwd:owned.toplevel,at:p.now()}};
+    checkedAssociation(run,association);
+    commitRun(run,p,latest=>{
+      checkedAssociation(latest,association);
+      latest.evidenceAssociations=[...(latest.evidenceAssociations??[]).filter(a=>associationKey(a)!==associationKey(association)),association];
+    });
+    return done(`Registered ${stage === 'pr1'?'PR 1':'current'} evidence workspace for ${run.repo}#${run.number}. No check, approval or workflow progress was recorded.`);
+  } catch(error) {if(error?.code==='workflow_run_save_failed')throw error;return fail(`Evidence workspace not registered: ${oneLine(error.message)}`);}
+}
 export function storyCount(run, ports = {}) {
   const records = [...(run.runtimeHistory ?? []), ...Object.values(run.done ?? {}), ...(run.evidence ?? [])]
     .filter(record => runtimeLines(record.summary).length).sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
   if (!records.length) return null;
-  const fingerprint = (ports.fingerprint ?? gitFingerprint)(run.root), compatible = records.filter(record => matchesSource(record, run.root, fingerprint, ports.capture));
+  const fingerprint = (ports.fingerprint ?? gitFingerprint)(run.root), compatible = records.filter(record => eligibleEvidence(run,record,{stage:ports.stage,root:run.root,fingerprint,capture:ports.capture}));
   const current = latestStories(compatible.flatMap(record => runtimeLines(record.summary)));
   const all = latestStories(records.flatMap(record => runtimeLines(record.summary)));
   const currentByStory = new Map(current.map(line => [line.story, line]));
@@ -614,19 +755,38 @@ export function storyCount(run, ports = {}) {
   return result;
 }
 export function storyEvidence(run, { comparisonRoot } = {}) {
-  const records = [...(run.runtimeHistory ?? []), ...Object.values(run.done ?? {}), ...(run.evidence ?? [])]
+  // Only pdd's own recorded pdd test batches and checked receipts; Prompt tests lines typed into a summary are not evidence.
+  const records = [...ownStoryRecords(run), ...(run.evidence ?? [])]
     .filter(record => runtimeLines(record.summary).length).sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
   const root = comparisonRoot === undefined ? run.root : comparisonRoot;
   const current = new Map(), older = new Map(), fingerprint = root === null ? null : gitFingerprint(root);
   for (const record of records) {
-    const compatible = root !== null && matchesSource(record, root, fingerprint);
+    const compatible = root !== null && eligibleEvidence(run,record,{root,fingerprint});
     for (const row of latestStories(runtimeLines(record.summary))) {
       (compatible ? current : older).set(row.story, { story: row.story, pass: row.pass, current: compatible, result: row.result, at: record.at ?? 0 });
     }
   }
   return [...new Map([...older, ...current]).values()];
 }
-const storyText = count => `${count.pass} of ${count.total} Stories pass${count.unknown?.length ? ` · ${count.unknown.length} unknown` : ''}`;
+// The Story count in status reads only pdd's own results: the pdd test batches that done recorded (pddHistory and step
+// pddResults) and receipts that pdd workflow evidence checked. Prompt tests lines an agent typed into a summary never count.
+function ownStoryRecords(run) {
+  const batches = new Map();
+  for (const result of [...(run.pddHistory ?? []), ...Object.values(run.done ?? {}).flatMap(record => record?.pddResults ?? [])])
+    if (result?.kind === 'pdd test' && result.sourceSha256 && Array.isArray(result.tests) && !batches.has(result.batch)) batches.set(result.batch, result);
+  return [...batches.values()].map(result => ({ at: result.at, summary: (result.stories?.length ? result.stories : [result.summary]).join('\n'),
+    source: { kind: 'runtime-capture-v1', sha256: result.sourceSha256, tests: result.tests } }));
+}
+// null when the run has no check claim at all; { none: true } when it has a check or typed lines but no pdd result.
+export function ownStoryCount(run, ports = {}) {
+  const own = [...(run.evidence ?? []), ...ownStoryRecords(run)];
+  // A Story that only typed lines name shows as unknown: without a source binding, storyCount never trusts its result.
+  const typed = [...(run.runtimeHistory ?? []), ...Object.values(run.done ?? {})].filter(record => runtimeLines(record?.summary).length).map(({ at, summary }) => ({ at, summary }));
+  if (own.length) return storyCount({ ...run, runtimeHistory: [], done: {}, evidence: [...typed, ...own] }, ports);
+  const claimed = run.done?.check || typed.length;
+  return claimed ? { pass: 0, total: 0, failing: [], none: true } : null;
+}
+const storyText = count => count.none ? `no pdd result (${NO_VERDICT})` : `${count.pass} of ${count.total} Stories pass${count.unknown?.length ? ` · ${count.unknown.length} unknown` : ''}`;
 const shortLine = text => clip(text, 199);
 // Report links in a check summary, each once: "Report (<story>): <url>" keeps the Story name; a bare link has none.
 function reportLinks(text, env) {
@@ -881,11 +1041,11 @@ function fullSummaries(steps, texts, size) {
   const notice = shortened.length ? [`_${shortened.length} step ${shortened.length === 1 ? 'summary was' : 'summaries were'} shortened to fit the PR size limit: ${listed(shortened)}. The PR author has the full summaries in the run folder._`, ''] : [];
   return [...notice, FULL_SUMMARIES, '', ...items, '', '</details>'];
 }
-function publicationRuntime(run, env) {
+function publicationRuntime(run, env, stage = 'current') {
   if (run.publicationPending) return [];
   const fingerprint = gitFingerprint(run.root);
   const records = [...(run.runtimeHistory ?? []), ...Object.values(run.done ?? {}), ...(run.evidence ?? [])]
-    .filter(record => runtimeLines(record.summary).length && matchesSource(record, run.root, fingerprint)).sort((a,b) => (a.at ?? 0) - (b.at ?? 0));
+    .filter(record => runtimeLines(record.summary).length && eligibleEvidence(run,record,{stage,fingerprint})).sort((a,b) => (a.at ?? 0) - (b.at ?? 0));
   const stories = new Map();
   for (const record of records) for (const line of runtimeLines(record.summary)) if (line.story) stories.set(line.story, { line, record });
   // Lines that an agent typed or pasted into a step summary stay agent notes; only a receipt that pdd workflow evidence checked is not.
@@ -930,7 +1090,7 @@ function prBody(run, area, env, drafts = [], tests = true, evidence) {
   const sources = [run.done.check?.summary, ...steps.toReversed().map(step => run.done[step]?.summary)].filter(Boolean);
   const verdict = sources.map(verdictLine).find(Boolean), change = sources.map(changeLine).find(Boolean);
   const shown = change?.match(/https?:\/\/[^\s;]+/g) ?? [];
-  const runtime = publicationRuntime(run, env).filter(line => !line.replace(`${AGENT_NOTE}: `, '').startsWith('Report') || !shown.some(url => line.includes(` ${url} `)));
+  const runtime = publicationRuntime(run, env, label === 'PR 1' ? 'pr1' : 'current').filter(line => !line.replace(`${AGENT_NOTE}: `, '').startsWith('Report') || !shown.some(url => line.includes(` ${url} `)));
   const noted = runtime.some(line => hasReportLink(line, env)) || change && hasReportLink(change, env);
   const replayResult = area.replay_evidence === REPLAY_POLICY ? run.replayEvidence ?? readReplayEvidence(run) : null;
   const replay = replayResult ? [formatReplayEvidence(replayResult,{maxCharacters:0}), ''] : [];
@@ -1055,13 +1215,14 @@ async function publishAreaPr(run, area, p, lines, retry) {
       const failed=await editReplay(pending);if(failed)return failed;
     }
     p.say(`Pushing ${run.branch} to ${label}…`);
+    const promptHead = codePr ? null : await git(p,run.root,'rev-parse','--verify','HEAD^{commit}');
     try {
-      const reply = await p.execFile('git', ['push', 'origin', `${codePr && /^[a-f\d]{40,64}$/i.test(run.testInventory.headSha) ? run.testInventory.headSha : 'HEAD'}:refs/heads/${run.branch}`], { cwd: run.root });
+      const reply = await p.execFile('git', ['push', 'origin', `${codePr && /^[a-f\d]{40,64}$/i.test(run.testInventory.headSha) ? run.testInventory.headSha : promptHead}:refs/heads/${run.branch}`], { cwd: run.root });
       if (reply.code !== undefined && reply.code !== 0) throw Object.assign(Error(reply.stderr || 'git push failed'), {stderr:reply.stderr, code:reply.code});
     }
     catch (error) {
     if(error?.code==='workflow_progress_refused')throw error; return fail([...lines, `git push to ${run.branch} failed (${causeOf(error)}). Check the network and gh auth, then ${retry}.`].join('\n')); }
-    if (codePr && await git(p,run.root,'rev-parse','--verify','HEAD^{commit}') !== run.testInventory.headSha) return fail('Source was pushed; the local head changed. The PR stays publication-pending; retry from the pushed source.');
+    if (await git(p,run.root,'rev-parse','--verify','HEAD^{commit}') !== (codePr ? run.testInventory.headSha : promptHead)) return fail('Source was pushed; the local head changed. The PR stays publication-pending; retry from the pushed source.');
     prepared = await publicationEvidence(run, area, p);
     let finalBody;
     try { finalBody=markedReplayBody(run.replayEvidence); }
@@ -1073,6 +1234,7 @@ async function publishAreaPr(run, area, p, lines, retry) {
       lines.push(`warning: The code PR still shows the previous inventory; its displayed commit pair identifies the older comparison. The new comparison is ${commitSha(run.testInventory.baseSha)&&commitSha(run.testInventory.headSha)?`${run.testInventory.baseSha.slice(0,7)} → ${run.testInventory.headSha.slice(0,7)}`:'unavailable'}. The current full report ${run.testInventory.saved ? 'was saved locally in test-inventory.json in the run folder' : 'was not saved locally'}. Inventory refresh failed (${failed.message}); ${retry}.`);
     } else rememberPublication(existing);
     const applyPublication=publicationUpdate(run,codePr?['testInventory']:[]);
+    if (!codePr) existing.publishedHeadSha=promptHead;
     const metadata=Object.fromEntries(['publishedHeadSha','publicationBodySha256'].filter(key=>Object.hasOwn(existing,key)).map(key=>[key,existing[key]]));
     commitRun(run,p,latest=>{applyPublication(latest);const pr=latest.pr.find(pr=>pr.url===existing.url&&pr.stage===existing.stage);if(pr)Object.assign(pr,metadata);});
     if (area.then === 'ask-code') await refreshReplayBaseline(run,p);
@@ -1103,7 +1265,7 @@ async function publishAreaPr(run, area, p, lines, retry) {
   if (!['open', 'merged'].includes(outcome.state) || !outcome.pr) return fail([...lines, `${label[0].toUpperCase()}${label.slice(1)} did not open: ${/ then try again\.$/.test(outcome.message)
     ? outcome.message.replace(/ then try again\.$/, ` then ${retry}.`) : `${outcome.message} ${retry[0].toUpperCase()}${retry.slice(1)} to retry.`}`].join('\n'));
   if (area.then === 'ask-code') await refreshReplayBaseline(run,p);
-  const published = { stage: area.name, number: outcome.pr.number, url: outcome.pr.url, branch: run.branch, base };
+  const published = { publishedHeadSha:intent.headSha, stage: area.name, number: outcome.pr.number, url: outcome.pr.url, branch: run.branch, base };
   rememberPublication(published);
   const applyPublication=publicationUpdate(run,codePr?['testInventory']:[]);
   commitRun(run,p,latest=>{applyPublication(latest);if(!latest.pr.some(pr=>pr.url===published.url&&pr.stage===published.stage))latest.pr.push(published);});
@@ -1148,17 +1310,27 @@ async function recordEvidenceCommand({ ref, summaryFile, cwd }, ports) {
   const p = deps(ports), found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
   const run = found.run;
-  let receipt, source, lines;
+  let receipt, source, lines, association;
   try {
     if (!summaryFile || !lstatSync(resolve(cwd, summaryFile)).isFile() || lstatSync(resolve(cwd, summaryFile)).size > 2 * 1024 * 1024) throw Error('Supply a regular saved JSON file of at most 2 MiB.');
     receipt = JSON.parse(readFileSync(resolve(cwd, summaryFile), 'utf8'));
-    if (realpathSync(receipt.repo) !== realpathSync(run.root)) throw Error('The evidence belongs to a different repository/worktree.');
     if (!/^[a-f0-9]{64}$/.test(receipt.source_sha256 ?? '') || !Array.isArray(receipt.rows) || !receipt.rows.length) throw Error('Saved check JSON needs source_sha256 and nonempty rows.');
     const tests = receipt.rows.map(row => row?.test);
-    if (tests.some(path => typeof path !== 'string' || !path) || new Set(tests).size !== tests.length) throw Error('Evidence test paths must be unique.');
+    evidenceTests(tests);
     source = { kind: 'runtime-capture-v1', sha256: receipt.source_sha256, tests };
-    if (!matchesSource({ source }, run.root, null)) throw Error('The saved source does not match the current selected files. Read a compatible receipt or run a fresh selected check.');
-    const found = findTests({ root: run.root });
+    const producer=realpathSync(receipt.repo);
+    association=(run.evidenceAssociations??[]).find(a=>a.workspaceRoot===producer && selectionEqual(a.tests,tests) && a.source_sha256===source.sha256);
+    // Re-import cannot change the stage of the same original result.
+    const previous=[...(run.evidence??[])].reverse().find(e=>e.association && sameFact(e.receipt,receipt));
+    if(previous && (!association || previous.association.stage!==association.stage || !sameFact(previous.association.sourceAnchor,association.sourceAnchor)))
+      throw Error('The original evidence stage is no longer registered; it cannot be relabelled.');
+    let root=run.root;
+    if(association)root=checkedAssociation(run,association);
+    else {
+      if(producer!==realpathSync(run.root))throw Error('The evidence belongs to a different repository/worktree without a registered association.');
+      if(!matchesSource({source},run.root,null))throw Error('The saved source does not match the current selected files. Read a compatible receipt or run a fresh selected check.');
+    }
+    const found = findTests({ root });
     const rows = receipt.rows.map(row => {
       const test = found.tests.find(test => test.path === row.test);
       if (!test || test.story !== row.story || !['passed', 'failed', 'refused', 'not_run', 'unknown', 'queued', 'running'].includes(row.state))
@@ -1171,8 +1343,12 @@ async function recordEvidenceCommand({ ref, summaryFile, cwd }, ports) {
     const label = line => typeof line === 'string' ? line.replace(LABEL_START, PROMPT_TESTS_LABEL) : line;
     if (rows.some(row => label(row.summary_line) !== expected.get(row.story))) throw Error('Evidence summary_line does not match its structured Story results.');
   } catch (error) { return fail(`Evidence not recorded: ${oneLine(error.message)}`); }
-  const evidence={at:p.now(),summary:[...new Set(lines)].join('\n'),source,receipt};
-  commitRun(run,p,latest=>{(latest.evidence??=[]).push(evidence);});
+  const reports=receipt.rows.flatMap(row=>typeof row.report_url==='string' && /^https?:\/\/[^\s<>\x22\x27`]+$/.test(row.report_url)?[`Report (${row.story}): ${row.report_url}`]:[]);
+  const evidence={at:p.now(),summary:[...new Set([...lines,...reports])].join('\n'),source,receipt,...(association?{association:structuredClone(association)}:{})};
+  commitRun(run,p,latest=>{
+    if(!eligibleEvidence(latest,evidence,{stage:association?.stage,fingerprint:null}))throw Error('The selected evidence source or association changed before saving.');
+    (latest.evidence??=[]).push(evidence);
+  });
   return done(`Recorded source-verified saved evidence for ${run.repo}#${run.number}. Steps, gates and PRs are unchanged. This records evidence, not fresh execution or approval.`);
 }
 
@@ -1183,12 +1359,38 @@ function ownResults(run, p) {
 }
 // The steps whose done output shows pdd's own results, or a visible "no pdd result" warning.
 const PROOF_STEPS = ['check', 'try', 'verify'];
+function canRefreshCodeReview(run, step) {
+  const area = run.areas[run.area];
+  return run.state === 'completed' && run.doneAt === 'PR 1'
+    && area?.then === 'ask-code' && run.gate?.kind === 'ask-code'
+    && run.gate.area === area.name && Boolean(prOf(run, area.name))
+    && area.steps.includes(step) && area.steps.every(item => run.done[item]);
+}
+async function refreshCompletedCodeReview(run, step, p) {
+  const selectedArea = run.area, selectedGate = structuredClone(run.gate);
+  try {
+    // Inspect before the short owned update. A failed inspection must retain
+    // the previous review and cannot turn an ended run into ordinary progress.
+    const snapshot = await gatePromptSnapshot(run, p);
+    const question = await askCodeLines(run, run.areas[run.area], p);
+    commitRun(run, p, latest => {
+      if (!canRefreshCodeReview(latest, step) || latest.area !== selectedArea
+        || ['id','area','kind','at'].some(key => latest.gate?.[key] !== selectedGate[key]))
+        throw Error('The run ended or the gate changed, look again.');
+      latest.gate.promptSnapshot = snapshot;
+    });
+    return doneWithRequests(done([...snapshotLines(snapshot), ...question].join('\n')), run, p);
+  } catch (error) {
+    return fail(`Cannot refresh the code-choice review: ${causeText(error?.stderr || error?.detail || error?.message) || causeOf(error)}. Repair the selection or inspect the current run and gate, then run done again and ask the person again.`);
+  }
+}
 async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACKAGE_ROOT }, ports) {
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
   const run = await runForWorktree(cwd, p);
   if (!run) return fail('pdd workflow done works only in a run worktree. cd to the worktree that pdd made for this run.');
   if (run.state === 'cancelled') return done(`The run for #${run.number} was cancelled. Stop working on it.`);
-  if (run.state === 'completed') return done(`The run for #${run.number} is complete. Stop.`);
+  if (run.state === 'completed') return canRefreshCodeReview(run, step)
+    ? refreshCompletedCodeReview(run, step, p) : done(`The run for #${run.number} is complete. Stop.`);
   protectProgress(run,p);
   const area = run.areas[run.area], lines = [];
   if (!area.steps.includes(step)) lines.push(`warning: "${step}" is not a step of the ${area.name} area (${area.steps.join(', ')}). pdd recorded it anyway.`);
@@ -1218,6 +1420,8 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
       lines.push(`warning: ${step} ran again after ${later.join(', ')}. pdd cleared ${later.length>1?'those steps':'that step'}; run ${later.length>1?'them':'it'} again.`);
     }
     if(hasRuntime)(latest.runtimeHistory??=[]).push({...record,step});
+    // pdd's own pdd test results, once per batch, so a later partial check keeps the Stories of an earlier one.
+    for(const result of record.pddResults??[])if(result.kind==='pdd test'&&!(latest.pddHistory??=[]).some(item=>item.batch===result.batch))latest.pddHistory.push(result);
     if(replay)latest.replayEvidence=replay;
     latest.done[step]=record;
   };
@@ -1333,6 +1537,7 @@ async function syncPr1(run, p) {
   catch { return { failed: `pdd could not push ${what ?? `the worktree's new commit${ahead > 1 ? 's' : ''}`} to PR 1. Run: ${go}git push origin HEAD:refs/heads/${run.branch}\n${again}` }; }
   if (await git(p,run.root,'rev-parse','--verify','HEAD^{commit}') !== pushedHead) return { failed: 'Source was pushed; the local head changed. PR 1 stays publication-pending; retry from the pushed source.' };
   await refreshReplayBaseline(run,p);
+  commitRun(run,p,latest=>{const owned=prOf(latest,pr1.stage);if(owned)owned.publishedHeadSha=pushedHead;});
   const drafts = await pr1Drafts(run, p);
   return { drafts, lines: [what ? `pdd committed ${what} and pushed it to PR 1.` : `pdd pushed ${ahead} new commit${ahead > 1 ? 's' : ''} from the worktree to PR 1.`, ...await draftDescription(run, pr1, drafts, p)] };
 }
@@ -1359,7 +1564,7 @@ async function draftDescription(run, pr1, drafts, p) {
     const headerStart = at;
     while (at < rows.length && new RegExp(String.raw`^(?:pdd result: |Agent note — not checked by pdd: (?:Verdict:|Before[ :]|${PROMPT_TESTS_WORDS}|Report(?: \([^)]*\))?:)|Verdict:|Before |Before:|${PROMPT_TESTS_WORDS}|Report(?: \([^)]*\))?:)`).test(rows[at])) at++;
     const priorTop = rows.slice(headerStart, at);
-    const ordinaryTop = [...ownLines(run, evidence), ...new Set([...labelledTop, ...priorTop.filter(line => /^(?:Agent note — not checked by pdd: )?(?:Verdict:|Before[ :])/.test(line)).map(line => line.startsWith(`${AGENT_NOTE}: `) ? line : `${AGENT_NOTE}: ${line}`)]), ...publicationRuntime(run, p.env)];
+    const ordinaryTop = [...ownLines(run, evidence), ...new Set([...labelledTop, ...priorTop.filter(line => /^(?:Agent note — not checked by pdd: )?(?:Verdict:|Before[ :])/.test(line)).map(line => line.startsWith(`${AGENT_NOTE}: `) ? line : `${AGENT_NOTE}: ${line}`)]), ...publicationRuntime(run, p.env, 'pr1')];
     const introduction = [];
     while (at < rows.length && !rows[at].trim()) at++;
     if (reference.test(rows[at] ?? '')) {
@@ -2021,7 +2226,7 @@ async function gateFacts(run, p) {
 }
 
 function detail(run, chat = null, facts = {}) {
-  const drafts = facts.drafts ?? [], stories = storyCount(run);
+  const drafts = facts.drafts ?? [], stories = ownStoryCount(run), pr1Stories=(run.evidence??[]).some(e=>e.association?.stage==='pr1')?ownStoryCount(run,{stage:'pr1'}):null;
   const area = run.areas[run.area], tab = currentChat(run) ?? run.chats?.at(-1);
   const ci = pr => ({ passing: 'CI passing', failing: 'CI failing', pending: 'CI running', none: 'no CI checks' }[pr.ci] ?? 'CI unknown');
   const steps = (area?.steps ?? []).map(step => `${step} ${run.done[step] ? 'done' : 'to do'}${run.done[step]?.summary ? ` ("${clip(oneLine(run.done[step].summary), 120)}")` : ''}`);
@@ -2040,6 +2245,7 @@ function detail(run, chat = null, facts = {}) {
     ...(stories ? [`Stories: ${storyText(stories)}${stories.failing.length ? ` (✗ ${stories.failing.join(', ')})` : ''}`,
       ...(stories.unknown?.length ? [`Unknown Stories: ${stories.unknown.join(', ')}`] : []),
       ...(stories.evidence ? [stories.evidence] : [])] : []),
+    ...(pr1Stories ? [`PR 1 Stories: ${storyText(pr1Stories)}`] : []),
     `Worktree: ${run.root} (branch ${run.branch})`, `Run folder: ${run.runDir}`, `Review without resuming: pdd workflow view ${run.repo}#${run.number}`, ...(next ? [`Next: ${next}`] : [])].join('\n');
 }
 
@@ -2069,8 +2275,9 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false } = 
     : step ? `agent working on ${step}` : 'agent working';
   const ref = `${run.repo}#${run.number}`;
   const when = Number.isFinite(run.updatedAt) ? new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', ...(timeZone ? { timeZone } : {}) }).format(new Date(run.updatedAt)) : 'unknown time';
-  const prs = (run.pr ?? []).map(pr => ({ number: pr.number, url: pr.url, state: pr.state ?? 'open' })), stories = storyCount(run);
+  const prs = (run.pr ?? []).map(pr => ({ number: pr.number, url: pr.url, state: pr.state ?? 'open' })), stories = ownStoryCount(run);
   return { ref, repo: run.repo, number: run.number, workflow: run.workflow, area: area?.name ?? null, group, words, prs, stories,
+    ...((run.evidence??[]).some(e=>e.association?.stage==='pr1')?{pr1Stories:ownStoryCount(run,{stage:'pr1'})}:{}),
     updatedAt: run.updatedAt ?? null, root: run.root, runDir: run.runDir, viewCommand: `pdd workflow view ${ref}`,
     line: [ref, run.workflow, area?.name ?? '?', words, ...(stories ? [storyText(stories)] : []), ...(prs.length ? [`PR ${prs.map(pr => `#${pr.number}`).join(' ')}`] : []), when].join(' · ') };
 }
@@ -2117,7 +2324,9 @@ async function runStatusCommand({ ref, cwd, all = false, json = false, cancelled
 
 const replacementPhases = ['intent', 'closeRequested', 'closed', 'createRequested', 'prepared', 'launchRequested', 'launched', 'rolledBack', 'ended'];
 function validReplacement(record, run) {
-  if (!record || typeof record !== 'object' || Array.isArray(record) || Object.keys(record).some(key => !['id', 'area', 'phase', 'at', 'original', 'replacement', 'recovery'].includes(key)) || !validSessionId(record.id) || !Number.isSafeInteger(record.at) || record.at < 0 || !replacementPhases.includes(record.phase) || !run.areas.slice(0, run.area + 1).some(area => area.name === record.area)) return false;
+  if (!record || typeof record !== 'object' || Array.isArray(record) || Object.keys(record).some(key => !['id', 'area', 'phase', 'at', 'original', 'configDir', 'replacement', 'recovery'].includes(key)) || !validSessionId(record.id) || !Number.isSafeInteger(record.at) || record.at < 0 || !replacementPhases.includes(record.phase) || !run.areas.slice(0, run.area + 1).some(area => area.name === record.area)) return false;
+  if (Object.hasOwn(record, 'configDir') && (record.configDir !== null && (typeof record.configDir !== 'string' || !record.configDir.length)
+    || record.replacement && record.replacement.configDir !== record.configDir)) return false;
   const recovery = record.recovery;
   if (recovery !== undefined && (!recovery || typeof recovery !== 'object' || Array.isArray(recovery)
     || Object.keys(recovery).some(key => !['closeAcknowledged','resumeRequested','allocationLabel','tabIdsBefore','latestLaunchRequest','unsentProof'].includes(key))
@@ -2201,17 +2410,22 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
   let defaultOriginal = chat ? structuredClone(chat) : undefined;
   if (newSession && historical) return fail(`Select the current area ${run.areas[run.area].name} to start a new session; earlier areas cannot be replaced.`);
   if (newSession && !chat && (!run.chatReplacement || ['launched','rolledBack','ended'].includes(run.chatReplacement.phase))) return fail('The current area has no saved chat to replace. Open it first.');
-  const missing = missingHome(run, p.env);
-  if (missing) return fail(missing);
   const pending = run.chatReplacement;
   if (pending !== undefined) {
     if (!validReplacement(pending, run)) return fail('The saved chat replacement record is malformed or unknown. Inspect it before opening a chat.');
     if (!['launched', 'rolledBack', 'ended'].includes(pending.phase) && !newSession) return fail(`Chat replacement is pending at ${pending.phase}. Retry: pdd workflow open ${run.number} --new`);
   }
+  const recovering = pending && !['launched','rolledBack','ended'].includes(pending.phase);
+  const incoming = newSession && !recovering && run.agent === 'codex' && typeof p.env.CODEX_HOME === 'string' && p.env.CODEX_HOME.length ? p.env.CODEX_HOME : null;
+  const replacementConfig = incoming ? resolve(cwd, expandHome(incoming, p.env)) : run.configDir;
+  if (incoming && !isFolder(replacementConfig)) return fail(`CODEX_HOME is "${replacementConfig}", but that folder does not exist. Fix CODEX_HOME and run the command again.`);
+  // Pending recovery checks the profile of each effect, which may be the original
+  // chat's folder rather than either the current run or the retrying terminal.
+  const missing = !recovering && missingHome({ ...run, configDir: replacementConfig }, p.env);
+  if (missing) return fail(missing);
 
   try {
     if (newSession) {
-      const recovering = pending && !['launched','rolledBack','ended'].includes(pending.phase);
       if (recovering) chat = pending.original;
       const replacementArea = recovering ? run.areas.findIndex(item => item.name === pending.area) : run.area;
       const currentArea = run.areas[replacementArea];
@@ -2224,12 +2438,14 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
         ...(run.gate ? [`Open gate: ${run.gate.kind} for ${run.gate.area ?? currentArea.name}. Wait for the person to decide whether to approve or request changes; do not treat this new session as approval.`] : []),
         ...(openQuestion(run) ? [`Pending question: ${openQuestion(run).text}`] : []),
       ].join('\n') + '\n';
+      const replacementRun = { ...run, configDir: replacementConfig };
       const checkpoint = async record => {
         if (!validReplacement(record, run)) throw Object.assign(Error('Invalid replacement checkpoint'), { code: 'invalid_replacement_checkpoint' });
         const admit = fresh => {
           if (!fresh || ended(fresh)) throw Object.assign(Error('The run ended during replacement.'), {code:'run_ended'});
           const prior = fresh.chatReplacement;
           const sameAttempt = prior && prior.id === record.id && prior.at === record.at && sameFact(prior.original, record.original);
+          if (sameAttempt && Object.hasOwn(prior, 'configDir') && prior.configDir !== record.configDir) throw Error('Replacement configuration changed');
           if (record.phase === 'intent' && !sameAttempt) {
             if (prior && !['launched','rolledBack','ended'].includes(prior.phase)) throw Error('Replacement already pending');
             if (prior?.id === record.id) throw Error('Invalid replacement transition');
@@ -2239,15 +2455,21 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
         admit(readRun(run.runDir));
         commitRun(run, p, fresh => {
           if (!admit(fresh)) (fresh.abandonedChats ??= []).push({ ...record.original, replacementId: record.id, abandonedAt: record.at, reason: 'explicit-new-session' });
+          const priorPhase = fresh.chatReplacement?.phase;
           fresh.chatReplacement = structuredClone(record);
+          // Only the first current-area installation selects later-area inheritance.
+          // Observation/recovery checkpoints must not retarget a newer saved account.
+          if (record.phase === 'launchRequested' && record.area === fresh.areas[fresh.area]?.name
+            && !['launchRequested','launched'].includes(priorPhase)) fresh.configDir = record.configDir;
           if (['launchRequested', 'launched', 'rolledBack'].includes(record.phase)) {
             fresh.chats = fresh.chats.filter(item => item.area !== record.area);
             fresh.chats.push(record.phase === 'rolledBack' ? {...record.original, messageFile: record.original.originalMessageFile} : {...record.replacement});
           }
           if (['launched','rolledBack','ended'].includes(record.phase) && record.area === fresh.areas[fresh.area]?.name) clearChatFailure(fresh);
         });
+        Object.assign(replacementRun, run);
       };
-      chat = await restartChat({ run, chat, message, pending: pending && !['launched','rolledBack','ended'].includes(pending.phase) ? pending : undefined }, { ...p, checkpoint });
+      chat = await restartChat({ run: replacementRun, chat, message, pending: recovering ? pending : undefined }, { ...p, checkpoint });
       if (run.chatReplacement?.phase === 'ended') return done(`Ended the historical ${chat.area} replacement attempt without launching or resuming it. The current chat and progress are kept.`);
       if (run.chatReplacement?.phase === 'rolledBack') return done(`Restored the usable ${chat.area} chat. The same replacement attempt was rolled back.`);
       if (run.chatReplacement?.recovery?.resumeRequested) return done(`Resumed this attempt's ${chat.area} session in Herdr session pdd; no second first message was sent. The run, completed work, gates and approvals are kept.`);
@@ -2296,6 +2518,7 @@ const openRunCommand = (args, ports) => lockedMutation(args, ports, openRunLocke
 export const startRun=saveGuard(startRunCommand);
 
 export const recordEvidence=saveGuard(recordEvidenceCommand);
+export const associateEvidenceWorkspace=saveGuard(associateEvidenceWorkspaceCommand);
 
 export const stepDone=saveGuard(stepDoneCommand);
 
