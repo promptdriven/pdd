@@ -1,0 +1,79 @@
+{
+  "kind": "native-draft-cases",
+  "status": "draft; expectations await person review",
+  "story_path": "user_stories/read-saved-lint.md",
+  "owner_prompt": "prompts/cli/runtime-client.prompt.md",
+  "public_boundary": "src/runtime-client.mjs: module function runCheck({words, options, cwd, cache=false}, ports)",
+  "runtime_check": "BLOCKED",
+  "runtime_reason": "No owner Runtime interface; native Git discovery/capture, archive/hash, saved-state files and locks are unbound (#2548). This is not a prompt-runtime.program-scenario.v1 scenario. No check-only API is proposed.",
+  "native_replay": "NOT RUN for this inventory; code-area replay must consume these expected values at the real public boundary",
+  "authority": [
+    "https://github.com/promptdriven/pdd/issues/2840",
+    "https://github.com/promptdriven/pdd/issues/2840#issuecomment-6636030289"
+  ],
+  "criteria": [
+    {"id": "AC1", "text": "After `pdd lint place-order --timeout 1` returns a pending batch, reading that batch with `pdd test --read BATCH` after its one selected test passes lint prints \"Lint: 1 of 1 tests pass. 0 AI calls. No checks were sent.\" and exits 0; with `--json`, the summary is the same and the row state is `passed`."},
+    {"id": "AC2", "text": "Reading the same standalone lint batch after the original lint already passed gives the same passing summary, exit 0 and `passed` JSON row."},
+    {"id": "AC3", "text": "Reading a standalone lint batch that finished refused shows its refusals and exits 4; its JSON row state is `refused`."},
+    {"id": "AC4", "text": "These standalone lint reads send no new lint or Story check and do not advise starting a fresh check. Reading a normal Story check held for lint still continues that original check with its saved selection and ceiling of 6 calls, without repeating lint."}
+  ],
+  "setup": {
+    "synthetic": true,
+    "isolation": "Each case uses a fresh temporary Git repository, external saved-state directory and fake authenticated owner; no hosted transport or credentials.",
+    "selected_tests": ["tests/place-order.json"],
+    "transport": "Local fake Runtime; confirm matching lint ID/command and supplied per-test outcome. Count POSTs before and after each read.",
+    "clock": "Injected deterministic clock; initial pending lint reaches the explicit 1-minute wait, exits 3 and saves its batch before the read.",
+    "text_assertions": "Require the summary as a complete output line; other owned diagnostics may surround it. Every emitted line ends with a newline."
+  },
+  "standalone_read_invariants": {
+    "new_lint_posts": 0,
+    "new_check_posts": 0,
+    "ai_calls": 0,
+    "forbidden_text": ["Run a fresh pdd test command to start checks."],
+    "passing_forbidden": {"row_state": "not_run", "reason_code": "lint-finished", "exit_code": 5}
+  },
+  "cases": [
+    {
+      "id": "pending-first-pass-text", "criterion_ids": ["AC1", "AC4"],
+      "given": {"intent": "explicit lint-only", "original_lint": "pending; exit 3", "latest_lint": "one selected test passed"},
+      "action": {"command": "pdd test --read BATCH", "output": "text"},
+      "expected": {"exit_code": 0, "summary_line": "Lint: 1 of 1 tests pass. 0 AI calls. No checks were sent.", "apply_standalone_read_invariants": true}
+    },
+    {
+      "id": "pending-first-pass-json", "criterion_ids": ["AC1", "AC4"],
+      "given": {"intent": "explicit lint-only", "original_lint": "pending; exit 3", "latest_lint": "one selected test passed"},
+      "action": {"command": "pdd test --read BATCH --json", "output": "json"},
+      "expected": {"exit_code": 0, "row_state": "passed", "summary_line": "Lint: 1 of 1 tests pass. 0 AI calls. No checks were sent.", "apply_standalone_read_invariants": true}
+    },
+    {
+      "id": "already-passed-text", "criterion_ids": ["AC2", "AC4"],
+      "given": {"intent": "explicit lint-only", "original_lint": "passed; exit 0", "latest_lint": "one selected test passed"},
+      "action": {"command": "pdd test --read BATCH", "output": "text"},
+      "expected": {"exit_code": 0, "summary_line": "Lint: 1 of 1 tests pass. 0 AI calls. No checks were sent.", "apply_standalone_read_invariants": true}
+    },
+    {
+      "id": "already-passed-json", "criterion_ids": ["AC2", "AC4"],
+      "given": {"intent": "explicit lint-only", "original_lint": "passed; exit 0", "latest_lint": "one selected test passed"},
+      "action": {"command": "pdd test --read BATCH --json", "output": "json"},
+      "expected": {"exit_code": 0, "row_state": "passed", "summary_line": "Lint: 1 of 1 tests pass. 0 AI calls. No checks were sent.", "apply_standalone_read_invariants": true}
+    },
+    {
+      "id": "refused-text", "criterion_ids": ["AC3", "AC4"],
+      "given": {"intent": "explicit lint-only", "original_lint": "pending; exit 3", "latest_lint": "selected test refused", "diagnostic": {"code": "story-criterion-mismatch", "file": "tests/place-order.json", "message": "Criterion text does not match the Story."}},
+      "action": {"command": "pdd test --read BATCH", "output": "text"},
+      "expected": {"exit_code": 4, "diagnostic_preserved": true, "apply_standalone_read_invariants": true}
+    },
+    {
+      "id": "refused-json", "criterion_ids": ["AC3", "AC4"],
+      "given": {"intent": "explicit lint-only", "original_lint": "pending; exit 3", "latest_lint": "selected test refused", "diagnostic": {"code": "story-criterion-mismatch", "file": "tests/place-order.json", "message": "Criterion text does not match the Story."}},
+      "action": {"command": "pdd test --read BATCH --json", "output": "json"},
+      "expected": {"exit_code": 4, "row_state": "refused", "diagnostic_preserved": true, "apply_standalone_read_invariants": true}
+    },
+    {
+      "id": "normal-check-continuation-control", "criterion_ids": ["AC4"],
+      "given": {"intent": "explicit normal Check", "original_command": "pdd test place-order --max-calls 6 --timeout 1", "original_lint": "pending; exit 3", "latest_lint": "one selected test passed", "owner_repo_source": "unchanged", "check_dispatch": "never posted; no ID or claim", "check_reply": "passed"},
+      "action": {"command": "pdd test --read BATCH --json", "output": "json"},
+      "expected": {"exit_code": 0, "row_state": "passed", "new_lint_posts": 0, "new_check_posts": 1, "check_max_calls": 6, "selected_tests": ["tests/place-order.json"], "check_source_multipart": "original captured source retained"}
+    }
+  ]
+}
