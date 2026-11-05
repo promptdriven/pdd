@@ -77,28 +77,40 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
   let check = null, lint = null;
   for (const name of names) {
     const batch = readJson(join(directory, name, 'batch.json'));
-    if (!batch || batch.batch !== name || typeof batch.root !== 'string' || real(batch.root) !== wanted || !Array.isArray(batch.rows)) continue;
+    if (!batch || batch.batch !== name || typeof batch.root !== 'string' || !Array.isArray(batch.rows)) continue;
+    let association=null;
+    if(workspace) {
+      try { association=workspace({root,producerRoot:batch.root,tests:[...new Set(batch.rows.filter(row=>!row.unsent).map(row=>row.test))],source_sha256:batch.source_sha256,runId:batch.association?.runId??null,stage:batch.association?.stage??null}); } catch { continue; }
+      if(association?.state!=='eligible') {
+        // Ordinary same-worktree history remains readable when its source has
+        // drifted or its legacy source identity is unavailable. It retains the
+        // existing changed/unknown judgment. Alternate or stage-bound evidence
+        // must be admitted by its owner before any repository filtering.
+        if(real(batch.root)!==wanted||batch.association)continue;
+        association=null;
+      }
+    } else if(real(batch.root)!==wanted)continue;
     const at = Date.parse(batch.created_at);
     if (!Number.isFinite(at) || at < since) continue;
-    if (batch.intent === 'lint-only') { if (!lint || at >= lint.at) lint = { name, at, batch }; }
-    else if (batch.intent === 'check' && (!check || at >= check.at)) check = { name, at, batch };
+    if (batch.intent === 'lint-only') { if (!lint || at >= lint.at) lint = { name, at, batch, association }; }
+    else if (batch.intent === 'check' && (!check || at >= check.at)) check = { name, at, batch, association };
   }
   if (check) {
     const { batch } = check, summary = readJson(join(directory, check.name, 'summary.json'));
     let source = 'unknown';
     try {
       const tests = [...new Set(batch.rows.map(row => row?.test).filter(test => typeof test === 'string'))].sort();
-      if (/^[a-f0-9]{64}$/.test(batch.source_sha256 ?? '') && tests.length) source = capture(root, { tests, appMap: null }).sha256 === batch.source_sha256 ? 'current' : 'changed';
+      if (/^[a-f0-9]{64}$/.test(batch.source_sha256 ?? '') && tests.length) source = capture(check.association?.sourceAnchor?.root ?? root, { tests, appMap: null }).sha256 === batch.source_sha256 ? 'current' : 'changed';
     } catch { source = 'unknown'; }
     const stories = Array.isArray(summary?.rows) ? [...new Set(summary.rows.map(row => text(row?.summary_line)).filter(Boolean))] : [];
     results.push({ kind: 'pdd test', batch: check.name, at: check.at, source, requests: requestsOf(batch.rows), reports: reportsOf(batch.rows),
-      summary: text(summary?.summary_line) || 'result not saved (the check did not finish)', stories,
+      ...(check.association?{stage:check.association.stage,sourceAnchor:check.association.sourceAnchor}:{}),summary: text(summary?.summary_line) || 'result not saved (the check did not finish)', stories,
       ...identity(batch.rows) });
   }
   if (lint) {
     const rows = lint.batch.rows.filter(row => row && typeof row === 'object');
     const passing = rows.filter(row => row.state === 'passed').length, ended = ['passed', 'failed', 'refused'].includes(lint.batch.lint?.state) || rows.every(row => ['passed', 'failed', 'refused'].includes(row.state));
-    results.push({ kind: 'pdd lint', batch: lint.name, at: lint.at, requests: requestsOf([lint.batch.lint]), summary: ended ? `Lint: ${passing} of ${rows.length} tests pass. 0 AI calls.` : 'Lint: result unknown (the lint did not finish).' });
+    results.push({ kind: 'pdd lint', batch: lint.name, at: lint.at, ...(lint.association?{stage:lint.association.stage,sourceAnchor:lint.association.sourceAnchor}:{}),requests: requestsOf([lint.batch.lint]), summary: ended ? `Lint: ${passing} of ${rows.length} tests pass. 0 AI calls.` : 'Lint: result unknown (the lint did not finish).' });
   }
   if (runDir) {
     const proof = proveResult(join(runDir, 'old-code-proof.json'), { runId, since, root, baseBranch }, git);
@@ -128,7 +140,7 @@ export function resultLines(results, { kinds = null } = {}) {
   if (!shown.length) return [noResultLine(kinds ?? KINDS)];
   return shown.map(result => {
     if (result.kind === 'native evidence') return `${PDD_RESULT}: native evidence (${iso(result.at)}, source ${result.source}, ${result.stage === 'pr1' ? 'PR 1 (historical)' : result.stage || 'unknown stage'}): ${nativeResultSummary(result.assessment)}`;
-    const facts = [result.batch && `batch ${result.batch}`, iso(result.at), result.source && `source ${result.source}`,
+    const facts = [result.batch && `batch ${result.batch}`, iso(result.at), result.source && `source ${result.source}`, result.stage && (result.stage==='pr1'?'PR 1 (historical)':result.stage),
       result.engine && `engine ${result.engine}${result.engineCached ? ' (cached)' : ''}`, result.model && `model ${result.model}${result.modelCached ? ' (cached)' : ''}`,
       result.requests?.length && `request${result.requests.length > 1 ? 's' : ''} ${result.requests.slice(0, SHOWN).join(' ')}`,
       result.headSha && `head ${result.headSha.slice(0, 7)}`].filter(Boolean).join(', ');
@@ -474,7 +486,8 @@ function nativeContextFromOriginals(selectors,input,retained,ports) {
   if(ports.workspace&&known(producerRoot)&&Array.isArray(tests)&&known(source?.source_sha256)) {
     try{association=ports.workspace({root:selectors.root,producerRoot,tests,source_sha256:source.source_sha256,runId:source.runId??null,stage:source.stage??null});}catch(error){limits.push(`Native association lookup unavailable: ${text(error.message)}.`);}
   }
-  const associationValid=association?.state==='eligible'&&(!selectors.runId||association.runId===selectors.runId)&&['current','pr1'].includes(association.stage)&&known(association.producerRoot)&&Array.isArray(association.tests)&&association.tests.length===tests?.length&&association.tests.every((path,index)=>path===tests[index]);
+  const ownedSameRoot=association.runId===null&&source?.runId==null&&association.stage==='current'&&real(association.producerRoot??'')===real(selectors.root);
+  const associationValid=association?.state==='eligible'&&(!selectors.runId||association.runId===selectors.runId||ownedSameRoot)&&['current','pr1'].includes(association.stage)&&known(association.producerRoot)&&Array.isArray(association.tests)&&association.tests.length===tests?.length&&association.tests.every(path=>tests.includes(path));
   checks.push({check:'workspace-association',state:associationValid?'checked':'unavailable',reason:association?.reason??'unknown',stage:association?.stage??'unknown'});
   if(!associationValid)limits.push(`Native run/source association is unverified: ${text(association?.reason||'unknown owner or stage')}.`);
   const sourceMatches=object(assertedSource)&&['sourceId','implementationId','testsId'].every(key=>known(assertedSource[key])&&assertedSource[key]===candidate[key]);
@@ -567,11 +580,12 @@ function nativeResultSummary(a) {
   const rows = [`profile ${text(a.profileId)}: ${a.profileState}`, `Story native proof: ${a.storyNativeProof}`, `origin ${a.origin}`, `receipt ${a.receiptState}`,
     `occurrences ${a.occurrenceCount ?? 'unknown'}, unique IDs ${a.uniqueIdCount ?? 'unknown'}`];
   for (const name of ['missingIds','failedIds','skippedIds','unknownIds','duplicateIds','optionalSkippedIds','unexecutedGates','prerequisiteProblems']) if (a[name].length) rows.push(`${name}: ${a[name].map(id=>text(id)).join(', ')}`);
-  for (const criterion of a.criteria) rows.push(`${text(criterion.id)}: ${criterion.state} (${criterion.reason}); native IDs ${criterion.nativeIds.map(id=>text(id)).join(', ') || 'none'}`);
+  for (const criterion of a.criteria) rows.push(`${text(criterion.id)}: ${criterion.state} (${criterion.reason}); criterion ${text(criterion.text,1000)}; native IDs ${criterion.nativeIds.map(id=>text(id)).join(', ') || 'none'}`);
   for (const row of a.observations) rows.push(`${text(row.occurrenceId)} ${text(row.testId)}: ${text(row.outcome)}; selected ${row.selected ?? 'unknown'}, started ${row.started ?? 'unknown'}${row.skipReason ? `; ${text(row.skipReason)}` : ''}`);
   for (const row of a.gates) rows.push(`gate ${text(row.id)}: ${text(row.outcome)}`);
   for (const row of a.prerequisites) rows.push(`fixture ${text(row.id)}: ${text(row.state)}, artifact ${text(row.artifactId)}, reference ${text(row.verificationRef)}`);
-  rows.push(`original ${text(a.identity.originalRef)}, verification ${text(a.identity.verificationRef)}`);
+  rows.push(`source ${text(a.identity.sourceId)}, implementation ${text(a.identity.implementationId)}, tests ${text(a.identity.testsId)}, profile prompt ${text(a.identity.profilePrompt)}, review ${text(a.identity.profileApproval)}`);
+  rows.push(`original ${text(a.identity.originalRef)}, source reference ${text(a.identity.sourceRef)}, verification ${text(a.identity.verificationRef)}`);
   rows.push(...a.limits.map(limit=>`Limit: ${text(limit,1000)}`));
   return rows.join('; ');
 }

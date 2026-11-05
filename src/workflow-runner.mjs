@@ -23,7 +23,7 @@ import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
 import { causeText } from './runtime-output.mjs';
 import { preparePrEvidence } from './workflow-pr-evidence.mjs';
 import { validateProofRecord } from './workflow-prove.mjs';
-import { readRunResults, resultLines, usableResult, noResultLine } from './workflow-results.mjs';
+import { readRunResults, resultLines, usableResult, noResultLine, prepareNativeEvidence } from './workflow-results.mjs';
 import { collectTestInventory } from './workflow-inventory.mjs';
 import {adoptReplayCorpus,REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinReplayVectors,readReplayEvidence,formatReplayEvidence} from './workflow-replay.mjs';
 
@@ -905,7 +905,8 @@ async function publicationEvidence(run, area, p) {
   }
   if (run.publicationPending) evidence.lines.unshift('Check evidence: publication-pending (source is being published).');
   // pdd's own pdd test and pdd lint results lead the body; the code PR's prove result is its Old-code proof line.
-  evidence.pddLines = resultLines(ownResults(run, p), { kinds: ['pdd test', 'pdd lint'] });
+  const results=ownResults(run,p);
+  evidence.pddLines = resultLines(results, { kinds: ['pdd test', 'pdd lint', ...results.some(result=>result.kind==='native evidence')?['native evidence']:[]] });
   return evidence;
 }
 function evidenceFit(lines, room, env) {
@@ -1264,17 +1265,41 @@ async function recordEvidenceCommand({ ref, summaryFile, cwd }, ports) {
   const p = deps(ports), found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
   const run = found.run;
-  let receipt, source, lines;
+  let receipt, source, lines, association;
   try {
     if (!summaryFile || !lstatSync(resolve(cwd, summaryFile)).isFile() || lstatSync(resolve(cwd, summaryFile)).size > 2 * 1024 * 1024) throw Error('Supply a regular saved JSON file of at most 2 MiB.');
     receipt = JSON.parse(readFileSync(resolve(cwd, summaryFile), 'utf8'));
-    if (realpathSync(receipt.repo) !== realpathSync(run.root)) throw Error('The evidence belongs to a different repository/worktree.');
+    if (receipt.schema === 'pdd.native-evidence-import.v1') {
+      const prepared = prepareNativeEvidence({root:run.root,runDir:run.runDir,runId:run.runId,summaryFile:resolve(cwd,summaryFile)},
+        {workspace:input=>readEvidenceEligibility(input,p)});
+      const folder = join('evidence',p.randomUUID());
+      mkdirSync(join(run.runDir,folder),{recursive:true,mode:0o700});
+      const native = {...prepared.record,originals:prepared.record.originals.map((row,index)=> {
+        const savedPath = join(folder,String(index));
+        writeFileSync(join(run.runDir,savedPath),prepared.originals[index].bytes,{flag:'wx',mode:0o600});
+        return {...row,savedPath};
+      })};
+      const at = p.now();
+      writeFileSync(join(run.runDir,folder,'admission.json'),JSON.stringify(native,null,2)+'\n',{flag:'wx',mode:0o600});
+      commitRun(run,p,latest=>{(latest.evidence??=[]).push({at,native});});
+      return done(`Recorded native original evidence for ${run.repo}#${run.number}: profile ${prepared.assessment.profileState}; Story native proof ${prepared.assessment.storyNativeProof}. Originals and limits retained. Steps, gates and PRs are unchanged. This records evidence, not fresh execution or approval.`);
+    }
     if (!/^[a-f0-9]{64}$/.test(receipt.source_sha256 ?? '') || !Array.isArray(receipt.rows) || !receipt.rows.length) throw Error('Saved check JSON needs source_sha256 and nonempty rows.');
     const tests = receipt.rows.map(row => row?.test);
-    if (tests.some(path => typeof path !== 'string' || !path) || new Set(tests).size !== tests.length) throw Error('Evidence test paths must be unique.');
+    evidenceTests(tests);
     source = { kind: 'runtime-capture-v1', sha256: receipt.source_sha256, tests };
-    if (!matchesSource({ source }, run.root, null)) throw Error('The saved source does not match the current selected files. Read a compatible receipt or run a fresh selected check.');
-    const found = findTests({ root: run.root });
+    const producer=realpathSync(receipt.repo);
+    association=(run.evidenceAssociations??[]).find(a=>a.workspaceRoot===producer && selectionEqual(a.tests,tests) && a.source_sha256===source.sha256);
+    const previous=[...(run.evidence??[])].reverse().find(e=>e.association && sameFact(e.receipt,receipt));
+    if(previous && (!association || previous.association.stage!==association.stage || !sameFact(previous.association.sourceAnchor,association.sourceAnchor)))
+      throw Error('The original evidence stage is no longer registered; it cannot be relabelled.');
+    let root=run.root;
+    if(association)root=checkedAssociation(run,association);
+    else {
+      if(producer!==realpathSync(run.root))throw Error('The evidence belongs to a different repository/worktree without a registered association.');
+      if(!matchesSource({source},run.root,null))throw Error('The saved source does not match the current selected files. Read a compatible receipt or run a fresh selected check.');
+    }
+    const found = findTests({ root });
     const rows = receipt.rows.map(row => {
       const test = found.tests.find(test => test.path === row.test);
       if (!test || test.story !== row.story || !['passed', 'failed', 'refused', 'not_run', 'unknown', 'queued', 'running'].includes(row.state))
@@ -1287,14 +1312,18 @@ async function recordEvidenceCommand({ ref, summaryFile, cwd }, ports) {
     const label = line => typeof line === 'string' ? line.replace(LABEL_START, PROMPT_TESTS_LABEL) : line;
     if (rows.some(row => label(row.summary_line) !== expected.get(row.story))) throw Error('Evidence summary_line does not match its structured Story results.');
   } catch (error) { return fail(`Evidence not recorded: ${oneLine(error.message)}`); }
-  const evidence={at:p.now(),summary:[...new Set(lines)].join('\n'),source,receipt};
-  commitRun(run,p,latest=>{(latest.evidence??=[]).push(evidence);});
+  const reports=receipt.rows.flatMap(row=>typeof row.report_url==='string' && /^https?:\/\/[^\s<>\x22\x27`]+$/.test(row.report_url)?[`Report (${row.story}): ${row.report_url}`]:[]);
+  const evidence={at:p.now(),summary:[...new Set([...lines,...reports])].join('\n'),source,receipt,...(association?{association:structuredClone(association)}:{})};
+  commitRun(run,p,latest=>{
+    if(!eligibleEvidence(latest,evidence,{stage:association?.stage,fingerprint:null}))throw Error('The selected evidence source or association changed before saving.');
+    (latest.evidence??=[]).push(evidence);
+  });
   return done(`Recorded source-verified saved evidence for ${run.repo}#${run.number}. Steps, gates and PRs are unchanged. This records evidence, not fresh execution or approval.`);
 }
 
 // pdd's own results for a run (pdd test, pdd lint, pdd workflow prove). A read problem gives no results, never a stop.
 function ownResults(run, p) {
-  try { return (p.readRunResults ?? readRunResults)({ root: run.root, runDir: run.runDir, runId: run.runId, since: run.startedAt ?? 0, baseBranch: run.baseBranch ?? null }, { env: p.env }); }
+  try { return (p.readRunResults ?? readRunResults)({ root: run.root, runDir: run.runDir, runId: run.runId, since: run.startedAt ?? 0, baseBranch: run.baseBranch ?? null }, { env: p.env, workspace:input=>readEvidenceEligibility(input,p) }); }
   catch { return []; }
 }
 // The steps whose done output shows pdd's own results, or a visible "no pdd result" warning.
@@ -2227,8 +2256,9 @@ async function runStatusCommand({ ref, cwd, all = false, json = false, cancelled
   if(!ordinaryOwnership&&!snapshotOnly)await refreshPr(found.run, p);
   const run = found.run, facts = ended(run)||ordinaryOwnership||snapshotOnly ? {} : await gateFacts(run, p), chat = ordinaryOwnership||snapshotOnly?null:await chatState(run, p);
   const snapshot = requestSnapshot(run, p);
-  if (json) { const { line, ...item } = summary(run, p.timeZone, chat, facts); return done(JSON.stringify({ runs: [{ ...item, ...snapshot, ordinaryOwnership }] }, null, 2)); }
-  return done([detail(run, chat, facts), ...ownershipLines(ordinaryOwnership), ...requestLines(snapshot, { ended: ended(run), p })].join('\n'));
+  const nativeResults=ownResults(run,p).filter(result=>result.kind==='native evidence');
+  if (json) { const { line, ...item } = summary(run, p.timeZone, chat, facts); return done(JSON.stringify({ runs: [{ ...item, ...snapshot, ordinaryOwnership, nativeResults }] }, null, 2)); }
+  return done([detail(run, chat, facts), ...(nativeResults.length?resultLines(nativeResults):[]), ...ownershipLines(ordinaryOwnership), ...requestLines(snapshot, { ended: ended(run), p })].join('\n'));
 }
 
 const replacementPhases = ['intent', 'closeRequested', 'closed', 'createRequested', 'prepared', 'launchRequested', 'launched', 'rolledBack', 'ended'];

@@ -1,4 +1,6 @@
 import {readEvidenceEligibility} from './workflow-runner.mjs';
+import {allRuns} from './workflow-runs.mjs';
+import {assessNativeEvidence, resultLines, usableResult} from './workflow-results.mjs';
 import {loadRuntimeWorkspace,allowsRuntimePath,requireRuntimePath,RuntimeWorkspaceError} from './runtime-workspace.mjs';
 // Generated from prompts/cli/runtime-client.prompt.md (sha256: 968f5c72c403d2dd588d3e44b8e3a6db8a9443e2cf6fe0b054c64ddc8a17e26e).
 import { hasProgress, outcomeDone, outcomeFor, outcomeOverall, outcomeText, progressText } from './runtime-outcome.mjs';
@@ -1941,6 +1943,49 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
   const context = { ports, cacheEnabled: cache || !!options['--lf'] || !!options['--cache-clear'], json: options['--json'] === true, details: options['--details'] === true, interrupted: false, warnings: [] };
   let release = () => {};
   try {
+    if (options['--lint'] === true && words.length && Object.keys(options).every(key => ['--lint','--local','--json','--timeout'].includes(key))) {
+      const {root,found,normalized} = localSetup(cwd,words);
+      const selection = selectTests(found,normalized,{native:true});
+      if (selection.nativeSelections?.length) {
+        if(selection.untested.length)throw new Stop(2,selection.untested.join('\n'));
+        if(selection.unknown.length)throw new Stop(2,[`Unknown story ${selection.unknown.map(word=>JSON.stringify(cleanText(word))).join(', ')}. Stories:`,...storyList(found)].join('\n'));
+        const runs = allRuns({cancelled:true},{env:ports.env}).filter(run => {
+          try { return realpathSync(run.root) === realpathSync(root); } catch { return false; }
+        });
+        const native = [];
+        for (const descriptor of selection.nativeSelections) {
+          const owners = runs.filter(run => (run.evidence ?? []).some(entry => entry.native?.profileId === descriptor.profileId && entry.native?.storyPath === descriptor.storyPath));
+          const run = owners.length === 1 ? owners[0] : null;
+          const assessment = await assessNativeEvidence({root,runDir:run?.runDir ?? null,runId:run?.runId ?? null,profileId:descriptor.profileId,storyPath:descriptor.storyPath},
+            {workspace:input=>readEvidenceEligibility(input,{env:ports.env})});
+          if (descriptor.reason || owners.length !== 1) {
+            assessment.profileNativeProof = assessment.storyNativeProof = 'none';
+            assessment.limits.push(descriptor.reason ?? (owners.length ? 'Native evidence run association is ambiguous.' : 'No owned native evidence run/profile association.'));
+          }
+          native.push({...descriptor,assessment});
+        }
+        const missing = native.some(row=>!usableResult({kind:'native evidence',assessment:row.assessment}));
+        let exitCode = missing ? 1 : 0;
+        const runtimeWords = selection.selected.map(test=>test.path);
+        if (context.json) {
+          let output = '';
+          if (runtimeWords.length) exitCode = await runCheck({words:runtimeWords,options,cwd,cache},{...givenPorts,stdout:{write:chunk=>{output+=chunk;}}});
+          if (exitCode === 0 && missing) exitCode = 1;
+          let report = {};
+          if (output.trim()) { try { report = JSON.parse(output); } catch { line(ports.stdout,output.trim()); } }
+          line(ports.stdout,JSON.stringify({...report,repo:root,exit_code:exitCode,native_assessments:native,...(!runtimeWords.length?{rows:[],summary_line:'Native evidence assessment. 0 AI calls. No checks were sent.'}:{})}));
+        } else {
+          for (const row of native) {
+            line(ports.stdout,`Native Story: ${row.storyPath}; profile ${row.profileId ?? 'unknown'}; owner ${row.promptPath ?? 'unknown'}`);
+            for (const criterion of row.assessment.criteria) line(ports.stdout,`${criterion.id}: ${criterion.text}`);
+            for (const value of resultLines([{kind:'native evidence',assessment:row.assessment,source:row.assessment.sourceState,stage:row.assessment.identity.stage}])) line(ports.stdout,value);
+          }
+          if (runtimeWords.length) exitCode = await runCheck({words:runtimeWords,options,cwd,cache},givenPorts);
+          if (exitCode === 0 && missing) exitCode = 1;
+        }
+        return exitCode;
+      }
+    }
     if (Object.hasOwn(options, '--compact') && (options['--compact'] !== true || options['--fill-hash'] !== true || words.length
       || Object.keys(options).some(name => !['--fill-hash', '--compact'].includes(name)))) throw new Stop(2, '--compact requires --fill-hash, without other options or Stories.');
     // Local modes dispatch before repository runtime state, origin or sign-in.
@@ -3398,6 +3443,24 @@ export function runtimeWorkspaceMigrationStore({root,projectionRoot,env=process.
   const p=casePorts({...given,env}),directory=stateDirectory(env,root),oldKey=p.hash(Buffer.from(projectionRoot)).slice(0,16);
   const readJson=path=>JSON.parse(caseRead(p,path));
   const list=path=>{try{caseSafe(p,path,{directory:true});return p.files.list(path);}catch(e){if(e.code==='ENOENT'||!caseStat(p,path))return[];throw e;}};
+  const destinationRepo=join(directory,'repos',p.hash(Buffer.from(root)).slice(0,16)+'.json');
+  function migrateDoor(pointer,record) {
+    if(!pointer?.descriptor||!pointer?.last)throw Error('original last-door pointer is unavailable; retain the original recovery command');
+    const descriptor=readJson(pointer.descriptor),lastRaw=caseRead(p,pointer.last),mapping=new Map(record.mappings.map(m=>[m.from,m.to]));
+    if(descriptor.version!==1||descriptor.root!==projectionRoot||!UUID.test(descriptor.sessionId??'')||!descriptor.login||!descriptor.origin
+      ||pointer.descriptor!==join(directory,'tries',descriptor.sessionId+'.door.json')||descriptor.repoState!==join(directory,'repos',oldKey+'.json')
+      ||!Object.values(readJson(descriptor.repoState).tries??{}).some(row=>row.id===descriptor.sessionId))throw Error('original PDD-owned door identity is unavailable');
+    const mapped=path=>{const target=mapping.get(path);if(!target)throw Error('door source has no exact destination mapping');return target;};
+    const mapHashes=hashes=>Object.fromEntries(Object.entries(hashes??{}).map(([path,hash])=>[mapped(path),hash]));
+    const stem=join(directory,'tries',`${descriptor.sessionId}.authored-${p.hash(Buffer.from(root)).slice(0,16)}`),descriptorPath=stem+'.door.json',lastPath=stem+'.last.json';
+    const next={...descriptor,root,originalPath:mapped(descriptor.originalPath),storyPath:mapped(descriptor.storyPath),prompt:mapped(descriptor.prompt),promptHashes:mapHashes(descriptor.promptHashes),effectivePromptHashes:mapHashes(descriptor.effectivePromptHashes),repoState:destinationRepo,stateDir:directory,
+      migration:{producerRoot:projectionRoot,originalDescriptor:pointer.descriptor,originalLast:pointer.last,readCommand:record.readCommand??null}};
+    // This is a local destination descriptor. Original execution records and
+    // their producer identity are immutable and remain at their original paths.
+    caseWrite(p,descriptorPath,JSON.stringify(next));
+    if(!caseStat(p,lastPath))caseWrite(p,lastPath,lastRaw,{exclusive:true});
+    return {descriptor:descriptorPath,last:lastPath};
+  }
   return{
     inventory(){
       const records=[],repoPath=join(directory,'repos',oldKey+'.json');let repo;
@@ -3415,10 +3478,18 @@ export function runtimeWorkspaceMigrationStore({root,projectionRoot,env=process.
         const old=item.record,mapping=new Map(record.mappings.map(m=>[m.from,m.to])),target=join(directory,'repos',p.hash(Buffer.from(root)).slice(0,16)+'.json');
         const current=caseStat(p,target)?readJson(target):{root,tries:{}};const tries={...current.tries};
         for(const [from,value] of Object.entries(old.tries??{})){const to=mapping.get(from);if(!to)throw Error('original Try has no exact destination mapping');if(tries[to]&&tries[to].id!==value.id)throw Error('authored repository already has another Try at this test');tries[to]={...value,original_root:projectionRoot};}
-        const next={...old,...current,root,original_root:projectionRoot,tries,last_batch:current.last_batch??old.last_batch??null};
+        const last_door=old.last_door?migrateDoor(old.last_door,{...record,readCommand:item.readCommand}):current.last_door;
+        const next={...old,...current,root,original_root:projectionRoot,tries,last_batch:current.last_batch??old.last_batch??null,...(last_door?{last_door}:{})};
         // Destination publication is separately prepared and recoverable. Original
         // receipts/state remain untouched and the selected lease guards this item.
         caseWrite(p,target,JSON.stringify(next));
+      }
+      if(item.state==='applied'&&item.kind==='try'&&itemId.endsWith('.door.json')) {
+        const old=readJson(join(directory,'repos',oldKey+'.json'));
+        if(old.last_door?.descriptor!==itemId)throw Error('door has no owned original last-result pointer; preserve its original recovery command');
+        const last_door=migrateDoor(old.last_door,{...record,readCommand:item.readCommand});
+        if(!caseStat(p,destinationRepo))throw Error('authored repository pointer is unavailable');
+        caseWrite(p,destinationRepo,JSON.stringify({...readJson(destinationRepo),last_door}));
       }
       caseWrite(p,path,JSON.stringify({...record,items:{[itemId]:item}}));return path;
     },
