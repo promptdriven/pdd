@@ -1,0 +1,59 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/workflow-dynamic-test-inventory.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "A generated test file whose cases have computed names reports an unknown count, rather than claiming zero tests or known removals, assertion changes, or skips."
+    }
+  ],
+  "initial_world": {
+    "requests": []
+  },
+  "simulation": {
+    "snapshot.read": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "available": false,
+        "reason": "snapshot unavailable",
+        "files": []
+      }
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "generated-computed-names",
+      "entry_path": "prompts/cli/workflow-inventory.prompt.md",
+      "operation": "analyzeTestChanges",
+      "input": {
+        "files": [
+          {
+            "oldPath": "",
+            "newPath": "test/generated.test.mjs",
+            "before": "",
+            "after": "for (const row of [{name:'one'}, {name:'two'}, {name:'three'}]) {\n  test(row.name, () => assert.ok(true));\n}\n"
+          }
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/available",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/text",
+          "op": "contains",
+          "value": "unknown"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}
