@@ -35,7 +35,7 @@ function fixture(t,{workflow='small-change',opted=false,promptPr=false,before=in
       const route=['push','ls-remote','fetch'].includes(args[0]);
       return exec('git',route?['-c',`url.${remote}.insteadOf=https://github.com/example/project.git`,...args]:args,{...opts,encoding:args[0]==='cat-file'?'buffer':'utf8'});
     }
-    assert.equal(file,'gh');f.events.push({kind:'gh',args:[...args],...(args[1]==='edit'?{remote:git('--git-dir',remote,'rev-parse','refs/heads/topic'),body:opts.input}:{})});
+    assert.equal(file,'gh');f.events.push({kind:'gh',args:[...args],...(args[0]==='api'&&args[2]==='PATCH'?{remote:git('--git-dir',remote,'rev-parse','refs/heads/topic'),body:JSON.parse(opts.input).body}:{})});
     const flag=name=>args[args.indexOf(name)+1];
     if(args[0]==='repo')return {stdout:JSON.stringify({nameWithOwner:'example/project',defaultBranchRef:{name:'main'},url:'https://github.com/example/project'})};
     if(args[1]==='list')return {stdout:JSON.stringify(f.prs)};
@@ -46,11 +46,11 @@ function fixture(t,{workflow='small-change',opted=false,promptPr=false,before=in
       const pr={number:23,url:'https://github.com/example/project/pull/23',state:'OPEN',headRefName:flag('--head'),baseRefName:flag('--base'),headRefOid,body,isCrossRepository:false,headRepositoryOwner:{login:'example'},headRepository:{name:'project'},mergeCommit:null};
       f.prs.push(pr);return {stdout:pr.url};
     }
-    if(args[1]==='edit') {
+    if(args[0]==='api'&&args[2]==='PATCH') {
       f.editAttempts=(f.editAttempts??0)+1;
       if(f.failEdit || f.editAttempts===f.failEditAt)return {stdout:'',stderr:'GraphQL: body update denied',code:1};
-      assert.equal(flag('--body-file'),'-');assert.equal(typeof opts.input,'string');
-      const body=opts.input;f.edits.push(body);f.prs[0].body=body;return {stdout:''};
+      assert.equal(flag('--input'),'-');assert.equal(typeof opts.input,'string');
+      const body=JSON.parse(opts.input).body;f.edits.push(body);f.prs[0].body=body;return {stdout:''};
     }
     assert.fail(`Unexpected gh ${args.join(' ')}`);
   }};
@@ -99,7 +99,7 @@ test('feature and bug stacked code PRs compare the fetched original run branch m
     assert.equal(f.prs[0].baseRefName,'prompt');proveCurrent(f,artifact(f));assert.notEqual(artifact(f).baseSha,f.promptSha);
     const oldHead=artifact(f).headSha;writeFileSync(join(f.root,'test/a.mjs'),`test('keep', () => assert.ok(value));\n`);
     f.events=[];const result=await f.done();assert.equal(result.exitCode,0,result.message);assert.equal(f.edits.length,2);
-    const edits=f.events.filter(e=>e.kind==='gh'&&e.args[1]==='edit'),push=f.events.findIndex(e=>e.kind==='git'&&e.args[0]==='push');
+    const edits=f.events.filter(e=>e.kind==='gh'&&e.args[0]==='api'&&e.args[2]==='PATCH'),push=f.events.findIndex(e=>e.kind==='git'&&e.args[0]==='push');
     assert.ok(f.events.indexOf(edits[0])<push&&push<f.events.indexOf(edits[1]));
     assert.equal(edits[0].remote,oldHead);assert.equal(edits[1].remote,artifact(f).headSha);
     assert.match(edits[0].body,/Old-code proof: publication-pending/);assert.doesNotMatch(edits[0].body,/Old-code proof: ✓/);
@@ -121,7 +121,7 @@ test('combined changed-source pending failure stops push, preserves the old body
   const f=fixture(t);writeFileSync(join(f.root,'test/a.mjs'),changed);assert.equal((await f.done()).exitCode,0);
   const previous=f.prs[0].body,oldHead=f.remoteHead();f.failEdit=true;f.events=[];writeFileSync(join(f.root,'test/a.mjs'),`test('third', () => {});\n`);
   const result=await f.done();assert.equal(result.exitCode,1,result.message);assert.equal(f.prs[0].body,previous);assert.ok(previous.includes(oldHead.slice(0,7)));
-  assert.match(result.message,/body update denied/);assert.match(result.message,/No source was pushed/);assert.match(result.message,/run done formal again/);
+  assert.match(result.message,/body update denied/);assert.match(result.message,/No source was pushed/);assert.match(result.message,/pdd workflow refresh-description 17 23/);
   assert.equal(f.events.some(e=>e.kind==='git'&&e.args[0]==='push'),false);assert.equal(f.remoteHead(),oldHead);
   assert.equal(artifact(f).headSha,f.git('rev-parse','HEAD'));assert.notEqual(artifact(f).headSha,f.remoteHead());
   f.failEdit=false;assert.equal((await f.done()).exitCode,0);proveCurrent(f,artifact(f));
@@ -132,17 +132,17 @@ test('combined unchanged-source inventory-only refresh failure warns and retains
   const previous=f.prs[0].body,oldHead=f.remoteHead();f.failEdit=true;f.events=[];
   const result=await f.done();assert.equal(result.exitCode,0,result.message);assert.equal(f.prs[0].body,previous);assert.equal(f.remoteHead(),oldHead);
   assert.match(result.message,/still shows the previous inventory/);assert.ok(result.message.includes(`${f.baseSha.slice(0,7)} → ${f.git('rev-parse','HEAD').slice(0,7)}`));
-  assert.match(result.message,/was saved locally/);assert.match(result.message,/body update denied/);assert.match(result.message,/run done formal again/);
-  assert.equal(f.events.filter(e=>e.kind==='gh'&&e.args[1]==='edit').length,1);assert.equal(artifact(f).headSha,f.remoteHead());
+  assert.match(result.message,/was saved locally/);assert.match(result.message,/body update denied/);assert.match(result.message,/pdd workflow refresh-description 17 23/);
+  assert.equal(f.events.filter(e=>e.kind==='gh'&&e.args[0]==='api'&&e.args[2]==='PATCH').length,1);assert.equal(artifact(f).headSha,f.remoteHead());
   f.failEdit=false;assert.equal((await f.done()).exitCode,0);proveCurrent(f,artifact(f));
 });
 
 test('combined non-opted final edit failure leaves real pushed source publication-pending',async t=>{
   const f=fixture(t);writeFileSync(join(f.root,'test/a.mjs'),changed);assert.equal((await f.done()).exitCode,0);
   const before=f.remoteHead();f.events=[];f.failEditAt=(f.editAttempts??0)+2;writeFileSync(join(f.root,'test/a.mjs'),`test('last', () => {});\n`);
-  const result=await f.done();assert.equal(result.exitCode,1);assert.match(result.message,/body update denied/);assert.match(result.message,/Source was pushed; the PR stays publication-pending/);assert.match(result.message,/run done formal again/);
+  const result=await f.done();assert.equal(result.exitCode,1);assert.match(result.message,/body update denied/);assert.match(result.message,/Source was pushed; the PR stays publication-pending/);assert.match(result.message,/pdd workflow refresh-description 17 23/);
   assert.notEqual(f.remoteHead(),before);assert.equal(f.remoteHead(),f.git('rev-parse','HEAD'));assert.match(f.prs[0].body,/Old-code proof: publication-pending/);assert.doesNotMatch(f.prs[0].body,/Old-code proof: ✓/);
-  const edits=f.events.filter(e=>e.kind==='gh'&&e.args[1]==='edit');assert.equal(edits.length,2);assert.equal(edits[0].remote,before);assert.equal(edits[1].remote,f.remoteHead());
+  const edits=f.events.filter(e=>e.kind==='gh'&&e.args[0]==='api'&&e.args[2]==='PATCH');assert.equal(edits.length,2);assert.equal(edits[0].remote,before);assert.equal(edits[1].remote,f.remoteHead());
   assert.equal(artifact(f).headSha,f.remoteHead());
 });
 
@@ -159,7 +159,7 @@ test('replay-enabled updates retain pending-before-push and final-edit failures 
   const f=fixture(t,{workflow:'feature',opted:true});writeFileSync(join(f.root,'test/a.mjs'),changed);
   assert.equal((await f.done()).exitCode,0);assert.ok(f.prs[0].body.includes('Test inventory commits:'));const replayAt=f.prs[0].body.indexOf('Code replay'),inventoryAt=f.prs[0].body.indexOf('Test inventory commits:');assert.ok(replayAt>=0&&inventoryAt<replayAt);
   f.events=[];writeFileSync(join(f.root,'test/a.mjs'),`test('last', () => {});\n`);assert.equal((await f.done()).exitCode,0);proveCurrent(f,artifact(f));
-  const edits=f.events.map((e,i)=>e.kind==='gh'&&e.args[1]==='edit'?i:-1).filter(i=>i>=0),push=f.events.findIndex(e=>e.kind==='git'&&e.args[0]==='push');assert.ok(edits[0]<push&&push<edits[1]);
+  const edits=f.events.map((e,i)=>e.kind==='gh'&&e.args[0]==='api'&&e.args[2]==='PATCH'?i:-1).filter(i=>i>=0),push=f.events.findIndex(e=>e.kind==='git'&&e.args[0]==='push');assert.ok(edits[0]<push&&push<edits[1]);
   f.failEdit=true;writeFileSync(join(f.root,'test/a.mjs'),`test('held', () => {});\n`);const before=f.remoteHead(),failed=await f.done();assert.equal(failed.exitCode,1);assert.equal(f.remoteHead(),before);assert.match(failed.message,/No source was pushed/);
   f.failEdit=false;f.failEditAt=f.editAttempts+2;const finalFailed=await f.done();assert.equal(finalFailed.exitCode,1);assert.notEqual(f.remoteHead(),before);assert.equal(f.remoteHead(),f.git('rev-parse','HEAD'));assert.match(finalFailed.message,/Source was pushed; the PR stays publication-pending/);assert.ok(f.prs[0].body.includes('Publication pending;'));assert.ok(f.prs[0].body.includes('Code replay: BLOCKED'));
 });
@@ -251,9 +251,9 @@ const path=${JSON.stringify(state)},s=JSON.parse(fs.readFileSync(path,'utf8')),a
 const save=()=>fs.writeFileSync(path,JSON.stringify(s));
 if(args[0]==='repo')process.stdout.write(JSON.stringify({nameWithOwner:'example/project',defaultBranchRef:{name:'main'},url:'https://github.com/example/project'}));
 else if(args[1]==='list')process.stdout.write(JSON.stringify(s.prs));
-else if(args[1]==='create'||args[1]==='edit'){
-  if(flag('--body-file')!=='-')throw Error('body must come from stdin');
-  const body=fs.readFileSync(0,'utf8');s.bodies.push({action:args[1],body,source:flag('--body-file'),remote:execFileSync('/usr/bin/git',['--git-dir',${JSON.stringify(f.remote)},'rev-parse','refs/heads/topic'],{encoding:'utf8'}).trim()});
+else if(args[1]==='create'||args[0]==='api'&&args[2]==='PATCH'){
+  const patch=args[0]==='api';if((patch?flag('--input'):flag('--body-file'))!=='-')throw Error('body must come from stdin');
+  const raw=fs.readFileSync(0,'utf8'),body=patch?JSON.parse(raw).body:raw;s.bodies.push({action:patch?'edit':'create',body,source:'-',remote:execFileSync('/usr/bin/git',['--git-dir',${JSON.stringify(f.remote)},'rev-parse','refs/heads/topic'],{encoding:'utf8'}).trim()});
   if(args[1]==='create'){
     const pr={number:23,url:'https://github.com/example/project/pull/23',state:'OPEN',headRefName:flag('--head'),baseRefName:flag('--base'),headRefOid:execFileSync('/usr/bin/git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),body,isCrossRepository:false,headRepositoryOwner:{login:'example'},headRepository:{name:'project'},mergeCommit:null};
     s.prs.push(pr);process.stdout.write(pr.url);

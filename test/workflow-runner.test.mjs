@@ -1262,7 +1262,7 @@ test('0.1.7 #9: a prompt approval committed by hand is pushed to PR 1 before the
   const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
   writeFileSync(gitShim, '#!/bin/sh\nif [ "$1" = fetch ]; then exit 0; fi\nif [ "$1" = push ]; then sha=$("' + realGit + '" rev-parse HEAD) || exit 1; ref=${3#*:}; local_ref=refs/remotes/origin/${ref#refs/heads/}; "' + realGit + '" update-ref "$local_ref" "$sha"; exit 0; fi\nexec "' + realGit + '" "$@"\n'); chmodSync(gitShim, 0o755);
   const ghScript = `#!/bin/sh
-if [ "$1" = pr ] && [ "$2" = edit ]; then cat > "$GH_CAPTURE"; cp "$GH_CAPTURE" "$GH_PR_BODY_FILE"; exit 0; fi
+if [ "$1" = api ] && [ "$3" = PATCH ]; then node -e 'const fs=require("fs"),body=JSON.parse(fs.readFileSync(0,"utf8")).body;fs.writeFileSync(process.env.GH_CAPTURE,body);fs.writeFileSync(process.env.GH_PR_BODY_FILE,body);'; exit 0; fi
 if [ "$1" = pr ] && [ "$2" = view ]; then
   if [ "$4" = --json ] && [ "$5" = body ]; then
     node -e 'const fs=require("fs"); process.stdout.write(JSON.stringify({body:fs.readFileSync(process.env.GH_PR_BODY_FILE,"utf8")}));'
