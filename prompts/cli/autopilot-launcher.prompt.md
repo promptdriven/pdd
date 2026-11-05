@@ -137,12 +137,23 @@ source state and mode are unchanged, return quietly before permission lookups;
 revalidate authority when there is an actual source change to assess or deliver. A PR waiting for a person in
 observe mode is quiet until its relevant trusted state changes.
 
-Only a successful idle-agent delivery records the fingerprint. A failed or
-busy delivery remains pending. Never submit to a working, blocked or unknown
-agent; wait for idle/done on a later tick and coalesce pending changes. First
-recipe delivery obeys the same busy rule. The skill owns cross-machine claims
-(pdd:working plus one comment), room scheduling and running issue progress;
-launcher polling must not repeatedly prompt that owner about the same work.
+Launch an empty native owner once when a pane needs an agent; launch acceptance
+is neither packet submission nor uptake and consumes no recipe or fingerprint.
+For the exact saved coordinator, use [area-chat delivery](workflow-chat.prompt.md#message-delivery)
+and its guarded ordered submission. The launcher retains its stricter rule:
+submit only when that coordinator is idle or done, never working, blocked or
+unknown. Validate the original target and durable submission intent immediately
+before transport; a replaced target cannot receive the old packet.
+
+Keep recipe, issue, timer and review work pending until safe submission is
+acknowledged. A dialog, unreadable screen, failed launch or confirmed rejection
+consumes no delivery fingerprint. If submission may have happened, retain
+uncertain custody: do not blindly resend or invent an acknowledgement. An
+acknowledgement establishes submission, not agent uptake. Coalesce pending
+changes and preserve them across workspace or pane recreation. The skill owns
+cross-machine claims (pdd:working plus one comment), room scheduling and running
+issue progress; launcher polling must not repeatedly prompt that owner about the
+same work.
 
 A trusted author/commenter is the repo owner, appears in configured trusted
 names, or has write/maintain/admin permission confirmed by GitHub. Association
@@ -165,7 +176,10 @@ The first task on the first launch is the repo's start-up recipe, before
 issues, even on an empty repo. Persist the installed package root and point each
 agent request to its bundled [Autopilot skill](../../skills/pdd-autopilot/SKILL.md),
 with a JSON packet containing repository, activation time, optional runs, trusted
-issues and the recipe-first flag. State that further issue/comment reads must
+issues and the recipe-first flag. Use the bundled PDD command and the explicitly
+selected HOME/profile consistently for the coordinator and normal issue handoff;
+preserve a confirmed saved agent family. Start or reuse the normal PDD workflow
+before issue edits or delegation, leaving its worktree, stages and gates to PDD. State that further issue/comment reads must
 use the same trust boundary. Follow that skill for recipe execution, room
 scheduling, cross-machine claims, per-prompt concurrency and stuck runs; keep
 these rules with their skill owner rather than copying them into the launcher.
