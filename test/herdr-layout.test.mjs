@@ -9,13 +9,126 @@ import { promisify } from 'node:util';
 
 import {fixture} from './helpers/herdr-layout-fixture.mjs';
 
+async function createWithoutWorktreeMetadata(f, {loseCreateReply = false, loseAttachReply = false, failCreateBeforeEffect = false} = {}) {
+ const command=f.ports.command;
+ f.ports.command=async args=>{
+  if(args[0]==='worktree'&&args[1]==='open'&&args[args.indexOf('--path')+1]===f.input.sourceRoot){
+   f.calls.push(args);
+   const workspaceId=args[args.indexOf('--workspace')+1],row=f.workspaces.find(w=>w.workspace_id===workspaceId);
+   if(row)row.worktree={checkout_path:f.input.sourceRoot,repo_key:f.input.commonDir,is_linked_worktree:false};
+   const reply={id:'cli:worktree:open',result:{workspace:structuredClone(row),already_open:true}};
+   if(loseAttachReply){loseAttachReply=false;throw Error('attach reply lost');}
+   return reply;
+  }
+  if(args[0]==='workspace'&&args[1]==='create'&&failCreateBeforeEffect){
+   failCreateBeforeEffect=false;f.calls.push(args);throw Error('create failed before mutation');
+  }
+  const reply=await command(args);
+  if(args[0]==='workspace'&&args[1]==='create'){
+   const workspaceId=reply.result.workspace.workspace_id;
+   f.workspaces.find(w=>w.workspace_id===workspaceId).worktree=null;
+   reply.result.workspace.worktree=null;
+   if(loseCreateReply){loseCreateReply=false;throw Error('create reply lost');}
+  }
+  return reply;
+ };
+}
+function openWithOwner(f, run) {
+ return f.module.withHerdrLayoutLock(()=>f.module.openHerdrRunLayout({...f.input,...(run?{run}:{})},f.ports),f.ports);
+}
+
+test('2859: checkpoints a newly created parent before attaching it and retries the same workspace',async t=>{
+ const f=await fixture(t);await createWithoutWorktreeMetadata(f);
+ let saved,interrupt=true;f.ports.checkpoint=async custody=>{saved=structuredClone(custody);if(interrupt&&custody.repoWorkspaceId&&custody.repoRoot){interrupt=false;throw Error('stop after parent custody');}};
+ await assert.rejects(openWithOwner(f),/stop after parent custody/);
+ assert.equal(f.workspaces.length,1);assert.equal(f.workspaces[0].worktree,null);
+ assert.equal(f.calls.filter(args=>args[0]==='worktree').length,0,'the attach must wait for durable parent custody');
+ assert(saved.repoWorkspaceId);assert.deepEqual(Object.keys(saved.repoRoot).sort(),['cwd','paneId','tabId','terminalId']);
+ const result=await openWithOwner(f,{runId:f.input.runId,layout:saved,chats:[]});
+ assert.equal(f.workspaces.length,2,'retry must reuse the created parent');
+ assert.equal(f.calls.filter(args=>args[0]==='workspace'&&args[1]==='create').length,1);
+ assert.deepEqual(f.calls.find(args=>args[0]==='worktree'&&args[1]==='open'),['worktree','open','--workspace',saved.repoWorkspaceId,'--path',f.input.sourceRoot,'--no-focus']);
+ const parent=f.workspaces.find(row=>row.workspace_id===saved.repoWorkspaceId);
+ assert.deepEqual(parent.worktree,{checkout_path:f.input.sourceRoot,repo_key:f.input.commonDir,is_linked_worktree:false});
+ assert.equal(result.repoWorkspaceId,saved.repoWorkspaceId);assert.deepEqual(result.repoRoot,saved.repoRoot);
+ assert.equal(f.workspaces.find(row=>row.workspace_id===result.workspaceId).worktree.is_linked_worktree,true);
+});
+
+test('2859: a lost attach acknowledgement is resolved from the saved ID and live inventory',async t=>{
+ const f=await fixture(t);await createWithoutWorktreeMetadata(f,{loseAttachReply:true});
+ const result=await openWithOwner(f);
+ assert.equal(f.calls.filter(args=>args[0]==='workspace'&&args[1]==='create').length,1);
+ assert.equal(f.calls.filter(args=>args[0]==='worktree'&&args[1]==='open').length,2,'one parent attach and one assigned run-worktree open');
+ assert.equal(result.repoWorkspaceId,f.workspaces[0].workspace_id);
+ assert.equal(f.workspaces.filter(row=>row.worktree?.checkout_path===f.input.sourceRoot).length,1);
+});
+
+test('2859: a lost create reply keeps uncertainty and never creates a duplicate workspace',async t=>{
+ const f=await fixture(t);await createWithoutWorktreeMetadata(f,{loseCreateReply:true});
+ let saved;f.ports.checkpoint=async custody=>{saved=structuredClone(custody);};
+ await assert.rejects(openWithOwner(f),/create reply lost/);
+ assert(saved.repoCreateIntent);assert.equal(f.workspaces.length,1);
+ const failure=await openWithOwner(f,{runId:f.input.runId,layout:saved,chats:[]}).then(()=>null,error=>error);
+ assert.equal(failure.code,'herdr_layout_identity_changed');
+ assert.equal(f.calls.filter(args=>args[0]==='workspace'&&args[1]==='create').length,1);
+ assert.equal(f.workspaces.length,1);assert.equal(f.workspaces[0].worktree,null);
+ assert.equal(f.calls.filter(args=>args[0]==='worktree').length,0);
+});
+
+test('2859: a create intent with no observed effect permits one safe retry',async t=>{
+ const f=await fixture(t);await createWithoutWorktreeMetadata(f,{failCreateBeforeEffect:true});
+ let saved;f.ports.checkpoint=async custody=>{saved=structuredClone(custody);};
+ await assert.rejects(openWithOwner(f),/create failed before mutation/);
+ assert(saved.repoCreateIntent);assert.equal(f.workspaces.length,0);
+ const result=await openWithOwner(f,{runId:f.input.runId,layout:saved,chats:[]});
+ assert.equal(f.calls.filter(args=>args[0]==='workspace'&&args[1]==='create').length,2);
+ assert.equal(f.workspaces.filter(row=>row.worktree?.checkout_path===f.input.sourceRoot).length,1);
+ assert(result.workspaceId);
+});
+
+test('2859: retries refuse a changed original root or foreign checkout identity',async t=>{
+ for(const kind of ['root','identity','extra-pane']){
+  const f=await fixture(t);await createWithoutWorktreeMetadata(f);
+  let saved,interrupt=true;f.ports.checkpoint=async custody=>{saved=structuredClone(custody);if(interrupt&&custody.repoWorkspaceId&&custody.repoRoot){interrupt=false;throw Error('stop after parent custody');}};
+  await assert.rejects(openWithOwner(f),/stop after parent custody/);
+  const row=f.workspaces.find(w=>w.workspace_id===saved.repoWorkspaceId);
+  if(kind==='root')f.herdr.panes.find(p=>p.workspace_id===row.workspace_id).pane_id='replacement';
+  else if(kind==='identity')row.worktree={checkout_path:f.input.cwd,repo_key:f.input.commonDir,is_linked_worktree:false};
+  else f.herdr.panes.push({...f.herdr.panes.find(p=>p.workspace_id===row.workspace_id),pane_id:'extra-pane'});
+  await assert.rejects(openWithOwner(f,{runId:f.input.runId,layout:saved,chats:[]}),{code:'herdr_layout_identity_changed'});
+  assert.equal(f.calls.filter(args=>args[0]==='workspace'&&args[1]==='create').length,1);
+  assert.equal(f.calls.filter(args=>args[0]==='worktree').length,0);
+ }
+});
+
+test('2859: an unrelated blank same-label workspace is never attached by label',async t=>{
+ const f=await fixture(t),other=join(f.root,'other');await mkdir(other);await f.init(other,'bob/coffee');
+ const unrelated=await f.ports.command(['workspace','create','--cwd',other,'--label','coffee','--no-focus']);
+ const original=f.workspaces.find(w=>w.workspace_id===unrelated.result.workspace.workspace_id);original.worktree=null;
+ const before=structuredClone(original),result=await f.open();
+ assert.equal(f.workspaces.find(w=>w.workspace_id===original.workspace_id).worktree,null);
+ assert.equal(f.workspaces.find(w=>w.workspace_id===result.repoWorkspaceId).label,'alice/coffee');
+ assert.deepEqual(f.workspaces.find(w=>w.workspace_id===original.workspace_id),before);
+ assert.equal(f.calls.some(args=>args[0]==='worktree'&&args[1]==='open'&&args[args.indexOf('--workspace')+1]===original.workspace_id),false);
+});
+
+test('2859: a unique verified run remains reusable when its old parent hint is unavailable',async t=>{
+ const f=await fixture(t),first=await f.open(),parent=f.workspaces.find(w=>w.workspace_id===first.repoWorkspaceId),before=f.calls.length;
+ parent.worktree=null;
+ const reopened=await openWithOwner(f,{runId:f.input.runId,layout:{workspaceId:first.workspaceId,repoWorkspaceId:'stale-parent',repoCreateIntent:{label:'prior-attempt',parentRoot:f.input.sourceRoot,commonDir:f.input.commonDir,workspaceIdsBefore:[]},...first.root},chats:[]});
+ assert.equal(reopened.workspaceId,first.workspaceId);
+ assert.equal(f.workspaces.length,2);
+ assert.equal(f.calls.slice(before).some(args=>args[0]==='workspace'&&args[1]==='create'||args[0]==='worktree'&&args[1]==='open'),false);
+ assert.equal(parent.worktree,null);
+});
+
 test('repository reuse, one worktree per run, issue/workflow label and stage tabs',async t=>{
  const f=await fixture(t),a=await f.open(),b=await f.open({stageId:'change'});
  assert.equal(a.repoWorkspaceId,b.repoWorkspaceId);assert.equal(a.workspaceId,b.workspaceId);assert.notEqual(a.tabId,b.tabId);
  assert.deepEqual(f.workspaces.map(w=>w.label),['coffee','coffee#2 small-change']);
  assert.deepEqual(f.calls.find(a=>a[0]==='worktree'),['worktree','open','--workspace',a.repoWorkspaceId,'--path',f.input.cwd,'--label','coffee#2 small-change','--no-focus']);
  assert.equal(f.calls.filter(a=>a[0]==='worktree').length,1);
- assert(f.calls.filter(c=>c[0]==='tab').every(c=>c[c.indexOf('--workspace')+1]===a.workspaceId));
+ assert(f.calls.filter(c=>c[0]==='tab'&&c[1]==='create').every(c=>c[c.indexOf('--workspace')+1]===a.workspaceId));
 });
 test('a busy layout lock fails at once instead of waiting; a later run shares the repository workspace',async t=>{
  const f=await fixture(t),cwd=join(f.root,'run2');await mkdir(cwd);

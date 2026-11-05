@@ -17,9 +17,17 @@ flowchart TD
     R -->|None| P[Find verified non-linked clone parent]
     R -->|Ambiguous or unsafe| F([Refuse without mutation])
     P -->|Found| O[Open assigned existing worktree]
-    P -->|Absent| C[Create parent under unused label]
+    P -->|Absent| C[Record create intent and create parent]
     P -->|Unverifiable| F
-    C --> O
+    C -->|Checkpoint returned ID and original root| A1[Attach verified clone path to created parent]
+    A1 -->|Live parent identity verified| O
+    A1 -->|Error or lost reply| V[Inspect live identity and saved root]
+    V -->|Attached and root unchanged| O
+    V -->|Uncertain| F
+    C -->|Reply lost| Z{Any new workspace since intent?}
+    Z -->|Explicit retry; baseline still matches| C
+    Z -->|Yes; expected parent identity verified| O
+    Z -->|Yes; blank or conflicting| F
     O -->|Created or already_open verified| T
     O -->|Lost reply or refusal| U([Retain uncertainty; inspect on explicit retry])
     T -->|Unique match| A([Checkpoint actual IDs; return])
@@ -34,11 +42,15 @@ flowchart TD
 
 If no parent exists, choose the unused short repository name, otherwise `owner/repo`, otherwise `owner/repo@` plus the first 12 lowercase SHA-256 hex characters of canonical commonDir. Refuse an occupied final label. Preserve all existing workspace labels: adopting a parent does not authorize renaming it or qualifying peer workspaces.
 
+Before creating a parent, checkpoint a namespaced create intent containing the chosen label, canonical parent root and common directory, plus the live workspace IDs already present. It is evidence for detecting an interrupted allocation, not proof that a workspace with that label belongs to PDD. On explicit retry with no saved workspace ID, inspect live identity first. If no workspace appeared since the intent, clear it and creation may retry. If any workspace appeared and no independently verified parent matches the expected clone, refuse without creating another. A verified parent may be reused by its canonical checkout and repository identity, never by its label. This intent keeps a lost reply from causing another empty workspace while retaining ownership uncertainty.
+
+When PDD creates a parent, retain the actual workspace ID and its returned initial tab, pane, terminal and parent cwd in run custody before the next Herdr effect. The live workspace may have no Git identity after `workspace create`; this does not make its label identity. Use `worktree open --workspace <saved-id> --path <verified-parent-root> --no-focus` to attach that already-created parent to the verified clone. Before retrying an interrupted attachment, find that saved ID in live inventory and verify the same original root tab, pane, terminal and cwd. If it already has the exact non-linked checkout_path and repo_key, reuse it. If its Git identity is absent, run the attach command, then verify the resulting live identity and unchanged root. If the attach command errors or its reply is lost, inspect live inventory in that call; continue only when the saved workspace now has the exact non-linked checkout_path and repo_key and its original root remains unchanged. Otherwise retain custody and refuse without attaching another workspace. A partial create reply with an actual workspace ID must checkpoint that ID before refusing; without enough root custody, do not attach it on retry unless live identity independently verifies the expected parent.
+
 Open the already-assigned Git worktree with `worktree open --workspace <parent-id> --path <cwd> --label '<repo name>#<issue> <workflow>' --no-focus`; never create/remove a Git checkout through Herdr. Treat Herdr's `already_open` response as adoption, not refusal: verify its actual workspace through complete live inventory before using it. A lost create reply never licenses blind duplicate allocation; an explicit retry first inspects live identity and adopts a unique match.
 
 **Area match:** inside the verified run workspace, select the unique tab labelled exactly stageId whose single pane cwd equals assigned cwd. Adopt that tab, including a prelaunch tab left after a crash, or create one when no match exists. Never select a peer tab by label alone. Preserve the initial shell tab. Repeated lookup, including repair:true, returns the same verified area tab; explicit native-session replacement remains the chat owner's separate protocol. Allocation alone never authorizes another native launch after an uncertain dispatch.
 
-Checkpoint before effects and checkpoint returned identities before proceeding; checkpoint failure stops the next effect. Return actual `repoWorkspaceId`, `workspaceId`, `tabId`, `paneId`, `terminalId` and `root` (initial run tab/pane/terminal IDs), never predicted IDs. Run-record creation/close custody remains available for cleanup but cannot override contradictory live identity. A closed saved run does not silently reopen. Unavailable/malformed inventory or identity uncertainty refuses finitely, retaining custody. For unsafe live identity, diagnostics identify session/workspace, failed field, escaped expected/observed values and one inspect/retry action; do not recommend closing or deleting anything.
+Checkpoint before effects and checkpoint returned identities before proceeding; checkpoint failure stops the next effect. Return actual `repoWorkspaceId`, `repoRoot`, `repoCreateIntent`, `workspaceId`, `tabId`, `paneId`, `terminalId` and `root` (initial run tab/pane/terminal IDs), never predicted IDs. `repoRoot` is the saved original tab, pane, terminal and cwd of a parent PDD created but not yet verified in live Git identity. `repoCreateIntent` records the checked pre-create inventory and target identity until PDD can prove creation or safe retry. Run-record creation/close custody remains available for cleanup but cannot override contradictory live identity. A closed saved run does not silently reopen. Unavailable/malformed inventory or identity uncertainty refuses finitely, retaining custody. For unsafe live identity, diagnostics identify session/workspace, failed field, escaped expected/observed values and one inspect/retry action; do not recommend closing or deleting anything.
 
 ## Cleanup
 
