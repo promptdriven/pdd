@@ -12,4 +12,4 @@ When two different issues allocate in separate processes, I expect both to get r
 
 An incomplete or uncertain intent never authorizes a second add, a new identity, deletion or automatic repair. A safe error is a native error code or numeric Git exit status, not arbitrary error text. Diagnostic evidence alone does not establish resource pressure or contention.
 
-Runtime check: NOT REPLAYED. The owner has no executable Runtime interface for native filesystem, UUID and separate-process effects. The native case inventory describes required coverage; it is not an interpreter scenario or approval.
+Interpreter scenario: NOT AVAILABLE. The owner has no executable Runtime interface binding native filesystem, UUID and separate-process effects. The native case inventory is in the external run notes; it describes required coverage, not an interpreter scenario or approval.
