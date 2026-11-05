@@ -3201,6 +3201,10 @@ function caseImportState(root,record,p,{inspect=false,reconcile=false,reason='re
   if(!caseStat(p,journal))return{};
   const transaction=JSON.parse(caseRead(p,journal));
   if(transaction.state==='committed')return{result:caseResult(record,'committed','already applied',{path:transaction.path,duplicate:true})};
+  // Only a conflict recorded before publication retains the observed baseline
+  // in its history. Older conflicts lost their phase, so absence is uncertain.
+  if(transaction.state==='conflict'&&!transaction.observed?.includes(transaction.before))
+    return{result:caseResult(record,'conflict','authored revision changed after preparation; received and observed revisions retained')};
   if((inspect||reconcile)&&transaction.after!==undefined){
     requireRuntimePath(loadRuntimeWorkspace({root}),{path:transaction.path,from:'Case reconciliation'});
     const target=join(root,transaction.path),actual=caseStat(p,target)?caseRead(p,target):null;
@@ -3210,7 +3214,7 @@ function caseImportState(root,record,p,{inspect=false,reconcile=false,reason='re
       return{result:caseResult(record,'committed',reason,{path:transaction.path,steps:transaction.steps})};
     }
     if(reconcile&&actual!==transaction.before){
-      caseWrite(p,journal,JSON.stringify({...transaction,state:'conflict',observed:[...(transaction.observed??[]),actual]}));
+      caseWrite(p,journal,JSON.stringify({...transaction,state:'conflict',observed:[...(transaction.observed??[]),...(transaction.state==='prepared'?[transaction.before]:[]),actual]}));
       return{result:caseResult(record,'conflict','authored revision changed after preparation; received and observed revisions retained')};
     }
     if(transaction.state==='publishing'){
@@ -3236,11 +3240,11 @@ function applyPendingCaseSync({root,pendingId,writeOwnership,signal},ports={},pu
     requireRuntimePath(loadRuntimeWorkspace({root}),{path:prepared.path,from:'Case publication'});
     const target=join(root,prepared.path);caseSafe(p,dirname(target),{directory:true,create:prepared.isolated});
     const st=caseStat(p,target),before=st?caseRead(p,target):null;
-    if(before!==prepared.before){if(prepared.isolated&&before===prepared.after){persist({...transaction,state:'committed'});return caseResult(record,'committed','already saved',{path:prepared.path,duplicate:true});}persist({...transaction,state:'conflict',observed:[before]});return caseResult(record,'conflict','authored revision changed before publication');}
+    if(before!==prepared.before){if(prepared.isolated&&before===prepared.after){persist({...transaction,state:'committed'});return caseResult(record,'committed','already saved',{path:prepared.path,duplicate:true});}persist({...transaction,state:'conflict',observed:[prepared.before,before]});return caseResult(record,'conflict','authored revision changed before publication');}
     temp=join(dirname(target),`.pdd-case-${p.nonce()}.tmp`);caseWrite(p,temp,prepared.after,{exclusive:true});tempOwned=caseStat(p,temp);p.fault('before-publication',record);
     ownedCaseLease(writeOwnership,root,record.target);
     const latest=caseStat(p,target)?caseRead(p,target):null;
-    if(latest!==prepared.before){persist({...transaction,state:'conflict',observed:[latest]});return caseResult(record,'conflict','authored revision changed during preparation');}
+    if(latest!==prepared.before){persist({...transaction,state:'conflict',observed:[prepared.before,latest]});return caseResult(record,'conflict','authored revision changed during preparation');}
     if(signal?.aborted)return caseResult(record,'pending','case save cancelled');
     publicationGuard?.();
     // From this boundary onward, reconcile while custody remains held even on abort.
@@ -3295,6 +3299,18 @@ function retainedCaseAuthority(root,record,p){
   if((references.length||original.contract_references!==undefined)
     &&(!Array.isArray(original.contract_references)||!isDeepStrictEqual(original.contract_references,references)))throw Error('original reference baseline is unavailable or changed');
   const problem=tryPromptProblem(root,found,test,original,capture);if(problem)throw Error(problem);
+  const seed=original.seed_scenario;
+  if(!isObject(seed)||seed.schema_version!==TEST_SCHEMA||seed.story_path!==story||!Array.isArray(seed.steps)||!seed.steps.length)
+    throw Error('original captured scenario context is unavailable');
+  // Let the capture owner discover both closures. Current scenario edits cannot
+  // hide required context from the original uploaded seed, and neither capture
+  // may supply a missing original pin.
+  const originalCapture=captureSource(root,{tests:[path],prepareSource:()=>[{path,bytes:JSON.stringify(seed)}]});
+  for(const selected of [capture,originalCapture]){
+    if(!selected.sources.filter(file=>file.path.endsWith('.prompt.md')).every(file=>hash(raw[file.path])&&hash(effective[file.path])))
+      throw Error('complete original raw/effective source pins are unavailable');
+    const problem=tryPromptProblem(root,found,{...test,doc:seed},original,selected);if(problem)throw Error(problem);
+  }
   return JSON.stringify({id:meta.id,root:meta.root,session:meta.session_id,path,story,pins:{story:original.story_sha256,raw,effective,references:original.contract_references}});
 }
 

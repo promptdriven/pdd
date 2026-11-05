@@ -9,7 +9,7 @@ import {spawn} from 'node:child_process';
 import {harbor,fakeRuntime,portsFor,PLACE} from './runtime-fake.mjs';
 import {runMcp} from '../src/try-mcp.mjs';
 import * as client from '../src/runtime-client.mjs';
-import {interfaceBlocks} from '../src/runtime-preflight.mjs';
+import {interfaceBlocks,proseSha256} from '../src/runtime-preflight.mjs';
 
 const read=path=>fs.readFileSync(path,'utf8');
 const json=path=>JSON.parse(read(path));
@@ -31,12 +31,13 @@ async function protocol(cwd,env,ports={}){
 
 // Default MCP, owner, saver and files. Only the initial hosted transport and gh
 // identity/clock are controlled. Local application uses no injected owner/lease.
-async function staged(t,{savedCase,references=false}={}){
+async function staged(t,{savedCase,references=false,sourceSetup}={}){
   const before={kv:{exact:['before']}},after={kv:{exact:['after']}},observed={stdout:'exact output\n',stderr:'exact stderr\n',exit_code:0};
   const f=harbor(t,root=>{
     fs.rmSync(join(root,'tests/unknown-item.json'));
     if(savedCase){const path=join(root,'tests/place-order.json'),doc=json(path);doc.steps.at(-1).checks.push({criterion_id:doc.criteria[0].id,target:'world',path:'',op:'equals',value:before});write(path,doc);}
     if(references){const path=join(root,PLACE),text=read(path),block=interfaceBlocks(text)[0],iface=JSON.parse(block[1]);fs.mkdirSync(join(root,'contracts'));write(join(root,'contracts/request.json'),iface.entries[0].input_schema);iface.entries[0].input_schema={$contract:'contracts/request.json#'};fs.writeFileSync(path,text.slice(0,block.indices[1][0])+JSON.stringify(iface)+text.slice(block.indices[1][1]));}
+    sourceSetup?.(root);
   });
   const originalPath='tests/place-order.json',original=read(join(f.repo,originalPath)),doc=JSON.parse(original);
   write(join(f.repo,'pdd-workspace.json'),{allowed_paths:['prompts/','user_stories/','tests/',...(references?['contracts/']:[])]});
@@ -263,5 +264,64 @@ test('actual crash after publication reconciles ledger only or holds a removed v
     if(removed){assert.equal(reply.result.isError,true);assert.equal(fs.existsSync(path),false);fs.writeFileSync(join(f.repo,PLACE),prompt);const again=await applyCall(server,argumentsFor(f));assert.equal(again.result.isError,true);assert.equal(fs.existsSync(path),false,'uncertain publication may not restore a deliberately removed variant');}
     else{assert.equal(reply.result.isError,undefined,JSON.stringify(reply));assert.equal(json(journal).state,'committed');assert.equal(read(path),bytes);assert.equal(fs.statSync(path).ino,stat.ino);assert.equal(fs.statSync(path).mtimeMs,stat.mtimeMs);}
     assert.equal(read(f.receiptPath),f.receiptBytes);assert.equal(read(join(f.repo,f.originalPath)),f.original);assert.equal(f.callPosts,1);
+  }
+});
+
+test('repair: interrupted publication conflict survives removal and MCP restart without restoration',async t=>{
+  const f=await staged(t);await f.server.close();const worker=childMcp(f,{crash:true});t.after(()=>worker.child.kill('SIGKILL'));worker.send();
+  await until(()=>worker.errors.includes('CRASH_PUBLISHED'));worker.child.kill('SIGKILL');assert.equal((await worker.done).signal,'SIGKILL');
+  const journal=f.receiptPath.replace('.received.json','.transaction.json');assert.equal(json(journal).state,'publishing');
+  const path=join(f.repo,'tests',variantFiles(f)[0]),published=read(path),edited={...JSON.parse(published),personEdit:'retain this authored revision'};write(path,edited);const editedBytes=read(path);
+  const first=await protocol(f.repo,f.env,nativePorts(f));const conflict=await applyCall(first,argumentsFor(f));await first.close();
+  assert.equal(conflict.result.isError,true);assert.match(conflict.result.content[0].text,/authored revision changed/);
+  assert.equal(json(journal).state,'conflict');assert.ok(json(journal).observed.includes(editedBytes));assert.equal(read(path),editedBytes);const conflictBytes=read(journal);
+  fs.unlinkSync(path);
+  const restarted=await protocol(f.repo,f.env,nativePorts(f));t.after(()=>restarted.close());
+  for(let attempt=0;attempt<2;attempt++){
+    const reply=await applyCall(restarted,argumentsFor(f));assert.equal(reply.result.isError,true,'UNCERTAIN_CONFLICT_MUST_NOT_RESTORE: retry must retain the conflict');
+    assert.equal(fs.existsSync(path),false,'UNCERTAIN_CONFLICT_MUST_NOT_RESTORE: removed variant must stay absent');assert.equal(read(journal),conflictBytes);
+    const local=await apply(f);assert.equal(local.result.state,'conflict');assert.equal(local.result.pendingId,f.receipt.pendingId);
+    if(attempt===0){fs.unlinkSync(f.metaPath);fs.appendFileSync(join(f.repo,PLACE),'\nSource changed after interrupted publication.\n');}
+  }
+  assert.equal(read(f.receiptPath),f.receiptBytes);assert.equal(read(join(f.repo,f.originalPath)),f.original);assert.equal(f.callPosts,1);
+  assert.deepEqual({gh:f.external.gh,http:f.external.http},f.externalBefore);
+});
+
+test('repair: genuinely prepublication conflict can recover after the conflicting variant is removed',async t=>{
+  const f=await staged(t);await f.server.close();const path=join(f.repo,'tests',`place-order.try-${f.receipt.saved.id}.json`),foreign='{"person":"prepublication revision"}\n';
+  const first=await protocol(f.repo,f.env,{...nativePorts(f),fault(stage){if(stage==='before-publication')fs.writeFileSync(path,foreign);}});
+  const conflict=await applyCall(first,argumentsFor(f));await first.close();assert.equal(conflict.result.isError,true);assert.equal(read(path),foreign);
+  const journal=f.receiptPath.replace('.received.json','.transaction.json');assert.equal(json(journal).state,'conflict');assert.ok(json(journal).observed.includes(foreign));
+  fs.unlinkSync(path);const restarted=await protocol(f.repo,f.env,nativePorts(f));t.after(()=>restarted.close());
+  const recovered=await applyCall(restarted,argumentsFor(f));assert.equal(recovered.result.isError,undefined,JSON.stringify(recovered));assert.equal(json(journal).state,'committed');
+  assert.deepEqual(json(path),f.receipt.saved.test);assert.equal(read(join(f.repo,f.originalPath)),f.original);assert.equal(read(f.receiptPath),f.receiptBytes);
+  const duplicate=await apply(f);assert.equal(duplicate.result.duplicate,true);assert.equal(f.callPosts,1);assert.deepEqual({gh:f.external.gh,http:f.external.http},f.externalBefore);
+});
+
+test('repair: complete original capture pins include transitive, root and original test context prompts',async t=>{
+  for(const selection of ['transitive','root-include','context-prompt','context-path','original-context']){
+    const required='prompts/required-context.prompt.md',bridge='prompts/bridge.prompt.md';
+    const f=await staged(t,{savedCase:selection==='original-context'?()=>{}:undefined,sourceSetup(root){
+      fs.writeFileSync(join(root,required),'# Required context\n\nOriginal required rule.\n\n## Dependencies\n\nNone.\n');
+      if(['transitive','root-include'].includes(selection)){
+        fs.writeFileSync(join(root,bridge),'# Bridge\n\n## Dependencies\n\n[Required context](required-context.prompt.md)\n');
+        if(selection==='root-include')write(join(root,'pdd-source.json'),{include:[bridge]});
+        else{const path=join(root,PLACE);let text=read(path).replace('## Dependencies\n\nNone.','## Dependencies\n\n[Bridge](bridge.prompt.md)');text=text.replace(/("prose_sha256":\s*")[a-f0-9]+(")/,'$1'+proseSha256(text)+'$2');fs.writeFileSync(path,text);}
+      }else{const path=join(root,'tests/place-order.json'),doc=json(path);doc.context=selection==='context-prompt'?[{prompt_path:required,paths:[]}]:[{prompt_path:PLACE,paths:[required]}];write(path,doc);}
+    }});
+    const repoBytes=read(f.repoPath),repo=JSON.parse(repoBytes),entry=repo.tries[f.originalPath],requiredPath=join(f.repo,required),requiredBytes=read(requiredPath);
+    assert.ok(entry.prompt_hashes[required]&&entry.effective_prompt_hashes[required],selection+' must start with an actual complete capture');
+    if(selection==='original-context'){const doc=json(join(f.repo,f.originalPath));doc.context=[];write(join(f.repo,f.originalPath),doc);}
+    const authoredBefore=read(join(f.repo,f.originalPath));
+    delete entry.prompt_hashes[required];delete entry.effective_prompt_hashes[required];write(f.repoPath,repo);fs.appendFileSync(requiredPath,'\nRequired context changed after capture.\n');
+    const native=await apply(f);assert.equal(native.result.state,'pending','COMPLETE_ORIGINAL_PIN_SET_REQUIRED: '+selection);assert.equal(native.result.pendingId,f.receipt.pendingId);
+    const refusal=await applyCall(f.server,argumentsFor(f));assert.equal(refusal.result.isError,true,selection);assert.ok(refusal.result.content[0].text.includes(f.receiptPath));
+    assert.equal(variantFiles(f).length,0);assert.equal(read(join(f.repo,f.originalPath)),authoredBefore);assert.equal(read(f.receiptPath),f.receiptBytes);
+    fs.writeFileSync(f.repoPath,repoBytes);fs.writeFileSync(requiredPath,requiredBytes);fs.writeFileSync(join(f.repo,f.originalPath),f.original);
+    const missingSeed=JSON.parse(repoBytes);delete missingSeed.tries[f.originalPath].seed_scenario;write(f.repoPath,missingSeed);
+    assert.equal((await apply(f)).result.state,'pending','missing original selection context must stay held');assert.equal(variantFiles(f).length,0);fs.writeFileSync(f.repoPath,repoBytes);
+    const valid=await applyCall(f.server,argumentsFor(f));assert.equal(valid.result.isError,undefined,'complete original pins must still apply: '+JSON.stringify(valid));
+    if(selection==='original-context')assert.equal(json(join(f.repo,f.originalPath)).steps.at(-1).step_id,'observed');else assert.equal(variantFiles(f).length,1);
+    assert.equal(read(f.receiptPath),f.receiptBytes);assert.equal(f.callPosts,1);assert.deepEqual({gh:f.external.gh,http:f.external.http},f.externalBefore);await f.server.close();
   }
 });
