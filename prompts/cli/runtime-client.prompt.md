@@ -848,13 +848,18 @@ under the existing receipt rules, even with incomplete sent coverage. An
 all-unsent Story supplies no summary. Aggregate before exposing one row per
 Story per batch, using its newest sent result time, otherwise batch creation time.
 
-Currentness belongs here, not to the product reader. Recapture the batch's full
-original selected test set using source capture with no app map, and compare
-that capture hash with the saved batch source hash. Never compare a one-test
-hash with a multi-test batch hash or shorten the selection to sent rows.
-Missing source identity, changed inputs,
-failed capture or explicit null comparisonRoot make the evidence unverified,
-not current. root still identifies the saved records when comparisonRoot names
-a merged run's current base. Missing state is empty. Malformed or unreadable
+Currentness belongs here, not to the product reader. For an associated original,
+compare its full original selected test set/source against the returned original
+stage and sourceAnchor through the owner's exact source readers, not the generic
+comparisonRoot. Retain that stage/anchor with the associated Story row and label
+compatible PR 1 evidence historical; it cannot set current=true for current-code
+proof. Ordinary same-root/current evidence keeps its existing comparisonRoot
+capture with no app map and no new run or association. Compare the full original
+selected set with the saved batch source hash; never use a one-test hash for a
+multi-test batch or shorten selection to sent rows. Missing source/anchor,
+changed inputs or failed capture leave affected compatibility unverified, not
+current. An explicit null comparisonRoot still disables ordinary same-root/current
+verification. root identifies saved records when comparisonRoot names a merged
+run's current base. Missing state is empty. Malformed or unreadable
 records produce finite warnings and no invented pass, while unrelated readable
 batches remain usable. Do not recover by a network read or change saved caches.
