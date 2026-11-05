@@ -1,0 +1,753 @@
+{
+  "schema_version": "prompt-runtime.app-map.v1",
+  "name": "Native issue dependencies",
+  "initial_screen": "graph",
+  "initial_route": null,
+  "initial_state": {
+    "graph": {
+      "repository": "example/crm",
+      "capturedAt": "2026-11-04T18:30:00Z",
+      "complete": true,
+      "nodes": [
+        {
+          "key": "https://github.com/example/crm/issues/42",
+          "title": "CRM import",
+          "reviewState": "current",
+          "dependencyState": "waiting",
+          "executionState": "idle",
+          "eligible": false,
+          "reasons": [
+            "Open prerequisite"
+          ],
+          "blockers": [
+            "https://github.com/example/crm/issues/17"
+          ],
+          "review": "r42",
+          "nativeState": "open",
+          "facts": []
+        },
+        {
+          "key": "https://github.com/example/crm/issues/17",
+          "title": "CRM schema",
+          "reviewState": "current",
+          "dependencyState": "clear",
+          "executionState": "idle",
+          "eligible": true,
+          "reasons": [],
+          "blockers": [],
+          "review": "r17",
+          "nativeState": "open",
+          "facts": []
+        }
+      ],
+      "edges": [
+        {
+          "dependent": "https://github.com/example/crm/issues/42",
+          "blocker": "https://github.com/example/crm/issues/17",
+          "reason": "Schema must exist before import.",
+          "evidence": [
+            "https://github.com/example/crm/issues/42#issuecomment-1"
+          ]
+        }
+      ]
+    },
+    "query": "",
+    "filter": "all",
+    "selected": "https://github.com/example/crm/issues/42",
+    "sync": "refreshing",
+    "lastSync": "10:30"
+  },
+  "state_schema": {
+    "type": "object",
+    "properties": {
+      "graph": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "repository": {
+                "type": "string"
+              },
+              "capturedAt": {
+                "type": "string"
+              },
+              "complete": {
+                "type": "boolean"
+              },
+              "nodes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "key": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "reviewState": {
+                      "type": "string",
+                      "enum": [
+                        "unchecked",
+                        "current",
+                        "question",
+                        "pending",
+                        "stale",
+                        "unverified",
+                        "conflict"
+                      ]
+                    },
+                    "dependencyState": {
+                      "type": "string",
+                      "enum": [
+                        "clear",
+                        "waiting",
+                        "unknown",
+                        "cycle"
+                      ]
+                    },
+                    "executionState": {
+                      "type": "string",
+                      "enum": [
+                        "idle",
+                        "running",
+                        "held",
+                        "unknown"
+                      ]
+                    },
+                    "eligible": {
+                      "type": "boolean"
+                    },
+                    "reasons": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "blockers": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "review": {
+                      "type": "string"
+                    },
+                    "nativeState": {
+                      "type": "string",
+                      "enum": [
+                        "open",
+                        "completed",
+                        "not_planned",
+                        "unknown"
+                      ]
+                    },
+                    "facts": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "question",
+                              "condition"
+                            ]
+                          },
+                          "text": {
+                            "type": "string"
+                          },
+                          "issue": {
+                            "type": "string"
+                          },
+                          "source": {
+                            "type": "string"
+                          },
+                          "inputs": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "key": {
+                                  "type": "string"
+                                },
+                                "revision": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "key",
+                                "revision"
+                              ],
+                              "additionalProperties": false
+                            }
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "text",
+                          "issue",
+                          "source",
+                          "inputs"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "title",
+                    "reviewState",
+                    "dependencyState",
+                    "executionState",
+                    "eligible",
+                    "reasons",
+                    "blockers",
+                    "review",
+                    "nativeState",
+                    "facts"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "edges": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "dependent": {
+                      "type": "string"
+                    },
+                    "blocker": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "evidence": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "dependent",
+                    "blocker",
+                    "reason",
+                    "evidence"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "repository",
+              "capturedAt",
+              "complete",
+              "nodes",
+              "edges"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "query": {
+        "type": "string"
+      },
+      "filter": {
+        "type": "string",
+        "enum": [
+          "all",
+          "waiting",
+          "ready",
+          "running",
+          "unknown"
+        ]
+      },
+      "selected": {
+        "type": "string"
+      },
+      "sync": {
+        "type": "string",
+        "enum": [
+          "refreshing",
+          "current",
+          "offline",
+          "empty"
+        ]
+      },
+      "lastSync": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "graph",
+      "query",
+      "filter",
+      "selected",
+      "sync",
+      "lastSync"
+    ],
+    "additionalProperties": false
+  },
+  "synthetic": true,
+  "router": null,
+  "routes": [],
+  "stylesheets": [],
+  "screens": [
+    {
+      "id": "graph",
+      "prompt_path": "prompts/cli/issue-dependency-graph-view.prompt.md",
+      "operation": "renderIssueGraph",
+      "source": "operation",
+      "format": "html",
+      "input": {
+        "graph": {
+          "$ref": "/state/graph"
+        },
+        "query": {
+          "$ref": "/state/query"
+        },
+        "filter": {
+          "$ref": "/state/filter"
+        },
+        "selected": {
+          "$ref": "/state/selected"
+        },
+        "sync": {
+          "$ref": "/state/sync"
+        },
+        "lastSync": {
+          "$ref": "/state/lastSync"
+        }
+      },
+      "result_pointer": "/html"
+    }
+  ],
+  "handlers": [
+    {
+      "screen": "graph",
+      "kind": "button",
+      "match": {
+        "value": "filter-all"
+      },
+      "handler": {
+        "prompt_path": "prompts/cli/issue-dependency-graph-view.prompt.md",
+        "operation": "renderIssueGraph"
+      },
+      "input": {
+        "graph": {
+          "$ref": "/state/graph"
+        },
+        "query": {
+          "$ref": "/state/query"
+        },
+        "filter": "all",
+        "selected": {
+          "$ref": "/state/selected"
+        },
+        "sync": {
+          "$ref": "/state/sync"
+        },
+        "lastSync": {
+          "$ref": "/state/lastSync"
+        }
+      },
+      "next": {
+        "kind": "same",
+        "screen": null,
+        "route_pointer": null
+      },
+      "state": {
+        "graph": {
+          "$ref": "/state/graph"
+        },
+        "query": {
+          "$ref": "/state/query"
+        },
+        "filter": "all",
+        "selected": {
+          "$ref": "/state/selected"
+        },
+        "sync": {
+          "$ref": "/state/sync"
+        },
+        "lastSync": {
+          "$ref": "/state/lastSync"
+        }
+      }
+    },
+    {
+      "screen": "graph",
+      "kind": "button",
+      "match": {
+        "value": "filter-waiting"
+      },
+      "handler": {
+        "prompt_path": "prompts/cli/issue-dependency-graph-view.prompt.md",
+        "operation": "renderIssueGraph"
+      },
+      "input": {
+        "graph": {
+          "$ref": "/state/graph"
+        },
+        "query": {
+          "$ref": "/state/query"
+        },
+        "filter": "waiting",
+        "selected": {
+          "$ref": "/state/selected"
+        },
+        "sync": {
+          "$ref": "/state/sync"
+        },
+        "lastSync": {
+          "$ref": "/state/lastSync"
+        }
+      },
+      "next": {
+        "kind": "same",
+        "screen": null,
+        "route_pointer": null
+      },
+      "state": {
+        "graph": {
+          "$ref": "/state/graph"
+        },
+        "query": {
+          "$ref": "/state/query"
+        },
+        "filter": "waiting",
+        "selected": {
+          "$ref": "/state/selected"
+        },
+        "sync": {
+          "$ref": "/state/sync"
+        },
+        "lastSync": {
+          "$ref": "/state/lastSync"
+        }
+      }
+    },
+    {
+      "screen": "graph",
+      "kind": "button",
+      "match": {
+        "value": "filter-ready"
+      },
+      "handler": {
+        "prompt_path": "prompts/cli/issue-dependency-graph-view.prompt.md",
+        "operation": "renderIssueGraph"
+      },
+      "input": {
+        "graph": {
+          "$ref": "/state/graph"
+        },
+        "query": {
+          "$ref": "/state/query"
+        },
+        "filter": "ready",
+        "selected": {
+          "$ref": "/state/selected"
+        },
+        "sync": {
+          "$ref": "/state/sync"
+        },
+        "lastSync": {
+          "$ref": "/state/lastSync"
+        }
+      },
+      "next": {
+        "kind": "same",
+        "screen": null,
+        "route_pointer": null
+      },
+      "state": {
+        "graph": {
+          "$ref": "/state/graph"
+        },
+        "query": {
+          "$ref": "/state/query"
+        },
+        "filter": "ready",
+        "selected": {
+          "$ref": "/state/selected"
+        },
+        "sync": {
+          "$ref": "/state/sync"
+        },
+        "lastSync": {
+          "$ref": "/state/lastSync"
+        }
+      }
+    },
+    {
+      "screen": "graph",
+      "kind": "button",
+      "match": {
+        "value": "filter-running"
+      },
+      "handler": {
+        "prompt_path": "prompts/cli/issue-dependency-graph-view.prompt.md",
+        "operation": "renderIssueGraph"
+      },
+      "input": {
+        "graph": {
+          "$ref": "/state/graph"
+        },
+        "query": {
+          "$ref": "/state/query"
+        },
+        "filter": "running",
+        "selected": {
+          "$ref": "/state/selected"
+        },
+        "sync": {
+          "$ref": "/state/sync"
+        },
+        "lastSync": {
+          "$ref": "/state/lastSync"
+        }
+      },
+      "next": {
+        "kind": "same",
+        "screen": null,
+        "route_pointer": null
+      },
+      "state": {
+        "graph": {
+          "$ref": "/state/graph"
+        },
+        "query": {
+          "$ref": "/state/query"
+        },
+        "filter": "running",
+        "selected": {
+          "$ref": "/state/selected"
+        },
+        "sync": {
+          "$ref": "/state/sync"
+        },
+        "lastSync": {
+          "$ref": "/state/lastSync"
+        }
+      }
+    },
+    {
+      "screen": "graph",
+      "kind": "button",
+      "match": {
+        "value": "filter-unknown"
+      },
+      "handler": {
+        "prompt_path": "prompts/cli/issue-dependency-graph-view.prompt.md",
+        "operation": "renderIssueGraph"
+      },
+      "input": {
+        "graph": {
+          "$ref": "/state/graph"
+        },
+        "query": {
+          "$ref": "/state/query"
+        },
+        "filter": "unknown",
+        "selected": {
+          "$ref": "/state/selected"
+        },
+        "sync": {
+          "$ref": "/state/sync"
+        },
+        "lastSync": {
+          "$ref": "/state/lastSync"
+        }
+      },
+      "next": {
+        "kind": "same",
+        "screen": null,
+        "route_pointer": null
+      },
+      "state": {
+        "graph": {
+          "$ref": "/state/graph"
+        },
+        "query": {
+          "$ref": "/state/query"
+        },
+        "filter": "unknown",
+        "selected": {
+          "$ref": "/state/selected"
+        },
+        "sync": {
+          "$ref": "/state/sync"
+        },
+        "lastSync": {
+          "$ref": "/state/lastSync"
+        }
+      }
+    },
+    {
+      "screen": "graph",
+      "kind": "submit",
+      "match": {
+        "id": "search"
+      },
+      "handler": {
+        "prompt_path": "prompts/cli/issue-dependency-graph-view.prompt.md",
+        "operation": "renderIssueGraph"
+      },
+      "input": {
+        "graph": {
+          "$ref": "/state/graph"
+        },
+        "query": {
+          "$ref": "/event/fields/query"
+        },
+        "filter": {
+          "$ref": "/state/filter"
+        },
+        "selected": {
+          "$ref": "/state/selected"
+        },
+        "sync": {
+          "$ref": "/state/sync"
+        },
+        "lastSync": {
+          "$ref": "/state/lastSync"
+        }
+      },
+      "next": {
+        "kind": "same",
+        "screen": null,
+        "route_pointer": null
+      },
+      "state": {
+        "graph": {
+          "$ref": "/state/graph"
+        },
+        "query": {
+          "$ref": "/event/fields/query"
+        },
+        "filter": {
+          "$ref": "/state/filter"
+        },
+        "selected": {
+          "$ref": "/state/selected"
+        },
+        "sync": {
+          "$ref": "/state/sync"
+        },
+        "lastSync": {
+          "$ref": "/state/lastSync"
+        }
+      }
+    },
+    {
+      "screen": "graph",
+      "kind": "button",
+      "match": {
+        "value": "https://github.com/example/crm/issues/42"
+      },
+      "handler": {
+        "prompt_path": "prompts/cli/issue-dependency-graph-view.prompt.md",
+        "operation": "renderIssueGraph"
+      },
+      "input": {
+        "graph": {
+          "$ref": "/state/graph"
+        },
+        "query": {
+          "$ref": "/state/query"
+        },
+        "filter": {
+          "$ref": "/state/filter"
+        },
+        "selected": "https://github.com/example/crm/issues/42",
+        "sync": {
+          "$ref": "/state/sync"
+        },
+        "lastSync": {
+          "$ref": "/state/lastSync"
+        }
+      },
+      "next": {
+        "kind": "same",
+        "screen": null,
+        "route_pointer": null
+      },
+      "state": {
+        "graph": {
+          "$ref": "/state/graph"
+        },
+        "query": {
+          "$ref": "/state/query"
+        },
+        "filter": {
+          "$ref": "/state/filter"
+        },
+        "selected": "https://github.com/example/crm/issues/42",
+        "sync": {
+          "$ref": "/state/sync"
+        },
+        "lastSync": {
+          "$ref": "/state/lastSync"
+        }
+      }
+    },
+    {
+      "screen": "graph",
+      "kind": "button",
+      "match": {
+        "value": "https://github.com/example/crm/issues/17"
+      },
+      "handler": {
+        "prompt_path": "prompts/cli/issue-dependency-graph-view.prompt.md",
+        "operation": "renderIssueGraph"
+      },
+      "input": {
+        "graph": {
+          "$ref": "/state/graph"
+        },
+        "query": {
+          "$ref": "/state/query"
+        },
+        "filter": {
+          "$ref": "/state/filter"
+        },
+        "selected": "https://github.com/example/crm/issues/17",
+        "sync": {
+          "$ref": "/state/sync"
+        },
+        "lastSync": {
+          "$ref": "/state/lastSync"
+        }
+      },
+      "next": {
+        "kind": "same",
+        "screen": null,
+        "route_pointer": null
+      },
+      "state": {
+        "graph": {
+          "$ref": "/state/graph"
+        },
+        "query": {
+          "$ref": "/state/query"
+        },
+        "filter": {
+          "$ref": "/state/filter"
+        },
+        "selected": "https://github.com/example/crm/issues/17",
+        "sync": {
+          "$ref": "/state/sync"
+        },
+        "lastSync": {
+          "$ref": "/state/lastSync"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 900" role="img" aria-labelledby="title desc">
+<title id="title">CRM dependency graph, waiting and refreshing</title>
+<desc id="desc">Search and filters precede a graph. Issue 42 depends on issue 17. Selected issue details explain the wait and show sync status.</desc>
+<rect width="400" height="900" fill="#f5f7fb"/>
+<g font-family="sans-serif" fill="#182536" font-size="15">
+<g id="graph-header"><text x="16" y="32" font-size="22" font-weight="bold">Dependency graph</text><text x="16" y="56">example/crm · GitHub native links</text></g>
+<g id="search"><rect x="16" y="74" width="368" height="38" rx="6" fill="white" stroke="#8192a8"/><text x="28" y="98">Search issues</text></g>
+<g id="filters"><g id="filter-all"><text x="16" y="140">All</text></g><g id="filter-waiting"><text x="56" y="140">Waiting</text></g><g id="filter-ready"><text x="127" y="140">Ready</text></g><g id="filter-running"><text x="190" y="140">Running</text></g><g id="filter-unknown"><text x="273" y="140">Unknown</text></g></g>
+<g id="sync-status"><text x="16" y="169">Refreshing · Last sync 10:30</text></g><g id="refresh-graph"><text x="322" y="169">Refresh</text></g>
+<g id="graph-canvas"><rect x="16" y="190" width="368" height="390" rx="8" fill="white" stroke="#c5cfdd"/>
+<path d="M 196 295 L 196 365" stroke="#59728e" stroke-width="3"/><path d="M 190 357 L 196 367 L 202 357" fill="none" stroke="#59728e" stroke-width="3"/>
+<g id="issue-example-crm-42"><rect x="52" y="234" width="286" height="64" rx="6" fill="#fff1d6" stroke="#ad7718"/><text x="66" y="259">#42 CRM import</text><text x="66" y="282">Waiting · selected</text></g>
+<g id="issue-example-crm-17"><rect x="52" y="369" width="286" height="64" rx="6" fill="#e9eff9" stroke="#7088a4"/><text x="66" y="394">#17 CRM schema</text><text x="66" y="417">Open prerequisite</text></g>
+<g id="zoom-in"><text x="40" y="548">Zoom in</text></g><g id="zoom-out"><text x="132" y="548">Zoom out</text></g><g id="fit-graph"><text x="235" y="548">Fit graph</text></g></g>
+<g id="issue-details"><rect x="16" y="610" width="368" height="250" rx="8" fill="white" stroke="#c5cfdd"/>
+<text x="32" y="640" font-weight="bold">#42 CRM import</text><text x="32" y="670">Review: current · Execution: idle</text><text x="32" y="700">Waits for #17 CRM schema</text><text x="32" y="730">Schema must exist before import.</text><text x="32" y="764" fill="#245ba8">Issue and review evidence</text><text x="32" y="800">Source: example/crm</text><text x="32" y="830">Captured: 10:30</text></g>
+</g></svg>
