@@ -214,7 +214,7 @@ async function wake(state, text, p) {
   }
   const deliver = async (initial, withinLaunch = () => true) => {
     const pane = state.paneId, workspace = state.workspaceId, launch = state.ownerLaunch;
-    let identity = initial?.agent_session == null ? undefined : JSON.stringify(initial.agent_session);
+    let identity = initial ? JSON.stringify(initial.agent_session ?? null) : undefined;
     let changed = false, expired = false;
     if (!withinLaunch()) { p.warn('Autopilot work remains pending: the chat startup window expired.'); return false; }
     const result = await sendToChat({ paneId: pane, startedAt: launch?.startedAt }, text, {

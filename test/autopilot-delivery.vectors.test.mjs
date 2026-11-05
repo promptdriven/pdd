@@ -253,6 +253,40 @@ test('replacement target is not sent the original packet', async () => {
   assert.equal(f.state().recipeDelivered,undefined);
 });
 
+test('existing owner retains null or absent session identity', async () => {
+  for (const initial of ['null', 'absent']) for (const replacement of [false, true]) {
+    const f=fixture(`existing-${initial}-${replacement}`,{native:'idle'}), original=f.ports.herdr; let reads=0;
+    f.ports.herdr=async args=>{
+      if(args[0]==='agent' && args[1]==='get') {
+        reads++;
+        const agent={agent_status:'idle'};
+        if(replacement && reads>1) agent.agent_session='replacement';
+        else if(initial==='null') agent.agent_session=null;
+        return {result:{agent}};
+      }
+      return original(args);
+    };
+    await f.start();
+    assert.equal(f.packets.length,replacement?0:1,`${initial}: replacement must not receive packet`);
+  }
+});
+
+test('new owner acquires its first session and retains that identity', async () => {
+  for (const replacement of [false,true]) {
+    const f=fixture(`new-identity-${replacement}`,{afterLaunch:'idle'}), original=f.ports.herdr; let launched=false, reads=0;
+    f.ports.herdr=async args=>{
+      if(args[0]==='pane' && args[1]==='run') { launched=true; return original(args); }
+      if(launched && args[0]==='agent' && args[1]==='get') {
+        reads++;
+        return {result:{agent:{agent_status:reads===1?'starting':'idle',agent_session:reads===1?null:replacement && reads>2?'replacement':'first'}}};
+      }
+      return original(args);
+    };
+    await f.start();
+    assert.equal(f.packets.length,replacement?0:1,`new owner: ${replacement?'replacement refused':'first session accepted'}`);
+  }
+});
+
 test('launch identity is saved before empty dispatch', async () => {
   const f=fixture('launch-identity'), original=f.ports.herdr; let saved;
   f.ports.herdr=async args=>{if(args[0]==='pane'&&args[1]==='run') {const file=join(f.ports.stateRoot,readdirSync(f.ports.stateRoot).find(x=>x.endsWith('.json')));saved=JSON.parse(readFileSync(file));}return original(args);};
