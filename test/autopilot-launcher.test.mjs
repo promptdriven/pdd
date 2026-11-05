@@ -1,21 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, existsSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
+import { loadAgentDefinitions } from '../src/agent-config.mjs';
 
 const root = resolve('.');
 const capture = () => ({ text: '', write(s) { this.text += s; } });
 async function fixture(t, options = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'pdd-autopilot-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const cwd = join(dir, 'repo'), home = join(dir, 'home');
+  const cwd = join(dir, options.cwdName ?? 'repo'), home = join(dir, 'home');
   mkdirSync(cwd); mkdirSync(home);
   writeFileSync(join(cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: options.mode ?? 'auto', trust: ['helper'] } }));
-  const f = { cwd, home, time: Date.parse('2026-11-04T00:00:00Z'), polls: [], prompts: [], runs: [], timers: [], comments: [], ack: [], issues: [], etag: '"one"', active: false };
+  const f = { dir, cwd, home, time: Date.parse('2026-11-04T00:00:00Z'), polls: [], prompts: [], runs: [], timers: [], comments: [], ack: [], issues: [], etag: '"one"', active: false };
   f.ports = {
     stateRoot: join(home, 'state'), now: () => f.time,
     warn: text => { (f.warnings ??= []).push(text); },
@@ -58,6 +59,109 @@ async function fixture(t, options = {}) {
   return f;
 }
 const issue = (number, extra = {}) => ({ number, state: 'open', title: `Issue ${number}`, body: 'trusted body', user: { login: 'owner' }, author_association: 'OWNER', created_at: '2026-11-04T00:01:00Z', updated_at: '2026-11-04T00:01:00Z', comments: 0, labels: [], html_url: `https://github.com/owner/repo/issues/${number}`, ...extra });
+
+// Native startup cases use the public launcher with fake programs, never live agents.
+async function nativeStartup(t, { kind = 'codex', custom = false, cwdName, body = 'Please fix this synthetic startup case.' } = {}) {
+  const f = await fixture(t, { mode: 'observe', cwdName });
+  const bin = join(f.dir, 'bin'), profile = join(f.home, 'profile chosen');
+  mkdirSync(bin); mkdirSync(profile);
+  f.ports.stateRoot = join(f.dir, 'state');
+  const record = join(f.dir, 'native.jsonl');
+  const script = `#!${process.execPath}\nconst fs = require('node:fs'); fs.appendFileSync(${JSON.stringify(record)}, JSON.stringify({command:process.argv[1],argv:process.argv.slice(2),cwd:process.cwd(),env:{CODEX_HOME:process.env.CODEX_HOME,CLAUDE_CONFIG_DIR:process.env.CLAUDE_CONFIG_DIR,STARTUP_TEST_VALUE:process.env.STARTUP_TEST_VALUE}})+'\\n');\n`;
+  for (const name of ['codex', 'fake-provider', 'chosen codex wrapper']) writeFileSync(join(bin, name), script, { mode: 0o755 });
+  const env = { HOME: f.home, PATH: `${bin}:/usr/bin:/bin`, CODEX_HOME: profile, XDG_CONFIG_HOME: join(f.home, '.config') };
+  const value = 'a b\'c"d\\e$HOME';
+  env.CLAUDE_CONFIG_DIR = join(f.home, value);
+  let selected = { id: kind, kind, command: kind === 'codex' ? 'codex' : join(bin, 'fake-provider'), env: {} };
+  if (custom) {
+    const folder = join(f.home, '.config', 'pdd'); mkdirSync(folder, { recursive: true });
+    writeFileSync(join(folder, 'agents.json'), JSON.stringify({ include_defaults: false, agents: [{ name: 'Chosen startup fixture', kind, command: join(bin, 'chosen codex wrapper'), env: { CODEX_HOME: profile, STARTUP_TEST_VALUE: value } }] }));
+    [selected] = loadAgentDefinitions({ cwd: f.cwd, env });
+  }
+  writeFileSync(join(profile, 'config.toml'), `model="gpt-6.1-sol"\nmodel_reasoning_effort="high"\ncheck_for_update_on_startup=true\n[projects.${JSON.stringify(f.cwd)}]\ntrust_level="untrusted"\n[projects.${JSON.stringify(join(f.dir, 'unrelated'))}]\ntrust_level="untrusted"\n`);
+  const snapshot = folder => Object.fromEntries(readdirSync(folder, { recursive: true, withFileTypes: true }).filter(x => x.isFile()).map(x => {
+    const path = join(x.parentPath ?? x.path, x.name);
+    return [path, readFileSync(path)];
+  }));
+  const saved = snapshot(f.home), parentEnv = { ...process.env };
+  f.ports.selectAgent = async () => selected;
+  const herdr = f.ports.herdr;
+  f.ports.herdr = async args => {
+    const reply = await herdr(args);
+    if (args[0] === 'pane' && args[1] === 'run') execFileSync('/bin/sh', ['-c', args[3]], { cwd: f.cwd, env, timeout: 10000 });
+    return reply;
+  };
+  f.issues = [issue(101, { body })];
+  const result = await f.invoke('start', { env, runs: '1' });
+  assert.equal(result.exitCode, 0, result.message);
+  const calls = existsSync(record) ? readFileSync(record, 'utf8').trim().split('\n').map(JSON.parse) : [];
+  assert.equal(calls.length, 1, 'one selected fake executable runs');
+  const [call] = calls;
+  assert.equal(call.command, selected.command === 'codex' ? join(bin, 'codex') : selected.command);
+  // process.cwd() resolves the temporary directory's /var symlink on macOS.
+  assert.equal(call.cwd, realpathSync(f.cwd));
+  assert.equal(call.env.CODEX_HOME, profile); assert.equal(call.env.CLAUDE_CONFIG_DIR, env.CLAUDE_CONFIG_DIR);
+  assert.equal(call.env.STARTUP_TEST_VALUE, custom ? value : undefined);
+  assert.ok(Object.keys(process.env).length === Object.keys(parentEnv).length && Object.entries(parentEnv).every(([key, value]) => process.env[key] === value), 'parent environment is unchanged');
+  assert.deepEqual(snapshot(f.home), saved, 'agent settings and file inventory remain unchanged');
+  const configs = [], operands = [];
+  for (let i = 0; i < call.argv.length; i++) {
+    if (call.argv[i] === '-c' || call.argv[i] === '--config') configs.push(call.argv[++i]);
+    else if (!call.argv[i].startsWith('-')) operands.push(call.argv[i]);
+  }
+  assert.equal(operands.length, 1, 'interactive first message is one operand');
+  const packet = JSON.parse(operands[0].trimEnd().split('\n').at(-1));
+  assert.equal(packet.issues[0].body, body); assert.equal(packet.recipeFirst, true); assert.equal(packet.runs, 1);
+  assert.equal(f.timers.filter(([action]) => action === 'start').length, 1);
+  assert.equal(f.state().nextTick, f.time + 30 * 60 * 1000);
+  f.status = 304; await f.tick();
+  assert.equal(f.prompts.length, 1, 'unchanged tick sends no extra packet');
+  assert.equal(f.herdrCalls.filter(args => args[0] === 'pane').length, 1);
+  assert.equal(existsSync(join(f.dir, 'PDD_SENTINEL')), false);
+  assert.equal(existsSync(join(f.cwd, 'PDD_SENTINEL')), false);
+  return { ...f, call, configs };
+}
+
+function codexStartupConfig({ cwd, call, configs }) {
+  assert.ok(call.argv.includes('--no-daemon'));
+  assert.ok(call.argv.includes('--dangerously-bypass-approvals-and-sandbox'));
+  // Decode the public Codex inline-table config; do not compare the shell command.
+  const trust = configs.find(value => /^projects\s*=/.test(value));
+  assert.ok(trust, 'invocation config must include project trust');
+  const table = trust.match(/^projects\s*=\s*\{\s*("(?:\\.|[^"\\])*")\s*=\s*\{\s*trust_level\s*=\s*("(?:\\.|[^"\\])*")\s*\}\s*\}$/);
+  assert.ok(table, 'trust config must name one project key');
+  assert.equal(JSON.parse(table[1]), cwd); assert.equal(JSON.parse(table[2]), 'trusted');
+  assert.ok(configs.some(value => /^check_for_update_on_startup\s*=\s*false$/.test(value)));
+  assert.equal(configs.some(value => /^(?:model|model_reasoning_effort|profile)\s*=/.test(value)), false);
+  assert.equal(call.argv.some(value => ['-m', '--model', '-p', '--profile'].includes(value)), false);
+}
+
+test('native startup: normal Codex uses invocation trust and no update check', async t => {
+  codexStartupConfig(await nativeStartup(t));
+});
+
+test('native startup: configured Codex wrapper keeps its environment and saved model', async t => {
+  codexStartupConfig(await nativeStartup(t, { custom: true }));
+});
+
+test('native startup: cwd and first message keep shell syntax literal', async t => {
+  const literal = "space 'single' \"double\" \\slash $HOME $(touch PDD_SENTINEL) `touch PDD_SENTINEL` ;";
+  codexStartupConfig(await nativeStartup(t, { cwdName: `repo ${literal}`, body: `Keep ${literal}\nsecond line` }));
+});
+
+test('native startup: invocation overrides leave saved update and trust settings unchanged', async t => {
+  codexStartupConfig(await nativeStartup(t));
+});
+
+for (const [kind, flags] of [
+  ['claude', ['--dangerously-skip-permissions']],
+  ['gemini', ['--yolo', '--prompt-interactive']],
+  ['agy', ['--dangerously-skip-permissions', '--prompt-interactive']],
+]) test(`native startup: ${kind} keeps its interactive launch without Codex config`, async t => {
+  const { call, configs } = await nativeStartup(t, { kind, custom: kind !== 'agy' });
+  for (const flag of flags) assert.ok(call.argv.includes(flag));
+  assert.equal(configs.length, 0);
+});
 
 test('autopilot routes parse and dispatch without setup or a runtime call', async () => {
   const stdout = capture(), stderr = capture(); let seen;
