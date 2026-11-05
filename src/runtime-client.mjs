@@ -3110,6 +3110,7 @@ function caseArea(root,p,{create=true}={}){
 }
 const caseResult=(record,state,reason,extra={})=>({state,path:record.target??null,pendingId:record.pendingId,reason,recoveryPath:record.recoveryPath,...extra});
 function caseMessage(result){return result.state==='committed'?`${result.duplicate?'already saved to':'added to'} ${result.path}${result.steps?.length?' as step '+result.steps.join(', '):''}`:`not added: ${result.reason}. Case retained at ${result.recoveryPath} (pending ${result.pendingId}).`;}
+const caseOutcome=result=>({kind:'case',result,message:caseMessage(result)});
 function retainCase(root,saved,options,p){
   const original=options.seedTest??{path:saved?.original_path,storyPath:saved?.story_path??saved?.test?.story_path};
   const identity={root,session:options.sessionId??saved?.session_id??null,action:saved?.id??null,original};
@@ -3193,20 +3194,42 @@ function prepareCase(root,record,p){
   for(const raw of test.steps){if(!isObject(raw)||!Array.isArray(raw.checks)||!raw.checks.length)throw Error('case has no mapped checks');const checks=raw.checks.map(c=>({...c,criterion_id:byText.get(savedText.get(c.criterion_id))}));if(checks.some(c=>!c.criterion_id))throw Error(`"${cleanText(saved.name??saved.id)}" checks a criterion that ${path} does not have; keep expected values and repair the mapping`);const taken=new Set(current.steps.map(s=>s.step_id));let id=slug(raw.step_id)||slug(saved.id)||'saved-case';for(let n=2,base=id;taken.has(id);n++)id=`${base}-${n}`;const step={...raw,step_id:id,checks};after=appendStep(after,current,step);current={...current,steps:[...current.steps,step]};steps.push(id);}
   return{path,before:text,after,steps};
 }
-function applyPendingCaseSync({root,pendingId,writeOwnership,signal},ports={}){
+function caseImportState(root,record,p,{inspect=false,reconcile=false,reason='reconciled published case'}={}){
+  if(p.files.list(dirname(record.recoveryPath)).filter(x=>x.endsWith('.received.json')).length!==1)
+    return{result:caseResult(record,'conflict','this identity has different received payloads; both are retained')};
+  const journal=record.recoveryPath.replace('.received.json','.transaction.json');
+  if(!caseStat(p,journal))return{};
+  const transaction=JSON.parse(caseRead(p,journal));
+  if(transaction.state==='committed')return{result:caseResult(record,'committed','already applied',{path:transaction.path,duplicate:true})};
+  if((inspect||reconcile)&&transaction.after!==undefined){
+    requireRuntimePath(loadRuntimeWorkspace({root}),{path:transaction.path,from:'Case reconciliation'});
+    const target=join(root,transaction.path),actual=caseStat(p,target)?caseRead(p,target):null;
+    if(actual===transaction.after){
+      if(!reconcile)return{transaction,published:true,reconciliationOnly:transaction.state==='publishing'};
+      caseSyncDir(p,dirname(target));caseWrite(p,journal,JSON.stringify({...transaction,state:'committed'}));
+      return{result:caseResult(record,'committed',reason,{path:transaction.path,steps:transaction.steps})};
+    }
+    if(reconcile&&actual!==transaction.before){
+      caseWrite(p,journal,JSON.stringify({...transaction,state:'conflict',observed:[...(transaction.observed??[]),actual]}));
+      return{result:caseResult(record,'conflict','authored revision changed after preparation; received and observed revisions retained')};
+    }
+    if(transaction.state==='publishing'){
+      if(!reconcile)return{transaction,reconciliationOnly:true};
+      return{result:caseResult(record,'pending','publication outcome is uncertain; retain the case without reapplying it')};
+    }
+  }
+  return{transaction};
+}
+function applyPendingCaseSync({root,pendingId,writeOwnership,signal},ports={},publicationGuard){
   const p=casePorts(ports);root=p.files.realpath(root);const record=readPending(root,pendingId,p),journal=record.recoveryPath.replace('.received.json','.transaction.json');
   let temp,tempOwned,lease,transaction;const persist=value=>caseWrite(p,journal,JSON.stringify(value));
   try{
     lease=ownedCaseLease(writeOwnership,root,record.target);
-    const variants=p.files.list(dirname(record.recoveryPath)).filter(x=>x.endsWith('.received.json'));
-    if(variants.length!==1)return caseResult(record,'conflict','this identity has different received payloads; both are retained');
-    if(caseStat(p,journal)){transaction=JSON.parse(caseRead(p,journal));if(transaction.state==='committed')return caseResult(record,'committed','already applied',{path:transaction.path,duplicate:true});
-      if(transaction.after!==undefined){const actual=caseStat(p,join(root,transaction.path))?caseRead(p,join(root,transaction.path)):null;
-        if(actual===transaction.after){caseSyncDir(p,dirname(join(root,transaction.path)));persist({...transaction,state:'committed'});return caseResult(record,'committed','reconciled published case',{path:transaction.path,steps:transaction.steps});}
-        if(actual!==transaction.before){persist({...transaction,state:'conflict',observed:[...(transaction.observed??[]),actual]});return caseResult(record,'conflict','authored revision changed after preparation; received and observed revisions retained');}
-      }
-    }
+    const known=caseImportState(root,record,p,{reconcile:true});
+    if(known.result)return known.result;
+    transaction=known.transaction;
     if(signal?.aborted)return caseResult(record,'pending','case save cancelled');
+    publicationGuard?.();
     const prepared=prepareCase(root,record,p);transaction={...prepared,state:'prepared',pendingId};persist(transaction);p.fault('prepared',record);
     if(signal?.aborted)return caseResult(record,'pending','case save cancelled');
     ownedCaseLease(writeOwnership,root,record.target);
@@ -3219,6 +3242,7 @@ function applyPendingCaseSync({root,pendingId,writeOwnership,signal},ports={}){
     const latest=caseStat(p,target)?caseRead(p,target):null;
     if(latest!==prepared.before){persist({...transaction,state:'conflict',observed:[latest]});return caseResult(record,'conflict','authored revision changed during preparation');}
     if(signal?.aborted)return caseResult(record,'pending','case save cancelled');
+    publicationGuard?.();
     // From this boundary onward, reconcile while custody remains held even on abort.
     transaction={...transaction,state:'publishing'};persist(transaction);
     if(prepared.isolated)p.files.link(temp,target);else p.files.rename(temp,target);
@@ -3228,7 +3252,7 @@ function applyPendingCaseSync({root,pendingId,writeOwnership,signal},ports={}){
     return caseResult(record,'committed','applied',{path:prepared.path,steps:prepared.steps});
   }catch(error){
     if(transaction?.state==='publishing'){
-      try{const actual=caseRead(p,join(root,transaction.path));if(actual===transaction.after){caseSyncDir(p,dirname(join(root,transaction.path)));persist({...transaction,state:'committed'});return caseResult(record,'committed','reconciled after publication',{path:transaction.path,steps:transaction.steps});}persist({...transaction,state:'conflict',observed:[actual]});}catch{/* durable prepared record retains custody */}
+      try{const known=caseImportState(root,record,p,{reconcile:true,reason:'reconciled after publication'});if(known.result?.state==='committed')return known.result;}catch{/* durable prepared record retains custody */}
     }
     return caseResult(record,'pending',cleanText(error.message??error));
   }finally{if(temp){try{const remaining=caseStat(p,temp);if(tempOwned&&remaining?.ino===tempOwned.ino&&remaining.dev===tempOwned.dev)p.files.unlink(temp);}catch(e){if(e.code!=='ENOENT'){} }} }
@@ -3236,16 +3260,89 @@ function applyPendingCaseSync({root,pendingId,writeOwnership,signal},ports={}){
 export async function applyPendingCase(input,ports={}){return applyPendingCaseSync(input,ports);}
 export const saveDoorCaseResult=(root,saved,options={})=>{
   const p=casePorts(options.ports??{env:options.env});let record;
-  const outcome=result=>({kind:'case',result,message:caseMessage(result)});
-  try{root=p.files.realpath(root);record=retainCase(root,saved,options,p);const journal=record.recoveryPath.replace('.received.json','.transaction.json');
-    if(p.files.list(dirname(record.recoveryPath)).filter(n=>n.endsWith('.received.json')).length>1)return outcome(caseResult(record,'conflict','this identity has different received payloads; both are retained'));
-    if(caseStat(p,journal)){const prior=JSON.parse(caseRead(p,journal));if(prior.state==='committed')return outcome(caseResult(record,'committed','already applied',{path:prior.path,duplicate:true}));}
-    if(options.writeOwnership)return outcome(applyPendingCaseSync({root,pendingId:record.pendingId,writeOwnership:options.writeOwnership,signal:options.signal},options.ports??{env:options.env}));
+  try{root=p.files.realpath(root);record=retainCase(root,saved,options,p);
+    const known=caseImportState(root,record,p);if(known.result)return caseOutcome(known.result);
+    if(options.writeOwnership)return caseOutcome(applyPendingCaseSync({root,pendingId:record.pendingId,writeOwnership:options.writeOwnership,signal:options.signal},options.ports??{env:options.env}));
     let reason;try{prepareCase(root,record,p);}catch(error){reason=error.message;}
-    const result=caseResult(record,'pending',options.signal?.aborted?'case save cancelled':reason??'close the editor for the named original test and apply the retained case with supported ownership');return outcome(result);}
+    const result=caseResult(record,'pending',options.signal?.aborted?'case save cancelled':reason??'close the editor for the named original test and apply the retained case with supported ownership');return caseOutcome(result);}
   catch(error){return{kind:'failure',message:`not added: durable case receipt failed (${cleanText(error.message??error)}).${record?' Recovery: '+record.recoveryPath:''}`};}
 };
 export const saveDoorCase=(root,saved,options={})=>saveDoorCaseResult(root,saved,options).message;
+
+function retainedCaseAuthority(root,record,p){
+  const action=record.identity.action;
+  if(typeof action!=='string'||!UUID.test(action))throw Error('original local call authority is unavailable');
+  const directory=stateDirectory(p.env,root),meta=JSON.parse(caseRead(p,join(directory,'calls',action+'.meta.json')));
+  if(meta.id!==action||meta.root!==root||typeof meta.session_id!=='string'||!UUID.test(meta.session_id)
+    ||record.identity.session!=null&&record.identity.session!==meta.session_id)throw Error('original local call authority does not match this receipt');
+  const repo=JSON.parse(caseRead(p,join(directory,'repos',sha256(Buffer.from(root)).slice(0,16)+'.json')));
+  if(repo.root!==root||!isObject(repo.tries))throw Error('original local Try authority is unavailable');
+  const matches=Object.entries(repo.tries).filter(([,value])=>value?.id===meta.session_id);
+  if(matches.length!==1)throw Error('original local Try authority is missing or ambiguous');
+  const [path,original]=matches[0],story=record.identity.original.storyPath;
+  if(path!==record.target||original.storyPath!==story)throw Error('original test or Story authority does not match this receipt');
+  const hash=value=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value),raw=original.prompt_hashes,effective=original.effective_prompt_hashes;
+  if(!hash(original.story_sha256)||!isObject(raw)||!Object.keys(raw).length||!isObject(effective)
+    ||!Object.entries(raw).every(([path,value])=>hash(value)&&hash(effective[path]))
+    ||!Object.keys(effective).every(path=>Object.hasOwn(raw,path)))throw Error('original Story/raw/effective source pins are unavailable');
+  const workspace=loadRuntimeWorkspace({root});
+  requireRuntimePath(workspace,{path,from:'Retained case original'});requireRuntimePath(workspace,{path:story,from:path});
+  caseSafe(p,join(root,path));caseSafe(p,join(root,story));
+  const found=findTests({root}),test=found.tests.find(test=>test.path===path&&test.storyPath===story);
+  if(!test||test.doc?.story_path!==story||sha256(Buffer.from(caseRead(p,join(root,story))))!==original.story_sha256)throw Error('the original Story or test changed');
+  const capture=captureSource(root,{tests:[path]});
+  const references=capture.references??[];
+  if((references.length||original.contract_references!==undefined)
+    &&(!Array.isArray(original.contract_references)||!isDeepStrictEqual(original.contract_references,references)))throw Error('original reference baseline is unavailable or changed');
+  const problem=tryPromptProblem(root,found,test,original,capture);if(problem)throw Error(problem);
+  return JSON.stringify({id:meta.id,root:meta.root,session:meta.session_id,path,story,pins:{story:original.story_sha256,raw,effective,references:original.contract_references}});
+}
+
+function retainedCaseCoverage(record){
+  const unavailable={scope:'unavailable',covered:null,total:null},doc=record.saved?.test;
+  if(!Array.isArray(doc?.criteria)||!doc.criteria.length||!Array.isArray(doc.steps)||!doc.steps.length)return unavailable;
+  const ids=new Set(),covered=new Set();
+  for(const criterion of doc.criteria){
+    if(!isObject(criterion)||typeof criterion.id!=='string'||!criterion.id||typeof criterion.text!=='string'||ids.has(criterion.id))return unavailable;
+    ids.add(criterion.id);
+  }
+  for(const step of doc.steps){
+    if(!isObject(step)||!Array.isArray(step.checks)||!step.checks.length)return unavailable;
+    for(const check of step.checks){if(!isObject(check)||typeof check.criterion_id!=='string'||!ids.has(check.criterion_id))return unavailable;covered.add(check.criterion_id);}
+  }
+  // Existing persistence retains scenario criteria, not a complete original
+  // Story inventory. A seed snapshot alone cannot promote this scope.
+  return{scope:'retained-scenario',covered:covered.size,total:ids.size};
+}
+
+export async function applyPendingCaseWithHandoff({cwd=process.cwd(),pendingId,handoff,signal}={},ports={}){
+  const p=casePorts(ports);let root,record,lease,unsubscribe;const removals=[];
+  const outcome=result=>({...caseOutcome(result),coverage:retainedCaseCoverage(record)});
+  try{
+    root=p.files.realpath(repoRoot(cwd));const received=readPending(root,pendingId,p),original=received.identity?.original;
+    if(received.schema_version!=='pdd.case-import.v1'||!isObject(received.saved)||!isObject(original)
+      ||typeof received.target!=='string'||received.target!==original.path||typeof original.storyPath!=='string'||received.saved.id!==received.identity.action
+      ||received.target.split(/[\\/]/).some(part=>!part||part==='.'||part==='..')||received.target.startsWith('/'))throw Error('invalid retained original case binding');
+    record=received;
+    if(!handoff||!['closed-editor','editor-lease'].includes(handoff.kind)||handoff.testPath!==record.target||handoff.closed===false
+      ||handoff.kind==='editor-lease'&&typeof handoff.release!=='function')throw Error('explicit closed-file handoff for the exact original test is required');
+    let known=caseImportState(root,record,p,{inspect:true});if(known.result)return outcome(known.result);
+    const controller=new AbortController(),abort=()=>controller.abort();
+    for(const external of new Set([signal,ports.signal].filter(Boolean))){if(external.aborted)abort();else{external.addEventListener('abort',abort,{once:true});removals.push(()=>external.removeEventListener('abort',abort));}}
+    unsubscribe=withDefaults(ports).onInterrupt(abort);
+    if(controller.signal.aborted)throw Error('case save cancelled');
+    const authority=known.published||known.reconciliationOnly?null:retainedCaseAuthority(root,record,p);
+    const guard=()=>{
+      if(authority===null)throw Error('the established published target changed; keep the received case without reapplying it');
+      if(retainedCaseAuthority(root,record,p)!==authority)throw Error('original local source authority changed while waiting');
+    };
+    lease=await acquireCaseWriteOwnership({root,testPath:record.target,handoff,signal:controller.signal},ports);
+    known=caseImportState(root,record,p,{inspect:true});if(known.result)return outcome(known.result);
+    if(!known.published&&!known.reconciliationOnly)guard();
+    return outcome(applyPendingCaseSync({root,pendingId,writeOwnership:lease,signal:controller.signal},ports,guard));
+  }catch(error){return record?outcome(caseResult(record,'pending',cleanText(error.message??error))):{kind:'failure',message:`not added: retained case unavailable (${cleanText(error.message??error)}).`};}
+  finally{try{lease?.release();}finally{unsubscribe?.();for(const remove of removals)remove();}}
+}
 
 async function caseHandoff(context,testPath){
   context.caseHandoffs??=new Map();if(context.caseHandoffs.has(testPath))return null;
