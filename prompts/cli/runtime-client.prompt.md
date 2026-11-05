@@ -152,6 +152,83 @@ Add native `acquireCaseWriteOwnership({root,testPath,handoff,signal},ports={})`,
 
 An observed non-cooperating edit causes conflict with received payload and observed authored versions retained. For uncoordinated editors with no handoff, stage the received case and leave authored bytes unchanged. Exact byte/inode comparison and atomic rename alone cannot guarantee protection from an arbitrary editor; do not claim universal compare-and-swap or safely append through a known uncoordinated edit.
 
+### Local retained-case application
+
+Export asynchronous native module function
+`applyPendingCaseWithHandoff({cwd,pendingId,handoff,signal},ports={})` for a retained
+case, including after the caller restarts. Resolve the canonical Git root from
+the server's `cwd`; neither the pending identity nor the handoff chooses a root.
+Use the existing pending reader, acquisition, apply, interrupt and formatter
+owners, returning the same [native outcome](#native-received-case-outcomes) as
+`saveDoorCaseResult`. Do not rebuild or normalize the saved case, change its raw
+bytes, payload fields, identity/equality inputs or isolated/append mode.
+
+Only this entry's `kind:'case'` outcome also carries read-only
+`coverage:{scope,covered,total}`; it changes neither `result` nor `message`.
+For well-formed nonempty retained scenario criteria with unique nonempty string IDs,
+`total` is that retained ID count and `covered` counts distinct referenced IDs
+that are valid members of that set, once each. Repeated checks add no coverage;
+pass/fail observations are irrelevant. Missing/malformed criteria or checks,
+duplicate criterion IDs, or an unknown referenced ID make `scope:'unavailable'`
+with both counts null; never repair IDs or fabricate a count.
+
+Normally use `scope:'retained-scenario'`: these counts describe that saved
+scenario, not the complete Story or mapped original criteria. Generic append
+can map by text and collapse distinct saved IDs; its retained counts are never
+claimed as mapped original coverage. Use `scope:'original-story'` only when
+already-retained original context establishes the complete original MCP Story
+criterion inventory and identical criterion identity. A matching selected
+`seed_scenario` alone does not establish complete Story scope. Do not read a
+current Story to supply a denominator, infer a missing original inventory, or
+add receipt/source metadata. Coverage is a projection after transaction
+classification, not an eligibility rule. Unavailable coverage cannot override a
+committed duplicate, change its historical result/message, reapply or restore a
+case, create a variant or claim current-source proof. Failure has no coverage.
+
+Before waiting, validate the private receipt's safe regular path, exact root and
+pending identity, retained original test/Story binding, and the named handoff's
+exact match to that original test. JSON input cannot supply an opaque lease or
+retarget a case. An invalid, unreadable or foreign receipt returns `kind:'failure'`
+without a pending claim, wait or publication authority. A valid receipt held by
+an unresolved confirmation, source, target or ownership condition retains its
+actual pending/conflict identity, reason and recovery location.
+
+Use one shared transaction classification, in this precedence:
+
+| Established observation | Result and permitted effect |
+|---|---|
+| Same identity has conflicting received payloads | Retain conflict; publish neither payload. |
+| Matching durable committed identity | Return the existing committed duplicate without authored mutation. Later source/target change or deliberate removal cannot restore it or create another variant. This is historical application, not current-source proof. |
+| An interrupted publication is proved by the owner's matching transaction and actual published bytes | Reconcile the ledger under existing custody rules; do not rewrite or restore the target. Changed or uncertain bytes retain the existing pending/conflict outcome. |
+| No application is established | New publication requires the original local authority below and the existing safe apply transaction. |
+
+For new publication, bind the retained action to the existing safe local
+`calls/<action>.meta.json`: its `id` equals that action, its `root` equals the
+canonical server root, and its `session_id` identifies exactly one owned
+repository Try entry. That entry's test-path key and `storyPath` must match the
+receipt's original test/Story. A nonnull retained session must agree; preserve a
+null retained session without filling it. Never choose the first or latest
+record, infer a replacement session or create an association. Missing, malformed,
+foreign or ambiguous local authority leaves the valid receipt held.
+
+Require that original record's `story_sha256`, complete `prompt_hashes` and
+`effective_prompt_hashes`, using the existing local source readers and pin
+comparison owner. Require its original `contract_references` baseline where
+those readers need it. Missing or legacy pins cannot be replaced with current
+bytes or a newly captured baseline.
+Stale or unavailable authority never authorizes new publication or current-source
+proof. Revalidate the original binding, saved pin set, current source and exact
+target after awaiting acquisition and before unapplied publication; changed,
+replaced or missing authority retains the case instead of writing.
+
+No gh authentication, credential lookup or sign-in is performed or required.
+This operation is local: no owner HTTP read, Try setup, model/provider request,
+saved read, retry or gate action. Hold supported ownership through the existing
+publication/ledger boundary. Forward the same standard `AbortSignal`; reuse the
+owner's SIGINT/SIGHUP/SIGTERM subscription and bounded cleanup. Before publication,
+abort prevents delayed writes; after it, preserve existing reconciliation.
+Release only this operation's lease/subscription.
+
 ### Duplicate and interruption recovery
 
 Durable import identity is original session/action/saved-case identity plus exact selected target; retain payload bytes separately for equality. Identical committed payload is a no-op across process restart. Same identity with different payload retains both as conflict. Distinct cooperating savers each append once using the latest owned target. A later editor's deliberate removal of an applied step does not cause duplicate polling to restore it. Missing ledger proof does not mean no append occurred.
@@ -773,6 +850,20 @@ Return normalized usage alongside the confirmed result (usage.calls and result.r
 to the runtime. Preserve paused-session refusals; never silently create a new world during a command.
 
 Export `saveDoorCase(root, saved, options={})` as the existing printable-result native entry to [received-case import](#received-case-import). Obtain target authority from the retained original native association; a supplied path alone is not authority. Keep its explicit isolated option under that same owner.
+
+<a id="native-received-case-outcomes"></a>
+
+The synchronous native module function `saveDoorCaseResult(root, saved, options={})`
+exposes that same operation as a typed outcome. Its normal branches return
+`{kind:'case', result, message}`: `result` is the existing transaction result,
+including its `pending`, `conflict` or `committed` state, and `message` is the
+identical printable string for that result. A failure returns
+`{kind:'failure', message}` with the same existing failure string and no `result`.
+It must not report an unknown or failed receipt as pending or authorize an
+ownership wait or publication. Both entries use the same receipt, payload,
+identity, equality and transaction policy. `saveDoorCase` remains synchronous
+with its existing signature and returns only this outcome's `message`, preserving
+all existing printable results.
 
 For CLI or HTTP setup every preflight, lint or runtime refusal is a wrapper failure on stderr prefixed `pdd:`
 and exits 125. Argument combinations alone may exit 2. Session records capture hashes of uploaded prompt files

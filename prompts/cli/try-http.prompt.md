@@ -58,7 +58,14 @@ sandboxed frames. JSON action bodies go through the existing remote action ledge
 lost answer. A lost POST returns uncertainty to the driver, which reads its persisted action ID. Stop prevents
 new upstream work and interrupts outstanding reads. Print the actual Screen URL as well as named API routes.
 
+## Workspace owner access
+
+Carry the [workspace authority](runtime-workspace.prompt.md) through selected source/app-map reads, owner lookup, listener setup and each call/save continuation. Required source validation precedes authentication, model metadata, listeners and dispatch. Delegate exact original target and durable pending/conflict saves to the runtime client. Keep pinned model authority, output and unknown-outcome behavior.
+
+
 ## Dependencies
+
+- [Workspace authority](runtime-workspace.prompt.md): required generation/runtime/verification context for opt-in permission.
 
 - [Runtime client](runtime-client.prompt.md): required generation/runtime context for owner-authenticated metadata,
   exactly-once calls and session lifecycle.
