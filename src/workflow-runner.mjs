@@ -1904,7 +1904,7 @@ Nothing was sent to the chat.` };
     if (sent.uncertain) return uncertain();
     if (sent.code === 'chat_target_changed') return fail(`The original ${area.name} chat target changed. ${kept}`);
     if (sent.code === 'chat_still_starting') return fail(`The ${area.name} chat is still starting. ${kept}`);
-    if (sent.code === 'agent_blocked' || sent.code === 'agent_dialog') return fail(`The ${area.name} chat did not get ${what}: ${sent.reason ?? 'the chat shows a dialog'}. pdd sent nothing and did not answer the dialog. Answer it in the chat yourself, then retry. ${kept}`);
+    if (sent.code === 'agent_blocked' || sent.code === 'agent_dialog') return fail(`The ${area.name} chat did not get ${what}: ${sent.reason ?? (sent.code === 'agent_blocked' ? 'the chat shows a question dialog' : 'the chat shows a dialog')}. pdd sent nothing and did not answer the dialog. Answer it in the chat yourself, then retry. ${kept}`);
     if (sent.code === 'pane_unreadable') return fail(`The ${area.name} chat did not get ${what}: ${sent.reason}. pdd sends nothing when it cannot see the chat. ${kept}`);
     if (sent.code === 'agent_not_found') return fail(`The ${area.name} chat is not running. ${kept}`);
     return fail(`pdd could not send the text to the ${area.name} chat (${sent.code}). ${kept}`);
@@ -1961,7 +1961,7 @@ Nothing was sent to the chat.` };
           const saved = journal.requests.find(item => item.id === entry.id);
           if (!saved) throw Error('Saved request unavailable');
           // A pending request keeps the reason of its latest unsent delivery (a dialog or an unread screen) for status.
-          const keepReason = () => { const reason = sent.reason ?? (sent.code === 'agent_blocked' ? 'the chat shows a dialog' : null); if (reason) saved.reason = reason; else delete saved.reason; };
+          const keepReason = () => { const reason = sent.reason ?? (sent.code === 'agent_blocked' ? 'the chat shows a question dialog' : null); if (reason) saved.reason = reason; else delete saved.reason; };
           if (!claimed || saved.owner?.token !== owner.token) { if (!claimed && !sent.ok && saved.state === 'pending' && !saved.inFlight) keepReason(); return { ...saved }; }
           delete saved.inFlight; delete saved.owner;
           if (!sent.ok) { saved.state = sent.uncertain ? 'uncertain' : 'pending'; saved.code = sent.code; keepReason(); return { ...saved }; }
