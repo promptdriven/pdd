@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: f770025525275bf3b076c4a71ef0b4363bd4b4cfafaa794228b5ab75a6b880a1).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 191001ca9b6c4819eea3e0d04e63e89bb1a1d5b7003da927b896eb0ae81c2037).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { execFile as execFileCallback } from 'node:child_process';
@@ -407,7 +407,7 @@ async function startRunCommand({ name, issue, agent = 'codex', base, adoptCorpus
   try { workflow = readWorkflowAreas({ packageRoot, name, cwd, home: p.env.HOME || homedir() }); } catch (error) { return fail(error.message); }
   if (adoptCorpus !== undefined && (typeof adoptCorpus !== 'string' || !adoptCorpus.trim() || !workflow.areas.some(area=>area.replay_evidence===REPLAY_POLICY))) return {exitCode:2,message:'--adopt-corpus requires a declaration path and an explicitly replay-evidence-enabled workflow.'};
   if (!['codex', 'claude', 'gemini', 'agy'].includes(agent)) return fail('Choose --agent codex, --agent claude, --agent gemini or --agent agy.');
-  // Every chat of the run uses this config folder; a missing one makes the agent stop at once (0.1.6 tester).
+  // Save the initial profile for later chats; explicit Codex replacement may select another.
   const variable = homeVariable(agent), configDir = variable && p.env[variable] ? resolve(cwd, expandHome(p.env[variable], p.env)) : null;
   if (configDir && !isFolder(configDir)) return fail(`${variable} is "${configDir}", but that folder does not exist. Fix ${variable} and run the command again.`);
   const explicitBase = base !== undefined;
@@ -2163,7 +2163,9 @@ async function runStatusCommand({ ref, cwd, all = false, json = false, cancelled
 
 const replacementPhases = ['intent', 'closeRequested', 'closed', 'createRequested', 'prepared', 'launchRequested', 'launched', 'rolledBack', 'ended'];
 function validReplacement(record, run) {
-  if (!record || typeof record !== 'object' || Array.isArray(record) || Object.keys(record).some(key => !['id', 'area', 'phase', 'at', 'original', 'replacement', 'recovery'].includes(key)) || !validSessionId(record.id) || !Number.isSafeInteger(record.at) || record.at < 0 || !replacementPhases.includes(record.phase) || !run.areas.slice(0, run.area + 1).some(area => area.name === record.area)) return false;
+  if (!record || typeof record !== 'object' || Array.isArray(record) || Object.keys(record).some(key => !['id', 'area', 'phase', 'at', 'original', 'configDir', 'replacement', 'recovery'].includes(key)) || !validSessionId(record.id) || !Number.isSafeInteger(record.at) || record.at < 0 || !replacementPhases.includes(record.phase) || !run.areas.slice(0, run.area + 1).some(area => area.name === record.area)) return false;
+  if (Object.hasOwn(record, 'configDir') && (record.configDir !== null && (typeof record.configDir !== 'string' || !record.configDir.length)
+    || record.replacement && record.replacement.configDir !== record.configDir)) return false;
   const recovery = record.recovery;
   if (recovery !== undefined && (!recovery || typeof recovery !== 'object' || Array.isArray(recovery)
     || Object.keys(recovery).some(key => !['closeAcknowledged','resumeRequested','allocationLabel','tabIdsBefore','latestLaunchRequest','unsentProof'].includes(key))
@@ -2247,17 +2249,22 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
   let defaultOriginal = chat ? structuredClone(chat) : undefined;
   if (newSession && historical) return fail(`Select the current area ${run.areas[run.area].name} to start a new session; earlier areas cannot be replaced.`);
   if (newSession && !chat && (!run.chatReplacement || ['launched','rolledBack','ended'].includes(run.chatReplacement.phase))) return fail('The current area has no saved chat to replace. Open it first.');
-  const missing = missingHome(run, p.env);
-  if (missing) return fail(missing);
   const pending = run.chatReplacement;
   if (pending !== undefined) {
     if (!validReplacement(pending, run)) return fail('The saved chat replacement record is malformed or unknown. Inspect it before opening a chat.');
     if (!['launched', 'rolledBack', 'ended'].includes(pending.phase) && !newSession) return fail(`Chat replacement is pending at ${pending.phase}. Retry: pdd workflow open ${run.number} --new`);
   }
+  const recovering = pending && !['launched','rolledBack','ended'].includes(pending.phase);
+  const incoming = newSession && !recovering && run.agent === 'codex' && typeof p.env.CODEX_HOME === 'string' && p.env.CODEX_HOME.length ? p.env.CODEX_HOME : null;
+  const replacementConfig = incoming ? resolve(cwd, expandHome(incoming, p.env)) : run.configDir;
+  if (incoming && !isFolder(replacementConfig)) return fail(`CODEX_HOME is "${replacementConfig}", but that folder does not exist. Fix CODEX_HOME and run the command again.`);
+  // Pending recovery checks the profile of each effect, which may be the original
+  // chat's folder rather than either the current run or the retrying terminal.
+  const missing = !recovering && missingHome({ ...run, configDir: replacementConfig }, p.env);
+  if (missing) return fail(missing);
 
   try {
     if (newSession) {
-      const recovering = pending && !['launched','rolledBack','ended'].includes(pending.phase);
       if (recovering) chat = pending.original;
       const replacementArea = recovering ? run.areas.findIndex(item => item.name === pending.area) : run.area;
       const currentArea = run.areas[replacementArea];
@@ -2270,12 +2277,14 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
         ...(run.gate ? [`Open gate: ${run.gate.kind} for ${run.gate.area ?? currentArea.name}. Wait for the person to decide whether to approve or request changes; do not treat this new session as approval.`] : []),
         ...(openQuestion(run) ? [`Pending question: ${openQuestion(run).text}`] : []),
       ].join('\n') + '\n';
+      const replacementRun = { ...run, configDir: replacementConfig };
       const checkpoint = async record => {
         if (!validReplacement(record, run)) throw Object.assign(Error('Invalid replacement checkpoint'), { code: 'invalid_replacement_checkpoint' });
         const admit = fresh => {
           if (!fresh || ended(fresh)) throw Object.assign(Error('The run ended during replacement.'), {code:'run_ended'});
           const prior = fresh.chatReplacement;
           const sameAttempt = prior && prior.id === record.id && prior.at === record.at && sameFact(prior.original, record.original);
+          if (sameAttempt && Object.hasOwn(prior, 'configDir') && prior.configDir !== record.configDir) throw Error('Replacement configuration changed');
           if (record.phase === 'intent' && !sameAttempt) {
             if (prior && !['launched','rolledBack','ended'].includes(prior.phase)) throw Error('Replacement already pending');
             if (prior?.id === record.id) throw Error('Invalid replacement transition');
@@ -2285,15 +2294,21 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
         admit(readRun(run.runDir));
         commitRun(run, p, fresh => {
           if (!admit(fresh)) (fresh.abandonedChats ??= []).push({ ...record.original, replacementId: record.id, abandonedAt: record.at, reason: 'explicit-new-session' });
+          const priorPhase = fresh.chatReplacement?.phase;
           fresh.chatReplacement = structuredClone(record);
+          // Only the first current-area installation selects later-area inheritance.
+          // Observation/recovery checkpoints must not retarget a newer saved account.
+          if (record.phase === 'launchRequested' && record.area === fresh.areas[fresh.area]?.name
+            && !['launchRequested','launched'].includes(priorPhase)) fresh.configDir = record.configDir;
           if (['launchRequested', 'launched', 'rolledBack'].includes(record.phase)) {
             fresh.chats = fresh.chats.filter(item => item.area !== record.area);
             fresh.chats.push(record.phase === 'rolledBack' ? {...record.original, messageFile: record.original.originalMessageFile} : {...record.replacement});
           }
           if (['launched','rolledBack','ended'].includes(record.phase) && record.area === fresh.areas[fresh.area]?.name) clearChatFailure(fresh);
         });
+        Object.assign(replacementRun, run);
       };
-      chat = await restartChat({ run, chat, message, pending: pending && !['launched','rolledBack','ended'].includes(pending.phase) ? pending : undefined }, { ...p, checkpoint });
+      chat = await restartChat({ run: replacementRun, chat, message, pending: recovering ? pending : undefined }, { ...p, checkpoint });
       if (run.chatReplacement?.phase === 'ended') return done(`Ended the historical ${chat.area} replacement attempt without launching or resuming it. The current chat and progress are kept.`);
       if (run.chatReplacement?.phase === 'rolledBack') return done(`Restored the usable ${chat.area} chat. The same replacement attempt was rolled back.`);
       if (run.chatReplacement?.recovery?.resumeRequested) return done(`Resumed this attempt's ${chat.area} session in Herdr session pdd; no second first message was sent. The run, completed work, gates and approvals are kept.`);
