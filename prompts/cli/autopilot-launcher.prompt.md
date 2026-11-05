@@ -147,8 +147,6 @@ line per event. Busy or failed delivery consumes no event; reassess current
 facts when idle so refreshed or ended events are not delivered stale. Neither
 timer marks, terminates or takes over a run itself; the skill owns those actions.
 The two 60-minute thresholds are constants, not settings, caps or hard stops.
-Account usage reset wakeups require readable local account usage data; when
-none is available, skip that rule without a network request or an invented reset.
 
 Use same-repository closing references in PR bodies to associate PRs with issues.
 Resolve trusted related PR metadata on change (state, draft, merge and head),

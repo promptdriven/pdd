@@ -13,7 +13,7 @@ Draft for review. This is a dependency of [review wakes](autopilot-review-wake.m
 
 ## Rules to check
 
-- Preserve the [launcher time rules and trust boundary](../prompts/cli/autopilot-launcher.prompt.md#tick-and-the-skill-boundary), including one reason line per event and no invented usage reset.
+- Preserve the [launcher time rules and trust boundary](../prompts/cli/autopilot-launcher.prompt.md#tick-and-the-skill-boundary), including one reason line per event.
 - Check both rules at one millisecond before and at 60 minutes, repeated ticks and restart, and a later activity becoming due. For a claim, check the claimed flag and the takeover reason; for a run, check the stuck reason.
 - Check working, blocked and unknown agents defer both events and an idle agent receives them together once. Check failed delivery retries, and activity refreshed while busy cancels the old event until it becomes due again.
 - Check cached comment edit time controls claim age without another comment or network query; revoked trust does not send the cached claim. Check real status-file modification times, completed and cancelled runs, another repository, malformed files, and a run ended while pending. Check missing claim activity and an empty tick stay quiet.
