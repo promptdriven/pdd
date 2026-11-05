@@ -5,7 +5,7 @@ As a person whose workflow agent has reached its session limit, I want to open a
 ## Acceptance criteria
 
 1. `pdd workflow open 2627` keeps its existing behavior: it focuses the current chat or resumes that chat's saved native session when it ended.
-2. `pdd workflow open 2627 --new` replaces only the current area's owned chat with one new native session in the same worktree and saved agent configuration; the old native session is not resumed.
+2. `pdd workflow open 2627 --new` replaces only the current area's owned chat with one new native session in the same worktree and with the same agent; the old native session is not resumed. For a fresh Codex replacement, a nonempty incoming `CODEX_HOME` selects an existing folder, overriding the saved profile. Empty or unset `CODEX_HOME` and other agents keep their saved profile. A pending replacement keeps its already selected profile regardless of the retrying terminal's `CODEX_HOME`.
 3. A replacement keeps the run identity, branch, worktree, active area, completed steps, step summaries, open gate, pending question, decisions, approvals and PR records. Its first message explains the saved progress, what remains, and any gate or question in words the person can understand; it does not restart or approve the workflow.
 4. `pdd workflow open 2627 story` opens that run's recorded story chat without changing the current area or approvals. An unknown or not-yet-started area refuses before a launch, close or saved-run change. A historical-area request with --new refuses with guidance to select the current area.
 5. Before replacing a chat, PDD confirms the saved tab, pane, workspace and worktree identity. A changed identity, unavailable inspection or unresolved earlier launch refuses before closing or launching anything.
@@ -17,6 +17,8 @@ As a person whose workflow agent has reached its session limit, I want to open a
 ## Rules to check
 
 A fresh-session request may launch at most one new native session, after confirmed closure of its selected predecessor. It must preserve all workflow progress and human decisions; uncertainty never authorizes another launch. A historical-area open must not change which area can record progress or approve the run.
+
+For a fresh current-area Codex replacement, a nonempty incoming `CODEX_HOME` selects its normalized existing folder; otherwise the saved profile, including null, is retained. The attempt pins that selection before closing the original chat, and retries cannot change it. Only installation of the current area's active replacement at the saved launch checkpoint commits that profile for later areas, before native dispatch; a failed checkpoint sends nothing, prelaunch rollback keeps the prior run profile, and historical or later checkpoints cannot retarget newer progress or its profile. An unknown close acknowledgement alone cannot authorize allocation, launch or an inheritance commit.
 
 Runtime check: NOT RUN. The existing CLI Interpreter entry does not bind saved-run, native session, Herdr ownership/close acknowledgement or cross-process persistence effects. Native tests and a private Herdr transcript with waiting stub agents must establish these criteria; syntax acceptance alone is not evidence of replacement.
 
