@@ -8,6 +8,7 @@ I can see when a held PR 1 notice will not be sent after my run moves to code, a
 2. The saved notice keeps its text, original chat, pending state and last reason. JSON status retains these saved facts. Reading status changes no delivery data.
 3. A later changes command sends my new request to the code chat without the held notice. The notice adds no change round, question, gate or approval and does not advance the run.
 4. While the original area is current, held notices still go first in order and send once. Notices that may already have been sent and sends still in progress stay protected. Held human requests keep their original chat and their existing answer, change and approval effects.
+5. When approval moves the run out of the notice's area, its result warns that the notice was not sent and later changes will not send it, showing the full saved text and last safe reason. This warning also appears when the next chat's startup is not confirmed, without changing the approval or startup result or redirecting the notice.
 
 ## Rules to check
 
