@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 26c1bfa7bdce5b94281f3c43770f105996efecf912aeeab758bac91ecaeda009).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 191001ca9b6c4819eea3e0d04e63e89bb1a1d5b7003da927b896eb0ae81c2037).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { execFile as execFileCallback } from 'node:child_process';
@@ -23,7 +23,7 @@ import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
 import { causeText } from './runtime-output.mjs';
 import { preparePrEvidence } from './workflow-pr-evidence.mjs';
 import { validateProofRecord } from './workflow-prove.mjs';
-import { readRunResults, resultLines, usableResult, noResultLine } from './workflow-results.mjs';
+import { readRunResults, resultLines, usableResult, noResultLine, NO_VERDICT } from './workflow-results.mjs';
 import { collectTestInventory } from './workflow-inventory.mjs';
 import {adoptReplayCorpus,REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinReplayVectors,readReplayEvidence,formatReplayEvidence} from './workflow-replay.mjs';
 
@@ -554,14 +554,39 @@ function hideLocalPaths(text, run) {
 const PROMPT_TESTS = new RegExp(PROMPT_TESTS_WORDS);
 const LABEL_START = new RegExp(`^${PROMPT_TESTS_WORDS}`);
 const LINE_PATTERN = new RegExp(`${PROMPT_TESTS_WORDS}((?:\\s*\\([^)]*\\))*):\\s*(.*?)(?=\\n|\\s*(?:;|\\bReport\\b|https?:\\/\\/|${PROMPT_TESTS_WORDS}|$))`, 'gs');
+// A result is only its pdd parts, joined by " · " (mark and criteria, checks, other states, AI calls). Words an agent
+// wrote after them on the same line ("… 2 AI calls. Full suite: 4085 passed.") are not part of the result.
+const RESULT_PART = /^(?:(?:✓|✗|no verdict|running|busy|unknown|UNKNOWN|queued|refused|not run)(?: (?:\d+ of \d+ criteri(?:a|on)|passed))?|\d+ of \d+ criteri(?:a|on)|passed|criteria details not reported|\d+\/\d+ checks|(?:\d+ AI calls?(?: \(\d+ for reruns\))?|\d+ for reruns)(?: \+ \d+ unknown)?|\d+ (?:refused|not run|unknown|queued|running|ahead|not yet settled|Stor(?:y|ies) skipped)|\d+ AI calls? so far|step \d+(?: of \d+)?(?: \([^)]*\))?)$/;
+function resultParts(text) {
+  const sentence = text.split(/\.\s/)[0].replace(/[.,]$/, ''), kept = [];
+  for (const part of sentence.split(' · ')) {
+    if (RESULT_PART.test(part)) { kept.push(part); continue; }
+    // Without a step number, progress puts the step name directly after its own running marker.
+    if (part && kept.length > 1 && kept.at(-1) === 'running') { kept.push(part); continue; }
+    const words = part.split(' ');
+    for (let size = words.length - 1; size > 0; size--) if (RESULT_PART.test(words.slice(0, size).join(' '))) { kept.push(words.slice(0, size).join(' ')); break; }
+    break;
+  }
+  return kept.length ? kept.join(' · ') : sentence.split(' ')[0];
+}
 export function runtimeLines(text) {
   return [...String(text ?? '').matchAll(LINE_PATTERN)].map(match => {
     const groups = [...match[1].matchAll(/\(([^)]*)\)/g)].map(group => group[1].trim());
     const story = groups.find(group => group && group.toUpperCase() !== 'DRAFT' && group !== 'all Stories') ?? null;
-    const result = match[2].replace(/\s+/g, ' ').trim().replace(/[.,]$/, '');
+    const result = resultParts(match[2].replace(/\s+/g, ' ').trim());
     return { story, draft: groups.some(group => group.toUpperCase() === 'DRAFT'), result,
       line: `${PROMPT_TESTS_LABEL}${match[1].replace(/\s+/g, ' ')}: ${result}`, pass: result.includes('✓') && !result.includes('✗') };
   });
+}
+// The Prompt tests lines that pdd wrote as results in a PR body's top block: "pdd result:" lines and plain (receipt or older) lines.
+// The Steps overview, full summaries, Verify and every agent note are never read.
+export function recordedRuntimeLines(text) {
+  const lines = [];
+  for (const line of String(text ?? '').split('\n')) {
+    if (/^#{1,6}\s/.test(line) || /^<details\b/i.test(line)) break;
+    if (line.startsWith('pdd result:') || LABEL_START.test(line)) lines.push(line);
+  }
+  return runtimeLines(lines.join('\n'));
 }
 // One line per Story: a Story checked again keeps its place and takes its latest line.
 const latestStories = lines => [...new Map(lines.filter(line => line.story).map(line => [line.story, line])).values()];
@@ -614,7 +639,8 @@ export function storyCount(run, ports = {}) {
   return result;
 }
 export function storyEvidence(run, { comparisonRoot } = {}) {
-  const records = [...(run.runtimeHistory ?? []), ...Object.values(run.done ?? {}), ...(run.evidence ?? [])]
+  // Only pdd's own recorded pdd test batches and checked receipts; Prompt tests lines typed into a summary are not evidence.
+  const records = [...ownStoryRecords(run), ...(run.evidence ?? [])]
     .filter(record => runtimeLines(record.summary).length).sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
   const root = comparisonRoot === undefined ? run.root : comparisonRoot;
   const current = new Map(), older = new Map(), fingerprint = root === null ? null : gitFingerprint(root);
@@ -626,7 +652,25 @@ export function storyEvidence(run, { comparisonRoot } = {}) {
   }
   return [...new Map([...older, ...current]).values()];
 }
-const storyText = count => `${count.pass} of ${count.total} Stories pass${count.unknown?.length ? ` · ${count.unknown.length} unknown` : ''}`;
+// The Story count in status reads only pdd's own results: the pdd test batches that done recorded (pddHistory and step
+// pddResults) and receipts that pdd workflow evidence checked. Prompt tests lines an agent typed into a summary never count.
+function ownStoryRecords(run) {
+  const batches = new Map();
+  for (const result of [...(run.pddHistory ?? []), ...Object.values(run.done ?? {}).flatMap(record => record?.pddResults ?? [])])
+    if (result?.kind === 'pdd test' && result.sourceSha256 && Array.isArray(result.tests) && !batches.has(result.batch)) batches.set(result.batch, result);
+  return [...batches.values()].map(result => ({ at: result.at, summary: (result.stories?.length ? result.stories : [result.summary]).join('\n'),
+    source: { kind: 'runtime-capture-v1', sha256: result.sourceSha256, tests: result.tests } }));
+}
+// null when the run has no check claim at all; { none: true } when it has a check or typed lines but no pdd result.
+export function ownStoryCount(run, ports = {}) {
+  const own = [...(run.evidence ?? []), ...ownStoryRecords(run)];
+  // A Story that only typed lines name shows as unknown: without a source binding, storyCount never trusts its result.
+  const typed = [...(run.runtimeHistory ?? []), ...Object.values(run.done ?? {})].filter(record => runtimeLines(record?.summary).length).map(({ at, summary }) => ({ at, summary }));
+  if (own.length) return storyCount({ root: run.root, evidence: [...typed, ...own] }, ports);
+  const claimed = run.done?.check || typed.length;
+  return claimed ? { pass: 0, total: 0, failing: [], none: true } : null;
+}
+const storyText = count => count.none ? `no pdd result (${NO_VERDICT})` : `${count.pass} of ${count.total} Stories pass${count.unknown?.length ? ` · ${count.unknown.length} unknown` : ''}`;
 const shortLine = text => clip(text, 199);
 // Report links in a check summary, each once: "Report (<story>): <url>" keeps the Story name; a bare link has none.
 function reportLinks(text, env) {
@@ -1218,6 +1262,8 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
       lines.push(`warning: ${step} ran again after ${later.join(', ')}. pdd cleared ${later.length>1?'those steps':'that step'}; run ${later.length>1?'them':'it'} again.`);
     }
     if(hasRuntime)(latest.runtimeHistory??=[]).push({...record,step});
+    // pdd's own pdd test results, once per batch, so a later partial check keeps the Stories of an earlier one.
+    for(const result of record.pddResults??[])if(result.kind==='pdd test'&&!(latest.pddHistory??=[]).some(item=>item.batch===result.batch))latest.pddHistory.push(result);
     if(replay)latest.replayEvidence=replay;
     latest.done[step]=record;
   };
@@ -2021,7 +2067,7 @@ async function gateFacts(run, p) {
 }
 
 function detail(run, chat = null, facts = {}) {
-  const drafts = facts.drafts ?? [], stories = storyCount(run);
+  const drafts = facts.drafts ?? [], stories = ownStoryCount(run);
   const area = run.areas[run.area], tab = currentChat(run) ?? run.chats?.at(-1);
   const ci = pr => ({ passing: 'CI passing', failing: 'CI failing', pending: 'CI running', none: 'no CI checks' }[pr.ci] ?? 'CI unknown');
   const steps = (area?.steps ?? []).map(step => `${step} ${run.done[step] ? 'done' : 'to do'}${run.done[step]?.summary ? ` ("${clip(oneLine(run.done[step].summary), 120)}")` : ''}`);
@@ -2069,7 +2115,7 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false } = 
     : step ? `agent working on ${step}` : 'agent working';
   const ref = `${run.repo}#${run.number}`;
   const when = Number.isFinite(run.updatedAt) ? new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', ...(timeZone ? { timeZone } : {}) }).format(new Date(run.updatedAt)) : 'unknown time';
-  const prs = (run.pr ?? []).map(pr => ({ number: pr.number, url: pr.url, state: pr.state ?? 'open' })), stories = storyCount(run);
+  const prs = (run.pr ?? []).map(pr => ({ number: pr.number, url: pr.url, state: pr.state ?? 'open' })), stories = ownStoryCount(run);
   return { ref, repo: run.repo, number: run.number, workflow: run.workflow, area: area?.name ?? null, group, words, prs, stories,
     updatedAt: run.updatedAt ?? null, root: run.root, runDir: run.runDir, viewCommand: `pdd workflow view ${ref}`,
     line: [ref, run.workflow, area?.name ?? '?', words, ...(stories ? [storyText(stories)] : []), ...(prs.length ? [`PR ${prs.map(pr => `#${pr.number}`).join(' ')}`] : []), when].join(' · ') };
