@@ -284,7 +284,7 @@ else if(args[1]==='create'||args[1]==='edit'){
   }
   if(markers){
     const body=proof.bodies[0].body,report=artifact(f);
-    const expected=`Tests vs base: "test/a.mjs" 4 → 3 tests. Removed: 2 (${span('gone')}, ${span(removed)}).\nChanged assertions in kept tests: "test/a.mjs" ${span('keep')} ${span('assert.equal(value, 1);')} → ${span('assert.equal(value, 2);')}.\nChanged assertions in kept tests: "test/a.mjs" ${span(kept)} ${span(oldLine)} → ${span(nextLine)}.\nNew skips: "test/a.mjs" ${span('later')} ${span("test.todo('later');")}.\nNew skips: "test/a.mjs" ${span(kept)} ${span(skipLine)}.\nNew skips: "test/a.mjs" suite ${span(suite)} ${span(suiteLine)}.\nStatic inventory only; tests were not run.\n`;
+    const expected=`Tests vs base: "test/a.mjs" 4 → 3 tests. Removed: 2 (${span('gone')}, ${span(removed)}).\nChanged assertions in kept tests: "test/a.mjs" ${span('keep')} ${span('assert.equal(value, 1);')} → ${span('assert.equal(value, 2);')}.\nChanged assertions in kept tests: "test/a.mjs" ${span(kept)} ${span(oldLine)} → ${span(nextLine)}.\nNew skips: "test/a.mjs" ${span('later')} ${span("test.todo('later');")}.\nNew skips: "test/a.mjs" ${span(kept)} ${span(skipLine)}.\nNew skips: "test/a.mjs" suite ${span(suite)} ${span(suiteLine)}.\nStatic inventory only; this inventory did not run tests.\n`;
     assert.equal(report.available,true);assert.equal(report.details,expected);assert.equal(report.text,expected);
     missingProofBeforeInventory(body);assert.ok(body.slice(body.indexOf('Tests vs base:')).startsWith(expected));
     assert.equal((body.match(/pdd-workflow:/g)??[]).length,1,'only the canonical raw ownership prefix survives');
