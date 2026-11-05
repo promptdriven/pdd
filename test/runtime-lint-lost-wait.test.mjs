@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runCheck } from '../src/runtime-client.mjs';
-import { harbor, portsFor, PLACE } from './runtime-fake.mjs';
+import { captureSource } from '../src/runtime-preflight.mjs';
+import { harbor, portsFor, PLACE, ordinaryCapabilities } from './runtime-fake.mjs';
 
 // Synthetic public-boundary cases derived from runtime-client's Order GET rule:
 // unconfirmed lost lint answers use the existing five-minute recovery policy;
@@ -11,7 +12,7 @@ import { harbor, portsFor, PLACE } from './runtime-fake.mjs';
 // All service replies, shell identity, time and interruption use injected ports.
 async function lostLint(t, { interactive, confirmed = null, timeout } = {}) {
   const setup = harbor(t), posts = [], gets = [];
-  let made, started, safetyInterrupted = false;
+  let made, started, capture, safetyInterrupted = false;
   const job = (id, command, state, result = null) => ({ id, requestId: id, command, state, result,
     usage: { calls: command === 'check' ? 1 : 0 },
     engine_sha: 'eae2202a68d00ab762fcbbf1eba0d8607a132a15',
@@ -23,6 +24,8 @@ async function lostLint(t, { interactive, confirmed = null, timeout } = {}) {
       const request = JSON.parse(await init.body.get('request').text());
       const command = path.split('/').at(-1);
       posts.push({ command, id: request.requestId });
+      assert.equal(request.source_sha256, capture.sha256);
+      assert.deepEqual(Buffer.from(await init.body.get('source').arrayBuffer()), capture.tar);
       if (command === 'lint') throw new TypeError('Synthetic lost lint POST reply');
       return Response.json(job(request.requestId, 'check', 'passed', {
         outcome: 'Pass', report: { samples: [{ steps: [{ checks: [{ criterion_id: 'AC1',
@@ -34,11 +37,14 @@ async function lostLint(t, { interactive, confirmed = null, timeout } = {}) {
     if (!confirmed || elapsed < 240000) return Response.json({}, { status: 404 });
     if (elapsed < 420000) return Response.json(job(id, 'lint', confirmed));
     return Response.json(job(id, 'lint', 'passed', { exitCode: 0, refusals: [], report: {
-      verdict: 'passed', lint: { complete: true, tests: [{ path: 'tests/place-order.json', verdict: 'passed' }] }, program: {
+      // Supplied ordinary support for the original upload, not an inference from a pass.
+      verdict: 'passed', lint: { complete: true, tests: [{ path: 'tests/place-order.json', verdict: 'passed',
+        capabilities: ordinaryCapabilities(capture.sources, 'tests/place-order.json') }] }, program: {
       prompts: [{ path: PLACE, admission_state: 'draft', interface: { calls: [] } }], refused_prompts: []
     } } }));
   };
-  made = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: 'https://offline.invalid' }, { fetch, interactive });
+  made = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: 'https://offline.invalid' }, { fetch, interactive,
+    captureSource: (...args) => (capture = captureSource(...args)) });
   started = made.clock.now;
   const sleep = made.ports.sleep;
   made.ports.sleep = async ms => {

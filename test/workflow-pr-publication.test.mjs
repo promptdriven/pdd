@@ -39,7 +39,7 @@ const flag=n=>a[a.indexOf(n)+1],out=x=>process.stdout.write(typeof x==='string'?
 const commit=()=>cp.execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();
 const remote=()=>{try{return cp.execFileSync('git',['ls-remote','origin','refs/heads/topic'],{encoding:'utf8'}).trim().split('\\t')[0]}catch{return ''}};
 if(a[0]==='repo')out({nameWithOwner:'example/project',defaultBranchRef:{name:'main'},url:'https://github.com/example/project'});
-else if(a[1]==='list')out(s.prs.filter(p=>!a.includes('--head')||p.headRefName===flag('--head')));
+else if(a[1]==='list')out(s.prs.filter(p=>!a.includes('--head')||p.headRefName===flag('--head')).map(p=>({...p,headRefOid:remote()||p.headRefOid})));
 else if(a[1]==='view')out(s.prs.find(p=>p.url===a[2])||{body:''});
 else if(a[1]==='create'||a[1]==='edit'){
  if(flag('--body-file')!=='-')throw Error('must read body from stdin');

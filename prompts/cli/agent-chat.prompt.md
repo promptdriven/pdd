@@ -6,6 +6,11 @@ Use only the runtime origin, owner sign-in and validated Try identity supplied b
 This module relays chat to the person's installed CLI through [agent adapters](agent-adapters.prompt.md).
 It never dispatches a program action, changes project files, approves a prompt or chooses a model.
 
+## Workspace connection
+
+Load the [workspace authority](runtime-workspace.prompt.md) before guide preparation and bridge setup. Pass its same capability through `guidePorts`, every background refresh, the chosen adapter and any compatibility retry. Collect a local context-read disclosure separately from upload files. A required-source refusal precedes authentication, model metadata and relay connection. If the adapter cannot enforce the bounded connection contract, report that local limitation before connecting; an otherwise usable ordinary Try stays usable. Do not switch provider automatically.
+
+
 ## Connection and identity
 
 Fetch owner `/v1/try/<id>/model` before connecting. Use only admitted entries from that pinned model,
@@ -68,6 +73,8 @@ Supply owner credentials and secret values from the base environment and every c
 After a successful relay reply, call delivered with its accepted person/reply pair. Failed delivery creates no remembered offer. Install a private context.onAgentCaseSaved callback for id/name/Story/result notices from collectSavedTests; remove only that callback on close. Close guide memory on disconnection. These notices never authorize saving or changing a Story.
 
 ## Dependencies
+
+- [Workspace authority](runtime-workspace.prompt.md): required generation/runtime/verification context for opt-in permission.
 
 - [Try guide](agent-guide.prompt.md): required generation/runtime context for memory, coverage, own-case checks and compatibility projection.
 - [Run judge](agent-judge.prompt.md): required generation/runtime context for deterministic verdicts and ordered progress.

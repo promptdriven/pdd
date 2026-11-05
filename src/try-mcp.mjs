@@ -1,6 +1,6 @@
 // Generated from prompts/cli/try-mcp.prompt.md (sha256: d03704791897bcd4cd86f2a0c6c82cb3ab445d3d35b9e367f1f76ff99f1e71d9).
 import { createInterface } from 'node:readline';
-import { readTryOwner, runDoorCall, saveDoorCase } from './runtime-client.mjs';
+import { readTryOwner, runDoorCall, saveDoorCase, applyPendingCaseWithHandoff } from './runtime-client.mjs';
 import { createRunJudge } from './agent-judge.mjs';
 
 const object = x => x !== null && typeof x === 'object' && !Array.isArray(x);
@@ -11,7 +11,7 @@ const tools = [
   ['try_state', 'Read current Try data, entries and schemas, Story criteria, test inputs, runs, budget and progress. Opens a missing Try.', {}, false],
   ['try_run', 'Run one action on the Try, spending its existing AI call budget. Use entry and input, or exact CLI argv. Every run appears on the Try page.', { entry: { type: 'string' }, input: { type: 'object', additionalProperties: true }, argv: { type: 'array', items: { type: 'string' } } }, false],
   ['try_check', 'Compare a confirmed run with the Story tests, with honest limits and first differences. No AI calls.', { run_id: { type: 'string' } }, true],
-  ['try_save_case', 'Save a confirmed run as an exact observed-result case. Review its expectation and starting data; saving does not approve correctness.', { run_id: { type: 'string' }, criterion_id: { type: 'string' }, name: { type: 'string' } }, false],
+  ['try_save_case', 'Save a confirmed run as an exact observed-result case. Or apply a retained pending_id with closed_editor_for: obtain the person’s actual confirmation that this exact original test is closed and handed over until apply finishes; generic tool approval is insufficient. Review its expectation and starting data; saving does not approve correctness.', { run_id: { type: 'string' }, criterion_id: { type: 'string' }, name: { type: 'string' }, pending_id: { type: 'string', pattern: '^[0-9a-f]{64}\\.[0-9a-f]{64}$' }, closed_editor_for: { type: 'string', minLength: 1 } }, false],
 ].map(([name, description, properties, readOnlyHint]) => ({ name, description, inputSchema: schema(properties), annotations: { readOnlyHint, destructiveHint: false, idempotentHint: name !== 'try_run', openWorldHint: false } }));
 
 function validate(name, args) {
@@ -29,15 +29,32 @@ function validate(name, args) {
       if (Object.hasOwn(args, 'entry') || Object.hasOwn(args, 'input')) throw new Error('Choose argv, or entry and input.');
     } else if (!text(args.entry) || !object(args.input)) throw new Error('Give entry and input, or argv.');
   }
+  if(name==='try_save_case'&&(Object.hasOwn(args,'pending_id')||Object.hasOwn(args,'closed_editor_for'))){
+    if(!text(args.pending_id)||!text(args.closed_editor_for))throw new Error('Give both pending_id and closed_editor_for for retained-case application.');
+    if(!/^[a-f0-9]{64}\.[a-f0-9]{64}$/.test(args.pending_id))throw new Error('Invalid pending_id.');
+    if(['story','run_id','criterion_id','name'].some(key=>Object.hasOwn(args,key)))throw new Error('Pending application accepts only pending_id and closed_editor_for.');
+  }
+}
+
+function recordedCaseNote({scope,covered,total}){
+  const prefix=scope==='original-story'?`Recorded case; covers ${covered} of ${total} Story criteria.${total>1?' Complete coverage before pdd test.':''}`
+    :scope==='retained-scenario'?`Recorded case; references ${covered} of ${total} retained scenario criteria. Whole-Story coverage is unavailable. Complete coverage before pdd test.`
+      :'Recorded case; criterion coverage is unavailable. Complete coverage before pdd test.';
+  return prefix+' This records observed output; review its expectation and saved-data setup before replaying.';
 }
 
 export function createTryTools({ cwd = process.cwd(), words = [], env } = {}, ports = {}) {
-  const dependencies = { readTryOwner, runDoorCall, saveDoorCase, ...ports };
+  const dependencies = { readTryOwner, runDoorCall, saveDoorCase, applyPendingCaseWithHandoff, ...ports };
   const runtimePorts = { ...ports, env: env ?? ports.env ?? process.env, stdout: ports.stderr ?? process.stderr, stderr: ports.stderr ?? process.stderr };
   const sessions = new Map();
   let queue = Promise.resolve();
   async function invoke(name, args) {
     validate(name, args);
+    if(name==='try_save_case'&&Object.hasOwn(args,'pending_id')){
+      const outcome=await dependencies.applyPendingCaseWithHandoff({cwd,pendingId:args.pending_id,handoff:{kind:'closed-editor',testPath:args.closed_editor_for},signal:runtimePorts.signal},runtimePorts);
+      if(outcome.kind!=='case'||outcome.result.state!=='committed')throw new Error(outcome.message);
+      return{pending_id:args.pending_id,result:outcome.message,note:recordedCaseNote(outcome.coverage)};
+    }
     const owner = await dependencies.readTryOwner({ cwd, story: args.story ?? words[0] }, runtimePorts);
     const key = `${owner.root}:${owner.record.id}`;
     let session = sessions.get(key);
@@ -69,7 +86,7 @@ export function createTryTools({ cwd = process.cwd(), words = [], env } = {}, po
       const started = Date.now();
       let answer;
       try {
-        answer = await dependencies.runDoorCall({ root: owner.root, origin: owner.record.origin, sessionId: owner.record.id,
+        answer = await dependencies.runDoorCall({ root: owner.root, originalPath:owner.test.path, origin: owner.record.origin, sessionId: owner.record.id,
           login: owner.record.login, prompt: entry.entry_path, operation: entry.operation, callCap: owner.model.calls?.cap ?? null }, input, runtimePorts);
       } catch (error) {
         // The door owns dispatch/recovery. Conservatively block a second mutation when its outcome is unconfirmed.
@@ -97,10 +114,10 @@ export function createTryTools({ cwd = process.cwd(), words = [], env } = {}, po
     const result = dependencies.saveDoorCase(owner.root, { id: run.id, name: args.name ?? 'Recorded Try tool run', story_path: owner.test.storyPath, original_path: owner.test.path,
       test: { schema_version: 'prompt-runtime.program-scenario.v1', story_path: owner.test.storyPath, criteria, initial_world: run.world_before, simulation: owner.test.doc.simulation ?? {}, context: owner.test.doc.context ?? [],
         steps: [{ step_id: `try-${run.id}`, entry_path: run.entry.slice(0, separator), operation: run.entry.slice(separator + 1), input: run.input,
-          checks: [{ criterion_id: criterion, target: 'result', path: '', op: 'equals', value: run.result }] }] } }, { isolated: true });
+          checks: [{ criterion_id: criterion, target: 'result', path: '', op: 'equals', value: run.result }] }] } }, { ...runtimePorts, ports: runtimePorts, isolated: true });
     if (!result.startsWith('added ') && !result.startsWith('already saved ')) throw new Error(result);
     run.saved = result;
-    return { run_id: run.id, result, note: `Recorded case; covers 1 of ${criteria.length} Story criteria.${criteria.length > 1 ? ' Complete coverage before pdd test.' : ''} This records observed output; review its expectation and saved-data setup before replaying.` };
+    return { run_id: run.id, result, note: recordedCaseNote({scope:'original-story',covered:1,total:criteria.length}) };
   }
   return { call(name, args = {}) { const result = queue.then(() => invoke(name, args)); queue = result.catch(() => {}); return result; } };
 }
@@ -116,7 +133,7 @@ export async function runMcp({ cwd = process.cwd(), words = [], env } = {}, port
     if (msg.method === 'initialize') {
       if (!object(msg.params) || typeof msg.params.protocolVersion !== 'string' || !object(msg.params.capabilities) || !object(msg.params.clientInfo)) return error(id, -32602, 'Invalid initialize parameters');
       const versions = ['2025-06-18', '2025-03-26', '2024-11-05'];
-      return { jsonrpc: '2.0', id, result: { protocolVersion: versions.includes(msg.params.protocolVersion) ? msg.params.protocolVersion : versions[0], capabilities: { tools: {} }, serverInfo: { name: 'pdd-try', version: '0.1.16' } } };
+      return { jsonrpc: '2.0', id, result: { protocolVersion: versions.includes(msg.params.protocolVersion) ? msg.params.protocolVersion : versions[0], capabilities: { tools: {} }, serverInfo: { name: 'pdd-try', version: '0.1.18' } } };
     }
     if (msg.method === 'ping' || msg.method === 'tools/list') {
       if (msg.params !== undefined && !object(msg.params)) return error(id, -32602, 'Parameters must be an object');

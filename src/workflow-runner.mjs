@@ -1,9 +1,9 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 191001ca9b6c4819eea3e0d04e63e89bb1a1d5b7003da927b896eb0ae81c2037).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 33dc44a7518d2fb7bf424398daf54496e911059e51d2bb93abd85e77ba1308dd).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
-import { execFile as execFileCallback } from 'node:child_process';
+import { spawnSync, execFile as execFileCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { constants, openSync, closeSync, fsyncSync, unlinkSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { constants, openSync, closeSync, fsyncSync, unlinkSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 
 import * as nativeDeliveryFiles from 'node:fs';
 import { homedir, hostname, tmpdir } from 'node:os';
@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 import { readWorkflowAreas } from './workflow-areas.mjs';
-import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, readWorkflowPrStatus } from './workflow-github.mjs';
+import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, reconcileWorkflowPr, readWorkflowPrStatus } from './workflow-github.mjs';
 import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mjs';
 import { allRuns, currentChat, gitContext, listRuns, readRun, readRunOwnership, resolveRun, runDirFor, runForWorktree, updateRun, writeRun } from './workflow-runs.mjs';
 import { startChat, sendToChat, herdrCommand, chatSession, openChat, restartChat, validSessionId, closeChats, expandHome, homeVariable, isFolder, observeLifecycle, applyLifecycle, launchAnchor, sessionEvidenceDue, ownSession, observedSession, START_GRACE_MS } from './workflow-chat.mjs';
@@ -23,7 +23,7 @@ import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
 import { causeText } from './runtime-output.mjs';
 import { preparePrEvidence } from './workflow-pr-evidence.mjs';
 import { validateProofRecord } from './workflow-prove.mjs';
-import { readRunResults, resultLines, usableResult, noResultLine, NO_VERDICT } from './workflow-results.mjs';
+import { readRunResults, resultLines, usableResult, noResultLine, NO_VERDICT, prepareNativeEvidence } from './workflow-results.mjs';
 import { collectTestInventory } from './workflow-inventory.mjs';
 import {adoptReplayCorpus,REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinReplayVectors,readReplayEvidence,formatReplayEvidence} from './workflow-replay.mjs';
 
@@ -73,7 +73,7 @@ const looksLikeApproval = text => APPROVAL.test(text) && !CHANGE_WORDS.test(text
 
 function deps(ports = {}) {
   const env = ports.env ?? process.env;
-  const execFile = ports.execFile ?? ((file, args, options = {}) => execute(file, args, { ...options, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }));
+  const execFile = ports.execFile ?? ((file, args, options = {}) => execute(file, args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, ...options }));
   return { ...ports, env, execFile, commandPorts: ports.execFile ? { execFile: ports.execFile } : {}, now: ports.now ?? Date.now, randomUUID: ports.randomUUID ?? randomUUID,
     isTTY: ports.isTTY ?? Boolean(process.stdin.isTTY && process.stderr.isTTY), say: ports.say ?? (() => {}) };
 }
@@ -620,11 +620,127 @@ export function matchesSource(record, root, fingerprint, capture = captureSource
   }
   return false;
 }
+// Registration authority is independent of receipt content and source equality.
+const evidenceTests = tests => {
+  if (!Array.isArray(tests) || !tests.length || tests.some(path => typeof path !== 'string' || !path || /[\\\x00-\x1f\x7f]/.test(path)
+    || path.startsWith('/') || /^[A-Za-z]:/.test(path) || path.split('/').some(part => !part || part === '.' || part === '..' || part.toLowerCase() === '.git'))
+    || new Set(tests).size !== tests.length) throw Error('Select nonempty unique safe authored-relative test paths.');
+  return [...tests].sort();
+};
+const selectionEqual = (a,b) => sameFact(evidenceTests(a),evidenceTests(b));
+const associationKey = a => JSON.stringify([a.workspaceRoot,evidenceTests(a.tests),a.source_sha256]);
+function ownedPr1Head(run) {
+  const area = askArea(run), pr = area && prOf(run,area.name);
+  if (!pr || !Number.isSafeInteger(pr.number) || pr.url !== `https://github.com/${run.repo}/pull/${pr.number}` || !commitSha(pr.publishedHeadSha))
+    throw Error('The owned recorded PR 1 head is missing or unavailable.');
+  return pr.publishedHeadSha;
+}
+function selectedCapture(root,tests,capture=captureSource) {
+  const visible=new Set(gitFiles(root));
+  if(tests.some(path=>!visible.has(path)))throw Error('A selected authored source is missing or unavailable.');
+  return capture(root,{tests,appMap:null});
+}
+function frozenRoot(run,head) { return join(realpathSync(run.runDir),'evidence-pr1',head); }
+function checkedAssociation(run,a,capture=captureSource) {
+  if (a.runId !== run.runId || a.repo !== run.repo || !['current','pr1'].includes(a.stage)
+    || !/^[a-f0-9]{64}$/.test(a.source_sha256 ?? '') || realpathSync(a.workspaceRoot) !== a.workspaceRoot
+    || a.registration?.operation !== 'evidence-associate' || !Number.isFinite(a.registration.at)
+    || a.registration.cwd !== realpathSync(run.root)) throw Error('The evidence association has a different run, owner, producer or registration.');
+  evidenceTests(a.tests);
+  const root = a.stage === 'current' ? realpathSync(run.root) : frozenRoot(run,ownedPr1Head(run));
+  const head = a.stage === 'pr1' ? ownedPr1Head(run) : null;
+  if (a.sourceAnchor?.root !== root || a.sourceAnchor?.head !== head || realpathSync(root) !== root)
+    throw Error('The registered stage source anchor is missing, changed or unrelated.');
+  if (selectedCapture(root,a.tests,capture).sha256 !== a.source_sha256) throw Error('The registered stage source has changed or is unavailable.');
+  if (a.stage === 'current' && selectedCapture(a.workspaceRoot,a.tests,capture).sha256 !== a.source_sha256)
+    throw Error('The producer selected source has changed or is unavailable.');
+  return root;
+}
+// One eligibility rule for import, status/Story counts and prepared PR lines.
+function eligibleEvidence(run,record,{stage='current',root=run.root,fingerprint=null,capture=captureSource}={}) {
+  try {
+    if (record.association) {
+      const saved = record.association;
+      const a = (run.evidenceAssociations ?? []).find(a => associationKey(a) === associationKey(saved));
+      if (!a || a.stage !== saved.stage || !sameFact(a.sourceAnchor,saved.sourceAnchor) || a.runId !== saved.runId || a.repo !== saved.repo
+        || !(saved.stage === stage || stage==='pr1' && saved.stage==='current' && run.area<=run.areas.indexOf(askArea(run))) || record.source?.sha256 !== saved.source_sha256 || !selectionEqual(record.source?.tests,saved.tests)
+        || realpathSync(record.receipt?.repo) !== saved.workspaceRoot) return false;
+      checkedAssociation(run,a,capture);
+      return root===run.root || matchesSource(record,root,fingerprint,capture);
+    }
+    if (record.receipt) {
+      const producer=realpathSync(record.receipt.repo);
+      const a=(run.evidenceAssociations??[]).find(a=>a.workspaceRoot===producer && selectionEqual(a.tests,record.source?.tests) && a.source_sha256===record.source?.sha256);
+      if(a) { if(a.stage!=='current')return false; checkedAssociation(run,a,capture); }
+      else if(producer!==realpathSync(run.root))return false;
+    }
+    return matchesSource(record,root,fingerprint,capture);
+  } catch { return false; }
+}
+// Materialize local immutable commit objects inside the run folder, never a ref
+// or checkout in the authored repository. Canonical preflight still owns capture.
+async function retainPr1Source(run,head,p) {
+  const target = frozenRoot(run,head);
+  if (existsSync(target)) return target;
+  // A missing previously registered anchor must not be silently reconstructed.
+  if ((run.evidenceAssociations ?? []).some(a => a.stage === 'pr1' && a.sourceAnchor?.root === target)) throw Error('The retained PR 1 source is missing.');
+  const parent = dirname(target); mkdirSync(parent,{recursive:true,mode:0o700});
+  if(realpathSync(parent)!==parent)throw Error('The retained source folder cannot traverse a symlink.');
+  const temporary = mkdtempSync(join(parent,'.source-'));
+  try {
+    const tree = await p.execFile('git',['ls-tree','-r','-z',head],{cwd:run.root,encoding:'buffer'});
+    const entries = Buffer.from(tree.stdout).toString('utf8').split('\0').filter(Boolean).map(row => {
+      const match = /^(100644|100755|120000|160000) (blob|commit) ([a-f0-9]{40,64})\t(.+)$/.exec(row);
+      if (!match) throw Error('The PR 1 tree contains an unavailable source entry.');
+      evidenceTests([match[4]]);
+      return {mode:match[1],oid:match[3],path:match[4]};
+    });
+    const response = await p.execFile('git',['cat-file','--batch'],{cwd:run.root,input:entries.filter(e=>e.mode!=='160000').map(e=>e.oid+'\n').join(''),encoding:'buffer',maxBuffer:512*1024*1024});
+    const bytes = Buffer.from(response.stdout); let offset=0;
+    for (const entry of entries) {
+      if(entry.mode==='160000'){mkdirSync(join(temporary,entry.path),{recursive:true});continue;}
+      const end=bytes.indexOf(10,offset), header=bytes.subarray(offset,end).toString('utf8').split(' '), size=Number(header[2]);
+      if (end<0 || header[0]!==entry.oid || header[1]!=='blob' || !Number.isSafeInteger(size) || size<0 || end+1+size>=bytes.length) throw Error('The frozen PR 1 objects are unavailable.');
+      const content=bytes.subarray(end+1,end+1+size), path=join(temporary,entry.path); offset=end+2+size;
+      mkdirSync(dirname(path),{recursive:true});
+      if (entry.mode==='120000') symlinkSync(content.toString('utf8'),path);
+      else writeFileSync(path,content,{mode:entry.mode==='100755'?0o700:0o600,flag:'wx'});
+    }
+    await p.execFile('git',['init','-q',`--object-format=${head.length===64?'sha256':'sha1'}`],{cwd:temporary});
+    await p.execFile('git',['update-index','-z','--index-info'],{cwd:temporary,input:entries.map(e=>`${e.mode} ${e.oid}\t${e.path}\0`).join('')});
+    renameSync(temporary,target);
+    return target;
+  } finally {rmSync(temporary,{recursive:true,force:true});}
+}
+async function associateEvidenceWorkspaceCommand({ref,workspace,stage,tests,cwd},ports) {
+  const p=deps(ports),found=await resolveRun(ref,{cwd},p);
+  if(found.error)return fail(found.error);
+  const run=found.run;
+  try {
+    const owned=await gitContext(cwd,p),producer=typeof workspace==='string' && workspace.trim() && await gitContext(resolve(cwd,workspace),p);
+    if(!owned || owned.toplevel!==realpathSync(run.root) || owned.commonDir!==realpathSync(run.commonDir)
+      || realpathSync(run.runDir)!==realpathSync(runDirFor(owned.commonDir,run.number))) throw Error('Register evidence only from the selected run owned worktree.');
+    if(!producer || realpathSync(resolve(cwd,workspace))!==producer.toplevel) throw Error('Supply the exact existing producer Git root.');
+    if(!['current','pr1'].includes(stage))throw Error('Evidence stage must be current or pr1.');
+    const selection=evidenceTests(tests),head=stage==='pr1'?ownedPr1Head(run):null;
+    const root=stage==='pr1'?await retainPr1Source(run,head,p):owned.toplevel;
+    const captured=selectedCapture(root,selection);
+    if(stage==='current' && selectedCapture(producer.toplevel,selection).sha256!==captured.sha256)throw Error('The producer source does not match the current authored selection.');
+    const association={runId:run.runId,repo:run.repo,workspaceRoot:producer.toplevel,stage,sourceAnchor:{root,head},tests:selection,
+      source_sha256:captured.sha256,registration:{operation:'evidence-associate',cwd:owned.toplevel,at:p.now()}};
+    checkedAssociation(run,association);
+    commitRun(run,p,latest=>{
+      checkedAssociation(latest,association);
+      latest.evidenceAssociations=[...(latest.evidenceAssociations??[]).filter(a=>associationKey(a)!==associationKey(association)),association];
+    });
+    return done(`Registered ${stage === 'pr1'?'PR 1':'current'} evidence workspace for ${run.repo}#${run.number}. No check, approval or workflow progress was recorded.`);
+  } catch(error) {if(error?.code==='workflow_run_save_failed')throw error;return fail(`Evidence workspace not registered: ${oneLine(error.message)}`);}
+}
 export function storyCount(run, ports = {}) {
   const records = [...(run.runtimeHistory ?? []), ...Object.values(run.done ?? {}), ...(run.evidence ?? [])]
     .filter(record => runtimeLines(record.summary).length).sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
   if (!records.length) return null;
-  const fingerprint = (ports.fingerprint ?? gitFingerprint)(run.root), compatible = records.filter(record => matchesSource(record, run.root, fingerprint, ports.capture));
+  const fingerprint = (ports.fingerprint ?? gitFingerprint)(run.root), compatible = records.filter(record => eligibleEvidence(run,record,{stage:ports.stage,root:run.root,fingerprint,capture:ports.capture}));
   const current = latestStories(compatible.flatMap(record => runtimeLines(record.summary)));
   const all = latestStories(records.flatMap(record => runtimeLines(record.summary)));
   const currentByStory = new Map(current.map(line => [line.story, line]));
@@ -645,7 +761,7 @@ export function storyEvidence(run, { comparisonRoot } = {}) {
   const root = comparisonRoot === undefined ? run.root : comparisonRoot;
   const current = new Map(), older = new Map(), fingerprint = root === null ? null : gitFingerprint(root);
   for (const record of records) {
-    const compatible = root !== null && matchesSource(record, root, fingerprint);
+    const compatible = root !== null && eligibleEvidence(run,record,{root,fingerprint});
     for (const row of latestStories(runtimeLines(record.summary))) {
       (compatible ? current : older).set(row.story, { story: row.story, pass: row.pass, current: compatible, result: row.result, at: record.at ?? 0 });
     }
@@ -659,6 +775,7 @@ function ownStoryRecords(run) {
   for (const result of [...(run.pddHistory ?? []), ...Object.values(run.done ?? {}).flatMap(record => record?.pddResults ?? [])])
     if (result?.kind === 'pdd test' && result.sourceSha256 && Array.isArray(result.tests) && !batches.has(result.batch)) batches.set(result.batch, result);
   return [...batches.values()].map(result => ({ at: result.at, summary: (result.stories?.length ? result.stories : [result.summary]).join('\n'),
+    ...(result.association?{association:result.association,receipt:{repo:result.producerRoot}}:{}),
     source: { kind: 'runtime-capture-v1', sha256: result.sourceSha256, tests: result.tests } }));
 }
 // null when the run has no check claim at all; { none: true } when it has a check or typed lines but no pdd result.
@@ -666,7 +783,7 @@ export function ownStoryCount(run, ports = {}) {
   const own = [...(run.evidence ?? []), ...ownStoryRecords(run)];
   // A Story that only typed lines name shows as unknown: without a source binding, storyCount never trusts its result.
   const typed = [...(run.runtimeHistory ?? []), ...Object.values(run.done ?? {})].filter(record => runtimeLines(record?.summary).length).map(({ at, summary }) => ({ at, summary }));
-  if (own.length) return storyCount({ root: run.root, evidence: [...typed, ...own] }, ports);
+  if (own.length) return storyCount({ ...run, runtimeHistory: [], done: {}, evidence: [...typed, ...own] }, ports);
   const claimed = run.done?.check || typed.length;
   return claimed ? { pass: 0, total: 0, failing: [], none: true } : null;
 }
@@ -833,7 +950,8 @@ async function publicationEvidence(run, area, p) {
   }
   if (run.publicationPending) evidence.lines.unshift('Check evidence: publication-pending (source is being published).');
   // pdd's own pdd test and pdd lint results lead the body; the code PR's prove result is its Old-code proof line.
-  evidence.pddLines = resultLines(ownResults(run, p), { kinds: ['pdd test', 'pdd lint'] });
+  const results=ownResults(run,p);
+  evidence.pddLines = resultLines(results, { kinds: ['pdd test', 'pdd lint', ...results.some(result=>result.kind==='native evidence')?['native evidence']:[]] });
   return evidence;
 }
 function evidenceFit(lines, room, env) {
@@ -925,11 +1043,11 @@ function fullSummaries(steps, texts, size) {
   const notice = shortened.length ? [`_${shortened.length} step ${shortened.length === 1 ? 'summary was' : 'summaries were'} shortened to fit the PR size limit: ${listed(shortened)}. The PR author has the full summaries in the run folder._`, ''] : [];
   return [...notice, FULL_SUMMARIES, '', ...items, '', '</details>'];
 }
-function publicationRuntime(run, env) {
+function publicationRuntime(run, env, stage = 'current') {
   if (run.publicationPending) return [];
   const fingerprint = gitFingerprint(run.root);
   const records = [...(run.runtimeHistory ?? []), ...Object.values(run.done ?? {}), ...(run.evidence ?? [])]
-    .filter(record => runtimeLines(record.summary).length && matchesSource(record, run.root, fingerprint)).sort((a,b) => (a.at ?? 0) - (b.at ?? 0));
+    .filter(record => runtimeLines(record.summary).length && eligibleEvidence(run,record,{stage,fingerprint})).sort((a,b) => (a.at ?? 0) - (b.at ?? 0));
   const stories = new Map();
   for (const record of records) for (const line of runtimeLines(record.summary)) if (line.story) stories.set(line.story, { line, record });
   // Lines that an agent typed or pasted into a step summary stay agent notes; only a receipt that pdd workflow evidence checked is not.
@@ -974,7 +1092,7 @@ function prBody(run, area, env, drafts = [], tests = true, evidence) {
   const sources = [run.done.check?.summary, ...steps.toReversed().map(step => run.done[step]?.summary)].filter(Boolean);
   const verdict = sources.map(verdictLine).find(Boolean), change = sources.map(changeLine).find(Boolean);
   const shown = change?.match(/https?:\/\/[^\s;]+/g) ?? [];
-  const runtime = publicationRuntime(run, env).filter(line => !line.replace(`${AGENT_NOTE}: `, '').startsWith('Report') || !shown.some(url => line.includes(` ${url} `)));
+  const runtime = publicationRuntime(run, env, label === 'PR 1' ? 'pr1' : 'current').filter(line => !line.replace(`${AGENT_NOTE}: `, '').startsWith('Report') || !shown.some(url => line.includes(` ${url} `)));
   const noted = runtime.some(line => hasReportLink(line, env)) || change && hasReportLink(change, env);
   const replayResult = area.replay_evidence === REPLAY_POLICY ? run.replayEvidence ?? readReplayEvidence(run) : null;
   const replay = replayResult ? [formatReplayEvidence(replayResult,{maxCharacters:0}), ''] : [];
@@ -1013,6 +1131,18 @@ function prTitle(issueTitle, suffix) {
 }
 
 const commitSha = value => /^(?:[a-f\d]{40}|[a-f\d]{64})$/i.test(value);
+// Updates use the same publication owner's identity checks as initial creation.
+// Local source supplies an expected intent, never authority for the saved head.
+async function readPublishedPr1(run, pr, p) {
+  const intent = await prepareWorkflowPr({cwd:run.root,runId:run.runId,stageId:pr.stage,repository:run.repo,
+    baseBranch:pr.base,title:prTitle(oneLine(run.issue.title) || `Issue #${run.number}`)},p.commandPorts);
+  if (intent.headBranch !== pr.branch) throw Error('The owned PR 1 branch changed.');
+  const outcome = await reconcileWorkflowPr({cwd:run.root,intent},p.commandPorts);
+  p.inspectProgress?.();
+  if (!['open','merged'].includes(outcome.state) || !outcome.pr || outcome.pr.number !== pr.number || outcome.pr.url !== pr.url)
+    throw Error('The published PR 1 head is unavailable or does not match the owned publication.');
+  return outcome.pr;
+}
 function inventoryCommits(inventory) {
   return commitSha(inventory.baseSha) && commitSha(inventory.headSha)
     ? `Test inventory commits: ${inventory.baseSha.slice(0,7)} → ${inventory.headSha.slice(0,7)}.`
@@ -1080,8 +1210,9 @@ async function publishAreaPr(run, area, p, lines, retry) {
   // Only an unchanged source and identical non-inventory body can be an
   // informational refresh. Missing prior custody always takes the safety path.
   const bodyIdentity = () => createHash('sha256').update(prBody({...run,testInventory:null},area,p.env,bodyDrafts,bodyTests,prepared)).digest('hex');
-  const rememberPublication = pr => {
+  const rememberPublication = (pr, observed) => {
     if (codePr) { pr.publishedHeadSha = run.testInventory.headSha; pr.publicationBodySha256 = bodyIdentity(); }
+    else if (commitSha(observed?.headSha)) pr.publishedHeadSha = observed.headSha;
   };
   if (existing) {
     let inventoryOnly = false;
@@ -1099,13 +1230,14 @@ async function publishAreaPr(run, area, p, lines, retry) {
       const failed=await editReplay(pending);if(failed)return failed;
     }
     p.say(`Pushing ${run.branch} to ${label}…`);
+    const promptHead = codePr ? null : await git(p,run.root,'rev-parse','--verify','HEAD^{commit}');
     try {
-      const reply = await p.execFile('git', ['push', 'origin', `${codePr && /^[a-f\d]{40,64}$/i.test(run.testInventory.headSha) ? run.testInventory.headSha : 'HEAD'}:refs/heads/${run.branch}`], { cwd: run.root });
+      const reply = await p.execFile('git', ['push', 'origin', `${codePr && /^[a-f\d]{40,64}$/i.test(run.testInventory.headSha) ? run.testInventory.headSha : promptHead}:refs/heads/${run.branch}`], { cwd: run.root });
       if (reply.code !== undefined && reply.code !== 0) throw Object.assign(Error(reply.stderr || 'git push failed'), {stderr:reply.stderr, code:reply.code});
     }
     catch (error) {
     if(error?.code==='workflow_progress_refused')throw error; return fail([...lines, `git push to ${run.branch} failed (${causeOf(error)}). Check the network and gh auth, then ${retry}.`].join('\n')); }
-    if (codePr && await git(p,run.root,'rev-parse','--verify','HEAD^{commit}') !== run.testInventory.headSha) return fail('Source was pushed; the local head changed. The PR stays publication-pending; retry from the pushed source.');
+    if (await git(p,run.root,'rev-parse','--verify','HEAD^{commit}') !== (codePr ? run.testInventory.headSha : promptHead)) return fail('Source was pushed; the local head changed. The PR stays publication-pending; retry from the pushed source.');
     prepared = await publicationEvidence(run, area, p);
     let finalBody;
     try { finalBody=markedReplayBody(run.replayEvidence); }
@@ -1115,7 +1247,17 @@ async function publishAreaPr(run, area, p, lines, retry) {
     if (failed) {
       if (!inventoryOnly) return failed;
       lines.push(`warning: The code PR still shows the previous inventory; its displayed commit pair identifies the older comparison. The new comparison is ${commitSha(run.testInventory.baseSha)&&commitSha(run.testInventory.headSha)?`${run.testInventory.baseSha.slice(0,7)} → ${run.testInventory.headSha.slice(0,7)}`:'unavailable'}. The current full report ${run.testInventory.saved ? 'was saved locally in test-inventory.json in the run folder' : 'was not saved locally'}. Inventory refresh failed (${failed.message}); ${retry}.`);
-    } else rememberPublication(existing);
+    } else {
+      let observed;
+      if (!codePr) {
+        try { observed = await readPublishedPr1(run,existing,p); }
+        catch (error) {
+          if(error?.code==='workflow_progress_refused')throw error;
+          return fail([...lines,`${oneLine(error.message)} Source was pushed; PR 1 publication remains unconfirmed. ${retry}.`].join('\n'));
+        }
+      }
+      rememberPublication(existing,observed);
+    }
     const applyPublication=publicationUpdate(run,codePr?['testInventory']:[]);
     const metadata=Object.fromEntries(['publishedHeadSha','publicationBodySha256'].filter(key=>Object.hasOwn(existing,key)).map(key=>[key,existing[key]]));
     commitRun(run,p,latest=>{applyPublication(latest);const pr=latest.pr.find(pr=>pr.url===existing.url&&pr.stage===existing.stage);if(pr)Object.assign(pr,metadata);});
@@ -1148,7 +1290,7 @@ async function publishAreaPr(run, area, p, lines, retry) {
     ? outcome.message.replace(/ then try again\.$/, ` then ${retry}.`) : `${outcome.message} ${retry[0].toUpperCase()}${retry.slice(1)} to retry.`}`].join('\n'));
   if (area.then === 'ask-code') await refreshReplayBaseline(run,p);
   const published = { stage: area.name, number: outcome.pr.number, url: outcome.pr.url, branch: run.branch, base };
-  rememberPublication(published);
+  rememberPublication(published,outcome.pr);
   const applyPublication=publicationUpdate(run,codePr?['testInventory']:[]);
   commitRun(run,p,latest=>{applyPublication(latest);if(!latest.pr.some(pr=>pr.url===published.url&&pr.stage===published.stage))latest.pr.push(published);});
   return null;
@@ -1192,17 +1334,42 @@ async function recordEvidenceCommand({ ref, summaryFile, cwd }, ports) {
   const p = deps(ports), found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
   const run = found.run;
-  let receipt, source, lines;
+  let receipt, source, lines, association;
   try {
     if (!summaryFile || !lstatSync(resolve(cwd, summaryFile)).isFile() || lstatSync(resolve(cwd, summaryFile)).size > 2 * 1024 * 1024) throw Error('Supply a regular saved JSON file of at most 2 MiB.');
     receipt = JSON.parse(readFileSync(resolve(cwd, summaryFile), 'utf8'));
-    if (realpathSync(receipt.repo) !== realpathSync(run.root)) throw Error('The evidence belongs to a different repository/worktree.');
+    if (receipt.schema === 'pdd.native-evidence-import.v1') {
+      const prepared = prepareNativeEvidence({root:run.root,runDir:run.runDir,runId:run.runId,summaryFile:resolve(cwd,summaryFile)},
+        {workspace:input=>readEvidenceEligibility(input,p)});
+      const folder = join('evidence',p.randomUUID());
+      mkdirSync(join(run.runDir,folder),{recursive:true,mode:0o700});
+      const native = {...prepared.record,originals:prepared.record.originals.map((row,index)=> {
+        const savedPath = join(folder,String(index));
+        writeFileSync(join(run.runDir,savedPath),prepared.originals[index].bytes,{flag:'wx',mode:0o600});
+        return {...row,savedPath};
+      })};
+      const at = p.now();
+      writeFileSync(join(run.runDir,folder,'admission.json'),JSON.stringify(native,null,2)+'\n',{flag:'wx',mode:0o600});
+      commitRun(run,p,latest=>{(latest.evidence??=[]).push({at,native});});
+      return done(`Recorded native original evidence for ${run.repo}#${run.number}: profile ${prepared.assessment.profileState}; Story native proof ${prepared.assessment.storyNativeProof}. Originals and limits retained. Steps, gates and PRs are unchanged. This records evidence, not fresh execution or approval.`);
+    }
     if (!/^[a-f0-9]{64}$/.test(receipt.source_sha256 ?? '') || !Array.isArray(receipt.rows) || !receipt.rows.length) throw Error('Saved check JSON needs source_sha256 and nonempty rows.');
     const tests = receipt.rows.map(row => row?.test);
-    if (tests.some(path => typeof path !== 'string' || !path) || new Set(tests).size !== tests.length) throw Error('Evidence test paths must be unique.');
+    evidenceTests(tests);
     source = { kind: 'runtime-capture-v1', sha256: receipt.source_sha256, tests };
-    if (!matchesSource({ source }, run.root, null)) throw Error('The saved source does not match the current selected files. Read a compatible receipt or run a fresh selected check.');
-    const found = findTests({ root: run.root });
+    const producer=realpathSync(receipt.repo);
+    association=(run.evidenceAssociations??[]).find(a=>a.workspaceRoot===producer && selectionEqual(a.tests,tests) && a.source_sha256===source.sha256);
+    // Re-import cannot change the stage of the same original result.
+    const previous=[...(run.evidence??[])].reverse().find(e=>e.association && sameFact(e.receipt,receipt));
+    if(previous && (!association || previous.association.stage!==association.stage || !sameFact(previous.association.sourceAnchor,association.sourceAnchor)))
+      throw Error('The original evidence stage is no longer registered; it cannot be relabelled.');
+    let root=run.root;
+    if(association)root=checkedAssociation(run,association);
+    else {
+      if(producer!==realpathSync(run.root))throw Error('The evidence belongs to a different repository/worktree without a registered association.');
+      if(!matchesSource({source},run.root,null))throw Error('The saved source does not match the current selected files. Read a compatible receipt or run a fresh selected check.');
+    }
+    const found = findTests({ root });
     const rows = receipt.rows.map(row => {
       const test = found.tests.find(test => test.path === row.test);
       if (!test || test.story !== row.story || !['passed', 'failed', 'refused', 'not_run', 'unknown', 'queued', 'running'].includes(row.state))
@@ -1215,24 +1382,54 @@ async function recordEvidenceCommand({ ref, summaryFile, cwd }, ports) {
     const label = line => typeof line === 'string' ? line.replace(LABEL_START, PROMPT_TESTS_LABEL) : line;
     if (rows.some(row => label(row.summary_line) !== expected.get(row.story))) throw Error('Evidence summary_line does not match its structured Story results.');
   } catch (error) { return fail(`Evidence not recorded: ${oneLine(error.message)}`); }
-  const evidence={at:p.now(),summary:[...new Set(lines)].join('\n'),source,receipt};
-  commitRun(run,p,latest=>{(latest.evidence??=[]).push(evidence);});
+  const reports=receipt.rows.flatMap(row=>typeof row.report_url==='string' && /^https?:\/\/[^\s<>\x22\x27`]+$/.test(row.report_url)?[`Report (${row.story}): ${row.report_url}`]:[]);
+  const evidence={at:p.now(),summary:[...new Set([...lines,...reports])].join('\n'),source,receipt,...(association?{association:structuredClone(association)}:{})};
+  commitRun(run,p,latest=>{
+    if(!eligibleEvidence(latest,evidence,{stage:association?.stage,fingerprint:null}))throw Error('The selected evidence source or association changed before saving.');
+    (latest.evidence??=[]).push(evidence);
+  });
   return done(`Recorded source-verified saved evidence for ${run.repo}#${run.number}. Steps, gates and PRs are unchanged. This records evidence, not fresh execution or approval.`);
 }
 
 // pdd's own results for a run (pdd test, pdd lint, pdd workflow prove). A read problem gives no results, never a stop.
 function ownResults(run, p) {
-  try { return (p.readRunResults ?? readRunResults)({ root: run.root, runDir: run.runDir, runId: run.runId, since: run.startedAt ?? 0, baseBranch: run.baseBranch ?? null }, { env: p.env }); }
+  try { return (p.readRunResults ?? readRunResults)({ root: run.root, runDir: run.runDir, runId: run.runId, since: run.startedAt ?? 0, baseBranch: run.baseBranch ?? null }, { env: p.env, workspace:input=>readEvidenceEligibility(input,p) }); }
   catch { return []; }
 }
 // The steps whose done output shows pdd's own results, or a visible "no pdd result" warning.
 const PROOF_STEPS = ['check', 'try', 'verify'];
+function canRefreshCodeReview(run, step) {
+  const area = run.areas[run.area];
+  return run.state === 'completed' && run.doneAt === 'PR 1'
+    && area?.then === 'ask-code' && run.gate?.kind === 'ask-code'
+    && run.gate.area === area.name && Boolean(prOf(run, area.name))
+    && area.steps.includes(step) && area.steps.every(item => run.done[item]);
+}
+async function refreshCompletedCodeReview(run, step, p) {
+  const selectedArea = run.area, selectedGate = structuredClone(run.gate);
+  try {
+    // Inspect before the short owned update. A failed inspection must retain
+    // the previous review and cannot turn an ended run into ordinary progress.
+    const snapshot = await gatePromptSnapshot(run, p);
+    const question = await askCodeLines(run, run.areas[run.area], p);
+    commitRun(run, p, latest => {
+      if (!canRefreshCodeReview(latest, step) || latest.area !== selectedArea
+        || ['id','area','kind','at'].some(key => latest.gate?.[key] !== selectedGate[key]))
+        throw Error('The run ended or the gate changed, look again.');
+      latest.gate.promptSnapshot = snapshot;
+    });
+    return doneWithRequests(done([...snapshotLines(snapshot), ...question].join('\n')), run, p);
+  } catch (error) {
+    return fail(`Cannot refresh the code-choice review: ${causeText(error?.stderr || error?.detail || error?.message) || causeOf(error)}. Repair the selection or inspect the current run and gate, then run done again and ask the person again.`);
+  }
+}
 async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACKAGE_ROOT }, ports) {
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
   const run = await runForWorktree(cwd, p);
   if (!run) return fail('pdd workflow done works only in a run worktree. cd to the worktree that pdd made for this run.');
   if (run.state === 'cancelled') return done(`The run for #${run.number} was cancelled. Stop working on it.`);
-  if (run.state === 'completed') return done(`The run for #${run.number} is complete. Stop.`);
+  if (run.state === 'completed') return canRefreshCodeReview(run, step)
+    ? refreshCompletedCodeReview(run, step, p) : done(`The run for #${run.number} is complete. Stop.`);
   protectProgress(run,p);
   const area = run.areas[run.area], lines = [];
   if (!area.steps.includes(step)) lines.push(`warning: "${step}" is not a step of the ${area.name} area (${area.steps.join(', ')}). pdd recorded it anyway.`);
@@ -1365,7 +1562,15 @@ async function syncPr1(run, p) {
     ahead = 0;
   }
   if (behind && replayEnabled(run)) return {failed:`The prompt branch is behind its published head. Update the worktree from origin/${run.branch}, then ${approvalGuide(run, p.pdd)}.`};
-  if (!ahead && !behind) await refreshReplayBaseline(run,p);
+  const rememberHead = async () => {
+    const observed = await readPublishedPr1(run,pr1,p);
+    commitRun(run,p,latest=>{const pr=latest.pr.find(pr=>pr.url===pr1.url&&pr.stage===pr1.stage);if(pr)pr.publishedHeadSha=observed.headSha;});
+  };
+  if (!ahead && !behind) {
+    try { await rememberHead(); }
+    catch (error) { if(error?.code==='workflow_progress_refused')throw error;return {failed:`${oneLine(error.message)} Check the published PR 1 head, then ${again}`}; }
+    await refreshReplayBaseline(run,p);
+  }
   if (ahead && behind && what) return { failed: `PR 1 has commits that this worktree does not have, so pdd did not push ${what}. Run: ${go}git pull --rebase origin ${shell(run.branch)} && git push origin HEAD:refs/heads/${run.branch}\n${again}` };
   if (!ahead || behind) {
     const drafts = approved.length ? await pr1Drafts(run, p) : before;
@@ -1378,6 +1583,8 @@ async function syncPr1(run, p) {
   try { await rawGit(p,run.root,'push','origin',`${pushedHead}:refs/heads/${run.branch}`); }
   catch { return { failed: `pdd could not push ${what ?? `the worktree's new commit${ahead > 1 ? 's' : ''}`} to PR 1. Run: ${go}git push origin HEAD:refs/heads/${run.branch}\n${again}` }; }
   if (await git(p,run.root,'rev-parse','--verify','HEAD^{commit}') !== pushedHead) return { failed: 'Source was pushed; the local head changed. PR 1 stays publication-pending; retry from the pushed source.' };
+  try { await rememberHead(); }
+  catch (error) { if(error?.code==='workflow_progress_refused')throw error;return {failed:`${oneLine(error.message)} Source was pushed; PR 1 publication remains unconfirmed. ${again}`}; }
   await refreshReplayBaseline(run,p);
   const drafts = await pr1Drafts(run, p);
   return { drafts, lines: [what ? `pdd committed ${what} and pushed it to PR 1.` : `pdd pushed ${ahead} new commit${ahead > 1 ? 's' : ''} from the worktree to PR 1.`, ...await draftDescription(run, pr1, drafts, p)] };
@@ -1405,7 +1612,7 @@ async function draftDescription(run, pr1, drafts, p) {
     const headerStart = at;
     while (at < rows.length && new RegExp(String.raw`^(?:pdd result: |Agent note — not checked by pdd: (?:Verdict:|Before[ :]|${PROMPT_TESTS_WORDS}|Report(?: \([^)]*\))?:)|Verdict:|Before |Before:|${PROMPT_TESTS_WORDS}|Report(?: \([^)]*\))?:)`).test(rows[at])) at++;
     const priorTop = rows.slice(headerStart, at);
-    const ordinaryTop = [...ownLines(run, evidence), ...new Set([...labelledTop, ...priorTop.filter(line => /^(?:Agent note — not checked by pdd: )?(?:Verdict:|Before[ :])/.test(line)).map(line => line.startsWith(`${AGENT_NOTE}: `) ? line : `${AGENT_NOTE}: ${line}`)]), ...publicationRuntime(run, p.env)];
+    const ordinaryTop = [...ownLines(run, evidence), ...new Set([...labelledTop, ...priorTop.filter(line => /^(?:Agent note — not checked by pdd: )?(?:Verdict:|Before[ :])/.test(line)).map(line => line.startsWith(`${AGENT_NOTE}: `) ? line : `${AGENT_NOTE}: ${line}`)]), ...publicationRuntime(run, p.env, 'pr1')];
     const introduction = [];
     while (at < rows.length && !rows[at].trim()) at++;
     if (reference.test(rows[at] ?? '')) {
@@ -1812,11 +2019,11 @@ function requestSnapshot(run, p) {
   } catch { return { requests: null, inFlightRequests: null, pendingRequests: null, uncertainRequests: null, requestWarning: 'Change-request visibility unavailable: could not read the delivery journal. Check the run folder.' }; }
 }
 const protectedRequestAdvice = entry => `Request ${entry.id}: ${shownText(entry)}. Original area ${entry.area}, pane ${entry.paneId}. Wait for the current send to finish before checking the original chat or typing anything. If it remains stuck after waiting, pdd will not automatically clear or resend protected ownership. First verify the original chat before manually supplying anything absent.`;
-const finalNotice = entry => `Request ${entry.id}: pdd notice was not sent and later changes will not send it. Original ${entry.area} chat, pane ${entry.paneId}:\n${entry.text}\nLast delivery reason: ${entry.reason ?? "unknown"}.`;
+const finalNotice = (entry, ended = false) => `Request ${entry.id}: pdd notice was not sent and later changes will not send it.${ended ? " The run ended." : ""} Original ${entry.area} chat, pane ${entry.paneId}:\n${entry.text}\nLast delivery reason: ${entry.reason ?? "unknown"}.`;
 function requestLines(snapshot, { openOnly = false, agent = false, ended = false, currentArea, p = {} } = {}) {
   if (snapshot.requestWarning) return [snapshot.requestWarning];
   return [...snapshot.requests.filter(entry => (!ended || !openOnly) && (!openOnly || entry.ackedAt == null)).map(entry =>
-    `${uptakeReceipt(entry, p)} Area ${entry.area}: ${entry.text}${agent ? `\nTell the person about this outstanding request. After actually addressing this request, run: ${uptakeCommand(entry.id, p)}` : ""}`), ...snapshot.pendingRequests.map(entry => entry.kind === 'notice' && currentArea && entry.area !== currentArea ? finalNotice(entry) : `Request ${entry.id}: ${ended ? 'pending, not sent; run ended. Original' : 'pending, saved for the original'} ${entry.area} chat, pane ${entry.paneId}: ${shownText(entry)}${entry.reason ? ` Not sent: ${entry.reason}.` : ''}`), ...snapshot.uncertainRequests.map(entry => `Request ${entry.id}: uncertain, may already be in the original ${entry.area} chat, pane ${entry.paneId}: ${shownText(entry)}. Check that original chat.`), ...snapshot.inFlightRequests.map(entry => agent ? `Request ${entry.id}: delivery in progress. Tell the person about this outstanding request.` : protectedRequestAdvice(entry))];
+    `${uptakeReceipt(entry, p)} Area ${entry.area}: ${entry.text}${agent ? `\nTell the person about this outstanding request. After actually addressing this request, run: ${uptakeCommand(entry.id, p)}` : ""}`), ...snapshot.pendingRequests.map(entry => entry.kind === 'notice' && (ended || currentArea && entry.area !== currentArea) ? finalNotice(entry, ended) : `Request ${entry.id}: ${ended ? 'pending, not sent; run ended. Original' : 'pending, saved for the original'} ${entry.area} chat, pane ${entry.paneId}: ${shownText(entry)}${entry.reason ? ` Not sent: ${entry.reason}.` : ''}`), ...snapshot.uncertainRequests.map(entry => `Request ${entry.id}: uncertain, may already be in the original ${entry.area} chat, pane ${entry.paneId}: ${shownText(entry)}. Check that original chat.`), ...snapshot.inFlightRequests.map(entry => agent ? `Request ${entry.id}: delivery in progress. Tell the person about this outstanding request.` : protectedRequestAdvice(entry))];
 }
 function doneWithRequests(result, run, p) {
   if (result.exitCode !== 0) return result;
@@ -2085,7 +2292,7 @@ async function gateFacts(run, p) {
 }
 
 function detail(run, chat = null, facts = {}) {
-  const drafts = facts.drafts ?? [], stories = ownStoryCount(run);
+  const drafts = facts.drafts ?? [], stories = ownStoryCount(run), pr1Stories=(run.evidence??[]).some(e=>e.association?.stage==='pr1')?ownStoryCount(run,{stage:'pr1'}):null;
   const area = run.areas[run.area], tab = currentChat(run) ?? run.chats?.at(-1);
   const ci = pr => ({ passing: 'CI passing', failing: 'CI failing', pending: 'CI running', none: 'no CI checks' }[pr.ci] ?? 'CI unknown');
   const steps = (area?.steps ?? []).map(step => `${step} ${run.done[step] ? 'done' : 'to do'}${run.done[step]?.summary ? ` ("${clip(oneLine(run.done[step].summary), 120)}")` : ''}`);
@@ -2104,6 +2311,7 @@ function detail(run, chat = null, facts = {}) {
     ...(stories ? [`Stories: ${storyText(stories)}${stories.failing.length ? ` (✗ ${stories.failing.join(', ')})` : ''}`,
       ...(stories.unknown?.length ? [`Unknown Stories: ${stories.unknown.join(', ')}`] : []),
       ...(stories.evidence ? [stories.evidence] : [])] : []),
+    ...(pr1Stories ? [`PR 1 Stories: ${storyText(pr1Stories)}`] : []),
     `Worktree: ${run.root} (branch ${run.branch})`, `Run folder: ${run.runDir}`, `Review without resuming: pdd workflow view ${run.repo}#${run.number}`, ...(next ? [`Next: ${next}`] : [])].join('\n');
 }
 
@@ -2135,6 +2343,7 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false } = 
   const when = Number.isFinite(run.updatedAt) ? new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', ...(timeZone ? { timeZone } : {}) }).format(new Date(run.updatedAt)) : 'unknown time';
   const prs = (run.pr ?? []).map(pr => ({ number: pr.number, url: pr.url, state: pr.state ?? 'open' })), stories = ownStoryCount(run);
   return { ref, repo: run.repo, number: run.number, workflow: run.workflow, area: area?.name ?? null, group, words, prs, stories,
+    ...((run.evidence??[]).some(e=>e.association?.stage==='pr1')?{pr1Stories:ownStoryCount(run,{stage:'pr1'})}:{}),
     updatedAt: run.updatedAt ?? null, root: run.root, runDir: run.runDir, viewCommand: `pdd workflow view ${ref}`,
     line: [ref, run.workflow, area?.name ?? '?', words, ...(stories ? [storyText(stories)] : []), ...(prs.length ? [`PR ${prs.map(pr => `#${pr.number}`).join(' ')}`] : []), when].join(' · ') };
 }
@@ -2175,8 +2384,9 @@ async function runStatusCommand({ ref, cwd, all = false, json = false, cancelled
   if(!ordinaryOwnership&&!snapshotOnly)await refreshPr(found.run, p);
   const run = found.run, facts = ended(run)||ordinaryOwnership||snapshotOnly ? {} : await gateFacts(run, p), chat = ordinaryOwnership||snapshotOnly?null:await chatState(run, p);
   const snapshot = requestSnapshot(run, p);
-  if (json) { const { line, ...item } = summary(run, p.timeZone, chat, facts); return done(JSON.stringify({ runs: [{ ...item, ...snapshot, ordinaryOwnership }] }, null, 2)); }
-  return done([detail(run, chat, facts), ...ownershipLines(ordinaryOwnership), ...requestLines(snapshot, { ended: ended(run), currentArea: run.areas[run.area]?.name, p })].join('\n'));
+  const nativeResults=ownResults(run,p).filter(result=>result.kind==='native evidence');
+  if (json) { const { line, ...item } = summary(run, p.timeZone, chat, facts); return done(JSON.stringify({ runs: [{ ...item, ...snapshot, ordinaryOwnership, nativeResults }] }, null, 2)); }
+  return done([detail(run, chat, facts), ...(nativeResults.length?resultLines(nativeResults):[]), ...ownershipLines(ordinaryOwnership), ...requestLines(snapshot, { ended: ended(run), currentArea: run.areas[run.area]?.name, p })].join('\n'));
 }
 
 const replacementPhases = ['intent', 'closeRequested', 'closed', 'createRequested', 'prepared', 'launchRequested', 'launched', 'rolledBack', 'ended'];
@@ -2375,6 +2585,7 @@ const openRunCommand = (args, ports) => lockedMutation(args, ports, openRunLocke
 export const startRun=saveGuard(startRunCommand);
 
 export const recordEvidence=saveGuard(recordEvidenceCommand);
+export const associateEvidenceWorkspace=saveGuard(associateEvidenceWorkspaceCommand);
 
 export const stepDone=saveGuard(stepDoneCommand);
 
@@ -2393,3 +2604,38 @@ export const runStatus=saveGuard(async(options,ports)=>{
 });
 
 export const openRun=saveGuard(openRunCommand);
+
+// Canonical, read-only association admission for native workspace consumers.
+// The existing registered authority above remains the only permission rule.
+export function readEvidenceEligibility({root,producerRoot,tests,source_sha256,runId=null,stage=null},ports={}){
+  const canonical=ports.realpath??realpathSync,capture=ports.captureSource??captureSource;
+  let result={state:'unavailable',reason:'source or ownership unavailable',runId:null,repo:null,producerRoot:null,tests:[],stage:null,sourceAnchor:null,source_sha256:source_sha256??null};
+  try{
+    root=canonical(root);producerRoot=canonical(producerRoot);tests=evidenceTests(tests);
+    result={...result,producerRoot,tests};
+    if(!/^[a-f0-9]{64}$/.test(source_sha256??''))return{...result,state:'ineligible',reason:'original selected source identity is missing'};
+    const runs=(ports.allRuns??allRuns)({cancelled:true},ports);
+    // Only the consumer's owned source/run may authorize an alternate producer.
+    const candidates=[];
+    for(const run of runs){
+      if(!run||typeof run.root!=='string'||canonical(run.root)!==root)continue;
+      for(const association of run.evidenceAssociations??[]){
+        if(association.workspaceRoot===producerRoot&&selectionEqual(association.tests,tests)&&association.source_sha256===source_sha256)candidates.push({run,association});
+      }
+    }
+    if(candidates.length){
+      if(candidates.length!==1)return{...result,state:'ineligible',reason:'workspace association is ambiguous'};
+      const {run,association:a}=candidates[0];
+      if(runId!==null&&runId!==run.runId||stage!==null&&stage!==a.stage)return{...result,state:'ineligible',reason:'saved run or stage disagrees with the owned association'};
+      const inspect=ports.inspectRepository??(path=>{const git=spawnSync('git',['rev-parse','--path-format=absolute','--git-common-dir'],{cwd:path,encoding:'utf8'});if(git.status!==0)throw Error('repository ownership unavailable');return canonical(git.stdout.trim());});
+      const common=inspect(root);
+      if(canonical(run.commonDir)!==common||canonical(run.runDir)!==canonical(runDirFor(common,run.number))||typeof run.repo!=='string'||!run.runId)return{...result,state:'ineligible',reason:'run ownership is missing or contradictory'};
+      checkedAssociation(run,a,capture);
+      return{state:'eligible',reason:null,runId:run.runId,repo:run.repo,producerRoot,tests,stage:a.stage,sourceAnchor:{...a.sourceAnchor},source_sha256};
+    }
+    if(runId!==null||stage!==null&&stage!=='current')return{...result,state:'ineligible',reason:'saved run/stage has no matching owned association'};
+    if(root!==producerRoot)return{...result,state:'ineligible',reason:'alternate producer has no owned workspace association'};
+    if(capture(root,{tests,appMap:null}).sha256!==source_sha256)return{...result,state:'ineligible',reason:'the exact selected source has changed'};
+    return{state:'eligible',reason:null,runId:null,repo:null,producerRoot,tests,stage:'current',sourceAnchor:{root,head:null},source_sha256};
+  }catch(error){return{...result,reason:oneLine(error.message??error)};}
+}

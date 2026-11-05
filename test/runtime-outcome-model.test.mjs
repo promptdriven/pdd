@@ -1,11 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { exitCodeFor, projectAnswer, renderJson, renderText, summaryLine } from '../src/runtime-output.mjs';
-import { TOKEN } from './runtime-fake.mjs';
+import { TOKEN, ordinaryCapabilities, sha } from './runtime-fake.mjs';
 
 // Expected outcomes through the public output functions, so they are part of the contract.
-const selected = { test: 'tests/one.json', steps: [{ entry_path: 'prompts/one.prompt.md' }] };
-const lint = () => ({ command: 'lint', state: 'passed', result: { report: { lint: { complete: true, tests: [{ path: selected.test, verdict: 'passed' }] } } } });
+const selected = { test: 'tests/one.json', steps: [{ step_id: 'one', operation: 'one', entry_path: 'prompts/one.prompt.md' }] };
+const sources = [{ path: selected.test, bytes: Buffer.from(JSON.stringify({ steps: selected.steps })) }];
+selected.sourceFiles = sources.map(source => ({ path: source.path, sha256: sha(source.bytes) }));
+const lint = () => ({ command: 'lint', state: 'passed', engine_sha: 'eae2202a68d00ab762fcbbf1eba0d8607a132a15', result: {
+  capabilities: [{ path: selected.test, report: ordinaryCapabilities(sources, selected.test) }],
+  report: { lint: { complete: true, tests: [{ path: selected.test, verdict: 'passed' }] } } } });
 const refused = { code: 'bad-input', field: '/steps/0/input', message: 'Correct this input.', fix: 'Use an integer.' };
 const row = view => ({ ...view, story: 'one', title: 'One', test: selected.test, phase: 'server' });
 
