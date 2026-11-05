@@ -214,26 +214,48 @@ function discoverTests(root, files, strict = false,workspace=loadRuntimeWorkspac
   });
   const warnings = [...storyWarnings, ...rule.tests.filter(entry => entry.problem).map(entry => `Warning: ${entry.problem}`),
     ...rule.untested.map(item => `Warning: ${item.line}`), ...(rule.orphans.length ? [orphanSummary(rule.orphans)] : [])];
-  const found={ visible, tests, stories, warnings, untested: rule.untested, orphans: rule.orphans };
+  // Discover declarations from already bounded Story reads. Owner files are
+  // opened only after explicit lint selection.
+  const nativeSelections = stories.flatMap(story => {
+    const section = /^## Native validation\s*\n([\s\S]*?)(?=^## |$(?![\s\S]))/m.exec(read(story.path));
+    return section ? [{ storyPath: story.path, story: story.name, section: section[1] }] : [];
+  });
+  const found={ root, visible, tests, stories, nativeSelections, warnings, untested: rule.untested, orphans: rule.orphans };
   Object.defineProperty(found,'workspace',{value:workspace});return found;
 }
 
 // STORY words, by the test name rule: a test path, a story path, a story name or a test file name.
 // Returns {selected, unknown, untested}: untested holds the line of each named Story that has no test.
-export function selectTests(found, words = []) {
+export function selectTests(found, words = [], { native = false } = {}) {
   if (!words.length) return { selected: [...found.tests], unknown: [], untested: [] };
-  const selected = new Set(), unknown = [], untested = [];
+  const selected = new Set(), unknown = [], untested = [], nativeSelections = new Map();
   for (const raw of words) {
     const word = raw.replace(/^\.\//, '');
     const hits = found.tests.filter(test => test.path === word || test.files?.includes(word) || test.storyPath === word || test.storyPaths?.includes(word) || test.story === word
       || word === '.' || (!word.startsWith('../') && word !== '..' && [test.path, ...(test.files ?? []), ...(test.storyPaths ?? []), test.storyPath].some(path => path?.startsWith(word.replace(/\/$/, '') + '/')))
       || basename(test.path, '.json') === word || test.storyPaths?.some(path => storyName(path) === word));
-    const missing = hits.length ? [] : (found.untested ?? []).filter(item => item.storyPath === word || item.story === word);
+    const nativeHits = native ? (found.nativeSelections ?? []).filter(item => item.storyPath === word || item.story === word || word === '.' || (!word.startsWith('../') && word !== '..' && item.storyPath.startsWith(word.replace(/\/$/, '') + '/'))) : [];
+    for (const item of nativeHits) nativeSelections.set(item.storyPath, item);
+    const missing = hits.length || nativeHits.length ? [] : (found.untested ?? []).filter(item => item.storyPath === word || item.story === word);
     if (missing.length) untested.push(...missing.map(item => item.line));
-    else if (!hits.length) unknown.push(raw);
+    else if (!hits.length && !nativeHits.length) unknown.push(raw);
     for (const hit of hits) selected.add(hit);
   }
-  return { selected: found.tests.filter(test => selected.has(test)), unknown, untested };
+  const descriptors = [...nativeSelections.values()].map(item => {
+    const links = [...item.section.matchAll(/\[[^\]]*\]\(([^)\s]+)#native-validation-profile-([^)\s]+)\)/g)];
+    if (links.length !== 1) return {storyPath:item.storyPath,profileId:null,promptPath:null,reason:'Native Story owner link is missing or ambiguous.'};
+    const promptPath = posix.normalize(posix.join(posix.dirname(item.storyPath),links[0][1]));
+    try {
+      if (!promptPath.endsWith('.prompt.md')) throw Error('Native owner must be a module prompt.');
+      const captured = captureSource(found.root,{tests:[item.storyPath,promptPath]});
+      return {storyPath:item.storyPath,promptPath,profileId:links[0][2],sourceReferences:captured.files};
+    } catch (error) {
+      // Workspace/source boundary failures retain their ordinary refusal exit.
+      if (error instanceof PreflightError) throw error;
+      return {storyPath:item.storyPath,promptPath,profileId:links[0][2],reason:error.message};
+    }
+  });
+  return { selected: found.tests.filter(test => selected.has(test)), nativeSelections:descriptors, unknown, untested };
 }
 
 const refusal = (code, section, message, extra = {}) => ({ code, section, message, ...extra });

@@ -1,0 +1,20 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtempSync,mkdirSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {execFileSync} from 'node:child_process';
+import {nativeFixture,packageRoot,put} from './helpers/native-cli-fixture.mjs';
+test('isolated npm-packed install selects native Story and preserves unverified original intake locally',async t=>{
+  const directory=mkdtempSync(join(tmpdir(),'pdd-native-packed-'));t.after(()=>rmSync(directory,{recursive:true,force:true}));
+  const cache=join(directory,'cache'),home=join(directory,'home'),prefix=join(directory,'install');mkdirSync(home);
+  const env={...process.env,HOME:home,npm_config_cache:cache};
+  const packed=JSON.parse(execFileSync('npm',['pack','--json','--pack-destination',directory],{cwd:packageRoot,env,encoding:'utf8',maxBuffer:8*1024*1024}))[0];
+  execFileSync('npm',['install','--prefix',prefix,'--ignore-scripts','--no-audit','--no-fund','--offline',join(directory,packed.filename)],{env,encoding:'utf8',stdio:['ignore','pipe','pipe']});
+  const f=await nativeFixture(t,{cli:join(prefix,'node_modules/pdd/bin/pdd.mjs')});
+  const result=f.command('lint','native','--json');assert.equal(result.status,1,result.stdout+result.stderr);
+  assert.equal(JSON.parse(result.stdout).native_assessments[0].assessment.storyNativeProof,'none');
+  put(f.parent,'report','TAP version 13\nok 1 - required A\n1..1\n');
+  put(f.parent,'import.json',{schema:'pdd.native-evidence-import.v1',profileId:'native',storyPath:f.storyPath,originals:[{role:'report',path:'report'}]});
+  const imported=f.command('workflow','evidence','17','--summary',join(f.parent,'import.json'));assert.equal(imported.status,0,imported.stdout+imported.stderr);assert.equal(f.readRun().evidence.at(-1).native.intake.admission,'unverified');
+});

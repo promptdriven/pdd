@@ -2,6 +2,46 @@
 
 Own `src/runtime-client.mjs`. Export `runCheck({words, options, cwd, cache=false}, ports)` and `runTry({words, options, cwd}, ports)`. Each returns an exit code. These commands and the Try MCP tools call the PDD interpreter with the person's `gh` login. Lines that pdd writes itself follow the [word rule](public-boundary.prompt.md#pdd-interpreter), except the plain busy-check messages owned below.
 
+## Native lint selection and display (draft)
+
+For explicit `pdd lint STORY` (including existing path/directory and multiple
+Story operands), obtain preflight's bounded `nativeSelections` with the ordinary
+Runtime selection. Resolve the owned run and exact Story/profile association
+from existing saved workflow evidence; if no unique owned run/profile exists,
+show that reason and no native proof. Do not pick a first report or create an
+association. For each selected native descriptor call the shared
+`assessNativeEvidence` with its actual root/run/profile/Story selectors and the
+production default reader. Use its current Story criteria, not an old mapping
+list. Missing/ambiguous/unreviewed declarations and missing evidence are native
+missing-proof results, not a bare Runtime missing-test line.
+
+Text and `--json` show one native assessment per selected Story/profile. Show
+every current criterion's identity/text, mapped native test IDs and observed
+outcomes, its supported/unproved reason, required gate/fixture rows, profile and
+source identity/currentness, original source/stage, origin, original references
+and limits. Keep unknown/empty Story facts explicit. Label a whole Story natively
+proved only from `storyNativeProof`; `profileNativeProof` alone is profile
+completion. Qualified external evidence keeps that qualifier and checked/unchecked
+limits. Missing fixtures, required skips, unexecuted gates and incomplete/stale/
+unknown evidence retain the shared judgment even at process exit zero.
+
+A native-only explicit lint reads this saved evidence locally and sends no
+hosted request. A missing native proof returns 1; complete current whole-Story
+native proof returns 0. Existing command/boundary errors retain their exits.
+For mixed/native-and-Runtime selection, process ordinary Runtime rows through
+their unchanged lint route and exit rules; any native missing proof prevents
+overall success without replacing a Runtime unknown/refused/not-run exit.
+Show native proof separately from hosted lint/schema verdicts, Runtime capability
+and modeled observations. Native results add no Runtime pass, check count, AI
+usage, capability claim or Try support. Do not alter saved-lint receipt policy,
+Runtime check dispatch, cache or the separate Story-count owner.
+
+The same saved association/assessment is available to workflow/PR readers; this
+client never promotes historical PR 1 evidence to current code proof. No reading
+executes a native test, repairs fixtures, asks for permissions or broadens source
+discovery. Physical reader, CLI display and mixed-selection integration require
+native tests; the supplied assessor scenarios do not prove them.
+
 ## Reuse complete Story passes
 
 Ordinary test CLI calls opt into local reuse with `cache:true`; direct `runCheck`
@@ -627,6 +667,11 @@ step 5 above), or `AI calls unknown` when there is neither; never an invented ze
 read turns into a lost, unknown row drops its old `progress`.
 
 ## Dependencies
+
+- [Native results](workflow-results.prompt.md#native-profile-and-criterion-assessment-draft):
+  required generation/runtime/verification context for native admission,
+  assessment and visible proof limits. This is an unapproved native draft;
+  copied workspace contracts remain their owner's unapproved draft context.
 
 - [Evidence eligibility read owner](workflow-runner.prompt.md#read-evidence-eligibility): required generation/runtime/verification context for `readEvidenceEligibility`, its inputs/result and accepted association policy. Use this binding for contract history, saved Story evidence and migration handoff; do not invoke registration on reads.
 
