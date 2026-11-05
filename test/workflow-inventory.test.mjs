@@ -81,7 +81,13 @@ test('static convention handles duplicate names, nested assertions, comments, an
   const {analyzeTestChanges}=await inventoryModule();
   const before=`// test('comment', () => {});\ntest('assert', () => {});\ntest('same', () => {\n  test('nested', () => {\n    assert.equal(inside, 1);\n  });\n  assert.equal(outside, 1);\n});\ntest('same', () => assert.ok(second));\ntest(name, () => {});\ntest(\`dynamic \${value}\`, () => {});\n`;
   const after=before.replace('inside, 1','inside, 2').replace('outside, 1','outside, 2').replace('assert.ok(second)','expect(second).toBe(true)').replace("test('assert', () => {});", "test('assert', () => { const unrelated = {skip: true}; });");
-  const report=analyzeTestChanges({files:[{oldPath:'a.spec.mts',newPath:'a.spec.mts',before,after}]});assert.equal(report.available,true);
+  const unknown=analyzeTestChanges({files:[{oldPath:'a.spec.mts',newPath:'a.spec.mts',before,after}]});
+  assert.equal(unknown.available,true);
+  for(const category of ['Tests vs base', 'Changed assertions in kept tests', 'New skips'])
+    assert.ok(unknown.text.includes(`${category}: "a.spec.mts" unavailable ("unknown dynamic test inventory").`));
+  const staticBefore=before.replace('test(name, () => {});\ntest(`dynamic ${value}`, () => {});\n','');
+  const staticAfter=after.replace('test(name, () => {});\ntest(`dynamic ${value}`, () => {});\n','');
+  const report=analyzeTestChanges({files:[{oldPath:'a.spec.mts',newPath:'a.spec.mts',before:staticBefore,after:staticAfter}]});assert.equal(report.available,true);
   assert.match(report.text,/4 → 4 tests\. Removed: none/);assert.ok(report.text.includes('`"nested"` `"    assert.equal(inside, 1);"`'));
   assert.ok(report.text.includes('`"same"` `"  assert.equal(outside, 1);"`'));assert.ok(report.text.includes('`"same"` [2]'));
   assert.ok(!report.text.includes('`"assert"` `"test'));assert.ok(report.text.includes('New skips: none.'));
