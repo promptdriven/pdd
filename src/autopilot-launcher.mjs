@@ -10,7 +10,7 @@ import { loadAgentDefinitions } from './agent-config.mjs';
 import { pathDiagnostic } from './path-diagnostic.mjs';
 import { runAutopilot } from './autopilot.mjs';
 import { checkWorkflowAgents } from './workflow-agents.mjs';
-import { sendToChat } from './workflow-chat.mjs';
+import { sendToChat, START_GRACE_MS } from './workflow-chat.mjs';
 
 const INTERVAL = 30 * 60 * 1000;
 const SESSION = 'pdd-autopilot';
@@ -212,12 +212,14 @@ async function wake(state, text, p) {
     if (!['agent_not_found', 'pane_not_found', 'server_not_running'].includes(e.code)) throw e;
     if (e.code !== 'agent_not_found') { delete state.paneId; delete state.workspaceId; delete state.ownerLaunch; await openWorkspace(state, p); }
   }
-  const deliver = async (initial) => {
+  const deliver = async (initial, withinLaunch = () => true) => {
     const pane = state.paneId, workspace = state.workspaceId, launch = state.ownerLaunch;
     let identity = initial?.agent_session == null ? undefined : JSON.stringify(initial.agent_session);
-    let changed = false;
+    let changed = false, expired = false;
+    if (!withinLaunch()) { p.warn('Autopilot work remains pending: the chat startup window expired.'); return false; }
     const result = await sendToChat({ paneId: pane, startedAt: launch?.startedAt }, text, {
       herdr: async args => {
+        if (args[0] === 'agent' && args[1] === 'prompt' && !withinLaunch()) { expired = true; throw Object.assign(Error('Startup window expired'), { code: 'agent_blocked' }); }
         const reply = await herdr(args, p);
         if (args[0] === 'agent' && args[1] === 'get' && reply.result?.agent) {
           const observed = reply.result.agent;
@@ -234,6 +236,7 @@ async function wake(state, text, p) {
         const saved = read(state.stateFile);
         if (changed || !saved?.enabled || saved.paneId !== pane || saved.workspaceId !== workspace || JSON.stringify(saved.ownerLaunch) !== JSON.stringify(launch)) return false;
         const current = (await herdr(['agent', 'get', pane], p)).result?.agent;
+        if (!withinLaunch()) { expired = true; return false; }
         if (!current || !['idle', 'done'].includes(current.agent_status) || (identity !== undefined && JSON.stringify(current.agent_session ?? null) !== identity)) return false;
         state.deliveryIntent = { paneId: pane, workspaceId: workspace, at: p.now() };
         save(state.stateFile, state);
@@ -241,7 +244,7 @@ async function wake(state, text, p) {
       },
     });
     if (result.ok || !result.uncertain) delete state.deliveryIntent;
-    if (!result.ok) p.warn(`Autopilot work remains pending: ${changed ? 'the chat target changed' : result.reason ?? result.code.replaceAll('_', ' ')}.`);
+    if (!result.ok) p.warn(`Autopilot work remains pending: ${expired ? 'the chat startup window expired' : changed ? 'the chat target changed' : result.reason ?? result.code.replaceAll('_', ' ')}.`);
     return result.ok;
   };
   if (agent) {
@@ -265,10 +268,13 @@ async function wake(state, text, p) {
   const env = Object.entries(childEnv).map(([k, v]) => `${k}=${quote(v)}`);
   const unset = ['CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME'].filter(k => !state.environment[k]).flatMap(k => ['-u', k]);
   state.ownerLaunch = { paneId: state.paneId, startedAt: p.now() };
+  const elapsedNow = p.elapsedNow ?? (() => Number(process.hrtime.bigint() / 1_000_000n));
+  const began = elapsedNow(), deadline = state.ownerLaunch.startedAt + START_GRACE_MS;
+  const withinLaunch = () => Math.min(deadline - p.now(), START_GRACE_MS - Math.max(0, elapsedNow() - began)) > 0;
   save(state.stateFile, state);
   try { await herdr(['pane', 'run', state.paneId, ['env', ...unset, ...env, quote(definition.command), ...args].join(' ')], p); }
   catch (error) { if (error.confirmedRejection || error.code === 'agent_not_found' || error.code === 'pane_not_found') delete state.ownerLaunch; throw error; }
-  return deliver();
+  return deliver(undefined, withinLaunch);
 }
 
 function claimTickLock(file) {

@@ -173,8 +173,41 @@ test('confirmed launch rejection retries pending work; uncertain launch retains 
     assert.equal(f.state().recipeDelivered,undefined); assert.equal(f.state().seen?.[101],undefined);
     await f.tick();
     assert.equal(launches,confirmed?2:1);
-    assert.equal(f.state().recipeDelivered,undefined); assert.equal(f.state().seen?.[101],undefined);
-    if(confirmed) { await f.tick(); assert.equal(f.state().recipeDelivered,true); assert.ok(f.state().seen[101]); }
+    if(confirmed) { assert.equal(f.state().recipeDelivered,true); assert.ok(f.state().seen[101]); assert.equal(f.packets.length,1); }
+    else { assert.equal(f.state().recipeDelivered,undefined); assert.equal(f.state().seen?.[101],undefined); assert.equal(f.packets.length,0); }
+  }
+});
+
+test('new owner admission respects the original launch window through submission', async () => {
+  for (const mode of ['before-boundary', 'launch-expired', 'screen-expired', 'recheck-expired', 'transport-expired', 'backward-clock']) {
+    const f=fixture(`deadline-${mode}`,{afterLaunch:'idle'}), original=f.ports.herdr;
+    let elapsed=0, launched=false, inspections=0;
+    f.ports.elapsedNow=()=>elapsed;
+    if(mode==='transport-expired') f.ports.now=()=>{
+      let files=[]; try { files=readdirSync(f.ports.stateRoot, {withFileTypes:true}).filter(x=>x.name.endsWith('.json')); } catch (error) { if(error.code!=='ENOENT') throw error; }
+      if(files.some(x=>JSON.parse(readFileSync(join(f.ports.stateRoot,x.name),'utf8')).deliveryIntent)) return f.time+30000;
+      return f.time;
+    };
+    f.ports.herdr=async args=>{
+      if(args[0]==='pane' && args[1]==='run') {
+        const result=await original(args); launched=true;
+        if(mode==='before-boundary') { f.time+=29999; elapsed=29999; }
+        if(mode==='launch-expired') { f.time+=30000; elapsed=30000; }
+        if(mode==='backward-clock') { f.time-=1000; elapsed=30000; }
+        return result;
+      }
+      if(launched && args[0]==='agent' && args[1]==='get' && ++inspections===2 && mode==='recheck-expired') { f.time+=30000; elapsed=30000; }
+      if(launched && args[0]==='pane' && args[1]==='read' && mode==='screen-expired') { f.time+=30000; elapsed=30000; }
+      return original(args);
+    };
+    const anchor=f.time;
+    await f.start();
+    const admitted=mode==='before-boundary';
+    assert.equal(f.state().ownerLaunch.startedAt,anchor,mode);
+    assert.equal(f.packets.length,Number(admitted),mode);
+    assert.equal(Boolean(f.state().recipeDelivered),admitted,mode);
+    assert.equal(Boolean(f.state().seen?.[101]),admitted,mode);
+    assert.equal(Boolean(f.state().deliveryIntent),false,mode);
   }
 });
 
