@@ -321,7 +321,12 @@ function reviewedNative(selectors,selection,retained,ports) {
     const approved=event.prompts.find(row=>row.path===selection.promptPath);
     if(!approved)continue;
     const decision=array(run?.decisions).find(row=>row.evidence?.id===event.id);
-    if(decision&&(decision.decision!=='approve'||!array(decision.evidence?.prompts).some(row=>row.path===approved.path&&row.proseSha256===approved.proseSha256)))continue;
+    // A workflow journal event cannot outlive the saved decision that binds
+    // it. Without workflow identity, standalone approvals use the journal.
+    const workflowApproval=known(run?.workflow)||run?.approvalRecord?.evidence?.id===event.id||Boolean(decision);
+    if(workflowApproval&&(!decision||decision.decision!=='approve'||!known(decision.gateId)||
+      run?.approvalRecord?.evidence?.id===event.id&&decision.gateId!==run.approvalRecord.gateId||
+      array(decision.evidence?.prompts).length!==event.prompts.length||!event.prompts.every(prompt=>array(decision.evidence?.prompts).some(row=>row.path===prompt.path&&row.proseSha256===prompt.proseSha256))))continue;
     const bytes=candidates.find(row=>proseSha256(row.content)===approved.proseSha256);
     if(!bytes)continue;
     let profile;try{profile=profileIn(bytes.content,selectors.profileId);}catch{continue;}
@@ -507,7 +512,9 @@ function nativeContextFromOriginals(selectors,input,retained,ports) {
   if(!sourceMatches||!selectedPathsMatch)limits.push('Original source/test selection does not establish the current complete native source binding.');
   const sourceRef=source?.originalRef??'unknown';
   const companionMatches=row=>row&&known(row.sourceId)&&row.sourceId===assertedSource?.sourceId&&row.stage===association?.stage;
-  const executionValid=companionMatches(execution)&&Number.isInteger(execution.exitCode)&&execution.processEnded===true;
+  const executionValid=companionMatches(execution)&&Number.isInteger(execution.exitCode)&&execution.processEnded===true&&report.capture?.processEnded!==false&&
+    (report.exitCode===null||report.exitCode===undefined||report.exitCode===execution.exitCode);
+  checks.push({check:'original-process-completion',state:executionValid?'checked':'unavailable',originalRef:execution?.originalRef??'unknown'});
   if(executionValid) {
     report.exitCode=execution.exitCode;report.capture={...report.capture,processEnded:true};
     for(const key of ['producer','producerVersion','runner','runnerVersion','runtimeVersion'])if(known(execution[key]))report[key]=execution[key];
@@ -540,7 +547,7 @@ function nativeContextFromOriginals(selectors,input,retained,ports) {
   if(selectedValid)for(const row of array(report.observations))row.selected=selectionEvidence.testIds.includes(row.testId)?true:null;
   const identitiesBound=profile.requiredIds.every(id=>array(report.observations).filter(row=>row.testId===id).every(row=>row.identityBound===true));
   if(selectedValid&&selectionEvidence.testIds.some(id=>!report.observations.some(row=>row.testId===id)))report.complete=false;
-  const verified=associationValid&&sourceMatches&&selectedPathsMatch&&identitiesBound&&reviewed.review==='approved';
+  const verified=associationValid&&sourceMatches&&selectedPathsMatch&&identitiesBound&&executionValid&&reviewed.review==='approved';
   const intake={origin:parsed?'external-machine':'unknown',admission:verified?'verified':'unverified',originalRef,verificationRef:verified?`derived:${digest(JSON.stringify(checks))}`:'',limits:distinct(limits),stage:associationValid?association.stage:'unknown',sourceRef};
   const context={schema:'pdd.native-assessment-context.v1',runId:selectors.runId,protected:protectedProfile,candidate,story:selection.story,intake,report,baseline:null};
   if(input.baseline) {
