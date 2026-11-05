@@ -205,33 +205,50 @@ function message(state, issues) {
 }
 async function wake(state, text, p) {
   await openWorkspace(state, p);
-  if (state.deliveryIntent) return false;
+  if (state.deliveryIntent) { p.warn('Autopilot work remains pending: a previous submission has uncertain custody.'); return false; }
   let agent;
   try { agent = (await herdr(['agent', 'get', state.paneId], p)).result?.agent; }
   catch (e) {
     if (!['agent_not_found', 'pane_not_found', 'server_not_running'].includes(e.code)) throw e;
     if (e.code !== 'agent_not_found') { delete state.paneId; delete state.workspaceId; delete state.ownerLaunch; await openWorkspace(state, p); }
   }
-  if (agent) {
-    if (!['idle', 'done'].includes(agent.agent_status)) return false;
+  const deliver = async (initial) => {
     const pane = state.paneId, workspace = state.workspaceId, launch = state.ownerLaunch;
-    const identity = JSON.stringify(agent.agent_session ?? null);
+    let identity = initial?.agent_session == null ? undefined : JSON.stringify(initial.agent_session);
+    let changed = false;
     const result = await sendToChat({ paneId: pane, startedAt: launch?.startedAt }, text, {
-      herdr: args => herdr(args, p), now: p.now,
+      herdr: async args => {
+        const reply = await herdr(args, p);
+        if (args[0] === 'agent' && args[1] === 'get' && reply.result?.agent) {
+          const observed = reply.result.agent;
+          const session = observed.agent_session == null ? undefined : JSON.stringify(observed.agent_session);
+          if (identity === undefined) identity = session;
+          else if (session !== undefined && identity !== session) changed = true;
+          if (changed) return { ...reply, result: { ...reply.result, agent: { ...observed, agent_status: 'blocked' } } };
+          if (!['idle', 'done', 'blocked'].includes(observed.agent_status))
+            return { ...reply, result: { ...reply.result, agent: { ...observed, agent_status: 'starting' } } };
+        }
+        return reply;
+      }, now: p.now,
       beforeSubmit: async () => {
         const saved = read(state.stateFile);
-        if (!saved?.enabled || saved.paneId !== pane || saved.workspaceId !== workspace || JSON.stringify(saved.ownerLaunch) !== JSON.stringify(launch)) return false;
+        if (changed || !saved?.enabled || saved.paneId !== pane || saved.workspaceId !== workspace || JSON.stringify(saved.ownerLaunch) !== JSON.stringify(launch)) return false;
         const current = (await herdr(['agent', 'get', pane], p)).result?.agent;
-        if (!current || !['idle', 'done'].includes(current.agent_status) || JSON.stringify(current.agent_session ?? null) !== identity) return false;
+        if (!current || !['idle', 'done'].includes(current.agent_status) || (identity !== undefined && JSON.stringify(current.agent_session ?? null) !== identity)) return false;
         state.deliveryIntent = { paneId: pane, workspaceId: workspace, at: p.now() };
         save(state.stateFile, state);
         return true;
       },
     });
     if (result.ok || !result.uncertain) delete state.deliveryIntent;
+    if (!result.ok) p.warn(`Autopilot work remains pending: ${changed ? 'the chat target changed' : result.reason ?? result.code.replaceAll('_', ' ')}.`);
     return result.ok;
+  };
+  if (agent) {
+    if (!['idle', 'done'].includes(agent.agent_status)) { p.warn('Autopilot work remains pending: the chat is not idle.'); return false; }
+    return deliver(agent);
   }
-  if (state.ownerLaunch?.paneId === state.paneId) return false;
+  if (state.ownerLaunch?.paneId === state.paneId) { p.warn('Autopilot work remains pending: the launched chat is unavailable.'); return false; }
   let definition;
   const selectedEnv = { ...p.env, HOME: state.definitionHome ?? state.environment.HOME };
   try { definition = loadAgentDefinitions({ cwd: state.cwd, env: selectedEnv }).find(x => x.id === state.agent.id); } catch { /* Fall back to the saved command. */ }
@@ -251,7 +268,7 @@ async function wake(state, text, p) {
   save(state.stateFile, state);
   try { await herdr(['pane', 'run', state.paneId, ['env', ...unset, ...env, quote(definition.command), ...args].join(' ')], p); }
   catch (error) { if (error.confirmedRejection || error.code === 'agent_not_found' || error.code === 'pane_not_found') delete state.ownerLaunch; throw error; }
-  return false;
+  return deliver();
 }
 
 function claimTickLock(file) {

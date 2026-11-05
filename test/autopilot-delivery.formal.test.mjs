@@ -131,8 +131,8 @@ test('bounded launch rejection and uncertain custody', async () => {
     assert.equal(Boolean(f.state().seen?.[101]),false);
     await f.tick();
     assert.equal(launches,confirmed?2:1);
-    assert.equal(Boolean(f.state().recipeDelivered),false);
-    assert.equal(Boolean(f.state().seen?.[101]),false);
+    assert.equal(Boolean(f.state().recipeDelivered),confirmed);
+    assert.equal(Boolean(f.state().seen?.[101]),confirmed);
     if(confirmed) {
       await f.tick();
       assert.equal(f.packets.length,1);

@@ -173,6 +173,24 @@ test('autopilot routes parse and dispatch without setup or a runtime call', asyn
   assert.deepEqual(parseArgv(['autopilot', 'add', '12', '15']).operands, ['12', '15']);
 });
 
+test('one start waits for the newly launched owner and submits once', async t => {
+  const f = await fixture(t, { mode: 'observe' });
+  f.issues = [issue(101)];
+  const herdr = f.ports.herdr;
+  let inspections = 0;
+  f.ports.herdr = async args => {
+    if (args[0] === 'agent' && args[1] === 'get' && f.agentStarted && ++inspections < 3)
+      return { result: { agent: { agent_status: 'starting' } } };
+    return herdr(args);
+  };
+  const result = await f.module.runAutopilotLauncher({ command: 'start', cwd: f.cwd, env: { HOME: f.home, PATH: process.env.PATH }, packageRoot: root, issues: [] }, f.ports);
+  assert.equal(result.exitCode, 0);
+  assert.equal(f.herdrCalls.filter(args => args[0] === 'pane' && args[1] === 'run').length, 1);
+  assert.equal(f.prompts.length, 1, 'first start submits one pending packet');
+  assert.equal(JSON.parse(f.prompts[0].trim().split('\n').at(-1)).recipeFirst, true);
+  assert.equal(f.state().recipeDelivered, true);
+});
+
 test('start installs a timer and runs the recipe immediately; unchanged empty ticks wake no AI', async t => {
   const f = await fixture(t);
   assert.equal((await f.invoke('start')).exitCode, 0);
