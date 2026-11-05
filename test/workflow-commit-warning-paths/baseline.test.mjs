@@ -17,7 +17,7 @@ const steps = JSON.parse(readFileSync(join(packageRoot, 'skills/pdd-small-change
 const afterVerify = steps.slice(steps.indexOf('verify') + 1);
 async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-runner-')));
-  
+
   const source = join(base, 'project'), state = join(base, 'state'), home = join(base, 'home');
   for (const dir of [source, state, home, join(home, '.claude')]) mkdirSync(dir);
   const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
