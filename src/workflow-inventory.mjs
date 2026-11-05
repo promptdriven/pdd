@@ -236,6 +236,9 @@ function dynamicInventory(source, lang, entries) {
     if (!/^\s*import\b/.test(line)) continue;
     for (const m of line.matchAll(/\b(?:test|it)\s+as\s+([\w$]+)/g)) aliases.add(m[1]);
   }
+  for (const binding of visible.join('\n').matchAll(/^\s*import\b[^\n{]*\{([^}]*)\}/gm)) {
+    for (const m of binding[1].matchAll(/\b(?:test|it)\s+as\s+([\w$]+)/g)) aliases.add(m[1]);
+  }
   const tests = entries.filter(e => !e.suite);
   for (let at = 0; at < visible.length; at++) {
     const line = visible[at];
