@@ -10,3 +10,9 @@ I can rely on my workflow PR description to reflect the latest approved drafts a
 ## Rules to check
 
 A failed pre-push publication-pending update must not allow a source push. A failed informational refresh warns rather than undoing publication. Replay and final-body safety still apply.
+
+## Regression cases
+
+- An approval refresh and an area refresh each preserve the complete description, including Unicode, newlines and the ownership marker, when `gh pr edit` would fail on the Projects classic query.
+- A nonzero exit or rejected update reports a useful safe first-line reason and a retry command; a rejection with code zero is still a failure. Missing stderr uses a useful fallback. Credentials, control characters and private paths do not appear in the reason.
+- A failed pending update prevents the source push. A failed final update after a push leaves the pending description and reports the retry; an informational-only failure warns and retains the previous inventory description.
