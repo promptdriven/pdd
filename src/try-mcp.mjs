@@ -97,7 +97,7 @@ export function createTryTools({ cwd = process.cwd(), words = [], env } = {}, po
     const result = dependencies.saveDoorCase(owner.root, { id: run.id, name: args.name ?? 'Recorded Try tool run', story_path: owner.test.storyPath, original_path: owner.test.path,
       test: { schema_version: 'prompt-runtime.program-scenario.v1', story_path: owner.test.storyPath, criteria, initial_world: run.world_before, simulation: owner.test.doc.simulation ?? {}, context: owner.test.doc.context ?? [],
         steps: [{ step_id: `try-${run.id}`, entry_path: run.entry.slice(0, separator), operation: run.entry.slice(separator + 1), input: run.input,
-          checks: [{ criterion_id: criterion, target: 'result', path: '', op: 'equals', value: run.result }] }] } }, { isolated: true });
+          checks: [{ criterion_id: criterion, target: 'result', path: '', op: 'equals', value: run.result }] }] } }, { ...runtimePorts, ports: runtimePorts, isolated: true });
     if (!result.startsWith('added ') && !result.startsWith('already saved ')) throw new Error(result);
     run.saved = result;
     return { run_id: run.id, result, note: `Recorded case; covers 1 of ${criteria.length} Story criteria.${criteria.length > 1 ? ' Complete coverage before pdd test.' : ''} This records observed output; review its expectation and saved-data setup before replaying.` };
