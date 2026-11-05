@@ -52,6 +52,11 @@ For catalog dispositions `autopilot-start`, `autopilot-stop`, `autopilot-status`
 
 The runner routes (run, done, ask, approve, changes, cancel, status, open) call the matching export of `src/workflow-runner.mjs` (startRun, stepDone, askPerson, approveRun, changeRun, cancelRun, runStatus, openRun) with the parsed values, cwd and packageRoot. For done, pass `--summary` as `summary` and `--skipped` as `skipped`, each only when given. Only for startRun, obtain admission below before importing or invoking the runner, and pass the selected agent instead of an unconditional default. Pass the caller env unchanged as runner `ports.env`, alongside `say`, so agent configuration follows the same environment as readiness. For startRun, pass `base` only when `--base` was given, using its text unchanged; the runner owns branch validation and selection. For startRun, pass `adoptCorpus` only when `--adopt-corpus` was given, using its text unchanged; the runner owns adoption policy. For approveRun, pass `said: options["--said"]` only when supplied, without trimming or joining. Forward the literal `-` marker unchanged; dispatch never reads stdin or interprets person words. For status, pass `all`, `cancelled` and `json` only when their flag is given. For open, pass `area` only when the optional area operand was given and `newSession: true` only when --new was given; otherwise preserve the existing openRun arguments. The runner owns selection, replacement safety and persistence. Tests may inject the runner module. Print the returned message once: stdout when exitCode is 0, stderr otherwise. Return the exitCode. A missing export, an invalid reply or a thrown error prints one finite line and returns 1; never retry.
 
+For catalog route `workflow.refresh-description`, call the runner's module function
+`retryPrDescription({ref: operands[0], pr: operands[1], cwd}, ports)` using the existing injectable
+runner and workflow stream/error handling. Parsing and help use the catalog. This
+route does not run admission or invoke another workflow command.
+
 For catalog route `workflow.request-uptake`, require nonblank `--summary` before importing or invoking the runner; missing summary returns 2 with one finite diagnostic. Reuse normal parser validation for missing/extra operands, duplicate/blank options and help/completion. Call the actual module function `acknowledgeRequest({requestId: operands[0], summary: options['--summary'], cwd}, ports)` on the existing injectable `workflowRunner`, using the workflow stream/error handling above. Derive command hints from the catalog prefix by stable id; dispatch on the catalog's stable disposition, never a second public verb. `bin/pdd.mjs` remains a thin entry point. Interpreter resource `dispatch.requestUptake` binds this same injected module function, not native journal execution.
 
 workflow list uses `listWorkflowAreas({packageRoot,cwd,home})` (home from the HOME environment value) and `formatWorkflowList` from [workflow areas](workflow-areas.prompt.md). A read failure returns 1. Local help/version/skill/completion do not import the runner.
@@ -151,8 +156,8 @@ finite local cause and returns 5. Catalog owns all syntax.
 
 ```json
 {
-  "status": "approved",
-  "prose_sha256": "d740ad78a1586c7ec7b2742e0bebab423daa91c451d079de00eb863794303f6b",
+  "status": "draft",
+  "prose_sha256": "6017c9b7c1cfca92cb54110b4c4b9754a7a965fd0a31ab250fb3accc1fbaf521",
   "entries": [{"operation": "runPdd","input_schema": {"type": "object","properties": {"argv": {"type": "array","items": {"type": "string"}},"cwd": {"type": "string"},"env": {"type": "object","properties": {"HOME": {"type": "string"},"PATH": {"type": "string"},"CODEX_HOME": {"type": "string"},"CLAUDE_CONFIG_DIR": {"type": "string"}},"required": [],"additionalProperties": false},"packageRoot": {"type": "string"}},"required": ["argv"],"additionalProperties": false},"result_schema": {"type": "object","properties": {"exit_code": {"type": "integer"},"stdout": {"type": "string"},"stderr": {"type": "string"}},"required": ["exit_code","stdout","stderr"],"additionalProperties": false},"errors": []}],
   "calls": [],
   "resources": [

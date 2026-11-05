@@ -55,6 +55,7 @@ For `workflow.run`, accept optional `--adopt-corpus FILE`, a nonempty text path 
 - workflow.ask `workflow ask QUESTION…`: the question words join into one text; `--` ends options.
 - workflow.approve `workflow approve [ISSUE] [--said WORDS]`, workflow.status `workflow status [ISSUE] [--all] [--cancelled] [--json]` (flags).
 - workflow.changes `workflow changes ISSUE TEXT…`: the text words join into one request; `--` ends options.
+- workflow.refresh-description `workflow refresh-description ISSUE PR` (local `workflow-refresh-description`): one required issue operand and one required text PR number operand, no options. The runner validates the recorded PR identity. Help says it retries only the existing PR description update, without advancing workflow progress.
 - workflow.cancel `workflow cancel ISSUE`.
 - workflow.open `workflow open ISSUE [AREA] [--new]`: optional AREA uses the existing `workflow-name` operand type (the parser's safe name validator); --new is a flag. Help distinguishes focusing/resuming a saved area from replacing the current area's native session, keeping the run and approvals. The runner owns area existence/history checks; the catalog does not inspect saved runs.
 - workflow.view `workflow view ISSUE` (local `workflow-view`): one required issue operand, no options. Help says it shows a read-only review of gates, approvals, files, PRs and Simulator links without starting or resuming a chat.
@@ -134,6 +135,7 @@ The ordered help-form list consists of the lines below in their displayed order,
   pdd workflow done STEP [--summary TEXT] [--skipped REASON]  For the agent in a run worktree: record a step with pdd's own latest pdd test, pdd lint and prove results (the summary is an agent note) and print what to do next; --skipped records that the step was skipped, and why.
   pdd workflow evidence ISSUE --summary FILE  Record source-verified saved check JSON without rerunning steps, gates or publication.
   pdd workflow ask QUESTION  For the agent in a run worktree: show the person that the chat waits for their answer.
+  pdd workflow refresh-description ISSUE PR  Retry the existing PR description update without advancing workflow progress.
   pdd workflow approve [ISSUE] [--said WORDS]  Use --said - with the shared quoted-heredoc template to record chat words for the gate and all its drafts, or use terminal y/N; strict mode requires a person terminal.
   pdd workflow changes ISSUE TEXT  Send a change request to the same area chat; the gate stays open.
   pdd workflow cancel ISSUE  Cancel the run and close its Herdr tabs; keep the worktree and branch.
