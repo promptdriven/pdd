@@ -1,0 +1,111 @@
+import test, {after} from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdirSync, mkdtempSync, readFileSync, writeFileSync, readdirSync, rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {fileURLToPath} from 'node:url';
+const evidence = mkdtempSync(join(tmpdir(), 'pdd-formal-'));
+after(() => rmSync(evidence, {recursive:true, force:true}));
+const product = fileURLToPath(new URL('..', import.meta.url));
+const {runAutopilotLauncher, tickAutopilot} = await import(`${product}/src/autopilot-launcher.mjs`);
+const observations = [];
+const absent = () => Object.assign(Error('No native agent'), {code:'agent_not_found'});
+const issue = number => ({number, state:'open', title:`Synthetic issue ${number}`, body:'Synthetic trusted work.', user:{login:'owner'}, created_at:'2026-11-04T00:01:00Z', updated_at:'2026-11-04T00:01:00Z', comments:0, labels:[], html_url:`https://github.com/owner/repo/issues/${number}`});
+
+function fixture(name, {native='absent', afterLaunch='blocked', screen='Ready\n› '} = {}) {
+  const dir = join(evidence, 'worlds', name), cwd = join(dir, 'repo'), home = join(dir, 'home');
+  mkdirSync(cwd, {recursive:true}); mkdirSync(home, {recursive:true});
+  writeFileSync(join(cwd, 'pdd.json'), JSON.stringify({autopilot:{mode:'observe', trust:[]}}));
+  const f = {name, dir, cwd, home, native, afterLaunch, screen, issues:[issue(101)], calls:[], packets:[], time:Date.parse('2026-11-04T00:00:00Z')};
+  f.ports = {
+    stateRoot:join(dir,'launcher-state'), platform:'darwin', now:()=>f.time,
+    env:{HOME:home, PATH:'/synthetic/no-executables', CODEX_HOME:undefined, CLAUDE_CONFIG_DIR:undefined, GEMINI_CLI_HOME:undefined},
+    selectAgent:async()=>({id:'codex',kind:'codex',command:'codex',env:{}}),
+    pathDiagnostic:()=>[], timer:async()=>true, warn:()=>{},
+    queryIssues:async()=>({status:200,etag:'synthetic',issues:structuredClone(f.issues)}),
+    run:async(command,args)=>{
+      f.calls.push({port:'process',command,args});
+      if(command==='git') return {code:0,stdout:cwd+'\n',stderr:''};
+      if(command==='gh' && args[0]==='repo') return {code:0,stdout:'{"nameWithOwner":"owner/repo"}',stderr:''};
+      if(command==='gh' && args[0]==='auth') return {code:0,stdout:'',stderr:''};
+      if(command==='herdr' && args[0]==='--version') return {code:0,stdout:'synthetic',stderr:''};
+      throw Error(`Unexpected process port: ${command} ${args.join(' ')}`);
+    },
+    herdr:async args=>{
+      f.calls.push({port:'herdr',args});
+      if(args[0]==='workspace') return {result:{workspace:{workspace_id:'w'},root_pane:{pane_id:'p'}}};
+      if(args[0]==='status') return {running:true};
+      if(args[0]==='agent' && args[1]==='get') {
+        if(f.native==='absent') throw absent();
+        return {result:{agent:{agent_status:f.native}}};
+      }
+      if(args[0]==='pane' && args[1]==='run') {
+        f.native=f.afterLaunch;
+        return {result:{type:'ok'}};
+      }
+      if(args[0]==='pane' && args[1]==='read') {
+        if(f.screen instanceof Error) throw f.screen;
+        return f.screen;
+      }
+      if(args[0]==='agent' && args[1]==='prompt') {
+        f.packets.push(JSON.parse(args[3].trim().split('\n').at(-1)));
+        return {result:{type:'ok'}};
+      }
+      throw Error(`Unexpected Herdr port: ${args.join(' ')}`);
+    }
+  };
+  f.start = async runs => {
+    const result = await runAutopilotLauncher({command:'start',cwd,packageRoot:product,env:f.ports.env,...(runs?{runs}:{})},f.ports);
+    assert.equal(result.exitCode,0,`Control setup must complete: ${result.message}`);
+    f.stateFile=join(f.ports.stateRoot,readdirSync(f.ports.stateRoot).find(x=>x.endsWith('.json')));
+    return result;
+  };
+  f.state=()=>JSON.parse(readFileSync(f.stateFile,'utf8'));
+  f.tick=()=>tickAutopilot(f.stateFile,f.ports);
+  f.saveObservation=extra=>{
+    const value={name,...extra,state:f.state(),calls:f.calls,packets:f.packets};
+    observations.push(value);writeFileSync(join(dir,'observation.json'),JSON.stringify(value,null,2)+'\n');
+  };
+  return f;
+}
+
+// Oracle: the Story permits submission only to the same ready coordinator on
+// a readable, dialog-free screen; only acknowledgement consumes the work.
+test('bounded delivery decisions preserve pending work', async () => {
+  let n=0;
+  for (const status of ['idle','done','working','blocked','unknown']) {
+    for (const screen of ['Ready\n› ', 'Switch model\nPress enter to confirm or esc to go back', Object.assign(Error('unreadable'),{code:'screen_failed'})]) {
+      const f=fixture(`decision-${n++}`,{native:status,screen}); await f.start();
+      const permitted = ['idle','done'].includes(status) && screen === 'Ready\n› ';
+      assert.equal(f.packets.length, Number(permitted), `${status} / ${String(screen)}`);
+      assert.equal(Boolean(f.state().recipeDelivered), permitted);
+      assert.equal(Boolean(f.state().seen?.[101]), permitted);
+    }
+  }
+});
+
+test('bounded launch, identity and acknowledgement outcomes', async () => {
+  for (const mode of ['launch','replacement','reject','uncertain','ack']) {
+    const f=fixture(`outcome-${mode}`,{native:mode==='launch'?'absent':'idle',afterLaunch:'blocked'});
+    const original=f.ports.herdr; let reads=0, attempts=0;
+    f.ports.herdr=async args=>{
+      if(mode==='replacement' && args[0]==='agent' && args[1]==='get') return {result:{agent:{agent_status:'idle',agent_session:++reads>1?'replacement':'original'}}};
+      if(args[0]==='agent' && args[1]==='prompt') {
+        attempts++;
+        if(mode==='reject'||mode==='uncertain') throw Object.assign(Error('submission failed'),{code:mode==='reject'?'agent_not_found':'transport_lost'});
+      }
+      return original(args);
+    };
+    await f.start();
+    assert.equal(Boolean(f.state().recipeDelivered),mode==='ack',mode);
+    assert.equal(Boolean(f.state().seen?.[101]),mode==='ack',mode);
+    if(mode==='replacement') assert.equal(attempts,0);
+    if(mode==='launch') { f.native='idle'; await f.tick(); assert.equal(f.packets.length,1); }
+    if(mode==='reject'||mode==='uncertain') {
+      await f.tick();
+      assert.equal(attempts,mode==='reject'?2:1,mode);
+      assert.equal(Boolean(f.state().deliveryIntent),mode==='uncertain',mode);
+    }
+    if(mode==='ack') { await f.tick(); assert.equal(attempts,1); }
+  }
+});
