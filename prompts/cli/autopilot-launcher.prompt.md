@@ -50,7 +50,7 @@ user timer and runs the first tick immediately. Repeated start reuses the timer
 and saved activation time; stopping/restarting does not admit old backlog.
 Optional --runs is a positive safe integer with no product maximum. Omission
 means no fixed cap. Persist only the selected launcher identity/config-folder
-paths, not credentials or the whole environment. A named user timer runs the
+paths, including the HOME used to load local launcher definitions, not credentials or the whole environment. A named user timer runs the
 Node script with absolute paths and the launcher's PATH and agent config paths.
 Linux uses a systemd user timer whose oneshot service sets `KillMode=process`,
 so a Herdr server started by the tick survives its exit. macOS uses a LaunchAgent.
@@ -62,7 +62,16 @@ does not leave status claiming it is running.
 Use a dedicated Herdr session `pdd-autopilot`, isolated from the default session.
 Open its repo workspace at start; launch the interactive agent only for work.
 Reuse its saved pane for later prompts; if it no longer exists, recreate the
-repo workspace/pane and preserve the queued work. Never send interrupt/kill/close to stop:
+repo workspace/pane and preserve the queued work. Recreated native owners use
+saved HOME and selected config-folder bindings. Reload commands and non-profile
+environment overrides from the saved launcher-definition HOME, never a later
+caller HOME, and only within the saved agent family. If the named definition now
+selects another family, launch no replacement, retain pending work and report that
+`pdd autopilot start` must select it again. An explicit start may save a new
+profile. Saved HOME and config-folder values override reloaded and caller values;
+an absent saved config variable is unset in the child even if the pane or
+reloaded definition supplies it. Preserve other configured environment values
+and provider behavior. Never send interrupt/kill/close to stop:
 stop disables this repo's timer and queued ticks and removes its persistent
 timer definition, leaving the current step to
 finish. Repeated stop is harmless. Status reads local state and timer activity;
@@ -137,12 +146,25 @@ source state and mode are unchanged, return quietly before permission lookups;
 revalidate authority when there is an actual source change to assess or deliver. A PR waiting for a person in
 observe mode is quiet until its relevant trusted state changes.
 
-Only a successful idle-agent delivery records the fingerprint. A failed or
-busy delivery remains pending. Never submit to a working, blocked or unknown
-agent; wait for idle/done on a later tick and coalesce pending changes. First
-recipe delivery obeys the same busy rule. The skill owns cross-machine claims
-(pdd:working plus one comment), room scheduling and running issue progress;
-launcher polling must not repeatedly prompt that owner about the same work.
+Persist the original launch time before dispatch and use the existing bounded
+startup window and injected clock. Launch an empty native owner once when a pane
+needs an agent; launch acceptance
+is neither packet submission nor uptake and consumes no recipe or fingerprint.
+For the exact saved coordinator in the dedicated session, use [area-chat delivery](workflow-chat.prompt.md#message-delivery)
+and its guarded ordered submission. The launcher retains its stricter rule:
+submit only when that coordinator is idle or done, never working, blocked or
+unknown. Validate the original target and durable submission intent immediately
+before transport; a replaced target cannot receive the old packet.
+
+Keep recipe, issue, timer and review work pending until safe submission is
+acknowledged. A dialog, unreadable screen, failed launch or confirmed rejection
+consumes no delivery fingerprint. If submission may have happened, retain
+uncertain custody: do not blindly resend or invent an acknowledgement. An
+acknowledgement establishes submission, not agent uptake or completed work. Coalesce pending
+changes and preserve them across workspace or pane recreation. The skill owns
+cross-machine claims (pdd:working plus one comment), room scheduling and running
+issue progress; launcher polling must not repeatedly prompt that owner about the
+same work.
 
 A trusted author/commenter is the repo owner, appears in configured trusted
 names, or has write/maintain/admin permission confirmed by GitHub. Association
@@ -165,7 +187,17 @@ The first task on the first launch is the repo's start-up recipe, before
 issues, even on an empty repo. Persist the installed package root and point each
 agent request to its bundled [Autopilot skill](../../skills/pdd-autopilot/SKILL.md),
 with a JSON packet containing repository, activation time, optional runs, trusted
-issues and the recipe-first flag. State that further issue/comment reads must
+issues and the recipe-first flag. Include `workflow` metadata: `pddBin` is this package root's absolute
+`bin/pdd.mjs`, `agent` is the selected family, `home` its selected HOME, and
+`configHome` is that family's config variable and saved path (`{variable,path}`),
+or null for a family without one. A missing or empty saved path is null and the
+variable must be unset. Read bindings from the saved selected launcher environment,
+including configured overrides, not a later caller; include no credentials, other
+environment values or other families' paths. Use the bundled PDD command and
+explicitly selected HOME/profile for the coordinator and supported normal issue
+handoff, including new chats. The handoff step binds workflow commands; metadata
+alone does not prove propagation into issue chats. Preserve the saved family. Start or reuse the normal PDD workflow
+before issue edits or delegation, leaving its worktree, stages and gates to PDD. State that further issue/comment reads must
 use the same trust boundary. Follow that skill for recipe execution, room
 scheduling, cross-machine claims, per-prompt concurrency and stuck runs; keep
 these rules with their skill owner rather than copying them into the launcher.
@@ -181,8 +213,13 @@ count, time-based run termination or new refusal is introduced by the launcher.
   bundled package path for recipe, room, claim and stuck-run behavior. Its
   references to pdd-check and pdd-merge own their downstream work.
 
+- [Workflow handoff](../../skills/pdd-autopilot/steps/handoff.md): required authoring,
+  generation, verification and interactive-agent context for the normal workflow
+  and explicit profile bindings.
 - [Agent configuration](agent-config.prompt.md): required native generation and
   verification context for existing configured launcher identities/environment.
+- [Area-chat delivery](workflow-chat.prompt.md#message-delivery): required authoring, native
+  generation and verification context for shared readiness and ordered submission.
 - [Workflow readiness](workflow-agents.prompt.md): required native generation
   and verification context for the shared agy readiness probe.
 - [Agent adapters](agent-adapters.prompt.md): required native generation and

@@ -1,0 +1,230 @@
+{
+  "story_path": "user_stories/autopilot-delivery.md",
+  "purpose": "Requirement-derived native vectors; these are not Runtime scenarios or evidence of model uptake.",
+  "cases": [
+    {
+      "id": "empty-owner-then-idle",
+      "criteria": [
+        1,
+        4
+      ],
+      "given": {
+        "newPane": true,
+        "launchAccepted": true,
+        "status": "absent",
+        "work": [
+          "recipe",
+          "issue"
+        ]
+      },
+      "then": {
+        "status": "idle",
+        "screen": "safe"
+      },
+      "expect": {
+        "emptyLaunches": 1,
+        "consumedBeforeReady": [],
+        "submissions": 1,
+        "delivered": [
+          "recipe",
+          "issue"
+        ],
+        "unchangedTickSubmissions": 0,
+        "uptakeClaimed": false
+      }
+    },
+    {
+      "id": "busy-states",
+      "criteria": [
+        1,
+        2
+      ],
+      "given": {
+        "statuses": [
+          "working",
+          "blocked",
+          "unknown"
+        ]
+      },
+      "expect": {
+        "submissions": 0,
+        "workPending": true
+      }
+    },
+    {
+      "id": "safe-done",
+      "criteria": [
+        2,
+        4
+      ],
+      "given": {
+        "status": "done",
+        "screen": "safe"
+      },
+      "expect": {
+        "submissions": 1,
+        "acknowledged": true
+      }
+    },
+    {
+      "id": "dialog-and-unreadable",
+      "criteria": [
+        2,
+        3
+      ],
+      "given": {
+        "status": "idle",
+        "screens": [
+          "model dialog",
+          "usage dialog",
+          "unreadable"
+        ]
+      },
+      "expect": {
+        "submissions": 0,
+        "workPending": true,
+        "fingerprintsConsumed": 0
+      }
+    },
+    {
+      "id": "launch-and-rejection",
+      "criteria": [
+        1,
+        3
+      ],
+      "given": {
+        "outcomes": [
+          "launch failed",
+          "confirmed rejection"
+        ],
+        "work": [
+          "recipe",
+          "issue",
+          "timer",
+          "review"
+        ]
+      },
+      "expect": {
+        "workPending": true,
+        "fingerprintsConsumed": 0
+      }
+    },
+    {
+      "id": "target-replaced",
+      "criteria": [
+        1,
+        3
+      ],
+      "given": {
+        "targetChangesBeforeSubmit": true
+      },
+      "expect": {
+        "replacementSubmissions": 0,
+        "workPending": true
+      }
+    },
+    {
+      "id": "uncertain-custody",
+      "criteria": [
+        3,
+        4
+      ],
+      "given": {
+        "submissionMayHaveOccurred": true
+      },
+      "then": {
+        "sameWorkOnLaterTick": true
+      },
+      "expect": {
+        "blindResends": 0,
+        "acknowledgementInvented": false,
+        "custody": "uncertain"
+      }
+    },
+    {
+      "id": "recreate",
+      "criteria": [
+        5
+      ],
+      "given": {
+        "pendingWork": true,
+        "savedPaneMissing": true
+      },
+      "expect": {
+        "session": "pdd-autopilot",
+        "workPreserved": true,
+        "safeDecisionBeforeSubmission": true
+      }
+    },
+    {
+      "id": "profile-and-handoff",
+      "criteria": [
+        6
+      ],
+      "given": {
+        "savedFamily": "confirmed",
+        "explicitHome": "selected",
+        "explicitProfile": "selected"
+      },
+      "expect": {
+        "familyPreserved": true,
+        "coordinatorAndHandoffUseSelectedEnvironment": true,
+        "bundledPddUsed": true,
+        "workflowBeforeIssueEditsAndDelegation": true,
+        "globalAccountTrustCredentialsChanged": false
+      }
+    },
+    {
+      "id": "saved-profile-recreation",
+      "criteria": [
+        5,
+        6
+      ],
+      "given": {
+        "savedHome": "selected",
+        "savedConfigVariable": "absent",
+        "laterCallerHome": "different",
+        "reloadedConfigVariable": "present",
+        "paneRecreated": true
+      },
+      "expect": {
+        "definitionHome": "selected",
+        "nativeHome": "selected",
+        "configVariable": "unset",
+        "pendingWorkPreserved": true
+      }
+    },
+    {
+      "id": "saved-family-mismatch-recovery",
+      "criteria": [
+        5,
+        6
+      ],
+      "given": {
+        "savedFamily": "codex",
+        "reloadedFamily": "different"
+      },
+      "expect": {
+        "replacementLaunches": 0,
+        "workPending": true,
+        "reportsExplicitStartRequired": true,
+        "explicitStartCanSelectNewProfile": true
+      }
+    },
+    {
+      "id": "launch-identity",
+      "criteria": [
+        1,
+        3
+      ],
+      "given": {
+        "newPane": true
+      },
+      "expect": {
+        "originalLaunchTimePersistedBeforeDispatch": true,
+        "emptyLaunches": 1,
+        "blindResends": 0
+      }
+    }
+  ]
+}
