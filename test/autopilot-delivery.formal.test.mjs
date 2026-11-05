@@ -141,3 +141,45 @@ test('bounded launch rejection and uncertain custody', async () => {
     }
   }
 });
+
+// Approved first-launch rule: readiness remains bounded by the original launch,
+// and only the original idle/done owner on a readable screen receives work.
+test('bounded first launch continues safely in the same tick', async () => {
+  for (const mode of ['delayed-idle','delayed-done','blocked','dialog','unreadable','absent','unknown','replacement','uncertain']) {
+    const f=fixture(`first-${mode}`);
+    const herdr=f.ports.herdr, warnings=[]; let inspections=0, attempts=0, launched=false;
+    f.ports.warn=message=>warnings.push(message);
+    f.ports.herdr=async args=>{
+      if(args[0]==='pane' && args[1]==='run') { launched=true; return herdr(args); }
+      if(launched && args[0]==='agent' && args[1]==='get') {
+        inspections++;
+        if(mode==='absent') { f.time+=30001; throw absent(); }
+        if(mode==='unknown') { f.time+=30001; return {result:{agent:{agent_status:'unknown',agent_session:'original'}}}; }
+        if(mode==='replacement') return {result:{agent:{agent_status:'idle',agent_session:inspections===1?'original':'replacement'}}};
+        const status=mode==='blocked'?'blocked':(['delayed-idle','delayed-done'].includes(mode) && inspections===1?'starting':mode==='delayed-done'?'done':'idle');
+        return {result:{agent:{agent_status:status,agent_session:'original'}}};
+      }
+      if(args[0]==='pane' && args[1]==='read') {
+        if(mode==='dialog') return 'Switch model\nPress enter to confirm or esc to go back';
+        if(mode==='unreadable') throw Error('screen unavailable');
+      }
+      if(args[0]==='agent' && args[1]==='prompt') {
+        attempts++;
+        if(mode==='uncertain') throw Object.assign(Error('transport lost'),{code:'transport_lost'});
+      }
+      return herdr(args);
+    };
+    const startTime=f.time;
+    await f.start();
+    const ready=mode==='delayed-idle'||mode==='delayed-done';
+    assert.equal(f.packets.length,Number(ready),`${mode}: first start packet`);
+    assert.equal(Boolean(f.state().recipeDelivered),ready,`${mode}: recipe custody`);
+    assert.equal(Boolean(f.state().seen?.[101]),ready,`${mode}: issue custody`);
+    assert.equal(f.state().ownerLaunch.startedAt,startTime,`${mode}: original anchor`);
+    assert.equal(f.calls.filter(c=>c.port==='herdr' && c.args[0]==='pane' && c.args[1]==='run').length,1,`${mode}: one launch`);
+    if(!ready) assert.ok(warnings.some(w=>/pending/i.test(w)),`${mode}: plain pending reason`);
+    if(mode==='uncertain') { assert.equal(attempts,1); assert.ok(f.state().deliveryIntent); }
+    else if(!ready) assert.equal(attempts,0,`${mode}: no unsafe submission`);
+    if(ready) { assert.equal(f.packets[0].workflow.home,f.home); assert.equal(f.packets[0].workflow.agent,'codex'); }
+  }
+});
