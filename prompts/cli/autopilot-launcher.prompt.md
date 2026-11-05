@@ -124,27 +124,29 @@ Keep claimed issues marked `claimed: true`, never present them as unclaimed.
 
 Use same-repository closing references in PR bodies to associate PRs with issues.
 Resolve trusted related PR metadata on change (state, draft, merge and head),
-including when a PR leaves the open list. Inspect reviews of related PRs for
-new reviews even when issue-list or PR metadata is unchanged, including HTTP
-304. Revalidate each review page and follow next-page links without truncation.
-A new submitted review from a trusted person, identified by PR number and
-review ID, is unseen work, including a request for changes; include its
-identity, trusted author, submission metadata, state and body in the packet
-and fingerprint. An already delivered review must not wake the
-agent again. Apply the existing quiet-baseline, current-authority, lookup-failure
-and pending-delivery rules to reviews as well. Never forward an untrusted
-review. Fetch PR discussion comments on changed
+including when a PR leaves the open list. Fetch PR discussion comments on changed
 comment metadata and include only trusted comments (with identity/edit metadata)
 in the packet and fingerprint; outsider comments alone must not wake AI. Never
-forward untrusted PR text. Cache other details so unchanged ticks need no other detail query.
-Revalidate cached PR commenters against current explicit trust and write access
-before delivery; revocation must not allow previously trusted text into a new
-packet. Cached data is not cached authority. Compare the previous and current
-trusted views under current authority, so revocation alone, or revocation plus
-an outsider comment, never becomes new work. If the cached issue/comment/PR
-source state, reviews and mode are unchanged, return quietly before permission lookups;
-revalidate authority when there is an actual source change to assess or deliver. A PR waiting for a person in
-observe mode is quiet until its relevant trusted state changes.
+forward untrusted PR text. Cache details so unchanged ticks need no PR-detail query.
+
+Check submitted reviews for known related PRs on each tick, including when the
+issues list returns HTTP 304 and the issue and PR head are unchanged. Use
+conditional requests and revalidate each review page, following GitHub's next
+page links without truncation. A new trusted submission, identified by PR number
+and GitHub review ID, is unseen work and wakes the idle agent once. Include its
+identity, trusted author, submission metadata, state and body in the packet and
+fingerprint; unchanged repeats stay quiet. Reviews use the same trust and pending
+delivery rules as other trusted work.
+
+Revalidate cached PR commenters and reviewers against current explicit trust and
+write access before delivery; revocation must not allow previously trusted text
+into a new packet. Cached data is not cached authority. Compare the previous and
+current trusted views under current authority, so revocation alone, or revocation
+plus an outsider comment or review, never becomes new work. If the cached issue,
+comment, PR and review source state and mode are unchanged, return quietly before
+permission lookups. Revalidate authority when there is an actual source change to
+assess or deliver. A PR waiting for a person in observe mode is quiet until its
+relevant trusted state changes.
 
 Only a successful idle-agent delivery records the fingerprint. A failed or
 busy delivery remains pending. Never submit to a working, blocked or unknown
