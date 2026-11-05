@@ -42,7 +42,7 @@ The block of Harbor Coffee's `place_order` (schemas cut):
 ```
 - Every schema follows section 3. List every error that the prose can return in `errors`.
 - Do not write `prose_sha256`: `pdd test --fill-hash` fills it.
-- Show the gate. Judge the person's later reply in any chat. A question, change request or earlier message is not approval. No exact phrase is needed. Never invent a decision or edit approval fields. See [Record a chat approval](https://github.com/promptdriven/pdd/blob/alpha/docs/cli.md#record-a-chat-approval).
+- Show the gate. Judge the person's later reply in any chat. A question, change request or earlier message is not approval. No exact phrase is needed. Never invent a decision or edit approval fields. See [Record a chat approval](https://github.com/promptdriven/pdd/blob/main/docs/cli.md#record-a-chat-approval).
 - After actual approval, record the exact words for the ready gate and all its drafts:
 
 ```sh
@@ -756,7 +756,7 @@ Each linked prompt includes complete schemas, resource declarations and limits; 
 
 ### Seed a SQL connection
 
-[Module](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/database.mjs) · [Prompt](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/database.prompt.md) · [Story](https://github.com/promptdriven/pdd/blob/alpha/user_stories/fake-database.md) · [Scenario](https://github.com/promptdriven/pdd/blob/alpha/test/runtime/fake-database.json)
+[Module](https://github.com/promptdriven/pdd/blob/main/examples/fakes/database.mjs) · [Prompt](https://github.com/promptdriven/pdd/blob/main/examples/fakes/database.prompt.md) · [Story](https://github.com/promptdriven/pdd/blob/main/user_stories/fake-database.md) · [Scenario](https://github.com/promptdriven/pdd/blob/main/test/runtime/fake-database.json)
 
 Bind one logical connection to one `world_pointer` for all reads, writes and transactions. Starting rows live under `rows`; SQL executes in real in-memory SQLite. Named scalar argument `id` binds `:id`. Inspect `/database/rows/books`, not SQLite snapshot internals. For dynamic nullable parameters use `statement_argument_pointer` plus JSON-text `parameters_argument_pointer`; never interpolate values into SQL.
 
@@ -796,7 +796,7 @@ Passing prompt check (DRAFT): [2/2 checks · 2 AI calls](https://runtime.promptd
 
 ### Read UTF-8 files
 
-[Module](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/files.mjs) · [Prompt](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/files.prompt.md) · [Story](https://github.com/promptdriven/pdd/blob/alpha/user_stories/fake-files.md) · [Scenario](https://github.com/promptdriven/pdd/blob/alpha/test/runtime/fake-files.json)
+[Module](https://github.com/promptdriven/pdd/blob/main/examples/fakes/files.mjs) · [Prompt](https://github.com/promptdriven/pdd/blob/main/examples/fakes/files.prompt.md) · [Story](https://github.com/promptdriven/pdd/blob/main/user_stories/fake-files.md) · [Scenario](https://github.com/promptdriven/pdd/blob/main/test/runtime/fake-files.json)
 
 Files are keyed by exact POSIX path, each with UTF-8 `content` and `is_symlink`. `blob.write` additionally selects a content argument; `blob.stat` supports exists/is_symlink/size. These fakes never open a host path. Ownership, permissions, races, fsync and atomic rename require explicit ports and native tests.
 
@@ -829,7 +829,7 @@ Passing prompt check (DRAFT): [1/1 checks · 2 AI calls](https://runtime.promptd
 
 ### Hash exact bytes
 
-[Module](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/hash.mjs) · [Prompt](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/hash.prompt.md) · [Story](https://github.com/promptdriven/pdd/blob/alpha/user_stories/fake-hash.md) · [Scenario](https://github.com/promptdriven/pdd/blob/alpha/test/runtime/fake-hash.json)
+[Module](https://github.com/promptdriven/pdd/blob/main/examples/fakes/hash.mjs) · [Prompt](https://github.com/promptdriven/pdd/blob/main/examples/fakes/hash.prompt.md) · [Story](https://github.com/promptdriven/pdd/blob/main/user_stories/fake-hash.md) · [Scenario](https://github.com/promptdriven/pdd/blob/main/test/runtime/fake-hash.json)
 
 The prompt calls `compute.hash_utf8` with `{text}` and returns `{value}`. The deterministic compute action hashes exact bytes; do not ask the model to calculate a digest. `hash_json` hashes the interpreter's canonical JSON representation and is not interchangeable with an application-specific canonical serializer.
 
@@ -870,11 +870,11 @@ The `simulation` entry of the scenario:
 
 `hash_json` hashes the interpreter's canonical JSON: keys sorted by UTF-16 code units, no spaces, and the interpreter's own spelling of numbers (a subset of RFC 8785). An application's own serializer can give other bytes, for example for floats or non-ASCII keys. To hash exact bytes that the application made, use `hash_utf8`. Native tests must prove that the hash and the serializer match.
 
-Lint accepts this declaration also when the native code hashes inside (for example with Python `hashlib`) and takes no `compute` argument. Keep the native signature. [Module binding coverage](https://github.com/promptdriven/pdd/blob/alpha/docs/runtime-bindings.md) checks that the prompt can reach its operations. It does not run native hashing. Native tests own that, and a lint pass is not a behavior pass.
+Lint accepts this declaration also when the native code hashes inside (for example with Python `hashlib`) and takes no `compute` argument. Keep the native signature. [Module binding coverage](https://github.com/promptdriven/pdd/blob/main/docs/runtime-bindings.md) checks that the prompt can reach its operations. It does not run native hashing. Native tests own that, and a lint pass is not a behavior pass.
 
 ### Inject a fixed-answer callback
 
-[Module](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/service.mjs) · [Prompt](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/service.prompt.md) · [Story](https://github.com/promptdriven/pdd/blob/alpha/user_stories/fake-service.md) · [Scenario](https://github.com/promptdriven/pdd/blob/alpha/test/runtime/fake-service.json)
+[Module](https://github.com/promptdriven/pdd/blob/main/examples/fakes/service.mjs) · [Prompt](https://github.com/promptdriven/pdd/blob/main/examples/fakes/service.prompt.md) · [Story](https://github.com/promptdriven/pdd/blob/main/user_stories/fake-service.md) · [Scenario](https://github.com/promptdriven/pdd/blob/main/test/runtime/fake-service.json)
 
 The native `lookup(service, id)` uses the supplied callback; resource `service.lookup` binds that same boundary. `port.write` appends actual argument objects at `/requests` and returns the fixed `result_template`. Assert both the reply and exact request list. The fixed answer does not prove authentication, transport, timeout handling or any live service effect. Never include credentials in fixtures.
 
@@ -972,7 +972,7 @@ I can look up the same item twice and see each supplied reply.
 
 ### Separate decide from do
 
-[Module](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/decision.mjs) · [Prompt](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/decision.prompt.md) · [Story](https://github.com/promptdriven/pdd/blob/alpha/user_stories/fake-decision.md) · [Scenario](https://github.com/promptdriven/pdd/blob/alpha/test/runtime/fake-decision.json)
+[Module](https://github.com/promptdriven/pdd/blob/main/examples/fakes/decision.mjs) · [Prompt](https://github.com/promptdriven/pdd/blob/main/examples/fakes/decision.prompt.md) · [Story](https://github.com/promptdriven/pdd/blob/main/user_stories/fake-decision.md) · [Scenario](https://github.com/promptdriven/pdd/blob/main/test/runtime/fake-decision.json)
 
 `decideReply` is a pure public decision over supplied facts; `doLookup` obtains those facts through the injected callback and applies the same rule. The first step proves an unavailable decision without I/O; the second proves the exact effect request and available result. Split only when the native design benefits: SQL and callbacks do not require a split merely to bind them.
 
@@ -997,7 +997,7 @@ Passing prompt check (DRAFT): [4/4 checks · 3 AI calls](https://runtime.promptd
 
 ### Keep factory instances with handles
 
-[Module](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/factory.mjs) · [Prompt](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/factory.prompt.md) · [Story](https://github.com/promptdriven/pdd/blob/alpha/user_stories/fake-factory.md) · [Scenario](https://github.com/promptdriven/pdd/blob/alpha/test/runtime/fake-factory.json)
+[Module](https://github.com/promptdriven/pdd/blob/main/examples/fakes/factory.mjs) · [Prompt](https://github.com/promptdriven/pdd/blob/main/examples/fakes/factory.prompt.md) · [Story](https://github.com/promptdriven/pdd/blob/main/user_stories/fake-factory.md) · [Scenario](https://github.com/promptdriven/pdd/blob/main/test/runtime/fake-factory.json)
 
 Use `schema_version: "prompt-runtime.interface.v2"`, `instance_types: [{"name":"Greeter","resource":"instances"}]`, and write-access collection resource `instances`. Factory entry `instance` is `{"kind":"factory","type":"Greeter","path":"/handle"}`; method uses kind `method` with the same type/path. Mark both handle fields with the `handle` convention. Store captured state under the executor-issued `instance_handle`; never fabricate a handle or expose closure configuration as a new native method argument. The next step takes `{"$step_result":{"step_id":"create","path":"/handle"}}`. Native callers still receive an object with a method; the handle is its JSON transport identity.
 
