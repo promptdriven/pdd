@@ -9,7 +9,7 @@ import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {syncBuiltinESMExports} from 'node:module';
 import {loadRuntimeWorkspace, allowsRuntimePath, requireRuntimePath} from '../src/runtime-workspace.mjs';
-import {captureSource, fillHashes, proseSha256, createStrictSourceAccess} from '../src/runtime-preflight.mjs';
+import {captureSource, fillHashes, createStrictSourceAccess} from '../src/runtime-preflight.mjs';
 import {askAgent} from '../src/agent-adapters.mjs';
 import {saveDoorCase, acquireCaseWriteOwnership, applyPendingCase, runTry} from '../src/runtime-client.mjs';
 import {migrateRuntimeWorkspace} from '../src/runtime-workspace-migration.mjs';
@@ -17,6 +17,13 @@ import {associateEvidenceWorkspace, readEvidenceEligibility} from '../src/workfl
 import {writeRun} from '../src/workflow-runs.mjs';
 
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
+// This fixture has one known literal interface wrapper. Its independent oracle
+// hashes the authored outside bytes, without calling the production hash/parser.
+function authoredHash(text) {
+  const start = text.indexOf('<details>'), end = text.indexOf('</details>') + '</details>'.length;
+  assert.ok(start >= 0 && end > start);
+  return sha(text.slice(0, start) + text.slice(end));
+}
 const read = (root, path) => fs.readFileSync(join(root, path), 'utf8');
 function write(root, path, bytes) {
   fs.mkdirSync(dirname(join(root, path)), {recursive: true});
@@ -43,7 +50,7 @@ function fixture(t) {
   limits: {max_steps: 1, max_model_calls: 1}, conventions: []};
   let text = '# Order\n\nReturn a value.\n\n## Dependencies\n\n<details><summary>Runtime interface</summary>\n```json\n' +
     JSON.stringify(iface, null, 2) + '\n```\n</details>\n';
-  text = text.replace('"prose_sha256": ""', '"prose_sha256": "' + proseSha256(text) + '"');
+  text = text.replace('"prose_sha256": ""', '"prose_sha256": "' + authoredHash(text) + '"');
   write(root, prompt, text);
   const doc = {schema_version: 'prompt-runtime.program-scenario.v1', story_path: story,
     criteria: [{id: 'AC1', text: 'Keep value.'}], initial_world: {count: 0}, simulation: {}, context: [],
@@ -182,7 +189,7 @@ test('FORMAL authored source: all 2 statuses × 2 freshness states; all 2 policy
     write(f.root, f.prompt, before); write(f.root, 'private/excluded.prompt.md', before);
     const result = fillHashes({root: f.root});
     const shouldWrite = stale && status === 'draft';
-    const expected = shouldWrite ? before.replace(/("prose_sha256": ")[a-f0-9]+(")/, `$1${proseSha256(before)}$2`) : before;
+    const expected = shouldWrite ? before.replace(/("prose_sha256": ")[a-f0-9]+(")/, `$1${authoredHash(before)}$2`) : before;
     assert.equal(read(f.root, f.prompt), expected, `${status}/${stale}: promised non-hash bytes`);
     assert.equal(result.filled.length, Number(shouldWrite));
     assert.equal(result.stale.length, Number(stale && status === 'approved'));
