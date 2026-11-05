@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSy
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import {pinReplayVectors} from '../src/workflow-replay.mjs';
 
 const packageRoot = resolve(import.meta.dirname, '..');
 const url = number => `https://github.com/example/project/pull/${number}`;
@@ -65,6 +66,48 @@ else if(a[1]==='create'||a[1]==='edit'){
   return { base, root, bare, git, run, head, runDir, save, invoke, machine, change, data, configure: values => writeFileSync(state, JSON.stringify({ ...data(), ...values })) };
 }
 const allLabels = 'Review: reviewed\nProof (gap closed): regression\nProof (defect fixed): repaired\nNot caught because: missing case\nNot checked: external check\nNot fixed yet: this helps find the cause';
+
+for(const kind of ['349-value move','800 numeric edits','ownership marker','oversized pointer'])test(`2870 review publication: ${kind} stays advisory and reviewable`,t=>{
+  const f=fixture(t,{opted:true});mkdirSync(join(f.root,'test/runtime'),{recursive:true});
+  const path='test/runtime/check-no-verdict.json',full=join(f.root,path);
+  const doc=kind==='349-value move'?JSON.parse(readFileSync(join(packageRoot,path))):{
+    schema_version:'prompt-runtime.program-scenario.v1',initial_world:{numbers:Array.from({length:800},(_,i)=>i)},
+    steps:[{step_id:'sum',entry_path:'prompts/add.prompt.md',operation:'add',checks:[{criterion_id:'AC1',target:'result',path:'/total',op:'equals',value:3}]}]
+  };
+  writeFileSync(full,JSON.stringify(doc));f.git('add','.');f.git('commit','-qm','Saved cases');
+  f.run.replayBaseline=pinReplayVectors(f.root,[path]);
+  if(kind==='349-value move'){
+    const leaves=v=>v!==null&&typeof v==='object'&&Object.keys(v).length?Object.values(v).reduce((sum,item)=>sum+leaves(item),0):1;
+    assert.equal(leaves(doc),349);
+    writeFileSync(join(f.root,'test/runtime/moved.json'),readFileSync(full));rmSync(full);
+  }else if(kind==='800 numeric edits'){
+    doc.initial_world.numbers=doc.initial_world.numbers.map(value=>value+1);writeFileSync(full,JSON.stringify(doc));
+  }else if(kind==='oversized pointer'){
+    doc.initial_world['a'.repeat(70000)]=1;writeFileSync(full,JSON.stringify(doc));
+  }else{
+    doc.steps[0].checks[0].value='pdd-workflow:changed';writeFileSync(full,JSON.stringify(doc));
+  }
+  f.save();const out=f.invoke('Review: checked');assert.equal(out.exitCode,0,out.message);
+  const body=f.data().prs[0].body,record=JSON.parse(readFileSync(join(f.runDir,'status.json')));
+  assert.ok([...body].length<=60000,`${[...body].length} characters`);
+  assert.equal((body.match(/pdd-workflow:/g)??[]).length,1);
+  assert.match(body,/Saved-value changes are advisory/);
+  if(kind==='ownership marker')assert.match(body,/pdd-workflow\\\\u003achanged/);
+  else {
+    const warnings=record.replayEvidence.warnings;
+    const shown=(body.match(/warning: Saved test values changed:/g)??[]).length;
+    assert.match(body,new RegExp(`and ${warnings.length-shown} more saved-value changes`));
+    assert.match(body,/status\.json.*replayEvidence\/warnings/);
+    if(kind==='800 numeric edits'){
+      assert.equal(warnings.length,800);assert.equal(warnings[799].before,799);assert.equal(warnings[799].after,800);
+    }else if(kind==='349-value move'){
+      assert.equal(warnings.filter(w=>w.vector===path&&Object.hasOwn(w,'before')).length,349);
+      assert.equal(warnings.filter(w=>w.vector==='test/runtime/moved.json'&&Object.hasOwn(w,'after')).length,349);
+    }else{
+      assert.equal(warnings.length,1);assert.equal(warnings[0].path.length,70015);assert.equal(shown,0);
+    }
+  }
+});
 
 test('real publication creates code PR with all known-step labels, current machine proof and one stdin ownership marker', t => {
   const f = fixture(t); f.machine();
@@ -234,7 +277,7 @@ for (const [kind, ordinary] of [
   const body = f.data().prs[0].body;
   assert.equal(f.data().events.filter(event => event.kind === 'edit').length, editsBefore + 1);
   assert.ok(body.includes(ordinary), 'Preserve the complete ordinary reviewer context when room remains.');
-  assert.match(body, /^Agent note — not checked by pdd: Not fixed yet: `diagnosis only`\nAgent note — not checked by pdd: Not checked: `external`\nAgent note — not checked by pdd: Defect: `broken value`\nAgent note — not checked by pdd: Review: `refreshed`\n\nRefs #17\n\n/);
+  assert.match(body, /^Agent note — not checked by pdd: Not fixed yet: `diagnosis only`\nAgent note — not checked by pdd: Not checked: `external`\nAgent note — not checked by pdd: Defect: `broken value`\nAgent note — not checked by pdd: Review: `refreshed`\n\npdd result: none\. pdd has no pdd test or pdd lint result of its own for this run \(pdd:no-verdict\)\.\n\nRefs #17\n\n/);
   assert.doesNotMatch(body, /Review: old|Closes #17|Old-code proof:/);
   assert.equal(body.split(marker).length - 1, 1);
   assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1);

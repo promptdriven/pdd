@@ -1,0 +1,49 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/authoring-orchestration-measurement.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Both arms freeze the same task, source, model, effort, tool versions, outcome rules and coverage; the baseline includes the current one-call wait."
+    },
+    {
+      "id": "AC2",
+      "text": "The report separates the coordinator, each child and interpreter, with requests, cached and uncached input, output, wall time, outcome and provenance; missing usage stays unknown."
+    },
+    {
+      "id": "AC3",
+      "text": "The report separates internal polling, saved-report reads and model-driven status requests, and distinguishes supplied context bytes from measured input or retained history."
+    },
+    {
+      "id": "AC4",
+      "text": "Overlapping durations and cached or nested usage are not counted twice; synthetic exercises cannot establish savings, dollar claims or a numeric regression target."
+    }
+  ],
+  "cases": [
+    {
+      "id": "freeze",
+      "given": "Prepare two arms of the same task with current shipped and revised guidance.",
+      "required_observation": "AC1: Inspect frozen task/source, version/model/effort/cache/order/coverage and guidance bytes. Any mismatch remains a comparability limit; no live launch without budget authorization."
+    },
+    {
+      "id": "per-role-accounting",
+      "given": "Synthetic coordinator receipt total 1000 input, 600 cached, 100 output; child total 500, 100 cached, 50 output; duplicate coordinator receipt; interpreter usage absent.",
+      "required_observation": "AC2, AC4: Coordinator is 1 request, 400 uncached; child is 1 request, 400 uncached. Known authoring total input 1500 includes 700 cached and 800 uncached; output 150. Interpreter remains unknown; duplicate identity contributes nothing."
+    },
+    {
+      "id": "overlap",
+      "given": "Synthetic coordinator interval 0\u201310 seconds; child 2\u20138; overall arm 0\u201310.",
+      "required_observation": "AC2, AC4: Role durations are 10 and 6 seconds; elapsed is 10, not 16. Missing terminal outcomes or usage stay unknown; failed/aborted runs remain listed."
+    },
+    {
+      "id": "context-and-events",
+      "given": "Synthetic 75 internal polls, 2 saved reads, 1 model-driven status request and context file inventory.",
+      "required_observation": "AC3: Report the categories separately; saved-read count does not establish model turns. Bytes supplied are not tokens actually consumed or retained. Unknown retained history stays unavailable."
+    },
+    {
+      "id": "limits",
+      "given": "Only synthetic traces or unequal outcomes are available; no controlled live baseline exists.",
+      "required_observation": "AC1, AC4: Label synthetic and comparison limits. Do not assert savings, dollar cost or numeric regression targets. Keep raw scripts/logs/results outside the product commit."
+    }
+  ]
+}

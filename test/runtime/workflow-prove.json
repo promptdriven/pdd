@@ -16,7 +16,7 @@
     },
     {
       "id": "AC4",
-      "text": "Each phase requests a 120-second limit, a 2-second process-group kill grace and a 1 MiB output cap; base timeout, head timeout, output overflow and child signals have distinct unsuccessful reports and exit 1."
+      "text": "Each phase requests the per-phase limit (10 minutes by default, or the person's --timeout of 1 to 120 whole minutes), a 2-second process-group kill grace and a 1 MiB output cap; base timeout, head timeout, output overflow and child signals have distinct unsuccessful reports and exit 1."
     },
     {
       "id": "AC5",
@@ -1417,7 +1417,7 @@
         "request": {
           "command": "node --test test/new.test.mjs",
           "cwd": "/snap/proved/base",
-          "timeoutMs": 120000,
+          "timeoutMs": 600000,
           "killGraceMs": 2000,
           "outputLimitBytes": 1048576
         },
@@ -1438,7 +1438,7 @@
         "request": {
           "command": "node --test test/new.test.mjs",
           "cwd": "/snap/proved/head",
-          "timeoutMs": 120000,
+          "timeoutMs": 600000,
           "killGraceMs": 2000,
           "outputLimitBytes": 1048576
         },
@@ -1459,7 +1459,7 @@
         "request": {
           "command": "node --test test/new.test.mjs",
           "cwd": "/snap/old-passes/base",
-          "timeoutMs": 120000,
+          "timeoutMs": 600000,
           "killGraceMs": 2000,
           "outputLimitBytes": 1048576
         },
@@ -1480,7 +1480,7 @@
         "request": {
           "command": "node --test test/new.test.mjs",
           "cwd": "/snap/old-passes/head",
-          "timeoutMs": 120000,
+          "timeoutMs": 600000,
           "killGraceMs": 2000,
           "outputLimitBytes": 1048576
         },
@@ -1501,7 +1501,7 @@
         "request": {
           "command": "node --test test/new.test.mjs",
           "cwd": "/snap/wrong-reason/base",
-          "timeoutMs": 120000,
+          "timeoutMs": 600000,
           "killGraceMs": 2000,
           "outputLimitBytes": 1048576
         },
@@ -1522,7 +1522,7 @@
         "request": {
           "command": "node --test test/new.test.mjs",
           "cwd": "/snap/wrong-reason/head",
-          "timeoutMs": 120000,
+          "timeoutMs": 600000,
           "killGraceMs": 2000,
           "outputLimitBytes": 1048576
         },
@@ -1543,7 +1543,7 @@
         "request": {
           "command": "node --test test/new.test.mjs",
           "cwd": "/snap/head-fails/base",
-          "timeoutMs": 120000,
+          "timeoutMs": 600000,
           "killGraceMs": 2000,
           "outputLimitBytes": 1048576
         },
@@ -1564,7 +1564,7 @@
         "request": {
           "command": "node --test test/new.test.mjs",
           "cwd": "/snap/head-fails/head",
-          "timeoutMs": 120000,
+          "timeoutMs": 600000,
           "killGraceMs": 2000,
           "outputLimitBytes": 1048576
         },
@@ -1585,7 +1585,7 @@
         "request": {
           "command": "node --test test/new.test.mjs",
           "cwd": "/snap/base-timeout/base",
-          "timeoutMs": 120000,
+          "timeoutMs": 600000,
           "killGraceMs": 2000,
           "outputLimitBytes": 1048576
         },
@@ -1606,7 +1606,7 @@
         "request": {
           "command": "node --test test/new.test.mjs",
           "cwd": "/snap/base-timeout/head",
-          "timeoutMs": 120000,
+          "timeoutMs": 600000,
           "killGraceMs": 2000,
           "outputLimitBytes": 1048576
         },
@@ -1627,7 +1627,7 @@
         "request": {
           "command": "node --test test/new.test.mjs",
           "cwd": "/snap/head-timeout/base",
-          "timeoutMs": 120000,
+          "timeoutMs": 600000,
           "killGraceMs": 2000,
           "outputLimitBytes": 1048576
         },
@@ -1648,7 +1648,7 @@
         "request": {
           "command": "node --test test/new.test.mjs",
           "cwd": "/snap/head-timeout/head",
-          "timeoutMs": 120000,
+          "timeoutMs": 600000,
           "killGraceMs": 2000,
           "outputLimitBytes": 1048576
         },
@@ -1669,7 +1669,7 @@
         "request": {
           "command": "node --test test/new.test.mjs",
           "cwd": "/snap/output-limit/base",
-          "timeoutMs": 120000,
+          "timeoutMs": 600000,
           "killGraceMs": 2000,
           "outputLimitBytes": 1048576
         },
@@ -1690,7 +1690,7 @@
         "request": {
           "command": "node --test test/new.test.mjs",
           "cwd": "/snap/output-limit/head",
-          "timeoutMs": 120000,
+          "timeoutMs": 600000,
           "killGraceMs": 2000,
           "outputLimitBytes": 1048576
         },
@@ -1711,7 +1711,7 @@
         "request": {
           "command": "node --test test/new.test.mjs",
           "cwd": "/snap/signalled/base",
-          "timeoutMs": 120000,
+          "timeoutMs": 600000,
           "killGraceMs": 2000,
           "outputLimitBytes": 1048576
         },
@@ -1732,7 +1732,7 @@
         "request": {
           "command": "node --test test/new.test.mjs",
           "cwd": "/snap/signalled/head",
-          "timeoutMs": 120000,
+          "timeoutMs": 600000,
           "killGraceMs": 2000,
           "outputLimitBytes": 1048576
         },
@@ -1753,7 +1753,7 @@
         "request": {
           "command": "node --test test/new.test.mjs",
           "cwd": "/snap/missing-fixture/base",
-          "timeoutMs": 120000,
+          "timeoutMs": 600000,
           "killGraceMs": 2000,
           "outputLimitBytes": 1048576
         },
@@ -1774,7 +1774,7 @@
         "request": {
           "command": "node --test test/new.test.mjs",
           "cwd": "/snap/missing-fixture/head",
-          "timeoutMs": 120000,
+          "timeoutMs": 600000,
           "killGraceMs": 2000,
           "outputLimitBytes": 1048576
         },
@@ -3443,7 +3443,7 @@
           "args": {
             "command": "node --test test/new.test.mjs",
             "cwd": "/snap/proved/base",
-            "timeoutMs": 120000,
+            "timeoutMs": 600000,
             "killGraceMs": 2000,
             "outputLimitBytes": 1048576
           },
@@ -3465,7 +3465,7 @@
           "args": {
             "command": "node --test test/new.test.mjs",
             "cwd": "/snap/proved/head",
-            "timeoutMs": 120000,
+            "timeoutMs": 600000,
             "killGraceMs": 2000,
             "outputLimitBytes": 1048576
           },
@@ -3487,7 +3487,7 @@
           "args": {
             "command": "node --test test/new.test.mjs",
             "cwd": "/snap/old-passes/base",
-            "timeoutMs": 120000,
+            "timeoutMs": 600000,
             "killGraceMs": 2000,
             "outputLimitBytes": 1048576
           },
@@ -3509,7 +3509,7 @@
           "args": {
             "command": "node --test test/new.test.mjs",
             "cwd": "/snap/old-passes/head",
-            "timeoutMs": 120000,
+            "timeoutMs": 600000,
             "killGraceMs": 2000,
             "outputLimitBytes": 1048576
           },
@@ -3531,7 +3531,7 @@
           "args": {
             "command": "node --test test/new.test.mjs",
             "cwd": "/snap/wrong-reason/base",
-            "timeoutMs": 120000,
+            "timeoutMs": 600000,
             "killGraceMs": 2000,
             "outputLimitBytes": 1048576
           },
@@ -3553,7 +3553,7 @@
           "args": {
             "command": "node --test test/new.test.mjs",
             "cwd": "/snap/wrong-reason/head",
-            "timeoutMs": 120000,
+            "timeoutMs": 600000,
             "killGraceMs": 2000,
             "outputLimitBytes": 1048576
           },
@@ -3575,7 +3575,7 @@
           "args": {
             "command": "node --test test/new.test.mjs",
             "cwd": "/snap/head-fails/base",
-            "timeoutMs": 120000,
+            "timeoutMs": 600000,
             "killGraceMs": 2000,
             "outputLimitBytes": 1048576
           },
@@ -3597,7 +3597,7 @@
           "args": {
             "command": "node --test test/new.test.mjs",
             "cwd": "/snap/head-fails/head",
-            "timeoutMs": 120000,
+            "timeoutMs": 600000,
             "killGraceMs": 2000,
             "outputLimitBytes": 1048576
           },
@@ -3619,7 +3619,7 @@
           "args": {
             "command": "node --test test/new.test.mjs",
             "cwd": "/snap/base-timeout/base",
-            "timeoutMs": 120000,
+            "timeoutMs": 600000,
             "killGraceMs": 2000,
             "outputLimitBytes": 1048576
           },
@@ -3641,7 +3641,7 @@
           "args": {
             "command": "node --test test/new.test.mjs",
             "cwd": "/snap/base-timeout/head",
-            "timeoutMs": 120000,
+            "timeoutMs": 600000,
             "killGraceMs": 2000,
             "outputLimitBytes": 1048576
           },
@@ -3663,7 +3663,7 @@
           "args": {
             "command": "node --test test/new.test.mjs",
             "cwd": "/snap/head-timeout/base",
-            "timeoutMs": 120000,
+            "timeoutMs": 600000,
             "killGraceMs": 2000,
             "outputLimitBytes": 1048576
           },
@@ -3685,7 +3685,7 @@
           "args": {
             "command": "node --test test/new.test.mjs",
             "cwd": "/snap/head-timeout/head",
-            "timeoutMs": 120000,
+            "timeoutMs": 600000,
             "killGraceMs": 2000,
             "outputLimitBytes": 1048576
           },
@@ -3707,7 +3707,7 @@
           "args": {
             "command": "node --test test/new.test.mjs",
             "cwd": "/snap/output-limit/base",
-            "timeoutMs": 120000,
+            "timeoutMs": 600000,
             "killGraceMs": 2000,
             "outputLimitBytes": 1048576
           },
@@ -3729,7 +3729,7 @@
           "args": {
             "command": "node --test test/new.test.mjs",
             "cwd": "/snap/output-limit/head",
-            "timeoutMs": 120000,
+            "timeoutMs": 600000,
             "killGraceMs": 2000,
             "outputLimitBytes": 1048576
           },
@@ -3751,7 +3751,7 @@
           "args": {
             "command": "node --test test/new.test.mjs",
             "cwd": "/snap/signalled/base",
-            "timeoutMs": 120000,
+            "timeoutMs": 600000,
             "killGraceMs": 2000,
             "outputLimitBytes": 1048576
           },
@@ -3773,7 +3773,7 @@
           "args": {
             "command": "node --test test/new.test.mjs",
             "cwd": "/snap/signalled/head",
-            "timeoutMs": 120000,
+            "timeoutMs": 600000,
             "killGraceMs": 2000,
             "outputLimitBytes": 1048576
           },
@@ -3795,7 +3795,7 @@
           "args": {
             "command": "node --test test/new.test.mjs",
             "cwd": "/snap/missing-fixture/base",
-            "timeoutMs": 120000,
+            "timeoutMs": 600000,
             "killGraceMs": 2000,
             "outputLimitBytes": 1048576
           },
@@ -3817,7 +3817,7 @@
           "args": {
             "command": "node --test test/new.test.mjs",
             "cwd": "/snap/missing-fixture/head",
-            "timeoutMs": 120000,
+            "timeoutMs": 600000,
             "killGraceMs": 2000,
             "outputLimitBytes": 1048576
           },
@@ -3839,7 +3839,7 @@
           "args": {
             "command": "node --test test/new.test.mjs",
             "cwd": "/snap/merge-base-after-base-merge/base",
-            "timeoutMs": 120000,
+            "timeoutMs": 600000,
             "killGraceMs": 2000,
             "outputLimitBytes": 1048576
           },
@@ -3861,7 +3861,7 @@
           "args": {
             "command": "node --test test/new.test.mjs",
             "cwd": "/snap/merge-base-after-base-merge/head",
-            "timeoutMs": 120000,
+            "timeoutMs": 600000,
             "killGraceMs": 2000,
             "outputLimitBytes": 1048576
           },
@@ -3883,7 +3883,7 @@
           "args": {
             "command": "node --test test/new.test.mjs",
             "cwd": "/snap/exit-126-setup/base",
-            "timeoutMs": 120000,
+            "timeoutMs": 600000,
             "killGraceMs": 2000,
             "outputLimitBytes": 1048576
           },
@@ -3905,7 +3905,7 @@
           "args": {
             "command": "node --test test/new.test.mjs",
             "cwd": "/snap/exit-126-setup/head",
-            "timeoutMs": 120000,
+            "timeoutMs": 600000,
             "killGraceMs": 2000,
             "outputLimitBytes": 1048576
           },
@@ -3927,7 +3927,7 @@
           "args": {
             "command": "node --test test/new.test.mjs",
             "cwd": "/snap/exit-127-setup/base",
-            "timeoutMs": 120000,
+            "timeoutMs": 600000,
             "killGraceMs": 2000,
             "outputLimitBytes": 1048576
           },
@@ -3949,7 +3949,7 @@
           "args": {
             "command": "node --test test/new.test.mjs",
             "cwd": "/snap/exit-127-setup/head",
-            "timeoutMs": 120000,
+            "timeoutMs": 600000,
             "killGraceMs": 2000,
             "outputLimitBytes": 1048576
           },
@@ -3971,7 +3971,7 @@
           "args": {
             "command": "node --test test/new.test.mjs",
             "cwd": "/snap/passing-head-setup-looking-output/base",
-            "timeoutMs": 120000,
+            "timeoutMs": 600000,
             "killGraceMs": 2000,
             "outputLimitBytes": 1048576
           },
@@ -3993,7 +3993,7 @@
           "args": {
             "command": "node --test test/new.test.mjs",
             "cwd": "/snap/passing-head-setup-looking-output/head",
-            "timeoutMs": 120000,
+            "timeoutMs": 600000,
             "killGraceMs": 2000,
             "outputLimitBytes": 1048576
           },
@@ -4015,7 +4015,7 @@
           "args": {
             "command": "printf \"@octocat #17 `x` pdd-workflow:\"",
             "cwd": "/snap/safe-proof-values/base",
-            "timeoutMs": 120000,
+            "timeoutMs": 600000,
             "killGraceMs": 2000,
             "outputLimitBytes": 1048576
           },
@@ -4037,7 +4037,7 @@
           "args": {
             "command": "printf \"@octocat #17 `x` pdd-workflow:\"",
             "cwd": "/snap/safe-proof-values/head",
-            "timeoutMs": 120000,
+            "timeoutMs": 600000,
             "killGraceMs": 2000,
             "outputLimitBytes": 1048576
           },
@@ -4059,7 +4059,7 @@
           "args": {
             "command": "printf \"C:\\tmp\\q\"\r\n\t\u0000   pdd-workflow:",
             "cwd": "/snap/literal-command-controls/base",
-            "timeoutMs": 120000,
+            "timeoutMs": 600000,
             "killGraceMs": 2000,
             "outputLimitBytes": 1048576
           },
@@ -4081,7 +4081,7 @@
           "args": {
             "command": "printf \"C:\\tmp\\q\"\r\n\t\u0000   pdd-workflow:",
             "cwd": "/snap/literal-command-controls/head",
-            "timeoutMs": 120000,
+            "timeoutMs": 600000,
             "killGraceMs": 2000,
             "outputLimitBytes": 1048576
           },
@@ -4103,7 +4103,7 @@
           "args": {
             "command": "node --test test/new.test.mjs",
             "cwd": "/snap/head-fails-tap-tail/base",
-            "timeoutMs": 120000,
+            "timeoutMs": 600000,
             "killGraceMs": 2000,
             "outputLimitBytes": 1048576
           },
@@ -4125,7 +4125,7 @@
           "args": {
             "command": "node --test test/new.test.mjs",
             "cwd": "/snap/head-fails-tap-tail/head",
-            "timeoutMs": 120000,
+            "timeoutMs": 600000,
             "killGraceMs": 2000,
             "outputLimitBytes": 1048576
           },

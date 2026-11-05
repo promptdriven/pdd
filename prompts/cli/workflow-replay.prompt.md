@@ -1,11 +1,11 @@
 # Validate structured code replay evidence
 
-Own src/workflow-replay.mjs. Bind an agent's replay report to the original approved prompt-space vectors and
-current Git-visible code. Validate structure and identity only: never run a test, invoke supplied commands,
+Own src/workflow-replay.mjs. Bind an agent's replay report to current scenarios and Git-visible code,
+retaining approved prompt-space vectors for comparison. Validate structure and identity only: never run a test, invoke supplied commands,
 prove equivalence, approve a prompt, or infer success from prose. Preserve existing runtime source fingerprints.
 
 Export REPLAY_POLICY (`pdd.replay-evidence.v1`), sourceFingerprint(root), pinReplayVectors(root, paths),
-readReplayEvidence(run), formatReplayEvidence(result), and adoptReplayCorpus(root, declarationPath, ports). The runner owns policy opt-in and publication.
+readReplayEvidence(run, paths?), formatReplayEvidence(result, options?), and adoptReplayCorpus(root, declarationPath, ports). The runner owns policy opt-in and publication.
 
 ## Original identities
 
@@ -14,7 +14,7 @@ source: regular file [path, executable bits, SHA256(bytes)], symbolic link [path
 tracked file [path,"missing"]. Include uncommitted and untracked non-ignored files, independently of commit SHA.
 
 pinReplayVectors receives the prompt area's selected original scenario paths at approved publication. Return
-an anchor containing version pdd.replay-vectors.v1, each raw file SHA256 and each original step/check identity,
+an anchor containing version pdd.replay-vectors.v1, each raw file SHA256, parsed scenario snapshot and original step/check identity,
 or an explicit blocked anchor with a reason. No paths or no checks is not_replayed. Paths must be unique,
 Git-visible, canonical repo-relative regular files with no symlink ancestors or hardlinks; refuse missing,
 empty, unreadable or malformed scenarios. Limit200files,10MiB aggregate vector bytes,2MiB per file and10000
@@ -65,7 +65,7 @@ empty, missing, duplicate, subset and extra rows block. Derive bytes and origina
 check identities from the immutable commit, never declaration digest claims.
 Unrelated scenarios outside the declared scope, including repository test fixtures,
 do not participate and cannot block adoption. The runner's changed-scenario guard
-still independently blocks new code-stage vectors absent from the frozen anchor.
+reports new code-stage vectors under the saved-value warning rule below.
 Require `approved_commit_ancestor:true`: the native port checks the approved commit
 is an ancestor of the selected base at startup and allocated/current HEAD thereafter.
 A resolved but unrelated commit returns `blocked/unrelated-commit`, even with equal bytes.
@@ -136,30 +136,67 @@ Do not throw through startup.
 
 readReplayEvidence reads only <runDir>/replay-evidence.json, a regular single-link file of at most2MiB; reject
 symbolic links in the path and avoid unbounded reads. Open nonblocking so a FIFO or device cannot wait for
-a writer before the regular-file check. It requires a valid saved original anchor and unchanged,
-still-visible original files with identical nonempty bytes. A missing original anchor cannot be reconstructed
+a writer before the regular-file check. It requires a valid saved original anchor. A missing original anchor cannot be reconstructed
 from code-space files. Bind run_id to run.runId and source to current sourceFingerprint(run.root).
 Missing/stale/malformed evidence returns blocked with a finite reason, never throws through publication.
-An empty original vector set is not_replayed, never pass.
+An empty current vector set is not_replayed, never pass.
+A saved anchor outcome may only be blocked or not_replayed and remains that outcome even when current
+paths are supplied; still collect comparable saved-value warnings before returning it. Any other saved
+outcome is malformed and blocked. A report with zero checks never displays PASS.
+
+### Saved-value changes: show, do not lock
+
+Keep the original anchor for comparison; never replace it or approve changed expectations.
+Compare its snapshots to current files, using optional `paths` to include newly discovered scenarios.
+List every changed JSON value with vector path, JSON Pointer, before and after values; distinguish
+missing from null, zero, false and empty. Include additions, removals, moved files and byte-only changes.
+For older anchors without snapshots, report old/current hashes and say original values are unavailable.
+Unreadable, empty or malformed vectors get a warning with their path and cause.
+Warnings appear in command output and the PR, even when replay evidence is absent or stale.
+They never require returning to prompt space, block code work/publication or imply approval.
+The checker or person decides whether the changes are correct. These diagnostics do not authorize an
+agent to edit test values in code space; the authoring rules stay with the Prompting guide.
+Do not cap the saved list of changed values. The runner saves it in status.json at /replayEvidence/warnings.
+
+Render complete JSON Pointers and before/after JSON values reversibly, without path/URL cleaning or
+identity truncation. Distinct values must remain visibly distinct. Use JSON Unicode escapes for code
+units outside printable ASCII, including invisible and bidi characters. Escape Markdown, HTML, controls and
+path separators so outer body cleaning cannot collapse different paths or damage quoted URLs.
+Escape pdd-workflow: and pdd-product: as in the runner's inert summary text; they cannot become ownership markers.
+Missing is distinct from a literal string or null. The default report shows all warnings. Optional
+maxCharacters is a display budget for the entire replay section: retain its status, counts and trust
+boundary, show the longest prefix of whole warning items that fits, then name the exact omitted count
+and status.json /replayEvidence/warnings containing the complete list. Never silently omit or cut an item.
+The runner supplies space from its whole-description budget; a long warning list never locks publication.
+
+Validate the manifest against the current readable scenarios and their current hashes and identities.
+Missing current vectors/checks in an older manifest mean not_replayed, with the warning retained;
+never claim changed cases were executed from an old record. Unavailable vectors mean not_replayed,
+not a value-change lock. All unrelated evidence validation and source-fingerprint rules remain.
+
+For code-stage adoption revalidation only, native option `scenarioReference` selects the original
+scenario bytes from the frozen commit in a disposable current-source view. This preserves validation
+of the original prompt/dependency closure and authority while allowing scenario edits. Startup and
+prompt-space adoption still require exact scenario bytes. Never change the source worktree.
 
 <details>
 <summary>Required versioned JSON fields</summary>
 
 - schema_version: pdd.replay-evidence.v1; run_id: the saved run ID.
 - source: {kind:"git-content-v1",sha256:64hex}.
-- vectors: unique exact original {path,sha256} rows; no additions, omissions or changed hashes.
+- vectors: unique exact current {path,sha256} rows; no substituted hashes.
 - checks: at most10000 rows, each {vector,step_id,check_index,entry_path,operation,criterion_id,target,path,op,
   outcome}. outcome is pass, fail, blocked or not_replayed. A blocked/not_replayed row needs a nonblank reason.
-  Each row must match an original identity exactly and occur once; unknown/duplicate identities are malformed.
+  Each row must match a current identity exactly and occur once; unknown/duplicate identities are malformed.
   Missing identities are counted as not_replayed. Empty checks cannot pass.
 - operations: unique {vector,step_id,entry_path,operation,executed,outcome,boundary,command,exit_code} rows,
-  one per original step. boundary is {kind:function|command|route,name:nonblank}. command is the agent's
+  one per current step. boundary is {kind:function|command|route,name:nonblank}. command is the agent's
   recorded test command, not a command for pdd to execute. executed is boolean; outcome is returned,
   expected_error, crash or not_run. exit_code is an integer0..255 for executed steps, null for not_run.
   Only executed+returned/expected_error is public-boundary execution evidence. A missing or unexecuted
   operation makes its checks not_replayed, even if the supplied check rows say pass. An unknown/duplicate
   operation is malformed. Missing/unexecuted operations need no invented success metadata.
-- counts: {total,pass,fail,blocked,not_replayed}, nonnegative safe integers exactly equal to the derived original
+- counts: {total,pass,fail,blocked,not_replayed}, nonnegative safe integers exactly equal to the derived current
   check outcomes (including missing/unexecuted checks). No extra checks or zero-total pass.
 - mutation: {kind:"semantic",description:nonblank,command:nonblank,exit_code:integer0..255,
   outcome:assertion_failure|crash|survived|not_run,failed_checks:[{vector,step_id,check_index}],reason?}.
@@ -172,7 +209,7 @@ An empty original vector set is not_replayed, never pass.
 
 All identifier/reason/command strings are bounded (at most1000characters); collections stay within the limits
 above. Reject wrong types and unsupported versions; never coerce truthy flags or counts. SHA256 comparison
-uses the actual original bytes. The manifest is agent-supplied evidence, not an independently verified execution.
+uses the actual current bytes. The manifest is agent-supplied evidence, not an independently verified execution.
 </details>
 
 ## Result and report
@@ -198,7 +235,7 @@ For adopted runs, retain structured adoption provenance even when replay is bloc
 The PR replay section displays "Anchor adopted from REPO@COMMIT; approval reference R
 by A; external-assertion-unverified", using cleaned recorded values.
 formatReplayEvidence emits a compact PR section with prominent Code replay PASS/FAIL/BLOCKED/NOT REPLAYED,
-exact counts, source and manifest hashes, vector hashes, public execution totals, semantic control and typed
+exact counts, source and manifest hashes, current vector hashes labeled "Current vector", public execution totals, semantic control and typed
 formal result. Include: `Agents execute the tests and supply this record. pdd validates structure and identity;
 it does not independently prove execution or prompt/code equivalence.` Keep details bounded and sanitize
 control characters, private local paths and Try capabilities. Escape HTML and Markdown in displayed metadata
@@ -218,7 +255,7 @@ let an agent's free-form PASS summary replace this status.
 ```json
 {
   "status": "approved",
-  "prose_sha256": "ed5bd6e32afe4c34de534731c8ad47f39171d09135f3630781b7d4be23bfceed",
+  "prose_sha256": "852ac6e549fe5bba8ea3e9a94f4b1ee265bb704df3986015522e812838df5446",
   "entries": [
     {
       "operation": "adoptReplayCorpus",

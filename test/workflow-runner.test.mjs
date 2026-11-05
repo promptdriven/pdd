@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync, realpathSync, readdirSync, chmodSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { execFile as callbackExec, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { proseSha256 } from '../src/runtime-preflight.mjs';
@@ -20,13 +20,17 @@ async function lastSteps(f, run, out) {
 }
 
 import {fakeHerdr} from './helpers/fake-herdr.mjs';
+// #2904: with no pdd result of its own, PR 1 starts with the pdd:no-verdict line; agent-pasted check lines carry the agent-note label.
+const NOTE = 'Agent note — not checked by pdd: ';
+const NO_OWN_RESULT = 'pdd result: none. pdd has no pdd test or pdd lint result of its own for this run (pdd:no-verdict).';
+function pr1Top(body, count) { const lines = body.split('\n'); assert.equal(lines[0], NO_OWN_RESULT); return lines.slice(1, count + 1); }
 
 
 function assertSafeApprovalAdvice(text) {
   assert.match(text,/show the gate.*ask the person/i);
   const command=text.split('\n').find(line=>line.endsWith(" workflow approve 17 --said - <<'PDD_SAID'"));
   assert.ok(command,'show the actual quoted-heredoc stdin command');
-  assert.match(command,/^<pdd> workflow approve 17/, 'agent template uses the portable package placeholder');
+  assert.match(command, /^"\$PDD_BIN" workflow approve 17/, 'agent template uses the portable package placeholder');
   assert.match(text,/\nPDD_SAID(?:\n|$)/);
   assert.match(text,/delimiter.*absent/i);
   assert.match(text,/terminal y\/N/);
@@ -150,10 +154,10 @@ test('small-change: run exits at once, done reaches the gate, changes go to the 
   assert.ok(existsSync(run.root) && run.root !== f.source); assert.match(run.branch, /^pdd\/small-change-17-/);
   const first = run.chats[0], pane = f.herdr.paneOf(first);
   assert.equal(pane.commands.length, 1);
-  assert.match(pane.commands[0], /^env PDD_AGENT_SESSION=1 CLAUDE_CONFIG_DIR=\S+ claude --dangerously-skip-permissions --session-id [0-9a-f-]{36} "\$\(cat '.+plan-start\.md'\)"$/);
+  assert.match(pane.commands[0], /^env PDD_AGENT_SESSION=1 PDD_BIN=\S+ CLAUDE_CONFIG_DIR=\S+ claude --dangerously-skip-permissions --session-id [0-9a-f-]{36} "\$\(cat '.+plan-start\.md'\)"$/);
   assert.equal(first.session.id, pane.agent.agent_session.value);
   const message = readFileSync(join(run.runDir, 'plan-start.md'), 'utf8');
-  for (const part of [`Use the pdd-small-change skill: ${join(packageRoot, 'skills/pdd-small-change/SKILL.md')}`, '#17', 'Use value two', issueUrl, run.root, run.runDir, 'plan', 'scope', '/abs/node /abs/pdd.mjs workflow done'])
+  for (const part of [`Use the pdd-small-change skill: ${join(packageRoot, 'skills/pdd-small-change/SKILL.md')}`, '#17', 'Use value two', issueUrl, run.root, run.runDir, 'plan', 'scope', '"$PDD_BIN" workflow done'])
     assert.ok(message.includes(part), part);
   assert.ok(message.split('\n').length <= 14, message);
   assert.doesNotMatch(message, /Prompting guide/);
@@ -288,7 +292,7 @@ for (const name of ['bug', 'feature']) {
     assert.equal((await f.run()).exitCode, 0);
     let run = f.record();
     assert.deepEqual(areas.map(([area]) => area), ['story', 'prompt-pr', 'code']);
-    assert.match(f.herdr.paneOf(run.chats[0]).commands[0], /^env PDD_AGENT_SESSION=1 codex --no-daemon --dangerously-bypass-approvals-and-sandbox -c 'projects=\{".+"=\{trust_level="trusted"\}\}' "\$\(cat '.+story-start\.md'\)"$/);
+    assert.match(f.herdr.paneOf(run.chats[0]).commands[0], /^env PDD_AGENT_SESSION=1 PDD_BIN=\S+ codex --no-daemon --dangerously-bypass-approvals-and-sandbox -c 'projects=\{".+"=\{trust_level="trusted"\}\}' "\$\(cat '.+story-start\.md'\)"$/);
     for (const [index, [area, steps]] of areas.entries()) {
       assert.equal(f.record().area, index); assert.equal(f.record().chats.at(-1).area, area);
       const optional = JSON.parse(readFileSync(join(packageRoot, `skills/pdd-${name}/workflow.json`), 'utf8')).areas[index].optional;
@@ -313,19 +317,76 @@ for (const name of ['bug', 'feature']) {
     assert.ok(f.prs[0].body.includes(`Runtime check: ✓ 3 of 3 criteria · 10/10 checks · 1 AI call ${report}`), 'the check result stays in PR 1');
     assert.match(f.prs[0].body, /^Approved in terminal:/m);
     assert.ok(f.prs[0].body.indexOf('Approved in terminal:') > f.prs[0].body.indexOf('Prompt tests:'), 'recorded terminal approval follows runtime prose');
-    assert.match(f.prs[0].body, /^Prompt tests: ✓ 3 of 3 criteria · 10\/10 checks · 1 AI call\nReport: https:\/\/checks\.example\.test\/r\/k3y-123 \(report links expire after 7 days\)/);
+    assert.match(f.prs[0].body, /^pdd result: none\. [^\n]*\nAgent note — not checked by pdd: Prompt tests: ✓ 3 of 3 criteria · 10\/10 checks · 1 AI call\nAgent note — not checked by pdd: Report: https:\/\/checks\.example\.test\/r\/k3y-123 \(report links expire after 7 days\)/);
     assert.equal(f.prs[1].baseRefName, f.prs[0].headRefName, 'PR 2 is stacked on the open PR 1');
     const nothing = await approveRun({ ref: '17', cwd: f.source }, f.ports);
     assert.equal(nothing.exitCode, 1); assert.match(nothing.message, /Nothing to approve/);
   });
 }
 
-test('a second run for the same issue is refused and points at the first one', async t => {
+// #2871: an old active run (stuck, abandoned or left from a crash) never blocks a new run on its issue.
+test('a second run on an issue with an active run starts, names the old run in one warning and marks it replaced', async t => {
   const f = await fixture(t);
-  await f.run();
+  await f.run(); const old = f.record();
+  f.tick(90 * 60000);
   const again = await f.run();
-  assert.equal(again.exitCode, 1); assert.match(again.message, /already has a run/); assert.match(again.message, /pdd workflow open 17/);
-  assert.equal(f.herdr.panes.filter(p => p.commands).length, 1);
+  assert.equal(again.exitCode, 0, again.message);
+  assert.deepEqual(f.prompts, [], 'no person is asked');
+  assert.equal(again.message.match(/had an active run/g).length, 1);
+  assert.ok(again.message.includes(`warning: Issue #17 had an active run ${old.runId} (small-change). pdd marked it replaced`), again.message);
+  assert.ok(again.message.includes(old.root) && again.message.includes(old.branch) && again.message.includes(old.sourceRoot));
+  assert.match(again.message, /Last activity: 90 min ago\./); assert.doesNotMatch(again.message, /may still be working/);
+  const fresh = f.record(), archived = `${old.runDir}-cancelled-${old.runId.slice(0, 8)}`, replaced = JSON.parse(readFileSync(join(archived, 'status.json'), 'utf8'));
+  assert.equal(fresh.state, 'running'); assert.notEqual(fresh.runId, old.runId); assert.notEqual(fresh.root, old.root);
+  assert.equal(replaced.runId, old.runId); assert.equal(replaced.state, 'cancelled'); assert.deepEqual(replaced.cancelled, { state: 'replaced', at: f.clock }); assert.equal(replaced.gate, null);
+  assert.deepEqual(fresh.previous.map(item => item.runId), [old.runId]);
+  assert.equal(f.herdr.panes.filter(p => p.commands).length, 2);
+  const listed = await runStatus({ cwd: f.source, cancelled: true }, f.ports);
+  assert.match(listed.message, /replaced/);
+});
+
+test('a replacement soon after the old run was active says that the old run may still be working', async t => {
+  const f = await fixture(t);
+  await f.run(); f.tick(5 * 60000);
+  const again = await f.run();
+  assert.equal(again.exitCode, 0, again.message);
+  assert.match(again.message, /Last activity: 5 min ago\. It may still be working; close its chat if it is\./);
+});
+
+test('a replaced run cannot write over the new run: late steps from its worktree and its in-flight delivery leave the new run unchanged', async t => {
+  const f = await fixture(t);
+  await f.run(); const old = f.record(), oldPane = old.chats[0].paneId;
+  let replacement = null;
+  const herdr = f.ports.herdr;
+  f.ports.herdr = async args => {
+    // The new run starts while the old run's change request is in flight to its chat.
+    if (!replacement && args[0] === 'agent' && args[1] === 'prompt' && args[2] === oldPane) { f.tick(); replacement = await f.run(); }
+    return herdr(args);
+  };
+  f.tick();
+  const late = await changeRun({ ref: '17', text: 'Also explain why.', cwd: f.source }, f.ports);
+  assert.equal(replacement?.exitCode, 0, replacement?.message);
+  assert.notEqual(late.exitCode, 0, late.message);
+  const fresh = f.record();
+  assert.notEqual(fresh.runId, old.runId); assert.deepEqual(fresh.changes, []);
+  assert.equal(existsSync(join(fresh.runDir, 'delivery-journal.json')), false, 'the old request stays out of the new run journal');
+  const done = await stepDone({ step: 'scope', summary: 'late', cwd: old.root }, f.agentPorts());
+  assert.notEqual(done.exitCode, 0);
+  assert.deepEqual(f.record(), fresh);
+});
+
+test('a replaced run cannot put its change request into the new run journal when the new run starts while the request waits for the journal claim', async t => {
+  const f = await fixture(t);
+  await f.run(); const old = f.record(), lock = join(old.runDir, '.delivery-journal.lock');
+  mkdirSync(lock); writeFileSync(join(lock, 'owner-other.json'), JSON.stringify({ pid: process.pid, hostname: 'another-host', token: 'other' }));
+  let replacement = null;
+  const late = await changeRun({ ref: '17', text: 'Old request.', cwd: f.source }, { ...f.ports,
+    journalSleep: async () => { if (!replacement) { f.tick(); replacement = await f.run(); } } });
+  assert.equal(replacement?.exitCode, 0, replacement?.message);
+  assert.notEqual(late.exitCode, 0, late.message);
+  const fresh = f.record();
+  assert.notEqual(fresh.runId, old.runId);
+  assert.equal(existsSync(join(fresh.runDir, 'delivery-journal.json')), false, 'the old request stays out of the new run journal');
 });
 
 test('cancel closes the run tabs, keeps the worktree and branch, and done then tells the agent to stop', async t => {
@@ -412,8 +473,8 @@ test('after cancel a new run on the same issue gets a fresh worktree and branch,
   const archived = `${old.runDir}-cancelled-${old.runId.slice(0, 8)}`;
   assert.equal(JSON.parse(readFileSync(join(archived, 'status.json'), 'utf8')).state, 'cancelled');
   assert.deepEqual(fresh.previous.map(item => [item.root, item.branch, item.runDir]), [[old.root, old.branch, archived]]);
-  const refused = await f.run();
-  assert.equal(refused.exitCode, 1); assert.match(refused.message, /already has a run/);
+  const replaced = await f.run();
+  assert.equal(replaced.exitCode, 0, replaced.message); assert.match(replaced.message, /had an active run/);
 });
 
 const featureAreas = { version: 2, areas: [
@@ -452,7 +513,7 @@ test('feature: story, approve, PR 1 with prompt work only, then the person asks 
   assert.equal(f.prs[0].title, 'Use value two (prompt, Story and tests)'); assert.equal(f.prs[0].baseRefName, 'main'); assert.equal(f.prs[0].headRefName, run.branch);
   assert.match(f.prs[0].body, /^Approved in terminal:/m);
   assert.ok(f.prs[0].body.indexOf('Approved in terminal:') > f.prs[0].body.indexOf('Prompt tests:'), 'recorded terminal approval follows runtime prose');
-  assert.match(f.prs[0].body, /^Prompt tests: ✓ 3 of 3 criteria · 10\/10 checks · 1 AI call\nReport: https:\/\/checks\.example\.test\/r\/k3y \(report links expire after 7 days\)\n\nPart of #17/);
+  assert.match(f.prs[0].body, /^pdd result: none\. [^\n]*\nAgent note — not checked by pdd: Prompt tests: ✓ 3 of 3 criteria · 10\/10 checks · 1 AI call\nAgent note — not checked by pdd: Report: https:\/\/checks\.example\.test\/r\/k3y \(report links expire after 7 days\)\n\nPart of #17/);
   assert.doesNotMatch(f.prs[0].body, /Closes #17/); assert.doesNotMatch(f.prs[0].body, /## Verify/);
   let record = f.record();
   assert.equal(record.state, 'waiting'); assert.equal(record.gate.kind, 'ask-code'); assert.equal(record.waitingFor.what, 'Make the code PR now, or stop here and merge PR 1');
@@ -806,9 +867,10 @@ test('#18: the PR body puts the Runtime check and report link on top, cuts steps
   f.tick(); f.ports.confirm = async () => false;
   await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
   const body = f.prs[0].body, top = body.split('\n');
-  assert.equal(top[0], 'Prompt tests (DRAFT): ✓ 3 of 3 criteria · 18/18 checks · 12 AI calls');
-  assert.equal(top[1], 'Report: https://rt.example.test/r/d379-42 (report links expire after 7 days)');
-  assert.equal(top[3], 'Part of #17');
+  assert.equal(top[0], NO_OWN_RESULT);
+  assert.equal(top[1], NOTE + 'Prompt tests (DRAFT): ✓ 3 of 3 criteria · 18/18 checks · 12 AI calls');
+  assert.equal(top[2], NOTE + 'Report: https://rt.example.test/r/d379-42 (report links expire after 7 days)');
+  assert.equal(top[4], 'Part of #17');
   const stepsList = body.split('\n## Steps\n')[1].split('\n\n')[0].split('\n');
   assert.ok(stepsList.length > 0); for (const [index, row] of stepsList.entries()) assert.ok(row.startsWith('- **') && row.length <= `- **${['understand', 'prompt-story', 'check', 'try'][index]}**: `.length + 'Agent note — not checked by pdd: '.length + 199 + '``'.length, row);
   assert.doesNotMatch(body, /\/Users\/|\/home\/|\/private\/|\/var\/folders/);
@@ -848,10 +910,10 @@ test('#18: the check step\'s Runtime check wins the top of PR 1; the code questi
   f.tick(); await stepDone({ step: 'prompt-story', summary: 'Story; Runtime check (DRAFT): ✓ 1 of 2 criteria; Report: https://rt.example.test/r/first', cwd: run.root }, f.agentPorts());
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, f.ports);
   f.tick(); const gate = await stepDone({ step: 'check', summary: 'Runtime check: ✓ 2 of 2 criteria; Report: https://rt.example.test/r/second', cwd: run.root }, f.agentPorts());
-  assert.match(f.prs[0].body, /^Prompt tests: ✓ 2 of 2 criteria\nReport: https:\/\/rt\.example\.test\/r\/second /);
+  assert.match(f.prs[0].body, /^pdd result: none\. [^\n]*\nAgent note — not checked by pdd: Prompt tests: ✓ 2 of 2 criteria\nAgent note — not checked by pdd: Report: https:\/\/rt\.example\.test\/r\/second /);
   assert.match(gate.message, /ask exactly: "Do you want the code PR now, or stop here and merge PR 1 first\?/);
   assert.match(gate.message, /show the gate.*ask the person/i);
-  assert.ok(gate.message.includes(`<pdd> workflow approve 17 --said - <<'PDD_SAID'\n`), 'safe agent template uses the portable package placeholder and quoted heredoc');
+  assert.ok(gate.message.includes(`"$PDD_BIN" workflow approve 17 --said - <<'PDD_SAID'\n`), 'safe agent template uses the portable package placeholder and quoted heredoc');
   assert.match(gate.message, /\nPDD_SAID(?:\n|$)/);
   assert.match(gate.message, /terminal y\/N/);
 });
@@ -859,38 +921,37 @@ test('#18: the check step\'s Runtime check wins the top of PR 1; the code questi
 // 0.1.6 items 6 and 7: many Stories in one run.
 const storyLines = 'Runtime check (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call; Runtime check (merge-tiles) (DRAFT): ✗ 2 of 3 criteria · 8/10 checks · 2 AI calls; '
   + 'Runtime check (score): ✓ 2 of 2 criteria · 6/6 checks · 1 AI call; Runtime check: ✗ 7 of 8 criteria · 24/26 checks · 4 AI calls; Report: https://rt.example.test/r/batch-1';
-test('0.1.6: PR 1 starts with one Runtime check line per Story, then the total pdd adds up and the report; status counts the Stories that pass', async t => {
+test('0.1.6: PR 1 starts with one Runtime check line per Story (as agent notes), then the total pdd adds up and the report; status shows no pdd result for typed lines', async t => {
   const { f, run } = await featureAtTryGate(t);
   f.ports.timeZone = 'UTC';
   f.tick(); await stepDone({ step: 'check', summary: storyLines, cwd: run.root }, f.agentPorts());
   let shown = await runStatus({ ref: '17', cwd: f.source }, f.ports);
-  assert.match(shown.message, /^Stories: 2 of 3 Stories pass \(✗ merge-tiles\)$/m);
-  assert.match((await runStatus({ all: true, cwd: f.source }, f.ports)).message, /· 2 of 3 Stories pass ·/);
-  assert.deepEqual(JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0].stories, { pass: 2, total: 3, failing: ['merge-tiles'] });
+  assert.match(shown.message, /^Stories: no pdd result \(pdd:no-verdict\)$/m);
+  assert.match((await runStatus({ all: true, cwd: f.source }, f.ports)).message, /· no pdd result \(pdd:no-verdict\) ·/);
+  assert.deepEqual(JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0].stories, { pass: 0, total: 0, failing: [], none: true });
   // The chat re-checks only merge-tiles and sends all current lines again; pdd counts only the latest summary.
   f.tick(); await stepDone({ step: 'check', summary: storyLines.replace('(DRAFT): ✗ 2 of 3 criteria · 8/10 checks', '(DRAFT): ✓ 3 of 3 criteria · 10/10 checks').replace('Runtime check: ✗ 7 of 8', 'Runtime check: ✓ 8 of 8'), cwd: run.root }, f.agentPorts());
   const gate = await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
   assert.match(gate.message, /Prompt tests line of each Story/);
   shown = await runStatus({ ref: '17', cwd: f.source }, f.ports);
-  assert.match(shown.message, /^Stories: 3 of 3 Stories pass$/m);
+  assert.match(shown.message, /^Stories: no pdd result \(pdd:no-verdict\)$/m);
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
-  const top = f.prs[0].body.split('\n');
-  assert.deepEqual(top.slice(0, 6), [
-    'Prompt tests (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
-    'Prompt tests (merge-tiles) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 2 AI calls',
-    'Prompt tests (score): ✓ 2 of 2 criteria · 6/6 checks · 1 AI call',
-    'Prompt tests (all Stories) (DRAFT): ✓ 8 of 8 criteria · 26/26 checks · 4 AI calls',
-    'Report: https://rt.example.test/r/batch-1 (report links expire after 7 days)', '']);
+  assert.deepEqual(pr1Top(f.prs[0].body, 6), [
+    NOTE + 'Prompt tests (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
+    NOTE + 'Prompt tests (merge-tiles) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 2 AI calls',
+    NOTE + 'Prompt tests (score): ✓ 2 of 2 criteria · 6/6 checks · 1 AI call',
+    NOTE + 'Prompt tests (all Stories) (DRAFT): ✓ 8 of 8 criteria · 26/26 checks · 4 AI calls',
+    NOTE + 'Report: https://rt.example.test/r/batch-1 (report links expire after 7 days)', '']);
 });
 
-test('0.1.6: a single overall Runtime check line counts as one Story', async t => {
+test('0.1.6: a single typed overall Runtime check line gives no Story count in status (no pdd result)', async t => {
   const { f, run } = await featureAtTryGate(t);
-  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^Stories: 1 of 1 Stories pass$/m);
+  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^Stories: no pdd result \(pdd:no-verdict\)$/m);
   f.tick(); await stepDone({ step: 'check', summary: 'Runtime check (DRAFT): ✗ 1 of 2 criteria · 3/5 checks · 1 AI call', cwd: run.root }, f.agentPorts());
-  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^Stories: 0 of 1 Stories pass$/m);
+  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^Stories: no pdd result \(pdd:no-verdict\)$/m);
 });
 
-test('0.1.6: the skills format (one line each, with a Report line per Story) gives the same PR 1 top and count', async t => {
+test('0.1.6: the skills format (one line each, with a Report line per Story) gives the same PR 1 top, and status shows no pdd result', async t => {
   const { f, run } = await featureAtTryGate(t);
   const summary = ['Runtime check (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call', 'Checked each Story.', 'Report: https://rt.example.test/r/one',
     'Runtime check (merge-tiles) (DRAFT): ✗ 2 of 3 criteria · 8/10 checks · 2 AI calls', 'Report (DRAFT): https://rt.example.test/r/two',
@@ -899,16 +960,16 @@ test('0.1.6: the skills format (one line each, with a Report line per Story) giv
   // The stored summary keeps the newlines; status still shows each step on one line.
   assert.equal(f.record().done.check.summary, summary);
   const shown = (await runStatus({ ref: '17', cwd: f.source }, f.ports)).message;
-  assert.match(shown, /^Stories: 1 of 2 Stories pass \(✗ merge-tiles\)$/m);
+  assert.match(shown, /^Stories: no pdd result \(pdd:no-verdict\)$/m);
   assert.match(shown, /check done \("Runtime check \(move-tiles\): ✓ 3 of 3 criteria · 10\/10 checks · 1 AI call Checked each Story\. Report: https:/);
   await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
-  assert.deepEqual(f.prs[0].body.split('\n').slice(0, 6), [
-    'Prompt tests (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
-    'Prompt tests (merge-tiles) (DRAFT): ✗ 2 of 3 criteria · 8/10 checks · 2 AI calls',
-    'Prompt tests (all Stories) (DRAFT): ✗ 5 of 6 criteria · 18/20 checks · 3 AI calls',
-    'Report: https://rt.example.test/r/one (report links expire after 7 days)',
-    'Report: https://rt.example.test/r/two (report links expire after 7 days)', '']);
+  assert.deepEqual(pr1Top(f.prs[0].body, 6), [
+    NOTE + 'Prompt tests (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
+    NOTE + 'Prompt tests (merge-tiles) (DRAFT): ✗ 2 of 3 criteria · 8/10 checks · 2 AI calls',
+    NOTE + 'Prompt tests (all Stories) (DRAFT): ✗ 5 of 6 criteria · 18/20 checks · 3 AI calls',
+    NOTE + 'Report: https://rt.example.test/r/one (report links expire after 7 days)',
+    NOTE + 'Report: https://rt.example.test/r/two (report links expire after 7 days)', '']);
 });
 
 test('0.1.6: the agreed format ("; ", one "Report (<story>): <url>" per report row) keeps the Story name on each PR 1 report line', async t => {
@@ -918,15 +979,15 @@ test('0.1.6: the agreed format ("; ", one "Report (<story>): <url>" per report r
     + 'Report (merge-tiles): https://rt.example.test/r/two; Report (merge-tiles): https://rt.example.test/r/three';
   f.tick(); await stepDone({ step: 'check', summary, cwd: run.root }, f.agentPorts());
   await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
-  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^Stories: 2 of 2 Stories pass$/m);
+  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^Stories: no pdd result \(pdd:no-verdict\)$/m);
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
-  assert.deepEqual(f.prs[0].body.split('\n').slice(0, 7), [
-    'Prompt tests (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
-    'Prompt tests (merge-tiles) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 2 AI calls',
-    'Prompt tests (all Stories) (DRAFT): ✓ 6 of 6 criteria · 20/20 checks · 3 AI calls',
-    'Report (move-tiles): https://rt.example.test/r/one (report links expire after 7 days)',
-    'Report (merge-tiles): https://rt.example.test/r/two (report links expire after 7 days)',
-    'Report (merge-tiles): https://rt.example.test/r/three (report links expire after 7 days)', '']);
+  assert.deepEqual(pr1Top(f.prs[0].body, 7), [
+    NOTE + 'Prompt tests (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
+    NOTE + 'Prompt tests (merge-tiles) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 2 AI calls',
+    NOTE + 'Prompt tests (all Stories) (DRAFT): ✓ 6 of 6 criteria · 20/20 checks · 3 AI calls',
+    NOTE + 'Report (move-tiles): https://rt.example.test/r/one (report links expire after 7 days)',
+    NOTE + 'Report (merge-tiles): https://rt.example.test/r/two (report links expire after 7 days)',
+    NOTE + 'Report (merge-tiles): https://rt.example.test/r/three (report links expire after 7 days)', '']);
 });
 
 test('0.1.6 real run (pdd-trial-2048-1027): the pasted overall line repeated one Story; pdd drops it and adds up all Stories itself', async t => {
@@ -938,16 +999,16 @@ test('0.1.6 real run (pdd-trial-2048-1027): the pasted overall line repeated one
     + 'Runtime check (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 8 AI calls Report: https://rt.example.test/r/7a5cc123-32d4-434b-bc1e-43edcb1f643d';
   f.tick(); await stepDone({ step: 'check', summary, cwd: run.root }, f.agentPorts());
   await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
-  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^Stories: 3 of 3 Stories pass$/m);
+  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^Stories: no pdd result \(pdd:no-verdict\)$/m);
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
-  assert.deepEqual(f.prs[0].body.split('\n').slice(0, 8), [
-    'Prompt tests (swipe-play) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 8 AI calls',
-    'Prompt tests (game-result) (DRAFT): ✓ 3 of 3 criteria · 13/13 checks · 5 AI calls',
-    'Prompt tests (new-game) (DRAFT): ✓ 2 of 2 criteria · 12/12 checks · 4 AI calls',
-    'Prompt tests (all Stories) (DRAFT): ✓ 8 of 8 criteria · 35/35 checks · 17 AI calls',
-    'Report: https://rt.example.test/r/7a5cc123-32d4-434b-bc1e-43edcb1f643d (report links expire after 7 days)',
-    'Report: https://rt.example.test/r/ddab0595-645e-47e5-9bff-74c47614d9a1 (report links expire after 7 days)',
-    'Report: https://rt.example.test/r/5a866c47-e4d3-4746-9036-9fe86c9b8937 (report links expire after 7 days)', '']);
+  assert.deepEqual(pr1Top(f.prs[0].body, 8), [
+    NOTE + 'Prompt tests (swipe-play) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 8 AI calls',
+    NOTE + 'Prompt tests (game-result) (DRAFT): ✓ 3 of 3 criteria · 13/13 checks · 5 AI calls',
+    NOTE + 'Prompt tests (new-game) (DRAFT): ✓ 2 of 2 criteria · 12/12 checks · 4 AI calls',
+    NOTE + 'Prompt tests (all Stories) (DRAFT): ✓ 8 of 8 criteria · 35/35 checks · 17 AI calls',
+    NOTE + 'Report: https://rt.example.test/r/7a5cc123-32d4-434b-bc1e-43edcb1f643d (report links expire after 7 days)',
+    NOTE + 'Report: https://rt.example.test/r/ddab0595-645e-47e5-9bff-74c47614d9a1 (report links expire after 7 days)',
+    NOTE + 'Report: https://rt.example.test/r/5a866c47-e4d3-4746-9036-9fe86c9b8937 (report links expire after 7 days)', '']);
 });
 
 test('0.1.6: a summary with no overall line works; a Story checked again takes its latest line', async t => {
@@ -956,31 +1017,31 @@ test('0.1.6: a summary with no overall line works; a Story checked again takes i
   const summary = 'Runtime check (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call; Runtime check (merge-tiles): ✗ 2 of 3 criteria · 8/10 checks · 2 AI calls; '
     + 'Report (move-tiles): https://rt.example.test/r/one; Report (merge-tiles): https://rt.example.test/r/two';
   f.tick(); await stepDone({ step: 'check', summary, cwd: run.root }, f.agentPorts());
-  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^Stories: 1 of 2 Stories pass \(✗ merge-tiles\)$/m);
+  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^Stories: no pdd result \(pdd:no-verdict\)$/m);
   // A chat that adds the re-check after the old lines: the later merge-tiles line wins and keeps its place.
   f.tick(); await stepDone({ step: 'check', summary: `${summary}; Runtime check (merge-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call; Report (merge-tiles): https://rt.example.test/r/three`, cwd: run.root }, f.agentPorts());
-  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^Stories: 2 of 2 Stories pass$/m);
+  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^Stories: no pdd result \(pdd:no-verdict\)$/m);
   await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
-  assert.deepEqual(f.prs[0].body.split('\n').slice(0, 7), [
-    'Prompt tests (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
-    'Prompt tests (merge-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
-    'Prompt tests (all Stories): ✓ 6 of 6 criteria · 20/20 checks · 2 AI calls',
-    'Report (move-tiles): https://rt.example.test/r/one (report links expire after 7 days)',
-    'Report (merge-tiles): https://rt.example.test/r/two (report links expire after 7 days)',
-    'Report (merge-tiles): https://rt.example.test/r/three (report links expire after 7 days)', '']);
+  assert.deepEqual(pr1Top(f.prs[0].body, 7), [
+    NOTE + 'Prompt tests (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
+    NOTE + 'Prompt tests (merge-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
+    NOTE + 'Prompt tests (all Stories): ✓ 6 of 6 criteria · 20/20 checks · 2 AI calls',
+    NOTE + 'Report (move-tiles): https://rt.example.test/r/one (report links expire after 7 days)',
+    NOTE + 'Report (merge-tiles): https://rt.example.test/r/two (report links expire after 7 days)',
+    NOTE + 'Report (merge-tiles): https://rt.example.test/r/three (report links expire after 7 days)', '']);
 });
 
-// pdd check prints only the Story's own line when there is one Story (0.1.7): PR 1 lifts it and status counts it.
+// pdd check prints only the Story's own line when there is one Story (0.1.7): PR 1 lifts it as an agent note, and status (pdd results only) shows no pdd result.
 test('0.1.7: a summary with only one named Runtime check line lifts that line into PR 1', async t => {
   const { f, run } = await featureAtTryGate(t);
   f.tick(); await stepDone({ step: 'check', summary: 'Runtime check (unread-filter) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call; Report (unread-filter): https://rt.example.test/r/one', cwd: run.root }, f.agentPorts());
-  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^Stories: 1 of 1 Stories pass$/m);
+  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^Stories: no pdd result \(pdd:no-verdict\)$/m);
   await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
-  assert.deepEqual(f.prs[0].body.split('\n').slice(0, 3), [
-    'Prompt tests (unread-filter) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
-    'Report (unread-filter): https://rt.example.test/r/one (report links expire after 7 days)', '']);
+  assert.deepEqual(pr1Top(f.prs[0].body, 3), [
+    NOTE + 'Prompt tests (unread-filter) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
+    NOTE + 'Report (unread-filter): https://rt.example.test/r/one (report links expire after 7 days)', '']);
 });
 
 test('0.1.6: one named Story gets no total line; its line is the total', async t => {
@@ -988,9 +1049,9 @@ test('0.1.6: one named Story gets no total line; its line is the total', async t
   f.tick(); await stepDone({ step: 'check', summary: 'Runtime check (move-tiles) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call; Runtime check (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call; Report (move-tiles): https://rt.example.test/r/one', cwd: run.root }, f.agentPorts());
   await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
-  assert.deepEqual(f.prs[0].body.split('\n').slice(0, 3), [
-    'Prompt tests (move-tiles) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
-    'Report (move-tiles): https://rt.example.test/r/one (report links expire after 7 days)', '']);
+  assert.deepEqual(pr1Top(f.prs[0].body, 3), [
+    NOTE + 'Prompt tests (move-tiles) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
+    NOTE + 'Report (move-tiles): https://rt.example.test/r/one (report links expire after 7 days)', '']);
 });
 
 // ---- 0.1.7: a real tester run of 0.1.6 (round 2, "web", bookshelf, Oct 27) ----
@@ -1011,7 +1072,7 @@ test('0.1.7 #1: run expands a leading ~ in CODEX_HOME and CLAUDE_CONFIG_DIR and 
   assert.equal(started.exitCode, 0, started.message);
   const run = f.record();
   assert.equal(run.configDir, folder); assert.equal(run.chats[0].configDir, folder);
-  assert.ok(f.herdr.paneOf(run.chats[0]).commands[0].startsWith(`env PDD_AGENT_SESSION=1 CODEX_HOME='${folder}' codex `), f.herdr.paneOf(run.chats[0]).commands[0]);
+  assert.ok(f.herdr.paneOf(run.chats[0]).commands[0].includes(` CODEX_HOME='${folder}' codex `), f.herdr.paneOf(run.chats[0]).commands[0]);
 
   const claude = await fixture(t), claudeHome = claude.ports.env.HOME;
   claude.ports.env = { HOME: claudeHome, CLAUDE_CONFIG_DIR: '~/missing' };
@@ -1030,7 +1091,7 @@ test('0.1.7 #1: a saved "~" config folder is expanded when pdd resumes or starts
   pane.agent = null;
   const inside = { ...f.ports, env: { ...f.ports.env, HERDR_ENV: '1' } };
   assert.equal((await openRun({ ref: '17', cwd: f.source }, inside)).exitCode, 0);
-  assert.ok(pane.commands[1].startsWith(`env PDD_AGENT_SESSION=1 CLAUDE_CONFIG_DIR='${dir}' claude `), pane.commands[1]);
+  assert.ok(pane.commands[1].includes(` CLAUDE_CONFIG_DIR='${dir}' claude `), pane.commands[1]);
   f.tick(); await stepDone({ step: 'scope', summary: 'plan', cwd: run.root }, f.agentPorts());
   rmSync(dir, { recursive: true });
   const missing = `This run uses CLAUDE_CONFIG_DIR "${dir}", but that folder does not exist. Make that folder, or cancel the run (pdd workflow cancel 17) and start it again with the right CLAUDE_CONFIG_DIR.`;
@@ -1043,7 +1104,7 @@ test('0.1.7 #1: a saved "~" config folder is expanded when pdd resumes or starts
   assert.equal(notOpened.exitCode, 1); assert.equal(notOpened.message, missing); assert.equal(pane.commands.length, 2);
   mkdirSync(dir);
   assert.equal((await approveRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
-  assert.ok(f.herdr.paneOf(f.record().chats[1]).commands[0].startsWith(`env PDD_AGENT_SESSION=1 CLAUDE_CONFIG_DIR='${dir}' claude `));
+  assert.ok(f.herdr.paneOf(f.record().chats[1]).commands[0].includes(` CLAUDE_CONFIG_DIR='${dir}' claude `));
 });
 
 // Tester B2–B4: the chat died at its start, and for 10 minutes status said "State: the agent works on understand".
@@ -1381,12 +1442,12 @@ for (const [name, summary] of [['one per line', verdictSummary.join('\n')], ['jo
     f.tick(); await stepDone({ step: 'check', summary, cwd: run.root }, f.agentPorts());
     await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
     f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
-    assert.deepEqual(f.prs[0].body.split('\n').slice(0, 5), [
+    assert.deepEqual(pr1Top(f.prs[0].body, 5), [
       'Agent note — not checked by pdd: Verdict: the bug is in the PROMPT (its check fails on the issue\'s case).',
       'Agent note — not checked by pdd: Before ✗ 0 of 1 criteria https://rt.example.test/r/da176d28-b1a3 → after ✓ 5 of 5 criteria https://rt.example.test/r/526de1aa-e631 (report links expire after 7 days)',
-      'Prompt tests (split-cent-conservation) (DRAFT): ✓ 5 of 5 criteria · 20/20 checks · 15 AI calls',
+      NOTE + 'Prompt tests (split-cent-conservation) (DRAFT): ✓ 5 of 5 criteria · 20/20 checks · 15 AI calls',
       '', 'Part of #17']);
-    assert.deepEqual(f.prs[0].body.split('\n').filter(line => line.startsWith('Report')), [], 'the report links of the Before → after line are not listed again');
+    assert.deepEqual(f.prs[0].body.split('\n').filter(line => line.replace(NOTE, '').startsWith('Report')), [], 'the report links of the Before → after line are not listed again');
     assert.doesNotMatch(f.prs[0].body, /^\S+ report links expire after 7 days\.$/m, 'the top line says it already');
   });
 }
@@ -1396,8 +1457,8 @@ test('0.1.7 #15: "Before: no prompt" is lifted too, and a check summary without 
   f.tick(); await stepDone({ step: 'check', summary: 'Verdict: no prompt covers this yet; the bug can only be in the code.\nBefore: no prompt → after ✓ 3 of 3 criteria https://rt.example.test/r/after-3\nRuntime check: ✓ 3 of 3 criteria · 9/9 checks · 2 AI calls\nReport: https://rt.example.test/r/after-3', cwd: run.root }, f.agentPorts());
   await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
-  assert.deepEqual(f.prs[0].body.split('\n').slice(0, 4), ['Agent note — not checked by pdd: Verdict: no prompt covers this yet; the bug can only be in the code.',
-    'Agent note — not checked by pdd: Before: no prompt → after ✓ 3 of 3 criteria https://rt.example.test/r/after-3 (report links expire after 7 days)', 'Prompt tests: ✓ 3 of 3 criteria · 9/9 checks · 2 AI calls', '']);
+  assert.deepEqual(pr1Top(f.prs[0].body, 4), ['Agent note — not checked by pdd: Verdict: no prompt covers this yet; the bug can only be in the code.',
+    'Agent note — not checked by pdd: Before: no prompt → after ✓ 3 of 3 criteria https://rt.example.test/r/after-3 (report links expire after 7 days)', NOTE + 'Prompt tests: ✓ 3 of 3 criteria · 9/9 checks · 2 AI calls', '']);
 });
 
 function topicBase(f, name = 'round3/workflow-base') {
@@ -1711,27 +1772,40 @@ test('RELEASE11: PR2 refreshes its selected remote base with an explicit trackin
 });
 
 // Greg #2442: newer verify results must beat the old check without treating UNKNOWN as a failure.
+// #2904: these Story counts come from pdd's own saved pdd test batches that done records, never from typed summaries.
+async function ownBatch(f, run, name, lines) {
+  const { captureSource } = await import('../src/runtime-preflight.mjs');
+  const folder = join(f.ports.env.PDD_STATE_DIR ?? join(f.ports.env.HOME, '.pdd', 'runtime'), 'batches', name), tests = ['tests/value.json'];
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(join(folder, 'batch.json'), JSON.stringify({ version: 1, batch: name, root: run.root, created_at: new Date(f.clock).toISOString(), intent: 'check',
+    source_sha256: captureSource(run.root, { tests, appMap: null }).sha256, rows: [{ test: tests[0], state: 'passed', request_ids: [] }] }));
+  writeFileSync(join(folder, 'summary.json'), JSON.stringify({ summary_line: 'Prompt tests: see rows', rows: lines.map(summary_line => ({ summary_line })) }));
+}
+const storiesOf = async f => JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0].stories;
+
 test('GREG2442-1: newest compatible verify evidence replaces 7/8 with 17/17; unknown stays unknown', async t => {
-  const { f, run } = await featureAtTryGate(t);
-  const old = Array.from({ length: 8 }, (_, i) => `Runtime check (story-${i}): ${i === 7 ? 'unknown · 0' : '✓ 1'} of 1 criteria · 1/1 checks · 1 AI call`).join('\n');
-  f.tick(); await stepDone({ step: 'check', summary: old, cwd: run.root }, f.agentPorts());
-  let data = JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0].stories;
+  const { f, run } = await featureAtTryGate(t, { tests: true });
+  f.tick(); await ownBatch(f, run, '20261027-170100-aaaa', Array.from({ length: 8 }, (_, i) => `Prompt tests (story-${i}): ${i === 7 ? 'unknown · 0' : '✓ 1'} of 1 criteria · 1/1 checks · 1 AI call`));
+  await stepDone({ step: 'check', summary: 'checked', cwd: run.root }, f.agentPorts());
+  let data = await storiesOf(f);
   assert.equal(data.pass, 7); assert.deepEqual(data.failing, []); assert.deepEqual(data.unknown, ['story-7']);
-  const newer = Array.from({ length: 17 }, (_, i) => `Runtime check (story-${i}): ✓ 1 of 1 criteria · 1/1 checks · 1 AI call`).join('\n');
-  f.tick(); await stepDone({ step: 'verify', summary: newer, cwd: run.root }, f.agentPorts());
-  data = JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0].stories;
+  f.tick(); await ownBatch(f, run, '20261027-170200-bbbb', Array.from({ length: 17 }, (_, i) => `Prompt tests (story-${i}): ✓ 1 of 1 criteria · 1/1 checks · 1 AI call`));
+  await stepDone({ step: 'verify', summary: 'verified', cwd: run.root }, f.agentPorts());
+  data = await storiesOf(f);
   assert.equal(data.pass, 17); assert.equal(data.total, 17); assert.deepEqual(data.failing, []);
 });
 
 test('GREG2442-2: changed uncommitted source invalidates pass evidence, byte-identical content restores it', async t => {
-  const { f, run } = await featureAtTryGate(t);
-  const file = join(run.root, 'value.mjs'), original = readFileSync(file);
-  writeFileSync(file, 'export const value = 999;\n');
-  let out = await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports);
-  let data = JSON.parse(out.message).runs[0].stories;
+  const { f, run } = await featureAtTryGate(t, { tests: true });
+  f.tick(); await ownBatch(f, run, '20261027-170100-aaaa', ['Prompt tests (value): ✓ 2 of 2 criteria · 2/2 checks · 1 AI call']);
+  await stepDone({ step: 'check', summary: 'checked', cwd: run.root }, f.agentPorts());
+  assert.equal((await storiesOf(f)).pass, 1);
+  const file = join(run.root, 'tests', 'value.json'), original = readFileSync(file);
+  writeFileSync(file, '{"changed":true}\n');
+  let data = await storiesOf(f);
   assert.equal(data.pass, 0); assert.deepEqual(data.failing, []); assert.ok(data.unknown.length);
   writeFileSync(file, original);
-  data = JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0].stories;
+  data = await storiesOf(f);
   assert.equal(data.pass, 1);
 });
 
@@ -1780,12 +1854,15 @@ test('GREG2442-3: saved check JSON records only source-verified evidence and pre
 
 
 test('GREG2442-4: later stale-source verify cannot override compatible older results', async t => {
-  const { f, run } = await featureAtTryGate(t);
-  const file = join(run.root, 'value.mjs'), original = readFileSync(file);
-  writeFileSync(file, 'export const value = 999;\n');
-  f.tick(); await stepDone({ step: 'verify', summary: 'Runtime check: ✗ 0 of 2 criteria', cwd: run.root }, f.agentPorts());
+  const { f, run } = await featureAtTryGate(t, { tests: true });
+  f.tick(); await ownBatch(f, run, '20261027-170100-aaaa', ['Prompt tests (value): ✓ 2 of 2 criteria · 2/2 checks · 1 AI call']);
+  await stepDone({ step: 'check', summary: 'checked', cwd: run.root }, f.agentPorts());
+  const file = join(run.root, 'tests', 'value.json'), original = readFileSync(file);
+  writeFileSync(file, '{"changed":true}\n');
+  f.tick(); await ownBatch(f, run, '20261027-170200-bbbb', ['Prompt tests (value): ✗ 0 of 2 criteria · 0/2 checks · 1 AI call']);
+  await stepDone({ step: 'verify', summary: 'verified', cwd: run.root }, f.agentPorts());
   writeFileSync(file, original);
-  const data = JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0].stories;
+  const data = await storiesOf(f);
   assert.equal(data.pass, 1); assert.deepEqual(data.failing, []);
 });
 
@@ -2070,13 +2147,14 @@ test('2530: valid replay and real assertion failures both publish with canonical
   }
 });
 
-test('2530: vector edits after prompt-space approval cannot replace the saved original hashes',async t=>{
+test('2870: vector edits after prompt-space approval warn and replay without replacing the anchor',async t=>{
   const {f,run,vector}=await replayArea(t);const original=f.record().replayBaseline;
   vector.steps[0].checks[0].value=999;writeFileSync(join(run.root,'tests/add.json'),JSON.stringify(vector));
   writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
   writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
   const out=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());assert.equal(out.exitCode,0,out.message);
-  assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nNative tests: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\nCode replay: BLOCKED/);assert.match(f.prs[1].body,/Original vectors changed/);
+  assert.match(f.prs[1].body,/Code replay: PASS/);assert.match(f.prs[1].body.replaceAll('&#47;','/'),/warning: Saved test values changed:.*\/value.*3.*999/);
+  assert.match(out.message,/warning: Saved test values changed:/);
   assert.deepEqual(f.record().replayBaseline,original);
 });
 
@@ -2178,7 +2256,8 @@ test('2553: legacy single-vector baseline cannot publish PASS after another scen
   const out = await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
   assert.equal(out.exitCode,0,out.message);
   assert.equal(f.prs.length,2);
-  assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nNative tests: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\nCode replay: BLOCKED/);
+  assert.match(f.prs[1].body,/Code replay: NOT REPLAYED/);
+  assert.match(f.prs[1].body.replaceAll('&#47;','/'),/warning: Saved test values changed: tests\/refund\.json/);
   assert.doesNotMatch(f.prs[1].body,/Replay evidence is stale/);
   assert.deepEqual(f.record().replayBaseline,original,'code publication cannot repin saved originals');
 });
@@ -2225,7 +2304,7 @@ test('2553: exact whitespace paths survive anchoring and code inventory checks',
   const saved=f.record();saved.replayBaseline.vectors=saved.replayBaseline.vectors.filter(v=>v.path!==path);
   writeFileSync(join(run.runDir,'status.json'),JSON.stringify(saved));
   const result=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
-  assert.equal(result.exitCode,0,result.message);assert.match(f.record().replayEvidence.reason,/missing from the approved anchor/);
+  assert.equal(result.exitCode,0,result.message);assert.ok(f.record().replayEvidence.warnings.some(w=>w.vector===path));
 });
 
 for(const failure of ['listing','missing','malformed']) {
@@ -2248,6 +2327,10 @@ for(const failure of ['listing','missing','malformed']) {
     const result=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
     assert.equal(result.exitCode,0,result.message);assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nNative tests: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\nCode replay: BLOCKED/);
     assert.match(f.record().replayEvidence.reason,/inventory is unavailable/);
+    if(failure==='malformed'){
+      assert.match(f.record().replayEvidence.reason,/tests\/broken\.json/);
+      assert.match(f.record().replayEvidence.reason,/JSON/);
+    }
     assert.match(result.message,/Code replay: BLOCKED/);
   });
 }
@@ -2260,7 +2343,7 @@ test('2553: irrelevant JSON mentioning the schema never becomes a scenario',asyn
   assert.deepEqual(f.record().replayBaseline.vectors.map(v=>v.path),['tests/add.json']);
 });
 
-test('2553: an open code PR update guards newly added scenarios and preserves the frozen anchor',async t=>{
+test('2870: an open code PR lists newly added scenarios without locking and preserves the anchor',async t=>{
   const {f,run,vector}=await replayArea(t);const saved=f.record().replayBaseline;
   writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
   writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
@@ -2269,7 +2352,9 @@ test('2553: an open code PR update guards newly added scenarios and preserves th
   writeFileSync(join(run.root,'tests/refund.json'),JSON.stringify(vector));
   writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
   const result=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
-  assert.equal(result.exitCode,0,result.message);assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nNative tests: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\nCode replay: BLOCKED.*refund\.json/);
+  assert.equal(result.exitCode,0,result.message);assert.match(f.prs[1].body,/Code replay: NOT REPLAYED/);
+  assert.match(f.prs[1].body.replaceAll('&#47;','/'),/warning: Saved test values changed: tests\/refund\.json/);
+  assert.doesNotMatch(result.message,/Return to prompt space/);
   assert.deepEqual(f.record().replayBaseline,saved);assert.equal(f.edits.filter(n=>n===f.prs[1].number).length,2);
 });
 
@@ -2345,7 +2430,7 @@ test('2640 same custom first code area without adoption stays truthful BLOCKED',
   writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
   const out=await stepDone({step:'verify',summary:'PASS in prose',cwd:run.root},f.agentPorts());assert.equal(out.exitCode,0,out.message);assert.match(f.prs[0].body,/^Code replay: BLOCKED/m);
 });
-for(const mode of ['prompt','dependency','vector','added','removed','frozen-declaration'])test(`2640 adopted code publication refuses ${mode} changes without repinning`,async t=>{
+for(const mode of ['prompt','dependency','vector','added','removed','frozen-declaration'])test(`2640 adopted code publication handles ${mode} changes without repinning`,async t=>{
   const {f,vector}=await adoptedCorpusRun(t),run=f.record(),anchor=structuredClone(run.replayBaseline);
   writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
   if(mode==='prompt')writeFileSync(join(run.root,'prompts/add.prompt.md'),'Changed prompt.\n');
@@ -2354,7 +2439,16 @@ for(const mode of ['prompt','dependency','vector','added','removed','frozen-decl
   if(mode==='added')writeFileSync(join(run.root,'tests/new.json'),JSON.stringify(vector));
   if(mode==='removed')rmSync(join(run.root,'tests/add.json'));
   if(mode==='frozen-declaration')writeFileSync(join(run.runDir,'replay-adoption.json'),'{}');
-  const out=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());assert.equal(out.exitCode,1,out.message);assert.match(out.message,/ordinary approval workflow/);assert.equal(f.prs.length,0);assert.equal(f.pushes.length,0);assert.deepEqual(f.record().replayBaseline,anchor);
+  const out=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
+  if(['vector','added','removed'].includes(mode)){
+    assert.equal(out.exitCode,0,out.message);assert.equal(f.prs.length,1);
+    assert.match(f.prs[0].body,/warning: Saved test values changed:/);
+    assert.doesNotMatch(out.message,/ordinary approval workflow/);
+  }else{
+    assert.equal(out.exitCode,1,out.message);assert.match(out.message,/ordinary approval workflow/);
+    assert.equal(f.prs.length,0);assert.equal(f.pushes.length,0);
+  }
+  assert.deepEqual(f.record().replayBaseline,anchor);
 });
 test('2640 startup validates selected base rather than dirty caller tree',async t=>{
   const {f,begin}=await adoptedCorpusRun(t,{start:false});writeFileSync(join(f.source,'rules/add.md'),'Dirty caller rule.\n');
@@ -2390,6 +2484,23 @@ test('2640 publication retry revalidates frozen context before updating an open 
   assert.equal((await stepDone({step:'verify',summary:'Replay',cwd:run.root},f.agentPorts())).exitCode,0);
   const pushes=f.pushes.length,edits=f.edits.length;writeFileSync(join(run.root,'rules/add.md'),'Changed after publication.\n');
   const out=await stepDone({step:'verify',summary:'Retry',cwd:run.root},f.agentPorts());assert.equal(out.exitCode,1,out.message);assert.match(out.message,/ordinary approval workflow/);assert.equal(f.pushes.length,pushes);assert.equal(f.edits.length,edits);assert.deepEqual(f.record().replayBaseline,anchor);assert.equal(f.record().replayEvidence.outcome,'blocked');assert.equal(f.record().done.verify.replayEvidence.outcome,'blocked');
+});
+
+for(const change of ['corrected','removed','moved','added'])test(`2870: adopted code publication warns for ${change} scenarios without a lock`,async t=>{
+  const {f,vector}=await adoptedCorpusRun(t),run=f.record(),anchor=structuredClone(run.replayBaseline);
+  const path=join(run.root,'tests/add.json');
+  if(change==='corrected'){vector.steps[0].checks[0].value=8;writeFileSync(path,JSON.stringify(vector));}
+  if(change==='removed')rmSync(path);
+  if(change==='moved'){writeFileSync(join(run.root,'tests/moved.json'),readFileSync(path));rmSync(path);}
+  if(change==='added')writeFileSync(join(run.root,'tests/extra.json'),JSON.stringify(vector));
+  if(change==='corrected')writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
+  const out=await stepDone({step:'verify',summary:'Checked current cases',cwd:run.root},f.agentPorts());
+  assert.equal(out.exitCode,0,out.message);assert.equal(f.prs.length,1);
+  assert.match(out.message,/warning: Saved test values changed:/);
+  assert.match(f.prs[0].body,/warning: Saved test values changed:/);
+  assert.doesNotMatch(out.message,/ordinary approval workflow|Return to prompt space/);
+  if(change==='corrected')assert.match(f.prs[0].body,/Code replay: PASS/);
+  assert.deepEqual(f.record().replayBaseline,anchor);
 });
 test('2640 invalid adoption preserves cancelled historical run and its claim before restart',async t=>{
   const {f,begin,declaration}=await adoptedCorpusRun(t);const run=f.record();assert.equal((await cancelRun({ref:'17',cwd:f.source},f.ports)).exitCode,0);
@@ -2488,18 +2599,18 @@ test('product association: conflicting markers warn and ordinary issues keep the
 });
 
 // user_stories/prompt-tests-line.md: pdd writes `Prompt tests`; every reader takes old `Runtime check` lines the same way.
-test('Prompt tests lines: PR 1 top, total and Story count read new and old labels alike; a verdict stops at either label', async t => {
+test('Prompt tests lines: the PR 1 top and total read new and old labels alike, status never counts them, and a verdict stops at either label', async t => {
   const { f, run } = await featureAtTryGate(t);
   const summary = ['Verdict: the bug is in the PROMPT.', 'Prompt tests (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
     'Runtime check (merge-tiles) (DRAFT): ✗ 2 of 3 criteria · 8/10 checks · 2 AI calls', 'Report (move-tiles): https://rt.example.test/r/one'].join('; ');
   f.tick(); await stepDone({ step: 'check', summary, cwd: run.root }, f.agentPorts());
   const stories = JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0].stories;
-  assert.equal(stories.total, 2); assert.equal(stories.pass, 1); assert.deepEqual(stories.failing, ['merge-tiles']);
+  assert.deepEqual(stories, { pass: 0, total: 0, failing: [], none: true }, 'typed Prompt tests lines never count in status (#2904)');
   await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
-  const top = f.prs[0].body.split('\n').slice(0, 4);
+  const top = pr1Top(f.prs[0].body, 4);
   assert.ok(top[0].startsWith('Agent note — not checked by pdd: Verdict:') && !/Prompt tests|Runtime check/.test(top[0]), top[0]);
-  assert.deepEqual(top.slice(1).map(line => line.split(':')[0]), ['Prompt tests (move-tiles)', 'Prompt tests (merge-tiles) (DRAFT)', 'Prompt tests (all Stories) (DRAFT)']);
+  assert.deepEqual(top.slice(1).map(line => line.replace(NOTE, '').split(':')[0]), ['Prompt tests (move-tiles)', 'Prompt tests (merge-tiles) (DRAFT)', 'Prompt tests (all Stories) (DRAFT)']);
   assert.match(top[3], /: ✗ 5 of 6 criteria · 18\/20 checks · 3 AI calls$/);
   assert.doesNotMatch(f.prs[0].body, /^Runtime check/m, 'pdd writes only the new label');
 });
@@ -2525,4 +2636,288 @@ test('Prompt tests lines: workflow evidence records a saved result with the new 
   assert.equal(f.record().evidence.length, 2);
   const stories = JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0].stories;
   assert.equal(stories.pass, 2); assert.equal(stories.total, 2);
+});
+
+
+test('chat and approval hints use the running package under PATH shadowing', async t => {
+ const f=await fixture(t); await f.run(); const run=f.record();
+ const hint=readFileSync(run.chats[0].messageFile,'utf8').split('\n').find(line=>line.startsWith('After each step, run: '));
+ assert.match(hint,/run: "\$PDD_BIN" workflow done/);
+ assert.doesNotMatch(hint,/\/abs\/node|bin\/pdd\.mjs/);
+ const executable=hint.match(/run: ("\$PDD_BIN")/)[1];
+ const old=join(f.base,'old');mkdirSync(old);writeFileSync(join(old,'pdd'),'#!/bin/sh\necho old\n',{mode:0o755});
+ const version=JSON.parse(readFileSync(join(packageRoot,'package.json'),'utf8')).version;
+ const result=execFileSync('/bin/sh',['-c',`${executable} --version`],{env:{...process.env,PATH:`${old}:${dirname(process.execPath)}:/usr/bin:/bin`,PDD_BIN:join(packageRoot,'bin/pdd.mjs'),PDD_AGENT_SESSION:'1'},encoding:'utf8'});
+ assert.equal(result.trim(),version);
+ const gate=await stepDone({step:'scope',summary:'ready',cwd:run.root},f.agentPorts());
+ assert.match(gate.message,/"\$PDD_BIN" workflow approve 17 --said -/);
+});
+
+// #2904: pdd attaches its own pdd test and pdd lint results to the steps and the PR; agent text stays an agent note.
+function saveBatch(stateDir, name, batch, summary) {
+  const folder = join(stateDir, 'batches', name); mkdirSync(folder, { recursive: true });
+  writeFileSync(join(folder, 'batch.json'), JSON.stringify({ version: 1, batch: name, ...batch }));
+  if (summary) writeFileSync(join(folder, 'summary.json'), JSON.stringify(summary));
+}
+async function featureWithOwnResults(t, { results = true } = {}) {
+  const f = await fixture(t, { name: 'feature', agent: 'codex' });
+  const skill = join(f.source, '.agents', 'skills', 'pdd-feature');
+  mkdirSync(skill, { recursive: true }); writeFileSync(join(skill, 'workflow.json'), JSON.stringify(featureAreas));
+  assert.equal((await f.run()).exitCode, 0);
+  const run = f.record(), stateDir = join(f.base, 'runtime-state');
+  f.ports.env.PDD_STATE_DIR = stateDir;
+  const done = async (step, input) => { f.tick(); const out = await stepDone({ step, ...input, cwd: run.root }, f.agentPorts()); assert.equal(out.exitCode, 0, out.message); return out; };
+  await done('understand', { summary: 'understood' }); await done('visual', { summary: 'skipped' });
+  writeFileSync(join(run.root, 'feature.prompt.md'), 'Return two.\n'); mkdirSync(join(run.root, 'tests'));
+  writeFileSync(join(run.root, 'tests', 'value.json'), JSON.stringify({ schema_version: 'prompt-runtime.program-scenario.v1', criteria: [], initial_world: {}, steps: [] }));
+  f.git(run.root, 'add', '.'); f.git(run.root, 'commit', '-qm', 'prompt, Story and tests');
+  await done('prompt-story', { summary: 'Story and cases written' });
+  f.tick(); assert.equal((await approveRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
+  if (results) {
+    const row = { test: 'tests/value.json', story: 'user_stories/value.md', state: 'passed', request_ids: [], engine_sha: 'abcdef1234567890', requested_model: 'model-one' };
+    // Older than the run, or for another folder: never this run's result.
+    saveBatch(stateDir, '20261001-100000-old0', { root: run.root, created_at: '2026-10-01T10:00:00.000Z', intent: 'check', rows: [row] }, { summary_line: 'Prompt tests: ✗ 0 of 1 criteria', rows: [] });
+    saveBatch(stateDir, '20261027-180000-oth0', { root: f.source, created_at: '2026-10-27T18:00:00.000Z', intent: 'check', rows: [row] }, { summary_line: 'Prompt tests: ✗ other folder', rows: [] });
+    saveBatch(stateDir, '20261027-180000-abcd', { root: run.root, created_at: '2026-10-27T18:00:00.000Z', intent: 'check', source_sha256: 'f'.repeat(64), rows: [row] },
+      { summary_line: 'Prompt tests: no verdict · 0 of 8 criteria · 0/0 checks · 1 refused · 0 AI calls', rows: [{ summary_line: 'Prompt tests (value): no verdict · 0 of 8 criteria · 1 refused' }] });
+    saveBatch(stateDir, '20261027-175900-lint', { root: run.root, created_at: '2026-10-27T17:59:00.000Z', intent: 'lint-only', lint: { state: 'passed' }, rows: [{ ...row }] });
+  }
+  return { f, run, done };
+}
+
+test('2904: done check attaches pdd\'s own latest pdd test and pdd lint results; the typed summary stays an agent note', async t => {
+  const { f, run, done } = await featureWithOwnResults(t);
+  const typed = 'Prompt tests (value): ✓ 8 of 8 criteria · 20/20 checks · 2 AI calls\nPublic full suite: 4085 passed.';
+  const check = await done('check', { summary: typed });
+  assert.match(check.message, /^pdd recorded its own results with this step:$/m);
+  assert.match(check.message, /^pdd result: pdd test \(batch 20261027-180000-abcd, 2026-10-27T18:00:00Z, source (?:changed|unknown), engine abcdef123456, model model-one\): Prompt tests: no verdict · 0 of 8 criteria · 0\/0 checks · 1 refused · 0 AI calls; Prompt tests \(value\): no verdict · 0 of 8 criteria · 1 refused$/m);
+  assert.match(check.message, /^pdd result: pdd lint \(batch 20261027-175900-lint, 2026-10-27T17:59:00Z\): Lint: 1 of 1 tests pass\. 0 AI calls\.$/m);
+  assert.match(check.message, /summary is saved as an agent note/);
+  assert.doesNotMatch(check.message, /other folder|✗ 0 of 1/);
+  const saved = f.record().done.check;
+  assert.equal(saved.summary, typed);
+  assert.deepEqual(saved.pddResults.map(result => [result.kind, result.batch]), [['pdd test', '20261027-180000-abcd'], ['pdd lint', '20261027-175900-lint']]);
+
+  await done('try', { skipped: 'No person at the Try step (agent-driven run).' });
+  const body = f.prs[0].body, top = body.split('\n\nPart of #17')[0].split('\n');
+  assert.match(top[0], /^pdd result: pdd test \(batch 20261027-180000-abcd, .*\): Prompt tests: no verdict/);
+  assert.match(top[1], /^pdd result: pdd lint \(batch 20261027-175900-lint, /);
+  // The line the agent typed is shown, but never as pdd's own result.
+  assert.ok(top.includes('Agent note — not checked by pdd: Prompt tests (value): ✓ 8 of 8 criteria · 20/20 checks · 2 AI calls'), top.join('\n'));
+  assert.ok(top.every(line => /^(?:pdd result: |Agent note — not checked by pdd: |Approved in )/.test(line)), top.join('\n'));
+  assert.match(body, /^- \*\*try\*\*: skipped \(recorded by pdd\)\. Agent note — not checked by pdd: `skipped: No person at the Try step \(agent-driven run\)\.`$/m);
+});
+
+test('2904: with no pdd result of its own, done check warns and goes on, and the PR shows pdd:no-verdict', async t => {
+  const { f, run, done } = await featureWithOwnResults(t, { results: false });
+  const check = await done('check', { summary: 'Prompt tests: ✓ 3 of 3 criteria · 10/10 checks · 1 AI call' });
+  assert.match(check.message, /^warning: pdd has no result of its own for this run yet\. pdd recorded the step with the label "no pdd result"\.$/m);
+  assert.match(check.message, /^pdd result: none\. pdd has no pdd test, pdd lint or pdd workflow prove result of its own for this run \(pdd:no-verdict\)\.$/m);
+  assert.match(check.message, /Next step: try/);
+  assert.deepEqual(f.record().done.check.pddResults, []);
+  const skipped = await done('try', { skipped: 'No person at the Try step.' });
+  assert.match(skipped.message, /pdd recorded that try was skipped\. Reason \(agent note\): No person at the Try step\./);
+  assert.equal(f.record().done.try.skipped.reason, 'No person at the Try step.');
+  assert.equal(f.prs.length, 1, 'no hard stop: PR 1 opens');
+  assert.equal(f.prs[0].body.split('\n')[0], 'pdd result: none. pdd has no pdd test or pdd lint result of its own for this run (pdd:no-verdict).');
+  assert.match(f.prs[0].body, /^Agent note — not checked by pdd: Prompt tests: ✓ 3 of 3 criteria · 10\/10 checks · 1 AI call$/m);
+  assert.doesNotMatch(f.prs[0].body, /^Prompt tests: ✓/m);
+});
+
+test('2904: with no agent summary, the step record and the PR trace pdd\'s result to its saved requests and reports; a fake proof is not pdd\'s proof', async t => {
+  const { f, run, done } = await featureWithOwnResults(t, { results: false });
+  saveBatch(f.ports.env.PDD_STATE_DIR, '20261027-180000-abcd', { root: run.root, created_at: '2026-10-27T18:00:00.000Z', intent: 'check',
+    rows: [{ test: 'tests/value.json', state: 'passed', request_ids: ['11111111-1111-4111-8111-111111111111'], report_url: 'https://rt.example.test/r/actual-report' }] },
+    { summary_line: 'Prompt tests: ✓ 1 of 1 criteria · 1/1 checks · 1 AI call', rows: [] });
+  // A file that only looks like a proof: it is shown plainly and never as pdd's proof.
+  writeFileSync(join(run.runDir, 'old-code-proof.json'), JSON.stringify({ runId: run.runId, outcome: 'proved', headSha: f.git(run.root, 'rev-parse', 'HEAD') }));
+  const check = await done('check', {});
+  assert.match(check.message, /^pdd recorded its own results with this step:$/m);
+  assert.match(check.message, /^pdd result: pdd workflow prove \([^)]*\): Old-code proof: unavailable\.$/m);
+  assert.doesNotMatch(check.message, /Old-code proof: proved|Old-code proof: ✓/);
+  const saved = f.record().done.check;
+  assert.equal(saved.summary, '');
+  assert.deepEqual(saved.pddResults[0].requests, ['11111111-1111-4111-8111-111111111111']);
+  assert.deepEqual(saved.pddResults[0].reports, ['https://rt.example.test/r/actual-report']);
+  assert.equal(saved.pddResults[1].state, 'unavailable');
+  await done('try', { skipped: 'No person at the Try step.' });
+  const top = f.prs[0].body.split('\n')[0];
+  assert.match(top, /^pdd result: pdd test \(batch 20261027-180000-abcd, [^)]*request 11111111-1111-4111-8111-111111111111\): Prompt tests: ✓ 1 of 1 criteria · 1\/1 checks · 1 AI call; Report: https:\/\/rt\.example\.test\/r\/actual-report \(report links expire after 7 days\)$/);
+});
+
+test('2904: done check with only a stale or fake proof warns, shows it plainly, says pdd:no-verdict and goes on', async t => {
+  const { f, run, done } = await featureWithOwnResults(t, { results: false });
+  writeFileSync(join(run.runDir, 'old-code-proof.json'), '{"runId":"x"}');
+  const out = await done('check', { summary: 'checked' });
+  assert.match(out.message, /^warning: pdd has no result of its own for this run yet\./m);
+  assert.match(out.message, /Old-code proof: unavailable\./);
+  assert.match(out.message, /\(pdd:no-verdict\)\.$/m);
+  assert.match(out.message, /Next step: try/);
+});
+
+test('2904: a 51-row pdd test batch keeps all requests and reports in the step record, and the PR top says how many it does not show', async t => {
+  const { f, run, done } = await featureWithOwnResults(t, { results: false });
+  const id = i => `${String(i).padStart(8, '0')}-1111-4111-8111-111111111111`;
+  saveBatch(f.ports.env.PDD_STATE_DIR, '20261027-180000-abcd', { root: run.root, created_at: '2026-10-27T18:00:00.000Z', intent: 'check',
+    rows: Array.from({ length: 51 }, (_, i) => ({ test: `tests/t${i}.json`, state: 'passed', request_ids: [id(i)], report_url: `https://rt.example.test/r/report-${i}` })) },
+    { summary_line: 'Prompt tests: ✓ 51 of 51 criteria', rows: [] });
+  await done('check', {});
+  const [own] = f.record().done.check.pddResults;
+  assert.equal(own.requests.length, 51); assert.equal(own.reports.length, 51);
+  await done('try', { skipped: 'No person at the Try step.' });
+  const top = f.prs[0].body.split('\n')[0];
+  assert.match(top, /^pdd result: pdd test \(batch 20261027-180000-abcd, /);
+  assert.ok(top.endsWith('; 41 more requests and 41 more reports not shown (all in the run record)'), top.slice(-160));
+});
+
+test('2904: a cache-only pdd test row with no agent summary shows its cached build and model in the step record and the PR top', async t => {
+  const { f, run, done } = await featureWithOwnResults(t, { results: false });
+  saveBatch(f.ports.env.PDD_STATE_DIR, '20261027-180000-abcd', { root: run.root, created_at: '2026-10-27T18:00:00.000Z', intent: 'check',
+    rows: [{ test: 'tests/value.json', state: 'passed', cached: true, request_ids: [], cache_identity: { engine_sha: 'fedcba9876543210', requested_model: 'cached-model' } }] },
+    { summary_line: 'Prompt tests: ✓ 1 of 1 criteria · 1 Story skipped · 0 AI calls', rows: [] });
+  await done('check', {});
+  const [own] = f.record().done.check.pddResults;
+  assert.deepEqual([own.engine, own.engineCached, own.model, own.modelCached], ['fedcba987654', true, 'cached-model', true]);
+  await done('try', { skipped: 'No person at the Try step.' });
+  assert.match(f.prs[0].body.split('\n')[0], /^pdd result: pdd test \(batch 20261027-180000-abcd, [^)]*engine fedcba987654 \(cached\), model cached-model \(cached\)\): /);
+});
+
+// #2904 follow-up: the status Story count reads only pdd's own recorded results; typed lines never count.
+test('2904: status counts Stories from pdd\'s own recorded pdd test results, never from a typed done summary', async t => {
+  const { f, run, done } = await featureWithOwnResults(t, { results: false });
+  const { captureSource } = await import('../src/runtime-preflight.mjs');
+  const stateDir = f.ports.env.PDD_STATE_DIR;
+  // The agent claims a pass; pdd has no result of its own.
+  await done('check', { summary: 'Prompt tests (value): ✓ 8 of 8 criteria · 20/20 checks · 2 AI calls' });
+  f.herdr.idle();
+  let shown = (await runStatus({ ref: '17', cwd: f.source }, f.ports)).message;
+  assert.match(shown, /^Stories: no pdd result \(pdd:no-verdict\)$/m);
+  assert.doesNotMatch(shown, /Stories pass/);
+  assert.equal(JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0].stories.none, true);
+  // pdd's own check fails one of two Stories; then a partial re-check passes it. Both batches count, by Story.
+  const tests = ['tests/value.json'], sha = captureSource(run.root, { tests, appMap: null }).sha256;
+  const row = { test: 'tests/value.json', story: 'user_stories/value.md', state: 'failed', request_ids: [] };
+  saveBatch(stateDir, '20261027-180000-aaaa', { root: run.root, created_at: '2026-10-27T18:00:00.000Z', intent: 'check', source_sha256: sha, rows: [row] },
+    { summary_line: 'Prompt tests: ✗ 1 of 3 criteria', rows: [{ summary_line: 'Prompt tests (value): ✓ 1 of 1 criteria' }, { summary_line: 'Prompt tests (other): ✗ 0 of 2 criteria' }] });
+  await done('check', { summary: 'Prompt tests (value): ✓ 1 of 1 criteria; Prompt tests (other): ✓ 2 of 2 criteria' });
+  shown = (await runStatus({ ref: '17', cwd: f.source }, f.ports)).message;
+  assert.match(shown, /^Stories: 1 of 2 Stories pass \(✗ other\)$/m, 'the typed ✓ for other does not count');
+  saveBatch(stateDir, '20261027-190000-bbbb', { root: run.root, created_at: '2026-10-27T19:00:00.000Z', intent: 'check', source_sha256: sha, rows: [row] },
+    { summary_line: 'Prompt tests: ✓ 2 of 2 criteria', rows: [{ summary_line: 'Prompt tests (other): ✓ 2 of 2 criteria' }] });
+  await done('check', { summary: 'checked other again' });
+  shown = (await runStatus({ ref: '17', cwd: f.source }, f.ports)).message;
+  assert.match(shown, /^Stories: 2 of 2 Stories pass$/m);
+  // A Story that only a typed line names is unknown, never a pass.
+  await done('verify', { summary: 'Prompt tests (extra): ✓ 4 of 4 criteria · 4/4 checks · 1 AI call' });
+  shown = (await runStatus({ ref: '17', cwd: f.source }, f.ports)).message;
+  assert.match(shown, /^Stories: 2 of 3 Stories pass · 1 unknown$/m); assert.match(shown, /^Unknown Stories: extra$/m);
+  assert.deepEqual(f.record().pddHistory.map(result => result.batch), ['20261027-180000-aaaa', '20261027-190000-bbbb']);
+  // A changed source makes pdd's saved results unverified, never a current pass.
+  writeFileSync(join(run.root, 'tests', 'value.json'), JSON.stringify({ schema_version: 'prompt-runtime.program-scenario.v1', criteria: [], initial_world: { changed: true }, steps: [] }));
+  shown = (await runStatus({ ref: '17', cwd: f.source }, f.ports)).message;
+  assert.match(shown, /^Stories: 0 of 3 Stories pass · 3 unknown$/m);
+});
+
+test('2904: agent words after a Prompt tests result on the same line are not part of the result', async () => {
+  const { runtimeLines } = await import('../src/workflow-runner.mjs');
+  const results = text => runtimeLines(text).map(line => line.result);
+  assert.deepEqual(results('Prompt tests (value): ✓ 8 of 8 criteria · 20/20 checks · 2 AI calls. Public full suite: 4085 passed, no skips.'), ['✓ 8 of 8 criteria · 20/20 checks · 2 AI calls']);
+  assert.deepEqual(results('Prompt tests: ✓ 3 of 3 criteria and all native tests pass'), ['✓ 3 of 3 criteria']);
+  assert.deepEqual(results('Prompt tests: ✗ 2 of 3 criteria · 8/10 checks · 2 AI calls · the rest is fine'), ['✗ 2 of 3 criteria · 8/10 checks · 2 AI calls']);
+  for (const line of ['no verdict · 0 of 8 criteria · 0/0 checks · 1 refused · 0 AI calls', 'running · step 2 of 5 (pay) · 3 AI calls so far · 1 not yet settled · 0/0 checks',
+    '✓ passed · criteria details not reported · 0/0 checks · 1 AI call', '✓ 3 of 3 criteria · 10/10 checks · 1 AI call (1 for reruns) + 1 unknown'])
+    assert.deepEqual(results(`Prompt tests (a): ${line}`), [line], 'pdd\'s own result lines stay whole');
+});
+
+test('2904: product evidence reads pdd\'s own records and receipts, never typed summaries or agent-note PR lines', async () => {
+  const { storyEvidence, recordedRuntimeLines } = await import('../src/workflow-runner.mjs');
+  const typed = { root: '/nowhere', runtimeHistory: [{ at: 1, source: { kind: 'git-content-v1', sha256: 'a'.repeat(64) }, summary: 'Prompt tests (P01-menu): ✓' }],
+    done: { check: { at: 1, summary: 'Prompt tests (P01-menu): ✓' } } };
+  assert.deepEqual(storyEvidence(typed, { comparisonRoot: null }), []);
+  const own = { root: '/nowhere', done: {}, pddHistory: [{ kind: 'pdd test', batch: 'b1', at: 2, summary: 'Prompt tests: ✓', stories: ['Prompt tests (P01-menu): ✓ 1 of 1 criteria'], sourceSha256: 'b'.repeat(64), tests: ['tests/a.json'] }] };
+  assert.deepEqual(storyEvidence(own, { comparisonRoot: null }).map(row => [row.story, row.pass, row.current]), [['P01-menu', true, false]]);
+  const body = ['pdd result: pdd test (batch b1, 2026-11-03T12:00:00Z, source current): Prompt tests (P02-order): ✓ 2 of 2 criteria',
+    'Agent note — not checked by pdd: Prompt tests (P01-menu): ✓ 3 of 3 criteria', 'Prompt tests (P03-ready): ✗ 0 of 1 criteria', '', 'Part of #17'].join('\n');
+  assert.deepEqual(recordedRuntimeLines(body).map(row => row.story), ['P02-order', 'P03-ready']);
+});
+
+test('2921: named progress without step numbers keeps its accounting and cuts trailing agent words', async () => {
+  const { runtimeLines } = await import('../src/workflow-runner.mjs');
+  const { projectAnswer, summaryLine } = await import('../src/runtime-output.mjs');
+  const view = projectAnswer({ command: 'check', state: 'running', progress: { step: 'pay', calls_settled: 3, calls_open: 1 } });
+  const result = 'running · 0 of 2 criteria · 0/0 checks · running · pay · 3 AI calls so far · 1 not yet settled · 1 running';
+  for (const story of [null, 's']) {
+    const line = summaryLine([{ ...view, criteria_total: 2 }], story);
+    assert.equal(line, `Prompt tests${story ? ` (${story})` : ''}: ${result}`);
+    for (const tail of ['', '. Public full suite: 4085 passed, no skips.', ' and all native tests pass', ' · the rest is fine'])
+      assert.deepEqual(runtimeLines(`${line}${tail}`).map(row => row.result), [result], `${line}${tail}`);
+  }
+});
+
+test('2904: every Prompt tests form that summaryLine prints stays whole, and agent words after it are cut off', async () => {
+  const { runtimeLines } = await import('../src/workflow-runner.mjs');
+  const { summaryLine } = await import('../src/runtime-output.mjs');
+  const S = { phase: 'server', request_ids: ['a'] };
+  const groups = [
+    [{ ...S, state: 'failed', criteria: { passed: 0, total: 1 }, checks: { passed: 0, total: 0 }, rerun: { calls: 2 }, unknown_calls: 1 }],
+    [{ ...S, state: 'passed', criteria: { passed: 3, total: 3 }, checks: { passed: 10, total: 10 }, calls: 4, rerun: { calls: 1 } }],
+    [{ ...S, state: 'failed', criteria: { passed: 1, total: 3 }, checks: { passed: 3, total: 10 }, calls: 2 }, { ...S, state: 'unknown', criteria_total: 2 }],
+    [{ ...S, state: 'running', criteria_total: 2, progress: { step: 'pay', steps_done: 1, steps_total: 5, calls_settled: 3, calls_open: 1 } }],
+    [{ ...S, state: 'running', criteria_total: 2, progress: { calls_settled: 1 } }, { ...S, state: 'running', criteria_total: 1, progress: { calls_settled: 2, calls_open: 2 } }],
+    [{ state: 'refused', criteria_total: 8, request_ids: [], calls: 0 }],
+    [{ state: 'passed', cached: true, story: 's', criteria: { passed: 1, total: 1 }, checks: { passed: 1, total: 1 }, calls: 0, request_ids: [] }],
+    [{ ...S, state: 'passed', checks: { passed: 1, total: 1 }, calls: 1 }],
+    [{ state: 'not_run', busy: true, criteria_total: 1, request_ids: [], calls: 0 }],
+    [{ ...S, state: 'queued', criteria_total: 1 }]];
+  for (const rows of groups) for (const story of [null, 's']) {
+    const line = summaryLine(rows, story), result = line.slice(line.indexOf(': ') + 2);
+    for (const tail of ['', '. Public full suite: 4085 passed, no skips.', ' and all native tests pass', ' · the rest is fine'])
+      assert.deepEqual(runtimeLines(`${line}${tail}`).map(row => row.result), [result], `${line}${tail}`);
+  }
+  for (const [text, result] of [['Prompt tests: UNKNOWN and all native tests pass', 'UNKNOWN'], ['Runtime check (a): unknown · 0 of 1 criteria · 1/1 checks · 1 AI call and more', 'unknown · 0 of 1 criteria · 1/1 checks · 1 AI call']])
+    assert.deepEqual(runtimeLines(text).map(row => row.result), [result], text);
+});
+
+// #2921: product reads a real, runner-generated PR body: only pdd's own result lines count, never Steps rows or full summaries.
+async function productStatusFor(t, body) {
+  const { productStatus } = await import('../src/product.mjs');
+  const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-product-body-'))); t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  const { cpSync } = await import('node:fs');
+  cpSync(join(packageRoot, 'examples/coffee-pickup'), cwd, { recursive: true });
+  const marker = '<!-- pdd-product: run=phone-1 -->', issue = { number: 81, body: marker, user: { login: 'member' }, author_association: 'MEMBER', created_at: '2026-10-01T00:00:00Z' };
+  const pr = { number: 61, url: 'https://github.com/example/coffee/pull/61', state: 'MERGED', isDraft: false, updatedAt: '2026-10-02T00:00:00Z', headRefName: 'topic-61', isCrossRepository: false,
+    headRepository: { name: 'coffee' }, headRepositoryOwner: { login: 'example' },
+    body: `${marker}\n<!-- pdd-workflow:instance-61:code -->\n${body.replace(/^<!-- pdd-workflow:[^\n]*-->$/gm, '')}` };
+  let saved = null;
+  const ports = { lockProductState: async () => ({ handle: 'lock' }), unlockProductState: async () => ({}), readProductState: async () => ({ json: saved }), writeProductState: async ({ json }) => { saved = json; return {}; },
+    now: async () => ({ milliseconds: Date.parse('2026-10-03T00:00:00Z') }), issueByNumber: async ({ number }) => number === 81 ? issue : null, listRuns: async () => [],
+    resolveRepository: async () => ({ repository: 'example/coffee', defaultBranch: 'alpha' }), planOnBase: async () => true, storyEvidence: async () => [],
+    issuePage: async args => { const items = issue.body.includes(args.marker) ? [issue] : []; return { items: items.slice((args.page - 1) * args.perPage, args.page * args.perPage), total_count: items.length, incomplete_results: false }; },
+    timelinePage: async args => args.issue === 81 && args.page === 1 ? [{ event: 'cross-referenced', source: { issue: { pull_request: { html_url: pr.url } } } }] : [],
+    pullRequest: async ({ number }) => number === 61 ? pr : null, currentActor: async () => ({ login: 'person' }),
+    openBaseSource: async () => ({ root: cwd, handle: null }), closeBaseSource: async () => ({}), execFile: async () => assert.fail('no process') };
+  return productStatus({ cwd }, ports);
+}
+
+test('2921: product counts nothing from a generated PR body whose only Prompt tests lines are agent notes, and a real pdd ✗ wins over them', async t => {
+  const typed = 'Prompt tests (P01-menu): ✓ 8 of 8 criteria · 8/8 checks · 1 AI call';
+  { // No pdd result: the body has the agent-note top line, a Steps row and the full summary, all saying ✓.
+    const { f, done } = await featureWithOwnResults(t, { results: false });
+    await done('check', { summary: typed }); await done('try', { skipped: 'No person at the Try step.' });
+    const body = f.prs[0].body;
+    assert.match(body, /^- \*\*check\*\*: Agent note — not checked by pdd: `Saved runtime receipt \(unverified in this agent note\): Prompt tests \(P01-menu\): ✓/m);
+    const status = await productStatusFor(t, body);
+    assert.equal(status.parts[0].pass, 0, JSON.stringify(status.parts[0]));
+  }
+  { // pdd's own check failed P01-menu; the agent typed a pass.
+    const { f, run, done } = await featureWithOwnResults(t, { results: false });
+    saveBatch(f.ports.env.PDD_STATE_DIR, '20261027-180000-abcd', { root: run.root, created_at: '2026-10-27T18:00:00.000Z', intent: 'check', rows: [{ test: 'tests/value.json', state: 'failed', request_ids: [] }] },
+      { summary_line: 'Prompt tests: ✗ 0 of 8 criteria · 0/8 checks · 1 AI call', rows: [{ summary_line: 'Prompt tests (P01-menu): ✗ 0 of 8 criteria · 0/8 checks · 1 AI call' }] });
+    await done('check', { summary: typed }); await done('try', { skipped: 'No person at the Try step.' });
+    const body = f.prs[0].body;
+    assert.match(body.split('\n')[0], /^pdd result: pdd test .*Prompt tests \(P01-menu\): ✗ 0 of 8 criteria/);
+    const status = await productStatusFor(t, body);
+    assert.equal(status.parts[0].pass, 0, JSON.stringify(status.parts[0]));
+    assert.equal(status.runs.find(row => row.run === 'phone-1').fromPr, 61, 'the pdd result line still names the PR as the evidence source');
+  }
 });

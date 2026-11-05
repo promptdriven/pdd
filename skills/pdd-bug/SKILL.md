@@ -2,7 +2,7 @@
 name: pdd-bug
 description: Use when fixing PDD bugs, errors or wrong results. Reproduce, prompt/tests PR 1, code PR 2 if asked.
 metadata:
-  pdd-skills: 0.1.15
+  pdd-skills: 0.1.16
 ---
 
 # PDD bug
@@ -14,12 +14,13 @@ Step briefs are in `steps/`. `?` means optional.
 2. prompt-pr: check, try? → approve, then gate: pr, then ask
 3. code: build, verify, formal, review → gate: pr
 
+- If Autopilot is `observe` or `auto`, read `steps/autopilot.md` first.
 - Main chat: coordinate; no code or checks.
-- Use fresh subagents; never reuse builders or let them check their code. Give the step file and paths at once, not chat history. Wait once with a long time-out; no small follow-ups. Check/read: RUNBOOK §11 once.
+- Fresh subagents; never reuse builders or let them check code. Step file/paths at once; no chat history. Wait once: long time-out; no small follow-ups. Read §11 once. See pdd-prompting RUNBOOK "Bounded handoffs".
 - Checks: fresh first. Only verify/formal may reuse after startup failure; wrote no code, tests or prompts this run.
 - Review: always fresh; no build, verify, formal, prior reviews or their context. Blocked: RUNBOOK §17.
 - Read pdd-prompting RUNBOOK §17 before checks: cleanup, unrun checks, recovery and result replacement.
-- At gates, show results, ask and stop. Revise and ask again. Outside runs, ask before PRs. In runs, pdd opens them. Main chat merges only on person request under RUNBOOK §2.
+- At gates, show results, ask and stop. Revise and ask again. Outside runs, ask before PRs. In runs, pdd opens them. Main chat merges only on person request (RUNBOOK §2).
 - Use full URLs.
 - Before an optional step, ask the person and wait for the answer: "Do you want to try it now? yes/no". In a run, run `<pdd> workflow ask` first.
 - At the story gate, start with one verdict line, then the details: "Verdict: the bug is in the PROMPT (its check fails on the issue's case).", "Verdict: the prompt is right; the bug is only in the CODE." or "Verdict: no prompt covers this yet; the bug can only be in the code." Give the full paths of the Story files. For issue-only prompts, offer "adopt PDD for this module" later. You may offer `pdd simulate <story>` before the check. Ask for approval or changes in their own words.
@@ -32,7 +33,7 @@ Step briefs are in `steps/`. `?` means optional.
 
 ## Try tools
 
-`try_open`, `try_state`, `try_run`, `try_check`, `try_save_case` if asked. AI calls; Simulator history. Person reviews expected values.
+`try_open`, `try_state`, `try_run`, `try_check`, `try_save_case` if asked. AI calls; Simulator history.
 
 ## In a run
 
@@ -46,4 +47,4 @@ Step briefs are in `steps/`. `?` means optional.
 PDD_SAID
 ```
 
-Quote a delimiter absent as a whole line in the words. Stdin keeps newlines. Blank input fails; no word grading. RUNBOOK §2.
+Quote a delimiter absent as a whole line in the words. Blank input fails. RUNBOOK §2.
