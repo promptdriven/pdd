@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 380ee5eefc510c637630477bacadd1b3112a7a0bad1ac255986a22a625ca048a).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: d81029894e8a893e849b731fc57893dfb33795a72e56ded4c171dc1395e204ed).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
@@ -193,6 +193,7 @@ const INPUT_LINE = /^\s*[›>❯](?:\s|$)/;
 const RULE_LINE = /^[\s\u2500-\u259f\-_=]+$/, EDGES = /^[\s\u2500-\u259f]+|[\s\u2500-\u259f]+$/g;
 const footerLine = line => {
   const text = line.replace(EDGES, '').replace(/\s+/g, ' ');
+  if (text.toLowerCase() === 'enter select · esc back') return true;
   return FOOTER.test(text) && text.replace(/^\(|\)$/g, '').replace(/^(?:press|use) /i, '').split(HINT_JOIN).some(hint => DIALOG_HINTS.has(hint.toLowerCase()));
 };
 // The first line of the dialog that the screen shows, or null when no live dialog footer is in its last 3 nonblank lines.

@@ -25,6 +25,9 @@ const CODEX_OFFER = [
   '',
   '  Press enter to confirm or esc to go back',
   ''].join('\n');
+// Minimal synthetic dialog using the public Codex model-picker header and its compact footer.
+// It carries no captured pane, session, transcript or model-choice data.
+const CODEX_MODEL_PICKER = '  Select Model and Effort\n\n  enter select · esc back\n';
 // An idle Codex chat that asks an ordinary question in chat text: the person answers it with pdd workflow changes.
 const CODEX_IDLE = [
   '• Use 3 retries in the example? [y/n]',
@@ -111,6 +114,17 @@ test('2939 sendToChat reads the screen before custody and transport', async () =
   const offer = await send(CODEX_OFFER);
   assert.equal(offer.result.code, 'agent_dialog'); assert.match(offer.result.reason, /Approaching rate limits/);
   assert.equal(offer.prompted, 0); assert.equal(offer.custody, 0);
+  for (const screen of [CODEX_MODEL_PICKER, CODEX_MODEL_PICKER.toUpperCase()]) {
+    const picker = await send(screen);
+    assert.equal(picker.result.code, 'agent_dialog', 'the compact Codex model-picker footer is a live dialog');
+    assert.equal(picker.custody, 0, 'a compact dialog records no submission intent');
+    assert.equal(picker.prompted, 0, 'a compact dialog receives no prompt transport');
+  }
+  for (const screen of ['"enter select · esc back"\n', '• The dialog uses enter select · esc back.\n', quotedIdle('  enter select · esc back')]) {
+    const ordinary = await send(screen);
+    assert.deepEqual(ordinary.result, { ok: true }, 'quoted hints, explanations and hints above a later input line stay ordinary chat');
+    assert.equal(ordinary.custody, 1); assert.equal(ordinary.prompted, 1);
+  }
   for (const unread of [Object.assign(Error('gone'), { code: 'pane_not_found' }), { result: {} }]) {
     const failed = await send(unread);
     assert.equal(failed.result.code, 'pane_unreadable'); assert.equal(failed.prompted, 0); assert.equal(failed.custody, 0);
