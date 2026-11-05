@@ -16,9 +16,29 @@ A [removed name](argument-parser.prompt.md#removed-names) is a `CommandInputErro
 
 Read the entire [Prompting guide](../../docs/prompting-guide.md) before authoring prompts or Stories. Follow [public alpha boundary](public-boundary.prompt.md) for native authoring/generation scope and shared local command policy. Runtime parsing/forwarding receives no guide input; applicable concrete validation and route facts remain with the required parser/catalog contracts.
 
-For admitted setup, after the existing skills, project and MCP actions in the setup callback, call [Autopilot settings](autopilot.prompt.md) `runAutopilot({action: "setup", interactive, inRepo}, ports)` once; derive terminal and repository context from actual stdin and Git, and supply real terminal-question, config and GitHub ports or their injected substitutes. Include its failure in the setup exit status while retaining other actions; print a setup message only when nonempty, so outside-repository setup adds no Autopilot output. Dispatch catalog dispositions `autopilot.off`, `autopilot.observe`, `autopilot.auto`, `autopilot-trust` and `autopilot-untrust` to the same function, with action mode and the named mode, or trust/untrust and parsed names respectively. Print its message once to stdout on exit 0, stderr otherwise, and return its exit code. Permit injected module and ports; a thrown error yields one finite diagnostic and exit 1. No Autopilot settings route starts a workflow or interpreter.
+For admitted setup, after the existing skills, project and MCP actions in the setup callback, call [Autopilot settings](autopilot.prompt.md) `runAutopilot({action: "setup", interactive, inRepo}, ports)` once; derive terminal and repository context from actual stdin and Git, and supply real terminal-question, config and GitHub ports or their injected substitutes. Include its failure in the setup exit status while retaining other actions; print a setup message only when nonempty, so outside-repository setup adds no Autopilot output. Dispatch catalog dispositions `autopilot.off`, `autopilot.observe`, `autopilot.auto`, `autopilot-trust` and `autopilot-untrust` to the same function, with action mode and the named mode, or trust/untrust and parsed names respectively. For settings writes, supply the launcher’s native `withAutopilotModeLock({cwd,env}, action, ports)` as the settings write boundary; take it only for the final fresh read and save, after any setup questions. Preserve the settings result and non-repository behavior. Read-only setup takes no boundary. Print its message once to stdout on exit 0, stderr otherwise, and return its exit code. Permit injected module and ports; a thrown error yields one finite diagnostic and exit 1. No Autopilot settings route starts a workflow or interpreter.
+
+Dispatch `dependencies-prepare` and `dependencies-complete` to an injected
+`dependencyIntake` module (default src/issue-dependencies-intake.mjs), using separate
+`dependencyIntakePorts`. Before reading stdin or importing a mutation path, require
+complete's --input to be exactly `-` and prepare's optional --issue to be a positive
+issue number. Pass prepare `{command:"prepare",cwd,issue}`; pass complete
+`{command:"complete",cwd,stdin}` with the exact UTF-8 stdin payload. The intake
+owner validates JSON. After complete returns exitCode 0, call launcher module function `requestAutopilotCompletion` once with `{cwd,env}` using the injected `autopilotLauncher`
+(default src/autopilot-launcher.mjs) and `autopilotLauncherPorts`. This includes
+pending results that may already have saved durable work. Do not trigger on
+prepare, rejected or thrown intake; an exception may leave effects uncertain.
+Print the intake message once to stdout on exitCode 0, stderr otherwise, and
+return its exitCode unchanged. Treat a launcher import or call throw, or a malformed launcher result, as unknown.
+On busy or unknown, write a separate finite warning to stderr that reconciliation
+was not confirmed; preserve the original intake message, stream and exit code.
+Do not change the JSON, retry automatically or claim a wake. A finite throw returns 1 with one safe
+line and no automatic retry. No route silently chooses or calls an AI model.
+Preserve every existing evidence-associate route and --test text-list behavior.
 
 ## Dependencies
+
+- [Structured dependency intake](issue-dependencies-intake.prompt.md): required generation and verification context for prepare/complete dispatch.
 
 - [Workflow scope](workflow-scope.prompt.md): required authoring, generation, runtime, verification and testing context for scope dispatch and its ports.
 
