@@ -1,0 +1,164 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/try-stop-story-path.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "`pdd simulate --stop user_stories/fakes/tester-panel.md` prints `The Try link for \"I can control test events while I try Pocket\" is stopped.`, exits with code 0 and saves the open Try list as empty."
+    },
+    {
+      "id": "AC2",
+      "text": "When `tester-panel` is open, `pdd simulate --stop user_stories/fakes/other.md` prints `No open Try for \"user_stories/fakes/other.md\". Open Try links: tester-panel.` to stderr, exits with code 2 and saves nothing."
+    }
+  ],
+  "initial_world": {
+    "kv": {
+      "tries": [
+        {
+          "test_path": "tests/tester-panel.json",
+          "id": "try-1",
+          "request_ids": [
+            "try-1"
+          ],
+          "reservation": null,
+          "story": "tester-panel",
+          "storyPath": "user_stories/fakes/tester-panel.md",
+          "title": "I can control test events while I try Pocket",
+          "origin": "https://runtime.promptdriven.ai",
+          "login": "tester"
+        }
+      ]
+    },
+    "requests": []
+  },
+  "simulation": {
+    "runtime.stop": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "status": 200,
+        "state": "passed"
+      }
+    },
+    "state.load": {
+      "action": "key-value.get",
+      "world_pointer": "/kv",
+      "key_argument_pointer": "/key",
+      "value_argument_pointer": null,
+      "item_key_pointer": null,
+      "item_value_pointer": null,
+      "result_template": {
+        "value": null
+      },
+      "result_value_pointer": "/value"
+    },
+    "state.save": {
+      "action": "key-value.put",
+      "world_pointer": "/kv",
+      "key_argument_pointer": "/key",
+      "value_argument_pointer": "/value",
+      "item_key_pointer": null,
+      "item_value_pointer": null,
+      "result_template": {
+        "value": []
+      },
+      "result_value_pointer": "/value"
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "stop-missing-story-path",
+      "entry_path": "prompts/cli/runtime-client.prompt.md",
+      "operation": "runTry",
+      "input": {
+        "words": [
+          "user_stories/fakes/other.md"
+        ],
+        "options": {
+          "--stop": true
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/stderr",
+          "op": "equals",
+          "value": "No open Try for \"user_stories/fakes/other.md\". Open Try links: tester-panel.\n"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/exit_code",
+          "op": "equals",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/runtime-client-runtime-stop",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/runtime-client-state-save",
+          "op": "equals",
+          "value": 0
+        }
+      ]
+    },
+    {
+      "step_id": "stop-open-try-by-story-path",
+      "entry_path": "prompts/cli/runtime-client.prompt.md",
+      "operation": "runTry",
+      "input": {
+        "words": [
+          "user_stories/fakes/tester-panel.md"
+        ],
+        "options": {
+          "--stop": true
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/stdout",
+          "op": "equals",
+          "value": "The Try link for \"I can control test events while I try Pocket\" is stopped.\n"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/stderr",
+          "op": "equals",
+          "value": "Stopping the Try for \"I can control test events while I try Pocket\"…\n"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/exit_code",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/runtime-client-runtime-stop",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/kv/tries",
+          "op": "equals",
+          "value": []
+        }
+      ]
+    }
+  ]
+}
