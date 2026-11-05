@@ -1620,17 +1620,21 @@ export async function retryPrDescription(args, ports = {}) {
     try {
       if (!area) throw Error('The recorded PR area is unavailable.');
       const readHead = async () => {
-        const response = await p.execFile('gh', ['pr', 'view', recorded.url, '--json', 'body,headRefOid'], {cwd:run.root});
+        const response = await p.execFile('gh', ['pr', 'view', recorded.url, '--json', 'number,url,body,headRefOid,headRefName,baseRefName,isCrossRepository,headRepository,headRepositoryOwner'], {cwd:run.root});
         if (response.code !== undefined && response.code !== 0) throw Object.assign(Error('PR read failed'), {stderr:response.stderr});
         const value = JSON.parse(String(response.stdout ?? ''));
-        if (typeof value.body !== 'string' || value.body.split(`<!-- pdd-workflow:${run.runId}:${area.name} -->`).length !== 2 || value.body.replace(`<!-- pdd-workflow:${run.runId}:${area.name} -->`, '').includes('pdd-workflow:') || !commitSha(value.headRefOid)) throw Error('The owned public PR and head cannot be verified.');
+        if (!Number.isSafeInteger(recorded.number) || recorded.number < 1 || recorded.url !== `https://github.com/${run.repo}/pull/${recorded.number}`
+          || typeof recorded.branch !== 'string' || !recorded.branch || typeof recorded.base !== 'string' || !recorded.base
+          || value.number !== recorded.number || value.url !== recorded.url || value.headRefName !== recorded.branch || value.baseRefName !== recorded.base
+          || value.isCrossRepository !== false || `${value.headRepositoryOwner?.login}/${value.headRepository?.name}`.toLowerCase() !== String(run.repo).toLowerCase()
+          || typeof value.body !== 'string' || value.body.split(`<!-- pdd-workflow:${run.runId}:${area.name} -->`).length !== 2 || value.body.replace(`<!-- pdd-workflow:${run.runId}:${area.name} -->`, '').includes('pdd-workflow:') || !commitSha(value.headRefOid)) throw Error('The owned public PR and head cannot be verified.');
         return value;
       };
       const before = await readHead(), head = (await rawGit(p,run.root,'rev-parse','--verify','HEAD^{commit}')).trim();
       const dirty = await rawGit(p,run.root,'status','--porcelain=v1','--untracked-files=all');
       const historical = area.then === 'ask-code' && head !== before.headRefOid;
       if (historical) {
-        if (ownedPr1Head(run) !== before.headRefOid) throw Error('The recorded PR 1 head does not match the public PR head.');
+        if (Object.hasOwn(recorded, 'publishedHeadSha') && (!commitSha(recorded.publishedHeadSha) || recorded.publishedHeadSha !== before.headRefOid)) throw Error('The recorded PR 1 head does not match the public PR head.');
         p.descriptionSource = {head:before.headRefOid, root:await retainPr1Source(run,before.headRefOid,p)};
         run.descriptionHistoricalRoot = p.descriptionSource.root;
         const through = run.areas.indexOf(area);

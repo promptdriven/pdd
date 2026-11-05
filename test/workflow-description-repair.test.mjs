@@ -35,7 +35,7 @@ async function scenario(mode="retry") {
    if(args[0]==='pr'&&args[1]==='list')return {stdout:JSON.stringify(pr?[pr]:[])};
    if(args[0]==='pr'&&args[1]==='create'){pr={number:23,url:'https://github.com/example/project/pull/23',state:'OPEN',headRefName:flag('--head'),baseRefName:flag('--base'),headRefOid:git(opts.cwd,'rev-parse','HEAD'),body:String(opts.input??''),title:flag('--title'),headRepository:{name:'project'},headRepositoryOwner:{login:'example'},isCrossRepository:false};return {stdout:pr.url+'\n'};}
    if(args[0]==='pr'&&args[1]==='view'&&injectProgress){injectProgress=false;const advanced=await done('formal','Later publication');assert.equal(advanced.exitCode,0,advanced.message);}
-   if(args[0]==='pr'&&args[1]==='view')return {stdout:JSON.stringify({state:'OPEN',body:pr.body,headRefOid:git(opts.cwd,'rev-parse','refs/remotes/origin/'+pr.headRefName)})};
+   if(args[0]==='pr'&&args[1]==='view'){const snapshot={...pr,headRefOid:git(opts.cwd,'rev-parse','refs/remotes/origin/'+pr.headRefName)};return {stdout:JSON.stringify(Object.fromEntries(flag('--json').split(',').map(key=>[key,snapshot[key]])))};}
    throw Error(`unexpected ${file} ${args.join(' ')}`);
   };
   const agent={...ports,isTTY:false,env:{HOME:home,PDD_AGENT_SESSION:'1'}};

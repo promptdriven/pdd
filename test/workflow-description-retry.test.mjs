@@ -4,11 +4,16 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {execFileSync,execFile as cb,spawnSync} from 'node:child_process';
 import {promisify} from 'node:util';
-import {startRun,stepDone,approveRun} from '../src/workflow-runner.mjs';
-import * as runner from '../src/workflow-runner.mjs';
+import * as currentRunner from '../src/workflow-runner.mjs';
+import {pathToFileURL} from 'node:url';
 import {runPdd} from '../src/pdd-cli.mjs';
 import {fakeHerdr} from './helpers/fake-herdr.mjs';
 const exec=promisify(cb), root=realpathSync(new URL('..',import.meta.url).pathname);
+const runner=process.env.PDD_CANDIDATE_RUNNER ? await import(pathToFileURL(process.env.PDD_CANDIDATE_RUNNER).href) : currentRunner;
+// An optional historical runner produces a legacy run through its public API.
+// The candidate always handles the retry; no saved run is edited by this test.
+const producer=process.env.PDD_LEGACY_RUNNER ? await import(pathToFileURL(process.env.PDD_LEGACY_RUNNER).href) : runner;
+const {startRun,stepDone,approveRun}=producer;
 const base=realpathSync(mkdtempSync(join(tmpdir(),'pdd2830-'))), source=join(base,'project'), state=join(base,'state'), home=join(base,'home');
 for(const dir of [source,state,home]) mkdirSync(dir);
 const git=(cwd,...args)=>execFileSync('git',args,{cwd,encoding:'utf8'}).trim();
@@ -32,9 +37,12 @@ try {
   if(args[0]==='pr'&&args[1]==='list')return {stdout:JSON.stringify(pr?[pr]:[])};
   if(args[0]==='pr'&&args[1]==='create'){pr={number:23,url:'https://github.com/example/project/pull/23',state:'OPEN',headRefName:flag('--head'),baseRefName:flag('--base'),headRefOid:git(opts.cwd,'rev-parse','HEAD'),body:String(opts.input??''),title:flag('--title'),headRepository:{name:'project'},headRepositoryOwner:{login:'example'},isCrossRepository:false};return {stdout:pr.url+'\n'};}
   if(args[0]==='pr'&&args[1]==='view'){
+   if(flag('--json')!=='number,url,body,headRefOid,headRefName,baseRefName,isCrossRepository,headRepository,headRepositoryOwner') return {stdout:JSON.stringify(Object.fromEntries(flag('--json').split(',').map(key=>[key,pr[key]])))};
    if (concurrent || concurrentBody) views++;
    if (concurrentBody && views===2) pr.body=pr.body.replace('<!-- pdd-workflow:', 'Newer public prose.\n\n<!-- pdd-workflow:');
-   return {stdout:JSON.stringify({state:'OPEN',body:pr.body,headRefOid:staleHead || (concurrent && views === 2) ? 'a'.repeat(40) : git(opts.cwd,'rev-parse','refs/remotes/origin/'+pr.headRefName)})};
+   assert.deepEqual(args.slice(2),[pr.url,'--json','number,url,body,headRefOid,headRefName,baseRefName,isCrossRepository,headRepository,headRepositoryOwner']);
+   const snapshot={...pr,headRefOid:staleHead || (concurrent && views === 2) ? 'a'.repeat(40) : git(opts.cwd,'rev-parse','refs/remotes/origin/'+run.branch)};
+   return {stdout:JSON.stringify(Object.fromEntries(flag('--json').split(',').map(key=>[key,snapshot[key]])))};
   }
   if(args[0]==='pr'&&args[1]==='edit'){editArgs=args;intended=String(opts.input??'');if(++edits===1){pr.body=intended;return {stdout:''};}return {stdout:'',stderr:reason,code:1};}
   throw Error(`unexpected ${file} ${args.join(' ')}`);
@@ -48,9 +56,10 @@ try {
  writeFileSync(join(run.root,'feature.prompt.md'),'# Value\n\nReturn two.\n\n<details><summary>Runtime interface</summary>\n\n```json\n'+JSON.stringify({status:'draft',prose_sha256:'',entries:[],limits:{max_steps:1,max_model_calls:1}})+'\n```\n</details>\n');
  await done('check','Synthetic evidence café 🧪\nsecond line');await done('try','skipped');assert.ok(pr,'synthetic PR 1 created');assert.match(pr.body,/Draft prompts: feature\.prompt\.md/);h.idle();clock+=1000;
  out=await approveRun({ref:'17',cwd:source},ports);
- assert.match(out.message,/Projects \(classic\)/);
- const command=out.message.match(/pdd workflow refresh-description 17 23/)[0];
+ if(!process.env.PDD_LEGACY_RUNNER) assert.match(out.message,/Projects \(classic\)/);
+ const command=process.env.PDD_LEGACY_RUNNER ? 'pdd workflow refresh-description 17 23' : out.message.match(/pdd workflow refresh-description 17 23/)[0];
  assert.equal(record().areas[record().area].name,'code');
+ if(process.env.PDD_LEGACY_RUNNER) assert.equal(Object.hasOwn(record().pr[0],'publishedHeadSha'),false);
  writeFileSync(join(run.root,'value.mjs'),'export const value = 2; // Code evidence 🧪\n');git(run.root,'add','.');git(run.root,'commit','-qm','code change');
  const codeHead=git(run.root,'rev-parse','HEAD');
  await done('build','later progress Code evidence 🧪');
@@ -59,7 +68,11 @@ try {
  const call = async args => { stdout='';stderr='';return runPdd(args,{...streams,cwd:source,workflowRunner:{retryPrDescription:(input)=>runner.retryPrDescription(input,ports)}}); };
  for (const args of [['workflow','refresh-description','17'],['workflow','refresh-description','17','23','extra'],['workflow','refresh-description','17','23','--bad']]) assert.equal(await call(args),2);
  const priorBody=pr.body;
+ if(process.env.PDD_CANDIDATE_RUNNER) assert.equal(await call(command.split(' ').slice(1)),0,stderr);
  assert.equal(await call(['workflow','refresh-description','17','99']),1);assert.equal(pr.body,priorBody);
+ for (const [key,wrong] of [['headRefName','another-branch'],['baseRefName','another-base'],['isCrossRepository',true],['number',24]]) {
+  const saved=pr[key];pr[key]=wrong;assert.equal(await call(command.split(' ').slice(1)),1);assert.match(stderr,/owned public PR and head cannot be verified/);assert.equal(pr.body,priorBody);assert.deepEqual(record(),before);assert.equal(pushes,pushesBeforeRetry);pr[key]=saved;
+ }
  staleHead=true;assert.equal(await call(command.split(' ').slice(1)),1);assert.equal(pr.body,priorBody);staleHead=false;
  missingSource=true;assert.equal(await call(command.split(' ').slice(1)),1);assert.match(stderr,/historical source unavailable/);assert.equal(pr.body,priorBody);assert.deepEqual(record(),before);assert.equal(pushes,pushesBeforeRetry);missingSource=false;
  concurrent=true;views=0;assert.equal(await call(command.split(' ').slice(1)),1);assert.equal(pr.body,priorBody);assert.deepEqual(record(),before);assert.equal(pushes,pushesBeforeRetry);concurrent=false;
