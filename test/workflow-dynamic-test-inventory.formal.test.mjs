@@ -18,7 +18,7 @@ test('bounded dynamic pairs preserve uncertainty and independent evidence withou
   let pairs = 0;
   for (const before of states) for (const after of states) {
     // Both absent is represented by a present empty path; all other pairs
-    // include additions, deletions and renames where both sides exist.
+    // include additions and deletions; existing pairs use the same path.
     const file = {oldPath:before.present ? 'test/new.js' : '', newPath:after.present ? 'test/new.js' : '', before:before.source, after:after.source};
     if (!file.oldPath && !file.newPath) file.newPath = 'test/new.js';
     const healthy = {oldPath:'test/healthy.js',newPath:'test/healthy.js',before:'test("old", () => {});',after:'test("new", () => {});'};
