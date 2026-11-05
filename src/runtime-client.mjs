@@ -3234,16 +3234,18 @@ function applyPendingCaseSync({root,pendingId,writeOwnership,signal},ports={}){
   }finally{if(temp){try{const remaining=caseStat(p,temp);if(tempOwned&&remaining?.ino===tempOwned.ino&&remaining.dev===tempOwned.dev)p.files.unlink(temp);}catch(e){if(e.code!=='ENOENT'){} }} }
 }
 export async function applyPendingCase(input,ports={}){return applyPendingCaseSync(input,ports);}
-export const saveDoorCase=(root,saved,options={})=>{
+export const saveDoorCaseResult=(root,saved,options={})=>{
   const p=casePorts(options.ports??{env:options.env});let record;
+  const outcome=result=>({kind:'case',result,message:caseMessage(result)});
   try{root=p.files.realpath(root);record=retainCase(root,saved,options,p);const journal=record.recoveryPath.replace('.received.json','.transaction.json');
-    if(p.files.list(dirname(record.recoveryPath)).filter(n=>n.endsWith('.received.json')).length>1)return caseMessage(caseResult(record,'conflict','this identity has different received payloads; both are retained'));
-    if(caseStat(p,journal)){const prior=JSON.parse(caseRead(p,journal));if(prior.state==='committed')return caseMessage(caseResult(record,'committed','already applied',{path:prior.path,duplicate:true}));}
-    if(options.writeOwnership)return caseMessage(applyPendingCaseSync({root,pendingId:record.pendingId,writeOwnership:options.writeOwnership,signal:options.signal},options.ports??{env:options.env}));
+    if(p.files.list(dirname(record.recoveryPath)).filter(n=>n.endsWith('.received.json')).length>1)return outcome(caseResult(record,'conflict','this identity has different received payloads; both are retained'));
+    if(caseStat(p,journal)){const prior=JSON.parse(caseRead(p,journal));if(prior.state==='committed')return outcome(caseResult(record,'committed','already applied',{path:prior.path,duplicate:true}));}
+    if(options.writeOwnership)return outcome(applyPendingCaseSync({root,pendingId:record.pendingId,writeOwnership:options.writeOwnership,signal:options.signal},options.ports??{env:options.env}));
     let reason;try{prepareCase(root,record,p);}catch(error){reason=error.message;}
-    const result=caseResult(record,'pending',options.signal?.aborted?'case save cancelled':reason??'close the editor for the named original test and apply the retained case with supported ownership');return caseMessage(result);}
-  catch(error){return `not added: durable case receipt failed (${cleanText(error.message??error)}).${record?' Recovery: '+record.recoveryPath:''}`;}
+    const result=caseResult(record,'pending',options.signal?.aborted?'case save cancelled':reason??'close the editor for the named original test and apply the retained case with supported ownership');return outcome(result);}
+  catch(error){return{kind:'failure',message:`not added: durable case receipt failed (${cleanText(error.message??error)}).${record?' Recovery: '+record.recoveryPath:''}`};}
 };
+export const saveDoorCase=(root,saved,options={})=>saveDoorCaseResult(root,saved,options).message;
 
 async function caseHandoff(context,testPath){
   context.caseHandoffs??=new Map();if(context.caseHandoffs.has(testPath))return null;

@@ -718,6 +718,18 @@ to the runtime. Preserve paused-session refusals; never silently create a new wo
 
 Export `saveDoorCase(root, saved, options={})` as the existing printable-result native entry to [received-case import](#received-case-import). Obtain target authority from the retained original native association; a supplied path alone is not authority. Keep its explicit isolated option under that same owner.
 
+The synchronous native module function `saveDoorCaseResult(root, saved, options={})`
+exposes that same operation as a typed outcome. Its normal branches return
+`{kind:'case', result, message}`: `result` is the existing transaction result,
+including its `pending`, `conflict` or `committed` state, and `message` is the
+identical printable string for that result. A failure returns
+`{kind:'failure', message}` with the same existing failure string and no `result`.
+It must not report an unknown or failed receipt as pending or authorize an
+ownership wait or publication. Both entries use the same receipt, payload,
+identity, equality and transaction policy. `saveDoorCase` remains synchronous
+with its existing signature and returns only this outcome's `message`, preserving
+all existing printable results.
+
 For CLI or HTTP setup every preflight, lint or runtime refusal is a wrapper failure on stderr prefixed `pdd:`
 and exits 125. Argument combinations alone may exit 2. Session records capture hashes of uploaded prompt files
 and the login. Before showing or opening a reused --serve door, compare every recorded uploaded prompt hash with the local files; missing hashes, removed files or changed bytes refuse with a --new hint before model metadata, a listener or a call. CLI doors apply the same source-identity rule. --new stops the old session first.
