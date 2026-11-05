@@ -10,8 +10,8 @@ export const write=(root,path,text)=>{fs.mkdirSync(dirname(join(root,path)),{rec
 export const json=(root,path,value)=>write(root,path,JSON.stringify(value,null,2)+'\n');
 export const get=(root,path)=>JSON.parse(read(root,path));
 export function fixture(t,{bounded=true}={}){
-  const parent=fs.mkdtempSync(join(tmpdir(),'pdd-workspace-')),root=join(parent,'repo'),state=join(parent,'state');fs.mkdirSync(root);
-  t.after(()=>fs.rmSync(parent,{recursive:true,force:true}));
+  const temporary=fs.mkdtempSync(join(tmpdir(),'pdd-workspace-')),parent=fs.realpathSync(temporary),root=join(parent,'repo'),state=join(parent,'state');fs.mkdirSync(root);
+  t.after(()=>fs.rmSync(temporary,{recursive:true,force:true}));
   const git=spawnSync('git',['init','-q'],{cwd:root});if(git.status!==0)throw Error('fixture git init failed');
   const story='simulation/user_stories/order.md',prompt='simulation/prompts/order.prompt.md',test='simulation/tests/order.json',second='simulation/tests/order.second.json';
   write(root,story,'# Order\n\nI can keep my values.\n\n## Acceptance criteria\n\n1. Keep value.\n');
@@ -20,7 +20,7 @@ export function fixture(t,{bounded=true}={}){
   const doc={schema_version:'prompt-runtime.program-scenario.v1',story_path:story,criteria:[{id:'AC1',text:'Keep value.'}],initial_world:{count:0},simulation:{},context:[],steps:[{step_id:'prior',entry_path:prompt,operation:'order',input:{},checks:[{criterion_id:'AC1',target:'result',path:'',op:'equals',value:7},{criterion_id:'AC1',target:'world',path:'',op:'equals',value:{count:0}}]}]};
   json(root,test,doc);json(root,second,doc);write(root,'private/ordinary.md','PRIVATE-MARKER');
   if(bounded)json(root,'pdd-workspace.json',{allowed_paths:['simulation/']});
-  const env={...process.env,PDD_STATE_DIR:state};
+  const env={...process.env,PDD_STATE_DIR:join(temporary,'state')};
   const saved=(id='case-A',extra={})=>({id,name:id,story_path:story,original_path:second,world_before:{count:0},test:{...doc,steps:[{step_id:id,entry_path:prompt,operation:'order',input:{},checks:[{criterion_id:'AC1',target:'result',path:'',op:'equals',value:9},{criterion_id:'AC1',target:'world',path:'',op:'equals',value:{count:0}}]}]},...extra});
   return{parent,root,state,env,story,prompt,test,second,doc,saved};
 }
