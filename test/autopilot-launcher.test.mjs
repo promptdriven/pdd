@@ -42,17 +42,18 @@ async function fixture(t, options = {}) {
         if (!f.agentStarted) throw Object.assign(Error('agent_not_found'), { code: 'agent_not_found' });
         return { result: { agent: { agent_status: f.agentStatus ?? 'idle' } } };
       }
-      if (args[0] === 'pane') {
-        f.agentStarted = true;
-        const packetFile = readdirSync(f.ports.stateRoot).find(x => x.endsWith('.message.md'));
-        f.prompts.push(readFileSync(join(f.ports.stateRoot, packetFile), 'utf8'));
-      }
+      if (args[0] === 'pane' && args[1] === 'run') f.agentStarted = true;
+      if (args[0] === 'pane' && args[1] === 'read') return 'Ready\n› ';
       if (args[0] === 'agent' && args[1] === 'prompt') f.prompts.push(args[3] ?? args[2]);
       return {};
     },
   };
   f.module = await import('../src/autopilot-launcher.mjs');
-  f.invoke = async (command, extra = {}) => f.module.runAutopilotLauncher({ command, cwd, env: { HOME: home, PATH: process.env.PATH }, packageRoot: root, issues: [], ...extra }, f.ports);
+  f.invoke = async (command, extra = {}) => {
+    const result = await f.module.runAutopilotLauncher({ command, cwd, env: { HOME: home, PATH: process.env.PATH }, packageRoot: root, issues: [], ...extra }, f.ports);
+    if (command === 'start' && result.exitCode === 0 && f.agentStarted) await f.module.tickAutopilot(f.stateFile(), f.ports);
+    return result;
+  };
   f.stateFile = () => join(f.ports.stateRoot, readdirSync(f.ports.stateRoot).find(x => x.endsWith('.json')));
   f.state = () => JSON.parse(readFileSync(f.stateFile(), 'utf8'));
   f.tick = () => f.module.tickAutopilot(f.stateFile(), f.ports);
@@ -109,14 +110,14 @@ async function nativeStartup(t, { kind = 'codex', custom = false, cwdName, body 
     if (call.argv[i] === '-c' || call.argv[i] === '--config') configs.push(call.argv[++i]);
     else if (!call.argv[i].startsWith('-')) operands.push(call.argv[i]);
   }
-  assert.equal(operands.length, 1, 'interactive first message is one operand');
-  const packet = JSON.parse(operands[0].trimEnd().split('\n').at(-1));
+  assert.equal(operands.length, 0, 'native owner starts without a packet');
+  const packet = JSON.parse(f.prompts[0].trimEnd().split('\n').at(-1));
   assert.equal(packet.issues[0].body, body); assert.equal(packet.recipeFirst, true); assert.equal(packet.runs, 1);
   assert.equal(f.timers.filter(([action]) => action === 'start').length, 1);
   assert.equal(f.state().nextTick, f.time + 30 * 60 * 1000);
   f.status = 304; await f.tick();
   assert.equal(f.prompts.length, 1, 'unchanged tick sends no extra packet');
-  assert.equal(f.herdrCalls.filter(args => args[0] === 'pane').length, 1);
+  assert.equal(f.herdrCalls.filter(args => args[0] === 'pane' && args[1] === 'run').length, 1);
   assert.equal(existsSync(join(f.dir, 'PDD_SENTINEL')), false);
   assert.equal(existsSync(join(f.cwd, 'PDD_SENTINEL')), false);
   return { ...f, call, configs };
@@ -155,8 +156,8 @@ test('native startup: invocation overrides leave saved update and trust settings
 
 for (const [kind, flags] of [
   ['claude', ['--dangerously-skip-permissions']],
-  ['gemini', ['--yolo', '--prompt-interactive']],
-  ['agy', ['--dangerously-skip-permissions', '--prompt-interactive']],
+  ['gemini', ['--yolo']],
+  ['agy', ['--dangerously-skip-permissions']],
 ]) test(`native startup: ${kind} keeps its interactive launch without Codex config`, async t => {
   const { call, configs } = await nativeStartup(t, { kind, custom: kind !== 'agy' });
   for (const flag of flags) assert.ok(call.argv.includes(flag));
@@ -172,15 +173,33 @@ test('autopilot routes parse and dispatch without setup or a runtime call', asyn
   assert.deepEqual(parseArgv(['autopilot', 'add', '12', '15']).operands, ['12', '15']);
 });
 
+test('one start waits for the newly launched owner and submits once', async t => {
+  const f = await fixture(t, { mode: 'observe' });
+  f.issues = [issue(101)];
+  const herdr = f.ports.herdr;
+  let inspections = 0;
+  f.ports.herdr = async args => {
+    if (args[0] === 'agent' && args[1] === 'get' && f.agentStarted && ++inspections < 3)
+      return { result: { agent: { agent_status: 'starting' } } };
+    return herdr(args);
+  };
+  const result = await f.module.runAutopilotLauncher({ command: 'start', cwd: f.cwd, env: { HOME: f.home, PATH: process.env.PATH }, packageRoot: root, issues: [] }, f.ports);
+  assert.equal(result.exitCode, 0);
+  assert.equal(f.herdrCalls.filter(args => args[0] === 'pane' && args[1] === 'run').length, 1);
+  assert.equal(f.prompts.length, 1, 'first start submits one pending packet');
+  assert.equal(JSON.parse(f.prompts[0].trim().split('\n').at(-1)).recipeFirst, true);
+  assert.equal(f.state().recipeDelivered, true);
+});
+
 test('start installs a timer and runs the recipe immediately; unchanged empty ticks wake no AI', async t => {
   const f = await fixture(t);
   assert.equal((await f.invoke('start')).exitCode, 0);
-  assert.equal(f.polls.length, 1); assert.equal(f.prompts.length, 1);
+  assert.equal(f.polls.length, 2); assert.equal(f.prompts.length, 1);
   assert.match(f.prompts[0], /"recipeFirst":true/);
   assert.equal(f.state().runs, undefined);
   assert.equal(f.state().nextTick, f.time + 1800000);
   f.status = 304; await f.tick(); await f.tick();
-  assert.equal(f.prompts.length, 1); assert.deepEqual(f.polls, [undefined, '"one"', '"one"']);
+  assert.equal(f.prompts.length, 1); assert.deepEqual(f.polls, [undefined, '"one"', '"one"', '"one"']);
 });
 
 test('new and named issues are eligible; claimed work is distinguished and closed/old issues excluded', async t => {
@@ -217,8 +236,8 @@ test('trusted issue comments are filtered, and failed delivery is retried', asyn
   f.issues = [issue(9, { comments: 1 })];
   f.issueComments = { 9: [{ body: 'OUTSIDER', user: { login: 'outside' }, author_association: 'NONE' }] };
   const herdr = f.ports.herdr;
-  f.ports.herdr = async args => { if (args[1] === 'prompt') throw Error('delivery failed'); return herdr(args); };
-  await assert.rejects(f.tick(), /delivery failed/);
+  f.ports.herdr = async args => { if (args[1] === 'prompt') throw Object.assign(Error('blocked'), { code: 'agent_blocked' }); return herdr(args); };
+  await f.tick();
   f.ports.herdr = herdr; await f.tick();
   assert.match(f.prompts[1], /trusted body/); assert.doesNotMatch(f.prompts[1], /OUTSIDER/);
 });
@@ -339,7 +358,7 @@ test('native empty 304 tick makes exactly one GitHub request and no model reques
     return run(command, args, opts);
   };
   await f.invoke('start'); await f.tick();
-  assert.equal(queries, 2); assert.equal(f.prompts.length, 1);
+  assert.equal(queries, 3); assert.equal(f.prompts.length, 1);
 });
 
 test('rate limit reset is saved and no GitHub retry happens before it', async t => {
@@ -414,6 +433,7 @@ test('fresh setup and mode/trust commands feed the launcher and bundled skills w
   assert.deepEqual(JSON.parse(saved).autopilot, { mode: 'auto', trust: ['Helper'] });
   f.issues = [issue(60, { user: { login: 'helper' }, author_association: 'NONE' })];
   assert.equal(await runPdd(['autopilot', 'start'], { ...dependencies, autopilotLauncherPorts: f.ports }), 0, stderr.text);
+  await f.tick();
   assert.match(f.prompts[0], /"recipeFirst":true/);
   assert.match(f.prompts[0], /"number":60,/);
   assert.ok(f.prompts[0].includes(JSON.stringify(join(root, 'skills', 'pdd-autopilot', 'SKILL.md'))));
@@ -469,6 +489,7 @@ test('a removed Herdr pane is replaced, then queued work is delivered', async t 
     return herdr(args);
   };
   await f.tick(); assert.equal(f.state().paneId, 'p2');
+  await f.tick();
   assert.ok(f.herdrCalls.some(args => args[0] === 'pane' && args[2] === 'p2'));
   assert.match(f.prompts.at(-1), /"number":58,/);
 });

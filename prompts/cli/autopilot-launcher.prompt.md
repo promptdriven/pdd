@@ -150,6 +150,10 @@ Persist the original launch time before dispatch and use the existing bounded
 startup window and injected clock. Launch an empty native owner once when a pane
 needs an agent; launch acceptance
 is neither packet submission nor uptake and consumes no recipe or fingerprint.
+In the same tick, continue bounded readiness and guarded delivery for that original
+owner within the shared startup window; do not defer its first packet solely to
+the next periodic tick. If readiness or safe delivery cannot be established, keep
+the work pending and report a plain reason by the end of that window.
 For the exact saved coordinator in the dedicated session, use [area-chat delivery](workflow-chat.prompt.md#message-delivery)
 and its guarded ordered submission. The launcher retains its stricter rule:
 submit only when that coordinator is idle or done, never working, blocked or

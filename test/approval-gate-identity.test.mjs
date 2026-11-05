@@ -58,6 +58,7 @@ function fakeHerdr() {
       if (kind) p.agent = { agent: kind, agent_status: 'working', agent_session: { agent: kind, kind: 'id', value: session }, prompts: [] };
       return {};
     }
+    if (group === 'pane' && verb === 'read') { h.panes.find(p => p.pane_id === rest[0]) ?? fail('pane_not_found'); return 'Ready\n› '; }
     if (group === 'agent' && verb === 'get') { const p = h.panes.find(p => p.pane_id === rest[0]); if (!p?.agent) fail('agent_not_found'); return { result: { agent: { ...p.agent, pane_id: p.pane_id } } }; }
     if (group === 'agent' && verb === 'prompt') { const p = h.panes.find(p => p.pane_id === rest[0]); if (!p?.agent) fail('agent_not_found'); if (p.agent.agent_status === 'blocked') fail('agent_blocked'); p.agent.prompts.push(rest[1]); return { result: { type: 'agent_prompted' } }; }
     fail(`unexpected herdr ${args.join(' ')}`);

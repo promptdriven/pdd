@@ -1,4 +1,4 @@
-// Generated from prompts/cli/product.prompt.md (sha256: f183ad802e37da62fcdc4a59c918e330b51c9048fb1f8e014d1aefe15aafce35).
+// Generated from prompts/cli/product.prompt.md (sha256: fc5127717989e3995a3b1b02784f73754fb002d3bd503aac72b9d358356a4360).
 import { execFile as execute } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, existsSync, fstatSync, lstatSync, openSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { listRuns } from './workflow-runs.mjs';
-import { runtimeLines, storyEvidence, startRun } from './workflow-runner.mjs';
+import { recordedRuntimeLines, storyEvidence, startRun } from './workflow-runner.mjs';
 import { resolveWorkflowRepository } from './workflow-github.mjs';
 import { causeText } from './runtime-output.mjs';
 import { createSavedStoryEvidenceReader } from './runtime-client.mjs';
@@ -489,7 +489,7 @@ async function progress(input, given, target) {
       if (unverified) { const evidence = (await savedFor(cwd, cwd)).filter(row => run.stories.some(id => storyMatches(row.story, id))); details.push({ run, issue, local: null, prs: [], evidence, fromPr: null, done: false, unverified: true, reason: selected.reason }); continue; }
       const prs = issue ? await pullRequests(p, cwd, repo.repository, issue, local, run.run, warning) : [];
       const done = prs.some(pr => pr.state === 'MERGED' && codePr(pr, local));
-      const latest = [...prs].filter(pr => runtimeLines(pr.body).some(row => row.story)).sort((a, b) => String(a.updatedAt ?? '').localeCompare(String(b.updatedAt ?? '')) || a.number - b.number).at(-1);
+      const latest = [...prs].filter(pr => recordedRuntimeLines(pr.body).some(row => row.story)).sort((a, b) => String(a.updatedAt ?? '').localeCompare(String(b.updatedAt ?? '')) || a.number - b.number).at(-1);
       let evidence, comparisonRoot = local?.root ?? cwd;
       if (done) {
         const baseBranch = local?.baseBranch ?? repo.defaultBranch;
@@ -502,7 +502,7 @@ async function progress(input, given, target) {
         if (comparisonRoot === null) warning.push(`Warning: ${run.run}'s base source is unavailable; saved results are unverified.`);
       }
       if (local) evidence = await p.storyEvidence(local, ...(done ? [{ comparisonRoot }] : []));
-      else evidence = latest ? runtimeLines(latest.body).filter(row => row.story).map(row => ({ ...row, current: false, remote: true, at: Date.parse(latest.updatedAt) || 0 })) : [];
+      else evidence = latest ? recordedRuntimeLines(latest.body).filter(row => row.story).map(row => ({ ...row, current: false, remote: true, at: Date.parse(latest.updatedAt) || 0 })) : [];
       const saved = [...await savedFor(cwd, done ? comparisonRoot : cwd), ...(local?.root && local.root !== cwd ? await savedFor(local.root, comparisonRoot) : [])];
       evidence = [...evidence, ...saved.filter(row => run.stories.some(id => storyMatches(row.story, id)))];
       details.push({ run, issue, local, prs, evidence, fromPr: !local && latest ? latest.number : null, done });
