@@ -86,6 +86,28 @@ test('2859: a create intent with no observed effect permits one safe retry',asyn
  assert(result.workspaceId);
 });
 
+test('2859: a fresh create checkpoint clears merged stale parent ID and root',async t=>{
+ const f=await fixture(t),oldId='legacy-parent';
+ f.workspaces.push({workspace_id:oldId,label:'legacy',worktree:{checkout_path:f.input.sourceRoot,repo_key:f.input.commonDir,is_linked_worktree:true}});
+ const oldRoot={tabId:'old-tab',paneId:'old-pane',terminalId:'old-terminal',cwd:f.input.sourceRoot};
+ const stale={repoWorkspaceId:oldId,repoRoot:oldRoot,repoCreateIntent:{label:'coffee',parentRoot:f.input.sourceRoot,
+  commonDir:f.input.commonDir,workspaceIdsBefore:[oldId]}};
+ let persisted=structuredClone(stale),interrupt=true;
+ f.ports.checkpoint=async custody=>{
+  persisted={...persisted,...structuredClone(custody)};
+  if(interrupt&&custody.repoCreateIntent?.label==='coffee'&&custody.repoWorkspaceId===null&&custody.repoRoot===null){
+   interrupt=false;throw Error('stop before replacement create');
+  }
+ };
+ await assert.rejects(openWithOwner(f,{runId:f.input.runId,layout:stale,chats:[]}),/stop before replacement create/);
+ assert.equal(persisted.repoWorkspaceId,null);assert.equal(persisted.repoRoot,null);
+ assert.equal(f.calls.filter(args=>args[0]==='workspace'&&args[1]==='create').length,0);
+ const result=await openWithOwner(f,{runId:f.input.runId,layout:persisted,chats:[]});
+ assert.notEqual(result.repoWorkspaceId,oldId);
+ assert.equal(f.calls.filter(args=>args[0]==='workspace'&&args[1]==='create').length,1);
+ assert.equal(f.workspaces.filter(row=>row.worktree?.checkout_path===f.input.sourceRoot&&row.worktree?.is_linked_worktree===false).length,1);
+});
+
 test('2859: retries refuse a changed original root or foreign checkout identity',async t=>{
  for(const kind of ['root','identity','extra-pane']){
   const f=await fixture(t);await createWithoutWorktreeMetadata(f);
@@ -98,6 +120,37 @@ test('2859: retries refuse a changed original root or foreign checkout identity'
   await assert.rejects(openWithOwner(f,{runId:f.input.runId,layout:saved,chats:[]}),{code:'herdr_layout_identity_changed'});
   assert.equal(f.calls.filter(args=>args[0]==='workspace'&&args[1]==='create').length,1);
   assert.equal(f.calls.filter(args=>args[0]==='worktree').length,0);
+ }
+});
+
+test('2859: a missing pending parent refuses, while verified live identity can recover a partial root',async t=>{
+ {
+  const f=await fixture(t);await createWithoutWorktreeMetadata(f);
+  let saved,interrupt=true;f.ports.checkpoint=async custody=>{saved=structuredClone(custody);if(interrupt&&custody.repoWorkspaceId&&custody.repoRoot){interrupt=false;throw Error('stop after parent custody');}};
+  await assert.rejects(openWithOwner(f),/stop after parent custody/);
+  const parentId=saved.repoWorkspaceId;
+  f.workspaces.splice(f.workspaces.findIndex(row=>row.workspace_id===parentId),1);
+  f.herdr.tabs=f.herdr.tabs.filter(tab=>tab.workspace_id!==parentId);
+  f.herdr.panes=f.herdr.panes.filter(pane=>pane.workspace_id!==parentId);
+  await assert.rejects(openWithOwner(f,{runId:f.input.runId,layout:saved,chats:[]}),{code:'herdr_layout_identity_changed'});
+  assert.equal(f.calls.filter(args=>args[0]==='workspace'&&args[1]==='create').length,1);
+  assert.equal(f.calls.filter(args=>args[0]==='worktree'&&args[1]==='open').length,0);
+ }
+ {
+  const f=await fixture(t);await createWithoutWorktreeMetadata(f);
+  let saved,interrupt=true;f.ports.checkpoint=async custody=>{saved=structuredClone(custody);if(interrupt&&custody.repoWorkspaceId&&custody.repoRoot){interrupt=false;throw Error('stop after parent custody');}};
+  await assert.rejects(openWithOwner(f),/stop after parent custody/);
+  const parentId=saved.repoWorkspaceId,parent=f.workspaces.find(row=>row.workspace_id===parentId);
+  parent.worktree={checkout_path:f.input.sourceRoot,repo_key:f.input.commonDir,is_linked_worktree:false};
+  const partial={...saved,repoRoot:{tabId:null,paneId:null,terminalId:null,cwd:null}};
+  const result=await openWithOwner(f,{runId:f.input.runId,layout:partial,chats:[]});
+  assert.equal(result.repoWorkspaceId,parentId);
+  assert.equal(result.repoCreateIntent,null);
+  assert.equal(result.repoRoot,undefined);
+  assert.equal(f.calls.filter(args=>args[0]==='worktree'&&args[1]==='open'&&args[args.indexOf('--workspace')+1]===parentId
+   &&args[args.indexOf('--path')+1]===f.input.sourceRoot).length,0,
+   'independently verified live parent identity permits reuse without attachment');
+  assert.equal(f.calls.filter(args=>args[0]==='workspace'&&args[1]==='create').length,1);
  }
 });
 
