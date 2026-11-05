@@ -12,6 +12,7 @@ function setup(handler,extra={}){
  runtime:{send:async(path,init,ms)=>{const call={path,init,ms,body:init.body?JSON.parse(init.body):null};calls.push(call);if(path.endsWith('/model'))return{status:200,json:{entries:[entry],stories:[{title:'Bookmarks',criteria:[{id:'AC1',text:'List bookmarks'}]}]}};return handler(call,{controller,calls,context});}}};context.agentFinalSend=context.runtime.send;
  return{context,calls,saved,output,controller};
 }
+async function waitForFixtureReply(observe){const deadline=Date.now()+5000;while(!observe()){assert.ok(Date.now()<deadline,'fixture did not observe an agent reply before stopping');await new Promise(resolve=>setImmediate(resolve));}}
 const connect=({body})=>({status:200,json:{connected:true,bridge_id:body.bridge_id,browser_key:KEY}});
 test('CHAT1 connects owner, uses fragment key and remembers only selection',async()=>{
  const s=setup(connect),b=await createAgentBridge(s.context,{story:'bookmarks'},ID,{},'https://runtime.example/s/abc/');assert.ok(b.url.endsWith('#agent='+KEY));assert.equal(s.calls[1].body.selected,'codex');assert.equal(s.saved[0].agent_choice,'Codex');assert.ok(!JSON.stringify(s.saved).includes(KEY));assert.ok(!s.output.join('').includes(KEY));await b.close();await b.close();assert.equal(s.calls.filter(c=>c.path.endsWith('/disconnect')).length,1);
@@ -140,7 +141,7 @@ test('guide memory crosses agent switches, rich fields are negotiated, and priva
 });
 
 test('every launcher secret is scrubbed before memory and legacy upload',async()=>{
- let polls=0;let received;const s=setup((c,{controller})=>{if(c.path.endsWith('/connect'))return connect(c);if(c.path.includes('/poll')){if(++polls>1){controller.abort();return{lost:true};}return{status:200,json:{connected:true,selected:'codex',message:{id:'m1',agent:'codex',text:'other-secret!',context:{}}}};}return{status:200,json:{ok:true}};},{askAgent:async a=>{received=a;return{say:'other-secret!',fill:null,apply:false,next:null,expect:null,save:null};}});
+ let polls=0,replyCount=0;let received;const s=setup(async(c,{controller})=>{if(c.path.endsWith('/connect'))return connect(c);if(c.path.endsWith('/reply')){replyCount++;return{status:200,json:{ok:true}};}if(c.path.includes('/poll')){if(++polls>1){await waitForFixtureReply(()=>replyCount>0);controller.abort();return{lost:true};}return{status:200,json:{connected:true,selected:'codex',message:{id:'m1',agent:'codex',text:'other-secret!',context:{}}}};}return{status:200,json:{ok:true}};},{askAgent:async a=>{received=a;return{say:'other-secret!',fill:null,apply:false,next:null,expect:null,save:null};}});
  s.context.agentDefinitions=[{id:'codex',name:'Codex',kind:'codex',command:'codex',env:{}},{id:'custom-other',name:'Other',kind:'claude',command:'other',env:{API_KEY:'other-secret!'}}];const b=await createAgentBridge(s.context,{},ID,{},'https://runtime.example/s/abc/');await b.run();assert.ok(!JSON.stringify(received.context).includes('other-secret!'));const uploaded=s.calls.find(c=>c.path.endsWith('/reply')).body;assert.ok(!JSON.stringify(uploaded).includes('other-secret!'));assert.deepEqual(Object.keys(uploaded).sort(),['agents','bridge_id','fill','message_id','say']);
 });
 
@@ -157,10 +158,10 @@ test('deterministic pass needs no available agent and preserves signed-out state
 });
 test('negotiated run reaches adapter and reply only for current manual requests',async()=>{
  for(const kind of ['chat','run']){
- let polls=0,captured;
- const s=setup((c,{controller})=>{
+ let polls=0,replyCount=0,captured;
+ const s=setup(async(c,{controller})=>{
  if(c.path.endsWith('/connect'))return{...connect(c),json:{...connect(c).json,features:['apply','run']}};
- if(c.path.includes('/poll')){if(++polls>1){controller.abort();return{lost:true}}return{status:200,json:{connected:true,selected:'codex',message:{id:ID,kind,text:'Please execute that action',agent:'codex',context:{}}}};}
+ if(c.path.endsWith('/reply')){replyCount++;return{status:200,json:{ok:true}};}if(c.path.includes('/poll')){if(++polls>1){await waitForFixtureReply(()=>replyCount>0);controller.abort();return{lost:true}}return{status:200,json:{connected:true,selected:'codex',message:{id:ID,kind,text:'Please execute that action',agent:'codex',context:{}}}};}
  return{status:200,json:{ok:true}};
  },{askAgent:async options=>{captured=options;return{say:'Preparing action',fill:{entry:'prompts/main.prompt.md#main',input:{argv:['list']}},apply:true,run:true};}});
  const bridge=await createAgentBridge(s.context,{},ID,{},'https://runtime.example/s/abc/');await bridge.run();
