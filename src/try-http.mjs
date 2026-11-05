@@ -1,7 +1,8 @@
 // Generated from prompts/cli/try-http.prompt.md (sha256: cdae13428913e7130b7ba39685d67d329b1af6259ca85daecf3e75f6d7d29741).
 import { createServer, validateHeaderName, validateHeaderValue } from 'node:http';
 import { join, relative } from 'node:path';
-import { checkInput } from './runtime-preflight.mjs';
+import {loadRuntimeWorkspace} from './runtime-workspace.mjs';
+import { checkInput,captureSource } from './runtime-preflight.mjs';
 import { cleanText, tryUsage, tryUsageHeaders, tryUsageLine } from './runtime-output.mjs';
 import { runDoorCall } from './runtime-client.mjs';
 
@@ -116,6 +117,7 @@ async function requestText(req) {
 
 export async function openServe(context, test, sessionId, options) {
   const { ports, root, origin, identity } = context;
+  if(loadRuntimeWorkspace({root}).configured)captureSource(root,{tests:[test.path],appMap:context.appMap??null});
   const model = await context.runtime.send(`/v1/try/${sessionId}/model`, { method: 'GET' }, 30_000);
   if (model.status !== 200 || !Array.isArray(model.json?.entries)) throw problem(502, cleanText(model.json?.error?.message || 'The interpreter could not read this Try’s routes. It needs the Try doors server branch.'));
   const routes = model.json.entries.filter(e => e.http).map(entry => ({ ...entry, route: entry.http }));
@@ -182,7 +184,7 @@ export async function openServe(context, test, sessionId, options) {
       ports.stderr?.write(`${label}: running on the Try…\n`);
       const work = tail.then(async () => {
         if (stopped || context.signal?.aborted) throw problem(503, 'The local Try is stopped.');
-        return runDoorCall({ root, origin, login: identity.login, sessionId, callCap, prompt: selected.entry_path, operation: selected.operation }, input,
+        return runDoorCall({ root, originalPath:test.path, origin, login: identity.login, sessionId, callCap, prompt: selected.entry_path, operation: selected.operation }, input,
           { ...ports, signal: context.signal });
       });
       tail = work.catch(() => {});

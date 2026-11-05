@@ -1,0 +1,115 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/bounded-authored-source.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Hash filling changes only permitted valid draft authored prompts, preserves every other promised byte, and keeps approved or stale handling unchanged."
+    },
+    {
+      "id": "AC2",
+      "text": "A required excluded reference refuses before authentication or network; an excluded unselected prompt is neither opened nor written."
+    },
+    {
+      "id": "AC3",
+      "text": "Currentness retains the complete original selected test set, raw and effective prompt identities and used reference meaning; relevant changes become stale or unavailable."
+    },
+    {
+      "id": "AC4",
+      "text": "An unrelated excluded edit does not stale selected source, and widening permission alone does not claim a new check or change unchanged selected source identity."
+    }
+  ],
+  "binding_status": "unbound-unexecuted",
+  "native_effects": [
+    "exact authored byte/hash mutation",
+    "deterministic source/reference fingerprints",
+    "saved source identity and state consumers"
+  ],
+  "cases": [
+    {
+      "id": "direct-hash-preservation",
+      "criterion_id": "AC1",
+      "operation": "fillHashes + runCheck --fill-hash",
+      "given": {
+        "targets": [
+          "in-bound draft current",
+          "in-bound draft stale",
+          "approved current",
+          "approved stale",
+          "excluded draft"
+        ],
+        "formatting": "authored non-hash bytes include unusual JSON whitespace"
+      },
+      "expected": {
+        "draft_stale": "only existing hash string changes directly in authored file",
+        "draft_current": "no write",
+        "approved_current": "no write",
+        "approved_stale": "stale result without write",
+        "excluded": "no read/write",
+        "approval_provenance": "unchanged"
+      }
+    },
+    {
+      "id": "hash-reference-barrier",
+      "criterion_id": "AC2",
+      "operation": "fillHashes",
+      "given": {
+        "in_bound_draft": "simulation/prompts/order.prompt.md",
+        "required_contract": "contracts/excluded.md",
+        "unselected_excluded_prompt": "private/other.prompt.md"
+      },
+      "expected": {
+        "required_crossing": "useful boundary chain and refusal",
+        "auth_calls": 0,
+        "network_calls": 0,
+        "excluded_read_write_calls": 0
+      }
+    },
+    {
+      "id": "exact-source-reuse",
+      "criterion_id": "AC3",
+      "operation": "runTry reuse + runDoorCall + readContractHistory + savedStoryEvidence",
+      "given": {
+        "selection": [
+          "simulation/test/order.json",
+          "simulation/test/order.second.json"
+        ],
+        "independent_changes": [
+          "selected test bytes",
+          "selected Story bytes",
+          "raw prompt bytes",
+          "effective prompt schema through contract",
+          "used seed value",
+          "reference points at different parent-root content",
+          "narrowed policy excludes required file"
+        ]
+      },
+      "expected": {
+        "current_claim": false,
+        "outcome": "stale or unavailable with exact cause",
+        "selection": "both original tests retained",
+        "old_receipts": "unchanged bytes",
+        "new_dispatch_to_repair_read": false
+      }
+    },
+    {
+      "id": "unrelated-and-wider-policy",
+      "criterion_id": "AC4",
+      "operation": "captureSource + source-sensitive reuse",
+      "given": {
+        "changes": [
+          "excluded private/ordinary.md",
+          "unused record in shared contract file",
+          "allow additional unused directory"
+        ],
+        "selected_source": "unchanged complete closure"
+      },
+      "expected": {
+        "tar_source_identity": "unchanged for unchanged selected bytes",
+        "currentness": "revalidated without invented failure or verdict",
+        "check_calls": 0,
+        "policy_hash_pin_added": false
+      }
+    }
+  ]
+}
