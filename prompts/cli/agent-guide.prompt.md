@@ -2,6 +2,11 @@
 
 Own `src/agent-guide.mjs`. Export `createTryGuide({root,env,model,test,features=[],secrets=[],ports={}})`, returning `prepare(message)`, `decorate(reply)`, `delivered(message,reply)`, `wire(reply)`, `saved(record)` and `close()`. This read-only coordinator owns one bridge's RAM memory and the private-to-public boundary. It never calls an agent, invokes a program, changes project files, approves or saves a case, or chooses a model. The bridge still owns authenticated transport, cancellation, exactly-once delivery and when a reply was accepted.
 
+## Workspace refresh
+
+Use the [workspace authority](runtime-workspace.prompt.md) for every private scenario/card/judge input and refresh. Carry the same capability through `ports`, and revalidate it before preparing any turn, including deterministic replies. When permission changes, remove excluded product rules, criteria/input bindings, judges and retained source-derived memory before another request. Rebuild bounded coverage conservatively; removed/incomplete local evidence never claims full coverage or a current pass. Keep actual received-case status separate from a pending/conflicting import.
+
+
 ## Local authority and memory
 
 Use only safe authored scenarios from `readAgentScenarios({root})`; optional ports `readAgentScenarios` and `buildProjectCard` replace those local reads for verification. Model Stories and input bindings are fallback data without expected answers. Judge each local scenario separately, including different initial worlds; aggregate per-Story criterion states conservatively. Refresh local scenarios/card every turn. Filter malformed scenario documents, steps, criteria and checks conservatively, marking the inventory incomplete; invalid data cannot establish a pass. Include the reader array’s non-enumerable incomplete flag in the change hash. A changed scenario rebuilds its judge and replays bounded observed runs; capture source/scenario baselines when the guide connects. Changed source fingerprints mark that local checks use a changed local copy, never that the pinned runtime changed. Include an explicit local-copy note in the where-you-are text when changed, keeping that text within 1536 UTF-8 bytes. Official check marks remain separate.
@@ -36,6 +41,8 @@ decorate adds trusted progress and a schema-valid next.fill from local criterion
 saved accepts `{id,name,story_path,result}` only after collectSavedTests actually reports an `added to ...` result. Remember that successful imported case and destination, without storing raw saved-test contents. A refusal never marks a case saved. Keep existing append behavior and criterion ownership; phase B saving choices are outside this module.
 
 ## Dependencies
+
+- [Workspace authority](runtime-workspace.prompt.md): required generation/runtime/verification context for opt-in permission.
 
 - [Agent project](agent-project.prompt.md): required for safe scenario reads, where-you-are facts, product rules, latest check and save target.
 - [Run judge](agent-judge.prompt.md): required for exact comparisons, own expectations, missing data and ordered progress.

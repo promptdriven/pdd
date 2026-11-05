@@ -210,6 +210,8 @@ Without `criterion_results`, an outcome proves no criterion passed.
 No external runtime dependency. The required wire reference below supplies the
 client consumption interface; the server remains the capability decision owner.
 
+## Caller navigation
+
 The client owns transport, native digest computation, saved evidence, capacity waits, local
 hints and text cleaning; [runtime output](runtime-output.prompt.md) renders the
 retained fields. Server answer shapes: prompt-runtime `server/lint_driver.py`

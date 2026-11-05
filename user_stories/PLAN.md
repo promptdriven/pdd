@@ -128,6 +128,25 @@ The seven workflow Stories retain their separately approved contracts and all 28
 
 1. [Find each Story's test by its name and folder](tests-found-by-name.md): the tests of Story `S` are `S.json` and `S.<variant>.json` in a `test` or `tests` folder; pdd opens no JSON file to find tests, reads a matched test in full at any size, prints every Story with no test (with the expected path), one line for the test-folder JSON files that match no Story (`--files` lists them) and every conflict, and names the selected tests in the lint request when the interpreter supports it. Native cases: `test/tests-found-by-name.test.mjs`. Interpreter test: none (native effects).
 
+## Native evidence pair (draft; review required)
+
+1. [Native validation profile](native-validation-profile.md) — https://github.com/promptdriven/pdd/issues/2961. Cases: `test/runtime/native-validation-profile.json`.
+2. [Native criterion evidence](native-criterion-evidence.md) — https://github.com/promptdriven/pdd/issues/2954. Cases: `test/runtime/native-criterion-evidence.json`. Uses the same profile assessment.
+
+Prompt tests: not run. Source-only contract repair defines original-report intake, existing-journal snapshots and bounded native lint/workflow/PR consumers. All scenarios remain unjudged. No hosted lint, simulation, native capture, implementation or gate approval.
+## Bounded authored Runtime workspace (issue 2781, draft)
+
+Five slices, in build order. The first slice has a small policy Story and a native capture Story. Every choice remains for review; no approval or execution is implied.
+
+1. [Set an allowed-file ceiling](bounded-workspace-policy.md) — root `pdd-workspace.json`; keep additive `pdd-source.json` and Story selection separate. Scenario: `test/runtime/bounded-workspace-policy.json`. Prompt tests (bounded-workspace-policy): NOT RUN; no paid budget. Free lint: 1 of 1 passed, 0 AI calls, no checks sent. Supplied native stat/read callback replies are bindable; host path safety remains native.
+2. [Capture selected authored source inside the ceiling](bounded-runtime-capture.md) — complete closure, pre-auth refusal, actual manifest and separate reads. Native cases: `test/runtime-workspace/bounded-runtime-capture-cases.json`. Prompt tests (bounded-runtime-capture): UNBOUND / NOT RUN; Git, byte capture, symlinks and snapshot effects require native verification.
+3. [Keep simulator and guide context inside the ceiling](bounded-simulator-context.md) — all additional readers, refreshes and actual adapter controls. Native cases: `test/runtime-workspace/bounded-simulator-context-cases.json`. Prompt tests (bounded-simulator-context): UNBOUND / NOT RUN; native reader/process controls are not established by packet size or read-only flags.
+4. [Keep authored hashes and source identity current](bounded-authored-source.md) — direct draft hashes and exact source/reference currentness. Native cases: `test/runtime-workspace/bounded-authored-source-cases.json`. Prompt tests (bounded-authored-source): UNBOUND / NOT RUN; exact byte mutation and source identities require native verification.
+5. [Save once to the exact original test or keep the case safely](authored-case-import.md) — preservation, supported writer ownership, pending handoff, deduplication, interruption and observed worlds. Native cases: `test/runtime-workspace/authored-case-import-cases.json`. Prompt tests (authored-case-import): UNBOUND / NOT RUN; locks, races and durability require native verification.
+6. [Move projection state without repeating old work](bounded-workspace-migration.md) — exact path mappings, pending/applied cases, private state and 2899-owned evidence continuity. Native cases: `test/runtime-workspace/bounded-workspace-migration-cases.json`. Prompt tests (bounded-workspace-migration): UNBOUND / NOT RUN; filesystem/state/evidence effects require native verification.
+
+Items 1–2 are slice 1; items 3–6 are slices 2–5. Proposed policy and migration helpers own their rules. Runtime client owns command ordering/currentness and received-case import. Workflow runner alone owns evidence association/eligibility for https://github.com/promptdriven/pdd/issues/2899. This feature consumes that result; that bug alone does not deliver these slices. No product screen applies.
+
 ## Selected interpreter compatibility (#2791)
 
 Draft expectations for person review. No code or native readiness claim.

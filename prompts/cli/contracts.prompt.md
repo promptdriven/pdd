@@ -22,6 +22,11 @@ and physical source/snapshot checks. Use the
 contract-reference module's catalog, expansion, comparison and migration APIs;
 this command owns orchestration and presentation, not another resolver.
 
+## Workspace catalog
+
+Use the [workspace authority](runtime-workspace.prompt.md) through the bound strict access capability for catalog/discovery, per-Story footprints, reference ports, preview originals and sync destinations. Filter optional catalog/advice candidates before content reads. Excluded optional data and unavailable sibling footprints stay unavailable/advisory; they cannot create a global refusal. A required selected reference crossing still refuses. Strict no-link reads/writes remain in force; local history association is consumed from its owner without rewriting receipts.
+
+
 ## Listing and freshness
 
 `pdd contracts` lists every catalog record's canonical target and owner file,
@@ -87,6 +92,8 @@ stderr; every nonempty output line ends with one newline. No history or source
 write happens while merely listing or previewing.
 
 ## Dependencies
+
+- [Workspace authority](runtime-workspace.prompt.md): required generation/runtime/verification context for opt-in permission.
 
 - [References](contract-refs.prompt.md): required generation and verification
   context for record, expansion, comparison and migration rules.
