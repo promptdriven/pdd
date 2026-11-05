@@ -401,8 +401,9 @@ function describe(run, chat = null, { drafts = [], nothing = false } = {}) {
   return step ? `the agent works on ${step}` : 'the agent works';
 }
 
-async function startRunCommand({ name, issue, agent = 'codex', base, adoptCorpus, cwd, packageRoot = PACKAGE_ROOT }, ports) {
+async function startRunCommand({ name, issue, agent = 'codex', base, adoptCorpus, draft = false, cwd, packageRoot = PACKAGE_ROOT }, ports) {
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
+  if (typeof draft !== 'boolean') return fail('Draft publication must be a Boolean.');
   let workflow;
   try { workflow = readWorkflowAreas({ packageRoot, name, cwd, home: p.env.HOME || homedir() }); } catch (error) { return fail(error.message); }
   if (adoptCorpus !== undefined && (typeof adoptCorpus !== 'string' || !adoptCorpus.trim() || !workflow.areas.some(area=>area.replay_evidence===REPLAY_POLICY))) return {exitCode:2,message:'--adopt-corpus requires a declaration path and an explicitly replay-evidence-enabled workflow.'};
@@ -426,6 +427,8 @@ async function startRunCommand({ name, issue, agent = 'codex', base, adoptCorpus
   try { binding = await resolveWorkflowIssue({ cwd: context.toplevel, issue }, p.commandPorts); }
   catch (error) { return fail(`pdd could not read issue ${issue} with gh (${causeOf(error)}). Check "gh auth status", the origin remote and the issue number.`); }
   const number = binding.issue.number, runDir = runDirFor(context.commonDir, number), existing = readRun(runDir);
+  if (existing?.draft !== undefined && typeof existing.draft !== 'boolean') return fail('The saved draft publication policy must be a Boolean.');
+  if (existing && !ended(existing) && draft && existing.draft !== true) return fail(`Issue #${number} already has a nondraft run. Use pdd workflow approve ${number} --draft at its ready unpublished gate; starting again cannot change that policy.`);
   if (existing?.state === 'completed') return fail(`Issue #${number} already has a run (${existing.workflow}, ${describe(existing)}). Open it: pdd workflow open ${number}. Status: pdd workflow status ${number}.`);
   const warnings = [...(workflow.warnings ?? [])], baseBranch = explicitBase ? base : binding.defaultBranch;
   // A requested origin branch must be usable before releasing a cancelled run's claim.
@@ -499,7 +502,7 @@ async function startRunCommand({ name, issue, agent = 'codex', base, adoptCorpus
     ...(productMarkers.length === 1 ? { productMarker: productMarkers[0] } : {}),
     issue: { number, title: binding.issue.title, url: binding.issue.url }, number, root: a.worktreePath, branch: a.branch,
     baseBranch, baseSha: a.baseSha, sourceRoot: a.sourceRoot, commonDir: a.commonDir, runDir, agent,
-    configDir,
+    configDir, draft,
     startedAt: p.now(), state: 'running', areas: workflow.areas, area: 0, done: {}, gate: null, chats: [], decisions: [], changes: [],
     approvalRecord: null, pr: [], prState: null, cancelled: null, warnings, journalSeq: 0,
     previous: existing ? [...(existing.previous ?? []), { runId: existing.runId, root: existing.root, branch: existing.branch, runDir: `${runDir}-cancelled-${existing.runId.slice(0, 8)}` }] : [] };
@@ -1137,7 +1140,8 @@ async function readPublishedPr1(run, pr, p) {
   const intent = await prepareWorkflowPr({cwd:run.root,runId:run.runId,stageId:pr.stage,repository:run.repo,
     baseBranch:pr.base,title:prTitle(oneLine(run.issue.title) || `Issue #${run.number}`)},p.commandPorts);
   if (intent.headBranch !== pr.branch) throw Error('The owned PR 1 branch changed.');
-  const outcome = await reconcileWorkflowPr({cwd:run.root,intent},p.commandPorts);
+  if (run.draft !== undefined && typeof run.draft !== 'boolean') throw Error('The saved draft publication policy must be a Boolean.');
+  const outcome = await reconcileWorkflowPr({cwd:run.root,intent,draft:run.draft ?? false},p.commandPorts);
   p.inspectProgress?.();
   if (!['open','merged'].includes(outcome.state) || !outcome.pr || outcome.pr.number !== pr.number || outcome.pr.url !== pr.url)
     throw Error('The published PR 1 head is unavailable or does not match the owned publication.');
@@ -1149,9 +1153,32 @@ function inventoryCommits(inventory) {
     : 'Test inventory commits: unavailable.';
 }
 
+// Qualify draft policy before any write to an already published PR.
+async function requireExistingDraft(run, pr, p) {
+  if (run.draft !== true) return;
+  // Existing-update paths have no saved prepared intent. Qualify the saved PR
+  // itself before writes, retaining their ordinary source/marker checks below.
+  const expected = `https://github.com/${run.repo}/pull/${pr.number}`;
+  try {
+    if (!Number.isSafeInteger(pr.number) || pr.number < 1 || typeof pr.url !== 'string'
+      || pr.url.toLowerCase() !== expected.toLowerCase()) throw Error('Invalid saved PR identity');
+    const reply = await p.execFile('gh', ['pr', 'view', pr.url, '--json', 'number,url,isDraft'], {cwd:run.root});
+    if (reply.code !== undefined && reply.code !== 0) throw Error('PR unavailable');
+    const actual = JSON.parse(reply.stdout);
+    if (actual.number !== pr.number || actual.url !== pr.url || actual.isDraft !== true) throw Error('Draft PR unconfirmed');
+  } catch {
+    throw Error('The existing PR is not confirmed as the original draft. Inspect it; no PR update was started.');
+  }
+  p.inspectProgress?.();
+}
 // Commit leftovers, then push to the area's PR or open it. Returns a failure result, or null when the PR is there.
 async function publishAreaPr(run, area, p, lines, retry) {
+  if (run.draft !== undefined && typeof run.draft !== 'boolean') return fail('The saved draft publication policy must be a Boolean.');
   const label = prLabel(run, area), existing = prOf(run, area.name), title = oneLine(run.issue.title) || `Issue #${run.number}`;
+  if (existing) {
+    try { await requireExistingDraft(run, existing, p); }
+    catch (error) { if(error?.code==='workflow_progress_refused')throw error;return fail(error.message); }
+  }
   const status = await rawGit(p, run.root, 'status', '--porcelain=v1', '-z', '--untracked-files=all');
   if (status) {
     const records = status.split('\0');
@@ -1289,7 +1316,7 @@ async function publishAreaPr(run, area, p, lines, retry) {
       : `pdd could not prepare ${label} (${causeOf(error)}). Fix it, then ${retry}.`;
     return fail([...lines, why].join('\n'));
   }
-  const outcome = await publishWorkflowPr({ cwd: run.root, intent, body: `${body}\n<!-- ${intent.marker} -->\n` }, p.commandPorts);
+  const outcome = await publishWorkflowPr({ cwd: run.root, intent, body: `${body}\n<!-- ${intent.marker} -->\n`, draft: run.draft ?? false }, p.commandPorts);
   p.inspectProgress?.();
   // GitHub's refusal and a too-long body are certain: their message names the fix. Only a real doubt says "unconfirmed".
   if (!['open', 'merged'].includes(outcome.state) || !outcome.pr) return fail([...lines, `${label[0].toUpperCase()}${label.slice(1)} did not open: ${/ then try again\.$/.test(outcome.message)
@@ -1552,6 +1579,8 @@ async function syncPr1(run, p) {
   const pr1 = prOf(run, askArea(run).name), before = await pr1Drafts(run, p);
   if (run.state === 'completed' || !pr1 || run.branch !== pr1.branch) return { drafts: before, lines: [] };
   if ((await (p.readPrStatus ?? readWorkflowPrStatus)({ cwd: run.root, url: pr1.url }, p.commandPorts)).state !== 'open') return { drafts: before, lines: [] };
+  try { await requireExistingDraft(run, pr1, p); }
+  catch (error) { if(error?.code==='workflow_progress_refused')throw error;return {failed:error.message}; }
   const approved = before.filter(path => {
     try { const found = statuses(readFileSync(join(run.root, path), 'utf8')); return found.includes('approved') && !found.includes('draft'); } catch { return false; }
   });
@@ -1599,6 +1628,7 @@ async function syncPr1(run, p) {
 // PR 1's description names its draft prompts; after a push to PR 1 that line must say the new truth. A failure only warns.
 async function draftDescription(run, pr1, drafts, p) {
   try {
+    await requireExistingDraft(run, pr1, p);
     const body = JSON.parse(String((await p.execFile('gh', ['pr', 'view', pr1.url, '--json', 'body'], { cwd: run.root })).stdout ?? '')).body;
     if (typeof body !== 'string') throw Error('PR 1 description unavailable.');
     const old = body.split('\n').find(line => line.startsWith('Draft prompts: '));
@@ -1790,11 +1820,19 @@ async function saveGateApproval(run, area, record, edits, p, snapshot = run.gate
   commitRun(run,p,latest=>{latest.decisions.push(decision);latest.approvalRecord=approvalRecord;});
   return decision;
 }
-async function approveRunCommand({ ref, cwd, said: approvalWords, packageRoot = PACKAGE_ROOT }, ports) {
+async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false, packageRoot = PACKAGE_ROOT }, ports) {
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
+  if (typeof draft !== 'boolean') return fail('Draft publication must be a Boolean.');
   const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
   const run = found.run, area = run.areas[run.area], label = `${run.repo}#${run.number} "${oneLine(run.issue.title)}"`;
+  if (run.draft !== undefined && typeof run.draft !== 'boolean') return fail('The saved draft publication policy must be a Boolean.');
+  const strengthening = draft && run.draft !== true;
+  const draftStage = run.areas.slice(run.area).find(item => item.gate === 'pr');
+  const draftEligibility = latest => latest.gate && latest.gate.area === area.name
+    && area.steps.every(step => latest.done[step]) && draftStage && !prOf(latest, draftStage.name)
+    && (latest.gate.kind === 'approve' && area.gate === 'approve' || latest.gate.kind === 'approve-pr' && area.before === 'approve');
+  if (strengthening && !draftEligibility(run)) return fail('Draft publication can be requested only at a ready unpublished approval gate. The run and existing PRs are unchanged.');
   const selectedQuestion=run.question,selectedGate=run.gate,selectedArea=run.area;
   const askCode = area.then === 'ask-code', beforePr = run.gate?.kind === 'approve-pr';
   if (ended(run) && !(askCode && run.gate?.kind === 'ask-code')) return fail(`The run for ${run.repo}#${run.number} is ${run.state}. There is nothing to approve.`);
@@ -1868,6 +1906,15 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, packageRoot = 
   let saved;
   try { if (run.gate || beforePr || !askCode) saved = await saveGateApproval(run, area, record, edits, p, approvalSnapshot); }
   catch (error) { return fail(`Approval failed: ${error.message}`); }
+  if (strengthening) {
+    try {
+      commitRun(run,p,latest=>{
+        if (latest.draft !== undefined && typeof latest.draft !== 'boolean') throw Error('The saved draft publication policy must be a Boolean.');
+        if (!draftEligibility(latest)) throw Error('The draft publication gate is no longer ready and unpublished.');
+        latest.draft = true;
+      });
+    } catch (error) { return fail(`Draft publication policy was not saved: ${error.message}`); }
+  }
   carried.push(...edits.map(edit => `Approved ${edit.path} ${edit.proseSha256}`));
   if (askCode && run.gate?.kind === 'ask-code') {
     const carry = synchronized ? { drafts: await pr1Drafts(run, p), lines: await draftDescription(run, prOf(run, area.name), await pr1Drafts(run, p), p) } : await syncPr1(run, p);
@@ -2358,6 +2405,13 @@ function ownershipLines(owner) {
   return owner?[`Workflow progress ownership: ${owner.path}; PID ${owner.pid??'unknown'}, host ${owner.hostname??'unknown'}, token ${owner.token??'unknown'}.${owner.warning?` ${owner.warning}.`:''} If no pdd command is running, inspect and remove this ownership folder, then retry.`]:[];
 }
 
+// Project saved steps, rather than the current area or the newest run-wide results.
+function savedStepResults(run) {
+  return Object.entries(run.done ?? {}).map(([step, record]) => ({ step,
+    area: record.area ?? run.areas.find(area => area.steps.includes(step))?.name ?? null,
+    pddResults: record.pddResults ?? [] }));
+}
+
 async function listStatus(runs, { json, cancelled, scope, snapshotOnly=false }, p) {
   const reading = runs.filter(run => run.state === 'waiting' && run.pr?.length).reduce((sum, run) => sum + run.pr.length, 0);
   if (reading) p.say(`Reading ${reading} PR${reading === 1 ? '' : 's'} from GitHub…`);
@@ -2367,7 +2421,7 @@ async function listStatus(runs, { json, cancelled, scope, snapshotOnly=false }, 
     const ordinaryOwnership=readRunOwnership(run.runDir,p);
     const item = summary(run, p.timeZone, ordinaryOwnership||snapshotOnly?null:await chatState(run, p), ended(run)||ordinaryOwnership||snapshotOnly ? {} : await gateFacts(run, p));
     const snapshot = requestSnapshot(run, p);
-    all.push({ ...item, ...snapshot, ordinaryOwnership, line: [item.line, ...ownershipLines(ordinaryOwnership), ...requestLines(snapshot, { openOnly: true, ended: ended(run), currentArea: run.areas[run.area]?.name, p })].join('\n') });
+    all.push({ ...item, steps: savedStepResults(run), ...snapshot, ordinaryOwnership, line: [item.line, ...ownershipLines(ordinaryOwnership), ...requestLines(snapshot, { openOnly: true, ended: ended(run), currentArea: run.areas[run.area]?.name, p })].join('\n') });
   }
   const hidden = cancelled ? 0 : all.filter(item => item.group === 'cancelled').length;
   const shown = all.filter(item => cancelled || item.group !== 'cancelled')
@@ -2391,8 +2445,11 @@ async function runStatusCommand({ ref, cwd, all = false, json = false, cancelled
   const run = found.run, facts = ended(run)||ordinaryOwnership||snapshotOnly ? {} : await gateFacts(run, p), chat = ordinaryOwnership||snapshotOnly?null:await chatState(run, p);
   const snapshot = requestSnapshot(run, p);
   const nativeResults=ownResults(run,p).filter(result=>result.kind==='native evidence');
-  if (json) { const { line, ...item } = summary(run, p.timeZone, chat, facts); return done(JSON.stringify({ runs: [{ ...item, ...snapshot, ordinaryOwnership, nativeResults }] }, null, 2)); }
-  return done([detail(run, chat, facts), ...(nativeResults.length?resultLines(nativeResults):[]), ...ownershipLines(ordinaryOwnership), ...requestLines(snapshot, { ended: ended(run), currentArea: run.areas[run.area]?.name, p })].join('\n'));
+  const steps = savedStepResults(run);
+  if (json) { const { line, ...item } = summary(run, p.timeZone, chat, facts); return done(JSON.stringify({ runs: [{ ...item, steps, ...snapshot, ordinaryOwnership, nativeResults }] }, null, 2)); }
+  return done([detail(run, chat, facts), ...steps.flatMap(({ step, area, pddResults }) =>
+    [`Step: ${area ?? 'unknown'} / ${step}`, ...resultLines(pddResults).map(line => `  ${line}`)]),
+    ...(nativeResults.length?resultLines(nativeResults):[]), ...ownershipLines(ordinaryOwnership), ...requestLines(snapshot, { ended: ended(run), currentArea: run.areas[run.area]?.name, p })].join('\n'));
 }
 
 const replacementPhases = ['intent', 'closeRequested', 'closed', 'createRequested', 'prepared', 'launchRequested', 'launched', 'rolledBack', 'ended'];
