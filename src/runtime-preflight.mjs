@@ -159,12 +159,39 @@ export const orphanSummary = orphans => orphans.length === 1 ? `Warning: ${orpha
   : `Warning: ${orphans.length} JSON files in test folders match no Story (the tests of user_stories/**/S.md are S.json and S.<variant>.json). pdd test --files lists them.`;
 
 // Tests, stories and Git-visible regular files of one repo.
-export function findTests({ root, files = gitFiles(root), workspace }) {
-  return discoverTests(root, files,false,workspace);
+export function findTests({ root, files = gitFiles(root), workspace, excludeFixtureProjects = false }) {
+  return discoverTests(root, files,false,workspace,excludeFixtureProjects);
 }
 
+// Identify projects by Git-visible names before inspecting any Story or test content.
+function fixtureProjectRoots(root, files) {
+  const directories = new Map();
+  for (const path of files) {
+    const parts = path.split('/');
+    if (parts[0] !== 'test' || parts[1] !== 'fixtures') continue;
+    // Do not follow an unchecked link while classifying a name.
+    let safe = true;
+    for (let i = 1; i < parts.length; i++) {
+      const ancestor = statOf(join(root, ...parts.slice(0, i)));
+      if (!ancestor?.isDirectory()) { safe = false; break; }
+    }
+    if (!safe) continue;
+    const stat = statOf(join(root, path));
+    if (!stat || (!stat.isFile() && !stat.isSymbolicLink())) continue;
+    for (let i = 3; i < parts.length - 1; i++) {
+      if (parts[i] !== 'user_stories' && parts[i] !== 'tests') continue;
+      const project = parts.slice(0, i).join('/');
+      if (!directories.has(project)) directories.set(project, new Set());
+      directories.get(project).add(parts[i]);
+    }
+  }
+  return [...directories].filter(([, dirs]) => dirs.has('user_stories') && dirs.has('tests')).map(([path]) => path).sort();
+}
+
+const outsideFixtureProjects = (files, roots) => files.filter(path => !roots.some(root => path.startsWith(`${root}/`)));
+
 // Git-visible regular files and Stories: discovery reads Story files, never JSON files.
-function discoverStories(root, files, strict = false, workspace=loadRuntimeWorkspace({root})) {
+function discoverStories(root, files, strict = false, workspace=loadRuntimeWorkspace({root}), discoveryFiles = null) {
   workspace=boundedWorkspace(root,workspace);
   const visible = new Set(), stories = [], storyFiles = [], titles = new Map(), warnings = [], linkedPaths = new Set(), sizes = new Map();
   let linkedFiles = strict||workspace.configured ? filePort(root, new Set(files), strict,workspace) : undefined;
@@ -181,7 +208,7 @@ function discoverStories(root, files, strict = false, workspace=loadRuntimeWorks
     if (!stat?.isFile()) continue;
     visible.add(path); sizes.set(path, Number(stat.size));
     if (linked) linkedPaths.add(path);
-    if (isStoryPath(path)) {
+    if ((!discoveryFiles || discoveryFiles.has(path)) && isStoryPath(path)) {
       // Every Story file can own a test by its name. An index (PLAN.md, README.md) or a file with no acceptance
       // criteria section is not listed as a Story (2048 session, 0.1.6), so it never gets a "has no test" line.
       storyFiles.push(path);
@@ -195,9 +222,11 @@ function discoverStories(root, files, strict = false, workspace=loadRuntimeWorks
   return { visible, stories, storyFiles, titles, warnings, sizes, read };
 }
 
-function discoverTests(root, files, strict = false,workspace=loadRuntimeWorkspace({root})) {
-  const { visible, stories, storyFiles, titles, warnings: storyWarnings, sizes, read } = discoverStories(root, files, strict,workspace);
-  const named = new Set(stories.map(story => story.path)), rule = matchTests(storyFiles, [...visible]);
+function discoverTests(root, files, strict = false,workspace=loadRuntimeWorkspace({root}),excludeFixtureProjects=false) {
+  const excluded = excludeFixtureProjects ? fixtureProjectRoots(root, files) : [];
+  const discoveryFiles = new Set(outsideFixtureProjects(files, excluded));
+  const { visible, stories, storyFiles, titles, warnings: storyWarnings, sizes, read } = discoverStories(root, files, strict,workspace,discoveryFiles);
+  const named = new Set(stories.map(story => story.path)), rule = matchTests(storyFiles, [...visible].filter(path => discoveryFiles.has(path)));
   rule.untested = rule.untested.filter(item => named.has(item.storyPath));
   const tests = rule.tests.map(entry => {
     const size = sizes.get(entry.path);
@@ -212,7 +241,7 @@ function discoverTests(root, files, strict = false,workspace=loadRuntimeWorkspac
       throw error;
     }
   });
-  const warnings = [...storyWarnings, ...rule.tests.filter(entry => entry.problem).map(entry => `Warning: ${entry.problem}`),
+  const warnings = [...excluded.map(path => `Warning: skipped nested fixture project ${path}.`), ...storyWarnings, ...rule.tests.filter(entry => entry.problem).map(entry => `Warning: ${entry.problem}`),
     ...rule.untested.map(item => `Warning: ${item.line}`), ...(rule.orphans.length ? [orphanSummary(rule.orphans)] : [])];
   // Discover declarations from already bounded Story reads. Owner files are
   // opened only after explicit lint selection.
@@ -220,7 +249,7 @@ function discoverTests(root, files, strict = false,workspace=loadRuntimeWorkspac
     const section = /^## Native validation\s*\n([\s\S]*?)(?=^## |$(?![\s\S]))/m.exec(read(story.path));
     return section ? [{ storyPath: story.path, story: story.name, section: section[1] }] : [];
   });
-  const found={ root, visible, tests, stories, nativeSelections, warnings, untested: rule.untested, orphans: rule.orphans };
+  const found={ root, visible, tests, stories, nativeSelections, warnings, untested: rule.untested, orphans: rule.orphans, excludedFixtureProjects: excluded, discoveryVisible: new Set([...visible].filter(path => discoveryFiles.has(path))) };
   Object.defineProperty(found,'workspace',{value:workspace});return found;
 }
 
@@ -1347,7 +1376,7 @@ function preparedText(root, visible, path, text, format,workspace) {
   }
 }
 
-function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadRuntimeWorkspace({root}) }, strict = false) {
+function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadRuntimeWorkspace({root}),excludeFixtureProjects=tests === undefined }, strict = false) {
   const policyBefore=JSON.stringify(loadRuntimeWorkspace({root}));workspace=boundedWorkspace(root,workspace);
   const names = gitFiles(root), visible = new Set(names), overlay = new Map(), payload = new Map(), queue = [], visited = new Set();
   const chains=new Map(),preparationReads=new Set(),referenceReads=new Set();
@@ -1449,9 +1478,11 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
       for (const path of doc.include) { add(path, SOURCE_CONFIG); shared.add(sourcePath(path,SOURCE_CONFIG)); }
     }
     // The test name rule over the effective source (Git-visible files and prepared files); it opens no JSON file.
-    const onDisk = discoverStories(root,names,strict,workspace);
-    const named = matchTests(onDisk.storyFiles, [...onDisk.visible, ...overlay.keys()]).tests.filter(test=>!test.problem);
-    const allNamed=matchTests(onDisk.storyFiles,names).tests.flatMap(test=>(test.files??[test.path]).map(path=>({...test,path})));
+    const excluded = excludeFixtureProjects ? fixtureProjectRoots(root, names) : [];
+    const discoveryNames = outsideFixtureProjects(names, excluded);
+    const onDisk = discoverStories(root,discoveryNames,strict,workspace);
+    const named = matchTests(onDisk.storyFiles, outsideFixtureProjects([...onDisk.visible, ...overlay.keys()], excluded)).tests.filter(test=>!test.problem);
+    const allNamed=matchTests(onDisk.storyFiles,discoveryNames).tests.flatMap(test=>(test.files??[test.path]).map(path=>({...test,path})));
     const selected = tests ?? named.map(test=>test.path);
     for (const path of selected) add(path, 'Selected test',path.endsWith('.prompt.md')?'context':isStoryPath(path)?'story':'test');
     if (appMap) { add(appMap, 'App map', 'app-map'); shared.add(sourcePath(appMap,'App map')); }

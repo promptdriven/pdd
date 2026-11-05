@@ -243,8 +243,9 @@ async function readSavedStoryEvidence({ root, comparisonRoot = root }, ports, ca
     if (comparisonRoot !== null && /^[a-f0-9]{64}$/.test(batch.source_sha256 ?? '')) {
       try {
         const folder = await real(comparisonRoot), tests = [...new Set(batch.rows.map(row => row.test))].sort();
-        const key = JSON.stringify([folder, tests]);
-        if (!captures.has(key)) captures.set(key, Promise.resolve().then(() => capture(folder, { tests, appMap: null }))
+        const excludeFixtureProjects = batch.exclude_fixture_projects === true;
+        const key = JSON.stringify([folder, tests, excludeFixtureProjects]);
+        if (!captures.has(key)) captures.set(key, Promise.resolve().then(() => capture(folder, { tests, appMap: null, excludeFixtureProjects }))
           .then(source => ({ sha256: source.sha256 })).catch(error => ({ error })));
         const source = await captures.get(key);
         if (source.error) throw source.error;
@@ -795,7 +796,7 @@ function batchId(now, uuid) {
 function localSetup(cwd, words) {
   const root = repoRoot(cwd), names=gitFiles(root), workspace=loadRuntimeWorkspace({root});
   for(const word of words){const path=relative(realpathSync(root),resolve(realpathSync(cwd),word)).split(sep).join('/');if(names.includes(path))requireRuntimePath(workspace,{path,from:'Selected source'});}
-  const found = findTests({ root, files: names });
+  const found = findTests({ root, files: names, excludeFixtureProjects: words.length === 0 });
   const realCwd = realpathSync(cwd), realRoot = realpathSync(root);
   const normalized = words.map(word => {
     const rel = relative(realRoot, resolve(realCwd, word)).split(sep).join('/');
@@ -815,7 +816,7 @@ function storyList(found) {
 }
 
 function select(found, words, root) {
-  if (!found.tests.length) throw new Stop(2, [NO_TESTS, ...(root ? whyNoTests(root, found.visible, found) : [])].join('\n'));
+  if (!found.tests.length) throw new Stop(2, [NO_TESTS, ...(root ? whyNoTests(root, found.discoveryVisible ?? found.visible, found) : []), ...(found.excludedFixtureProjects ?? []).map(path => `Warning: skipped nested fixture project ${path}.`)].join('\n'));
   const { selected, unknown, untested = [] } = selectTests(found, words);
   if (untested.length) throw new Stop(2, untested.join('\n'));
   if (unknown.length) throw new Stop(2, [`Unknown story ${unknown.map(word => `"${cleanText(word)}"`).join(', ')}. Stories:`, ...storyList(found)].join('\n'));
@@ -838,7 +839,7 @@ function recoverSourceContext(context) {
   if (context.sourceRecoveryAttempted) return false;
   context.sourceRecoveryAttempted = true;
   try {
-    const capture = context.ports.captureSource(context.root, { tests: sentTests(context.rows), appMap: null });
+    const capture = context.ports.captureSource(context.root, { tests: sentTests(context.rows), appMap: null, excludeFixtureProjects: context.excludeFixtureProjects });
     if (capture.sha256 !== context.capture.sha256) { context.sourceRecoveryMismatch = true; return false; }
     capture.stories = context.capture.stories;
     context.capture = capture;
@@ -984,6 +985,7 @@ function batchRecord(context) {
   const { batch, origin, root, identity, capture, rows, lint, warnings } = context;
   return { version: 1, batch, origin, root, head: context.head, login: identity.login, user_id: identity.userId,
     source_sha256: capture.sha256, files: capture.files.map(file => file.path), bytes: capture.bytes, timeout_min: context.timeoutMin,
+    exclude_fixture_projects: context.excludeFixtureProjects === true,
     created_at: new Date(context.startedAt).toISOString(), intent: context.intent, lint, warnings, coverage: context.coverage,
     contract_snapshots: capture.stories,
     test_cache: context.testCache ? { tokens: [...context.testCache.tokens] } : context.savedTestCache,
@@ -1411,7 +1413,8 @@ function runFiles(cwd, words, options, ports) {
   const tests = selected.filter(test => !test.error).map(test => test.path);
   for (const test of selected.filter(test => test.error)) line(ports.stderr, `Warning: not sent: ${test.error}`);
   const appMap = options['--app-map'] === undefined ? null : appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
-  const capture = ports.captureSource(root, { tests, appMap });
+  for (const path of found.excludedFixtureProjects ?? []) line(ports.stderr, `Warning: skipped nested fixture project ${path}.`);
+  const capture = ports.captureSource(root, { tests, appMap, excludeFixtureProjects: words.length === 0 });
   for (const warning of [...(capture.warnings ?? []), ...unmatchedLines(found)]) line(ports.stderr, warning);
   const other = otherFiles(capture.files, found), width = Math.max(0, ...capture.files.map(file => file.path.length));
   for(const read of capture.reads??[])line(ports.stderr,`Local read (${read.roles.join(', ')}, not uploaded): ${read.path}`);
@@ -1425,6 +1428,7 @@ function runFiles(cwd, words, options, ports) {
 // Locally the selected prompts' limits gate, SVG advice and privacy/capture checks run; other engine rules are the server's.
 async function runLintOnly(context, cwd, words, options, setRelease) {
   const { ports } = context, origin = runtimeOrigin(ports.env), { root, found, normalized } = localSetup(cwd, words);
+  context.excludeFixtureProjects = words.length === 0;
   const selected = select(found, normalized, root);
   context.coverage = bindingCoverage({ root, found, selected });
   // A test that the test name rule cannot use is refused here and never sent; the other tests are linted.
@@ -1471,7 +1475,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
     }
     return 4;
   }
-  const capture = ports.captureSource(root, { tests: selected.filter((test, index) => !local(rows[index])).map(test => test.path), appMap: null });
+  const capture = ports.captureSource(root, { tests: selected.filter((test, index) => !local(rows[index])).map(test => test.path), appMap: null, excludeFixtureProjects: words.length === 0 });
   const svgWarnings = lintSvgLayouts({ root, files: [...found.visible], promptPaths: capture.files.map(file => file.path).filter(path => path.endsWith('.prompt.md')) });
   const drift=[];
   try {
@@ -1697,7 +1701,7 @@ async function continueHeld(context, candidates, saved) {
   if (context.lintPending) return;
   const lintId = context.lint?.request_ids?.at(-1), lint = lintId && context.store.read(join(context.folder, `${lintId}.json`));
   let capture;
-  try { capture = Array.isArray(context.capture.sources) ? context.capture : context.ports.captureSource(context.root, { tests: sentTests(saved.rows), appMap: null }); }
+  try { capture = Array.isArray(context.capture.sources) ? context.capture : context.ports.captureSource(context.root, { tests: sentTests(saved.rows), appMap: null, excludeFixtureProjects: saved.exclude_fixture_projects === true }); }
   catch (error) {
     if (!(error instanceof PreflightError)) throw error;
     context.continuationNotice = `No checks were sent for the lint-held rows: the saved source cannot be verified. ${error.message}`;
@@ -1730,10 +1734,10 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
   const saved = store.read(join(context.folder, 'batch.json'));
   if (!saved) throw new Stop(2, `No saved batch ${name}.`);
   if (saved.root !== root) throw new Stop(2, 'This saved batch belongs to a different repository.');
-  if(loadRuntimeWorkspace({root}).configured)ports.captureSource(root,{tests:saved.rows.filter(row=>!row.unsent).map(row=>row.test),appMap:null});
+  if(loadRuntimeWorkspace({root}).configured)ports.captureSource(root,{tests:saved.rows.filter(row=>!row.unsent).map(row=>row.test),appMap:null,excludeFixtureProjects:saved.exclude_fixture_projects === true});
   const identity = signIn(ports.gh, context.store);
   if (identity.login !== saved.login) throw new Stop(5, `These runs belong to ${saved.login}. Run: gh auth switch -u ${saved.login}`);
-  Object.assign(context, { batch: name, origin: saved.origin, coverage: saved.coverage, identity, intent: saved.intent, secrets: [identity.token], warnings: saved.warnings ?? [],
+  Object.assign(context, { excludeFixtureProjects: saved.exclude_fixture_projects === true, batch: name, origin: saved.origin, coverage: saved.coverage, identity, intent: saved.intent, secrets: [identity.token], warnings: saved.warnings ?? [],
     capture: { sha256: saved.source_sha256, files: saved.files.map(path => ({ path })), bytes: saved.bytes, stories:saved.contract_snapshots }, lint: saved.lint, head: saved.head, startedAt: Date.parse(saved.created_at) });
   runtimeOrigin({ PDD_RUNTIME_URL: saved.origin });
   context.runtime = new Runtime({ origin: saved.origin, token: identity.token, ports, signal: context.signal });
@@ -1742,7 +1746,7 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
   // Preserve the producer's original evidence before refresh can normalize unsent usage.
   const evidence = candidates.map(row => ({ row, hadCalls: Object.hasOwn(row, 'calls'), calls: row.calls }));
   for (const row of rows) adoptClaims(context, row);
-  Object.assign(context, { rows, visible: findTests({ root }).visible, reading: true });
+  Object.assign(context, { rows, visible: findTests({ root, excludeFixtureProjects: context.excludeFixtureProjects }).visible, reading: true });
   const cache = context.cacheEnabled ? await openTestCache(context, root, false) : null;
   context.testCache = cache; context.savedTestCache = saved.test_cache;
   if (cache && !cache.disabled) {
@@ -1835,7 +1839,7 @@ async function recoverRestarts(context) {
   if (!admitted.length) return [];
   context.restartDecisions ??= new Set();
   for (const row of admitted) context.restartDecisions.add(row.request_ids.at(-1));
-  const capture = context.recoveredSourceCapture ?? context.ports.captureSource(context.root, { tests: sentTests(context.rows), appMap: null });
+  const capture = context.recoveredSourceCapture ?? context.ports.captureSource(context.root, { tests: sentTests(context.rows), appMap: null, excludeFixtureProjects: context.excludeFixtureProjects });
   if (capture.sha256 !== context.capture.sha256) { context.continuationNotice = 'The saved source changed; no restarted check was sent again.'; return []; }
   capture.stories = context.capture.stories;
   context.capture = capture;
@@ -1857,7 +1861,7 @@ async function runRetry(context, name, options) {
   const rows = await runRead(context, name, true, options);
   if (context.intent !== undefined && context.intent !== 'check') throw new Stop(2, 'The saved batch has no Check intent. Start a fresh selected pdd test.');
   if (context.interrupted || ports.now() >= context.deadline) return () => printResult(context, rows);
-  const capture = Array.isArray(context.capture.sources) ? context.capture : context.ports.captureSource(context.root, { tests: sentTests(rows), appMap: null });
+  const capture = Array.isArray(context.capture.sources) ? context.capture : context.ports.captureSource(context.root, { tests: sentTests(rows), appMap: null, excludeFixtureProjects: context.excludeFixtureProjects });
   if (capture.sha256 !== context.capture.sha256) throw new Stop(2, 'The saved source no longer matches: source changed. Start a fresh selected pdd test instead.');
   capture.stories = context.capture.stories;
   context.capture = capture;
@@ -1905,10 +1909,10 @@ async function refreshCheckBatches(context, identity, origin, id, answer) {
       store.write(join(folder, `${id}.json`), answer);
       if (context.cacheEnabled && saved.version === 1 && saved.intent === 'check'
         && Array.isArray(saved.test_cache?.tokens) && saved.rows.some(row => row.request_ids?.at(-1) === id)) {
-        const capture = context.ports.captureSource(root, { tests: sentTests(saved.rows), appMap: null });
+        const capture = context.ports.captureSource(root, { tests: sentTests(saved.rows), appMap: null, excludeFixtureProjects: saved.exclude_fixture_projects === true });
         if (capture.sha256 !== saved.source_sha256) continue;
         // Project receipts privately: UUID reads never rewrite saved batch/summary views.
-        const projection = { ...context, cacheReadInvocation: true, startedAt: Date.parse(saved.created_at), reading: true, visible: findTests({ root }).visible, warnings: [] };
+        const projection = { ...context, cacheReadInvocation: true, startedAt: Date.parse(saved.created_at), reading: true, visible: findTests({ root, excludeFixtureProjects: saved.exclude_fixture_projects === true }).visible, warnings: [] };
         const rows = saved.rows.map(savedRow => {
           const row = { ...savedRow, state: 'unknown', calls: 'unknown', request_ids: [...(savedRow.request_ids ?? [])], checks: null };
           const latest = row.request_ids.at(-1), receipt = latest && store.read(join(folder, `${latest}.json`));
@@ -2589,7 +2593,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
   const { ports } = context;
   const origin = runtimeOrigin(ports.env);
   const { root, found, normalized } = localSetup(cwd, words);
-  context.visible = found.visible; context.origin = origin;
+  context.visible = found.visible; context.origin = origin; context.excludeFixtureProjects = words.length === 0;
   // Ordinary Check waits for completion in every shell unless a limit is explicit.
   context.agentLimit = false;
   context.timeoutMin = options['--timeout'] !== undefined ? Number(options['--timeout']) : null;
@@ -2614,12 +2618,12 @@ async function runBatch(context, cwd, words, options, setRelease) {
     row.criterion_texts = Object.fromEntries((Array.isArray(test?.doc?.criteria) ? test.doc.criteria : []).filter(isObject).map(item => [item.id, item.text]));
   }
   if (options['--max-calls'] !== undefined) for (const row of rows) row.max_calls = Number(options['--max-calls']);
-  context.warnings.push(...found.warnings, ...checked.warnings, ...sharedSourceFiles(root, found.visible));
+  context.warnings.push(...found.warnings, ...checked.warnings, ...sharedSourceFiles(root, found.discoveryVisible ?? found.visible));
   context.unmatched = unmatchedLines(found);
   if (cache) await beginTestAttempts(cache, rows.filter(row => row.state !== 'ready'), null, options, origin);
   if (!rows.some(row => row.state === 'ready')) return printResult(context, rows);
   let capture;
-  try { capture = ports.captureSource(root, { tests: sentTests(rows), appMap: null }); }
+  try { capture = ports.captureSource(root, { tests: sentTests(rows), appMap: null, excludeFixtureProjects: words.length === 0 }); }
   catch (error) { if (cache) await beginTestAttempts(cache, rows, null, options, origin); throw error; }
   context.warnings.push(...(capture.warnings ?? []));
   if (cache) await beginTestAttempts(cache, rows, capture, options, origin);
