@@ -213,6 +213,7 @@ async function rawGit(p, root, ...args) {
 }
 async function changedFiles(run, p, strict = false) {
   try {
+    if (p.descriptionSource) return (await rawGit(p, run.root, 'diff', '--name-only', '-z', run.baseSha, p.descriptionSource.head)).split('\0').filter(Boolean);
     const tracked = (await rawGit(p, run.root, 'diff', '--name-only', '-z', run.baseSha)).split('\0');
     const untracked = (await rawGit(p, run.root, 'ls-files', '--others', '--exclude-standard', '-z')).split('\0');
     return [...new Set([...tracked, ...untracked].filter(Boolean))];
@@ -318,15 +319,15 @@ const statuses = text => interfaceBlocks(text).map(block => { try { return JSON.
 // The *.prompt.md files that a branch changes against its base and whose Runtime interface is still "draft".
 async function draftPrompts(run, p, branch, base) {
   try {
-    const files = (await git(p, run.root, 'diff', '--name-only', `refs/remotes/origin/${base}...${branch}`)).split('\n').filter(path => path.endsWith('.prompt.md'));
+    const files = (await git(p, run.root, 'diff', '--name-only', `refs/remotes/origin/${base}...${p.descriptionSource?.head ?? branch}`)).split('\n').filter(path => path.endsWith('.prompt.md'));
     const drafts = [];
     for (const path of files) {
       let text;
-      try { text = String((await p.execFile('git', ['show', `${branch}:${path}`], { cwd: run.root })).stdout ?? ''); } catch { continue; }
+      try { text = String((await p.execFile('git', ['show', `${p.descriptionSource?.head ?? branch}:${path}`], { cwd: run.root })).stdout ?? ''); } catch (error) { if (p.descriptionSource) throw error; continue; }
       if (statuses(text).includes('draft')) drafts.push(path);
     }
     return drafts;
-  } catch { return []; }
+  } catch (error) { if (p.descriptionSource) throw error; return []; }
 }
 const draftLine = drafts => `Draft prompts: ${drafts.join(', ')}. Approve them before you merge.`;
 // How the person approves PR 1's draft prompts before the code PR (0.1.6: pdd asked "Make the code PR now?" and then refused).
@@ -336,9 +337,19 @@ const approveFirst = (run, drafts) => `Approve this gate and its draft prompts (
 // What PR 1 holds, read from the worktree before pdd opens it (files the chat did not commit count, because pdd commits
 // them first): the changed prompts by Runtime interface status, the test files (prompt-runtime.program-scenario JSON)
 // and the number of Stories.
+async function descriptionSourceText(run, p, path) {
+  if (!p.descriptionSource) return readFileSync(join(run.root,path),'utf8');
+  const actual = readFileSync(join(p.descriptionSource.root,path));
+  const expected = await p.execFile('git',['show',`${p.descriptionSource.head}:${path}`],{cwd:run.root,encoding:'buffer'});
+  if (!actual.equals(Buffer.from(expected.stdout))) throw Error('The retained PR 1 source changed.');
+  return actual.toString('utf8');
+}
 async function worktreeContents(run, p) {
   const texts = new Map();
-  for (const path of await changedFiles(run, p)) { try { texts.set(path, readFileSync(join(run.root, path), 'utf8')); } catch { /* Deleted or not a file. */ } }
+  for (const path of await changedFiles(run, p)) { try { texts.set(path, await descriptionSourceText(run,p,path)); } catch (error) { if (p.descriptionSource) {
+    const exists = await p.execFile('git',['cat-file','-e',`${p.descriptionSource.head}:${path}`],{cwd:run.root}).then(() => true, () => false);
+    if (exists) throw error;
+  } } }
   const paths = [...texts.keys()], prompts = paths.filter(path => path.endsWith('.prompt.md')), status = path => statuses(texts.get(path));
   const drafts = prompts.filter(path => status(path).includes('draft')), approved = prompts.filter(path => !drafts.includes(path) && status(path).includes('approved'));
   return { drafts, approved, other: prompts.filter(path => !drafts.includes(path) && !approved.includes(path)),
@@ -903,7 +914,10 @@ async function matchingPromptApprovals(run, p) {
   const published = new Map();
   for (const path of await changedFiles(run, p, true)) {
     if (!path.endsWith('.prompt.md')) continue;
-    try { published.set(path, proseSha256(readFileSync(join(run.root, path), 'utf8'))); } catch { /* Deleted files have no current identity. */ }
+    try { published.set(path, proseSha256(await descriptionSourceText(run,p,path))); } catch (error) { if (p.descriptionSource) {
+      const exists = await p.execFile('git',['cat-file','-e',`${p.descriptionSource.head}:${path}`],{cwd:run.root}).then(() => true, () => false);
+      if (exists) throw error;
+    } }
   }
   return records.flatMap(record => {
     const prompts = record.prompts.filter(prompt => published.get(prompt.path) === prompt.proseSha256);
@@ -949,7 +963,7 @@ async function publicationEvidence(run, area, p) {
   }
   if (run.publicationPending) evidence.lines.unshift('Check evidence: publication-pending (source is being published).');
   // pdd's own pdd test and pdd lint results lead the body; the code PR's prove result is its Old-code proof line.
-  evidence.pddLines = resultLines(ownResults(run, p), { kinds: ['pdd test', 'pdd lint'] });
+  evidence.pddLines = p.descriptionSource ? [] : resultLines(ownResults(run, p), { kinds: ['pdd test', 'pdd lint'] });
   return evidence;
 }
 function evidenceFit(lines, room, env) {
@@ -1043,9 +1057,10 @@ function fullSummaries(steps, texts, size) {
 }
 function publicationRuntime(run, env, stage = 'current') {
   if (run.publicationPending) return [];
-  const fingerprint = gitFingerprint(run.root);
+  const sourceRoot = stage === 'pr1' && run.descriptionHistoricalRoot || run.root;
+  const fingerprint = sourceRoot === run.root ? gitFingerprint(run.root) : null;
   const records = [...(run.runtimeHistory ?? []), ...Object.values(run.done ?? {}), ...(run.evidence ?? [])]
-    .filter(record => runtimeLines(record.summary).length && eligibleEvidence(run,record,{stage,fingerprint})).sort((a,b) => (a.at ?? 0) - (b.at ?? 0));
+    .filter(record => runtimeLines(record.summary).length && eligibleEvidence(run,record,{stage,root:sourceRoot,fingerprint})).sort((a,b) => (a.at ?? 0) - (b.at ?? 0));
   const stories = new Map();
   for (const record of records) for (const line of runtimeLines(record.summary)) if (line.story) stories.set(line.story, { line, record });
   // Lines that an agent typed or pasted into a step summary stay agent notes; only a receipt that pdd workflow evidence checked is not.
@@ -1613,13 +1628,23 @@ export async function retryPrDescription(args, ports = {}) {
       };
       const before = await readHead(), head = (await rawGit(p,run.root,'rev-parse','--verify','HEAD^{commit}')).trim();
       const dirty = await rawGit(p,run.root,'status','--porcelain=v1','--untracked-files=all');
-      if (head !== before.headRefOid || dirty.trim()) throw Error('The working source does not match the public PR head.');
+      const historical = area.then === 'ask-code' && head !== before.headRefOid;
+      if (historical) {
+        if (ownedPr1Head(run) !== before.headRefOid) throw Error('The recorded PR 1 head does not match the public PR head.');
+        p.descriptionSource = {head:before.headRefOid, root:await retainPr1Source(run,before.headRefOid,p)};
+        run.descriptionHistoricalRoot = p.descriptionSource.root;
+        const through = run.areas.indexOf(area);
+        const steps = new Set(run.areas.slice(0,through + 1).flatMap(item => item.steps));
+        run.done = Object.fromEntries(Object.entries(run.done ?? {}).filter(([step]) => steps.has(step)));
+        run.runtimeHistory = (run.runtimeHistory ?? []).filter(record => steps.has(record.step));
+        run.evidence = (run.evidence ?? []).filter(record => record.association?.stage === 'pr1');
+      } else if (head !== before.headRefOid || dirty.trim()) throw Error('The working source does not match the public PR head.');
       const current = await readHead();
       if (current.headRefOid !== before.headRefOid || current.body !== before.body) throw Error('The public PR changed during refresh.');
       p.beforeDescriptionPatch = async () => {
         const latest = await readHead();
         if (JSON.stringify(readRun(run.runDir)) !== snapshot) throw Error('The workflow changed during refresh.');
-        if (latest.headRefOid !== before.headRefOid || latest.body !== before.body || (await rawGit(p,run.root,'rev-parse','--verify','HEAD^{commit}')).trim() !== head || (await rawGit(p,run.root,'status','--porcelain=v1','--untracked-files=all')).trim()) throw Error('The public PR or working source changed during refresh.');
+        if (latest.headRefOid !== before.headRefOid || latest.body !== before.body || (await rawGit(p,run.root,'rev-parse','--verify','HEAD^{commit}')).trim() !== head || (!historical && (await rawGit(p,run.root,'status','--porcelain=v1','--untracked-files=all')).trim() !== dirty.trim())) throw Error('The public PR or working source changed during refresh.');
       };
       if (area.then === 'ask-code') {
         const messages = await draftDescription(run, recorded, await pr1Drafts(run,p), p);
