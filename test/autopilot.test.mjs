@@ -47,6 +47,7 @@ for (const name of stories) test(`autopilot-${name}: replay approved Story cases
       const label = `${name}/${step.step_id}/${check.criterion_id} ${check.target} ${check.path}`;
       if (check.op === 'equals') assert.deepEqual(value, check.value, label);
       else if (check.op === 'contains') assert.ok(value.includes(check.value), label);
+      else if (check.op === 'count') { assert.ok(Array.isArray(value), label); assert.equal(value.length, check.value, label); }
       else assert.fail(`Unmapped assertion ${check.op}: ${label}`);
     }
   }
