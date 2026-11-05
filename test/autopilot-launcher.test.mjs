@@ -19,6 +19,7 @@ async function fixture(t, options = {}) {
   const f = { dir, cwd, home, time: Date.parse('2026-11-04T00:00:00Z'), polls: [], prompts: [], runs: [], timers: [], comments: [], ack: [], issues: [], etag: '"one"', active: false };
   f.ports = {
     stateRoot: join(home, 'state'), now: () => f.time,
+    readRunProgress: async () => f.runProgress ?? [],
     warn: text => { (f.warnings ??= []).push(text); },
     selectAgent: async () => ({ id: 'codex', kind: 'codex', command: 'codex', env: {} }),
     pathDiagnostic: () => [],
@@ -27,7 +28,7 @@ async function fixture(t, options = {}) {
       if (command === 'git') return { code: 0, stdout: cwd + '\n', stderr: '' };
       if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: '{"nameWithOwner":"owner/repo"}', stderr: '' };
       if (command === 'gh' && args[0] === 'auth') return { code: 0, stdout: '', stderr: '' };
-      if (command === 'gh' && args[0] === 'api') { if (args.some(x => String(x).includes('/permission'))) return { code: 0, stdout: 'HTTP/2.0 200 OK\r\n\r\n{"permission":"none"}', stderr: '' }; f.ack.push(args); return { code: 0, stdout: '{}', stderr: '' }; }
+      if (command === 'gh' && args[0] === 'api') { if (args.some(x => String(x).includes('/reviews?'))) return { code: 0, stdout: 'HTTP/2.0 200 OK\r\n\r\n[]', stderr: '' }; if (args.some(x => String(x).includes('/permission'))) return { code: 0, stdout: 'HTTP/2.0 200 OK\r\n\r\n{"permission":"none"}', stderr: '' }; f.ack.push(args); return { code: 0, stdout: '{}', stderr: '' }; }
       if (command === 'herdr') return { code: 0, stdout: '1.0', stderr: '' };
       throw Error(`unexpected process ${command} ${args}`);
     },
@@ -740,5 +741,95 @@ for (const change of ['unclaim with waiting PR', 'auto with stuck issue']) test(
   if (change.startsWith('unclaim')) f.issues[0].labels = [];
   else writeFileSync(join(f.cwd, 'pdd.json'), '{"autopilot":{"mode":"auto","trust":[]}}');
   for (let tick = 0; tick < 4; tick++) await f.tick();
+  assert.equal(f.prompts.length, 0);
+});
+
+const packet = f => JSON.parse(f.prompts.at(-1).trim().split('\n').at(-1));
+const hour = 60 * 60 * 1000;
+
+for (const rule of ['run', 'claim']) test(`time rule: ${rule} wakes once at 60 minutes and a later activity can become due again`, async t => {
+  const f = await fixture(t); const changedAt = f.time;
+  if (rule === 'run') f.runProgress = [{ number: 101, changedAt }];
+  else f.issues = [issue(101, { labels: [{ name: 'pdd:working' }], updated_at: new Date(changedAt).toISOString() })];
+  await f.invoke('start'); f.prompts.length = 0; f.status = 304;
+  f.time = changedAt + hour - 1; await f.tick(); assert.equal(f.prompts.length, 0);
+  f.time++; await f.tick(); assert.equal(f.prompts.length, 1);
+  const event = packet(f).timeRules[0];
+  assert.equal(event.number, 101);
+  assert.equal(event.reason.split('\n').length, 1);
+  assert.match(event.reason, rule === 'run' ? /no progress.*60 minutes.*pdd:stuck/ : /pdd:working.*about 1 hour.*takeover/);
+  if (rule === 'claim') assert.equal(packet(f).issues[0].claimed, true);
+  for (let i = 0; i < 3; i++) { f.time += hour; await f.tick(); }
+  await f.invoke('stop'); await f.invoke('start');
+  assert.equal(f.prompts.length, 1, 'An unchanged due event stays consumed across restart');
+  const refreshedAt = f.time;
+  if (rule === 'run') f.runProgress[0].changedAt = refreshedAt;
+  else { f.status = 200; f.issues[0].updated_at = new Date(refreshedAt).toISOString(); }
+  await f.tick(); const count = f.prompts.length;
+  f.time += hour - 1; await f.tick(); assert.equal(f.prompts.length, count);
+  f.time++; await f.tick(); assert.equal(f.prompts.length, count + 1);
+  await f.tick(); assert.equal(f.prompts.length, count + 1);
+});
+
+for (const status of ['working', 'blocked', 'unknown']) test(`time rules stay pending while ${status} and coalesce when idle`, async t => {
+  const f = await fixture(t); const changedAt = f.time;
+  f.runProgress = [{ number: 102, changedAt }];
+  f.issues = [issue(103, { labels: [{ name: 'pdd:working' }], updated_at: new Date(changedAt).toISOString() })];
+  await f.invoke('start'); f.prompts.length = 0; f.status = 304; f.agentStatus = status;
+  f.time += hour;
+  for (let i = 0; i < 3; i++) await f.tick();
+  assert.equal(f.prompts.length, 0);
+  f.agentStatus = 'idle'; await f.tick();
+  assert.equal(f.prompts.length, 1);
+  assert.deepEqual(packet(f).timeRules.map(event => event.number).sort(), [102, 103]);
+  await f.tick(); assert.equal(f.prompts.length, 1);
+});
+
+test('time rules retry failed delivery and discard refreshed pending events', async t => {
+  const f = await fixture(t); const changedAt = f.time;
+  f.runProgress = [{ number: 104, changedAt }];
+  await f.invoke('start'); f.prompts.length = 0; f.status = 304; f.time += hour;
+  const herdr = f.ports.herdr;
+  f.ports.herdr = async args => { if (args[0] === 'agent' && args[1] === 'prompt') throw Error('delivery failed'); return herdr(args); };
+  await assert.rejects(f.tick(), /delivery failed/);
+  f.ports.herdr = herdr; await f.tick(); assert.equal(f.prompts.length, 1);
+  f.runProgress[0].changedAt = f.time; f.time += hour; f.agentStatus = 'working'; await f.tick();
+  f.runProgress[0].changedAt = f.time; f.agentStatus = 'idle'; await f.tick();
+  assert.equal(f.prompts.length, 1, 'Progress while busy cancels the old due event');
+  f.time += hour; await f.tick(); assert.equal(f.prompts.length, 2);
+});
+
+test('time rule uses cached comment activity and never adds a GitHub query on unchanged ticks', async t => {
+  const f = await fixture(t); const changedAt = f.time;
+  f.issues = [issue(105, { labels: [{ name: 'pdd:working' }], comments: 1, updated_at: new Date(changedAt).toISOString() })];
+  f.issueComments = { 105: [{ id: 1, body: 'Claim refreshed on this machine', user: { login: 'owner' }, created_at: new Date(changedAt).toISOString(), updated_at: new Date(changedAt + hour / 2).toISOString() }] };
+  await f.invoke('start'); f.prompts.length = 0; f.status = 304;
+  const processes = f.runs.length, commentReads = f.comments.length;
+  f.time += hour; await f.tick(); assert.equal(f.prompts.length, 0);
+  f.time += hour / 2; await f.tick(); assert.equal(f.prompts.length, 1);
+  await f.tick(); assert.equal(f.prompts.length, 1);
+  assert.equal(f.comments.length, commentReads);
+  assert.ok(f.runs.slice(processes).every(([command]) => command === 'git'), 'No extra network or model process');
+});
+
+test('time rule revalidates trust on a cached due claim without forwarding stranger text', async t => {
+  const f = await fixture(t);
+  f.issues = [issue(106, { title: 'REVOKED TITLE', body: 'REVOKED BODY', user: { login: 'helper' }, labels: [{ name: 'pdd:working' }], updated_at: new Date(f.time).toISOString() })];
+  await f.invoke('start'); f.prompts.length = 0; f.status = 304;
+  writeFileSync(join(f.cwd, 'pdd.json'), '{"autopilot":{"mode":"auto","trust":[]}}');
+  f.time += hour; await f.tick(); assert.equal(f.prompts.length, 0);
+});
+
+test('an unchanged empty tick with no local progress or usage data still sends zero prompts', async t => {
+  const f = await fixture(t); await f.invoke('start'); f.prompts.length = 0; f.status = 304;
+  for (let i = 0; i < 4; i++) { f.time += hour; await f.tick(); }
+  assert.equal(f.prompts.length, 0);
+});
+
+test('a claim with no readable activity time never invents a due event', async t => {
+  const f = await fixture(t);
+  f.issues = [issue(112, { labels: [{ name: 'pdd:working' }], updated_at: undefined })];
+  await f.invoke('start'); f.prompts.length = 0; f.status = 304;
+  for (let i = 0; i < 3; i++) { f.time += hour; await f.tick(); }
   assert.equal(f.prompts.length, 0);
 });
