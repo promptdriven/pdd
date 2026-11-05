@@ -34,7 +34,7 @@ async function indexControl(t){
  console.log(JSON.stringify({case:'index-failure-after-successful-commit',writeRunCommit:true}));
 }
 
-test('2753 compatible whole write respects a held native callback',async t=>{
+async function heldCallbackScenario(t, holdUntilRefusal){
  contentionRow('held-callback-and-compatible-write');contentionRow('preservation-controls');
  row('storage-compatibility-and-local-boundary');assert.equal(typeof storage.updateRun,'function');
  const {Worker}=await import('node:worker_threads');
@@ -58,7 +58,16 @@ test('2753 compatible whole write respects a held native callback',async t=>{
  // The announcement does not establish acquisition or waiting. Observe storage
  // under ownership, then accept either documented outcome after release.
  const before=storage.readRun(run.runDir);assert.notEqual(before.message,'Compatible replacement committed last','whole write cannot publish inside callback ownership');
+ // In the refusal control the callback stays held until the writer finishes.
+ // In the other case release it after the attempt announcement.
+ const refused=holdUntilRefusal?await writer.result:undefined;
  release();const [updated,written]=await Promise.all([updater.result,writer.result]);
+ if(holdUntilRefusal){
+  assert.equal(written,refused);
+  assert.equal(written.error?.code,'workflow_run_save_failed','held ownership must produce a finite save refusal');
+  // Deliberately restore the former assertion only for the committed mutation control.
+  if(process.env.PDD_STORAGE_OLD_SUCCESS_ASSERTION==='1') assert.equal(written.error,undefined,'old unconditional success assertion');
+ }
  assert.equal(updated.error,undefined,`callback worker: ${JSON.stringify(updated)}`);
  assert.equal(updated.result.message,'Callback committed first');
  if(written.error){
@@ -68,8 +77,11 @@ test('2753 compatible whole write respects a held native callback',async t=>{
   assert.equal(written.result.message,'Compatible replacement committed last',`writer outcome: ${JSON.stringify(written)}`);
   assert.deepEqual(f.record(),written.result,'successful whole write retains its intended record');
  }
- console.log(JSON.stringify({case:'held-callback-and-compatible-write',writer:written.error?{failure:written.error}:{success:true}}));
-});
+ console.log(JSON.stringify({case:'held-callback-and-compatible-write',holdUntilRefusal,writer:written.error?{failure:written.error}:{success:true}}));
+}
+
+test('2753 compatible whole write respects a held native callback',async t=>heldCallbackScenario(t,false));
+test('2753 held callback forces finite whole-write refusal',async t=>heldCallbackScenario(t,true));
 
 test('2753 native ownership failures release only acquired ownership and retain commit truth',async t=>{
  row('storage-compatibility-and-local-boundary');assert.equal(typeof storage.updateRun,'function');
