@@ -33,7 +33,14 @@ correct. Repeated Save for the same action is a no-op. Refuse missing/unknown ev
 identity, and keep earlier checks and all unrelated test bytes. Tie the recording to the original step's criterion.
 Print the target file and new step name. No model call is needed.
 
+## Workspace and received cases
+
+Carry the [workspace authority](runtime-workspace.prompt.md) through opening, direct Story/prompt reads, owner calls, pinned-source checks and save targets. Use the runtime client's exact-original import transaction for `saveLast`, including durable pending/conflict results and duplicate identity across restart. A pending case is not printed as saved. No authored source read may precede required-path checks. PDD-owned launcher/private descriptor/Git-exclude writes are local infrastructure, retain strict no-link rules and grant no context permission. Preserve confirmed starting-world compatibility; a review reminder cannot authorize appending under a false world.
+
+
 ## Dependencies
+
+- [Workspace authority](runtime-workspace.prompt.md): required generation/runtime/verification context for opt-in permission.
 
 - [Runtime client](runtime-client.prompt.md): required generation/runtime context for authentication, state, owner
   calls, confirmed results and safe original-test append.
