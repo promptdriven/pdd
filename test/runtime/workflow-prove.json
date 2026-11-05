@@ -2675,7 +2675,9 @@
             }
           }
         }
-      ]
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
     },
     "host.createWorktree": {
       "action": "fixture.lookup",
