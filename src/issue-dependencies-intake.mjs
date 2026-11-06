@@ -74,7 +74,7 @@ export async function checkDependencyStart({ cwd = '', repository, issue, coordi
     if (!coordinator || coordinator.repository?.toLowerCase() !== repository.toLowerCase() || !coordinator.coordinatorId || owners.localOwner !== coordinator.coordinatorId || !coordinator.machine || !coordinator.claim?.commentId || !coordinator.claim?.labelEventId || !claim || claim.owner !== coordinator.coordinatorId || claim.coordinatorId !== coordinator.coordinatorId || claim.machine !== coordinator.machine || claim.commentId !== coordinator.claim.commentId || claim.labelEventId !== coordinator.claim.labelEventId) return { allowed: false, reason: 'owner' };
     if (settings.activation !== coordinator.activation || settings.runs !== coordinator.runs) return { allowed: false, reason: 'stale' };
     if (owners.runsKnown !== true || !Array.isArray(owners.runs)) return { allowed: false, reason: 'runs' };
-    const occupied = owners.runs.filter(run => !(['paused', 'stuck', 'question'].includes(run.state) && run.occupied === false));
+    const occupied = owners.runs.filter(run => !(['waiting', 'paused', 'stuck', 'question'].includes(run.state) && run.occupied === false));
     if (settings.runs !== undefined) {
       if (!Number.isSafeInteger(settings.runs) || settings.runs < 1) return { allowed: false, reason: 'runs' };
       const slots = new Map();

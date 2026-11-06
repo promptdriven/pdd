@@ -2886,10 +2886,12 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
 
 const openRunCommand = (args, ports) => lockedMutation(args, ports, openRunLocked);
 
-async function startRunCommand(args, ports) {
+async function startRunCommand(args, ports = {}) {
   if (Object.hasOwn(args, 'automaticOrigin')) return fail('Invalid automatic start context.');
   const p = deps(ports);
-  if (args.coordinator === undefined && !Object.hasOwn(p.env, 'PDD_AUTOPILOT_CONTEXT')) return startRunUnlocked(args, ports);
+  const nativeSession = /[\\/]sessions[\\/]([^\\/]+)[\\/][^\\/]+$/.exec(String(p.env.HERDR_SOCKET_PATH ?? ''))?.[1];
+  const recoverCoordinator = args.coordinator === undefined && !Object.hasOwn(p.env, 'PDD_AUTOPILOT_CONTEXT') && nativeSession === 'pdd-autopilot';
+  if (args.coordinator === undefined && !Object.hasOwn(p.env, 'PDD_AUTOPILOT_CONTEXT') && !recoverCoordinator) return startRunUnlocked(args, ports);
   if (args.coordinator !== undefined && !validAutomaticContext(args.coordinator)) return fail('Invalid automatic start context.');
   if (Object.hasOwn(p.env, 'PDD_AUTOPILOT_CONTEXT')) {
     try { if (!validAutomaticContext(JSON.parse(p.env.PDD_AUTOPILOT_CONTEXT))) return fail('Invalid automatic start context.'); }
@@ -2899,9 +2901,28 @@ async function startRunCommand(args, ports) {
   try {
     context = await gitContext(args.cwd, p);
     if (!context) return fail('Run this inside a Git checkout of the repository that has the issue.');
+    let recoveryFile, root;
+    if (recoverCoordinator) {
+      root = realpathSync(context.toplevel);
+      const id = createHash('sha256').update(root).digest('hex').slice(0, 20);
+      const folder = ports.autopilotStateRoot ?? join(p.env.HOME || homedir(), '.local', 'state', 'pdd', 'autopilot');
+      recoveryFile = join(folder, `${id}.json`);
+      let selected;
+      try { selected = JSON.parse(readFileSync(recoveryFile, 'utf8')); } catch { selected = null; }
+      if (!selected || !p.env.HERDR_PANE_ID || selected.paneId !== p.env.HERDR_PANE_ID)
+        return await startRunUnlocked(args, ports);
+    }
     const dir = join(context.commonDir, 'pdd');
     mkdirSync(dir, { recursive: true });
     release = acquireRunLock(dir, 'autopilot-admission.lock');
+    if (recoverCoordinator) {
+      let state;
+      try { state = JSON.parse(readFileSync(recoveryFile, 'utf8')); } catch { return fail('Automatic start unavailable: current coordinator state is missing.'); }
+      const coordinator = {version:'pdd.autopilot-coordinator.v1',repository:state.repo,coordinatorId:state.coordinatorId,machine:state.machine,activation:state.activatedAt,...(state.runs === undefined ? {} : {runs:state.runs})};
+      if (state.enabled !== true || state.paneId !== p.env.HERDR_PANE_ID || state.ownerLaunch?.paneId !== state.paneId || !equalFact(state.ownerLaunch?.coordinator, coordinator) || !validAutomaticContext(coordinator) || realpathSync(state.cwd) !== root)
+        return fail('Automatic start unavailable: current coordinator ownership does not match.');
+      args = {...args,coordinator};
+    }
     return await startRunUnlocked(args, ports);
   } catch { return fail('Automatic start is unavailable: admission lock could not be acquired.'); }
   finally { release?.(); }

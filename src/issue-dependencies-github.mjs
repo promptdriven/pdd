@@ -6,7 +6,7 @@ import { join, resolve, relative, isAbsolute } from 'node:path';
 import { runAutopilot } from './autopilot.mjs';
 import { resolveWorkflowRepository } from './workflow-github.mjs';
 import { gitContext, currentChat, stateDirFor } from './workflow-runs.mjs';
-import { chatLifecycle, chatSession, observeLifecycle, sessionEvidenceDue, observedSession, ownSession, launchAnchor } from './workflow-chat.mjs';
+import { chatLifecycle, chatSession, observeLifecycle, sessionEvidenceDue, observedSession, ownSession, launchAnchor, validSessionId } from './workflow-chat.mjs';
 import { projectIssueGraph, validateDependencyChange } from './issue-dependencies.mjs';
 
 const REVIEW = 'pdd-dependency-review:v1', IMPACT = 'pdd-dependency-impact:v1';
@@ -385,19 +385,20 @@ async function readLocalOccupied({ cwd, repository }, ports = {}) {
     const runId = run.runId || run.runDir;
     if (typeof runId !== 'string' || !runId) { runsKnown = false; continue; }
     seen.add(runId);
-    const chat = currentChat(run), state = chatLifecycle(chat);
+    const chat = currentChat(run), state = chatLifecycle(chat); let finishedTurn = false;
     if (['paused', 'stuck', 'question', 'waiting'].includes(run.state) && chat && !chat.startUnconfirmed && !run.chatFailure
       && !(run.chatReplacement && !['launched', 'rolledBack', 'ended'].includes(run.chatReplacement.phase))) {
       const live = await chatSession(chat, ports), now = (ports.now ?? Date.now)();
       const own = sessionEvidenceDue(chat, live, now) && !observedSession(chat, chat.agent ?? run.agent)
         ? await ownSession({ run, chat, since: launchAnchor(chat), ports }) : null;
       const observed = observeLifecycle(chat, live, now, chat.agent ?? run.agent, own?.kind === 'match' ? own.id : null);
+      finishedTurn = live.alive && live.status === 'done' && validSessionId(chat.session?.id) && validSessionId(live.sessionId) && chat.session.id === live.sessionId && observed.exact;
       // A saved end alone cannot establish current custody; Herdr must also confirm absence.
       if (!live.alive && ['agent_not_found', 'server_not_running'].includes(live.code)
         && ['ended', 'failed'].includes(observed.state)) continue;
     }
     runs.push({ issue: `https://github.com/${repository.toLowerCase()}/issues/${run.number}`, runId,
-      state: chat?.startUnconfirmed || state === 'starting' ? 'starting' : ['running', 'waiting'].includes(run.state) ? run.state : 'unknown' });
+      state: chat?.startUnconfirmed || (state === 'starting' && !finishedTurn) ? 'starting' : ['running', 'waiting', 'paused', 'stuck', 'question'].includes(run.state) ? run.state : 'unknown', ...(finishedTurn ? { occupied: false } : {}) });
   }
   const index = join(context.commonDir, 'pdd', 'worktree-assignments');
   let indexExists = false;

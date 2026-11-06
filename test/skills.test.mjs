@@ -830,8 +830,9 @@ test('AUTOPILOT12: claim remains until removed and competing coordinators back o
 
 // Wrong: a fixed number of runs, or three runs that change one prompt file at once.
 test('AUTOPILOT13: runs start by room with no fixed cap, and at most 2 runs change one prompt file', () => {
-  const text = has('pdd-autopilot/SKILL.md', 'below its 5-hour and weekly limits (never paid credits)', 'free CPU and memory', 'a test slot is free',
-    'There is no fixed number of runs; `--runs N` sets a cap.', 'At most 2 runs change one prompt file; skip a 3rd and take the next free issue.');
+  const text = has('pdd-autopilot/SKILL.md', 'There is no fixed number of runs;',
+    'At most 2 runs change one prompt file; skip a 3rd and take the next free issue.');
+  assert.match(text, /`--runs N` sets (?:an optional|a) cap/);
   assert.doesNotMatch(text, /max_runs|at most 3 runs/i);
 });
 

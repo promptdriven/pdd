@@ -37,7 +37,7 @@ yield.
 
 ## Room, claim and stuck work
 
-4. Room: start only when the AI account is below its 5-hour and weekly limits (never paid credits), the machine has free CPU and memory, and a test slot is free. There is no fixed number of runs; `--runs N` sets a cap. At most 2 runs change one prompt file; skip a 3rd and take the next free issue.
+4. Work: use the person's configured agent and execution environment. Respect actual provider limits and the person's chosen spending and concurrency settings. Use the repository's own test commands and requirements; no PDD-specific runner pool, free test slot or fixed CPU/memory threshold is required before starting ready work. If an operation cannot run because of an actual resource or service limit, report that operation as waiting or failed and continue unrelated work that can run. Required verification and merge rules still apply. There is no fixed number of runs; `--runs N` sets an optional cap. At most 2 runs change one prompt file; skip a 3rd and take the next free issue.
 5. Claim: add the `pdd:working` label and one short comment that names this machine and coordinator ID. If coordinators race, the earlier label event wins. Skip a claimed issue. The claim keeps Autopilot ownership until removed, even while the run is paused or the launcher is stopped. Remove the label when the run ends.
 8. Stuck: no progress (commit, push, comment or PR event) for 60 minutes, or 30M tokens in one PR stage: add the `pdd:stuck` label, write one comment with the cause, and take the next issue.
 
