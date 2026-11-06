@@ -1,0 +1,57 @@
+# PDD issue handoff
+
+Required step for pdd-autopilot. After readiness and claim, check `pdd workflow status N`.
+Reuse an active run with `pdd workflow open N`; otherwise start
+`pdd workflow run bug|feature|small-change N --agent AGENT` with the matching workflow
+and the packet's agent, or the current agent without a packet. Use the normal PDD
+session before issue edits or delegation. The run owns its worktree, area chats,
+gates and PRs; do not create issue worktrees or PRs outside it.
+
+The person’s explicit choice of auto and start establishes the chosen automatic work
+and merge scope; configuration alone does not. Preserve the person’s actual words or
+commands and attribution, without presenting a coordinator summary as a quotation.
+The coordinator gives the owner the actual attributed operator action or exact standing
+delegation and repo, work and merge scope in the existing owner handoff. Before finishing
+the first area, the owner records that same authority and scope in the existing run notes
+(`<run folder>/STEP.md`) and directs later area chats to read those notes. On reuse,
+carry forward the existing notes. Do not invent words or infer authority from mode.
+
+With a launcher `workflow` packet, use its absolute `pddBin` for PDD commands.
+Bind HOME to `home`. If `configHome` is present, bind its `variable` to `path`,
+or unset that variable when the path is null. Shell-quote paths. Apply these
+bindings to workflow commands and ensure supported workflow routes inherit the
+selected explicit profile for new chats. Without a packet, use installed pdd and the current
+profile. These command bindings do not alone prove that a default-home profile
+reaches issue chats in an existing normal PDD server.
+
+After an automatic PDD run reaches `waiting`, `paused`, `stuck`, `question`,
+`completed` or `cancelled`, and its current worker turn is positively confirmed
+complete, the coordinator may run `pdd workflow yield ISSUE`. A native Herdr
+`DONE` for the matching observed session confirms the turn even when the pane
+remains registered. Confirmed absence with ended or failed evidence also
+confirms it.
+`DONE` alone does not end the PDD run or release its issue claim. Waiting work
+keeps its issue allocation and claim. Completed or cancelled work releases its
+allocation before the completion request. Running or unconfirmed work does not
+yield.
+
+## Room, claim and stuck work
+
+4. Room: start only when the AI account is below its 5-hour and weekly limits (never paid credits), the machine has free CPU and memory, and a test slot is free. There is no fixed number of runs; `--runs N` sets a cap. At most 2 runs change one prompt file; skip a 3rd and take the next free issue.
+5. Claim: add the `pdd:working` label and one short comment that names this machine and coordinator ID. If coordinators race, the earlier label event wins. Skip a claimed issue. The claim keeps Autopilot ownership until removed, even while the run is paused or the launcher is stopped. Remove the label when the run ends.
+8. Stuck: no progress (commit, push, comment or PR event) for 60 minutes, or 30M tokens in one PR stage: add the `pdd:stuck` label, write one comment with the cause, and take the next issue.
+
+## Merge conditions
+
+Merge only when all of these are true:
+- a fresh checker PASS (pdd-check) is for the current head. A PASS for another head counts only when `git patch-id` of both heads is equal and the full suite is green on the exact current head. A conflict fix or any other change gives a new patch-id and needs a fresh PASS;
+- the full suite is green on the exact merge head, for PR 1 and the code PR. Red pair: if PR 1's new native tests are red only for the missing behavior, never merge PR 1 alone. When both PRs have a PASS, set the code PR's base to PR 1's base (`gh pr edit CODE --base BASE`); merge the code PR, which carries PR 1, once the full suite is green on its exact head;
+- at least one check ran, and all required checks are green on that head. A missing, pending or failed check: wait, do not merge;
+- the repository’s required human reviews are satisfied. Read the applicable repository review requirements and `gh pr view PR --json reviewDecision,reviewRequests,latestReviews` before merging. If requirements or review status are unknown or pending, wait and continue other eligible work; do not rely on merge rejection to discover them;
+- a second fresh checker agreed when pdd-check asks for one (risk 4-5, a split verdict, or a change to check, merge or approval code);
+- no question to a person is open.
+
+
+## Outcomes and retries
+
+Outcomes: merged, dropped, stuck, or one question. Retry a call at most 3 times, only for HTTP 408, 429, 5xx or a network error. Never send a failed check again. Keep `--max-calls` and strict mode. Write each decision on the issue or PR. After a restart, read the issue and PR first and do not redo finished steps.

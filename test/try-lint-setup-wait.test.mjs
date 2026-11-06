@@ -6,7 +6,7 @@ import { runTry } from '../src/runtime-client.mjs';
 import { harbor, fakeRuntime, portsFor } from './runtime-fake.mjs';
 
 // Native execution of the approved case table; no executable Runtime scenario exists (#2548).
-const cases = JSON.parse(readFileSync(new URL('./runtime-admission/try-lint-setup-wait.json', import.meta.url)));
+const cases = JSON.parse(readFileSync(new URL('../fixtures/native-cases/try-lint-setup-wait.json', import.meta.url)));
 const start = Date.parse('2026-10-27T16:27:47Z');
 for (const [id, interactive, readyAt] of [
   ['agent-slow-lint', false, 122000], ['terminal-slow-lint', true, 122000],

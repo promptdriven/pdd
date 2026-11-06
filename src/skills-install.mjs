@@ -1,9 +1,9 @@
-// Generated from prompts/cli/skills-install.prompt.md (sha256: 17b7cb67916aededee7ae2edf0ed2b3defd5814e12f6d91895bfed6aed1bde28).
+// Generated from prompts/cli/skills-install.prompt.md (sha256: 7e6aca3cc57392dd87507384620bfe2bb6cb47c9b47130bcc312b7c3637b61ab).
 import { createHash } from 'node:crypto';
 import { cpSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 
-export const PDD_SKILL_NAMES = Object.freeze(['pdd-prompting', 'pdd-setup', 'pdd-small-change', 'pdd-bug', 'pdd-feature', 'pdd-product', 'pdd-autopilot', 'pdd-check', 'pdd-merge']);
+export const PDD_SKILL_NAMES = Object.freeze(['pdd-prompting', 'pdd-setup', 'pdd-small-change', 'pdd-bug', 'pdd-feature', 'pdd-product', 'pdd-autopilot', 'pdd-check', 'pdd-merge', 'pdd-graph']);
 const MARKER = '.pdd-skill.json';
 
 const relativeFiles = (dir, prefix = '') => readdirSync(dir, { withFileTypes: true }).flatMap(entry =>

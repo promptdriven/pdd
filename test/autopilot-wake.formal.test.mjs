@@ -40,6 +40,7 @@ async function fixture(t, initialReviews = [[]]) {
   f.ports = {
     stateRoot, platform: 'linux', env: { HOME: home }, now: () => f.time,
     readRunProgress: async () => [], warn: text => f.warnings.push(text),
+    reconcileDependencyIntake: async () => ({ eligible: f.rows.map(row => row.html_url), queued: [], skipped: [] }),
     selectAgent: async () => ({ id: 'codex', kind: 'codex', command: 'codex', env: {} }),
     pathDiagnostic: () => [], timer: async () => true,
     run: async (command, args) => {
@@ -48,7 +49,7 @@ async function fixture(t, initialReviews = [[]]) {
       if (command === 'herdr' && args[0] === '--version') return { code: 0, stdout: '1.0', stderr: '' };
       if (command === 'loginctl') return { code: 0, stdout: 'yes\n', stderr: '' };
       if (command === 'gh' && args[0] === 'auth') return { code: 0, stdout: '', stderr: '' };
-      if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: '{"nameWithOwner":"owner/repo"}', stderr: '' };
+      if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: '{"nameWithOwner":"owner/repo","url":"https://github.com/owner/repo"}', stderr: '' };
       assert.ok(command === 'gh' && args[0] === 'api' && args.includes('GET'), `Unexpected process: ${command} ${args.join(' ')}`);
       const endpoint = args[args.indexOf('GET') + 1], request = { endpoint, args: [...args] };
       f.requests.push(request);
@@ -75,12 +76,17 @@ async function fixture(t, initialReviews = [[]]) {
       assert.fail(`Unexpected GitHub read: ${endpoint}`);
     },
     herdr: async args => {
-      if (args[0] === 'workspace') return { result: { root_pane: { pane_id: 'fake-pane' }, workspace: { workspace_id: 'fake-workspace' } } };
-      if (args[0] === 'agent' && args[1] === 'get') return { result: { agent: { agent_status: f.agentStatus } } };
+      const live={pane_id:'fake-pane',workspace_id:'fake-workspace',cwd,foreground_cwd:cwd,tab_id:'t',terminal_id:'term',agent:'codex',agent_status:f.agentStatus,agent_session:'session'};
+      if (args[0] === 'workspace') return { result: { type:'workspace_info', root_pane: { pane_id: 'fake-pane' }, workspace: { workspace_id: 'fake-workspace' } } };
+      if (args[0] === 'pane' && args[1] === 'get') return {result:{type:'pane_info',pane:live}};
+      if (args[0] === 'pane' && args[1] === 'run') { f.agentStarted = true; return {}; }
+      if (args[0] === 'pane' && args[1] === 'read') return '';
+      if (args[0] === 'agent' && args[1] === 'get') { if (!f.agentStarted) throw Object.assign(Error('agent_not_found'), { code: 'agent_not_found' }); return { result: { type:'agent_info', agent:live } }; }
       assert.ok(args[0] === 'agent' && args[1] === 'prompt', `Unexpected Herdr action: ${args.join(' ')}`);
       f.attempts++;
       if (f.failures) { f.failures--; throw Error('Synthetic delivery failure'); }
-      f.prompts.push(args[3]); return {};
+      const instruction = args.at(-1), match = /Artifact path: (.+)/.exec(instruction);
+      f.prompts.push(match ? readFileSync(JSON.parse(match[1]), 'utf8') : instruction); return {};
     },
   };
   t.after(() => { rmSync(dir, { recursive: true, force: true }); assert.equal(f.modelCalls, 0, 'Review discovery must make no model call (AC4).'); });

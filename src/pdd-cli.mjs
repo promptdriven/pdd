@@ -27,6 +27,7 @@ const RUNNER_ROUTES = {
   'workflow-run': plan => ['startRun', { name: plan.operands[0], issue: plan.operands[1], agent: plan.options['--agent'] ?? 'codex', ...(plan.options['--base'] !== undefined ? { base: plan.options['--base'] } : {}), ...(plan.options['--adopt-corpus'] !== undefined ? { adoptCorpus: plan.options['--adopt-corpus'] } : {}), ...(plan.options['--draft'] !== undefined ? { draft: plan.options['--draft'] } : {}), ...(plan.options['--origin'] !== undefined ? {origin:plan.options['--origin']} : {}), ...(plan.options['--decision-id'] !== undefined ? {decisionId:plan.options['--decision-id']} : {}), ...(plan.options['--outcome'] !== undefined ? {outcome:plan.options['--outcome']} : {}) }],
   'workflow-evidence-associate': plan => ['associateEvidenceWorkspace', { ref: plan.operands[0], workspace: plan.options['--workspace'], stage: plan.options['--stage'], tests: plan.options['--test'] }],
   'workflow-evidence': plan => ['recordEvidence', { ref: plan.operands[0], summaryFile: plan.options['--summary'] }],
+  'workflow-yield': plan => ['yieldAutomaticCapacity', { ref: plan.operands[0] }],
   'workflow-done': plan => ['stepDone', { step: plan.operands[0], ...(plan.options['--summary'] !== undefined ? { summary: plan.options['--summary'] } : {}), ...(plan.options['--skipped'] !== undefined ? { skipped: plan.options['--skipped'] } : {}) }],
   'workflow-approve': plan => ['approveRun', { ref: plan.operands[0], ...(plan.options['--said'] !== undefined ? { said: plan.options['--said'] } : {}), ...(plan.options['--draft'] !== undefined ? { draft: plan.options['--draft'] } : {}) }],
   'workflow-ask': plan => ['askPerson', { text: plan.operands.join(' ') }],
@@ -46,7 +47,7 @@ export function renderHelp(prefix = [], packageRoot = PACKAGE_ROOT) {
 export async function runPdd(argv, { stdout = process.stdout, stderr = process.stderr,
   cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, workflowRunner, workflowAreas,
   stdin = process.stdin, confirm, mcpServer, runtimeSlots, contracts, product, productPorts, gitContext, workflowProve, provePorts,
-  autopilotLauncher, autopilotLauncherPorts = {}, workflowAgents = { checkWorkflowAgents }, workflowAgentPorts = {}, setupSkills = defaultSetupSkills,
+  issueGraph, issueGraphPorts = {}, dependencyIntake, dependencyIntakePorts = {}, autopilotLauncher, autopilotLauncherPorts = {}, workflowAgents = { checkWorkflowAgents }, workflowAgentPorts = {}, setupSkills = defaultSetupSkills,
   setupProject = defaultSetupProject, setupAgentMcp, autopilot, autopilotPorts = {}, pathDiagnostic = defaultPathDiagnostic } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
@@ -61,10 +62,37 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     } catch { /* An optional PATH diagnostic never prevents the requested command. */ }
   }
   switch (plan.local) {
+    case 'issue-dependency-graph': {
+      try { const module = issueGraph ?? await import('./issue-dependency-graph.mjs');
+        const result = await module.runIssueGraph({cwd, repository:plan.options['--repo'], issue:plan.options['--issue'], open:!!plan.options['--open']}, issueGraphPorts);
+        (result.exitCode ? stderr : stdout).write(result.message); return result.exitCode;
+      } catch (error) { line(stderr, `Graph failed.${reason(error)}`); return 1; }
+    }
+    case 'dependencies-prepare': case 'dependencies-complete': {
+      if (plan.local === 'dependencies-complete' && plan.options['--input'] !== '-') { line(stderr, 'Use pdd dependencies complete --input -.'); return 2; }
+      if (plan.local === 'dependencies-prepare' && plan.options['--issue'] !== undefined && !/^[1-9]\d*$/.test(plan.options['--issue'])) { line(stderr, 'Use pdd dependencies prepare --issue N with a positive issue number.'); return 2; }
+      try { const module = dependencyIntake ?? await import('./issue-dependencies-intake.mjs');
+        let payload = stdin;
+        if (plan.local === 'dependencies-complete' && typeof stdin !== 'string' && stdin?.[Symbol.asyncIterator]) {
+          const chunks = []; for await (const chunk of stdin) chunks.push(Buffer.from(chunk));
+          payload = Buffer.concat(chunks).toString('utf8');
+        }
+        const result = await module.runDependencyIntake(plan.local === 'dependencies-prepare' ? {command:'prepare',cwd,issue:plan.options['--issue']} : {command:'complete',cwd,stdin:payload},dependencyIntakePorts);
+        if (plan.local === 'dependencies-complete' && result.exitCode === 0) {
+          let state = 'unknown';
+          try { const launcher = autopilotLauncher ?? await import('./autopilot-launcher.mjs');
+            const wake = await launcher.requestAutopilotCompletion({cwd, env}, autopilotLauncherPorts);
+            if (['reconciled', 'inactive', 'busy', 'unknown'].includes(wake?.state)) state = wake.state;
+          } catch { /* Completion intake remains accepted even if the wake fails. */ }
+          if (state === 'busy' || state === 'unknown') line(stderr, 'Autopilot reconciliation was not confirmed.');
+        }
+        (result.exitCode ? stderr : stdout).write(result.message); return result.exitCode;
+      } catch(error) { line(stderr, `Dependency intake failed.${reason(error)}`); return 1; }
+    }
     case 'autopilot-start': case 'autopilot-stop': case 'autopilot-status': case 'autopilot-add': {
       try {
         const module = autopilotLauncher ?? await import('./autopilot-launcher.mjs');
-        const result = await module.runAutopilotLauncher({ command: plan.local.slice(10), issues: [...plan.operands], runs: plan.options['--runs'], cwd, packageRoot, env }, autopilotLauncherPorts);
+        const result = await module.runAutopilotLauncher({ command: plan.local.slice(10), issues: [...plan.operands], runs: plan.options['--runs'], resumeCustody: plan.options['--resume-custody'], cwd, packageRoot, env }, autopilotLauncherPorts);
         if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255 || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid Autopilot reply');
         line(result.exitCode === 0 ? stdout : stderr, result.message); return result.exitCode;
       } catch (error) { line(stderr, `The Autopilot command failed.${reason(error)}`); return 1; }
@@ -112,7 +140,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         return result.exitCode;
       } catch (error) { line(stderr, `The product command failed.${reason(error)}`); return 1; }
     }
-    case 'workflow-request-uptake': case 'workflow-run': case 'workflow-done': case 'workflow-ask': case 'workflow-approve': case 'workflow-changes':
+    case 'workflow-yield': case 'workflow-request-uptake': case 'workflow-run': case 'workflow-done': case 'workflow-ask': case 'workflow-approve': case 'workflow-changes':
     case 'workflow-cancel': case 'workflow-status': case 'workflow-open': case 'workflow-evidence': case 'workflow-evidence-associate': {
       if (plan.local === 'workflow-evidence-associate' && (!plan.options['--workspace']?.trim() || !plan.options['--stage'] || !plan.options['--test']?.length)) {
         line(stderr, 'Use pdd workflow evidence-associate ISSUE --workspace PATH --stage current|pr1 --test PATH... .'); return 2;
@@ -134,7 +162,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       try {
         const runner = workflowRunner ?? await import('./workflow-runner.mjs');
         if (typeof runner[name] !== 'function') throw Error('Missing runner export');
-        const result = await runner[name]({ ...input, cwd, packageRoot }, { say: text => line(stderr, text), ...(plan.local === 'workflow-run' ? { env } : {}) });
+        const result = await runner[name]({ ...input, cwd, packageRoot }, { say: text => line(stderr, text), ...(['workflow-run', 'workflow-yield'].includes(plan.local) ? { env } : {}) });
         if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255
           || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid runner reply');
         line(result.exitCode === 0 ? stdout : stderr, result.message);

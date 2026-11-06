@@ -10,16 +10,17 @@ const issue = (number, extra = {}) => ({number,state:'open',title:`Issue ${numbe
 function fixture(t) {
   const root=mkdtempSync(join(tmpdir(),'pdd-selector-')); t.after(()=>rmSync(root,{recursive:true,force:true})); execFileSync('git',['init','-q',root]);
   writeFileSync(join(root,'pdd.json'),JSON.stringify({autopilot:{mode:'auto',trust:['helper']}})); const stateFile=join(root,'state.json');
-  writeFileSync(stateFile,JSON.stringify({enabled:true,cwd:root,repo:'Owner/Repo',activatedAt:'2026-11-04T00:00:00Z',agent:{id:'codex',kind:'codex',command:'codex',env:{}},stateFile,workspaceId:'w',paneId:'p',recipeDelivered:true}));
+  const activatedAt='2026-11-04T00:00:00Z', home=process.env.HOME, coordinator={version:'pdd.autopilot-coordinator.v1',repository:'Owner/Repo',coordinatorId:'c',machine:'m',activation:activatedAt};
+  writeFileSync(stateFile,JSON.stringify({enabled:true,cwd:root,repo:'Owner/Repo',activatedAt,coordinatorId:'c',machine:'m',agent:{id:'codex',kind:'codex',command:'codex',env:{}},environment:{HOME:home},stateFile,workspaceId:'w',paneId:'p',recipeDelivered:true,ownerLaunch:{paneId:'p',startedAt:1,coordinator,profile:{agent:{id:'codex',kind:'codex'},home,definitionHome:home,configHome:null}}}));
   const f={root,stateFile,issues:[],warnings:[],packets:[]};
-  f.ports={now:()=>Date.parse('2026-11-05T00:00:00Z'),warn:s=>f.warnings.push(s),queryIssues:async()=>({status:200,issues:structuredClone(f.issues)}),comments:async()=>{throw Error('comments unavailable');},run:async (command,args)=>({code:0,stdout:command==='git'?execFileSync('git',args,{cwd:root,encoding:'utf8'}):'{}',stderr:''}),herdr:async args=>{if(args[0]==='agent'&&args[1]==='get') return {result:{agent:{agent_status:'idle'}}}; if(args[0]==='agent'&&args[1]==='prompt') f.packets.push(args[3]??args[2]); return {};}};
+  f.ports={now:()=>Date.parse('2026-11-05T00:00:00Z'),warn:s=>f.warnings.push(s),queryIssues:async()=>({status:200,issues:structuredClone(f.issues)}),comments:async()=>{throw Error('comments unavailable');},run:async (command,args)=>({code:0,stdout:command==='git'?execFileSync('git',args,{cwd:root,encoding:'utf8'}):JSON.stringify({nameWithOwner:'Owner/Repo',url:'https://github.com/Owner/Repo'}),stderr:''}),reconcileDependencyIntake:async()=>({eligible:f.issues.map(x=>x.html_url),queued:[],skipped:[]}),herdr:async args=>{const live={pane_id:'p',workspace_id:'w',cwd:root,foreground_cwd:root,tab_id:'t',terminal_id:'term',agent:'codex',agent_status:'idle',agent_session:'session'}; if(args[0]==='agent'&&args[1]==='get') return {result:{type:'agent_info',agent:live}}; if(args[0]==='pane'&&args[1]==='get') return {result:{type:'pane_info',pane:live}}; if(args[0]==='workspace'&&args[1]==='get') return {result:{type:'workspace_info',workspace:{workspace_id:'w'}}}; if(args[0]==='pane'&&args[1]==='read') return '';  if(args[0]==='agent'&&args[1]==='prompt') { const instruction=args.at(-1), match=/Artifact path: (.+)/.exec(instruction); f.packets.push(match ? readFileSync(JSON.parse(match[1]),'utf8') : instruction); } return {result:{}};}};
   f.tick=()=>tickAutopilot(stateFile,f.ports); f.decisions=()=>{const dir=join(root,'.git','pdd','metrics','decisions');try{return readdirSync(dir).map(x=>JSON.parse(readFileSync(join(dir,x),'utf8')));}catch(e){if(e.code==='ENOENT')return [];throw e;}}; return f;
 }
 test('selector captures observed open issues with scope, reasons, unknown and a shared snapshot',async t=>{
   const f=fixture(t); f.issues=[issue(1),issue(2,{labels:['pdd:working']}),issue(3,{created_at:'2026-11-03T00:00:00Z'}),issue(4,{comments:1}),issue(5,{state:'closed'}),issue(6,{pull_request:{}})];
   await f.tick(); const rows=f.decisions(); assert.deepEqual(rows.map(r=>r.issue).sort(),[1,2,3,4]); assert.equal(new Set(rows.map(r=>r.snapshotId)).size,1);
   const byIssue=Object.fromEntries(rows.map(r=>[r.issue,r.events.find(e=>e.type==='selection').data]));
-  assert.deepEqual([byIssue[2].state,byIssue[2].reasons],['waiting',['pdd:working']]); assert.equal(byIssue[3].inScope,false); assert.ok(byIssue[3].reasons.length); assert.equal(byIssue[4].state,'unknown'); assert.ok(byIssue[4].reasons.length);
+  assert.deepEqual([byIssue[2].state,byIssue[2].reasons],['waiting',['pdd:working']]); assert.equal(byIssue[3].inScope,true); assert.equal(byIssue[3].state,'ready'); assert.deepEqual(byIssue[3].reasons,[]); assert.equal(byIssue[4].state,'unknown'); assert.ok(byIssue[4].reasons.length);
   assert.equal(rows.find(r=>r.issue===1).offered,true); assert.ok(rows.find(r=>r.issue===1).events.some(e=>e.type==='launch'));
   assert.equal(byIssue[1].state,'ready'); assert.match(f.packets[0],new RegExp(rows.find(r=>r.issue===1).id));
 });
@@ -78,6 +79,7 @@ test('uncertain and certain wake errors retain attempt without claiming start',a
 test('unchanged trusted ready work remains ready in the next snapshot',async t=>{
  const f=fixture(t); f.issues=[issue(1)]; await f.tick(); await f.tick();
  assert.deepEqual(f.decisions().map(r=>r.events.find(e=>e.type==='selection').data.state),['ready','ready']);
+ assert.equal(f.packets.length,2); assert.ok(f.packets.every(packet=>packet.includes('\"number\":1,')));
 });
 
 test('launch outbox survives ledger failure and export retries without duplication',async t=>{

@@ -6,7 +6,7 @@ const { test, lint, simulate, run, requestUptake } = NAMES;
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change', 'product']);
 export const PUBLIC_HELP_TEXT = Object.freeze({
   heading: "PDD: prompt-driven development for your coding agent.",
-  closingLines: Object.freeze(["Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex, /pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting).", `workflow ${run} opens the first area chat in Herdr session pdd and exits. The person approves each area; after the last step pdd pushes the branch and opens a real PR.`, "pdd never merges."]),
+  closingLines: Object.freeze(["Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex, /pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting).", `workflow ${run} opens the first area chat in Herdr session pdd and exits. Manual workflows follow RUNBOOK §2 and its person gates; pdd opens a real PR.`, "The CLI has no merge command. Auto agents use pdd-merge after repository review and tests, with required human approvals."]),
   learnLines: Object.freeze(["Learn PDD: run pdd help prompting, or read the Prompting guide and the RUNBOOK.", "Prompting guide: PACKAGE_ROOT/docs/prompting-guide.md", "RUNBOOK: PACKAGE_ROOT/RUNBOOK.md"]),
   promptingLines: Object.freeze(["In PDD, prompts are the source. Code follows the prompts.", "1. Prompt: prompts/NAME.prompt.md. Write what the program does in plain English, then ## Dependencies, then one Runtime interface block.", "2. Story: user_stories/STORY.md. Write one thing that a person can do, then a numbered ## Acceptance criteria list.", "3. Test: tests/STORY.json. When the repo keeps its own tests in tests/ or test/, use tests/runtime/ or test/runtime/. Write steps with an exact check for each criterion.", `4. Check: run pdd ${test} --fill-hash, then pdd ${lint} (0 AI calls), then pdd ${test} STORY on the PDD interpreter.`, "5. Approve: a person reads each prompt and runs pdd approve PROMPT. An agent never approves."])
 });
@@ -21,14 +21,19 @@ const routes = [
   { id: 'metrics.export', prefix: ['metrics', 'export'], local: 'metrics', operands: [{name:'file',type:'text'}], options: [{name:'--timezone',kind:'text'}], forms: [form('pdd metrics export FILE [--timezone IANA]', 'Export metrics for sharing.')] },
   { id: 'metrics.import', prefix: ['metrics', 'import'], local: 'metrics', operands: [{name:'file',type:'text'}], options: [], forms: [form('pdd metrics import FILE', 'Import a metrics bundle.')] },
   { id: 'metrics.record', prefix: ['metrics', 'record'], local: 'metrics', operands: [{name:'file',type:'text'}], options: [], forms: [form('pdd metrics record FILE', 'Record explicit metrics observations.')] },
-  { id: 'autopilot.start', prefix: ['autopilot', 'start'], local: 'autopilot-start', operands: [], options: [{name:'--runs',kind:'text'}],
-    forms: [form('pdd autopilot start [--runs N]', 'Start this repo in an interactive Herdr agent; check now and every 30 minutes without AI on empty ticks. --runs optionally caps concurrent runs.')] },
+  { id: 'autopilot.start', prefix: ['autopilot', 'start'], local: 'autopilot-start', operands: [], options: [{name:'--runs',kind:'text'},{name:'--resume-custody',kind:'text'}],
+    forms: [form('pdd autopilot start [--runs N] [--resume-custody FILE]', 'Start this repo in an interactive Herdr agent; check now and every 30 minutes without AI on empty ticks. --runs optionally caps concurrent runs; --resume-custody supplies the verified original-owner projection.')] },
   { id: 'autopilot.stop', prefix: ['autopilot', 'stop'], local: 'autopilot-stop', operands: [], options: [],
     forms: [form('pdd autopilot stop', "Stop this machine's timer; let the current agent step finish.")] },
   { id: 'autopilot.status', prefix: ['autopilot', 'status'], local: 'autopilot-status', operands: [], options: [],
     forms: [form('pdd autopilot status', "Show this machine's repo, agent and next tick.")] },
   { id: 'autopilot.add', prefix: ['autopilot', 'add'], local: 'autopilot-add', operands: [{name:'issue',type:'issue',repeat:true}], options: [],
     forms: [form('pdd autopilot add N...', 'Mark named old issues with pdd:autopilot so Autopilot may take them.')] },
+  { id: 'graph', prefix: ['graph'], local: 'issue-dependency-graph', operands: [], options: [{name:'--open',kind:'flag'},{name:'--issue',kind:'text'},{name:'--repo',kind:'text'}],
+    forms: [form('pdd graph', 'Read native dependencies and saved reviews without AI.'), form('pdd graph --open', 'Open the local viewer.'), form('pdd graph --issue N', 'Select a root issue.'), form('pdd graph --open --issue N --repo OWNER/REPO', 'Open a selected issue in an explicit repository, including outside a checkout.')] },
+  { id: 'dependencies.prepare', prefix: ['dependencies','prepare'], local: 'dependencies-prepare', operands: [], options: [{name:'--issue',kind:'text'}], forms: [form('pdd dependencies prepare [--issue N]', 'Read a scoped native coordinator packet without AI or GitHub writes.')] },
+  { id: 'dependencies.complete', prefix: ['dependencies','complete'], local: 'dependencies-complete', operands: [], options: [{name:'--input',kind:'text'}], forms: [form('pdd dependencies complete --input -', 'Read a structured completion from stdin, save the review and reconcile its intended effects.')] },
+  { id: 'workflow.yield', prefix: ['workflow','yield'], local: 'workflow-yield', operands: [{name:'ref',type:'text'}], options: [], forms: [form('pdd workflow yield N', 'Hand off automatic capacity after the worker has stopped.')] },
   { id: 'product.status', prefix: ['product', 'status'], local: 'product-status', operands: [], options: [{name:'--json',kind:'flag'}],
     forms: [form('pdd product status [--json]', 'Count Stories by part and slice from the product plan; no interpreter calls.')] },
   { id: 'product.next', prefix: ['product', 'next'], local: 'product-next', operands: [], options: [],

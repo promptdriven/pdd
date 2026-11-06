@@ -11,7 +11,7 @@ import { parseArgv } from '../src/argument-parser.mjs';
 import { captureSource, interfaceBlocks, proseSha256 } from '../src/runtime-preflight.mjs';
 import { harbor, fakeRuntime, portsFor } from './runtime-fake.mjs';
 
-const vectors = JSON.parse(readFileSync(new URL('./runtime/test-cache.json', import.meta.url)));
+const vectors = JSON.parse(readFileSync(new URL('../fixtures/native-cases/test-cache.json', import.meta.url)));
 const read = path => JSON.parse(readFileSync(path, 'utf8'));
 const write = (path, value) => writeFileSync(path, JSON.stringify(value, null, 2) + '\n');
 const git = (cwd, ...args) => spawnSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });

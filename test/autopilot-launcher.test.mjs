@@ -26,7 +26,7 @@ async function fixture(t, options = {}) {
     run: async (command, args) => {
       f.runs.push([command, args]);
       if (command === 'git') return { code: 0, stdout: cwd + '\n', stderr: '' };
-      if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: '{"nameWithOwner":"owner/repo"}', stderr: '' };
+      if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: '{"nameWithOwner":"owner/repo","url":"https://github.com/owner/repo"}', stderr: '' };
       if (command === 'gh' && args[0] === 'auth') return { code: 0, stdout: '', stderr: '' };
       if (command === 'gh' && args[0] === 'api') { if (args.some(x => String(x).includes('/reviews?'))) return { code: 0, stdout: 'HTTP/2.0 200 OK\r\n\r\n[]', stderr: '' }; if (args.some(x => String(x).includes('/permission'))) return { code: 0, stdout: 'HTTP/2.0 200 OK\r\n\r\n{"permission":"none"}', stderr: '' }; f.ack.push(args); return { code: 0, stdout: '{}', stderr: '' }; }
       if (command === 'herdr') return { code: 0, stdout: '1.0', stderr: '' };
@@ -35,20 +35,23 @@ async function fixture(t, options = {}) {
     timer: async (action, state) => { f.timers.push([action, structuredClone(state)]); if (action === 'start') f.active = true; if (action === 'stop') f.active = false; return f.active; },
     queryIssues: async (state) => { f.polls.push(state.etag); return { status: f.status ?? 200, etag: f.etag, issues: structuredClone(f.issues) }; },
     comments: async number => { f.comments.push(number); return f.issueComments?.[number] ?? []; },
+    reconcileDependencyIntake: async () => ({ eligible: f.issues.map(issue => issue.html_url), queued: [], skipped: [] }),
     herdr: async args => {
       f.herdrCalls ??= []; f.herdrCalls.push(args);
       if (args[0] === 'status') return { running: f.serverRunning !== false };
-      if (args[0] === 'workspace') return { result: { workspace: { workspace_id: 'w1' }, root_pane: { pane_id: 'p1' } } };
+      const live = { pane_id:'p1', workspace_id:'w1', cwd, foreground_cwd:cwd, tab_id:'t1', terminal_id:'term1', agent:'codex', agent_status:f.agentStatus ?? 'idle', agent_session:'session' };
+      if (args[0] === 'workspace') return { result: { type:'workspace_info', workspace: { workspace_id: 'w1' }, root_pane: { pane_id: 'p1' } } };
+      if (args[0] === 'pane' && args[1] === 'get') return { result: { type:'pane_info', pane:live } };
       if (args[0] === 'agent' && args[1] === 'get') {
         if (!f.agentStarted) throw Object.assign(Error('agent_not_found'), { code: 'agent_not_found' });
-        return { result: { agent: { agent_status: f.agentStatus ?? 'idle' } } };
+        return { result: { type:'agent_info', agent:live } };
       }
-      if (args[0] === 'pane') {
-        f.agentStarted = true;
-        const packetFile = readdirSync(f.ports.stateRoot).find(x => x.endsWith('.message.md'));
-        f.prompts.push(readFileSync(join(f.ports.stateRoot, packetFile), 'utf8'));
+      if (args[0] === 'pane' && args[1] === 'run') { f.agentStarted = true; return {}; }
+      if (args[0] === 'pane' && args[1] === 'read') return '';
+      if (args[0] === 'agent' && args[1] === 'prompt') {
+        const instruction = args.at(-1), match = /Artifact path: (.+)/.exec(instruction);
+        f.prompts.push(match ? readFileSync(JSON.parse(match[1]), 'utf8') : instruction);
       }
-      if (args[0] === 'agent' && args[1] === 'prompt') f.prompts.push(args[3] ?? args[2]);
       return {};
     },
   };
@@ -110,14 +113,14 @@ async function nativeStartup(t, { kind = 'codex', custom = false, cwdName, body 
     if (call.argv[i] === '-c' || call.argv[i] === '--config') configs.push(call.argv[++i]);
     else if (!call.argv[i].startsWith('-')) operands.push(call.argv[i]);
   }
-  assert.equal(operands.length, 1, 'interactive first message is one operand');
-  const packet = JSON.parse(operands[0].trimEnd().split('\n').at(-1));
+  assert.equal(operands.length, 0, 'the interactive process starts before its first message');
+  const packet = JSON.parse(f.prompts[0].trimEnd().split('\n').at(-1));
   assert.equal(packet.issues[0].body, body); assert.equal(packet.recipeFirst, true); assert.equal(packet.runs, 1);
   assert.equal(f.timers.filter(([action]) => action === 'start').length, 1);
   assert.equal(f.state().nextTick, f.time + 30 * 60 * 1000);
   f.status = 304; await f.tick();
   assert.equal(f.prompts.length, 1, 'unchanged tick sends no extra packet');
-  assert.equal(f.herdrCalls.filter(args => args[0] === 'pane').length, 1);
+  assert.equal(f.herdrCalls.filter(args => args[0] === 'pane' && args[1] === 'run').length, 1);
   assert.equal(existsSync(join(f.dir, 'PDD_SENTINEL')), false);
   assert.equal(existsSync(join(f.cwd, 'PDD_SENTINEL')), false);
   return { ...f, call, configs };
@@ -156,11 +159,12 @@ test('native startup: invocation overrides leave saved update and trust settings
 
 for (const [kind, flags] of [
   ['claude', ['--dangerously-skip-permissions']],
-  ['gemini', ['--yolo', '--prompt-interactive']],
-  ['agy', ['--dangerously-skip-permissions', '--prompt-interactive']],
+  ['gemini', ['--yolo']],
+  ['agy', ['--dangerously-skip-permissions']],
 ]) test(`native startup: ${kind} keeps its interactive launch without Codex config`, async t => {
   const { call, configs } = await nativeStartup(t, { kind, custom: kind !== 'agy' });
   for (const flag of flags) assert.ok(call.argv.includes(flag));
+  if (kind === 'gemini' || kind === 'agy') assert.equal(call.argv.includes('--prompt-interactive'), false);
   assert.equal(configs.length, 0);
 });
 
@@ -169,6 +173,7 @@ test('autopilot routes parse and dispatch without setup or a runtime call', asyn
   assert.equal(parseArgv(['autopilot', 'start', '--runs', '1200000']).local, 'autopilot-start');
   assert.equal(await runPdd(['autopilot', 'start', '--runs', '3'], { cwd: '/repo', stdout, stderr, autopilotLauncher: { runAutopilotLauncher: async input => { seen = input; return { exitCode: 0, message: 'started' }; } } }), 0);
   assert.equal(seen.command, 'start'); assert.equal(seen.runs, '3');
+  assert.equal(await runPdd(['autopilot','start','--resume-custody','owner.json'], {cwd:'/repo',stdout:capture(),stderr:capture(),autopilotLauncher:{runAutopilotLauncher:async input=>{seen=input;return {exitCode:0,message:'started'};}}}),0); assert.equal(seen.resumeCustody,'owner.json');
   assert.equal(stdout.text, 'started\n'); assert.equal(stderr.text, '');
   assert.deepEqual(parseArgv(['autopilot', 'add', '12', '15']).operands, ['12', '15']);
 });
@@ -178,20 +183,47 @@ test('start installs a timer and runs the recipe immediately; unchanged empty ti
   assert.equal((await f.invoke('start')).exitCode, 0);
   assert.equal(f.polls.length, 1); assert.equal(f.prompts.length, 1);
   assert.match(f.prompts[0], /"recipeFirst":true/);
+  const context = JSON.parse(f.prompts[0].trim().split('\n').at(-1));
+  assert.deepEqual(context.startAction, { command: 'pdd autopilot start', repository: 'owner/repo', mode: 'auto' });
+  assert.equal(context.currentMode, 'auto');
+  assert.match(f.prompts[0], /ordinary eligible work and automatic merge under the repository review, testing, strict approval and other rules/);
   assert.equal(f.state().runs, undefined);
   assert.equal(f.state().nextTick, f.time + 1800000);
   f.status = 304; await f.tick(); await f.tick();
   assert.equal(f.prompts.length, 1); assert.deepEqual(f.polls, [undefined, '"one"', '"one"']);
+  const prior=f.state(), configured=prior.environment.CODEX_HOME;
+  f.ports.selectAgent=async (_state, ports)=>{ assert.equal(ports.env.CODEX_HOME,configured); return {id:'codex',kind:'codex',command:'codex',env:{}}; };
+  const restarted=await f.invoke('start',{env:{HOME:f.home,PATH:process.env.PATH,CODEX_HOME:join(f.dir,'unrelated-profile')}});
+  assert.equal(restarted.exitCode,0,restarted.message); assert.equal(f.state().coordinatorId,prior.coordinatorId); assert.deepEqual(f.state().ownerLaunch,prior.ownerLaunch); assert.equal(f.state().environment.CODEX_HOME,configured);
+  const original=f.state(), replacement=structuredClone(original), history=[{kind:'legacy-uncertain',payloadDigest:'kept'}];
+  replacement.enabled=false; replacement.coordinatorId='replacement'; replacement.agent={id:'agy',kind:'agy',command:'agy'}; replacement.uncertainDeliveryHistory=history; replacement.runs=3;
+  replacement.ownerLaunch={...replacement.ownerLaunch,coordinator:{...replacement.ownerLaunch.coordinator,coordinatorId:'replacement'},profile:{agent:{id:'agy',kind:'agy'},home:f.home,definitionHome:f.home,configHome:null}};
+  writeFileSync(f.stateFile(),JSON.stringify(replacement));
+  const launch=original.ownerLaunch, artifact=join(f.dir,'custody.json');
+  writeFileSync(artifact,JSON.stringify({repository:original.repo,sourceRoot:f.cwd,coordinatorId:original.coordinatorId,machine:original.machine,activation:original.activatedAt,paneId:original.paneId,workspaceId:original.workspaceId,agent:launch.profile.agent,home:launch.profile.home,definitionHome:launch.profile.definitionHome,configHome:launch.profile.configHome,launchStartedAt:launch.startedAt}));
+  f.ports.selectAgent=async()=>({id:'codex',kind:'codex',command:'codex',env:{}});
+  f.ports.listRuns=async()=>[{number:17,repo:original.repo,state:'waiting',issue:{url:'https://github.com/owner/repo/issues/17'},automaticOrigin:{repository:original.repo,coordinatorId:original.coordinatorId,machine:original.machine,claim:{commentId:'11',labelEventId:'12'}}}];
+  f.ports.owners={read:async()=>({json:JSON.stringify({claims:[{issue:'https://github.com/owner/repo/issues/17',active:true,owner:original.coordinatorId,coordinatorId:original.coordinatorId,machine:original.machine,commentId:'11',labelEventId:'12'}]})})};
+  const oldHerdr=f.ports.herdr; f.ports.herdr=async args=>{
+    const live={pane_id:original.paneId,workspace_id:original.workspaceId,cwd:f.cwd,foreground_cwd:f.cwd,tab_id:'t1',terminal_id:'term1',agent:'codex',agent_status:'idle',agent_session:'session'};
+    if(args[0]==='pane'&&args[1]==='get')return {result:{type:'pane_info',pane:live}};
+    if(args[0]==='workspace'&&args[1]==='get')return {result:{type:'workspace_info',workspace:{workspace_id:original.workspaceId}}};
+    if(args[0]==='agent'&&args[1]==='get')return {result:{type:'agent_info',agent:live}};
+    return oldHerdr(args);
+  };
+  const recovered=await f.invoke('start',{resumeCustody:artifact}); assert.equal(recovered.exitCode,0,recovered.message);
+  const restored=f.state(); assert.equal(restored.coordinatorId,original.coordinatorId); assert.equal(restored.agent.kind,'codex'); assert.deepEqual(restored.uncertainDeliveryHistory,history); assert.equal(restored.runs,undefined);
+  f.ports.listRuns=async()=>[]; const semanticOnly=await f.invoke('start',{resumeCustody:artifact}); assert.equal(semanticOnly.exitCode,0,semanticOnly.message); assert.equal(f.state().coordinatorId,original.coordinatorId); assert.deepEqual(f.state().uncertainDeliveryHistory,history); assert.equal(f.state().runs,undefined);
 });
 
-test('new and named issues are eligible; claimed work is distinguished and closed/old issues excluded', async t => {
+test('old and new issues are eligible; claimed work is distinguished and closed issues excluded', async t => {
   const f = await fixture(t); await f.invoke('start');
   f.issues = [issue(1), issue(2, { created_at: '2026-01-01T00:00:00Z' }), issue(3, { created_at: '2026-01-01T00:00:00Z', labels: [{ name: 'pdd:autopilot' }] }), issue(4, { pull_request: {} }), issue(5, { state: 'closed' }), issue(6, { labels: [{ name: 'pdd:working' }] })];
   await f.tick();
   const prompt = f.prompts.at(-1);
-  assert.match(prompt, /"number":1,/); assert.match(prompt, /"number":3,/);
-  for (const n of [2, 4, 5, 6]) assert.doesNotMatch(prompt, new RegExp(`"number":${n},`));
-  await f.tick(); assert.equal(f.prompts.length, 2); // Already-seen work must stay quiet.
+  assert.match(prompt, /"number":1,/); assert.match(prompt, /"number":2,/); assert.match(prompt, /"number":3,/);
+  for (const n of [4, 5, 6]) assert.doesNotMatch(prompt, new RegExp(`"number":${n},`));
+  await f.tick(); assert.equal(f.prompts.length, 3); // Auto reconsiders still-unclaimed ready work.
   await f.invoke('stop'); f.time += 3600000; await f.invoke('start');
   assert.equal(f.state().activatedAt, '2026-11-04T00:00:00.000Z');
 });
@@ -312,6 +344,7 @@ test('native Linux and macOS user timers pin Node, script, state and environment
 
 test('native HTTP tick uses ETags and revalidates cached later pages, including a close', async t => {
   const f = await fixture(t); delete f.ports.queryIssues;
+  f.ports.reconcileDependencyIntake = async () => ({ eligible: [issue(31).html_url], queued: [], skipped: [] });
   let phase = 0; const queries = [];
   const run = f.ports.run;
   f.ports.run = async (command, args, opts) => {
@@ -537,11 +570,12 @@ for (const kind of ['stuck', 'code-pending', 'own working', 'observe PR waiting'
   assert.equal(f.prompts.length, 0);
 });
 
-test('an ordinary open issue is delivered once; only unseen trusted changes wake it again', async t => {
-  const f = await fixture(t); f.issues = [issue(71)]; await f.invoke('start');
+test('observe mode deduplicates an ordinary open issue until trusted changes', async t => {
+  const f = await fixture(t, {mode:'observe'}); f.issues = [issue(71)]; await f.invoke('start');
   f.prompts.length = 0; f.status = 304;
   for (let tick = 0; tick < 4; tick++) await f.tick();
   assert.equal(f.prompts.length, 0);
+  await f.invoke('start'); assert.equal(f.prompts.length, 0);
   f.status = 200; f.issues[0].comments = 1; f.issues[0].updated_at = '2026-11-04T01:00:00Z';
   f.issueComments = { 71: [{ id: 1, body: 'STRANGER', user: { login: 'outside' } }] };
   await f.tick(); assert.equal(f.prompts.length, 0);
@@ -558,7 +592,7 @@ test('new work stays pending while the agent is busy and is coalesced when idle'
   for (let tick = 0; tick < 4; tick++) { await f.tick(); f.status = 304; }
   assert.equal(f.prompts.length, 0);
   f.agentStatus = 'idle'; await f.tick(); assert.equal(f.prompts.length, 1);
-  await f.tick(); assert.equal(f.prompts.length, 1);
+  await f.tick(); assert.equal(f.prompts.length, 2);
 });
 
 test('trusted PR head and closure changes wake an observe issue once each', async t => {
@@ -633,13 +667,24 @@ test('overlapping ticks cannot deliver twice from a snapshot read before lock ac
   const f = await fixture(t); await f.invoke('start'); f.prompts.length = 0; f.issues = [issue(77)];
   // Keep the existing native-operation barrier separate from optional telemetry lookup.
   f.ports.metricsContext = async () => ({toplevel:f.cwd,commonDir:f.cwd});
-  const run = f.ports.run; let reads = 0, release;
-  f.ports.run = async (cmd, args, opts) => {
-    if (cmd === 'git' && ++reads === 2) await new Promise(resolve => { release = resolve; });
-    return run(cmd, args, opts);
+  const query = f.ports.queryIssues; let reads = 0, release;
+  f.ports.queryIssues = async state => {
+    if (++reads === 2) await new Promise(resolve => { release = resolve; });
+    return query(state);
   };
   const first = f.tick(), second = f.tick(); await first; release?.(); await second;
   assert.equal(f.prompts.length, 1);
+  f.prompts.length = 0;
+  let entered, unblock, resume;
+  const enteredScan = new Promise(resolve => { entered = resolve; });
+  f.ports.queryIssues = async state => { entered(); await new Promise(resolve => { unblock = resolve; }); return query(state); };
+  f.ports.armStartScan = (_identity, options) => { resume = options.resume; };
+  f.ports.waitForScan = async () => {};
+  const oldScan = f.tick(); await enteredScan;
+  assert.equal((await f.invoke('start')).exitCode, 0); assert.equal(typeof resume, 'function');
+  assert.equal(f.prompts.length, 0); unblock(); await oldScan;
+  f.ports.queryIssues = query; await resume();
+  assert.equal(f.prompts.length, 1); assert.match(f.prompts[0], /\"number\":77,/);
 });
 
 test('trusted PR comments wake a waiting issue once; outsider PR comments stay quiet', async t => {
@@ -727,10 +772,11 @@ test('trust removal and outsider-only updates stay quiet for issue and PR discus
     const run = f.ports.run; let permissions = 0;
     f.ports.run = async (cmd, args, opts) => { if (args.some(x => String(x).endsWith('/permission'))) permissions++; return run(cmd, args, opts); };
     f.status = 304; for (let tick = 0; tick < 4; tick++) await f.tick();
-    assert.equal(f.prompts.length, 0); assert.equal(permissions, 0, 'Quiet ticks must not refresh cached permissions');
+    if (channel === 'PR') { assert.equal(f.prompts.length, 0); assert.equal(permissions, 0, 'Quiet ticks must not refresh cached permissions'); }
+    else { assert.equal(f.prompts.length, 4); for (const packet of f.prompts) assert.doesNotMatch(packet, /REVOKED TEXT/); f.prompts.length = 0; }
     f.status = 200; const changed = f.issues.find(x => x.number === number); changed.comments = 2; changed.updated_at = '2026-11-04T01:00:00Z';
     f.issueComments[number].push({ id: 2, body: 'OUTSIDER ONLY', user: { login: 'outside' } });
-    await f.tick(); assert.equal(f.prompts.length, 0);
+    await f.tick(); if (channel === 'PR') assert.equal(f.prompts.length, 0); else { assert.equal(f.prompts.length, 1); assert.doesNotMatch(f.prompts[0], /REVOKED TEXT|OUTSIDER ONLY/); f.prompts.length = 0; }
     changed.comments = 3; changed.updated_at = '2026-11-04T02:00:00Z';
     f.issueComments[number].push({ id: 3, body: 'New owner feedback', user: { login: 'owner' } });
     await f.tick(); assert.equal(f.prompts.length, 1);
@@ -753,6 +799,7 @@ for (const change of ['unclaim with waiting PR', 'auto with stuck issue']) test(
   const f = await fixture(t, { mode: 'observe' });
   f.issues = [issue(84, { labels: [{ name: change.startsWith('unclaim') ? 'pdd:working' : 'pdd:stuck' }] }), pr(97, 84)];
   f.ports.pullRequest = async () => ({ state: 'open', head: { sha: 'a' } });
+  f.ports.reconcileDependencyIntake = async () => ({ eligible: [], queued: [], skipped: [] });
   await f.invoke('start'); f.prompts.length = 0;
   if (change.startsWith('unclaim')) f.issues[0].labels = [];
   else writeFileSync(join(f.cwd, 'pdd.json'), '{"autopilot":{"mode":"auto","trust":[]}}');

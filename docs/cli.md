@@ -38,7 +38,7 @@ These commands store settings and determine trust. Selecting a mode starts no ru
 
 | Command | What it does |
 |---|---|
-| `pdd autopilot start [--runs N]` | Check sign-ins and the running pdd version, open a dedicated interactive Herdr session and check for work immediately. A user timer checks again every 30 minutes. `--runs` sets an optional concurrent-run cap; omission has no fixed cap |
+| `pdd autopilot start [--runs N] [--resume-custody FILE]` | Check sign-ins and the running pdd version, open a dedicated interactive Herdr session and check for work immediately. A user timer checks again every 30 minutes. `--runs` sets an optional concurrent-run cap; omission has no fixed cap. `--resume-custody` supplies the verified original-owner projection for explicit recovery |
 | `pdd autopilot stop` | Disable this repo's timer on this machine and let the current agent step finish |
 | `pdd autopilot status` | Show this machine's repo, agent, timer state and next tick without contacting GitHub or waking an agent |
 | `pdd autopilot add N...` | Label named issues `pdd:autopilot`, allowing Autopilot to take older issues |
@@ -108,7 +108,7 @@ The fresh replacement keeps the run, worktree, progress, gates and approvals, an
 - Codex is the default agent. The chats start in full-access mode: Codex with `--dangerously-bypass-approvals-and-sandbox`, Claude Code with `--dangerously-skip-permissions`, Gemini with `--yolo`, Antigravity CLI (`--agent agy`) with `--dangerously-skip-permissions` and the run worktree trusted for that session only. An Antigravity chat also gets pdd's runs folder and worktrees folder with `--add-dir`, so it reads its start file with its own file tools. pdd finds a signed-in Antigravity CLI with `agy models`. Gemini CLI needs a paid Gemini API key, Vertex AI or Code Assist; with a free or Google One account, use `--agent agy`. PDD does not choose a model and does not change your agent's settings, sign-in or config.
 - The first message of each chat gives the full path of this pdd. The agent uses it, so another `pdd` on its PATH does not matter.
 - No command has a time limit. You can close the terminal at any time.
-pdd never merges and has no merge command. To ask your agent to merge, follow [RUNBOOK §2](../RUNBOOK.md#2-the-files).
+The pdd CLI has no merge command. In manual workflows, ask your agent to merge under [RUNBOOK §2](../RUNBOOK.md#2-the-files). In Autopilot `auto` mode, pdd-merge handles eligible merges after repository review and test rules pass; required human approvals still apply.
 
 `pdd workflow run bug 2544 --draft` saves draft PR publication before starting the
 chat. The saved Boolean applies to PR 1 and the separately approved code PR, or
@@ -312,3 +312,7 @@ Workflow approval reads `pdd.json` from the main checkout (`sourceRoot`), outsid
 - `pdd metrics export FILE [--timezone IANA]`
 - `pdd metrics import FILE`
 - `pdd metrics record FILE`
+
+`pdd graph` reads the saved dependency graph; `pdd graph --open` opens its viewer. Use `pdd graph --issue N` to select an issue, or `pdd graph --open --issue N --repo OWNER/REPO` to select a repository explicitly.
+
+`pdd dependencies prepare [--issue N]` prepares a coordinator packet. `pdd dependencies complete --input -` reads a structured completion from stdin. `pdd workflow yield N` hands off automatic capacity after the current worker has stopped.

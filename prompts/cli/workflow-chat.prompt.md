@@ -1,6 +1,6 @@
 # Area chats in Herdr
 
-Own `src/workflow-chat.mjs`. An area chat is one native Codex, Claude, Gemini or Antigravity CLI (`agy`) session in its own tab of the Herdr session `pdd`. pdd starts it and then leaves. pdd never watches it.
+Own `src/workflow-chat.mjs`. An area chat is one native Codex, Claude, Gemini or Antigravity CLI (`agy`) session in its own tab of the Herdr session `pdd`. pdd starts it and then leaves. Automatic fresh chats can be observed by the runner’s one-shot [completion bridge](workflow-worker-completion.prompt.md).
 
 - Use only the session `pdd` (`herdr --session pdd …`). Never touch the person's default session or another session.
 - If the `pdd` server is not running, start `herdr --session pdd server` in the background. Remove agent-session markers (`CLAUDECODE`, `CLAUDE_CODE_*` session values, `CODEX_THREAD_ID`, `HERDR_*`, `PDD_AGENT_SESSION`) from its environment, so chats in it save their transcripts. Wait for it only while that server process is alive.
