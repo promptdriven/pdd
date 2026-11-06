@@ -245,7 +245,7 @@ async function readSavedStoryEvidence({ root, comparisonRoot = root }, ports, ca
         const folder = await real(comparisonRoot), tests = [...new Set(batch.rows.map(row => row.test))].sort();
         const excludeFixtureProjects = batch.exclude_fixture_projects === true;
         const key = JSON.stringify([folder, tests, excludeFixtureProjects]);
-        if (!captures.has(key)) captures.set(key, Promise.resolve().then(() => capture(folder, { tests, appMap: null, excludeFixtureProjects }))
+        if (!captures.has(key)) captures.set(key, Promise.resolve().then(() => capture(folder, { tests, appMap: null, ...(excludeFixtureProjects ? { excludeFixtureProjects: true } : {}) }))
           .then(source => ({ sha256: source.sha256 })).catch(error => ({ error })));
         const source = await captures.get(key);
         if (source.error) throw source.error;
