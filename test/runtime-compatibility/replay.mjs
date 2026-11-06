@@ -15,6 +15,8 @@ const copy = value => structuredClone(value);
 const files = capture => capture.sources.map(source => ({ path: source.path, sha256: sha(source.bytes) }));
 const checks = f => f.posts.filter(post => post.command === 'check');
 const paid = f => f.posts.filter(post => ['check', 'try'].includes(post.command));
+const completeZero = () => ({ provider_calls: 0, accounting_complete: true,
+  usage: { calls: 0, known_calls: 0, unknown_calls: 0, provider_calls: 0, accounting_complete: true } });
 
 export function mutate(report, variant) {
   const row = report.operations[0];
@@ -265,7 +267,7 @@ export const paidCases = {
       if (door === 'retry') {
         // Create an authentic admitted but not-started capacity refusal, then change only saved authoritative lint input.
         first = await c.run('check', { '--timeout': 0.01 }, ['place-order'], { fetch: async (url, init) => {
-          if (String(url).endsWith('/v1/check') && init?.method === 'POST') return new Response(JSON.stringify({ dispatch: 'not_started', error: { code: 'check-queue-full', details: { retryable: true, retry_after: 300 } } }), { status: 503, headers: { 'retry-after': '300', 'content-type': 'application/json' } });
+          if (String(url).endsWith('/v1/check') && init?.method === 'POST') return new Response(JSON.stringify({ dispatch: 'not_started', ...completeZero(), error: { code: 'check-queue-full', details: { retryable: true, retry_after: 300 } } }), { status: 503, headers: { 'retry-after': '300', 'content-type': 'application/json' } });
           return fetch(url, init);
         } });
       } else first = await c.run('check', { '--timeout': 0.01 });
@@ -285,7 +287,7 @@ export const paidCases = {
     for (const guard of ['owner','source','intent','claim']) for (const door of ['continuation','retry','restart']) {
       const c = await client(t, { pending: door === 'continuation', job: door === 'restart' ? 'running' : 'passed' });
       const busyFetch = async (url, init) => {
-        if (String(url).endsWith('/v1/check') && init?.method === 'POST') return new Response(JSON.stringify({ dispatch: 'not_started', error: { code: 'check-queue-full', details: { retryable: true, retry_after: 300 } } }), { status: 503, headers: { 'retry-after': '300', 'content-type': 'application/json' } });
+        if (String(url).endsWith('/v1/check') && init?.method === 'POST') return new Response(JSON.stringify({ dispatch: 'not_started', ...completeZero(), error: { code: 'check-queue-full', details: { retryable: true, retry_after: 300 } } }), { status: 503, headers: { 'retry-after': '300', 'content-type': 'application/json' } });
         return fetch(url, init);
       };
       const first = await c.run('check', { '--timeout': 0.01 }, ['place-order'], door === 'retry' ? { fetch: busyFetch } : {}), saved = c.saved(first);

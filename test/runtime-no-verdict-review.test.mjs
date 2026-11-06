@@ -10,9 +10,14 @@ async function run(setup, fake, options = { '--json': true }, words = ['place-or
   const code = await runCheck({ words: options['--read'] ? [] : words, options, cwd: setup.repo }, ports);
   return { code, text: ports.stdout.text, json: options['--json'] ? JSON.parse(ports.stdout.text) : null };
 }
-const capacity = (f, id) => f.job(id, 'check', 'refused', { outcome: 'Inconclusive', why: 'No verdict. Queue full.', next_step: 'STALE RETRY',
-  refusals: [{ code: 'check-queue-timeout', details: { retryable: true, retry_after: 1 } }],
-  report: { dispatch: 'not_started', provider_calls: 0, samples: [] } }, 0);
+const capacity = (f, id) => {
+  const answer = f.job(id, 'check', 'refused', { outcome: 'Inconclusive', why: 'No verdict. Queue full.', next_step: 'STALE RETRY',
+    refusals: [{ code: 'check-queue-timeout', details: { retryable: true, retry_after: 1 } }],
+    report: { dispatch: 'not_started', provider_calls: 0, accounting_complete: true, samples: [] } }, 0);
+  answer.accounting_complete = true;
+  Object.assign(answer.usage, { calls: 0, known_calls: 0, unknown_calls: 0, provider_calls: 0, accounting_complete: true });
+  return answer;
+};
 
 test('REVIEW marks keep passed plus actual busy busy and preserve precedence controls', () => {
   assert.match(summaryLine([row('passed'), row('not_run', { busy: true })]), /: busy ·/);

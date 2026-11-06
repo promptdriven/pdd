@@ -32,7 +32,10 @@ async function observe(t, input) {
         if (!refused) {
           refused = true;
           return { status: 503, headers: { 'retry-after': '7' }, json: {
-            dispatch: 'not_started', error: { code: 'maintenance', details: { until: input.until, reason } },
+            dispatch: 'not_started', ...(input.kind === 'check' ? {
+              provider_calls: 0, accounting_complete: true,
+              usage: { calls: 0, known_calls: 0, unknown_calls: 0, provider_calls: 0, accounting_complete: true },
+            } : {}), error: { code: 'maintenance', details: { until: input.until, reason } },
           } };
         }
         assert.ok(made.clock.now >= end, 'no replacement POST before the UTC maintenance end');

@@ -74,8 +74,10 @@ test('RUNTIME-SERVER2: a lost connection after a POST is read with the same ID a
 test('RUNTIME-SERVER3: 429 server-full gives a new ID after Retry-After and keeps the old one', async t => {
   const setup = harbor(t);
   const fake = await fakeRuntime(t, (entry, f) => entry.method === 'POST' && entry.command === 'check' && f.posts.filter(p => p.command === 'check').length === 1
-    ? { status: 429, headers: { 'retry-after': '3' }, json: { requestId: entry.request.requestId, command: 'check', state: 'refused', job_created: true,
-      dispatch: 'not_started', error: { code: 'server-full', message: 'The runtime is busy. Try again later.' } } } : f.normal(entry));
+    ? { status: 429, headers: { 'retry-after': '3' }, json: { requestId: entry.request.requestId, command: 'check', state: 'refused', job_created: false,
+      dispatch: 'not_started', provider_calls: 0, accounting_complete: true,
+      usage: { calls: 0, known_calls: 0, unknown_calls: 0, provider_calls: 0, accounting_complete: true },
+      error: { code: 'server-full', message: 'The runtime is busy. Try again later.' } } } : f.normal(entry));
   const result = await check(setup, fake, ['place-order']);
   assert.equal(result.code, 0, result.err + result.out);
   const checks = fake.posts.filter(post => post.command === 'check');
@@ -559,7 +561,9 @@ test('RUNTIME-WAIT3: Ctrl-C after 12 min prints the read line and exits 3; --rea
   let clock, done = false;
   const fake = await fakeRuntime(t, (entry, f) => {
     if (entry.method === 'POST' && entry.request.scenario === 'tests/unknown-item.json')
-      return { status: 429, json: { dispatch: 'not_started', error: { code: 'server-full', message: 'The runtime is busy. Try again later.' } } };
+      return { status: 429, json: { dispatch: 'not_started', provider_calls: 0, accounting_complete: true,
+        usage: { calls: 0, known_calls: 0, unknown_calls: 0, provider_calls: 0, accounting_complete: true },
+        error: { code: 'server-full', message: 'The runtime is busy. Try again later.' } } };
     if (entry.method !== 'GET') return f.normal(entry);
     if (clock.now >= Date.parse('2026-10-27T16:39:47Z')) clock.interrupt?.();
     return { status: 200, json: f.check(entry.url.split('/').at(-1), done ? 'passed' : 'running') };
@@ -630,7 +634,9 @@ test('RUNTIME-SERVER11: 429 with no Retry-After waits 5 s before the new request
   const fake = await fakeRuntime(t, (entry, f) => {
     if (entry.method === 'POST' && entry.command === 'check') {
       times.push(clock.now);
-      if (times.length === 1) return { status: 429, json: { dispatch: 'not_started', error: { code: 'server-full', message: 'The runtime is busy. Try again later.' } } };
+      if (times.length === 1) return { status: 429, json: { dispatch: 'not_started', provider_calls: 0, accounting_complete: true,
+        usage: { calls: 0, known_calls: 0, unknown_calls: 0, provider_calls: 0, accounting_complete: true },
+        error: { code: 'server-full', message: 'The runtime is busy. Try again later.' } } };
     }
     return f.normal(entry);
   });
@@ -684,7 +690,9 @@ test('RUNTIME-SERVER13: no POST starts after Ctrl-C, even for a check that waits
   let interrupt;
   const fake = await fakeRuntime(t, (entry, f) => {
     if (entry.method === 'POST' && entry.request.scenario === 'tests/place-order.json') {
-      return { status: 429, headers: { 'retry-after': '1' }, json: { dispatch: 'not_started', error: { code: 'server-full', message: 'busy' } } };
+      return { status: 429, headers: { 'retry-after': '1' }, json: { dispatch: 'not_started', provider_calls: 0, accounting_complete: true,
+        usage: { calls: 0, known_calls: 0, unknown_calls: 0, provider_calls: 0, accounting_complete: true },
+        error: { code: 'server-full', message: 'busy' } } };
     }
     if (entry.method === 'GET') { interrupt(); return { status: 200, json: f.check(entry.url.split('/').at(-1), 'running') }; }
     return f.normal(entry);

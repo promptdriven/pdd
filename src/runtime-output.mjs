@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: 3a6b40f4cbb1946ff7602ecb1193d558751670527427042f48dcd511426fb389).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: a77f11c7c30654f87306a167d2e391b9be60da825e016b9fdec9d35a9f8adddf).
 import { hasProgress, outcomeExitCode, outcomeFor, outcomeText, progressText } from './runtime-outcome.mjs';
 export const OPEN_STATES = new Set(['queued', 'running']);
 
@@ -86,9 +86,9 @@ export const refusalView = (item, secrets = []) => ({
   cause: cleanText(item?.cause, secrets) || null });
 
 // The parts of a server answer that pdd shows.
-export function projectAnswer(answer, { origin, secrets = [], steps: authoredSteps = [], criterionTexts = {}, test, sourceFiles } = {}) {
+export function projectAnswer(answer, { origin, secrets = [], steps: authoredSteps = [], criterionTexts = {}, test, sourceFiles, capacityUncertain = false } = {}) {
   const result = answer?.result ?? null, report = result?.report ?? null, time_limit = stepTimeLimit(answer, { steps: authoredSteps, secrets });
-  const outcome = outcomeFor(answer, { test, steps: authoredSteps, timeLimit: !!time_limit, sourceFiles });
+  const outcome = outcomeFor(answer, { test, steps: authoredSteps, timeLimit: !!time_limit, sourceFiles, capacityUncertain });
   const safeCompatibility = (value, key = '') => typeof value === 'string'
     ? /^(?:path|prompt_path|target_path)$/.test(key) && /^(?:\/|[A-Za-z]:[\\/])/.test(value) ? '<server path>' : cleanText(value, secrets).replace(TOKENS, '[secret]')
     : Array.isArray(value) ? value.map(item => safeCompatibility(item, key))
@@ -136,9 +136,24 @@ export function projectAnswer(answer, { origin, secrets = [], steps: authoredSte
   // prompt-runtime #379 adds reason, fix, file, at, where and cause to each refusal; the live server may not send them yet.
   const refusals = (Array.isArray(result?.refusals) ? result.refusals : []).map(item => refusalView(item, secrets));
   const usage = answer?.usage ?? {};
-  const incomplete = usage.accounting_complete === false || report?.accounting_complete === false || usage.unknown_calls > 0;
-  const knownCalls = nonNegativeInt(usage.known_calls) ?? nonNegativeInt(usage.calls);
-  const unknownCalls = incomplete ? Math.max(1, nonNegativeInt(usage.unknown_calls) ?? 1) : 0;
+  const accountingSurfaces = [answer, usage, result, report].filter(isObjectLike);
+  const accountingValues = key => accountingSurfaces.filter(surface => Object.hasOwn(surface, key)).map(surface => nonNegativeInt(surface[key]));
+  const accountingKeys = ['calls', 'known_calls', 'unknown_calls', 'provider_calls'];
+  const invalidCounter = accountingKeys.some(key => accountingValues(key).some(value => value === undefined));
+  const conflictingCounters = accountingKeys.some(key => new Set(accountingValues(key).filter(value => value !== undefined)).size > 1);
+  const flags = [[answer, 'accounting_complete'], [usage, 'accounting_complete'], [result, 'accounting_complete'], [report, 'accounting_complete']]
+    .filter(([source, key]) => source && Object.hasOwn(source, key)).map(([source, key]) => source[key]);
+  const invalidFlag = flags.some(value => typeof value !== 'boolean'), conflictingFlags = new Set(flags.filter(value => typeof value === 'boolean')).size > 1;
+  const usageCalls = nonNegativeInt(usage.calls);
+  const knownValues = accountingValues('known_calls').filter(value => value !== undefined);
+  const callValues = accountingValues('calls').filter(value => value !== undefined);
+  const providerValues = accountingValues('provider_calls').filter(value => value !== undefined);
+  const knownCalls = Math.max(...(knownValues.length ? knownValues : callValues), ...providerValues, 0);
+  const unknownValues = accountingValues('unknown_calls').filter(value => value !== undefined);
+  const reportedUnknown = Math.max(...unknownValues, 0);
+  const incomplete = capacityUncertain || invalidCounter || conflictingCounters || invalidFlag || conflictingFlags || flags.includes(false)
+    || reportedUnknown > 0 || usageCalls === undefined || knownCalls > usageCalls;
+  const unknownCalls = incomplete ? Math.max(1, reportedUnknown) : 0;
   const model = [usage.requested_model, report?.evaluation?.requested_model].find(value => typeof value === 'string' && value && value !== 'unknown');
   const results = Array.isArray(report?.criterion_results) ? report.criterion_results : [];
   const cause = Array.isArray(report?.samples) ? report.samples.map(sample => sample?.refusal?.failure_cause).find(isObjectLike) : null;
@@ -157,8 +172,8 @@ export function projectAnswer(answer, { origin, secrets = [], steps: authoredSte
     time_limit, checks: all.length ? { passed: all.filter(check => check.passed).length, total: all.length } : null,
     criteria: results.length ? { passed: results.filter(item => item?.status === 'passed').length, total: results.length } : null,
     all_checks: all, failed_checks: all.filter(check => !check.passed).map(({ passed, ...check }) => check), refusals,
-    calls: !incomplete && typeof usage.calls === 'number' ? usage.calls : 'unknown',
-    known_calls: incomplete ? knownCalls : undefined, unknown_calls: unknownCalls, requested_model: model ? cleanText(model, secrets) : null,
+    calls: !incomplete ? usageCalls : 'unknown',
+    known_calls: incomplete ? knownCalls : undefined, unknown_calls: unknownCalls, accounting_complete: !incomplete, requested_model: model ? cleanText(model, secrets) : null,
     server_seconds: typeof usage.seconds === 'number' ? usage.seconds : null,
     report_url: validLink(answer?.report_url, origin, 'report'), why: result?.why ? cleanText(result.why, secrets) : null,
     who: result?.who ? cleanText(result.who, secrets) : null, next_step: result?.next_step ? cleanText(result.next_step, secrets) : null,
@@ -196,6 +211,7 @@ export function jsonRow(row) {
       message: item.message ?? null, engine_message: item.engine_message ?? null, hint: item.hint ?? null, reason: item.reason ?? null, fix: item.fix ?? null,
       where: item.where ?? null, cause: item.cause ?? null })), calls: sentRow(row) ? row.calls ?? 'unknown' : 0,
     seconds: round(row.seconds), requested_model: row.requested_model ?? null, report_url: row.report_url ?? null,
+    ...(row.accounting_complete !== undefined ? { known_calls: row.known_calls ?? null, unknown_calls: row.unknown_calls ?? 0, accounting_complete: row.accounting_complete } : {}),
     request_id: row.request_ids?.at(-1) ?? null, draft: !!row.draft, busy: !!row.busy, can_retry: !!row.can_retry, time_limit: row.time_limit ?? null,
     why: row.why ?? null, who: row.who ?? null, next_step: row.next_step ?? null,
     rerun: row.rerun ?? null, ...(typeof row.cache_reason === 'string' ? { cache_reason: row.cache_reason } : {}), ...(row.cached ? { cached: true, passed_at: row.passed_at } : {}),

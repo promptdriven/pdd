@@ -7,8 +7,13 @@ import { createHash } from 'node:crypto';
 import { runCheck } from '../src/runtime-client.mjs';
 import { harbor, fakeRuntime, portsFor } from './runtime-fake.mjs';
 const X = '88888888-8888-4888-8888-888888888888';
-const capacity = (f, id) => f.job(id, 'check', 'refused', { outcome: 'Inconclusive', why: 'No verdict. Queue full.', next_step: 'RETRY LATER',
-  refusals: [{ code: 'check-queue-timeout', details: { retryable: true, retry_after: 1 } }], report: { dispatch: 'not_started', provider_calls: 0, samples: [] } }, 0);
+const capacity = (f, id) => {
+  const answer = f.job(id, 'check', 'refused', { outcome: 'Inconclusive', why: 'No verdict. Queue full.', next_step: 'RETRY LATER',
+    refusals: [{ code: 'check-queue-timeout', details: { retryable: true, retry_after: 1 } }], report: { dispatch: 'not_started', provider_calls: 0, accounting_complete: true, samples: [] } }, 0);
+  answer.accounting_complete = true;
+  Object.assign(answer.usage, { calls: 0, known_calls: 0, unknown_calls: 0, provider_calls: 0, accounting_complete: true });
+  return answer;
+};
 
 for (const response of ['lost', '404']) test(`RELAY busy row + unsaved retry claim ${response}`, async t => {
   const h = harbor(t); let busy = true;
