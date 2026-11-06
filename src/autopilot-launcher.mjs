@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 1ada2c5d311bbb3edfd2db154d4a151d1a43ecb969769856b9a4ddbc5d3954ad).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: eb52a62d4f0432918b7e2f74f2eac8ce5707407ca1578ea4fc5f3d0ee9219907).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch } from 'node:fs';
@@ -29,6 +29,8 @@ const ACK = '<!-- pdd:autopilot:thanks -->';
 const ACK_TEXT = `thanks, a maintainer will look\n\n${ACK}`;
 const self = fileURLToPath(import.meta.url);
 const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`;
+// A TOML basic string: JSON escapes plus DEL, which TOML also forbids raw.
+const tomlString = value => JSON.stringify(String(value)).replaceAll('\x7f', '\\u007f');
 const line = value => String(value).split(/[\r\n]/)[0].replace(/[\x00-\x1f\x7f]/g, ' ');
 const read = (file, fallback = null) => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return fallback; throw e; } };
 function save(file, value) {
@@ -559,11 +561,14 @@ async function wake(state, makeText, p, prepare = async () => {}, explicitStartR
   try { definition = loadAgentDefinitions({ cwd: state.cwd, env: selectedEnv }).find(x => x.id === state.agent.id); } catch { /* Fall back to the saved command. */ }
   definition ??= state.agent;
   if (definition.kind !== state.agent.kind) { p.warn('Run pdd autopilot start to select the changed agent profile.'); return false; }
+  const context = JSON.stringify(envelope());
+  // Codex builds each chat command's environment from shell_environment_policy; `set` applies after `inherit`.
   const args = definition.kind === 'codex' ? ['--no-daemon', '--dangerously-bypass-approvals-and-sandbox',
-    '-c', quote(`projects={${JSON.stringify(state.cwd)}={trust_level="trusted"}}`), '-c', quote('check_for_update_on_startup=false')]
+    '-c', quote(`projects={${JSON.stringify(state.cwd)}={trust_level="trusted"}}`), '-c', quote('check_for_update_on_startup=false'),
+    '-c', quote(`shell_environment_policy.set.PDD_AUTOPILOT_CONTEXT=${tomlString(context)}`)]
     : definition.kind === 'claude' ? ['--dangerously-skip-permissions'] : ['--dangerously-skip-permissions'];
   if (definition.kind === 'gemini') args.splice(0, 1, '--yolo');
-  const childEnv = { ...keepEnv(p.env), ...definition.env, HOME: state.environment?.HOME ?? p.env.HOME, PDD_AUTOPILOT_CONTEXT: JSON.stringify(envelope()) };
+  const childEnv = { ...keepEnv(p.env), ...definition.env, HOME: state.environment?.HOME ?? p.env.HOME, PDD_AUTOPILOT_CONTEXT: context };
   for (const variable of ['CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME']) {
     if (state.environment?.[variable]) childEnv[variable] = state.environment?.[variable]; else delete childEnv[variable];
   }
