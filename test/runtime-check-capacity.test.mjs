@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, rmSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, rmSync, readdirSync, mkdirSync, unlinkSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { runCheck } from '../src/runtime-client.mjs';
+import { listRuntimeJobs } from '../src/runtime-slots.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
 import { fakeRuntime, harbor, ordinaryCapabilities, portsFor, storyTest } from './runtime-fake.mjs';
 
@@ -33,7 +34,8 @@ async function memoryRuntime(setup, handlers = {}, extraPorts = {}) {
     const url = new URL(input), method = init.method ?? 'GET';
     if (url.pathname === '/v1/capacity') {
       fake.capacities++;
-      return Response.json({ error: { code: 'not-found' } }, { status: 404 });
+      const reply = handlers.capacity ? await handlers.capacity(fake) : { status: 404, json: { error: { code: 'not-found' } } };
+      return Response.json(reply.json ?? {}, { status: reply.status, headers: reply.headers });
     }
     if (method === 'POST' && url.pathname === '/v1/lint') {
       const { request, tar } = await decode(init.body), sources = sourcesFrom(tar);
@@ -126,6 +128,23 @@ test('CAPACITY direct 429: unknown usage never allocates another ID, claim or Ch
   assert.ok(fake.gets.includes(result.json.rows[0].request_id)); assert.equal(read.json.rows[0].state, 'unknown');
 });
 
+test('CAPACITY duplicate report surfaces conflict on a direct 429', async t => {
+  const setup = harbor(t);
+  const { fake, ...made } = await memoryRuntime(setup, { check: request => {
+    const answer = capacity(fake, request.requestId);
+    answer.report = { provider_calls: 1, accounting_complete: false };
+    answer.error = { code: 'server-full', details: { retryable: true, retry_after: 1 } };
+    return { status: 429, json: answer };
+  } });
+  const result = await runMemory(setup, fake, made, ['place-order'], { '--json': true, '--timeout': 1 });
+  const row = result.json.rows[0];
+  assert.deepEqual({ posts: fake.checkPosts.length, ids: new Set(fake.checkPosts.map(item => item.requestId)).size,
+    claims: dispatchClaimIds(setup, result.json.batch).length, state: row.state, calls: row.calls,
+    unknown_calls: row.unknown_calls, busy: row.busy, can_retry: row.can_retry },
+  { posts: 1, ids: 1, claims: 1, state: 'unknown', calls: 'unknown', unknown_calls: 1, busy: false, can_retry: false });
+  assert.match(row.next_step ?? '', /--read/);
+});
+
 test('CAPACITY terminal contradiction stays unknown through saved read and explicit retry', async t => {
   const setup = harbor(t);
   const { fake, ...made } = await memoryRuntime(setup, { check: request => {
@@ -156,6 +175,32 @@ test('CAPACITY terminal contradiction stays unknown through saved read and expli
   assert.match(text.out, /unknown/i); assert.match(text.out, /pdd test --read/);
   assert.doesNotMatch(text.out + text.err, /You are not charged|No checks ran/);
   assert.equal(fake.checkPosts.length, 1);
+});
+
+test('CAPACITY saved GET contradiction does not create a fresh ID or POST', async t => {
+  const setup = harbor(t);
+  const { fake, ...made } = await memoryRuntime(setup, {
+    check: request => ({ status: 202, json: fake.job(request.requestId, 'check', 'queued', { queue: { ahead: 1 }, report: { samples: [] } }, 0) }),
+    get: id => {
+      const refusal = { code: 'server-full', details: { retryable: true, retry_after: 1 } };
+      const answer = fake.job(id, 'check', 'refused', { refusals: [refusal], report: {
+        dispatch: 'not_started', provider_calls: 0, accounting_complete: true, refusal, samples: [] } }, 0);
+      answer.accounting_complete = false;
+      Object.assign(answer.usage, { known_calls: 0, unknown_calls: 0, accounting_complete: true });
+      return { status: 200, json: answer };
+    },
+  });
+  const initial = await runMemory(setup, fake, made, ['place-order'], { '--json': true, '--timeout': 1 });
+  const batch = initial.json.batch, row = initial.json.rows[0], id = row.request_id;
+  assert.equal(row.state, 'unknown'); assert.equal(row.calls, 'unknown');
+  assert.equal(row.known_calls, 0); assert.equal(row.unknown_calls, 1); assert.equal(row.accounting_complete, false);
+  assert.equal(row.busy, false); assert.equal(row.can_retry, false);
+  assert.equal(fake.checkPosts.length, 1); assert.equal(dispatchClaimIds(setup, batch).length, 1);
+  const read = await invokeMemory(setup, fake, made.ports.fetch, [batch], { '--read': true, '--json': true });
+  assert.equal(read.json.rows[0].request_id, id); assert.equal(read.json.rows[0].calls, 'unknown');
+  assert.equal(read.json.rows[0].unknown_calls, 1); assert.equal(read.json.rows[0].busy, false);
+  assert.equal(fake.checkPosts.length, 1); assert.equal(dispatchClaimIds(setup, batch).length, 1);
+  assert.deepEqual(fake.gets, [id, id]);
 });
 
 test('CAPACITY missing, malformed or conflicting accounting surfaces fail closed', async t => {
@@ -206,6 +251,46 @@ test('CAPACITY complete zero remains retryable beyond three attempts; saved read
   const retry = await invokeMemory(setup, fake, made.ports.fetch, [], { '--retry': initial.json.batch, '--json': true, '--timeout': 1 });
   assert.ok(fake.checkPosts.length > before.posts, retry.err + retry.out);
   assert.ok(dispatchClaimIds(setup, initial.json.batch).length > before.claims);
+});
+
+test('CAPACITY revalidates saved proof after admission wait and releases its unsent reservation', async t => {
+  const setup = harbor(t); let made, mutationCount = 0, batchName, holderPath;
+  const { fake, ...ports } = await memoryRuntime(setup, { check: request => {
+    const answer = capacity(fake, request.requestId);
+    answer.error = { code: 'server-full', details: { retryable: true, retry_after: 1 } };
+    if (!holderPath) {
+      const directory = join(setup.state, 'slots', encodeURIComponent(new URL(fake.origin).host));
+      mkdirSync(directory, { recursive: true, mode: 0o700 });
+      holderPath = join(directory, 'held.json');
+      writeFileSync(holderPath, JSON.stringify({ id: 'held', state: 'active', pid: process.pid, kind: 'check', started_at: ports.clock.now, request_ids: [] }));
+      batchName = readdirSync(join(setup.state, 'batches')).find(name => saved(setup, name).rows.some(row => row.request_ids.includes(request.requestId)));
+    }
+    return { status: 429, json: answer };
+  } }, { sleep: async ms => {
+    made.clock.now += ms;
+    const directory = join(setup.state, 'slots', encodeURIComponent(new URL(fake.origin).host));
+    const records = readdirSync(directory).filter(name => name.endsWith('.json')).map(name => {
+      try { return JSON.parse(readFileSync(join(directory, name), 'utf8')); } catch { return null; }
+    }).filter(Boolean);
+    if (!mutationCount && records.some(record => record.id === 'held') && records.some(record => record.state === 'waiting')) {
+      const id = fake.checkPosts[0].requestId, path = join(setup.state, 'batches', batchName, `${id}.admission.json`);
+      const receipt = JSON.parse(readFileSync(path, 'utf8'));
+      receipt.accounting_complete = false; writeFileSync(path, JSON.stringify(receipt)); mutationCount++;
+      unlinkSync(holderPath);
+    }
+    await new Promise(done => setImmediate(done));
+  } });
+  fake.origin = 'https://capacity-recheck.invalid'; ports.ports.env.PDD_RUNTIME_URL = fake.origin;
+  ports.ports.env.PDD_MAX_JOBS = '1';
+  made = ports;
+  const result = await runMemory(setup, fake, ports, ['place-order'], { '--json': true, '--timeout': 1 });
+  const row = result.json.rows[0], batch = result.json.batch;
+  assert.equal(mutationCount, 1); assert.equal(fake.checkPosts.length, 1);
+  assert.equal(dispatchClaimIds(setup, batch).length, 1);
+  assert.equal(row.state, 'unknown'); assert.equal(row.calls, 'unknown');
+  assert.equal(row.unknown_calls, 1); assert.equal(saved(setup, batch).rows[0].capacity_uncertain, true);
+  assert.equal(row.busy, false); assert.equal(row.can_retry, false);
+  assert.deepEqual(await listRuntimeJobs({ stateDir: setup.state, origin: fake.origin }), { jobs: [] });
 });
 
 test('RESTART accounting aggregates original and replacement in JSON, text and cache', async t => {
@@ -275,6 +360,112 @@ test('RESTART recognizes report refusal and keeps one replacement with the origi
   assert.ok(fake.checkPosts.every(request => request.max_calls === 7));
   assert.equal(dispatchClaimIds(setup, result.json.batch).length, 2);
   assert.equal(result.json.rows[0].calls, 'unknown');
+});
+
+test('ACCOUNTING queued and running snapshots do not poison a complete terminal receipt', async t => {
+  const setup = harbor(t); let reads = 0;
+  const { fake, ...made } = await memoryRuntime(setup, {
+    check: request => ({ status: 202, json: fake.job(request.requestId, 'check', 'queued', { queue: { ahead: 1 }, report: { samples: [] } }, 0) }),
+    get: id => {
+      reads++;
+      if (reads === 1) {
+        const running = fake.job(id, 'check', 'running', { report: { samples: [] } }, 1);
+        Object.assign(running.usage, { known_calls: 1, unknown_calls: 1, accounting_complete: false });
+        return { status: 200, json: running };
+      }
+      const passed = fake.job(id, 'check', 'passed', { exitCode: 0, report: { samples: [], accounting_complete: true } }, 2);
+      passed.accounting_complete = true;
+      Object.assign(passed.usage, { known_calls: 2, unknown_calls: 0, accounting_complete: true });
+      return { status: 200, json: passed };
+    },
+  });
+  const result = await runMemory(setup, fake, made, ['place-order'], { '--json': true, '--timeout': 1, '--cache-clear': true });
+  const row = result.json.rows[0], batch = result.json.batch;
+  assert.equal(row.state, 'passed'); assert.equal(row.calls, 2);
+  assert.equal(row.known_calls, 2); assert.equal(row.unknown_calls, 0); assert.equal(row.accounting_complete, true);
+  assert.equal(fake.checkPosts.length, 1); assert.ok(reads >= 2);
+  const observations = JSON.parse(readFileSync(join(setup.state, 'batches', batch, `${row.request_id}.observations.json`), 'utf8'));
+  assert.deepEqual(observations.map(answer => answer.state), ['queued', 'running']);
+  const cached = JSON.parse(readFileSync(join(setup.repo, '.pdd/cache/test/stories.json'), 'utf8')).stories['user_stories/place-order.md'];
+  assert.equal(cached.outcome, 'passed'); assert.ok(cached.pass);
+  const later = await invokeMemory(setup, fake, made.ports.fetch, ['place-order'], { '--json': true }, true);
+  assert.equal(later.json.rows[0].cached, true); assert.equal(fake.checkPosts.length, 1);
+});
+
+test('ACCOUNTING complete saved receipt keeps calls total when known_calls is lower', async t => {
+  const setup = harbor(t);
+  const receipt = id => {
+    const answer = fake.job(id, 'check', 'passed', { exitCode: 0, report: { samples: [], accounting_complete: true } }, 3);
+    answer.accounting_complete = true;
+    Object.assign(answer.usage, { known_calls: 2, unknown_calls: 0, accounting_complete: true });
+    return answer;
+  };
+  const { fake, ...made } = await memoryRuntime(setup, {
+    check: request => ({ status: 200, json: receipt(request.requestId) }),
+    get: id => ({ status: 200, json: receipt(id) }),
+  });
+  const initial = await runMemory(setup, fake, made, ['place-order'], { '--json': true, '--cache-clear': true });
+  const first = initial.json.rows[0], batch = initial.json.batch;
+  assert.equal(first.calls, 3); assert.equal(first.unknown_calls, 0);
+  assert.equal(first.accounting_complete, true);
+  assert.match(initial.json.summary_line, /3 AI calls$/);
+  const direct = await invokeMemory(setup, fake, made.ports.fetch, [first.request_id], { '--read': true, '--json': true });
+  const directRow = direct.json.rows[0];
+  assert.equal(directRow.calls, 3); assert.equal(directRow.unknown_calls, 0);
+  assert.equal(directRow.accounting_complete, true); assert.match(direct.json.summary_line, /3 AI calls$/);
+  assert.equal(fake.checkPosts.length, 1);
+  const read = await invokeMemory(setup, fake, made.ports.fetch, [batch], { '--read': true, '--json': true });
+  const savedRow = read.json.rows[0];
+  assert.equal(savedRow.calls, 3); assert.equal(savedRow.unknown_calls, 0);
+  assert.equal(savedRow.accounting_complete, true); assert.match(read.json.summary_line, /3 AI calls$/);
+  assert.equal(fake.checkPosts.length, 1);
+});
+
+test('ACCOUNTING known calls above the reported total remains unknown', async t => {
+  const setup = harbor(t);
+  const { fake, ...made } = await memoryRuntime(setup, { check: request => {
+    const answer = fake.job(request.requestId, 'check', 'passed', { exitCode: 0, report: { samples: [], accounting_complete: true } }, 3);
+    answer.accounting_complete = true;
+    Object.assign(answer.usage, { known_calls: 4, unknown_calls: 0, accounting_complete: true });
+    return { status: 200, json: answer };
+  } });
+  const result = await runMemory(setup, fake, made, ['place-order'], { '--json': true });
+  const row = result.json.rows[0];
+  assert.equal(row.calls, 'unknown'); assert.equal(row.known_calls, 4);
+  assert.equal(row.unknown_calls, 1); assert.equal(row.accounting_complete, false);
+});
+
+test('ACCOUNTING terminal unknown history stays incomplete after a same-ID complete receipt', async t => {
+  const setup = harbor(t);
+  const { fake, ...made } = await memoryRuntime(setup, {
+    check: request => {
+      const unknown = fake.job(request.requestId, 'check', 'unknown', { exitCode: 3, report: { samples: [], accounting_complete: false } }, 2);
+      unknown.accounting_complete = false;
+      Object.assign(unknown.usage, { known_calls: 2, unknown_calls: 1, accounting_complete: false });
+      return { status: 200, json: unknown };
+    },
+    get: id => {
+      const passed = fake.job(id, 'check', 'passed', { exitCode: 0, report: { samples: [], accounting_complete: true } }, 3);
+      passed.accounting_complete = true;
+      Object.assign(passed.usage, { known_calls: 3, unknown_calls: 0, accounting_complete: true });
+      return { status: 200, json: passed };
+    },
+  });
+  const initial = await runMemory(setup, fake, made, ['place-order'], { '--json': true });
+  const batch = initial.json.batch, id = initial.json.rows[0].request_id;
+  assert.equal(initial.json.rows[0].calls, 'unknown'); assert.equal(initial.json.rows[0].known_calls, 2);
+  assert.equal(initial.json.rows[0].unknown_calls, 1); assert.equal(initial.json.rows[0].accounting_complete, false);
+  const read = await invokeMemory(setup, fake, made.ports.fetch, [batch], { '--read': true, '--json': true });
+  const row = read.json.rows[0];
+  assert.equal(row.request_id, id); assert.equal(row.calls, 'unknown'); assert.equal(row.known_calls, 3);
+  assert.equal(row.unknown_calls, 1); assert.equal(row.accounting_complete, false);
+  const observations = JSON.parse(readFileSync(join(setup.state, 'batches', batch, `${id}.observations.json`), 'utf8'));
+  assert.ok(observations.some(answer => answer.state === 'unknown' && answer.usage.unknown_calls === 1));
+  assert.equal(fake.checkPosts.length, 1); assert.deepEqual(fake.gets, [id]);
+  const direct = await invokeMemory(setup, fake, made.ports.fetch, [id], { '--read': true, '--json': true });
+  assert.equal(direct.json.rows[0].calls, 'unknown'); assert.equal(direct.json.rows[0].known_calls, 3);
+  assert.equal(direct.json.rows[0].unknown_calls, 1); assert.equal(direct.json.rows[0].accounting_complete, false);
+  assert.equal(fake.checkPosts.length, 1); assert.deepEqual(fake.gets, [id, id]);
 });
 
 test('CAPACITY1: confirmed zero-execution capacity is retried until the wait ends, then busy, never a test failure', async t => {
@@ -362,7 +553,9 @@ test('CAPACITY3: admission backpressure honors Retry-After before a fresh ID', a
   const setup = harbor(t); let now = 0, firstAt;
   const fake = await fakeRuntime(t, (e, f) => {
     if (e.command === 'check' && checkPosts(f).length === 1) { firstAt = now; return { status: 503, headers: { 'retry-after': '7' }, json: {
-      dispatch: 'not_started', job_created: false, error: { code: 'check-queue-full', details: { retryable: true, retry_after: 2 } } } }; }
+      dispatch: 'not_started', provider_calls: 0, accounting_complete: true,
+      usage: { calls: 0, known_calls: 0, unknown_calls: 0, accounting_complete: true },
+      job_created: false, error: { code: 'check-queue-full', details: { retryable: true, retry_after: 2 } } } }; }
     if (e.command === 'check') assert.ok(now - firstAt >= 7000);
     return f.normal(e);
   });
@@ -482,7 +675,9 @@ test('CAPACITY10: unknown dispatched jobs still occupy four configured slots; he
 test('CAPACITY11: explicit recovery honors saved admission Retry-After across invocations', async t => {
   const setup = harbor(t);
   const fake = await fakeRuntime(t, (e, f) => e.command === 'check' ? { status: 503, headers: { 'retry-after': '300' }, json: {
-    dispatch: 'not_started', error: { code: 'check-queue-full', details: { retryable: true, retry_after: 300 } } } } : f.normal(e));
+    dispatch: 'not_started', provider_calls: 0, accounting_complete: true,
+    usage: { calls: 0, known_calls: 0, unknown_calls: 0, accounting_complete: true },
+    error: { code: 'check-queue-full', details: { retryable: true, retry_after: 300 } } } } : f.normal(e));
   const first = await run(setup, fake, ['place-order'], { '--json': true, '--timeout': 1 }); assert.equal(first.code, 5); assert.equal(checkPosts(fake).length, 1);
   const next = await run(setup, fake, [], { '--retry': first.json.batch, '--json': true });
   assert.equal(next.code, 5); assert.equal(checkPosts(fake).length, 1);

@@ -66,8 +66,13 @@
     },
     {
       "id": "same-id-reconciliation",
-      "given": "after restart replacement, a complete-looking terminal receipt is read for the original request ID; no reconciliation signal is defined by the Runtime contract",
+      "given": "after restart replacement, a complete-looking terminal receipt is read for the original request ID whose earlier correctly identified unknown receipt had incomplete accounting; no reconciliation signal is defined by the Runtime contract",
       "required_observation": "preserve the earlier raw observation and unknown accounting for that component; only an explicit future Runtime reconciliation contract may resolve it; local lease release remains separate"
+    },
+    {
+      "id": "same-id-progress-accounting",
+      "given": "one request ID has queued and running progress snapshots with partial accounting, followed by a complete terminal receipt",
+      "required_observation": "preserve raw progress snapshots; use terminal accounting for that ID; allow complete output and cache evidence when the terminal receipt and remaining run evidence are complete"
     },
     {
       "id": "structured-refusal-locations",

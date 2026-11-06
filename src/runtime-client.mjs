@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 2e95d8204810edc39bc89217bea0d979d09d8d75d1e1cef62535f6aae3f11488).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: d091d31f3f3448ec47f9e4d9dfd6c89a7c53a281d33981fc191d49fa86311671).
 import {readEvidenceEligibility} from './workflow-runner.mjs';
 import {allRuns} from './workflow-runs.mjs';
 import {assessNativeEvidence, resultLines, usableResult} from './workflow-results.mjs';
@@ -510,29 +510,27 @@ function safeAdmission(reply) {
     && !(report && Object.hasOwn(report, 'provider_calls') && report.provider_calls !== 0) && !report?.samples?.some(sample => sample?.steps?.some(step => step?.checks?.length));
 }
 function accountingProof(record) {
-  const usage = record?.usage, result = record?.result, report = result?.report ?? record?.report ?? {};
-  if (!isObject(usage) || !isObject(report)) return false;
+  const usage = record?.usage, result = record?.result, reports = [record?.report, result?.report].filter(isObject);
+  if (!isObject(usage)) return false;
   const supplied = (object, key) => isObject(object) && Object.hasOwn(object, key);
-  const dispatches = [[record, 'dispatch'], [usage, 'dispatch'], [result, 'dispatch'], [report, 'dispatch']].filter(([object, key]) => supplied(object, key)).map(([object, key]) => object[key]);
+  const surfaces = [record, usage, result, ...reports].filter(isObject);
+  const dispatches = surfaces.filter(object => supplied(object, 'dispatch')).map(object => object.dispatch);
   if (!dispatches.length || dispatches.some(value => value !== 'not_started')) return false;
-  const flagSurfaces = [[record, 'accounting_complete'], [usage, 'accounting_complete'], [result, 'accounting_complete'], [report, 'accounting_complete']]
-    .filter(([object, key]) => supplied(object, key)).map(([object, key]) => object[key]);
+  const flagSurfaces = surfaces.filter(object => supplied(object, 'accounting_complete')).map(object => object.accounting_complete);
   if (!flagSurfaces.length || flagSurfaces.some(value => value !== true)) return false;
-  const counters = [[record, 'calls'], [record, 'known_calls'], [record, 'unknown_calls'], [usage, 'calls'], [usage, 'known_calls'], [usage, 'unknown_calls'],
-    [record, 'provider_calls'], [usage, 'provider_calls'], [result, 'calls'], [result, 'known_calls'], [result, 'unknown_calls'], [result, 'provider_calls'],
-    [report, 'calls'], [report, 'known_calls'], [report, 'unknown_calls'], [report, 'provider_calls']];
+  const counters = surfaces.flatMap(object => ['calls', 'known_calls', 'unknown_calls', 'provider_calls'].map(key => [object, key]));
   if (!supplied(usage, 'calls') || usage.calls !== 0 || !counters.some(([object, key]) => key === 'provider_calls' && supplied(object, key))) return false;
   for (const [object, key] of counters) if (supplied(object, key)) {
     const value = object[key];
     if (!Number.isSafeInteger(value) || value < 0 || value !== 0) return false;
   }
-  if ([record, usage, result, report].some(object => supplied(object, 'job_created') && object.job_created !== false)) return false;
-  if (supplied(record, 'provider_calls') && supplied(report, 'provider_calls') && record.provider_calls !== report.provider_calls) return false;
+  if (surfaces.some(object => supplied(object, 'job_created') && object.job_created !== false)) return false;
   if (supplied(record, 'calls') && supplied(usage, 'calls') && record.calls !== usage.calls) return false;
   if (supplied(usage, 'known_calls') && supplied(usage, 'calls') && usage.known_calls !== usage.calls) return false;
   if (supplied(usage, 'unknown_calls') && usage.unknown_calls !== 0) return false;
-  if ([result, report].some(object => supplied(object, 'criterion_results') && (!Array.isArray(object.criterion_results) || object.criterion_results.length))) return false;
-  for (const surface of [result, report]) if (supplied(surface, 'samples')) {
+  const resultSurfaces = [result, ...reports].filter(isObject);
+  if (resultSurfaces.some(object => supplied(object, 'criterion_results') && (!Array.isArray(object.criterion_results) || object.criterion_results.length))) return false;
+  for (const surface of resultSurfaces) if (supplied(surface, 'samples')) {
     if (!Array.isArray(surface.samples)) return false;
     for (const sample of surface.samples) {
       if (!isObject(sample) || !Array.isArray(sample.steps)) return false;
@@ -541,7 +539,7 @@ function accountingProof(record) {
       }
     }
   }
-  if ([record, result, report].some(object => supplied(object, 'checks') && (!Array.isArray(object.checks) || object.checks.length))) return false;
+  if ([record, ...resultSurfaces].some(object => supplied(object, 'checks') && (!Array.isArray(object.checks) || object.checks.length))) return false;
   return true;
 }
 function capacityRefusal(refusals, headers) {
@@ -589,25 +587,28 @@ function capacityHistorySafe(context, row) {
     const latest = context.store.read(join(context.folder, `${id}.json`));
     const prior = context.store.read(join(context.folder, `${id}.observations.json`));
     const history = [...(Array.isArray(prior) ? prior : []), ...(latest ? [latest] : [])];
+    const terminalHistory = history.filter(answer => accountingEnd(answer, id));
+    const firstTerminal = history.findIndex(answer => accountingEnd(answer, id));
+    const progressConflict = history.some((answer, index) => !accountingEnd(answer, id)
+      && (!['queued', 'running'].includes(answer?.state) || index > firstTerminal));
     const admissionCandidate = isAdmissionCapacityRecord(admission) && admissionCapacityCandidate(admission);
-    const answerCandidates = history.filter(answer => checkCapacityCandidate(answer));
+    const answerCandidates = terminalHistory.filter(answer => checkCapacityCandidate(answer));
     if (!admissionCandidate && !answerCandidates.length) continue;
     found = true;
     if (admissionCandidate && (!admissionMatches(admission, id) || !accountingProof(admission) || history.some(answer => !checkCapacityCandidate(answer)))) return false;
     if (answerCandidates.some(answer => !accountingProof(answer))) return false;
-    if (answerCandidates.length !== history.length) return false;
+    if (answerCandidates.length !== terminalHistory.length || progressConflict) return false;
   }
   return found && accumulatedAccounting(context, row).accounting_complete === true;
 }
 function usagePart(record) {
-  const usage = isObject(record?.usage) ? record.usage : {}, result = isObject(record?.result) ? record.result : {}, report = record?.result?.report ?? record?.report ?? {};
+  const usage = isObject(record?.usage) ? record.usage : {}, result = isObject(record?.result) ? record.result : {}, reports = [record?.report, result?.report].filter(isObject);
   const counter = value => Number.isSafeInteger(value) && value >= 0 ? value : undefined;
-  const surfaces = [record, usage, result, report];
+  const surfaces = [record, usage, result, ...reports];
   const values = key => surfaces.filter(source => Object.hasOwn(source, key)).map(source => counter(source[key]));
   const invalid = ['calls', 'known_calls', 'unknown_calls', 'provider_calls'].some(key => values(key).some(value => value === undefined));
   const conflicting = ['calls', 'known_calls', 'unknown_calls', 'provider_calls'].some(key => new Set(values(key).filter(value => value !== undefined)).size > 1);
-  const flags = [[record, 'accounting_complete'], [usage, 'accounting_complete'], [result, 'accounting_complete'], [report, 'accounting_complete']]
-    .filter(([source, key]) => Object.hasOwn(source, key)).map(([source, key]) => source[key]);
+  const flags = surfaces.filter(source => Object.hasOwn(source, 'accounting_complete')).map(source => source.accounting_complete);
   const invalidFlag = flags.some(value => typeof value !== 'boolean');
   const conflictingFlags = new Set(flags.filter(value => typeof value === 'boolean')).size > 1;
   const callValues = values('calls'), knownValues = values('known_calls'), unknownValues = values('unknown_calls'), providerValues = values('provider_calls');
@@ -617,7 +618,7 @@ function usagePart(record) {
   const callLowerBound = knownValues.length ? knownRaw ?? 0 : Math.max(...callValues.filter(value => value !== undefined), 0);
   const known = Math.max(callLowerBound, providerCalls ?? 0);
   const complete = !invalid && !conflicting && !invalidFlag && !conflictingFlags && !flags.includes(false) && calls !== undefined
-    && (unknownRaw ?? 0) === 0 && (knownRaw === undefined || knownRaw === calls) && (providerCalls === undefined || providerCalls === calls);
+    && (unknownRaw ?? 0) === 0 && (knownRaw === undefined || knownRaw <= calls) && (providerCalls === undefined || providerCalls === calls);
   return { known, unknown: complete ? 0 : Math.max(1, unknownRaw ?? 0), complete, total: complete ? calls : null };
 }
 function attemptAccounting(context, id) {
@@ -626,10 +627,12 @@ function attemptAccounting(context, id) {
   const admission = context.store.read(join(context.folder, `${id}.admission.json`));
   const history = [...(Array.isArray(observations) ? observations : []), ...(answer ? [answer] : [])]
     .filter((item, index, list) => list.findIndex(other => isDeepStrictEqual(other, item)) === index);
+  const terminalHistory = history.filter(item => accountingEnd(item, id));
+  const accountingHistory = terminalHistory.length ? terminalHistory : history.slice(-1);
   const admissionCandidate = isAdmissionCapacityRecord(admission) && admissionCapacityCandidate(admission);
   const unsafeAdmission = admissionCandidate && !accountingProof(admission);
   const admissionConflict = admissionCandidate && (!admissionMatches(admission, id) || unsafeAdmission || history.some(item => !checkCapacityCandidate(item)));
-  const records = [...history, ...(admission ? [admission] : [])];
+  const records = [...accountingHistory, ...(admission ? [admission] : [])];
   if (!records.length) return { known: 0, unknown: 1, complete: false, total: null };
   const parts = records.map(usagePart), known = Math.max(...parts.map(part => part.known));
   const unknown = Math.max(1, ...parts.map(part => part.unknown));
@@ -688,6 +691,8 @@ function markBusy(context, row, wait, observedAt = context.ports.now(), legacy =
 
 const restarted = answer => answer?.command === 'check' && answer.state === 'unknown' && [answer.result?.report?.refusal, ...(Array.isArray(answer.result?.refusals) ? answer.result.refusals : [])].some(item => item?.code === 'service-restarted');
 const confirmedEnd = answer => ['passed', 'failed', 'refused', 'not_run'].includes(answer?.state) || restarted(answer);
+const accountingEnd = (answer, id) => confirmedEnd(answer)
+  || answer?.command === 'check' && answer.state === 'unknown' && answer.requestId === id && answer.id === id;
 function localLimit(context) {
   if (context.localLimit !== undefined) return context.localLimit;
   const raw = context.ports.env.PDD_MAX_JOBS;
@@ -1084,8 +1089,11 @@ function applyAnswer(row, answer, context, observedWait = null, observedAt = con
   const knownIdentity = value => typeof value === 'string' && value.trim() && value.trim().toLowerCase() !== 'unknown';
   context.observedTestIdentities ??= [];
   const models = [answer?.usage?.requested_model, answer?.result?.report?.evaluation?.requested_model];
+  const accounting = context.store && context.folder && row.request_ids.length ? accumulatedAccounting(context, row) : usagePart(answer);
+  const terminal = accountingEnd(answer, row.request_ids.at(-1));
   context.observedTestIdentities.push({ engine_sha: knownIdentity(answer?.engine_sha) ? answer.engine_sha : null,
-    models: models.filter(knownIdentity), complete: !!row.cache_identity && usagePart(answer).complete && row.accounting_complete !== false && !capacityUncertain,
+    models: models.filter(knownIdentity), terminal, complete: terminal && !!row.cache_identity
+      && (accounting.accounting_complete ?? accounting.complete) === true && !capacityUncertain,
     observed_at: new Date(context.ports.now()).toISOString() });
   const view = projectAnswer(answer, { origin: context.origin, secrets: context.secrets, steps: row.steps ?? [], criterionTexts: row.criterion_texts ?? {}, test: row.test, capacityUncertain });
   const advice = noVerdictAdvice(answer, view);
@@ -1100,7 +1108,9 @@ function applyAnswer(row, answer, context, observedWait = null, observedAt = con
     rerun: view.rerun ?? row.rerun,
     engine_sha: view.engine_sha, provider: view.provider, progress: view.progress, ahead: view.ahead,
     draft: view.draft ?? row.draft });
-  if (row.request_ids.length) Object.assign(row, accumulatedAccounting(context, row));
+  if (row.request_ids.length) Object.assign(row, context.store && context.folder ? accumulatedAccounting(context, row) : {
+    calls: accounting.complete ? accounting.total : 'unknown', known_calls: accounting.known,
+    unknown_calls: accounting.complete ? 0 : accounting.unknown, accounting_complete: accounting.complete });
   const wait = capacitySafe ? checkCapacity(answer) : null;
   if (capacityUncertain) markCapacityUnknown(context, row);
   else if (wait !== null) markBusy(context, row, observedWait ?? wait, observedAt, context.reading && observedWait === null);
@@ -1240,6 +1250,13 @@ async function sendCheckAttempt(context, row) {
   const attempt = row.request_ids.length, previousCalls = row.restart_used || row.restart_pending ? accumulatedCalls(context, row) : 0;
   if (!await admission(context, 'check', row)) {
     if (context.interrupted && interruptedAdmissions.has(row)) Object.assign(row, { state: 'not_run', calls: previousCalls, phase: 'local', note: { code: null, message: 'Stopped before sending.' } });
+    return;
+  }
+  // Admission can wait while another reader records a conflicting receipt.
+  // Revalidate while holding the local reservation, before creating a claim or UUID.
+  if (row.request_ids.length && (row.busy || row.capacity_uncertain) && !row.restart_pending && !capacityHistorySafe(context, row)) {
+    await finishReservation(context, row, { state: 'not_run' });
+    markCapacityUnknown(context, row);
     return;
   }
   adoptClaims(context, row);
@@ -2077,14 +2094,16 @@ async function runRequest(context, id) {
 // Refresh only caches owned by this exact repository, runtime and signed-in account.
 async function refreshCheckBatches(context, identity, origin, id, answer) {
   const { store, root } = context, batches = join(store.dir, 'batches');
-  let names;
+  let names, owner = null;
   try { names = readdirSync(batches); } catch { return; }
   for (const name of names.filter(name => BATCH.test(name))) {
     try {
       const folder = join(batches, name), saved = store.read(join(folder, 'batch.json'));
       if (!saved || saved.root !== root || saved.origin !== origin || saved.login !== identity.login
         || String(saved.user_id) !== String(identity.userId)) continue;
-      if (!saved.rows?.some(row => row.request_ids?.includes(id))) continue;
+      const matchingRow = saved.rows?.find(row => row.request_ids?.includes(id));
+      if (!matchingRow) continue;
+      owner ??= { batch: name, folder, row: matchingRow };
       const cached = store.read(join(folder, `${id}.json`));
       if (sameJob(cached, id, 'check') && ['passed', 'failed', 'refused'].includes(cached.state)
         && !['passed', 'failed', 'refused'].includes(answer.state)) continue;
@@ -2108,6 +2127,7 @@ async function refreshCheckBatches(context, identity, origin, id, answer) {
       }
     } catch { /* A cache failure must not hide an authoritative read or other caches. */ }
   }
+  return owner;
 }
 
 // A read is observation only; it does not replay the call or settle backend accounting.
@@ -2127,8 +2147,9 @@ async function runCallRead(context, id) {
   if (answer?.command === 'check') {
     Object.assign(context, { origin, secrets: [identity.token] });
     const row = { test: '-', story: '-', title: '-', phase: 'server', request_ids: [id], state: 'unknown', refusals: [], warnings: [] };
+    const owner = await refreshCheckBatches(context, identity, origin, id, answer);
+    if (owner) { context.batch = owner.batch; context.folder = owner.folder; }
     applyAnswer(row, answer, context);
-    await refreshCheckBatches(context, identity, origin, id, answer);
     return printResult(context, [row], { recovery: `pdd test --read ${id}` });
   }
   const state = answer?.state ?? 'unknown', exitCode = exitCodeFor([{ state }]);
@@ -2741,9 +2762,11 @@ async function finishTestAttempts(cache, rows, capture) {
   await cacheTransaction(cache, data => {
     const observations = cache.context.observedTestIdentities ?? [];
     const previous = data.latest_identity;
-    const identity = { engine_sha: observations[0]?.engine_sha ?? null,
-      requested_model: observations[0]?.models[0] ?? null };
-    const complete = observations.length > 0 && observations.every(item => item.complete && observedIdentityMatches(item, identity));
+    const identity = { engine_sha: observations.find(item => item.engine_sha)?.engine_sha ?? null,
+      requested_model: observations.flatMap(item => item.models).find(Boolean) ?? null };
+    const terminalObservations = observations.filter(item => item.terminal);
+    const complete = terminalObservations.length > 0 && terminalObservations.every(item => item.complete)
+      && observations.every(item => observedIdentityMatches(item, identity));
     const marks = previous?.in_progress ?? [];
     const ownMark = mark => !!cache.mark && mark.token === cache.mark.token;
     const clean = marks.length === 1 && ownMark(marks[0]) && !cache.context.cacheReadInvocation && !cache.context.checkRunFailed && Number.isFinite(cache.context.startedAt)

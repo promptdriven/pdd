@@ -134,6 +134,11 @@
       "id": "strict-duplicate-proof",
       "given": "direct Check capacity admission has missing or malformed calls/provider evidence, conflicting duplicate counters, dispatch flags or completion flags",
       "required_observation": "no new Check UUID/claim/POST; preserve raw response and show unknown accounting without busy or zero-charge metadata"
+    },
+    {
+      "id": "nested-report-conflict",
+      "given": "direct 429 capacity receipt has top-level report provider_calls=1/accounting_complete=false and result.report provider_calls=0/accounting_complete=true",
+      "required_observation": "treat duplicate report surfaces as conflicting proof; preserve the receipt and use one Check ID/claim/POST with unknown accounting, not busy retry"
     }
   ]
 }
