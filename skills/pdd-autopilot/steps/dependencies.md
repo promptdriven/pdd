@@ -15,8 +15,12 @@ their existing owners. It is distinct from steps/handoff.md.
   `pdd dependencies prepare`. Examine the actual
   trusted requirements/source packet, and send `{request,analysis}` to
   `pdd dependencies complete --input -`. Keep required source locators/revisions.
-  Analyze a new issue's impact in both directions before replacing old heads.
-- Reuse saved current reviews and completed unaffected impact. A stale or
+  For each subject, answer one question: does it need any open issue first? Impact
+  analysis of other issues is optional. A request names at most 10 subjects, new
+  ones first; the next request carries the rest.
+- Reuse saved current reviews. A new or unrelated edited issue does not make them
+  stale. A "blocked by" link that a person sets in GitHub applies at once; it needs
+  no analysis. A stale or
   unchecked review is refreshed through the ordinary `pdd dependencies prepare`,
   analysis and `pdd dependencies complete --input -` path; do not treat its old
   result as current. Keep questions and unknown facts pending. After a review

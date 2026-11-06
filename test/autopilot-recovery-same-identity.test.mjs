@@ -178,18 +178,19 @@ function packetNumbers(text) {
 
 test('public start recovers v2 with real intake', async t => {
  const f=await fixture(t,{name:'bug',agent:'codex'}); const h=await launcherHarness(f);
- // A newly observed candidate is already claimed, so an unchanged stale head
- // must still supply a bounded producer for its missing candidate impact.
+ // A newly observed issue that is claimed elsewhere does not stale the
+ // unchanged review of issue 17: 17 stays current and eligible, and the new
+ // issue is skipped instead of queued.
  const candidateIssue=makeIssue(103), inputIssues=[h.oldIssue,candidateIssue];
  const input=await readDependencySnapshot({cwd:f.source,repository},graphPorts({issues:inputIssues,comments:{17:[reviewComment(h.oldIssue,[h.oldIssue],'501')]}}));
  const owners={localOwner:'coordinator-a',claims:[{issue:candidateIssue.html_url,active:true,owner:null}],runs:[],runsKnown:true};
  const intakePorts={snapshots:{read:async()=>({snapshot:structuredClone(input.snapshot)})},owners:{read:async()=>reply(owners)},evidence:{read:async()=>reply({source:[],requirements:[]})}};
  const prepared=await prepareDependencyIntake({cwd:f.source,repository},intakePorts);
- assert.deepEqual(prepared.queued,[h.oldIssue.html_url]);
+ assert.deepEqual(prepared.queued,[]); assert.deepEqual(prepared.skipped,[candidateIssue.html_url]);
  const projected=(await import('../src/issue-dependencies.mjs')).projectIssueGraph({snapshot:input.snapshot});
- const staleNode=projected.nodes.find(node=>node.key===h.oldIssue.html_url); assert.equal(staleNode.reviewState,'stale'); assert.equal(staleNode.eligible,false);
+ const oldNode=projected.nodes.find(node=>node.key===h.oldIssue.html_url); assert.equal(oldNode.reviewState,'current'); assert.equal(oldNode.eligible,true);
  const reconciled=await reconcileDependencyIntake({cwd:f.source,repository,trigger:'tick',mode:'auto'},intakePorts);
- assert.deepEqual(reconciled.queued,[h.oldIssue.html_url]); assert.equal(reconciled.eligible.includes(h.oldIssue.html_url),false);
+ assert.deepEqual(reconciled.queued,[]); assert.equal(reconciled.eligible.includes(h.oldIssue.html_url),true);
  const initial=await runAutopilotLauncher(h.input,h.ports); assert.equal(initial.exitCode,0,initial.message);
  const state=JSON.parse(readFileSync(h.stateFile));
  const old={version:2,paneId:state.paneId,workspaceId:state.workspaceId,at:1,fingerprint:'older-distinct-semantic-identity',payloadDigest:'old-payload'};

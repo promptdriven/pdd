@@ -118,32 +118,33 @@ function coverageReasons(key, outgoing, coverage, snapshot) {
   return result;
 }
 
+// A review depends only on what it used (its inputs) and the issues it names as
+// prerequisites, at their examined candidate revisions. A new or edited
+// unrelated issue is not part of that answer.
 function freshnessInputs(head, snapshot, issues) {
   const current = new Map([...rowMap(snapshot.inputs), ...[...issues.values()].filter(i => i.revision).map(i => [i.key, i.revision])]);
-  const root = snapshot.repository.toLowerCase(), candidates = rowMap(head.candidates);
-  const required = new Map(head.inputs.map(i => [i.key, i.revision]));
-  for (const i of issues.values()) if ((i.state !== 'unknown' || snapshot.coverage?.scope === true) && i.key.startsWith(`https://github.com/${root}/issues/`)) {
-    if (candidates.get(i.key) !== i.revision) required.set(i.key, candidates.get(i.key));
-  }
+  const candidates = rowMap(head.candidates), required = new Map(head.inputs.map(i => [i.key, i.revision]));
+  for (const { key } of head.dependencies) if (!required.has(key) && candidates.has(key)) required.set(key, candidates.get(key));
   return { current, deficits: [...required].filter(([key, revision]) => !current.has(key) || current.get(key) !== revision) };
 }
 
 function freshness(head, snapshot, issues) {
   const { current, deficits } = freshnessInputs(head, snapshot, issues);
-  const coverage = coverageRows(snapshot);
+  const coverage = coverageRows(snapshot), headRepository = issueRepository(head.issue);
+  // Only current impacts hosted in the head's root repository that name this head apply.
+  const impacts = snapshot.impacts.filter(i => headRepository && issueRepository(i.host) === headRepository && i.authority !== 'outsider'
+    && (i.reviews ?? []).includes(head.id) && (i.inputs ?? []).every(r => current.get(locator(r.key)) === r.revision));
+  const trusted = i => i.intact && (i.authority === 'trusted' || !i.authority && i.trusted);
+  const affected = i => (i.affected ?? []).some(k => issueKey(k) === head.issue);
+  // A complete trusted impact that names this review as affected queues reanalysis.
+  if (impacts.some(i => i.complete && trusted(i) && affected(i))) return false;
   if (deficits.length && coverage === false) return false;
   for (const [key] of deficits) {
     const issueCandidate = coverageIssueKey(key);
     if (!current.has(key) || (coverage !== null && issueCandidate && !coverage.get(issueCandidate)?.reviewImpact)) return false;
-    const headRepository = issueRepository(head.issue);
-    const impacts = snapshot.impacts.filter(i => headRepository && issueRepository(i.host) === headRepository
-      && (i.reviews ?? []).includes(head.id)
-      && (i.inputs ?? []).some(r => locator(r.key) === key && r.revision === current.get(key))
-      && (i.inputs ?? []).every(r => current.get(locator(r.key)) === r.revision)
-      && i.authority !== 'outsider');
-    if (impacts.some(i => !i.intact || (i.authority ?? (i.trusted ? 'trusted' : 'unverified')) !== 'trusted'
-      || (i.affected ?? []).some(k => issueKey(k) === head.issue))) return false;
-    if (!impacts.some(i => i.complete && i.intact && (i.authority === 'trusted' || !i.authority && i.trusted))) return false;
+    const covering = impacts.filter(i => (i.inputs ?? []).some(r => locator(r.key) === key && r.revision === current.get(key)));
+    if (covering.some(i => !trusted(i) || affected(i))) return false;
+    if (!covering.some(i => i.complete && trusted(i))) return false;
   }
   return true;
 }

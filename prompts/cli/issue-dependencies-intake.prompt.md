@@ -41,20 +41,16 @@ coordinator identity, not a machine name. Preserve the existing shared claim win
 policy and local run/allocation observations. Another or unknown owner yields a
 skip. Unclaimed reviews use the existing repository coordinator.
 
-First queue unchecked or substantively changed subjects for both-direction impact
-against exact existing heads. Hold a candidate-only gap on an unchanged subject
-for that impact while unclaimed complete-observation work can produce it. If no
-such ordinary subject is available, select one open, idle, unassigned, trusted
-stale subject whose own review inputs are unchanged and whose candidate coverage
-is missing, without a question or required condition. Apply current ownership and
-observation checks before selecting it for the existing review and impact path.
-Do not make its stale graph state ready or invent impact facts. The request
-`issues` lists subjects requiring reviews; `snapshotJson` retains every prior head
-whose coverage must be accounted for. Completed impact may account for unchanged
-heads without an analysis.reviews entry. A positive affected head queues that
-subject on the next prepare; do not require it in the new issue's completion.
-Unexplained omission of a required subject or prior coverage remains invalid.
-Read ownership once for ordinary subjects and any eligible fallback candidates; with none, prepare needs no ownership lookup. Question heads with unchanged input/candidate/head fingerprints need no automatic
+Queue open root subjects whose review is unchecked or stale. Each review answers
+one question: does this issue need any open issue first? Other current reviews stay
+current and need no entry. Unchecked (new) subjects go first, then stale ones,
+newest issue first in each group. One request names at most 10 subjects, so one new
+issue never waits for a large batch; later subjects wait for the next prepare. An
+explicit `--issue` prepare names only that subject. The request `issues` lists the
+selected subjects; `snapshotJson` retains their prior heads, which each review's
+base must name. A positive affected head queues that subject on the next prepare.
+Unexplained omission of a required subject remains invalid.
+Read ownership once for the selected subjects; with none, prepare needs no ownership lookup. Question heads with unchanged input/candidate/head fingerprints need no automatic
 semantic redelivery. Explicit prepare of a named issue may request another look.
 
 The request `id` is an opaque analysis-request identity, `issues` names the selected
@@ -87,10 +83,12 @@ empty. Pass cwd to effect recovery, defaulting to empty for a direct caller.
 Default snapshot reads bind readDependencySnapshot with these same arguments. It rereads
 canonical state; a still-applicable completion also rereads current ownership; carried request IDs or old trust
 flags are not authority. Require each review's issue, candidates and base heads to match the prepared
-scope and current snapshot. Prepared required inputs must be retained; additional
+scope. The subjects, their own heads and the issues their reviews name must be
+unchanged in the current snapshot; a new or edited unrelated issue or review does
+not make completion pending. Prepared required inputs must be retained; additional
 examined locators must match freshly reread current rows. Never trust their
 carried revision or silently omit a required item.
-Reject omitted required reviews/impact coverage or unexplained extra subjects, invalid cycles/self links,
+Reject omitted required reviews or unexplained extra subjects, invalid cycles/self links,
 unsupported analysis and missing reasons. A stale or unknown observation returns
 pending and queues fresh review without edge writes. Questions append a question
 record. Additions append pending intent BEFORE effects and delegate recovery to
@@ -99,7 +97,7 @@ Do not erase existing edges or resolve conflicts by record arrival order.
 The record base must name all heads it resolves. Never record draft prompt approval
 or invent a person's approval words as part of semantic completion.
 
-A new issue requires both-direction impact analysis. Parsed `analysis.impactJson` (empty means none) names all
+Impact analysis is optional. A nonempty parsed `analysis.impactJson` names the
 examined new/changed revisions, affected existing issues and the exact prior review
 heads considered. An impact is stored on a selected issue in `request.repository`;
 only an impact hosted in a graph head's root repository can establish that head's
@@ -107,7 +105,7 @@ freshness. Other repositories' impact comments remain visible but cannot overrid
 that graph's impact decision.
 
 Validate the full current request, every review and every proposed dependency
-before writing. If an impact is complete and required, save it before per-subject
+before writing. If an impact is supplied, save it before per-subject
 reviews and dependency effects. This preserves valid impact evidence when an
 unrelated subject save later fails. Before saving, reuse an identical complete,
 trusted, intact impact already hosted on the selected root issue. If impact saving
@@ -116,9 +114,9 @@ is uncertain, stop before any review or dependency write and return `pendingStag
 pending dependencies in order. A later failure returns `pendingStage` as
 `review-save` or `edge-confirmation` with the affected `pendingIssue`; earlier
 confirmed records remain saved. Do not retry an uncertain effect or continue to a
-later subject in that call. Completed negative impact coverage lets another
-machine reuse unaffected reviews without AI. Incomplete or affected coverage
-cannot make unchecked or older stale work current. Relevant source changes queue
+later subject in that call. Saved reviews of other issues stay current without AI
+on any machine. Incomplete or affected coverage cannot make unchecked or stale
+work current. Relevant source changes queue
 only subjects with changed recorded requirement inputs. Persist impact through
 `reviews.saveImpact`, whose default is the GitHub adapter's append-only impact save.
 
@@ -210,7 +208,7 @@ still apply after ok. This read is not atomic exclusion across machines.
 Retain body-free snapshot warnings in the request packet. For a partial snapshot,
 use the shared model's explicit coverage for selected subjects and their complete
 blocker closure; preserve global partial status. Completion revalidates coverage,
-current candidate and impact observations, required input revisions, and current
+the subjects' own heads and named issues, impact observations, required input revisions, and current
 owner and cap before effects. Legacy partial packets without coverage stay pending.
 
 ## Dependencies

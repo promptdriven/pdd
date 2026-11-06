@@ -47,6 +47,8 @@ If the batch, any required field or pagination is unavailable or incomplete, use
 the existing REST reads for the affected root; a failed required read makes the
 snapshot incomplete. Claimed issues retain full current claim-history and owner
 reads. Recursively linked and cross-repository issues retain full closure reads.
+Execution and its coverage apply to root-repository issues only. A linked issue in
+another repository is only a prerequisite there, and its native state decides.
 Recheck current authority, required source inputs, occupancy, settings and cap at
 their existing boundaries. Caller-supplied GitHub ports keep their existing contract.
 
@@ -92,9 +94,13 @@ not infer installation or deployment from a PR merge.
 the existing Autopilot trust owner with repository-bound read ports. This is a
 read adapter for that owner's policy, not another trust implementation. Resolve
 current authority separately for each record's actual repository and subject.
-Never use checkout A's local extra names for explicit repository B. Missing local
-extra trust or lookup failure is unverified, not trusted. Native graph reads still
-work with that limit. No login, setup, clone or AI is allowed to resolve it.
+Never use checkout A's local extra names for explicit repository B. When the
+current checkout is verified as another repository, or no checkout is given, apply
+the trust owner's default policy to that repository's own GitHub data: its owner
+and collaborators with write permission are trusted, and other authors are
+outsiders. An unresolved checkout, a failed or incomplete owner/collaborator lookup,
+or an unreadable local setting is unverified, not trusted. No login, setup, clone
+or AI is allowed to resolve it.
 Never treat a PDD marker as authority. Preserve malformed/unsupported/edited trusted
 records as unresolved observations; do not hide them by returning an older record.
 Use actual comment identity and creation/edit evidence to set `intact`.
@@ -182,13 +188,13 @@ revisions establishes scope. Continue reading comments and authority for every
 listed root even if a separate issue detail read fails. The reviewImpact
 coverage bit records whether that issue's current issue, authority and comments
 were read; it is not proof that a review is unaffected. For each saved review
-revision deficit, require that same candidate row's reviewImpact coverage and a
-trusted, intact, complete impact record that names the current candidate
-revision and review ID. Missing relevant comments, an affected result or a
+revision deficit (a changed input or named prerequisite), require that row's
+reviewImpact coverage and a trusted, intact, complete impact record that names
+the current revision and review ID. Missing relevant comments, an affected result or a
 missing impact record keeps the review stale. Unread rows outside the changed
-same-repository candidate set and the subject's prerequisite/input closure do
+rows and the subject's prerequisite/input closure do
 not veto that review; their own graph nodes remain incomplete. A missing comment
-page on a changed candidate or a direct/transitive prerequisite remains unknown
+page on a changed row or a direct/transitive prerequisite remains unknown
 and blocks the affected subject. Identify relevant context and execution per
 subject; a failure unrelated to its required locators does not defeat it.
 Report the missing resource without asserting a dependency.

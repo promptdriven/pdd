@@ -19,6 +19,7 @@ blocker. Only `snapshot.edges` creates graph edges. Saved proposals never do.
 Deduplicate native edges and retain input issue order, adding missing linked nodes
 as unknown placeholders. A partial snapshot establishes clear dependencies for a subject only with the explicit current coverage below.
 A native edge with no qualifying saved reason shows `GitHub dependency; no saved reason`.
+A person's native "blocked by" link applies at once from GitHub; it needs no AI review.
 A saved edge absent in native state stays absent; show `Human dependency change`
 and reviewState question until a current trusted coordinator resolves the override.
 
@@ -31,8 +32,8 @@ boolean `scope`, and unique issue rows with `key`, boolean `issue`, `authority`,
 Scope establishes the complete current root index and candidate revisions.
 The subject and its full transitive blocker closure need their current issue,
 authority, comments, relationships, timeline, relevant required context and
-execution. For the selected head, apply the existing freshness rule: only an
-input or candidate revision deficit requires current relevant impact discovery.
+execution. For the selected head, apply the freshness rule below: only an
+input or named-prerequisite revision deficit requires current relevant impact discovery.
 When that discovery is required, `reviewImpact` must be true; unavailable
 evidence is unknown, not proof that a missing record affects the subject. An
 unavailable required locator of the selected head gives the body-free reason
@@ -57,7 +58,8 @@ current revision row and cannot match. Never substitute an entire commit or a
 caller-supplied revision for a read. These same key/revision rows bind evidence,
 review inputs and revalidation; no second context store is required.
 Review inputs identify the subject, examined requirement comments, and only relevant
-source/plan revisions. Candidate coverage lists the examined issue revisions.
+source/plan revisions. Candidate coverage lists the examined issue revisions; it
+supplies the examined revision of each named prerequisite, not a staleness list.
 The adapter excludes unchanged PDD review/claim bookkeeping from those revisions.
 An empty completed dependency list is an explicit checked result.
 
@@ -69,7 +71,7 @@ flowchart TD
   C --> D{Exactly one current head?}
   D -->|No heads| N[Unchecked or stale]
   D -->|Competing heads| X[Conflict]
-  D -->|One| E{Inputs and coverage current?}
+  D -->|One| E{Inputs and named prerequisites current?}
   E -->|No| S[Stale]
   E -->|Yes| F{Outcome?}
   F -->|Question| Q[Question]
@@ -107,20 +109,22 @@ invalid, competing, superseded or input-changed observation supplies no reason.
 This display grants no authority, eligibility or permission to write; review and
 dependency states and intake decisions retain their existing rules.
 
-**Freshness.** Compare substantive revisions by identity and value, never
+**Freshness.** A review is stale only when something it depends on changes: a
+required input (its subject, examined requirement comments and source/plan rows),
+or the examined candidate revision of an issue it names as a prerequisite. A new
+issue, or an edit to an issue that the review did not use or name, never makes it
+stale. Native link changes need no new review; the graph reads them directly.
+Compare substantive revisions by identity and value, never
 `updated_at` or an entire repository commit alone. Unknown or changed required
-inputs are stale. Current candidate coverage must account for every current visible
-root issue revision. A completed intact trusted impact record may extend named
-review IDs across its examined new/changed input revisions, only when those inputs
-are still current and the issue is not in `affected`. The impact's `reviews` names
+rows are stale. A completed intact trusted impact record may extend named
+review IDs across its examined changed input revisions, only when those inputs
+are still current and the issue is not in `affected`. A current applicable one
+that names the head's issue in `affected` makes that head stale. The impact's `reviews` names
 the exact still-applicable review heads checked for impact. An impact can prove
 freshness for a head only when its saved comment is hosted in that head's root
 repository. This keeps one repository's graph decisions from being overridden
 by an unrelated repository's comment. Unfinished, stale, foreign or untrusted
-coverage grants nothing. Distinguish unchanged subject inputs
-with a candidate-coverage gap from changed subject inputs: the former awaits
-impact, and does not require replacing its head before impact is examined.
-For each exact prior head and changed input revision, applicable positive impact
+coverage grants nothing. For each exact prior head and changed input revision, applicable positive impact
 wins over negative coverage in either input order. A known edited or unverified
 competing impact also leaves that coverage unresolved; a known outsider grants
 nothing. Impact authority is explicit when available; legacy trusted true means
@@ -128,8 +132,7 @@ trusted, false without a known outsider observation means unverified. No arrival
 that examines the disputed revisions resolves it; impacts for old heads cannot
 stale that replacement. Report disputed old heads as stale/ineligible.
 Affected work queues reanalysis;
-unaffected work reuses its completed review on an empty local cache. A new issue
-must be examined for both its prerequisites and what existing work it blocks.
+unaffected work reuses its completed review on an empty local cache.
 An unrelated source commit or unchanged PDD bookkeeping does not invalidate reviews.
 
 ## Dependency and execution results

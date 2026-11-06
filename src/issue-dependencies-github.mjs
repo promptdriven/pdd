@@ -202,7 +202,10 @@ function nativeAuthority(cwd, ports) {
   const dataFor = repository => {
     const key = repository.toLowerCase();
     if (!scope.authorityData.has(key)) scope.authorityData.set(key, (async () => {
-      const root = await selectedCheckout(cwd, repository, ports); let configKnown = !!root, raw = null;
+      // Another repository (or no checkout at all) has no local extra trust: apply the
+      // default policy (owner and write collaborators) to its own GitHub data.
+      const root = await selectedCheckout(cwd, repository, ports), selected = cwd ? scope.repositories.get(resolve(cwd)) : null;
+      let configKnown = !!root || !cwd || !!selected && !sameRepo(selected.repository, repository), raw = null;
       if (root) {
         try { const setting = readJson(join(root, 'pdd.json'), {}); raw = Object.hasOwn(setting, 'autopilot') ? JSON.stringify(setting.autopilot) : null; }
         catch { configKnown = false; }
@@ -623,7 +626,9 @@ export async function readDependencySnapshot({ cwd = '', repository, inputs = []
     if (!row.reviewImpact) row.missing.push('Relevant impact discovery unavailable');
     const requiredForIssue = (issues.find(issue => issue.key === row.key)?.conditionSources ?? []).flatMap(condition => nonIssueRows(condition.inputs));
     if (!contextKnown || requiredForIssue.some(input => !currentInputs.has(input.key))) { row.context = false; row.missing.push('Required context unavailable'); }
-    if (issues.find(issue => issue.key === row.key)?.execution === 'unknown') { row.execution = false; if (!row.missing.includes('Execution observation unavailable')) row.missing.push('Execution observation unavailable'); }
+    // Execution is observed only for root issues. A linked issue in another
+    // repository matters only as a prerequisite, where its native state decides.
+    if (info(row.key)?.repository === repository && issues.find(issue => issue.key === row.key)?.execution === 'unknown') { row.execution = false; if (!row.missing.includes('Execution observation unavailable')) row.missing.push('Execution observation unavailable'); }
   }
   const dedupEdges = [...new Map(edges.map(e => [`${e.dependent}\n${e.blocker}`, e])).values()];
   const capturedAt = (await ports.clock.now({})).iso;
