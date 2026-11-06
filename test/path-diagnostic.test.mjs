@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { runPdd } from '../src/pdd-cli.mjs';
@@ -9,7 +9,8 @@ import { runPdd } from '../src/pdd-cli.mjs';
 const bin = resolve(import.meta.dirname, '../bin/pdd.mjs');
 const version = JSON.parse(readFileSync(new URL('../package.json', import.meta.url))).version;
 function fixture(t) {
-  const root = mkdtempSync(join(tmpdir(), "pdd-path ' proof-"));
+  // Setup needs a regular config path even when the OS temp directory is linked.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "pdd-path ' proof-")));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const old = join(root, 'conda-bin'), alpha = join(root, 'alpha-bin'), nodeBin = join(root, 'node-bin'), home = join(root, 'home'), cwd = join(root, 'project');
   for (const path of [old, alpha, nodeBin, home, cwd]) mkdirSync(path);
