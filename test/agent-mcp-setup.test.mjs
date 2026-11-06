@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, symlinkSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, symlinkSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
@@ -14,7 +14,8 @@ import { setupAgentMcp } from '../src/agent-mcp-setup.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
 
 function fixture(t) {
-  const home = mkdtempSync(join(tmpdir(), 'pdd-mcp-setup-'));
+  // The normal config fixture has no symlink ancestors, including macOS /var.
+  const home = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-mcp-setup-')));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const env = { HOME: home, PATH: '', CODEX_HOME: join(home, 'custom-codex'), CLAUDE_CONFIG_DIR: join(home, 'custom-claude') };
   mkdirSync(env.CODEX_HOME); mkdirSync(env.CLAUDE_CONFIG_DIR); mkdirSync(join(home, '.gemini'));
