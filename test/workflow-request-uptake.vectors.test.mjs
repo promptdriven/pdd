@@ -19,10 +19,12 @@ for(const v of vectors.cases.filter(v=>!v.id.startsWith('probe-I')))test(`2722 v
   for(const opts of viewOptions.filter(o=>!o.json))facts((await f.status(opts)).message,[entry.id]);break;
  }
  case 'joined-delivery-receipt':{
-  let release,entered;const start=new Promise(r=>entered=r),gate=new Promise(r=>release=r);let prompts=0;
-  const healthy=f.ports.herdr;f.ports.herdr=async a=>{if(a[0]==='agent'&&a[1]==='get'){entered();await gate;}if(a[0]==='agent'&&a[1]==='prompt')prompts++;return healthy(a);};
-  const first=f.change();await start;const second=f.change('Explain the chosen value',{...f.ports,herdr:async a=>{if(a[0]==='agent'&&a[1]==='get')await first;return healthy(a);}});await new Promise(r=>setTimeout(r,30));release();const results=await Promise.all([first,second]);
-  assert.equal(prompts,1);const saved=f.read()[0];for(const r of results){assert.equal(r.exitCode,0);facts(r.message,[saved.id,'delivered']);}break;
+  let release,entered,secondEntered;const start=new Promise(r=>entered=r),gate=new Promise(r=>release=r),secondStart=new Promise(r=>secondEntered=r);
+  const healthy=f.ports.herdr;f.ports.herdr=async a=>{if(a[0]==='agent'&&a[1]==='get'){entered();await gate;}return healthy(a);};
+  const first=f.change();await start;const pending=f.read();assert.equal(pending.length,1);assert.equal(pending[0].state,'pending');const pendingId=pending[0].id;
+  const second=f.change('Explain the chosen value',{...f.ports,herdr:async a=>{if(a[0]==='agent'&&a[1]==='get'){secondEntered();await first;}return healthy(a);}});await secondStart;
+  const admitted=f.read();assert.equal(admitted.length,1);assert.equal(admitted[0].id,pendingId);assert.equal(admitted[0].state,'pending');release();const results=await Promise.all([first,second]);
+  assert.equal(f.sent().length,1);const saved=f.read()[0];assert.equal(saved.id,pendingId);for(const r of results){assert.equal(r.exitCode,0);facts(r.message,[pendingId,'delivered']);}break;
  }
  case 'explicit-first-and-repeat':{
   f.save([f.entry(),f.orphan()]);const before=f.read(),run=JSON.stringify(f.record());f.ports.now=()=>2000;

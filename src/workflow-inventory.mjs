@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 const exec = promisify(callbackExec);
 const MAX_FILES = 1000, MAX_BLOB = 1024 * 1024, MAX_BYTES = 16 * MAX_BLOB, BUDGET = 12000;
 const BLOB_REASONS = ['candidate blob exceeds 1 MiB', 'binary candidate blob', 'non-UTF-8 candidate blob'];
-const DISCLAIMER = 'Static inventory only; tests were not run.';
+const DISCLAIMER = 'Static inventory only; this inventory did not run tests.';
 const sha = value => typeof value === 'string' && /^(?:[a-f\d]{40}|[a-f\d]{64})$/i.test(value);
 const size = value => [...value].length;
 const jsonLiteral = value => JSON.stringify(value).replace(/[\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
@@ -213,6 +213,49 @@ function cases(source, lang) {
   }
   return found;
 }
+// Bounded textual signals of declarations that cannot be inventoried reliably.
+function dynamicInventory(source, lang, entries) {
+  if (lang !== 'js') return false;
+  const lines = source.split('\n');
+  let blockComment = false;
+  const visible = lines.map(line => {
+    let out = '', i = 0, quote = '';
+    while (i < line.length) {
+      if (blockComment) { const end = line.indexOf('*/', i); if (end < 0) break; blockComment = false; i = end + 2; continue; }
+      const c = line[i];
+      if (quote) { out += c; if (c === '\\' && i + 1 < line.length) out += line[++i]; else if (c === quote) quote = ''; i++; continue; }
+      if (line.startsWith('//', i)) break;
+      if (line.startsWith('/*', i)) { blockComment = true; i += 2; continue; }
+      if (["'", '"', '`'].includes(c)) quote = c;
+      out += c; i++;
+    }
+    return out;
+  });
+  const aliases = new Set();
+  for (const line of visible) {
+    if (!/^\s*import\b/.test(line)) continue;
+    for (const m of line.matchAll(/\b(?:test|it)\s+as\s+([\w$]+)/g)) aliases.add(m[1]);
+  }
+  for (const binding of visible.join('\n').matchAll(/^\s*import\b[^\n{]*\{([^}]*)\}/gm)) {
+    for (const m of binding[1].matchAll(/\b(?:test|it)\s+as\s+([\w$]+)/g)) aliases.add(m[1]);
+  }
+  const tests = entries.filter(e => !e.suite);
+  for (let at = 0; at < visible.length; at++) {
+    const line = visible[at];
+    const call = /^\s*(test|it|xit)(?:\.(only|skip|todo|each))?\s*\(/.exec(line);
+    if (call && (call[2] === 'each' || !tests.some(e => e.at === at))) return true;
+    const alias = /^\s*([\w$]+)\s*\(/.exec(line);
+    if (alias && aliases.has(alias[1])) return true;
+    const loop = /^(\s*)(?:for|while)\b.*\{/.exec(line);
+    if (loop && !tests.some(e => e.at < at && e.end >= at)) {
+      for (let i = at + 1; i < visible.length; i++) {
+        if (visible[i].startsWith(loop[1]) && /^}/.test(visible[i].slice(loop[1].length))) break;
+        if (tests.some(e => e.at === i)) return true;
+      }
+    }
+  }
+  return tests.length === 0 && visible.some(line => line.trim());
+}
 const key = entry => JSON.stringify([entry.name,entry.occurrence]);
 const label = entry => `${codeLiteral(entry.name)}${entry.occurrence > 1 ? ` [${entry.occurrence}]` : ''}`;
 // One bounded suffix table, then earliest old/new matches for each LCS suffix.
@@ -285,6 +328,11 @@ export function analyzeTestChanges({files}) {
       assertions.push(`Changed assertions in kept tests: ${suffix}`);skips.push(`New skips: ${suffix}`);continue;
     }
     const oldCases=cases(file.before,file.oldLang),newCases=cases(file.after,file.newLang);
+    if (dynamicInventory(file.before,file.oldLang,oldCases) || dynamicInventory(file.after,file.newLang,newCases)) {
+      const suffix=`${path} unavailable (${quoted('unknown dynamic test inventory')}).`;
+      counts.push(`Tests vs base: ${suffix}`); summaries.push(counts.at(-1));
+      assertions.push(`Changed assertions in kept tests: ${suffix}`); skips.push(`New skips: ${suffix}`); continue;
+    }
     const before=oldCases.filter(c=>!c.suite),after=newCases.filter(c=>!c.suite);
     const oldMap=new Map(oldCases.map(c=>[JSON.stringify([c.suite,key(c)]),c])),newMap=new Map(after.map(c=>[key(c),c]));
     const removed=before.filter(c=>!newMap.has(key(c)));

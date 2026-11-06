@@ -12,8 +12,9 @@ function scratch(t) {
   cpSync('package.json',join(root,'package.json'));
   cpSync('src',join(root,'src'),{recursive:true});mkdirSync(join(root,'test'),{recursive:true});
   cpSync('test/helpers',join(root,'test/helpers'),{recursive:true});mkdirSync(join(root,'test/runtime'),{recursive:true});
-  for(const name of ['workflow-prove','workflow-proof-pr','workflow-pr-labels']) {cpSync(`test/runtime/${name}.json`,join(root,`test/runtime/${name}.json`));cpSync(`test/${name}.vectors.test.mjs`,join(root,`test/${name}.vectors.test.mjs`));}
+  for(const name of ['workflow-prove','workflow-prove-existing-tests','workflow-proof-pr','workflow-pr-labels']) {cpSync(`test/runtime/${name}.json`,join(root,`test/runtime/${name}.json`));cpSync(`test/${name}.vectors.test.mjs`,join(root,`test/${name}.vectors.test.mjs`));}
   cpSync('test/workflow-prove.test.mjs',join(root,'test/workflow-prove.test.mjs'));
+  cpSync('test/workflow-prove.formal.test.mjs',join(root,'test/workflow-prove.formal.test.mjs'));
   cpSync('test/runtime-check.test.mjs',join(root,'test/runtime-check.test.mjs'));return root;
 }
 function run(root,path,pattern) {
@@ -22,13 +23,14 @@ function run(root,path,pattern) {
 }
 function replace(root,path,before,after) {const file=join(root,path),original=readFileSync(file,'utf8');assert.ok(original.includes(before),`Control target absent: ${before}`);writeFileSync(file,original.replace(before,after));}
 const cases=[
+ ['existing test fallback', 'workflow-prove-existing-tests', 'src/workflow-prove.mjs', 'if(!interruptSignal) {', 'if(record.paths.length && !interruptSignal) {'],
  ['literal causality', 'workflow-prove', 'src/workflow-prove.mjs', "return record.base.expectedFound ? 'proved' : 'wrong-reason';", "return 'proved';"],
  ['head identity', 'workflow-proof-pr', 'src/workflow-pr-evidence.mjs', 'record.headSha !== head.headSha', 'false'],
  ['warning-light issue safety', 'workflow-pr-labels', 'src/workflow-pr-evidence.mjs', "grouped.get('Not fixed yet:').size ? 'Refs'", "false ? 'Refs'"]
 ];
 for(const [label,name,path,before,after] of cases) test(`PROOF-CONTROL: actual ${label} mutation fails approved checks by assertion`,t=>{
   const root=scratch(t),file=`test/${name}.vectors.test.mjs`,baseline=run(root,file);assert.equal(baseline.status,0,baseline.stdout+baseline.stderr);
-  replace(root,path,before,after);const mutant=run(root,file);assert.equal(mutant.status,1,mutant.stdout+mutant.stderr);assert.match(mutant.stdout,/ERR_ASSERTION/);assert.match(mutant.stdout,/exact checks failed/);assert.doesNotMatch(mutant.stdout+mutant.stderr,/ERR_MODULE_NOT_FOUND|SyntaxError/);
+  replace(root,path,before,after);const mutant=run(root,file);assert.equal(mutant.status,1,mutant.stdout+mutant.stderr);assert.match(mutant.stdout,/ERR_ASSERTION/);assert.match(mutant.stdout,/exact checks failed/);assert.doesNotMatch(mutant.stdout+mutant.stderr,/^(?:# )?(?:Error \[ERR_MODULE_NOT_FOUND\]|SyntaxError:)/m);
 });
 test('PROOF-CONTROL: restored whitespace tokenizer fails existing quoted-summary regression independently of prove admission',t=>{
   const root=scratch(t),file='test/runtime-check.test.mjs',baseline=run(root,file,'RUNTIME-RUNBOOK-QUOTES');assert.equal(baseline.status,0,baseline.stdout+baseline.stderr);
@@ -43,4 +45,10 @@ for (const [label, before, after] of [
   const root=scratch(t),file='test/workflow-prove.test.mjs',baseline=run(root,file,'PROVE-NATIVE2');assert.equal(baseline.status,0,baseline.stdout+baseline.stderr);
   const path=join(root,'src/workflow-prove.mjs'),source=readFileSync(path,'utf8');assert.ok(source.includes(before));writeFileSync(path,source.replaceAll(before,after));
   const mutant=run(root,file,'PROVE-NATIVE2');assert.equal(mutant.status,1,mutant.stdout+mutant.stderr);assert.match(mutant.stdout,/ERR_ASSERTION/);assert.doesNotMatch(mutant.stdout+mutant.stderr,/ERR_MODULE_NOT_FOUND|SyntaxError/);
+});
+
+test('2958-FORMAL-CONTROL: restoring the old empty-overlay guard fails the bounded Story oracle by assertion',t=>{
+ const root=scratch(t),file='test/workflow-prove.formal.test.mjs',baseline=run(root,file);assert.equal(baseline.status,0,baseline.stdout+baseline.stderr);
+ replace(root,'src/workflow-prove.mjs','if(!interruptSignal) {','if(record.paths.length && !interruptSignal) {');
+ const mutant=run(root,file);assert.equal(mutant.status,1,mutant.stdout+mutant.stderr);assert.match(mutant.stdout,/ERR_ASSERTION/);assert.doesNotMatch(mutant.stdout+mutant.stderr,/ERR_MODULE_NOT_FOUND|SyntaxError/);
 });

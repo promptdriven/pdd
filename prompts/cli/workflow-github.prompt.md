@@ -12,7 +12,7 @@ Own `src/workflow-github.mjs`, exporting the module functions below. Help the lo
 
 ## One publication and read-only recovery
 
-The runner must durably save the exact prepared intent BEFORE calling `publishWorkflowPr({cwd,intent,body},ports)` once. The helper has no journal and cannot certify that save; unknown effects normally use only `reconcileWorkflowPr({cwd,intent},ports)`. Reconciliation reads the PR body marker from GitHub and never needs a local body file. Missing PR alone never permits another publication. The explicit absence-checked recovery below is the only exception.
+The runner must durably save the exact prepared intent BEFORE calling `publishWorkflowPr({cwd,intent,body,draft?},ports)` once. The helper has no journal and cannot certify that save; unknown effects normally use only `reconcileWorkflowPr({cwd,intent,draft?},ports)`. Reconciliation reads the PR body marker from GitHub and never needs a local body file. Missing PR alone never permits another publication. The explicit absence-checked recovery below is the only exception.
 
 ```mermaid
 flowchart TD
@@ -30,6 +30,23 @@ flowchart TD
 ```
 
 Publication receives the final PR body text from the runner; the body must contain exactly one own-line `<!-- ${marker} -->` using the returned marker value. It sends that text to `gh pr create` with `--body-file -` and stdin, never by writing or validating a body file. Publication verifies that origin has exactly one push URL naming the same GitHub repository, and verifies the current repository, named branch, clean worktree and exact saved HEAD before effects. It also measures the final body, marker included, in characters (Unicode code points, as GitHub counts them). GitHub refuses more than 65,536 (0.1.7 tester: `GraphQL: Body is too long (maximum is 65536 characters) (createPullRequest)` after the push, hidden behind "unconfirmed"), so a longer body returns failed before any effect: `The PR description has N characters. GitHub accepts at most 65,536. Nothing was pushed. Make it shorter, then try again.` (N with thousands commas). Read the remote head first (`git ls-remote --exit-code --refs origin refs/heads/<savedHeadBranch>`): when it already holds exactly the saved SHA (an earlier attempt pushed it and GitHub refused the PR), do not push again. Otherwise push the saved SHA to the saved branch without force. Then use explicit repository/head/base/title and `--body-file -` for `gh pr create`. Its stdout/URL is not completion evidence: read the actual PR back. Nonzero/throw/timeout after either write starts is recovery_required; do not repeat a command or automatically create after an uncertain push. One exception names a certain result: when `gh pr create` exits nonzero, read back first (an exact PR is reported as usual); when the readback is absent and gh's stderr has GitHub's own refusal, `GraphQL: <reason> (createPullRequest)`, GitHub did not create the PR, so return `rejected`: `GitHub refused to open the PR: REASON. The branch is pushed; no PR was opened. FIX` (for `Body is too long`, REASON is `its description is too long (GitHub's limit is 65,536 characters)` and FIX `Make the PR description shorter, then try again.`; else REASON is GitHub's reason and FIX `Fix what GitHub names, then try again.`). Any other create failure stays recovery_required: `PR creation is unconfirmed (gh: LINE). Reconcile this same saved intent; do not publish again.`, with gh's first error line when it has one. An already exact PR is reported without push/create. A failed pre-effect local/input check returns failed. Reconcile issues only Git/gh reads and never writes a file or pushes/creates/merges.
+
+### Requested draft publication
+
+`publishWorkflowPr` and `reconcileWorkflowPr` accept separate optional Boolean
+`draft`, captured with the other inputs before the first await. Missing/false
+retains current ready-publication and readback behavior; supplied nonbooleans
+refuse before effects. Never put draft in the exact eight-key prepared intent.
+For true, add `--draft` to the single `gh pr create` call and request actual GitHub
+`isDraft` in PR reads. A draft-qualified successful outcome requires `isDraft === true`
+from the exact unique verified PR, including a preexisting match and readback after
+nonzero/interrupted creation. False, missing or malformed isDraft instead returns
+recovery_required with pr:null and advice to inspect the existing PR. Never infer
+it from create argv, stdout/URL or local policy. An exact matching ready PR stays
+unchanged: no conversion, push/create retry or duplicate. An exact matching draft
+PR can be reported under ordinary first-publication/reconciliation rules without
+writes. Explicit unpublishedOnly retains its stronger refusal of every existing PR;
+draft cannot bypass absence, identity, source, body or uncertain-effect checks.
 
 ### Explicit recovery only when both original effects are absent
 
@@ -63,7 +80,7 @@ Optional `ports.execFile(file,args,{cwd})` returns or resolves `{stdout,stderr?,
 <summary>Runtime interface</summary>
 
 ```json
-{"status":"draft","prose_sha256":"13bae3a4c21b376d33609c3ad4bcdc0a40cad9523e75b2fd5208f6fa023b68d3","entries":[{"operation":"prepareWorkflowPr","input_schema":{"type":"object","properties":{"cwd":{"type":"string","minLength":1},"runId":{"type":"string","minLength":1},"stageId":{"type":"string","minLength":1},"repository":{"type":"string","minLength":1},"baseBranch":{"type":"string","minLength":1},"title":{"type":"string","minLength":1}},"required":["cwd","runId","stageId","repository","baseBranch"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"repository":{"type":"string"},"runId":{"type":"string"},"stageId":{"type":"string"},"headBranch":{"type":"string"},"baseBranch":{"type":"string"},"headSha":{"type":"string"},"marker":{"type":"string"},"title":{"type":"string"}},"required":["repository","runId","stageId","headBranch","baseBranch","headSha","marker","title"],"additionalProperties":false},"errors":["workflow_github_intent_invalid","workflow_github_repository_mismatch","workflow_github_worktree_dirty","workflow_github_topic_required"]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":2},"conventions":[]}
+{"status":"draft","prose_sha256":"","entries":[{"operation":"prepareWorkflowPr","input_schema":{"type":"object","properties":{"cwd":{"type":"string","minLength":1},"runId":{"type":"string","minLength":1},"stageId":{"type":"string","minLength":1},"repository":{"type":"string","minLength":1},"baseBranch":{"type":"string","minLength":1},"title":{"type":"string","minLength":1}},"required":["cwd","runId","stageId","repository","baseBranch"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"repository":{"type":"string"},"runId":{"type":"string"},"stageId":{"type":"string"},"headBranch":{"type":"string"},"baseBranch":{"type":"string"},"headSha":{"type":"string"},"marker":{"type":"string"},"title":{"type":"string"}},"required":["repository","runId","stageId","headBranch","baseBranch","headSha","marker","title"],"additionalProperties":false},"errors":["workflow_github_intent_invalid","workflow_github_repository_mismatch","workflow_github_worktree_dirty","workflow_github_topic_required"]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":2},"conventions":[]}
 ```
 
 </details>

@@ -68,7 +68,7 @@ function introduced(oldLines, newLines) {
     newLines.slice(0, index + 1).filter(value => value === line).length >
     oldLines.filter(value => value === line).length);
 }
-const disclaimer = 'Static inventory only; tests were not run.\n';
+const disclaimer = 'Static inventory only; this inventory did not run tests.\n';
 function expectedReport(path, oldCases, newCases) {
   const before = identify(oldCases), after = identify(newCases);
   const removed = before.filter(item => !after.some(other => sameIdentity(item, other)));
