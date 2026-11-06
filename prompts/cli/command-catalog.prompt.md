@@ -254,3 +254,7 @@ Check stories on the PDD interpreter with your gh login: reuses unchanged passin
 ```
 
 Preserve every unrelated help form.
+
+The metrics routes are `pdd metrics [--json] [--date YYYY-MM-DD | --snapshot ID] [--timezone IANA] [--at UTC] [--expected-source ID...]`, `pdd metrics export FILE [--timezone IANA]`, `pdd metrics import FILE`, and `pdd metrics record FILE`. The metrics owner validates option combinations and values.
+
+For `workflow.run`, also accept optional `--origin` (manual, autopilot or unknown), `--decision-id` (text) and `--outcome` (code or prompt-only) as observational metadata. The runner verifies the decision against the actual repository and issue. Keep the draft, base and approved-corpus options and existing help form.

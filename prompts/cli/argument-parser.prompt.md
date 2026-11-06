@@ -61,3 +61,5 @@ For the [scope routes](command-catalog.prompt.md#durable-scope-routes), parse ex
 - [Command catalog](command-catalog.prompt.md): required authoring/generation/runtime/verification/testing context for `PUBLIC_COMMAND_ROUTES`, exact prefixes, operand/option declarations and local dispositions. Parsing uses these route facts, with no outside calls.
 - [Workflow scope](workflow-scope.prompt.md): required authoring/generation/runtime/verification/testing context for canonical scope policy associated with scope route validation; this parser owns syntax and the scope module owns policy.
 - Native authoring/generation also uses the repository context identified in Authoring above. The runtime-client link in Argument validation identifies ownership of downstream combination checks; parsing never calls it and needs no runtime client/session/token context.
+
+Workflow run parses the catalog origin, decision-id and outcome options as observational metadata and forwards them without granting workflow authority.

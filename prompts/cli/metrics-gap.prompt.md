@@ -1,0 +1,3 @@
+# Metrics capture gap fallback
+
+`src/metrics-gap.mjs` records an incomplete coverage observation for a repository issue when ordinary metrics identity or delivery fails. Store only the repository, issue, observation time and generated event identity; do not store paths, text, credentials or conversation. Write a new private file, sync its bytes, atomically publish it and sync the directory. Return failure to the caller if storage is unavailable; callers warn and continue their ordinary operation. The metrics command replays valid saved gaps. This fallback is evidence of missing coverage, never a workflow gate.

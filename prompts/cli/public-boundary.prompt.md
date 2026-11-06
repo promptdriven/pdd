@@ -35,3 +35,5 @@ Every line that pdd writes itself for a person names the commands with the [Name
 Machine-read words keep `check` and `try`, because servers, saved files and scripts depend on them: the wire commands `check` and `try`, the `/v1/try/…` paths, the folder `.pdd/try`, the `PDD Try launcher v1` marker, the `x-pdd-try-*` headers, the saved `tries/` records, the local dispositions `runtime-check` and `runtime-try`, and the workflow step names `check` and `try`. A server text that pdd prints as it got it stays as the server sent it, even when it names an old command.
 
 The package may include a licensed, attributed vendored public TOML parser under `src/vendor/` for safe config validation. It requires no npm install or registry access at runtime.
+
+The local metrics routes dispatch to the metrics command; they require no interpreter call.

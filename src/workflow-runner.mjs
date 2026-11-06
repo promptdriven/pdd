@@ -1,9 +1,10 @@
+import { findNativeSessions } from './approval-evidence.mjs';
 // Generated from prompts/cli/workflow-runner.prompt.md (sha256: 33dc44a7518d2fb7bf424398daf54496e911059e51d2bb93abd85e77ba1308dd).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { constants, openSync, closeSync, fsyncSync, unlinkSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { constants, openSync, closeSync, fsyncSync, unlinkSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 
 import * as nativeDeliveryFiles from 'node:fs';
 import { homedir, hostname, tmpdir } from 'node:os';
@@ -401,7 +402,20 @@ function describe(run, chat = null, { drafts = [], nothing = false } = {}) {
   return step ? `the agent works on ${step}` : 'the agent works';
 }
 
-async function startRunCommand({ name, issue, agent = 'codex', base, adoptCorpus, draft = false, cwd, packageRoot = PACKAGE_ROOT }, ports) {
+// Digest installed runtime bytes and the selected skill without exporting paths or contents.
+function installedCandidateIdentity(packageRoot, skillDir) {
+  try {
+    const hash=createHash('sha256');
+    const add=(label,path)=>{const stat=lstatSync(path); if(stat.isSymbolicLink()) throw Error('Unstable candidate');
+      if(stat.isDirectory()) for(const name of readdirSync(path).sort()) add(`${label}/${name}`,join(path,name));
+      else if(stat.isFile()) { const bytes=readFileSync(path); hash.update(`${label}:${bytes.length}:`); hash.update(bytes); }
+    };
+    add('package',join(packageRoot,'package.json')); add('runtime',join(packageRoot,'src')); add('skill',skillDir);
+    return `sha256:${hash.digest('hex')}`;
+  } catch {return 'unknown';}
+}
+
+async function startRunCommand({ name, issue, agent = 'codex', base, adoptCorpus, draft = false, origin, decisionId, outcome, cwd, packageRoot = PACKAGE_ROOT }, ports) {
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
   if (typeof draft !== 'boolean') return fail('Draft publication must be a Boolean.');
   let workflow;
@@ -427,6 +441,17 @@ async function startRunCommand({ name, issue, agent = 'codex', base, adoptCorpus
   try { binding = await resolveWorkflowIssue({ cwd: context.toplevel, issue }, p.commandPorts); }
   catch (error) { return fail(`pdd could not read issue ${issue} with gh (${causeOf(error)}). Check "gh auth status", the origin remote and the issue number.`); }
   const number = binding.issue.number, runDir = runDirFor(context.commonDir, number), existing = readRun(runDir);
+  let actualOrigin = origin === 'manual' ? 'manual' : 'unknown';
+  if (origin === 'autopilot' && /^[0-9a-f-]{36}$/.test(decisionId ?? '')) {
+    try { const decision=JSON.parse(readFileSync(join(context.commonDir,'pdd','metrics','decisions',`${decisionId}.json`),'utf8'));
+      const committed=!decision.pendingSnapshot || (()=>{const snapshot=JSON.parse(readFileSync(join(context.commonDir,'pdd','metrics','snapshots',`${decision.snapshotId.slice(9)}.json`),'utf8')); return snapshot.snapshotId===decision.snapshotId && snapshot.repo===binding.repository.toLowerCase() && snapshot.events?.some(event=>event.id===`${decisionId}:selection` && event.issue===number);})();
+      if (committed && decision.repo?.toLowerCase() === binding.repository.toLowerCase() && decision.issue === number && decision.id === decisionId && decision.offered === true && decision.events?.some(event => event.type === 'selection' && event.repo === binding.repository.toLowerCase() && event.issue === number)) actualOrigin='autopilot';
+    } catch { /* Unknown evidence must not block a workflow. */ }
+  }
+  let cliVersion='unknown', skillVersion='unknown';
+  try { cliVersion=JSON.parse(readFileSync(join(packageRoot,'package.json'),'utf8')).version || 'unknown'; } catch {}
+  try { skillVersion=/^  pdd-skills:\s*(\S+)/m.exec(readFileSync(join(workflow.dir,'SKILL.md'),'utf8'))?.[1] ?? 'unknown'; } catch {}
+  const metricsOrigin={origin:actualOrigin, ...(actualOrigin === 'autopilot' ? {decisionId} : {}), requiredOutcome:['code','prompt-only'].includes(outcome) ? outcome : 'unknown',cliVersion,skillVersion,candidateVersion:installedCandidateIdentity(packageRoot,workflow.dir)};
   if (existing?.draft !== undefined && typeof existing.draft !== 'boolean') return fail('The saved draft publication policy must be a Boolean.');
   if (existing && !ended(existing) && draft && existing.draft !== true) return fail(`Issue #${number} already has a nondraft run. Use pdd workflow approve ${number} --draft at its ready unpublished gate; starting again cannot change that policy.`);
   if (existing?.state === 'completed') return fail(`Issue #${number} already has a run (${existing.workflow}, ${describe(existing)}). Open it: pdd workflow open ${number}. Status: pdd workflow status ${number}.`);
@@ -502,7 +527,7 @@ async function startRunCommand({ name, issue, agent = 'codex', base, adoptCorpus
     ...(productMarkers.length === 1 ? { productMarker: productMarkers[0] } : {}),
     issue: { number, title: binding.issue.title, url: binding.issue.url }, number, root: a.worktreePath, branch: a.branch,
     baseBranch, baseSha: a.baseSha, sourceRoot: a.sourceRoot, commonDir: a.commonDir, runDir, agent,
-    configDir, draft,
+    configDir, draft, metricsOrigin, metricsObservations:[{type:'coverage',at:new Date(p.now()).toISOString(),data:{complete:false}}],
     startedAt: p.now(), state: 'running', areas: workflow.areas, area: 0, done: {}, gate: null, chats: [], decisions: [], changes: [],
     approvalRecord: null, pr: [], prState: null, cancelled: null, warnings, journalSeq: 0,
     previous: existing ? [...(existing.previous ?? []), { runId: existing.runId, root: existing.root, branch: existing.branch, runDir: `${runDir}-cancelled-${existing.runId.slice(0, 8)}` }] : [] };
@@ -1348,17 +1373,26 @@ async function finishPr(run, area, step, p, lines) {
   lines.push(`pdd recorded ${step}. pdd opens ${label} now.`);
   const failed = await publishAreaPr(run, area, p, lines, `run done ${step} again`);
   if (failed) return failed;
+  // Capture readiness in the native waiting transition, never in a separate save.
+  const candidate = prOf(run, area.name);
+  const ready = step === area.steps.at(-1) && run.done[step] && !run.done[step].skipped && run.area === run.areas.length - 1 && (area.name === 'code' || run.workflow === 'small-change' || run.areas.slice(0,-1).some(item => item.then === 'ask-code')) && area.steps.every(name => run.done[name] && (!run.done[name].skipped || area.optional.includes(name))) && candidate?.number && commitSha(candidate.publishedHeadSha);
+  const recordReadiness = latest => {
+    const pr=prOf(latest,area.name);
+    if (ready && latest.area===selectedArea && area.steps.every(name=>latest.done[name] && (!latest.done[name].skipped || area.optional.includes(name))) && pr?.number===candidate.number && pr.publishedHeadSha===candidate.publishedHeadSha && !(latest.metrics?.events ?? []).some(event=>event.type==='milestone' && event.data?.stage==='implementation-ready' && event.data.pr===pr.number && event.data.head===pr.publishedHeadSha) && !(latest.metricsObservations ?? []).some(event=>event.type==='milestone' && event.data?.stage==='implementation-ready' && event.data.pr===pr.number && event.data.head===pr.publishedHeadSha)) {
+      latest.metricsObservations=[...(latest.metricsObservations ?? []),{type:'milestone',at:new Date(p.now()).toISOString(),data:{stage:'implementation-ready',pr:pr.number,head:pr.publishedHeadSha}}];
+    }
+  };
   if(area.replay_evidence===REPLAY_POLICY)lines.push(formatReplayEvidence(run.replayEvidence));
   if (area.then === 'ask-code') {
     // New commits on an open PR 1 keep the question's time, so a yes the person already gave still counts
     // (a change request with pdd workflow changes moves it).
     const at=p.now();
-    commitRun(run,p,latest=>{if(latest.area===selectedArea&&sameGate(latest.gate,selectedGate)){latest.state='waiting';latest.gate=existing && latest.gate?.kind==='ask-code'?latest.gate:{id:p.randomUUID(),area:area.name,at,kind:'ask-code'};}});
+    commitRun(run,p,latest=>{if(latest.area===selectedArea&&sameGate(latest.gate,selectedGate)){recordReadiness(latest);latest.state='waiting';latest.gate=existing && latest.gate?.kind==='ask-code'?latest.gate:{id:p.randomUUID(),area:area.name,at,kind:'ask-code'};}});
     const savedApproval = !!run.gate && (run.decisions ?? []).some(decision => decision.gateId === run.gate.id && decision.evidence);
     const shownGate = run.area===selectedArea && run.gate?.kind==='ask-code' ? (savedApproval ? snapshotLines(run.gate.promptSnapshot ?? []) : await showGate(run, p)) : [];
     return done([...lines, ...shownGate, ...await askCodeLines(run, area, p)].join('\n'));
   }
-  commitRun(run,p,latest=>{if(latest.area===selectedArea&&sameGate(latest.gate,selectedGate)){latest.state='waiting';latest.gate=null;}});
+  commitRun(run,p,latest=>{if(latest.area===selectedArea&&sameGate(latest.gate,selectedGate)){recordReadiness(latest);latest.state='waiting';latest.gate=null;}});
   return done([...lines, `${label === 'the PR' ? 'PR' : label}: ${prOf(run, area.name).url}`, `Tell the person ${label} is open. pdd never merges. Stop here.`].join('\n'));
 }
 
@@ -1974,7 +2008,7 @@ ${approvalGuide(run)}`, p, true);
 
     if(askCode){latest.branch=branch;latest.prBase=prBase;}
     if(equalFact(latest.question,observedQuestion))latest.question=null;
-    if(latest.area===areaIndex){if(sameGate(latest.gate,selectedGate))latest.gate=null;latest.area=areaIndex+1;latest.state=latest.question?'waiting':'running';latest.doneAt=null;}
+    if(latest.area===areaIndex){if(askCode)latest.metricsOrigin={...(latest.metricsOrigin ?? {origin:'unknown'}),requiredOutcome:'code'};if(sameGate(latest.gate,selectedGate))latest.gate=null;latest.area=areaIndex+1;latest.state=latest.question?'waiting':'running';latest.doneAt=null;}
   });
   approvalRecorded();
   const next = run.areas[run.area];
@@ -2315,17 +2349,41 @@ async function chatState(run, p) {
   // A never-seen chat after the grace counts as ended only when its own native session shows that the agent ran.
   const own = sessionEvidenceDue(chat, live, p.now()) && !observedSession(chat, chat.agent ?? run.agent) ? await ownSession({ run, chat, since: launchAnchor(chat), ports: p }) : null;
   const observed = observeLifecycle(chat, live, p.now(), chat.agent ?? run.agent, own?.kind === 'match' ? own.id : null);
+  // A start fact needs the saved session, an explicit matching live identity when live,
+  // and the native session metadata timestamp. Launch and observation times are not starts.
+  let metricsStartAt = null;
+  const kind=chat.agent ?? run.agent, id=chat.session?.id, since=launchAnchor(chat);
+  if (!run.metricsStartRecorded && ['codex','claude'].includes(kind) && validSessionId(id)
+      && Number.isFinite(since) && (live.alive ? live.sessionId === id : observed.state === 'ended')) {
+    try {
+      const folder=expandHome(chat.configDir,p.env ?? process.env);
+      const sessions=await (p.findNativeSessions ?? findNativeSessions)({agent:kind,root:run.root,startedAt:since,endedAt:p.now(),sessionId:id},
+        {env:p.env ?? process.env,...(folder ? (kind === 'claude' ? {claudeConfigDir:folder} : {codexHome:folder}) : {})});
+      if (Array.isArray(sessions) && sessions.length === 1 && sessions[0].id === id && Number.isFinite(sessions[0].startedAt)
+          && sessions[0].startedAt >= since && sessions[0].startedAt <= p.now()) metricsStartAt=sessions[0].startedAt;
+    } catch { /* Missing evidence leaves coverage unknown. */ }
+  }
   // Status saves only positive facts: the exact live agent (running) or end evidence. An unclear observation changes nothing.
   const next = structuredClone(chat);
   if (observed.state === 'ended' || observed.state === 'running' && observed.exact) applyLifecycle(next, observed);
   if (live.alive) delete next.startUnconfirmed;
   const recovered = live.alive && failure;
-  if (!sameFact(next, chat) || recovered) {
-    commitRun(run,p,latest=>{
+  const nativeChange = !sameFact(next, chat) || recovered;
+  if (nativeChange || metricsStartAt !== null) {
+    const saveObservation = () => commitRun(run,p,latest=>{
       const saved=latest.chats.find(item=>sameChat(item,chat));
-      if(saved&&sameFact(saved,chat))copyObservation(saved,next);
+      if(saved&&sameFact(saved,chat)) {
+        copyObservation(saved,next);
+        if (metricsStartAt !== null && !latest.metricsStartRecorded) {
+          latest.metricsStartRecorded=true;
+          latest.metricsObservations=[...(latest.metricsObservations ?? []),{type:'start',at:new Date(metricsStartAt).toISOString(),data:latest.metricsOrigin ?? {origin:'unknown',requiredOutcome:'unknown'}}];
+        }
+
+      }
       if(recovered&&equalFact(latest.chatFailure,failure))clearChatFailure(latest);
     });
+    if (nativeChange) saveObservation();
+    else try { saveObservation(); } catch { /* Existing incomplete coverage remains; retry on a later observation. */ }
   }
   if (live.alive) return ['blocked', 'working'].includes(live.status) ? live.status : null;
   if (failure) return 'unconfirmed';

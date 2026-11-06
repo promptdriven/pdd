@@ -617,6 +617,8 @@ test('Linux start warns about logout when lingering is not enabled; status detec
 
 test('overlapping ticks cannot deliver twice from a snapshot read before lock acquisition', async t => {
   const f = await fixture(t); await f.invoke('start'); f.prompts.length = 0; f.issues = [issue(77)];
+  // Keep the existing native-operation barrier separate from optional telemetry lookup.
+  f.ports.metricsContext = async () => ({toplevel:f.cwd,commonDir:f.cwd});
   const run = f.ports.run; let reads = 0, release;
   f.ports.run = async (cmd, args, opts) => {
     if (cmd === 'git' && ++reads === 2) await new Promise(resolve => { release = resolve; });
