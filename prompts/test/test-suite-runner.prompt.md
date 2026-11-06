@@ -20,7 +20,7 @@ The scenario can check the selected arguments, filtered environment, stdio choic
 
 ```json
 {
-  "status": "draft",
+  "status": "approved",
   "prose_sha256": "caefd075eebf30d20022d45859967a51b1e3236eec884b793f3c2b6023e92f1c",
   "entries": [
     {
