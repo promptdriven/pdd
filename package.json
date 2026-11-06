@@ -22,7 +22,7 @@
     "user_stories/fake-*.md"
   ],
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "test": "node src/test-suite-runner.mjs"
   },
   "engines": {
     "node": ">=22.16.0"
