@@ -18,6 +18,13 @@ const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const line = (stream, text) => stream.write(`${text}\n`);
 // The real reason of an unexpected error, after the fixed safe line.
 const reason = error => { const text = causeText(error?.message ?? error); return text ? ` Reason: ${text}` : ''; };
+// Stdin as text: a string from tests, else the whole stream.
+const readText = async input => {
+  if (typeof input === 'string') return input;
+  if (!input?.[Symbol.asyncIterator]) return '';
+  const chunks = []; for await (const chunk of input) chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks).toString('utf8');
+};
 const skillCount = folders => `${folders.length} PDD skill${folders.length === 1 ? '' : 's'}`;
 const skillNames = folders => folders.map(folder => basename(folder)).join(', ');
 // npx skills update changes only what npx skills add recorded (0.1.8 tester); add replaces any copy.
@@ -49,7 +56,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
   cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, workflowRunner, workflowAreas,
   stdin = process.stdin, confirm, mcpServer, runtimeSlots, contracts, product, productPorts, gitContext, workflowProve, provePorts,
   issueGraph, issueGraphPorts = {}, dependencyIntake, dependencyIntakePorts = {}, autopilotLauncher, autopilotLauncherPorts = {}, workflowAgents = { checkWorkflowAgents }, workflowAgentPorts = {}, setupSkills = defaultSetupSkills,
-  setupProject = defaultSetupProject, setupAgentMcp, autopilot, autopilotPorts = {}, pathDiagnostic = defaultPathDiagnostic } = {}) {
+  setupProject = defaultSetupProject, setupAgentMcp, autopilot, autopilotPorts = {}, autopilotAlerts, autopilotAlertsPorts = {}, pathDiagnostic = defaultPathDiagnostic } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
@@ -97,6 +104,21 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255 || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid Autopilot reply');
         line(result.exitCode === 0 ? stdout : stderr, result.message); return result.exitCode;
       } catch (error) { line(stderr, `The Autopilot command failed.${reason(error)}`); return 1; }
+    }
+    case 'autopilot-alert': case 'autopilot-alerts': {
+      const action = plan.local === 'autopilot-alert' ? 'alert' : plan.operands[0];
+      if (action === 'alert' && plan.options['--input'] !== '-') { line(stderr, 'Use pdd autopilot alert --issue N --kind KIND --input - with the alert JSON on stdin.'); return 2; }
+      try {
+        const module = autopilotAlerts ?? await import('./autopilot-alerts.mjs');
+        let text = '';
+        if (action === 'alert' || action === 'set') {
+          if (action === 'set' && stdin?.isTTY) line(stderr, 'Paste the webhook URL, press Enter, then press Ctrl-D. pdd never prints it.');
+          text = await readText(stdin);
+        }
+        const result = await module.runAutopilotAlerts({ action, cwd, env, text, issue: plan.options['--issue'], kind: plan.options['--kind'], update: plan.options['--update'] === true }, autopilotAlertsPorts);
+        if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255 || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid alert reply');
+        line(result.exitCode === 0 ? stdout : stderr, result.message); return result.exitCode;
+      } catch { line(stderr, 'The Autopilot alert command failed.'); return 1; }
     }
     case 'metrics': {
       const args = [...(plan.commandId === 'metrics' ? [] : [plan.commandId.split('.')[1]]), ...plan.operands];

@@ -58,6 +58,8 @@ The `autopilot start --resume-custody FILE` option passes the file path unchange
 
 - [Autopilot settings](autopilot.prompt.md): required authoring, generation, runtime, verification and testing context for setup and Autopilot dispatch.
 
+- [Autopilot alerts](autopilot-alerts.prompt.md): required native generation, verification and testing context for alert and destination dispatch.
+
 - [Command catalog](command-catalog.prompt.md): required authoring/generation/runtime/verification/testing context for route facts, complete help entries and `PUBLIC_HELP_TEXT` heading, closing, Learn PDD and prompting topic templates. This module renders the common help wrapper and forwards parsed values; it does not own a second help table.
 
 - [Contract commands](contracts.prompt.md): required generation and verification
@@ -82,6 +84,8 @@ Native integration uses the public APIs linked in the route sections below. Runt
 ## Autopilot dispatch
 
 For catalog dispositions `autopilot-start`, `autopilot-stop`, `autopilot-status` and `autopilot-add`, dynamically import [Autopilot launcher](autopilot-launcher.prompt.md). Call its module function `runAutopilotLauncher({command, issues, runs, resumeCustody, cwd, packageRoot, env}, ports)`: command is the disposition suffix, issues are the operands unchanged, runs is the --runs text when present, and resumeCustody is the --resume-custody path when present. Tests may inject `dependencies.autopilotLauncher` and `autopilotLauncherPorts`. Print its {exitCode,message} once, stdout on zero and stderr otherwise, and return that code. Invalid replies or exceptions produce one finite diagnostic and exit 1 without retry. Help and parsing do not load the launcher or check sign-ins. Existing admission applies only to setup and workflow-run; the launcher owns its own startup checks.
+
+For catalog dispositions `autopilot-alert` and `autopilot-alerts`, dynamically import [Autopilot alerts](autopilot-alerts.prompt.md) and call its module function `runAutopilotAlerts({action, cwd, env, text, issue, kind, update}, ports)`. The action is `alert` for `autopilot-alert`, else the `set`, `test` or `clear` operand. For `alert`, `--input` must be `-`; otherwise return 2 with one line before importing the module. Read all stdin as UTF-8 `text` for `alert` and `set` only; when `set` reads a terminal, first print one hint line to stderr. Pass `--issue`, `--kind` and the `--update` flag unchanged. Tests may inject `dependencies.autopilotAlerts` and `autopilotAlertsPorts`. Print the reply once, stdout on zero and stderr otherwise. An invalid reply or exception prints one fixed line without the error text, so a webhook URL can never reach the output, and returns 1.
 
 ## Workflow dispatch
 

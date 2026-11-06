@@ -43,6 +43,11 @@ Catalog four local routes before the product routes: `autopilot.start` (`autopil
 - `pdd autopilot status`: Show this machine's repo, agent and next tick.
 - `pdd autopilot add N...`: Mark named old issues with pdd:autopilot so Autopilot may take them.
 
+Catalog two alert routes after `autopilot.add`. [Autopilot alerts](autopilot-alerts.prompt.md) owns their behavior and validation.
+
+- `autopilot.alert` (`autopilot alert`, local `autopilot-alert`, no operands; text `--issue`, value `--kind` with usage-limit, resource, access, decision, stuck and recovered, text `--input`, flag `--update`). Form `pdd autopilot alert --issue N --kind usage-limit|resource|access|decision|stuck|recovered --input - [--update]`. Help says it is for the coordinator; it records one alert for a real human need or incident and sends it to this machine's destination; it reads `{"cause","tried","need"}` JSON from stdin; a repeat of an open alert sends nothing; `--update` sends a material change; recovered sends one recovery and closes the issue's alerts.
+- `autopilot.alerts` (`autopilot alerts`, local `autopilot-alerts`, one operand of choice set, test or clear, no options). Three forms: `pdd autopilot alerts set` reads a Discord or Slack incoming webhook URL from stdin and saves it for this machine outside every repository, readable only by the user, and never prints it; `pdd autopilot alerts test` sends one test message and confirms the posted message; `pdd autopilot alerts clear` removes the destination. No form takes the URL as an argument. The operand keeps the prefix at two words, so `pdd autopilot alerts --help` works through the existing parser.
+
 The [launcher](autopilot-launcher.prompt.md) owns behavior and --runs numeric interpretation. No fixed run cap, headless flag or additional setup question. Include routes in help and completion. Preserve all unrelated forms and ordering.
 
 ## Public routes

@@ -39,13 +39,23 @@ For ordinary recoverable questions, use best judgment, record why, and continue.
 
 After repeated failed validation, inspect the actual failure, identify its cause and change the repair before another permitted check. Do not abandon a useful correction only because two repair rounds failed. Keep the Story's behavior expectations and required validation. Do not resend an unchanged failed check or an external action with an unknown outcome. If the issue is genuinely blocked, record the cause and next action, preserve its claim and progress, and continue with other proven-eligible work. Release capacity only after positive worker-end evidence.
 
-For an operational incident or a real human decision, use an existing configured notification integration only when it supports sending and readback. Keep the affected repo and issue, cause, attempted action and exact help needed with the original run. Use `pdd workflow ask` and `pdd workflow changes` to keep the question and its answer with that run. If no supported delivery route exists, record this in the run and continue feasible work; do not guess a destination, repeat an unchanged alert each tick or create another run to carry the answer. Send a recovery update when the incident materially changes or ends.
+## Alerts
+
+Alert a person only for a real human need or an operational incident: an AI account usage limit (give the reset time when known), a CPU, memory or disk failure, an access or spending decision, an unresolved product choice, or an issue stuck after its retry time. Do not alert for routine progress or for a question that your best judgment settles. Put the question on the GitHub issue, so the answer stays with the original run. In the run, use `pdd workflow ask`; relay the trusted answer from the issue with `pdd workflow changes`. Do not create another run to carry the answer. Then send one alert with the cause, what you tried and the exact help needed:
+
+```sh
+pdd autopilot alert --issue N --kind usage-limit|resource|access|decision|stuck --input - <<'PDD_ALERT'
+{"cause":"...","tried":"...","need":"..."}
+PDD_ALERT
+```
+
+One issue and kind is one incident. A repeat call sends nothing, so do not send it again each tick. Add `--update` only for a material change. When the incident ends, send `--kind recovered` once with `{"cause":"what changed"}`. Without a destination, or when delivery fails, pdd records the alert on this machine and `pdd autopilot status` shows it; continue feasible work. Never guess, set, test or clear the destination: the person sets it with `pdd autopilot alerts set`.
 
 ## Room, claim and stuck work
 
 4. Work: use the person's configured agent and execution environment. Respect actual provider limits and the person's chosen spending and concurrency settings. Use the repository's own test commands and requirements; no PDD-specific runner pool, free test slot or fixed CPU/memory threshold is required before starting ready work. If an operation cannot run because of an actual resource or service limit, report that operation as waiting or failed and continue unrelated work that can run. Required verification and merge rules still apply. There is no fixed number of runs; `--runs N` sets an optional cap. At most 2 runs change one prompt file; skip a 3rd and take the next free issue.
 5. Claim: add the `pdd:working` label and one short comment that names this machine and coordinator ID. If coordinators race, the earlier label event wins. Skip a claimed issue. The claim keeps Autopilot ownership until removed, even while the run is paused or the launcher is stopped. Remove the label when the run ends.
-8. Stuck: no progress (commit, push, comment or PR event) for 60 minutes, or 30M tokens in one PR stage: add the `pdd:stuck` label, write one comment with the cause, and take the next issue.
+8. Stuck: no progress (commit, push, comment or PR event) for 60 minutes, or 30M tokens in one PR stage: add the `pdd:stuck` label, write one comment with the cause, and take the next issue. Send one `stuck` alert.
 
 ## Merge conditions
 
