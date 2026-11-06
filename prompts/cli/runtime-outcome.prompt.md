@@ -9,10 +9,13 @@ positive evidence about that test; missing or unrecognized evidence is never
 
 ## Outcomes
 
-Module function `outcomeFor(answer, {test, steps = [], kind = answer.command, timeLimit = false, sourceFiles})`
+Module function `outcomeFor(answer, {test, steps = [], kind = answer.command, timeLimit = false, sourceFiles, capacityUncertain = false})`
 returns one outcome object. `test` is the selected test path, `steps` its authored
 steps (each with `entry_path`), `kind` is `lint` or `check`, and `timeLimit` is
-true when the client found a typed step time-limit stop in the answer.
+true when the client found a typed step time-limit stop in the answer. The client
+sets `capacityUncertain` for a Check when raw capacity evidence is incomplete or
+conflicting. That flag returns `unknown` before generic retryable/not-started
+refusal classification; the answer cannot project as busy or not run.
 
 | State | When | Retained fields |
 |---|---|---|
@@ -30,15 +33,18 @@ it. An ended job that will not change is never `unknown`.
 Rules for every answer, in this order:
 
 1. A time-limit stop is `unknown`.
-2. Refusal records are `result.refusals`; `report.refusal` stands in only when that
+2. For a check, `capacityUncertain: true` is `unknown`, even when the raw receipt
+   also says retryable and not started. It never becomes `not_run` from that
+   generic refusal rule.
+3. Refusal records are `result.refusals`; `report.refusal` stands in only when that
    list is empty. Any refusal record that the server declares `retryable: true` (on
    the record or in its `details`), in an answer with `dispatch: not_started`
    (report or answer), is `not_run` with its own code and the server's text, whatever
    the code is (for example `pool-copy-unavailable` or `login-queue-timeout`). The
    check did not start, so it is never refused or failed. Retryability is never
    inferred from a code name or from text.
-3. Lint answers follow [Lint evidence](#lint-evidence-and-scope).
-4. For a check: job state `unknown` is `unknown` with the server's `why` as reason;
+4. Lint answers follow [Lint evidence](#lint-evidence-and-scope).
+5. For a check: job state `unknown` is `unknown` with the server's `why` as reason;
    job state `failed` is `failed`; job state `refused`, or report `verdict:
    refused`, is `refused`. The first refusal record gives `code`, `field` (else
    `at`, else `section`), `fix` and `message` (`reason`, else `message`, else

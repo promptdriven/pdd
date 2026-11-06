@@ -29,6 +29,14 @@
     {
       "id": "AC7",
       "text": "Submissions by the same authenticated owner at the same runtime reuse a clear capacity observation for about 10 seconds."
+    },
+    {
+      "id": "AC8",
+      "text": "A Check capacity refusal is busy only when one fail-closed accounting rule proves typed complete zero work across every supplied surface; otherwise it stays unknown and no new Check UUID, claim or POST is sent."
+    },
+    {
+      "id": "AC9",
+      "text": "A plain `pdd test --read` reads saved Check IDs only; complete-zero capacity evidence alone never creates a fresh Check attempt, while an authorized in-command or `--retry` can continue after existing waits and guards."
     }
   ],
   "cases": [
@@ -106,6 +114,26 @@
       "id": "interrupt-pause-preserves-earlier-evidence",
       "given": "a command has earlier confirmed completed work and separately an earlier potentially paid dispatch with unknown outcome, while a later confirmed busy or maintenance refusal is paused; Ctrl-C occurs in that pause; compare the existing after-admission-before-current-POST stop boundary",
       "required_observation": "post-pause text says Stopped. with earlier submitted IDs and confirmed/unknown outcomes, preserves receipts and known/unknown accounting, retains every uncertain paid lease and its read-only recovery advice, and sends nothing further; before-current-POST text stays Stopped before sending. scoped to the unsent request without claiming earlier work was unsent; existing exits and JSON schema stay unchanged"
+    },
+    {
+      "id": "strict-direct-zero",
+      "given": "direct HTTP 429 server-full; usage.calls=0, known_calls=0, unknown_calls=1, usage.accounting_complete=true; provider_calls=0; retryable=true",
+      "required_observation": "one Check UUID/claim/POST only; preserve raw admission and request ID; unknown usage, no busy/can_retry, no zero-charge or fresh-submit advice; read the same ID"
+    },
+    {
+      "id": "strict-terminal-zero",
+      "given": "matching terminal/GET Check refusal has retryable=true and unknown_calls=1, or top-level accounting_complete=false while usage/report claim complete zero",
+      "required_observation": "one fail-closed accounting rule rejects the receipt; retain every raw observation and identity; no capacity replay or false busy classification"
+    },
+    {
+      "id": "saved-capacity-read",
+      "given": "a saved complete-zero capacity admission with a future retry time is read with plain --read, then separately with authorized --retry",
+      "required_observation": "plain read sends GET only and allocates no Check UUID/claim/POST; explicit retry may continue only after the saved wait and all existing guards"
+    },
+    {
+      "id": "strict-duplicate-proof",
+      "given": "direct Check capacity admission has missing or malformed calls/provider evidence, conflicting duplicate counters, dispatch flags or completion flags",
+      "required_observation": "no new Check UUID/claim/POST; preserve raw response and show unknown accounting without busy or zero-charge metadata"
     }
   ]
 }

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-outcome.prompt.md (sha256: 83fa331108693f7464676e0dde1cab6e7fd6bd2380c44534060116c0d662eeb2).
+// Generated from prompts/cli/runtime-outcome.prompt.md (sha256: 9dc6d2a4e44b4552e544d834e7f60fcab7191aeec5a92351e64db856fbbc8110).
 // What happened to one selected test: the one place that turns a server answer into an outcome.
 const objects = value => Array.isArray(value) ? value.filter(item => item && typeof item === 'object' && !Array.isArray(item)) : [];
 const count = value => Number.isSafeInteger(value) && value >= 0;
@@ -13,14 +13,15 @@ const refused = (refusals, extra = {}) => {
 };
 
 // Module function: one outcome for one selected test from one server answer.
-export function outcomeFor(answer, { test, steps = [], kind = answer?.command, timeLimit = false, sourceFiles } = {}) {
-  const outcome = answerOutcome(answer, { test, steps, kind, timeLimit, sourceFiles });
+export function outcomeFor(answer, { test, steps = [], kind = answer?.command, timeLimit = false, sourceFiles, capacityUncertain = false } = {}) {
+  const outcome = answerOutcome(answer, { test, steps, kind, timeLimit, sourceFiles, capacityUncertain });
   return kind === 'lint' ? { ...outcome, compatibility: selectedCompatibility(answer, test, sourceFiles) } : outcome;
 }
 
-function answerOutcome(answer, { test, steps, kind, timeLimit, sourceFiles }) {
+function answerOutcome(answer, { test, steps, kind, timeLimit, sourceFiles, capacityUncertain }) {
   const result = answer?.result, report = result?.report;
   if (timeLimit) return { state: 'unknown', reason: 'The step was stopped at its time limit.' };
+  if (capacityUncertain && kind === 'check') return { state: 'unknown', reason: 'Check capacity accounting is incomplete or conflicting.' };
   if (answer?.state === 'queued') return { state: 'queued', ...(count(answer.queue?.ahead) ? { ahead: answer.queue.ahead } : {}) };
   if (answer?.state === 'running') {
     const progress = progressFrom(answer.progress);

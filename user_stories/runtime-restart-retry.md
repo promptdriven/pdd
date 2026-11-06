@@ -8,6 +8,7 @@ I can recover a check interrupted by a confirmed runtime restart once while reta
 2. Each Story row gets at most one replacement across repeated or concurrent saved reads and retries.
 3. Recovery preserves both attempts' request IDs, receipts and known or unknown usage.
 4. Waiting through restart recovery avoids repeated source packing while still checking the saved source before an authorized replacement.
+5. Restart aggregation keeps each request ID's known calls, unknown calls and completeness; an incomplete original plus complete replacement stays incomplete. Keep prior raw observations and do not settle them from a later complete-looking receipt because this Runtime contract defines no reconciliation signal.
 
 ## Rules to check
 
