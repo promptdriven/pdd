@@ -87,7 +87,7 @@ function validateBundle(b) {
   if (b.snapshots !== undefined) { if (!Array.isArray(b.snapshots)) throw Error('Invalid metrics snapshots'); b.snapshots.forEach(s => validateSnapshot(s,b.repo)); }
   validateEvents(b.events); if (b.events.some(e => e.repo !== b.repo)) throw Error('Metrics bundle repository mismatch');
 }
-function validateSnapshot(s, repository) {
+export function validateSnapshot(s, repository) {
   if (!s || Object.keys(s).some(k => !['snapshotId','repo','observedAt','source','events'].includes(k)) || !/^snapshot:[0-9a-f-]{36}$/i.test(s.snapshotId) || s.repo !== repository || !iso(s.observedAt) || !identifier(s.source) || !Array.isArray(s.events)) throw Error('Invalid metrics snapshot');
   validateEvents(s.events);
   if (new Set(s.events.map(e => e.issue)).size !== s.events.length || s.events.some(e => e.repo !== repository || e.type !== 'selection' || e.data.snapshotId !== s.snapshotId || e.source !== s.source || e.observedAt !== s.observedAt || e.at !== s.observedAt)) throw Error('Invalid metrics snapshot membership');

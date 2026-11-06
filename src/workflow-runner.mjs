@@ -1,3 +1,4 @@
+import { validateSnapshot } from './metrics-store.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
 // Generated from prompts/cli/workflow-runner.prompt.md (sha256: 33dc44a7518d2fb7bf424398daf54496e911059e51d2bb93abd85e77ba1308dd).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
@@ -449,6 +450,7 @@ async function startRunCommand({ name, issue, agent = 'codex', base, adoptCorpus
       if (/^snapshot:[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(snapshotId ?? '')
           && decision.id === decisionId && decision.repo === repo && decision.issue === number && decision.offered === true) {
         const snapshot=JSON.parse(readFileSync(join(context.commonDir,'pdd','metrics','snapshots',`${snapshotId.slice(9)}.json`),'utf8'));
+        validateSnapshot(snapshot,repo);
         const matchingSelection=event=>event?.schema === 'pdd.metrics.event.v1' && event.id === `${decisionId}:selection`
           && event.repo === repo && event.issue === number && event.type === 'selection' && event.data?.snapshotId === snapshotId;
         const selected=Array.isArray(decision.events) ? decision.events.filter(matchingSelection) : [];
