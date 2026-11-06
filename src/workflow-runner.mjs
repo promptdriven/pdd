@@ -442,10 +442,19 @@ async function startRunCommand({ name, issue, agent = 'codex', base, adoptCorpus
   catch (error) { return fail(`pdd could not read issue ${issue} with gh (${causeOf(error)}). Check "gh auth status", the origin remote and the issue number.`); }
   const number = binding.issue.number, runDir = runDirFor(context.commonDir, number), existing = readRun(runDir);
   let actualOrigin = origin === 'manual' ? 'manual' : 'unknown';
-  if (origin === 'autopilot' && /^[0-9a-f-]{36}$/.test(decisionId ?? '')) {
-    try { const decision=JSON.parse(readFileSync(join(context.commonDir,'pdd','metrics','decisions',`${decisionId}.json`),'utf8'));
-      const committed=!decision.pendingSnapshot || (()=>{const snapshot=JSON.parse(readFileSync(join(context.commonDir,'pdd','metrics','snapshots',`${decision.snapshotId.slice(9)}.json`),'utf8')); return snapshot.snapshotId===decision.snapshotId && snapshot.repo===binding.repository.toLowerCase() && snapshot.events?.some(event=>event.id===`${decisionId}:selection` && event.issue===number);})();
-      if (committed && decision.repo?.toLowerCase() === binding.repository.toLowerCase() && decision.issue === number && decision.id === decisionId && decision.offered === true && decision.events?.some(event => event.type === 'selection' && event.repo === binding.repository.toLowerCase() && event.issue === number)) actualOrigin='autopilot';
+  if (origin === 'autopilot' && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(decisionId ?? '')) {
+    try {
+      const decision=JSON.parse(readFileSync(join(context.commonDir,'pdd','metrics','decisions',`${decisionId}.json`),'utf8'));
+      const repo=binding.repository.toLowerCase(), snapshotId=decision.snapshotId;
+      if (/^snapshot:[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(snapshotId ?? '')
+          && decision.id === decisionId && decision.repo === repo && decision.issue === number && decision.offered === true) {
+        const snapshot=JSON.parse(readFileSync(join(context.commonDir,'pdd','metrics','snapshots',`${snapshotId.slice(9)}.json`),'utf8'));
+        const matchingSelection=event=>event?.schema === 'pdd.metrics.event.v1' && event.id === `${decisionId}:selection`
+          && event.repo === repo && event.issue === number && event.type === 'selection' && event.data?.snapshotId === snapshotId;
+        const selected=Array.isArray(decision.events) ? decision.events.filter(matchingSelection) : [];
+        if (snapshot.snapshotId === snapshotId && snapshot.repo === repo && Array.isArray(snapshot.events)
+            && selected.length === 1 && snapshot.events.some(event=>matchingSelection(event) && sameFact(event,selected[0]))) actualOrigin='autopilot';
+      }
     } catch { /* Unknown evidence must not block a workflow. */ }
   }
   let cliVersion='unknown', skillVersion='unknown';

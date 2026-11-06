@@ -15,8 +15,12 @@ for (const scenario of ['manual','unknown','autopilot','unlinked autopilot']) {
     const f=await fixture(t); f.ports.skipMetricsDelivery=true;
     const id='11234567-89ab-4cde-8fab-123456789abc';
     if (scenario==='autopilot') {
-      const dir=join(f.source,'.git','pdd','metrics','decisions'); mkdirSync(dir,{recursive:true});
-      writeFileSync(join(dir,`${id}.json`),JSON.stringify({id,repo:'example/project',issue:17,offered:true,events:[{type:'selection',repo:'example/project',issue:17}]}));
+      const dir=join(f.source,'.git','pdd','metrics'), snapshotId='snapshot:21234567-89ab-4cde-8fab-123456789abc';
+      const observedAt='2026-10-27T17:00:00.000Z';
+      const selection={schema:'pdd.metrics.event.v1',id:`${id}:selection`,type:'selection',repo:'example/project',issue:17,source:'install:fixture',at:observedAt,observedAt,data:{snapshotId,inScope:true,state:'ready',reasons:[]}};
+      mkdirSync(join(dir,'decisions'),{recursive:true});mkdirSync(join(dir,'snapshots'),{recursive:true});
+      writeFileSync(join(dir,'decisions',`${id}.json`),JSON.stringify({id,repo:'example/project',issue:17,offered:true,snapshotId,pendingSnapshot:true,events:[selection]}));
+      writeFileSync(join(dir,'snapshots',`${snapshotId.slice(9)}.json`),JSON.stringify({snapshotId,repo:'example/project',source:'install:fixture',observedAt,events:[selection]}));
     }
     const options=scenario==='manual'?{origin:'manual',outcome:'code'}:scenario.includes('autopilot')?{origin:'autopilot',decisionId:id}:{};
     assert.equal((await launch(f,options)).exitCode,0);
