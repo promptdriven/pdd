@@ -1,23 +1,27 @@
-# Node test suite runner
+# Node test-suite launcher
 
-This new module owns the child process used by the package's `npm test` entry. `src/test-suite-runner.mjs` exports module function `runTestSuite({cwd, testFiles, environment}, ports)`. It starts the selected Node test files through the injected `nodeTest.run` program port and returns that run's exit status and captured output unchanged.
+`src/test-suite-runner.mjs` exports module function `runTestSuite({cwd, testFiles, environment}, ports)`. The npm test entry runs this module and passes its numeric child exit code to npm.
 
-Before launch, omit every environment entry whose name starts with `HERDR_` or equals `PDD_AGENT_SESSION`. Keep all other supplied entries and values. Set child stdio to `["ignore", "pipe", "pipe"]`: the child gets no caller input and does not inherit the caller's output streams. Do not connect to or read a Herdr or agent session. Wait for the Node test process to exit, then return its `exit_code`, `stdout` and `stderr` unchanged. Do not hide test failures or diagnostics.
+## Entry and file selection
 
-The `environment` input is one row per variable. Preserve each supplied `testFiles` item and its order.
+The package script must be `"test": "node src/test-suite-runner.mjs"`. The entry calls `runTestSuite` with the current working directory, positional test-file arguments and environment. With no test-file arguments, start the current Node executable with `["--test", "test/*.test.mjs"]`, preserving the existing top-level suite selection. When invoked as `npm test -- <file...>`, start it with `["--test", ...testFiles]`; only those supplied paths run. Do not append a focused selection to the full suite or invoke a shell.
 
-The interpreter can check only the injected launch arguments and supplied program replies. Real process creation, environment inheritance, file descriptors and termination are native effects. A passing prompt check does not prove that the OS child has no live socket or that an actual test process exits.
+Call the injected `nodeTest.run` once with the selected Node arguments. Remove each environment entry whose name starts with `HERDR_` or equals `PDD_AGENT_SESSION`; preserve every other supplied name and value. Set child stdio to `["ignore", "pipe", "pipe"]`. The child receives no caller stdin. Forward each stdout and stderr chunk to the matching caller stream as soon as it arrives, preserving each stream's bytes and order. Do not accumulate and replay output after exit, add a timeout, or print a replacement diagnostic. Wait for the child to close and return its numeric exit code unchanged, including nonzero codes.
+
+Do not inspect or connect to a Herdr socket or agent session. This contract filters the named environment entries and ignores caller stdin. It intentionally preserves caller-visible stdout and stderr through live per-chunk forwarding. It does not promise to remove every inherited descriptor or prove socket isolation.
+
+The scenario can check the selected arguments, filtered environment, stdio choice and supplied exit code. It cannot model stream events or prove live forwarding, OS descriptor behavior or that a real child terminates. Those effects need native checks.
 
 ## Dependencies
 
-- [Package scripts](../../package.json), required for authoring and native verification of how `npm test` selects the suite and enters this new module.
+- [Package scripts](../../package.json), required to keep the `npm test` entry, its default `test/*.test.mjs` selection and focused-file arguments aligned.
 
 <details><summary>Runtime interface</summary>
 
 ```json
 {
   "status": "draft",
-  "prose_sha256": "c8d88e91576c6a481a30c698cce7b754c30b21e3742216af5fb0338f56fd438d",
+  "prose_sha256": "caefd075eebf30d20022d45859967a51b1e3236eec884b793f3c2b6023e92f1c",
   "entries": [
     {
       "operation": "runTestSuite",
@@ -25,7 +29,7 @@ The interpreter can check only the injected launch arguments and supplied progra
         "type": "object",
         "properties": {
           "cwd": {"type": "string", "minLength": 1},
-          "testFiles": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1},
+          "testFiles": {"type": "array", "items": {"type": "string", "minLength": 1}},
           "environment": {
             "type": "array",
             "items": {
@@ -41,8 +45,8 @@ The interpreter can check only the injected launch arguments and supplied progra
       },
       "result_schema": {
         "type": "object",
-        "properties": {"exit_code": {"type": "integer"}, "stdout": {"type": "string"}, "stderr": {"type": "string"}},
-        "required": ["exit_code", "stdout", "stderr"],
+        "properties": {"exit_code": {"type": "integer"}},
+        "required": ["exit_code"],
         "additionalProperties": false
       },
       "errors": []
@@ -62,7 +66,7 @@ The interpreter can check only the injected launch arguments and supplied progra
             "type": "object",
             "properties": {
               "cwd": {"type": "string", "minLength": 1},
-              "testFiles": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1},
+              "args": {"type": "array", "items": {"type": "string"}},
               "environment": {
                 "type": "array",
                 "items": {
@@ -74,20 +78,20 @@ The interpreter can check only the injected launch arguments and supplied progra
               },
               "stdio": {"type": "array", "items": {"type": "string", "enum": ["ignore", "pipe"]}, "minItems": 3, "maxItems": 3}
             },
-            "required": ["cwd", "testFiles", "environment", "stdio"],
+            "required": ["cwd", "args", "environment", "stdio"],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
-            "properties": {"exit_code": {"type": "integer"}, "stdout": {"type": "string"}, "stderr": {"type": "string"}},
-            "required": ["exit_code", "stdout", "stderr"],
+            "properties": {"exit_code": {"type": "integer"}},
+            "required": ["exit_code"],
             "additionalProperties": false
           }
         }
       ]
     }
   ],
-  "limits": {"max_steps": 4, "max_model_calls": 12},
+  "limits": {"max_steps": 12, "max_model_calls": 12},
   "conventions": []
 }
 ```

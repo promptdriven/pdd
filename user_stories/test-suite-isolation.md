@@ -1,18 +1,18 @@
-# Run tests inside a workflow chat
+# Run the Node test suite
 
-I can run `npm test` inside a workflow chat and get the same test result as outside the chat, without tests reading the chat's live session or waiting for input I did not provide.
+I can run the repository's tests from npm inside or outside a workflow chat.
 
 ## Acceptance criteria
 
-1. Running the same tests with the same test outcomes inside and outside a workflow chat gives the same exit status and output.
-2. A test never reads the live Herdr session or the agent session of the shell that runs it.
-3. A test never waits on input that it does not supply.
-4. A failed test keeps its nonzero exit status and useful failure output.
+1. `npm test` selects the top-level `test/*.test.mjs` files by default. `npm test -- <file...>` selects only the supplied files.
+2. A test child receives no environment variable whose name starts with `HERDR_` or equals `PDD_AGENT_SESSION`.
+3. A test child receives no caller stdin. Each stdout and stderr chunk reaches the matching caller stream as soon as the child writes it.
+4. Runs with the same selected test outcomes have the same exit status. The launcher preserves the child's exact numeric status, including a nonzero status.
 
 ## Rules to check
 
-The child test process receives no environment variable whose name starts with `HERDR_` or equals `PDD_AGENT_SESSION`. It does not inherit the caller's stdin, stdout or stderr. Its stdin is ignored, and its stdout and stderr are captured. Any child that receives one of those session markers or caller streams is forbidden.
+The focused-file list replaces the default set; it never runs beside the full suite. Keep every environment entry except the named session markers. Ignore stdin. Forward stdout and stderr chunks as they arrive; do not accumulate and replay them after exit. Do not compare separate runs' output bytes or timing lines: each run keeps its own live streams, and elapsed times can differ. Do not inspect or connect to a live Herdr socket or agent session. The Story does not claim that every descriptor or socket is isolated.
 
 ## Native verification boundary
 
-The prompt test checks the injected launch arguments and fixed program replies. It does not create a real Node child, inspect OS socket ownership or prove termination. Verify those effects with native tests in the code step. The issue's hang and its cause remain unproved by the current reproduction.
+Prompt scenarios can check selection arguments, environment filtering, stdio choices and supplied child exit codes. They cannot prove live stream timing, OS descriptor behavior, socket isolation or native child termination. The cause of the reported hang remains unknown. A passing containment or native check alone does not establish the cause or resolve the historical hang.
