@@ -256,7 +256,7 @@ test('trusted issue comments are filtered, and failed delivery is retried', asyn
   assert.match(f.prompts[1], /trusted body/); assert.doesNotMatch(f.prompts[1], /OUTSIDER/);
 });
 
-test('stop disables only the timer and status is local; runs is optional, never fixed', async t => {
+test('stop disables only the timer; status does not poll GitHub; runs is optional, never fixed', async t => {
   const f = await fixture(t); await f.invoke('start', { runs: '7' });
   assert.match(f.prompts[0], /"runs":7/);
   const polls = f.polls.length;
@@ -264,7 +264,8 @@ test('stop disables only the timer and status is local; runs is optional, never 
   const before = f.herdrCalls.length;
   await f.invoke('stop'); await f.tick(); await f.invoke('stop');
   assert.equal(f.herdrCalls.length, before); assert.equal(f.polls.length, polls);
-  assert.match((await f.invoke('status')).message, /stopped/);
+  const stoppedStatus = (await f.invoke('status')).message;
+  assert.match(stoppedStatus, /Autopilot disabled/); assert.match(stoppedStatus, /timer inactive/);
   assert.equal((await f.invoke('start', { runs: '0' })).exitCode, 2);
 });
 
@@ -648,6 +649,84 @@ test('Linux start warns about logout when lingering is not enabled; status detec
   const result = await f.invoke('start'); assert.equal(result.exitCode, 0); assert.match(result.message, /loginctl enable-linger/);
   f.serverRunning = false; const status = await f.invoke('status');
   assert.doesNotMatch(status.message, /Autopilot running/); assert.match(status.message, /Herdr/);
+});
+
+test('status reports the saved coordinator state without waking it or querying GitHub', async t => {
+  for (const coordinatorStatus of ['working', 'starting', 'idle', 'blocked', 'done']) {
+    const f = await fixture(t); await f.invoke('start');
+    f.agentStatus = coordinatorStatus;
+    const polls = f.polls.length, prompts = f.prompts.length, timerCalls = f.timers.length;
+    const status = await f.invoke('status');
+    assert.equal(status.exitCode, 0);
+    assert.match(status.message, new RegExp(`coordinator ${coordinatorStatus}`));
+    assert.equal(f.polls.length, polls);
+    assert.equal(f.prompts.length, prompts);
+    assert.ok(f.timers.slice(timerCalls).every(([action]) => action === 'status'));
+    assert.ok(f.herdrCalls.some(args => args[0] === 'agent' && args[1] === 'get'));
+  }
+});
+
+test('status shows a working saved coordinator after stop without restarting or querying GitHub', async t => {
+  const f = await fixture(t); await f.invoke('start'); await f.invoke('stop');
+  f.agentStatus = 'working';
+  const timers = f.timers.length, prompts = f.prompts.length, herdrCalls = f.herdrCalls.length;
+  const gitHubCalls = f.runs.filter(([command]) => command === 'gh').length;
+  const status = await f.invoke('status');
+  assert.equal(status.exitCode, 0);
+  assert.match(status.message, /Autopilot disabled/); assert.match(status.message, /timer inactive/);
+  assert.match(status.message, /Herdr running/); assert.match(status.message, /coordinator working/);
+  assert.ok(f.timers.slice(timers).every(([action]) => action === 'status'));
+  assert.ok(f.herdrCalls.slice(herdrCalls).some(args => args[0] === 'agent' && args[1] === 'get'));
+  assert.equal(f.runs.filter(([command]) => command === 'gh').length, gitHubCalls);
+  assert.equal(f.prompts.length, prompts);
+  assert.equal(f.herdrCalls.slice(herdrCalls).some(args => args[0] === 'pane' && args[1] === 'run'), false);
+});
+
+test('status shows a missing saved coordinator after stop without restarting or querying GitHub', async t => {
+  const f = await fixture(t); await f.invoke('start'); await f.invoke('stop');
+  f.agentStarted = false;
+  const timers = f.timers.length, prompts = f.prompts.length, herdrCalls = f.herdrCalls.length;
+  const gitHubCalls = f.runs.filter(([command]) => command === 'gh').length;
+  const status = await f.invoke('status');
+  assert.equal(status.exitCode, 0);
+  assert.match(status.message, /Autopilot disabled/); assert.match(status.message, /timer inactive/);
+  assert.match(status.message, /Herdr running/); assert.match(status.message, /coordinator unavailable/);
+  assert.match(status.message, /missing/);
+  assert.doesNotMatch(status.message, /coordinator (?:working|starting|idle|blocked|done)/);
+  assert.ok(f.timers.slice(timers).every(([action]) => action === 'status'));
+  assert.ok(f.herdrCalls.slice(herdrCalls).some(args => args[0] === 'agent' && args[1] === 'get'));
+  assert.equal(f.runs.filter(([command]) => command === 'gh').length, gitHubCalls);
+  assert.equal(f.prompts.length, prompts);
+  assert.equal(f.herdrCalls.slice(herdrCalls).some(args => args[0] === 'pane' && args[1] === 'run'), false);
+});
+
+test('status does not call a live Herdr server a running repo coordinator when the saved agent is gone', async t => {
+  const f = await fixture(t); await f.invoke('start'); f.agentStarted = false;
+  const status = await f.invoke('status');
+  assert.equal(status.exitCode, 0);
+  assert.match(status.message, /coordinator unavailable \(missing\)/i);
+  assert.doesNotMatch(status.message, /Autopilot running/);
+});
+
+test('status reports an unrecorded or mismatched coordinator as unavailable', async t => {
+  const f = await fixture(t); await f.invoke('start');
+  const state = f.state(); delete state.paneId; delete state.workspaceId;
+  writeFileSync(f.stateFile(), JSON.stringify(state));
+  let status = await f.invoke('status');
+  assert.match(status.message, /coordinator unavailable \(not recorded\)/i);
+  assert.doesNotMatch(status.message, /Autopilot running/);
+
+  state.paneId = 'p1'; state.workspaceId = 'w1'; writeFileSync(f.stateFile(), JSON.stringify(state));
+  const herdr = f.ports.herdr;
+  f.ports.herdr = async args => {
+    if (args[0] === 'agent' && args[1] === 'get') return { result: { type: 'agent_info', agent: {
+      pane_id: 'p1', workspace_id: 'w1', cwd: join(f.dir, 'other-repo'), agent: 'codex', agent_status: 'idle'
+    } } };
+    return herdr(args);
+  };
+  status = await f.invoke('status');
+  assert.match(status.message, /coordinator unavailable \(saved target does not match\)/i);
+  assert.doesNotMatch(status.message, /Autopilot running/);
 });
 
 test('macOS start does not check Linux lingering or warn about loginctl', async t => {

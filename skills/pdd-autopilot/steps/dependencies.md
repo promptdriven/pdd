@@ -16,8 +16,14 @@ their existing owners. It is distinct from steps/handoff.md.
   trusted requirements/source packet, and send `{request,analysis}` to
   `pdd dependencies complete --input -`. Keep required source locators/revisions.
   Analyze a new issue's impact in both directions before replacing old heads.
-- Reuse saved current reviews and completed unaffected impact. Keep questions and
-  unknown facts pending. Graph reads use `pdd graph` and never trigger analysis.
+- Reuse saved current reviews and completed unaffected impact. A stale or
+  unchecked review is refreshed through the ordinary `pdd dependencies prepare`,
+  analysis and `pdd dependencies complete --input -` path; do not treat its old
+  result as current. Keep questions and unknown facts pending. After a review
+  changes, read the graph again before starting affected work. A partial graph
+  does not prove the backlog is empty: continue only issues already proved
+  eligible, and keep checking the rest when the current graph is available.
+  Graph reads use `pdd graph` and never trigger analysis.
 - After the existing claim winner is established, retain the launcher's opaque
   coordinatorId in the same single claim comment that names the machine. Include a JSON object with string fields repository, coordinatorId, machine and labelEventId, matching the winning label event. Different
   coordinators on one machine keep different IDs. Reuse the existing label/event

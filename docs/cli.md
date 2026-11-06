@@ -40,7 +40,7 @@ These commands store settings and determine trust. Selecting a mode starts no ru
 |---|---|
 | `pdd autopilot start [--runs N] [--resume-custody FILE]` | Check sign-ins and the running pdd version, open a dedicated interactive Herdr session and check for work immediately. A user timer checks again every 30 minutes. `--runs` sets an optional concurrent-run cap; omission has no fixed cap. `--resume-custody` supplies the verified original-owner projection for explicit recovery |
 | `pdd autopilot stop` | Disable this repo's timer on this machine and let the current agent step finish |
-| `pdd autopilot status` | Show this machine's repo, agent, timer state and next tick without contacting GitHub or waking an agent |
+| `pdd autopilot status` | Show this machine's repo, agent, timer, coordinator health and next tick without contacting GitHub or waking an agent; an idle coordinator is healthy |
 | `pdd autopilot add N...` | Label named issues `pdd:autopilot`, allowing Autopilot to take older issues |
 
 The launcher uses the repository settings module to read root `pdd.json`. An

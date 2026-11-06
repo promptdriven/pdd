@@ -811,16 +811,6 @@ test('AUTOPILOT10: the Autopilot text holds no team process, times, machines or 
   }
 });
 
-// Wrong: after two FAILs the agent sends the same work again instead of checking the premise.
-test('AUTOPILOT11: one fix round, then a premise check and a new plan before pdd:stuck', () => {
-  for (const name of WORKFLOWS) {
-    const text = has(`${name}/steps/autopilot.md`, 'After a FAIL, do one fix round.', 'After a second FAIL, check the premise',
-      'Write the cause and a new plan in one comment, add the `pdd:stuck` label (`gh issue edit N --add-label pdd:stuck`)', 'Never change a test to make it pass.',
-      'Something runs a prompt (a test, a command or another prompt) that has no interface block: draft the block from the prompt text through pdd and save it. A prompt that nothing runs needs none.');
-    assert.ok(text.indexOf('check the premise') < text.indexOf('new plan') && text.indexOf('new plan') < text.indexOf('pdd:stuck'), name);
-  }
-});
-
 // Wrong (two machines on one repo): both work on one issue, or a dead claim blocks the issue forever.
 test('AUTOPILOT12: claim remains until removed and competing coordinators back off', () => {
   has('pdd-autopilot/SKILL.md', 'add the `pdd:working` label and one short comment that names this machine and coordinator ID.',

@@ -31,3 +31,7 @@ The rules for prompts are in `guide.md`. Use them for this review.
 
 - Read the full diff. Sum up the approved behavior, the tests that ran and the limits that remain.
 - Never invent a PR link or say that a PR merged when it did not.
+
+## Behavioral tests
+
+Derive expectations from accepted requirements before viewing outputs. Check observable behavior, state, effects and diagnostic meaning. For native tests call the public operation. Could a signature-only change or empty stub pass? If so, improve the behavior check. Require exact text only when the accepted interface does. If Runtime cannot express the meaning, report that coverage untested and use independent behavior review or native checks; do not invent a comparator or claim a semantic pass.

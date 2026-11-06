@@ -14,6 +14,6 @@ It changes these rules of SKILL.md and RUNBOOK §2, §4, §11, §12 and §14:
 
 Still in force: product calls the issue does not settle, actions that cannot be undone, `--max-calls`, strict mode, and never sending a failed check again.
 
-After a FAIL, do one fix round. After a second FAIL, check the premise: is the issue, the Story or the plan wrong? Write the cause and a new plan in one comment, add the `pdd:stuck` label (`gh issue edit N --add-label pdd:stuck`), and stop work on this issue. From its existing worktree, record that stop with `pdd workflow park --reason TEXT` using the actual cause; an authorized coordinator may do this without waking the stopped worker.
+After repeated failed validation, inspect the actual failure, identify its cause and change the repair before another permitted check. Two failed rounds do not by themselves mean this issue is blocked. Keep repairing while a useful correction is available, preserving behavior expectations and required validation. If a real blocker remains, record its cause and next action in the original run; keep its claim and progress, and let the coordinator continue independent eligible work. Never repeat an unchanged failed check or an external action with an unknown outcome.
 
 Something runs a prompt (a test, a command or another prompt) that has no interface block: draft the block from the prompt text through pdd and save it. A prompt that nothing runs needs none. No prompt covers the code: use the verdict "no prompt covers this yet".

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: b23f513cf0a284ad55fb9a89cfa6b1d15859544f757fa762eed2a24dda5f8cd0).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 1ada2c5d311bbb3edfd2db154d4a151d1a43ecb969769856b9a4ddbc5d3954ad).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch } from 'node:fs';
@@ -134,6 +134,27 @@ async function herdr(args, p) {
   let reply; try { reply = JSON.parse(result.code === 0 ? result.stdout : result.stderr || result.stdout); } catch { reply = {}; }
   if (result.code !== 0 || reply.error) throw Object.assign(Error(reply.error?.message || 'Herdr could not deliver; run herdr --help.'), { code: reply.error?.code, confirmedRejection: Boolean(reply.error && typeof reply.error === 'object') });
   return reply;
+}
+async function coordinatorHealth(state, p) {
+  if (!state.paneId || !state.workspaceId || !state.agent?.kind) return { state: 'unavailable', reason: 'not recorded' };
+  let agent;
+  try {
+    const reply = await herdr(['agent', 'get', state.paneId], p);
+    if (reply?.result?.type !== 'agent_info') return { state: 'unavailable', reason: 'status unreadable' };
+    agent = reply.result.agent;
+  } catch (error) {
+    if (['agent_not_found', 'pane_not_found'].includes(error.code)) return { state: 'unavailable', reason: 'missing' };
+    if (error.code === 'server_not_running') return { state: 'unavailable', reason: 'Herdr is not running' };
+    return { state: 'unavailable', reason: 'status unreadable' };
+  }
+  if (!agent || agent.pane_id !== state.paneId || agent.workspace_id !== state.workspaceId
+    || !samePath(agent.cwd, state.cwd) || agent.agent !== state.agent.kind) {
+    return { state: 'unavailable', reason: 'saved target does not match' };
+  }
+  if (!['working', 'starting', 'idle', 'blocked', 'done'].includes(agent.agent_status)) {
+    return { state: 'unavailable', reason: 'state unknown' };
+  }
+  return { state: agent.agent_status };
 }
 async function openWorkspace(state, p) {
   if (!p.herdr) {
@@ -1065,10 +1086,15 @@ export async function runAutopilotLauncher(input, ports = {}) {
     p = portsFor(state, { ...ports, env: input.env });
     if (command === 'start') { releaseAdmission(); releaseAdmission = null; }
     if (command === 'status') {
-      const active = Boolean(state.enabled && await timer('status', state, p));
-      let server = true;
-      if (active) { try { server = (await herdr(['status', 'server', '--json'], p)).running === true; } catch { server = false; } }
-      return ok(`Autopilot ${active ? server ? 'running' : 'unavailable (Herdr is not running)' : 'stopped'}: ${state.repo ?? state.cwd} · ${state.agent?.id ?? 'no agent'} · next tick: ${active && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}`);
+      const timerActive = Boolean(await timer('status', state, p));
+      let serverRunning = false;
+      try { serverRunning = (await herdr(['status', 'server', '--json'], p)).running === true; } catch { /* Report unavailable below. */ }
+      const coordinator = serverRunning
+        ? await coordinatorHealth(state, p)
+        : { state: 'unavailable', reason: 'Herdr is not running' };
+      const coordinatorState = coordinator.state === 'unavailable'
+        ? `unavailable (${coordinator.reason})` : coordinator.state;
+      return ok(`Autopilot ${state.enabled ? 'enabled' : 'disabled'}; timer ${timerActive ? 'active' : 'inactive'}; Herdr ${serverRunning ? 'running' : 'unavailable'}; coordinator ${coordinatorState}: ${state.repo ?? state.cwd} · ${state.agent?.id ?? 'no agent'} · next tick: ${timerActive && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}`);
     }
     if (command === 'stop') {
       if (previous) { state.enabled = false; state.nextTick = null; state.controlRevision = randomUUID(); save(stateFile, state); }

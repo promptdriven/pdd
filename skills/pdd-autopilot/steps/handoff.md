@@ -35,6 +35,12 @@ keeps its issue allocation and claim. Completed or cancelled work releases its
 allocation before the completion request. Running or unconfirmed work does not
 yield.
 
+For ordinary recoverable questions, use best judgment, record why, and continue. The explicit Auto-and-start authority also covers routine non-strict workflow approvals through the existing native approval route; it is not checker evidence or a human reply. Keep strict approval and repository-required human reviews. A genuinely blocked issue keeps its claim and history while independent eligible work proceeds.
+
+After repeated failed validation, inspect the actual failure, identify its cause and change the repair before another permitted check. Do not abandon a useful correction only because two repair rounds failed. Keep the Story's behavior expectations and required validation. Do not resend an unchanged failed check or an external action with an unknown outcome. If the issue is genuinely blocked, record the cause and next action, preserve its claim and progress, and continue with other proven-eligible work. Release capacity only after positive worker-end evidence.
+
+For an operational incident or a real human decision, use an existing configured notification integration only when it supports sending and readback. Keep the affected repo and issue, cause, attempted action and exact help needed with the original run. Use `pdd workflow ask` and `pdd workflow changes` to keep the question and its answer with that run. If no supported delivery route exists, record this in the run and continue feasible work; do not guess a destination, repeat an unchanged alert each tick or create another run to carry the answer. Send a recovery update when the incident materially changes or ends.
+
 ## Room, claim and stuck work
 
 4. Work: use the person's configured agent and execution environment. Respect actual provider limits and the person's chosen spending and concurrency settings. Use the repository's own test commands and requirements; no PDD-specific runner pool, free test slot or fixed CPU/memory threshold is required before starting ready work. If an operation cannot run because of an actual resource or service limit, report that operation as waiting or failed and continue unrelated work that can run. Required verification and merge rules still apply. There is no fixed number of runs; `--runs N` sets an optional cap. At most 2 runs change one prompt file; skip a 3rd and take the next free issue.

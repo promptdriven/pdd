@@ -114,9 +114,17 @@ stop first saves this repo as disabled so queued ticks cannot act even if timer 
 timer definition, leaving the current step to
 finish. Stop checks and removes the owned timer even if saved installation state
 is absent or false, including after a failed start. Repeated stop is harmless. Status reads local state and timer activity;
-show repo, agent, running/stopped, and next tick (or none), without waking AI or
-querying GitHub. Report unavailable Herdr separately instead of claiming healthy
-running state when its server is absent. Concurrent ticks for one local state serialize with a local
+show enabled/disabled, timer activity, Herdr availability, coordinator state,
+repo, agent, and next tick (or none), without waking AI or querying GitHub.
+Whenever Herdr is available, inspect the saved coordinator with the existing
+`agent get` operation, including when the timer is inactive. Confirm that its pane,
+workspace, repository path and provider match saved local state. Report a missing,
+unreadable or mismatched coordinator as unavailable; a live Herdr server alone
+does not mean this repo's coordinator is running. For a matching coordinator,
+report its actual `working`, `starting`, `idle`, `blocked` or `done` state; idle is healthy.
+Status never repairs, replaces or wakes a coordinator. Report unavailable Herdr
+separately instead of claiming healthy running state when its server is absent.
+Concurrent ticks for one local state serialize with a local
 lock; independent machines have separate state. A lock blocks only for a valid
 live owner. Empty, malformed and dead-owner locks are reclaimed. Publish the
 owner PID atomically so another tick never sees an unfinished new lock. Reload
