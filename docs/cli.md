@@ -316,3 +316,5 @@ Workflow approval reads `pdd.json` from the main checkout (`sourceRoot`), outsid
 `pdd graph` reads the saved dependency graph; `pdd graph --open` opens its viewer. Use `pdd graph --issue N` to select an issue, or `pdd graph --open --issue N --repo OWNER/REPO` to select a repository explicitly.
 
 `pdd dependencies prepare [--issue N]` prepares a coordinator packet. `pdd dependencies complete --input -` reads a structured completion from stdin. `pdd workflow yield N` hands off automatic capacity after the current worker has stopped.
+
+`pdd workflow park --reason TEXT` records an automatic stop from its existing run worktree without releasing its claim or treating the worker as done.

@@ -9,6 +9,8 @@ Catalog `dependencies prepare` (local `dependencies-prepare`, optional text `--i
 
 Catalog `graph` (local `issue-dependency-graph`, no operands, flags `--open` and text options `--issue`, `--repo`). Show forms `pdd graph`, `pdd graph --open`, `pdd graph --issue N` and `pdd graph --open --issue N --repo OWNER/REPO`.
 
+Catalog `workflow park` as local `workflow-park`, with required text `--reason`; show `pdd workflow park --reason TEXT` for recording an automatic stop in its existing worktree.
+
 ## Authoring
 
 Read the full [Prompting guide](../../docs/prompting-guide.md) before authoring prompts or Stories. Follow the [public alpha boundary](public-boundary.prompt.md) for native authoring/generation scope and shared local command policy. These authoring obligations do not add runtime facts: the complete catalog route declarations below own what the pure data module exposes.

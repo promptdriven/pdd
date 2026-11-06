@@ -404,6 +404,7 @@ const revising = run => { const last = run.changes?.at(-1); return Boolean(last 
 function describe(run, chat = null, { drafts = [], nothing = false } = {}) {
   const area = run.areas[run.area], pr1 = askArea(run) && prOf(run, askArea(run).name);
   if (run.state === 'cancelled') return run.cancelled?.state === 'replaced' ? 'replaced' : 'cancelled';
+  if (run.state === 'stuck') return `stuck: ${run.parkReason ?? 'automatic work stopped'}`;
   if (activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting'].includes(chat)) return chatStatusWords(run, chat);
   if (openQuestion(run) && run.state !== 'completed') return `waiting for you: ${run.question.text.split('\n')[0]}`;
   if (chat === 'blocked' && run.state === 'running') return `waiting for you: the chat asks a question in its window (pdd workflow open ${run.number})`;
@@ -2173,6 +2174,29 @@ ${approvalGuide(run)}`, p, true);
   } finally { releaseAdmission?.(); }
 }
 
+// Record an automatic stop without releasing or waking its worker.
+async function parkAutomaticRunCommand({ reason, cwd }, ports) {
+  const p = deps(ports), run = await runForWorktree(cwd, p);
+  if (!run) return fail('Park requires the existing run worktree.');
+  const text = String(reason ?? '').trim();
+  if (!text) return fail('Give the actual stop reason with --reason.');
+  if (!run.automaticOrigin) return fail('Park requires an automatic run.');
+  if (ended(run)) return fail('An ended run cannot be parked.');
+  if (explicitlyStopped(run, p)) return fail('Autopilot is stopped.');
+  const ownership = await continuationOwnership(run, cwd, p);
+  if (ownership) return fail(ownership);
+  const selectedArea=run.area, selectedGate=structuredClone(run.gate ?? null), selectedState=run.state, selectedOrigin=structuredClone(run.automaticOrigin);
+  protectProgress(run,p,{approval:true});
+  if (run.state === 'stuck' && run.parkReason === text) return done('Automatic run is already parked.');
+  commitRun(run,p,latest=>{
+    if (latest.area !== selectedArea || !sameGate(latest.gate,selectedGate) || latest.state !== selectedState || !equalFact(latest.automaticOrigin,selectedOrigin) || explicitlyStopped(latest,p))
+      throw Object.assign(Error('The run or Autopilot changed; look again.'),{code:'workflow_progress_refused'});
+    latest.state='stuck'; latest.parkReason=text;
+  });
+  return done('Automatic run parked: '+text);
+}
+export const parkAutomaticRun = saveGuard(parkAutomaticRunCommand);
+
 // The agent asks the person in the middle of a step: status shows the question until the next done or the answer.
 async function askPersonCommand({ text, cwd }, ports) {
   const p = deps(ports);
@@ -2584,11 +2608,12 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false } = 
   const replacementPending = run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase);
   const problem = replacementPending || activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting'].includes(chat);
   const question = openQuestion(run), writing = !problem && Boolean(run.gate) && !question && chat === 'working';
-  const group = run.state === 'cancelled' ? 'cancelled' : run.state === 'completed' ? 'done' : problem ? 'waiting' : writing ? 'working'
-    : run.gate || question || running && ['blocked', 'stopped'].includes(chat) ? 'waiting' : prOf(run, area?.name) ? 'pr-open' : 'working';
+  const group = run.state === 'cancelled' ? 'cancelled' : run.state === 'completed' ? 'done' : run.state === 'stuck' ? 'waiting' : problem ? 'waiting' : writing ? 'working'
+    : run.state === 'stuck' || run.gate || question || running && ['blocked', 'stopped'].includes(chat) ? 'waiting' : prOf(run, area?.name) ? 'pr-open' : 'working';
   const step = area?.steps.find(item => !run.done[item]);
   const words = group === 'cancelled' ? (run.cancelled?.state === 'replaced' ? 'replaced' : 'cancelled')
     : group === 'done' ? (run.gate?.kind === 'ask-code' ? 'done at PR 1' : 'done')
+    : run.state === 'stuck' ? `stuck: ${run.parkReason ?? 'automatic work stopped'}`
     : replacementPending ? `chat replacement pending at ${run.chatReplacement.phase}; run pdd workflow open ${run.number} --new`
     : problem ? chatStatusWords(run, chat)
     : question ? `waiting for you: ${question.text.split('\n')[0]}`
