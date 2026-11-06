@@ -1,0 +1,45 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/autopilot-codex-command-context.md",
+  "criteria": [
+    {"id": "AC1", "text": "With a Codex profile that keeps only basic shell variables (`inherit = \"core\"`), the Codex start of the coordinator sets `PDD_AUTOPILOT_CONTEXT` for the commands of the chat to the same start context that the coordinator process gets."},
+    {"id": "AC2", "text": "When the coordinator pane has a Herdr pane id and socket path, the Codex start also sets `HERDR_PANE_ID` and `HERDR_SOCKET_PATH` for the commands of the chat to those values."},
+    {"id": "AC3", "text": "The Codex start keeps its folder-trust and update-check settings, and Autopilot writes no Codex configuration."}
+  ],
+  "initial_world": {
+    "saved_state": {
+      "enabled": true,
+      "repo": "owner/repo",
+      "cwd": "/repo",
+      "coordinatorId": "coord-3031",
+      "machine": "mac-3031",
+      "activatedAt": "2026-11-06T00:00:00.000Z",
+      "agent": {"id": "codex", "kind": "codex", "command": "codex"},
+      "environment": {"HOME": "/home/sam", "CODEX_HOME": "/home/sam/.codex-core"}
+    },
+    "codex_profile": {"/home/sam/.codex-core/config.toml": "[shell_environment_policy]\ninherit = \"core\"\n"},
+    "herdr_pane": {"pane_id": "p1", "env": {"HERDR_PANE_ID": "p1", "HERDR_SOCKET_PATH": "/home/sam/.config/herdr/sessions/pdd-autopilot/herdr.sock"}},
+    "launches": [],
+    "config_writes": []
+  },
+  "simulation": {
+    "herdr.pane_run": {"action": "port.write", "world_pointer": "/launches", "result_template": {}},
+    "codex.config_write": {"action": "port.write", "world_pointer": "/config_writes", "result_template": {}}
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "codex-core-profile-start",
+      "entry_path": "prompts/cli/autopilot-launcher.prompt.md",
+      "operation": "runAutopilotLauncher",
+      "input": {"command": "start", "cwd": "/repo", "issues": [], "env": {"HOME": "/home/sam", "PATH": "/usr/bin:/bin", "CODEX_HOME": "/home/sam/.codex-core"}},
+      "checks": [
+        {"criterion_id": "AC1", "target": "world", "path": "/launches/0/command_environment_set/PDD_AUTOPILOT_CONTEXT", "op": "equals", "value": "{\"version\":\"pdd.autopilot-coordinator.v1\",\"repository\":\"owner/repo\",\"coordinatorId\":\"coord-3031\",\"machine\":\"mac-3031\",\"activation\":\"2026-11-06T00:00:00.000Z\"}"},
+        {"criterion_id": "AC2", "target": "world", "path": "/launches/0/command_environment_set/HERDR_PANE_ID", "op": "equals", "value": "p1"},
+        {"criterion_id": "AC2", "target": "world", "path": "/launches/0/command_environment_set/HERDR_SOCKET_PATH", "op": "equals", "value": "/home/sam/.config/herdr/sessions/pdd-autopilot/herdr.sock"},
+        {"criterion_id": "AC3", "target": "world", "path": "/launches/0/codex_config/check_for_update_on_startup", "op": "equals", "value": false},
+        {"criterion_id": "AC3", "target": "world", "path": "/config_writes", "op": "equals", "value": []}
+      ]
+    }
+  ]
+}
