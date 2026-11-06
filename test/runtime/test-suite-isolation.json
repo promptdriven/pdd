@@ -1,0 +1,91 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/test-suite-isolation.md",
+  "criteria": [
+    {"id": "AC1", "text": "Running the same tests with the same test outcomes inside and outside a workflow chat gives the same exit status and output."},
+    {"id": "AC2", "text": "A test never reads the live Herdr session or the agent session of the shell that runs it."},
+    {"id": "AC3", "text": "A test never waits on input that it does not supply."},
+    {"id": "AC4", "text": "A failed test keeps its nonzero exit status and useful failure output."}
+  ],
+  "initial_world": {"kv": {"node_test_calls": 0}},
+  "simulation": {
+    "nodeTest.run": {
+      "action": "fixture.lookup",
+      "world_pointer": "/kv/node_test_calls",
+      "cases": [
+        {
+          "args": {"cwd": "/fixture/repo", "testFiles": ["test/product.formal.test.mjs", "test/product-unsent-checks.vectors.test.mjs"], "environment": [{"name": "HOME", "value": "/fixture/home"}, {"name": "PATH", "value": "/fixture/bin"}], "stdio": ["ignore", "pipe", "pipe"]},
+          "call_index": 1,
+          "result": {"exit_code": 0, "stdout": "synthetic test summary: 2 passed\n", "stderr": ""}
+        },
+        {
+          "args": {"cwd": "/fixture/repo", "testFiles": ["test/product.formal.test.mjs", "test/product-unsent-checks.vectors.test.mjs"], "environment": [{"name": "HOME", "value": "/fixture/home"}, {"name": "PATH", "value": "/fixture/bin"}], "stdio": ["ignore", "pipe", "pipe"]},
+          "call_index": 2,
+          "result": {"exit_code": 0, "stdout": "synthetic test summary: 2 passed\n", "stderr": ""}
+        },
+        {
+          "args": {"cwd": "/fixture/repo", "testFiles": ["test/product.formal.test.mjs", "test/product-unsent-checks.vectors.test.mjs"], "environment": [{"name": "HOME", "value": "/fixture/home"}, {"name": "PATH", "value": "/fixture/bin"}], "stdio": ["ignore", "pipe", "pipe"]},
+          "call_index": 3,
+          "result": {"exit_code": 1, "stdout": "synthetic test summary: 1 failed\n", "stderr": "synthetic assertion diagnostic\n"}
+        },
+        {
+          "args": {"cwd": "/fixture/repo", "testFiles": ["test/product.formal.test.mjs", "test/product-unsent-checks.vectors.test.mjs"], "environment": [{"name": "HOME", "value": "/fixture/home"}, {"name": "PATH", "value": "/fixture/bin"}], "stdio": ["ignore", "pipe", "pipe"]},
+          "call_index": 4,
+          "result": {"exit_code": 1, "stdout": "synthetic test summary: 1 failed\n", "stderr": "synthetic assertion diagnostic\n"}
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "outside-success",
+      "entry_path": "prompts/test/test-suite-runner.prompt.md",
+      "operation": "runTestSuite",
+      "input": {"cwd": "/fixture/repo", "testFiles": ["test/product.formal.test.mjs", "test/product-unsent-checks.vectors.test.mjs"], "environment": [{"name": "HOME", "value": "/fixture/home"}, {"name": "PATH", "value": "/fixture/bin"}]},
+      "checks": [
+        {"criterion_id": "AC1", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
+        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "equals", "value": "synthetic test summary: 2 passed\n"},
+        {"criterion_id": "AC1", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
+        {"criterion_id": "AC2", "target": "calls", "path": "/resources/test-suite-runner-nodeTest-run", "op": "equals", "value": 1}
+      ]
+    },
+    {
+      "step_id": "workflow-success",
+      "entry_path": "prompts/test/test-suite-runner.prompt.md",
+      "operation": "runTestSuite",
+      "input": {"cwd": "/fixture/repo", "testFiles": ["test/product.formal.test.mjs", "test/product-unsent-checks.vectors.test.mjs"], "environment": [{"name": "HOME", "value": "/fixture/home"}, {"name": "PATH", "value": "/fixture/bin"}, {"name": "HERDR_ENV", "value": "1"}, {"name": "HERDR_SESSION", "value": "synthetic-session"}, {"name": "HERDR_SOCKET_PATH", "value": "/fixture/not-a-live-socket"}, {"name": "HERDR_PANE_ID", "value": "synthetic-pane"}, {"name": "HERDR_TAB_ID", "value": "synthetic-tab"}, {"name": "HERDR_WORKSPACE_ID", "value": "synthetic-workspace"}, {"name": "PDD_AGENT_SESSION", "value": "1"}]},
+      "checks": [
+        {"criterion_id": "AC1", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
+        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "equals", "value": "synthetic test summary: 2 passed\n"},
+        {"criterion_id": "AC1", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
+        {"criterion_id": "AC2", "target": "calls", "path": "/resources/test-suite-runner-nodeTest-run", "op": "equals", "value": 1},
+        {"criterion_id": "AC3", "target": "calls", "path": "/resources/test-suite-runner-nodeTest-run", "op": "equals", "value": 1}
+      ]
+    },
+    {
+      "step_id": "outside-failure",
+      "entry_path": "prompts/test/test-suite-runner.prompt.md",
+      "operation": "runTestSuite",
+      "input": {"cwd": "/fixture/repo", "testFiles": ["test/product.formal.test.mjs", "test/product-unsent-checks.vectors.test.mjs"], "environment": [{"name": "HOME", "value": "/fixture/home"}, {"name": "PATH", "value": "/fixture/bin"}]},
+      "checks": [
+        {"criterion_id": "AC4", "target": "result", "path": "/exit_code", "op": "not_equals", "value": 0},
+        {"criterion_id": "AC4", "target": "result", "path": "/stderr", "op": "equals", "value": "synthetic assertion diagnostic\n"},
+        {"criterion_id": "AC4", "target": "result", "path": "/stdout", "op": "equals", "value": "synthetic test summary: 1 failed\n"}
+      ]
+    },
+    {
+      "step_id": "workflow-failure",
+      "entry_path": "prompts/test/test-suite-runner.prompt.md",
+      "operation": "runTestSuite",
+      "input": {"cwd": "/fixture/repo", "testFiles": ["test/product.formal.test.mjs", "test/product-unsent-checks.vectors.test.mjs"], "environment": [{"name": "HOME", "value": "/fixture/home"}, {"name": "PATH", "value": "/fixture/bin"}, {"name": "HERDR_ENV", "value": "1"}, {"name": "HERDR_SESSION", "value": "synthetic-session"}, {"name": "HERDR_SOCKET_PATH", "value": "/fixture/not-a-live-socket"}, {"name": "HERDR_PANE_ID", "value": "synthetic-pane"}, {"name": "HERDR_TAB_ID", "value": "synthetic-tab"}, {"name": "HERDR_WORKSPACE_ID", "value": "synthetic-workspace"}, {"name": "PDD_AGENT_SESSION", "value": "1"}]},
+      "checks": [
+        {"criterion_id": "AC4", "target": "result", "path": "/exit_code", "op": "not_equals", "value": 0},
+        {"criterion_id": "AC4", "target": "result", "path": "/stderr", "op": "equals", "value": "synthetic assertion diagnostic\n"},
+        {"criterion_id": "AC4", "target": "result", "path": "/stdout", "op": "equals", "value": "synthetic test summary: 1 failed\n"}
+      ]
+    }
+  ]
+}
