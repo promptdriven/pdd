@@ -20,6 +20,12 @@ test('REF lossless JSON retains authored numeric-looking keys and preserves toke
   assert.equal(Object.getPrototypeOf(JSON.parse(result.text)),Object.prototype);
 });
 
+test('REF long plain and escape-dense strings keep their exact source tokens', () => {
+  const files = {'contracts/x.json':`{"type":"string","description":"${'a'.repeat(1e6)}\\"\\\\\\u00e9\\n","default":"${'\\n'.repeat(4e6)}"}`};
+  const result = expand('{"$contract":"contracts/x.json#"}',files);
+  assert.equal(result.text,files['contracts/x.json']);
+});
+
 test('REF roots and nested resource schemas expand; prose, literal annotations and real $ref stay literal', () => {
   const src = prompt({status:'draft',entries:[],resources:[{operations:[{arguments_schema:{type:'array',items:{$contract:'contracts/x.json#'}},result_schema:{oneOf:[{$contract:'contracts/x.json#'},{type:'string',default:{$contract:'missing'}}]}}]}]});
   const result = expand(src,{'contracts/x.json':'{"type":"boolean"}'},'prompt');

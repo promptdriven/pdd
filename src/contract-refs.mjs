@@ -1,4 +1,4 @@
-// Generated from prompts/cli/contract-refs.prompt.md (sha256: 92a844075d65a211c3f3b05bbe8537ca4cb45e30d73a28ad4227cb90f6cf18cc).
+// Generated from prompts/cli/contract-refs.prompt.md (sha256: 8ebd7bf6bf6ea14d1c1cbd92744288880bf54d5c7d74d646367774e26ae38acd).
 // Numbers remain tokens until serialization, including values outside binary64.
 class JsonNumber { constructor(text) { this.text = text; Object.freeze(this); } }
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value) && !(value instanceof JsonNumber);
@@ -11,11 +11,24 @@ const keysOf = value => {
   const written=new Set(layout.keys);
   return [...layout.keys.filter(key=>Object.hasOwn(value,key)),...Object.keys(value).filter(key=>!written.has(key))];
 };
+// Strings are scanned by hand: any regex for a string body either backtracks
+// exponentially or overflows the regex stack at the source size limit.
+function lex(text) {
+  const tokens = [], scalar = /-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null|[{}\[\]:,"]/g;
+  for (let match; (match = scalar.exec(text));) {
+    if (match[0] !== '"') { tokens.push(match); continue; }
+    let end = match.index + 1;
+    while (end < text.length && text[end] !== '"') end += text[end] === '\\' ? 2 : 1;
+    tokens.push(Object.assign([text.slice(match.index, end + 1)], {index:match.index}));
+    scalar.lastIndex = end + 1;
+  }
+  return tokens;
+}
 // JSON.parse remains the value decoder. This lexical index records the source
 // spans and written member order which JavaScript's object enumeration loses.
 function parse(text) {
   const value = JSON.parse(text, (_key, item, context) => typeof item === 'number' ? new JsonNumber(context.source) : item);
-  const tokens = [...text.matchAll(/"(?:[^"\\]+|\\[\s\S])*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null|[{}\[\]:,]/g)];
+  const tokens = lex(text);
   let index = 0;
   function locate(item) {
     const first = tokens[index++], start = first.index;
