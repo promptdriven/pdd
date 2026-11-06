@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: ef10496beab5afc7a017290be6a7200a911c9a20ecb90c93c9daef37a87ded8f).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 33dc44a7518d2fb7bf424398daf54496e911059e51d2bb93abd85e77ba1308dd).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -1889,14 +1889,14 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, packageRoot = 
     // A draft prompt in PR 1: pdd does not offer the code PR, and says how to approve the prompt first.
     const drafts = await pr1Drafts(run, p);
     if (drafts.length) {
-      await sendToChat(currentChat(run), `pdd opened PR 1: ${url}. The person approved it in their terminal. PR 1 has draft prompts, so the code PR waits. Tell them exactly: "PR 1 is open: ${url}. ${approveFirst(run, drafts)}" Then stop.
-${approvalGuide(run)}`, p);
-      return done([...head, `PR 1: ${url}`, approveFirst(run, drafts)].join('\n'));
+      const notice = await deliverRequest(run, `pdd opened PR 1: ${url}. The person approved it in their terminal. PR 1 has draft prompts, so the code PR waits. Tell them exactly: "PR 1 is open: ${url}. ${approveFirst(run, drafts)}" Then stop.
+${approvalGuide(run)}`, p, true);
+      return done([...head, `PR 1: ${url}`, approveFirst(run, drafts), ...noticeWarnings(notice)].join('\n'));
     }
     if (!await confirm(p, `Make the code PR now and approve the code gate and all selected draft prompts for ${label}? PR 1: ${url} (y/N) `)) {
-      await sendToChat(currentChat(run), `pdd opened PR 1: ${url}. The person approved it in their terminal and stops here for now. Tell them exactly: "PR 1 is open: ${url}. ${codeLater(run)}" Then stop.
-${approvalGuide(run)}`, p);
-      return done([...head, `PR 1: ${url}`, `Stopped at PR 1. ${codeLater(run)}`].join('\n'));
+      const notice = await deliverRequest(run, `pdd opened PR 1: ${url}. The person approved it in their terminal and stops here for now. Tell them exactly: "PR 1 is open: ${url}. ${codeLater(run)}" Then stop.
+${approvalGuide(run)}`, p, true);
+      return done([...head, `PR 1: ${url}`, `Stopped at PR 1. ${codeLater(run)}`, ...noticeWarnings(notice)].join('\n'));
     }
   }
   if (beforePr && askCode) saved = null;
@@ -1925,11 +1925,12 @@ ${approvalGuide(run)}`, p);
   });
   approvalRecorded();
   const next = run.areas[run.area];
+  const finalNotices = requestSnapshot(run, p).pendingRequests?.filter(entry => entry.kind === 'notice' && entry.area === area.name && entry.area !== next.name).map(entry => finalNotice(entry, false, 'warning: ')) ?? [];
   let chat;
   try { chat = await startNextChat(run, p, packageRoot); }
   catch (error) {
-    if(error?.code==='workflow_progress_refused')throw error; return fail(`${carried.map(line => `${line}\n`).join('')}Approved the ${area.name} area of ${label}.${said} The ${next.name} chat startup was not confirmed (${error.code ?? 'error'}). Start it: pdd workflow open ${run.number}`); }
-  return done([...carried, `Approved the ${area.name} area of ${label}.${said}${based}`,
+    if(error?.code==='workflow_progress_refused')throw error; return fail(`${carried.map(line => `${line}\n`).join('')}Approved the ${area.name} area of ${label}.${said} The ${next.name} chat startup was not confirmed (${error.code ?? 'error'}). Start it: pdd workflow open ${run.number}\n${finalNotices.join("\n")}`); }
+  return done([...carried, ...finalNotices, `Approved the ${area.name} area of ${label}.${said}${based}`,
     `Started area ${run.area + 1} of ${run.areas.length}: ${next.name} (${next.steps.join(', ')}) in a new chat: Herdr session pdd, tab "${chat.label}".`,
     `Watch it: pdd workflow open ${run.number}`, ...(agent ? ['This chat\'s work is done. Stop here.'] : [])].join('\n'));
 }
@@ -1993,7 +1994,7 @@ function readDeliveryJournal(run, p) {
   try { journal = JSON.parse(fs.readFileSync(join(run.runDir, 'delivery-journal.json'), 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw error; return { requests: [] }; }
   if (!journal || !Array.isArray(journal.requests) || journal.requests.some(entry => !entry || typeof entry.id !== 'string' || !entry.id ||
-    typeof entry.text !== 'string' || !['pending', 'uncertain', 'delivered'].includes(entry.state) || !['answer', 'change'].includes(entry.kind) ||
+    typeof entry.text !== 'string' || !['pending', 'uncertain', 'delivered'].includes(entry.state) || !['answer', 'change', 'notice'].includes(entry.kind) ||
     typeof entry.area !== 'string' || !entry.area || typeof entry.paneId !== 'string' || !entry.paneId || !Number.isFinite(entry.at) ||
     entry.inFlight !== undefined && typeof entry.inFlight !== 'boolean') || new Set(journal.requests.map(entry => entry.id)).size !== journal.requests.length) throw Error('Malformed delivery journal');
   return journal;
@@ -2002,21 +2003,27 @@ const uptakeQuote = value => "'" + value.replaceAll("'", "'\"'\"'") + "'";
 const uptakeCommand = (id, p) => `${p.pdd ?? pddFor(p, PACKAGE_ROOT)} ${PUBLIC_COMMAND_ROUTES.find(route => route.id === 'workflow.request-uptake').prefix.join(' ')} ${uptakeQuote(id)} --summary ${uptakeQuote('what I changed')}`;
 const deliveryTime = (value, p = {}) => typeof value !== 'number' || !Number.isFinite(value) || Math.abs(value) > 8640000000000000 ? 'unknown' : new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', ...(p.timeZone ? { timeZone: p.timeZone } : {}) }).format(new Date(value));
 const uptakeReceipt = (entry, p) => `Request ${entry.id}: delivered at ${deliveryTime(entry.deliveredAt, p)}; ${entry.ackedAt == null ? 'not yet acknowledged by the agent' : `acknowledged at ${deliveryTime(entry.ackedAt, p)}: ${entry.ackSummary ?? ''}`}.`;
+// An undelivered pdd notice keeps the approval's success and adds its delivery result as warning lines.
+const noticeWarnings = result => result.exitCode === 0 ? [] : result.message.split('\n').map(line => `warning: ${line}`);
+// A status row of one journal entry; a pdd notice says so, and its text line shows only the notice's first line.
+const requestRow = ({ id, text, area, paneId, kind }) => ({ id, text, area, paneId, ...(kind === 'notice' ? { kind } : {}) });
+const shownText = entry => entry.kind === 'notice' ? `pdd notice: ${oneLine(entry.text.split('\n')[0]).slice(0, 160)}` : entry.text;
 function requestSnapshot(run, p) {
   try {
     const entries = readDeliveryJournal(run, p).requests;
     return { requests: entries.filter(entry => entry.kind === 'change' && entry.state === 'delivered')
       .map(entry => ({ id: entry.id, text: entry.text, area: entry.area, deliveredAt: entry.deliveredAt ?? null, ackedAt: entry.ackedAt ?? null, ackSummary: entry.ackSummary ?? null })),
-      pendingRequests: entries.filter(entry => !entry.inFlight && entry.state === 'pending').map(({ id, text, area, paneId }) => ({ id, text, area, paneId })),
-      uncertainRequests: entries.filter(entry => !entry.inFlight && entry.state === 'uncertain').map(({ id, text, area, paneId }) => ({ id, text, area, paneId })),
-      inFlightRequests: entries.filter(entry => entry.inFlight).map(({ id, text, area, paneId }) => ({ id, text, area, paneId })) };
+      pendingRequests: entries.filter(entry => !entry.inFlight && entry.state === 'pending').map(entry => ({ ...requestRow(entry), ...(typeof entry.reason === 'string' && entry.reason ? { reason: entry.reason } : {}) })),
+      uncertainRequests: entries.filter(entry => !entry.inFlight && entry.state === 'uncertain').map(requestRow),
+      inFlightRequests: entries.filter(entry => entry.inFlight).map(requestRow) };
   } catch { return { requests: null, inFlightRequests: null, pendingRequests: null, uncertainRequests: null, requestWarning: 'Change-request visibility unavailable: could not read the delivery journal. Check the run folder.' }; }
 }
-const protectedRequestAdvice = entry => `Request ${entry.id}: ${entry.text}. Original area ${entry.area}, pane ${entry.paneId}. Wait for the current send to finish before checking the original chat or typing anything. If it remains stuck after waiting, pdd will not automatically clear or resend protected ownership. First verify the original chat before manually supplying anything absent.`;
-function requestLines(snapshot, { openOnly = false, agent = false, ended = false, p = {} } = {}) {
+const protectedRequestAdvice = entry => `Request ${entry.id}: ${shownText(entry)}. Original area ${entry.area}, pane ${entry.paneId}. Wait for the current send to finish before checking the original chat or typing anything. If it remains stuck after waiting, pdd will not automatically clear or resend protected ownership. First verify the original chat before manually supplying anything absent.`;
+const finalNotice = (entry, ended = false, framingPrefix = '') => `${framingPrefix}Request ${entry.id}: pdd notice was not sent and later changes will not send it.${ended ? " The run ended." : ""} Original ${entry.area} chat, pane ${entry.paneId}:\n${entry.text}\n${framingPrefix}Last delivery reason: ${entry.reason ?? "unknown"}.`;
+function requestLines(snapshot, { openOnly = false, agent = false, ended = false, currentArea, p = {} } = {}) {
   if (snapshot.requestWarning) return [snapshot.requestWarning];
   return [...snapshot.requests.filter(entry => (!ended || !openOnly) && (!openOnly || entry.ackedAt == null)).map(entry =>
-    `${uptakeReceipt(entry, p)} Area ${entry.area}: ${entry.text}${agent ? `\nTell the person about this outstanding request. After actually addressing this request, run: ${uptakeCommand(entry.id, p)}` : ""}`), ...snapshot.pendingRequests.map(entry => `Request ${entry.id}: ${ended ? 'pending, not sent; run ended. Original' : 'pending, saved for the original'} ${entry.area} chat, pane ${entry.paneId}: ${entry.text}`), ...snapshot.uncertainRequests.map(entry => `Request ${entry.id}: uncertain, may already be in the original ${entry.area} chat, pane ${entry.paneId}: ${entry.text}. Check that original chat.`), ...snapshot.inFlightRequests.map(entry => agent ? `Request ${entry.id}: delivery in progress. Tell the person about this outstanding request.` : protectedRequestAdvice(entry))];
+    `${uptakeReceipt(entry, p)} Area ${entry.area}: ${entry.text}${agent ? `\nTell the person about this outstanding request. After actually addressing this request, run: ${uptakeCommand(entry.id, p)}` : ""}`), ...snapshot.pendingRequests.map(entry => entry.kind === 'notice' && (ended || currentArea && entry.area !== currentArea) ? finalNotice(entry, ended) : `Request ${entry.id}: ${ended ? 'pending, not sent; run ended. Original' : 'pending, saved for the original'} ${entry.area} chat, pane ${entry.paneId}: ${shownText(entry)}${entry.reason ? ` Not sent: ${entry.reason}.` : ''}`), ...snapshot.uncertainRequests.map(entry => `Request ${entry.id}: uncertain, may already be in the original ${entry.area} chat, pane ${entry.paneId}: ${shownText(entry)}. Check that original chat.`), ...snapshot.inFlightRequests.map(entry => agent ? `Request ${entry.id}: delivery in progress. Tell the person about this outstanding request.` : protectedRequestAdvice(entry))];
 }
 function doneWithRequests(result, run, p) {
   if (result.exitCode !== 0) return result;
@@ -2077,28 +2084,35 @@ async function deliveryJournal(run, p, action, { recover = true } = {}) {
 export async function changeRun({ ref, text, cwd }, ports) {
   const p = deps(ports), found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
-  let run = found.run;
+  return deliverRequest(found.run, text, p);
+}
+
+// Journal custody and FIFO delivery to the current area chat: the person's answer or change request, or (notice) a pdd
+// notice with its exact text. A notice has no answer/change effect and no retry command; the next delivery sends it first.
+async function deliverRequest(run, text, p, notice = false) {
   const selectedIdentity=runIdentity(run);
   if (ended(run)) return fail(`The run for ${run.repo}#${run.number} is ${run.state}.`);
-  const request = oneLine(text), answer = Boolean(openQuestion(run)), kind = answer ? 'answer' : 'change';
-  if (!request) return fail('Write the change request after the issue number.');
-  if (!answer && run.gate && looksLikeApproval(request)) return { exitCode: 2, message: `This looks like an approval. Tell your agent you approve this gate, or run pdd workflow approve ${run.number} in a terminal.
+  const request = notice ? String(text) : oneLine(text), answer = !notice && Boolean(openQuestion(run)), kind = notice ? 'notice' : answer ? 'answer' : 'change';
+  if (!request.trim()) return fail('Write the change request after the issue number.');
+  if (!notice && !answer && run.gate && looksLikeApproval(request)) return { exitCode: 2, message: `This looks like an approval. Tell your agent you approve this gate, or run pdd workflow approve ${run.number} in a terminal.
 Nothing was sent to the chat.` };
   const area = run.areas[run.area], chat = currentChat(run);
-  if (!chat) return fail(`The ${area.name} area has no chat. Start it: pdd workflow open ${run.number}`);
+  if (!chat) return fail(`The ${area.name} area has no chat${notice ? ', so pdd did not send its notice' : ''}. Start it: pdd workflow open ${run.number}`);
+  const what = notice ? 'the pdd notice' : 'your request', What = notice ? 'The pdd notice' : 'Your request';
   const latest = () => readRun(run.runDir), matches = entry => entry.area === area.name && entry.paneId === chat.paneId;
   const targetCurrent = saved => saved && runIdentity(saved)===selectedIdentity && !ended(saved) && saved.areas[saved.area]?.name === area.name && currentChat(saved)?.paneId === chat.paneId;
-  const retry = `Retry: pdd workflow changes ${run.number} '${request.replace(/'/g, `'\\''`)}'`;
-  const kept = `Your request is kept. Wait briefly or open it: pdd workflow open ${run.number}. ${retry}`;
+  const retry = notice ? `It goes to the chat first with your next pdd workflow changes ${run.number}.` : `Retry: pdd workflow changes ${run.number} '${request.replace(/'/g, `'\\''`)}'`;
+  const kept = `${What} is kept. Wait briefly or open it: pdd workflow open ${run.number}. ${retry}`;
   const warning = `An earlier request is uncertain and may already be in the chat. Check the original chat: pdd workflow open ${run.number}; type it there if absent. pdd will not automatically resend it.`;
-  const uncertain = () => fail(`Your request is uncertain and may already be in the chat. Check the original chat: pdd workflow open ${run.number}; type it there if absent. pdd will not automatically resend it.`);
-  const progress = entry => fail(`Delivery to the original ${entry.area} chat is in progress or needs inspection. ${accepted.id !== entry.id ? 'Your request is saved pending. ' : ''}${protectedRequestAdvice(entry)} Open it: pdd workflow open ${run.number}.`);
-  const already = () => done(`Your request was already delivered to the ${area.name} chat.${accepted.kind === 'change' ? `\n${uptakeReceipt(accepted, p)}` : ''}`);
+  const uncertain = () => fail(`${What} is uncertain and may already be in the chat. Check the original chat: pdd workflow open ${run.number}; type it there if absent. pdd will not automatically resend it.`);
+  const progress = entry => fail(`Delivery to the original ${entry.area} chat is in progress or needs inspection. ${accepted.id !== entry.id ? `${What} is saved pending. ` : ''}${protectedRequestAdvice(entry)} Open it: pdd workflow open ${run.number}.`);
+  const already = () => done(`${What} was already delivered to the ${area.name} chat.${accepted.kind === 'change' ? `\n${uptakeReceipt(accepted, p)}` : ''}`);
   const failure = sent => {
     if (sent.uncertain) return uncertain();
     if (sent.code === 'chat_target_changed') return fail(`The original ${area.name} chat target changed. ${kept}`);
     if (sent.code === 'chat_still_starting') return fail(`The ${area.name} chat is still starting. ${kept}`);
-    if (sent.code === 'agent_blocked') return fail(`The ${area.name} chat shows a question dialog. Answer it in the chat: pdd workflow open ${run.number}. ${kept}`);
+    if (sent.code === 'agent_blocked' || sent.code === 'agent_dialog') return fail(`The ${area.name} chat did not get ${what}: ${sent.reason ?? (sent.code === 'agent_blocked' ? 'the chat shows a question dialog' : 'the chat shows a dialog')}. pdd sent nothing and did not answer the dialog. Answer it in the chat yourself, then retry. ${kept}`);
+    if (sent.code === 'pane_unreadable') return fail(`The ${area.name} chat did not get ${what}: ${sent.reason}. pdd sends nothing when it cannot see the chat. ${kept}`);
     if (sent.code === 'agent_not_found') return fail(`The ${area.name} chat is not running. ${kept}`);
     return fail(`pdd could not send the text to the ${area.name} chat (${sent.code}). ${kept}`);
   };
@@ -2106,10 +2120,10 @@ Nothing was sent to the chat.` };
   try {
     accepted = await deliveryJournal(run, p, journal => {
       let entry = journal.requests.find(item => matches(item) && item.kind === kind && item.text === request && item.state !== 'delivered');
-      if (!entry) { entry = { id: (p.deliveryToken ?? randomUUID)(), text: request, kind, area: area.name, paneId: chat.paneId, state: 'pending', at: p.now(), question: run.question ?? null, gate: run.gate ?? null }; journal.requests.push(entry); }
+      if (!entry) { entry = { id: (p.deliveryToken ?? randomUUID)(), text: request, kind, area: area.name, paneId: chat.paneId, state: 'pending', at: p.now(), question: notice ? null : run.question ?? null, gate: notice ? null : run.gate ?? null }; journal.requests.push(entry); }
       return { ...entry };
     });
-  } catch (error) { return fail(error.code === 'delivery_busy' ? `Another command is saving a request. Wait briefly, then retry. ${retry}` : `Could not save your request; it was not sent. Check the run folder and retry. ${retry}`); }
+  } catch (error) { return fail(error.code === 'delivery_busy' ? `Another command is saving a request. Wait briefly, then retry. ${retry}` : `Could not save ${what}; it was not sent. Check the run folder and retry. ${retry}`); }
   const owner = { pid: p.ownerPid ?? process.pid, hostname: deliveryHost(p), token: (p.deliveryToken ?? randomUUID)() };
   activeDeliveries.add(owner.token);
   try {
@@ -2123,7 +2137,7 @@ Nothing was sent to the chat.` };
       if (entry.state === 'uncertain') continue;
       if (entry.inFlight) return progress(entry);
       run = latest(); if (!targetCurrent(run)) return failure({ code: 'chat_target_changed' });
-      const message = entry.kind === 'answer' ? `${ANSWER_PREFIX}: ${entry.text} Go on with the step.`
+      const message = entry.kind === 'notice' ? entry.text : entry.kind === 'answer' ? `${ANSWER_PREFIX}: ${entry.text} Go on with the step.`
         : `${CHANGE_PREFIX}: ${entry.text} Revise in this chat, run done again for the step you changed, then show the result and ask again.\nRequest ${entry.id}. After addressing it, record agent uptake with a short note:\n${uptakeCommand(entry.id, p)}`;
       let custodyFailed = false, claimed = false;
       const transport = herdrCommand(p), guardedHerdr = async args => {
@@ -2147,17 +2161,20 @@ Nothing was sent to the chat.` };
           saved.inFlight = true; saved.owner = owner; claimed = true; return true;
         }); } catch { custodyFailed = true; return false; }
       } });
-      if (custodyFailed) return fail(`Could not save submission intent; your request was not sent. ${kept}`);
+      if (custodyFailed) return fail(`Could not save submission intent; ${what} was not sent. ${kept}`);
       let observed;
       try {
         observed = await deliveryJournal(run, p, journal => {
           const saved = journal.requests.find(item => item.id === entry.id);
           if (!saved) throw Error('Saved request unavailable');
-          if (!claimed || saved.owner?.token !== owner.token) return { ...saved };
+          // A pending request keeps the reason of its latest unsent delivery (a dialog or an unread screen) for status.
+          const keepReason = () => { const reason = sent.reason ?? (sent.code === 'agent_blocked' ? 'the chat shows a question dialog' : null); if (reason) saved.reason = reason; else delete saved.reason; };
+          if (!claimed || saved.owner?.token !== owner.token) { if (!claimed && !sent.ok && saved.state === 'pending' && !saved.inFlight) keepReason(); return { ...saved }; }
           delete saved.inFlight; delete saved.owner;
-          if (!sent.ok) { saved.state = sent.uncertain ? 'uncertain' : 'pending'; saved.code = sent.code; return { ...saved }; }
-          const now = p.now(); saved.state = 'delivered'; saved.deliveredAt = now; delete saved.code;
-          commitRun(run,p,current=>{
+          if (!sent.ok) { saved.state = sent.uncertain ? 'uncertain' : 'pending'; saved.code = sent.code; keepReason(); return { ...saved }; }
+          const now = p.now(); saved.state = 'delivered'; saved.deliveredAt = now; delete saved.code; delete saved.reason;
+          // A pdd notice changes no workflow fact.
+          if (entry.kind !== 'notice') commitRun(run,p,current=>{
           current.changes.push({ stage: entry.area, round: current.changes.filter(change => change.stage === entry.area).length + 1, text: entry.text, at: now, ...(entry.kind === 'answer' ? { answer: true } : {}) });
           if (targetCurrent(current)) {
             if (equalFact(current.question,entry.question))current.question=null;
@@ -2180,6 +2197,7 @@ Nothing was sent to the chat.` };
       if (saved.state === 'uncertain') return uncertain();
       return failure({ code: 'chat_target_changed' });
     }
+    if (notice) return done(`Sent the pdd notice to the ${area.name} chat of #${run.number}.${warnings ? `\n${warning}` : ''}`);
     return done((answer ? `Sent your answer to the ${area.name} chat of #${run.number}. The agent goes on with the step.`
       : `Sent your change request to the ${area.name} chat of #${run.number}.${run.gate ? ' The gate stays open.' : ''}`) + (!answer ? `\n${uptakeReceipt(accepted, p)}` : '') + (warnings ? `\n${warning}` : ''));
   } catch (error) { return fail(`Could not update the saved request. Wait briefly, then retry; check the original chat (${error.code ?? 'journal unavailable'}).`); }
@@ -2343,7 +2361,7 @@ async function listStatus(runs, { json, cancelled, scope, snapshotOnly=false }, 
     const ordinaryOwnership=readRunOwnership(run.runDir,p);
     const item = summary(run, p.timeZone, ordinaryOwnership||snapshotOnly?null:await chatState(run, p), ended(run)||ordinaryOwnership||snapshotOnly ? {} : await gateFacts(run, p));
     const snapshot = requestSnapshot(run, p);
-    all.push({ ...item, ...snapshot, ordinaryOwnership, line: [item.line, ...ownershipLines(ordinaryOwnership), ...requestLines(snapshot, { openOnly: true, ended: ended(run), p })].join('\n') });
+    all.push({ ...item, ...snapshot, ordinaryOwnership, line: [item.line, ...ownershipLines(ordinaryOwnership), ...requestLines(snapshot, { openOnly: true, ended: ended(run), currentArea: run.areas[run.area]?.name, p })].join('\n') });
   }
   const hidden = cancelled ? 0 : all.filter(item => item.group === 'cancelled').length;
   const shown = all.filter(item => cancelled || item.group !== 'cancelled')
@@ -2368,7 +2386,7 @@ async function runStatusCommand({ ref, cwd, all = false, json = false, cancelled
   const snapshot = requestSnapshot(run, p);
   const nativeResults=ownResults(run,p).filter(result=>result.kind==='native evidence');
   if (json) { const { line, ...item } = summary(run, p.timeZone, chat, facts); return done(JSON.stringify({ runs: [{ ...item, ...snapshot, ordinaryOwnership, nativeResults }] }, null, 2)); }
-  return done([detail(run, chat, facts), ...(nativeResults.length?resultLines(nativeResults):[]), ...ownershipLines(ordinaryOwnership), ...requestLines(snapshot, { ended: ended(run), p })].join('\n'));
+  return done([detail(run, chat, facts), ...(nativeResults.length?resultLines(nativeResults):[]), ...ownershipLines(ordinaryOwnership), ...requestLines(snapshot, { ended: ended(run), currentArea: run.areas[run.area]?.name, p })].join('\n'));
 }
 
 const replacementPhases = ['intent', 'closeRequested', 'closed', 'createRequested', 'prepared', 'launchRequested', 'launched', 'rolledBack', 'ended'];
