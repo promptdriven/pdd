@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, rmSync, readdirSync, mkdirSync, unlinkSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { readFileSync, writeFileSync, rmSync, readdirSync, mkdirSync, unlinkSync, realpathSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { runCheck } from '../src/runtime-client.mjs';
@@ -9,6 +10,17 @@ import { parseArgv } from '../src/argument-parser.mjs';
 import { fakeRuntime, harbor, ordinaryCapabilities, portsFor, storyTest } from './runtime-fake.mjs';
 
 const ENGINE = 'eae2202a68d00ab762fcbbf1eba0d8607a132a15';
+const legacy3007Cache = {
+  schema_version: 1, generation: 1, epoch: 'f9166417-952f-4b35-bbe4-a9b5a9392df3',
+  stories: { 'user_stories/place-order.md': { generation: 1, outcome: 'passed', pass: {
+    engine_sha: ENGINE, requested_model: 'gpt-6.1-sol',
+    fingerprint: '330540fcab512d83a5db2927d1c1921175a8cd7943c3057a1de0d063364988e6',
+    tests: ['tests/place-order.json'], passed_at: '2026-10-27T16:27:47.000Z',
+    rows: { 'tests/place-order.json': { checks: { passed: 10, total: 10 }, criteria: { passed: 3, total: 3 }, criteria_total: 3, draft: false } },
+  } } },
+  latest_identity: { engine_sha: ENGINE, models: ['gpt-6.1-sol'], in_progress: [], clean: true, conflict: false,
+    sampled_at: '2026-10-27T16:27:47.000Z', written_at: '2026-10-27T16:27:47.200Z', observed_at: '2026-10-27T16:27:47.200Z' },
+};
 
 async function memoryRuntime(setup, handlers = {}, extraPorts = {}) {
   const fake = { posts: [], checkPosts: [], gets: [], capacities: 0, origin: 'https://runtime.invalid' };
@@ -76,8 +88,8 @@ function dispatchClaimIds(setup, batch) {
   }).filter(Boolean);
 }
 
-async function runMemory(setup, fake, made, words = ['place-order'], options = { '--json': true }) {
-  const code = await runCheck({ words, options, cwd: setup.repo }, made.ports);
+async function runMemory(setup, fake, made, words = ['place-order'], options = { '--json': true }, cache = false) {
+  const code = await runCheck({ words, options, cwd: setup.repo, cache }, made.ports);
   setup.clockNow = made.clock.now;
   const out = made.ports.stdout.text;
   return { code, clock: made.clock, out, err: made.ports.stderr.text, json: options['--json'] && out ? JSON.parse(out) : null };
@@ -163,7 +175,7 @@ test('CAPACITY terminal contradiction stays unknown through saved read and expli
   assert.match(row.next_step ?? '', /--read/);
   assert.equal(fake.checkPosts.length, 1); assert.equal(dispatchClaimIds(setup, batch).length, 1);
 
-  const read = await invokeMemory(setup, fake, made.ports.fetch, [batch], { '--read': true, '--json': true });
+  const read = await invokeMemory(setup, fake, made.ports.fetch, [batch], { '--read': true, '--json': true, '--timeout': '0.01' });
   assert.equal(fake.checkPosts.length, 1); assert.equal(dispatchClaimIds(setup, batch).length, 1);
   assert.ok(fake.gets.includes(row.request_id));
   assert.equal(read.json.rows[0].state, 'unknown'); assert.equal(read.json.rows[0].busy, false);
@@ -201,6 +213,60 @@ test('CAPACITY saved GET contradiction does not create a fresh ID or POST', asyn
   assert.equal(read.json.rows[0].unknown_calls, 1); assert.equal(read.json.rows[0].busy, false);
   assert.equal(fake.checkPosts.length, 1); assert.equal(dispatchClaimIds(setup, batch).length, 1);
   assert.deepEqual(fake.gets, [id, id]);
+});
+
+test('CAPACITY maintenance 503 with complete zero proof waits, rechecks and retries', async t => {
+  const setup = harbor(t); let clock, attempts = 0;
+  const { fake, ...made } = await memoryRuntime(setup, {
+    check: (request, runtime) => {
+      attempts++;
+      if (attempts === 1) return { status: 503, headers: { 'retry-after': '7' }, json: {
+        dispatch: 'not_started', provider_calls: 0, accounting_complete: true,
+        usage: { calls: 0, known_calls: 0, unknown_calls: 0, provider_calls: 0, accounting_complete: true },
+        error: { code: 'maintenance', details: { until: new Date(clock.now + 9000).toISOString(), reason: 'deploy' } },
+      } };
+      const answer = runtime.job(request.requestId, 'check', 'passed', { exitCode: 0, report: { samples: [], accounting_complete: true } }, 1);
+      answer.accounting_complete = true;
+      Object.assign(answer.usage, { known_calls: 1, unknown_calls: 0, accounting_complete: true });
+      return { status: 200, json: answer };
+    },
+  }, { sleep: async ms => { clock.now += ms; } });
+  clock = made.clock;
+  const result = await runMemory(setup, fake, made, ['place-order'], { '--json': true, '--timeout': 1 });
+  const row = result.json.rows[0], batch = result.json.batch;
+  assert.equal(result.code, 0, result.err + result.out); assert.equal(attempts, 2);
+  assert.equal(fake.checkPosts.length, 2); assert.equal(new Set(fake.checkPosts.map(item => item.requestId)).size, 2);
+  assert.equal(dispatchClaimIds(setup, batch).length, 2);
+  assert.equal(row.state, 'passed'); assert.equal(row.calls, 1); assert.equal(row.unknown_calls, 0); assert.equal(row.accounting_complete, true);
+  assert.match(result.err, /maintenance.*deploy/i, 'valid proof makes the maintenance wait advice truthful');
+  const first = JSON.parse(readFileSync(join(setup.state, 'batches', batch, `${fake.checkPosts[0].requestId}.admission.json`), 'utf8'));
+  assert.equal(first.error.code, 'maintenance'); assert.equal(first.usage.calls, 0); assert.equal(first.accounting_complete, true);
+  assert.ok(result.clock.now >= Date.parse(first.error.details.until));
+});
+
+test('CAPACITY maintenance 503 without consistent zero proof stays unknown and cannot retry', async t => {
+  for (const invalid of ['missing provider count', 'conflicting completion']) await t.test(invalid, async sub => {
+    const setup = harbor(sub);
+    const { fake, ...made } = await memoryRuntime(setup, { check: request => {
+      const reply = { dispatch: 'not_started', provider_calls: 0, accounting_complete: true,
+        usage: { calls: 0, known_calls: 0, unknown_calls: 0, provider_calls: 0, accounting_complete: true },
+        error: { code: 'maintenance', details: { until: '2026-10-27T16:28:00.000Z', reason: 'deploy' } }, requestId: request.requestId };
+      if (invalid === 'missing provider count') { delete reply.provider_calls; delete reply.usage.provider_calls; }
+      else reply.usage.accounting_complete = false;
+      return { status: 503, headers: { 'retry-after': '7' }, json: reply };
+    } });
+    const initial = await runMemory(setup, fake, made, ['place-order'], { '--json': true, '--timeout': 1 });
+    const row = initial.json.rows[0], batch = initial.json.batch, id = row.request_id;
+    assert.equal(row.state, 'unknown'); assert.equal(row.calls, 'unknown');
+    assert.equal(row.unknown_calls, 1); assert.equal(row.accounting_complete, false);
+    assert.equal(row.busy, false); assert.equal(row.can_retry, false); assert.match(row.next_step ?? '', /--read/);
+    assert.doesNotMatch(initial.err, /maintenance.*deploy/i, 'uncertain proof must not be described as a safe maintenance wait');
+    assert.equal(fake.checkPosts.length, 1); assert.deepEqual(dispatchClaimIds(setup, batch), [id]);
+    setup.clockNow += 90_100;
+    const retry = await invokeMemory(setup, fake, made.ports.fetch, [], { '--retry': batch, '--json': true, '--timeout': 1 });
+    assert.equal(retry.json.rows[0].calls, 'unknown'); assert.equal(retry.json.rows[0].can_retry, false);
+    assert.equal(fake.checkPosts.length, 1); assert.deepEqual(dispatchClaimIds(setup, batch), [id]);
+  });
 });
 
 test('CAPACITY missing, malformed or conflicting accounting surfaces fail closed', async t => {
@@ -340,6 +406,44 @@ test('RESTART accounting aggregates original and replacement in JSON, text and c
   assert.notEqual(replacementId, originalId);
 });
 
+test('RESTART complete zero retries keep an unknown origin beside the final replacement pass', async t => {
+  const setup = harbor(t); let checks = 0;
+  const { fake, ...made } = await memoryRuntime(setup, { check: (request, runtime) => {
+    checks++;
+    if (checks === 1) {
+      const refusal = { code: 'service-restarted', message: 'The runtime restarted.' };
+      const answer = runtime.job(request.requestId, 'check', 'unknown', { refusals: [refusal], report: { refusal, samples: [], accounting_complete: false } }, 2);
+      answer.accounting_complete = false;
+      Object.assign(answer.usage, { known_calls: 2, unknown_calls: 1, accounting_complete: false });
+      return { status: 200, json: answer };
+    }
+    if (checks <= 3) return { status: 503, headers: { 'retry-after': '1' }, json: {
+      requestId: request.requestId, id: request.requestId, command: 'check', dispatch: 'not_started',
+      provider_calls: 0, accounting_complete: true,
+      usage: { calls: 0, known_calls: 0, unknown_calls: 0, provider_calls: 0, accounting_complete: true },
+      error: { code: 'check-queue-full', details: { retryable: true, retry_after: 1 } },
+    } };
+    const answer = runtime.job(request.requestId, 'check', 'passed', { exitCode: 0, report: { samples: [], accounting_complete: true } }, 3);
+    answer.accounting_complete = true;
+    Object.assign(answer.usage, { known_calls: 3, unknown_calls: 0, accounting_complete: true });
+    return { status: 200, json: answer };
+  } });
+  const result = await runMemory(setup, fake, made, ['place-order'], { '--json': true, '--timeout': 1, '--cache-clear': true }, true);
+  const row = result.json.rows[0], batch = result.json.batch;
+  assert.equal(result.code, 0, result.err + result.out); assert.equal(checks, 4);
+  assert.deepEqual({ posts: fake.checkPosts.length, uniqueIds: new Set(fake.checkPosts.map(item => item.requestId)).size,
+    claims: dispatchClaimIds(setup, batch).length }, { posts: 4, uniqueIds: 4, claims: 4 });
+  assert.deepEqual(saved(setup, batch).rows[0].request_ids, fake.checkPosts.map(item => item.requestId));
+  assert.equal(row.state, 'passed'); assert.equal(row.calls, 'unknown');
+  assert.equal(row.known_calls, 5); assert.equal(row.unknown_calls, 1); assert.equal(row.accounting_complete, false);
+  for (const request of fake.checkPosts.slice(1, 3)) {
+    const receipt = JSON.parse(readFileSync(join(setup.state, 'batches', batch, `${request.requestId}.admission.json`), 'utf8'));
+    assert.equal(receipt.dispatch, 'not_started'); assert.equal(receipt.usage.calls, 0); assert.equal(receipt.usage.accounting_complete, true);
+  }
+  const cache = JSON.parse(readFileSync(join(setup.repo, '.pdd/cache/test/stories.json'), 'utf8')).stories['user_stories/place-order.md'];
+  assert.notEqual(cache?.outcome, 'passed'); assert.equal(cache?.pass, undefined);
+});
+
 test('RESTART recognizes report refusal and keeps one replacement with the original call ceiling', async t => {
   const setup = harbor(t); let check = 0;
   const { fake, ...made } = await memoryRuntime(setup, { check: request => {
@@ -360,6 +464,34 @@ test('RESTART recognizes report refusal and keeps one replacement with the origi
   assert.ok(fake.checkPosts.every(request => request.max_calls === 7));
   assert.equal(dispatchClaimIds(setup, result.json.batch).length, 2);
   assert.equal(result.json.rows[0].calls, 'unknown');
+});
+
+test('CACHE legacy #3007 false pass misses after version bump; fresh complete pass remains reusable', async t => {
+  const setup = harbor(t);
+  const cacheDir = join(setup.repo, '.pdd/cache/test'); mkdirSync(cacheDir, { recursive: true });
+  writeFileSync(join(cacheDir, 'stories.json'), JSON.stringify(legacy3007Cache));
+  writeFileSync(join(cacheDir, 'lastfailed.json'), JSON.stringify({ schema_version: 1, epoch: legacy3007Cache.epoch, generation: 1, stories: {} }));
+  const bindingDir = join(setup.state, 'test-cache-bindings'); mkdirSync(bindingDir, { recursive: true });
+  const repoKey = createHash('sha256').update(realpathSync(setup.repo)).digest('hex');
+  writeFileSync(join(bindingDir, `${repoKey}.json`), JSON.stringify({ schema_version: 1, epoch: legacy3007Cache.epoch }));
+  setup.clockNow = Date.parse('2026-10-27T16:28:00Z');
+  const { fake, ...made } = await memoryRuntime(setup, { check: request => {
+    const answer = fake.job(request.requestId, 'check', 'passed', { exitCode: 0, report: { samples: [], accounting_complete: true } }, 3);
+    answer.accounting_complete = true;
+    Object.assign(answer.usage, { known_calls: 3, unknown_calls: 0, accounting_complete: true });
+    return { status: 200, json: answer };
+  } });
+  const options = { '--json': true, '--max-calls': '9' };
+  const first = await invokeMemory(setup, fake, made.ports.fetch, ['place-order'], options, true);
+  assert.equal(first.code, 0); assert.equal(first.json.rows[0].cached, undefined);
+  assert.equal(fake.checkPosts.length, 1, 'the retained 0.1.19 false pass must not skip a new Check');
+  const path = join(cacheDir, 'stories.json'), fresh = JSON.parse(readFileSync(path, 'utf8'));
+  const freshPass = fresh.stories['user_stories/place-order.md']?.pass;
+  assert.equal(fresh.stories['user_stories/place-order.md']?.outcome, 'passed'); assert.ok(freshPass);
+  assert.notEqual(freshPass.fingerprint, legacy3007Cache.stories['user_stories/place-order.md'].pass.fingerprint);
+  const repeated = await invokeMemory(setup, fake, made.ports.fetch, ['place-order'], options, true);
+  assert.equal(repeated.json.rows[0].cached, true, 'a new complete pass stays reusable');
+  assert.equal(fake.checkPosts.length, 1);
 });
 
 test('ACCOUNTING queued and running snapshots do not poison a complete terminal receipt', async t => {
@@ -421,6 +553,40 @@ test('ACCOUNTING complete saved receipt keeps calls total when known_calls is lo
   assert.equal(fake.checkPosts.length, 1);
 });
 
+test('ACCOUNTING wrong-ID saved pass cannot add usage to a fresh progress receipt', async t => {
+  const setup = harbor(t);
+  const { fake, ...made } = await memoryRuntime(setup, {
+    check: request => {
+      const answer = fake.job(request.requestId, 'check', 'passed', { exitCode: 0, report: { samples: [], accounting_complete: true } }, 3);
+      answer.accounting_complete = true;
+      Object.assign(answer.usage, { known_calls: 3, unknown_calls: 0, accounting_complete: true });
+      return { status: 200, json: answer };
+    },
+    get: id => {
+      const answer = fake.job(id, 'check', 'unknown', { exitCode: 3, report: { samples: [], accounting_complete: true } }, 1);
+      answer.accounting_complete = true;
+      Object.assign(answer.usage, { known_calls: 1, unknown_calls: 0, accounting_complete: true });
+      return { status: 200, json: answer };
+    },
+  });
+  const initial = await runMemory(setup, fake, made, ['place-order'], { '--json': true });
+  const batch = initial.json.batch, firstId = initial.json.rows[0].request_id, secondId = '22222222-2222-4222-8222-222222222222';
+  const folder = join(setup.state, 'batches', batch), firstPath = join(folder, `${firstId}.json`), wrong = JSON.parse(readFileSync(firstPath, 'utf8'));
+  wrong.requestId = '11111111-1111-4111-8111-111111111111'; wrong.id = wrong.requestId;
+  writeFileSync(firstPath, JSON.stringify(wrong));
+  const batchPath = join(folder, 'batch.json'), record = JSON.parse(readFileSync(batchPath, 'utf8'));
+  Object.assign(record.rows[0], { request_ids: [firstId, secondId], request_id: secondId, state: 'unknown', phase: 'server' });
+  writeFileSync(batchPath, JSON.stringify(record));
+  const read = await invokeMemory(setup, fake, made.ports.fetch, [batch], { '--read': true, '--json': true });
+  const row = read.json.rows[0];
+  assert.equal(row.request_id, secondId); assert.equal(row.state, 'unknown');
+  assert.equal(row.calls, 'unknown'); assert.equal(row.known_calls, 1);
+  assert.equal(row.unknown_calls, 1); assert.equal(row.accounting_complete, false);
+  assert.equal(JSON.parse(readFileSync(firstPath, 'utf8')).requestId, wrong.requestId, 'mismatched raw evidence remains available');
+  assert.deepEqual(JSON.parse(readFileSync(batchPath, 'utf8')).rows[0].request_ids, [firstId, secondId]);
+  assert.equal(fake.checkPosts.length, 1); assert.deepEqual(fake.gets, [secondId]);
+});
+
 test('ACCOUNTING known calls above the reported total remains unknown', async t => {
   const setup = harbor(t);
   const { fake, ...made } = await memoryRuntime(setup, { check: request => {
@@ -462,9 +628,11 @@ test('ACCOUNTING terminal unknown history stays incomplete after a same-ID compl
   const observations = JSON.parse(readFileSync(join(setup.state, 'batches', batch, `${id}.observations.json`), 'utf8'));
   assert.ok(observations.some(answer => answer.state === 'unknown' && answer.usage.unknown_calls === 1));
   assert.equal(fake.checkPosts.length, 1); assert.deepEqual(fake.gets, [id]);
+  const summaryPath = join(setup.state, 'batches', batch, 'summary.json'), summaryBeforeDirectRead = readFileSync(summaryPath);
   const direct = await invokeMemory(setup, fake, made.ports.fetch, [id], { '--read': true, '--json': true });
   assert.equal(direct.json.rows[0].calls, 'unknown'); assert.equal(direct.json.rows[0].known_calls, 3);
   assert.equal(direct.json.rows[0].unknown_calls, 1); assert.equal(direct.json.rows[0].accounting_complete, false);
+  assert.deepEqual(readFileSync(summaryPath), summaryBeforeDirectRead, 'direct UUID projection keeps its owning batch summary unchanged');
   assert.equal(fake.checkPosts.length, 1); assert.deepEqual(fake.gets, [id, id]);
 });
 

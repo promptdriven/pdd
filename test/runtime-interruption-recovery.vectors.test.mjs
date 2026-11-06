@@ -10,9 +10,14 @@ const read = path => JSON.parse(readFileSync(path));
 const write = (path, value) => writeFileSync(path, JSON.stringify(value));
 const checkPosts = fake => fake.posts.filter(e => e.command === 'check');
 const checks = Array.from({ length: 17 }, (_, i) => ({ criterion_id: `AC${i % 4 + 1}`, target: 'result', path: '/totalCents', op: 'equals', expected: 900, actual: 900, passed: true }));
-const capacity = (f, id) => f.job(id, 'check', 'refused', { outcome: 'Inconclusive', why: 'No verdict. Queue full.', next_step: 'STALE RETRY',
-  refusals: [{ code: 'check-queue-timeout', details: { retryable: true, retry_after: 1 } }],
-  report: { dispatch: 'not_started', provider_calls: 0, samples: [] } }, 0);
+const capacity = (f, id) => {
+  const answer = f.job(id, 'check', 'refused', { outcome: 'Inconclusive', why: 'No verdict. Queue full.', next_step: 'STALE RETRY',
+    refusals: [{ code: 'check-queue-timeout', details: { retryable: true, retry_after: 1 } }],
+    report: { dispatch: 'not_started', provider_calls: 0, accounting_complete: true, samples: [] } }, 0);
+  answer.accounting_complete = true;
+  Object.assign(answer.usage, { calls: 0, known_calls: 0, unknown_calls: 0, accounting_complete: true });
+  return answer;
+};
 const passed = (f, id) => { const answer = f.check(id, 'passed', checks); answer.usage.calls = 4; return answer; };
 async function fixture(t, answer) {
   const setup = harbor(t), fake = await fakeRuntime(t, (e, f) => e.command === 'lint' ? { status: 200, json: f.lint(e.request.requestId) } : answer(e, f));

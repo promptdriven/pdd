@@ -555,7 +555,7 @@ function checkCapacity(answer, headers) {
   return capacityRefusal([answer.result?.report?.refusal, ...(Array.isArray(answer.result?.refusals) ? answer.result.refusals : [])], headers);
 }
 function admissionCapacityCandidate(record, headers) {
-  return capacityDelay(record?.error, headers) !== null;
+  return capacityDelay(record?.error, headers) !== null || record?.error?.code === 'maintenance';
 }
 function isAdmissionCapacityRecord(record) {
   return isObject(record) && isObject(record.error);
@@ -581,8 +581,10 @@ function capacityHistoryHasEvidence(context, row) {
 }
 function capacityHistorySafe(context, row) {
   if (!context.store || !context.folder) return false;
+  const restartOrigin = structuredRestartOrigin(context, row);
   let found = false;
   for (const id of row.request_ids ?? []) {
+    if (id === restartOrigin) continue;
     const admission = context.store.read(join(context.folder, `${id}.admission.json`));
     const latest = context.store.read(join(context.folder, `${id}.json`));
     const prior = context.store.read(join(context.folder, `${id}.observations.json`));
@@ -599,7 +601,39 @@ function capacityHistorySafe(context, row) {
     if (answerCandidates.some(answer => !accountingProof(answer))) return false;
     if (answerCandidates.length !== terminalHistory.length || progressConflict) return false;
   }
-  return found && accumulatedAccounting(context, row).accounting_complete === true;
+  // A durable structured restart is the one bounded exception. Its unknown
+  // usage stays in the published totals, but does not block a later zero-work
+  // capacity receipt from continuing that replacement.
+  const accountingRow = restartOrigin ? { ...row, request_ids: row.request_ids.filter(id => id !== restartOrigin) } : row;
+  return found && accumulatedAccounting(context, accountingRow).accounting_complete === true;
+}
+function structuredRestartOrigin(context, row) {
+  const fuse = claimPath(context, row).replace(/\.0\.dispatch\.json$/, '.restart.json');
+  if (row.restart_used !== true || !statOrNull(fuse)) return null;
+  const origins = (row.request_ids ?? []).filter(id => {
+    const latest = context.store.read(join(context.folder, `${id}.json`));
+    const prior = context.store.read(join(context.folder, `${id}.observations.json`));
+    const history = [...(Array.isArray(prior) ? prior : []), ...(latest ? [latest] : [])]
+      .filter((item, index, list) => list.findIndex(other => isDeepStrictEqual(other, item)) === index);
+    const terminal = history.filter(answer => accountingEnd(answer, id));
+    return history.length > 0 && history.every(answer => sameJob(answer, id, 'check'))
+      && terminal.length > 0 && terminal.every(restarted);
+  });
+  return origins.length === 1 ? origins[0] : null;
+}
+function capacityRetryAllowed(context, row) {
+  if (!capacityHistorySafe(context, row)) return false;
+  const id = row.request_ids?.at(-1);
+  if (!id) return false;
+  const admission = context.store.read(join(context.folder, `${id}.admission.json`));
+  if (isAdmissionCapacityRecord(admission) && admissionCapacityCandidate(admission))
+    return admissionMatches(admission, id) && accountingProof(admission);
+  const latest = context.store.read(join(context.folder, `${id}.json`));
+  const prior = context.store.read(join(context.folder, `${id}.observations.json`));
+  const history = [...(Array.isArray(prior) ? prior : []), ...(latest ? [latest] : [])]
+    .filter((item, index, list) => list.findIndex(other => isDeepStrictEqual(other, item)) === index);
+  const terminal = history.filter(answer => accountingEnd(answer, id));
+  return terminal.length > 0 && terminal.every(answer => checkCapacityCandidate(answer) && accountingProof(answer));
 }
 function usagePart(record) {
   const usage = isObject(record?.usage) ? record.usage : {}, result = isObject(record?.result) ? record.result : {}, reports = [record?.report, result?.report].filter(isObject);
@@ -627,8 +661,9 @@ function attemptAccounting(context, id) {
   const admission = context.store.read(join(context.folder, `${id}.admission.json`));
   const history = [...(Array.isArray(observations) ? observations : []), ...(answer ? [answer] : [])]
     .filter((item, index, list) => list.findIndex(other => isDeepStrictEqual(other, item)) === index);
-  const terminalHistory = history.filter(item => accountingEnd(item, id));
-  const accountingHistory = terminalHistory.length ? terminalHistory : history.slice(-1);
+  const matchingHistory = history.filter(item => sameJob(item, id, 'check'));
+  const terminalHistory = matchingHistory.filter(item => accountingEnd(item, id));
+  const accountingHistory = terminalHistory.length ? terminalHistory : matchingHistory.slice(-1);
   const admissionCandidate = isAdmissionCapacityRecord(admission) && admissionCapacityCandidate(admission);
   const unsafeAdmission = admissionCandidate && !accountingProof(admission);
   const admissionConflict = admissionCandidate && (!admissionMatches(admission, id) || unsafeAdmission || history.some(item => !checkCapacityCandidate(item)));
@@ -691,8 +726,8 @@ function markBusy(context, row, wait, observedAt = context.ports.now(), legacy =
 
 const restarted = answer => answer?.command === 'check' && answer.state === 'unknown' && [answer.result?.report?.refusal, ...(Array.isArray(answer.result?.refusals) ? answer.result.refusals : [])].some(item => item?.code === 'service-restarted');
 const confirmedEnd = answer => ['passed', 'failed', 'refused', 'not_run'].includes(answer?.state) || restarted(answer);
-const accountingEnd = (answer, id) => confirmedEnd(answer)
-  || answer?.command === 'check' && answer.state === 'unknown' && answer.requestId === id && answer.id === id;
+const accountingEnd = (answer, id) => sameJob(answer, id, 'check')
+  && (confirmedEnd(answer) || answer.state === 'unknown');
 function localLimit(context) {
   if (context.localLimit !== undefined) return context.localLimit;
   const raw = context.ports.env.PDD_MAX_JOBS;
@@ -880,9 +915,12 @@ function judgePost(reply, id, command, secrets) {
     return { kind: 'busy', wait: capacityDelay(error, reply.headers), admission: reply.json };
   }
   if ([429, 503].includes(reply.status) && reply.json?.dispatch === 'not_started' && !safeAdmission(reply))
-    return { kind: 'unknown', why: 'The admission receipt has uncertain execution accounting.', ...(command === 'check' ? { admission: reply.json } : {}) };
-  if (reply.status === 503 && error?.code === 'maintenance' && reply.json?.dispatch === 'not_started' && safeAdmission(reply))
+    return { kind: 'unknown', why: 'The admission receipt has uncertain execution accounting.', ...(command === 'check' ? { admission: reply.json, capacity_uncertain: true } : {}) };
+  if (reply.status === 503 && error?.code === 'maintenance' && reply.json?.dispatch === 'not_started' && safeAdmission(reply)) {
+    if (command === 'check' && (!admissionMatches(reply.json, id) || !accountingProof(reply.json)))
+      return { kind: 'unknown', why: 'Check maintenance accounting is incomplete or conflicting.', admission: reply.json, capacity_uncertain: true };
     return { kind: 'busy', wait: retryAfter(reply.headers), admission: reply.json, maintenance: true };
+  }
   if (command === 'lint' && reply.status === 503 && error?.code === 'lint-queue-full' && lintQueueWait(error) !== null && safeAdmission(reply)) return { kind: 'busy', wait: capacityDelay(error, reply.headers), admission: reply.json };
   if (['check', 'try'].includes(command) && [429, 503].includes(reply.status) && reply.json?.dispatch === 'not_started' && safeAdmission(reply)) {
     const wait = capacityDelay(error, reply.headers);
@@ -1242,7 +1280,7 @@ async function sendCheckAttempt(context, row) {
   if (context.interrupted || context.ports.now() >= context.deadline || !['ready', 'waiting'].includes(row.state)) return;
   // Recheck the saved raw cohort immediately before any capacity-driven new ID.
   // The one structured restart replacement has its own durable fuse and remains allowed.
-  if (row.request_ids.length && (row.busy || row.capacity_uncertain) && !row.restart_pending && !capacityHistorySafe(context, row)) {
+  if (row.request_ids.length && (row.busy || row.capacity_uncertain) && !row.restart_pending && !capacityRetryAllowed(context, row)) {
     markCapacityUnknown(context, row);
     return;
   }
@@ -1254,7 +1292,7 @@ async function sendCheckAttempt(context, row) {
   }
   // Admission can wait while another reader records a conflicting receipt.
   // Revalidate while holding the local reservation, before creating a claim or UUID.
-  if (row.request_ids.length && (row.busy || row.capacity_uncertain) && !row.restart_pending && !capacityHistorySafe(context, row)) {
+  if (row.request_ids.length && (row.busy || row.capacity_uncertain) && !row.restart_pending && !capacityRetryAllowed(context, row)) {
     await finishReservation(context, row, { state: 'not_run' });
     markCapacityUnknown(context, row);
     return;
@@ -1314,7 +1352,7 @@ async function sendCheckAttempt(context, row) {
   }
   else if (verdict.kind === 'accepted') applyAnswer(row, verdict.answer, context, verdict.wait, verdict.observed_at);
   else if (verdict.kind === 'busy') {
-    if (row.request_ids.length > 1 && !capacityHistorySafe(context, row)) markCapacityUnknown(context, row);
+    if (row.request_ids.length > 1 && !capacityRetryAllowed(context, row)) markCapacityUnknown(context, row);
     else markBusy(context, row, verdict.wait, verdict.observed_at);
   }
   else if (verdict.kind === 'not_run') Object.assign(row, { state: 'not_run', note: verdict.note });
@@ -1972,7 +2010,7 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
     const admission = store.read(join(context.folder, `${id}.admission.json`));
     if (admissionCapacityCandidate(admission)) {
       const wait = capacityDelay(admission.error);
-      if (wait !== null && accountingProof(admission) && capacityHistorySafe(context, row)) { markBusy(context, row, wait); return; }
+      if (wait !== null && accountingProof(admission) && capacityRetryAllowed(context, row)) { markBusy(context, row, wait); return; }
       markCapacityUnknown(context, row);
     }
     const answer = store.read(join(context.folder, `${id}.json`));
@@ -2148,8 +2186,9 @@ async function runCallRead(context, id) {
     Object.assign(context, { origin, secrets: [identity.token] });
     const row = { test: '-', story: '-', title: '-', phase: 'server', request_ids: [id], state: 'unknown', refusals: [], warnings: [] };
     const owner = await refreshCheckBatches(context, identity, origin, id, answer);
-    if (owner) { context.batch = owner.batch; context.folder = owner.folder; }
-    applyAnswer(row, answer, context);
+    // Use the owning batch only to build the direct row's aggregate projection.
+    // UUID reads must not turn a one-row view into a saved batch or summary write.
+    applyAnswer(row, answer, owner ? { ...context, batch: owner.batch, folder: owner.folder } : context);
     return printResult(context, [row], { recovery: `pdd test --read ${id}` });
   }
   const state = answer?.state ?? 'unknown', exitCode = exitCodeFor([{ state }]);

@@ -7,6 +7,8 @@ import { listRuntimeJobs } from '../src/runtime-slots.mjs';
 import { fakeRuntime, harbor, portsFor } from './runtime-fake.mjs';
 
 const checkPosts = fake => fake.posts.filter(e => e.command === 'check');
+const completeZero = () => ({ provider_calls: 0, accounting_complete: true,
+  usage: { calls: 0, known_calls: 0, unknown_calls: 0, provider_calls: 0, accounting_complete: true } });
 const makePorts = (setup, fake, extra) => portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin }, extra);
 const saved = (setup, batch) => JSON.parse(readFileSync(join(setup.state, 'batches', batch, 'batch.json')));
 const restart = (f, id, calls = 'unknown') => f.job(id, 'check', 'unknown', { why: 'The result is unknown.', refusals: [{ code: 'service-restarted', message: 'The service restarted.' }] }, calls);
@@ -17,7 +19,8 @@ for (const kind of ['check', 'lint', 'try']) test(`admission: ${kind} succeeds a
     if (e.command === kind) {
       times.push(made.clock.now);
       if (times.length <= 4) return { status: kind === 'lint' ? 503 : 429, headers: { 'retry-after': '7' }, json: {
-        dispatch: 'not_started', error: { code: kind === 'lint' ? 'lint-queue-full' : 'server-full', details: { retryable: true, retry_after: 7 } },
+        dispatch: 'not_started', ...(kind === 'check' ? completeZero() : {}),
+        error: { code: kind === 'lint' ? 'lint-queue-full' : 'server-full', details: { retryable: true, retry_after: 7 } },
       } };
     }
     if (e.command === 'try') return { status: 200, json: f.tryJob(e.request.requestId) };
@@ -63,7 +66,8 @@ for (const kind of ['check', 'lint', 'try']) test(`maintenance: ${kind} handles 
   const fake = await fakeRuntime(t, (e, f) => {
     if (e.command === kind && ++count === 1) {
       at = made.clock.now;
-      return { status: 503, headers: { 'retry-after': '7' }, json: { dispatch: 'not_started', error: { code: 'maintenance', details: { until: new Date(at + 9000).toISOString(), reason: 'deploy' } } } };
+      return { status: 503, headers: { 'retry-after': '7' }, json: { dispatch: 'not_started', ...(kind === 'check' ? completeZero() : {}),
+        error: { code: 'maintenance', details: { until: new Date(at + 9000).toISOString(), reason: 'deploy' } } } };
     }
     if (e.command === kind) assert.ok(made.clock.now >= at + 9000);
     if (e.command === 'try') return { status: 200, json: f.tryJob(e.request.requestId) };
@@ -312,7 +316,7 @@ for (const priorCalls of [2, 'unknown']) test(`restart: capacity attempts retain
   const setup = harbor(t);
   const fake = await fakeRuntime(t, (e, f) => {
     if (e.command === 'check') return checkPosts(f).length === 1 ? { status: 200, json: restart(f, e.request.requestId, priorCalls) }
-      : { status: 503, headers: { 'retry-after': '7' }, json: { dispatch: 'not_started', error: { code: 'check-queue-full', details: { retryable: true } } } };
+      : { status: 503, headers: { 'retry-after': '7' }, json: { dispatch: 'not_started', ...completeZero(), error: { code: 'check-queue-full', details: { retryable: true } } } };
     return f.normal(e);
   });
   const { ports } = makePorts(setup, fake);
@@ -324,7 +328,7 @@ test('restart: a passed replacement counts confirmed admission attempts as zero 
   const setup = harbor(t);
   const fake = await fakeRuntime(t, (e, f) => {
     if (e.command === 'check') return checkPosts(f).length === 1 ? { status: 200, json: restart(f, e.request.requestId, 2) }
-      : checkPosts(f).length === 2 ? { status: 503, headers: { 'retry-after': '1' }, json: { dispatch: 'not_started', error: { code: 'check-queue-full', details: { retryable: true } } } }
+      : checkPosts(f).length === 2 ? { status: 503, headers: { 'retry-after': '1' }, json: { dispatch: 'not_started', ...completeZero(), error: { code: 'check-queue-full', details: { retryable: true } } } }
         : { status: 200, json: f.check(e.request.requestId) };
     return f.normal(e);
   });

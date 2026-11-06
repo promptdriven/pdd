@@ -32,9 +32,12 @@ function earliest(advice, mode, answerAt = 0) {
 }
 function refused(fake, id, advice) {
   const refusal = { code: 'check-queue-timeout', details: { retryable: true, retry_after: advice } };
-  return fake.job(id, 'check', 'refused', { refusals: [refusal], report: {
-    dispatch: 'not_started', provider_calls: 0, samples: [], refusal,
+  const answer = fake.job(id, 'check', 'refused', { refusals: [refusal], report: {
+    dispatch: 'not_started', provider_calls: 0, accounting_complete: true, samples: [], refusal,
   } }, 0);
+  answer.accounting_complete = true;
+  Object.assign(answer.usage, { calls: 0, known_calls: 0, unknown_calls: 0, accounting_complete: true });
+  return answer;
 }
 
 async function world(t, { advice = 1, mode = '404', delay = 0, repeat = false, capacity, receipt } = {}) {

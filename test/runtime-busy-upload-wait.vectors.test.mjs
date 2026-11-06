@@ -10,7 +10,12 @@ const read = path => JSON.parse(readFileSync(path));
 const posts = f => f.posts.filter(e => e.command === 'check');
 const full = (running = 4, limit = 4) => ({ status: 200, json: { maintenance: null, slots: { check: { running, limit, waiting: 0 } } } });
 const absent = () => ({ status: 404, json: { error: { code: 'not-found' } } });
-const busy = (f, id) => f.job(id, 'check', 'refused', { refusals: [{ code: 'check-queue-timeout', details: { retryable: true, retry_after: 1 } }], report: { dispatch: 'not_started', provider_calls: 0, samples: [] } }, 0);
+const busy = (f, id) => {
+  const answer = f.job(id, 'check', 'refused', { refusals: [{ code: 'check-queue-timeout', details: { retryable: true, retry_after: 1 } }], report: { dispatch: 'not_started', provider_calls: 0, accounting_complete: true, samples: [] } }, 0);
+  answer.accounting_complete = true;
+  Object.assign(answer.usage, { calls: 0, known_calls: 0, unknown_calls: 0, accounting_complete: true });
+  return answer;
+};
 const pass = (f, id) => { const answer = f.check(id); answer.usage.calls = 4; return answer; };
 async function fixture(t, { capacity = absent, answer, interruptAt = Infinity } = {}) {
   const setup = harbor(t), times = [], receipts = new Map(), sleeps = [], observations = [];

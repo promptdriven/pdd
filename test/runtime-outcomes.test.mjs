@@ -151,7 +151,9 @@ for (const saved of ['passed', 'not-checked']) test(`OUTCOME retry gate on a bus
   const h = harbor(t);
   let busy = true, now;
   const f = await fakeRuntime(t, (e, f) => e.command === 'check' && busy ? { status: 503, headers: { 'retry-after': '300' },
-    json: { dispatch: 'not_started', error: { code: 'check-queue-full', details: { retryable: true, retry_after: 300 } } } } : f.normal(e));
+    json: { dispatch: 'not_started', provider_calls: 0, accounting_complete: true,
+      usage: { calls: 0, known_calls: 0, unknown_calls: 0, provider_calls: 0, accounting_complete: true },
+      error: { code: 'check-queue-full', details: { retryable: true, retry_after: 300 } } } } : f.normal(e));
   const run = async options => {
     const p = portsFor({ HOME: h.home, PDD_STATE_DIR: h.state, PDD_RUNTIME_URL: f.origin });
     if (now) p.clock.now = now;
