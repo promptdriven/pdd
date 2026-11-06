@@ -17,6 +17,10 @@
     {
       "id": "AC4",
       "text": "Waiting through restart recovery avoids repeated source packing while still checking the saved source before an authorized replacement."
+    },
+    {
+      "id": "AC5",
+      "text": "Restart aggregation keeps each request ID's known calls, unknown calls and completeness; an incomplete original plus complete replacement stays incomplete. Keep prior raw observations and do not settle them from a later complete-looking receipt because this Runtime contract defines no reconciliation signal."
     }
   ],
   "cases": [
@@ -54,6 +58,26 @@
       "id": "later-recovery-revalidates",
       "given": "new recovery invocation or newly authorized replacement after prior wait; local source changed",
       "required_observation": "validate source for the new dispatch decision, refuse changed source before replacement allocation/POST; avoiding repeated packing never removes saved-source equality guard"
+    },
+    {
+      "id": "cross-id-accounting",
+      "given": "original same-ID service-restarted receipt has calls=2, known_calls=2, unknown_calls=1 and accounting_complete=false; the one replacement has calls=3, known_calls=3, unknown_calls=0 and accounting_complete=true",
+      "required_observation": "retain both raw receipts; report at least 5 known calls + 1 unknown with no complete numeric total in JSON/text; the incomplete cohort cannot create cache PASS"
+    },
+    {
+      "id": "same-id-reconciliation",
+      "given": "after restart replacement, a complete-looking terminal receipt is read for the original request ID whose earlier correctly identified unknown receipt had incomplete accounting; no reconciliation signal is defined by the Runtime contract",
+      "required_observation": "preserve the earlier raw observation and unknown accounting for that component; only an explicit future Runtime reconciliation contract may resolve it; local lease release remains separate"
+    },
+    {
+      "id": "same-id-progress-accounting",
+      "given": "one request ID has queued and running progress snapshots with partial accounting, followed by a complete terminal receipt",
+      "required_observation": "preserve raw progress snapshots; use terminal accounting for that ID; allow complete output and cache evidence when the terminal receipt and remaining run evidence are complete"
+    },
+    {
+      "id": "structured-refusal-locations",
+      "given": "same-ID unknown/service-restarted appears in result.refusals and, in a separate case, result.report.refusal; replacement also restarts",
+      "required_observation": "each first receipt authorizes one replacement only; preserve original max_calls and both IDs; no third possibly-started POST"
     }
   ]
 }

@@ -43,6 +43,7 @@ async function heldCallbackScenario(t, holdUntilRefusal){
  t.after(async()=>{release();await Promise.all(workers.map(worker=>worker.terminate()));});
  function launch(mode,record){
   const worker=new Worker(new URL('./helpers/workflow-concurrent-storage-worker.mjs',import.meta.url),{workerData:{runDir:run.runDir,mode,barrier,record,stateDir:f.ports.stateDir}});workers.push(worker);
+  const exited = new Promise(resolve => worker.once('exit', resolve));
   let ready,complete,rejectReady,rejectResult,finished=false;
   const held=new Promise((resolve,reject)=>{ready=resolve;rejectReady=reject;});
   const result=new Promise((resolve,reject)=>{complete=resolve;rejectResult=reject;});
@@ -51,7 +52,7 @@ async function heldCallbackScenario(t, holdUntilRefusal){
   const fail=error=>{rejectReady(error);rejectResult(error);};
   worker.on('error',fail);worker.on('exit',code=>{if(!finished)fail(Error(`${mode} worker exited before reporting its outcome (code ${code})`));});
   worker.on('message',m=>{if(m.held||m.attempting)ready();else{finished=true;if(m.error)rejectReady(Error(`${mode} worker failed before its signal: ${JSON.stringify(m.error)}`));complete(m);}});
-  return {held,result};
+  return {held,result,exited};
  }
  const updater=launch('update');await updater.held;
  const writer=launch('write',{...run,message:'Compatible replacement committed last'});await writer.held;
@@ -62,6 +63,7 @@ async function heldCallbackScenario(t, holdUntilRefusal){
  // In the other case release it after the attempt announcement.
  const refused=holdUntilRefusal?await writer.result:undefined;
  release();const [updated,written]=await Promise.all([updater.result,writer.result]);
+ await Promise.all([updater.exited,writer.exited]);
  if(holdUntilRefusal){
   assert.equal(written,refused);
   assert.equal(written.error?.code,'workflow_run_save_failed','held ownership must produce a finite save refusal');

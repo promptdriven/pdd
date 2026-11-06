@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-prove.prompt.md (sha256: 0cd8c7ac973959264f249e997632ace0f440a8ec23c18a97ebfd7814ac759885).
+// Generated from prompts/cli/workflow-prove.prompt.md (sha256: c3f82e0ec441132a3f1f5b63402b4a36ec917c1ac9876e63a15a6a30f958e4da).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { constants, fchmodSync, closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
@@ -24,7 +24,8 @@ function phaseRecord(result, expect) {
 export function classifyProof(record) {
   if (record.setupError || record.cleanupError || record.base.error || record.head.error || record.base.setupError || record.head.setupError || [126,127].includes(record.base.exitCode) || [126,127].includes(record.head.exitCode)) return 'setup-error';
   if (record.interruptSignal) return 'signalled';
-  if (!record.paths.length) return 'no-changed-tests';
+  // Preserve legacy unexecuted records; an empty overlay does not classify executed proofs.
+  if (!record.paths.length && [record.base, record.head].every(phase => Object.entries(emptyPhase()).every(([key, value]) => JSON.stringify(phase[key]) === JSON.stringify(value)))) return 'no-changed-tests';
   if (record.base.timedOut) return 'base-timeout';
   if (record.head.timedOut) return 'head-timeout';
   if (record.base.outputLimited || record.head.outputLimited) return 'output-limit';
@@ -226,9 +227,9 @@ export async function proveRun({ref,test,expect,cwd,timeoutMinutes=DEFAULT_PHASE
       const {snapshot:s}=await p.snapshot({root:run.root,baseBranch:run.baseBranch});record.headSha=s.headSha;record.baseSha=s.baseSha;
       if(s.error || !s.baseAvailable || !s.headAvailable)throw Error(s.error || 'Committed snapshots unavailable.');
       record.paths=selectFiles(s.files);
-      if(record.paths.length && !interruptSignal) {
+      if(!interruptSignal) {
         for(const [phase,commit] of [['base',record.baseSha],['head',record.headSha]]) {if(interruptSignal)break;const created=await p.createWorktree({root:run.root,commit,phase});if(created.worktree)worktrees.push(created.worktree);if(created.error || !created.worktree)throw Error(created.error || 'Worktree unavailable.');}
-        if(!interruptSignal){const copied=await p.overlay({root:run.root,headSha:record.headSha,worktree:worktrees[0],paths:record.paths});if(copied.error)throw Error(copied.error);}
+        if(record.paths.length && !interruptSignal){const copied=await p.overlay({root:run.root,headSha:record.headSha,worktree:worktrees[0],paths:record.paths});if(copied.error)throw Error(copied.error);}
         for(const [index,phase] of ['base','head'].entries()) {
           if(interruptSignal)break;
           let response;try {const input={command:test,cwd:worktrees[index],timeoutMs:timeoutMinutes*60000,killGraceMs:2000,outputLimitBytes:1048576};response=await (ports.runProcess ? p.runProcess(input) : runProcess(input,controller.signal));}catch(error){response={result:{exitCode:null,signal:'',timedOut:false,outputLimited:false,stdout:'',stderr:'',error:diagnostic(error),setupError:''}};}

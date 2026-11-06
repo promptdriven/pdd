@@ -507,6 +507,40 @@ Cut from the Harbor Coffee app map (`…` marks cut parts):
    "state": {"cart": {"$ref": "/result/cart"}, …every other state field…}}, …]}
 ```
 
+### Automatic Screen timers
+
+The Runtime app-map contract supports host-scheduled Screen actions through the optional root `timers` array. The host schedules an action for the declared handler; it does not run JavaScript from the page. Keep requested timed game behavior in the app map and its operation. Script removal in section 20 does not mean timed Screen behavior is unsupported.
+
+Each timer row has exactly `id`, `screen`, `interval_ms`, `enabled_pointer`, `generation_pointer`,
+`handler`, `input`, `state` and `next`; `after` is optional. The map may have at most 16 timers.
+IDs are unique and match `[A-Za-z0-9_-]{1,48}`. At most one timer may name each existing
+non-wildcard screen. `interval_ms` is a strict integer from 1000 to 3600000. It sets a wait, not a
+guaranteed tick rate. `enabled_pointer` selects a present, required Boolean state field with a valid
+initial value. `generation_pointer` selects a present, required integer field from 0 through
+9007199254740991, with a valid initial value. The handler must be an executable operation admitted
+by the normal app-map rules.
+
+The timer event has exactly `timer_id` (string), `generation`, `sequence` and `elapsed_ms` (integers
+from 0 through 9007199254740991). A timer has no browser target. Its `input` can copy app state and
+use only individually proved `/event/<field>` references. For example:
+
+```json
+"input": {
+  "state": {"$ref": "/state"},
+  "timer_id": {"$ref": "/event/timer_id"},
+  "generation": {"$ref": "/event/generation"},
+  "sequence": {"$ref": "/event/sequence"},
+  "elapsed_ms": {"$ref": "/event/elapsed_ms"}
+}
+```
+
+See the [Snake timer declaration](https://github.com/promptdriven/prompt-runtime/blob/main/prompts/examples/snake/app-map.json#L609-L675)
+for a full map example and the [Runtime timer declaration](https://github.com/promptdriven/prompt-runtime/blob/main/prompts/prompt_runtime/program_app_map.prompt.md#L770-L798)
+for admission rules. The [host scheduling contract](https://github.com/promptdriven/prompt-runtime/blob/main/prompts/server/web/screen_ticks.prompt.md)
+waits for a live visible Screen and for ordinary or pending work to finish. It waits a fixed delay
+after a completed action, submits one funded tick through the existing FIFO, and does not queue missed
+ticks. Ticks use the existing action/call budget.
+
 ## 14. Bug workflow
 
 1. Reproduce: turn the issue into a test. Add a criterion to the story and a step that checks it to the story's test file.
@@ -735,7 +769,9 @@ CSS properties, scripts and active content. Embedded `<style>` elements are remo
 provide stylesheet rules. External URLs are removed; retained URL attributes must be repository-local, without a
 scheme, host or parent traversal. CSS URLs, scripts, unsafe functions and indirection such as `var()` are filtered.
 Allowed CSS functions are `rgb`, `rgba`, `hsl`, `hsla`, `calc`, `min`, `max` and `clamp`, subject to the same safety
-filters. A removed element, attribute or declaration cannot satisfy a structured HTML assertion.
+filters. A removed element, attribute or declaration cannot satisfy a structured HTML assertion. Script removal applies
+to page content; it does not disable host-scheduled app-map timers (section 13). Do not infer that timed Screen behavior
+is unsupported from this cleanup rule.
 
 The all-Story check estimate includes entry executions, declared saved-data operations and nested prompt-call allowances; conditional operations can use fewer calls. The hard `--max-calls` cap stays authoritative. Named HTTP responses include `x-pdd-ai-calls`, `x-pdd-try-used`, `x-pdd-try-remaining`, `x-pdd-try-cap` and `x-pdd-usage-source` (`runtime` for a receipt, `last-known` for local zero-call responses). Startup shows session usage on stderr. Program stdout, HTTP bodies and status codes retain their program values; CLI stderr carries program text followed by accounting. No model call or repeat dispatch is made for accounting.
 

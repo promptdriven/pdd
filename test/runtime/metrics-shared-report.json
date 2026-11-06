@@ -1,0 +1,292 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/metrics-shared-report.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "A group containing issues 1 and 2 still contains two issues when issue 1 has two attempts and two pull requests."
+    },
+    {
+      "id": "AC2",
+      "text": "An attempted launch without a confirmed start does not count as a start."
+    },
+    {
+      "id": "AC3",
+      "text": "A checker pass for an old candidate does not validate a changed candidate."
+    },
+    {
+      "id": "AC4",
+      "text": "A later delivered fix remains attributed to the original group, and an administrative reopen is separate from a human report that the fix is still broken."
+    },
+    {
+      "id": "AC5",
+      "text": "Importing the same event twice does not add a second issue or event, and an absent machine is shown as a coverage gap."
+    }
+  ],
+  "initial_world": {},
+  "simulation": {},
+  "context": [],
+  "steps": [
+    {
+      "step_id": "fixed-group",
+      "entry_path": "prompts/cli/metrics-model.prompt.md",
+      "operation": "calculateMetrics",
+      "input": {
+        "events": [
+          {
+            "schema": "pdd.metrics.event.v1",
+            "id": "1",
+            "repo": "a/b",
+            "issue": 1,
+            "type": "selection",
+            "at": "2026-01-01T00:00:00Z",
+            "observedAt": "2026-01-01T00:00:00Z",
+            "source": "machine-a",
+            "data": {
+              "snapshotId": "s",
+              "inScope": true,
+              "state": "ready",
+              "reasons": []
+            }
+          },
+          {
+            "schema": "pdd.metrics.event.v1",
+            "id": "2",
+            "repo": "a/b",
+            "issue": 2,
+            "type": "selection",
+            "at": "2026-01-01T00:00:00Z",
+            "observedAt": "2026-01-01T00:00:00Z",
+            "source": "machine-a",
+            "data": {
+              "snapshotId": "s",
+              "inScope": true,
+              "state": "ready",
+              "reasons": []
+            }
+          },
+          {
+            "schema": "pdd.metrics.event.v1",
+            "id": "3",
+            "repo": "a/b",
+            "issue": 1,
+            "type": "start",
+            "at": "2026-01-01T00:00:00Z",
+            "observedAt": "2026-01-01T00:00:00Z",
+            "source": "machine-a",
+            "data": {
+              "origin": "manual"
+            },
+            "attempt": "one"
+          },
+          {
+            "schema": "pdd.metrics.event.v1",
+            "id": "4",
+            "repo": "a/b",
+            "issue": 1,
+            "type": "start",
+            "at": "2026-01-01T00:00:00Z",
+            "observedAt": "2026-01-01T00:00:00Z",
+            "source": "machine-a",
+            "data": {
+              "origin": "manual"
+            },
+            "attempt": "two"
+          },
+          {
+            "schema": "pdd.metrics.event.v1",
+            "id": "5",
+            "repo": "a/b",
+            "issue": 2,
+            "type": "launch",
+            "at": "2026-01-01T00:00:00Z",
+            "observedAt": "2026-01-01T00:00:00Z",
+            "source": "machine-a",
+            "data": {
+              "origin": "autopilot",
+              "status": "attempted"
+            }
+          },
+          {
+            "schema": "pdd.metrics.event.v1",
+            "id": "6",
+            "repo": "a/b",
+            "issue": 1,
+            "type": "milestone",
+            "at": "2026-01-01T00:00:00Z",
+            "observedAt": "2026-01-01T00:00:00Z",
+            "source": "machine-a",
+            "data": {
+              "stage": "implementation-ready",
+              "pr": 8,
+              "head": "b"
+            }
+          },
+          {
+            "schema": "pdd.metrics.event.v1",
+            "id": "7",
+            "repo": "a/b",
+            "issue": 1,
+            "type": "check",
+            "at": "2026-01-01T00:00:00Z",
+            "observedAt": "2026-01-01T00:00:00Z",
+            "source": "machine-a",
+            "data": {
+              "pr": 8,
+              "head": "a",
+              "verdict": "PASS",
+              "reviewer": "r",
+              "evidence": "https://example.test/check",
+              "acceptance": "accepted"
+            }
+          },
+          {
+            "schema": "pdd.metrics.event.v1",
+            "id": "8",
+            "repo": "a/b",
+            "issue": 1,
+            "type": "delivery",
+            "at": "2026-01-02T00:00:00Z",
+            "observedAt": "2026-01-02T00:00:00Z",
+            "source": "machine-a",
+            "data": {
+              "pr": 8,
+              "head": "b",
+              "explicit": true,
+              "evidence": "https://example.test/merge"
+            }
+          },
+          {
+            "schema": "pdd.metrics.event.v1",
+            "id": "9",
+            "repo": "a/b",
+            "issue": 1,
+            "type": "report",
+            "at": "2026-01-03T00:00:00Z",
+            "observedAt": "2026-01-03T00:00:00Z",
+            "source": "machine-a",
+            "data": {
+              "classification": "administrative",
+              "humanReported": true,
+              "evidence": "https://example.test/reopen"
+            }
+          },
+          {
+            "schema": "pdd.metrics.event.v1",
+            "id": "1",
+            "repo": "a/b",
+            "issue": 1,
+            "type": "selection",
+            "at": "2026-01-01T00:00:00Z",
+            "observedAt": "2026-01-01T00:00:00Z",
+            "source": "machine-a",
+            "data": {
+              "snapshotId": "s",
+              "inScope": true,
+              "state": "ready",
+              "reasons": []
+            }
+          },
+          {
+            "schema": "pdd.metrics.event.v1",
+            "id": "10",
+            "repo": "a/b",
+            "issue": 1,
+            "type": "milestone",
+            "at": "2026-01-01T00:00:00Z",
+            "observedAt": "2026-01-01T00:00:00Z",
+            "source": "machine-a",
+            "data": {
+              "stage": "prompt-pr",
+              "pr": 7
+            }
+          },
+          {
+            "schema": "pdd.metrics.event.v1",
+            "id": "11",
+            "repo": "a/b",
+            "issue": 1,
+            "type": "report",
+            "at": "2026-01-04T00:00:00Z",
+            "observedAt": "2026-01-04T00:00:00Z",
+            "source": "machine-a",
+            "data": {
+              "classification": "failed-fix",
+              "humanReported": true,
+              "evidence": "https://example.test/complaint"
+            }
+          }
+        ],
+        "repo": "a/b",
+        "scope": {
+          "kind": "cohort",
+          "snapshotId": "s"
+        },
+        "timezone": "UTC",
+        "observedAt": "2026-02-05T00:00:00Z",
+        "sources": [
+          "machine-a",
+          "machine-b"
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/issues",
+          "op": "count",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/issues/0/attempts",
+          "op": "count",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/stages/started/numerator",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/issues/0/validated",
+          "op": "equals",
+          "value": "unknown"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/stages/delivered/numerator",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/issues/0/failedFixReports",
+          "op": "count",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/issues",
+          "op": "count",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/coverage/missingSources/0",
+          "op": "equals",
+          "value": "machine-b"
+        }
+      ]
+    }
+  ]
+}

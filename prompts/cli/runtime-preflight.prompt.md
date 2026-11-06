@@ -25,6 +25,22 @@ Hash filling checks allowed draft targets and required reference inputs before r
 
 
 
+## Nested fixture projects (proposed)
+
+For an unqualified all-Story selection, exclude a nested fixture project from
+Story and test discovery when its root is below `test/fixtures` and has both
+a direct `user_stories` directory and a direct `tests` directory containing
+Git-visible files. Exclude only descendants of that project root; do not infer
+an exclusion from a folder named `fixtures` or `examples` alone. Report each
+excluded project root so the selection is visible. Apply the exclusion before
+name matching, warnings and content reads.
+
+Explicit Story, test or directory selections retain existing selection and
+validation semantics, including missing dependency refusals and root-relative
+references; they do not silently skip a selected fixture. Outside the excluded
+roots, preserve name conflicts, missing dependency errors, and behavior when no
+fixture project is present. Do not remove or modify fixture files.
+
 ## Native Story discovery and selection (draft)
 
 For explicit `pdd lint` Story selection, retain ordinary name/path/directory

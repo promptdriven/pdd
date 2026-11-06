@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 32674d449522854da8b9182e14dd9f1d7716d7c028a68f8549f43e8b29e53027).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: d091d31f3f3448ec47f9e4d9dfd6c89a7c53a281d33981fc191d49fa86311671).
 import {readEvidenceEligibility} from './workflow-runner.mjs';
 import {allRuns} from './workflow-runs.mjs';
 import {assessNativeEvidence, resultLines, usableResult} from './workflow-results.mjs';
@@ -243,8 +243,9 @@ async function readSavedStoryEvidence({ root, comparisonRoot = root }, ports, ca
     if (comparisonRoot !== null && /^[a-f0-9]{64}$/.test(batch.source_sha256 ?? '')) {
       try {
         const folder = await real(comparisonRoot), tests = [...new Set(batch.rows.map(row => row.test))].sort();
-        const key = JSON.stringify([folder, tests]);
-        if (!captures.has(key)) captures.set(key, Promise.resolve().then(() => capture(folder, { tests, appMap: null }))
+        const excludeFixtureProjects = batch.exclude_fixture_projects === true;
+        const key = JSON.stringify([folder, tests, excludeFixtureProjects]);
+        if (!captures.has(key)) captures.set(key, Promise.resolve().then(() => capture(folder, { tests, appMap: null, ...(excludeFixtureProjects ? { excludeFixtureProjects: true } : {}) }))
           .then(source => ({ sha256: source.sha256 })).catch(error => ({ error })));
         const source = await captures.get(key);
         if (source.error) throw source.error;
@@ -508,22 +509,180 @@ function safeAdmission(reply) {
     && json?.accounting_complete !== false && json?.usage?.accounting_complete !== false && report?.accounting_complete !== false
     && !(report && Object.hasOwn(report, 'provider_calls') && report.provider_calls !== 0) && !report?.samples?.some(sample => sample?.steps?.some(step => step?.checks?.length));
 }
-function checkCapacity(answer, headers) {
+function accountingProof(record) {
+  const usage = record?.usage, result = record?.result, reports = [record?.report, result?.report].filter(isObject);
+  if (!isObject(usage)) return false;
+  const supplied = (object, key) => isObject(object) && Object.hasOwn(object, key);
+  const surfaces = [record, usage, result, ...reports].filter(isObject);
+  const dispatches = surfaces.filter(object => supplied(object, 'dispatch')).map(object => object.dispatch);
+  if (!dispatches.length || dispatches.some(value => value !== 'not_started')) return false;
+  const flagSurfaces = surfaces.filter(object => supplied(object, 'accounting_complete')).map(object => object.accounting_complete);
+  if (!flagSurfaces.length || flagSurfaces.some(value => value !== true)) return false;
+  const counters = surfaces.flatMap(object => ['calls', 'known_calls', 'unknown_calls', 'provider_calls'].map(key => [object, key]));
+  if (!supplied(usage, 'calls') || usage.calls !== 0 || !counters.some(([object, key]) => key === 'provider_calls' && supplied(object, key))) return false;
+  for (const [object, key] of counters) if (supplied(object, key)) {
+    const value = object[key];
+    if (!Number.isSafeInteger(value) || value < 0 || value !== 0) return false;
+  }
+  if (surfaces.some(object => supplied(object, 'job_created') && object.job_created !== false)) return false;
+  if (supplied(record, 'calls') && supplied(usage, 'calls') && record.calls !== usage.calls) return false;
+  if (supplied(usage, 'known_calls') && supplied(usage, 'calls') && usage.known_calls !== usage.calls) return false;
+  if (supplied(usage, 'unknown_calls') && usage.unknown_calls !== 0) return false;
+  const resultSurfaces = [result, ...reports].filter(isObject);
+  if (resultSurfaces.some(object => supplied(object, 'criterion_results') && (!Array.isArray(object.criterion_results) || object.criterion_results.length))) return false;
+  for (const surface of resultSurfaces) if (supplied(surface, 'samples')) {
+    if (!Array.isArray(surface.samples)) return false;
+    for (const sample of surface.samples) {
+      if (!isObject(sample) || !Array.isArray(sample.steps)) return false;
+      for (const step of sample.steps) {
+        if (!isObject(step) || !Array.isArray(step.checks) || step.checks.length) return false;
+      }
+    }
+  }
+  if ([record, ...resultSurfaces].some(object => supplied(object, 'checks') && (!Array.isArray(object.checks) || object.checks.length))) return false;
+  return true;
+}
+function capacityRefusal(refusals, headers) {
+  return refusals.map(item => capacityDelay(item, headers)).find(wait => wait !== null) ?? null;
+}
+function checkCapacityCandidate(answer, headers) {
   const report = answer?.result?.report;
-  if (answer?.command !== 'check' || answer.state !== 'refused' || answer.usage?.calls !== 0 || report?.dispatch !== 'not_started'
-    || Object.hasOwn(report, 'provider_calls') && report.provider_calls !== 0 || report.accounting_complete === false || answer.usage?.accounting_complete === false
-    || report.samples?.some(sample => sample?.steps?.some(step => step?.checks?.length))) return null;
-  return [report.refusal, ...(Array.isArray(answer.result?.refusals) ? answer.result.refusals : [])].map(item => capacityDelay(item, headers)).find(wait => wait !== null) ?? null;
+  return answer?.command === 'check' && answer.state === 'refused'
+    && capacityRefusal([report?.refusal, ...(Array.isArray(answer.result?.refusals) ? answer.result.refusals : [])], headers) !== null;
 }
-function accumulatedCalls(context, row) {
-  const calls = row.request_ids.map(id => {
-    const answer = context.store.read(join(context.folder, `${id}.json`));
-    if (answer) return answer.usage?.calls;
+function checkCapacity(answer, headers) {
+  if (!checkCapacityCandidate(answer, headers) || !accountingProof(answer)) return null;
+  return capacityRefusal([answer.result?.report?.refusal, ...(Array.isArray(answer.result?.refusals) ? answer.result.refusals : [])], headers);
+}
+function admissionCapacityCandidate(record, headers) {
+  return capacityDelay(record?.error, headers) !== null || record?.error?.code === 'maintenance';
+}
+function isAdmissionCapacityRecord(record) {
+  return isObject(record) && isObject(record.error);
+}
+function admissionMatches(record, id) {
+  if (!isObject(record)) return false;
+  for (const surface of [record, record.result].filter(isObject)) {
+    for (const key of ['requestId', 'id']) if (Object.hasOwn(surface, key) && surface[key] !== id) return false;
+    if (Object.hasOwn(surface, 'command') && surface.command !== 'check') return false;
+  }
+  return true;
+}
+function capacityHistoryHasEvidence(context, row) {
+  if (!context.store || !context.folder) return false;
+  for (const id of row.request_ids ?? []) {
     const admission = context.store.read(join(context.folder, `${id}.admission.json`));
-    return admission?.dispatch === 'not_started' && safeAdmission({ json: admission }) ? 0 : 'unknown';
-  });
-  return calls.every(value => typeof value === 'number' && Number.isFinite(value)) ? calls.reduce((a, b) => a + b, 0) : 'unknown';
+    const latest = context.store.read(join(context.folder, `${id}.json`));
+    const prior = context.store.read(join(context.folder, `${id}.observations.json`));
+    if (isAdmissionCapacityRecord(admission) && admissionCapacityCandidate(admission)
+      || [...(Array.isArray(prior) ? prior : []), ...(latest ? [latest] : [])].some(answer => checkCapacityCandidate(answer))) return true;
+  }
+  return false;
 }
+function capacityHistorySafe(context, row) {
+  if (!context.store || !context.folder) return false;
+  const restartOrigin = structuredRestartOrigin(context, row);
+  let found = false;
+  for (const id of row.request_ids ?? []) {
+    if (id === restartOrigin) continue;
+    const admission = context.store.read(join(context.folder, `${id}.admission.json`));
+    const latest = context.store.read(join(context.folder, `${id}.json`));
+    const prior = context.store.read(join(context.folder, `${id}.observations.json`));
+    const history = [...(Array.isArray(prior) ? prior : []), ...(latest ? [latest] : [])];
+    const terminalHistory = history.filter(answer => accountingEnd(answer, id));
+    const firstTerminal = history.findIndex(answer => accountingEnd(answer, id));
+    const progressConflict = history.some((answer, index) => !accountingEnd(answer, id)
+      && (!['queued', 'running'].includes(answer?.state) || index > firstTerminal));
+    const admissionCandidate = isAdmissionCapacityRecord(admission) && admissionCapacityCandidate(admission);
+    const answerCandidates = terminalHistory.filter(answer => checkCapacityCandidate(answer));
+    if (!admissionCandidate && !answerCandidates.length) continue;
+    found = true;
+    if (admissionCandidate && (!admissionMatches(admission, id) || !accountingProof(admission) || history.some(answer => !checkCapacityCandidate(answer)))) return false;
+    if (answerCandidates.some(answer => !accountingProof(answer))) return false;
+    if (answerCandidates.length !== terminalHistory.length || progressConflict) return false;
+  }
+  // A durable structured restart is the one bounded exception. Its unknown
+  // usage stays in the published totals, but does not block a later zero-work
+  // capacity receipt from continuing that replacement.
+  const accountingRow = restartOrigin ? { ...row, request_ids: row.request_ids.filter(id => id !== restartOrigin) } : row;
+  return found && accumulatedAccounting(context, accountingRow).accounting_complete === true;
+}
+function structuredRestartOrigin(context, row) {
+  const fuse = claimPath(context, row).replace(/\.0\.dispatch\.json$/, '.restart.json');
+  if (row.restart_used !== true || !statOrNull(fuse)) return null;
+  const origins = (row.request_ids ?? []).filter(id => {
+    const latest = context.store.read(join(context.folder, `${id}.json`));
+    const prior = context.store.read(join(context.folder, `${id}.observations.json`));
+    const history = [...(Array.isArray(prior) ? prior : []), ...(latest ? [latest] : [])]
+      .filter((item, index, list) => list.findIndex(other => isDeepStrictEqual(other, item)) === index);
+    const terminal = history.filter(answer => accountingEnd(answer, id));
+    return history.length > 0 && history.every(answer => sameJob(answer, id, 'check'))
+      && terminal.length > 0 && terminal.every(restarted);
+  });
+  return origins.length === 1 ? origins[0] : null;
+}
+function capacityRetryAllowed(context, row) {
+  if (!capacityHistorySafe(context, row)) return false;
+  const id = row.request_ids?.at(-1);
+  if (!id) return false;
+  const admission = context.store.read(join(context.folder, `${id}.admission.json`));
+  if (isAdmissionCapacityRecord(admission) && admissionCapacityCandidate(admission))
+    return admissionMatches(admission, id) && accountingProof(admission);
+  const latest = context.store.read(join(context.folder, `${id}.json`));
+  const prior = context.store.read(join(context.folder, `${id}.observations.json`));
+  const history = [...(Array.isArray(prior) ? prior : []), ...(latest ? [latest] : [])]
+    .filter((item, index, list) => list.findIndex(other => isDeepStrictEqual(other, item)) === index);
+  const terminal = history.filter(answer => accountingEnd(answer, id));
+  return terminal.length > 0 && terminal.every(answer => checkCapacityCandidate(answer) && accountingProof(answer));
+}
+function usagePart(record) {
+  const usage = isObject(record?.usage) ? record.usage : {}, result = isObject(record?.result) ? record.result : {}, reports = [record?.report, result?.report].filter(isObject);
+  const counter = value => Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+  const surfaces = [record, usage, result, ...reports];
+  const values = key => surfaces.filter(source => Object.hasOwn(source, key)).map(source => counter(source[key]));
+  const invalid = ['calls', 'known_calls', 'unknown_calls', 'provider_calls'].some(key => values(key).some(value => value === undefined));
+  const conflicting = ['calls', 'known_calls', 'unknown_calls', 'provider_calls'].some(key => new Set(values(key).filter(value => value !== undefined)).size > 1);
+  const flags = surfaces.filter(source => Object.hasOwn(source, 'accounting_complete')).map(source => source.accounting_complete);
+  const invalidFlag = flags.some(value => typeof value !== 'boolean');
+  const conflictingFlags = new Set(flags.filter(value => typeof value === 'boolean')).size > 1;
+  const callValues = values('calls'), knownValues = values('known_calls'), unknownValues = values('unknown_calls'), providerValues = values('provider_calls');
+  const calls = counter(usage.calls), knownRaw = knownValues.length ? Math.max(...knownValues.filter(value => value !== undefined)) : calls;
+  const unknownRaw = unknownValues.length ? Math.max(...unknownValues.filter(value => value !== undefined)) : 0;
+  const providerCalls = providerValues.length ? Math.max(...providerValues.filter(value => value !== undefined)) : undefined;
+  const callLowerBound = knownValues.length ? knownRaw ?? 0 : Math.max(...callValues.filter(value => value !== undefined), 0);
+  const known = Math.max(callLowerBound, providerCalls ?? 0);
+  const complete = !invalid && !conflicting && !invalidFlag && !conflictingFlags && !flags.includes(false) && calls !== undefined
+    && (unknownRaw ?? 0) === 0 && (knownRaw === undefined || knownRaw <= calls) && (providerCalls === undefined || providerCalls === calls);
+  return { known, unknown: complete ? 0 : Math.max(1, unknownRaw ?? 0), complete, total: complete ? calls : null };
+}
+function attemptAccounting(context, id) {
+  const path = join(context.folder, `${id}.json`), answer = context.store.read(path);
+  const observations = context.store.read(join(context.folder, `${id}.observations.json`));
+  const admission = context.store.read(join(context.folder, `${id}.admission.json`));
+  const history = [...(Array.isArray(observations) ? observations : []), ...(answer ? [answer] : [])]
+    .filter((item, index, list) => list.findIndex(other => isDeepStrictEqual(other, item)) === index);
+  const matchingHistory = history.filter(item => sameJob(item, id, 'check'));
+  const terminalHistory = matchingHistory.filter(item => accountingEnd(item, id));
+  const accountingHistory = terminalHistory.length ? terminalHistory : matchingHistory.slice(-1);
+  const admissionCandidate = isAdmissionCapacityRecord(admission) && admissionCapacityCandidate(admission);
+  const unsafeAdmission = admissionCandidate && !accountingProof(admission);
+  const admissionConflict = admissionCandidate && (!admissionMatches(admission, id) || unsafeAdmission || history.some(item => !checkCapacityCandidate(item)));
+  const records = [...accountingHistory, ...(admission ? [admission] : [])];
+  if (!records.length) return { known: 0, unknown: 1, complete: false, total: null };
+  const parts = records.map(usagePart), known = Math.max(...parts.map(part => part.known));
+  const unknown = Math.max(1, ...parts.map(part => part.unknown));
+  const complete = !admissionConflict && parts.every(part => part.complete) && new Set(parts.map(part => part.total)).size === 1;
+  return { known, unknown: complete ? 0 : unknown, complete, total: complete ? parts[0].total : null };
+}
+function accumulatedAccounting(context, row) {
+  const ids = row.request_ids ?? [];
+  if (!ids.length || !context.store || !context.folder) return { calls: row.calls, known_calls: row.known_calls, unknown_calls: row.unknown_calls ?? 0, accounting_complete: row.accounting_complete };
+  const parts = ids.map(id => attemptAccounting(context, id)), known = parts.reduce((sum, part) => sum + part.known, 0);
+  const unknown = parts.reduce((sum, part) => sum + part.unknown, 0), complete = parts.every(part => part.complete);
+  const total = complete ? parts.reduce((sum, part) => sum + part.total, 0) : null;
+  return { calls: complete ? total : 'unknown', known_calls: known, unknown_calls: complete ? 0 : Math.max(1, unknown), accounting_complete: complete };
+}
+function accumulatedCalls(context, row) { return accumulatedAccounting(context, row).calls; }
 // A confirmed pause follows a POST. Keep its submission and accounting visible
 // when an interrupt ends the pause rather than describing an unsent request.
 function stoppedPause(context, target, kind) {
@@ -533,6 +692,18 @@ function stoppedPause(context, target, kind) {
   return `Stopped. Submitted ${kind} ${ids.length === 1 ? 'request' : 'requests'}: ${ids.join(', ')}. `
     + 'The interpreter confirmed that the last attempt did not start; no work ran for this attempt. '
     + (calls === 'unknown' ? 'Total usage is unknown; earlier submissions may have run.' : `Recorded usage: ${calls} AI calls.`) + recovery;
+}
+const capacityUnknownReason = 'The Check capacity response does not prove complete zero-work accounting. Usage is unknown.';
+function sameIdReadAdvice(context, row) {
+  return context.batch ? `Read the saved request with: pdd test --read ${context.batch}`
+    : `Read request ${row.request_ids.at(-1)} before sending anything again.`;
+}
+function markCapacityUnknown(context, row) {
+  const accounting = accumulatedAccounting(context, row);
+  Object.assign(row, { state: 'unknown', phase: 'server', calls: 'unknown', known_calls: accounting.known_calls ?? 0,
+    unknown_calls: Math.max(1, accounting.unknown_calls ?? 0), accounting_complete: false, capacity_uncertain: true,
+    busy: false, can_retry: false, busy_display: null, retry_at: null, busy_request_id: null, busy_observed_at: null,
+    capacity_until: null, note: null, why: capacityUnknownReason, next_step: sameIdReadAdvice(context, row) });
 }
 function markBusy(context, row, wait, observedAt = context.ports.now(), legacy = context.reading) {
   const id = row.request_ids.at(-1);
@@ -549,12 +720,14 @@ function markBusy(context, row, wait, observedAt = context.ports.now(), legacy =
   Object.assign(row, { state: context.reading ? 'not_run' : 'waiting', busy: true, can_retry: true, calls: 0, refusals: [],
     checks: null, criteria: null, all_checks: [], failed_checks: [], why: null, next_step: null,
     note: { code: 'check-busy', message: 'The interpreter is busy. No checks ran for this attempt. Retry this batch later.' } });
-  if (row.restart_used) row.calls = accumulatedCalls(context, row);
+  Object.assign(row, accumulatedAccounting(context, row));
   if (!context.reading) context.checkWindow = 1;
 }
 
 const restarted = answer => answer?.command === 'check' && answer.state === 'unknown' && [answer.result?.report?.refusal, ...(Array.isArray(answer.result?.refusals) ? answer.result.refusals : [])].some(item => item?.code === 'service-restarted');
 const confirmedEnd = answer => ['passed', 'failed', 'refused', 'not_run'].includes(answer?.state) || restarted(answer);
+const accountingEnd = (answer, id) => sameJob(answer, id, 'check')
+  && (confirmedEnd(answer) || answer.state === 'unknown');
 function localLimit(context) {
   if (context.localLimit !== undefined) return context.localLimit;
   const raw = context.ports.env.PDD_MAX_JOBS;
@@ -737,10 +910,17 @@ function judgePost(reply, id, command, secrets) {
   const stopLine = blockingAnswer(reply);
   if (stopLine) return { kind: 'stop', note: { code: 'blocked', message: stopLine }, blocked: true };
   const error = isObject(reply.json?.error) ? reply.json.error : null;
+  if (command === 'check' && [429, 503].includes(reply.status) && capacityDelay(error, reply.headers) !== null) {
+    if (!admissionMatches(reply.json, id) || !accountingProof(reply.json)) return { kind: 'unknown', why: 'Check capacity accounting is incomplete or conflicting.', admission: reply.json, capacity_uncertain: true };
+    return { kind: 'busy', wait: capacityDelay(error, reply.headers), admission: reply.json };
+  }
   if ([429, 503].includes(reply.status) && reply.json?.dispatch === 'not_started' && !safeAdmission(reply))
-    return { kind: 'unknown', why: 'The admission receipt has uncertain execution accounting.' };
-  if (reply.status === 503 && error?.code === 'maintenance' && reply.json?.dispatch === 'not_started' && safeAdmission(reply))
+    return { kind: 'unknown', why: 'The admission receipt has uncertain execution accounting.', ...(command === 'check' ? { admission: reply.json, capacity_uncertain: true } : {}) };
+  if (reply.status === 503 && error?.code === 'maintenance' && reply.json?.dispatch === 'not_started' && safeAdmission(reply)) {
+    if (command === 'check' && (!admissionMatches(reply.json, id) || !accountingProof(reply.json)))
+      return { kind: 'unknown', why: 'Check maintenance accounting is incomplete or conflicting.', admission: reply.json, capacity_uncertain: true };
     return { kind: 'busy', wait: retryAfter(reply.headers), admission: reply.json, maintenance: true };
+  }
   if (command === 'lint' && reply.status === 503 && error?.code === 'lint-queue-full' && lintQueueWait(error) !== null && safeAdmission(reply)) return { kind: 'busy', wait: capacityDelay(error, reply.headers), admission: reply.json };
   if (['check', 'try'].includes(command) && [429, 503].includes(reply.status) && reply.json?.dispatch === 'not_started' && safeAdmission(reply)) {
     const wait = capacityDelay(error, reply.headers);
@@ -795,7 +975,7 @@ function batchId(now, uuid) {
 function localSetup(cwd, words) {
   const root = repoRoot(cwd), names=gitFiles(root), workspace=loadRuntimeWorkspace({root});
   for(const word of words){const path=relative(realpathSync(root),resolve(realpathSync(cwd),word)).split(sep).join('/');if(names.includes(path))requireRuntimePath(workspace,{path,from:'Selected source'});}
-  const found = findTests({ root, files: names });
+  const found = findTests({ root, files: names, excludeFixtureProjects: words.length === 0 });
   const realCwd = realpathSync(cwd), realRoot = realpathSync(root);
   const normalized = words.map(word => {
     const rel = relative(realRoot, resolve(realCwd, word)).split(sep).join('/');
@@ -815,7 +995,7 @@ function storyList(found) {
 }
 
 function select(found, words, root) {
-  if (!found.tests.length) throw new Stop(2, [NO_TESTS, ...(root ? whyNoTests(root, found.visible, found) : [])].join('\n'));
+  if (!found.tests.length) throw new Stop(2, [NO_TESTS, ...(root ? whyNoTests(root, found.discoveryVisible ?? found.visible, found) : []), ...(found.excludedFixtureProjects ?? []).map(path => `Warning: skipped nested fixture project ${path}.`)].join('\n'));
   const { selected, unknown, untested = [] } = selectTests(found, words);
   if (untested.length) throw new Stop(2, untested.join('\n'));
   if (unknown.length) throw new Stop(2, [`Unknown story ${unknown.map(word => `"${cleanText(word)}"`).join(', ')}. Stories:`, ...storyList(found)].join('\n'));
@@ -838,7 +1018,7 @@ function recoverSourceContext(context) {
   if (context.sourceRecoveryAttempted) return false;
   context.sourceRecoveryAttempted = true;
   try {
-    const capture = context.ports.captureSource(context.root, { tests: sentTests(context.rows), appMap: null });
+    const capture = context.ports.captureSource(context.root, { tests: sentTests(context.rows), appMap: null, excludeFixtureProjects: context.excludeFixtureProjects });
     if (capture.sha256 !== context.capture.sha256) { context.sourceRecoveryMismatch = true; return false; }
     capture.stories = context.capture.stories;
     context.capture = capture;
@@ -909,7 +1089,7 @@ function addHints(row, root, visible) {
 function noVerdictAdvice(answer, view) {
   const why = view.why;
   return { why: why && why !== 'Checks failed.' ? why : null,
-    next_step: checkCapacity(answer) === null ? view.next_step : null };
+    next_step: checkCapacityCandidate(answer) ? null : view.next_step };
 }
 
 // Only the confirmed answer can identify the engine/model that produced a pass.
@@ -932,6 +1112,14 @@ const sameCacheIdentity = (a, b) => !!a && !!b && a.engine_sha === b.engine_sha 
 
 function applyAnswer(row, answer, context, observedWait = null, observedAt = context.ports.now()) {
   context.unsentInterruptions?.delete(row);
+  const capacityCandidate = checkCapacityCandidate(answer);
+  const capacitySafe = capacityCandidate && checkCapacity(answer) !== null && capacityHistorySafe(context, row);
+  // Earlier contradictory capacity evidence remains uncertain until the Runtime
+  // supplies an explicit reconciliation contract for that same request ID.
+  const capacityUncertain = row.capacity_uncertain === true || capacityCandidate && !capacitySafe
+    || capacityHistoryHasEvidence(context, row) && !capacityHistorySafe(context, row);
+  if (capacityUncertain) row.capacity_uncertain = true;
+  else if (capacitySafe) row.capacity_uncertain = false;
   row.cache_identity = answerCacheIdentity(answer);
   // Evidence is no newer than its original batch, even when read much later.
   const times = [context.startedAt, ...[answer?.finished_at, answer?.completed_at, answer?.ended_at].map(value => typeof value === 'number' ? value : Date.parse(value))].filter(Number.isFinite);
@@ -939,23 +1127,31 @@ function applyAnswer(row, answer, context, observedWait = null, observedAt = con
   const knownIdentity = value => typeof value === 'string' && value.trim() && value.trim().toLowerCase() !== 'unknown';
   context.observedTestIdentities ??= [];
   const models = [answer?.usage?.requested_model, answer?.result?.report?.evaluation?.requested_model];
+  const accounting = context.store && context.folder && row.request_ids.length ? accumulatedAccounting(context, row) : usagePart(answer);
+  const terminal = accountingEnd(answer, row.request_ids.at(-1));
   context.observedTestIdentities.push({ engine_sha: knownIdentity(answer?.engine_sha) ? answer.engine_sha : null,
-    models: models.filter(knownIdentity), complete: !!row.cache_identity, observed_at: new Date(context.ports.now()).toISOString() });
-  const view = projectAnswer(answer, { origin: context.origin, secrets: context.secrets, steps: row.steps ?? [], criterionTexts: row.criterion_texts ?? {}, test: row.test });
+    models: models.filter(knownIdentity), terminal, complete: terminal && !!row.cache_identity
+      && (accounting.accounting_complete ?? accounting.complete) === true && !capacityUncertain,
+    observed_at: new Date(context.ports.now()).toISOString() });
+  const view = projectAnswer(answer, { origin: context.origin, secrets: context.secrets, steps: row.steps ?? [], criterionTexts: row.criterion_texts ?? {}, test: row.test, capacityUncertain });
   const advice = noVerdictAdvice(answer, view);
   const firstDiagnosis = view.failed_checks.find(check => check.diagnosis) ?? null, failed = view.state === 'failed';
   Object.assign(row, { state: view.state, checks: view.checks, criteria: view.criteria, failed_checks: view.failed_checks, all_checks: view.all_checks,
     refusals: view.refusals, calls: view.calls, requested_model: view.requested_model, report_url: view.report_url ?? row.report_url,
     server_seconds: view.server_seconds, busy_display: view.busy_display, time_limit: view.time_limit, known_calls: view.known_calls, unknown_calls: view.unknown_calls,
+    accounting_complete: view.accounting_complete,
     why: failed ? view.why ?? firstDiagnosis?.diagnosis?.why ?? null : ['refused', 'not_run', 'unknown'].includes(view.state) ? advice.why ?? (view.state === 'unknown' && row.lost && row.why !== 'Checks failed.' ? row.why : null) : null,
     who: failed ? view.who ?? firstDiagnosis?.diagnosis?.who ?? null : null,
     next_step: failed ? view.next_step ?? firstDiagnosis?.diagnosis?.next_step ?? null : ['refused', 'not_run', 'unknown'].includes(view.state) ? advice.next_step : null,
     rerun: view.rerun ?? row.rerun,
     engine_sha: view.engine_sha, provider: view.provider, progress: view.progress, ahead: view.ahead,
     draft: view.draft ?? row.draft });
-  if (row.restart_used) row.calls = accumulatedCalls(context, row);
-  const wait = checkCapacity(answer);
-  if (wait !== null) markBusy(context, row, observedWait ?? wait, observedAt, context.reading && observedWait === null);
+  if (row.request_ids.length) Object.assign(row, context.store && context.folder ? accumulatedAccounting(context, row) : {
+    calls: accounting.complete ? accounting.total : 'unknown', known_calls: accounting.known,
+    unknown_calls: accounting.complete ? 0 : accounting.unknown, accounting_complete: accounting.complete });
+  const wait = capacitySafe ? checkCapacity(answer) : null;
+  if (capacityUncertain) markCapacityUnknown(context, row);
+  else if (wait !== null) markBusy(context, row, observedWait ?? wait, observedAt, context.reading && observedWait === null);
   else { row.busy = false; row.can_retry = false; row.note = view.note; }
   if (row.state === 'refused') addHints(row, context.root, context.visible);
   if (ENDED.has(row.state) && row.sent_at && !row.ended_at && !context.reading) row.ended_at = context.ports.now();
@@ -984,6 +1180,7 @@ function batchRecord(context) {
   const { batch, origin, root, identity, capture, rows, lint, warnings } = context;
   return { version: 1, batch, origin, root, head: context.head, login: identity.login, user_id: identity.userId,
     source_sha256: capture.sha256, files: capture.files.map(file => file.path), bytes: capture.bytes, timeout_min: context.timeoutMin,
+    exclude_fixture_projects: context.excludeFixtureProjects === true,
     created_at: new Date(context.startedAt).toISOString(), intent: context.intent, lint, warnings, coverage: context.coverage,
     contract_snapshots: capture.stories,
     test_cache: context.testCache ? { tokens: [...context.testCache.tokens] } : context.savedTestCache,
@@ -993,6 +1190,8 @@ function batchRecord(context) {
       sent_at: row.sent_at ?? null, ended_at: row.ended_at ?? null, max_calls: row.max_calls, warnings: row.warnings, steps: row.steps, criteria_total: row.criteria_total,
       reservation: row.reservation ?? null, restart_used: !!row.restart_used,
       busy: !!row.busy, can_retry: !!row.can_retry, eligible: !!row.eligible, retry_at: row.retry_at ?? null,
+      ...(row.known_calls !== undefined ? { known_calls: row.known_calls } : {}), ...(row.unknown_calls !== undefined ? { unknown_calls: row.unknown_calls } : {}),
+      ...(row.accounting_complete !== undefined ? { accounting_complete: row.accounting_complete } : {}), ...(row.capacity_uncertain ? { capacity_uncertain: true } : {}),
       busy_request_id: row.busy_request_id ?? null, busy_observed_at: row.busy_observed_at ?? null, capacity_until: row.capacity_until ?? null,
       engine_sha: row.engine_sha ?? null, requested_model: row.requested_model ?? null, cache_identity: row.cache_identity ?? null,
       ...(row.cache_reason ? { cache_reason: row.cache_reason } : {}), criterion_texts: row.criterion_texts ?? {}, draft: !!row.draft })) };
@@ -1037,7 +1236,18 @@ function saveBatch(context) {
   }
   context.store.write(join(context.folder, 'batch.json'), batchRecord(context));
 }
-function saveAnswer(context, id, json) { if (isObject(json)) context.store.write(join(context.folder, `${id}.json`), json); }
+function saveAnswerAt(store, folder, id, json) {
+  if (!isObject(json)) return;
+  const path = join(folder, `${id}.json`), previous = store.read(path);
+  if (previous && !isDeepStrictEqual(previous, json)) {
+    const historyPath = join(folder, `${id}.observations.json`), history = store.read(historyPath);
+    const retained = Array.isArray(history) ? history : [];
+    if (!retained.some(item => isDeepStrictEqual(item, previous))) retained.push(previous);
+    store.write(historyPath, retained);
+  }
+  store.write(path, json);
+}
+function saveAnswer(context, id, json) { saveAnswerAt(context.store, context.folder, id, json); }
 
 async function postJob(context, path, command, request, row, timeoutMs, deadline = context.deadline) {
   const id = request.requestId;
@@ -1068,10 +1278,23 @@ async function sendCheck(context, row) {
 }
 async function sendCheckAttempt(context, row) {
   if (context.interrupted || context.ports.now() >= context.deadline || !['ready', 'waiting'].includes(row.state)) return;
+  // Recheck the saved raw cohort immediately before any capacity-driven new ID.
+  // The one structured restart replacement has its own durable fuse and remains allowed.
+  if (row.request_ids.length && (row.busy || row.capacity_uncertain) && !row.restart_pending && !capacityRetryAllowed(context, row)) {
+    markCapacityUnknown(context, row);
+    return;
+  }
   if (row.busy && row.request_ids.length && !await capacityReady(context, context.deadline, row)) return;
   const attempt = row.request_ids.length, previousCalls = row.restart_used || row.restart_pending ? accumulatedCalls(context, row) : 0;
   if (!await admission(context, 'check', row)) {
     if (context.interrupted && interruptedAdmissions.has(row)) Object.assign(row, { state: 'not_run', calls: previousCalls, phase: 'local', note: { code: null, message: 'Stopped before sending.' } });
+    return;
+  }
+  // Admission can wait while another reader records a conflicting receipt.
+  // Revalidate while holding the local reservation, before creating a claim or UUID.
+  if (row.request_ids.length && (row.busy || row.capacity_uncertain) && !row.restart_pending && !capacityRetryAllowed(context, row)) {
+    await finishReservation(context, row, { state: 'not_run' });
+    markCapacityUnknown(context, row);
     return;
   }
   adoptClaims(context, row);
@@ -1128,13 +1351,20 @@ async function sendCheckAttempt(context, row) {
     Object.assign(row, { state: 'not_run', calls: previousCalls, phase: 'local', note });
   }
   else if (verdict.kind === 'accepted') applyAnswer(row, verdict.answer, context, verdict.wait, verdict.observed_at);
-  else if (verdict.kind === 'busy') markBusy(context, row, verdict.wait, verdict.observed_at);
+  else if (verdict.kind === 'busy') {
+    if (row.request_ids.length > 1 && !capacityRetryAllowed(context, row)) markCapacityUnknown(context, row);
+    else markBusy(context, row, verdict.wait, verdict.observed_at);
+  }
   else if (verdict.kind === 'not_run') Object.assign(row, { state: 'not_run', note: verdict.note });
   else if (verdict.kind === 'stop') { Object.assign(row, { state: 'not_run', note: verdict.note }); context.stopped = verdict.note; if (verdict.blocked) context.blocked = verdict.note.message; }
   else if (verdict.kind === 'refused') Object.assign(row, { state: 'refused', refusals: [verdict.refusal] });
   // An explicit caller deadline also bounds recovery of a lost POST answer.
-  else Object.assign(row, { state: 'unknown', why: verdict.why, lost: true, read_until: Number.isFinite(context.deadline)
-    ? context.deadline : context.ports.now() + LOST_READ_MS });
+  else {
+    if (verdict.capacity_uncertain) markCapacityUnknown(context, row);
+    else Object.assign(row, { state: 'unknown', why: verdict.why, lost: true, read_until: Number.isFinite(context.deadline)
+      ? context.deadline : context.ports.now() + LOST_READ_MS });
+    row.lost = true; row.read_until = Number.isFinite(context.deadline) ? context.deadline : context.ports.now() + LOST_READ_MS;
+  }
 }
 
 // GET one open row once.
@@ -1147,7 +1377,11 @@ async function readRow(context, row, deadline = Infinity) {
   if (verdict.kind === 'again' && verdict.why && !context.readTrouble) line(context.ports.stderr, `pdd cannot read the results right now (${verdict.why}). It keeps trying.`);
   if (verdict.kind !== 'again') context.readTrouble = false; else if (verdict.why) context.readTrouble = true;
   if (verdict.kind === 'state') { saveAnswer(context, id, verdict.answer); queueProgress(context, verdict.answer); await finishReservation(context, row, verdict.answer); applyAnswer(row, verdict.answer, context, verdict.wait, verdict.observed_at); row.lost = false; }
-  else if (verdict.kind === 'unknown') Object.assign(row, { state: 'unknown', why: verdict.why, lost: false, final: true });
+  else if (verdict.kind === 'unknown') {
+    if (row.capacity_uncertain) markCapacityUnknown(context, row);
+    else Object.assign(row, { state: 'unknown', why: verdict.why, lost: false, final: true });
+    row.lost = false; row.final = true;
+  }
   else if (verdict.kind === 'auth') context.readStop = AUTH_TEXT;
   else if (verdict.kind === 'blocked') context.readStop = verdict.message;
   else if (verdict.kind === 'gate') context.readStop = 'The runtime opens soon.';
@@ -1411,7 +1645,8 @@ function runFiles(cwd, words, options, ports) {
   const tests = selected.filter(test => !test.error).map(test => test.path);
   for (const test of selected.filter(test => test.error)) line(ports.stderr, `Warning: not sent: ${test.error}`);
   const appMap = options['--app-map'] === undefined ? null : appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
-  const capture = ports.captureSource(root, { tests, appMap });
+  for (const path of found.excludedFixtureProjects ?? []) line(ports.stderr, `Warning: skipped nested fixture project ${path}.`);
+  const capture = ports.captureSource(root, { tests, appMap, excludeFixtureProjects: words.length === 0 });
   for (const warning of [...(capture.warnings ?? []), ...unmatchedLines(found)]) line(ports.stderr, warning);
   const other = otherFiles(capture.files, found), width = Math.max(0, ...capture.files.map(file => file.path.length));
   for(const read of capture.reads??[])line(ports.stderr,`Local read (${read.roles.join(', ')}, not uploaded): ${read.path}`);
@@ -1425,6 +1660,7 @@ function runFiles(cwd, words, options, ports) {
 // Locally the selected prompts' limits gate, SVG advice and privacy/capture checks run; other engine rules are the server's.
 async function runLintOnly(context, cwd, words, options, setRelease) {
   const { ports } = context, origin = runtimeOrigin(ports.env), { root, found, normalized } = localSetup(cwd, words);
+  context.excludeFixtureProjects = words.length === 0;
   const selected = select(found, normalized, root);
   context.coverage = bindingCoverage({ root, found, selected });
   // A test that the test name rule cannot use is refused here and never sent; the other tests are linted.
@@ -1471,7 +1707,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
     }
     return 4;
   }
-  const capture = ports.captureSource(root, { tests: selected.filter((test, index) => !local(rows[index])).map(test => test.path), appMap: null });
+  const capture = ports.captureSource(root, { tests: selected.filter((test, index) => !local(rows[index])).map(test => test.path), appMap: null, excludeFixtureProjects: words.length === 0 });
   const svgWarnings = lintSvgLayouts({ root, files: [...found.visible], promptPaths: capture.files.map(file => file.path).filter(path => path.endsWith('.prompt.md')) });
   const drift=[];
   try {
@@ -1697,7 +1933,7 @@ async function continueHeld(context, candidates, saved) {
   if (context.lintPending) return;
   const lintId = context.lint?.request_ids?.at(-1), lint = lintId && context.store.read(join(context.folder, `${lintId}.json`));
   let capture;
-  try { capture = Array.isArray(context.capture.sources) ? context.capture : context.ports.captureSource(context.root, { tests: sentTests(saved.rows), appMap: null }); }
+  try { capture = Array.isArray(context.capture.sources) ? context.capture : context.ports.captureSource(context.root, { tests: sentTests(saved.rows), appMap: null, excludeFixtureProjects: saved.exclude_fixture_projects === true }); }
   catch (error) {
     if (!(error instanceof PreflightError)) throw error;
     context.continuationNotice = `No checks were sent for the lint-held rows: the saved source cannot be verified. ${error.message}`;
@@ -1730,10 +1966,10 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
   const saved = store.read(join(context.folder, 'batch.json'));
   if (!saved) throw new Stop(2, `No saved batch ${name}.`);
   if (saved.root !== root) throw new Stop(2, 'This saved batch belongs to a different repository.');
-  if(loadRuntimeWorkspace({root}).configured)ports.captureSource(root,{tests:saved.rows.filter(row=>!row.unsent).map(row=>row.test),appMap:null});
+  if(loadRuntimeWorkspace({root}).configured)ports.captureSource(root,{tests:saved.rows.filter(row=>!row.unsent).map(row=>row.test),appMap:null,excludeFixtureProjects:saved.exclude_fixture_projects === true});
   const identity = signIn(ports.gh, context.store);
   if (identity.login !== saved.login) throw new Stop(5, `These runs belong to ${saved.login}. Run: gh auth switch -u ${saved.login}`);
-  Object.assign(context, { batch: name, origin: saved.origin, coverage: saved.coverage, identity, intent: saved.intent, secrets: [identity.token], warnings: saved.warnings ?? [],
+  Object.assign(context, { excludeFixtureProjects: saved.exclude_fixture_projects === true, batch: name, origin: saved.origin, coverage: saved.coverage, identity, intent: saved.intent, secrets: [identity.token], warnings: saved.warnings ?? [],
     capture: { sha256: saved.source_sha256, files: saved.files.map(path => ({ path })), bytes: saved.bytes, stories:saved.contract_snapshots }, lint: saved.lint, head: saved.head, startedAt: Date.parse(saved.created_at) });
   runtimeOrigin({ PDD_RUNTIME_URL: saved.origin });
   context.runtime = new Runtime({ origin: saved.origin, token: identity.token, ports, signal: context.signal });
@@ -1742,7 +1978,7 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
   // Preserve the producer's original evidence before refresh can normalize unsent usage.
   const evidence = candidates.map(row => ({ row, hadCalls: Object.hasOwn(row, 'calls'), calls: row.calls }));
   for (const row of rows) adoptClaims(context, row);
-  Object.assign(context, { rows, visible: findTests({ root }).visible, reading: true });
+  Object.assign(context, { rows, visible: findTests({ root, excludeFixtureProjects: context.excludeFixtureProjects }).visible, reading: true });
   const cache = context.cacheEnabled ? await openTestCache(context, root, false) : null;
   context.testCache = cache; context.savedTestCache = saved.test_cache;
   if (cache && !cache.disabled) {
@@ -1772,23 +2008,28 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
     if (!id) return;
     row.phase = 'server';
     const admission = store.read(join(context.folder, `${id}.admission.json`));
-    if (admission?.dispatch === 'not_started') {
+    if (admissionCapacityCandidate(admission)) {
       const wait = capacityDelay(admission.error);
-      if (wait !== null) { markBusy(context, row, wait); return; }
+      if (wait !== null && accountingProof(admission) && capacityRetryAllowed(context, row)) { markBusy(context, row, wait); return; }
+      markCapacityUnknown(context, row);
     }
     const answer = store.read(join(context.folder, `${id}.json`));
     // Local terminal receipts remain available even when another row used the network wait.
-    if (answer && confirmedEnd(answer) && sameJob(answer, id, 'check')) { await finishReservation(context, row, answer); applyAnswer(row, answer, context); return; }
+    if (answer && confirmedEnd(answer) && sameJob(answer, id, 'check')) {
+      await finishReservation(context, row, answer); applyAnswer(row, answer, context);
+      if (!row.capacity_uncertain) return;
+    }
     if (finalPost(row, answer)) return;
     if (row.final && (ports.now() >= (context.deadline ?? Infinity) || context.interrupted)) return;
     // A verified open receipt stays open when another row consumed this wait.
     if ((ports.now() >= (context.deadline ?? Infinity) || context.interrupted)
       && answer && sameJob(answer, id, 'check') && ['queued', 'running'].includes(answer.state)) { applyAnswer(row, answer, context); return; }
     // Polling an open cache is not evidence that its saved advice came from a lost read.
-    if (!row.lost && (row.state !== 'unknown' || row.lost === false)) row.why = null;
+    if (!row.capacity_uncertain && !row.lost && (row.state !== 'unknown' || row.lost === false)) row.why = null;
     Object.assign(row, { state: 'unknown', calls: 'unknown', checks: null, criteria: null, failed_checks: [], all_checks: [], busy: false, can_retry: false, note: null, lost: true,
       progress: undefined, ahead: undefined,
       read_until: Number.isFinite(context.deadline) ? context.deadline : ports.now() + LOST_READ_MS });
+    if (row.capacity_uncertain) { row.why = capacityUnknownReason; row.next_step = sameIdReadAdvice(context, row); }
     if (ports.now() >= (context.deadline ?? Infinity) || context.interrupted) return;
     if (!quiet) line(ports.stderr, 'Reading 1 result from the PDD interpreter…');
     await readRow(context, row, context.deadline);
@@ -1835,7 +2076,7 @@ async function recoverRestarts(context) {
   if (!admitted.length) return [];
   context.restartDecisions ??= new Set();
   for (const row of admitted) context.restartDecisions.add(row.request_ids.at(-1));
-  const capture = context.recoveredSourceCapture ?? context.ports.captureSource(context.root, { tests: sentTests(context.rows), appMap: null });
+  const capture = context.recoveredSourceCapture ?? context.ports.captureSource(context.root, { tests: sentTests(context.rows), appMap: null, excludeFixtureProjects: context.excludeFixtureProjects });
   if (capture.sha256 !== context.capture.sha256) { context.continuationNotice = 'The saved source changed; no restarted check was sent again.'; return []; }
   capture.stories = context.capture.stories;
   context.capture = capture;
@@ -1857,7 +2098,7 @@ async function runRetry(context, name, options) {
   const rows = await runRead(context, name, true, options);
   if (context.intent !== undefined && context.intent !== 'check') throw new Stop(2, 'The saved batch has no Check intent. Start a fresh selected pdd test.');
   if (context.interrupted || ports.now() >= context.deadline) return () => printResult(context, rows);
-  const capture = Array.isArray(context.capture.sources) ? context.capture : context.ports.captureSource(context.root, { tests: sentTests(rows), appMap: null });
+  const capture = Array.isArray(context.capture.sources) ? context.capture : context.ports.captureSource(context.root, { tests: sentTests(rows), appMap: null, excludeFixtureProjects: context.excludeFixtureProjects });
   if (capture.sha256 !== context.capture.sha256) throw new Stop(2, 'The saved source no longer matches: source changed. Start a fresh selected pdd test instead.');
   capture.stories = context.capture.stories;
   context.capture = capture;
@@ -1891,24 +2132,26 @@ async function runRequest(context, id) {
 // Refresh only caches owned by this exact repository, runtime and signed-in account.
 async function refreshCheckBatches(context, identity, origin, id, answer) {
   const { store, root } = context, batches = join(store.dir, 'batches');
-  let names;
+  let names, owner = null;
   try { names = readdirSync(batches); } catch { return; }
   for (const name of names.filter(name => BATCH.test(name))) {
     try {
       const folder = join(batches, name), saved = store.read(join(folder, 'batch.json'));
       if (!saved || saved.root !== root || saved.origin !== origin || saved.login !== identity.login
         || String(saved.user_id) !== String(identity.userId)) continue;
-      if (!saved.rows?.some(row => row.request_ids?.includes(id))) continue;
+      const matchingRow = saved.rows?.find(row => row.request_ids?.includes(id));
+      if (!matchingRow) continue;
+      owner ??= { batch: name, folder, row: matchingRow };
       const cached = store.read(join(folder, `${id}.json`));
       if (sameJob(cached, id, 'check') && ['passed', 'failed', 'refused'].includes(cached.state)
         && !['passed', 'failed', 'refused'].includes(answer.state)) continue;
-      store.write(join(folder, `${id}.json`), answer);
+      saveAnswerAt(store, folder, id, answer);
       if (context.cacheEnabled && saved.version === 1 && saved.intent === 'check'
         && Array.isArray(saved.test_cache?.tokens) && saved.rows.some(row => row.request_ids?.at(-1) === id)) {
-        const capture = context.ports.captureSource(root, { tests: sentTests(saved.rows), appMap: null });
+        const capture = context.ports.captureSource(root, { tests: sentTests(saved.rows), appMap: null, excludeFixtureProjects: saved.exclude_fixture_projects === true });
         if (capture.sha256 !== saved.source_sha256) continue;
         // Project receipts privately: UUID reads never rewrite saved batch/summary views.
-        const projection = { ...context, cacheReadInvocation: true, startedAt: Date.parse(saved.created_at), reading: true, visible: findTests({ root }).visible, warnings: [] };
+        const projection = { ...context, cacheReadInvocation: true, startedAt: Date.parse(saved.created_at), reading: true, visible: findTests({ root, excludeFixtureProjects: saved.exclude_fixture_projects === true }).visible, warnings: [] };
         const rows = saved.rows.map(savedRow => {
           const row = { ...savedRow, state: 'unknown', calls: 'unknown', request_ids: [...(savedRow.request_ids ?? [])], checks: null };
           const latest = row.request_ids.at(-1), receipt = latest && store.read(join(folder, `${latest}.json`));
@@ -1922,6 +2165,7 @@ async function refreshCheckBatches(context, identity, origin, id, answer) {
       }
     } catch { /* A cache failure must not hide an authoritative read or other caches. */ }
   }
+  return owner;
 }
 
 // A read is observation only; it does not replay the call or settle backend accounting.
@@ -1941,8 +2185,10 @@ async function runCallRead(context, id) {
   if (answer?.command === 'check') {
     Object.assign(context, { origin, secrets: [identity.token] });
     const row = { test: '-', story: '-', title: '-', phase: 'server', request_ids: [id], state: 'unknown', refusals: [], warnings: [] };
-    applyAnswer(row, answer, context);
-    await refreshCheckBatches(context, identity, origin, id, answer);
+    const owner = await refreshCheckBatches(context, identity, origin, id, answer);
+    // Use the owning batch only to build the direct row's aggregate projection.
+    // UUID reads must not turn a one-row view into a saved batch or summary write.
+    applyAnswer(row, answer, owner ? { ...context, batch: owner.batch, folder: owner.folder } : context);
     return printResult(context, [row], { recovery: `pdd test --read ${id}` });
   }
   const state = answer?.state ?? 'unknown', exitCode = exitCodeFor([{ state }]);
@@ -2555,9 +2801,11 @@ async function finishTestAttempts(cache, rows, capture) {
   await cacheTransaction(cache, data => {
     const observations = cache.context.observedTestIdentities ?? [];
     const previous = data.latest_identity;
-    const identity = { engine_sha: observations[0]?.engine_sha ?? null,
-      requested_model: observations[0]?.models[0] ?? null };
-    const complete = observations.length > 0 && observations.every(item => item.complete && observedIdentityMatches(item, identity));
+    const identity = { engine_sha: observations.find(item => item.engine_sha)?.engine_sha ?? null,
+      requested_model: observations.flatMap(item => item.models).find(Boolean) ?? null };
+    const terminalObservations = observations.filter(item => item.terminal);
+    const complete = terminalObservations.length > 0 && terminalObservations.every(item => item.complete)
+      && observations.every(item => observedIdentityMatches(item, identity));
     const marks = previous?.in_progress ?? [];
     const ownMark = mark => !!cache.mark && mark.token === cache.mark.token;
     const clean = marks.length === 1 && ownMark(marks[0]) && !cache.context.cacheReadInvocation && !cache.context.checkRunFailed && Number.isFinite(cache.context.startedAt)
@@ -2570,7 +2818,7 @@ async function finishTestAttempts(cache, rows, capture) {
       if (data.epoch !== token.epoch || data.stories[story]?.generation !== token.generation) continue;
       const own = rows.filter(row => row.story_path === story && !row.cached), footprint = capture.stories?.find(item => item.story_path === story);
       const complete = footprint?.tests.length === own.length && footprint.tests.every(test => own.some(row => row.test === test));
-      const outcome = own.some(row => row.state === 'failed') ? 'failed' : own.some(row => row.state === 'refused') ? 'refused' : own.some(row => row.state === 'not_run') ? 'not_run' : complete && own.length && own.every(row => row.state === 'passed' && typeof row.calls === 'number') && !cache.context.interrupted && !cache.context.lintUnknown ? 'passed' : 'unknown';
+      const outcome = own.some(row => row.state === 'failed') ? 'failed' : own.some(row => row.state === 'refused') ? 'refused' : own.some(row => row.state === 'not_run') ? 'not_run' : complete && own.length && own.every(row => row.state === 'passed' && typeof row.calls === 'number' && row.accounting_complete === true) && !cache.context.interrupted && !cache.context.lintUnknown ? 'passed' : 'unknown';
       const record = data.stories[story] = { generation: token.generation, outcome: outcome !== 'passed' && data.stories[story]?.outcome === 'failed' ? 'failed' : outcome };
       const identity = own[0]?.cache_identity;
       const consistent = identity && own.every(row => sameCacheIdentity(identity, row.cache_identity))
@@ -2589,7 +2837,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
   const { ports } = context;
   const origin = runtimeOrigin(ports.env);
   const { root, found, normalized } = localSetup(cwd, words);
-  context.visible = found.visible; context.origin = origin;
+  context.visible = found.visible; context.origin = origin; context.excludeFixtureProjects = words.length === 0;
   // Ordinary Check waits for completion in every shell unless a limit is explicit.
   context.agentLimit = false;
   context.timeoutMin = options['--timeout'] !== undefined ? Number(options['--timeout']) : null;
@@ -2614,12 +2862,12 @@ async function runBatch(context, cwd, words, options, setRelease) {
     row.criterion_texts = Object.fromEntries((Array.isArray(test?.doc?.criteria) ? test.doc.criteria : []).filter(isObject).map(item => [item.id, item.text]));
   }
   if (options['--max-calls'] !== undefined) for (const row of rows) row.max_calls = Number(options['--max-calls']);
-  context.warnings.push(...found.warnings, ...checked.warnings, ...sharedSourceFiles(root, found.visible));
+  context.warnings.push(...found.warnings, ...checked.warnings, ...sharedSourceFiles(root, found.discoveryVisible ?? found.visible));
   context.unmatched = unmatchedLines(found);
   if (cache) await beginTestAttempts(cache, rows.filter(row => row.state !== 'ready'), null, options, origin);
   if (!rows.some(row => row.state === 'ready')) return printResult(context, rows);
   let capture;
-  try { capture = ports.captureSource(root, { tests: sentTests(rows), appMap: null }); }
+  try { capture = ports.captureSource(root, { tests: sentTests(rows), appMap: null, excludeFixtureProjects: words.length === 0 }); }
   catch (error) { if (cache) await beginTestAttempts(cache, rows, null, options, origin); throw error; }
   context.warnings.push(...(capture.warnings ?? []));
   if (cache) await beginTestAttempts(cache, rows, capture, options, origin);
@@ -3154,6 +3402,15 @@ const caseNativeFiles={lstat:lstatSync,read:readFileSync,open:openSync,write:wri
 const caseLeases=new WeakMap();
 function casePorts(ports={}){return{files:ports.files??caseNativeFiles,env:ports.env??process.env,hash:ports.hash??sha256,nonce:ports.randomUUID??randomUUID,now:ports.now??Date.now,pid:ports.pid??process.pid,host:ports.host??hostname(),isAlive:ports.isAlive??(pid=>{try{process.kill(pid,0);return true;}catch(e){return e.code==='ESRCH'?false:null;}}),sleep:ports.sleep??((ms,signal)=>new Promise(done=>{if(signal?.aborted)return done();const finish=()=>{clearTimeout(timer);signal?.removeEventListener('abort',finish);done();};const timer=setTimeout(finish,ms);signal?.addEventListener('abort',finish,{once:true});})),fault:ports.fault??(()=>{})};}
 function caseStat(p,path){try{return p.files.lstat(path);}catch(e){if(e.code==='ENOENT')return null;throw e;}}
+function caseStateDirectory(env,root,p){
+  const configured=resolve(env.PDD_STATE_DIR||join(env.HOME||homedir(),'.pdd','runtime'));
+  if(caseStat(p,configured)?.isSymbolicLink())throw Error('unsafe or missing local path');
+  const missing=[];let current=configured,canonical;
+  for(;;){try{canonical=p.files.realpath(current);break;}catch(e){if(e.code!=='ENOENT')throw e;const parent=dirname(current);if(parent===current)throw e;missing.push(basename(current));current=parent;}}
+  const directory=join(canonical,...missing.reverse());
+  if(inside(directory,p.files.realpath(root)))throw new Stop(2,'PDD_STATE_DIR is inside this repository. pdd keeps run state outside the repo. Choose another folder.');
+  return directory;
+}
 function caseSafe(p,path,{directory=false,create=false}={}){
   const full=resolve(path),parts=full.split(sep).filter(Boolean);let at=sep;
   for(let i=0;i<parts.length;i++){at=join(at,parts[i]);const dir=i<parts.length-1||directory;let st=caseStat(p,at);
@@ -3172,7 +3429,7 @@ function caseWrite(p,path,text,{exclusive=false}={}){
   }finally{if(fd!==undefined)p.files.close(fd);try{const remaining=caseStat(p,temp);if(owned&&remaining?.ino===owned.ino&&remaining.dev===owned.dev)p.files.unlink(temp);}catch(e){if(e.code!=='ENOENT')throw e;}}
 }
 function caseArea(root,p,{create=true}={}){
-  const dir=stateDirectory(p.env,root),area=join(dir,'case-import');
+  const dir=caseStateDirectory(p.env,root,p),area=join(dir,'case-import');
   if(create)caseSafe(p,area,{directory:true,create:true});else if(caseStat(p,area))caseSafe(p,area,{directory:true});
   return area;
 }
@@ -3344,7 +3601,7 @@ export const saveDoorCase=(root,saved,options={})=>saveDoorCaseResult(root,saved
 function retainedCaseAuthority(root,record,p){
   const action=record.identity.action;
   if(typeof action!=='string'||!UUID.test(action))throw Error('original local call authority is unavailable');
-  const directory=stateDirectory(p.env,root),meta=JSON.parse(caseRead(p,join(directory,'calls',action+'.meta.json')));
+  const directory=caseStateDirectory(p.env,root,p),meta=JSON.parse(caseRead(p,join(directory,'calls',action+'.meta.json')));
   if(meta.id!==action||meta.root!==root||typeof meta.session_id!=='string'||!UUID.test(meta.session_id)
     ||record.identity.session!=null&&record.identity.session!==meta.session_id)throw Error('original local call authority does not match this receipt');
   const repo=JSON.parse(caseRead(p,join(directory,'repos',sha256(Buffer.from(root)).slice(0,16)+'.json')));
@@ -3631,7 +3888,7 @@ export async function readTryOwner({ cwd = process.cwd(), story } = {}, givenPor
 
 // Local migration ports use the same private custody/publication boundary.
 export function runtimeWorkspaceMigrationStore({root,projectionRoot,env=process.env},given={}){
-  const p=casePorts({...given,env}),directory=stateDirectory(env,root),oldKey=p.hash(Buffer.from(projectionRoot)).slice(0,16);
+  const p=casePorts({...given,env}),directory=caseStateDirectory(env,root,p),oldKey=p.hash(Buffer.from(projectionRoot)).slice(0,16);
   const readJson=path=>JSON.parse(caseRead(p,path));
   const list=path=>{try{caseSafe(p,path,{directory:true});return p.files.list(path);}catch(e){if(e.code==='ENOENT'||!caseStat(p,path))return[];throw e;}};
   const destinationRepo=join(directory,'repos',p.hash(Buffer.from(root)).slice(0,16)+'.json');

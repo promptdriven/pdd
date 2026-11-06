@@ -339,8 +339,14 @@ function watchSendOwnership(ctx) {
   };
   return { actor, assert: () => { assert.ok(count > 0, 'the scenario actually sent checks'); assert.deepEqual(violations, [], 'every check POST holds the sending run own mark, unchanged until finish'); } };
 }
-const queueRefusal = (fake, id) => fake.job(id, 'check', 'refused', { outcome: 'Inconclusive', why: 'No verdict. Queue full.', next_step: 'RETRY LATER',
-  refusals: [{ code: 'check-queue-timeout', details: { retryable: true, retry_after: 1 } }], report: { dispatch: 'not_started', provider_calls: 0, samples: [] } }, 0);
+const queueRefusal = (fake, id) => {
+  const answer = fake.job(id, 'check', 'refused', { outcome: 'Inconclusive', why: 'No verdict. Queue full.', next_step: 'RETRY LATER',
+    refusals: [{ code: 'check-queue-timeout', details: { retryable: true, retry_after: 1 } }],
+    report: { dispatch: 'not_started', provider_calls: 0, accounting_complete: true, samples: [] } }, 0);
+  answer.accounting_complete = true;
+  Object.assign(answer.usage, { known_calls: 0, unknown_calls: 0, accounting_complete: true });
+  return answer;
+};
 
 for (const path of ['normal', 'read-resend', 'retry', 'recovery', 'reuse-disabled']) test(`TEST-CACHE-R5 every POST owns a mark: ${path}`, async t => {
   const ctx = await setup(t), watched = watchSendOwnership(ctx), a = watched.actor(1000);

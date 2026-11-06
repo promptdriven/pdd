@@ -78,6 +78,9 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
   for (const name of names) {
     const batch = readJson(join(directory, name, 'batch.json'));
     if (!batch || batch.batch !== name || typeof batch.root !== 'string' || !Array.isArray(batch.rows)) continue;
+    let at;
+    try { at = Date.parse(batch.created_at); } catch { continue; }
+    if (!Number.isFinite(at) || at < since || (batch.intent !== 'check' && batch.intent !== 'lint-only')) continue;
     let association=null;
     if(workspace) {
       try { association=workspace({root,producerRoot:batch.root,tests:[...new Set(batch.rows.map(row=>row?.test))],source_sha256:batch.source_sha256,runId:batch.association?.runId??null,stage:batch.association?.stage??null}); } catch { continue; }
@@ -90,8 +93,6 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
         association=null;
       }
     } else if(real(batch.root)!==wanted)continue;
-    const at = Date.parse(batch.created_at);
-    if (!Number.isFinite(at) || at < since) continue;
     if (batch.intent === 'lint-only') { if (!lint || at >= lint.at) lint = { name, at, batch, association }; }
     else if (batch.intent === 'check' && (!check || at >= check.at)) check = { name, at, batch, association };
   }

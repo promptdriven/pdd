@@ -153,7 +153,7 @@ test('revision skip forms retain suite occurrence identity independently of test
   const ordinaryAfter=unrelated.map((args,i)=>`test('ordinary-${i}', ${args});`).join('\n')+'\n';
   f.write('test/options.js',ordinaryBefore);const baseSha=f.commit();f.write('test/options.js',ordinaryAfter);const headSha=f.commit();
   const {collectTestInventory}=await inventoryModule();
-  const expected=`Tests vs base: "test/options.js" ${unrelated.length} → ${unrelated.length} tests. Removed: none.\nChanged assertions in kept tests: none.\nNew skips: none.\nStatic inventory only; tests were not run.\n`;
+  const expected=`Tests vs base: "test/options.js" ${unrelated.length} → ${unrelated.length} tests. Removed: none.\nChanged assertions in kept tests: none.\nNew skips: none.\nStatic inventory only; this inventory did not run tests.\n`;
   assert.equal(analyzeTestChanges({files:[pair('test/options.js',ordinaryBefore,ordinaryAfter)]}).details,expected);
   assert.equal((await collectTestInventory({cwd:f.root,baseSha,headSha})).details,expected);
 });
@@ -193,7 +193,7 @@ test('manual revision native callback boundary excludes quoted and nested option
   // Ambient content cannot replace the committed snapshot.
   f.write('test/options.js',`test('ambient', t => t.skip('dirty'));\n`);
   const report=await collectTestInventory({cwd:f.root,baseSha,headSha});
-  const expected=`Tests vs base: "test/options.js" ${tails.length} → ${tails.length} tests. Removed: none.\nChanged assertions in kept tests: none.\nNew skips: none.\nStatic inventory only; tests were not run.\n`;
+  const expected=`Tests vs base: "test/options.js" ${tails.length} → ${tails.length} tests. Removed: none.\nChanged assertions in kept tests: none.\nNew skips: none.\nStatic inventory only; this inventory did not run tests.\n`;
   assert.equal(report.available,true);assert.equal(report.details,expected);
 });
 
@@ -264,6 +264,6 @@ for(const kind of ['expression arrow','block arrow','function'])test(`manual reg
   const quote=span;
   const expected=[`Tests vs base: "test/regex.mjs" ${rows.length} → ${rows.length} tests. Removed: none.`,
     ...rows.map(row=>`Changed assertions in kept tests: "test/regex.mjs" ${quote(row.name)} ${quote(row.before)} → ${quote(row.after)}.`),
-    'New skips: none.','Static inventory only; tests were not run.',''].join('\n');
+    'New skips: none.','Static inventory only; this inventory did not run tests.',''].join('\n');
   assert.equal(report.available,true);assert.equal(report.details,expected);
 });
