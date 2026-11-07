@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: 584afdb67c309723339c57e51a379de74e94d550b95704b080c6c715f0bcda64).
+// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: 1a0ed42769a50030a2de9f3e1fd2d834ea20b7513095e58b2627985687fe8452).
 import { mkdir, lstat, realpath } from 'node:fs/promises';
 import { openSync, closeSync, readFileSync, writeFileSync, fsyncSync, unlinkSync, lstatSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -18,11 +18,37 @@ export function samePath(a, b) {
 }
 // A readable value: quotes, controls and invisible or direction characters are escaped.
 const shown = value => JSON.stringify(value ?? null).replace(/[\u0080-\u009f\u00ad\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/g, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
-// The run expected one value and live Herdr shows another. Name both; repair never closes or deletes anything.
+// What changed, in plain words, for each failed identity field.
+const ROOT_CHANGED = 'its first tab (the run\'s own shell tab) is gone or has other Herdr IDs';
+const CHANGES = {
+  worktree: 'it does not show the expected Git worktree', checkout_path: 'it shows another checkout folder',
+  repo_key: 'it shows another Git clone', is_linked_worktree: 'it is not a linked Git worktree',
+  workspace_create: 'a new workspace appeared, but pdd cannot prove that it is the repository workspace',
+  pane_list: 'Herdr gave a pane list that pdd cannot read', tab_list: 'Herdr gave a tab list that pdd cannot read',
+  root_pane: ROOT_CHANGED, tab_id: ROOT_CHANGED, pane_id: ROOT_CHANGED, terminal_id: ROOT_CHANGED,
+  root_panes: 'it has other panes besides its first shell pane', area_panes: 'an area tab does not have exactly one pane',
+  area_tab: 'more than one tab has this area name', pane: 'an area tab pane has no complete Herdr IDs',
+  area_pane: 'the new area tab does not show the pane that Herdr made'};
+// Herdr screen fields that say nothing about identity.
+const NOISE = new Set(['agent_status', 'focused', 'revision', 'scroll', 'foreground_cwd']);
+// A value as readable `name value` pairs: no JSON dump, but every string stays escaped.
+function readable(value, prefix = '') {
+  if (value === null || value === undefined) return prefix ? [] : ['nothing'];
+  if (Array.isArray(value)) return value.length ? [value.map(item => readable(item).join(', ')).join('; ')] : ['nothing'];
+  if (typeof value !== 'object') return [prefix ? `${prefix} ${shown(value)}` : shown(value)];
+  return Object.entries(value).filter(([key]) => !NOISE.has(key)).flatMap(([key, item]) => item !== null && typeof item === 'object' && !Array.isArray(item)
+    ? readable(item, `${prefix}${key}.`) : item === null || item === undefined ? [`${prefix}${key} nothing`] : [`${prefix}${key} ${readable(item).join('')}`]);
+}
+const detail = (name, value) => { const text = `${name}: ${readable(value).join(', ') || 'nothing'}`; return text.length > 500 ? `${text.slice(0, 499)}…` : text; };
+// The run expected one value and live Herdr shows another. The first line says what changed and what to do;
+// the escaped values follow on later lines. Repair never closes or deletes anything.
 function identityChanged(workspaceId, field, expected, found) {
-  // The message starts with the code, as every other layout error does (callers and tests match on it).
-  return Object.assign(new Error(`herdr_layout_identity_changed: Herdr session ${PDD_HERDR_SESSION} workspace ${shown(workspaceId)} has ${field} ${shown(found)}, but the run expects ${shown(expected)}. Inspect that workspace in Herdr, restore it, then retry.`),
-    { code: 'herdr_layout_identity_changed', field, expected, found });
+  const what = field === 'workspace_id' ? (Array.isArray(found) || workspaceId === null ? 'more than one workspace shows this run worktree' : 'the saved workspace is gone')
+    : CHANGES[field] ?? `its ${field} changed`;
+  const where = id(workspaceId) ? `Herdr session ${PDD_HERDR_SESSION}, workspace ${shown(workspaceId)}` : `Herdr session ${PDD_HERDR_SESSION}`;
+  // The message starts with the code, as every other layout error does (callers show it once; tests match on it).
+  return Object.assign(new Error([`herdr_layout_identity_changed: ${where}: ${what}. Look at ${id(workspaceId) ? 'that workspace' : 'its workspaces'} in Herdr, undo the change, then try again.`,
+    detail(`Expected ${field}`, expected), detail(`Found ${field}`, found)].join('\n')), { code: 'herdr_layout_identity_changed', field, expected, found });
 }
 async function ensureDirectory(directory) {
   await mkdir(directory, {recursive:true,mode:0o700});
@@ -73,14 +99,15 @@ async function paneRows(command, workspaceId) {
 }
 async function assertRunRoot(command, run, closing = false) {
   const panes=await paneRows(command,run.workspaceId);
-  const expected={workspace_id:run.workspaceId,tab_id:run.rootTabId,pane_id:run.rootPaneId,terminal_id:run.rootTerminalId,cwd:run.cwd};
-  const differs=(p,key)=>key==='cwd'?!samePath(p.cwd,run.cwd):p[key]!==expected[key];
+  // Herdr IDs only: the root shell's live folder is not identity (a shell startup file can move it).
+  const expected={workspace_id:run.workspaceId,tab_id:run.rootTabId,pane_id:run.rootPaneId,terminal_id:run.rootTerminalId};
+  const differs=(p,key)=>p[key]!==expected[key];
   if(!panes.some(p=>Object.keys(expected).every(key=>!differs(p,key)))) {
     const near=panes.find(p=>p.pane_id===run.rootPaneId),field=near?Object.keys(expected).find(key=>differs(near,key)):'pane_id';
     throw identityChanged(run.workspaceId,field,expected[field],near?near[field]:null);
   }
   if(closing) {
-    if(panes.length!==1)throw problem('herdr_layout_identity_changed');
+    if(panes.length!==1)throw identityChanged(run.workspaceId,'root_panes',1,panes.length);
     const tabs = await tabsFor(command, run.workspaceId);
     if (tabs.length !== 1 || tabs[0].tab_id !== run.rootTabId) throw problem('run_has_open_tabs');
   }
@@ -101,7 +128,7 @@ async function assertParentRoot(command, workspaceId, root, cwd) {
   const tabs = await tabsFor(command, workspaceId), panes = await paneRows(command, workspaceId);
   const pane = panes.find(p => p.tab_id === root?.tabId && p.pane_id === root?.paneId && p.terminal_id === root?.terminalId);
   const tab = tabs.find(t => t.tab_id === root?.tabId);
-  if (!completeParentRoot(root, cwd) || tabs.length !== 1 || panes.length !== 1 || !tab || !pane || !samePath(pane.cwd, root.cwd))
+  if (!completeParentRoot(root, cwd) || tabs.length !== 1 || panes.length !== 1 || !tab || !pane)
     throw identityChanged(workspaceId, 'root_pane', root, {tabCount: tabs.length, paneCount: panes.length, pane: pane ?? null});
   return {tab, pane};
 }
@@ -122,7 +149,7 @@ async function attachCreatedParent(command, workspaceId, parentRoot, commonDir, 
   await assertParentRoot(command, workspaceId, root, parentRoot);
   return row;
 }
-async function runRoot(command, workspaceId, cwd, owner, opened, stageId) {
+async function runRoot(command, workspaceId, owner, opened, stageId) {
   const panes = await paneRows(command, workspaceId), tabs = await tabsFor(command, workspaceId);
   const saved = owner?.layout?.workspaceId === workspaceId ? owner.layout : null;
   const root = saved ?? (opened?.tab && opened?.root_pane ? {tabId: opened.tab.tab_id, paneId: opened.root_pane.pane_id, terminalId: opened.root_pane.terminal_id} : null);
@@ -134,8 +161,9 @@ async function runRoot(command, workspaceId, cwd, owner, opened, stageId) {
     const roots = panes.filter(p => !chatTabs.has(p.tab_id) && tabs.some(t => t.tab_id === p.tab_id && t.label !== stageId));
     if (roots.length === 1) pane = roots[0];
   }
-  if (!pane || ![pane.tab_id, pane.pane_id, pane.terminal_id].every(id) || !samePath(pane.cwd, cwd))
-    throw identityChanged(workspaceId, 'root_pane', root ?? {cwd}, pane ?? null);
+  if (!pane || ![pane.tab_id, pane.pane_id, pane.terminal_id].every(id))
+    throw identityChanged(workspaceId, 'root_pane', root ? {tabId: root.tabId, paneId: root.paneId, terminalId: root.terminalId} : 'one shell tab',
+      pane ?? panes.find(p => p.pane_id === root?.paneId) ?? null);
   return rootFields(pane);
 }
 
@@ -257,16 +285,17 @@ export async function openHerdrRunLayout(input, ports) {
     workspace = matches[0];
   }
   const workspaceId = workspace.workspace_id;
-  const root = await runRoot(command, workspaceId, cwd, owner, opened?.result, input.stageId);
+  const root = await runRoot(command, workspaceId, owner, opened?.result, input.stageId);
   custody = {repoWorkspaceId: repo?.workspace_id ?? null, ...(custody.repoRoot ? {repoRoot: custody.repoRoot} : {}),
     ...(Object.hasOwn(custody, 'repoCreateIntent') ? {repoCreateIntent: custody.repoCreateIntent} : {}), workspaceId, root};
   await save();
   const tabs = await tabsFor(command, workspaceId), panes = await paneRows(command, workspaceId);
-  const candidates = tabs.filter(t => t.label === input.stageId).filter(t => {
+  // Inside the verified run workspace the label selects the area tab; its pane's live folder takes no part.
+  const candidates = tabs.filter(t => t.label === input.stageId);
+  for (const t of candidates) {
     const group = panes.filter(p => p.tab_id === t.tab_id);
     if (group.length !== 1) throw identityChanged(workspaceId, 'area_panes', 1, group.length);
-    return group.length === 1 && samePath(group[0].cwd, cwd);
-  });
+  }
   if (candidates.length > 1) throw identityChanged(workspaceId, 'area_tab', input.stageId, candidates.map(t => t.tab_id));
   const owned = {repoWorkspaceId: repo?.workspace_id ?? null, ...(custody.repoRoot ? {repoRoot: custody.repoRoot} : {}),
     ...(Object.hasOwn(custody, 'repoCreateIntent') ? {repoCreateIntent: custody.repoCreateIntent} : {}), workspaceId, root};
@@ -281,7 +310,7 @@ export async function openHerdrRunLayout(input, ports) {
   const pane = created.result?.root_pane, tabId = created.result?.tab?.tab_id;
   if (created.id !== 'cli:tab:create' || ![tabId, pane?.pane_id, pane?.terminal_id].every(id)) throw problem('invalid_tab_reply');
   const actual = (await paneRows(command, workspaceId)).filter(p => p.tab_id === tabId);
-  if (actual.length !== 1 || actual[0].pane_id !== pane.pane_id || actual[0].terminal_id !== pane.terminal_id || !samePath(actual[0].cwd, cwd))
+  if (actual.length !== 1 || actual[0].pane_id !== pane.pane_id || actual[0].terminal_id !== pane.terminal_id)
     throw identityChanged(workspaceId, 'area_pane', pane, actual);
   custody = {...owned, tabId, paneId: pane.pane_id, terminalId: pane.terminal_id};
   await save();

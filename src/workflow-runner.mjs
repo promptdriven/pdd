@@ -50,6 +50,14 @@ function execute(file, args, { cwd, input, ...options } = {}) {
 }
 const shell = value => /^[A-Za-z0-9_@%+=:,./-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
 const oneLine = value => String(value ?? '').replace(/\s+/g, ' ').trim();
+// A chat failure as `code: reason` from the first message line, with the code only once; a bare code when there are no other words.
+const firstLine = value => oneLine(String(value ?? '').split('\n')[0]);
+const failureReason = error => {
+  const code = oneLine(error?.code ?? 'error'), text = firstLine(error?.message), rest = text.startsWith(`${code}: `) ? text.slice(code.length + 2) : text;
+  return !rest || rest === code ? code : `${code}: ${rest}`;
+};
+// The later message lines, such as the escaped expected and observed values of a Herdr layout identity refusal.
+const failureDetails = error => String(error?.message ?? '').split('\n').slice(1).map(oneLine).filter(Boolean);
 // A step summary keeps its line breaks (0.1.6: the chat pastes one Prompt tests line per line); blank lines go.
 const keepLines = value => String(value ?? '').split('\n').map(oneLine).filter(Boolean).join('\n');
 const done = message => ({ exitCode: 0, message });
@@ -384,7 +392,7 @@ async function pr1Drafts(run, p) {
 const activeChatFailure = run => !ended(run) && run.chatFailure?.area === run.areas[run.area]?.name ? run.chatFailure : null;
 const chatFailureWords = run => {
   const failure = activeChatFailure(run);
-  return `the ${failure.area} chat ${failure.phase === 'start' ? 'startup' : 'open'} was not confirmed (${failure.code}: ${failure.message}). Run pdd workflow open ${run.number} after Herdr is available.`;
+  return `the ${failure.area} chat ${failure.phase === 'start' ? 'startup' : 'open'} was not confirmed (${failureReason(failure)}). Run pdd workflow open ${run.number} after Herdr is available.`;
 };
 const chatStatusWords = (run, chat) => run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase) ? `chat replacement pending at ${run.chatReplacement.phase}; run pdd workflow open ${run.number} --new` : activeChatFailure(run) ? chatFailureWords(run)
   : chat === 'unavailable' ? `Herdr status unavailable (server_unavailable); chat activity is unknown. Run pdd workflow open ${run.number} after Herdr is available.`
@@ -655,8 +663,8 @@ async function startRunUnlocked({ name, issue, agent = 'codex', base, adoptCorpu
     if(error?.code==='workflow_run_save_failed')throw error;
     const warning=`The ${first.name} chat startup was not confirmed (${error.code ?? 'error'}).`;
     commitRun(run,p,latest=>{latest.warnings.push(warning);});
-    return fail([...warnings, `The worktree is ready at ${a.worktreePath}, but the ${first.name} chat startup was not confirmed (${error.code === 'ENOENT' ? causeOf(error) : `${error.code ?? 'error'}: ${oneLine(error.message)}`}).`,
-      `Start it with: pdd workflow open ${number}`].join('\n'));
+    return fail([...warnings, `The worktree is ready at ${a.worktreePath}, but the ${first.name} chat startup was not confirmed (${error.code === 'ENOENT' ? causeOf(error) : failureReason(error)}).`,
+      ...failureDetails(error), `Start it with: pdd workflow open ${number}`].join('\n'));
   }
   commitRun(run,p,()=>{});
   const chat = run.chats[0];
@@ -2170,7 +2178,7 @@ ${approvalGuide(run)}`, p, true);
   let chat;
   try { chat = await startNextChat(run, p, packageRoot); }
   catch (error) {
-    if(error?.code==='workflow_progress_refused')throw error; return fail(`${carried.map(line => `${line}\n`).join('')}Approved the ${area.name} area of ${label}.${said} The ${next.name} chat startup was not confirmed (${error.code ?? 'error'}). Start it: pdd workflow open ${run.number}\n${finalNotices.join("\n")}`); }
+    if(error?.code==='workflow_progress_refused')throw error; return fail(`${carried.map(line => `${line}\n`).join('')}Approved the ${area.name} area of ${label}.${said} The ${next.name} chat startup was not confirmed (${failureReason(error)}). Start it: pdd workflow open ${run.number}\n${[...failureDetails(error), ...finalNotices].join("\n")}`); }
   return done([...carried, ...finalNotices, `Approved the ${area.name} area of ${label}.${said}${based}`,
     `Started area ${run.area + 1} of ${run.areas.length}: ${next.name} (${next.steps.join(', ')}) in a new chat: Herdr session pdd, tab "${chat.label}".`,
     `Watch it: pdd workflow open ${run.number}`, ...(agent ? ['This chat\'s work is done. Stop here.'] : [])].join('\n'));
@@ -2748,12 +2756,12 @@ function saveChatObservations(run, original, observed, p, { error, phase = 'open
     if (checkpoint) return;
     // A late failed open of an area that is no longer current keeps its own record, but never replaces a current failure.
     if (error && phase === 'open' && fresh.areas[fresh.area].name !== area && !activeChatFailure(fresh))
-      fresh.chatFailure = { area, phase, code: oneLine(error.code ?? 'error').slice(0, 100), message: oneLine(error.message ?? 'Herdr request failed').slice(0, 500), at: p.now() };
+      fresh.chatFailure = { area, phase, code: oneLine(error.code ?? 'error').slice(0, 100), message: firstLine(error.message ?? 'Herdr request failed').slice(0, 500), at: p.now() };
     if (fresh.areas[fresh.area].name === area && sameFact(fresh.chatFailure, run.chatFailure)) {
       const stateFields = ['state', 'area', 'done', 'gate', 'question', 'approvalRecord', 'decisions'];
       const unchanged = stateFields.every(key => sameFact(fresh[key], run[key]));
       if (error) {
-        fresh.chatFailure = { area, phase, code: oneLine(error.code ?? 'error').slice(0, 100), message: oneLine(error.message ?? 'Herdr request failed').slice(0, 500), at: p.now() };
+        fresh.chatFailure = { area, phase, code: oneLine(error.code ?? 'error').slice(0, 100), message: firstLine(error.message ?? 'Herdr request failed').slice(0, 500), at: p.now() };
         if (unchanged) fresh.state = 'waiting';
       } else if (fresh.chatFailure) {
         if (unchanged) clearChatFailure(fresh);
@@ -2876,14 +2884,14 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
     return done([...shownGate, ...(gateRun.gate ? [approvalGuide(gateRun, p.pdd)] : []), started ? `Started the ${chat.area} chat in ${where}.` : opened.resumed ? `Resumed the ${chat.area} chat in ${where}.` : `The ${chat.area} chat is in ${where}.`,
       ...(opened.attached ? [] : [p.env.HERDR_ENV === '1' ? 'pdd focused that tab. If you are in another Herdr session, run: herdr session attach pdd' : 'See it with: herdr session attach pdd'])].join('\n'));
   } catch (error) {
-    if (newSession) return fail(`Chat replacement ${run.chatReplacement?.phase ?? 'refused'} (${error.code ?? 'error'}: ${oneLine(error.message)}).${run.chatReplacement ? ` Retry: pdd workflow open ${run.number} --new` : ''}`);
+    if (newSession) return fail([`Chat replacement ${run.chatReplacement?.phase ?? 'refused'} (${failureReason(error)}).${run.chatReplacement ? ` Retry: pdd workflow open ${run.number} --new` : ''}`, ...failureDetails(error)].join('\n'));
     if (!handedOff) {
       if (areaOriginal) saveAreaObservations(run, areaOriginal, chat, p);
       else saveChatObservations(run, defaultOriginal, chat, p, { error, phase: chat ? 'open' : 'start' });
     }
     // A starting chat is not a failed one: say so, with the one safe next step.
     if (['chat_start_unconfirmed', 'chat_start_failed'].includes(error.code)) return fail(oneLine(error.message));
-    return fail(`pdd could not open the ${run.areas[selected].name} chat (${error.code ?? 'error'}: ${oneLine(error.message)}).`);
+    return fail([`pdd could not open the ${run.areas[selected].name} chat (${failureReason(error)}).`, ...failureDetails(error)].join('\n'));
   }
 }
 
