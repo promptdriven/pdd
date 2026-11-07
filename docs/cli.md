@@ -529,3 +529,42 @@ Workflow approval reads `pdd.json` from the main checkout (`sourceRoot`), outsid
 `pdd dependencies prepare [--issue N]` prepares a coordinator packet. `pdd dependencies complete --input -` reads a structured completion from stdin. `pdd workflow yield N` hands off automatic capacity after the current worker has stopped.
 
 `pdd workflow park --reason TEXT` records an automatic stop from its existing run worktree without releasing its claim or treating the worker as done.
+
+
+## Autopilot issue sorting and areas
+
+Before new issue work, the coordinator sorts the issue on the current release.
+It supplies `analysis.sorts` in the same dependency completion. PDD validates and
+saves the records. It makes no model call for sorting. The record schema and agent
+steps are in [sort and route](../skills/pdd-autopilot/steps/sort.md).
+
+Set owners in root `pdd.json`, for example:
+
+```json
+{
+  "autopilot": {
+    "mode": "observe",
+    "areas": [
+      {"name": "cli", "match": {"paths": ["src/**", "skills/**", "docs/**"]}, "owner": "autopilot"},
+      {"name": "runtime", "match": {"repositories": ["promptdriven/prompt-runtime"], "keywords": ["hosted interpreter"], "labels": ["runtime"]}, "owner": "agarwal-ishaan"}
+    ]
+  }
+}
+```
+
+Match rules accept paths, keywords, labels and repositories. Explicit areas win
+over local CODEOWNERS. Ambiguous matches need a person. Without a rule, the repo
+has one Autopilot area. On the first visit without an explicit map, the coordinator
+shows a draft from CODEOWNERS, folders, labels and known assignees. A person edits
+and saves it once. A repository owner can use `repo:OWNER/NAME` to route work to
+another repository with a link note.
+
+Auto closes fixed, duplicate and old-code issues with evidence and a reopen hint.
+Observe labels them `pdd:close-proposed` and proposes the close. Another login gets
+one assignment note. An unknown owner gets `pdd:needs-owner` and one question.
+Person assignees and live claims prevent close and assignment effects. Writes are
+serial and wait at least one second between effects.
+
+Issues in the same area with the same cause wait for one umbrella. Its owner
+carries every member's requirements into one global fix. The code PR closes its
+current members. Existing dependencies, claims, trust and merge rules still apply.

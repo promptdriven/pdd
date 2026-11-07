@@ -15,7 +15,7 @@ their existing owners. It is distinct from steps/handoff.md.
   `pdd dependencies prepare`. Examine the actual
   trusted requirements/source packet, and send `{request,analysis}` to
   `pdd dependencies complete --input -`. Keep required source locators/revisions.
-  For each subject, answer one question: does it need any open issue first? Impact
+  First follow [sort](sort.md) and include analysis.sorts when the packet has sort context. Then, for each subject, answer one dependency question: does it need any open issue first? Impact
   analysis of other issues is optional. A request names at most 10 subjects, new
   ones first; the next request carries the rest.
 - A `pending` completion names a `reason` and the `rows` behind it. For
