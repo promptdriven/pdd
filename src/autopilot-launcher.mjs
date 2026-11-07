@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: eb52a62d4f0432918b7e2f74f2eac8ce5707407ca1578ea4fc5f3d0ee9219907).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 2b36f4bcfc4117443e265c3983ed310a4d4db19af6ff86de6e86eb0f44b13273).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch } from 'node:fs';
@@ -284,6 +284,71 @@ function profileBinding(state, p) {
     configHome: variable ? state.environment?.[variable] || null : null,
   };
 }
+// Codex builds each chat command's environment from shell_environment_policy; `set` applies after `inherit`.
+function providerArgs(kind, cwd, context) {
+  if (kind === 'codex') return ['--no-daemon', '--dangerously-bypass-approvals-and-sandbox',
+    '-c', quote(`projects={${JSON.stringify(cwd)}={trust_level="trusted"}}`), '-c', quote('check_for_update_on_startup=false'),
+    '-c', quote(`shell_environment_policy.set.PDD_AUTOPILOT_CONTEXT=${tomlString(context)}`)];
+  return [kind === 'gemini' ? '--yolo' : '--dangerously-skip-permissions'];
+}
+function launchDefinition(state, p) {
+  let definition;
+  const selectedEnv = { ...p.env, HOME: state.definitionHome ?? state.environment?.HOME ?? p.env.HOME };
+  try { definition = loadAgentDefinitions({ cwd: state.cwd, env: selectedEnv }).find(x => x.id === state.agent.id); } catch { /* Fall back to the saved command. */ }
+  return definition ?? state.agent;
+}
+// The invoked package and the arguments it builds. The coordinator envelope and profile bind the
+// context and account values; caller PATH and reloaded definitions can differ between a start and a timer tick.
+export function autopilotLaunchFingerprint(state) {
+  const root = resolve(state.packageRoot ?? dirname(dirname(self)));
+  let version = null;
+  try { version = read(join(root, 'package.json'))?.version ?? null; } catch { /* An unreadable package has no version. */ }
+  return digest({ version: 'pdd.autopilot-launch.v1', package: { root, version }, kind: state.agent.kind, args: providerArgs(state.agent.kind, state.cwd, '') });
+}
+function ownerLaunchMatches(state, p) {
+  const launch = state.ownerLaunch;
+  return !!state.paneId && launch?.paneId === state.paneId && JSON.stringify(launch.coordinator) === JSON.stringify(coordinatorEnvelope(state)) && JSON.stringify(launch.profile) === JSON.stringify(profileBinding(state, p));
+}
+// A matching owner chat that this package would launch differently is relaunched at an idle moment.
+function relaunchDue(state, p) {
+  if (!state.agent || state.deliveryIntent || state.reconciliationIntent || !ownerLaunchMatches(state, p)) return false;
+  return state.ownerLaunch.fingerprint !== autopilotLaunchFingerprint(state) && launchDefinition(state, p).kind === state.agent.kind;
+}
+function rearmWorkerCompletion(state, p) {
+  let armed = 0, unavailable = 0;
+  for (const run of (p.allRuns ?? allRuns)({}, p)) {
+    const origin = run.automaticOrigin;
+    if (!origin || ['cancelled', 'completed'].includes(run.state) || origin.coordinatorId !== state.coordinatorId || origin.machine !== state.machine || typeof origin.repository !== 'string' || origin.repository.toLowerCase() !== String(state.repo).toLowerCase() || !samePath(run.sourceRoot, state.cwd)) continue;
+    if (armSavedWorkerCompletion(run, state.paneId, p)) armed++; else unavailable++;
+  }
+  return { armed, unavailable };
+}
+// End only the saved idle coordinator pane, then forget it in the same admission hold.
+async function closeStaleCoordinator(state, agent, p) {
+  const pane = state.paneId, workspace = state.workspaceId, launch = JSON.stringify(state.ownerLaunch), session = JSON.stringify(agent.agent_session ?? null);
+  const target = ['paneId', 'workspaceId', 'ownerLaunch', 'contextPane', 'contextBinding', 'relaunchPending'];
+  const gone = async () => { try { await herdr(['pane', 'get', pane], p); return false; } catch (error) { if (error.code === 'pane_not_found') return true; throw error; } };
+  let closed = false;
+  try {
+    closed = await p.scanAction(async () => {
+      const saved = read(state.stateFile);
+      if (!saved?.enabled || saved.paneId !== pane || saved.workspaceId !== workspace || JSON.stringify(saved.ownerLaunch) !== launch || saved.deliveryIntent || saved.reconciliationIntent) return false;
+      const current = (await herdr(['agent', 'get', pane], p)).result?.agent;
+      if (!current || current.pane_id !== pane || current.workspace_id !== workspace || current.agent !== state.agent.kind || !samePath(current.cwd, state.cwd)
+        || !['idle', 'done'].includes(current.agent_status) || JSON.stringify(current.agent_session ?? null) !== session) return false;
+      try { await herdr(['pane', 'close', pane], p); } catch { /* The pane inventory below decides. */ }
+      if (!await gone()) return false;
+      for (const key of target) delete saved[key];
+      saved.recipeDelivered = false;
+      save(state.stateFile, saved);
+      return true;
+    });
+  } catch { closed = false; }
+  if (!closed) { p.warn('Autopilot work remains pending: the old coordinator chat could not be closed safely; the next tick retries.'); return false; }
+  for (const key of target) delete state[key];
+  state.recipeDelivered = false;
+  return true;
+}
 // A published request remains available while a submitted wake may still read it.
 function requestArtifact(state, requestJson, repository, p) {
   const request = JSON.parse(requestJson);
@@ -424,14 +489,13 @@ async function wake(state, makeText, p, prepare = async () => {}, explicitStartR
   }
   const recoverySession = JSON.stringify(agent?.agent_session ?? null);
   const envelope = () => coordinatorEnvelope(state);
-  const matches = launch => launch?.paneId === state.paneId && JSON.stringify(launch.coordinator) === JSON.stringify(envelope()) && JSON.stringify(launch.profile) === JSON.stringify(profileBinding(state, p));
   if (recovering) {
     if (!agent || !recoveryTargetMatches(state, oldIntent, p) || !['idle', 'done'].includes(agent.agent_status) || !await currentRecoveryTargetMatches(state, p, true, recoverySession)) {
       p.warn('Autopilot recovery waits: the saved target is not safely idle and unchanged.');
       return false;
     }
   }
-  if (!recovering && agent && !matches(state.ownerLaunch)) {
+  if (!recovering && agent && !ownerLaunchMatches(state, p)) {
     const oldPane = state.paneId;
     const nextId = randomUUID();
     if (!await p.scanGuard(latest => {
@@ -552,33 +616,47 @@ async function wake(state, makeText, p, prepare = async () => {}, explicitStartR
     return result.ok;
   };
   if (agent) {
-    if (!['idle', 'done'].includes(agent.agent_status)) { if (['working', 'starting'].includes(agent.agent_status)) p.coordinatorDeferred?.(state, agent); p.warn('Autopilot work remains pending: the chat is not idle.'); return false; }
-    return deliver(agent);
+    const relaunch = !recovering && relaunchDue(state, p);
+    if (!['idle', 'done'].includes(agent.agent_status)) {
+      if (['working', 'starting'].includes(agent.agent_status)) p.coordinatorDeferred?.(state, agent);
+      if (relaunch) {
+        const mark = { paneId: state.paneId, startedAt: state.ownerLaunch.startedAt };
+        if (JSON.stringify(state.relaunchPending) !== JSON.stringify(mark) && await p.scanGuard(latest => {
+          if (latest.paneId !== mark.paneId || latest.ownerLaunch?.startedAt !== mark.startedAt) return false;
+          latest.relaunchPending = mark;
+        })) state.relaunchPending = mark;
+      }
+      p.warn(relaunch ? 'Autopilot work remains pending: the coordinator relaunch waits until the chat is idle.' : 'Autopilot work remains pending: the chat is not idle.');
+      return false;
+    }
+    if (!relaunch) return deliver(agent);
+    const oldPane = state.paneId;
+    if (!await closeStaleCoordinator(state, agent, p)) return false;
+    await openWorkspace(state, p);
+    if (state.paneId === oldPane) { delete state.paneId; delete state.workspaceId; throw Error('Herdr did not create a fresh pane; retry next tick.'); }
+    try { rearmWorkerCompletion(state, p); } catch { /* A later explicit start rearms worker completion. */ }
+    try {
+      if ((await herdr(['agent', 'get', state.paneId], p)).result?.agent) return false;
+    } catch (error) { if (error.code !== 'agent_not_found') throw error; }
+    agent = null;
   }
   if (state.ownerLaunch?.paneId === state.paneId) { p.warn('Autopilot work remains pending: the launched chat is unavailable.'); return false; }
-  let definition;
-  const selectedEnv = { ...p.env, HOME: state.definitionHome ?? state.environment?.HOME ?? p.env.HOME };
-  try { definition = loadAgentDefinitions({ cwd: state.cwd, env: selectedEnv }).find(x => x.id === state.agent.id); } catch { /* Fall back to the saved command. */ }
-  definition ??= state.agent;
+  const definition = launchDefinition(state, p);
   if (definition.kind !== state.agent.kind) { p.warn('Run pdd autopilot start to select the changed agent profile.'); return false; }
   const context = JSON.stringify(envelope());
-  // Codex builds each chat command's environment from shell_environment_policy; `set` applies after `inherit`.
-  const args = definition.kind === 'codex' ? ['--no-daemon', '--dangerously-bypass-approvals-and-sandbox',
-    '-c', quote(`projects={${JSON.stringify(state.cwd)}={trust_level="trusted"}}`), '-c', quote('check_for_update_on_startup=false'),
-    '-c', quote(`shell_environment_policy.set.PDD_AUTOPILOT_CONTEXT=${tomlString(context)}`)]
-    : definition.kind === 'claude' ? ['--dangerously-skip-permissions'] : ['--dangerously-skip-permissions'];
-  if (definition.kind === 'gemini') args.splice(0, 1, '--yolo');
+  const args = providerArgs(definition.kind, state.cwd, context);
   const childEnv = { ...keepEnv(p.env), ...definition.env, HOME: state.environment?.HOME ?? p.env.HOME, PDD_AUTOPILOT_CONTEXT: context };
   for (const variable of ['CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME']) {
     if (state.environment?.[variable]) childEnv[variable] = state.environment?.[variable]; else delete childEnv[variable];
   }
   const env = Object.entries(childEnv).map(([k, v]) => `${k}=${quote(v)}`);
   const unset = ['CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME'].filter(k => !state.environment?.[k]).flatMap(k => ['-u', k]);
-  state.ownerLaunch = { paneId: state.paneId, startedAt: p.now(), coordinator: envelope(), profile: profileBinding(state, p) };
+  state.ownerLaunch = { paneId: state.paneId, startedAt: p.now(), coordinator: envelope(), profile: profileBinding(state, p), fingerprint: autopilotLaunchFingerprint(state) };
   const elapsedNow = p.elapsedNow ?? (() => Number(process.hrtime.bigint() / 1_000_000n));
   const began = elapsedNow(), deadline = state.ownerLaunch.startedAt + START_GRACE_MS;
   const withinLaunch = () => Math.min(deadline - p.now(), START_GRACE_MS - Math.max(0, elapsedNow() - began)) > 0;
-  if (!await p.scanGuard(latest => { latest.ownerLaunch = state.ownerLaunch; })) { delete state.ownerLaunch; return false; }
+  if (!await p.scanGuard(latest => { latest.ownerLaunch = state.ownerLaunch; delete latest.relaunchPending; })) { delete state.ownerLaunch; return false; }
+  delete state.relaunchPending;
   try { await p.scanAction(() => herdr(['pane', 'run', state.paneId, ['env', ...unset, ...env, quote(definition.command), ...args].join(' ')], p), 'launch'); }
   catch (error) { if (error.confirmedRejection || error.code === 'agent_not_found' || error.code === 'pane_not_found') delete state.ownerLaunch; throw error; }
   return deliver(undefined, withinLaunch, () => Math.max(p.now(), state.ownerLaunch.startedAt + Math.max(0, elapsedNow() - began)));
@@ -761,6 +839,8 @@ async function runTick(stateFile, ports, completion) {
     };
     p.scanTransport = action => p.scanAction(action, state.reconciliationIntent ? 'reconciliation' : 'intent');
     if (state.retryAt > p.now()) return outcome('unknown', `GitHub rate limited; next attempt after ${new Date(state.retryAt).toISOString()}.`);
+    // A due relaunch wakes even without new work; the fresh chat starts with the recipe.
+    if (state.recipeDelivered && relaunchDue(state, p)) state.recipeDelivered = false;
     const dependencyPending = {
       read: async () => ({ json: JSON.stringify(state.dependencyPending ?? {}) }),
       save: async ({ json }) => { const value = JSON.parse(json); const ok = await scanGuard(latest => { latest.dependencyPending = value; }); if (ok) state.dependencyPending = value; return { ok }; },
@@ -938,7 +1018,7 @@ async function runTick(stateFile, ports, completion) {
   } finally {
     try {
       if (state && scanGuard) await scanGuard(latest => {
-        for (const key of ['retryAt','cachedIssues','etag','pages','acknowledged','commentCache','seen','timeSeen','pullCache','recipeDelivered','dependencyPending','deliveryIntent','reconciliationIntent','uncertainDeliveryHistory','paneId','workspaceId','ownerLaunch','contextPane','contextBinding']) {
+        for (const key of ['retryAt','cachedIssues','etag','pages','acknowledged','commentCache','seen','timeSeen','pullCache','recipeDelivered','dependencyPending','deliveryIntent','reconciliationIntent','uncertainDeliveryHistory','paneId','workspaceId','ownerLaunch','contextPane','contextBinding','relaunchPending']) {
           if (Object.hasOwn(state, key)) latest[key] = state[key]; else delete latest[key];
         }
         latest.nextTick = (ports.now ?? Date.now)() + INTERVAL;
@@ -1099,7 +1179,9 @@ export async function runAutopilotLauncher(input, ports = {}) {
         : { state: 'unavailable', reason: 'Herdr is not running' };
       const coordinatorState = coordinator.state === 'unavailable'
         ? `unavailable (${coordinator.reason})` : coordinator.state;
-      return ok(`Autopilot ${state.enabled ? 'enabled' : 'disabled'}; timer ${timerActive ? 'active' : 'inactive'}; Herdr ${serverRunning ? 'running' : 'unavailable'}; coordinator ${coordinatorState}: ${state.repo ?? state.cwd} · ${state.agent?.id ?? 'no agent'} · next tick: ${timerActive && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}`);
+      const relaunch = state.relaunchPending && state.relaunchPending.paneId === state.paneId && state.relaunchPending.startedAt === state.ownerLaunch?.startedAt
+        ? '\nCoordinator relaunch pending after upgrade: the old chat ends when it is idle, then a fresh chat starts with the current launch settings.' : '';
+      return ok(`Autopilot ${state.enabled ? 'enabled' : 'disabled'}; timer ${timerActive ? 'active' : 'inactive'}; Herdr ${serverRunning ? 'running' : 'unavailable'}; coordinator ${coordinatorState}: ${state.repo ?? state.cwd} · ${state.agent?.id ?? 'no agent'} · next tick: ${timerActive && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}${relaunch}`);
     }
     if (command === 'stop') {
       if (previous) { state.enabled = false; state.nextTick = null; state.controlRevision = randomUUID(); save(stateFile, state); }
@@ -1189,12 +1271,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
       if (linger !== 'yes') warning = ' To keep Autopilot running after logout, enable lingering: loginctl enable-linger.';
     }
     releaseAdmission(); releaseAdmission = null;
-    let recoveryCount = 0, recoveryUnavailable = 0;
-    for (const run of (ports.allRuns ?? allRuns)({}, p)) {
-      const origin = run.automaticOrigin;
-      if (!origin || ['cancelled', 'completed'].includes(run.state) || origin.coordinatorId !== state.coordinatorId || origin.machine !== state.machine || typeof origin.repository !== 'string' || origin.repository.toLowerCase() !== String(state.repo).toLowerCase() || !samePath(run.sourceRoot, state.cwd)) continue;
-      if (armSavedWorkerCompletion(run, state.paneId, p)) recoveryCount++; else recoveryUnavailable++;
-    }
+    const { armed: recoveryCount, unavailable: recoveryUnavailable } = rearmWorkerCompletion(state, p);
     if (recoveryCount || recoveryUnavailable) warning += ` Worker completion observation ${recoveryUnavailable ? 'is unavailable for some saved workers' : 'was rearmed'}. If unavailable, inspect the worker and run pdd workflow yield ISSUE after positive completion evidence.`;
     try {
       let busy = false;

@@ -4,7 +4,7 @@ import * as fs from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {execFileSync,spawnSync} from 'node:child_process';
-import {tickAutopilot} from '../src/autopilot-launcher.mjs';
+import {tickAutopilot,autopilotLaunchFingerprint} from '../src/autopilot-launcher.mjs';
 import {writeRun,updateRun} from '../src/workflow-runs.mjs';
 import {runPdd} from '../src/pdd-cli.mjs';
 const at=Date.parse('2026-11-05T00:00:00Z');
@@ -12,7 +12,7 @@ function selector(t,{issues=true}={}) {
  const root=fs.mkdtempSync(join(tmpdir(),'pdd-composed-selector-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));execFileSync('git',['init','-q',root]);
  fs.writeFileSync(join(root,'pdd.json'),JSON.stringify({autopilot:{mode:'auto'}}));const stateFile=join(root,'state.json');
  const home=process.env.HOME, activatedAt='2026-11-04T00:00:00Z', coordinator={version:'pdd.autopilot-coordinator.v1',repository:'Owner/Repo',coordinatorId:'c',machine:'m',activation:activatedAt};
- fs.writeFileSync(stateFile,JSON.stringify({enabled:true,cwd:root,repo:'Owner/Repo',activatedAt,coordinatorId:'c',machine:'m',environment:{HOME:home},agent:{id:'codex',kind:'codex',command:'codex',env:{}},stateFile,workspaceId:'w',paneId:'p',recipeDelivered:true,ownerLaunch:{paneId:'p',startedAt:1,coordinator,profile:{agent:{id:'codex',kind:'codex'},home,definitionHome:home,configHome:null}}}));
+ fs.writeFileSync(stateFile,JSON.stringify({enabled:true,cwd:root,repo:'Owner/Repo',activatedAt,coordinatorId:'c',machine:'m',environment:{HOME:home},agent:{id:'codex',kind:'codex',command:'codex',env:{}},stateFile,workspaceId:'w',paneId:'p',recipeDelivered:true,ownerLaunch:{paneId:'p',startedAt:1,coordinator,profile:{agent:{id:'codex',kind:'codex'},home,definitionHome:home,configHome:null},fingerprint:autopilotLaunchFingerprint({cwd:root,agent:{kind:"codex"}})}}));
  const rows=issues?[{number:1,state:'open',title:'One',body:'body',user:{login:'owner'},author_association:'OWNER',created_at:'2026-11-04T00:01:00Z',updated_at:'2026-11-04T00:01:00Z',comments:0,labels:[],html_url:'https://example.test/1'}]:[];
  const f={root,stateFile,sent:[],ports:{now:()=>at,warn:()=>{},queryIssues:async()=>({status:200,issues:rows}),run:async (command,args)=>({code:0,stdout:command==='git'?execFileSync('git',args,{cwd:root,encoding:'utf8'}):'{}',stderr:''})}};
  f.ports.reconcileDependencyIntake=async()=>({eligible:rows.map(row=>row.html_url),queued:[],skipped:[]});

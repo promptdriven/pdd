@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { runPdd } from '../src/pdd-cli.mjs';
+import { autopilotLaunchFingerprint } from '../src/autopilot-launcher.mjs';
 
 const capture = () => ({ text: '', write(s) { this.text += s; } });
 
@@ -43,7 +44,7 @@ test('default launcher reads current state and reconciles completion under its e
   assert.equal(calls.length,1); assert.equal(calls[0].trigger,'completion'); assert.equal(calls[0].mode,'auto');
   const activation='2026-01-01T00:00:00Z', coordinator={version:'pdd.autopilot-coordinator.v1',repository:'example/project',coordinatorId:'c',machine:'m',activation};
   const saved=JSON.parse(readFileSync(file,'utf8'));
-  writeFileSync(file,JSON.stringify({...saved,activatedAt:activation,paneId:'p',workspaceId:'w',ownerLaunch:{paneId:'p',startedAt:1,coordinator,profile:{agent:{id:'codex',kind:'codex'},home,definitionHome:home,configHome:null}}}));
+  writeFileSync(file,JSON.stringify({...saved,activatedAt:activation,paneId:'p',workspaceId:'w',ownerLaunch:{paneId:'p',startedAt:1,coordinator,profile:{agent:{id:'codex',kind:'codex'},home,definitionHome:home,configHome:null},fingerprint:autopilotLaunchFingerprint({cwd,agent:{kind:"codex"}})}}));
   let idle=false, resume, sent=[];
   const row={number:7,state:'open',title:'Issue',body:'Work',user:{login:'example'},created_at:activation,updated_at:activation,comments:0,labels:[],html_url:'https://github.com/example/project/issues/7'};
   const activePorts={...ports,run:async cmd=>cmd==='git'?{code:0,stdout:cwd+'\n'}:{code:0,stdout:JSON.stringify({nameWithOwner:'example/project',url:'https://github.com/example/project'})},now:()=>Date.parse('2026-01-02T00:00:00Z'),warn:()=>{},queryIssues:async()=>({status:200,issues:[row]}),reconcileDependencyIntake:async()=>({queued:[],eligible:[row.html_url],skipped:[],pending:false}),wait:async()=>{idle=true;},armCoordinatorIdle:(_identity,options)=>{resume=options.resume;},herdr:async args=>{

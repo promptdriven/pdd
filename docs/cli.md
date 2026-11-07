@@ -40,7 +40,7 @@ These commands store settings and determine trust. Selecting a mode starts no ru
 |---|---|
 | `pdd autopilot start [--runs N] [--resume-custody FILE]` | Check sign-ins and the running pdd version, open a dedicated interactive Herdr session and check for work immediately. A user timer checks again every 30 minutes. `--runs` sets an optional concurrent-run cap; omission has no fixed cap. `--resume-custody` supplies the verified original-owner projection for explicit recovery |
 | `pdd autopilot stop` | Disable this repo's timer on this machine and let the current agent step finish |
-| `pdd autopilot status` | Show this machine's repo, agent, timer, coordinator health and next tick without contacting GitHub or waking an agent; an idle coordinator is healthy |
+| `pdd autopilot status` | Show this machine's repo, agent, timer, coordinator health and next tick without contacting GitHub or waking an agent; an idle coordinator is healthy. A second line shows a pending coordinator relaunch |
 | `pdd autopilot add N...` | Label named issues `pdd:autopilot`, allowing Autopilot to take older issues |
 
 The launcher uses the repository settings module to read root `pdd.json`. An
@@ -58,6 +58,16 @@ the commands of its chat keep the Autopilot start context when the Codex profile
 sets `inherit = "core"` or `"none"`. Autopilot does not change Codex settings.
 Limit: a `shell_environment_policy.include_only` list that leaves out
 `PDD_AUTOPILOT_CONTEXT` still removes it.
+
+A coordinator chat keeps the launch settings that it started with. Autopilot
+saves a fingerprint of the pdd package and the launch arguments with each
+coordinator launch. When a start or tick finds a chat with another or no
+fingerprint, for example after you install a newer pdd, it ends that chat
+when the chat is idle or done and starts a fresh chat with the current
+settings. The coordinator identity stays the same, so claims, saved runs and
+progress do not change. A busy chat is not interrupted: its work stays pending,
+and `pdd autopilot status` shows `Coordinator relaunch pending after upgrade`
+until the relaunch is done.
 
 A tick checks GitHub with ETags and wakes the agent only for a repo's first
 start-up recipe or an unseen trusted issue, comment or related PR change.

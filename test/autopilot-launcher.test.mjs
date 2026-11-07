@@ -994,3 +994,154 @@ test('a claim with no readable activity time never invents a due event', async t
   for (let i = 0; i < 3; i++) { f.time += hour; await f.tick(); }
   assert.equal(f.prompts.length, 0);
 });
+
+// Issue 3037: a coordinator chat keeps the launch settings it started with, so a chat that this package
+// would launch differently is relaunched at an idle moment. A stateful fake of the Herdr calls the
+// launcher makes: each workspace holds one pane, and `pane close` ends that pane, as Herdr 0.9.1 does
+// for the only pane of a workspace. `pane run` runs the launch text in /bin/sh with a fake codex
+// that records the arguments it gets. No live Herdr, agent, GitHub or model call.
+async function relaunchFixture(t, options = {}) {
+  const f = await fixture(t, options);
+  const bin = join(f.dir, 'bin'), record = join(f.dir, 'codex.jsonl');
+  mkdirSync(bin);
+  writeFileSync(join(bin, 'codex'), `#!${process.execPath}\nrequire('node:fs').appendFileSync(${JSON.stringify(record)}, JSON.stringify(process.argv.slice(2))+'\\n');\n`, { mode: 0o755 });
+  f.env = { HOME: f.home, PATH: `${bin}:/usr/bin:/bin` };
+  f.invoke = async (command, extra = {}) => f.module.runAutopilotLauncher({ command, cwd: f.cwd, env: f.env, packageRoot: root, issues: [], ...extra }, f.ports);
+  const panes = new Map(); let workspaces = 0;
+  f.launches = []; f.closed = []; f.delivered = []; f.armed = [];
+  f.ports.armWorkerCompletion = identity => f.armed.push(identity);
+  f.ports.allRuns = () => f.savedRuns ?? [];
+  const missing = (code, id) => Object.assign(Error(`${id} not found`), { code, confirmedRejection: true });
+  f.ports.herdr = async args => {
+    f.herdrCalls ??= []; f.herdrCalls.push(args);
+    const [group, action, id] = args;
+    if (group === 'status') return { running: true };
+    if (group === 'workspace' && action === 'create') {
+      const n = ++workspaces, pane = { pane_id: `w${n}:p1`, workspace_id: `w${n}`, tab_id: `w${n}:t1`, terminal_id: `term${n}`, session: `session-${n}`, agent: false, closed: false };
+      panes.set(pane.pane_id, pane);
+      return { id: 'cli:workspace:create', result: { type: 'workspace_created', workspace: { workspace_id: pane.workspace_id }, root_pane: { pane_id: pane.pane_id } } };
+    }
+    const pane = panes.get(id);
+    if (!pane || pane.closed) throw missing(group === 'agent' ? 'agent_not_found' : 'pane_not_found', id);
+    const live = { pane_id: pane.pane_id, workspace_id: pane.workspace_id, cwd: f.cwd, foreground_cwd: f.cwd, tab_id: pane.tab_id, terminal_id: pane.terminal_id, agent: 'codex', agent_status: f.agentStatus ?? 'idle', agent_session: pane.session };
+    if (group === 'pane' && action === 'get') return { result: { type: 'pane_info', pane: live } };
+    if (group === 'agent' && action === 'get') { if (!pane.agent) throw missing('agent_not_found', id); return { result: { type: 'agent_info', agent: live } }; }
+    if (group === 'pane' && action === 'run') {
+      const before = existsSync(record) ? readFileSync(record, 'utf8').trim().split('\n').length : 0;
+      execFileSync('/bin/sh', ['-c', args[3]], { cwd: f.cwd, env: { PATH: '/usr/bin:/bin', HOME: f.home }, timeout: 10000 });
+      pane.agent = true; f.launches.push({ pane: id, argv: JSON.parse(readFileSync(record, 'utf8').trim().split('\n')[before]) });
+      return {};
+    }
+    if (group === 'pane' && action === 'close') { pane.closed = true; f.closed.push(id); return { id: 'cli:pane:close', result: { type: 'ok' } }; }
+    if (group === 'pane' && action === 'read') return '';
+    if (group === 'agent' && action === 'prompt') {
+      const instruction = args.at(-1), match = /Artifact path: (.+)/.exec(instruction);
+      f.prompts.push(match ? readFileSync(JSON.parse(match[1]), 'utf8') : instruction); f.delivered.push(id);
+      return {};
+    }
+    return {};
+  };
+  f.packet = (index = -1) => JSON.parse(f.prompts.at(index).trimEnd().split('\n').at(-1));
+  f.context = launch => JSON.parse(codexConfigs(launch.argv).set.PDD_AUTOPILOT_CONTEXT);
+  f.saveState = change => { const state = f.state(); change(state); writeFileSync(f.stateFile(), JSON.stringify(state)); };
+  f.githubWrites = () => f.runs.filter(([command, args]) => command === 'gh' && args.some((value, i) => args[i - 1] === '--method' && value !== 'GET'));
+  return f;
+}
+const herdrSince = (f, from, group, action) => f.herdrCalls.slice(from).filter(args => args[0] === group && args[1] === action);
+
+test('relaunch: an idle chat launched without a launch fingerprint is replaced with current arguments; claims stay', async t => {
+  const f = await relaunchFixture(t);
+  f.issues = [issue(64, { labels: [{ name: 'pdd:working' }] })];
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  const original = f.state();
+  f.savedRuns = [{ runId: 'run-64', number: 64, repo: 'owner/repo', state: 'running', sourceRoot: f.cwd, automaticOrigin: { repository: 'owner/repo', coordinatorId: original.coordinatorId, machine: original.machine, claim: { commentId: '11', labelEventId: '12' } }, areas: [{ name: 'code' }], area: 0, chats: [{ area: 'code', paneId: 'worker-pane', startedAt: 5 }] }];
+  // A chat that an older package launched has no saved fingerprint.
+  f.saveState(state => { delete state.ownerLaunch.fingerprint; });
+  const calls = f.herdrCalls.length, writes = f.githubWrites().length, prompts = f.prompts.length;
+  f.status = 304; f.time += 60 * 1000; await f.tick();
+  assert.deepEqual(f.closed, ['w1:p1'], 'only the saved coordinator pane is closed');
+  assert.deepEqual(herdrSince(f, calls, 'pane', 'run').map(args => args[2]), ['w2:p1']);
+  const after = f.state();
+  assert.equal(after.paneId, 'w2:p1'); assert.equal(after.workspaceId, 'w2');
+  assert.equal(after.coordinatorId, original.coordinatorId, 'claims stay with the same coordinator');
+  assert.equal(after.machine, original.machine); assert.equal(after.activatedAt, original.activatedAt);
+  assert.deepEqual(after.seen, original.seen, 'saved progress stays');
+  assert.equal(typeof after.ownerLaunch.fingerprint, 'string');
+  assert.equal(after.ownerLaunch.paneId, 'w2:p1');
+  assert.deepEqual(f.context(f.launches.at(-1)), { version: 'pdd.autopilot-coordinator.v1', repository: 'owner/repo', coordinatorId: original.coordinatorId, machine: original.machine, activation: original.activatedAt });
+  assert.equal(f.prompts.length, prompts + 1); assert.equal(f.delivered.at(-1), 'w2:p1');
+  assert.equal(f.packet().recipeFirst, true, 'the fresh chat gets the start-up recipe');
+  assert.equal(f.githubWrites().length, writes, 'no claim label or comment changes');
+  assert.equal(f.armed.at(-1).coordinatorPaneId, 'w2:p1', 'worker completion follows the fresh coordinator pane');
+  const quiet = f.herdrCalls.length; await f.tick(); await f.tick();
+  assert.equal(herdrSince(f, quiet, 'pane', 'close').length, 0); assert.equal(herdrSince(f, quiet, 'pane', 'run').length, 0);
+  assert.equal(f.prompts.length, prompts + 1);
+});
+
+test('relaunch: a working chat with another fingerprint gets no input; status shows the pending relaunch until it is idle', async t => {
+  const f = await relaunchFixture(t);
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  const original = f.state();
+  f.saveState(state => { state.ownerLaunch.fingerprint = 'launched-by-another-package'; });
+  f.agentStatus = 'working'; f.issues = [issue(72)];
+  const calls = f.herdrCalls.length, prompts = f.prompts.length;
+  for (let tick = 0; tick < 2; tick++) { await f.tick(); f.status = 304; }
+  assert.equal(f.prompts.length, prompts, 'no input reaches the working chat');
+  assert.equal(herdrSince(f, calls, 'agent', 'prompt').length, 0);
+  assert.equal(herdrSince(f, calls, 'pane', 'close').length, 0, 'a working turn is never interrupted');
+  assert.equal(herdrSince(f, calls, 'pane', 'run').length, 0);
+  assert.equal(f.state().paneId, 'w1:p1');
+  const pending = await f.invoke('status');
+  assert.equal(pending.exitCode, 0);
+  assert.match(pending.message, /coordinator working/);
+  assert.equal(pending.message.split('\n').filter(text => /^Coordinator relaunch pending after upgrade/.test(text)).length, 1, pending.message);
+  f.agentStatus = 'idle'; await f.tick();
+  assert.deepEqual(f.closed, ['w1:p1']);
+  assert.equal(f.state().paneId, 'w2:p1'); assert.equal(f.state().coordinatorId, original.coordinatorId);
+  assert.equal(f.delivered.at(-1), 'w2:p1');
+  assert.match(f.prompts.at(-1), /"number":72,/, 'pending work reaches the fresh chat');
+  assert.ok(Object.hasOwn(codexConfigs(f.launches.at(-1).argv).set, 'PDD_AUTOPILOT_CONTEXT'));
+  const done = await f.invoke('status');
+  assert.doesNotMatch(done.message, /relaunch pending/);
+});
+
+test('relaunch: a chat with the current fingerprint is reused across ticks and an ordinary restart', async t => {
+  const f = await relaunchFixture(t);
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  const launch = f.state().ownerLaunch;
+  assert.equal(typeof launch.fingerprint, 'string');
+  f.status = 304; await f.tick(); await f.tick();
+  f.issues = [issue(81)]; f.status = 200; await f.tick();
+  assert.equal(f.delivered.at(-1), 'w1:p1'); assert.match(f.prompts.at(-1), /"number":81,/);
+  // Another caller PATH at start and the timer's saved environment are ordinary.
+  assert.equal((await f.invoke('stop')).exitCode, 0);
+  f.env = { ...f.env, PATH: `${f.env.PATH}:${join(f.dir, 'elsewhere')}` };
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  f.status = 304; await f.tick();
+  assert.equal(f.closed.length, 0);
+  assert.equal(f.launches.length, 1, 'one native launch');
+  assert.deepEqual(f.state().ownerLaunch, launch);
+  assert.doesNotMatch((await f.invoke('status')).message, /relaunch pending/);
+});
+
+test('relaunch: stop and start with an upgraded package gives the fresh chat the context override', async t => {
+  const f = await relaunchFixture(t);
+  const older = join(f.dir, 'pdd-older');
+  mkdirSync(older); writeFileSync(join(older, 'package.json'), JSON.stringify({ name: 'pdd', version: '0.0.1' }));
+  assert.equal((await f.invoke('start', { packageRoot: older })).exitCode, 0);
+  const original = f.state();
+  assert.equal(original.paneId, 'w1:p1'); assert.equal(f.launches.length, 1);
+  assert.equal((await f.invoke('stop')).exitCode, 0);
+  const started = await f.invoke('start');
+  assert.equal(started.exitCode, 0, started.message);
+  assert.deepEqual(f.closed, ['w1:p1']);
+  assert.equal(f.launches.length, 2); assert.equal(f.launches[1].pane, 'w2:p1');
+  const { set } = codexConfigs(f.launches[1].argv);
+  assert.ok(Object.hasOwn(set, 'PDD_AUTOPILOT_CONTEXT'), `fresh chat argv: ${JSON.stringify(f.launches[1].argv)}`);
+  assert.deepEqual(JSON.parse(set.PDD_AUTOPILOT_CONTEXT), { version: 'pdd.autopilot-coordinator.v1', repository: 'owner/repo', coordinatorId: original.coordinatorId, machine: original.machine, activation: original.activatedAt });
+  const after = f.state();
+  assert.equal(after.coordinatorId, original.coordinatorId); assert.equal(after.packageRoot, root);
+  assert.equal(f.delivered.at(-1), 'w2:p1');
+  assert.ok(f.prompts.at(-1).includes(JSON.stringify(join(root, 'skills', 'pdd-autopilot', 'SKILL.md'))), 'the fresh chat reads the upgraded skill');
+  assert.equal(f.packet().recipeFirst, true);
+});
