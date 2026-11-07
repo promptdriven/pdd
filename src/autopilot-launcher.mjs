@@ -20,6 +20,7 @@ import { sendToChat, START_GRACE_MS } from './workflow-chat.mjs';
 import { acquireRunLock } from './workflow-runner.mjs';
 import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
 import { samePath } from './workflow-herdr-layout.mjs';
+import { tomlString } from './toml-string.mjs';
 
 const INTERVAL = 30 * 60 * 1000;
 const STUCK_AFTER = 60 * 60 * 1000;
@@ -29,8 +30,6 @@ const ACK = '<!-- pdd:autopilot:thanks -->';
 const ACK_TEXT = `thanks, a maintainer will look\n\n${ACK}`;
 const self = fileURLToPath(import.meta.url);
 const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`;
-// A TOML basic string: JSON escapes plus DEL, which TOML also forbids raw.
-const tomlString = value => JSON.stringify(String(value)).replaceAll('\x7f', '\\u007f');
 const line = value => String(value).split(/[\r\n]/)[0].replace(/[\x00-\x1f\x7f]/g, ' ');
 const read = (file, fallback = null) => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return fallback; throw e; } };
 function save(file, value) {
