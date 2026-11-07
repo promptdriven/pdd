@@ -134,6 +134,29 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
   return results;
 }
 
+// Why pdd's own saved check has no verdict, from its saved rows (summary.json, else batch.json). It reads files only.
+// issue: a failed expectation or a file-rule refusal (fix this issue's files); access: sign-in or access;
+// service: not run, busy, or an AI-service refusal (Runtime); unknown: an outcome that is not known yet.
+const SERVICE_REFUSALS = new Set(['graph-provider-failure', 'graph-uncertain-child-dispatch']);
+const ACCESS_NOTES = new Set(['blocked', 'auth-required']);
+export function checkCause(rows) {
+  const open = (Array.isArray(rows) ? rows : []).filter(row => row && typeof row === 'object' && row.state !== 'passed');
+  if (!Array.isArray(rows) || !rows.length) return 'none';
+  if (!open.length) return 'passed';
+  const codes = row => (Array.isArray(row.refusals) ? row.refusals : []).map(item => item?.code);
+  if (open.some(row => row.state === 'failed' || row.state === 'refused' && (!codes(row).length || codes(row).some(code => !SERVICE_REFUSALS.has(code))))) return 'issue';
+  if (open.some(row => row.state === 'not_run' && ACCESS_NOTES.has(row.note?.code ?? row.reason?.code))) return 'access';
+  // An unknown answer that names the AI provider failure is a known end with no verdict.
+  const provider = row => row.state === 'unknown' && (SERVICE_REFUSALS.has(row.reason?.code) || SERVICE_REFUSALS.has(row.provider?.code) || codes(row).length > 0 && codes(row).every(code => SERVICE_REFUSALS.has(code)));
+  return open.every(row => ['refused', 'not_run'].includes(row.state) || provider(row)) ? 'service' : 'unknown';
+}
+export function savedCheckCause(batch, { env = process.env } = {}) {
+  if (!BATCH.test(String(batch ?? ''))) return 'none';
+  const folder = join(resolve(env.PDD_STATE_DIR || join(env.HOME || homedir(), '.pdd', 'runtime')), 'batches', batch);
+  const summary = readJson(join(folder, 'summary.json')), saved = readJson(join(folder, 'batch.json'));
+  return checkCause(Array.isArray(summary?.rows) ? summary.rows : Array.isArray(saved?.rows) ? saved.rows : []);
+}
+
 function more({ requests = [], reports = [] }) {
   const left = [[requests.length - SHOWN, 'request'], [reports.length - SHOWN, 'report']].filter(([count]) => count > 0).map(([count, word]) => `${count} more ${word}${count === 1 ? '' : 's'}`);
   return left.length ? [`${left.join(' and ')} not shown (all in the run record)`] : [];

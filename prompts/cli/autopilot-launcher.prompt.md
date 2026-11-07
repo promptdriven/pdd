@@ -240,6 +240,47 @@ facts when idle so refreshed or ended events are not delivered stale. Neither
 timer marks, terminates or takes over a run itself; the skill owns those actions.
 The two 60-minute thresholds are constants, not settings, caps or hard stops.
 
+### Runtime outage (#3039)
+
+A worker whose `pdd test` has no verdict for a Runtime cause parks its own run
+with `pdd workflow park --runtime` ([workflow runner](workflow-runner.prompt.md)):
+state `paused` with `runtimeWait {at, reason, batch, cause}`. The tick reads these
+waits from the same local run records as run progress (an injectable
+`readRuntimeWaits` port) and sorts them oldest first. It never parks, wakes or
+changes a run itself; it adds time rules for the coordinator, which wakes a run
+with `pdd workflow changes N` under the existing room and delivery rules.
+
+When no run waits and no outage is open, the tick makes no health check. Else
+it makes one free health check, [`checkRuntimeHealth`](runtime-client.prompt.md#free-runtime-health-check)
+(an injectable `runtimeHealth` port), and decides:
+
+| Facts | Decision |
+| --- | --- |
+| No open outage; health `unavailable`, or waits of 2 different issues with `at` within 15 minutes of each other | Open one outage (`health` or `errors`). Send one `runtime` alert for the oldest waiting issue; other waiting issues join it and send nothing |
+| Open outage, health not `healthy` | Wake nothing. Call the alert again for its first issue (a repeat sends nothing unless the last send failed) and for each newly waiting issue |
+| Open `health` outage, health `healthy` | Send one recovery (`recovered`, `"kind":"runtime"`), close the outage and offer every waiting run, oldest first |
+| Open `errors` outage, health `healthy` | The health check cannot see AI-service errors. Wake one test run: the oldest waiting run, at most once per 30-minute interval and not before 30 minutes after the outage opened. When that run waits again with a newer `at`, the test failed: wait 30 minutes for the next test. When it no longer waits 10 minutes after its wake was offered, send the recovery and offer the other waiting runs |
+| No outage, health `healthy` | Each wait is a problem of its own issue: offer one retry. Remember the retry with the run's progress mark (area and number of done steps) for 24 hours. A later wait with the same mark gets a `runtime-stuck` rule instead |
+| No outage, health `unknown` | Wake nothing and alert nothing |
+
+An offered wake is a `runtime-ready` time rule with one reason line: the run
+number, why it wakes (`one retry`, `as a test` or Runtime back), and the exact
+text for `pdd workflow changes N`. That text tells the worker to run
+`pdd test --read BATCH` first, to resend only a check that surely gave no verdict
+(`pdd test --retry BATCH` for not run or busy, the Story's check once for an
+AI-service refusal, the check once when no result was saved), never an unknown
+outcome or a failed check, and to keep `--max-calls`. For cause `unknown` the
+text has no resend command. Each rule is a time event keyed by run and
+`at:kind`: delivered once, offered again on a completion tick (a freed slot)
+while the run still waits. Persist the outage and retries in the launcher state
+as `runtime`. While an outage is open, the packet has
+`runtime: {state: "unavailable", since, note}`; the note says to keep other work
+moving and that new issues may start and park only at their Runtime check. Send
+alerts through [Autopilot alerts](autopilot-alerts.prompt.md) `runAutopilotAlerts`
+with this repository and the state root of this launcher (an injectable
+`sendAlert` port, or `alertPorts` for its HTTP); an alert failure never stops the
+tick.
+
 Use same-repository closing references in PR bodies to associate PRs with issues.
 Resolve trusted related PR metadata on change (state, draft, merge and head),
 including when a PR leaves the open list. Fetch PR discussion comments on changed

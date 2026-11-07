@@ -14,6 +14,17 @@ Skip unreadable, foreign, malformed or older records without a warning. Batch na
 
 Export `resultLines(results, {kinds})`. Each result becomes one line that starts with `pdd result: `: `pdd result: KIND (batch B, ISO time, source S, engine E[ (cached)], model M[ (cached)], requests R…, head H): RESULT[; STORY LINE…][; Report: URL (report links expire after 7 days)…]`, leaving out unknown facts. For an associated result, render its original stage beside source; label `pr1` as `PR 1 (historical)`, even when its frozen source is compatible. Never describe that result as a current-code pass. A line shows at most the first 10 requests and the first 10 report links; when there are more, it ends with `; K more requests and L more reports not shown (all in the run record)` (singular for one; naming only the kinds that have more), so nothing is dropped in silence. Export `usableResult(result)`: false only for a prove result that is not `current`. `kinds` limits the kinds shown. With nothing to show, the one line is `noResultLine(kinds)`: `pdd result: none. pdd has no pdd test, pdd lint or pdd workflow prove result of its own for this run (pdd:no-verdict).`, naming only the selected kinds. Also export `PDD_RESULT` (`pdd result`) and `NO_VERDICT` (`pdd:no-verdict`).
 
+Export `checkCause(rows)` and `savedCheckCause(batch, {env})`: why a saved check has no verdict, so a run waits for Runtime only for a service cause (#3039). `savedCheckCause` reads `batches/<BATCH>/summary.json` rows, else `batch.json` rows, in the same state folder; a name that is not a batch, or no rows, gives `none`. It reads files only. `checkCause` judges the rows that did not pass:
+
+| Rows | Cause |
+| --- | --- |
+| none | `none` |
+| all passed | `passed` |
+| a `failed` row, or a `refused` row with no code or a code other than `graph-provider-failure` and `graph-uncertain-child-dispatch` (a file rule) | `issue` |
+| a `not_run` row whose note or reason code is `blocked` or `auth-required` | `access` |
+| every other row is `refused` with an AI-service code, `not_run`, or `unknown` that names `graph-provider-failure` | `service` |
+| anything else (an unknown outcome, a check still queued or running) | `unknown` |
+
 ## Native profile and criterion assessment (draft)
 
 The existing [preflight capture owner](runtime-preflight.prompt.md#source-capture)

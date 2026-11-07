@@ -46,7 +46,7 @@ These commands store settings and determine trust. Selecting a mode starts no ru
 | `pdd autopilot alerts set --discord-channel ID [--token-command CMD]` | Use a Discord bot in one channel: read its token from stdin, or save CMD and run it at each send to get the token |
 | `pdd autopilot alerts test` | Send one test message and confirm that it was posted; for a bot, first check and show the bot name and channel name |
 | `pdd autopilot alerts clear` | Remove the alert destination from this machine |
-| `pdd autopilot alert --issue N --kind usage-limit\|resource\|access\|decision\|stuck\|recovered --input - [--update]` | For the coordinator: record one alert and send it to this machine's destination |
+| `pdd autopilot alert --issue N --kind usage-limit\|resource\|runtime\|access\|decision\|stuck\|recovered --input - [--update]` | For the coordinator: record one alert and send it to this machine's destination |
 
 The launcher uses the repository settings module to read root `pdd.json`. An
 active mode is `observe` or `auto`; missing or invalid settings count as `off`. It uses an
@@ -129,8 +129,8 @@ PDD_ALERT
 
 Each message names the repository, the issue link, the cause, what Autopilot tried
 and what it needs. Answer on the GitHub issue, so the answer stays with the run.
-A usage limit or a resource failure is one incident for the repository and
-machine, so a limit that blocks 5 runs sends one alert. A call for another
+A usage limit, a resource failure or a Runtime outage is one incident for the
+repository and machine, so a limit that blocks 5 runs sends one alert. A call for another
 blocked issue adds that issue to the incident and sends nothing. The machine is
 the name that Autopilot saved at its first start, else the host name, so a host
 rename does not open a new incident. An access or spending decision, a product
@@ -389,3 +389,14 @@ Workflow approval reads `pdd.json` from the main checkout (`sourceRoot`), outsid
 `pdd dependencies prepare [--issue N]` prepares a coordinator packet. `pdd dependencies complete --input -` reads a structured completion from stdin. `pdd workflow yield N` hands off automatic capacity after the current worker has stopped.
 
 `pdd workflow park --reason TEXT` records an automatic stop from its existing run worktree without releasing its claim or treating the worker as done.
+
+`pdd workflow park --runtime --reason TEXT` records that an automatic run waits for Runtime, the hosted PDD interpreter behind `pdd test`. pdd first reads the run's latest `pdd test` result. Only a check with no verdict from the AI service, a busy or not-run check, or an unknown outcome may wait. A failed check or a refusal that names a file rule is the issue's own work, and a sign-in problem is an access need: for these, the command exits 1 and parks nothing. A waiting run asks no person. `pdd workflow status` shows `waiting for Runtime: REASON`, and `pdd graph` shows the hold `Waiting for Runtime`. The run keeps its claim, branch, worktree and progress, and the coordinator can yield its worker slot with `pdd workflow yield N`.
+
+### Runtime outage in Autopilot
+
+While a run waits for Runtime, each Autopilot tick makes one free health check: a `GET /v1/capacity` read of the Runtime with your gh login. It sends no files and makes no AI call. Ticks with no waiting run make no check.
+
+- Runtime unavailable (no answer, HTTP 408, 429 or 5xx, or maintenance), or AI-service errors in 2 different issues within 15 minutes: this is an outage. Autopilot sends one `runtime` alert for the repository and machine, wakes no waiting run, and offers other work as usual. New issues can start; their workers wait only at the Runtime check.
+- Runtime healthy and one issue alone: Autopilot wakes that run once to retry. If the same step waits for Runtime again, the coordinator follows the stuck rule.
+- Runtime back: Autopilot sends one recovery and wakes the waiting runs, oldest first, within the worker cap. After AI-service errors, it first wakes only the oldest run as a test, and wakes the others when that run does not wait again.
+- A woken worker first runs `pdd test --read BATCH`. It resends only a check that surely gave no verdict: `pdd test --retry BATCH` for a check that did not run, or the Story's check once for an AI-service refusal. It never resends an unknown outcome or a failed check. `--max-calls`, strict mode and the merge rules do not change.

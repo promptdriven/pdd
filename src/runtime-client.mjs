@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: d091d31f3f3448ec47f9e4d9dfd6c89a7c53a281d33981fc191d49fa86311671).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 7303ec11f6527f3c8601a2c379381fb5aa965d97a90cb72d2f7edcee40ad92e3).
 import {readEvidenceEligibility} from './workflow-runner.mjs';
 import {allRuns} from './workflow-runs.mjs';
 import {assessNativeEvidence, resultLines, usableResult} from './workflow-results.mjs';
@@ -493,6 +493,28 @@ function blockingAnswer(reply) {
 
 const sameJob = (json, id, command) => isObject(json) && json.requestId === id && json.id === id && json.command === command && JOB_STATES.has(json.state);
 const gateText = reply => reply.status === 503 && !reply.json && String(reply.text ?? '').includes('The runtime opens soon.');
+
+// The free Runtime health check for Autopilot: one GET /v1/capacity with the gh token, the same read that admission
+// uses. It sends no source, starts no check and makes no AI call. healthy: the server answered and is not in
+// maintenance; unavailable: no answer, HTTP 408, 429 or 5xx, or maintenance; unknown: no sign-in or another answer.
+export async function checkRuntimeHealth({ env = process.env } = {}, givenPorts = {}) {
+  const ports = withDefaults({ ...givenPorts, env });
+  let origin;
+  try { origin = runtimeOrigin(env); } catch (error) { return { state: 'unknown', detail: cleanText(error.message) }; }
+  let token = '';
+  try { const reply = ports.gh(['auth', 'token']); token = reply.status === 0 ? String(reply.stdout ?? '').trim() : ''; } catch { token = ''; }
+  if (!token) return { state: 'unknown', detail: 'no gh sign-in' };
+  const reply = await new Runtime({ origin, token, ports }).send('/v1/capacity', { method: 'GET' }, givenPorts.timeoutMs ?? 10_000);
+  if (reply.lost) return { state: 'unavailable', detail: reply.unreachable ? 'not reached' : 'no answer' };
+  if (reply.status >= 500 || [408, 429].includes(reply.status)) return { state: 'unavailable', detail: `HTTP ${reply.status}` };
+  if (reply.status === 200 && isObject(reply.json)) {
+    const until = Date.parse(reply.json.maintenance?.until);
+    return Number.isFinite(until) && until > ports.now() ? { state: 'unavailable', detail: 'maintenance' } : { state: 'healthy', detail: 'HTTP 200' };
+  }
+  // An older interpreter without the capacity read still answered.
+  if (reply.status === 404) return { state: 'healthy', detail: 'HTTP 404' };
+  return { state: 'unknown', detail: `HTTP ${reply.status}` };
+}
 
 // Only capacity refusals that prove no execution can authorize a fresh check ID.
 function capacityDelay(refusal, headers) {
