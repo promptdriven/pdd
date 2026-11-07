@@ -83,13 +83,18 @@ empty. Pass cwd to effect recovery, defaulting to empty for a direct caller.
 Default snapshot reads bind readDependencySnapshot with these same arguments. It rereads
 canonical state; a still-applicable completion also rereads current ownership; carried request IDs or old trust
 flags are not authority. Require each review's issue, candidates and base heads to match the prepared
-scope. The subjects, their own heads and the issues their reviews name must be
-unchanged in the current snapshot; a new or edited unrelated issue or review does
-not make completion pending. Prepared required inputs must be retained; additional
+scope. The subjects, their own heads, their link rows and the issues their reviews
+name must be unchanged in the current snapshot; a new or edited unrelated issue or
+review does not make completion pending. Prepared required inputs must be retained; additional
 examined locators must match freshly reread current rows. Never trust their
 carried revision or silently omit a required item.
 Reject omitted required reviews or unexplained extra subjects, invalid cycles/self links,
-unsupported analysis and missing reasons. A stale or unknown observation returns
+unsupported analysis and missing reasons. Also reject a dependency in the model's
+`removed` [link facts](issue-dependencies.prompt.md#link-facts) for its subject: a
+person removed that link, so a coordinator that still believes it is needed records
+a question. Code owns each subject's link row: completion drops a carried copy from
+the analysis inputs and saves each review with the row from the current links plus
+the request's validated additions. A stale or unknown observation returns
 pending and queues fresh review without edge writes. Questions append a question
 record. Additions append pending intent BEFORE effects and delegate recovery to
 the GitHub owner. Checked-empty results append complete effects-none records.
@@ -142,8 +147,8 @@ Unsafe, stale or conflicting intent stays pending and queues only needed review.
 Off performs neither recovery effects nor semantic delivery.
 
 The durable semantic fingerprint is canonical JSON of repository, sorted subject
-identities, their substantive input/candidate key/revision rows and sorted current
-head IDs. It excludes capture time, unrelated paths and bookkeeping. Existing
+identities, their substantive input/candidate key/revision rows (with their link
+rows) and sorted current head IDs. It excludes capture time, unrelated paths and bookkeeping. Existing
 pending JSON stores requested and confirmed delivered fingerprints; busy/dialog
 never advances delivered. A saved unchanged question is itself durable evidence
 that its analysis finished: reconstruct its fingerprint from the saved head and

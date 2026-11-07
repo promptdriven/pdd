@@ -7,7 +7,7 @@ import { runAutopilot } from './autopilot.mjs';
 import { resolveWorkflowRepository } from './workflow-github.mjs';
 import { gitContext, currentChat, stateDirFor } from './workflow-runs.mjs';
 import { chatLifecycle, chatSession, observeLifecycle, sessionEvidenceDue, observedSession, ownSession, launchAnchor, validSessionId } from './workflow-chat.mjs';
-import { projectIssueGraph, validateDependencyChange } from './issue-dependencies.mjs';
+import { dependencyLinks, projectIssueGraph, validateDependencyChange } from './issue-dependencies.mjs';
 
 const REVIEW = 'pdd-dependency-review:v1', IMPACT = 'pdd-dependency-impact:v1';
 const NATIVE_GITHUB = Symbol('native github'), NATIVE_OWNERS = Symbol('native owners');
@@ -27,7 +27,9 @@ const info = key => {
   return m && Number.isSafeInteger(Number(m[2])) ? { repository: m[1].toLowerCase(), issue: Number(m[2]), key: `https://github.com/${m[1].toLowerCase()}/issues/${m[2]}`, comment: m[3] } : null;
 };
 const canonical = key => { const i = info(key); return i ? i.key + (i.comment ? `#issuecomment-${i.comment}` : '') : key; };
-const nonIssueRows = rows => (rows ?? []).filter(r => !info(r.key) || info(r.key).comment);
+// A review's link row (issue URL + #dependencies) comes from native links, not a read.
+const linkRow = key => /^https:\/\/github\.com\/[^/#]+\/[^/#]+\/issues\/[1-9][0-9]*#dependencies$/i.test(key ?? '');
+const nonIssueRows = rows => (rows ?? []).filter(r => (!info(r.key) || info(r.key).comment) && !linkRow(r.key));
 const uniqueRows = rows => [...new Map(rows.map(r => [canonical(r.key), { key: canonical(r.key), revision: r.revision }])).values()];
 const bookkeeping = body => /<!--\s*pdd(?:-dependency-(?:review|impact)|[: -](?:autopilot|claim|working|sync))/i.test(body ?? '')
   || /"coordinatorId"\s*:/.test(body ?? '') && /"labelEventId"\s*:/.test(body ?? '');
@@ -699,6 +701,8 @@ export async function applyDependencyChanges({ cwd = '', repository, issue, revi
     if (present) continue;
     const validation = validateDependencyChange({ snapshot, dependent: target.key, blocker: dependency.key });
     if (!validation.allowed) return pending(`Dependency addition waits: ${validation.reason}`);
+    // A link that a confirmed review named and that is now absent was removed by a person.
+    if (dependencyLinks({ snapshot, issue: target.key }).removed.includes(info(dependency.key)?.key)) return pending('Human dependency change');
     let history;
     try { history = await allPages(ports.github, repository, 'timeline', target.issue); } catch { return pending('Relationship history is unknown'); }
     // An absent edge after a human removal is never silently restored. Native

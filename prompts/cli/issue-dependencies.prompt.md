@@ -1,9 +1,10 @@
 # Shared native issue dependency model
 
 Own `src/issue-dependencies.mjs`. Export module functions
-`projectIssueGraph({snapshot})` and `validateDependencyChange({snapshot,dependent,blocker})`.
+`projectIssueGraph({snapshot})`, `validateDependencyChange({snapshot,dependent,blocker})`
+and `dependencyLinks({snapshot,issue,dependencies})`.
 These pure functions own identities, current-review selection, freshness, native edge
-meaning and dependency eligibility. They use supplied observations only. They have
+meaning, link facts and dependency eligibility. They use supplied observations only. They have
 no AI, filesystem, network, clock, scheduler or browser port. This is a new interface;
 preserve the existing workflow, trust and allocation owners.
 
@@ -20,8 +21,9 @@ Deduplicate native edges and retain input issue order, adding missing linked nod
 as unknown placeholders. A partial snapshot establishes clear dependencies for a subject only with the explicit current coverage below.
 A native edge with no qualifying saved reason shows `GitHub dependency; no saved reason`.
 A person's native "blocked by" link applies at once from GitHub; it needs no AI review.
-A saved edge absent in native state stays absent; show `Human dependency change`
-and reviewState question until a current trusted coordinator resolves the override.
+PDD never removes a link. So a link that a complete head names and that is absent in
+native state was removed by a person: that head is stale and shows `Human dependency change`.
+The person's change wins; a new review must not add the link back ([link facts](#link-facts)).
 
 ## Partial observation coverage
 
@@ -57,8 +59,8 @@ Revision is the actual item's content revision; absent/unreadable items have no
 current revision row and cannot match. Never substitute an entire commit or a
 caller-supplied revision for a read. These same key/revision rows bind evidence,
 review inputs and revalidation; no second context store is required.
-Review inputs identify the subject, examined requirement comments, and only relevant
-source/plan revisions. Candidate coverage lists the examined issue revisions; it
+Review inputs identify the subject, examined requirement comments, only relevant
+source/plan revisions and the subject's link row ([link facts](#link-facts)). Candidate coverage lists the examined issue revisions; it
 supplies the examined revision of each named prerequisite, not a staleness list.
 The adapter excludes unchanged PDD review/claim bookkeeping from those revisions.
 An empty completed dependency list is an explicit checked result.
@@ -71,7 +73,7 @@ flowchart TD
   C --> D{Exactly one current head?}
   D -->|No heads| N[Unchecked or stale]
   D -->|Competing heads| X[Conflict]
-  D -->|One| E{Inputs and named prerequisites current?}
+  D -->|One| E{Inputs, links and named prerequisites current?}
   E -->|No| S[Stale]
   E -->|Yes| F{Outcome?}
   F -->|Question| Q[Question]
@@ -110,10 +112,11 @@ This display grants no authority, eligibility or permission to write; review and
 dependency states and intake decisions retain their existing rules.
 
 **Freshness.** A review is stale only when something it depends on changes: a
-required input (its subject, examined requirement comments and source/plan rows),
-or the examined candidate revision of an issue it names as a prerequisite. A new
-issue, or an edit to an issue that the review did not use or name, never makes it
-stale. Native link changes need no new review; the graph reads them directly.
+required input (its subject, examined requirement comments, source/plan rows and
+link row), the examined candidate revision of an issue it names as a prerequisite,
+or a named link that a person removed. So a dependency link to or from its issue
+that changes makes it stale. A new issue, or an edit to an issue that the review
+did not use or name, never makes it stale.
 Compare substantive revisions by identity and value, never
 `updated_at` or an entire repository commit alone. Unknown or changed required
 rows are stale. A completed intact trusted impact record may extend named
@@ -134,6 +137,18 @@ stale that replacement. Report disputed old heads as stale/ineligible.
 Affected work queues reanalysis;
 unaffected work reuses its completed review on an empty local cache.
 An unrelated source commit or unchanged PDD bookkeeping does not invalidate reviews.
+
+<a id="link-facts"></a>
+**Link facts.** `dependencyLinks({snapshot,issue,dependencies})` returns `{row,removed}`
+for one issue; a malformed snapshot or issue gives `invalid-snapshot`. `row` is the
+issue's link row `{key,revision}`. Its key is the canonical issue URL plus
+`#dependencies`. Its revision is the sorted JSON list of the issue's native links,
+each `blocked-by URL` or `blocking URL`, without the "blocked by" links to the issues
+in `dependencies`. Freshness compares a head's saved row with the row computed from the
+current links and the head's own dependencies, so the head's own link effects never
+make it stale. A head with no saved link row has no link baseline: of the link changes,
+only a removed named link makes it stale. `removed` lists each blocker that a trusted,
+intact, confirmed review of the issue names and that is not linked now.
 
 ## Dependency and execution results
 

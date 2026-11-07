@@ -75,6 +75,7 @@ unrelated file change alone invalidates a review. Unknown context stays explicit
 Optional read inputs name additional required non-issue rows from completion.
 After parsing saved records, `context.read({cwd,repository,inputs})` rereads the
 union of their durable non-issue locators; inputs is omitted when that union is empty.
+A review's link row comes from native links through the pure model; it is not a locator to read.
 Its default uses actual bytes in a verified selected-repository checkout, or the
 same repository's current default-branch content API when no matching checkout
 exists. Within one context read, the verified checkout/repository resolution may be reused for its source locators; each source byte and comment revision is still read fresh, and a later context read resolves again. Read native comments by their owning repository/issue/comment identity.
@@ -162,7 +163,9 @@ validation. A superseded/edited/stale/conflicting intent stops remaining additio
 Keep already present edges. Never compensate by deleting them. Existing duplicate
 edges need no add. Native history must distinguish never-applied intent from a
 later human removal. Unknown ordering stays pending. Never restore an absent edge
-from an already confirmed review. An explicit trusted removal is outside automatic
+from an already confirmed review: a blocker in the model's `removed` link facts, or
+any relationship removal in the subject's native history, leaves the intent pending
+with `Human dependency change`. An explicit trusted removal is outside automatic
 addition and needs the existing coordinator's separate instruction; this module
 never removes an edge automatically.
 

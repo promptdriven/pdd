@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { execFile as nodeExecFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { projectIssueGraph, validateDependencyChange } from './issue-dependencies.mjs';
+import { dependencyLinks, projectIssueGraph, validateDependencyChange } from './issue-dependencies.mjs';
 import { createDependencyReadPorts, readDependencySnapshot, saveDependencyReview, saveDependencyImpact, applyDependencyChanges } from './issue-dependencies-github.mjs';
 
 const snapshotRead = (ports, args) => ports.snapshots?.read ? ports.snapshots.read(args) : readDependencySnapshot(args, ports);
@@ -137,6 +137,9 @@ export async function completeDependencyIntake({ cwd = '', request, analysis }, 
   for (const r of analysis.reviews) if (!exact(r, ['analysis','base','continuation','issue','inputs','candidates','outcome','dependencies','questions','effects']) || typeof r.analysis !== 'string' || !r.analysis || !strings(r.base) || typeof r.continuation !== 'string' || typeof r.issue !== 'string' || !validRows(r.inputs) || !validRows(r.candidates) || !Array.isArray(r.dependencies) || !r.dependencies.every(d => exact(d, ['key','reason','evidence']) && typeof d.key === 'string' && typeof d.reason === 'string' && strings(d.evidence)) || !strings(r.questions)) throw invalidAnalysis();
   const prepared = json(request.snapshotJson); const context = json(request.contextJson);
   if (prepared.repository.toLowerCase() !== request.repository.toLowerCase()) throw invalidAnalysis();
+  // Code owns each subject's link row: drop a carried copy and add the current one before saving.
+  const links = (snapshot, issue, dependencies) => { try { return dependencyLinks({ snapshot, issue, dependencies }); } catch { throw invalidAnalysis(); } };
+  analysis = { ...analysis, reviews: analysis.reviews.map(r => ({ ...r, inputs: r.inputs.filter(x => !/#dependencies$/i.test(x.key)) })) };
   const extra = [...(prepared.inputs || []), ...analysis.reviews.flatMap(r => r.inputs || []).filter(x => !prepared.issues.some(i => i.key === x.key))];
   const inputMap = new Map(extra.map(x => [x.key, x]));
   const args = { cwd, repository: request.repository }; if (inputMap.size) args.inputs = [...inputMap.values()];
@@ -148,6 +151,8 @@ export async function completeDependencyIntake({ cwd = '', request, analysis }, 
   const subjectHeads = value => headIds(value).filter(id => request.issues.includes(value.reviews.find(r => r.id === id)?.issue));
   if (subjectHeads(prepared).join('\0') !== subjectHeads(snapshot).join('\0')) return pendingResult();
   if (analysis.reviews.some(r => r.dependencies.some(d => prior.has(issueKey(d.key)) && current.get(issueKey(d.key)) !== prior.get(issueKey(d.key))))) return pendingResult();
+  // A link change to or from a subject after prepare means its analysis saw old links.
+  if (request.issues.some(k => links(prepared, k).row.revision !== links(snapshot, k).row.revision)) return pendingResult();
   const owners = request.issues.length ? json((await ports.owners.read({ repository: request.repository, issues: request.issues })).json) : { claims: [] };
   if (request.issues.some(k => ownedElsewhere(owners, k))) return pendingResult();
   const impact = analysis.impactJson ? json(analysis.impactJson) : null;
@@ -161,6 +166,9 @@ export async function completeDependencyIntake({ cwd = '', request, analysis }, 
     const base = priorHeads.filter(id => prepared.reviews.find(r => r.id === id)?.issue === review.issue);
     const required = [{ key: review.issue, revision: prior.get(review.issue) }, ...(context.source || []).filter(x => x.issues.includes(review.issue)), ...(context.requirements || []).filter(x => x.issue === review.issue && x.authority === 'trusted')];
     if (base.length !== review.base.length || !base.every(id => review.base.includes(id)) || (review.candidates.length !== candidates.length || !sameRows(candidates, new Map((review.candidates || []).map(x => [x.key, x.revision])))) || !sameRows(required, new Map((review.inputs || []).map(x => [x.key, x.revision]))) || !sameRows(review.inputs || [], current)) return pendingResult();
+    // A person's removal of a link is authoritative: a review records a question instead of adding it back.
+    const { removed } = links(snapshot, review.issue);
+    if (review.dependencies.some(d => removed.includes(issueKey(d.key)))) throw invalidAnalysis();
     if ((review.outcome === 'question' && (review.dependencies.length || review.effects !== 'none')) || (review.dependencies.length && (review.outcome !== 'pending' || review.effects !== 'pending')) || (!review.dependencies.length && review.effects !== 'none') || !['complete','question','pending'].includes(review.outcome) || !Array.isArray(review.dependencies) || !Array.isArray(review.questions) || (review.outcome === 'complete' && review.questions.length) || review.dependencies.some(d => !d.reason?.trim() || !Array.isArray(d.evidence) || !d.evidence.length)) throw invalidAnalysis();
     for (const dependency of review.dependencies) { const decision = validateDependencyChange({ snapshot: proposed, dependent: review.issue, blocker: dependency.key }); if (!decision.allowed && decision.reason !== 'duplicate') throw invalidAnalysis(); if (decision.allowed) proposed.edges.push({ dependent: review.issue, blocker: dependency.key }); }
   }
@@ -173,7 +181,9 @@ export async function completeDependencyIntake({ cwd = '', request, analysis }, 
   }
   const ids = []; const questions = [];
   for (const review of analysis.reviews) {
-    const result = await (ports.reviews?.save ?? saveDependencyReview)({ repository: request.repository, issue: review.issue, review }, ports);
+    // The link row holds the subject's links after this request's validated additions.
+    const saved = { ...review, inputs: [...review.inputs, links(proposed, review.issue, review.dependencies).row] };
+    const result = await (ports.reviews?.save ?? saveDependencyReview)({ repository: request.repository, issue: review.issue, review: saved }, ports);
     if (result.state !== 'saved' || !result.id) return pendingResult('review-save', review.issue, ids, questions);
     ids.push(result.id); questions.push(...review.questions);
     if (review.effects === 'pending' && review.dependencies.length) {
@@ -211,7 +221,8 @@ export async function reconcileDependencyIntake({ cwd = '', repository, trigger,
   const selectedSnapshot = JSON.parse(prepared.request.snapshotJson);
   const context = JSON.parse(prepared.request.contextJson);
   const relevant = new Set([...(context.source || []).filter(x => x.issues?.some(i => prepared.queued.includes(i))).map(x => x.key), ...(context.requirements || []).filter(x => prepared.queued.includes(x.issue)).map(x => x.key), ...selectedSnapshot.reviews.filter(r => prepared.queued.includes(r.issue)).flatMap(r => r.inputs.map(x => x.key))]);
-  const fingerprint = JSON.stringify({ repository: repository.toLowerCase(), issues: prepared.queued.slice().sort(), inputs: order([...selectedSnapshot.inputs.filter(x => relevant.has(x.key)), ...selectedSnapshot.issues.filter(i => root(i.key, repository)).map(i => ({ key: i.key, revision: i.revision }))]), heads: headIds(selectedSnapshot) });
+  const linkRows = prepared.queued.map(issue => dependencyLinks({ snapshot: selectedSnapshot, issue }).row);
+  const fingerprint = JSON.stringify({ repository: repository.toLowerCase(), issues: prepared.queued.slice().sort(), inputs: order([...selectedSnapshot.inputs.filter(x => relevant.has(x.key)), ...selectedSnapshot.issues.filter(i => root(i.key, repository)).map(i => ({ key: i.key, revision: i.revision })), ...linkRows]), heads: headIds(selectedSnapshot) });
   if (fingerprint !== pending.delivered || trigger === 'refresh') {
     pending.requested = fingerprint;
     const stored = await ports.pending.save({ repository, json: JSON.stringify(pending) });
