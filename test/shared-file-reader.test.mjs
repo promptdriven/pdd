@@ -5,7 +5,7 @@ import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { runPdd } from '../src/pdd-cli.mjs';
-import { runApprove, approvePromptText } from '../src/prompt-approve.mjs';
+import { runApprove, approvePromptText, askApproval } from '../src/prompt-approve.mjs';
 import { runCheck } from '../src/runtime-client.mjs';
 import { interfaceBlocks } from '../src/runtime-preflight.mjs';
 import { fakeRuntime, harbor, PLACE, portsFor, root, sink } from './runtime-fake.mjs';
@@ -110,6 +110,10 @@ test('shared reader: missing contract gives the same source reason before approv
   const replies = await rejectedCommands(setup), result = await approval(setup);
   assert.equal(result.code, 4);
   assert.match(result.text, /contract-missing/);
+  const callback = await askApproval({ root: setup.repo, path: PLACE, stdout: sink(), answers: { ask: () => assert.fail('a bad reference must not ask') } });
+  assert.equal(callback.state, 'declined');
+  assert.equal(callback.exitCode, 4);
+  assert.match(callback.message, /contract-missing/);
   for (const reply of replies) assert.match(reply.text, /contract-missing/);
 });
 

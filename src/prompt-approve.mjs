@@ -1,4 +1,4 @@
-// Generated from prompts/cli/prompt-approve.prompt.md (sha256: eb08fe9c85392fabd170df5d9319ad236a9258a913b5c6b837caa479daac3c86).
+// Generated from prompts/cli/prompt-approve.prompt.md (sha256: aa81368920b093a6cdd2e94abae711b0788a099317571146d033b8f499fefdca).
 import { approvalActor, readApprovalPolicy, readSaidWords, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -198,8 +198,16 @@ export function lineReader(stdin) {
 // Show one prompt, ask the person, and approve on y. expectedHash (from the Try page) must equal the local prose hash.
 // Returns {state: 'done' | 'declined', exitCode, message}; prints the view and the question to stdout.
 export async function askApproval({ root, path, stdout, answers, expectedHash, said, commit }) {
-  const visible = new Set(gitFiles(root)), prompt = readPrompt(root, visible, path);
-  const problems = promptSchemaRefusals(root, { visible }, prompt, new Map([[path, prompt]]));
+  let visible, prompt, problems;
+  const declined = error => ({ state: 'declined', exitCode: 4, message: error.message });
+  try { visible = new Set(gitFiles(root)); prompt = readPrompt(root, visible, path); }
+  catch (error) { return declined(error); }
+  const text = prompt.rawText, hash = prompt.interface ? proseSha256(text) : null;
+  if (prompt.interface && expectedHash !== undefined && expectedHash !== hash) {
+    return { state: 'declined', exitCode: 4, message: `${path}: the prompt changed since you clicked Approve. Not approved; look at the new text, then click Approve again.` };
+  }
+  try { problems = promptSchemaRefusals(root, { visible }, prompt, new Map([[path, prompt]])); }
+  catch (error) { return declined(error); }
   if (problems.length) {
     for (const problem of problems) {
       line(stdout, `  ${problem.code}  ${problem.section}  ${problem.message}`);
@@ -207,11 +215,7 @@ export async function askApproval({ root, path, stdout, answers, expectedHash, s
     }
     return { state: 'declined', exitCode: 4, message: `Fix these in ${path} before you approve.` };
   }
-  const text = prompt.rawText, iface = prompt.interface;
-  const hash = proseSha256(text), current = iface.prose_sha256 === hash;
-  if (expectedHash !== undefined && expectedHash !== hash) {
-    return { state: 'declined', exitCode: 4, message: `${path}: the prompt changed since you clicked Approve. Not approved; look at the new text, then click Approve again.` };
-  }
+  const iface = prompt.interface, current = iface.prose_sha256 === hash;
   if (iface.status === 'approved' && current) return { state: 'done', exitCode: 0, message: `${path} is already approved and current.` };
   for (const row of [...describeInterface(path, iface), ...proseView(root, path, text)]) line(stdout, row);
   if (iface.status === 'approved') line(stdout, 'The text changed after it was approved. Read the prompt again before you answer.');
