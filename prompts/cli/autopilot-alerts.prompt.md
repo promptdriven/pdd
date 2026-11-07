@@ -129,12 +129,13 @@ Each send has one result:
 | `usage-limit` | An AI account usage limit; give the reset time when known | repository, machine and kind |
 | `resource` | A CPU, memory or disk failure | repository, machine and kind |
 | `runtime` | The hosted Runtime (the PDD interpreter behind `pdd test`) is unavailable for this repository | repository, machine and kind |
+| `runtime-access` | The Runtime health check of this machine cannot be read: its gh sign-in or `PDD_RUNTIME_URL` needs a person | repository, machine and kind |
 | `access` | An access or spending decision | repository, issue and kind |
 | `decision` | An unresolved product choice | repository, issue and kind |
 | `stuck` | An issue stuck after its retry time | repository, issue and kind |
 | `recovered` | A matching open incident ended | |
 
-`usage-limit`, `resource` and `runtime` are machine incidents: they are not specific to
+`usage-limit`, `resource`, `runtime` and `runtime-access` are machine incidents: they are not specific to
 one issue. One usage limit that blocks 5 runs is one incident and one alert. The
 incident lists every affected issue. An access or spending decision belongs to
 its issue, so two different decisions on two issues are two incidents and two
@@ -142,7 +143,7 @@ alerts, and a recovery of one leaves the other open.
 
 The JSON has nonblank string fields `cause`, `tried` and `need`. For `recovered`
 only `cause` (what changed) is needed, and an optional `kind` names the one
-incident that ended: `usage-limit`, `resource`, `runtime`, `access`, `decision` or `stuck`.
+incident that ended: `usage-limit`, `resource`, `runtime`, `runtime-access`, `access`, `decision` or `stuck`.
 A missing or invalid issue, kind or field exits 2 with one line that names the
 problem, and records nothing.
 
@@ -180,7 +181,7 @@ Repository line, the Issue or Issues line of the closed incidents and
 `What changed: CAUSE`.
 
 The incident of a call is its machine incident (this repository, HOST and kind)
-for `usage-limit`, `resource` and `runtime`, else the incident of its issue and kind. This answers the question **when does a call send, and what ends an
+for `usage-limit`, `resource`, `runtime` and `runtime-access`, else the incident of its issue and kind. This answers the question **when does a call send, and what ends an
 incident?**
 
 ```mermaid

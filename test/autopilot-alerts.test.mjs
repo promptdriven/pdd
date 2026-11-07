@@ -455,13 +455,13 @@ test('invalid alert input is refused with its problem named, and records and sen
     [['autopilot', 'alert', '--issue', 'twelve', '--kind', 'usage-limit', '--input', '-'], JSON.stringify(usage), /--issue N with a positive issue number/],
     [['autopilot', 'alert', '--issue', '0', '--kind', 'usage-limit', '--input', '-'], JSON.stringify(usage), /--issue N with a positive issue number/],
     [['autopilot', 'alert', '--kind', 'usage-limit', '--input', '-'], JSON.stringify(usage), /--issue N with a positive issue number/],
-    [['autopilot', 'alert', '--issue', '12', '--input', '-'], JSON.stringify(usage), /--kind usage-limit\|resource\|runtime\|access\|decision\|stuck\|recovered/],
+    [['autopilot', 'alert', '--issue', '12', '--input', '-'], JSON.stringify(usage), /--kind usage-limit\|resource\|runtime\|runtime-access\|access\|decision\|stuck\|recovered/],
     [alert, 'not json', /JSON object on stdin with nonblank "cause", "tried", "need"\. Nothing was recorded/],
     [alert, '[]', /JSON object on stdin/],
     [alert, JSON.stringify({ cause: 'x', tried: 'y' }), /nonblank "cause", "tried", "need"/],
     [alert, JSON.stringify({ ...usage, need: '  ' }), /nonblank "cause", "tried", "need"/],
     [['autopilot', 'alert', '--issue', '12', '--kind', 'recovered', '--input', '-'], JSON.stringify({ cause: '' }), /nonblank "cause"\. Nothing was recorded/],
-    [['autopilot', 'alert', '--issue', '12', '--kind', 'recovered', '--input', '-'], JSON.stringify({ cause: 'Quota reset', kind: 'progress' }), /"kind" in a recovery as one of usage-limit\|resource\|runtime\|access\|decision\|stuck/],
+    [['autopilot', 'alert', '--issue', '12', '--kind', 'recovered', '--input', '-'], JSON.stringify({ cause: 'Quota reset', kind: 'progress' }), /"kind" in a recovery as one of usage-limit\|resource\|runtime\|runtime-access\|access\|decision\|stuck/],
   ];
   for (const [argv, stdin, problem] of cases) {
     const refused = await f.pdd(argv, stdin);

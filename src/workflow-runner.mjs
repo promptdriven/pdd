@@ -405,7 +405,7 @@ function describe(run, chat = null, { drafts = [], nothing = false } = {}) {
   const area = run.areas[run.area], pr1 = askArea(run) && prOf(run, askArea(run).name);
   if (run.state === 'cancelled') return run.cancelled?.state === 'replaced' ? 'replaced' : 'cancelled';
   if (run.state === 'stuck') return `stuck: ${run.parkReason ?? 'automatic work stopped'}`;
-  if (runtimeWaiting(run)) return `waiting for Runtime: ${run.runtimeWait.reason}. No person is needed; Autopilot wakes it when Runtime is back`;
+  if (runtimeWaiting(run)) return `waiting for Runtime: ${run.runtimeWait.reason}. Autopilot checks Runtime at each tick and wakes it when Runtime is back; an Autopilot alert names any need for a person (pdd autopilot status)`;
   if (activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting'].includes(chat)) return chatStatusWords(run, chat);
   if (openQuestion(run) && run.state !== 'completed') return `waiting for you: ${run.question.text.split('\n')[0]}`;
   if (chat === 'blocked' && run.state === 'running') return `waiting for you: the chat asks a question in its window (pdd workflow open ${run.number})`;
@@ -1570,8 +1570,9 @@ async function recordEvidenceCommand({ ref, summaryFile, cwd }, ports) {
 }
 
 // pdd's own results for a run (pdd test, pdd lint, pdd workflow prove). A read problem gives no results, never a stop.
+const readOwnResults = (run, p) => (p.readRunResults ?? readRunResults)({ root: run.root, runDir: run.runDir, runId: run.runId, since: run.startedAt ?? 0, baseBranch: run.baseBranch ?? null }, { env: p.env, workspace:input=>readEvidenceEligibility(input,p) });
 function ownResults(run, p) {
-  try { return (p.readRunResults ?? readRunResults)({ root: run.root, runDir: run.runDir, runId: run.runId, since: run.startedAt ?? 0, baseBranch: run.baseBranch ?? null }, { env: p.env, workspace:input=>readEvidenceEligibility(input,p) }); }
+  try { return readOwnResults(run, p); }
   catch { return []; }
 }
 // The steps whose done output shows pdd's own results, or a visible "no pdd result" warning.
@@ -2187,10 +2188,13 @@ function endRuntimeWait(run) {
 // The latest pdd test result of the run decides whether it may wait for Runtime: only a no-verdict
 // AI-service, busy, network or unknown result waits. A failed check or a file rule is this issue's own work.
 const RUNTIME_PARK_REFUSALS = {
-  issue: 'pdd test failed an expectation or names a file rule. This is this issue\'s own work, not a Runtime outage: find the cause and fix it (RUNBOOK §11). Nothing was parked.',
-  access: 'pdd test reports a sign-in or access problem. It is not a Runtime outage: run gh auth status and follow the access alert rule. Nothing was parked.',
+  issue: 'pdd test failed an expectation, names a file rule, or a step took longer than the server time limit. This is this issue\'s own work, not a Runtime outage: find the cause and fix it (RUNBOOK §11). For a step time limit, make the step smaller, for example split 30 moves into 3 steps of 10. Nothing was parked.',
+  access: 'pdd test reports a sign-in, access or Runtime address problem. It is not a Runtime outage, and waiting does not fix it: a person must fix the sign-in. Run gh auth status (and check PDD_RUNTIME_URL), then follow the access alert rule. Nothing was parked.',
   passed: 'The latest pdd test passed; nothing waits for Runtime. Nothing was parked.',
 };
+// The text of an Autopilot Runtime wake starts with its park time, so one park is woken at most once.
+export const runtimeWakeTag = at => `Runtime wake for the park at ${new Date(at).toISOString()}.`;
+const RUNTIME_WAKE_TAG = /^Runtime wake for the park at [^ ]+\./;
 
 // Record an automatic stop without releasing or waking its worker.
 async function parkAutomaticRunCommand({ reason, runtime = false, cwd }, ports) {
@@ -2205,8 +2209,10 @@ async function parkAutomaticRunCommand({ reason, runtime = false, cwd }, ports) 
   if (ownership) return fail(ownership);
   let wait = null;
   if (runtime) {
-    const check = ownResults(run, p).find(result => result.kind === 'pdd test') ?? null;
-    const cause = check ? savedCheckCause(check.batch, { env: p.env }) : 'none';
+    // A result read that fails is an outcome that is not known: never a sign that no check ran.
+    let check = null, cause;
+    try { check = readOwnResults(run, p).find(result => result.kind === 'pdd test') ?? null; cause = check ? savedCheckCause(check.batch, { env: p.env }) : 'none'; }
+    catch { cause = 'unknown'; }
     if (RUNTIME_PARK_REFUSALS[cause]) return fail(RUNTIME_PARK_REFUSALS[cause]);
     wait = { at: p.now(), reason: clip(oneLine(text), 300), batch: check?.batch ?? null, cause };
   }
@@ -2374,6 +2380,10 @@ async function deliveryJournal(run, p, action, { recover = true } = {}) {
 export async function changeRun({ ref, text, cwd, packageRoot = PACKAGE_ROOT }, ports) {
   const p = deps(ports); p.packageRoot = packageRoot; const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
+  // A Runtime wake reaches the run only while it still waits for that park: a second copy sends nothing.
+  const wake = RUNTIME_WAKE_TAG.exec(String(text ?? '').trim())?.[0];
+  if (wake && !(runtimeWaiting(found.run) && wake === runtimeWakeTag(found.run.runtimeWait.at)))
+    return done(`Run #${found.run.number} does not wait for the Runtime park that this wake names: it was already woken, or it parked again. Nothing was sent.`);
   return deliverRequest(found.run, text, p);
 }
 
@@ -2614,7 +2624,7 @@ function detail(run, chat = null, facts = {}) {
   const pending = run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase);
   const next = pending ? `pdd workflow open ${run.number} --new` : activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting'].includes(chat) ? `pdd workflow open ${run.number}`
     : run.gate ? approvalGuide(run)
-    : runtimeWaiting(run) ? `nothing for a person. Autopilot wakes this run when Runtime is back; the worker then reads pdd test --read${run.runtimeWait.batch ? ` ${run.runtimeWait.batch}` : ''} first.`
+    : runtimeWaiting(run) ? `nothing for a person unless an Autopilot alert asks (pdd autopilot status). Autopilot wakes this run when Runtime is back; the worker then reads pdd test --read${run.runtimeWait.batch ? ` ${run.runtimeWait.batch}` : ''} first.`
     : ended(run) ? null : prOf(run, area?.name) ? `Review and merge ${run.pr.length > 1 && run.prBase && run.prBase !== run.baseBranch ? 'PR 1, then PR 2,' : 'the PR'} on GitHub. pdd never merges.` : `pdd workflow open ${run.number}`;
   return [`${run.repo}#${run.number} "${oneLine(run.issue.title)}" · ${run.workflow} · ${run.agent}`,
     `State: ${describe(run, chat, facts)}`,

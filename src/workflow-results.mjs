@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-results.prompt.md (sha256: 889481fd15c18d7e592a074046af2ee4b3e0f97361bfad926ea721c720b65ad2).
+// Generated from prompts/cli/workflow-results.prompt.md (sha256: 81efc5eaceea34be57afa1edc4b9f8bace30610c64d1d4898dda161a5838ba3b).
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -135,26 +135,56 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
 }
 
 // Why pdd's own saved check has no verdict, from its saved rows (summary.json, else batch.json). It reads files only.
-// issue: a failed expectation or a file-rule refusal (fix this issue's files); access: sign-in or access;
-// service: not run, busy, or an AI-service refusal (Runtime); unknown: an outcome that is not known yet.
+// issue: a failed expectation, a file-rule refusal or a step time limit (fix this issue's files); access: sign-in,
+// access or a Runtime address problem; service: not run, busy, or an AI-service refusal (Runtime); unknown: an
+// outcome that is not known yet.
 const SERVICE_REFUSALS = new Set(['graph-provider-failure', 'graph-uncertain-child-dispatch']);
 const ACCESS_NOTES = new Set(['blocked', 'auth-required']);
+// pdd's own words for a server step deadline and for a login that Runtime did not accept (any error code).
+const TIME_LIMIT_WORDS = /\btook more than [\d.]+ minutes and was stopped\b|\b(?:timeout|timed[ -]out|time[ -]limit|deadline[ -]exceeded)\b/i;
+const SIGN_IN_WORDS = /\(HTTP 40[13]\)|\bgh auth login\b/;
+const words = item => item && typeof item === 'object' ? [item.message, item.engine_message, item.cause].filter(value => typeof value === 'string').join(' ') : '';
+const timeLimited = row => Boolean(row.time_limit) || [row.reason, row.note, ...(Array.isArray(row.refusals) ? row.refusals : [])]
+  .some(item => item?.code === 'step_timeout' || SERVICE_REFUSALS.has(item?.code) && TIME_LIMIT_WORDS.test(words(item)));
+const signIn = row => ACCESS_NOTES.has(row.note?.code ?? row.reason?.code) || [row.note, row.reason].some(item => SIGN_IN_WORDS.test(words(item))) || SIGN_IN_WORDS.test(String(row.why ?? ''));
 export function checkCause(rows) {
   const open = (Array.isArray(rows) ? rows : []).filter(row => row && typeof row === 'object' && row.state !== 'passed');
   if (!Array.isArray(rows) || !rows.length) return 'none';
   if (!open.length) return 'passed';
   const codes = row => (Array.isArray(row.refusals) ? row.refusals : []).map(item => item?.code);
-  if (open.some(row => row.state === 'failed' || row.state === 'refused' && (!codes(row).length || codes(row).some(code => !SERVICE_REFUSALS.has(code))))) return 'issue';
-  if (open.some(row => row.state === 'not_run' && ACCESS_NOTES.has(row.note?.code ?? row.reason?.code))) return 'access';
+  if (open.some(row => row.state === 'failed' || timeLimited(row) || row.state === 'refused' && (!codes(row).length || codes(row).some(code => !SERVICE_REFUSALS.has(code))))) return 'issue';
+  if (open.some(row => ['not_run', 'unknown'].includes(row.state) && signIn(row))) return 'access';
   // An unknown answer that names the AI provider failure is a known end with no verdict.
   const provider = row => row.state === 'unknown' && (SERVICE_REFUSALS.has(row.reason?.code) || SERVICE_REFUSALS.has(row.provider?.code) || codes(row).length > 0 && codes(row).every(code => SERVICE_REFUSALS.has(code)));
   return open.every(row => ['refused', 'not_run'].includes(row.state) || provider(row)) ? 'service' : 'unknown';
 }
+const OPEN_ROWS = new Set(['ready', 'waiting', 'sending', 'queued', 'running']);
+const stateFolder = env => resolve(env.PDD_STATE_DIR || join(env.HOME || homedir(), '.pdd', 'runtime'));
 export function savedCheckCause(batch, { env = process.env } = {}) {
   if (!BATCH.test(String(batch ?? ''))) return 'none';
-  const folder = join(resolve(env.PDD_STATE_DIR || join(env.HOME || homedir(), '.pdd', 'runtime')), 'batches', batch);
+  const folder = join(stateFolder(env), 'batches', batch);
   const summary = readJson(join(folder, 'summary.json')), saved = readJson(join(folder, 'batch.json'));
-  return checkCause(Array.isArray(summary?.rows) ? summary.rows : Array.isArray(saved?.rows) ? saved.rows : []);
+  const summaryRows = Array.isArray(summary?.rows) ? summary.rows : null, savedRows = Array.isArray(saved?.rows) ? saved.rows : null;
+  // A named check whose rows cannot be read has an outcome that is not known.
+  if (!summaryRows && !savedRows) return 'unknown';
+  // A check still open, or a summary that an interrupted --retry left behind (its saved rows moved on), is not known yet.
+  const states = rows => rows.reduce((map, row) => map.set(`${row?.test}\0${row?.story}`, [...(map.get(`${row?.test}\0${row?.story}`) ?? []), row?.state]), new Map());
+  if (savedRows?.some(row => OPEN_ROWS.has(row?.state))) return 'unknown';
+  const shown = summaryRows && states(summaryRows);
+  if (shown && savedRows && [...states(savedRows)].some(([key, list]) => shown.has(key) && shown.get(key).join() !== list.join())) return 'unknown';
+  return checkCause(summaryRows ?? savedRows);
+}
+// Proof that Runtime gave a verdict after a time: a passed or failed row of this worktree's pdd test that ended at or
+// after `since` (a sent check, not a cached pass or a read of an older answer). It reads files only.
+export function checkVerdictSince({ root, since }, { env = process.env } = {}) {
+  const directory = join(stateFolder(env), 'batches'), wanted = real(root);
+  let names;
+  try { names = readdirSync(directory).filter(name => BATCH.test(name)); } catch { return false; }
+  return names.some(name => {
+    const batch = readJson(join(directory, name, 'batch.json'));
+    return batch?.batch === name && batch.intent === 'check' && typeof batch.root === 'string' && Array.isArray(batch.rows) && real(batch.root) === wanted
+      && batch.rows.some(row => ['passed', 'failed'].includes(row?.state) && Number.isFinite(row.ended_at) && row.ended_at >= since);
+  });
 }
 
 function more({ requests = [], reports = [] }) {

@@ -281,15 +281,16 @@ The default `gh` port likewise ignores stdin and captures stdout and stderr; it 
 
 ## Free Runtime health check
 
-Export `checkRuntimeHealth({env}, ports)` for the [Autopilot launcher](autopilot-launcher.prompt.md) (#3039). It is the free health check: one `GET /v1/capacity` to the configured origin with the `gh auth token` bearer and a 10-second limit, the same read that admission uses. It sends no source, starts no check or lint and makes no AI call. It returns `{state, detail}`:
+Export `checkRuntimeHealth({env}, ports)` for the [Autopilot launcher](autopilot-launcher.prompt.md) (#3039). It is the free health check: one `GET /v1/capacity` to the configured origin with the `gh auth token` bearer and a 10-second limit, the same read that admission uses. It sends no source, starts no check or lint and makes no AI call. It returns `{state, detail}`, and `fix` for `access`. An answer that is neither healthy nor down is never treated as either: it is a sign-in or setup problem on this machine that a person must fix.
 
 | Answer | state |
 | --- | --- |
 | 200 with a JSON object and no future `maintenance.until`, or 404 (an older interpreter that still answered) | `healthy` |
 | no answer (network error or timeout), HTTP 408, 429 or 5xx, or a future `maintenance.until` | `unavailable` |
-| an invalid origin, no gh token (then nothing is sent), or any other status such as 401 | `unknown` |
+| HTTP 401 or 403, or no gh token (then nothing is sent) | `access`; `fix` says to run `gh auth status` and sign in again with `gh auth login`, or to ask the PDD team for Runtime access |
+| an invalid `PDD_RUNTIME_URL` origin (nothing is sent), a 3xx redirect (not followed), a 200 that is not a JSON object such as an HTML page, or any other status | `access`; `fix` says to check `PDD_RUNTIME_URL` |
 
-`detail` is a short word such as `HTTP 503`, `not reached`, `no answer` or `maintenance`; it never holds the token.
+`detail` is a short text such as `HTTP 503`, `not reached`, `no answer`, `maintenance`, `no gh sign-in` or `HTTP 401: Runtime did not accept the gh login`; neither `detail` nor `fix` ever holds the token.
 
 ## `pdd test`
 

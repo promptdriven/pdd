@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 7303ec11f6527f3c8601a2c379381fb5aa965d97a90cb72d2f7edcee40ad92e3).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 267f4bdfed7e29df67c60397203f3196580ade121281c1beb2c48ea6aff3c06b).
 import {readEvidenceEligibility} from './workflow-runner.mjs';
 import {allRuns} from './workflow-runs.mjs';
 import {assessNativeEvidence, resultLines, usableResult} from './workflow-results.mjs';
@@ -496,14 +496,17 @@ const gateText = reply => reply.status === 503 && !reply.json && String(reply.te
 
 // The free Runtime health check for Autopilot: one GET /v1/capacity with the gh token, the same read that admission
 // uses. It sends no source, starts no check and makes no AI call. healthy: the server answered and is not in
-// maintenance; unavailable: no answer, HTTP 408, 429 or 5xx, or maintenance; unknown: no sign-in or another answer.
+// maintenance; unavailable: no answer, HTTP 408, 429 or 5xx, or maintenance; access: an answer that is neither, a
+// sign-in or a setup problem on this machine that a person must fix (`fix` names how).
+const HEALTH_SIGN_IN = 'Run gh auth status on this machine; sign in again with gh auth login, or ask the PDD team for Runtime access.';
+const HEALTH_ADDRESS = 'Check PDD_RUNTIME_URL in the Autopilot environment: it must be the Runtime origin itself (unset it to use the default).';
 export async function checkRuntimeHealth({ env = process.env } = {}, givenPorts = {}) {
   const ports = withDefaults({ ...givenPorts, env });
   let origin;
-  try { origin = runtimeOrigin(env); } catch (error) { return { state: 'unknown', detail: cleanText(error.message) }; }
+  try { origin = runtimeOrigin(env); } catch { return { state: 'access', detail: 'PDD_RUNTIME_URL is not an HTTPS origin', fix: HEALTH_ADDRESS }; }
   let token = '';
   try { const reply = ports.gh(['auth', 'token']); token = reply.status === 0 ? String(reply.stdout ?? '').trim() : ''; } catch { token = ''; }
-  if (!token) return { state: 'unknown', detail: 'no gh sign-in' };
+  if (!token) return { state: 'access', detail: 'no gh sign-in', fix: HEALTH_SIGN_IN };
   const reply = await new Runtime({ origin, token, ports }).send('/v1/capacity', { method: 'GET' }, givenPorts.timeoutMs ?? 10_000);
   if (reply.lost) return { state: 'unavailable', detail: reply.unreachable ? 'not reached' : 'no answer' };
   if (reply.status >= 500 || [408, 429].includes(reply.status)) return { state: 'unavailable', detail: `HTTP ${reply.status}` };
@@ -513,7 +516,9 @@ export async function checkRuntimeHealth({ env = process.env } = {}, givenPorts 
   }
   // An older interpreter without the capacity read still answered.
   if (reply.status === 404) return { state: 'healthy', detail: 'HTTP 404' };
-  return { state: 'unknown', detail: `HTTP ${reply.status}` };
+  if ([401, 403].includes(reply.status)) return { state: 'access', detail: `HTTP ${reply.status}: Runtime did not accept the gh login`, fix: HEALTH_SIGN_IN };
+  if (reply.status >= 300 && reply.status < 400) return { state: 'access', detail: `HTTP ${reply.status}: a redirect, not a Runtime answer`, fix: HEALTH_ADDRESS };
+  return { state: 'access', detail: `HTTP ${reply.status}${reply.status === 200 ? ' that is not a Runtime answer' : ''}`, fix: HEALTH_ADDRESS };
 }
 
 // Only capacity refusals that prove no execution can authorize a fresh check ID.

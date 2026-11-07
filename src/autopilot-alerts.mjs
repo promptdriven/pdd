@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-alerts.prompt.md (sha256: a834b0dec24cf0e37ac11ab2240ec470640557693fcf47264252f29f64cddd7e).
+// Generated from prompts/cli/autopilot-alerts.prompt.md (sha256: d269ca3c979ecb6ec35c38d228d5fc28375de56d375b74c64d2892bbc012600a).
 import * as nativeFs from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
@@ -7,11 +7,12 @@ import { dirname, isAbsolute, join } from 'node:path';
 import { promisify } from 'node:util';
 
 const execute = promisify(execFile);
-export const ALERT_KINDS = Object.freeze(['usage-limit', 'resource', 'runtime', 'access', 'decision', 'stuck', 'recovered']);
+export const ALERT_KINDS = Object.freeze(['usage-limit', 'resource', 'runtime', 'runtime-access', 'access', 'decision', 'stuck', 'recovered']);
 // These incidents are shared by the whole machine: one incident per repository, machine and kind lists every affected issue.
-// A Runtime outage is one of them: the hosted PDD interpreter is down for every issue at once.
+// A Runtime outage is one of them: the hosted PDD interpreter is down for every issue at once. So is runtime-access:
+// the Runtime health check of this machine cannot be read (its gh sign-in or PDD_RUNTIME_URL).
 // An access or spending decision belongs to its issue, like a product decision.
-const MACHINE_KINDS = Object.freeze(['usage-limit', 'resource', 'runtime']);
+const MACHINE_KINDS = Object.freeze(['usage-limit', 'resource', 'runtime', 'runtime-access']);
 const LOG_LIMIT = 200, TEXT_LIMIT = 1900, FIELD_LIMIT = 500, ISSUE_LIMIT = 10, TIMEOUT_MS = 10000, TOKEN_COMMAND_MS = 30000;
 const SERVICE = { discord: 'Discord', slack: 'Slack', 'discord-bot': 'Discord bot' };
 const DISCORD_API = 'https://discord.com/api/v10';

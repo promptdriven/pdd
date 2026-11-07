@@ -14,16 +14,18 @@ Skip unreadable, foreign, malformed or older records without a warning. Batch na
 
 Export `resultLines(results, {kinds})`. Each result becomes one line that starts with `pdd result: `: `pdd result: KIND (batch B, ISO time, source S, engine E[ (cached)], model M[ (cached)], requests R…, head H): RESULT[; STORY LINE…][; Report: URL (report links expire after 7 days)…]`, leaving out unknown facts. For an associated result, render its original stage beside source; label `pr1` as `PR 1 (historical)`, even when its frozen source is compatible. Never describe that result as a current-code pass. A line shows at most the first 10 requests and the first 10 report links; when there are more, it ends with `; K more requests and L more reports not shown (all in the run record)` (singular for one; naming only the kinds that have more), so nothing is dropped in silence. Export `usableResult(result)`: false only for a prove result that is not `current`. `kinds` limits the kinds shown. With nothing to show, the one line is `noResultLine(kinds)`: `pdd result: none. pdd has no pdd test, pdd lint or pdd workflow prove result of its own for this run (pdd:no-verdict).`, naming only the selected kinds. Also export `PDD_RESULT` (`pdd result`) and `NO_VERDICT` (`pdd:no-verdict`).
 
-Export `checkCause(rows)` and `savedCheckCause(batch, {env})`: why a saved check has no verdict, so a run waits for Runtime only for a service cause (#3039). `savedCheckCause` reads `batches/<BATCH>/summary.json` rows, else `batch.json` rows, in the same state folder; a name that is not a batch, or no rows, gives `none`. It reads files only. `checkCause` judges the rows that did not pass:
+Export `checkCause(rows)` and `savedCheckCause(batch, {env})`: why a saved check has no verdict, so a run waits for Runtime only for a service cause (#3039). `savedCheckCause` reads `batches/<BATCH>/summary.json` rows, else `batch.json` rows, in the same state folder. A name that is not a batch gives `none`. A named batch whose rows cannot be read gives `unknown`, and so does a check whose `batch.json` still has a `ready`, `waiting`, `sending`, `queued` or `running` row, or a `summary.json` whose row states differ from the `batch.json` rows of the same test and Story (an interrupted `pdd test --retry` left the old summary). It reads files only. `checkCause` judges the rows that did not pass:
 
 | Rows | Cause |
 | --- | --- |
 | none | `none` |
 | all passed | `passed` |
-| a `failed` row, or a `refused` row with no code or a code other than `graph-provider-failure` and `graph-uncertain-child-dispatch` (a file rule) | `issue` |
-| a `not_run` row whose note or reason code is `blocked` or `auth-required` | `access` |
+| a `failed` row; a `refused` row with no code or a code other than `graph-provider-failure` and `graph-uncertain-child-dispatch` (a file rule); or a step time limit: a `time_limit` field, a `step_timeout` code, or an AI-service code whose words name a timeout, time limit or `took more than N minutes and was stopped` (split the step) | `issue` |
+| a `not_run` or `unknown` row whose note or reason code is `blocked` or `auth-required`, or whose note, reason or `why` says `(HTTP 401)`, `(HTTP 403)` or `gh auth login` (a Runtime 401 with any error code) | `access` |
 | every other row is `refused` with an AI-service code, `not_run`, or `unknown` that names `graph-provider-failure` | `service` |
 | anything else (an unknown outcome, a check still queued or running) | `unknown` |
+
+Export `checkVerdictSince({root, since}, {env})` for the Autopilot test wake: true when a `check` batch of this worktree (`batch.json` root, compared by real path) has a `passed` or `failed` row whose `ended_at` is at or after `since`. A cached pass or a read of an older answer has no new `ended_at`, so it is no proof. It reads files only.
 
 ## Native profile and criterion assessment (draft)
 
