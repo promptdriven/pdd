@@ -476,7 +476,7 @@ projects. Existing blocks stay unchanged. Each result includes local lint findin
 A clean local lint is not a server lint or a prompt check. Setup offers this command
 when it finds missing blocks. It never approves them.
 
-The automatic approval route requires a complete full draft from this command,
+The automatic approval route requires a complete draft from this command,
 unchanged committed prose, code and tests, passing existing native tests, and full
 prompt-check results on current source. It records `automatic-check-pass` with the
 command, results and source hashes. New behavior requires a person.

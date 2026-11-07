@@ -48,7 +48,7 @@ The block of Harbor Coffee's `place_order` (schemas cut):
 - Missing blocks: run `pdd interface draft PROMPT`, or `pdd interface draft --all` for the repository.
   This local command uses explicit schemas and contracts without AI calls. It preserves prose.
   Uncertain schemas remain draft gaps, so lint cannot claim they are clean.
-- A complete full block drafted from unchanged committed behavior can use
+- A complete block drafted from unchanged committed behavior can use
   `pdd approve PROMPT --automatic --tests COMMAND`. Existing native tests and a complete
   current prompt check must pass; pdd records `automatic-check-pass` evidence.
   Strict mode still requires a person. New behavior requires a person.
