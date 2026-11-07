@@ -93,18 +93,36 @@ the same denial and pushes nothing; the issue keeps its history.
 
 ## Autopilot repair ceiling
 
-For a run with `automaticOrigin`, a `stepDone` for a step that its current area
-has already recorded is one repair round: `build` again after a failed `verify`,
-`formal` or `review`, or `check` again after a failed check. Count rounds per
-area name in the run's optional `repairRounds` object (`{AREA: count}`), in the
-same saved update as the step, and add the line `Repair round N of 5 in the AREA
-area of this Autopilot run.` After 5 rounds in one area, refuse the next round
-before any effect: exit 1, record nothing, and tell the agent to take the stuck
-path: add `pdd:stuck`, write one comment with the cause, send one `stuck` alert,
-keep the claim and progress, and let the coordinator continue with other issues.
-Each area and each issue has its own count. The 5 is a constant, not a setting.
-Manual and legacy runs save no count and are never refused; their skill's
-2-repair rule applies.
+For a run with `automaticOrigin`, a repair round is a real return to an earlier
+step after a failure: a `stepDone` for a step of the current area that clears
+later recorded steps of that area (`build` again after a failed `verify`,
+`formal` or `review`). These are not rounds:
+
+- a `done` for a step with no recorded step after it, such as the retry that pdd
+  asks for after a failed PR open, claim check or push. A publication retry is
+  never refused;
+- a `done` for a later step of the area (not its first step), such as `verify`,
+  when the worktree content is the same as when that step was last recorded.
+  Save that content fingerprint (the [replay](workflow-replay.prompt.md)
+  `sourceFingerprint`) as `worktreeSha256` in each step record of such a run.
+
+Count rounds per area name in the run's optional `repairRounds` object
+(`{AREA: count}`), in the same saved update as the step, and add the line
+`Repair round N of 5 in the AREA area of this Autopilot run.` After 5 rounds in
+one area, refuse the next round before the step has any effect: exit 1, do not
+record the step, and record the stop in one saved update: state `stuck`, the
+reason `Repair limit reached in AREA: take the stuck path`, and `repairLimit`
+(`{area,step,at}`). Status and list show that reason, also after a later park.
+While `repairLimit` is saved, refuse every `done` of the run in the same way, so
+that the run cannot record a later step or open a PR past the refused round. The
+refusal tells the agent to take the stuck path: add `pdd:stuck`, write one
+comment with the cause, send one `stuck` alert, keep the claim and progress, do
+not retry, and let the coordinator continue with other issues. It also says that
+a person lets Autopilot try again with a new run and a new count by removing
+`pdd:stuck` and `pdd:working` from the issue. Each run, area and issue has its
+own count. The 5 is a constant, not a setting. Manual and legacy runs save no
+count and no fingerprint and are never refused; their skill's 2-repair rule
+applies.
 
 ## Record an automatic stopped run
 

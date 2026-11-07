@@ -267,6 +267,11 @@ An own claim whose issue has had `pdd:stuck` for 4 hours (`stuckSince`) is not
 refreshed again, so it expires 4 hours later unless the issue leaves `pdd:stuck`.
 For it, offer one `stuck-claim` time rule, once per stuck time, that asks the
 skill to retry with a changed approach or ask in the configured alert channel.
+After a ceiling (the claim is `takeoverLimited`, or this checkout's run of the
+issue is `stuck` with a saved `repairLimit`), the rule instead says which limit
+was reached and asks for no retry, no removal of `pdd:stuck` and no new comment:
+send the one `stuck` alert only if this stop has none yet; a person removes
+`pdd:stuck` and `pdd:working` to let Autopilot try again.
 
 An expired claim (`expired: true`) does not hold its issue: `pdd:working` alone
 is then not a waiting reason, and a currently eligible issue is fresh work. Its
@@ -281,20 +286,30 @@ and the claim expiry times are constants, not settings.
 
 Two more time rules use the same claims, delivery and persistence. Each is sent
 once per issue, only for an issue that is open in the cached list (a merge closes
-it), and does not touch other issues:
+it), and does not touch other issues. `self` is this coordinator and machine:
 
-- `long-running`: for an own active claim whose `claimedAt` is 24 hours old, ask
+- `long-running`: for an own active claim whose `claimedAt` is 24 hours old, while
+  the issue has no `pdd:stuck` and the claim has no `longRunningAlertedAt`, ask
   the skill to send one informational alert for that issue and keep working. It
-  is information, not a stop: heartbeats and work continue.
+  is information, not a stop: heartbeats and work continue. After the delivery,
+  write the time to the own claim comment through
+  [`recordLongRunningAlert`](issue-dependencies-github.prompt.md#claims-heartbeat-and-expiry),
+  under the scan's admission guard; a failure warns. The claim chain then carries
+  it, so no other machine sends the alert again after a takeover.
 - `takeover-limit`: for a claim that is
-  [`takeoverLimited`](issue-dependencies-github.prompt.md#takeovers), of any
-  owner, while the issue has no `pdd:stuck`, ask the skill not to take it over
-  again and to take the stuck path (`pdd:stuck`, one comment with the cause, one
-  `stuck` alert), keeping its claim and progress. Such a claim is not in the
-  expired-claim set: `pdd:working` stays a hold, the item has no `expiredClaim`,
-  its selection reasons add `takeover-limit`, and the idle-claim rule does not
-  apply when it is expired. A change of that reason alone updates the saved
-  selection.
+  [`takeoverLimited`](issue-dependencies-github.prompt.md#takeovers) for `self`,
+  while the issue has no `pdd:stuck`, ask the skill not to take it over again and
+  to take the stuck path (`pdd:stuck`, one comment with the cause, one `stuck`
+  alert), keeping its claim and progress, to read the issue again first and skip
+  it if it already has `pdd:stuck`, and say that a person removes `pdd:stuck` to
+  reset the count. Only one coordinator gets it: the owner of a live claim, else
+  the claim's `previousOwner`; any coordinator when GitHub shows no such owner.
+  Such a claim is not in the expired-claim set: `pdd:working` stays a hold, the
+  item has no `expiredClaim`, its selection reasons add `takeover-limit`, and the
+  idle-claim rule does not apply when it is expired. A change of that reason
+  alone updates the saved selection. An own expired claim is not limited for
+  `self`: it is offered with `expiredClaim`, because taking it back is a
+  re-claim.
 
 The 24 hours is a constant, not a setting.
 

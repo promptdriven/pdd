@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: a5a44ed0f8e98baa3de480788c6fa501ef9bb2f80c88209434c1d997b39d5299).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 5604cf332891a4bbcd782b9e5f95a5487e50a5809bb14be4be116c85236ad8af).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch } from 'node:fs';
@@ -15,7 +15,7 @@ import { appendEvents } from './metrics-store.mjs';
 import { recordCaptureGap } from './metrics-gap.mjs';
 import * as nativeFiles from 'node:fs';
 import { reconcileDependencyIntake } from './issue-dependencies-intake.mjs';
-import { createDependencyReadPorts, refreshClaimHeartbeat, takeoverLimited, withoutClaimHeartbeat } from './issue-dependencies-github.mjs';
+import { createDependencyReadPorts, recordLongRunningAlert, refreshClaimHeartbeat, takeoverLimited, withoutClaimHeartbeat } from './issue-dependencies-github.mjs';
 import { sendToChat, START_GRACE_MS } from './workflow-chat.mjs';
 import { acquireRunLock } from './workflow-runner.mjs';
 import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
@@ -266,6 +266,14 @@ async function readRunProgress(state, p) {
     } catch { /* Missing or unreadable records supply no progress fact. */ }
   }
   return progress;
+}
+// Whether this checkout's run of the issue stopped at the Autopilot repair limit (#3041).
+async function readRepairLimited(state, number, p) {
+  try {
+    const commonDir = (await p.checked('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim();
+    const run = read(join(commonDir, 'pdd', 'runs', String(number), 'status.json'));
+    return run?.v === 1 && run.number === number && run.repo?.toLowerCase() === state.repo.toLowerCase() && run.state === 'stuck' && Boolean(run.repairLimit);
+  } catch { return false; }
 }
 function message(state, issues, timeRules = []) {
   const skillPath = resolve(state.packageRoot ?? dirname(dirname(self)), 'skills', 'pdd-autopilot', 'SKILL.md');
@@ -786,8 +794,10 @@ async function runTick(stateFile, ports, completion) {
     // (no AI call) and let expired claims of any owner become selectable work.
     const observedClaims = (Array.isArray(intake.claims) ? intake.claims : []).filter(claim => claim && typeof claim.issue === 'string');
     // After 3 takeovers an expired claim is not offered for a 4th: it stays a hold (#3041).
-    const limitedClaims = new Map(observedClaims.filter(takeoverLimited).map(claim => [claim.issue.toLowerCase(), claim]));
-    const expiredClaims = new Map(observedClaims.filter(claim => claim.expired === true && claim.active === false && !takeoverLimited(claim)).map(claim => [claim.issue.toLowerCase(), claim]));
+    // Taking back this coordinator's own expired claim is a re-claim, not a takeover.
+    const self = { coordinatorId: state.coordinatorId, machine: state.machine }, limitedFor = claim => takeoverLimited(claim, self);
+    const limitedClaims = new Map(observedClaims.filter(limitedFor).map(claim => [claim.issue.toLowerCase(), claim]));
+    const expiredClaims = new Map(observedClaims.filter(claim => claim.expired === true && claim.active === false && !limitedFor(claim)).map(claim => [claim.issue.toLowerCase(), claim]));
     const ownClaims = observedClaims.filter(claim => claim.active === true && claim.coordinatorId === state.coordinatorId && claim.machine === state.machine && claim.commentId && claim.labelEventId);
     const stuckFor = claim => p.now() - (typeof claim.stuckSince === 'string' ? Date.parse(claim.stuckSince) : NaN);
     for (const claim of ownClaims) {
@@ -811,25 +821,40 @@ async function runTick(stateFile, ports, completion) {
     for (const claim of ownClaims) {
       const number = Number(/\/issues\/([1-9][0-9]*)$/.exec(claim.issue)?.[1]), key = `stuck:${number}`;
       if (Number.isSafeInteger(number) && stuckFor(claim) >= STUCK_CLAIM_AFTER && state.timeSeen[key] !== claim.stuckSince) {
-        timeRules.push({ kind: 'stuck-claim', number, reason: `Issue #${number} has been stuck for 4 hours; retry it with a changed approach or ask in the configured alert channel. Its claim is no longer refreshed and expires in 4 hours unless the issue leaves pdd:stuck.` });
+        // After a ceiling (the repair limit of this checkout's run, or the takeover limit), a
+        // retry is refused or not allowed: the rule asks for no retry and no further comment.
+        const ceiling = limitedFor(claim) ? 'takeover limit' : await (p.readRepairLimited ?? readRepairLimited)(state, number, p) ? 'repair limit' : null;
+        timeRules.push({ kind: 'stuck-claim', number, reason: ceiling
+          ? `Issue #${number} has been stuck for 4 hours after the ${ceiling}. Do not retry it, do not remove pdd:stuck and write no new comment; send the one stuck alert only if this stop has none yet. A person removes pdd:stuck and pdd:working to let Autopilot try again. Its claim is no longer refreshed and expires in 4 hours.`
+          : `Issue #${number} has been stuck for 4 hours; retry it with a changed approach or ask in the configured alert channel. Its claim is no longer refreshed and expires in 4 hours unless the issue leaves pdd:stuck.` });
         pendingTimes[key] = claim.stuckSince;
       }
     }
     // Per-issue ceilings (#3041), each sent once per issue. Only open issues count: a merge closes the issue.
     const openIssues = new Map((state.cachedIssues ?? []).filter(issue => !issue.pull_request && issue.state === 'open').map(issue => [String(issue.html_url).toLowerCase(), issue]));
     const issueNumber = claim => Number(/\/issues\/([1-9][0-9]*)$/.exec(claim.issue)?.[1]);
+    // The 24-hour alert is once per issue across machines: a claim record of the chain
+    // carries longRunningAlertedAt once it was sent. A stuck issue already has its alert.
+    const longRunning = [];
     for (const claim of ownClaims) {
       const number = issueNumber(claim), key = `long:${number}`, since = Date.parse(claim.claimedAt);
-      if (openIssues.has(claim.issue.toLowerCase()) && Number.isFinite(since) && p.now() - since >= LONG_RUNNING_AFTER && state.timeSeen[key] === undefined) {
+      if (openIssues.has(claim.issue.toLowerCase()) && Number.isFinite(since) && p.now() - since >= LONG_RUNNING_AFTER && state.timeSeen[key] === undefined
+        && claim.longRunningAlertedAt === undefined && claim.stuckSince === undefined) {
         timeRules.push({ kind: 'long-running', number, reason: `Issue #${number} was claimed 24 hours ago and has no merge yet. Send one informational alert for it, then keep working; this is not a stop.` });
-        pendingTimes[key] = claim.claimedAt;
+        pendingTimes[key] = claim.claimedAt; longRunning.push(claim);
       }
     }
+    // One coordinator acts on the takeover limit: the owner of a live claim, else the
+    // coordinator that held the claim before its expired owner (when GitHub shows one).
+    const actsOnLimit = claim => {
+      const by = claim.active === true ? claim : claim.previousOwner;
+      return !by?.coordinatorId || by.coordinatorId === state.coordinatorId && by.machine === state.machine;
+    };
     for (const claim of limitedClaims.values()) {
       const number = issueNumber(claim), key = `takeover:${number}`, issue = openIssues.get(claim.issue.toLowerCase());
       const stuck = issue?.labels?.some(label => (typeof label === 'string' ? label : label.name) === 'pdd:stuck');
-      if (issue && !stuck && state.timeSeen[key] === undefined) {
-        timeRules.push({ kind: 'takeover-limit', number, reason: `Issue #${number} has been taken over ${claim.takeovers} times. Do not take it over again: take the stuck path (pdd:stuck, one comment with the cause, one stuck alert) and keep its claim and progress.` });
+      if (issue && !stuck && actsOnLimit(claim) && state.timeSeen[key] === undefined) {
+        timeRules.push({ kind: 'takeover-limit', number, reason: `Issue #${number} has been taken over ${claim.takeovers} times. Do not take it over again: take the stuck path (pdd:stuck, one comment with the cause, one stuck alert) and keep its claim and progress. Read the issue again first and skip it if it already has pdd:stuck. A person removes pdd:stuck to reset the count.` });
         pendingTimes[key] = claim.takeovers;
       }
     }
@@ -980,6 +1005,13 @@ async function runTick(stateFile, ports, completion) {
       };
       delivered = await wake(state, () => message(state, work, timeRules), p, async () => {}, ports.explicitStartReconcile === true, { kind: 'work', events: Object.fromEntries(Object.entries(pending).map(([key, value]) => [key, value.event])), times: pendingTimes, recipe: !state.recipeDelivered }, capture);
       if (delivered) { state.recipeDelivered = true; Object.assign(state.seen, pending); Object.assign(state.timeSeen, pendingTimes); }
+      // Record the delivered 24-hour alert in the own claim comment, so that no machine sends it again.
+      if (delivered) for (const claim of longRunning) {
+        try {
+          await (p.recordLongRunningAlert ?? recordLongRunningAlert)({ cwd: state.cwd, repository: state.repo, claim, coordinatorId: state.coordinatorId, machine: state.machine, at: new Date(p.now()).toISOString() },
+            { execFile: async (file, args, options) => p.execute(file, args, options), admitMutation: action => p.scanAction(action) });
+        } catch (error) { p.warn(`Long-running alert record deferred for ${claim.issue}: ${line(error.message)}`); }
+      }
     }
     return outcome('reconciled', [delivered ? `Autopilot offered ${work.length} issue(s).` : 'Autopilot tick complete.', ...warnings].join(' '));
   } catch (e) {
