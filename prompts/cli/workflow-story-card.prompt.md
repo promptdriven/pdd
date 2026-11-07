@@ -48,7 +48,7 @@ A file that cannot be read, or a test file that is not valid JSON, shows `(canno
 
 The tests to judge are the given `tests` (the run's changed test files) and every test of these batches. For each test, the newest batch that has it decides (newest `created_at`, then batch name). The test passes only when:
 - its summary row has `state` `passed`, and its `criteria` has `total` above 0, equal to the current test file's number of criteria, and `passed` equal to `total`; and
-- its source did not change after the check: the batch's saved `contract_snapshots` row for its Story equals the same row of `captureSource(root, {tests: ROW TESTS, appMap: null})` today. A batch with no snapshots instead needs its `source_sha256` to equal today's capture of all its tests.
+- its source did not change after the check: the batch's saved `contract_snapshots` row for its Story equals the same row of `captureSource(root, {tests: ROW TESTS, appMap: null})` today, including its test selection, files and reference provenance. Equal file hashes alone cannot replace this row comparison. A nonempty snapshot list with no row for the selected test is unavailable and never falls back. A batch with no snapshots instead needs its `source_sha256` to equal today's capture of all its tests.
 
 Every given prompt path (all of the run's selected changed prompts) must be in the files of a passing test's snapshot row (or of its batch `files` without snapshots).
 

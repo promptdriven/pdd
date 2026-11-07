@@ -6,3 +6,4 @@ If the pdd-prompting skill has a RUNBOOK.md, run `pdd test` as it says, and show
 - Read the pdd-prompting SKILL.md and review.md, and review as it says.
 - Trace the bug input and one unaffected case through the prompt.
 - Never accept the buggy output as the expectation.
+- A person decides expected values: write the proposed Story or value change, run done again; pdd shows it on the card. Undo it on no.

@@ -424,10 +424,9 @@ test('SKILLS27: a page gets a render operation that returns html, an app map and
 });
 
 // Wrong (round-2 tester, 0.1.7): the optional visual step ran without asking, though pdd said "Ask the person".
-test('SKILLS28: before an optional step the main chat asks the person and waits for the answer', () => {
+test('SKILLS28: optional visual steps ask the person and wait for the answer', () => {
   const ask = 'In a run, run `<pdd> workflow ask` first.';
   const lines = { 'pdd-feature': '- Before an optional step, ask the person and wait for the answer: "Do you want a visual design step? yes/no". ' + ask,
-    'pdd-bug': '- Before an optional step, ask the person and wait for the answer: "Do you want to try it now? yes/no". ' + ask,
     'pdd-small-change': '- Before an optional step, ask the person and wait for the answer. ' + ask };
   for (const [name, line] of Object.entries(lines)) {
     const skill = read(`${name}/SKILL.md`);
@@ -717,12 +716,11 @@ test('AUTOPILOT1: the Autopilot skills fit their byte limits and carry the packa
 });
 
 // Wrong: Autopilot text changes the person-led path, or a workflow skill never points to its Autopilot instructions.
-test('AUTOPILOT2: off or absent keeps the person gates; observe and auto use steps/autopilot.md', () => {
+test('AUTOPILOT2: observe and auto use steps/autopilot.md', () => {
   for (const name of WORKFLOWS) {
     has(`${name}/SKILL.md`, '- If Autopilot is `observe` or `auto`, read `steps/autopilot.md` first.', 'A person decides expected values.');
     has(`${name}/steps/autopilot.md`, 'only when `autopilot.mode` in the root `pdd.json` is `observe` or `auto`', 'With `off` or no value, SKILL.md applies as written.',
       'A fresh pdd-check checks', 'its PASS is checker evidence, not approval', 'Optional steps: do not ask.', 'Merge: pdd-merge, not a person.');
-    assert.match(read(`${name}/SKILL.md`), /Before an optional step, ask the person and wait for the answer/, name);
   }
   has('pdd-autopilot/SKILL.md', 'If `autopilot.mode` is absent or `off`, do nothing; a person leads.', '`observe`: do all the work; a person merges.');
   has('pdd-merge/SKILL.md', 'If `autopilot.mode` is absent or `off`, a person merges as RUNBOOK §2 says.', '`observe`: when all the conditions below are true, write one PR comment "Would merge" with the facts; a person merges.');

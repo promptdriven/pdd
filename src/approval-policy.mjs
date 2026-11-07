@@ -34,7 +34,7 @@ export function approvalActor(env = process.env) {
   return { kind: 'terminal', id: env.USER || env.LOGNAME || 'unknown' };
 }
 function validEvidence(e) {
-  return object(e) && (!Object.hasOwn(e, 'id') || typeof e.id === 'string' && e.id.length > 0) && ['said','terminal','chat'].includes(e.route) && object(e.actor) && ['agent','terminal'].includes(e.actor.kind) && typeof e.actor.id === 'string' && Number.isSafeInteger(e.at) && (e.words === null || typeof e.words === 'string') && Array.isArray(e.prompts) && e.prompts.every(p => object(p) && typeof p.path === 'string' && /^[a-f0-9]{64}$/.test(p.proseSha256));
+  return object(e) && (!Object.hasOwn(e, 'id') || typeof e.id === 'string' && e.id.length > 0) && ['said','terminal','chat','automatic-check-pass','card-choice'].includes(e.route) && (!Object.hasOwn(e, 'basis') || object(e.basis)) && object(e.actor) && ['agent','terminal'].includes(e.actor.kind) && typeof e.actor.id === 'string' && Number.isSafeInteger(e.at) && (e.words === null || typeof e.words === 'string') && Array.isArray(e.prompts) && e.prompts.every(p => object(p) && typeof p.path === 'string' && /^[a-f0-9]{64}$/.test(p.proseSha256));
 }
 export function readPromptApprovals({ commonDir }, ports = {}) {
   const fs = ports.fs ?? nativeFs;

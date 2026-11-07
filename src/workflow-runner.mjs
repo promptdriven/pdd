@@ -30,6 +30,7 @@ import { validateProofRecord } from './workflow-prove.mjs';
 import { readRunResults, resultLines, usableResult, noResultLine, NO_VERDICT, prepareNativeEvidence } from './workflow-results.mjs';
 import { collectTestInventory } from './workflow-inventory.mjs';
 import {adoptReplayCorpus,REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinReplayVectors,readReplayEvidence,formatReplayEvidence} from './workflow-replay.mjs';
+import { storyCard, storyFingerprint, fingerprintChanges, fullCheckPass } from './workflow-story-card.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const CHANGE_PREFIX = 'The person asks for changes';
@@ -295,11 +296,49 @@ function automaticHandoff(run, p, packageRoot = PACKAGE_ROOT) {
   } catch { return null; }
 }
 
+// Normal runs (#2962): no saved automatic origin and no strict approval policy. Strict and automatic runs keep their gates.
+const THROUGH = ['prompt-pr', 'code'];
+const throughWords = 'Use --through prompt-pr (stop after PR 1) or --through code (go on to the code PR).';
+const TRY_SKIP = 'not asked in a normal run; the person can ask at the Story card to try it in the Simulator first';
+function normalRun(run, p) {
+  if (!run || Object.hasOwn(run, 'automaticOrigin')) return false;
+  try { return !readApprovalPolicy({ root: run.sourceRoot }, p).strictApprovals; } catch { return false; }
+}
+// The Story gate of a workflow that approves before PR 1 (bug and feature) is its first approve area.
+const storyGateIndex = run => run.areas.some(area => area.before === 'approve') ? run.areas.findIndex(area => area.gate === 'approve') : -1;
+const atStoryGate = run => Boolean(run.gate) && !ended(run) && (run.gate.kind === 'approve' && run.area >= 0 && run.area === storyGateIndex(run)
+  || run.gate.kind === 'approve-pr' && Boolean(run.gate.storyChanges?.length));
+// Lines changed in each changed prompt against the run base; an untracked prompt counts all its lines as added.
+async function promptLineCounts(run, p, changed) {
+  const counts = new Map();
+  try {
+    const parts = (await rawGit(p, run.root, 'diff', '--numstat', '-z', run.baseSha)).split('\0');
+    for (let i = 0; i < parts.length; i++) {
+      const match = /^(\d+|-)\t(\d+|-)\t([\s\S]*)$/.exec(parts[i]);
+      if (!match) continue;
+      let path = match[3];
+      if (path === '') { path = parts[i + 2]; i += 2; }
+      counts.set(path, { added: match[1] === '-' ? '?' : Number(match[1]), removed: match[2] === '-' ? '?' : Number(match[2]) });
+    }
+  } catch { /* Unknown counts show as "?". */ }
+  return changed.filter(path => path.endsWith('.prompt.md')).map(path => {
+    if (counts.has(path)) return { path, ...counts.get(path) };
+    try { const text = readFileSync(join(run.root, path), 'utf8'); return { path, added: text.split('\n').length - (text.endsWith('\n') || !text ? 1 : 0), removed: 0 }; }
+    catch { return { path, added: '?', removed: '?' }; }
+  });
+}
+async function cardText(run, p, extra = {}) {
+  const changed = await changedFiles(run, p);
+  return storyCard({ run, root: run.root, changed, prompts: await promptLineCounts(run, p, changed), through: run.through, ...extra });
+}
+const pddTestLines = (run, p) => ownResults(run, p).filter(result => result.kind === 'pdd test').flatMap(result => result.stories?.length ? result.stories : [result.summary]);
+const cardGate = 'Gate: show the person the Story card above exactly as printed, then ask. Never ask a bare "approve?". Stop. Do not approve for them. When the person also wants the code PR after PR 1, add --through code to the approve command; without it, pdd stops after PR 1.';
+
 async function areaMessage(run, index, p, packageRoot) {
   const area = run.areas[index], pdd = '"$PDD_BIN"', earlier = run.areas.slice(0, index).flatMap(item => item.steps);
   const summaries = earlier.filter(step => run.done[step]).map(step => `${step}: ${oneLine(run.done[step].summary).replace(/[.\s]+$/, '') || 'done'}`);
   const files = index ? await changedFiles(run, p) : [];
-  const automatic = automaticHandoff(run, p, packageRoot);
+  const automatic = automaticHandoff(run, p, packageRoot), normal = !automatic && normalRun(run, p);
   return [
     `Read and follow the selected workflow skill at ${JSON.stringify(resolve(run.skillDir ?? join(packageRoot ?? PACKAGE_ROOT, 'skills', run.skill), 'SKILL.md'))} and its adjacent supporting files. This is a pdd workflow run.${index ? automatic ? ' Earlier areas have advanced.' : ' The person approved the earlier areas.' : ''}`,
     ...(automatic ? [automatic] : []),
@@ -307,11 +346,13 @@ async function areaMessage(run, index, p, packageRoot) {
     `Worktree: ${run.root} (branch ${run.branch}). Work and commit only here.`,
     `Run folder: ${run.runDir}. Put notes there. verify writes verify.md there with the exact test commands and their output.`,
     ...(index ? [`Approved so far: ${summaries.join('; ') || 'no step summaries'}.`, `Changed files: ${files.slice(0, 20).join(', ') || 'none yet'}${files.length > 20 ? ', …' : ''}.`] : []),
-    `Area ${index + 1} of ${run.areas.length}: ${area.name}. Steps: ${area.steps.map(step => area.optional.includes(step) ? `${step} (optional: ask the person)` : step).join(', ')}.`,
+    `Area ${index + 1} of ${run.areas.length}: ${area.name}. Steps: ${area.steps.map(step => !area.optional.includes(step) ? step : normal && step === 'try' && area.before === 'approve' ? `${step} (optional: pdd skips it; do not ask)` : `${step} (optional: ask the person)`).join(', ')}.`,
     `After each step, run: ${pdd} workflow done STEP --summary "one line". It prints what to do next.`,
     ...(prLabel(run, area) === 'PR 2' && prOf(run, askArea(run).name) ? [`PR 1: ${prOf(run, askArea(run).name).url}. This area works on branch ${run.branch}, ${run.prBase === run.baseBranch ? `from the merged ${run.baseBranch}` : 'on top of PR 1'}.`] : []),
     area.gate === 'approve'
-      ? automatic ? 'Gate: show the result and follow the scoped automatic overlay and owner handoff; preserve required human decisions.' : `Gate: after the last step, show the person the result, ask them to approve or ask for changes, and stop. Never approve for them: ${approvalGuide(run, pdd)}`
+      ? automatic ? 'Gate: show the result and follow the scoped automatic overlay and owner handoff; preserve required human decisions.' : normal && index === storyGateIndex(run) ? `Gate: after the last step, pdd prints the Story card. Show it to the person as it is, then ask; never ask a bare "approve?". Never approve for them: ${approvalGuide(run, pdd)}` : `Gate: after the last step, show the person the result, ask them to approve or ask for changes, and stop. Never approve for them: ${approvalGuide(run, pdd)}`
+      : area.then === 'ask-code' && normal && area.before === 'approve'
+      ? 'After the last step, pdd reads its own saved check results. A full check pass opens PR 1 (prompt, Story and tests) with no question; then pdd follows the code-or-stop choice from the Story card. Never push, open a PR or merge yourself.'
       : area.then === 'ask-code'
       ? 'After the last step, pdd pushes the branch and opens PR 1 (prompt, Story and tests). Then show it and ask whether to make the code PR now. Never push, open a PR or merge yourself.'
       : `After the last step, pdd pushes the branch and opens ${prLabel(run, area)}. Never push, open a PR or merge yourself.`,
@@ -401,7 +442,7 @@ function clearChatFailure(run) {
 // said "waiting for you" about a minute before the chat had asked).
 const revising = run => { const last = run.changes?.at(-1); return Boolean(last && !last.answer && last.stage === run.gate.area && last.at >= run.gate.at); };
 // chat: what Herdr shows (chatState); facts: {drafts, nothing} read by the caller (gateFacts). describe itself makes no calls.
-function describe(run, chat = null, { drafts = [], nothing = false } = {}) {
+function describe(run, chat = null, { drafts = [], nothing = false, normal = false } = {}) {
   const area = run.areas[run.area], pr1 = askArea(run) && prOf(run, askArea(run).name);
   if (run.state === 'cancelled') return run.cancelled?.state === 'replaced' ? 'replaced' : 'cancelled';
   if (run.state === 'stuck') return `stuck: ${run.parkReason ?? 'automatic work stopped'}`;
@@ -412,6 +453,10 @@ function describe(run, chat = null, { drafts = [], nothing = false } = {}) {
   if (run.state === 'completed' && run.gate?.kind === 'ask-code') return `done at PR 1 (merged: ${pr1?.url}). ${codeLater(run)}`;
   if (run.state === 'completed') return 'complete: the PR is merged';
   if (run.gate && chat === 'working') return revising(run) ? `the agent works on your changes to the ${run.gate.area} area` : `the agent writes the gate message for the ${run.gate.area} area`;
+  if (normal && run.storyApproval && run.gate?.kind === 'approve-pr' && !atStoryGate(run)) return 'the agent must finish the prompt check before PR 1';
+  if (normal && run.storyApproval && run.gate?.kind === 'ask-code' && !drafts.length) return run.through === 'code'
+    ? `code PR requested; code entry waits. Fix the reported problem, then run pdd workflow done check.`
+    : `stopped after PR 1 (${pr1?.url}). ${codeLater(run)}`;
   if (run.gate?.kind === 'approve-pr') return `waiting for you: ${nothing ? '' : 'try it, then '}approve to open ${prLabel(run, area) === 'the PR' ? 'the PR' : prLabel(run, area)} (or ask for changes)`;
   if (run.gate?.kind === 'ask-code' && drafts.length) return `PR 1 open (${pr1?.url}); waiting for you: approve the draft prompt${drafts.length > 1 ? 's' : ''} first, then make the code PR.`;
   if (run.gate?.kind === 'ask-code') return `PR 1 open (${pr1?.url}); waiting for you: code PR now, or stop and merge PR 1. ${codeLater(run)}`;
@@ -487,7 +532,7 @@ function validAutomaticContext(value) {
     && (envelope || exactKeys(value.claim, ['commentId', 'labelEventId']) && nonempty(value.claim.commentId) && nonempty(value.claim.labelEventId));
 }
 
-async function startRunUnlocked({ name, issue, agent = 'codex', base, adoptCorpus, coordinator, draft = false, origin, decisionId, outcome, cwd, packageRoot = PACKAGE_ROOT }, ports) {
+async function startRunUnlocked({ name, issue, agent = 'codex', base, adoptCorpus, coordinator, draft = false, origin, decisionId, outcome, through, cwd, packageRoot = PACKAGE_ROOT }, ports) {
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
   const automatic = coordinator !== undefined || Object.hasOwn(p.env, 'PDD_AUTOPILOT_CONTEXT');
   if (Object.hasOwn(p.env, 'PDD_AUTOPILOT_CONTEXT')) {
@@ -498,6 +543,7 @@ async function startRunUnlocked({ name, issue, agent = 'codex', base, adoptCorpu
   }
   if (automatic && !validAutomaticContext(coordinator)) return fail('Invalid automatic start context.');
   if (typeof draft !== 'boolean') return fail('Draft publication must be a Boolean.');
+  if (through !== undefined && !THROUGH.includes(through)) return fail(throughWords);
   let workflow;
   try { workflow = readWorkflowAreas({ packageRoot, name, cwd, home: p.env.HOME || homedir() }); } catch (error) { return fail(error.message); }
   if (adoptCorpus !== undefined && (typeof adoptCorpus !== 'string' || !adoptCorpus.trim() || !workflow.areas.some(area=>area.replay_evidence===REPLAY_POLICY))) return {exitCode:2,message:'--adopt-corpus requires a declaration path and an explicitly replay-evidence-enabled workflow.'};
@@ -510,6 +556,11 @@ async function startRunUnlocked({ name, issue, agent = 'codex', base, adoptCorpu
   if (explicitBase && (typeof base !== 'string' || !base || base === 'HEAD' || base.startsWith('-') || base.startsWith('refs/'))) return badBase();
   const context = await gitContext(cwd, p);
   if (!context) return fail('Run this inside a Git checkout of the repository that has the issue.');
+  if (through !== undefined) {
+    if (automatic) return fail('--through applies only to a normal run. Nothing changed.');
+    try { if (readApprovalPolicy({ root: context.toplevel }, p).strictApprovals) return fail('--through is not available in strict mode. Nothing changed.'); }
+    catch (error) { return fail(error.message); }
+  }
   if (explicitBase) {
     try {
       const checked = await p.execFile('git', ['check-ref-format', `refs/heads/${base}`], { cwd: context.toplevel });
@@ -635,9 +686,9 @@ async function startRunUnlocked({ name, issue, agent = 'codex', base, adoptCorpu
   if (productMarkers.length > 1) warnings.push('Warning: The issue has multiple planned-run markers; its product association is unverified.');
   const run = { v: 1, runId, workflow: name, skill: workflow.skill, skillDir: workflow.dir, repo: binding.repository,
     ...(productMarkers.length === 1 ? { productMarker: productMarkers[0] } : {}),
-    issue: { number, title: binding.issue.title, url: binding.issue.url }, number, root: a.worktreePath, branch: a.branch,
+    issue: { number, title: binding.issue.title, url: binding.issue.url, ...(String(binding.issue.body ?? '').trim() ? { asked: String(binding.issue.body).slice(0, 4000) } : {}) }, number, root: a.worktreePath, branch: a.branch,
     baseBranch, baseSha: a.baseSha, sourceRoot: a.sourceRoot, commonDir: a.commonDir, runDir, agent,
-    configDir, draft, metricsOrigin, metricsObservations:[{type:'coverage',at:new Date(p.now()).toISOString(),data:{complete:false}}], ...(automaticOrigin ? { automaticOrigin } : {}),
+    configDir, draft, ...(through ? { through } : {}), metricsOrigin, metricsObservations:[{type:'coverage',at:new Date(p.now()).toISOString(),data:{complete:false}}], ...(automaticOrigin ? { automaticOrigin } : {}),
     startedAt: p.now(), state: 'running', areas: workflow.areas, area: 0, done: {}, gate: null, chats: [], decisions: [], changes: [],
     approvalRecord: null, pr: [], prState: null, cancelled: null, warnings, journalSeq: 0,
     previous: existing ? [...(existing.previous ?? []), { runId: existing.runId, root: existing.root, branch: existing.branch, runDir: `${runDir}-cancelled-${existing.runId.slice(0, 8)}` }] : [] };
@@ -1471,13 +1522,16 @@ async function askCodeLines(run, area, p) {
   // The code is built only from approved prompts, so the code PR is not offered while PR 1 has a draft prompt.
   if (drafts.length) return [`PR 1: ${url}`, ...summaries, draftLine(drafts),
     `Gate: show the person PR 1 and the Prompt tests line. Do not offer the code PR yet. Tell the person exactly: "PR 1 is open: ${url}. ${approveFirst(run, drafts)}" Stop there.`, approvalGuide(run)];
+  // Normal runs (#2962): the person chose code or stop at the Story card, so pdd asks no separate question.
+  if (run.storyApproval && normalRun(run, p)) return [`PR 1: ${url}`, ...summaries,
+    `Gate: show the person PR 1 and the Prompt tests line. Do not ask about the code PR: the person chose at the Story card. Tell the person exactly: "PR 1 is open: ${url}. ${codeLater(run)}" Stop there.`, `When the person later asks for the code PR, record their words: ${approvalGuide(run, p.pdd)}`];
   return [`PR 1: ${url}`, ...summaries,
     `Gate: show the person PR 1, the Prompt tests line and the Try link, then ask exactly: "Do you want the code PR now, or stop here and merge PR 1 first? ${codeLater(run)}" Stop there.`,
     approvalGuide(run, p.pdd),
     `If they stop, tell them exactly: "PR 1 is open: ${prOf(run, area.name).url}. ${codeLater(run)}" pdd never merges.`];
 }
 
-async function finishPr(run, area, step, p, lines) {
+async function finishPr(run, area, step, p, lines, packageRoot = PACKAGE_ROOT) {
   // A coordinator that lost or let expire its claim does not push to the issue.
   const ownership = await continuationOwnership(run, run.root, p);
   if (ownership) return fail(ownership);
@@ -1503,10 +1557,114 @@ async function finishPr(run, area, step, p, lines) {
     commitRun(run,p,latest=>{if(latest.area===selectedArea&&sameGate(latest.gate,selectedGate)){recordReadiness(latest);latest.state='waiting';latest.gate=existing && latest.gate?.kind==='ask-code'?latest.gate:{id:p.randomUUID(),area:area.name,at,kind:'ask-code'};}});
     const savedApproval = !!run.gate && (run.decisions ?? []).some(decision => decision.gateId === run.gate.id && decision.evidence);
     const shownGate = run.area===selectedArea && run.gate?.kind==='ask-code' ? (savedApproval ? snapshotLines(run.gate.promptSnapshot ?? []) : await showGate(run, p)) : [];
+    if (run.storyApproval && normalRun(run, p) && run.through === 'code') return afterPr1(run, area, p, [...lines, ...shownGate], packageRoot);
     return done([...lines, ...shownGate, ...await askCodeLines(run, area, p)].join('\n'));
   }
   commitRun(run,p,latest=>{if(latest.area===selectedArea&&sameGate(latest.gate,selectedGate)){recordReadiness(latest);latest.state='waiting';latest.gate=null;}});
   return done([...lines, `${label === 'the PR' ? 'PR' : label}: ${prOf(run, area.name).url}`, `Tell the person ${label} is open. pdd never merges. Stop here.`].join('\n'));
+}
+
+// Normal-run gates (#2962). The prompt PR gate opens PR 1 by itself only after a verified full check pass under a valid
+// Story approval; a changed Story or expected value reopens the Story gate for the person. null keeps the person gate.
+const promptPathChanges = (approved, current) => !Array.isArray(approved) ? [] : [
+  ...current.filter(path => !approved.includes(path)).map(path => `Prompt added: ${path}`),
+  ...approved.filter(path => !current.includes(path)).map(path => `Prompt removed: ${path}`)];
+async function normalPromptGate(run, area, step, p, lines, contents, packageRoot) {
+  const approval = run.storyApproval, snapshot = run.gate?.promptSnapshot;
+  if (!approval?.fingerprint || !Array.isArray(snapshot)) return null;
+  const paths = snapshot.map(row => row.path);
+  const current = storyFingerprint({ root: run.root, changed: await changedFiles(run, p) });
+  const changes = [...fingerprintChanges(approval.fingerprint, current), ...promptPathChanges(approval.prompts, paths)];
+  if (changes.length) {
+    const gateId = run.gate.id;
+    commitRun(run, p, latest => { if (latest.gate?.id === gateId) {
+      if (!latest.gate.storyChanges?.length || fingerprintChanges(latest.gate.storySnapshot, current).length) latest.gate.id = p.randomUUID();
+      latest.gate.storyChanges = changes; latest.gate.storySnapshot = current;
+    } });
+    return done([...lines, `pdd recorded ${step}. The Story, an expected value or the prompt list changed after the person approved the Story, so the Story gate is open again. pdd does not open ${prLabel(run, area)} until the person approves the change.`,
+      await cardText(run, p, { changes, results: pddTestLines(run, p) }), cardGate, approvalGuide(run, p.pdd),
+      'If they ask for changes or say no, revise or undo the change in this chat, run done again for the step you changed, and show the new card.'].join('\n'));
+  }
+  const check = fullCheckPass({ root: run.root, since: run.startedAt ?? 0, tests: contents.tests, prompts: paths }, p);
+  if (check.pass) return automaticPr1(run, area, step, p, lines, check, packageRoot);
+  // A typed summary cannot replace pdd's saved check results.
+  if (!check.tests.length) lines.push('pdd has no saved check result of its own for this run. Run the check; do not ask the person to approve.');
+  const shown = check.problems.slice(0, 20).map(problem => `Not passed (${problem.kind}): ${problem.path}: ${problem.detail}`);
+  if (check.problems.length > 20) shown.push(`… ${check.problems.length - 20} more problems`);
+  const verdictOnly = check.problems.length > 0 && check.problems.some(problem => problem.kind === 'no-verdict');
+  return done([...lines, `pdd recorded ${step}. The prompt check did not pass in full on the current files, so pdd does not open ${prLabel(run, area)} yet.`, ...shown,
+    verdictOnly ? 'No verdict: this is not a failed check. Follow RUNBOOK §11 for no verdict: tell the person the cause and pdd\'s next step. Do not ask them to approve, and never send the same check again on your own.'
+      : `Do not ask the person to approve. Repair and check again, then run: ${p.pdd} workflow done check --summary "one line". After 2 fix rounds for the same ✗, stop with the evidence. When the fix needs a Story or expected-value change, propose it and run done again: pdd then shows the Story card with the change, for the person.`,
+    ].join('\n'));
+}
+async function automaticPr1(run, area, step, p, lines, check, packageRoot) {
+  const ownership = await continuationOwnership(run, run.root, p);
+  if (ownership) return fail(ownership);
+  let snapshot, edits;
+  try {
+    snapshot = await gatePromptSnapshot(run, p);
+    if (!samePromptReview(snapshot, run.gate.promptSnapshot)) return fail([...lines, `The selected prompts changed while pdd read them. Run done ${step} again.`].join('\n'));
+    edits = await approveGatePrompts(run, p, snapshot);
+  } catch (error) { return fail([...lines, `Cannot approve the selected prompts: ${error.message}. Repair them, then run done ${step} again.`].join('\n')); }
+  const record = { via: 'automatic-check-pass', basis: { storyEvidenceId: run.storyApproval.evidenceId ?? null, batches: [...new Set(check.tests.map(item => item.batch))] } };
+  try { await saveGateApproval(run, area, record, edits, p, snapshot); }
+  catch (error) { return fail([...lines, `Approval failed: ${error.message}`].join('\n')); }
+  const selectedArea = run.area, selectedGate = structuredClone(run.gate), selectedQuestion = run.question, published = [];
+  const failed = await publishAreaPr(run, area, p, published, `run done ${step} again`);
+  if (failed) return failed;
+  const askCode = area.then === 'ask-code', at = p.now();
+  commitRun(run, p, latest => {
+    if (latest.area === selectedArea && sameGate(latest.gate, selectedGate)) { latest.state = 'waiting'; latest.gate = askCode ? { id: p.randomUUID(), area: area.name, at, kind: 'ask-code' } : null; }
+    if (equalFact(latest.question, selectedQuestion)) latest.question = null;
+  });
+  const label = prLabel(run, area), url = prOf(run, area.name).url;
+  const head = [...lines, ...edits.map(edit => `Approved ${edit.path} ${edit.proseSha256} (full check pass under the Story approval)`),
+    `pdd recorded ${step}. The prompt check passed in full on the current prompts (${check.tests.length} test${check.tests.length === 1 ? '' : 's'}), so pdd opened ${label === 'the PR' ? 'the PR' : label} with no approval question (route automatic-check-pass).`, ...published];
+  if (!askCode) return done([...head, `PR: ${url}`, 'pdd never merges.'].join('\n'));
+  const shownGate = run.gate ? await showGate(run, p) : [];
+  return afterPr1(run, area, p, [...head, ...shownGate], packageRoot);
+}
+// After PR 1 opens in a normal run: follow the code-or-stop choice saved with the Story approval; ask nothing.
+async function afterPr1(run, area, p, head, packageRoot) {
+  const url = prOf(run, area.name).url;
+  if (run.through !== 'code') return done([...head, `PR 1: ${url}`, `Stopped after PR 1, as the Story card said. Do not ask about the code PR. ${codeLater(run)}`].join('\n'));
+  const started = await startCodeFromCard(run, area, p, packageRoot);
+  return done([...head, `PR 1: ${url}`, started].join('\n'));
+}
+async function startCodeFromCard(run, area, p, packageRoot) {
+  const refuse = why => `pdd did not start the code PR: ${oneLine(why)} The run waits at the code gate. ${codeLater(run)}`;
+  const pr1 = prOf(run, area.name);
+  let state;
+  try { state = await (p.readPrStatus ?? readWorkflowPrStatus)({ cwd: run.root, url: pr1.url }, p.commandPorts); }
+  catch { return refuse('PR 1 state is unavailable.'); }
+  if (!['open', 'merged'].includes(state.state)) return refuse(`PR 1 is ${state.state}.`);
+  if (replayEnabled(run)) {
+    try { const dirty = await unpublishedScenarios(run, p); if (dirty.length) return refuse(`Unpublished scenario edits remain: ${dirty.join(', ')}. Publish them in prompt space first.`); }
+    catch { return refuse('Cannot verify published scenario bytes. Repair the scenario inventory.'); }
+  }
+  const drafts = await pr1Drafts(run, p);
+  if (drafts.length) return refuse(approveFirst(run, drafts));
+  const adopted = await adoptionFailure(run, p);
+  if (adopted) return refuse(adopted);
+  try { await saveGateApproval(run, area, { via: 'card-choice', basis: { storyEvidenceId: run.storyApproval?.evidenceId ?? null } }, [], p, run.gate?.promptSnapshot ?? []); }
+  catch (error) { return refuse(`Approval failed: ${error.message}`); }
+  p.say('Making the code branch…');
+  let based;
+  try { based = await codeBranch(run, area, p); }
+  catch (error) { if (error?.code === 'workflow_progress_refused') throw error; return refuse(error.message); }
+  const branch = run.branch, prBase = run.prBase, selectedArea = run.area, selectedGate = structuredClone(run.gate), selectedQuestion = run.question;
+  commitRun(run, p, latest => {
+    latest.branch = branch; latest.prBase = prBase;
+    if (equalFact(latest.question, selectedQuestion)) latest.question = null;
+    if (latest.area === selectedArea) { latest.metricsOrigin = { ...(latest.metricsOrigin ?? { origin: 'unknown' }), requiredOutcome: 'code' }; if (sameGate(latest.gate, selectedGate)) latest.gate = null; latest.area = selectedArea + 1; latest.state = latest.question ? 'waiting' : 'running'; latest.doneAt = null; }
+  });
+  const next = run.areas[run.area];
+  let chat;
+  try { chat = await startNextChat(run, p, packageRoot); }
+  catch (error) { if (error?.code === 'workflow_progress_refused') throw error; return `The person chose the code PR at the Story card.${based} The ${next.name} chat startup was not confirmed (${error.code ?? 'error'}). Start it: pdd workflow open ${run.number}`; }
+  return [`The person chose the code PR at the Story card (route card-choice).${based}`,
+    `Started area ${run.area + 1} of ${run.areas.length}: ${next.name} (${next.steps.join(', ')}) in a new chat: Herdr session pdd, tab "${chat.label}".`,
+    `Watch it: pdd workflow open ${run.number}`, 'This chat\'s work is done. Stop here.'].join('\n');
 }
 
 // Record saved Runtime evidence without progressing the workflow or contacting external services.
@@ -1585,7 +1743,7 @@ function canRefreshCodeReview(run, step) {
     && run.gate.area === area.name && Boolean(prOf(run, area.name))
     && area.steps.includes(step) && area.steps.every(item => run.done[item]);
 }
-async function refreshCompletedCodeReview(run, step, p) {
+async function refreshCompletedCodeReview(run, step, p, packageRoot = PACKAGE_ROOT) {
   const selectedArea = run.area, selectedGate = structuredClone(run.gate);
   try {
     // Inspect before the short owned update. A failed inspection must retain
@@ -1598,6 +1756,10 @@ async function refreshCompletedCodeReview(run, step, p) {
         throw Error('The run ended or the gate changed, look again.');
       latest.gate.promptSnapshot = snapshot;
     });
+    if (run.storyApproval && normalRun(run, p) && run.through === 'code') {
+      protectProgress(run, p);
+      return doneWithRequests(await afterPr1(run, run.areas[run.area], p, snapshotLines(snapshot), packageRoot), run, p);
+    }
     return doneWithRequests(done([...snapshotLines(snapshot), ...question].join('\n')), run, p);
   } catch (error) {
     return fail(`Cannot refresh the code-choice review: ${causeText(error?.stderr || error?.detail || error?.message) || causeOf(error)}. Repair the selection or inspect the current run and gate, then run done again and ask the person again.`);
@@ -1609,9 +1771,9 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
   if (!run) return fail('pdd workflow done works only in a run worktree. cd to the worktree that pdd made for this run.');
   if (run.state === 'cancelled') return done(`The run for #${run.number} was cancelled. Stop working on it.`);
   if (run.state === 'completed') return canRefreshCodeReview(run, step)
-    ? refreshCompletedCodeReview(run, step, p) : done(`The run for #${run.number} is complete. Stop.`);
+    ? refreshCompletedCodeReview(run, step, p, packageRoot) : done(`The run for #${run.number} is complete. Stop.`);
   protectProgress(run,p);
-  const area = run.areas[run.area], lines = [];
+  const area = run.areas[run.area], lines = [], normal = normalRun(run, p);
   if (!area.steps.includes(step)) lines.push(`warning: "${step}" is not a step of the ${area.name} area (${area.steps.join(', ')}). pdd recorded it anyway.`);
   else {
     const before = area.steps.slice(0, area.steps.indexOf(step)).filter(item => !run.done[item] && !area.optional.includes(item));
@@ -1634,21 +1796,27 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
   const applyDone=latest=>{
     if(equalFact(latest.question,observedQuestion))latest.question=null;
     const later=area.steps.includes(step) && latest.done[step]?area.steps.slice(area.steps.indexOf(step)+1).filter(item=>latest.done[item]):[];
-    if(later.length){
-      for(const item of later)delete latest.done[item];
-      lines.push(`warning: ${step} ran again after ${later.join(', ')}. pdd cleared ${later.length>1?'those steps':'that step'}; run ${later.length>1?'them':'it'} again.`);
-    }
+    // A step that pdd skipped itself is cleared without a warning; pdd skips it again below.
+    const told=later.filter(item=>latest.done[item]?.skipped?.by!=='pdd');
+    for(const item of later)delete latest.done[item];
+    if(told.length)lines.push(`warning: ${step} ran again after ${told.join(', ')}. pdd cleared ${told.length>1?'those steps':'that step'}; run ${told.length>1?'them':'it'} again.`);
     if(hasRuntime)(latest.runtimeHistory??=[]).push({...record,step});
     // pdd's own pdd test results, once per batch, so a later partial check keeps the Stories of an earlier one.
     for(const result of record.pddResults??[])if(result.kind==='pdd test'&&!(latest.pddHistory??=[]).some(item=>item.batch===result.batch))latest.pddHistory.push(result);
     if(replay)latest.replayEvidence=replay;
     latest.done[step]=record;
   };
-  let next, currentArea;
+  let next, currentArea, autoSkipped=false;
   const gateAt=p.now();
   commitRun(run,p,latest=>{
     applyDone(latest);
     next=area.steps.find(item=>!latest.done[item]);
+    // Normal runs (#2962): the optional try step before PR 1 is not asked; the person can ask for it at the Story card.
+    if(normal&&next==='try'&&step!=='try'&&area.optional.includes('try')&&area.before==='approve'){
+      latest.done.try={at:p.now(),summary:`skipped: ${TRY_SKIP}`,area:area.name,skipped:{reason:TRY_SKIP,by:'pdd'}};
+      autoSkipped=true;
+      next=area.steps.find(item=>!latest.done[item]);
+    }
     currentArea=latest.areas[latest.area]?.name===area.name;
     if(currentArea && equalFact(latest.gate,observedGate)){
       if(next){latest.state=latest.question?'waiting':'running';latest.gate=null;}
@@ -1657,6 +1825,7 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
     }
   });
   if(!currentArea)return doneWithRequests(done(`pdd recorded ${step}.`),run,p);
+  if(autoSkipped)lines.push(`pdd skipped the optional try step (${TRY_SKIP}). Do not ask the person about it.`);
   if (next) {
     lines.push(`pdd recorded ${step}.`, area.optional.includes(next)
       ? `Next step: ${next} (optional). Ask the person if they want it. If they do not, run: ${p.pdd} workflow done ${next} --summary "skipped"`
@@ -1667,6 +1836,10 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
   if (area.gate === 'pr' && area.before === 'approve' && !prOf(run, area.name)) {
     const contents = await worktreeContents(run, p);
     lines.push(...await showGate(run, p));
+    if (normal) {
+      const routed = await normalPromptGate(run, area, step, p, lines, contents, packageRoot);
+      if (routed) return doneWithRequests(routed, run, p);
+    }
     lines.push(`pdd recorded ${step}. The ${area.name} area is done; pdd opens ${prLabel(run, area)} after the person approves.`,
       nothingToTry(run, area, contents)
         ? 'Gate: show the person the Prompt tests line of each Story (one per Story: ✓, ✗ or no verdict) with the report link, if there is one. There is nothing to try. Ask them to approve or ask for changes. Stop. Do not approve for them.'
@@ -1681,6 +1854,13 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
   }
   lines.push(...await showGate(run, p));
   const automatic = automaticHandoff(run, p, packageRoot);
+  if (!automatic && normal && area.gate === 'approve' && run.area === storyGateIndex(run)) {
+    const changed = await changedFiles(run, p), gateId = run.gate?.id, storySnapshot = storyFingerprint({ root: run.root, changed });
+    commitRun(run, p, latest => { if (latest.gate && latest.gate.id === gateId) latest.gate.storySnapshot = storySnapshot; });
+    lines.push(`pdd recorded ${step}. The ${area.name} area is done.`, await cardText(run, p), cardGate, approvalGuide(run, p.pdd),
+      'If they ask for changes, revise in this chat, run done again for the step you changed, and show the new card.');
+    return doneWithRequests(done(lines.join('\n')), run, p);
+  }
   lines.push(`pdd recorded ${step}. The ${area.name} area is done.`,
     ...(automatic ? [automatic, 'Gate: show the result and follow the scoped automatic overlay and owner handoff; preserve required human decisions.'] : ['Gate: show the person the result, ask them to approve it or ask for changes, and stop. Do not approve for them.', approvalGuide(run, p.pdd), 'If they ask for changes, revise in this chat, run done again for the step you changed, and ask again.']));
   return doneWithRequests(done(lines.join('\n')), run, p);
@@ -1968,7 +2148,7 @@ async function saveGateApproval(run, area, record, edits, p, snapshot = run.gate
   const existing = run.decisions.find(decision => decision.gateId === gateId && decision.evidence);
   if (existing && !edits.length) { run.approvalRecord = { ...(run.approvalRecord?.gateId === gateId ? run.approvalRecord : {}), gateId, kind: existing.via, area: area.name, at: existing.at, evidence: existing.evidence }; return existing; }
   const at = p.now(), evidence = { id: p.randomUUID(), route: record.via, actor: approvalActor(p.env), at, words: record.text ?? null,
-    prompts: (snapshot ?? edits).map(({path,proseSha256}) => ({path,proseSha256})) };
+    prompts: (snapshot ?? edits).map(({path,proseSha256}) => ({path,proseSha256})), ...(record.basis ? { basis: record.basis } : {}) };
   p.inspectProgress?.();
   const fs = p.fs ?? { writeFileSync }, changed = [];
   try {
@@ -1984,9 +2164,10 @@ async function saveGateApproval(run, area, record, edits, p, snapshot = run.gate
   commitRun(run,p,latest=>{latest.decisions.push(decision);latest.approvalRecord=approvalRecord;});
   return decision;
 }
-async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false, packageRoot = PACKAGE_ROOT }, ports) {
+async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false, through, packageRoot = PACKAGE_ROOT }, ports) {
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
   if (typeof draft !== 'boolean') return fail('Draft publication must be a Boolean.');
+  if (through !== undefined && !THROUGH.includes(through)) return fail(throughWords);
   const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
   const run = found.run, area = run.areas[run.area], label = `${run.repo}#${run.number} "${oneLine(run.issue.title)}"`;
@@ -2012,6 +2193,10 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
   try { policy = readApprovalPolicy({root: run.sourceRoot}, p); }
   catch (error) { return fail(error.message); }
   if (policy.strictApprovals && (approvalWords !== undefined || viaChat)) return fail(`Only the person can approve in a terminal. Run pdd workflow approve ${run.number} in a normal terminal.`);
+  // Normal runs (#2962): the Story approval saves the Story fingerprint and the code-or-stop choice of the card.
+  const normal = !policy.strictApprovals && !Object.hasOwn(run, 'automaticOrigin');
+  const storyGate = run.gate?.kind === 'approve' && run.area >= 0 && run.area === storyGateIndex(run);
+  if (through !== undefined && (!normal || !(storyGate || beforePr && run.gate?.storyChanges?.length))) return fail('--through applies only at the Story gate or the prompt PR gate of a normal run, not in strict mode or an automatic run. Nothing changed.');
   if (approvalWords === undefined && viaChat) return fail(approvalGuide(run, p.pdd));
   try { if (approvalWords !== undefined) approvalWords = await readSaidWords(approvalWords, p); p.inspectProgress(); } catch (error) { return fail(error.message); }
   if (approvalWords !== undefined && (!run.gate || area.steps.some(step => !run.done[step]))) return fail('The gate is not ready. Finish its steps and run done first.');
@@ -2030,6 +2215,11 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
   if (askCode && run.gate?.kind === 'ask-code' && replayEnabled(run)) {
     try { const dirty = await unpublishedScenarios(run,p); if (dirty.length) return fail(`Unpublished scenario edits remain: ${dirty.join(', ')}. Publish them in prompt space first.`); }
     catch { return fail('Cannot verify published scenario bytes. Repair the scenario inventory.'); }
+  }
+  // A normal run's Story approval covers the card that the gate showed: a later Story or test change shows it again.
+  if (normal && run.gate?.storySnapshot && (storyGate || beforePr)) {
+    const late = fingerprintChanges(run.gate.storySnapshot, storyFingerprint({ root: run.root, changed: await changedFiles(run, p) }));
+    if (late.length) return fail(`The Story or its test cases changed after pdd showed the card (${late.slice(0, 3).join('; ')}). Run done again for the step you changed, show the new card and ask the person again.`);
   }
   let edits = [];
   try {
@@ -2108,6 +2298,19 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
   const said = record.text !== undefined ? ` The person wrote: "${oneLine(record.text).slice(0, 300)}".` : '';
   if (beforePr) {
     // Try before PR 1 (#13): the approval opens the area's PR; the code question comes after it.
+    const refreshed = normal && run.storyApproval && storyGateIndex(run) >= 0 ? { gateId: saved?.gateId ?? selectedGate?.id ?? null, evidenceId: saved?.evidence?.id ?? null, at: invocationAt,
+      fingerprint: storyFingerprint({ root: run.root, changed: await changedFiles(run, p) }), prompts: (approvalSnapshot ?? []).map(row => row.path) } : null;
+    if (refreshed) {
+      commitRun(run, p, latest => {
+        latest.storyApproval = refreshed;
+        if (through !== undefined) latest.through = through;
+        latest.gate = { ...latest.gate, id: p.randomUUID(), storySnapshot: refreshed.fingerprint };
+        delete latest.gate.storyChanges;
+        if (equalFact(latest.question, selectedQuestion)) latest.question = null;
+      });
+      approvalRecorded();
+      return normalPromptGate(run, area, 'check', p, [...carried, `Recorded the Story approval.${said}`], await worktreeContents(run, p), packageRoot);
+    }
     const lines = [], failed = await publishAreaPr(run, area, p, lines, approvalRetry(run, p.pdd));
     if (failed) return failed;
     const at = invocationAt, url = prOf(run, area.name).url;
@@ -2156,10 +2359,11 @@ ${approvalGuide(run)}`, p, true);
   }
   if (askCode && approvalWords === undefined && beforePr) carried.push(...await draftDescription(run, prOf(run, area.name), await pr1Drafts(run, p), p));
   const now = invocationAt;
+  const storyRecord = normal && storyGate ? { gateId: saved?.gateId ?? selectedGate?.id ?? null, evidenceId: saved?.evidence?.id ?? null, at: invocationAt,
+    fingerprint: storyFingerprint({ root: run.root, changed: await changedFiles(run, p) }), prompts: (approvalSnapshot ?? []).map(row => row.path) } : null;
   const branch=run.branch,prBase=run.prBase,observedQuestion=selectedQuestion,areaIndex=selectedArea;
   commitRun(run,p,latest=>{
-
-
+    if(storyRecord&&latest.area===areaIndex){latest.storyApproval=storyRecord;if(through!==undefined)latest.through=through;}
     if(askCode){latest.branch=branch;latest.prBase=prBase;}
     if(equalFact(latest.question,observedQuestion))latest.question=null;
     if(latest.area===areaIndex){if(askCode)latest.metricsOrigin={...(latest.metricsOrigin ?? {origin:'unknown'}),requiredOutcome:'code'};if(sameGate(latest.gate,selectedGate))latest.gate=null;latest.area=areaIndex+1;latest.state=latest.question?'waiting':'running';latest.doneAt=null;}
@@ -2575,9 +2779,10 @@ async function chatState(run, p) {
 
 // What status needs to know about the gate: PR 1's draft prompts at the code gate, nothing to try before the PR.
 async function gateFacts(run, p) {
-  if (run.gate?.kind === 'ask-code') return { drafts: await pr1Drafts(run, p) };
-  if (run.gate?.kind === 'approve-pr') return { nothing: nothingToTry(run, run.areas[run.area], await worktreeContents(run, p)) };
-  return {};
+  const normal = normalRun(run, p);
+  if (run.gate?.kind === 'ask-code') return { normal, drafts: await pr1Drafts(run, p) };
+  if (run.gate?.kind === 'approve-pr') return { normal, nothing: nothingToTry(run, run.areas[run.area], await worktreeContents(run, p)) };
+  return { normal };
 }
 
 function detail(run, chat = null, facts = {}) {
@@ -2587,6 +2792,8 @@ function detail(run, chat = null, facts = {}) {
   const steps = (area?.steps ?? []).map(step => `${step} ${run.done[step] ? 'done' : 'to do'}${run.done[step]?.summary ? ` ("${clip(oneLine(run.done[step].summary), 120)}")` : ''}`);
   const pending = run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase);
   const next = pending ? `pdd workflow open ${run.number} --new` : activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting'].includes(chat) ? `pdd workflow open ${run.number}`
+    : facts.normal && run.storyApproval && run.gate?.kind === 'approve-pr' && !atStoryGate(run) ? `pdd workflow done check --summary \"Prompt tests line\"`
+    : facts.normal && run.storyApproval && run.gate?.kind === 'ask-code' ? run.through === 'code' ? 'Fix the reported code entry problem, then run pdd workflow done check.' : codeLater(run)
     : run.gate ? approvalGuide(run)
     : ended(run) ? null : prOf(run, area?.name) ? `Review and merge ${run.pr.length > 1 && run.prBase && run.prBase !== run.baseBranch ? 'PR 1, then PR 2,' : 'the PR'} on GitHub. pdd never merges.` : `pdd workflow open ${run.number}`;
   return [`${run.repo}#${run.number} "${oneLine(run.issue.title)}" · ${run.workflow} · ${run.agent}`,
@@ -2606,8 +2813,9 @@ function detail(run, chat = null, facts = {}) {
 
 // One list line per run, grouped by what it needs: the person, the agent, a PR review, nothing.
 const GROUPS = ['waiting', 'working', 'pr-open', 'done', 'cancelled'];
-function summary(run, timeZone, chat = null, { drafts = [], nothing = false } = {}) {
+function summary(run, timeZone, chat = null, { drafts = [], nothing = false, normal = false } = {}) {
   const area = run.areas[run.area], ask = askArea(run), running = run.state === 'running';
+  const cardRun = normal && Boolean(run.storyApproval);
   const replacementPending = run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase);
   const problem = replacementPending || activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting'].includes(chat);
   const question = openQuestion(run), writing = !problem && Boolean(run.gate) && !question && chat === 'working';
@@ -2624,7 +2832,9 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false } = 
     : !run.gate && running && chat === 'stopped' ? `the chat stopped: run pdd workflow open ${run.number}`
     : writing ? (revising(run) ? 'agent working on your changes' : 'agent writing the gate message')
     : run.gate?.kind === 'ask-code' && drafts.length ? `waiting for you: approve the draft prompt${drafts.length > 1 ? 's' : ''}, then the code PR (PR 1 open)`
+    : run.gate?.kind === 'ask-code' && cardRun ? run.through === 'code' ? 'code PR requested; code entry waits' : 'stopped after PR 1; code can start when requested'
     : run.gate?.kind === 'ask-code' ? 'waiting for you: code PR now or stop (PR 1 open)'
+    : run.gate?.kind === 'approve-pr' && cardRun && !atStoryGate(run) ? 'agent must finish the prompt check before PR 1'
     : run.gate?.kind === 'approve-pr' ? `waiting for you: ${nothing ? '' : 'try it, then '}approve to open ${area.then === 'ask-code' ? 'PR 1' : 'the PR'}`
     : run.gate ? `waiting for you: approve the ${run.gate.area}`
     : group === 'pr-open' ? `${!ask ? 'PR' : area.then === 'ask-code' ? 'PR 1' : 'PR 2'} open`
@@ -2632,7 +2842,7 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false } = 
   const ref = `${run.repo}#${run.number}`;
   const when = Number.isFinite(run.updatedAt) ? new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', ...(timeZone ? { timeZone } : {}) }).format(new Date(run.updatedAt)) : 'unknown time';
   const prs = (run.pr ?? []).map(pr => ({ number: pr.number, url: pr.url, state: pr.state ?? 'open' })), stories = ownStoryCount(run);
-  return { ref, repo: run.repo, number: run.number, workflow: run.workflow, area: area?.name ?? null, group, words, prs, stories,
+  return { ref, repo: run.repo, number: run.number, workflow: run.workflow, area: area?.name ?? null, group, words, prs, stories, waitingForStory: normal && atStoryGate(run),
     ...((run.evidence??[]).some(e=>e.association?.stage==='pr1')?{pr1Stories:ownStoryCount(run,{stage:'pr1'})}:{}),
     updatedAt: run.updatedAt ?? null, root: run.root, runDir: run.runDir, viewCommand: `pdd workflow view ${ref}`,
     line: [ref, run.workflow, area?.name ?? '?', words, ...(stories ? [storyText(stories)] : []), ...(prs.length ? [`PR ${prs.map(pr => `#${pr.number}`).join(' ')}`] : []), when].join(' · ') };
@@ -2665,9 +2875,23 @@ async function listStatus(runs, { json, cancelled, scope, snapshotOnly=false }, 
     .sort((a, b) => GROUPS.indexOf(a.group) - GROUPS.indexOf(b.group) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
   if (json) return done(JSON.stringify({ runs: shown.map(({ line, ...item }) => item) }, null, 2));
   if (!shown.length) return done([`No pdd runs ${scope}.${hidden ? ` ${hidden} cancelled run${hidden > 1 ? 's' : ''} hidden; add --cancelled to see ${hidden > 1 ? 'them' : 'it'}.` : ''}`, 'Start one with: pdd workflow run NAME ISSUE'].join('\n'));
+  const cards = shown.filter(item => item.waitingForStory).map(item => item.ref);
   return done([...shown.map(item => item.line),
+    ...(cards.length ? [`Waiting for Story approval: ${cards.join(', ')}. Show each card: pdd workflow card N.`] : []),
     ...(hidden ? [`${hidden} cancelled run${hidden > 1 ? 's' : ''} hidden; add --cancelled to see ${hidden > 1 ? 'them' : 'it'}.`] : []),
     `Review without resuming: pdd workflow view ${shown[0].ref}`, `Open one: pdd workflow open ${shown[0].ref}`].join('\n'));
+}
+
+// The Story card of one run, read-only (#2962): no GitHub, Herdr or interpreter call and no saved change.
+async function showStoryCardCommand({ ref, cwd }, ports) {
+  const p = deps(ports), found = await resolveRun(ref, { cwd }, p);
+  if (found.error) return fail(found.error);
+  const run = found.run;
+  let changes = run.gate?.storyChanges ?? [];
+  if (!changes.length && run.storyApproval?.fingerprint && !ended(run))
+    changes = fingerprintChanges(run.storyApproval.fingerprint, storyFingerprint({ root: run.root, changed: await changedFiles(run, p) }));
+  const results = run.area > storyGateIndex(run) && storyGateIndex(run) >= 0 ? pddTestLines(run, p) : [];
+  return done(await cardText(run, p, { changes, results }));
 }
 
 async function runStatusCommand({ ref, cwd, all = false, json = false, cancelled = false }, ports, snapshotOnly=false) {
@@ -2996,6 +3220,8 @@ export const runStatus=saveGuard(async(options,ports)=>{
 });
 
 export const openRun=saveGuard(openRunCommand);
+
+export const showStoryCard=saveGuard(showStoryCardCommand);
 
 // Canonical, read-only association admission for native workspace consumers.
 // The existing registered authority above remains the only permission rule.

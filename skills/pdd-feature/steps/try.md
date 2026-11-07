@@ -8,4 +8,6 @@ If the pdd-prompting skill has a RUNBOOK.md, run `pdd simulate STORY` as it says
 
 To try a CLI, run `pdd simulate <story> --cli`, then run the command.
 
-If no person is there to try it, run `pdd workflow done try --skipped "REASON"`. Never write run files such as try.md by hand.
+In a normal run, pdd skips this step itself. In strict mode, if no person is there to try it, run `pdd workflow done try --skipped "REASON"`. Never write run files such as try.md by hand.
+
+Try tools: `try_open`, `try_state`, `try_run`, `try_check`, `try_save_case` if asked. AI calls; Simulator history.
