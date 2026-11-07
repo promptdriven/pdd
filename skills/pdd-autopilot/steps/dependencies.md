@@ -15,13 +15,29 @@ their existing owners. It is distinct from steps/handoff.md.
   `pdd dependencies prepare`. Examine the actual
   trusted requirements/source packet, and send `{request,analysis}` to
   `pdd dependencies complete --input -`. Keep required source locators/revisions.
-  Analyze a new issue's impact in both directions before replacing old heads.
-- Reuse saved current reviews and completed unaffected impact. A stale or
+  For each subject, answer one question: does it need any open issue first? Impact
+  analysis of other issues is optional. A request names at most 10 subjects, new
+  ones first; the next request carries the rest.
+- A `pending` completion names a `reason` and the `rows` behind it. For
+  `answer-row-mismatch`, copy the named rows exactly from the request and complete
+  again in the same session. For other reasons, do not loop: Autopilot delivers the
+  same subjects again after about 30 minutes, at most 3 times, and names the last
+  reason in "Repeated request N of 3". Then it asks one question on each issue.
+- Reuse saved current reviews. A new or unrelated edited issue does not make them
+  stale. A "blocked by" link that a person sets in GitHub applies at once; it needs
+  no analysis. A link that a person changes to or from an issue makes its review
+  stale; a link that PDD writes for another issue's review does not. A person's link
+  change wins: do not name a prerequisite whose link a person removed. If you still
+  think it is needed, record a question. Completion refuses a link that a confirmed
+  review named; a write that a removal or a cycle refuses becomes one question on
+  the issue. A person's answer (a trusted comment after the question) queues the
+  issue again. An outsider's issue is never queued. A stale or
   unchecked review is refreshed through the ordinary `pdd dependencies prepare`,
   analysis and `pdd dependencies complete --input -` path; do not treat its old
-  result as current. Keep questions and unknown facts pending. After a review
-  changes, read the graph again before starting affected work. A partial graph
-  does not prove the backlog is empty: continue only issues already proved
+  result as current. If you cannot decide, record a question. Use outcome pending
+  only with a named link. After a review changes, read the graph again before
+  starting affected work. A partial graph does not prove the backlog is empty:
+  continue only issues already proved
   eligible, and keep checking the rest when the current graph is available.
   Graph reads use `pdd graph` and never trigger analysis.
 - After the existing claim winner is established, retain the launcher's opaque

@@ -8,7 +8,7 @@ import { runAutopilot } from './autopilot.mjs';
 import { resolveWorkflowRepository } from './workflow-github.mjs';
 import { gitContext, currentChat, stateDirFor } from './workflow-runs.mjs';
 import { chatLifecycle, chatSession, observeLifecycle, sessionEvidenceDue, observedSession, ownSession, launchAnchor, validSessionId } from './workflow-chat.mjs';
-import { projectIssueGraph, validateDependencyChange } from './issue-dependencies.mjs';
+import { dependencyLinks, projectIssueGraph, validateDependencyChange } from './issue-dependencies.mjs';
 
 const REVIEW = 'pdd-dependency-review:v1', IMPACT = 'pdd-dependency-impact:v1';
 const NATIVE_GITHUB = Symbol('native github'), NATIVE_OWNERS = Symbol('native owners');
@@ -28,7 +28,24 @@ const info = key => {
   return m && Number.isSafeInteger(Number(m[2])) ? { repository: m[1].toLowerCase(), issue: Number(m[2]), key: `https://github.com/${m[1].toLowerCase()}/issues/${m[2]}`, comment: m[3] } : null;
 };
 const canonical = key => { const i = info(key); return i ? i.key + (i.comment ? `#issuecomment-${i.comment}` : '') : key; };
-const nonIssueRows = rows => (rows ?? []).filter(r => !info(r.key) || info(r.key).comment);
+// A review's link row (issue URL + #dependencies) comes from native links, not a read.
+const linkRow = key => /^https:\/\/github\.com\/[^/#]+\/[^/#]+\/issues\/[1-9][0-9]*#dependencies$/i.test(key ?? '');
+const nonIssueRows = rows => (rows ?? []).filter(r => (!info(r.key) || info(r.key).comment) && !linkRow(r.key));
+// A native "blocked by" removal in the subject's own history names the blocker
+// that a person removed. Undefined: the event is not such a removal (a
+// "blocking" removal is about another issue's links). Null: the blocker is unknown.
+const REMOVAL = /(?:block|depend).*(?:remov|delet)|(?:remov|delet).*(?:block|depend)/i;
+const eventIssue = value => {
+  if (!object(value)) return null;
+  const direct = info(value.html_url)?.key, repo = value.repository?.full_name;
+  if (direct) return direct;
+  return repositoryName(repo) && Number.isSafeInteger(value.number) && value.number > 0 ? `https://github.com/${repo.toLowerCase()}/issues/${value.number}` : null;
+};
+const blockedByRemoval = event => {
+  const name = String(event?.event ?? '');
+  if (!REMOVAL.test(name) || /^blocking(?:[_-]|$)/i.test(name)) return undefined;
+  return eventIssue(event.blocked_by);
+};
 const uniqueRows = rows => [...new Map(rows.map(r => [canonical(r.key), { key: canonical(r.key), revision: r.revision }])).values()];
 const bookkeeping = body => /<!--\s*pdd(?:-dependency-(?:review|impact)|[: -](?:autopilot|claim|working|sync))/i.test(body ?? '')
   || /"coordinatorId"\s*:/.test(body ?? '') && /"labelEventId"\s*:/.test(body ?? '');
@@ -204,7 +221,10 @@ function nativeAuthority(cwd, ports) {
   const dataFor = repository => {
     const key = repository.toLowerCase();
     if (!scope.authorityData.has(key)) scope.authorityData.set(key, (async () => {
-      const root = await selectedCheckout(cwd, repository, ports); let configKnown = !!root, raw = null;
+      // Another repository (or no checkout at all) has no local extra trust: apply the
+      // default policy (owner and write collaborators) to its own GitHub data.
+      const root = await selectedCheckout(cwd, repository, ports), selected = cwd ? scope.repositories.get(resolve(cwd)) : null;
+      let configKnown = !!root || !cwd || !!selected && !sameRepo(selected.repository, repository), raw = null;
       if (root) {
         try { const setting = readJson(join(root, 'pdd.json'), {}); raw = Object.hasOwn(setting, 'autopilot') ? JSON.stringify(setting.autopilot) : null; }
         catch { configKnown = false; }
@@ -703,7 +723,9 @@ export async function readDependencySnapshot({ cwd = '', repository, inputs = []
     if (!row.reviewImpact) row.missing.push('Relevant impact discovery unavailable');
     const requiredForIssue = (issues.find(issue => issue.key === row.key)?.conditionSources ?? []).flatMap(condition => nonIssueRows(condition.inputs));
     if (!contextKnown || requiredForIssue.some(input => !currentInputs.has(input.key))) { row.context = false; row.missing.push('Required context unavailable'); }
-    if (issues.find(issue => issue.key === row.key)?.execution === 'unknown') { row.execution = false; if (!row.missing.includes('Execution observation unavailable')) row.missing.push('Execution observation unavailable'); }
+    // Execution is observed only for root issues. A linked issue in another
+    // repository matters only as a prerequisite, where its native state decides.
+    if (info(row.key)?.repository === repository && issues.find(issue => issue.key === row.key)?.execution === 'unknown') { row.execution = false; if (!row.missing.includes('Execution observation unavailable')) row.missing.push('Execution observation unavailable'); }
   }
   const dedupEdges = [...new Map(edges.map(e => [`${e.dependent}\n${e.blocker}`, e])).values()];
   const capturedAt = (await ports.clock.now({})).iso;
@@ -765,6 +787,40 @@ export async function applyDependencyChanges({ cwd = '', repository, issue, revi
     return node?.review === reviewId && node.reviewState === 'pending' && !node.reasons.includes('Incomplete relevant observations');
   };
   if (!accepted(snapshot)) return pending('The intent is stale, conflicting or unverified');
+  // A person's change wins. A named blocker is refused when a person removed that
+  // link (a confirmed review named it, or the subject's history has a "blocked by"
+  // removal of it; a removal with an unknown blocker refuses every addition), or
+  // when adding it would close a cycle. A refused addition ends as one question.
+  const absent = current => [...new Set(intent.dependencies.map(d => info(d.key)?.key).filter(k => k
+    && !current.edges.some(e => info(e.dependent)?.key === target.key && info(e.blocker)?.key === k)))];
+  const refusal = async current => {
+    const missing = absent(current);
+    if (!missing.length) return { blockers: [] };
+    let history;
+    try { history = await allPages(ports.github, repository, 'timeline', target.issue); } catch { return null; }
+    const { removed } = dependencyLinks({ snapshot: current, issue: target.key }), byPerson = new Set(); let unknown = false;
+    for (const event of history) { const blocker = blockedByRemoval(event); if (blocker === undefined) continue; if (blocker) byPerson.add(blocker); else unknown = true; }
+    if (unknown) return { blockers: missing, why: 'unknown' };
+    const human = missing.filter(b => removed.includes(b) || byPerson.has(b));
+    if (human.length) return { blockers: human, why: 'removed' };
+    return { blockers: missing.filter(b => validateDependencyChange({ snapshot: current, dependent: target.key, blocker: b }).reason === 'cycle'), why: 'cycle' };
+  };
+  const ask = async (current, { blockers, why }) => {
+    const subject = target.key, list = blockers.join(', ');
+    const text = why === 'cycle' ? `The link "${subject} blocked by ${list}" would close a dependency cycle, so PDD did not add it. Which issue must go first?`
+      : why === 'unknown' ? `A person removed a "blocked by" link of ${subject}, and PDD cannot tell which one. PDD did not add "${subject} blocked by ${list}". If ${subject} needs it first, add the link in GitHub or answer here.`
+      : `A person removed the GitHub link "${subject} blocked by ${list}". PDD does not add it back. If ${subject} still needs it first, add the link in GitHub or answer here.`;
+    const { id, authority, intact, ...raw } = intent;
+    const question = { ...raw, base: [reviewId], continuation: '', outcome: 'question', dependencies: [], questions: [text], effects: 'none',
+      inputs: [...raw.inputs.filter(r => !linkRow(r.key)), dependencyLinks({ snapshot: current, issue: subject }).row] };
+    if (ports.admitEffect && !await ports.admitEffect()) return pending('Automatic control changed before the question');
+    const saved = await saveDependencyReview({ repository, issue: subject, review: question }, ports);
+    return saved.state === 'saved' ? { state: 'question', added, warnings: [...warnings, why === 'cycle' ? 'Dependency cycle' : 'Human dependency change'], questions: [text], reviewId: saved.id }
+      : pending('The question is not yet observed');
+  };
+  const first = await refusal(snapshot);
+  if (!first) return pending('Relationship history is unknown');
+  if (first.blockers.length) return ask(snapshot, first);
   let lastWasWrite = false;
   for (const dependency of intent.dependencies) {
     try { snapshot = await read(inputs); } catch { return pending('Cannot revalidate the pending intent'); }
@@ -773,12 +829,11 @@ export async function applyDependencyChanges({ cwd = '', repository, issue, revi
     lastWasWrite = false;
     if (present) continue;
     const validation = validateDependencyChange({ snapshot, dependent: target.key, blocker: dependency.key });
-    if (!validation.allowed) return pending(`Dependency addition waits: ${validation.reason}`);
-    let history;
-    try { history = await allPages(ports.github, repository, 'timeline', target.issue); } catch { return pending('Relationship history is unknown'); }
-    // An absent edge after a human removal is never silently restored. Native
-    // history without a resolvable identity is equally unsafe.
-    if (history.some(e => /(?:block|depend).*(?:remov|delet)|(?:remov|delet).*(?:block|depend)/i.test(e.event ?? ''))) return pending('Human dependency change');
+    if (!validation.allowed && validation.reason !== 'cycle') return pending(`Dependency addition waits: ${validation.reason}`);
+    // Check the history again before each write: a person may change a link at any time.
+    const refused = await refusal(snapshot);
+    if (!refused) return pending('Relationship history is unknown');
+    if (refused.blockers.length) return ask(snapshot, refused);
     const blocker = snapshot.issues.find(i => info(i.key)?.key === info(dependency.key)?.key);
     if (!/^[1-9][0-9]*$/.test(blocker?.nodeId ?? '')) return pending('REST blocker identity is unavailable');
     if (ports.admitEffect && !await ports.admitEffect()) return pending('Automatic control changed before dependency effect');

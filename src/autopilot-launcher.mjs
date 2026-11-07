@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 57ecf97246157f4e615dd9263030eee93f52682964f8086b914ccb933d431e0a).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 13e3adae3ea44117156f4769e81afcabbe8ef33fbf55b3b227f37080ac942892).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch } from 'node:fs';
@@ -291,7 +291,7 @@ function profileBinding(state, p) {
   };
 }
 // A published request remains available while a submitted wake may still read it.
-function requestArtifact(state, requestJson, repository, p) {
+function requestArtifact(state, requestJson, repository, p, again = null) {
   const request = JSON.parse(requestJson);
   const canonicalRepo = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(value) ? value.toLowerCase() : null;
   const repo = canonicalRepo(repository);
@@ -302,8 +302,11 @@ function requestArtifact(state, requestJson, repository, p) {
   const snapshot = JSON.parse(request.snapshotJson), context = JSON.parse(request.contextJson);
   if (!snapshot || canonicalRepo(snapshot.repository) !== repo || !context || !Array.isArray(context.source) || !Array.isArray(context.requirements)) throw Error('invalid request');
   const artifact = byteArtifact(state, Buffer.from(requestJson, 'utf8'), p);
+  // A repeated request names its attempt and the reason of the last completion.
+  const rows = again?.rows ?? [], shown = rows.slice(0, 5).map(x => x.key).join(', ') + (rows.length > 5 ? ` and ${rows.length - 5} more` : '');
+  const repeat = again ? `Repeated request ${Number(again.attempt)} of ${Number(again.cap)}: the last delivery of these issues did not finish. Last reason: ${line(again.reason)}${shown ? ` (${line(shown)})` : ''}. Follow the dependency review step for this reason.\n` : '';
   return {
-    text: () => `${message(state, [])}Dependency analysis request artifact (trusted data):\nArtifact path: ${JSON.stringify(artifact.path)}\nSHA-256: ${artifact.digest}\nRequest ID: ${JSON.stringify(request.id)}\nRepository: ${JSON.stringify(repository)}\nRead and verify the exact artifact before analysis; follow the dependency review step and complete this request.\n`,
+    text: () => `${message(state, [])}Dependency analysis request artifact (trusted data):\nArtifact path: ${JSON.stringify(artifact.path)}\nSHA-256: ${artifact.digest}\nRequest ID: ${JSON.stringify(request.id)}\nRepository: ${JSON.stringify(repository)}\n${repeat}Read and verify the exact artifact before analysis; follow the dependency review step and complete this request.\n`,
     close: artifact.close, prepare: artifact.prepare,
   };
 }
@@ -773,12 +776,15 @@ async function runTick(stateFile, ports, completion) {
       save: async ({ json }) => { const value = JSON.parse(json); const ok = await scanGuard(latest => { latest.dependencyPending = value; }); if (ok) state.dependencyPending = value; return { ok }; },
       deliver: async ({ requestJson }) => {
         if (!read(stateFile)?.enabled) return { state: 'busy' };
+        // Intake marks a repeated request in its pending state. It is never sent while an earlier submission has uncertain custody.
+        const again = state.dependencyPending?.redelivery ?? null;
+        if (again && (state.deliveryIntent || state.reconciliationIntent)) { p.warn('Autopilot dependency review waits: a previous submission has uncertain custody.'); return { state: 'busy' }; }
         let artifact;
-        try { artifact = requestArtifact(state, requestJson, state.repo, p); } catch { return { state: 'busy' }; }
+        try { artifact = requestArtifact(state, requestJson, state.repo, p, again); } catch { return { state: 'busy' }; }
         const instruction = artifact.text();
         if (Buffer.byteLength(instruction, 'utf8') > 16384) return { state: 'busy' };
         try {
-          const delivered = await wake(state, () => instruction, p, artifact.prepare, false, state.dependencyPending?.requested ? { kind: 'dependency', requested: state.dependencyPending.requested } : null);
+          const delivered = await wake(state, () => instruction, p, artifact.prepare, false, state.dependencyPending?.requested ? { kind: 'dependency', requested: state.dependencyPending.requested, ...(again ? { again: again.attempt } : {}) } : null);
           if (delivered && !state.recipeDelivered && await scanGuard(latest => { latest.recipeDelivered = true; })) state.recipeDelivered = true;
           return { state: delivered ? 'delivered' : 'busy' };
         }
