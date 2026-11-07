@@ -195,7 +195,12 @@ visible in timer logs) and defer that issue, while unrelated work continues.
 
 Every open issue can be considered, regardless of creation time, activation time,
 or `pdd:autopilot` label. For fresh work, include an issue only when the current
-dependency intake lists its URL in `eligible`. A missing, false or unavailable
+dependency intake lists its URL in `eligible`. Compare the GitHub `html_url` and
+each `eligible` key by the pure model's canonical issue identity (`issueKey`), not
+as exact strings. Owner and repository names ignore letter case: GitHub spells
+`html_url` with the owner's capitals, and the graph stores lowercase keys. An
+owner such as `Serhan-Asad` works like a lowercase owner. A value that is not a
+GitHub issue URL compares as its exact string. A missing, false or unavailable
 eligibility result waits. The shared graph owns current dependency readiness,
 trust, GitHub Assignees and claim checks; missing assignment data does not prove
 that an issue is unassigned. A related PR or saved run alone does not exclude an
@@ -516,7 +521,7 @@ reconcile and wake boundaries; injected substitutes reach this same path.
 - [Metrics store](metrics-store.prompt.md), [run records](workflow-runs.prompt.md) and [metrics gaps](metrics-gap.prompt.md): required native generation/verification context for observational selector/launch storage and identity.
 
 - [Workflow runner](workflow-runner.prompt.md#current-autopilot-start-ownership): required native generation and verification context for the existing shared admission lock.
-- [Dependency intake](issue-dependencies-intake.prompt.md): required generation, runtime and verification context for reconciliation and structured coordinator context. The [pure model](issue-dependencies.prompt.md) owns review and readiness.
+- [Dependency intake](issue-dependencies-intake.prompt.md): required generation, runtime and verification context for reconciliation and structured coordinator context. The [pure model](issue-dependencies.prompt.md) owns review and readiness, and its `issueKey` is the canonical issue identity for matching `eligible` keys.
 
 - [Autopilot settings](autopilot.prompt.md): required native generation and
   verification context for read-only settings resolution and notices.
