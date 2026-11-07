@@ -85,7 +85,7 @@ test('an AI-service no-verdict parks only this run for the interpreter: no quest
   const again = await changeRun({ ref: '17', cwd: f.source, text, packageRoot }, ports());
   assert.equal(again.exitCode, 0, again.message); assert.match(again.message, /Nothing was sent/);
   assert.equal(f.herdr.paneOf(chat).agent.prompts.length, prompts, 'the chat gets the wake once');
-  assert.equal(f.record().changes.filter(change => change.text.startsWith('The interpreter wake for the park')).length, 1);
+  assert.equal(f.record().changes.filter(change => change.text.startsWith('Interpreter wake for the park')).length, 1);
 });
 
 for (const [name, rows, words] of [
@@ -332,7 +332,7 @@ test('an interpreter outage: one interpreter alert per repository and machine, o
   f.issues = [issue(30)];
   await f.tick();
   assert.equal(f.sent.length, 1, 'one alert for both waiting issues');
-  assert.match(f.sent[0], /PDD Autopilot alert: runtime /); assert.match(f.sent[0], /issues\/12/); assert.match(f.sent[0], /health check failed \(HTTP 503\)/);
+  assert.match(f.sent[0], /PDD Autopilot alert: interpreter /); assert.match(f.sent[0], /issues\/12/); assert.match(f.sent[0], /health check failed \(HTTP 503\)/);
   const packet = f.packet();
   assert.equal(packet.runtime.state, 'unavailable'); assert.match(packet.runtime.note, /Keep other work moving/);
   assert.deepEqual(packet.issues.map(item => item.number), [30], 'a new issue may still start');
@@ -355,7 +355,7 @@ test('an interpreter outage: one interpreter alert per repository and machine, o
   assert.equal(f.sent.length, 1); assert.deepEqual(f.prompts.length > prompts ? kinds(f) : [], [], 'no wake without a new verdict');
   // Its new pdd test result has a verdict: The interpreter is back for all.
   f.probe = 'verdict'; f.time += 30 * minute; await f.tick();
-  assert.equal(f.sent.length, 2); assert.match(f.sent[1], /PDD Autopilot recovered: runtime/); assert.match(f.sent[1], /reached a verdict again/);
+  assert.equal(f.sent.length, 2); assert.match(f.sent[1], /PDD Autopilot recovered: interpreter/); assert.match(f.sent[1], /reached a verdict again/);
   assert.deepEqual(kinds(f), [['runtime-ready', 12]]);
   assert.match(f.rules()[0].reason, /unknown outcome: never send it again blind/); assert.doesNotMatch(f.rules()[0].reason, /--retry/, 'an unknown outcome is never resent');
   assert.match(f.rules()[0].reason, /"Interpreter wake for the park at 2026-11-06T12:00:00.000Z\. The interpreter is back\./);
@@ -389,7 +389,7 @@ test('a test wake that is never delivered holds no other run: 60 minutes later t
   // The wake record of #12 is kept for 24 hours from its wait, so its wait is offered once more a day later.
   assert.deepEqual(log, [['runtime-ready', 12, 33], ['runtime-ready', 15, 93], ['runtime-ready', 12, 123], ['runtime-ready', 18, 123], ['runtime-stuck', 18, 153], ['runtime-ready', 12, 1443]]);
   assert.equal(f.sent.length, 2, 'one interpreter alert and one recovery in 48 hours');
-  assert.match(f.sent[0], /PDD Autopilot alert: runtime /); assert.match(f.sent[1], /PDD Autopilot recovered: runtime/); assert.match(f.sent[1], /reached a verdict again/);
+  assert.match(f.sent[0], /PDD Autopilot alert: interpreter /); assert.match(f.sent[1], /PDD Autopilot recovered: interpreter/); assert.match(f.sent[1], /reached a verdict again/);
 });
 
 test('a test run that waits again or ends on the stuck path is no proof: one test per run per outage, then the stuck rule', async t => {
@@ -404,7 +404,7 @@ test('a test run that waits again or ends on the stuck path is no proof: one tes
   assert.deepEqual(kinds(f), [['runtime-ready', 15], ['runtime-stuck', 12]]); assert.equal(f.sent.length, 1);
   // #15 ends on the stuck path: no proof. No waiting run is left to test, so the outage closes with its one recovery.
   f.waits = [wait(12, f.waits[1].at)]; f.probe = 'failed'; f.time += 30 * minute; await f.tick();
-  assert.equal(f.sent.length, 2); assert.match(f.sent[1], /recovered: runtime/); assert.match(f.sent[1], /no waiting run is left to test/); assert.doesNotMatch(f.sent[1], /the interpreter is back/);
+  assert.equal(f.sent.length, 2); assert.match(f.sent[1], /recovered: interpreter/); assert.match(f.sent[1], /no waiting run is left to test/); assert.doesNotMatch(f.sent[1], /interpreter is back/i);
   const log = await hours(f, 12);
   assert.deepEqual(log.filter(([kind]) => kind === 'runtime-ready'), [], 'each run had one test wake only');
   assert.equal(f.sent.length, 2, 'no repeated alert or recovery');
@@ -434,7 +434,7 @@ test('a recovery keeps a used retry: a run found stuck before the outage gets no
   f.health = { state: 'healthy', detail: 'HTTP 200' }; f.time += 30 * minute; await f.tick();
   assert.deepEqual(kinds(f), [['runtime-ready', 15]], '#15 is the test, not #12');
   f.waits = f.waits.filter(w => w.number !== 15); f.probe = 'verdict'; f.time += 30 * minute; await f.tick();
-  assert.equal(f.sent.length, 2); assert.match(f.sent[1], /recovered: runtime/);
+  assert.equal(f.sent.length, 2); assert.match(f.sent[1], /recovered: interpreter/);
   assert.ok(!f.prompts.slice(afterStuck).some(text => /pdd workflow changes 12 and this text/.test(text)), '#12 is never woken again');
 });
 
@@ -495,7 +495,7 @@ test('real path: a parked run record, the real health check over HTTP, a test wa
   const folder = join(f.cwd, 'pdd', 'runs', String(record.number)); mkdirSync(folder, { recursive: true });
   writeFileSync(join(folder, 'status.json'), JSON.stringify(record));
   f.time = record.runtimeWait.at + 5 * minute; await f.tick();
-  assert.deepEqual(seen, ['GET /v1/capacity bearer']); assert.equal(f.sent.length, 1); assert.match(f.sent[0], /alert: runtime .*\n.*\n.*issues\/17/);
+  assert.deepEqual(seen, ['GET /v1/capacity bearer']); assert.equal(f.sent.length, 1); assert.match(f.sent[0], /alert: interpreter .*\n.*\n.*issues\/17/);
   answer = 200; f.time += 30 * minute; await f.tick();
   assert.deepEqual(kinds(f), [['runtime-ready', 17]]); assert.equal(f.sent.length, 1, 'no recovery before proof');
   const offeredAt = f.time;
@@ -506,7 +506,7 @@ test('real path: a parked run record, the real health check over HTTP, a test wa
   batch.rows = batch.rows.map(row => ({ ...row, state: 'passed', sent_at: offeredAt + 2 * minute, ended_at: offeredAt + 9 * minute }));
   writeFileSync(batchFile, JSON.stringify(batch));
   f.time += 30 * minute; await f.tick();
-  assert.equal(f.sent.length, 2); assert.match(f.sent[1], /recovered: runtime/); assert.match(f.sent[1], /reached a verdict again/);
+  assert.equal(f.sent.length, 2); assert.match(f.sent[1], /recovered: interpreter/); assert.match(f.sent[1], /reached a verdict again/);
   assert.ok(seen.length >= 4 && seen.every(line => line === 'GET /v1/capacity bearer'), 'only the free health read');
 });
 
@@ -553,7 +553,7 @@ test('real pdd test: a posted check that did not run is sent again by the Story 
   const again = await pddTest(['place-order'], { '--max-calls': '18' });
   assert.equal(again.sent, 1, 'the Story check sends the check once'); assert.equal(again.exitCode, 0, again.out + again.err);
   f.time += 30 * minute; await f.tick();
-  assert.equal(f.sent.length, 2); assert.match(f.sent[1], /recovered: runtime/); assert.match(f.sent[1], /reached a verdict again/);
+  assert.equal(f.sent.length, 2); assert.match(f.sent[1], /recovered: interpreter/); assert.match(f.sent[1], /reached a verdict again/);
 });
 
 test('the interpreter alert kind is one incident per repository and machine', async t => {
@@ -568,5 +568,5 @@ test('the interpreter alert kind is one incident per repository and machine', as
   assert.match((await call('15', 'interpreter', fields)).message, /Added #15 to the open interpreter alert/);
   assert.equal(sent.length, 1);
   assert.match((await call('15', 'recovered', { cause: 'The interpreter is back', kind: 'interpreter' })).message, /Recovery sent/);
-  assert.equal(sent.length, 2); assert.match(sent[1], /recovered: runtime/); assert.match(sent[1], /issues\/12, https:\/\/github.com\/owner\/repo\/issues\/15/);
+  assert.equal(sent.length, 2); assert.match(sent[1], /recovered: interpreter/); assert.match(sent[1], /issues\/12, https:\/\/github.com\/owner\/repo\/issues\/15/);
 });
