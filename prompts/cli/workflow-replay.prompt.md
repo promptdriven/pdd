@@ -5,7 +5,7 @@ retaining approved prompt-space vectors for comparison. Validate structure and i
 prove equivalence, approve a prompt, or infer success from prose. Preserve existing runtime source fingerprints.
 
 Export REPLAY_POLICY (`pdd.replay-evidence.v1`), sourceFingerprint(root), pinReplayVectors(root, paths),
-readReplayEvidence(run, paths?), formatReplayEvidence(result, options?), and adoptReplayCorpus(root, declarationPath, ports). The runner owns policy opt-in and publication.
+pinRunAnchor(root, options), readReplayEvidence(run, paths?), formatReplayEvidence(result, options?), and adoptReplayCorpus(root, declarationPath, ports). The runner owns policy opt-in and publication.
 
 ## Original identities
 
@@ -22,6 +22,32 @@ steps/checks. Each scenario uses prompt-runtime.program-scenario.v1, unique none
 operation, and nonempty checks. A check identity is vector path, step_id and zero-based check_index, plus the
 original entry_path, operation, criterion_id, target, JSON path and assertion op. Supported targets are result,
 error, world and calls. Preserve every original identity; do not substitute generated fixtures or expected values.
+
+## Approved scenarios on the base
+
+pinRunAnchor(root, {paths, commit, changed, scenarios, codeSpace}) builds a run's anchor without a declaration.
+`paths` are the run's changed scenario files, pinned as pinReplayVectors pins them. `commit` is the run's full
+base commit, `changed` the run's changed paths against it, and `scenarios` the current changed scenario files.
+A file on the base branch counts as approved. Also anchor each base scenario that belongs to the run's changed
+area. Read the base with local Git only: one `git grep -F` for the schema name in `*.json`, one `ls-tree`, one
+`git cat-file --batch`; never gh, a model or the worktree copy of a base file.
+
+A base scenario is a regular `.json` blob of at most 10 MiB, found by that search, whose parsed schema_version is
+prompt-runtime.program-scenario.v1; skip other and unparsable JSON. Its links are its story_path, every step
+entry_path and its entry_paths. The changed area is every changed path, the links of each changed scenario
+(current file and base blob), and the `stories` and `prompt` of each changed path that the base commit's
+`pdd-bindings.json` (pdd.bindings.v1) declares as a `module`. A base scenario belongs when one of its links is in
+the changed area. Use no other link: no folder, name, prose or AI guess. A malformed pdd-bindings.json adds no links.
+
+Without codeSpace, skip base files in `changed`; the changed route pins their current bytes. With codeSpace
+(a run with no prompt area before code), ignore `paths` and also select changed base files, always with their
+base bytes, so code space cannot change approved values. Each base vector keeps path, raw SHA256, snapshot,
+steps, checks and `base` (the full commit). The anchor keeps `base:{commit,note}`; the note says plainly why no
+base file was added, and names an absent or malformed pdd-bindings.json. Order changed vectors first, then base
+vectors by path. Apply the original limits to the whole anchor. A refusal states the count and the limit, for
+example `250 scenario files (3 changed + 247 approved on base 6b58b76); the limit is 200`. A selected base
+scenario that fails original validation blocks with its path. No vectors is not_replayed with the note; with
+codeSpace it is blocked, because no anchor exists. Git failure blocks. Never throw.
 
 ## Corpus adoption
 
@@ -234,6 +260,9 @@ blocked/not_replayed; real failures do not prevent publication. Hash the bounded
 For adopted runs, retain structured adoption provenance even when replay is blocked.
 The PR replay section displays "Anchor adopted from REPO@COMMIT; approval reference R
 by A; external-assertion-unverified", using cleaned recorded values.
+When the saved anchor has `base` and either vectors or a note, the result has `anchor` {commit, changed, files, checks, note},
+counted from the saved vectors, and the section shows `Anchor: 3 changed scenarios + 18 approved on base 6b58b76
+(1,722 checks).`, or `+ 0 approved on base 6b58b76 (NOTE).` Base approval never gives PASS by itself.
 formatReplayEvidence emits a compact PR section with prominent Code replay PASS/FAIL/BLOCKED/NOT REPLAYED,
 exact counts, source and manifest hashes, current vector hashes labeled "Current vector", public execution totals, semantic control and typed
 formal result. Include: `Agents execute the tests and supply this record. pdd validates structure and identity;
@@ -254,8 +283,8 @@ let an agent's free-form PASS summary replace this status.
 
 ```json
 {
-  "status": "approved",
-  "prose_sha256": "852ac6e549fe5bba8ea3e9a94f4b1ee265bb704df3986015522e812838df5446",
+  "status": "draft",
+  "prose_sha256": "1cb4f063810f2595a38dc02db465c1e89a13625efc5dbe58214b5fc23b54ab47",
   "entries": [
     {
       "operation": "adoptReplayCorpus",
