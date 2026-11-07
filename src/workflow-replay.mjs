@@ -323,6 +323,78 @@ export async function adoptReplayCorpus(root, declarationPath, ports = {}) {
   } catch(error) {cause=adoptionCause(error.message);return blocked('unavailable');}
 }
 
+// #2640: approved scenarios on the run's base join its anchor without a declaration.
+// Only links that the repository records count; all reads are local Git blobs.
+const plural=(count,word)=>`${count} ${word}${count===1?'':'s'}`;
+const scenarioLinks=doc=>[doc.story_path,...(Array.isArray(doc.steps)?doc.steps.map(step=>step?.entry_path):[]),
+  ...(Array.isArray(doc.entry_paths)?doc.entry_paths:[])].filter(value=>typeof value==='string'&&value.length>0);
+function bindingLinks(bytes) {
+  if(!bytes)return {state:'absent',links:new Map()};
+  try {
+    const doc=parse(bytes),links=new Map();
+    requireThat(object(doc)&&doc.schema_version==='pdd.bindings.v1'&&Array.isArray(doc.modules),'invalid');
+    for(const item of doc.modules) {
+      requireThat(object(item)&&text(item.module)&&Array.isArray(item.stories)&&item.stories.every(text)&&(item.prompt===undefined||text(item.prompt)),'invalid');
+      links.set(item.module,[...(links.get(item.module)??[]),...item.stories,...(item.prompt===undefined?[]:[item.prompt])]);
+    }
+    return {state:'used',links};
+  } catch {return {state:'invalid',links:new Map()};}
+}
+function baseScenarios(root,commit,changed,scenarios,codeSpace) {
+  // Read only JSON blobs that name the scenario schema, so large unrelated JSON stays unread.
+  let named;
+  try {named=new Set(localGit(root,'grep','-l','-z','-F','-e','prompt-runtime.program-scenario.v1',commit,'--','*.json').toString('utf8').split('\0').filter(Boolean).map(name=>name.slice(commit.length+1)));}
+  catch(error) {if(error.status!==1)throw Error('The base scenario search failed.');named=new Set();}
+  const rows=localGit(root,'ls-tree','-r','-l','-z','--full-tree',commit).toString('utf8').split('\0').filter(Boolean).map(row=>{
+    const match=/^(\d+) (\w+) ([a-f0-9]+) +(-|\d+)\t([\s\S]+)$/.exec(row);
+    requireThat(match,'Invalid Git tree inventory.');return {mode:match[1],type:match[2],oid:match[3],size:Number(match[4])||0,path:match[5]};
+  }).filter(row=>row.type==='blob'&&['100644','100755'].includes(row.mode)&&(named.has(row.path)||row.path==='pdd-bindings.json')&&canonicalPath(row.path)&&row.size<=10*1024*1024);
+  const blobs=batchBlobs(root,rows),docs=new Map();
+  for(const row of rows){try{const doc=parse(blobs.get(row.path));if(object(doc)&&doc.schema_version==='prompt-runtime.program-scenario.v1')docs.set(row.path,doc);}catch{/* Not a scenario. */}}
+  const bindings=bindingLinks(blobs.get('pdd-bindings.json')),changedSet=new Set(changed),area=new Set(changed);
+  const linkAll=doc=>{if(object(doc))for(const link of scenarioLinks(doc))area.add(link);};
+  for(const path of changed){if(docs.has(path))linkAll(docs.get(path));for(const link of bindings.links.get(path)??[])area.add(link);}
+  // The inventory owner reports unreadable current scenarios; here they add no links.
+  for(const path of scenarios){try{linkAll(parse(boundedFile(join(root,path))));}catch{/* No links. */}}
+  const selected=[...docs.keys()].filter(path=>(codeSpace||!changedSet.has(path))&&scenarioLinks(docs.get(path)).some(link=>area.has(link))).sort();
+  let bytes=0;
+  const vectors=selected.map(path=>{
+    const raw=blobs.get(path);bytes+=raw.length;
+    try {requireThat(raw.length>0&&raw.length<=LIMIT,'Original vector exceeds its byte limit.');return {...scenario(path,raw),base:commit};}
+    catch(error){throw Error(`${path} on base ${commit.slice(0,7)}: ${error.message}`);}
+  });
+  const why=bindings.state==='absent'?'; the base has no pdd-bindings.json to link changed code':bindings.state==='invalid'?'; pdd-bindings.json on the base is malformed and was not used':'';
+  const note=vectors.length?'':docs.size?`${plural(docs.size,'base scenario file')}, none names a prompt or Story that this run changed${why}`:'the base has no scenario files';
+  return {vectors,bytes,note};
+}
+export function pinRunAnchor(root,{paths=[],commit,changed=[],scenarios=[],codeSpace=false}={}) {
+  const base={commit:commitId(commit)?commit:'',note:''},empty={schema_version:'pdd.replay-vectors.v1',vectors:[],base};
+  try {
+    requireThat(base.commit,'The run base commit is unavailable.');
+    requireThat([paths,changed,scenarios].every(list=>Array.isArray(list)&&list.every(path=>typeof path==='string')),'Changed path lists are invalid.');
+    const own=codeSpace?{vectors:[]}:pinReplayVectors(root,paths);
+    if(own.outcome==='blocked')return {...own,base};
+    const found=baseScenarios(root,base.commit,changed,scenarios,codeSpace);base.note=found.note;
+    const vectors=[...own.vectors,...found.vectors],count=key=>vectors.reduce((total,vector)=>total+vector[key].length,0);
+    const bytes=found.bytes+own.vectors.reduce((total,vector)=>total+lstatSync(join(root,vector.path)).size,0);
+    const counted=`${plural(vectors.length,'scenario file')} (${own.vectors.length} changed + ${found.vectors.length} approved on base ${base.commit.slice(0,7)})`;
+    requireThat(vectors.length<=200,`The anchor needs ${counted}; the limit is 200.`);
+    requireThat(count('checks')<=MAX&&count('steps')<=MAX,`The anchor needs ${count('checks')} checks and ${count('steps')} steps in ${counted}; the limit is ${MAX} each.`);
+    requireThat(bytes<=10*1024*1024,`The anchor needs ${bytes} bytes in ${counted}; the limit is 10 MiB.`);
+    if(!vectors.length)return {...empty,outcome:codeSpace?'blocked':'not_replayed',reason:codeSpace?`No approved original-vector anchor: ${found.note}.`:`The approved prompt area has no original scenario vectors; ${found.note}.`};
+    return {schema_version:'pdd.replay-vectors.v1',vectors,base};
+  } catch(error) {return {...empty,outcome:'blocked',reason:sanitize(error.message)};}
+}
+function anchorFacts(baseline) {
+  if(!object(baseline?.base)||!commitId(baseline.base.commit)||!Array.isArray(baseline.vectors)||!baseline.vectors.length&&!text(baseline.base.note))return null;
+  const base=baseline.vectors.filter(vector=>vector?.base===baseline.base.commit);
+  return {commit:baseline.base.commit,changed:baseline.vectors.length-base.length,files:base.length,
+    checks:base.reduce((total,vector)=>total+(Array.isArray(vector.checks)?vector.checks.length:0),0),note:typeof baseline.base.note==='string'?baseline.base.note:''};
+}
+const thousands=count=>String(count).replace(/\B(?=(\d{3})+(?!\d))/g,',');
+const anchorLine=a=>`Anchor: ${plural(a.changed,'changed scenario')} + ${a.files} approved on base ${a.commit.slice(0,7)}${a.files
+  ? ` (${thousands(a.checks)} check${a.checks===1?'':'s'}).` : ` (${render(a.note)}).`}`;
+
 const emptyCounts = (total=0) => ({total,pass:0,fail:0,blocked:0,not_replayed:total});
 function valueChanges(before, after, path = '') {
   if(JSON.stringify(before)===JSON.stringify(after))return [];
@@ -344,6 +416,7 @@ const reviewText=value=>renderValue(value).replaceAll('/','&#47;');
 const reviewIdentity=value=>reviewText(JSON.stringify(String(value)).slice(1,-1));
 export function readReplayEvidence(run, paths) {
   let result = {outcome:'blocked',reason:'Structured replay evidence is unavailable.',counts:emptyCounts(),vectors:[],warnings:[],source:null,manifest_sha256:null,operations:{total:0,executed:0},...(run.replayAdoption ? {adoption:run.replayAdoption.provenance} : {})};
+  const anchor=anchorFacts(run.replayBaseline);if(anchor)result.anchor=anchor;
   try {
     const baseline = run.replayBaseline;
     requireThat(baseline?.schema_version === 'pdd.replay-vectors.v1' && Array.isArray(baseline.vectors) && baseline.vectors.length <= 200, 'No approved original-vector anchor is saved; return to prompt space.');
@@ -437,6 +510,7 @@ export function formatReplayEvidence(result, {maxCharacters=Infinity} = {}) {
   const warnings=(result.warnings??[]).map(w=>`warning: Saved test values changed: ${reviewIdentity(w.vector)} ${w.reason ? reviewIdentity(w.reason) : `${reviewIdentity(w.path)} ${reviewText(changeValue(w.before))} -> ${reviewText(changeValue(w.after))}`}`);
   const tail=[...(warnings.length ? ['Saved-value changes are advisory; the checker or person decides.'] : []),
     ...(result.adoption ? [`Anchor adopted from ${render(result.adoption.repository)}@${render(result.adoption.commit)}; approval reference ${render(result.adoption.reference)} by ${render(result.adoption.asserted_by)}; external-assertion-unverified`] : []),
+    ...(result.anchor ? [anchorLine(result.anchor)] : []),
     `Public-boundary operations: ${result.operations?.executed??0}/${result.operations?.total??0} executed.`,
     `Semantic mutation control: ${result.mutation?.outcome??'not recorded'}${result.mutation ? ` (${result.mutation.failures} assertion failures)` : ''}.`,
     `Formal check (agent reported): ${formalLabel[result.formal?.result]??'not recorded'}${result.formal ? `; scope: ${render(result.formal.scope)}; reason: ${render(result.formal.reason)}` : ''}.`,

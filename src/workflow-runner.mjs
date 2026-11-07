@@ -29,7 +29,7 @@ import { preparePrEvidence } from './workflow-pr-evidence.mjs';
 import { validateProofRecord } from './workflow-prove.mjs';
 import { readRunResults, resultLines, usableResult, noResultLine, NO_VERDICT, prepareNativeEvidence } from './workflow-results.mjs';
 import { collectTestInventory } from './workflow-inventory.mjs';
-import {adoptReplayCorpus,REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinReplayVectors,readReplayEvidence,formatReplayEvidence} from './workflow-replay.mjs';
+import {adoptReplayCorpus,REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinReplayVectors,pinRunAnchor,readReplayEvidence,formatReplayEvidence} from './workflow-replay.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const CHANGE_PREFIX = 'The person asks for changes';
@@ -223,10 +223,10 @@ async function changedFiles(run, p, strict = false) {
   } catch (error) { if (strict) throw error; return []; }
 }
 const isScenario = text => JSON.parse(text)?.schema_version === 'prompt-runtime.program-scenario.v1';
-async function scenarioInventory(run, p) {
+async function scenarioInventory(run, p, changed) {
   const paths = [];
   const saved=new Set(run.replayBaseline?.vectors?.map(vector=>vector.path)??[]);
-  for (const path of await changedFiles(run,p,true)) {
+  for (const path of changed ?? await changedFiles(run,p,true)) {
     if(!path.endsWith('.json'))continue;
     // The replay reader reports deleted/malformed saved files with their value diff.
     if(saved.has(path)){paths.push(path);continue;}
@@ -258,12 +258,35 @@ async function adoptionFailure(run,p) {
     return blocked('The adopted original anchor changed. Start an ordinary approval workflow for changed requirements.');
   return null;
 }
+const unavailableInventory = () => ({schema_version:'pdd.replay-vectors.v1',vectors:[],outcome:'blocked',reason:'The changed scenario inventory is unavailable; repair unreadable or malformed JSON candidates and Git listing failures.'});
 async function refreshReplayBaseline(run,p) {
   if (!replayEnabled(run) || run.replayAdoption) return;
-  try { run.replayBaseline = pinReplayVectors(run.root,await scenarioInventory(run,p)); }
-  catch { run.replayBaseline = {schema_version:'pdd.replay-vectors.v1',vectors:[],outcome:'blocked',reason:'The changed scenario inventory is unavailable; repair unreadable or malformed JSON candidates and Git listing failures.'}; }
+  try {
+    const changed = await changedFiles(run,p,true), paths = await scenarioInventory(run,p,changed);
+    run.replayBaseline = pinRunAnchor(run.root,{paths,commit:run.baseSha,changed,scenarios:paths});
+  }
+  catch { run.replayBaseline = unavailableInventory(); }
   const applyPublication=publicationUpdate(run,['replayBaseline']);
   commitRun(run,p,applyPublication);
+}
+// #2640: a run with no prompt area before its replay code area selects the approved
+// base scenarios in code space. Their values come only from the base commit.
+function codeSpaceAnchor(run) {
+  const first = run.areas.findIndex(area => area.replay_evidence === REPLAY_POLICY);
+  return first >= 0 && !run.replayAdoption && !run.areas.slice(0, first).some(area => area.then === 'ask-code');
+}
+async function refreshCodeSpaceAnchor(run,p,scenarios) {
+  let anchor;
+  try { anchor = pinRunAnchor(run.root,{commit:run.baseSha,changed:await changedFiles(run,p,true),scenarios:scenarios ?? [],codeSpace:true}); }
+  catch { anchor = unavailableInventory(); }
+  if (JSON.stringify(anchor) === JSON.stringify(run.replayBaseline)) return;
+  // Save only this field: a publication in progress keeps its unsaved in-memory facts.
+  const selected = runIdentity(run);
+  updateRun(run.runDir, latest => {
+    if (runIdentity(latest) !== selected) throw Error('The selected workflow run was replaced');
+    p.progressGuard?.(latest); latest.replayBaseline = anchor; return latest;
+  }, p);
+  run.replayBaseline = anchor;
 }
 async function currentReplayEvidence(run,p,validated=false) {
   let reason = validated ? null : await adoptionFailure(run,p);
@@ -271,6 +294,7 @@ async function currentReplayEvidence(run,p,validated=false) {
   try {
     paths=await scenarioInventory(run,p);
   } catch(error) { reason = `The current changed scenario inventory is unavailable: ${oneLine(error.message)}. Repair unreadable or malformed JSON candidates and Git listing failures.`; }
+  if (codeSpaceAnchor(run)) await refreshCodeSpaceAnchor(run,p,paths);
   const evidence = readReplayEvidence(run,paths);
   return reason ? {...evidence,outcome:'blocked',reason} : evidence;
 }
