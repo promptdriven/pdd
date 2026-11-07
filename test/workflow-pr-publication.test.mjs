@@ -45,7 +45,7 @@ const commit=()=>cp.execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).t
 const remote=()=>{try{return cp.execFileSync('git',['ls-remote','origin','refs/heads/topic'],{encoding:'utf8'}).trim().split('\\t')[0]}catch{return ''}};
 if(a[0]==='repo')out({nameWithOwner:'example/project',defaultBranchRef:{name:'main'},url:'https://github.com/example/project'});
 else if(a[1]==='list')out(s.prs.filter(p=>!a.includes('--head')||p.headRefName===flag('--head')).map(p=>({...p,headRefOid:remote()||p.headRefOid})));
-else if(a[1]==='view')out(s.prs.find(p=>p.url===a[2])||{body:''});
+else if(a[1]==='view'){const found=s.prs.find(p=>p.url===a[2]),p=found?.headRefName==='topic'?{...found,headRefOid:remote()||found.headRefOid}:found||{body:''};out(String(flag('--json')).split(',').includes('comments')?{...p,comments:(s.comments||[]).map(c=>({author:{login:'reviewer'},authorAssociation:c.author_association,body:c.body,createdAt:c.created_at,url:c.html_url}))}:p)}
 else if(a[0]==='api'&&a.some(x=>x.includes('/comments')))out((s.comments||[]).map(c=>JSON.stringify(c)).join('\\n'));
 else if(a[1]==='create'||a[1]==='edit'){
  if(flag('--body-file')!=='-')throw Error('must read body from stdin');
@@ -844,4 +844,83 @@ test('REFRESH-PR1: status refreshes PR 1\'s top too: its CI row, its status line
   assert.match(visible, /\| Full test suite \(CI\) \| ✓ green \|/);
   assert.match(visible, /^\*\*Next:\*\* PR 2 \(the code\): #24\. Part of #17\.$/m);
   assert.ok(body.endsWith(first.body.slice(first.body.indexOf(DETAILS_OPEN))), 'PR 1 keeps its Details byte for byte.');
+});
+
+// #3042 review 2: the title and verify.md close nothing; a refresh never writes over a newer publication; an unchanged
+// refresh makes no GitHub call besides the status read.
+const shell = value => `'${String(value).replaceAll("'", "'\\''")}'`;
+// Would GitHub close an issue from this text? Code spans and fences are removed: GitHub reads no reference in code.
+const liveOutsideCode = text => String(text).replace(/^(```|~~~)[^\n]*\n[\s\S]*?^\1\s*$/gm, '').replace(/(?<![`\\])(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)/g, '').match(liveKeyword()) ?? [];
+// The gh command with a shell step: `before` runs before the real gh, `after` after it (its output is kept and printed last).
+const wrapGh = (f, { match, after = '', before = '' }) => {
+  const real = join(f.base, 'bin', 'gh-real'), gh = join(f.base, 'bin', 'gh');
+  writeFileSync(real, readFileSync(gh, 'utf8')); chmodSync(real, 0o755);
+  writeFileSync(gh, `#!/bin/sh\nhit=; case "$*" in ${match}) if [ -z "$INNER" ] && [ -f ${shell(join(f.base, 'trigger'))} ]; then rm ${shell(join(f.base, 'trigger'))}; hit=1; fi;; esac\n`
+    + `if [ -n "$hit" ]; then ${before || ':'}; fi\nout=$(${shell(real)} "$@") || exit $?\nif [ -n "$hit" ]; then ${after || ':'}; fi\nprintf '%s' "$out"\n`);
+  chmodSync(gh, 0o755); writeFileSync(join(f.base, 'trigger'), '1');
+};
+const doneScript = (f, step, summary) => `import {stepDone} from ${JSON.stringify(join(packageRoot, 'src/workflow-runner.mjs'))};const r=await stepDone({ref:'17',step:${JSON.stringify(step)},summary:${JSON.stringify(summary)},cwd:${JSON.stringify(f.root)}},{stateDir:${JSON.stringify(join(f.base, 'pdd-state'))},isTTY:true,env:{HOME:${JSON.stringify(f.base)}},confirm:async()=>false});process.stdout.write(JSON.stringify(r));`;
+const editsOf = f => f.data().events.filter(event => event.kind === 'edit');
+
+test('CLOSING-TITLE-VERIFY: an agent title "Fixes #5 by padding" and verify.md "Fixes #8" / "Resolves: #9" close nothing', t => {
+  const f = stackedOnPr1(t);
+  writeFileSync(join(f.runDir, 'verify.md'), 'Results: all pass.\nThis Fixes #8 and Resolves: #9.\n\n```sh\ngit commit -m "fixes #5"\n```\n');
+  const out = f.invoke('Title: Fixes #5 by padding\nProblem: closes: #6\nCause: c\nFix: Fixes: #7\nResult: ok'); assert.equal(out.exitCode, 0, out.message);
+  const pr = codePr(f), [visible] = pr.body.split(DETAILS_OPEN), details = pr.body.slice(pr.body.indexOf(DETAILS_OPEN));
+  assert.equal(pr.title, 'fix(bug): Fixes\u200b #5 by padding (#17 · part 2: fix)');
+  assert.deepEqual(pr.title.match(liveKeyword()), null, 'The title closes nothing (GitHub puts it into the merge commit).');
+  assert.ok(details.includes('This Fixes\u200b #8 and Resolves\u200b: #9.'), details);
+  assert.ok(details.includes('```sh\ngit commit -m "fixes #5"\n```'), 'A fence in verify.md stays byte for byte.');
+  assert.deepEqual(liveOutsideCode(visible), ['Closes #17']); assert.deepEqual(liveOutsideCode(details), ['Closes #17'], 'Only pdd\'s own Closes line closes an issue.');
+});
+
+test('RACE: a status refresh never writes over a description that a done published after the status read', t => {
+  const f = fixture(t, { existing: true }); f.machine();
+  assert.equal(f.invoke('Review: no must-fix').exitCode, 0);
+  const b1 = f.data().prs[0].body, next = f.change(); f.machine(next);
+  const prs = f.data().prs; prs[0].statusCheckRollup = [{ conclusion: 'SUCCESS' }]; f.configure({ prs });
+  // The worker's done publishes right after GitHub answered the status read, so status holds the older description and head.
+  writeFileSync(join(f.base, 'done.mjs'), doneScript(f, 'review', 'Review: no must-fix'));
+  wrapGh(f, { match: '*comments*', after: `(cd ${shell(f.root)} && INNER=1 ${shell(process.execPath)} ${shell(join(f.base, 'done.mjs'))} > ${shell(join(f.base, 'done.out'))} 2> ${shell(join(f.base, 'done.err'))})` });
+  const before = editsOf(f).length;
+  assert.equal(f.invoke('', 'runStatus').exitCode, 0);
+  assert.equal(JSON.parse(readFileSync(join(f.base, 'done.out'), 'utf8')).exitCode, 0, 'The worker\'s done published during the status.');
+  const edits = editsOf(f), final = f.data().prs[0].body, inventory = body => pddPart(body).split('\n').find(line => line.startsWith('Test inventory commits:'));
+  assert.equal(edits.length, before + 2, 'Only the done wrote (its pending and its final description); the status wrote nothing.');
+  assert.equal(final, edits.at(-1).body);
+  assert.ok(inventory(final).endsWith(`→ ${next.slice(0, 7)}.`), inventory(final)); assert.notEqual(inventory(final), inventory(b1));
+  assert.equal(f.invoke('', 'runStatus').exitCode, 0);
+  const after = f.data().prs[0].body;
+  assert.equal(detailsOf(after).details, detailsOf(final).details, 'The next status keeps the newer Details.');
+  assert.match(after.split('\n')[0], /^✅ Ready to merge · Updated /);
+});
+
+test('RACE-RECORD: a status refresh writes nothing when the run record changed after its first read; the next status writes', t => {
+  const f = fixture(t); f.machine();
+  assert.equal(f.invoke('Review: no must-fix').exitCode, 0);
+  const prs = f.data().prs; prs[0].statusCheckRollup = [{ conclusion: 'SUCCESS' }]; f.configure({ prs });
+  const record = join(f.runDir, 'status.json');
+  // Just before the write, another process saves new readable facts for the PR.
+  wrapGh(f, { match: '*"--json body,headRefOid"', before: `${shell(process.execPath)} -e ${shell(`const fs=require('fs'),r=JSON.parse(fs.readFileSync(${JSON.stringify(record)},'utf8'));r.pr.find(p=>p.number===23).readable.facts.updatedAt=1;fs.writeFileSync(${JSON.stringify(record)},JSON.stringify(r));`)}` });
+  const body = f.data().prs[0].body, count = editsOf(f).length;
+  const first = f.invoke('', 'runStatus'); assert.equal(first.exitCode, 0);
+  assert.equal(editsOf(f).length, count); assert.equal(f.data().prs[0].body, body); assert.doesNotMatch(first.message, /updated the top|could not update/);
+  assert.equal(f.invoke('', 'runStatus').exitCode, 0);
+  assert.equal(editsOf(f).length, count + 1); assert.match(f.data().prs[0].body.split('\n')[0], /^✅ Ready to merge · Updated /);
+});
+
+test('CALLS: a status refresh reads each PR once (with its description, head and comments); a change adds one read and the edit', t => {
+  const f = fixture(t); f.machine();
+  assert.equal(f.invoke('Review: no must-fix').exitCode, 0);
+  const log = join(f.base, 'gh-calls.log'), real = join(f.base, 'bin', 'gh-real'), gh = join(f.base, 'bin', 'gh');
+  writeFileSync(real, readFileSync(gh, 'utf8')); chmodSync(real, 0o755);
+  writeFileSync(gh, `#!/bin/sh\nprintf '%s\\n' "$*" >> ${shell(log)}\nexec ${shell(real)} "$@"\n`); chmodSync(gh, 0o755);
+  const calls = () => { try { return readFileSync(log, 'utf8').trim().split('\n').filter(Boolean); } catch { return []; } };
+  const status = () => { const from = calls().length; assert.equal(f.invoke('', 'runStatus').exitCode, 0); return calls().slice(from); };
+  const prs = f.data().prs; prs[0].statusCheckRollup = [{ conclusion: 'SUCCESS' }]; f.configure({ prs });
+  const changed = status(), same = status();
+  const views = list => list.filter(call => call.startsWith('pr view'));
+  assert.deepEqual(views(same), [`pr view ${url(22)} --json state,mergedAt,statusCheckRollup,baseRefName`, `pr view ${url(23)} --json state,mergedAt,statusCheckRollup,baseRefName,body,headRefOid,comments`], same.join('\n'));
+  assert.deepEqual(same.filter(call => !call.startsWith('pr view')), [], 'No change: no other GitHub call (no comments read, no second view, no edit).');
+  assert.deepEqual(changed.filter(call => !views(same).includes(call)), [`pr view ${url(23)} --json body,headRefOid`, `pr edit ${url(23)} --body-file -`], changed.join('\n'));
 });

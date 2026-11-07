@@ -568,7 +568,8 @@ one approval, next or merge line. pdd fills the status line and the tables only 
 and `pdd lint` results, the replay evidence (§17), the old-code proof, review.md, CI and the checker verdict. It says
 ✅ only when each record that the PR needs is there and current. `pdd workflow status N` refreshes the status line and
 the rows of each open PR ("Updated <time>"). All the rest (pdd result lines, your step summaries, approvals,
-verify.md) stays whole in a closed "Details for tools and audits" section.
+verify.md) stays whole in a closed "Details for tools and audits" section. pdd owns the description: it rewrites the
+part above Details at each status and all of it at each push. Put notes for people in a PR comment.
 
 Give pdd the human parts as labeled lines in your `done` summary, one per line. A later line with the same label
 replaces an earlier one, also from a later step of the same PR:
@@ -584,9 +585,13 @@ replaces an earlier one, also from a later step of the same PR:
 A one-PR run (small change) uses `Problem:`, `Change:` and `Result:`. Use `Area:` only when the owning prompt's
 name is not a good title area. PR 1's Verdict is the verdict line of §14. pdd writes "This PR", the user story (from
 the Story's "As a …" line, §2), the changed files and their +/− counts itself. Your words never fill a table: "CI is
-green" in a summary stays your words. Your words cannot close an issue or add a link: only pdd's `Closes #N` closes
-one. Separate the cells of a `Case:` line with `|`; put a value that has a `|` in a code span. Do not paste logs,
-warnings or full paths of this computer (`/Users/…`). PR 1 cannot merge while a prompt in it is still draft.
+green" in a summary stays your words. In the PR title and description your words cannot close an issue: pdd breaks
+each closing keyword (fix, close, resolve and their forms) in the title, the summary, the cases, the file notes and
+verify.md, so only pdd's `Closes #N` closes one. Code spans and code blocks stay as you wrote them (GitHub reads no
+reference there). A commit message can close an issue, so do not write "Fixes #N" in one. In the readable part your
+words also cannot add a link or a mention. Separate the cells of a `Case:` line with `|`; put a value that has a `|`
+in a code span. Do not paste logs, warnings or full paths of this computer (`/Users/…`). PR 1 cannot merge while a
+prompt in it is still draft.
 
 ```text
 Verdict: the prompt is right; the bug is only in the CODE.

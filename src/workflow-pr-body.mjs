@@ -1,7 +1,7 @@
-// Generated from prompts/cli/workflow-pr-body.prompt.md (sha256: afe5456a9c78876490fef2f08c105af603a395d3c67849468473282ea8da34a9).
+// Generated from prompts/cli/workflow-pr-body.prompt.md (sha256: 329f702aaf97a1d660fc948fcaa97e280f05674ed98dd9dc2c137d831d4f5b59).
 // The readable part of a pdd workflow PR (#3042): a status line, the user story, a short summary, a cases table, what
 // changed, a proof table from pdd's own records and one approval/next/merge line. The runner gathers the facts; this
-// module only renders them. Agent words appear only in the summary and the cases table, always as inert text.
+// module only renders them. Agent words appear only in the title, the summary and the cases table, always as inert text.
 
 export const DETAILS_OPEN = '<details><summary>Details for tools and audits</summary>';
 const MAX_FIELD = 300, MAX_CELL = 120, MAX_CASES = 12, MAX_FILES = 40, MAX_NOTE = 160, MAX_STORIES = 3, MAX_WORDS = 3;
@@ -18,11 +18,11 @@ function clip(text, max) {
 }
 // GitHub closes an issue on merge for a closing keyword (close, closes, closed, fix, fixes, fixed, resolve, resolves,
 // resolved; any case) before an issue reference, also with a colon ("Fixes: #5", "Closes:#5") or marks between. Outside
-// code spans every such word gets a zero-width space after it, whatever follows, so it stays text. Inside a code span only
-// a keyword before a reference gets one (code spans are already inert; their text stays exact otherwise).
-const KEYWORD = /\b(fix(?:es|ed)?|close[sd]?|resolve[sd]?)\b/gi;
-const CLOSING = /\b(fix(?:es|ed)?|close[sd]?|resolve[sd]?)(?=[\s:*_~]*(?:[\w.-]+\/[\w.-]+)?#\d|[\s:*_~]*https?:\/\/github\.com\/)/gi;
-const CODE_SPAN = /(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)/g;
+// code spans every such word gets one zero-width space after it, whatever follows, so it stays text. A code span stays
+// exact: GitHub reads no reference and no mention in code. A backtick after a backslash opens no code span.
+const KEYWORD = /\b(fix(?:es|ed)?|close[sd]?|resolve[sd]?)\b(?!\u200b)/gi;
+const CODE_SPAN = /(?<![`\\])(`+)(?!`)(.+?)(?<!`)\1(?!`)/g;
+const inertWords = text => text.replace(KEYWORD, '$1\u200b').replace(/@(?=[A-Za-z0-9])/g, '@\u200b');
 // Agent words show no image and no link of their own: an image or a link keeps only its text, and a bare address gets a
 // zero-width space so that GitHub does not link it. The readable part then has one report link, pdd's.
 function plainLinks(text) {
@@ -47,13 +47,13 @@ export function inertText(value, max = MAX_FIELD) {
   // A cut can end inside a code span; escaping then treats its rest as text, which stays inert.
   const shown = [];
   at = 0;
-  const outside = part => escapeHtml(part).replace(KEYWORD, '$1\u200b');
+  const outside = part => inertWords(escapeHtml(part));
   for (const match of text.matchAll(CODE_SPAN)) {
     shown.push(outside(text.slice(at, match.index)), MARKERS(match[0]));
     at = match.index + match[0].length;
   }
   shown.push(outside(text.slice(at)));
-  return shown.join('').replace(/@(?=[A-Za-z0-9])/g, '@\u200b').replace(CLOSING, '$1\u200b');
+  return shown.join('');
 }
 const escapeHtml = text => text.replace(/</g, '&lt;').replace(/>/g, '&gt;').replaceAll('pdd-workflow:', 'pdd-workflow&#58;').replaceAll('pdd-product:', 'pdd-product&#58;');
 const cell = (value, max = MAX_CELL) => {
@@ -135,12 +135,14 @@ export function prArea({ area, files = [], workflow } = {}) {
 
 // `spec(area): … (#N · part 1: spec)`, `fix(area): … (#N · part 2: fix)`, `feat(area): … (#N · part 2: feat)`, and
 // `fix(area): … (#N)` for a one-PR run (part null). GitHub refuses a title over 256 UTF-16 code units: the statement is
-// cut at a character boundary and shows " …"; the type, area and suffix always stay.
+// cut at a character boundary and shows " …"; the type, area and suffix always stay. The statement follows the keyword
+// and mention rule of the readable part everywhere, also between backticks: GitHub puts the title into the merge commit,
+// and a commit message has no code spans.
 export function readablePrTitle({ layout, workflow, area, statement, number, part = layout === 'spec' ? 1 : null }) {
   const type = layout === 'spec' ? 'spec' : workflow === 'feature' ? 'feat' : 'fix';
   const prefix = `${type}(${area || 'pdd'}): `;
   const suffix = part ? ` (#${number} · part ${part}: ${type})` : ` (#${number})`;
-  const text = oneLine(statement) || `issue #${number}`;
+  const text = inertWords(oneLine(statement)) || `issue #${number}`;
   if ((prefix + text + suffix).length <= 256) return prefix + text + suffix;
   let kept = '';
   for (const point of text) { if (prefix.length + kept.length + point.length + 2 + suffix.length > 256) break; kept += point; }
@@ -341,27 +343,53 @@ export function readablePrTop(facts, { fileLimit = MAX_FILES } = {}) {
   return { text: lines.join('\n'), notes };
 }
 
-// pdd-owned and agent text inside the Details section never closes it early: a `</details>` with no open `<details>`
-// before it (outside code spans and fences) shows as text, an open block is closed at the end, and so is an open fence.
-export function balancedDetails(text) {
-  let depth = 0, fence = null;
+// Each Markdown line outside fenced code goes through `change`; fence lines and fenced lines stay. A fence opens only as
+// GitHub opens one (at most 3 spaces in front; a backtick fence has no backtick after it), and any line of the fence
+// mark alone closes it. So pdd never sees code where GitHub sees text.
+function textLines(text, change) {
+  let fence = null;
   const rows = String(text ?? '').split('\n').map(line => {
     const mark = line.trim().match(/^(`{3,}|~{3,})/)?.[1];
     if (fence) { if (mark && line.trim().startsWith(fence) && !line.trim().slice(mark.length).trim()) fence = null; return line; }
-    if (mark) { fence = mark; return line; }
-    return line.replace(/((?<!`)(`+)(?!`).*?(?<!`)\2(?!`))|<details\b[^>]*>|<\/details\s*>/gi, (tag, code) => {
-      if (code) return code;
-      if (/^<details/i.test(tag)) { depth++; return tag; }
-      if (depth) { depth--; return tag; }
-      return tag.replace('<', '&lt;').replace('>', '&gt;');
-    });
+    const open = /^ {0,3}(?:(`{3,})[^`]*|(~{3,}).*)$/.exec(line);
+    if (open) { fence = open[1] ?? open[2]; return line; }
+    return change(line);
   });
+  return { rows, fence };
+}
+
+// pdd-owned and agent text inside the Details section never closes it early: a `</details>` with no open `<details>`
+// before it (outside code spans and fences) shows as text, an open block is closed at the end, and so is an open fence.
+export function balancedDetails(text) {
+  let depth = 0;
+  const { rows, fence } = textLines(text, line => line.replace(/((?<![`\\])(`+)(?!`).*?(?<!`)\2(?!`))|<details\b[^>]*>|<\/details\s*>/gi, (tag, code) => {
+    if (code) return code;
+    if (/^<details/i.test(tag)) { depth++; return tag; }
+    if (depth) { depth--; return tag; }
+    return tag.replace('<', '&lt;').replace('>', '&gt;');
+  }));
   return [...rows, ...(fence ? [fence] : []), ...Array(depth).fill('</details>')].join('\n');
 }
 
+// Agent Markdown that pdd shows whole in Details (verify.md, the verdict and change lines of a check): outside code
+// spans and fenced code, every closing keyword gets a zero-width space after it, as in the readable part. An address, a
+// link target and an HTML tag keep their text, so their links still work; a keyword at the end of an address gets one
+// too ("…/fixes #5"). So only pdd's own `Closes #N` can close an issue.
+const SHOWN = /((?:https?|ftp):\/\/[^\s<>]*|\bwww\.[^\s<>]*)|<\/?[A-Za-z][A-Za-z0-9-]*(?:[\s/][^<>\n]*)?>|\]\([^()\s]*\)|\b(fix(?:es|ed)?|close[sd]?|resolve[sd]?)\b(?!\u200b)/gi;
+const closingWords = text => text.replace(SHOWN, (token, address, word) => word ? `${word}\u200b` : address ? address.replace(/\b(fix(?:es|ed)?|close[sd]?|resolve[sd]?)$/i, '$1\u200b') : token);
+export function closingInert(text) {
+  return textLines(text, line => {
+    let out = '', at = 0;
+    for (const match of line.matchAll(CODE_SPAN)) { out += closingWords(line.slice(at, match.index)) + match[0]; at = match.index + match[0].length; }
+    return out + closingWords(line.slice(at));
+  }).rows.join('\n');
+}
+
+// One line for a person who edits the description, right after the Details line (an HTML comment, so readers never see it).
+export const TOP_NOTE = '<!-- pdd writes this description. It rewrites the part above Details at each pdd workflow status and all of it at each push. Write your notes in a PR comment. -->';
 // The whole description: the readable part, then one closed Details section with everything pdd recorded.
 export function readablePrBody(top, details) {
-  return `${top.trimEnd()}\n\n${DETAILS_OPEN}\n\n${String(details).trim()}\n\n</details>\n`;
+  return `${top.trimEnd()}\n\n${DETAILS_OPEN}\n\n${TOP_NOTE}\n\n${String(details).trim()}\n\n</details>\n`;
 }
 // The pdd-written part inside the Details section of a readable description, and any text a person added after it;
 // null for a description without that section (an older pdd wrote it, so all of it is pdd body).
@@ -370,5 +398,6 @@ export function detailsOf(body) {
   if (open < 0 || rows[open] !== DETAILS_OPEN) return null;
   let close = rows.length - 1;
   while (close > open && rows[close] !== '</details>') close--;
-  return close > open ? { details: rows.slice(open + 1, close).join('\n').trim(), after: rows.slice(close + 1).join('\n').trim() } : null;
+  const details = rows.slice(open + 1, close).join('\n').trim();
+  return close > open ? { details: details.startsWith(TOP_NOTE) ? details.slice(TOP_NOTE.length).trim() : details, after: rows.slice(close + 1).join('\n').trim() } : null;
 }

@@ -3,7 +3,7 @@
 // data stays in one closed Details section. Fixtures follow Serhan-Asad/pdd-autopilot-sandbox PRs #6 and #7.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DETAILS_OPEN, detailsOf, inertText, prArea, prStatus, readPrFields, readablePrBody, readablePrTitle, readablePrTop, userStory } from '../src/workflow-pr-body.mjs';
+import { DETAILS_OPEN, TOP_NOTE, closingInert, detailsOf, inertText, prArea, prStatus, readPrFields, readablePrBody, readablePrTitle, readablePrTop, userStory } from '../src/workflow-pr-body.mjs';
 import { recordedRuntimeLines } from '../src/workflow-runner.mjs';
 import { AUTO_WORDS, STORY_6, featurePr2, fieldsText6, pr1Auto6, pr1Manual7, pr2Blocked6, pr2Fix6, smallChange } from './helpers/readable-pr-fixtures.mjs';
 
@@ -268,4 +268,52 @@ test('a split checker verdict blocks; agent links and images keep only their tex
   assert.deepEqual(fields.cases, [{ input: '`a || b`', before: 'false', expected: 'true' }, { input: '1205', before: '$12.50', expected: '$12.05' }]);
   const spec = pr1Auto6(); spec.fields.cases = fields.cases;
   assert.match(top(spec), /^\| `a \\\|\\\| b` \| false \| true \|$/m);
+});
+
+// #3042 review 2. GitHub reads no reference and no mention in code; a title goes into the merge commit, which has no code.
+const ZW = '\u200b';
+
+test('SF1 code spans stay exact: no zero-width space in a command or a case input; text outside code is still inert', () => {
+  for (const code of ['`npm i @types/node`', '`ssh git@github.com`', '`git commit -m "fixes #5"`', '`user@example.com`'])
+    assert.equal(inertText(`run ${code} now`), `run ${code} now`, code);
+  const mixed = inertText('Fixes #5 for @octocat: run `git commit -m "fixes #5"`');
+  assert.equal(mixed, `Fixes${ZW} #5 for @${ZW}octocat: run \`git commit -m "fixes #5"\``);
+  assert.ok(!live(mixed), 'Outside code nothing closes an issue.');
+  assert.equal(inertText(mixed), mixed, 'A word that has its zero-width space gets no second one.');
+  assert.equal(inertText('\\`fixes #5\\`'), `\\\`fixes${ZW} #5\\\``, 'A backtick after a backslash opens no code span, so its text stays inert.');
+  const facts = pr2Fix6(); facts.fields.cases = [{ input: '`@types/node`', before: 'a', after: '`fixes #5`', expected: '`fixes #5`' }];
+  assert.match(top(facts), /^\| `@types\/node` \| a \| `fixes #5` \| `fixes #5` ✓ \|$/m);
+});
+
+test('MF1 the title closes nothing: closing keywords and mentions are broken everywhere in its statement, also in backticks', () => {
+  const title = readablePrTitle({ layout: 'code', workflow: 'bug', area: 'money', statement: 'Fixes #5 by padding', number: 17, part: 2 });
+  assert.equal(title, `fix(money): Fixes${ZW} #5 by padding (#17 · part 2: fix)`);
+  for (const statement of ['Fixes #5 by padding', '`fixes #5` for @octocat', 'Resolves: org/repo#3', 'closes:#9', '**fixed** #4']) {
+    const text = readablePrTitle({ layout: 'spec', workflow: 'bug', area: 'money', statement, number: 17, part: 1 });
+    assert.doesNotMatch(text, /\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)[\s:*_~`]*(?:[\w.-]+\/[\w.-]+)?#\d/i, text);
+    assert.doesNotMatch(text, /@[A-Za-z]/, text);
+  }
+  const long = readablePrTitle({ layout: 'code', workflow: 'bug', area: 'money', statement: 'fixes '.repeat(60), number: 17, part: 2 });
+  assert.ok(long.length <= 256 && long.endsWith(' … (#17 · part 2: fix)'), long);
+});
+
+test('MF1 verify.md in Details closes nothing outside code; code, fences, addresses and tags stay byte for byte', () => {
+  const verify = ['Results: all pass.', 'This Fixes #8 and Resolves: #9.', 'Branch https://github.com/o/r/tree/fix-padding and [fix notes](docs/fix.md).',
+    'See https://example.com/fixes #7 and <a href="https://x.example/close">it</a>.', '```x```', 'Closes #6 after inline triple backticks.',
+    'Run `git commit -m "fixes #5"`.', '```sh', 'git commit -m "Fixes #10"', '```', '~~~', 'resolved #11', '~~~'].join('\n');
+  const shown = closingInert(verify), rows = shown.split('\n');
+  assert.equal(rows[1], `This Fixes${ZW} #8 and Resolves${ZW}: #9.`);
+  assert.equal(rows[2], `Branch https://github.com/o/r/tree/fix-padding and [fix${ZW} notes](docs/fix.md).`, 'An address and a link target keep their text.');
+  assert.equal(rows[3], `See https://example.com/fixes${ZW} #7 and <a href="https://x.example/close">it</a>.`, 'A keyword at the end of an address is broken too.');
+  assert.equal(rows[5], `Closes${ZW} #6 after inline triple backticks.`, '"```x```" is inline code, not a fence.');
+  assert.deepEqual([rows[6], ...rows.slice(7)], ['Run `git commit -m "fixes #5"`.', '```sh', 'git commit -m "Fixes #10"', '```', '~~~', 'resolved #11', '~~~'], 'Code spans and fences stay exact.');
+  assert.ok(!live(rows.slice(0, 7).join('\n')), 'The lines that GitHub shows as text close nothing.');
+  assert.equal(closingInert(shown), shown, 'Again on its own output it changes nothing.');
+});
+
+test('SF6 the description says to a person who edits it that pdd owns it; readers never see that note', () => {
+  const body = readablePrBody(top(pr1Auto6()), 'Part of #1');
+  assert.ok(body.includes(`${DETAILS_OPEN}\n\n${TOP_NOTE}\n\nPart of #1`));
+  assert.match(TOP_NOTE, /^<!-- [^\n]* -->$/); assert.doesNotMatch(TOP_NOTE, /pdd-workflow:/);
+  assert.equal(detailsOf(body).details, 'Part of #1', 'Details are pdd\'s text without the note.');
 });
