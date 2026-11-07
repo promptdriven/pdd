@@ -109,8 +109,9 @@ stays pending. No check reads the pane's live folder (Herdr `cwd` and `foregroun
 launch. After it, Herdr shows the repository as the live folder of the pane and of its agent. So status
 and uncertain-send recovery still compare that folder with the saved repository path: a workspace that
 `workspace create` made has no Herdr Git identity, and the folder ties the pane to this repository. The
-[relaunch close](#coordinator-relaunch) does not compare it, because it can meet a chat that an older
-launch started in the shell startup folder. Run each `gh repo view` repository check in the saved
+[relaunch close](#coordinator-relaunch) does not compare it when the owner launch saved a `terminal_id`,
+because it can meet a chat that an older launch started in the shell startup folder. Without a saved
+`terminal_id`, the relaunch close compares the folder too. Run each `gh repo view` repository check in the saved
 repository path, never in the pane's live folder.
 
 Reuse the pane only when its owner launch binding matches the current coordinator
@@ -225,9 +226,14 @@ new work. The fresh chat gets the start-up recipe first.
   coordinator pane only. Hold admission for the close. In that hold, first
   recheck that the saved state is enabled with the same pane, workspace and
   owner launch and no intent, and that Herdr reports the same pane, workspace,
-  provider, saved `terminal_id` and `agent_session` as `idle` or `done`. Do not
-  compare the chat's live folder: a chat that an older launch started without
-  the `cd` runs in the shell startup folder, and this relaunch replaces it. If
+  provider, saved `terminal_id` and `agent_session` as `idle` or `done`. When
+  the owner launch saved a `terminal_id`, that match is the proof of the chat:
+  do not compare the chat's live folder, because a chat that an older launch
+  started without the `cd` runs in the shell startup folder, and this relaunch
+  replaces it. When the owner launch saved no `terminal_id`, Herdr must also
+  report the saved repository path as the chat's folder (`cwd`): then only the
+  folder ties the pane to this repository in the shared session, and a pane of
+  another repository stays open. If
   Herdr reports another `terminal_id`, the saved pane [is gone](#gone-coordinator-pane): close nothing and forget it in the same
   hold. After the close, `pane get` must report `pane_not_found`. Then, in the
   same hold, add the current fingerprint to the relaunch record below, remove

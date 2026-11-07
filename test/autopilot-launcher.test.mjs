@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, utimesSync, existsSync, realpathSync, renameSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, utimesSync, existsSync, realpathSync, renameSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -1581,10 +1581,41 @@ test('2903: with a shell startup cd, uncertain-send recovery checks the reposito
   f.ports.herdr = async args => args[0] === 'workspace' && args[1] === 'get' ? { result: { type: 'workspace_info', workspace: { workspace_id: args[2] } } } : real(args);
   f.ports.run = async (command, args, options) => { if (command === 'gh' && args[0] === 'repo') repoViews.push(options?.cwd); return run(command, args, options); };
   assert.equal((await f.invoke('start')).exitCode, 0);
+  // Herdr names the repository with another spelling (a symlink): the folder matches, but only the saved path is this repository's path.
+  const link = join(f.dir, 'repo link'); symlinkSync(f.cwd, link);
+  Object.assign(f.panes.get('w1:p1'), { shell: link, agentCwd: link });
   f.saveState(state => { state.deliveryIntent = { version: 2, paneId: state.paneId, workspaceId: state.workspaceId, at: f.time - 1000, fingerprint: null, payloadDigest: 'earlier' }; });
   const calls = f.herdrCalls.length, views = repoViews.length;
   f.issues = [issue(96)]; f.time += 60 * 1000; await f.tick();
   assert.deepEqual(herdrSince(f, calls, 'agent', 'prompt').map(args => args[2]), ['w1:p1'], f.warnings?.join('\n'));
   assert.match(f.prompts.at(-1), /fresh current-state reconciliation/);
-  assert.ok(repoViews.length > views && repoViews.slice(views).every(cwd => cwd === f.cwd), JSON.stringify(repoViews));
+  assert.ok(repoViews.length > views && repoViews.slice(views).every(cwd => cwd === f.cwd), `gh repo view runs in the saved path, not in ${link}: ${JSON.stringify(repoViews)}`);
+});
+
+test('2903: the relaunch close compares the folder when no terminal id is saved, and trusts a matching saved terminal id', async t => {
+  // An old chat whose launch saved no terminal id, and the next tick wants to relaunch it.
+  const unproved = async (folder = null) => {
+    const f = await relaunchFixture(t, { shellStartup: true });
+    assert.equal((await f.invoke('start')).exitCode, 0);
+    if (folder) { const path = folder(f); Object.assign(f.panes.get('w1:p1'), { shell: path, agentCwd: path }); }
+    f.saveState(state => { delete state.ownerLaunch.fingerprint; state.ownerLaunch.terminalId = null; });
+    f.status = 304; f.time += 60 * 1000; await f.tick();
+    return f;
+  };
+  // The saved pane id now names an idle chat of another repository in the shared session: it stays open.
+  const other = await unproved(f => { const path = join(f.dir, 'other repository'); mkdirSync(path); return path; });
+  assert.deepEqual(other.closed, [], 'a chat in another repository folder is never closed');
+  assert.equal(other.launches.length, 1, 'no relaunch');
+  assert.equal(other.state().paneId, 'w1:p1');
+  // Control: the same saved state with the chat in this repository is closed and relaunched.
+  const same = await unproved();
+  assert.deepEqual(same.closed, ['w1:p1']); assert.equal(same.state().paneId, 'w2:p1');
+  // A saved terminal id that Herdr still reports proves the chat: it is closed although its shell moved.
+  const f = await relaunchFixture(t, { shellStartup: true });
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  assert.equal(f.state().ownerLaunch.terminalId, 'term1');
+  Object.assign(f.panes.get('w1:p1'), { shell: f.elsewhere, agentCwd: realpathSync(f.elsewhere) });
+  f.saveState(state => { delete state.ownerLaunch.fingerprint; });
+  f.status = 304; f.time += 60 * 1000; await f.tick();
+  assert.deepEqual(f.closed, ['w1:p1']); assert.equal(f.state().paneId, 'w2:p1');
 });

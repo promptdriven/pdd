@@ -147,6 +147,7 @@ test('2903: a fresh start with a changed Herdr ID prints the reason and its valu
   assert.ok(lines[at].includes(`"${area.workspace_id}"`), started.message);
   assert.ok(lines[at + 1].startsWith('Expected area_pane: ') && lines[at + 1].includes(`"${made.pane_id}"`), started.message);
   assert.ok(lines[at + 2].startsWith('Found area_pane: ') && lines[at + 2].includes('"other-terminal"'), started.message);
+  assert.ok(![lines[at + 1], lines[at + 2]].some(line => /\bcwd\b/.test(line)), `the folder is on neither line: ${started.message}`);
   assert.ok(lines[at + 3].startsWith('Start it with: ') && lines[at + 3].includes('pdd workflow open 17'), started.message);
 });
 
