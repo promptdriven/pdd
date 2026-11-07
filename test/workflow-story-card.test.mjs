@@ -549,7 +549,7 @@ test('#2962 repair 1: the native card retains wrapped criteria and reports bound
   assert.equal(bounded.includes('continuation-19'), false);
 });
 
-test('#2962 repair 1: the real saved-result writer supplies automatic publication evidence', async t => {
+test('#2962 repair 1: the real saved-result writer binds publication to its summary identity', async t => {
   const f = await storyGate(t); await approveStory(f);
   const fake = await fakeRuntime(t, (entry, runtime) => {
     if (entry.command === 'lint') return { status: 200, json: runtime.lint(entry.request.requestId) };
@@ -562,6 +562,12 @@ test('#2962 repair 1: the real saved-result writer supplies automatic publicatio
   const result = JSON.parse(made.ports.stdout.text);
   assert.equal(result.rows[0].state, 'passed');
   assert.deepEqual(result.rows[0].criteria, { passed: 3, total: 3 });
+  const summaryPath = join(f.ports.env.PDD_STATE_DIR, 'batches', result.batch, 'summary.json');
+  const original = readFileSync(summaryPath, 'utf8'), foreign = JSON.parse(original);
+  foreign.batch = '20261027-170000-zzzz';
+  writeFileSync(summaryPath, JSON.stringify(foreign));
+  await f.done('check'); assert.equal(f.prs.length, 0, 'a foreign summary cannot publish the real writer batch');
+  writeFileSync(summaryPath, original);
   await f.done('check'); assert.equal(f.prs.length, 1);
   assert.deepEqual(f.record().decisions.at(-1).evidence.basis.batches, [result.batch]);
 });
