@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: e5a842ee89efaa705611ecfcaa934bfe51e30681371214b15bf24a189f70a16d).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: f12c54bd6876e5d96bb9f4db3ca4fe1d117dd63ad142a7a1fec0b6bc061c42d9).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
@@ -125,7 +125,7 @@ export function chatCommand({ agent, cwd, messageFile, sessionId, resumeId, conf
   if (agent === 'claude') return [...env, 'claude', '--dangerously-skip-permissions', ...(resumeId ? ['--resume', resumeId] : ['--session-id', sessionId]), ...message].join(' ');
   // Codex builds each command's environment from shell_environment_policy; `set` applies after `inherit`.
   return [...env, 'codex', ...(resumeId ? ['resume', resumeId] : []), '--no-daemon', '--dangerously-bypass-approvals-and-sandbox',
-    '-c', quote(`projects={${JSON.stringify(cwd)}={trust_level="trusted"}}`),
+    '-c', quote(`projects={${tomlString(cwd)}={trust_level="trusted"}}`),
     '-c', quote(`shell_environment_policy.set.PDD_BIN=${tomlString(PACKAGE_BIN)}`), '-c', quote(`shell_environment_policy.set.PDD_AGENT_SESSION=${tomlString('1')}`), ...message].join(' ');
 }
 

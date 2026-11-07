@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: ea5fa2b8417cf84ff12d4a608a82e3b1385cecb5dbf1148a1ac96e74fe95b1b1).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 141b0804c9b54a5e2e80868c61c704761958464e3d3977cfab0200892a84ea63).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch } from 'node:fs';
@@ -564,8 +564,9 @@ async function wake(state, makeText, p, prepare = async () => {}, explicitStartR
   const context = JSON.stringify(envelope());
   // Codex builds each chat command's environment from shell_environment_policy; `set` applies after `inherit`.
   const args = definition.kind === 'codex' ? ['--no-daemon', '--dangerously-bypass-approvals-and-sandbox',
-    '-c', quote(`projects={${JSON.stringify(state.cwd)}={trust_level="trusted"}}`), '-c', quote('check_for_update_on_startup=false'),
-    '-c', quote(`shell_environment_policy.set.PDD_AUTOPILOT_CONTEXT=${tomlString(context)}`)]
+    '-c', quote(`projects={${tomlString(state.cwd)}={trust_level="trusted"}}`), '-c', quote('check_for_update_on_startup=false'),
+    '-c', quote(`shell_environment_policy.set.PDD_AUTOPILOT_CONTEXT=${tomlString(context)}`),
+    ...(state.environment?.CODEX_HOME ? ['-c', quote(`shell_environment_policy.set.CODEX_HOME=${tomlString(state.environment.CODEX_HOME)}`)] : [])]
     : definition.kind === 'claude' ? ['--dangerously-skip-permissions'] : ['--dangerously-skip-permissions'];
   if (definition.kind === 'gemini') args.splice(0, 1, '--yolo');
   const childEnv = { ...keepEnv(p.env), ...definition.env, HOME: state.environment?.HOME ?? p.env.HOME, PDD_AUTOPILOT_CONTEXT: context };

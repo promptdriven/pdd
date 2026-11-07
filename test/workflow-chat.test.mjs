@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { chatCommand, herdrCommand, startChat } from '../src/workflow-chat.mjs';
-import { codexConfigs } from './helpers/codex-config-args.mjs';
+import { codexConfigs, tomlBasicString } from './helpers/codex-config-args.mjs';
 
 const packageRoot = fileURLToPath(new URL('..', import.meta.url));
 
@@ -58,6 +58,17 @@ test('Codex chats: new and resumed launches keep PDD_BIN and PDD_AGENT_SESSION u
   }
   for (const agent of ['claude', 'gemini', 'agy']) for (const options of [{ messageFile: file, sessionId: id }, { resumeId: id }])
     assert.doesNotMatch(installed.chatCommand({ agent, cwd, configDir: root, ...options }), /shell_environment_policy/, agent);
+});
+
+test('Codex chats: a worktree path with a control character stays one valid TOML project key', t => {
+  const root = temp(t), bin = join(root, 'bin'), cwd = join(root, 'work \u007f\t tree "x" \\ é');
+  mkdirSync(bin); writeFileSync(join(bin, 'codex'), nativeScript, { mode: 0o755 }); writeFileSync(join(root, 'start.md'), 'Use the pdd-bug skill.');
+  for (const options of [{ messageFile: join(root, 'start.md') }, { resumeId: '11111111-1111-4111-8111-111111111111' }]) {
+    const out = JSON.parse(execFileSync('/bin/sh', ['-c', chatCommand({ agent: 'codex', cwd, ...options })], { cwd: root, env: { PATH: `${bin}:/usr/bin:/bin` }, encoding: 'utf8' }));
+    const table = /^\{("(?:\\.|[^"\\])*")=\{trust_level="trusted"\}\}$/.exec(codexConfigs(out.argv).config.projects);
+    assert.ok(table, `one trusted project key: ${codexConfigs(out.argv).config.projects}`);
+    assert.equal(tomlBasicString(table[1]), cwd);
+  }
 });
 
 test('PIPE1: native launch preserves more than 64 KiB of guidance and zero/nonzero exit status', t => {

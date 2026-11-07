@@ -55,9 +55,11 @@ service preserves a Herdr server it starts when the tick exits. See the chat wit
 A Codex coordinator also gets
 `-c shell_environment_policy.set.PDD_AUTOPILOT_CONTEXT=…` for this launch only, so
 the commands of its chat keep the Autopilot start context when the Codex profile
-sets `inherit = "core"` or `"none"`. Autopilot does not change Codex settings.
-Limit: a `shell_environment_policy.include_only` list that leaves out
-`PDD_AUTOPILOT_CONTEXT` still removes it.
+sets `inherit = "core"` or `"none"`. When Autopilot started with an explicit
+`CODEX_HOME`, the chat also gets `-c shell_environment_policy.set.CODEX_HOME=…`,
+so a `pdd workflow run` from the chat keeps that Codex profile. Autopilot does not
+change Codex settings. Limit: a `shell_environment_policy.include_only` list that
+leaves out one of these names still removes it.
 
 A tick checks GitHub with ETags and wakes the agent only for a repo's first
 start-up recipe or an unseen trusted issue, comment or related PR change.

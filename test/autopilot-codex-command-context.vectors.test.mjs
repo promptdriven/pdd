@@ -12,6 +12,7 @@ import { codexConfigs } from './helpers/codex-config-args.mjs';
 // The launcher prompt has no Runtime interface yet, so these are native results only.
 // Bindings (fake programs only: no live agent, Herdr session, GitHub call or model call):
 // - World paths such as /repo and /home/sam live under a temporary root. Herdr pane values stay literal.
+//   An observed command_environment_set value under that root maps back to its world path.
 // - saved_state seeds the coordinator identity. Its agent and environment reach the launcher as the
 //   selected agent and the start environment, because the launcher refuses a saved agent that has no
 //   owner launch binding. The step then checks that the saved state holds the same agent and environment.
@@ -33,7 +34,7 @@ function files(folder) {
 
 async function replayStep(t, step, world, root) {
   assert.equal(step.operation, 'runAutopilotLauncher', `Not replayed: unmapped operation ${step.operation}`);
-  const host = path => join(root, path);
+  const host = path => join(root, path), fromHost = value => typeof value === 'string' && value.startsWith(`${root}/`) ? value.slice(root.length) : value;
   const saved = world.saved_state, bin = join(root, 'fake-bin'), record = join(root, 'codex-calls.jsonl'), stateRoot = join(root, 'state');
   const cwd = host(step.input.cwd);
   for (const folder of [cwd, bin, stateRoot]) mkdirSync(folder, { recursive: true });
@@ -74,7 +75,7 @@ async function replayStep(t, step, world, root) {
         execFileSync('/bin/sh', ['-c', args[3]], { cwd, env: { PATH: '/usr/bin:/bin', HOME: env.HOME, ...pane.env }, timeout: 10000 });
         const call = JSON.parse(readFileSync(record, 'utf8').trim().split('\n')[calls]);
         const { set, config } = codexConfigs(call.argv);
-        world.launches.push({ pane_id: args[2], argv: call.argv, process_environment: call.env, codex_config: config, command_environment_set: set });
+        world.launches.push({ pane_id: args[2], argv: call.argv, process_environment: call.env, codex_config: config, command_environment_set: Object.fromEntries(Object.entries(set).map(([name, value]) => [name, fromHost(value)])) });
         return {};
       }
       if (args[0] === 'pane' && args[1] === 'read') return '';

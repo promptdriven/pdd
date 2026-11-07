@@ -19,7 +19,9 @@ prevent folder-trust and update dialogs from holding the automated launch.
 Preserve the configured executable, environment/profile, model and effort, native
 interactive/full-access behavior and first-message content. For Gemini and agy, start their default interactive mode without an initial prompt operand, then deliver the full first message exactly once through the guarded native chat; their prompt-interactive option executes its operand and must not create a separate bootstrap turn. Encode cwd as one exact
 project key and shell-quote arguments so spaces, quotes, backslashes and shell
-syntax stay literal. Do not write agent config or saved trust, or apply these
+syntax stay literal. The project key and each Codex string value are TOML basic
+strings from the shared encoder `tomlString` (`src/toml-string.mjs`), so a
+control character such as DEL stays valid. Do not write agent config or saved trust, or apply these
 Codex settings to another provider. Timer and later delivery behavior stay unchanged.
 
 The commands that the coordinator Codex chat runs must receive the Autopilot
@@ -27,13 +29,16 @@ context under any Codex `shell_environment_policy`. Codex builds each command
 environment from that policy, and `inherit = "core"` or `"none"` removes the
 process value. So also pass the invocation-only override
 `shell_environment_policy.set.PDD_AUTOPILOT_CONTEXT` with the same JSON text as
-the process `PDD_AUTOPILOT_CONTEXT`, as one TOML basic string, shell-quoted like
-the other arguments. Codex applies `set` after `inherit`; the profile's other
+the process `PDD_AUTOPILOT_CONTEXT`, shell-quoted like the other arguments. When
+the saved state has an explicit `CODEX_HOME`, also pass
+`shell_environment_policy.set.CODEX_HOME` with that same path, so a
+`pdd workflow run` from the chat keeps the coordinator's Codex profile; without
+one, set no `CODEX_HOME`. Codex applies `set` after `inherit`; the profile's other
 policy keys and `set` entries stay in effect. Set Herdr pane and socket values
 only when the launcher knows both exact values, because coordinator recovery
 reads the pane id only together with the socket path. The launcher does not know the pane
 shell's socket path, so it sets neither. Limit: a profile `include_only` list
-that omits `PDD_AUTOPILOT_CONTEXT` still removes it, because Codex applies
+that omits one of these names still removes it, because Codex applies
 `include_only` last. Do not change the profile to work around this.
 
 ## Start and stop
