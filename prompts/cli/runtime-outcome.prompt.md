@@ -31,8 +31,9 @@ result names. Keep raw server refusal codes in refusal records.
 
 A supplied reason or note code wins over defaults. Map check-busy and lint-busy
 to server-busy. Map the internal recovery note lint-pending to public deadline
-when an invocation ends its wait for a running lint. Interruption uses
-interrupted instead. A retryable not-run capacity refusal also uses server-busy in
+when an invocation ends its wait for a running lint. During the original
+free lint wait, interruption uses interrupted instead. A saved read can retain
+the producer deadline reason until fresh lint evidence replaces it. A retryable not-run capacity refusal also uses server-busy in
 public rows; retain its server code in raw refusals. Preserve broken-test as a not-run reason, for a caller that cannot
 run a malformed test; this module does not decide which tests to skip. A caller
 stopped by its explicit `--timeout` reports timeout-flag and names `--timeout` in
