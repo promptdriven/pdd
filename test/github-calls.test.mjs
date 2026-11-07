@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -281,6 +281,10 @@ test('native counter: a pdd command records each gh call in the ledger of its re
     return { stdout: file === 'gh' ? reply(200, { ok: true }) : 'x', stderr: '' };
   };
   const counted = nativeGithubCounter(exec, { stateRoot: dir, purpose: 'dependencies', now: () => NOW });
+  await counted('gh', ['api', 'repos/owner/repo/issues/6']);
+  assert.equal(existsSync(join(dir, 'github')), false, 'without an Autopilot ledger for the repository nothing is written');
+  mkdirSync(join(dir, 'github')); writeFileSync(githubLedger({ root: dir, repository: 'owner/repo' }).file, '');
+  seen.length = 0;
   assert.equal((await counted('git', ['status'], { cwd: dir, purpose: 'claims' })).stdout, 'x');
   assert.deepEqual(seen[0], ['git', { cwd: dir }], 'the purpose option never reaches the program');
   assert.match((await counted('gh', ['api', '--include', 'repos/Owner/Repo/issues/7'], { cwd: dir })).stdout, /^HTTP\/2.0 200/);
@@ -291,6 +295,6 @@ test('native counter: a pdd command records each gh call in the ledger of its re
   const entries = githubLedger({ root: dir, repository: 'owner/repo' }).read();
   assert.deepEqual(entries.map(entry => [entry.api, entry.purpose, entry.status, entry.repo]),
     [['rest', 'dependencies', 200, 'owner/repo'], ['graphql', 'dependencies', 200, 'owner/repo'], ['rest', 'dependencies', 404, 'owner/repo']]);
-  assert.deepEqual(readdirSync(join(dir, 'github')), [entries.length && `${createHash('sha256').update('owner/repo').digest('hex').slice(0, 20)}.jsonl`],
+  assert.deepEqual(readdirSync(join(dir, 'github')), [`${createHash('sha256').update('owner/repo').digest('hex').slice(0, 20)}.jsonl`],
     'gh api user names no repository and is not recorded');
 });

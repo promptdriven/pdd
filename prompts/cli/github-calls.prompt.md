@@ -107,8 +107,12 @@ object, or a function of the arguments and `options.repository`; null records
 nothing. Other programs run unchanged, also without these two options.
 `nativeGithubCounter` uses the ledger of `githubRepository(args)`, else of a valid
 `options.repository` (a GraphQL call names none in its arguments), under
-`githubStateRoot`, so worktrees and the main checkout share it; a call without a
-repository is not recorded.
+`githubStateRoot`, so worktrees and the main checkout share it. It appends only
+to a ledger file that already exists: the launcher makes it with its first call,
+so a pdd command counts its calls for the repositories where Autopilot runs on
+this machine. A call without a repository, or for a repository without a
+ledger, is not recorded; so a test that puts a fake `gh` on PATH adds nothing
+to a real ledger.
 
 ## Usage
 

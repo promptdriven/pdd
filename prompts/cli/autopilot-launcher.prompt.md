@@ -289,7 +289,8 @@ the launched chat may still be starting.
 Autopilot uses the person's own `gh` sign-in, so its GitHub calls use the
 person's limit. Each `gh` call of the launcher goes through `countGithubCalls` of
 [GitHub calls](github-calls.prompt.md) into this repository's ledger on this
-machine (under the state root, `ROOT/github/`), once the repository is known.
+machine, once the repository is known. `ROOT` is the folder of the launcher state
+file (the state root), so the ledgers sit in `ROOT/github/` beside the state.
 The tick names the purpose: the dependency intake `dependencies` (its claim
 checks name `claims`), heartbeats `claims`, the issue list `issues`; other calls
 take the purpose of their arguments. The intake also gets the ETag cache of this

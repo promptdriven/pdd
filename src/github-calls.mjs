@@ -151,12 +151,15 @@ export function countGithubCalls(exec, { ledger, purpose, now = Date.now } = {})
   };
 }
 
-// A counter for a pdd command outside Autopilot: the ledger of the repository that each call names.
+// A counter for a pdd command outside the tick: the ledger of the repository that each call names, only when
+// Autopilot already keeps a ledger for it on this machine. Other repositories, and test doubles of gh, write nothing.
 // The folder is found at each call, so a later HOME applies.
 export function nativeGithubCounter(exec, { env = process.env, stateRoot, purpose, fs = nativeFs, now = Date.now } = {}) {
   return countGithubCalls(exec, { purpose, now, ledger: (args, named) => {
     const repository = githubRepository(args) ?? (typeof named === 'string' && REPOSITORY.test(named) ? named.toLowerCase() : null);
-    return repository ? githubLedger({ root: githubStateRoot(env, stateRoot), repository, fs }) : null;
+    if (!repository) return null;
+    const ledger = githubLedger({ root: githubStateRoot(env, stateRoot), repository, fs });
+    try { return fs.existsSync(ledger.file) ? ledger : null; } catch { return null; }
   } });
 }
 

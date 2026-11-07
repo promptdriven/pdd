@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 878f27e0ba4441f1c3c01afb11cada097c551ff7efd71363b2b9de6ecf8d6251).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: cd0898212e42a1e09289ea23e3fec763f130c022f29cbadd45345ede7f64eec7).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch } from 'node:fs';
@@ -61,7 +61,8 @@ function portsFor(state, ports) {
   const env = { ...process.env, ...state?.environment, ...ports.env };
   const run = ports.run ?? runAgentProcess, now = ports.now ?? Date.now;
   // Each gh call goes to this repository's GitHub ledger on this machine; options.purpose names its purpose.
-  const githubRoot = githubStateRoot(env, ports.stateRoot), ledgers = new Map();
+  // The ledgers sit beside the launcher state files.
+  const githubRoot = ports.githubRoot ?? (typeof state?.stateFile === 'string' ? dirname(state.stateFile) : githubStateRoot(env, ports.stateRoot)), ledgers = new Map();
   const ledger = () => { const repo = state?.repo; if (typeof repo !== 'string' || !repo) return null; if (!ledgers.has(repo)) ledgers.set(repo, githubLedger({ root: githubRoot, repository: repo })); return ledgers.get(repo); };
   const execute = countGithubCalls(async (command, args, options = {}) => run(command, args, { cwd: state.cwd, env, timeoutMs: 10000, maxBytes: 8 * 1024 * 1024, ...options }), { ledger, now });
   const checked = async (command, args, options) => { const result = await execute(command, args, options); if (result.code !== 0) throw Error(`${command} failed; check its sign-in and retry.`); return result.stdout; };
@@ -884,7 +885,7 @@ async function runTick(stateFile, ports, completion) {
     state = read(stateFile);
     if (!state?.enabled) return outcome('inactive', 'Autopilot stopped.');
     if (ports.expectedStart && !['cwd','repo','coordinatorId','machine','controlRevision'].every(key => state[key] === ports.expectedStart[key])) return outcome('inactive', 'Autopilot start was superseded.');
-    p = portsFor(state, ports);
+    p = portsFor(state, { ...ports, githubRoot: dirname(stateFile) });
     if (!state.coordinatorId || !state.machine) {
       const release = await claimAdmission(state, p);
       if (!release) throw Error('Timed out waiting for automatic admission; retry.');

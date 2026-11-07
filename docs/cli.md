@@ -153,8 +153,9 @@ claimed issues to the top of "recently updated" every 30 minutes.
 ### GitHub API budget
 
 Autopilot uses your own `gh` sign-in, so its GitHub calls use your hourly limit
-(5,000 REST calls for a person). pdd counts each `gh` call that it makes, with
-its purpose and the limit that GitHub reports in the reply headers:
+(5,000 REST calls for a person). pdd counts each `gh` call of Autopilot, and of
+`pdd` commands in a repository where Autopilot runs on this machine, with its
+purpose and the limit that GitHub reports in the reply headers:
 
 | Purpose | Calls |
 |---|---|
