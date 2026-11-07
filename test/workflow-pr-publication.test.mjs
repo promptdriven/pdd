@@ -544,6 +544,8 @@ function formalPublication(t, { rules, formal = null }) {
   mkdirSync(join(f.root, 'user_stories'));
   writeFileSync(join(f.root, 'user_stories', 'value.md'), VALUE_STORY + (rules ? '\n## Rules to check\n\nWrong: any value other than two.\n' : ''));
   f.git('add', '.'); f.git('commit', '-qm', 'story'); f.machine(f.git('rev-parse', 'HEAD'));
+  // The anchor that pdd saves when PR 1 changes no scenario file: not_replayed, "no original scenario vectors".
+  f.run.replayBaseline = pinReplayVectors(f.root, []); f.save();
   if (formal) writeFileSync(join(f.runDir, 'replay-evidence.json'), JSON.stringify({ schema_version: 'pdd.replay-evidence.v1', run_id: f.run.runId,
     source: { kind: 'git-content-v1', sha256: sourceFingerprint(f.root) }, vectors: [], checks: [], operations: [],
     counts: { total: 0, pass: 0, fail: 0, blocked: 0, not_replayed: 0 }, formal }));
