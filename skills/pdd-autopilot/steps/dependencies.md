@@ -34,9 +34,10 @@ their existing owners. It is distinct from steps/handoff.md.
   issue again. An outsider's issue is never queued. A stale or
   unchecked review is refreshed through the ordinary `pdd dependencies prepare`,
   analysis and `pdd dependencies complete --input -` path; do not treat its old
-  result as current. Keep questions and unknown facts pending. After a review
-  changes, read the graph again before starting affected work. A partial graph
-  does not prove the backlog is empty: continue only issues already proved
+  result as current. If you cannot decide, record a question. Use outcome pending
+  only with a named link. After a review changes, read the graph again before
+  starting affected work. A partial graph does not prove the backlog is empty:
+  continue only issues already proved
   eligible, and keep checking the rest when the current graph is available.
   Graph reads use `pdd graph` and never trigger analysis.
 - After the existing claim winner is established, retain the launcher's opaque

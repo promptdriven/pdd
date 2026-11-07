@@ -25,7 +25,7 @@ const REVIEW_BATCH = 10;
 // A request whose subjects stay unchecked or stale is delivered again after one
 // tick interval, at most AGAIN_CAP times; then each subject gets one question.
 const AGAIN_AFTER = 30 * 60 * 1000, AGAIN_CAP = 3;
-const REASONS = ['observations-incomplete', 'input-changed', 'answer-row-mismatch', 'owner-changed', 'write-unconfirmed', 'review-pending'];
+const REASONS = ['observations-incomplete', 'input-changed', 'answer-row-mismatch', 'owner-changed', 'write-unconfirmed'];
 const invalidAnalysis = () => Object.assign(new Error('invalid-analysis'), { code: 'invalid-analysis' });
 // A pending result names its reason and, where they exist, the rows behind it.
 const pendingResult = (reason, { rows = [], stage, issue, reviewIds = [], questions = [] } = {}) => ({
@@ -232,7 +232,7 @@ export async function completeDependencyIntake({ cwd = '', request, analysis }, 
     // A person's removal of a link is authoritative: a review records a question instead of adding it back.
     const { removed } = links(snapshot, review.issue);
     if (review.dependencies.some(d => removed.includes(issueKey(d.key)))) throw invalidAnalysis();
-    if ((review.outcome === 'question' && (review.dependencies.length || review.effects !== 'none')) || (review.dependencies.length && (review.outcome !== 'pending' || review.effects !== 'pending')) || (!review.dependencies.length && review.effects !== 'none') || !['complete','question','pending'].includes(review.outcome) || !Array.isArray(review.dependencies) || !Array.isArray(review.questions) || (review.outcome === 'complete' && review.questions.length) || review.dependencies.some(d => !d.reason?.trim() || !Array.isArray(d.evidence) || !d.evidence.length)) throw invalidAnalysis();
+    if ((review.outcome === 'pending' && !review.dependencies.length) || (review.outcome === 'question' && (review.dependencies.length || review.effects !== 'none')) || (review.dependencies.length && (review.outcome !== 'pending' || review.effects !== 'pending')) || (!review.dependencies.length && review.effects !== 'none') || !['complete','question','pending'].includes(review.outcome) || !Array.isArray(review.dependencies) || !Array.isArray(review.questions) || (review.outcome === 'complete' && review.questions.length) || review.dependencies.some(d => !d.reason?.trim() || !Array.isArray(d.evidence) || !d.evidence.length)) throw invalidAnalysis();
     for (const dependency of review.dependencies) { const decision = validateDependencyChange({ snapshot: proposed, dependent: review.issue, blocker: dependency.key }); if (!decision.allowed && decision.reason !== 'duplicate') throw invalidAnalysis(); if (decision.allowed) proposed.edges.push({ dependent: review.issue, blocker: dependency.key }); }
     // The proposed state holds this intent, so its links are PDD links in every saved link row.
     if (review.dependencies.length) proposed.reviews.push({ ...review, id: '', authority: 'trusted', intact: true });
@@ -258,7 +258,6 @@ export async function completeDependencyIntake({ cwd = '', request, analysis }, 
       if (applied.state !== 'confirmed') return finish(pendingResult('write-unconfirmed', { stage: 'edge-confirmation', issue: review.issue, reviewIds: ids, questions }));
     }
   }
-  if (!questions.length && analysis.reviews.some(r => r.outcome === 'pending' && r.effects !== 'pending')) return finish(pendingResult('review-pending', { reviewIds: ids }));
   return { state: questions.length ? 'question' : 'complete', reviewIds: ids, eligible: [], questions };
 }
 

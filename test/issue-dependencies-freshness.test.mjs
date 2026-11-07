@@ -815,6 +815,62 @@ test('after three repeated deliveries the issue gets one visible question with t
   assert.equal(g.node(103).eligible, true);
 });
 
+// A saved review whose own outcome is pending and that names no link, as an
+// earlier version accepted it.
+const barePending = (id, subject, candidates) => comment(id, recordBody({ analysis: 'Could not decide yet.', base: [], continuation: '', issue: subject.html_url,
+  inputs: [row(subject)], candidates: candidates.map(row), outcome: 'pending', dependencies: [], questions: [], effects: 'none' }));
+
+test('a pending answer that names no link saves nothing; after three repeated deliveries the issue gets one question, and then nothing is sent', async () => {
+  for (const start of ['new issue', 'old pending review with no link']) {
+    const i17 = issue(17), i103 = issue(103);
+    const w = world({ issues: [i17, i103], comments: { [key(17)]: [savedReview('501', i17, [i17])],
+      ...(start === 'new issue' ? {} : { [key(103)]: [barePending('777', i103, [i17, i103])] }) } });
+    const r = redelivery(w);
+    const saved = () => (w.comments[key(103)] ?? []).length, before = saved();
+    let answered = 0;
+    // Six hours of 30-minute ticks. The coordinator answers each delivery with outcome pending and no link.
+    for (let minutes = 0; minutes <= 12 * 31; minutes += 31) {
+      await r.tick(minutes);
+      while (answered < r.sent.length) {
+        const { request } = r.sent[answered++];
+        const head = (await graph(w)).node(103).review;
+        const review = answer(request, i103, { base: head ? [head] : [], outcome: 'pending' });
+        await assert.rejects(completeDependencyIntake({ request, analysis: { impactJson: '', reviews: [review] } }, r.ports()), { code: 'invalid-analysis' }, start);
+        assert.equal(saved(), before, `${start}: a refused answer saves nothing`);
+      }
+    }
+    assert.equal(r.sent.length, 4, `${start}: one delivery and 3 repeats, no flood`);
+    assert.deepEqual(r.sent.map(s => s.again?.attempt ?? 0), [0, 1, 2, 3], start);
+    assert.equal(saved(), before + 1, `${start}: exactly one question`);
+    assert.match(w.comments[key(103)].at(-1).body, /Question: PDD sent the dependency review of .*issues\/103 4 times.*Last reason: not-completed/, start);
+    const g = await graph(w);
+    assert.equal(g.node(103).reviewState, 'question', start);
+    assert.equal(g.node(103).eligible, false, start);
+  }
+});
+
+test('an old saved pending review that names no link is reviewed again, and a complete answer makes the issue eligible', async () => {
+  const i17 = issue(17), i103 = issue(103);
+  const w = world({ issues: [i17, i103], comments: { [key(17)]: [savedReview('501', i17, [i17])], [key(103)]: [barePending('777', i103, [i17, i103])] } });
+  let g = await graph(w);
+  assert.equal(g.node(103).reviewState, 'stale');
+  assert.ok(g.node(103).reasons.includes('Stale review'));
+  assert.equal(g.node(103).eligible, false);
+  const r = redelivery(w);
+  assert.deepEqual((await r.tick(0)).queued, [key(103)], 'the old review is queued again');
+  assert.equal(r.sent.length, 1);
+  const { request } = r.sent[0];
+  const result = await completeDependencyIntake({ request, analysis: { impactJson: '', reviews: [answer(request, i103, { base: ['777'] })] } }, r.ports());
+  assert.equal(result.state, 'complete');
+  g = await graph(w);
+  assert.equal(g.node(103).reviewState, 'current');
+  assert.equal(g.node(103).eligible, true);
+  const next = await r.tick(31);
+  assert.deepEqual(next.queued, []);
+  assert.ok(next.eligible.includes(key(103)));
+  assert.equal(r.sent.length, 1, 'nothing more is sent');
+});
+
 test('the launcher names a repeated request and its reason, and does not send it while an earlier submission has uncertain custody', async t => {
   const dir = mkdtempSync(join(tmpdir(), 'pdd-redeliver-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
   const cwd = join(dir, 'repo'), home = join(dir, 'home'), stateRoot = join(dir, 'state');

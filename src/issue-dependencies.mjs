@@ -243,7 +243,9 @@ export function projectIssueGraph({ snapshot }) {
     const currentInputs = new Set([...snapshot.inputs.map(row => locator(row.key)), ...issues.keys(), `${key}${LINKS}`]);
     if (head && head.inputs.some(row => !currentInputs.has(locator(row.key)))) { reasons.push('Required context unavailable', `Observation unavailable: context ${key}`); covered = false; }
     let reviewState = selection.state, review = head?.id ?? '';
-    if (head) reviewState = !freshness(head, snapshot, issues, edges, reviews) ? 'stale' : head.outcome === 'complete' ? 'current' : head.outcome;
+    // A head whose own outcome is pending with no effects to apply (a bare pending
+    // answer that an earlier version saved) is reviewed again.
+    if (head) reviewState = !freshness(head, snapshot, issues, edges, reviews) || (head.outcome === 'pending' && head.effects !== 'pending') ? 'stale' : head.outcome === 'complete' ? 'current' : head.outcome;
     // A removed named link makes the review stale, so intake reviews it again.
     const humanChange = !!head && namedLinkRemoved(head, edges);
     const reviewReason = { unchecked: 'Unchecked', stale: 'Stale review', question: 'Review question', pending: 'Pending effects',

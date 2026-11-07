@@ -162,7 +162,9 @@ intact, confirmed review of the issue names and that is not linked now.
 ## Dependency and execution results
 
 `reviewState` follows the view above. No accepted record gives `unchecked`; an
-applicable but changed record gives `stale`. `review` is the selected head ID or
+applicable but changed record gives `stale`. A head whose own outcome is `pending`
+with effects other than `pending` also gives `stale`: it has no link to apply, so
+intake reviews it again. `review` is the selected head ID or
 empty when unresolved. Incomplete reads give dependencyState `unknown`.
 Persist unresolved install/deploy/product requirements as `questions` on a
 question review. An explicit trusted replacement resolves them; a restart does
