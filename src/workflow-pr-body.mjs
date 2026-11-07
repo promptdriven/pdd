@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-pr-body.prompt.md (sha256: 380278d3b4c3dc2de7b0f9cb6df81e368575f443e33a461ed37f8b042cae5c34).
+// Generated from prompts/cli/workflow-pr-body.prompt.md (sha256: 441cd742e14f1b94eedc21555cf9426cd8eb4c01eb86d7dc2c72e8c1183ce893).
 // The readable part of a pdd workflow PR (#3042): a status line, the user story, a short summary, a cases table, what
 // changed, a proof table from pdd's own records and one approval/next/merge line. The runner gathers the facts; this
 // module only renders them. Agent words appear only in the title, the summary and the cases table, always as inert text.
@@ -372,13 +372,25 @@ export function balancedDetails(text) {
 }
 
 // Agent Markdown that pdd shows whole in Details (verify.md, the verdict and change lines of a check): outside code
-// spans and fenced code, every closing keyword gets a zero-width space after it, as in the readable part. An address, a
-// link target and an HTML tag keep their text, so their links still work; a keyword at the end of an address gets one
-// too ("…/fixes #5"). So only pdd's own `Closes #N` can close an issue.
+// spans, fenced code and indented code blocks, every closing keyword gets a zero-width space after it, as in the readable
+// part. An address, a link target and an HTML tag keep their text, so their links still work; a keyword at the end of an
+// address gets one only when an issue reference follows ("…/fixes #5"), so "…/tree/fix" stays a working link. So only
+// pdd's own `Closes #N` can close an issue.
 const SHOWN = /((?:https?|ftp):\/\/[^\s<>]*|\bwww\.[^\s<>]*)|<\/?[A-Za-z][A-Za-z0-9-]*(?:[\s/][^<>\n]*)?>|\]\([^()\s]*\)|\b(fix(?:es|ed)?|close[sd]?|resolve[sd]?)\b(?!\u200b)/gi;
-const closingWords = text => text.replace(SHOWN, (token, address, word) => word ? `${word}\u200b` : address ? address.replace(/\b(fix(?:es|ed)?|close[sd]?|resolve[sd]?)$/i, '$1\u200b') : token);
+const REFERENCE_AFTER = /^[\s:*_~]*(?:[\w.-]+\/[\w.-]+)?#\d/;
+const closingWords = text => text.replace(SHOWN, (token, address, word, offset, whole) => word ? `${word}\u200b`
+  : address && REFERENCE_AFTER.test(whole.slice(offset + token.length)) ? address.replace(/\b(fix(?:es|ed)?|close[sd]?|resolve[sd]?)(?=[:*_~.,!?]*$)/i, '$1\u200b') : token);
+const LIST_ITEM = /^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:\s|$)/;
 export function closingInert(text) {
+  // An indented code block (4 spaces or a tab) starts after a blank line outside a list and stays exact, like a fence.
+  let code = false, blank = true, list = false;
   return textLines(text, line => {
+    const empty = !line.trim(), indented = /^(?: {4}|\t)/.test(line), wasBlank = blank;
+    blank = empty;
+    if (empty) return line;
+    if (indented && (code || (wasBlank && !list))) { code = true; return line; }
+    code = false;
+    if (LIST_ITEM.test(line)) list = true; else if (!indented && wasBlank) list = false;
     let out = '', at = 0;
     for (const match of line.matchAll(CODE_SPAN)) { out += closingWords(line.slice(at, match.index)) + match[0]; at = match.index + match[0].length; }
     return out + closingWords(line.slice(at));

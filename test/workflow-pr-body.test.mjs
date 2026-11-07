@@ -311,6 +311,22 @@ test('MF1 verify.md in Details closes nothing outside code; code, fences, addres
   assert.equal(closingInert(shown), shown, 'Again on its own output it changes nothing.');
 });
 
+// Wrong (#3042 review SF-A, SF-B): an evidence link that ends in a keyword word gets a zero-width space and stops
+// working, or a 4-space indented code block is changed.
+test('SF-A and SF-B: an address keeps its text unless an issue reference follows; an indented code block stays exact', () => {
+  const links = ['https://github.com/o/r/tree/issue-17-fix', '<https://github.com/o/r/compare/main...fix>', 'Branch https://github.com/o/r/tree/fixes, then CI.', 'www.example.com/close'];
+  for (const link of links) assert.equal(closingInert(link), link, link);
+  assert.equal(closingInert('See https://example.com/fixes #7'), `See https://example.com/fixes${ZW} #7`, 'a reference after it still makes the keyword inert');
+  assert.equal(closingInert('https://example.com/closes: o/r#3'), `https://example.com/closes${ZW}: o/r#3`);
+  const block = ['Results:', '', '    git commit -m "Fixes #7"', '', '    resolved #8', '', 'Fixes #9'].join('\n');
+  assert.deepEqual(closingInert(block).split('\n'), ['Results:', '', '    git commit -m "Fixes #7"', '', '    resolved #8', '', `Fixes${ZW} #9`]);
+  // Not code: an indented line right after a paragraph (a lazy continuation) or inside a list item.
+  assert.equal(closingInert('Results:\n    Fixes #7'), `Results:\n    Fixes${ZW} #7`);
+  assert.equal(closingInert('- step\n\n    Fixes #7'), `- step\n\n    Fixes${ZW} #7`);
+  assert.ok(!live(closingInert(block).split('\n').slice(-1).join('\n')));
+  for (const text of [block, ...links]) assert.equal(closingInert(closingInert(text)), closingInert(text), 'idempotent');
+});
+
 test('SF6 the description says to a person who edits it that pdd owns it; readers never see that note', () => {
   const body = readablePrBody(top(pr1Auto6()), 'Part of #1');
   assert.ok(body.includes(`${DETAILS_OPEN}\n\n${TOP_NOTE}\n\nPart of #1`));
