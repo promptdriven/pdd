@@ -229,7 +229,7 @@ git fetch origin
 pdd workflow run small-change 42
 ```
 
-ISSUE is the issue number (`42`). Add `--agent claude` to use Claude Code for the whole run. NAME is `small-change`, `bug`, `feature` or the name of [your own workflow](#8-make-your-own-workflow).
+ISSUE is the issue number (`42`). Add `--agent claude` to use Claude Code for the whole run, or an entry name such as `--agent "Claude (account-a)"` for one of [your own launchers](#many-accounts). NAME is `small-change`, `bug`, `feature` or the name of [your own workflow](#8-make-your-own-workflow).
 
 To build on an isolated topic branch, put that base on `origin`, then name its branch (without an `origin/` or `refs/` prefix):
 
@@ -624,6 +624,7 @@ pdd simulate my-story
 pdd simulate my-story --agent claude
 ```
 
+<a id="many-accounts"></a>
 Many accounts? List your agents in `~/.config/pdd/agents.json`:
 
 ```json
@@ -637,6 +638,27 @@ Many accounts? List your agents in `~/.config/pdd/agents.json`:
 ```
 
 Use `pdd simulate my-story --agent "Codex (account-b)"`, or choose a name in the picker. Each launcher has its own state, and the choice is remembered for the project. Detected defaults appear after your entries; set `"include_defaults": false` to show only your list. Only your user file supplies custom launchers; repository `.pdd/agents.json` files are ignored. `kind` chooses the read-only Codex, Claude or Gemini adapter. `command` is a program name or path, launched without a shell; leading `~` is expanded in paths and env values. Env overrides apply only to that launcher. Commands and env stay on your computer; only names and states reach the picker. Invalid configuration stops with a plain error.
+
+The same names work for workflow runs:
+
+```sh
+pdd workflow run feature 42 --agent "Claude (account-a)"
+pdd product start phone-1 --agent "Claude (account-a)"
+```
+
+The sign-in check at start runs that entry's command with `auth status` (Codex: `login status`) and the entry's env. Every chat of the run, also `pdd workflow open` and `--new`, starts that command with the normal agent arguments. The run saves the entry's name, kind and command. It saves only the names of the entry's env variables: pdd reads their values again from `agents.json` at each chat start, so a token in `env` never goes into the run folder. If you remove or rename the entry, the run stops with a clear message before it starts a chat; add the entry again. The built-in names `codex`, `claude`, `gemini` and `agy` always mean the built-in agents, so do not give an entry one of these names. An unknown name stops with a list of your entry names.
+
+`command` must be a file that can run, not a shell function or an alias, because pdd starts it without your shell startup files. A small script works. For example, `~/bin/claude-account-a` (run `chmod +x` on it):
+
+```sh
+#!/bin/sh
+unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
+CLAUDE_CODE_OAUTH_TOKEN="$(cat ~/.secrets/claude-account-a.token)"
+export CLAUDE_CODE_OAUTH_TOKEN
+exec claude "$@"
+```
+
+Each chat also gets the login variables of the person who runs the pdd command, not the ones of the terminal that first started the Herdr session `pdd`. See [the CLI reference](cli.md).
 
 The picker shows installation and sign-in state. You can switch agents; pdd remembers the choice for this project. A usage limit or sign-in error is shown in the chat without sending your message to another agent automatically. Codex and Claude use fresh read-only turns with your default model and login. Gemini CLI 0.66.0 uses a verified configuration with tools disabled; other Gemini versions are refused until their safety controls are verified. When its sign-in cannot be checked cheaply, the picker says it will be checked on the first message.
 

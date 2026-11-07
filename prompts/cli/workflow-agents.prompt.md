@@ -1,8 +1,8 @@
 # Choose an available workflow agent
 
-Own `src/workflow-agents.mjs`. Share readiness and selection between setup and workflow startup; a signed-out or missing optional agent must not block a ready one. For Codex and Claude, ready means credentials configured, not a successful provider authentication; expired/revoked credentials are not detected by status. This module does not start a chat, install a tool, change authentication, read credential files, or allocate a worktree. Gemini has no cheap authentication-status command: a successful `gemini --version` establishes installation and permits setup/startup; sign-in is checked when the chat starts. Antigravity CLI (`agy`) is ready when `agy models` lists models: it lists them only for a signed-in person and sends no model query; signed out, it exits 1 with a "sign in" line. No version is pinned. Its decisions use native noninteractive probes, with the caller's HOME, PATH, CODEX_HOME, CLAUDE_CONFIG_DIR and GEMINI_CLI_HOME unchanged. Try-page read-only capability checks are a separate policy.
+Own `src/workflow-agents.mjs`. Share readiness and selection between setup and workflow startup; a signed-out or missing optional agent must not block a ready one. For Codex and Claude, ready means credentials configured, not a successful provider authentication; expired/revoked credentials are not detected by status. This module does not start a chat, install a tool, change authentication, read credential files, or allocate a worktree. Gemini has no cheap authentication-status command: a successful `gemini --version` establishes installation and permits setup/startup; sign-in is checked when the chat starts. Antigravity CLI (`agy`) is ready when `agy models` lists models: it lists them only for a signed-in person and sends no model query; signed out, it exits 1 with a "sign in" line. No version is pinned. Its decisions use native noninteractive probes, with the caller's HOME, PATH, CODEX_HOME, CLAUDE_CONFIG_DIR and GEMINI_CLI_HOME unchanged; a named agents.json entry adds only its own env overrides. Try-page read-only capability checks are a separate policy.
 
-Export module functions `chooseWorkflowAgent({codex,claude,gemini,agy,requested})` and `checkWorkflowAgents({cwd,env,requested},ports)`. The pure chooser receives readiness states `ready`, `missing`, `signed_out` or `unavailable`; requested is absent, `codex`, `claude`, `gemini` or `agy`. Return `{ok,agent,message}`, with a selected agent and empty message on success, otherwise null agent and plain actionable guidance. Invalid states are unavailable; invalid requested names refuse without a probe. For compatibility, an omitted `gemini` or `agy` state on the pure chooser leaves that agent out of the candidate set and its guidance, unless it is explicitly requested. Native probing always supplies all four states.
+Export module functions `chooseWorkflowAgent({codex,claude,gemini,agy,requested})`, `checkWorkflowAgents({cwd,env,requested},ports)` and `workflowAgentEntry(requested,{cwd,env})`, and the constant `LOGIN_VARIABLES`. The pure chooser receives readiness states `ready`, `missing`, `signed_out` or `unavailable`; requested is absent, `codex`, `claude`, `gemini` or `agy`. Return `{ok,agent,message}`, with a selected agent and empty message on success, otherwise null agent and plain actionable guidance. Invalid states are unavailable; invalid requested names refuse without a probe. For compatibility, an omitted `gemini` or `agy` state on the pure chooser leaves that agent out of the candidate set and its guidance, unless it is explicitly requested. Native probing always supplies all four states.
 
 | Choice | Outcome |
 | --- | --- |
@@ -21,9 +21,39 @@ A native ENOENT counts as missing only with the process port's explicit executab
 
 Gemini CLI serves only a paid Gemini API key, Vertex AI or Code Assist; free and Google One accounts use Antigravity CLI. When `checkWorkflowAgents` selects Gemini and none of `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_GENAI_USE_VERTEXAI` or `GOOGLE_GENAI_USE_GCA` is set in the caller environment, add `hint`: `With a free or Google One account, Gemini CLI does not run; use Antigravity CLI: --agent agy.` It is one line, does not change the selection and reads no files. Otherwise there is no `hint` field. Delegate Codex/Claude response interpretation to [the shared credential-status owner](agent-adapters.prompt.md#shared-credential-status-interpretation) parseAgentAuthStatus. Transport failures, interrupted/overlong responses and untyped status remain unavailable; wrapper banners cannot establish Claude readiness. Do not infer readiness from a config folder or another agent's result.
 
+## Login variables
+
+`LOGIN_VARIABLES` is the one list, per agent kind, of the environment variables that choose an agent's login or account. Every chat launch and resume in the [chat owner](workflow-chat.prompt.md#chat-login) uses it. It is a frozen object of frozen arrays:
+
+| Kind | Login variables |
+| --- | --- |
+| `claude` | `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX` |
+| `codex` | `OPENAI_API_KEY`, `CODEX_API_KEY`, `OPENAI_BASE_URL` |
+| `gemini` | `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_GENAI_USE_GCA`, `GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_CLOUD_PROJECT` |
+| `agy` | none: Antigravity CLI keeps its sign-in in the person's home |
+
+The config-folder variable (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `GEMINI_CLI_HOME`) is not in this list: the run saves it as `configDir`, and the chat owner sets or unsets it from that saved value. This module never reads, prints or stores a login value.
+
+## Named agents.json entries
+
+`--agent` names a built-in agent (`codex`, `claude`, `gemini`, `agy`) or the `name` of an entry in the person's `~/.config/pdd/agents.json` ([named local agents](agent-config.prompt.md)). `workflowAgentEntry(requested,{cwd,env})` decides which, without a probe:
+
+| `requested` | Result |
+| --- | --- |
+| absent, or a built-in name | `{ok:true, agent:requested, definition:null}`; agents.json is not read, so a built-in name works exactly as before, also when an entry has that name |
+| the name of an enabled default entry (`Codex`, `Claude`, `Gemini`) | `{ok:true, agent:<its kind>, definition:null}`: it is the built-in agent |
+| the name of a custom entry | `{ok:true, agent:<its kind>, definition:{name,kind,command,env}}`, the loaded record with `~` already expanded |
+| any other text | `{ok:false, agent:null, message}`: `Unknown agent "<text>". Choose --agent codex, --agent claude, --agent gemini or --agent agy, or a name from ~/.config/pdd/agents.json: "<name>", "<name>".` with every custom entry name in file order, or `… or --agent agy. ~/.config/pdd/agents.json has no agent with that name.` when it has none |
+| any text while agents.json is invalid | `{ok:false, agent:null, message}`: the loader's plain error, then `Fix ~/.config/pdd/agents.json, or choose --agent codex, --agent claude, --agent gemini or --agent agy.` |
+
+The requested text and the names are shown as JSON strings, so a control character stays visible and harmless. The message never shows a command or an env value.
+
+`checkWorkflowAgents` with a requested entry name resolves it first. A refusal returns that refusal without a probe. For a custom entry it runs the same status command as for its kind, but with the entry's `command` as the program and the caller environment plus the entry's `env` overrides: the same program and environment that the chat starts. It returns the chooser result for that kind plus `name` (the entry name) on success. A not-ready entry gets one line: `<agent display name> (agents.json entry "<name>") is not signed in. Sign in with that entry's command, then run the command again.`, `… is not installed or its command was not found. Fix the command in ~/.config/pdd/agents.json.` or `… sign-in could not be checked. Run that entry's command with <status arguments>.`; it never shows the command text. A built-in request keeps its exact earlier probes, guidance and result, with no `name` field.
+
 ## Dependencies
 
 - Load the [Prompting guide](../../docs/prompting-guide.md) for authoring and generation.
+- [Named local agents](agent-config.prompt.md) owns `loadAgentDefinitions` and the agents.json format, validation and `~` expansion; this module only selects an entry by name.
 - [Agent adapters](agent-adapters.prompt.md) owns the reusable `runAgentProcess` native process boundary, including closed input, process cleanup, bounded output, executableMissing evidence and the shared parseAgentAuthStatus credential-status rules. This module supplies only status commands, the caller environment and the probe bounds; it does not use Try discovery or invoke the model adapter.
 - The [CLI](pdd-cli.prompt.md) and [runner](workflow-runner.prompt.md) own setup/startup dispatch and all subsequent effects. A refused readiness result must not be interpreted as a started workflow. They do not infer readiness themselves.
 - Native command reference: [Claude Code CLI](https://code.claude.com/docs/en/cli-reference). Commands and accepted readiness facts are specified above so generation does not depend on a live documentation fetch.
@@ -34,7 +64,7 @@ Gemini CLI serves only a paid Gemini API key, Vertex AI or Code Assist; free and
 ```json
 {
   "status": "draft",
-  "prose_sha256": "37a067a1650d92e204a5f8161a92f59ab49f91ef31c1f0fa91db2c3af029e414",
+  "prose_sha256": "99546282c196f59da4a47dcc74f2a1b84b1b9e70639795473e7017f5549a5dac",
   "entries": [{
     "operation": "chooseWorkflowAgent",
     "input_schema": {
