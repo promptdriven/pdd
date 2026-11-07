@@ -17,9 +17,16 @@ export function validSort(record) {
     && list(r.paths) && r.paths.every(x => x && !x.startsWith('/') && !x.split('/').includes('..')) && text(r.rootCause) && (!r.rootCause || /^[a-z\d]+(?:-[a-z\d]+)*$/.test(r.rootCause)) && ['high','medium','low'].includes(r.severity) && text(r.question));
 }
 export function sortInputs(snapshot, issue) {
-  return [{ key: issue.key, revision: issue.revision }, ...(snapshot.inputs ?? []).filter(x => x.key === snapshot.sortContext?.key || x.key.startsWith(`${issue.key}#issuecomment-`))];
+  return [{ key: issue.key, revision: issue.revision }, ...(snapshot.inputs ?? []).filter(x => x.key === snapshot.sortContext?.key || x.key === `${issue.key}#sort-labels` || x.key.startsWith(`${issue.key}#issuecomment-`))];
 }
+export function sortCovered(snapshot, issue) {
+  if (!snapshot.coverage) return snapshot.complete === true;
+  const row = snapshot.coverage.issues?.find(x => x.key === issue.key);
+  return snapshot.coverage.scope === true && !!row && ['issue','authority','comments','context','execution'].every(k => row[k] === true);
+}
+export const sortSourceKey = (repository, path) => `https://github.com/${repository.toLowerCase()}/blob/HEAD/${path.split('/').map(encodeURIComponent).join('/')}`;
 export function selectedSort(snapshot, issue) {
+  if (!issue || !sortCovered(snapshot, issue)) return null;
   const all = (issue.sorts ?? []).filter(x => x.authority !== 'outsider');
   const superseded = new Set(all.filter(x => x.authority === 'trusted' && x.intact && validSort(x.record)).flatMap(x => x.record.base));
   const heads = all.filter(x => !superseded.has(x.id));
@@ -27,7 +34,7 @@ export function selectedSort(snapshot, issue) {
   const head = heads[0], r = head.record;
   if (!head.intact || head.authority !== 'trusted' || !validSort(r) || r.issue !== issue.key || r.status.release !== snapshot.sortContext?.release) return null;
   const current = new Map([...snapshot.issues, ...snapshot.inputs].map(x => [x.key, x.revision]));
-  if (r.inputs.some(x => current.get(x.key) !== x.revision) || sortInputs(snapshot, issue).some(x => !r.inputs.some(y => y.key === x.key && y.revision === x.revision))) return null;
+  if (r.paths.some(path => !r.inputs.some(x => x.key === sortSourceKey(snapshot.repository, path))) || r.inputs.some(x => current.get(x.key) !== x.revision) || sortInputs(snapshot, issue).some(x => !r.inputs.some(y => y.key === x.key && y.revision === x.revision))) return null;
   return r;
 }
 export function sortPlan({ snapshot }) {
@@ -47,6 +54,7 @@ export function sortPlan({ snapshot }) {
     const area = resolveArea({ ...snapshot.sortContext, evidence: { paths: record.paths, keywords: [issue.title], labels: issue.labels ?? [], repository: record.belongs.kind === 'repository' ? record.belongs.repository : '', area: record.belongs.area } });
     Object.assign(route, { area: area.area, owner: area.owner });
     if (record.belongs.kind === 'unknown' || area.state === 'unsure') { route.action = live ? 'hold' : 'question'; route.reason = 'needs-owner'; continue; }
+    if (record.belongs.kind === 'repository' && area.owner === 'autopilot') { route.action = live ? 'hold' : 'link'; route.owner = `repo:${record.belongs.repository}`; route.reason = 'another-repository'; continue; }
     if (area.owner !== 'autopilot') { route.action = live ? 'hold' : area.owner.startsWith('repo:') ? 'link' : 'assign'; route.reason = 'another-owner'; continue; }
     if (record.question || record.status.state === 'unclear' || record.genuine.kind === 'unclear') { route.action = live ? 'hold' : 'question'; route.reason = 'needs-answer'; continue; }
     route.action = live ? 'hold' : 'work'; route.reason = live ? 'owned' : 'local';
@@ -81,10 +89,19 @@ export function projectSortGraph(snapshot, graph) {
     if (blockers.some(x => group.members.includes(x))) {
       for (const member of members) { member.eligible = false; member.reasons.push('Group needs dependency review'); }
     }
+    const prospective = [...graph.edges, ...group.members.filter(x => x !== group.umbrella).map(dependent => ({ dependent, blocker: group.umbrella }))];
+    const cycle = (key, stack = new Set(), done = new Set()) => {
+      if (stack.has(key)) return true;
+      if (done.has(key)) return false;
+      stack.add(key);
+      if (prospective.filter(x => x.dependent === key).some(x => cycle(x.blocker, stack, done))) return true;
+      stack.delete(key); done.add(key); return false;
+    };
+    if (cycle(group.umbrella)) for (const member of members) { member.eligible = false; member.reasons.push('Group dependency cycle'); }
     for (const blocker of blockers.filter(x => !group.members.includes(x))) {
       if (!umbrella.blockers.includes(blocker)) umbrella.blockers.push(blocker);
       const native = graph.nodes.find(x => x.key === blocker);
-      if (!native || !['completed','not_planned'].includes(native.nativeState)) { umbrella.eligible = false; umbrella.reasons.push('Group prerequisite pending'); }
+      if (!native || native.nativeState !== 'completed') { umbrella.eligible = false; umbrella.reasons.push('Group prerequisite pending'); }
     }
   }
   for (const node of graph.nodes) {

@@ -249,6 +249,8 @@ must expose a concurrent cycle and stop affected starts.
 None. Runtime schemas below are the required public normalized observation and
 projection declarations. Empty `continuation` and `review` mean absent identity.
 
+
+Sort groups and readiness are owned by [issue-sort](issue-sort.prompt.md). With sortContext, overlay sort holds and group waits on the projected graph without changing native dependency links or reviews.
 <details><summary>Runtime interface</summary>
 
 ```json

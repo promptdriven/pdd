@@ -1,6 +1,7 @@
 import { validateSnapshot } from './metrics-store.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
-import { createDependencyReadPorts } from './issue-dependencies-github.mjs';
+import { sortClosingReferences } from './issue-sort.mjs';
+import { readDependencySnapshot, createDependencyReadPorts } from './issue-dependencies-github.mjs';
 // Generated from prompts/cli/workflow-runner.prompt.md (sha256: 33dc44a7518d2fb7bf424398daf54496e911059e51d2bb93abd85e77ba1308dd).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
@@ -1361,6 +1362,14 @@ async function publishAreaPr(run, area, p, lines, retry) {
     commitRun(run,p,latest=>{applyPublication(latest);if(last&&latest.done[last])latest.done[last].replayEvidence=evidence;});
   }
 
+  // #3053: current shared-cause members travel with the umbrella's PR pair.
+  if (run.automaticOrigin) {
+    try {
+      const { snapshot } = await (p.readDependencySnapshot ?? readDependencySnapshot)({ cwd: run.sourceRoot || run.root, repository: run.repo }, p);
+      const references = sortClosingReferences({ snapshot, issue: `https://github.com/${run.repo.toLowerCase()}/issues/${run.number}`, code: label !== 'PR 1' });
+      prepared = { ...prepared, issueReference: [prepared.issueReference, ...references].join('\n') };
+    } catch { /* Unproved members get no closing promise. */ }
+  }
   const bodyBase = run.prBase ?? run.baseBranch;
   const bodyDrafts = label === 'PR 1' ? await draftPrompts(run, p, run.branch, bodyBase) : [];
   const bodyTests = label === 'PR 1' ? (await worktreeContents(run, p)).tests.length > 0 : true;

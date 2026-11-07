@@ -118,6 +118,8 @@ The record base must name all heads it resolves. Never record draft prompt appro
 or invent a person's approval words as part of semantic completion.
 
 <a id="pending-reasons"></a>
+
+Sort integration is owned by [issue-sort-github](issue-sort-github.prompt.md). Prepare carries sort context and selects stale sort subjects too. Complete accepts analysis.sorts with that context, validates the whole batch before effects, and saves/routes the records after ordinary review validation. Reconciliation routes current sorts; automatic start requires a current work route and an umbrella, never a member. Legacy direct value callers without sort context retain their existing interface.
 <details><summary>Pending reasons, rows and the completion note</summary>
 
 Every pending result names a `reason`, so the coordinator can act on it:

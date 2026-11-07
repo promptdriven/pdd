@@ -312,6 +312,8 @@ authority observation remains unknown. Never infer coverage for a legacy packet.
 - [Existing trust owner](autopilot.prompt.md): generation/verification context for
   repository-bound `authority.read`; its existing policy must be reused unchanged.
 
+
+Sort integration is owned by [issue-sort-github](issue-sort-github.prompt.md). Collect sort comments on each issue, exclude them from requirement text, and attach current local area/release context. Reuse the existing snapshot reads.
 <details><summary>Runtime interface</summary>
 
 ```json

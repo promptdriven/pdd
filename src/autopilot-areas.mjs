@@ -37,7 +37,7 @@ export function resolveArea({ areas, codeowners = '', evidence = {} }) {
     return resolved('codeowners', matches[0].owners[0], 'codeowners');
   }
   if (repository) return unsure('evidence');
-  return resolved(area || 'default', 'autopilot', 'default');
+  return resolved('default', 'autopilot', 'default');
 }
 export function draftAreas({ codeowners = '', folders = [], labels = [], assignees = [] }) {
   const areas = parseCodeowners(codeowners).filter(row => row.owners.length === 1 && login(row.owners[0])).map((row, i) => ({ name: `area-${i + 1}`, match: { paths: [row.pattern] }, owner: row.owners[0] }));

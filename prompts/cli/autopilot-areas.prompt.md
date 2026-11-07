@@ -16,7 +16,7 @@ map and no match, use the coordinator's named area when valid, else wait.
 Parse CODEOWNERS locally. Follow GitHub order: the last matching path rule wins.
 Ignore comments and unsupported patterns. Multiple owners or teams need a person;
 never select one. Different owners across examined paths wait. Without an
-explicit map or a matching CODEOWNERS entry, one default area belongs to Autopilot.
+explicit map or a matching CODEOWNERS entry, one area named default belongs to Autopilot, regardless of the coordinator's area hint.
 An external repository with no owner rule waits.
 
 `draftAreas({codeowners,folders,labels,assignees})` returns a proposed areas list
@@ -28,3 +28,11 @@ never approves or writes it.
 ## Dependencies
 
 None. All inputs are values. Files are read by issue-sort-github.
+
+
+<details><summary>Runtime interface</summary>
+
+```json
+{"status":"draft","prose_sha256":"","entries":[{"operation":"resolveArea","input_schema":{"type":"object","properties":{"areas":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"owner":{"type":"string"},"match":{"type":"object","properties":{"paths":{"type":"array","items":{"type":"string"}},"keywords":{"type":"array","items":{"type":"string"}},"labels":{"type":"array","items":{"type":"string"}},"repositories":{"type":"array","items":{"type":"string"}}},"required":[],"additionalProperties":false}},"required":["name","owner","match"],"additionalProperties":false}},"codeowners":{"type":"string"},"evidence":{"type":"object","properties":{"paths":{"type":"array","items":{"type":"string"}},"keywords":{"type":"array","items":{"type":"string"}},"labels":{"type":"array","items":{"type":"string"}},"repository":{"type":"string"},"area":{"type":"string"}},"required":[],"additionalProperties":false}},"required":[],"additionalProperties":false},"result_schema":{"type":"object","properties":{"state":{"type":"string","enum":["resolved","unsure"]},"area":{"type":"string"},"owner":{"type":"string"},"source":{"type":"string","enum":["config","codeowners","evidence","default"]}},"required":["state","area","owner","source"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":2},"conventions":[]}
+```
+</details>

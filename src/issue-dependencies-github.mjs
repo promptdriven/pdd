@@ -1,3 +1,4 @@
+import { sortPastAssignees, sortBookkeeping, readSortComment, addSortContext } from './issue-sort-github.mjs';
 // Implements prompts/cli/issue-dependencies-github.prompt.md.
 import { execFile as execCallback } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -50,7 +51,7 @@ const blockedByRemoval = event => {
 // A pdd command outside the Autopilot tick records its gh calls in the ledger of the repository that each call names.
 const execute = nativeGithubCounter(spawnRead, { purpose: 'dependencies' });
 const uniqueRows = rows => [...new Map(rows.map(r => [canonical(r.key), { key: canonical(r.key), revision: r.revision }])).values()];
-const bookkeeping = body => /<!--\s*pdd(?:-dependency-(?:review|impact)|[: -](?:autopilot|claim|working|sync))/i.test(body ?? '')
+const bookkeeping = body => sortBookkeeping(body) || /<!--\s*pdd(?:-dependency-(?:review|impact)|[: -](?:autopilot|claim|working|sync))/i.test(body ?? '')
   || /"coordinatorId"\s*:/.test(body ?? '') && /"labelEventId"\s*:/.test(body ?? '');
 
 function spawnRead(file, args, options = {}) {
@@ -119,7 +120,7 @@ async function bulkRoots(cwd, repository, roots, ports) {
     comments(first:100) { nodes { fullDatabaseId body createdAt updatedAt author { login } } pageInfo { hasNextPage } }
     blockedBy(first:100) { nodes { url } pageInfo { hasNextPage } }
     blocking(first:100) { nodes { url } pageInfo { hasNextPage } }
-    timelineItems(first:100,itemTypes:[CROSS_REFERENCED_EVENT]) { nodes { ... on CrossReferencedEvent { source { __typename ... on PullRequest { state } } } } pageInfo { hasNextPage } }`;
+    timelineItems(first:100,itemTypes:[CROSS_REFERENCED_EVENT,ASSIGNED_EVENT]) { nodes { __typename ... on AssignedEvent { assignee { ... on User { login } ... on Bot { login } } } ... on CrossReferencedEvent { source { __typename ... on PullRequest { state } } } } pageInfo { hasNextPage } }`;
   for (let offset = 0; offset < eligible.length; offset += 25) {
     const batch = eligible.slice(offset, offset + 25), [owner, name] = repository.split('/');
     const query = `query($owner:String!,$name:String!${batch.map((_, index) => `,$n${index}:Int!`).join('')}) { repository(owner:$owner,name:$name) { ${batch.map((_, index) => `i${index}:issue(number:$n${index}) { ${selection} }`).join(' ')} } }`;
@@ -138,14 +139,14 @@ async function bulkRoots(cwd, repository, roots, ports) {
       if (row.comments.nodes.some(x => !object(x) || !/^[1-9][0-9]*$/.test(String(x.fullDatabaseId ?? '')) || typeof x.body !== 'string'
         || typeof x.createdAt !== 'string' || typeof x.updatedAt !== 'string' || !object(x.author) || typeof x.author.login !== 'string')) return;
       if ([...row.blockedBy.nodes, ...row.blocking.nodes].some(x => !object(x) || !info(x.url))) return;
-      if (row.timelineItems.nodes.some(x => !object(x) || !object(x.source) || typeof x.source.__typename !== 'string'
+      if (row.timelineItems.nodes.filter(x => x?.__typename !== 'AssignedEvent').some(x => !object(x) || !object(x.source) || typeof x.source.__typename !== 'string'
         || x.source.__typename === 'PullRequest' && !['OPEN','CLOSED','MERGED'].includes(x.source.state))) return;
       const raw = { id: String(row.fullDatabaseId), number: row.number, html_url: row.url, title: row.title, body: row.body,
         state: 'open', state_reason: row.stateReason, user: {login:row.author.login}, labels: row.labels.nodes, assignees: row.assignees.nodes };
       const pages = {
         comments: row.comments.nodes.map(x => ({id:String(x.fullDatabaseId),body:x.body,created_at:x.createdAt,updated_at:x.updatedAt,user:{login:x.author.login}})),
         blockedBy: row.blockedBy.nodes.map(x => ({html_url:x.url})), blocking: row.blocking.nodes.map(x => ({html_url:x.url})),
-        timeline: row.timelineItems.nodes.filter(x => x.source.__typename === 'PullRequest').map(x => ({event:'cross-referenced',source:{issue:{pull_request:{},state:x.source.state === 'OPEN' ? 'open' : 'closed'}}})),
+        timeline: [...row.timelineItems.nodes.filter(x => x.__typename === 'AssignedEvent').map(x => ({event:'assigned',assignee:x.assignee})), ...row.timelineItems.nodes.filter(x => x.source?.__typename === 'PullRequest').map(x => ({event:'cross-referenced',source:{issue:{pull_request:{},state:x.source.state === 'OPEN' ? 'open' : 'closed'}}}))],
       };
       result.set(info(row.url).key, {raw,pages});
     });
@@ -194,7 +195,7 @@ function rawGithub(cwd, ports) {
       const existing = await allPages(github, repository, 'comments', issue);
       const equal = row => {
         const other = parseRecord(row.body);
-        return record && other && record.type === other.type && JSON.stringify(record.value) === JSON.stringify(other.value);
+        return sortBookkeeping(body) ? row.body === body : record && other && record.type === other.type && JSON.stringify(record.value) === JSON.stringify(other.value);
       };
       let row = existing.find(equal);
       if (!row) {
@@ -209,6 +210,19 @@ function rawGithub(cwd, ports) {
       const readback = (await s.api(`repos/${repository}/issues/comments/${row.id}`)).value;
       if (readback.id !== row.id || !equal(readback)) throw Error('Comment append readback is unresolved');
       return { json: JSON.stringify(readback) };
+    },
+    // #3053: one native update; the sort owner paces every write.
+    ensureSortLabel: async ({ repository, label, write }) => {
+      try { await s.api(`repos/${repository}/labels/${encodeURIComponent(label)}`); }
+      catch (error) { if (error.status !== 404) throw error; await write(() => s.api(`repos/${repository}/labels`, 'POST', JSON.stringify({ name: label, color: 'ededed' }))); }
+    },
+    sortUpdate: async ({ repository, issue, label, assignee, close }) => {
+      const endpoint = `repos/${repository}/issues/${issue}`;
+      if (label) await s.api(`${endpoint}/labels`, 'POST', JSON.stringify({ labels: [label] }));
+      else await s.api(endpoint, 'PATCH', JSON.stringify(assignee ? { assignees: [assignee] } : { state: 'closed' }));
+      const observed = (await s.api(endpoint)).value;
+      if (label ? !observed.labels?.some(x => x.name === label) : assignee ? !observed.assignees?.some(x => x.login === assignee) : observed.state !== 'closed') throw Error('sort-write-pending');
+      return { ok: true };
     },
     addBlocker: async ({ repository, issue, blockerId }) => {
       if (!/^[1-9][0-9]*$/.test(blockerId)) throw Error('Invalid REST issue identity');
@@ -566,6 +580,7 @@ function nativeOwners(cwd, ports) {
 
 export function createDependencyReadPorts({ cwd = '' } = {}, supplied = {}, scope = nativeReadScope()) {
   const ports = { ...supplied };
+  ports.cwd ??= cwd; // #3053: preserve the selected checkout at paced route admission.
   Object.defineProperty(ports, NATIVE_READ_SCOPE, { value: scope });
   ports.github ??= rawGithub(cwd, ports);
   ports.authority = supplied.authority?.[NATIVE_AUTHORITY] ? nativeAuthority(cwd, ports) : supplied.authority ?? nativeAuthority(cwd, ports);
@@ -678,7 +693,7 @@ export async function readDependencySnapshot({ cwd = '', repository, inputs = []
     if (labels.includes('pdd:working')) holds.push('Claimed');
     if (labels.includes('pdd:stuck')) holds.push('Stuck');
     if (labels.includes('pdd:code-pending')) holds.push('Code pending');
-    const issue = { key, nodeId: /^[1-9][0-9]*$/.test(String(raw.id)) ? String(raw.id) : '', title: raw.title ?? '', revision: requirementRevision,
+    const issue = { key, sorts: [], labels, nodeId: /^[1-9][0-9]*$/.test(String(raw.id)) ? String(raw.id) : '', title: raw.title ?? '', revision: requirementRevision,
       state: !detailKnown ? 'unknown' : raw.state === 'open' ? 'open' : raw.state === 'closed' ? raw.state_reason === 'not_planned' ? 'not_planned' : 'completed' : 'unknown',
       authority: authority.authority === 'trusted' ? 'trusted' : authority.authority === 'outsider' ? 'untrusted' : 'unknown',
       conditions: conditionRows.map(c => c.text ?? c.condition).filter(Boolean), execution: execution?.execution ?? execution?.state ?? (labels.includes('pdd:working') ? 'running' : context.nativeExecution ? 'unknown' : 'idle'), holds: [...new Set(holds)],
@@ -689,9 +704,13 @@ export async function readDependencySnapshot({ cwd = '', repository, inputs = []
     for (const kind of ['comments', 'blockedBy', 'blocking', 'timeline']) {
       let items;
       try { items = await allPages(ports.github, i.repository, kind, i.issue); } catch (e) { items = e.partialItems ?? []; missing(kind, `Incomplete ${kind}: ${key}`); }
+      if (kind === 'timeline') issue.pastAssignees = sortPastAssignees(items); // #3053: draft evidence only.
       if (kind === 'comments') for (const comment of items) {
         const current = await authorityFor(i.repository, comment.user?.login ?? '');
         if (!['trusted','outsider'].includes(current.authority)) missing('comments', `Comment authority unavailable: ${key}`);
+        // #3053: reuse the comments already observed for dependencies.
+        const sort = readSortComment(comment, current.authority);
+        if (sort) { issue.sorts.push(sort); continue; }
         const record = normalizedRecord(comment, key, current.authority);
         if (record) {
           if (record.type === 'review') { reviews.push(record.value); for (const d of record.value.dependencies) if (info(d.key)) queue.push(info(d.key).key); }
@@ -729,7 +748,7 @@ export async function readDependencySnapshot({ cwd = '', repository, inputs = []
     } catch { warn('Execution observations are unavailable'); }
     for (const issue of local) if (issue.execution === 'unknown') { const row = coverageByKey.get(issue.key); row.execution = false; row.missing.push('Execution observation unavailable'); }
   }
-  const required = uniqueRows([...inputs, ...reviews.flatMap(r => nonIssueRows(r.inputs)), ...impacts.flatMap(i => nonIssueRows(i.inputs))]);
+  const required = uniqueRows([...inputs, ...reviews.flatMap(r => nonIssueRows(r.inputs)), ...impacts.flatMap(i => nonIssueRows(i.inputs)), ...issues.flatMap(i => (i.sorts ?? []).flatMap(s => s.intact ? nonIssueRows(s.record.inputs).filter(x => !/#(?:autopilot-areas|sort-labels)$/.test(x.key)) : []))]);
   if (required.length) {
     try {
       const extra = parse((await readContext({ cwd, repository, inputs: required })).json);
@@ -751,7 +770,10 @@ export async function readDependencySnapshot({ cwd = '', repository, inputs = []
   }
   const dedupEdges = [...new Map(edges.map(e => [`${e.dependent}\n${e.blocker}`, e])).values()];
   const capturedAt = (await ports.clock.now({})).iso;
-  return { snapshot: { repository, capturedAt, complete, issues, edges: dedupEdges, reviews, impacts, inputs: uniqueRows(context.inputs ?? []), coverage, warnings }, warnings };
+  // #3053: local sort configuration is read once with this snapshot.
+  const snapshot = { repository, capturedAt, complete, issues, edges: dedupEdges, reviews, impacts, inputs: uniqueRows(context.inputs ?? []), coverage, warnings };
+  if (supplied.sortContext || !supplied.github || supplied.github[NATIVE_GITHUB]) await addSortContext(snapshot, await selectedCheckout(cwd, repository, ports) || '', ports);
+  return { snapshot, warnings };
 }
 
 function validRows(rows) { return Array.isArray(rows) && rows.every(r => object(r) && typeof r.key === 'string' && typeof r.revision === 'string' && r.revision); }
