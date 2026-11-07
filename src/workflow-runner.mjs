@@ -1,7 +1,7 @@
 import { validateSnapshot } from './metrics-store.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
 import { createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 33dc44a7518d2fb7bf424398daf54496e911059e51d2bb93abd85e77ba1308dd).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 486dcb83b6857f762adcbfa8cefd4b4b1f0cee41329b8773e722435ede610ac6).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -1280,17 +1280,29 @@ function formalCounterexample(run) {
 const resultText = summary => oneLine(summary).replace(/^[^:]*:\s*/, '');
 const STORY_FILE = /(?:^|\/)user_stories\/[^/]+\.md$/;
 // The Story paths that the step summaries name; `extra` is the summary of a step that `done` records now.
-const namedStories = (run, extra = '') => [...run.areas.flatMap(item => item.steps).filter(step => run.done[step]).map(step => run.done[step]?.summary ?? ''), extra]
-  .flatMap(summary => String(summary).match(/\buser_stories\/[\w./-]+\.md\b/g) ?? []);
+const safeStoryPath = path => typeof path === 'string' && isStoryPath(path) && !isAbsolute(path)
+  && !/^[A-Za-z]:[\\/]/.test(path) && !path.split('/').includes('..') && !/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(path);
+function namedStories(run, extra = '') {
+  const summaries = [...run.areas.flatMap(item => item.steps).filter(step => run.done[step]).map(step => String(run.done[step]?.summary ?? '')), String(extra)];
+  let paths; try { paths = gitFiles(run.root).filter(safeStoryPath); } catch { return []; }
+  // Match actual repository names, not an ASCII approximation or a relative suffix of an unsafe reference.
+  return paths.filter(path => summaries.some(summary => {
+    for (let at = summary.indexOf(path); at !== -1; at = summary.indexOf(path, at + 1)) {
+      const before = summary[at - 1] ?? '', after = summary.slice(at + path.length);
+      if (!/[\p{L}\p{N}_./\\-]/u.test(before) && !/^[\p{L}\p{N}_/\\-]|^\.[\p{L}\p{N}_]/u.test(after)) return true;
+    }
+    return false;
+  }));
+}
 // The Story files of a run: each changed user_stories/*.md (not PLAN.md or README.md) and each one that a step summary names.
 function runStoryPaths(run, files) {
-  return [...new Set([...files, ...namedStories(run)])].filter(path => STORY_FILE.test(path) && !/^(?:plan|readme)\.md$/i.test(path.split('/').at(-1)) && !path.split('/').includes('..'));
+  return [...new Set([...files, ...namedStories(run)])].filter(path => safeStoryPath(path) && STORY_FILE.test(path));
 }
 // #3029: true when a Story of the run (changed or named, user_stories/**/S.md) or the Story of an anchored scenario has
 // `## Rules to check`; false when pdd read a Story of the run and none has it; null (unknown) when pdd found no Story file.
 function storyRulesToCheck(run, files, extra) {
   const anchored = (run.replayBaseline?.vectors ?? []).map(vector => vector?.snapshot?.story_path);
-  const paths = [...new Set([...files, ...namedStories(run, extra), ...anchored])].filter(path => typeof path === 'string' && isStoryPath(path) && !isAbsolute(path) && !path.split('/').includes('..'));
+  const paths = [...new Set([...files, ...namedStories(run, extra), ...anchored])].filter(safeStoryPath);
   let read = false;
   for (const path of paths) {
     let text; try { text = readFileSync(join(run.root, path), 'utf8'); } catch { continue; }

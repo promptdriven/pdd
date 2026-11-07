@@ -135,6 +135,8 @@ the control command and its nonzero exit code:
 }
 ```
 
+Named Story paths can contain Unicode and spaces. Name the complete repository-relative path in a step summary, bare, quoted, in a code span or in a Markdown link. pdd resolves it against Git-visible Story files and checks every resolved Story. Absolute paths, `..` components and control characters are refused.
+
 When a Story of the run has `## Rules to check`, the code PR is not ready to merge until the formal status
 is recorded with Proved (bounded), Proved (solver) or Not applicable. A Failed result stays publishable with
 its failure line and is not ready to merge.
