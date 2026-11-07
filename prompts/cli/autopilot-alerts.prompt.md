@@ -2,7 +2,8 @@
 
 `src/autopilot-alerts.mjs` lets Autopilot tell a person about an operational
 incident or a real human decision. Each person sets their own destination once
-per machine: a Discord or Slack incoming webhook. The coordinator sends one
+per machine: a Discord or Slack incoming webhook, or a Discord bot that posts in
+one channel. The coordinator sends one
 alert per incident, material updates and one recovery message. The answer goes
 on the GitHub issue, so it stays with the original run.
 
@@ -25,12 +26,51 @@ This is a new public interface.
   0700. Write the file atomically with mode 0600. If a read finds wider file
   permissions, set them back to 0600.
 
+## A Discord bot destination
+
+`set` with `discordChannel` (from `--discord-channel ID`) saves a bot
+destination instead of a webhook. The channel ID has 17 to 20 digits. The bot
+token comes from one of two places:
+
+- stdin (`text`), when `tokenCommand` is absent. Save
+  `{"v":1,"service":"discord-bot","channel":ID,"token":TOKEN}` like the webhook,
+  with mode 0600. A token is 20 to 256 characters of letters, digits, `.`, `_`
+  and `-`.
+- `tokenCommand` (from `--token-command CMD`), for example a cloud secret
+  manager command. Save `{"v":1,"service":"discord-bot","channel":ID,"tokenCommand":CMD}`
+  and no token. Run CMD with `/bin/sh -c` in `cwd` at each send and each test,
+  with a 30-second limit. Its trimmed stdout is the token. A nonzero exit, a
+  timeout or output that is not a token is the result `failed` with detail
+  `token command failed (exit N)` or `token command gave no token`; nothing is
+  sent. Never save, print or log the command output or its stderr.
+
+The bot token is a secret under the same rules as the URL. `tokenCommand`
+without `discordChannel`, or an invalid channel, token or command, exits 2 and
+saves nothing. The CLI gives `--discord-channel` and `--token-command` only to
+`set`.
+
+Bot requests go to Discord REST v10, `https://discord.com/api/v10`, with headers
+`Authorization: Bot TOKEN` and `User-Agent: DiscordBot (https://github.com/promptdriven/pdd, VERSION)`,
+where VERSION is the package version.
+
+- Send: `POST /channels/ID/messages` with
+  `{"content":TEXT,"allowed_mentions":{"parse":[]},"flags":4}`. Flag 4 stops
+  link embeds. A status that is not 2xx is `failed` (`HTTP 403`). A 2xx reply
+  without a numeric message `id` is `unconfirmed` (`no message id`).
+- Readback: `GET /channels/ID/messages/MESSAGE_ID`. It is `delivered` only when
+  the reply has the same `id` and the same `content` after trim. Otherwise it is
+  `unconfirmed`: `readback mismatch`, `readback HTTP N` or `readback no reply`.
+- `test` first makes two read-only checks: `GET /users/@me` and
+  `GET /channels/ID`. If one fails, exit 1 and send nothing. Otherwise send the
+  test message with readback. Exit 0 only when it is delivered. The message names
+  the bot `username` and the channel `name`.
+
 ## Destination commands
 
 | Action | Result |
 | --- | --- |
 | `set` | Trim `text`. Save it when it is a supported webhook. Exit 0 and name the service. Otherwise exit 2 and save nothing. |
-| `test` | Send one test message, `PDD Autopilot test alert (HOST).` Exit 0 only when it is delivered. Exit 1 when no destination is set, or delivery failed or is unconfirmed. Record nothing. |
+| `test` | Send one test message, `PDD Autopilot test alert (HOST).` Exit 0 only when it is delivered. Exit 1 when no destination is set, or delivery failed or is unconfirmed. Record nothing. A bot destination also makes the [read-only checks](#a-discord-bot-destination). |
 | `clear` | Remove the destination file. Exit 0, also when no file exists. |
 
 Supported webhooks use `https`, no user name or password and no port:
@@ -156,7 +196,10 @@ Without a destination the end is `; set one with pdd autopilot alerts set.`
 - Native runtime: Node `fs`, `crypto`, `os` and `fetch`.
 - Input `env` (default: the process environment) gives HOME and
   XDG_CONFIG_HOME; a relative value is ignored.
-- Ports, all optional: `http({url, body})` returns `{status, text}` or throws
-  (code `unreached` means the request did not reach the server);
+- Ports, all optional: `http({method, url, headers, body})` returns
+  `{status, text}` or throws (code `unreached` means the request did not reach
+  the server); method defaults to POST, and a GET has no body;
+  `tokenCommand(command, {cwd})` returns the command stdout or throws with an
+  optional numeric `exitCode`; the default runs `/bin/sh -c`;
   `repository({cwd})` returns `{nameWithOwner}`; `now()`; `hostname()`;
   `stateRoot`. Tests inject `http`; no test sends a real webhook request.

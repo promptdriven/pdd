@@ -9,7 +9,10 @@ import { runPdd } from '../src/pdd-cli.mjs';
 // Synthetic webhook addresses. The fake HTTP port records requests; no test sends a real request.
 const DISCORD = 'https://discord.com/api/webhooks/123456789012345678/SECRET-discord_token';
 const SLACK = 'https://hooks.slack.com/services/T0000/B0000/SECRETslacktoken';
-const SECRETS = [DISCORD, SLACK, 'SECRET', 'discord_token', 'slacktoken', '123456789012345678'];
+const BOT_TOKEN = 'MTMwMDAwMDAwMDAwMDAwMDAx.GbotA1.SECRETbot_token_value_0123456789';
+const ROTATED_TOKEN = 'MTMwMDAwMDAwMDAwMDAwMDAy.GbotB2.SECRETrotated_token_9876543210';
+const CHANNEL = '1300000000000000099';
+const SECRETS = [DISCORD, SLACK, 'SECRET', 'discord_token', 'slacktoken', '123456789012345678', BOT_TOKEN, ROTATED_TOKEN, 'bot_token_value', 'rotated_token'];
 const capture = () => ({ text: '', write(value) { this.text += value; } });
 const echo = request => ({ status: 200, text: JSON.stringify({ id: '991', channel_id: '7', content: request.body.content }) });
 const usage = { cause: 'Codex usage limit; resets 2026-11-06T18:00Z', tried: 'Paused issue 12 and kept other work going', need: 'More quota or another signed-in account' };
@@ -56,9 +59,9 @@ function setup(t) {
     assert.equal(exitCode, 0, stderr.text);
     return stdout.text.trimEnd().split('\n');
   };
-  // The webhook address never reaches any output, request record or local file other than the private destination.
-  f.noSecret = () => {
-    const files = readdirSync(home, { recursive: true }).map(name => join(home, name)).filter(path => statSync(path).isFile() && path !== f.config);
+  // The secret never reaches any output or local file other than the private destination (or no file at all for a token command).
+  f.noSecret = ({ config = false } = {}) => {
+    const files = readdirSync(home, { recursive: true }).map(name => join(home, name)).filter(path => statSync(path).isFile() && (config || path !== f.config));
     const texts = [...f.outputs, ...files.map(path => readFileSync(path, 'utf8'))];
     for (const text of texts) for (const secret of SECRETS) assert.ok(!text.includes(secret), `a secret part is visible: ${text}`);
   };
@@ -275,5 +278,137 @@ test('alerts clear removes the destination, and test then reports that none is s
   assert.equal(tested.exitCode, 1);
   assert.match(tested.stderr, /No alert destination/);
   assert.equal(f.requests.length, 0);
+  f.noSecret();
+});
+
+// A fake Discord REST v10 API: it keeps posted messages so the readback is a real lookup.
+function fakeDiscord(f) {
+  const posted = new Map();
+  f.discord = { me: 200, channel: 200, readback: 'same' };
+  f.ports.http = async request => {
+    f.requests.push(structuredClone(request));
+    const path = request.url.startsWith('https://discord.com/api/v10/') ? request.url.slice('https://discord.com/api/v10'.length) : null;
+    const reply = (status, value) => ({ status, text: JSON.stringify(value) });
+    if (request.method === 'GET' && path === '/users/@me') return f.discord.me === 200 ? reply(200, { id: '42', username: 'PDD', bot: true }) : reply(f.discord.me, { message: 'no' });
+    if (request.method === 'GET' && path === `/channels/${CHANNEL}`) return f.discord.channel === 200 ? reply(200, { id: CHANNEL, name: 'internal-alerts', type: 0 }) : reply(f.discord.channel, { message: 'no' });
+    if (request.method === 'POST' && path === `/channels/${CHANNEL}/messages`) {
+      const id = String(1300000000000000100n + BigInt(posted.size));
+      posted.set(id, request.body.content);
+      return reply(200, { id, channel_id: CHANNEL, content: request.body.content });
+    }
+    const message = path?.match(new RegExp(`^/channels/${CHANNEL}/messages/([0-9]+)$`))?.[1];
+    if (request.method === 'GET' && posted.has(message)) return reply(200, { id: message, content: f.discord.readback === 'same' ? posted.get(message) : 'edited by someone else' });
+    return reply(404, { message: 'Unknown' });
+  };
+  f.route = request => `${request.method} ${request.url.slice('https://discord.com/api/v10'.length)}`;
+}
+
+test('a Discord bot with a stdin token: set saves it privately; test checks bot and channel, then posts with readback', async t => {
+  const f = setup(t); fakeDiscord(f);
+  const saved = await f.pdd(['autopilot', 'alerts', 'set', '--discord-channel', CHANNEL], `${BOT_TOKEN}\n`);
+  assert.equal(saved.exitCode, 0, saved.stderr);
+  assert.match(saved.stdout, new RegExp(`Discord bot for channel ${CHANNEL}`));
+  assert.deepEqual(JSON.parse(readFileSync(f.config, 'utf8')), { v: 1, service: 'discord-bot', channel: CHANNEL, token: BOT_TOKEN });
+  assert.equal(statSync(f.config).mode & 0o777, 0o600);
+
+  const tested = await f.pdd(['autopilot', 'alerts', 'test']);
+  assert.equal(tested.exitCode, 0, tested.stderr);
+  assert.match(tested.stdout, /Discord bot PDD in #internal-alerts posted it and the readback matched/);
+  assert.deepEqual(f.requests.map(f.route), ['GET /users/@me', `GET /channels/${CHANNEL}`, `POST /channels/${CHANNEL}/messages`,
+    `GET /channels/${CHANNEL}/messages/1300000000000000100`]);
+  for (const request of f.requests) {
+    assert.equal(request.headers.authorization, `Bot ${BOT_TOKEN}`);
+    assert.match(request.headers['user-agent'], /^DiscordBot \(https:\/\/github\.com\/promptdriven\/pdd, [^)]+\)$/);
+    assert.equal(request.body === undefined, request.method === 'GET', 'only the POST has a body');
+  }
+  const post = f.requests[2].body;
+  assert.equal(post.flags, 4, 'link embeds are suppressed');
+  assert.deepEqual(post.allowed_mentions, { parse: [] });
+  assert.match(post.content, /^PDD Autopilot test alert \(test-host\)\.$/);
+
+  const sent = await f.alert(12, 'usage-limit', usage);
+  assert.equal(sent.exitCode, 0, sent.stderr);
+  assert.match(sent.stdout, /confirmed/);
+  assert.deepEqual(f.requests.slice(4).map(f.route), [`POST /channels/${CHANNEL}/messages`, `GET /channels/${CHANNEL}/messages/1300000000000000101`]);
+  assert.match(f.requests[4].body.content, /^PDD Autopilot alert: usage-limit \(test-host\)\nRepository: owner\/repo\nIssue: https:\/\/github\.com\/owner\/repo\/issues\/12\n/);
+  assert.equal(f.record().incidents['12:usage-limit'].result, 'delivered');
+  assert.equal((await f.status()).length, 1);
+  f.noSecret();
+});
+
+test('a Discord bot readback mismatch is unconfirmed, shown in status and not sent again', async t => {
+  const f = setup(t); fakeDiscord(f);
+  await f.pdd(['autopilot', 'alerts', 'set', '--discord-channel', CHANNEL], BOT_TOKEN);
+  f.discord.readback = 'changed';
+  const sent = await f.alert(12, 'stuck', { cause: 'No progress after the retry time', tried: 'Two repairs', need: 'A person to look' });
+  assert.equal(sent.exitCode, 0, 'work continues');
+  assert.match(sent.stdout, /delivery unconfirmed \(readback mismatch\)/);
+  assert.equal(f.record().incidents['12:stuck'].result, 'unconfirmed');
+  assert.match((await f.status())[1], /^Alerts: 1 open alert not delivered; last delivery unconfirmed \(readback mismatch\) for #12 stuck/);
+  const count = f.requests.length;
+  assert.match((await f.alert(12, 'stuck', { cause: 'No progress after the retry time', tried: 'Two repairs', need: 'A person to look' })).stdout, /nothing sent/);
+  assert.equal(f.requests.length, count, 'an unconfirmed bot message may exist, so it is not posted again');
+  const tested = await f.pdd(['autopilot', 'alerts', 'test']);
+  assert.equal(tested.exitCode, 1);
+  assert.match(tested.stderr, /Test alert unconfirmed \(readback mismatch\) for Discord bot PDD in #internal-alerts/);
+  f.noSecret();
+});
+
+test('a bot token command runs at each send, the token never reaches disk or output, and a failing command sends nothing', async t => {
+  const f = setup(t); fakeDiscord(f);
+  // The fake secret store is outside HOME, like a real secret manager; the command is a plain local shell command.
+  const store = join(f.dir, 'secret-store'), tokenFile = join(store, 'token');
+  mkdirSync(store); writeFileSync(tokenFile, `${BOT_TOKEN}\n`);
+  const saved = await f.pdd(['autopilot', 'alerts', 'set', '--discord-channel', CHANNEL, '--token-command', `cat '${tokenFile}'`], 'IGNORED-STDIN-VALUE');
+  assert.equal(saved.exitCode, 0, saved.stderr);
+  assert.match(saved.stdout, /stores no token/);
+  assert.deepEqual(JSON.parse(readFileSync(f.config, 'utf8')), { v: 1, service: 'discord-bot', channel: CHANNEL, tokenCommand: `cat '${tokenFile}'` });
+  assert.equal(statSync(f.config).mode & 0o777, 0o600);
+
+  assert.match((await f.alert(12, 'usage-limit', usage)).stdout, /confirmed/);
+  assert.equal(f.requests.at(-1).headers.authorization, `Bot ${BOT_TOKEN}`);
+  writeFileSync(tokenFile, ROTATED_TOKEN);
+  assert.match((await f.alert(13, 'resource', { cause: 'Disk full', tried: 'Stopped new runs', need: 'Free disk space' })).stdout, /confirmed/);
+  assert.equal(f.requests.at(-1).headers.authorization, `Bot ${ROTATED_TOKEN}`, 'the command runs at send time, so a rotated token is used');
+  assert.match((await f.pdd(['autopilot', 'alerts', 'test'])).stdout, /Discord bot PDD in #internal-alerts/);
+
+  const count = f.requests.length;
+  await f.pdd(['autopilot', 'alerts', 'set', '--discord-channel', CHANNEL, '--token-command', `cat '${tokenFile}'; cat '${tokenFile}' >&2; exit 3`]);
+  const failed = await f.alert(14, 'access', { cause: 'Needs a paid plan', tried: 'Read the billing page', need: 'Approve spending' });
+  assert.equal(failed.exitCode, 0, 'work continues');
+  assert.match(failed.stdout, /delivery failed \(token command failed \(exit 3\)\)/);
+  const tested = await f.pdd(['autopilot', 'alerts', 'test']);
+  assert.equal(tested.exitCode, 1);
+  assert.match(tested.stderr, /token command failed \(exit 3\)\. Its output is not shown/);
+  await f.pdd(['autopilot', 'alerts', 'set', '--discord-channel', CHANNEL, '--token-command', 'true']);
+  assert.match((await f.alert(15, 'decision', { cause: 'Two layouts', tried: 'Asked on the issue', need: 'Pick one' })).stdout, /token command gave no token/);
+  assert.equal(f.requests.length, count, 'no request is sent without a token');
+  assert.match((await f.status())[1], /last delivery failed \(token command gave no token\) for #15 decision/);
+
+  f.noSecret({ config: true });
+});
+
+test('a Discord bot check failure sends no message, and invalid bot settings save nothing', async t => {
+  const f = setup(t); fakeDiscord(f);
+  for (const [argv, stdin] of [
+    [['autopilot', 'alerts', 'set', '--token-command', 'true'], ''],
+    [['autopilot', 'alerts', 'set', '--discord-channel', 'internal-alerts'], BOT_TOKEN],
+    [['autopilot', 'alerts', 'set', '--discord-channel', CHANNEL], '  '],
+    [['autopilot', 'alerts', 'set', '--discord-channel', CHANNEL], 'short'],
+    [['autopilot', 'alerts', 'test', '--discord-channel', CHANNEL], ''],
+    [['autopilot', 'alerts', 'clear', '--token-command', 'true'], ''],
+  ]) assert.equal((await f.pdd(argv, stdin)).exitCode, 2, argv.join(' '));
+  assert.equal(existsSync(f.config), false);
+
+  await f.pdd(['autopilot', 'alerts', 'set', '--discord-channel', CHANNEL], BOT_TOKEN);
+  f.discord.me = 401;
+  const badToken = await f.pdd(['autopilot', 'alerts', 'test']);
+  assert.equal(badToken.exitCode, 1);
+  assert.match(badToken.stderr, /Discord bot check failed \(HTTP 401\)/);
+  f.discord.me = 200; f.discord.channel = 403;
+  const noChannel = await f.pdd(['autopilot', 'alerts', 'test']);
+  assert.equal(noChannel.exitCode, 1);
+  assert.match(noChannel.stderr, new RegExp(`cannot read channel ${CHANNEL} \\(HTTP 403\\)`));
+  assert.deepEqual(f.requests.map(f.route), ['GET /users/@me', 'GET /users/@me', `GET /channels/${CHANNEL}`], 'only read-only checks ran');
   f.noSecret();
 });

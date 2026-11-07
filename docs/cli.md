@@ -43,7 +43,8 @@ These commands store settings and determine trust. Selecting a mode starts no ru
 | `pdd autopilot status` | Show this machine's repo, agent, timer, coordinator health and next tick without contacting GitHub or waking an agent; an idle coordinator is healthy. Adds one line when an [alert](#alerts) was not delivered |
 | `pdd autopilot add N...` | Label named issues `pdd:autopilot`, allowing Autopilot to take older issues |
 | `pdd autopilot alerts set` | Read your Discord or Slack incoming webhook URL from stdin and save it for this machine |
-| `pdd autopilot alerts test` | Send one test message and confirm that the webhook posted it |
+| `pdd autopilot alerts set --discord-channel ID [--token-command CMD]` | Use a Discord bot in one channel: read its token from stdin, or save CMD and run it at each send to get the token |
+| `pdd autopilot alerts test` | Send one test message and confirm that it was posted; for a bot, first check and show the bot name and channel name |
 | `pdd autopilot alerts clear` | Remove the alert destination from this machine |
 | `pdd autopilot alert --issue N --kind usage-limit\|resource\|access\|decision\|stuck\|recovered --input - [--update]` | For the coordinator: record one alert and send it to this machine's destination |
 
@@ -95,6 +96,23 @@ shell history. You can also pipe it from a password manager. pdd saves it in
 outside every repository, with mode 0600. pdd never prints it, also not in
 errors. A Discord webhook gets `?wait=true`, so the reply is the posted message.
 A Slack incoming webhook must reply `ok`. Only these replies count as delivered.
+
+A team with a Discord bot can use it instead of a webhook. Give the channel ID and
+the bot token. The token comes from stdin and is saved like the URL, or from your
+own command, which pdd saves and runs at each send, so the token is never written
+to disk:
+
+```sh
+pdd autopilot alerts set --discord-channel 123456789012345678 \
+  --token-command 'gcloud secrets versions access latest --secret=NAME --project=PROJECT'
+pdd autopilot alerts test
+```
+
+The bot posts with the Discord API v10, with link previews off, and reads the
+message back. Only a matching readback counts as delivered. `test` first checks
+the bot and the channel, read-only, and shows the bot name and the channel name.
+pdd never prints the token or the command output. The bot needs permission to
+view the channel, send messages and read message history.
 
 The coordinator alerts only for a real need: an AI account usage limit (with the
 reset time when known), a CPU, memory or disk failure, an access or spending

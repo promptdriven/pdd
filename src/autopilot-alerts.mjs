@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-alerts.prompt.md (sha256: 2969233b2ddb7fb646afcb668751dcf0b3a0dea20a38b7a2c17b283168b4f2be).
+// Generated from prompts/cli/autopilot-alerts.prompt.md (sha256: 568211909a50a5e6dacdcae1fdb1982e289898070745e7f419419688851cc898).
 import * as nativeFs from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
@@ -8,16 +8,21 @@ import { promisify } from 'node:util';
 
 const execute = promisify(execFile);
 export const ALERT_KINDS = Object.freeze(['usage-limit', 'resource', 'access', 'decision', 'stuck', 'recovered']);
-const LOG_LIMIT = 200, TEXT_LIMIT = 1900, FIELD_LIMIT = 500, TIMEOUT_MS = 10000;
-const SERVICE = { discord: 'Discord', slack: 'Slack' };
+const LOG_LIMIT = 200, TEXT_LIMIT = 1900, FIELD_LIMIT = 500, TIMEOUT_MS = 10000, TOKEN_COMMAND_MS = 30000;
+const SERVICE = { discord: 'Discord', slack: 'Slack', 'discord-bot': 'Discord bot' };
+const DISCORD_API = 'https://discord.com/api/v10';
+const SNOWFLAKE = /^[0-9]{17,20}$/, BOT_TOKEN = /^[A-Za-z0-9._-]{20,256}$/;
+const VERSION = (() => { try { return JSON.parse(nativeFs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '0'; } catch { return '0'; } })();
+const USER_AGENT = `DiscordBot (https://github.com/promptdriven/pdd, ${VERSION})`;
 const SENDS = ['delivered', 'failed', 'unconfirmed'];
 // Errors that prove the request never reached the webhook server, so a later call may send again.
 const UNREACHED = new Set(['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'ERR_TLS_CERT_ALTNAME_INVALID',
   'CERT_HAS_EXPIRED', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'SELF_SIGNED_CERT_IN_CHAIN', 'DEPTH_ZERO_SELF_SIGNED_CERT']);
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const oneLine = value => String(value).replace(/[\x00-\x1f\x7f]+/g, ' ').trim();
-// Defense in depth: no reply of this module may carry a webhook address, even one that a bug let through.
-const scrub = text => String(text).replace(/https?:\/\/\S*(?:webhooks|hooks\.slack\.com)\S*/gi, '[webhook]');
+// Defense in depth: no reply of this module may carry a webhook address or a bot token, even one that a bug let through.
+const scrub = text => String(text).replace(/https?:\/\/\S*(?:webhooks|hooks\.slack\.com)\S*/gi, '[webhook]')
+  .replace(/[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{20,}/g, '[token]');
 const done = (exitCode, message) => ({ exitCode, message: scrub(message) });
 const repoName = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+$/.test(value);
 const clip = (value, size) => value.length > size ? `${value.slice(0, size - 1)}…` : value;
@@ -52,16 +57,42 @@ function readDestination(fs, env) {
   try {
     const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
     try { if ((fs.statSync(file).mode & 0o077) !== 0) fs.chmodSync(file, 0o600); } catch { /* Reading still works. */ }
+    if (saved?.v === 1 && saved.service === 'discord-bot') return botDestination(saved);
     const parsed = saved?.v === 1 ? webhook(saved.url) : null;
     return parsed && parsed.service === saved.service ? parsed : null;
   } catch { return null; }
 }
 
-async function nativeHttp({ url, body }) {
+// A bot destination holds a channel and either a stored token or a token command, never both.
+function botDestination(saved) {
+  if (!SNOWFLAKE.test(String(saved.channel ?? ''))) return null;
+  if (typeof saved.tokenCommand === 'string' && saved.tokenCommand.trim() && saved.token === undefined)
+    return { service: 'discord-bot', channel: saved.channel, tokenCommand: saved.tokenCommand };
+  if (typeof saved.token === 'string' && BOT_TOKEN.test(saved.token) && saved.tokenCommand === undefined)
+    return { service: 'discord-bot', channel: saved.channel, token: saved.token };
+  return null;
+}
+
+// Run the person's own command at send time; its output is the token and is never shown or saved.
+async function nativeTokenCommand(command, { cwd }) {
+  try { return (await execute('/bin/sh', ['-c', command], { cwd, encoding: 'utf8', timeout: TOKEN_COMMAND_MS, maxBuffer: 64 * 1024 })).stdout; }
+  catch (error) { throw Object.assign(Error('token command failed'), { exitCode: Number.isInteger(error?.code) ? error.code : undefined }); }
+}
+
+async function botToken(destination, ports, cwd) {
+  if (destination.token) return { token: destination.token };
+  let output;
+  try { output = await (ports.tokenCommand ?? nativeTokenCommand)(destination.tokenCommand, { cwd }); }
+  catch (error) { return { error: `token command failed${Number.isInteger(error?.exitCode) ? ` (exit ${error.exitCode})` : ''}` }; }
+  const token = String(output ?? '').trim();
+  return BOT_TOKEN.test(token) ? { token } : { error: 'token command gave no token' };
+}
+
+async function nativeHttp({ method = 'POST', url, headers = {}, body }) {
   let response;
   try {
-    response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
-      redirect: 'error', signal: AbortSignal.timeout(TIMEOUT_MS) });
+    response = await fetch(url, { method, headers: { ...(body === undefined ? {} : { 'content-type': 'application/json' }), ...headers },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }), redirect: 'error', signal: AbortSignal.timeout(TIMEOUT_MS) });
   } catch (error) {
     const code = error?.cause?.code ?? error?.code;
     throw Object.assign(Error('webhook request failed'), { code: UNREACHED.has(code) ? 'unreached' : 'unknown' });
@@ -71,7 +102,38 @@ async function nativeHttp({ url, body }) {
   return { status: response.status, text };
 }
 
-async function deliver(destination, text, ports) {
+const success = status => Number.isInteger(status) && status >= 200 && status < 300;
+const parse = text => { try { return JSON.parse(text); } catch { return undefined; } };
+const botRequest = (ports, token, method, path, body) => (ports.http ?? nativeHttp)({ method, url: `${DISCORD_API}${path}`,
+  headers: { authorization: `Bot ${token}`, 'user-agent': USER_AGENT }, ...(body ? { body } : {}) });
+async function botGet(ports, token, path) {
+  let reply;
+  try { reply = await botRequest(ports, token, 'GET', path); } catch { return { detail: 'no reply' }; }
+  const status = Number(reply?.status), value = parse(reply?.text);
+  if (!success(status)) return { detail: `HTTP ${Number.isInteger(status) ? status : 'unknown'}` };
+  return object(value) ? { value } : { detail: 'unreadable reply' };
+}
+
+// POST the message with link embeds suppressed (flags 4), then GET it back: only matching content is a delivery.
+async function botSend(destination, token, text, ports) {
+  const channel = `/channels/${destination.channel}/messages`;
+  let reply;
+  try { reply = await botRequest(ports, token, 'POST', channel, { content: text, allowed_mentions: { parse: [] }, flags: 4 }); }
+  catch (error) { return error?.code === 'unreached' ? { result: 'failed', detail: 'not reached' } : { result: 'unconfirmed', detail: 'no reply' }; }
+  const status = Number(reply?.status), posted = parse(reply?.text);
+  if (!success(status)) return { result: 'failed', detail: `HTTP ${Number.isInteger(status) ? status : 'unknown'}` };
+  if (!/^[0-9]{1,25}$/.test(String(posted?.id ?? ''))) return { result: 'unconfirmed', detail: 'no message id' };
+  const back = await botGet(ports, token, `${channel}/${posted.id}`);
+  if (!back.value) return { result: 'unconfirmed', detail: `readback ${back.detail}` };
+  return back.value.id === posted.id && typeof back.value.content === 'string' && back.value.content.trim() === text.trim()
+    ? { result: 'delivered' } : { result: 'unconfirmed', detail: 'readback mismatch' };
+}
+
+async function deliver(destination, text, ports, cwd) {
+  if (destination.service === 'discord-bot') {
+    const auth = await botToken(destination, ports, cwd);
+    return auth.error ? { result: 'failed', detail: auth.error } : botSend(destination, auth.token, text, ports);
+  }
   const discord = destination.service === 'discord';
   const body = discord ? { content: text, allowed_mentions: { parse: [] } }
     : { text: text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;') };
@@ -143,7 +205,7 @@ async function sendAlert(input, ports, env, fs) {
   const file = recordFile(repo, env, ports), record = readRecord(fs, file) ?? { v: 1, repo, incidents: {}, log: [] };
   const at = new Date((ports.now ?? Date.now)()).toISOString(), host = oneLine((ports.hostname ?? osHostname)()) || 'unknown host';
   const destination = readDestination(fs, env), number = Number(issue);
-  const send = text => destination ? deliver(destination, text, ports) : { result: 'not-configured' };
+  const send = text => destination ? deliver(destination, text, ports, input.cwd) : { result: 'not-configured' };
   const log = (kind, action, outcome) => {
     record.log = [...record.log, { at, issue: number, kind, action, result: outcome.result, ...(outcome.detail ? { detail: outcome.detail } : {}) }].slice(-LOG_LIMIT);
   };
@@ -179,6 +241,18 @@ export async function runAutopilotAlerts(input = {}, ports = {}) {
   const env = input.env ?? process.env, fs = ports.fs ?? nativeFs;
   try {
     if (input.action === 'alert') return await sendAlert(input, ports, env, fs);
+    if (input.action === 'set' && (input.discordChannel !== undefined || input.tokenCommand !== undefined)) {
+      const channel = String(input.discordChannel ?? ''), command = input.tokenCommand;
+      if (!SNOWFLAKE.test(channel)) return done(2, 'Use --discord-channel with a Discord channel ID of 17 to 20 digits; --token-command needs it too. Nothing was saved.');
+      if (command !== undefined && (typeof command !== 'string' || !command.trim() || command.length > 2000)) return done(2, 'Give --token-command one nonblank command. Nothing was saved.');
+      const token = command === undefined ? String(input.text ?? '').trim() : undefined;
+      if (command === undefined && !BOT_TOKEN.test(token)) return done(2, 'Give the Discord bot token on stdin, or use --token-command. Nothing was saved.');
+      try { writePrivate(fs, configFile(env), { v: 1, service: 'discord-bot', channel, ...(command === undefined ? { token } : { tokenCommand: command }) }); }
+      catch { return done(1, 'Cannot save the alert destination; nothing was changed.'); }
+      return done(0, command === undefined
+        ? `Saved a Discord bot for channel ${channel} on this machine; the token is readable only by you. Run pdd autopilot alerts test.`
+        : `Saved a Discord bot for channel ${channel} on this machine; pdd runs your token command at each send and stores no token. Run pdd autopilot alerts test.`);
+    }
     if (input.action === 'set') {
       const parsed = webhook(input.text);
       if (!parsed) return done(2, 'Give one Discord or Slack incoming webhook URL (https) on stdin. Nothing was saved.');
@@ -189,8 +263,9 @@ export async function runAutopilotAlerts(input = {}, ports = {}) {
     if (input.action === 'test') {
       const destination = readDestination(fs, env);
       if (!destination) return done(1, 'No alert destination is set on this machine. Run pdd autopilot alerts set.');
-      const host = oneLine((ports.hostname ?? osHostname)()) || 'unknown host';
-      const outcome = await deliver(destination, `PDD Autopilot test alert (${host}).`, ports), service = SERVICE[destination.service];
+      const host = oneLine((ports.hostname ?? osHostname)()) || 'unknown host', text = `PDD Autopilot test alert (${host}).`;
+      if (destination.service === 'discord-bot') return await testBot(destination, text, input, ports);
+      const outcome = await deliver(destination, text, ports, input.cwd), service = SERVICE[destination.service];
       if (outcome.result === 'delivered') return done(0, `Test alert delivered; ${service} confirmed the message.`);
       if (outcome.result === 'failed') return done(1, `Test alert failed (${outcome.detail}). Check the ${service} webhook, then run pdd autopilot alerts set again.`);
       return done(1, `Test alert unconfirmed (${outcome.detail}). Look in the ${service} channel before you test again.`);
@@ -205,6 +280,21 @@ export async function runAutopilotAlerts(input = {}, ports = {}) {
     }
     return done(2, 'Use pdd autopilot alerts set|test|clear or pdd autopilot alert.');
   } catch { return done(1, 'The Autopilot alert command failed; nothing was printed about the webhook.'); }
+}
+
+// Read-only identity and channel checks first, then one test message with readback.
+async function testBot(destination, text, input, ports) {
+  const auth = await botToken(destination, ports, input.cwd);
+  if (auth.error) return done(1, `Test alert not sent: the ${auth.error}. Its output is not shown.`);
+  const me = await botGet(ports, auth.token, '/users/@me');
+  if (!me.value) return done(1, `Discord bot check failed (${me.detail}); check the token. Nothing was sent.`);
+  const channel = await botGet(ports, auth.token, `/channels/${destination.channel}`);
+  const bot = clip(oneLine(me.value.username ?? 'unknown'), 100);
+  if (!channel.value) return done(1, `Discord bot ${bot} cannot read channel ${destination.channel} (${channel.detail}). Nothing was sent.`);
+  const where = `Discord bot ${bot} in #${clip(oneLine(channel.value.name ?? destination.channel), 100)}`;
+  const outcome = await botSend(destination, auth.token, text, ports);
+  if (outcome.result === 'delivered') return done(0, `Test alert delivered; ${where} posted it and the readback matched.`);
+  return done(1, `Test alert ${outcome.result} (${outcome.detail}) for ${where}.`);
 }
 
 // One short line for pdd autopilot status, from local files only; empty when nothing needs the person.

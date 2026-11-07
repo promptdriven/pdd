@@ -108,14 +108,18 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     case 'autopilot-alert': case 'autopilot-alerts': {
       const action = plan.local === 'autopilot-alert' ? 'alert' : plan.operands[0];
       if (action === 'alert' && plan.options['--input'] !== '-') { line(stderr, 'Use pdd autopilot alert --issue N --kind KIND --input - with the alert JSON on stdin.'); return 2; }
+      const discordChannel = plan.options['--discord-channel'], tokenCommand = plan.options['--token-command'];
+      if (action !== 'set' && (discordChannel !== undefined || tokenCommand !== undefined)) { line(stderr, 'Use --discord-channel and --token-command only with pdd autopilot alerts set.'); return 2; }
       try {
         const module = autopilotAlerts ?? await import('./autopilot-alerts.mjs');
         let text = '';
-        if (action === 'alert' || action === 'set') {
-          if (action === 'set' && stdin?.isTTY) line(stderr, 'Paste the webhook URL, press Enter, then press Ctrl-D. pdd never prints it.');
+        // A token command replaces the stdin secret, so stdin is not read for it.
+        if (action === 'alert' || action === 'set' && tokenCommand === undefined) {
+          if (action === 'set' && stdin?.isTTY) line(stderr, `Paste the ${discordChannel === undefined ? 'webhook URL' : 'bot token'}, press Enter, then press Ctrl-D. pdd never prints it.`);
           text = await readText(stdin);
         }
-        const result = await module.runAutopilotAlerts({ action, cwd, env, text, issue: plan.options['--issue'], kind: plan.options['--kind'], update: plan.options['--update'] === true }, autopilotAlertsPorts);
+        const result = await module.runAutopilotAlerts({ action, cwd, env, text, issue: plan.options['--issue'], kind: plan.options['--kind'], update: plan.options['--update'] === true,
+          ...(discordChannel === undefined ? {} : { discordChannel }), ...(tokenCommand === undefined ? {} : { tokenCommand }) }, autopilotAlertsPorts);
         if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255 || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid alert reply');
         line(result.exitCode === 0 ? stdout : stderr, result.message); return result.exitCode;
       } catch { line(stderr, 'The Autopilot alert command failed.'); return 1; }
