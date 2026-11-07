@@ -91,6 +91,30 @@ native requirement/claim/run observations. Unknown provenance is not a claim-onl
 hold that the pre-start check may discard. The selected native coordinator supplies semantic conditions; the adapter does
 not infer installation or deployment from a PR merge.
 
+<a id="conditional-reads"></a>
+## Conditional reads and call purposes
+
+The native REST reads use `gh api --include`. With a supplied `githubCache` port
+(`{get(endpoint), set(endpoint, entry)}`, the ETag cache of
+[GitHub calls](github-calls.prompt.md#etag-cache)), each GET with a saved entry
+sends `If-None-Match: ETAG`. A 304 reply is a current GitHub answer that the
+resource has not changed; it does not count against the limit. Return the saved
+body and next page for it. gh exits with 1 for a 304 and prints the headers:
+read the reply from that failed command too. A 200 reply with an ETag replaces
+the saved entry. Without a saved entry, or for a write, the request is as before;
+any other non-2xx reply is the existing failure. This is not a saved projection:
+each read still asks GitHub, so freshness stays as above. Without the port no
+request changes.
+
+The native runner passes an optional `purpose` in the options of each call for
+the [call ledger](github-calls.prompt.md#ledger): the claim reads of the owners
+port (issue, timeline and comments of a claimed issue) name `claims`, and the
+batch GraphQL read names its `repository`.
+`github.page` and `github.issue` accept an optional `purpose` field for this; a
+supplied port can ignore it. The native default runner records each gh call
+through `nativeGithubCounter` with the default purpose `dependencies`, in the
+ledger of the repository that the call names.
+
 ## Claims, heartbeat and expiry
 
 Only Autopilot uses `pdd:working`. The native owners port reads the winning claim
@@ -270,6 +294,7 @@ authority observation remains unknown. Never infer coverage for a legacy packet.
 
 ## Dependencies
 
+- [GitHub calls](github-calls.prompt.md): required native generation and verification context for the call ledger and the ETag cache.
 - [Pure dependency model](issue-dependencies.prompt.md): required for authoring,
   generation, runtime and verification; canonical observation schema, current
   review, coverage, readiness and change validation. Native imports call these

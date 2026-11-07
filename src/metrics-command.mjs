@@ -10,8 +10,10 @@ import {gitContext, readRun} from './workflow-runs.mjs';
 import {backfillRun} from './metrics-capture.mjs';
 import {calculateMetrics} from './metrics-model.mjs';
 import * as ledger from './metrics-store.mjs';
+import {nativeGithubCounter} from './github-calls.mjs';
 
-const execFile = promisify(callback);
+// gh calls go to the GitHub call ledger of their repository; other programs run unchanged.
+const execFile = nativeGithubCounter(promisify(callback), {purpose:'other'});
 const iso = d => new Date(d).toISOString();
 const output = (stream, text) => typeof stream === 'function' ? stream(text) : stream.write(text);
 function options(argv) {

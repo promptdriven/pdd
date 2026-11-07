@@ -71,7 +71,11 @@ Optional `ports.execFile(file,args,{cwd})` returns or resolves `{stdout,stderr?,
 
 `readWorkflowPrStatus({cwd,url},ports)` reads one PR with `gh pr view <url> --json state,mergedAt,statusCheckRollup` and returns `{state,ci}`. `state` is open, merged or closed. `ci` is none, pending, passing or failing: any failed, cancelled or timed-out check is failing; else any check not complete is pending; else passing when there are checks. A read failure returns `{state:'unknown',ci:'unknown'}`. It never writes.
 
+The native gh runner records each `gh` call in the GitHub call ledger of the repository that the call names, through `nativeGithubCounter` of [GitHub calls](github-calls.prompt.md#ledger). Counting never changes a call or its result; an injected `execFile` is not wrapped.
+
 ## Dependencies
+
+- [GitHub calls](github-calls.prompt.md): native generation and verification context for counting `gh` calls.
 
 - Load the entire [Prompting guide](../../docs/prompting-guide.md) for authoring and generation; it owns module contracts and preservation. The helper owns local-runner GitHub effects, not CLI dispatch.
 - Runtime: Node `child_process.execFile`, `fs/promises`, `path` and `util`; installed normal Git and GitHub CLI (`git remote/status/symbolic-ref/rev-parse/rev-list/log/check-ref-format/push/ls-files/ls-remote`, `gh repo view`, `gh api`, `gh pr list/create`). Use their normal login/environment. [Runtime output](runtime-output.prompt.md) `causeText` bounds and scrubs a quoted gh line after this module removes private absolute paths; preserve HTTP URLs as useful diagnostics. No private modules or service dependencies.

@@ -95,7 +95,11 @@ Check reads the local value (no file counts as `{}`), the default-branch `pdd.js
 
 When the local value or the default-branch file cannot be read, return `unknown` with an empty message. Check never writes.
 
+The native gh runner records each `gh` call in the GitHub call ledger of the repository that the call names, through `nativeGithubCounter` of [GitHub calls](github-calls.prompt.md#ledger), with the purpose `setup`. Counting never changes a call or its result; an injected `execFile` is not wrapped.
+
 ## Dependencies
+
+- [GitHub calls](github-calls.prompt.md): native generation and verification context for counting `gh` calls.
 
 - [Workflow GitHub](workflow-github.prompt.md): required generation context for `resolveWorkflowRepository` and its `execFile` port.
 - [Autopilot settings](autopilot.prompt.md): owns the local `pdd.json` shape and its writes. The change table above follows its rules for the local write.

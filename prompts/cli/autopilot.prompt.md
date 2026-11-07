@@ -2,6 +2,8 @@
 
 `src/autopilot.mjs` exports module function `runAutopilot(input, ports)` for setup, mode, trust, untrust and trust lookup. It owns repository Autopilot settings; the CLI dispatches to it. Preserve other `pdd.json` keys, including `strict_approvals`. The stored shape is `{"autopilot":{"mode":"off","trust":[]}}`: mode is `off`, `observe` or `auto`; trust contains explicitly added GitHub names. Missing settings mean effective off and an empty list. An invalid saved mode remains untouched on setup, reads as off and produces a one-line explanation containing the lowercase word "invalid", for example: `Saved Autopilot mode "turbo" is invalid; using off and leaving it unchanged.` Mode commands replace it. Choosing a mode starts no run or interpreter; approval policy is unchanged.
 
+The optional object `autopilot.github`, for example `{"share":30,"floor":500}`, sets the GitHub API budget of Autopilot: `share` is the percent of the hourly REST limit that Autopilot on one machine may use, `floor` the remaining calls below which it makes no GitHub call until the reset. When the setting has a `github` member, every result also has `github: {share, floor}`, read by `githubBudgetSettings` of [GitHub calls](github-calls.prompt.md#budget): a missing or invalid value takes its default (30 and 500). Without the member the result has no `github` field and the defaults apply. No command writes this member; a person edits `pdd.json`, and mode and trust commands preserve it like other unknown Autopilot keys.
+
 Setup in a Git repository with a terminal asks for a mode only when no Autopilot setting exists; an empty answer selects off. It displays the repository owner and available write-access collaborators or team members and asks optionally for additional names; empty adds none. If lookup is incomplete, including when neither owner nor writers are available, warn that the trusted list may be incomplete and continue. When neither is available, only explicitly added names establish trust. Outside a Git root, setup returns exit code 0 with an empty message, asks nothing and saves nothing. Without a terminal, setup asks nothing and saves nothing; effective mode is off when no setting exists. A failed write reports one clear error and nonzero exit and leaves the file unchanged.
 
 `pdd autopilot off`, `observe`, and `auto` save the named mode. `pdd autopilot trust <name>...` adds explicit names; `pdd autopilot untrust <name>` removes an explicit name. Compare GitHub names case-insensitively, preserve the first spelling, ignore duplicates and absent removals. Owner and write-access people remain trusted independently of explicit names. An author is trusted if a supplied owner, write-access name or explicit name matches; missing lookup data never establishes trust. This lookup determines trust only; later skills own run actions.
@@ -14,7 +16,7 @@ Future workflow skills own run actions: in auto they record the checker’s PASS
 
 ## Dependencies
 
-None.
+- [GitHub calls](github-calls.prompt.md#budget): required generation and verification context for reading `autopilot.github` with `githubBudgetSettings`.
 
 Actions outside the stated set, invalid mode operands and missing or blank names return exit code 2 with a clear message and no save. Trust takes one or more nonblank names; untrust takes exactly one; isTrusted takes one nonblank author. Omitted interactive and inRepo default false. Successful actions return exit code 0, effective mode, explicit names, trusted false except for isTrusted, and a human-readable message (empty for outside-repository setup). Preserve unrelated top-level and Autopilot keys when saving; absent mode and trust read as off and empty. Failed writes return nonzero with a clear error and leave the file unchanged.
 
@@ -68,6 +70,22 @@ Actions outside the stated set, invalid mode operands and missing or blank names
             "items": {
               "type": "string"
             }
+          },
+          "github": {
+            "type": "object",
+            "properties": {
+              "share": {
+                "type": "integer"
+              },
+              "floor": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "share",
+              "floor"
+            ],
+            "additionalProperties": false
           },
           "trusted": {
             "type": "boolean"

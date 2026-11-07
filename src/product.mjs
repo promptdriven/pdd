@@ -11,6 +11,7 @@ import { recordedRuntimeLines, storyEvidence, startRun } from './workflow-runner
 import { resolveWorkflowRepository } from './workflow-github.mjs';
 import { causeText } from './runtime-output.mjs';
 import { createSavedStoryEvidenceReader } from './runtime-client.mjs';
+import { nativeGithubCounter } from './github-calls.mjs';
 
 const ordinary = promisify(execute);
 const invalid = message => { throw Object.assign(Error(message), { code: 'invalid-product' }); };
@@ -47,7 +48,8 @@ const rows = (text, section, file) => {
 };
 const duplicate = (items, key, file) => { const seen = new Set(); for (const item of items) { if (!item[key] || seen.has(item[key])) invalid(`${file}: duplicate or empty ${key} ${item[key]}.`); seen.add(item[key]); } };
 const portsFor = given => {
-  const execFile = given.execFile ?? ((file, args, options) => ordinary(file, args, { ...options, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 }));
+  // The native runner records each gh call in the GitHub call ledger of its repository.
+  const execFile = given.execFile ?? nativeGithubCounter((file, args, options) => ordinary(file, args, { ...options, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 }));
   const p = { readFile: path => readFile(path, 'utf8'), listRuns: input => listRuns(input, { execFile }),
     storyEvidence, savedStoryEvidence: createSavedStoryEvidenceReader(), startRun, resolveRepository: input => resolveWorkflowRepository(input, { execFile }),
     ...given, execFile };

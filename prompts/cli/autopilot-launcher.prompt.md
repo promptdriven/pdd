@@ -138,6 +138,11 @@ finish. Stop checks and removes the owned timer even if saved installation state
 is absent or false, including after a failed start. Repeated stop is harmless. Status reads local state and timer activity;
 show enabled/disabled, timer activity, Herdr availability, coordinator state,
 repo, agent, and next tick (or none), without waking AI or querying GitHub.
+When the [GitHub call ledgers](#github-budget) on this machine have a call in the
+last hour, status adds one line, after any alert line: `githubStatusLine` of
+[GitHub calls](github-calls.prompt.md#status-line) with this repository's usage,
+the machine usage and the budget with the settings' `github` value. It reads the
+local ledgers only; an error adds nothing.
 Whenever Herdr is available, inspect the saved coordinator with the existing
 `agent get` operation, including when the timer is inactive. Confirm that its pane,
 workspace, repository path, provider and any saved terminal identity match saved local state. Report a missing,
@@ -278,6 +283,44 @@ after a stop on the next start. If the pane has
 the saved terminal but no chat, keep the work pending without a second launch:
 the launched chat may still be starting.
 
+<a id="github-budget"></a>
+## GitHub budget
+
+Autopilot uses the person's own `gh` sign-in, so its GitHub calls use the
+person's limit. Each `gh` call of the launcher goes through `countGithubCalls` of
+[GitHub calls](github-calls.prompt.md) into this repository's ledger on this
+machine (under the state root, `ROOT/github/`), once the repository is known.
+The tick names the purpose: the dependency intake `dependencies` (its claim
+checks name `claims`), heartbeats `claims`, the issue list `issues`; other calls
+take the purpose of their arguments. The intake also gets the ETag cache of this
+repository as its `githubCache` port, saved after the intake ([conditional
+reads](issue-dependencies-github.prompt.md#conditional-reads)). At the end of
+each tick, after the state save, `compact` keeps the ledger to its last 2 hours.
+
+After the settings read and the existing rate-limit wait, and before the
+intake, the tick computes `githubBudget` from the entries of all ledgers on this
+machine and the settings' `github` value:
+
+- `reserve`: save the reported `resetAt` as the rate-limit wait (`retryAt`) and
+  return `unknown` with `GitHub limit low: R REST calls left, below the floor of F;
+  Autopilot waits until ISO.` (`GraphQL points` for the GraphQL resource). The
+  tick makes no GitHub call, not even a heartbeat: claims live 4 hours and a
+  reset is at most 1 hour away.
+- `low`: when the last intake result was saved less than 60 minutes ago, the
+  tick does not run the intake. It uses the saved `eligible` list and `claims`
+  and warns once per tick with the used and allowed calls and the time of the next
+  re-sync. Heartbeats of own live claims keep their priority; a saved claim whose
+  `lastSeen` is 4 hours old or more gets no heartbeat, because expiry is final.
+  After 60 minutes the intake runs once again. The issue list and the trusted
+  work selection stay as usual.
+- `normal`: as before.
+
+After each intake the tick saves `{at, eligible, claims}` (when `eligible` is a
+list), and a successful heartbeat updates the saved claim's `lastSeen`. These
+are local facts for the next tick; they are not a GitHub observation. The
+60-minute interval is a constant. Claim checks outside the tick, such as the
+workflow start boundary, do not use this budget.
+
 ## Tick and the skill boundary
 
 All providers use a user timer that checks for work before waking the agent.
@@ -297,7 +340,18 @@ flowchart TD
 Each tick makes one conditional issues-list query with its saved ETag, following
 pagination only when GitHub supplies another page (never truncate a queue). Cache
 and revalidate each page separately, so a close on a later page is seen even
-when the first page is unchanged.
+when the first page is unchanged. A full read lists the open issues
+(`state=open&sort=updated&direction=desc&per_page=100`). An update moves an issue
+to the first page of this order, so every page of a long list changes. So when
+the last full read had more than one page, and for 6 hours after it, the tick
+reads only what changed: `state=all&sort=updated&direction=desc&since=T&per_page=100`,
+where `T` is the newest `updated_at` of that full read. It applies each row to the
+cached open list: an open row replaces or adds its issue or PR, any other row
+leaves the list. The list stays in update order, newest first. `T` stays the
+same until the next full read, so the same URL with its ETag gets a 304 when
+nothing changed since the last tick. With one page, without a saved `T` or
+cached list, or after 6 hours, the tick makes a full read. A deleted or moved
+issue leaves the list at the next full read.
 HTTP 304 reuses metadata, not a model turn. On changed candidates only, fetch
 comments needed to identify trusted consent and filter their text. HTTP 429 is
 a rate limit; HTTP 403 counts only when the remaining allowance is zero or its
@@ -700,6 +754,9 @@ reconcile and wake boundaries; injected substitutes reach this same path.
   verification context for non-model process execution and auth-status parsing.
 - [PATH diagnostics](path-diagnostic.prompt.md): required native generation and
   verification context for the optional version shadowing warning.
+- [GitHub calls](github-calls.prompt.md): required native generation and
+  verification context for the call ledger, the budget, the status line and the
+  ETag cache.
 - [Autopilot alerts](autopilot-alerts.prompt.md#status-line): required native
   generation and verification context for status. When `alertStatusLine` with the
   saved repository and state root returns a line, status adds it on a second line.

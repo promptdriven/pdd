@@ -389,7 +389,11 @@ Status detail, list, JSON, phone projection and open read this same record. Ordi
 
 Accept `gemini` and `agy` (Antigravity CLI, displayed as Antigravity) alongside `codex` and `claude` for workflow startup. Display the selected agent name, and preserve Gemini configuration through the chat owner. The same recorded `--said` approval route applies to Gemini and Antigravity without native chat-file evidence. An Antigravity run saves no `configDir`.
 
+The native gh runner records each `gh` call in the GitHub call ledger of the repository that the call names, through `nativeGithubCounter` of [GitHub calls](github-calls.prompt.md#ledger). Counting never changes a call or its result; an injected `execFile` is not wrapped.
+
 ## Dependencies
+
+- [GitHub calls](github-calls.prompt.md): native generation and verification context for counting `gh` calls.
 
 - [Metrics store](metrics-store.prompt.md): required native generation/verification context for the pure canonical validateSnapshot function used before origin matching; validation failure leaves measurement unknown.
 

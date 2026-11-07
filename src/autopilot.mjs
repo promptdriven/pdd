@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createInterface } from 'node:readline/promises';
+import { githubBudgetSettings } from './github-calls.mjs';
 
 const execute = promisify(execFile);
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -100,8 +101,8 @@ function nativeGithub(root, exec) {
 }
 
 export async function runAutopilot(input, ports = {}) {
-  let mode = 'off', trust = [], warnings = [];
-  const result = (exitCode, message, trusted = false) => ({ mode, trust, trusted, message: [...warnings, message].filter(Boolean).join('\n'), exitCode });
+  let mode = 'off', trust = [], warnings = [], github;
+  const result = (exitCode, message, trusted = false) => ({ mode, trust, ...(github ? { github } : {}), trusted, message: [...warnings, message].filter(Boolean).join('\n'), exitCode });
   const { action, names, author } = input;
   if (!['setup', 'mode', 'trust', 'untrust', 'isTrusted'].includes(action)
     || action === 'mode' && !modes.includes(input.mode)
@@ -120,6 +121,7 @@ export async function runAutopilot(input, ports = {}) {
     const saved = raw === null ? undefined : JSON.parse(raw), setting = object(saved) ? saved : {};
     mode = modes.includes(setting.mode) ? setting.mode : 'off';
     trust = unique(Array.isArray(setting.trust) ? setting.trust : []);
+    if (Object.hasOwn(setting, 'github')) github = githubBudgetSettings(setting.github);
     const invalid = raw !== null && (!object(saved) || Object.hasOwn(setting, 'mode') && !modes.includes(setting.mode));
     if (invalid) warnings.push(`Saved Autopilot mode ${JSON.stringify(object(saved) ? setting.mode : saved)} is invalid; ${action === 'mode' ? 'treating it as off.' : 'using off and leaving it unchanged.'}`);
     if (['trust', 'untrust'].includes(action) && raw !== null && !object(saved)) {
