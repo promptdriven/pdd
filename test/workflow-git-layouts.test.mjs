@@ -41,17 +41,10 @@ function bare(f, common, root, after = () => {}) {
 }
 
 async function layout(t, name) {
-  const f = await fixture(t, { agent: 'codex' }), l = LAYOUTS[name](f), healthy = f.ports.herdr;
+  const f = await fixture(t, { agent: 'codex' }), l = LAYOUTS[name](f);
   // Real Herdr 0.9.1 identity rules: a new parent has no Git identity, and `worktree open --path` refuses a bare folder.
+  // The fake also refuses a linked source and a path of another repository, so a run opens only from a parent of this repository.
   f.herdr.realIdentity = true;
-  // Herdr opens a linked worktree only from the repository parent workspace (Git's primary registration).
-  f.ports.herdr = async args => {
-    if (args[0] === 'worktree' && args[1] === 'open') {
-      const parent = args[args.indexOf('--workspace') + 1], pane = f.herdr.panes.find(p => p.workspace_id === parent);
-      if (pane?.cwd !== l.root) { f.herdr.calls.push(args); throw Object.assign(Error('New and open worktree actions start from the repo parent workspace.'), { code: 'linked_worktree_source' }); }
-    }
-    return healthy(args);
-  };
   const record = () => JSON.parse(readFileSync(join(l.common, 'pdd/runs/17/status.json'), 'utf8'));
   const start = () => startRun({ name: 'small-change', issue: '17', agent: 'codex', cwd: l.cwd, packageRoot }, f.ports);
   return { f, ...l, record, start };
@@ -135,7 +128,21 @@ test('2698: a separate Git directory refuses before any run record, claim, workt
   assert.deepEqual(f.herdr.calls, []); assert.deepEqual(f.pushes, []); assert.deepEqual(f.prs, []);
 });
 
-for (const name of ['bare repository in P/.git with a linked worktree', 'bare P/.bare named by the P/.git file']) test(`2698: ${name}: a failed run open keeps the bare parent pending; open retries from the same parent`, async t => {
+const BARE_IN_PROJECT = ['bare repository in P/.git with a linked worktree', 'bare P/.bare named by the P/.git file'];
+
+test('2698: the fake Herdr refuses a linked checkout source and a path of another repository, as real Herdr 0.9.1 does', async t => {
+  const l = await layout(t, 'bare repository in P/.git with a linked worktree'), { f } = l, herdr = f.herdr.herdr;
+  const target = join(f.base, 'other-topic'); f.git(l.root, 'worktree', 'add', '-q', '-b', 'other-topic', target, 'main');
+  const caller = (await herdr(['workspace', 'create', '--cwd', l.cwd, '--label', 'caller', '--no-focus'])).result.workspace;
+  await assert.rejects(herdr(['worktree', 'open', '--workspace', caller.workspace_id, '--path', target, '--no-focus']), { code: 'linked_worktree_source' });
+  const foreign = join(f.base, 'foreign-topic'); f.git(f.source, 'worktree', 'add', '-q', '-b', 'foreign-topic', foreign, 'main');
+  const parent = (await herdr(['workspace', 'create', '--cwd', l.root, '--label', 'parent', '--no-focus'])).result.workspace;
+  await assert.rejects(herdr(['worktree', 'open', '--workspace', parent.workspace_id, '--path', foreign, '--no-focus']), { code: 'worktree_not_found', message: 'worktree path not found' });
+  assert.equal(parent.worktree, undefined, 'a refused open gives the parent no identity');
+  assert.equal(f.herdr.workspaces.length, 2);
+});
+
+for (const name of BARE_IN_PROJECT) test(`2698: ${name}: a failed run open keeps the bare parent pending; open retries from the same parent`, async t => {
   const l = await layout(t, name), { f } = l, herdr = f.ports.herdr;
   let refuse = true;
   f.ports.herdr = async args => {

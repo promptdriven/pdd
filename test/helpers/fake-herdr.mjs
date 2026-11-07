@@ -28,9 +28,12 @@ export function fakeHerdr() {
       // Real Herdr 0.9.1: the source must be a repository parent workspace inside Git, and the path a Git work tree.
       const source = h.workspaces.find(w => w.workspace_id === flag('--workspace')), sourceCwd = h.panes.find(p => p.workspace_id === source?.workspace_id)?.cwd;
       if (!source) fail('workspace_not_found');
-      if (source.worktree?.is_linked_worktree) throw Object.assign(Error('New and open worktree actions start from the repo parent workspace.'), { code: 'linked_worktree_source' });
+      // A linked source refuses, also a new workspace at a linked checkout that has no Git identity yet.
+      if (source.worktree ? source.worktree.is_linked_worktree : sourceCwd && linked(sourceCwd)) throw Object.assign(Error('New and open worktree actions start from the repo parent workspace.'), { code: 'linked_worktree_source' });
       if (!sourceCwd || gitOut(sourceCwd, 'rev-parse', '--git-dir') === null) throw Object.assign(Error('Herdr worktree actions require a workspace inside a Git work tree'), { code: 'not_git_worktree' });
       if (!workTree(flag('--path'))) throw Object.assign(Error('worktree cannot be opened'), { code: 'worktree_not_found' });
+      // A work tree of another repository (another common Git directory) refuses, and the source gets no identity.
+      if (commonDir(flag('--path')) !== commonDir(sourceCwd)) throw Object.assign(Error('worktree path not found'), { code: 'worktree_not_found' });
       // The source gets its repository identity on its first worktree action; a bare source keeps its own folder.
       source.worktree ??= { checkout_path: sourceCwd, repo_key: commonDir(sourceCwd), is_linked_worktree: false };
       if (h.realIdentity && realpathSync(flag('--path')) === realpathSync(sourceCwd) && !linked(sourceCwd))
