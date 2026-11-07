@@ -4,13 +4,13 @@
 // show what a real chat would get. No real agent, account or Herdr session is used.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { execFile as callback, execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lutimesSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { fixture, packageRoot } from './helpers/workflow-runner-fixture.mjs';
-import { openRun, runStatus, startRun } from '../src/workflow-runner.mjs';
+import { cancelRun, openRun, runStatus, startRun } from '../src/workflow-runner.mjs';
 import { checkWorkflowAgents, LOGIN_VARIABLES } from '../src/workflow-agents.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
 
@@ -254,4 +254,84 @@ test('2901: an Autopilot coordinator start with an agents.json entry name keeps 
   assert.deepEqual(f.record().automaticOrigin, origin);
   assert.equal(f.record().agentDefinition.name, 'Claude (account-b)');
   assert.equal(f.execute(f.commands[0]).program, 'claude-account-b');
+});
+
+// Repair 1 of 2901: the login file must go before any of its values takes effect, a failed delete must stop the agent,
+// shell-reserved entry env names refuse plainly, and files of launches that never ran do not stay.
+test('2901: an entry PATH without rm cannot keep the login file: the chat deletes it before any value takes effect', async t => {
+  const f = await accounts(t);
+  const noRm = join(f.base, 'no-rm'); mkdirSync(noRm);
+  f.agents([{ ...f.entries[0], env: { ...f.entries[0].env, PATH: noRm } }, f.entries[1]]);
+  const started = await f.start('Claude (account-a)');
+  assert.equal(started.exitCode, 0, started.message);
+  const [command] = f.commands, file = loginFileOf(command);
+  assert.ok(file && existsSync(file), `a login file in: ${command}`);
+  assert.ok(!command.includes(noRm), 'the entry PATH is not in the pane command');
+  const seen = f.execute(command);
+  assert.deepEqual([seen.program, seen.env.ACCOUNT_MARK, seen.env.CLAUDE_CODE_OAUTH_TOKEN], ['claude-account-a', 'a', 'entry-token-a']);
+  assert.equal(existsSync(file), false, 'the chat deleted the login file although the entry PATH has no rm');
+  assert.deepEqual(loginFiles(f), []);
+});
+
+test('2901: when the chat cannot delete the login file, the agent does not start', { skip: process.getuid?.() === 0 && 'root can delete in a read-only folder' }, async t => {
+  const f = await world(t);
+  f.ports.env.CLAUDE_CODE_OAUTH_TOKEN = 'caller-token';
+  assert.equal((await f.start('claude')).exitCode, 0);
+  const [command] = f.commands, runDir = f.record().runDir, mode = statSync(runDir).mode & 0o777;
+  chmodSync(runDir, 0o500);
+  let error = null;
+  try { f.execute(command); } catch (caught) { error = caught; } finally { chmodSync(runDir, mode); }
+  assert.ok(error && error.status !== 0, 'the chat line fails');
+  assert.ok(!String(error.stdout).includes('"program"'), 'the agent did not start');
+  assert.equal(loginFiles(f).length, 1, 'the file stays for the next clean-up');
+});
+
+test('2901: an entry env with a shell-reserved name refuses with a clear message, at start and at a later launch', async t => {
+  const f = await accounts(t);
+  f.agents([{ ...f.entries[0], env: { ...f.entries[0].env, UID: '0' } }, f.entries[1]]);
+  const expected = 'The agents.json entry "Claude (account-a)" sets names in env that the shell controls: UID. pdd cannot give them to the chat. Remove them from that entry\'s env, then run the command again.';
+  assert.deepEqual(await f.start('Claude (account-a)'), { exitCode: 1, message: expected });
+  assert.deepEqual(f.herdr.calls, []);
+  assert.deepEqual(f.commands, []);
+  const probes = [];
+  const checked = await checkWorkflowAgents({ cwd: f.source, env: f.ports.env, requested: 'Claude (account-a)' },
+    { run: async (...args) => { probes.push(args); return { code: 0, stdout: '{"loggedIn":true}', stderr: '' }; } });
+  assert.deepEqual(checked, { ok: false, agent: null, message: expected });
+  assert.deepEqual(probes, [], 'no sign-in probe for a refused entry');
+  // A run that started with a clean entry refuses a later launch when the entry now sets reserved names.
+  f.agents(f.entries);
+  assert.equal((await f.start('Claude (account-a)')).exitCode, 0);
+  f.agents([{ ...f.entries[0], env: { ...f.entries[0].env, PPID: '1', EUID: '0' } }, f.entries[1]]);
+  const before = f.commands.length;
+  const fresh = await openRun({ ref: '17', cwd: f.source, newSession: true }, f.ports);
+  assert.notEqual(fresh.exitCode, 0);
+  assert.ok(fresh.message.includes('The agents.json entry "Claude (account-a)" sets names in env that the shell controls: PPID, EUID. pdd cannot give them to the chat.'), fresh.message);
+  assert.equal(f.commands.length, before, 'no launch was sent');
+});
+
+test('2901: stale login files go at the next status, launch and cancel of the run; nothing else in the run folder is touched', async t => {
+  const f = await world(t);
+  assert.equal((await f.start('claude')).exitCode, 0);
+  const runDir = f.record().runDir, old = (Date.now() - 10 * 60_000) / 1000, names = () => readdirSync(runDir);
+  const file = (name, stale = true) => { writeFileSync(join(runDir, name), "export CLAUDE_CODE_OAUTH_TOKEN='left'\n", { mode: 0o600 }); if (stale) utimesSync(join(runDir, name), old, old); return name; };
+  const staleA = file(`login-${randomUUID()}.env`), fresh = file(`login-${randomUUID()}.env`, false);
+  const others = [file('login-not-a-uuid.env'), file('notes.env'), file(`old-login-${randomUUID()}.env`)];
+  const outside = join(f.base, 'outside.env'); writeFileSync(outside, 'keep');
+  const link = `login-${randomUUID()}.env`; symlinkSync(outside, join(runDir, link)); lutimesSync(join(runDir, link), old, old);
+  const folder = `login-${randomUUID()}.env`; mkdirSync(join(runDir, folder)); utimesSync(join(runDir, folder), old, old);
+  const kept = [fresh, ...others, link, folder];
+
+  assert.equal((await runStatus({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
+  assert.ok(!names().includes(staleA), 'status removes a stale login file');
+  for (const name of kept) assert.ok(names().includes(name), `status keeps ${name}`);
+
+  const staleB = file(`login-${randomUUID()}.env`);
+  assert.equal((await openRun({ ref: '17', cwd: f.source, newSession: true }, f.ports)).exitCode, 0);
+  assert.ok(!names().includes(staleB), 'a launch removes a stale login file');
+  for (const name of kept) assert.ok(names().includes(name), `a launch keeps ${name}`);
+
+  assert.equal((await cancelRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
+  assert.ok(!names().includes(fresh), 'cancel removes every login file, also a new one');
+  for (const name of [...others, link, folder]) assert.ok(names().includes(name), `cancel keeps ${name}`);
+  assert.equal(readFileSync(outside, 'utf8'), 'keep', 'the symlink target is untouched');
 });
