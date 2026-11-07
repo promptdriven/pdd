@@ -65,7 +65,7 @@ test('2640 B: a code-only run adopts the linked approved base files, records pro
   assert.equal(out.exitCode,0,out.message);assert.equal(f.prs.length,1);
   const body=f.prs[0].body;
   assert.match(body,/^Code replay: PASS/m);
-  assert.match(body,new RegExp(`^Anchor: 0 changed scenarios \\+ 2 approved on base ${base.slice(0,7)} \\(3 checks\\)\\.$`,'m'));
+  assert.match(body,new RegExp(`^Anchor: 0 changed scenarios \\(0 checks\\) \\+ 2 linked approved on base ${base.slice(0,7)} \\(3 checks\\)\\.$`,'m'));
   const anchor=f.record().replayBaseline;
   assert.deepEqual(anchor.vectors.map(v=>v.path),['tests/add.empty.json','tests/add.json'],'the unlinked other.json stays out');
   assert.equal(anchor.base.commit,base);
@@ -92,7 +92,7 @@ test('2640 B: a repository with no recorded link adds nothing and says so honest
   assert.equal(out.exitCode,0,out.message);
   const body=f.prs[0].body;
   assert.match(body,/^Code replay: BLOCKED — No approved original-vector anchor/m);
-  assert.match(body,new RegExp(`^Anchor: 0 changed scenarios \\+ 0 approved on base ${base.slice(0,7)} \\(3 base scenario files, none names a prompt or Story that this run changed; the base has no pdd-bindings\\.json to link changed code\\)\\.$`,'m'));
+  assert.match(body,new RegExp(`^Anchor: 0 changed scenarios \\(0 checks\\) \\+ 0 linked approved on base ${base.slice(0,7)} \\(3 base scenario files, none names a prompt or Story that this run changed; no changed file names its prompt in a Generated from header; the base has no pdd-bindings\\.json to link changed code\\)\\.$`,'m'));
   assert.deepEqual(f.record().replayBaseline.vectors,[]);
 });
 
@@ -141,7 +141,7 @@ test('2640 B: mixed run anchors the changed scenarios of PR 1 and the approved b
   assert.equal(out.exitCode,0,out.message);
   const body=f.prs.at(-1).body;
   assert.match(body,/^Code replay: PASS/m);
-  assert.match(body,new RegExp(`^Anchor: 1 changed scenario \\+ 2 approved on base ${base.slice(0,7)} \\(3 checks\\)\\.$`,'m'));
+  assert.match(body,new RegExp(`^Anchor: 1 changed scenario \\(1 check\\) \\+ 2 linked approved on base ${base.slice(0,7)} \\(3 checks\\)\\.$`,'m'));
   assert.deepEqual(f.record().replayBaseline,anchor,'code space keeps the frozen anchor');
 });
 
@@ -175,7 +175,7 @@ test('2640 B: very many linked base files are all counted; over the limit the an
   const r=repo(t,files);put(r.root,'prompts/add.prompt.md','# Add, changed\n');
   const anchor=pinRunAnchor(r.root,{paths:[],commit:r.base,changed:['prompts/add.prompt.md'],scenarios:[]});
   assert.equal(anchor.outcome,'blocked');assert.deepEqual(anchor.vectors,[]);
-  assert.equal(anchor.reason,`The anchor needs 201 scenario files (0 changed + 201 approved on base ${r.base.slice(0,7)}); the limit is 200.`);
+  assert.equal(anchor.reason,`The anchor needs 201 scenario files (0 changed + 201 linked approved on base ${r.base.slice(0,7)}); the limit is 200.`);
   rmSync(join(r.root,'tests/case-200.json'));r.git('add','-A');r.git('-c','user.name=Test','-c','user.email=test@example.invalid','commit','-qm','200');
   const fits=pinRunAnchor(r.root,{paths:[],commit:r.git('rev-parse','HEAD'),changed:['prompts/add.prompt.md'],scenarios:[]});
   assert.equal(fits.outcome,undefined,fits.reason);assert.equal(fits.vectors.length,200);
@@ -199,4 +199,115 @@ test('2640 B: a linked base file that PR 1 removes blocks the anchor before code
   assert.equal((await approveRun({ref:'17',cwd:f.source},f.ports)).exitCode,0);
   const anchor=f.record().replayBaseline;
   assert.equal(anchor.outcome,'blocked',JSON.stringify(anchor));assert.deepEqual(anchor.vectors,[]);
+});
+
+// Repair 1 (B): a changed code file links through its own PDD "Generated from" header.
+const HEADER=`// Generated from prompts/add.prompt.md (sha256: ${hash('# Add\n')}).\n`;
+// A third base file of the add Story through another prompt: it shares the header prompt's Story.
+const STORY_MATE={'prompts/cli.prompt.md':'# CLI\n','tests/add.cli.json':JSON.stringify(scenario('user_stories/add.md','prompts/cli.prompt.md',[check('AC1',7)],'cli'))};
+// agent-link src/pdd_link/m1_policy.py names no prompt path in its "Generated from" line.
+const M1_STYLE='"""Pure declared-fact assessments.\n\nGenerated from the canonical m1_policy prompt and its selected neutral contracts.\n"""\nVALUE = 1\n';
+
+test('2640 repair B: a code-only change to a file with a Generated-from header adds its prompt\'s base scenarios and its Story',async t=>{
+  const {f,run,base}=await baseRun(t,{files:{...BASE,...STORY_MATE,'value.mjs':`#!/usr/bin/env node\n${HEADER}export const value = 1;\n`}});
+  writeFileSync(join(run.root,'value.mjs'),`#!/usr/bin/env node\n${HEADER}export const value = 2;\n`);
+  record(run,['tests/add.cli.json','tests/add.empty.json','tests/add.json']);
+  const out=await stepDone({step:'verify',summary:'Replayed the approved cases',cwd:run.root},f.agentPorts());
+  assert.equal(out.exitCode,0,out.message);
+  const body=f.prs[0].body;
+  assert.match(body,/^Code replay: PASS/m);
+  assert.match(body,new RegExp(`^Anchor: 0 changed scenarios \\(0 checks\\) \\+ 3 linked approved on base ${base.slice(0,7)} \\(4 checks\\)\\.$`,'m'));
+  const anchor=f.record().replayBaseline;
+  assert.deepEqual(anchor.vectors.map(v=>[v.path,v.base]),[['tests/add.cli.json',base],['tests/add.empty.json',base],['tests/add.json',base]],'other.json stays out');
+  assert.equal(anchor.base.select,'linked');
+});
+
+test('2640 repair B: header formats are exact; a "Generated from" line without a prompt path links nothing',async t=>{
+  const {pinRunAnchor}=await api(),files={};
+  for(const n of [1,2,3,4,5,6]){files[`prompts/p${n}.prompt.md`]=`# P${n}\n`;files[`tests/p${n}.json`]=JSON.stringify(scenario(`user_stories/p${n}.md`,`prompts/p${n}.prompt.md`,[check('AC1',n)]));}
+  files['a.py']='# Generated from prompts/p1.prompt.md.\nVALUE = 1\n';
+  files['d.py']=M1_STYLE.replace('m1_policy prompt','p4 prompt');
+  files['e.mjs']=`${'// line\n'.repeat(10)}// Generated from prompts/p5.prompt.md.\n`;
+  files['f.mjs']='const x = "Generated from prompts/p6.prompt.md.";\n';
+  const r=repo(t,files);
+  rmSync(join(r.root,'a.py'));// Removed in the run: its base header still counts.
+  put(r.root,'b.py',`"""Generated from prompts/p2.prompt.md (sha256: ${hash('x')})."""\n`);// Added in the run.
+  put(r.root,'c.html','<!doctype html>\n<!-- Generated from prompts/p3.prompt.md -->\n');
+  for(const path of ['d.py','e.mjs','f.mjs'])put(r.root,path,readFileSync(join(r.root,path),'utf8')+'\n');
+  const anchor=pinRunAnchor(r.root,{commit:r.base,changed:['a.py','b.py','c.html','d.py','e.mjs','f.mjs'],codeSpace:true});
+  assert.equal(anchor.outcome,undefined,anchor.reason);
+  assert.deepEqual(anchor.vectors.map(v=>v.path),['tests/p1.json','tests/p2.json','tests/p3.json']);
+});
+
+test('2640 repair B: a changed file with no prompt header and no bindings adds nothing; the line says why',async t=>{
+  const {f,run,base}=await baseRun(t,{files:{...BASE,'src/m1_policy.py':M1_STYLE}});
+  writeFileSync(join(run.root,'src/m1_policy.py'),M1_STYLE.replace('VALUE = 1','VALUE = 2'));
+  record(run,['tests/add.json']);
+  const out=await stepDone({step:'verify',summary:'PASS in prose',cwd:run.root},f.agentPorts());
+  assert.equal(out.exitCode,0,out.message);
+  const body=f.prs[0].body;
+  assert.match(body,/^Code replay: BLOCKED — No approved original-vector anchor/m);
+  assert.match(body,new RegExp(`^Anchor: 0 changed scenarios \\(0 checks\\) \\+ 0 linked approved on base ${base.slice(0,7)} \\(3 base scenario files, none names a prompt or Story that this run changed; no changed file names its prompt in a Generated from header; the base has no pdd-bindings\\.json to link changed code\\)\\.$`,'m'));
+  assert.deepEqual(f.record().replayBaseline.vectors,[]);
+});
+
+// Repair 1 (C): root pdd.json on the base commit can select every approved base scenario.
+const ALL=JSON.stringify({autopilot:{mode:'off',trust:[]},replay:{base_scenarios:'all'}});
+
+test('2640 repair C: base_scenarios "all" adds every approved base scenario and the PR line says so',async t=>{
+  const {f,run,base}=await baseRun(t,{files:{...BASE,'pdd.json':ALL}});
+  writeFileSync(join(run.root,'value.mjs'),'export const value = 2;\n');
+  record(run,['tests/add.empty.json','tests/add.json','tests/other.json']);
+  const out=await stepDone({step:'verify',summary:'Replayed every approved case',cwd:run.root},f.agentPorts());
+  assert.equal(out.exitCode,0,out.message);
+  const body=f.prs[0].body;
+  assert.match(body,/^Code replay: PASS/m);
+  assert.match(body,new RegExp(`^Anchor: 0 changed scenarios \\(0 checks\\) \\+ all 3 approved on base ${base.slice(0,7)} \\(4 checks; pdd\\.json sets replay\\.base_scenarios to "all"\\)\\.$`,'m'));
+  const anchor=f.record().replayBaseline;
+  assert.deepEqual(anchor.vectors.map(v=>[v.path,v.base]),[['tests/add.empty.json',base],['tests/add.json',base],['tests/other.json',base]]);
+  assert.equal(anchor.base.select,'all');
+});
+
+test('2640 repair C: "all" keeps the limits; over a limit the anchor blocks and states the count',async t=>{
+  const {pinRunAnchor}=await api(),files={'pdd.json':ALL};
+  for(let i=0;i<201;i++)files[`tests/case-${String(i).padStart(3,'0')}.json`]=JSON.stringify(scenario(`user_stories/case-${i}.md`,`prompts/case-${i}.prompt.md`,[check('AC1',i)]));
+  const r=repo(t,files);
+  const anchor=pinRunAnchor(r.root,{commit:r.base,changed:['value.mjs'],codeSpace:true});
+  assert.equal(anchor.outcome,'blocked');assert.deepEqual(anchor.vectors,[]);
+  assert.equal(anchor.reason,`The anchor needs 201 scenario files (0 changed + all 201 approved on base ${r.base.slice(0,7)}); the limit is 200.`);
+  const many=n=>scenario('user_stories/many.md','prompts/many.prompt.md',Array.from({length:n},(_,i)=>check('AC1',i)),`many-${n}`);
+  const c=repo(t,{'pdd.json':ALL,'tests/a.json':JSON.stringify(many(5001)),'tests/b.json':JSON.stringify(many(5001))});
+  const checks=pinRunAnchor(c.root,{commit:c.base,changed:['value.mjs'],codeSpace:true});
+  assert.equal(checks.outcome,'blocked');
+  assert.equal(checks.reason,`The anchor needs 10002 checks and 2 steps in 2 scenario files (0 changed + all 2 approved on base ${c.base.slice(0,7)}); the limit is 10000 each.`);
+});
+
+test('2640 repair C: the default stays linked; the setting comes from the base commit; a bad value blocks',async t=>{
+  const {pinRunAnchor}=await api();
+  for(const config of [undefined,{autopilot:{mode:'auto',trust:[]}},{replay:{}},{replay:{base_scenarios:'linked'}}]){
+    const r=repo(t,{...BASE,...(config?{'pdd.json':JSON.stringify(config)}:{})});
+    put(r.root,'pdd.json',ALL);// The run's own copy does not count.
+    const anchor=pinRunAnchor(r.root,{commit:r.base,changed:['value.mjs'],codeSpace:true});
+    assert.equal(anchor.outcome,'blocked',JSON.stringify(config));assert.deepEqual(anchor.vectors,[]);
+    assert.equal(anchor.base.select,'linked');assert.match(anchor.reason,/^No approved original-vector anchor: 3 base scenario files, none names/);
+    const linked=pinRunAnchor(r.root,{commit:r.base,changed:['prompts/other.prompt.md'],codeSpace:true});
+    assert.deepEqual(linked.vectors.map(v=>v.path),['tests/other.json'],'linked selection is unchanged');
+  }
+  for(const [bytes,reason] of [['{"replay":{"base_scenarios":"every"}}','replay.base_scenarios must be "linked" or "all"'],['{"replay":"all"}','replay.base_scenarios must be "linked" or "all"'],['{"replay":','is not valid JSON'],['[]','is not a JSON object']]){
+    const r=repo(t,{...BASE,'pdd.json':bytes});
+    const anchor=pinRunAnchor(r.root,{commit:r.base,changed:['prompts/add.prompt.md'],codeSpace:true});
+    assert.equal(anchor.outcome,'blocked');assert.deepEqual(anchor.vectors,[]);
+    assert.equal(anchor.reason,`pdd.json on base ${r.base.slice(0,7)}${reason.startsWith('replay')?': ':' '}${reason}.`);
+  }
+});
+
+test('2640 repair C: with a prompt area, "all" adds every unchanged base file after the changed scenarios',async t=>{
+  const {pinRunAnchor}=await api(),r=repo(t,{...BASE,'pdd.json':ALL});
+  put(r.root,'tests/refund.json',JSON.stringify(scenario('user_stories/refund.md','prompts/refund.prompt.md',[check('AC1',-3)],'refund')));
+  r.git('add','tests/refund.json');
+  const edited=JSON.parse(readFileSync(join(r.root,'tests/other.json')));edited.steps[0].checks[0].value=2;put(r.root,'tests/other.json',JSON.stringify(edited));
+  const anchor=pinRunAnchor(r.root,{paths:['tests/refund.json','tests/other.json'],commit:r.base,changed:['tests/refund.json','tests/other.json'],scenarios:['tests/refund.json','tests/other.json']});
+  assert.equal(anchor.outcome,undefined,anchor.reason);
+  assert.deepEqual(anchor.vectors.map(v=>[v.path,v.base??null]),[['tests/refund.json',null],['tests/other.json',null],['tests/add.empty.json',r.base],['tests/add.json',r.base]]);
+  assert.equal(anchor.vectors[1].snapshot.steps[0].checks[0].value,2,'a base file that PR 1 changes keeps its PR 1 bytes');
 });

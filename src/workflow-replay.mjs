@@ -340,44 +340,68 @@ function bindingLinks(bytes) {
     return {state:'used',links};
   } catch {return {state:'invalid',links:new Map()};}
 }
+// A PDD header names the prompt that a file was generated from, in one of its first 10 lines, for example
+// `// Generated from prompts/cli/x.prompt.md (sha256: HEX).` or `# Generated from prompts/x.py.prompt.md.`
+const HEADER=/^\s*(?:\/\/+|#+|--|;+|\/\*+|\*+|<!--|"""|''')?\s*Generated from (\S+\.prompt\.md)(?: \(sha256: [a-f0-9]{64}\))?\.?\s*(?:\*\/|-->|"""|''')?\s*$/;
+const headerPrompts=bytes=>bytes?new TextDecoder().decode(bytes.subarray(0,64*1024)).split(/\r?\n/,10)
+  .map(line=>HEADER.exec(line)?.[1]).filter(canonicalPath):[];
+// Root pdd.json on the base commit: {"replay":{"base_scenarios":"linked"|"all"}}; missing means linked.
+function baseSelection(bytes,commit) {
+  if(!bytes)return 'linked';
+  const where=`pdd.json on base ${commit.slice(0,7)}`;let doc;
+  try {doc=parse(bytes);} catch {throw Error(`${where} is not valid JSON.`);}
+  requireThat(object(doc),`${where} is not a JSON object.`);
+  if(doc.replay===undefined)return 'linked';
+  requireThat(object(doc.replay)&&[undefined,'linked','all'].includes(doc.replay.base_scenarios),`${where}: replay.base_scenarios must be "linked" or "all".`);
+  return doc.replay.base_scenarios??'linked';
+}
 function baseScenarios(root,commit,changed,scenarios,codeSpace) {
   // Read only JSON blobs that name the scenario schema, so large unrelated JSON stays unread.
-  let named;
+  let named;const changedSet=new Set(changed);
   try {named=new Set(localGit(root,'grep','-l','-z','-F','-e','prompt-runtime.program-scenario.v1',commit,'--','*.json').toString('utf8').split('\0').filter(Boolean).map(name=>name.slice(commit.length+1)));}
   catch(error) {if(error.status!==1)throw Error('The base scenario search failed.');named=new Set();}
   const rows=localGit(root,'ls-tree','-r','-l','-z','--full-tree',commit).toString('utf8').split('\0').filter(Boolean).map(row=>{
     const match=/^(\d+) (\w+) ([a-f0-9]+) +(-|\d+)\t([\s\S]+)$/.exec(row);
     requireThat(match,'Invalid Git tree inventory.');return {mode:match[1],type:match[2],oid:match[3],size:Number(match[4])||0,path:match[5]};
-  }).filter(row=>row.type==='blob'&&['100644','100755'].includes(row.mode)&&(named.has(row.path)||row.path==='pdd-bindings.json')&&canonicalPath(row.path)&&row.size<=10*1024*1024);
-  const blobs=batchBlobs(root,rows),docs=new Map();
+  }).filter(row=>row.type==='blob'&&['100644','100755'].includes(row.mode)&&(named.has(row.path)||['pdd-bindings.json','pdd.json'].includes(row.path)||changedSet.has(row.path))&&canonicalPath(row.path)&&row.size<=10*1024*1024);
+  const blobs=batchBlobs(root,rows),docs=new Map(),select=baseSelection(blobs.get('pdd.json'),commit);
   for(const row of rows){try{const doc=parse(blobs.get(row.path));if(object(doc)&&doc.schema_version==='prompt-runtime.program-scenario.v1')docs.set(row.path,doc);}catch{/* Not a scenario. */}}
-  const bindings=bindingLinks(blobs.get('pdd-bindings.json')),changedSet=new Set(changed),area=new Set(changed);
+  const bindings=bindingLinks(blobs.get('pdd-bindings.json')),area=new Set(changed);
   const linkAll=doc=>{if(object(doc))for(const link of scenarioLinks(doc))area.add(link);};
   for(const path of changed){if(docs.has(path))linkAll(docs.get(path));for(const link of bindings.links.get(path)??[])area.add(link);}
   // The inventory owner reports unreadable current scenarios; here they add no links.
   for(const path of scenarios){try{linkAll(parse(boundedFile(join(root,path))));}catch{/* No links. */}}
-  const selected=[...docs.keys()].filter(path=>(codeSpace||!changedSet.has(path))&&scenarioLinks(docs.get(path)).some(link=>area.has(link))).sort();
+  // A changed file's header (base blob or current file) touches its prompt and the Stories that test that prompt.
+  const prompts=new Set();
+  for(const path of changed){
+    let current=null;try{if(canonicalPath(path))current=boundedFile(join(root,path),10*1024*1024,true);}catch{/* Removed or unreadable: no current header. */}
+    for(const bytes of [blobs.get(path),current])for(const prompt of headerPrompts(bytes))prompts.add(prompt);
+  }
+  for(const prompt of prompts){area.add(prompt);for(const doc of docs.values())if(scenarioLinks(doc).includes(prompt)&&text(doc.story_path))area.add(doc.story_path);}
+  const selected=[...docs.keys()].filter(path=>(codeSpace||!changedSet.has(path))&&(select==='all'||scenarioLinks(docs.get(path)).some(link=>area.has(link)))).sort();
   let bytes=0;
   const vectors=selected.map(path=>{
     const raw=blobs.get(path);bytes+=raw.length;
     try {requireThat(raw.length>0&&raw.length<=LIMIT,'Original vector exceeds its byte limit.');return {...scenario(path,raw),base:commit};}
     catch(error){throw Error(`${path} on base ${commit.slice(0,7)}: ${error.message}`);}
   });
-  const why=bindings.state==='absent'?'; the base has no pdd-bindings.json to link changed code':bindings.state==='invalid'?'; pdd-bindings.json on the base is malformed and was not used':'';
-  const note=vectors.length?'':docs.size?`${plural(docs.size,'base scenario file')}, none names a prompt or Story that this run changed${why}`:'the base has no scenario files';
-  return {vectors,bytes,note};
+  const why=[...(prompts.size?[]:['no changed file names its prompt in a Generated from header']),
+    ...(bindings.state==='absent'?['the base has no pdd-bindings.json to link changed code']:bindings.state==='invalid'?['pdd-bindings.json on the base is malformed and was not used']:[])];
+  const note=vectors.length?'':!docs.size?'the base has no scenario files':select==='all'?'every base scenario file is a changed scenario of this run'
+    :[`${plural(docs.size,'base scenario file')}, none names a prompt or Story that this run changed`,...why].join('; ');
+  return {vectors,bytes,note,select};
 }
 export function pinRunAnchor(root,{paths=[],commit,changed=[],scenarios=[],codeSpace=false}={}) {
-  const base={commit:commitId(commit)?commit:'',note:''},empty={schema_version:'pdd.replay-vectors.v1',vectors:[],base};
+  const base={commit:commitId(commit)?commit:'',note:'',select:'linked'},empty={schema_version:'pdd.replay-vectors.v1',vectors:[],base};
   try {
     requireThat(base.commit,'The run base commit is unavailable.');
     requireThat([paths,changed,scenarios].every(list=>Array.isArray(list)&&list.every(path=>typeof path==='string')),'Changed path lists are invalid.');
     const own=codeSpace?{vectors:[]}:pinReplayVectors(root,paths);
     if(own.outcome==='blocked')return {...own,base};
-    const found=baseScenarios(root,base.commit,changed,scenarios,codeSpace);base.note=found.note;
+    const found=baseScenarios(root,base.commit,changed,scenarios,codeSpace);base.note=found.note;base.select=found.select;
     const vectors=[...own.vectors,...found.vectors],count=key=>vectors.reduce((total,vector)=>total+vector[key].length,0);
     const bytes=found.bytes+own.vectors.reduce((total,vector)=>total+lstatSync(join(root,vector.path)).size,0);
-    const counted=`${plural(vectors.length,'scenario file')} (${own.vectors.length} changed + ${found.vectors.length} approved on base ${base.commit.slice(0,7)})`;
+    const counted=`${plural(vectors.length,'scenario file')} (${own.vectors.length} changed + ${found.select==='all'?`all ${found.vectors.length}`:`${found.vectors.length} linked`} approved on base ${base.commit.slice(0,7)})`;
     requireThat(vectors.length<=200,`The anchor needs ${counted}; the limit is 200.`);
     requireThat(count('checks')<=MAX&&count('steps')<=MAX,`The anchor needs ${count('checks')} checks and ${count('steps')} steps in ${counted}; the limit is ${MAX} each.`);
     requireThat(bytes<=10*1024*1024,`The anchor needs ${bytes} bytes in ${counted}; the limit is 10 MiB.`);
@@ -387,13 +411,16 @@ export function pinRunAnchor(root,{paths=[],commit,changed=[],scenarios=[],codeS
 }
 function anchorFacts(baseline) {
   if(!object(baseline?.base)||!commitId(baseline.base.commit)||!Array.isArray(baseline.vectors)||!baseline.vectors.length&&!text(baseline.base.note))return null;
-  const base=baseline.vectors.filter(vector=>vector?.base===baseline.base.commit);
-  return {commit:baseline.base.commit,changed:baseline.vectors.length-base.length,files:base.length,
-    checks:base.reduce((total,vector)=>total+(Array.isArray(vector.checks)?vector.checks.length:0),0),note:typeof baseline.base.note==='string'?baseline.base.note:''};
+  const fromBase=vector=>vector?.base===baseline.base.commit,checks=list=>list.reduce((total,vector)=>total+(Array.isArray(vector?.checks)?vector.checks.length:0),0);
+  const base=baseline.vectors.filter(fromBase),own=baseline.vectors.filter(vector=>!fromBase(vector));
+  return {commit:baseline.base.commit,select:baseline.base.select==='all'?'all':'linked',changed:own.length,changed_checks:checks(own),
+    files:base.length,checks:checks(base),note:typeof baseline.base.note==='string'?baseline.base.note:''};
 }
 const thousands=count=>String(count).replace(/\B(?=(\d{3})+(?!\d))/g,',');
-const anchorLine=a=>`Anchor: ${plural(a.changed,'changed scenario')} + ${a.files} approved on base ${a.commit.slice(0,7)}${a.files
-  ? ` (${thousands(a.checks)} check${a.checks===1?'':'s'}).` : ` (${render(a.note)}).`}`;
+const checkCount=count=>`${thousands(count)} check${count===1?'':'s'}`;
+// Count files and checks by source: changed in the run, linked on the base, or all on the base.
+const anchorLine=a=>`Anchor: ${plural(a.changed,'changed scenario')} (${checkCount(a.changed_checks)}) + ${a.select==='all'?`all ${a.files}`:`${a.files} linked`} approved on base ${a.commit.slice(0,7)}${a.files
+  ? ` (${checkCount(a.checks)}${a.select==='all'?'; pdd.json sets replay.base_scenarios to "all"':''}).` : ` (${render(a.note)}).`}`;
 
 const emptyCounts = (total=0) => ({total,pass:0,fail:0,blocked:0,not_replayed:total});
 function valueChanges(before, after, path = '') {
