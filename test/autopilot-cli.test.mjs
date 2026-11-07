@@ -16,9 +16,11 @@ function repo(t) {
   execFileSync('git', ['init', '-q', cwd]);
   return cwd;
 }
+// The mode, trust and untrust commands also update pdd.json on GitHub; this stub stands in for GitHub, so no test can reach the real gh.
+const noGithub = { github: { repository: async () => { throw Error('Tests never call GitHub'); }, request: async () => { throw Error('Tests never call GitHub'); } } };
 async function invoke(cwd, argv, extra = {}) {
   const stdout = capture(), stderr = capture();
-  const exitCode = await runPdd(argv, { cwd, stdout, stderr, ...extra });
+  const exitCode = await runPdd(argv, { cwd, stdout, stderr, autopilotGithubPorts: noGithub, ...extra });
   return { exitCode, stdout: stdout.text, stderr: stderr.text };
 }
 

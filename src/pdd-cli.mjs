@@ -23,6 +23,12 @@ async function autopilotGithub(module, name, input, ports, fallback = '') {
   try { return (await (module ?? await import('./autopilot-github.mjs'))[name](input, ports))?.message || ''; }
   catch { return fallback; }
 }
+// The autopilot value of the root pdd.json, or undefined when there is none.
+function savedAutopilot(root) {
+  if (!root) return undefined;
+  try { const config = JSON.parse(readFileSync(join(root, 'pdd.json'), 'utf8')); return config !== null && typeof config === 'object' ? config.autopilot : undefined; }
+  catch { return undefined; }
+}
 const skillCount = folders => `${folders.length} PDD skill${folders.length === 1 ? '' : 's'}`;
 const skillNames = folders => folders.map(folder => basename(folder)).join(', ');
 // npx skills update changes only what npx skills add recorded (0.1.8 tester); add replaces any copy.
@@ -135,7 +141,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         line(result.exitCode === 0 ? stdout : stderr, result.message);
         if (result.exitCode === 0) {
           const retry = ['pdd', 'autopilot', input.action === 'mode' ? input.mode : input.action, ...(input.names ?? [])].join(' ');
-          const next = await autopilotGithub(autopilotGithubModule, 'publishAutopilotSettings', { cwd, action: input.action, mode: input.mode, retry },
+          const next = await autopilotGithub(autopilotGithubModule, 'publishAutopilotSettings', { cwd, action: input.action, mode: input.mode, names: input.names, retry },
             autopilotGithubPorts, `pdd.json on GitHub was not updated. To retry, run ${retry}.`);
           if (next) line(stdout, next);
         }
@@ -240,7 +246,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         if (context?.toplevel) {
           const { file, changed, negated } = ignorePddFolder({ root: context.toplevel });
           if (changed) line(stdout, `Added .pdd/ to ${file}. pdd test keeps its local cache there.`);
-          else if (negated) line(stdout, `${file} has a "!" line for .pdd/, so Git does not ignore it. pdd setup did not change the file.`);
+          else if (negated) line(stdout, `${file} has a "!" line for .pdd/, so pdd setup did not change the file.`);
         }
       } catch (error) { line(stderr, `pdd setup: ${error.message}`); code = 1; }
       try {
@@ -249,10 +255,15 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       } catch (error) { line(stderr, `pdd setup: MCP registration failed.${reason(error)}`); code = 1; }
       try {
         const module = autopilot ?? await import('./autopilot.mjs');
+        const before = savedAutopilot(context?.toplevel);
         const result = await module.runAutopilot({ action: 'setup', interactive: !!stdin.isTTY, inRepo: !!context?.toplevel },
           { cwd: context?.toplevel ?? cwd, stdin, stdout, ...autopilotPorts });
         if (result.message) line(result.exitCode === 0 ? stdout : stderr, result.message);
         if (result.exitCode) code = result.exitCode;
+        // Setup saves a first mode only in this checkout and never writes to GitHub, where the workers read it.
+        const saved = savedAutopilot(context?.toplevel)?.mode;
+        if (result.exitCode === 0 && before === undefined && ['off', 'observe', 'auto'].includes(saved))
+          line(stdout, `Setup saved the Autopilot mode only in this checkout. Autopilot workers read pdd.json on GitHub; to update it there, run pdd autopilot ${saved}.`);
       } catch (error) { line(stderr, `Autopilot settings failed.${reason(error)}`); code = 1; }
       return code;
       } });

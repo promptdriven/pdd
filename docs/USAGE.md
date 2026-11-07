@@ -178,9 +178,9 @@ If you installed the pdd command, `pdd setup` in the top folder of the repo does
 1. They pick `CLAUDE.md` if it exists, else `AGENTS.md`. If neither exists, they make `AGENTS.md`.
 2. They add one short block (7 lines) between `<!-- pdd:start -->` and `<!-- pdd:end -->`. The block says that this project uses PDD and that prompts are the source. It names the skills and `pdd workflow run`. It tells the agent to read `RUNBOOK.md` before a runtime check.
 3. They keep all other text. A second run changes nothing. They never paste the guide.
-4. In a Git repo, they add the line `.pdd/` to the root `.gitignore` when no line there ignores that folder. `pdd test` keeps its local cache in `.pdd/`. They only append that line. When a `!.pdd/` line keeps the folder in Git, they change nothing and tell you.
+4. In a Git repo, they add the line `.pdd/` to the root `.gitignore` when no line there ignores that folder. `pdd test` keeps its local cache in `.pdd/`. They only append that line. When a `!` line keeps the folder or a path in it in Git (such as `!.pdd/config.json`), they change nothing and tell you.
 
-To turn on Autopilot for the repo, run `pdd autopilot observe` or `pdd autopilot auto`. Autopilot workers read `pdd.json` on the default branch on GitHub, so these commands also update `pdd.json` there, or open a PR when the branch needs one. See [Repository Autopilot settings](cli.md#repository-autopilot-settings).
+To turn on Autopilot for the repo, run `pdd autopilot observe` or `pdd autopilot auto`. Autopilot workers read `pdd.json` on the default branch on GitHub, so these commands also update `pdd.json` there, or open a PR when the branch needs one. Each command changes only its own part of the copy on GitHub. `pdd setup` saves a first mode only in your checkout. See [Repository Autopilot settings](cli.md#repository-autopilot-settings).
 
 Then open Codex or Claude Code as usual, in your project, and call a skill. In Codex:
 

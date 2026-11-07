@@ -160,6 +160,28 @@ test('SETUP7: pdd setup only appends to .gitignore, keeps every old byte and lin
     assert.equal(readFileSync(ignore, 'utf8'), text);
     const lines = result.stdout.split('\n').filter(line => line.includes(ignore));
     assert.equal(lines.length, negated ? 1 : 0, result.stdout);
-    if (negated) assert.match(lines[0], /"!" line for \.pdd\/.*did not change/);
+    if (negated) assert.equal(lines[0], `${ignore} has a "!" line for .pdd/, so pdd setup did not change the file.`);
   }
+});
+
+// Wrong (F6): setup appends .pdd/ after "!.pdd/config.json", so Git now ignores the file that the person keeps in Git.
+test('SETUP8: pdd setup keeps a more specific "!" line for a path in .pdd/ and does not append', t => {
+  const { project, run } = fixture(t);
+  spawnSync('git', ['init', '-q', project]);
+  const ignore = join(project, '.gitignore');
+  mkdirSync(join(project, '.pdd'), { recursive: true });
+  writeFileSync(join(project, '.pdd/config.json'), '{}');
+  for (const text of ['.pdd/*\n!.pdd/config.json\n', 'dist/\n!/.pdd/config.json\n', '!**/.pdd/config.json\n']) {
+    writeFileSync(ignore, text);
+    const result = run();
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(readFileSync(ignore, 'utf8'), text, JSON.stringify(text));
+    assert.deepEqual(result.stdout.split('\n').filter(line => line.includes(ignore)), [`${ignore} has a "!" line for .pdd/, so pdd setup did not change the file.`]);
+    const check = spawnSync('git', ['check-ignore', '-q', '.pdd/config.json'], { cwd: project });
+    assert.equal(check.status, 1, `Git must still keep .pdd/config.json after ${JSON.stringify(text)}`);
+  }
+  // A "!" line for another name that starts with .pdd is not about this folder.
+  writeFileSync(ignore, '!.pddrc\n');
+  assert.equal(run().status, 0);
+  assert.equal(readFileSync(ignore, 'utf8'), '!.pddrc\n.pdd/\n');
 });

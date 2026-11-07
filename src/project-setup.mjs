@@ -1,4 +1,4 @@
-// Generated from prompts/cli/project-setup.prompt.md (sha256: 78a7aa227709558cd5675ce6d0a38a6f64062cd4f56eae6e793589192513a61c).
+// Generated from prompts/cli/project-setup.prompt.md (sha256: 9409020fcf148cdc815b719fee5ddc1f1fb35dfe842632a617961c22f188a4e5).
 import { appendFileSync, existsSync, lstatSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -34,6 +34,8 @@ export function setupProject({ cwd, packageRoot }) {
 // pdd test keeps its local cache in .pdd/ at the Git root; a commit must never carry it.
 // Bytes, not text: a line check needs ASCII only, and the append keeps every old byte (also non-UTF-8 ones).
 const IGNORED = new Set(['.pdd', '.pdd/', '/.pdd', '/.pdd/']);
+// A "!" line for .pdd or a path in it, such as !.pdd/config.json: a .pdd/ line after it would override it.
+const NEGATION = /^!\/?(\*\*\/)?\.pdd($|[/*?[])/;
 export function ignorePddFolder({ root }) {
   const file = join(root, '.gitignore');
   let old = null;
@@ -46,6 +48,7 @@ export function ignorePddFolder({ root }) {
   const lines = old.toString('latin1').split('\n').map(line => line.replace(/[ \r]+$/, ''));
   const last = lines.findLast(line => IGNORED.has(line) || line.startsWith('!') && IGNORED.has(line.slice(1)));
   if (last !== undefined) return { file, changed: false, negated: last.startsWith('!') };
+  if (lines.some(line => NEGATION.test(line))) return { file, changed: false, negated: true };
   const newline = old.includes('\r\n') ? '\r\n' : '\n';
   appendFileSync(file, `${old.length && old.at(-1) !== 0x0a ? newline : ''}.pdd/${newline}`);
   return { file, changed: true, negated: false };

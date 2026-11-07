@@ -171,9 +171,9 @@ for (const [kind, flags] of [
 test('autopilot routes parse and dispatch without setup or a runtime call', async () => {
   const stdout = capture(), stderr = capture(); let seen;
   assert.equal(parseArgv(['autopilot', 'start', '--runs', '1200000']).local, 'autopilot-start');
-  assert.equal(await runPdd(['autopilot', 'start', '--runs', '3'], { cwd: '/repo', stdout, stderr, autopilotLauncher: { runAutopilotLauncher: async input => { seen = input; return { exitCode: 0, message: 'started' }; } } }), 0);
+  assert.equal(await runPdd(['autopilot', 'start', '--runs', '3'], { cwd: '/repo', stdout, stderr, autopilotGithubPorts: { github: {} }, autopilotLauncher: { runAutopilotLauncher: async input => { seen = input; return { exitCode: 0, message: 'started' }; } } }), 0);
   assert.equal(seen.command, 'start'); assert.equal(seen.runs, '3');
-  assert.equal(await runPdd(['autopilot','start','--resume-custody','owner.json'], {cwd:'/repo',stdout:capture(),stderr:capture(),autopilotLauncher:{runAutopilotLauncher:async input=>{seen=input;return {exitCode:0,message:'started'};}}}),0); assert.equal(seen.resumeCustody,'owner.json');
+  assert.equal(await runPdd(['autopilot','start','--resume-custody','owner.json'], {cwd:'/repo',stdout:capture(),stderr:capture(),autopilotGithubPorts:{github:{}},autopilotLauncher:{runAutopilotLauncher:async input=>{seen=input;return {exitCode:0,message:'started'};}}}),0); assert.equal(seen.resumeCustody,'owner.json');
   assert.equal(stdout.text, 'started\n'); assert.equal(stderr.text, '');
   assert.deepEqual(parseArgv(['autopilot', 'add', '12', '15']).operands, ['12', '15']);
 });
@@ -436,7 +436,8 @@ test('fresh setup and mode/trust commands feed the launcher and bundled skills w
   execFileSync('git', ['init', '--quiet', f.cwd]);
   const stdout = capture(), stderr = capture();
   const env = { HOME: f.home, PATH: process.env.PATH };
-  const dependencies = { cwd: f.cwd, packageRoot: root, env, stdout, stderr };
+  // A GitHub stub for the pdd.json copy on GitHub: no real gh runs.
+  const dependencies = { cwd: f.cwd, packageRoot: root, env, stdout, stderr, autopilotGithubPorts: { github: { repository: async () => { throw Error('Tests never call GitHub'); } } } };
   assert.equal(await runPdd(['setup'], { ...dependencies, stdin: { isTTY: false },
     pathDiagnostic: () => [], workflowAgents: { checkWorkflowAgents: async () => ({ ok: true, agent: 'codex', message: '' }) }, setupAgentMcp: async () => 0 }), 0, stderr.text);
   assert.ok(readFileSync(join(f.cwd, 'AGENTS.md'), 'utf8').includes('pdd:start'));

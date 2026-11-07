@@ -31,7 +31,8 @@ Return `{file, changed}`: the absolute file path and whether the file was writte
 | Does not exist | Create it with the one line `.pdd/` |
 | Its last such line is an ignore line | Write nothing |
 | Its last such line is a negation line | Write nothing, and return `negated: true`: the person keeps `.pdd/` in Git |
-| Has no such line | Append the line `.pdd/`. If the file does not end with a newline, append one first. Use CRLF for both when the file has a CRLF, else LF |
+| Has no such line, but a line `!` for `.pdd` or a path in it: `!`, an optional `/` or `**/`, then `.pdd` and the line end, `/`, `*`, `?` or `[` (for example `!.pdd/config.json`) | Write nothing, and return `negated: true`: a `.pdd/` line after it would override the person's more specific rule |
+| Has none of these lines | Append the line `.pdd/`. If the file does not end with a newline, append one first. Use CRLF for both when the file has a CRLF, else LF |
 | Is not a regular file (a folder or a symbolic link) | Throw an error that names the file and says to add `.pdd/` by hand; write nothing |
 
 Keep every old byte: read the file as bytes and only append. A file that is not valid UTF-8 keeps its bytes. Return `{file, changed, negated}`: the absolute `.gitignore` path, whether the file was written, and whether a negation line kept it unchanged.
