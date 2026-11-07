@@ -101,8 +101,14 @@ default clock follows the caller's injected `now` in milliseconds.
 
 | Claim | Expired when |
 |---|---|
-| Heartbeat: its record has a `lastSeen` time | 4 hours after `lastSeen`. Other issue activity does not refresh it. A future `lastSeen` counts as now. |
-| Legacy: no `lastSeen`, no unique matching comment, or a bare label | 24 hours with no issue activity: the latest issue update, comment creation or edit, or timeline event. `lastSeen` is that activity time. |
+| Heartbeat: its record has a top-level `lastSeen` time | 4 hours after its last-seen time: the latest of the recorded `lastSeen` and the claim comment's GitHub `created_at` and `updated_at`. A time later than now counts as now. Other issue activity does not refresh it. `lastSeen` is that last-seen time. |
+| Legacy: no top-level `lastSeen`, no unique matching comment, or a bare label | 24 hours with no issue activity: the latest issue update, comment creation or edit, or timeline event. `lastSeen` is that activity time. |
+
+The comment times are GitHub server times. So a recorded `lastSeen` from a wrong
+clock (for example a local time written with `Z`), a copied old time or a failed
+heartbeat readback cannot expire a claim sooner than 4 hours after the claim
+comment was created or last edited on GitHub. Any edit of the claim comment counts
+as a heartbeat. A `lastSeen` inside a nested object is not read.
 
 An unknown time or clock never expires a claim. An expired claim has `active: false`:
 it is not owned elsewhere, and it does not admit its old owner to a start or a
@@ -115,12 +121,16 @@ matches. Never edit or delete an old claim comment.
 `refreshClaimHeartbeat({cwd,repository,claim,coordinatorId,machine,at},ports)`
 acts only on an active claim of that coordinator and machine. It rereads the
 comment by `commentId`, requires the same record identity and labelEventId, sets
-`lastSeen` to `at` and keeps every other byte of the comment. The edit uses the
-scan's admission guard, like other scan mutations. Read back the saved `lastSeen`.
-Return `{state:"refreshed",lastSeen}` or `{state:"skipped"}`; an unavailable read,
-edit or readback throws. A repeated heartbeat is safe: it only sets a time.
-`withoutClaimHeartbeat(body)` returns the body without its `lastSeen` field, or
-the same body when there is none, so that a heartbeat edit is not new trusted work.
+the top-level `lastSeen` to `at` (adds it when absent) and keeps every other byte
+of the comment. Before the edit, check that the new body parses to the same record
+with only the new top-level `lastSeen`; never change a nested `lastSeen`. When no
+such edit exists, make no edit and throw. The edit uses the scan's admission guard,
+like other scan mutations. Read back the saved `lastSeen`. Return
+`{state:"refreshed",lastSeen}` or `{state:"skipped"}`; an unavailable read, edit or
+readback throws. A repeated heartbeat is safe: it only sets a time.
+`withoutClaimHeartbeat(body)` returns the body without its top-level `lastSeen`
+member, with the same check, or the same body when there is none or no such edit
+exists, so that a heartbeat edit is not new trusted work.
 
 ## Repository-bound authority
 

@@ -3,6 +3,7 @@ import { execFile as execCallback } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { join, resolve, relative, isAbsolute } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { runAutopilot } from './autopilot.mjs';
 import { resolveWorkflowRepository } from './workflow-github.mjs';
 import { gitContext, currentChat, stateDirFor } from './workflow-runs.mjs';
@@ -343,17 +344,34 @@ function claimRecord(body) {
 }
 const claimMetadata = body => claimRecord(body)?.value ?? null;
 const CLAIM_EXPIRES_AFTER = 4 * 60 * 60 * 1000, LEGACY_CLAIM_EXPIRES_AFTER = 24 * 60 * 60 * 1000;
-const LAST_SEEN = /(,\s*)?"lastSeen"\s*:\s*"[^"\\]*"(\s*,)?/;
+// A "lastSeen" member with a JSON scalar value, anywhere in the record text.
+const LAST_SEEN = /(,\s*)?"lastSeen"\s*:\s*(?:"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null)(\s*,)?/g;
 const time = value => typeof value === 'string' ? Date.parse(value) : NaN;
 const iso = at => new Date(at).toISOString();
 
-// The claim comment body without its lastSeen value. A heartbeat alone must not
-// look like new trusted work to the tick.
+// Set or remove only the top-level lastSeen member and keep every other byte. Each
+// place where the member can be is tried; an edit counts only when the new body
+// parses to exactly the expected record, so a nested lastSeen is never changed.
+// Return null when no such edit exists.
+function editClaimRecord(body, record, expected) {
+  const accept = text => { const next = String(body).replace(record.text, () => text); return isDeepStrictEqual(claimRecord(next)?.value, expected) ? next : null; };
+  const set = Object.hasOwn(expected, 'lastSeen'), value = JSON.stringify(expected.lastSeen);
+  if (set && !Object.hasOwn(record.value, 'lastSeen')) return accept(record.text.replace(/\}\s*$/, `,"lastSeen":${value}}`));
+  for (const match of record.text.matchAll(LAST_SEEN)) {
+    const [whole, before = '', after = ''] = match, member = set ? `${before}"lastSeen":${value}${after}` : before && after ? ',' : '';
+    const next = accept(record.text.slice(0, match.index) + member + record.text.slice(match.index + whole.length));
+    if (next !== null) return next;
+  }
+  return null;
+}
+
+// The claim comment body without its top-level lastSeen member. A heartbeat alone
+// must not look like new trusted work to the tick.
 export function withoutClaimHeartbeat(body) {
   const record = claimRecord(body);
   if (!record || !Object.hasOwn(record.value, 'lastSeen')) return body;
-  const text = record.text.replace(LAST_SEEN, (match, before, after) => before && after ? ',' : '');
-  return String(body).replace(record.text, () => text);
+  const { lastSeen, ...rest } = record.value;
+  return editClaimRecord(body, record, rest) ?? body;
 }
 
 async function winningClaim(repository, key, github, authority, now = NaN) {
@@ -371,7 +389,7 @@ async function winningClaim(repository, key, github, authority, now = NaN) {
     }
     if (event.label?.name === 'pdd:stuck') stuck = event.event === 'labeled' ? event : event.event === 'unlabeled' ? null : stuck;
   }
-  // Expiry: a heartbeat claim is expired 4 hours after its lastSeen time. A claim
+  // Expiry: a heartbeat claim is expired 4 hours after its last-seen time. A claim
   // without a heartbeat (legacy, bare label or unknown owner) is expired after 24
   // hours with no issue activity. An unknown time or clock never expires a claim.
   const facts = (claim, lastSeen) => {
@@ -393,14 +411,19 @@ async function winningClaim(repository, key, github, authority, now = NaN) {
       && (await authority.read({ repository, author: comment.user.login })).authority === 'trusted') matching.push({ comment, metadata });
   }
   if (matching.length !== 1) return facts({ issue: key, owner: '', coordinatorId: '', machine: '', commentId: '', labelEventId: String(winner.id) });
-  const { comment, metadata } = matching[0], lastSeen = time(metadata.lastSeen);
-  // A lastSeen in the future (clock skew) counts as now.
+  const { comment, metadata } = matching[0];
+  // The last-seen time of a heartbeat claim is the latest of its recorded lastSeen and
+  // the comment's GitHub creation and edit times (server times). A time later than now
+  // (clock skew) counts as now. A wrong writer clock or a failed heartbeat readback then
+  // cannot expire a claim sooner than 4 hours after its last edit on GitHub.
+  const recorded = time(metadata.lastSeen), atMostNow = at => Number.isFinite(now) ? Math.min(at, now) : at;
+  const lastSeen = Number.isFinite(recorded) ? Math.max(...[recorded, time(comment.created_at), time(comment.updated_at)].filter(Number.isFinite).map(atMostNow)) : NaN;
   return facts({ issue: key, owner: metadata.coordinatorId, coordinatorId: metadata.coordinatorId, machine: metadata.machine,
-    commentId: String(comment.id), labelEventId: String(winner.id) }, Number.isFinite(lastSeen) && Number.isFinite(now) ? Math.min(lastSeen, now) : lastSeen);
+    commentId: String(comment.id), labelEventId: String(winner.id) }, lastSeen);
 }
 
-// Heartbeat: the owning coordinator writes the current time as lastSeen in its
-// own winning claim comment. It edits nothing else and no other comment.
+// Heartbeat: the owning coordinator writes the current time as the top-level lastSeen
+// of its own winning claim comment. It edits nothing else and no other comment.
 export async function refreshClaimHeartbeat({ cwd = '', repository, claim, coordinatorId, machine, at }, ports = {}) {
   const i = info(claim?.issue), s = service(cwd, ports);
   if (!repositoryName(repository) || !i || !sameRepo(i.repository, repository) || !/^[1-9][0-9]*$/.test(String(claim.commentId ?? ''))
@@ -409,10 +432,8 @@ export async function refreshClaimHeartbeat({ cwd = '', repository, claim, coord
   const record = claimRecord(comment?.body);
   if (String(comment?.id) !== String(claim.commentId) || !record || !sameRepo(record.value.repository, repository) || record.value.coordinatorId !== coordinatorId
     || record.value.machine !== machine || record.value.labelEventId !== String(claim.labelEventId)) return { state: 'skipped' };
-  const lastSeen = iso(time(at)), value = JSON.stringify(lastSeen);
-  const text = Object.hasOwn(record.value, 'lastSeen') ? record.text.replace(LAST_SEEN, (match, before = '', after = '') => `${before}"lastSeen":${value}${after}`)
-    : record.text.replace(/\}\s*$/, `,"lastSeen":${value}}`);
-  const body = comment.body.replace(record.text, () => text);
+  const lastSeen = iso(time(at)), body = editClaimRecord(comment.body, record, { ...record.value, lastSeen });
+  if (body === null) throw Error('Claim record cannot take a heartbeat without other changes');
   const saved = (await s.api(endpoint, 'PATCH', JSON.stringify({ body }))).value;
   if (String(saved?.id) !== String(claim.commentId) || claimRecord(saved.body)?.value.lastSeen !== lastSeen) throw Error('Claim heartbeat readback is unresolved');
   return { state: 'refreshed', lastSeen };

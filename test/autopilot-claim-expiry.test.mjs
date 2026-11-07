@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { readDependencySnapshot, createDependencyReadPorts, refreshClaimHeartbeat } from '../src/issue-dependencies-github.mjs';
+import { readDependencySnapshot, createDependencyReadPorts, refreshClaimHeartbeat, withoutClaimHeartbeat } from '../src/issue-dependencies-github.mjs';
 import { projectIssueGraph } from '../src/issue-dependencies.mjs';
 import { checkDependencyStart } from '../src/issue-dependencies-intake.mjs';
 import { runIssueGraph } from '../src/issue-dependency-graph.mjs';
@@ -60,7 +60,7 @@ function readPorts(world, { issue, timeline, comments, review = true }) {
     },
     authority: { read: async () => ({ authority: 'trusted' }) },
     context: { read: async () => reply({ inputs: [], conditions: [], execution: [], nativeExecution: true }) },
-    clock: { now: async () => ({ iso: at(NOW) }) },
+    clock: { now: async () => ({ iso: at(world.now ?? NOW) }) },
   };
 }
 async function observe(world, facts) {
@@ -149,18 +149,46 @@ test('claim expiry: a takeover starts a new claim era; the new owner may start a
     { allowed: true, reason: 'ok' });
 });
 
-function commentService(initial) {
+// The first lastSeen may come from a wrong clock (here a local time written with Z,
+// 8 hours behind). GitHub's own comment times keep a fresh claim live.
+test('claim expiry: a fresh claim comment with a stale lastSeen is live, and its owner may start', async t => {
+  const world = checkout(t), created = NOW - 2 * minute, issue = issueRow(7, { updated_at: at(created) });
+  const comments = [{ id: 901, user: { login: 'owner' }, created_at: at(created), updated_at: at(created), body: claimBody({ lastSeen: at(NOW - 8 * hour) }) }];
+  const observed = await observe(world, { issue, comments, timeline: [labeled(701, at(NOW - 3 * minute))] });
+  assert.equal(observed.claim.active, true);
+  assert.equal(observed.claim.expired, undefined);
+  assert.equal(observed.claim.lastSeen, at(created), 'the claim comment creation time is the last-seen time');
+  assert.ok(observed.node.reasons.includes('Claimed'), observed.node.reasons.join('; '));
+  world.localOwner('coordinator-a');
+  const coordinator = { repository: repo, coordinatorId: 'coordinator-a', machine: 'machine-a', activation: 'activation', claim: { commentId: '901', labelEventId: '701' } };
+  assert.deepEqual(await checkDependencyStart({ cwd: world.cwd, repository: repo, issue: issue.html_url, coordinator },
+    { ...observed.ports, settings: { read: async () => ({ mode: 'auto', activation: 'activation' }) } }), { allowed: true, reason: 'ok' });
+});
+
+test('claim expiry: a lastSeen nested in another object is not read as the heartbeat', async t => {
+  const world = checkout(t), claimAt = at(NOW - 26 * hour), issue = issueRow(7, { updated_at: claimAt });
+  const comments = [{ id: 901, user: { login: 'owner' }, created_at: claimAt, updated_at: claimAt, body: claimBody({ previous: { lastSeen: at(NOW - minute) } }) }];
+  const { claim } = await observe(world, { issue, comments, timeline: [labeled(701, claimAt)] });
+  assert.equal(claim.expired, true, 'with no top-level lastSeen it is a legacy claim with no activity for 24 hours');
+  assert.equal(claim.lastSeen, claimAt);
+});
+
+// GitHub sets a comment's updated_at to its own (server) time on each edit.
+function commentService(initial, { serverTime = () => NOW, lostReply = false } = {}) {
   const comments = new Map(initial.map(row => [String(row.id), structuredClone(row)])), patches = [];
   const execFile = async (file, args, options = {}) => {
     assert.equal(file, 'gh'); assert.equal(args[0], 'api');
     const method = args[3], endpoint = args[4], id = /^repos\/owner\/repo\/issues\/comments\/([0-9]+)$/.exec(endpoint)?.[1];
     assert.ok(id, `unexpected endpoint ${endpoint}`);
-    if (method === 'PATCH') { const { body } = JSON.parse(options.input); patches.push({ id, body }); comments.get(id).body = body; }
-    else assert.equal(method, 'GET');
+    if (method === 'PATCH') {
+      const { body } = JSON.parse(options.input); patches.push({ id, body }); Object.assign(comments.get(id), { body, updated_at: at(serverTime()) });
+      if (lostReply) return { stdout: 'HTTP/2.0 502 Bad Gateway\r\n\r\n{}' };
+    } else assert.equal(method, 'GET');
     return { stdout: `HTTP/2.0 200 OK\r\n\r\n${JSON.stringify(comments.get(id))}` };
   };
   return { comments, patches, execFile };
 }
+const recordOf = body => JSON.parse(/```json\n([\s\S]*?)\n```/.exec(body)[1]);
 const ownClaim = (extra = {}) => ({ issue: key(7), active: true, owner: 'coordinator-a', coordinatorId: 'coordinator-a', machine: 'machine-a', commentId: '901', labelEventId: '701', ...extra });
 
 test('heartbeat: the owner updates only lastSeen in its own claim comment', async () => {
@@ -192,6 +220,51 @@ test('heartbeat: another owner, another claim era or an expired claim is never e
   }
 });
 
+test('heartbeat: only the top-level lastSeen changes, never one nested in another object', async () => {
+  const nested = { previous: { coordinatorId: 'coordinator-old', lastSeen: at(NOW - 9 * hour) } };
+  // The nested member comes first in the text, so the first "lastSeen" is the wrong one.
+  const withTop = `Took over.\n\n\`\`\`json\n${JSON.stringify({ ...nested, ...record({}), lastSeen: at(NOW - hour) })}\n\`\`\``;
+  for (const body of [withTop, claimBody(nested)]) {
+    const service = commentService([{ id: 901, user: { login: 'owner' }, body }]);
+    const result = await refreshClaimHeartbeat({ repository: repo, claim: ownClaim(), coordinatorId: 'coordinator-a', machine: 'machine-a', at: at(NOW) }, { execFile: service.execFile });
+    assert.deepEqual(result, { state: 'refreshed', lastSeen: at(NOW) });
+    assert.deepEqual(recordOf(service.comments.get('901').body), { ...nested, ...record({}), lastSeen: at(NOW) });
+  }
+  const heartbeatBody = withTop.replace(at(NOW - hour), at(NOW));
+  assert.deepEqual(recordOf(withoutClaimHeartbeat(heartbeatBody)), { ...nested, ...record({}) }, 'only the top-level lastSeen is left out');
+  assert.equal(withoutClaimHeartbeat(withTop), withoutClaimHeartbeat(heartbeatBody), 'a heartbeat alone does not change the view');
+  assert.equal(withoutClaimHeartbeat(claimBody(nested)), claimBody(nested));
+});
+
+test('heartbeat: a record whose lastSeen cannot be changed alone is not edited', async () => {
+  const body = claimBody({ lastSeen: { at: at(NOW - hour) } });
+  const service = commentService([{ id: 901, user: { login: 'owner' }, body }]);
+  await assert.rejects(refreshClaimHeartbeat({ repository: repo, claim: ownClaim(), coordinatorId: 'coordinator-a', machine: 'machine-a', at: at(NOW) }, { execFile: service.execFile }),
+    /cannot take a heartbeat/);
+  assert.equal(service.patches.length, 0);
+  assert.equal(service.comments.get('901').body, body);
+});
+
+// A writer clock 2 hours behind GitHub and a lost PATCH reply: the edit is saved, the
+// recorded lastSeen is old, and the readback fails. The server edit time still counts.
+test('heartbeat: after a failed readback the claim stays live for 4 hours after its last GitHub edit', async t => {
+  const world = checkout(t), edit = NOW - 3 * hour, claimAt = at(NOW - 30 * hour);
+  const service = commentService([{ id: 901, user: { login: 'owner' }, created_at: claimAt, updated_at: at(NOW - 3.5 * hour), body: claimBody({ lastSeen: at(NOW - 3.5 * hour) }) }],
+    { serverTime: () => edit, lostReply: true });
+  await assert.rejects(refreshClaimHeartbeat({ repository: repo, claim: ownClaim(), coordinatorId: 'coordinator-a', machine: 'machine-a', at: at(edit - 2 * hour) }, { execFile: service.execFile }),
+    /GitHub observation unavailable/);
+  assert.equal(recordOf(service.comments.get('901').body).lastSeen, at(edit - 2 * hour), 'the saved lastSeen is 2 hours behind the edit');
+  const facts = { issue: issueRow(7, { updated_at: at(edit) }), comments: [service.comments.get('901')], timeline: [labeled(701, claimAt)] };
+  world.now = edit + 4 * hour - minute;
+  const live = await observe(world, facts);
+  assert.equal(live.claim.active, true);
+  assert.equal(live.claim.lastSeen, at(edit));
+  world.now = edit + 4 * hour;
+  const expired = await observe(world, facts);
+  assert.equal(expired.claim.expired, true);
+  assert.equal(expired.claim.lastSeen, at(edit));
+});
+
 // The no-AI tick, with the dependency intake supplying the observed claims.
 async function tickFixture(t, { mode = 'auto' } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'pdd-claim-tick-'));
@@ -210,7 +283,11 @@ async function tickFixture(t, { mode = 'auto' } = {}) {
       if (command === 'gh' && args[0] === 'api') {
         const id = /^repos\/owner\/repo\/issues\/comments\/([0-9]+)$/.exec(args[4] ?? '')?.[1];
         if (id && f.claimComments.has(id)) {
-          if (args[3] === 'PATCH') { const { body } = JSON.parse(options.input); f.patches.push({ id, body }); f.claimComments.get(id).body = body; }
+          // Real GitHub: an edit sets the comment's updated_at and the issue's updated_at to the edit time.
+          if (args[3] === 'PATCH') {
+            const { body } = JSON.parse(options.input); f.patches.push({ id, body }); Object.assign(f.claimComments.get(id), { body, updated_at: at(f.time) });
+            for (const row of f.issues) if ((f.issueComments[row.number] ?? []).some(comment => String(comment.id) === id)) row.updated_at = at(f.time);
+          }
           return { code: 0, stdout: `HTTP/2.0 200 OK\r\n\r\n${JSON.stringify(f.claimComments.get(id))}`, stderr: '' };
         }
         if (args.some(x => String(x).includes('/reviews?'))) return { code: 0, stdout: 'HTTP/2.0 200 OK\r\n\r\n[]', stderr: '' };
@@ -222,7 +299,7 @@ async function tickFixture(t, { mode = 'auto' } = {}) {
     },
     timer: async () => true,
     queryIssues: async () => ({ status: f.status, etag: '"one"', issues: structuredClone(f.issues) }),
-    comments: async number => structuredClone(f.issueComments[number] ?? []),
+    comments: async number => structuredClone((f.issueComments[number] ?? []).map(row => f.claimComments.get(String(row.id)) ?? row)),
     reconcileDependencyIntake: async () => { const state = f.state(); return { eligible: f.eligible(state), queued: [], skipped: [], claims: f.claims(state) }; },
     herdr: async args => {
       if (args[0] === 'status') return { running: true };
@@ -237,6 +314,7 @@ async function tickFixture(t, { mode = 'auto' } = {}) {
     },
   };
   const launcher = await import('../src/autopilot-launcher.mjs');
+  f.cwd = cwd;
   f.stateFile = () => join(f.ports.stateRoot, readdirSync(f.ports.stateRoot).find(x => x.endsWith('.json')));
   f.state = () => { try { return JSON.parse(readFileSync(f.stateFile(), 'utf8')); } catch { return {}; } };
   f.start = () => launcher.runAutopilotLauncher({ command: 'start', cwd, env: { HOME: home, PATH: process.env.PATH }, packageRoot: resolve('.'), issues: [] }, f.ports);
@@ -251,29 +329,67 @@ async function tickFixture(t, { mode = 'auto' } = {}) {
 const tickIssue = (n, extra = {}) => ({ number: n, state: 'open', title: `Issue ${n}`, body: 'trusted body', user: { login: 'owner' }, author_association: 'OWNER',
   created_at: at(NOW - 48 * hour), updated_at: at(NOW - 2 * minute), comments: 0, labels: [{ name: 'pdd:working' }], assignees: [], html_url: key(n), ...extra });
 
-test('tick: the owner refreshes its live claim at each tick with no AI call, and a heartbeat edit is not new work', async t => {
+const timeRules = (f, kind) => f.prompts.flatMap(text => JSON.parse(text.trim().split('\n').at(-1)).timeRules ?? []).filter(row => row.kind === kind);
+// One own claim on issue 7, claimed at NOW; GitHub returns every change (status 200).
+async function heartbeatTick(t) {
   const f = await tickFixture(t);
   f.issues = [tickIssue(7, { comments: 1, updated_at: at(NOW) })];
   f.claims = state => [ownClaim({ owner: state.coordinatorId, coordinatorId: state.coordinatorId, machine: state.machine })];
   assert.equal((await f.start()).exitCode, 0);
-  f.issueComments = { 7: [f.ownComment(at(NOW))] }; f.issues[0].updated_at = at(NOW + 500); f.status = 200; await f.tick();
+  // The new claim comment is new trusted work once; the first heartbeat edit makes the tick read it.
+  f.issueComments = { 7: [f.ownComment(at(NOW))] }; f.status = 200; f.time += minute; await f.tick();
+  assert.ok(f.prompts.some(text => /"number":7,/.test(text)), 'the claim comment was seen');
   f.prompts.length = 0; f.patches.length = 0;
-  for (const [i, step] of [[1, 29], [2, 29]]) {
-    f.time += step * minute; f.status = 304;
-    await f.tick();
+  return f;
+}
+
+test('tick: the owner refreshes its live claim at each tick with no AI call, and a heartbeat edit is not new work', async t => {
+  const f = await heartbeatTick(t);
+  for (const i of [1, 2]) {
+    f.time += 29 * minute; await f.tick();
     assert.equal(f.patches.length, i, 'one heartbeat for the one own claim');
     assert.equal(JSON.parse(/```json\n([\s\S]*?)\n```/.exec(f.patches.at(-1).body)[1]).lastSeen, at(f.time));
+    assert.equal(f.issues[0].updated_at, at(f.time), 'like GitHub, the edit moved the issue update time');
   }
-  assert.equal(f.prompts.length, 0, 'a heartbeat is not an AI call');
-  // GitHub returns the edited comment with a new edit time (the issue list shows a new update time, so comments are reread).
-  f.status = 200; f.issues[0].updated_at = at(NOW + 1000);
-  f.issueComments[7] = [{ ...structuredClone(f.claimComments.get('901')), updated_at: at(f.time) }];
-  f.time += minute; await f.tick();
-  assert.equal(f.prompts.length, 0, 'a heartbeat edit alone does not wake the coordinator');
-  // Nor does it count as activity: the 60-minute idle-claim observation still comes.
-  f.time += 2 * minute; await f.tick();
-  assert.equal(f.prompts.length, 1);
-  assert.deepEqual(f.packet().timeRules.map(row => [row.kind, row.number]), [['idle-claim', 7]]);
+  assert.equal(f.prompts.length, 0, 'a heartbeat is neither an AI call nor new work');
+});
+
+// GitHub moves the issue updated_at to the edit time of a comment (measured on
+// GitHub 2026-11-06), so each heartbeat changes the issue update time.
+test('tick: with only heartbeats for 60 minutes the idle-claim rule fires once', async t => {
+  const f = await heartbeatTick(t);
+  f.time += 30 * minute; await f.tick();
+  assert.equal(timeRules(f, 'idle-claim').length, 0, '30 minutes of heartbeats is not idle yet');
+  f.time += 30 * minute; await f.tick();
+  assert.deepEqual(timeRules(f, 'idle-claim').map(row => row.number), [7], 'heartbeats alone are not activity');
+  for (let i = 0; i < 4; i++) { f.time += 30 * minute; await f.tick(); }
+  assert.equal(timeRules(f, 'idle-claim').length, 1, 'the rule is sent once');
+  assert.equal(f.patches.length, 6, 'the claim was refreshed at each tick');
+});
+
+test('tick: real progress on a heartbeat claim keeps the idle-claim rule quiet', async t => {
+  const f = await heartbeatTick(t);
+  const progress = (id, time) => { f.issueComments[7].push({ id, user: { login: 'owner' }, created_at: at(time), updated_at: at(time), body: `Progress ${id}.` });
+    f.issues[0].comments += 1; f.issues[0].updated_at = at(time); };
+  f.time += 30 * minute; await f.tick();
+  progress(902, f.time + 15 * minute);
+  f.time += 30 * minute; await f.tick();
+  f.time += 30 * minute; await f.tick();
+  assert.equal(timeRules(f, 'idle-claim').length, 0, 'a worker comment 45 minutes after the claim is activity');
+  f.time += 30 * minute; await f.tick();
+  assert.deepEqual(timeRules(f, 'idle-claim').map(row => row.number), [7], 'it fires 60 minutes after the last real progress');
+  assert.equal(f.patches.length, 4, 'the claim was refreshed at each tick');
+});
+
+test('tick: in off mode this machine sends no heartbeat, so its claims expire like a stopped machine', async t => {
+  const f = await heartbeatTick(t);
+  writeFileSync(join(f.cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'off', trust: [] } }));
+  for (let i = 0; i < 3; i++) { f.time += 30 * minute; await f.tick(); }
+  assert.equal(f.patches.length, 0, 'off mode writes no lastSeen');
+  assert.equal(f.prompts.length, 0, 'off mode wakes no AI and releases nothing');
+  writeFileSync(join(f.cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: [] } }));
+  f.time += 30 * minute; await f.tick();
+  assert.equal(f.patches.length, 1, 'back in auto mode the live claim is refreshed again');
 });
 
 test('tick: a live claim of another coordinator stays skipped; once it expires it is offered with its reason', async t => {

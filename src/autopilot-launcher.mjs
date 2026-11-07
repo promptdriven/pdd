@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 1572743cf4e1ff1b1ac8f13f7fe98c12893a0782140f85f0bff667771e79d290).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 64e2fce45f3273cb3e759fa4d4920d97ccc32e38a4bd66e21e168ce6dc1bbfc0).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch } from 'node:fs';
@@ -25,6 +25,7 @@ const INTERVAL = 30 * 60 * 1000;
 const STUCK_AFTER = 60 * 60 * 1000;
 const CLAIM_IDLE_AFTER = 60 * 60 * 1000;
 const STUCK_CLAIM_AFTER = 4 * 60 * 60 * 1000;
+const HEARTBEAT_SLACK = 5 * 1000;
 const SESSION = 'pdd-autopilot';
 const ACK = '<!-- pdd:autopilot:thanks -->';
 const ACK_TEXT = `thanks, a maintainer will look\n\n${ACK}`;
@@ -247,6 +248,7 @@ async function trusted(row, state, config, p) {
 }
 // A trusted claim comment that carries a lastSeen heartbeat.
 const heartbeat = row => typeof row?.body === 'string' && withoutClaimHeartbeat(row.body) !== row.body;
+const latestTime = values => values.map(value => Date.parse(value)).filter(Number.isFinite).reduce((last, at) => Math.max(last, at), -Infinity);
 async function readRunProgress(state, p) {
   const commonDir = (await p.checked('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim();
   const folder = join(commonDir, 'pdd', 'runs');
@@ -839,8 +841,11 @@ async function runTick(stateFile, ports, completion) {
         const expiredClaim = labels.includes('pdd:working') ? expiredClaims.get(String(issue.html_url).toLowerCase()) : undefined;
         const holdLabels = labels.filter(name => name === 'pdd:working' ? !expiredClaim : ['pdd:stuck', 'pdd:code-pending'].includes(name));
         const blocked = holdLabels.length > 0, claimNote = expiredClaim ? ['expired-claim'] : [];
-        // A heartbeat edit of a claim comment is not issue activity.
-        const claimActivity = [issue.updated_at, ...rows.flatMap(row => heartbeat(row) ? [row.created_at] : [row.created_at, row.updated_at])].map(value => Date.parse(value)).filter(Number.isFinite).reduce((latest, at) => Math.max(latest, at), -Infinity);
+        // A heartbeat edit of a claim comment is not issue activity. GitHub moves the issue
+        // update time to the time of a comment edit, so the issue update time counts only
+        // when it is later than the newest heartbeat edit.
+        const heartbeatEdit = latestTime(rows.filter(heartbeat).map(row => row.updated_at)), issueUpdate = Date.parse(issue.updated_at);
+        const claimActivity = latestTime([...(issueUpdate > heartbeatEdit + HEARTBEAT_SLACK ? [issue.updated_at] : []), ...rows.flatMap(row => heartbeat(row) ? [row.created_at] : [row.created_at, row.updated_at])]);
         const claimKey = `claim:${issue.number}`;
         const claimDue = labels.includes('pdd:working') && !expiredClaim && Number.isFinite(claimActivity) && p.now() - claimActivity >= CLAIM_IDLE_AFTER && state.timeSeen[claimKey] !== claimActivity;
         const recheckReadyBaseline = previous?.waiting === true && graphEligible === true && !blocked;

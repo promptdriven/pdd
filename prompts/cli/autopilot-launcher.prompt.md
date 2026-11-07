@@ -222,7 +222,11 @@ missing or unreadable records supply no progress fact.
 For an eligible trusted issue with a live `pdd:working` claim, use the latest issue update or
 comment creation/edit time already returned and cached by the tick as claim
 activity (including label refresh). A heartbeat edit is not activity: for a claim
-comment with `lastSeen`, use its creation time. At 60 minutes, representing the skill's
+comment with `lastSeen`, use its creation time. GitHub moves the issue update time
+to the time of a comment edit, so with such a comment, use the issue update time
+only when it is more than 5 seconds later than that comment's newest edit time. An
+issue change that a later heartbeat hides is then not activity; comments and
+comment edits still are. At 60 minutes, representing the skill's
 "about 1 hour", offer one line naming the issue number and asking the skill to
 review stalled work under its claim rule. This is an observation only: idle age
 does not authorize takeover, release the `pdd:working` claim, or make the issue fresh
@@ -247,10 +251,15 @@ Each tick keeps claims current without an AI call. Use the `claims` that the
 dependency intake returns; add no other GitHub read for them. For each active
 claim of this coordinator and machine, call the GitHub reader's
 [`refreshClaimHeartbeat`](issue-dependencies-github.prompt.md#claims-heartbeat-and-expiry)
-with the current clock time, under the scan's admission guard. A failed heartbeat
-warns and the tick continues. Never refresh another owner's claim or an expired
+with the current clock time, under the scan's admission guard. The tick, not the
+AI, writes `lastSeen`: the first heartbeat adds it to a new claim record. A failed
+heartbeat warns and the tick continues. Never refresh another owner's claim or an expired
 claim, also an own one: expiry is final, and the old owner gets the issue back
 only through the skill's takeover rule.
+
+In `off` mode the tick stops before the heartbeat. This machine then releases
+nothing, but its claims get no `lastSeen` and expire after 4 hours, as on a stopped
+machine.
 
 An own claim whose issue has had `pdd:stuck` for 4 hours (`stuckSince`) is not
 refreshed again, so it expires 4 hours later unless the issue leaves `pdd:stuck`.
