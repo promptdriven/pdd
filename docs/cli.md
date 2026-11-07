@@ -93,8 +93,9 @@ pdd autopilot alerts test
 The URL comes only from stdin, never from an argument, so it stays out of your
 shell history. You can also pipe it from a password manager. pdd saves it in
 `~/.config/pdd/autopilot-alerts.json` (`$XDG_CONFIG_HOME/pdd` when it is set),
-outside every repository, with mode 0600. pdd never prints it, also not in
-errors. A Discord webhook gets `?wait=true`, so the reply is the posted message.
+outside every repository, with mode 0600. When `HOME` is empty or not an
+absolute path, pdd uses your account's home folder; without one it saves
+nothing. pdd never prints it, also not in errors. A Discord webhook gets `?wait=true`, so the reply is the posted message.
 A Slack incoming webhook must reply `ok`. Only these replies count as delivered.
 
 A team with a Discord bot can use it instead of a webhook. Give the channel ID and
@@ -127,9 +128,15 @@ PDD_ALERT
 
 Each message names the repository, the issue link, the cause, what Autopilot tried
 and what it needs. Answer on the GitHub issue, so the answer stays with the run.
-One issue and kind is one incident: a repeat call sends nothing, `--update` sends
-a material change, and `--kind recovered` sends one recovery and closes the open
-alerts of that issue. Every call and its delivery result are recorded in
+A usage limit, a resource failure or an access decision is one incident for the
+repository and machine, so a limit that blocks 5 runs sends one alert. A call
+for another blocked issue adds that issue to the incident and sends nothing.
+A decision or a stuck issue is one incident per issue. A repeat call sends
+nothing for a delivered or unconfirmed alert, and sends again an alert that
+failed or had no destination. `--update` sends a material change or the new
+issue list. `--kind recovered` sends one recovery and closes the matching
+alerts; give `"kind"` in the JSON to close only that incident. Every call and
+its delivery result are recorded in
 `~/.local/state/pdd/autopilot/alerts/`. Without a destination, the alert stays in
 that record. `pdd autopilot status` adds one line when an alert was not delivered.
 Work continues in both cases.

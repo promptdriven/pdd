@@ -49,7 +49,7 @@ pdd autopilot alert --issue N --kind usage-limit|resource|access|decision|stuck 
 PDD_ALERT
 ```
 
-One issue and kind is one incident. A repeat call sends nothing, so do not send it again each tick. Add `--update` only for a material change. When the incident ends, send `--kind recovered` once with `{"cause":"what changed"}`. Without a destination, or when delivery fails, pdd records the alert on this machine and `pdd autopilot status` shows it; continue feasible work. Never guess, set, test or clear the destination: the person sets it with `pdd autopilot alerts set`.
+`usage-limit`, `resource` and `access` are one incident for this repository and machine. When it blocks another issue, make the same call with that issue: pdd adds the issue and sends nothing. `decision` and `stuck` are one incident per issue. While the need lasts, you may repeat the same call on a later tick: pdd sends nothing for a delivered or unconfirmed alert, and sends again one that failed or had no destination. Add `--update` only for a material change or to send the new issue list. When the incident ends, send `--kind recovered` once with `{"cause":"what changed","kind":"KIND"}`. Without a destination, or when delivery fails, pdd records the alert on this machine and `pdd autopilot status` shows it; continue feasible work. Never guess, set, test or clear the destination: the person sets it with `pdd autopilot alerts set`.
 
 ## Room, claim and stuck work
 

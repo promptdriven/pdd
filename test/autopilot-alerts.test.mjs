@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runPdd } from '../src/pdd-cli.mjs';
+import { alertStatusLine } from '../src/autopilot-alerts.mjs';
 
 // Synthetic webhook addresses. The fake HTTP port records requests; no test sends a real request.
 const DISCORD = 'https://discord.com/api/webhooks/123456789012345678/SECRET-discord_token';
@@ -91,6 +92,65 @@ test('alerts set saves a webhook from stdin outside the repository with private 
   f.noSecret();
 });
 
+test('an empty or relative HOME never puts the secret or a record in the checkout: pdd uses the account home, or saves nothing', async t => {
+  const f = setup(t);
+  delete f.ports.stateRoot;
+  const account = join(f.dir, 'account-home');
+  let accountHome = account;
+  f.ports.userInfo = () => { if (accountHome instanceof Error) throw accountHome; return { homedir: accountHome }; };
+  // In the real CLI the env is the process env, and os.homedir() reads that same HOME; run inside the temporary checkout.
+  const saved = { cwd: process.cwd(), HOME: process.env.HOME };
+  t.after(() => { process.chdir(saved.cwd); if (saved.HOME === undefined) delete process.env.HOME; else process.env.HOME = saved.HOME; });
+  process.chdir(f.cwd);
+  const checkout = () => readdirSync(f.cwd, { recursive: true });
+  const config = join(account, '.config', 'pdd', 'autopilot-alerts.json');
+  const record = join(account, '.local', 'state', 'pdd', 'autopilot', 'alerts', `${createHash('sha256').update('owner/repo').digest('hex').slice(0, 20)}.json`);
+
+  for (const HOME of ['', 'relhome']) {
+    process.env.HOME = HOME;
+    f.env = { HOME, XDG_CONFIG_HOME: 'relconfig', PATH: process.env.PATH };
+    rmSync(account, { recursive: true, force: true }); mkdirSync(account);
+    accountHome = account;
+    const set = await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);
+    assert.equal(set.exitCode, 0, set.stderr);
+    assert.deepEqual(checkout(), [], `HOME=${HOME}: set writes nothing in the checkout`);
+    assert.deepEqual(JSON.parse(readFileSync(config, 'utf8')), { v: 1, service: 'discord', url: DISCORD }, `HOME=${HOME}: the account home holds it`);
+    assert.equal(statSync(config).mode & 0o777, 0o600);
+    f.replies.push(echo);
+    assert.match((await f.alert(12, 'usage-limit', usage)).stdout, /confirmed/);
+    assert.equal(statSync(record).mode & 0o777, 0o600, 'the record is in the account home too');
+    assert.equal((await f.pdd(['autopilot', 'alerts', 'set', '--discord-channel', CHANNEL, '--token-command', 'true'])).exitCode, 0);
+    assert.equal(JSON.parse(readFileSync(config, 'utf8')).tokenCommand, 'true');
+    assert.equal((await f.pdd(['autopilot', 'alerts', 'clear'])).exitCode, 0);
+    assert.equal(existsSync(config), false);
+    assert.deepEqual(checkout(), [], `HOME=${HOME}: nothing is written in the checkout`);
+
+    // No absolute home at all: every action refuses and saves, records and sends nothing.
+    rmSync(account, { recursive: true, force: true });
+    accountHome = HOME === '' ? '' : Object.assign(Error('no passwd entry'), { code: 'ENOENT' });
+    const count = f.requests.length;
+    for (const [argv, stdin, what] of [
+      [['autopilot', 'alerts', 'set'], DISCORD, /Nothing was saved/],
+      [['autopilot', 'alerts', 'set', '--discord-channel', CHANNEL], BOT_TOKEN, /Nothing was saved/],
+      [['autopilot', 'alerts', 'set', '--discord-channel', CHANNEL, '--token-command', 'true'], '', /Nothing was saved/],
+      [['autopilot', 'alerts', 'test'], '', /Nothing was sent/],
+      [['autopilot', 'alerts', 'clear'], '', /Nothing was removed/],
+      [['autopilot', 'alert', '--issue', '12', '--kind', 'usage-limit', '--input', '-'], JSON.stringify(usage), /Nothing was recorded or sent\. Continue other work/],
+    ]) {
+      const refused = await f.pdd(argv, stdin);
+      assert.equal(refused.exitCode, 1, `HOME=${HOME}: ${argv.join(' ')}`);
+      assert.match(refused.stderr, /need an absolute home folder; set HOME to an absolute path/);
+      assert.match(refused.stderr, what);
+    }
+    assert.equal(f.requests.length, count, 'nothing is sent');
+    assert.equal(existsSync(account), false, 'nothing is saved');
+    assert.deepEqual(checkout(), [], `HOME=${HOME}: nothing is written in the checkout`);
+    assert.equal(alertStatusLine({ repo: 'owner/repo', env: f.env }, { userInfo: f.ports.userInfo }), '', 'status reads nothing');
+  }
+  assert.deepEqual(readdirSync(f.home), [], 'the unused HOME folder stays empty');
+  f.noSecret();
+});
+
 test('alerts test confirms a Discord message by readback; a missing readback is not a delivery', async t => {
   const f = setup(t);
   await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);
@@ -131,7 +191,7 @@ test('Slack: an ok reply is delivered, an error reply fails with only its status
   const sent = await f.alert(30, 'access', { cause: 'Needs <!channel> & a paid plan', tried: 'Read the billing page', need: 'Approve spending' });
   assert.equal(sent.exitCode, 0, sent.stderr);
   assert.match(f.requests.at(-1).body.text, /Needs &lt;!channel&gt; &amp; a paid plan/);
-  assert.equal(f.record().incidents['30:access'].result, 'delivered');
+  assert.equal(f.record().incidents['access@test-host'].result, 'delivered');
   f.noSecret();
 });
 
@@ -180,7 +240,7 @@ test('a failed delivery is recorded, does not stop work, shows in status, and th
   assert.equal(failed.exitCode, 0, 'work continues after a failed delivery');
   assert.match(failed.stdout, /delivery failed \(HTTP 500\)/);
   assert.match(failed.stdout, /pdd autopilot status/);
-  assert.equal(f.record().incidents['12:usage-limit'].result, 'failed');
+  assert.equal(f.record().incidents['usage-limit@test-host'].result, 'failed');
 
   const lines = await f.status();
   assert.equal(lines.length, 2);
@@ -213,8 +273,8 @@ test('without a destination an alert is recorded locally, work continues and sta
   assert.match(result.stdout, /recorded on this machine/);
   assert.match(result.stdout, /pdd autopilot alerts set/);
   assert.equal(f.requests.length, 0);
-  assert.deepEqual(f.record().incidents['12:usage-limit'].fields, usage);
-  assert.equal(f.record().incidents['12:usage-limit'].result, 'not-configured');
+  assert.deepEqual(f.record().incidents['usage-limit@test-host'].fields, usage);
+  assert.equal(f.record().incidents['usage-limit@test-host'].result, 'not-configured');
   assert.equal((await f.status())[1], 'Alerts: 1 open alert not delivered; set one with pdd autopilot alerts set.');
 
   assert.match((await f.alert(12, 'usage-limit', usage)).stdout, /nothing sent/, 'no destination: a repeat adds no send');
@@ -250,19 +310,95 @@ test('recovered closes the open alerts of the issue with one recovery message', 
   f.noSecret();
 });
 
-test('invalid alert input records and sends nothing', async t => {
+test('one usage limit that blocks five issues sends one alert; the issues join it, --update sends the list and recovered closes it', async t => {
   const f = setup(t);
   await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);
+  const links = issues => issues.map(n => `https://github.com/owner/repo/issues/${n}`).join(', ');
+  f.replies.push(echo);
+  assert.match((await f.alert(12, 'usage-limit', usage)).stdout, /Alert sent for #12 usage-limit; the webhook confirmed it/);
+  for (const issue of [13, 14, 15, 16]) {
+    const joined = await f.alert(issue, 'usage-limit', usage);
+    assert.equal(joined.exitCode, 0);
+    assert.match(joined.stdout, new RegExp(`Added #${issue} to the open usage-limit alert on this machine; nothing sent`));
+  }
+  assert.match((await f.alert(13, 'usage-limit', usage)).stdout, /already open; nothing sent/);
+  assert.equal(f.requests.length, 1, 'one usage limit is one alert, not one per blocked issue');
+  assert.deepEqual(f.record().incidents['usage-limit@test-host'].issues, [12, 13, 14, 15, 16]);
+
+  f.replies.push(echo);
+  assert.match((await f.alert(14, 'usage-limit', usage, '--update')).stdout, /Update sent for #12, #13, #14, #15, #16 usage-limit; the webhook confirmed it/);
+  assert.equal(f.requests[1].body.content, ['PDD Autopilot update: usage-limit (test-host)', 'Repository: owner/repo', `Issues: ${links([12, 13, 14, 15, 16])}`,
+    `Cause: ${usage.cause}`, `Tried: ${usage.tried}`, `Needs: ${usage.need}`, 'Answer on the GitHub issue.'].join('\n'));
+  assert.match((await f.alert(15, 'usage-limit', usage, '--update')).stdout, /nothing sent/, 'the list was sent, so an unchanged --update sends nothing');
+
+  const layout = { cause: 'Two layouts fit the Story', tried: 'Asked on the issue', need: 'Pick one layout' };
+  f.replies.push(echo, echo);
+  await f.alert(12, 'decision', layout);
+  await f.alert(13, 'decision', layout);
+  assert.equal(f.requests.length, 4, 'a decision stays one incident per issue');
+  f.ports.hostname = () => 'other-host';
+  f.replies.push(echo);
+  await f.alert(12, 'usage-limit', usage);
+  assert.match(f.requests[4].body.content, /^PDD Autopilot alert: usage-limit \(other-host\)\n/, 'another machine is another incident');
+  f.ports.hostname = () => 'test-host';
+
+  // A failed send is sent again by the next call from any affected issue, with the current list.
+  const disk = { cause: 'Disk full on the runner', tried: 'Stopped new runs', need: 'Free disk space' };
+  f.replies.push({ status: 503, text: '' });
+  assert.match((await f.alert(20, 'resource', disk)).stdout, /delivery failed \(HTTP 503\)/);
+  f.replies.push(echo);
+  assert.match((await f.alert(21, 'resource', disk)).stdout, /Alert sent for #20, #21 resource; the webhook confirmed it/);
+  assert.match(f.requests.at(-1).body.content, new RegExp(`\nIssues: ${links([20, 21]).replaceAll('.', '\\.')}\n`));
+  for (let issue = 22; issue <= 31; issue += 1) await f.alert(issue, 'resource', disk);
+  f.replies.push(echo);
+  await f.alert(31, 'resource', disk, '--update');
+  assert.match(f.requests.at(-1).body.content, new RegExp(`\nIssues: ${links([20, 21, 22, 23, 24, 25, 26, 27, 28, 29]).replaceAll('.', '\\.')} and 2 more\n`));
+
+  const count = f.requests.length;
+  f.replies.push(echo);
+  const recovered = await f.alert(16, 'recovered', { cause: 'The usage limit reset', kind: 'usage-limit' });
+  assert.equal(recovered.exitCode, 0, recovered.stderr);
+  assert.equal(f.requests.length, count + 1, 'one recovery for the whole incident');
+  assert.equal(f.requests.at(-1).body.content, ['PDD Autopilot recovered: usage-limit (test-host)', 'Repository: owner/repo',
+    `Issues: ${links([12, 13, 14, 15, 16])}`, 'What changed: The usage limit reset'].join('\n'));
+  assert.deepEqual(Object.keys(f.record().incidents).sort(), ['12:decision', '13:decision', 'resource@test-host', 'usage-limit@other-host']);
+  assert.match((await f.alert(13, 'recovered', { cause: 'Again', kind: 'usage-limit' })).stdout, /No open alert of kind usage-limit for #13; nothing sent/);
+
+  f.replies.push(echo);
+  await f.alert(12, 'recovered', { cause: 'The layout was chosen' });
+  assert.match(f.requests.at(-1).body.content, /^PDD Autopilot recovered: decision \(test-host\)\n[^]*\nIssue: https:\/\/github\.com\/owner\/repo\/issues\/12\n/);
+  assert.deepEqual(Object.keys(f.record().incidents).sort(), ['13:decision', 'resource@test-host', 'usage-limit@other-host'],
+    'without a kind, the issue\'s own incidents of this machine close');
+  f.replies.push(echo);
+  await f.alert(14, 'usage-limit', usage);
+  assert.match(f.requests.at(-1).body.content, /^PDD Autopilot alert: usage-limit \(test-host\)\n[^]*\nIssue: https:\/\/github\.com\/owner\/repo\/issues\/14\n/, 'a later limit opens a new incident');
+  f.noSecret();
+});
+
+test('invalid alert input is refused with its problem named, and records and sends nothing', async t => {
+  const f = setup(t);
+  assert.equal((await f.pdd(['autopilot', 'alerts', 'set'], DISCORD)).exitCode, 0, 'a destination exists, so only validation stops a send');
+  const alert = ['autopilot', 'alert', '--issue', '12', '--kind', 'usage-limit', '--input', '-'];
   const cases = [
-    ['autopilot', 'alert', '--issue', '12', '--kind', 'usage-limit', '--input', 'file.json'],
-    ['autopilot', 'alert', '--issue', 'twelve', '--kind', 'usage-limit', '--input', '-'],
-    ['autopilot', 'alert', '--kind', 'usage-limit', '--input', '-'],
-    ['autopilot', 'alert', '--issue', '12', '--input', '-'],
-    ['autopilot', 'alert', '--issue', '12', '--kind', 'progress', '--input', '-'],
+    [['autopilot', 'alert', '--issue', '12', '--kind', 'usage-limit', '--input', 'file.json'], JSON.stringify(usage), /--input - with the alert JSON on stdin/],
+    [['autopilot', 'alert', '--issue', 'twelve', '--kind', 'usage-limit', '--input', '-'], JSON.stringify(usage), /--issue N with a positive issue number/],
+    [['autopilot', 'alert', '--issue', '0', '--kind', 'usage-limit', '--input', '-'], JSON.stringify(usage), /--issue N with a positive issue number/],
+    [['autopilot', 'alert', '--kind', 'usage-limit', '--input', '-'], JSON.stringify(usage), /--issue N with a positive issue number/],
+    [['autopilot', 'alert', '--issue', '12', '--input', '-'], JSON.stringify(usage), /--kind usage-limit\|resource\|access\|decision\|stuck\|recovered/],
+    [alert, 'not json', /JSON object on stdin with nonblank "cause", "tried", "need"\. Nothing was recorded/],
+    [alert, '[]', /JSON object on stdin/],
+    [alert, JSON.stringify({ cause: 'x', tried: 'y' }), /nonblank "cause", "tried", "need"/],
+    [alert, JSON.stringify({ ...usage, need: '  ' }), /nonblank "cause", "tried", "need"/],
+    [['autopilot', 'alert', '--issue', '12', '--kind', 'recovered', '--input', '-'], JSON.stringify({ cause: '' }), /nonblank "cause"\. Nothing was recorded/],
+    [['autopilot', 'alert', '--issue', '12', '--kind', 'recovered', '--input', '-'], JSON.stringify({ cause: 'Quota reset', kind: 'progress' }), /"kind" in a recovery as one of usage-limit\|resource\|access\|decision\|stuck/],
   ];
-  for (const argv of cases) assert.equal((await f.pdd(argv, JSON.stringify(usage))).exitCode, 2, argv.join(' '));
-  for (const text of ['not json', '[]', JSON.stringify({ cause: 'x', tried: 'y' }), JSON.stringify({ ...usage, need: '  ' })])
-    assert.equal((await f.pdd(['autopilot', 'alert', '--issue', '12', '--kind', 'usage-limit', '--input', '-'], text)).exitCode, 2, text);
+  for (const [argv, stdin, problem] of cases) {
+    const refused = await f.pdd(argv, stdin);
+    assert.equal(refused.exitCode, 2, argv.join(' '));
+    assert.match(refused.stderr, problem, argv.join(' '));
+    assert.equal(refused.stdout, '');
+  }
+  assert.equal((await f.pdd(['autopilot', 'alert', '--issue', '12', '--kind', 'progress', '--input', '-'], JSON.stringify(usage))).exitCode, 2, 'the parser refuses an unknown kind');
   assert.equal(f.requests.length, 0);
   assert.equal(existsSync(f.recordFile()), false);
   f.noSecret();
@@ -331,7 +467,7 @@ test('a Discord bot with a stdin token: set saves it privately; test checks bot 
   assert.match(sent.stdout, /confirmed/);
   assert.deepEqual(f.requests.slice(4).map(f.route), [`POST /channels/${CHANNEL}/messages`, `GET /channels/${CHANNEL}/messages/1300000000000000101`]);
   assert.match(f.requests[4].body.content, /^PDD Autopilot alert: usage-limit \(test-host\)\nRepository: owner\/repo\nIssue: https:\/\/github\.com\/owner\/repo\/issues\/12\n/);
-  assert.equal(f.record().incidents['12:usage-limit'].result, 'delivered');
+  assert.equal(f.record().incidents['usage-limit@test-host'].result, 'delivered');
   assert.equal((await f.status()).length, 1);
   f.noSecret();
 });

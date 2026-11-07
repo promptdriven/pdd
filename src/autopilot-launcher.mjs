@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 1ada2c5d311bbb3edfd2db154d4a151d1a43ecb969769856b9a4ddbc5d3954ad).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: ad0303e436b113dc67639509231a2c417d082b114e155d2980ff853d59f6c636).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch } from 'node:fs';

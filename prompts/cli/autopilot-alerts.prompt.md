@@ -26,6 +26,20 @@ This is a new public interface.
   0700. Write the file atomically with mode 0600. If a read finds wider file
   permissions, set them back to 0600.
 
+## An absolute home folder
+
+A relative path resolves in the current folder, which is often a checkout. So
+use only absolute paths for the destination and the alert record:
+
+- Use `XDG_CONFIG_HOME` only when it is absolute.
+- Use `HOME` only when it is absolute. When it is empty or relative, use the
+  account home folder from the operating system (`os.userInfo().homedir`).
+  `os.homedir()` is not a fallback, because it returns the same bad `HOME`.
+- When no absolute home folder exists, `set`, `test`, `clear` and `alert` exit 1
+  with one line that asks for an absolute `HOME`, and read, save, record and send
+  nothing. The `alert` line also says `Continue other work.`
+  `alertStatusLine` returns the empty string.
+
 ## A Discord bot destination
 
 `set` with `discordChannel` (from `--discord-channel ID`) saves a bot
@@ -106,16 +120,24 @@ Each send has one result:
 
 | Kind | Use |
 | --- | --- |
-| `usage-limit` | An AI account usage limit; give the reset time when known |
-| `resource` | A CPU, memory or disk failure |
-| `access` | An access or spending decision |
-| `decision` | An unresolved product choice |
-| `stuck` | An issue stuck after its retry time |
-| `recovered` | The open incidents of the issue ended |
+| Kind | Use | One incident per |
+| --- | --- | --- |
+| `usage-limit` | An AI account usage limit; give the reset time when known | repository, machine and kind |
+| `resource` | A CPU, memory or disk failure | repository, machine and kind |
+| `access` | An access or spending decision | repository, machine and kind |
+| `decision` | An unresolved product choice | repository, issue and kind |
+| `stuck` | An issue stuck after its retry time | repository, issue and kind |
+| `recovered` | A matching open incident ended | |
+
+`usage-limit`, `resource` and `access` are machine incidents: they are not
+specific to one issue. One usage limit that blocks 5 runs is one incident and
+one alert. The incident lists every affected issue.
 
 The JSON has nonblank string fields `cause`, `tried` and `need`. For `recovered`
-only `cause` (what changed) is needed. A missing or invalid issue, kind or field
-exits 2 and records nothing.
+only `cause` (what changed) is needed, and an optional `kind` names the one
+incident that ended: `usage-limit`, `resource`, `access`, `decision` or `stuck`.
+A missing or invalid issue, kind or field exits 2 with one line that names the
+problem, and records nothing.
 
 Find the repository with `gh repo view --json nameWithOwner` in `cwd`. If that
 fails, read a `github.com` owner and name from the `origin` remote. If both fail,
@@ -132,46 +154,66 @@ Needs: NEED
 Answer on the GitHub issue.
 ```
 
-An update starts with `PDD Autopilot update: KIND (HOST)`. A recovery starts with
-`PDD Autopilot recovered: KIND, KIND (HOST)` and has the Repository and Issue
-lines and `What changed: CAUSE`.
+When the incident lists more than one issue, the third line is
+`Issues: LINK, LINK` in issue-number order. It shows at most 10 links and then
+` and N more`. An update starts with `PDD Autopilot update: KIND (HOST)`. A
+recovery starts with `PDD Autopilot recovered: KIND, KIND (HOST)` and has the
+Repository line, the Issue or Issues line of the closed incidents and
+`What changed: CAUSE`.
 
-An incident is one repository, issue and kind. This answers the question
-**when does a call send, and what ends an incident?**
+The incident of a call is its machine incident (this repository, HOST and kind)
+for `usage-limit`, `resource` and `access`, else the incident of its issue and
+kind. This answers the question **when does a call send, and what ends an
+incident?**
 
 ```mermaid
 flowchart TD
-    K{Kind is recovered?} -->|No| O{Open incident for this issue and kind?}
-    O -->|No| N[Open it and send the alert]
-    O -->|Yes| U{"--update and the fields changed?"}
+    K{Kind is recovered?} -->|No| O{Open incident for this call?}
+    O -->|No| N[Open it with this issue and send the alert]
+    O -->|Yes| J[Add this issue to its issues]
+    J --> U{"--update, and the fields changed or an issue is not in the last sent message?"}
     U -->|Yes| S[Save the fields and send an update]
     U -->|No| R{Latest result failed or not-configured, and a destination is set?}
     R -->|Yes| A[Send the alert again]
     R -->|No| Q(["Record a repeat; send nothing"])
-    K -->|Yes| C{Open incidents for this issue?}
+    K -->|Yes| C{Matching open incidents?}
     C -->|No| Z([Send nothing])
     C -->|Yes| E[Close all of them and send one recovery]
 ```
 
-Compare fields after trim. Each send sets the latest result of its incident. A
-closed incident has no further sends; the next alert for that issue and kind
-opens a new incident.
+Compare fields after trim. A repeat keeps the fields of the last send. A repeat
+that adds an issue says so, sends nothing and names `--update`. Each send sets
+the latest result of its incident and the issues that its message named.
+
+A recovery for issue N matches:
+
+- with `kind`: the open incident of that kind, which is the machine incident of
+  this HOST for a machine kind, else the incident of issue N;
+- without `kind`: every open incident of issue N and every machine incident of
+  this HOST that lists issue N.
+
+A closed incident has no further sends. The next alert for that incident opens a
+new one.
 
 Record every call that reaches the diagram, also one that sends nothing, in
 `<state root>/alerts/<ID>.json`, with mode 0600. The state root is
-`ports.stateRoot`, else `HOME/.local/state/pdd/autopilot` (the launcher's state
-folder). ID is the first 20 hex characters of the SHA-256 of the lowercase
-`OWNER/REPO`. The record keeps the open incidents (issue, kind, fields, open and
-update times, latest result and detail) and the newest 200 log rows (time,
-issue, kind, action `alert`, `update`, `retry`, `repeat` or `recovered`, result
-and detail). It never holds the URL.
+`ports.stateRoot`, else `<home folder>/.local/state/pdd/autopilot` (the
+launcher's state folder), with the [home folder](#an-absolute-home-folder)
+above. ID is the first 20 hex characters of the SHA-256 of the lowercase
+`OWNER/REPO`. The record keeps the open incidents (kind, affected issues,
+issues in the last sent message, fields, open and update times, latest result
+and detail) and the newest 200 log rows (time, issue, kind, action `alert`,
+`update`, `retry`, `repeat` or `recovered`, result and detail). It never holds
+the URL.
 
 `alert` exits 0 when the record is saved, whatever the delivery result, so work
 continues. Its message names the issue, the kind and the result. A failed or
 unconfirmed result says that `pdd autopilot status` shows it. A `not-configured`
 result says that the alert is recorded on this machine and names
 `pdd autopilot alerts set`. A repeat says that nothing was sent and names
-`--update`. A failure to save the record exits 1.
+`--update`. A failure to save the record exits 1. A repeat after a `failed` or
+`not-configured` result is how a coordinator sends a failed alert again, so the
+coordinator may repeat the same call on a later tick while the need lasts.
 
 ## Status line
 
@@ -195,11 +237,13 @@ Without a destination the end is `; set one with pdd autopilot alerts set.`
   `alertStatusLine` with its saved repository and state root.
 - Native runtime: Node `fs`, `crypto`, `os` and `fetch`.
 - Input `env` (default: the process environment) gives HOME and
-  XDG_CONFIG_HOME; a relative value is ignored.
+  XDG_CONFIG_HOME; a relative or empty value is ignored, as
+  [above](#an-absolute-home-folder).
 - Ports, all optional: `http({method, url, headers, body})` returns
   `{status, text}` or throws (code `unreached` means the request did not reach
   the server); method defaults to POST, and a GET has no body;
   `tokenCommand(command, {cwd})` returns the command stdout or throws with an
   optional numeric `exitCode`; the default runs `/bin/sh -c`;
   `repository({cwd})` returns `{nameWithOwner}`; `now()`; `hostname()`;
+  `userInfo()` returns `{homedir}` or throws (default `os.userInfo`);
   `stateRoot`. Tests inject `http`; no test sends a real webhook request.

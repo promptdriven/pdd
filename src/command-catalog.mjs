@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 5c0c0c67380e2ed2681bceefc4aefae45bc525b544d6fe4948c907c07c41468e).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: bb525aa3f4e1f88c472a7ea549b6eb060a53d53e4660be51b22af579df16b784).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -31,7 +31,7 @@ const routes = [
     forms: [form('pdd autopilot add N...', 'Mark named old issues with pdd:autopilot so Autopilot may take them.')] },
   { id: 'autopilot.alert', prefix: ['autopilot', 'alert'], local: 'autopilot-alert', operands: [],
     options: [{name:'--issue',kind:'text'},{name:'--kind',kind:'value',choices:['usage-limit','resource','access','decision','stuck','recovered']},{name:'--input',kind:'text'},{name:'--update',kind:'flag'}],
-    forms: [form('pdd autopilot alert --issue N --kind usage-limit|resource|access|decision|stuck|recovered --input - [--update]', 'For the coordinator: record one alert for a real human need or incident and send it to this machine\'s destination. Reads {"cause","tried","need"} JSON from stdin. A repeat of an open alert sends nothing; --update sends a material change; recovered sends one recovery and closes the issue\'s alerts.')] },
+    forms: [form('pdd autopilot alert --issue N --kind usage-limit|resource|access|decision|stuck|recovered --input - [--update]', 'For the coordinator: record one alert for a real human need or incident and send it to this machine\'s destination. Reads {"cause","tried","need"} JSON from stdin. usage-limit, resource and access are one alert per machine for all blocked issues. A repeat sends nothing unless the last send failed; --update sends a material change; recovered sends one recovery and closes the matching alerts.')] },
   { id: 'autopilot.alerts', prefix: ['autopilot', 'alerts'], local: 'autopilot-alerts', operands: [{name:'action',type:'choice:set,test,clear'}], options: [{name:'--discord-channel',kind:'text'},{name:'--token-command',kind:'text'}],
     forms: [form('pdd autopilot alerts set', 'Read a Discord or Slack incoming webhook URL from stdin and save it for this machine outside every repository, readable only by you; the URL is never printed.'),
       form('pdd autopilot alerts set --discord-channel ID [--token-command CMD]', 'Use a Discord bot instead: read its token from stdin and save it readable only by you, or save CMD and run it at each send so the token is never written to disk. The token and the command output are never printed.'),
