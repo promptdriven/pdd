@@ -2,10 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile as callbackExec } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { startRun, stepDone, approveRun, runStatus } from '../src/workflow-runner.mjs';
+import { startRun, stepDone, approveRun, runStatus, cancelRun } from '../src/workflow-runner.mjs';
 import { writeRun } from '../src/workflow-runs.mjs';
 import { fixture, packageRoot } from './helpers/workflow-runner-fixture.mjs';
 
@@ -75,7 +75,8 @@ async function publishingRun(t, { rounds } = {}) {
   const origin = { repository: 'example/project', coordinatorId: 'coordinator-a', machine: 'machine-a', claim: { commentId: '11', labelEventId: '12' } };
   const saved = f.record(); saved.automaticOrigin = structuredClone(origin); if (rounds) saved.repairRounds = rounds; writeRun(saved);
   const root = realpathSync(f.source), stateRoot = join(f.state, 'autopilot'); mkdirSync(stateRoot, { recursive: true });
-  writeFileSync(join(stateRoot, `${sha(root).slice(0, 20)}.json`), JSON.stringify({ repo: 'example/project', cwd: root, coordinatorId: origin.coordinatorId }));
+  writeFileSync(join(stateRoot, `${sha(root).slice(0, 20)}.json`), JSON.stringify({ enabled: true, repo: 'example/project', cwd: root, coordinatorId: origin.coordinatorId, machine: origin.machine,
+    activatedAt: 'activation', startAction: { command: 'pdd autopilot start', repository: 'example/project', mode: 'auto' } }));
   writeFileSync(join(f.source, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: [] } }));
   const fixturePath = join(f.base, 'reader.json'), logPath = join(f.base, 'gh.log'), claimedAt = at(f.clock - 2 * hour);
   const original = f.ports.execFile;
@@ -84,14 +85,26 @@ async function publishingRun(t, { rounds } = {}) {
     : original(file, args, opts);
   let value = 2;
   const edit = () => { writeFileSync(join(run.root, 'value.mjs'), `export const value = ${value++};\n`); f.git(run.root, 'commit', '-qam', `value ${value}`); };
+  // Fake GitHub: the claim eras of issue 17. The last era is the live claim, with its last heartbeat now.
+  const github = { labels: ['pdd:working'], eras: [{ event: 12, comment: 11, at: claimedAt }] };
+  const claimComment = era => ({ id: era.comment, user: { login: 'example' }, created_at: era.at, updated_at: at(f.clock),
+    body: JSON.stringify({ repository: origin.repository, coordinatorId: origin.coordinatorId, machine: origin.machine, labelEventId: String(era.event), lastSeen: at(f.clock) }) });
+  const writeGitHub = () => writeFileSync(fixturePath, JSON.stringify({ labels: github.labels,
+    events: github.eras.flatMap(era => [{ id: era.event, event: 'labeled', label: { name: 'pdd:working' }, actor: { login: 'example' }, created_at: era.at },
+      ...(era.removed ? [{ id: era.event + 1, event: 'unlabeled', label: { name: 'pdd:working' }, actor: { login: 'example' }, created_at: era.removed }] : [])]),
+    comments: github.eras.map(claimComment) }));
   const done = async (step, summary = step) => {
-    f.tick();
-    // The live claim, with its last heartbeat now.
-    writeFileSync(fixturePath, JSON.stringify({ labels: ['pdd:working'], events: [{ id: 12, event: 'labeled', label: { name: 'pdd:working' }, actor: { login: 'example' }, created_at: claimedAt }],
-      comments: [{ id: 11, user: { login: 'example' }, created_at: claimedAt, updated_at: at(f.clock), body: JSON.stringify({ repository: origin.repository, coordinatorId: origin.coordinatorId, machine: origin.machine, labelEventId: '12', lastSeen: at(f.clock) }) }] }));
+    f.tick(); writeGitHub();
     return stepDone({ step, summary, cwd: run.root }, f.agentPorts({ execFile, autopilotStateRoot: stateRoot }));
   };
-  return { f, run, done, edit };
+  // A new automatic start by this coordinator for its current claim, as the next tick's agent runs it.
+  const start = () => {
+    f.tick(); writeGitHub();
+    const era = github.eras.at(-1), coordinator = { ...origin, claim: { commentId: String(era.comment), labelEventId: String(era.event) }, activation: 'activation' };
+    return startRun({ name: 'small-change', issue: '17', agent: 'codex', cwd: f.source, packageRoot, coordinator },
+      { ...f.ports, execFile, autopilotStateRoot: stateRoot, checkDependencyStart: async () => ({ allowed: true, reason: 'ok' }) });
+  };
+  return { f, run, done, edit, github, start };
 }
 
 test('repair ceiling: a retry of the PR open after a clean first pass is not a repair round, and the PR opens', async t => {
@@ -158,7 +171,7 @@ test('repair ceiling: after the refusal the run is stuck in status, and no later
   const refused = await done('change', 'repair 6');
   assert.equal(refused.exitCode, 1);
   assert.match(refused.message, /refused another repair round/);
-  assert.match(refused.message, /A person lets Autopilot try again with a new run and a new count: they remove pdd:stuck and pdd:working/);
+  assert.ok(refused.message.includes('To let Autopilot try again, a person removes pdd:stuck and pdd:working, then runs pdd workflow cancel 17 in the checkout that holds the stuck run; the next tick starts a new run with a fresh repair count.'), refused.message);
   const status = await runStatus({ ref: '17', cwd: f.source }, f.ports);
   assert.match(status.message, /^State: stuck: Repair limit reached in build: take the stuck path$/m);
   const forward = await done('formal');
@@ -170,4 +183,79 @@ test('repair ceiling: after the refusal the run is stuck in status, and no later
   assert.equal(kept.done.formal, undefined);
   assert.equal(kept.done.verify.summary, '✗ 2 vectors fail');
   assert.equal(kept.state, 'stuck');
+});
+
+// The way out after the repair limit (#3041 repair 2): a stuck run is not ended, so the person
+// also cancels it in the checkout that holds it; the next automatic start then gets a fresh count.
+async function stuckAtLimit(t) {
+  const r = await publishingRun(t, { rounds: { build: 5 } });
+  r.edit();
+  assert.equal((await r.done('change', 'repair 5')).exitCode, 0);
+  assert.equal((await r.done('verify', '✗ 2 vectors fail')).exitCode, 0);
+  r.edit();
+  const refused = await r.done('change', 'repair 6');
+  assert.equal(refused.exitCode, 1);
+  assert.match(refused.message, /then runs pdd workflow cancel 17 in the checkout that holds the stuck run/);
+  assert.equal(r.f.record().state, 'stuck');
+  return r;
+}
+// The person removes pdd:stuck and pdd:working; on the next tick this coordinator claims the issue again.
+function removeLabelsAndClaimAgain(r) {
+  r.f.tick(); r.github.eras.at(-1).removed = at(r.f.clock); r.github.labels = [];
+  r.f.tick(60e3); r.github.eras.push({ event: 22, comment: 21, at: at(r.f.clock) }); r.github.labels = ['pdd:working'];
+}
+
+test('repair ceiling: after the limit, labels removed and pdd workflow cancel, the next automatic start gets a fresh count', async t => {
+  const r = await stuckAtLimit(t);
+  const stuck = r.f.record();
+  removeLabelsAndClaimAgain(r);
+  const cancelled = await cancelRun({ ref: '17', cwd: r.f.source }, r.f.ports);
+  assert.equal(cancelled.exitCode, 0, cancelled.message);
+  const started = await r.start();
+  assert.equal(started.exitCode, 0, started.message);
+  const fresh = r.f.record();
+  assert.notEqual(fresh.runId, stuck.runId, 'a new run');
+  assert.notEqual(fresh.state, 'stuck');
+  assert.equal(fresh.repairRounds, undefined, 'a fresh repair count');
+  assert.equal(fresh.repairLimit, undefined);
+  assert.deepEqual(fresh.automaticOrigin.claim, { commentId: '21', labelEventId: '22' }, 'the new run holds the new claim');
+});
+
+test('repair ceiling: after the limit and labels removed, without the cancel a new automatic start is deferred', async t => {
+  const r = await stuckAtLimit(t);
+  const stuck = r.f.record();
+  removeLabelsAndClaimAgain(r);
+  const deferred = await r.start();
+  assert.equal(deferred.exitCode, 1);
+  assert.match(deferred.message, /^Automatic start deferred: issue has an active run\.$/);
+  const kept = r.f.record();
+  assert.equal(kept.runId, stuck.runId, 'the stuck run stays');
+  assert.equal(kept.state, 'stuck');
+  assert.deepEqual(kept.repairRounds, { build: 5 });
+  assert.ok(kept.repairLimit);
+  const again = await r.done('change', 'repair 7');
+  assert.equal(again.exitCode, 1, 'the stuck run still refuses every done');
+  assert.match(again.message, /pdd refused change: the build area of this Autopilot run has had 5 repair rounds/);
+});
+
+test('repair ceiling: an unknown worktree fingerprint does not make verify again a repair round', async t => {
+  const { f, run, done, edit } = await publishingRun(t);
+  edit();
+  assert.equal((await done('change')).exitCode, 0);
+  assert.equal((await done('verify', 'Prompt tests: 3 of 3')).exitCode, 0);
+  assert.equal((await done('formal', '✗ formal fails')).exitCode, 0);
+  // A tracked path that is not a regular file or link: pdd cannot fingerprint the worktree (unknown now).
+  const path = join(run.root, 'value.mjs');
+  rmSync(path); mkdirSync(path); writeFileSync(join(path, 'inner.txt'), 'x\n');
+  const unknownNow = await done('verify', 'verify again, fingerprint unknown');
+  assert.equal(unknownNow.exitCode, 0, unknownNow.message);
+  assert.match(unknownNow.message, /warning: verify ran again after formal/);
+  assert.doesNotMatch(unknownNow.message, /Repair round/);
+  assert.equal(f.record().done.verify.worktreeSha256, undefined, 'no fingerprint saved');
+  // The worktree is readable again, but the last verify record has no fingerprint (unknown then).
+  rmSync(path, { recursive: true }); f.git(run.root, 'checkout', '--', 'value.mjs');
+  assert.equal((await done('formal', '✗ formal fails')).exitCode, 0);
+  const unknownThen = await done('verify', 'verify again, fingerprint known now');
+  assert.doesNotMatch(unknownThen.message, /Repair round/);
+  assert.equal(f.record().repairRounds, undefined, 'unknown counts as no change');
 });

@@ -1584,17 +1584,20 @@ const PROOF_STEPS = ['check', 'try', 'verify'];
 // step after a failure: a `done` for a step that clears later recorded steps of its area
 // (build again after verify, formal or review). A retry of a step with nothing recorded after
 // it (a publication, claim or push retry) is not a round. A later step of the area (a check
-// such as verify) recorded again on unchanged worktree content is not a round either. After
+// such as verify) recorded again on unchanged or unknown worktree content is not a round either. After
 // 5 rounds in one area, pdd refuses another, records the stop as `stuck`, and refuses every
 // later `done` of that run. Manual runs keep their skill's own repair rule and save no count.
 const REPAIR_ROUNDS = 5, REPAIR_REFUSED = Symbol('repair refused');
 const repairLimitReason = name => `Repair limit reached in ${name}: take the stuck path`;
-const repairRefusal = (name, step, rounds) => `pdd refused ${rounds ? 'another repair round' : `${step}`}: the ${name} area of this Autopilot run has had ${REPAIR_ROUNDS} repair rounds. pdd did not record ${step}; the run is stuck ("${repairLimitReason(name)}"). Take the stuck path: add pdd:stuck, write one comment with the cause, send one stuck alert, keep the claim and progress, and let the coordinator continue with other issues. Do not retry it. A person lets Autopilot try again with a new run and a new count: they remove pdd:stuck and pdd:working from the issue.`;
+// The way out is a person's: a stuck run is still active, so a new automatic start waits until it is cancelled.
+const repairRefusal = (name, step, rounds, number) => `pdd refused ${rounds ? 'another repair round' : `${step}`}: the ${name} area of this Autopilot run has had ${REPAIR_ROUNDS} repair rounds. pdd did not record ${step}; the run is stuck ("${repairLimitReason(name)}"). Take the stuck path: add pdd:stuck, write one comment with the cause, send one stuck alert, keep the claim and progress, and let the coordinator continue with other issues. Do not retry it. To let Autopilot try again, a person removes pdd:stuck and pdd:working, then runs pdd workflow cancel ${number} in the checkout that holds the stuck run; the next tick starts a new run with a fresh repair count.`;
 function repairRound(run, area, step, worktree) {
   if (!Object.hasOwn(run, 'automaticOrigin') || !area.steps.includes(step) || !run.done[step]) return null;
   const index = area.steps.indexOf(step);
   if (!area.steps.slice(index + 1).some(item => run.done[item])) return null;
-  if (index > 0 && typeof worktree === 'string' && run.done[step].worktreeSha256 === worktree) return null;
+  // A later step on unchanged content is a retry, not a round. An unknown fingerprint (now or when last recorded) counts as no change.
+  const recorded = run.done[step].worktreeSha256;
+  if (index > 0 && (typeof worktree !== 'string' || typeof recorded !== 'string' || recorded === worktree)) return null;
   const used = Number.isSafeInteger(run.repairRounds?.[area.name]) ? run.repairRounds[area.name] : 0;
   return used >= REPAIR_ROUNDS ? REPAIR_REFUSED : used + 1;
 }
@@ -1633,14 +1636,14 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
   protectProgress(run,p);
   const area = run.areas[run.area], lines = [];
   // After the repair limit, the run is stuck: no step of it is recorded, so it cannot go on to open a PR.
-  if (Object.hasOwn(run, 'automaticOrigin') && run.repairLimit) return fail(repairRefusal(run.repairLimit.area, step, false));
+  if (Object.hasOwn(run, 'automaticOrigin') && run.repairLimit) return fail(repairRefusal(run.repairLimit.area, step, false, run.number));
   const worktree = Object.hasOwn(run, 'automaticOrigin') ? gitFingerprint(run.root) : null;
   if (repairRound(run, area, step, worktree) === REPAIR_REFUSED) {
     commitRun(run, p, latest => {
       if (ended(latest) || latest.area !== run.area || repairRound(latest, area, step, worktree) !== REPAIR_REFUSED) throw Object.assign(Error('The run changed; look again.'), { code: 'workflow_progress_refused' });
       latest.state = 'stuck'; latest.parkReason = repairLimitReason(area.name); latest.repairLimit = { area: area.name, step, at: p.now() };
     });
-    return fail(repairRefusal(area.name, step, true));
+    return fail(repairRefusal(area.name, step, true, run.number));
   }
   if (!area.steps.includes(step)) lines.push(`warning: "${step}" is not a step of the ${area.name} area (${area.steps.join(', ')}). pdd recorded it anyway.`);
   else {

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 5604cf332891a4bbcd782b9e5f95a5487e50a5809bb14be4be116c85236ad8af).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: b6234b80a13697419a14fa57de65d2ddbea72f2bf65c80446d4eb31bb0257133).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch } from 'node:fs';
@@ -825,7 +825,7 @@ async function runTick(stateFile, ports, completion) {
         // retry is refused or not allowed: the rule asks for no retry and no further comment.
         const ceiling = limitedFor(claim) ? 'takeover limit' : await (p.readRepairLimited ?? readRepairLimited)(state, number, p) ? 'repair limit' : null;
         timeRules.push({ kind: 'stuck-claim', number, reason: ceiling
-          ? `Issue #${number} has been stuck for 4 hours after the ${ceiling}. Do not retry it, do not remove pdd:stuck and write no new comment; send the one stuck alert only if this stop has none yet. A person removes pdd:stuck and pdd:working to let Autopilot try again. Its claim is no longer refreshed and expires in 4 hours.`
+          ? `Issue #${number} has been stuck for 4 hours after the ${ceiling}. Do not retry it, do not remove pdd:stuck and write no new comment; send the one stuck alert only if this stop has none yet. ${ceiling === 'repair limit' ? `To let Autopilot try again, a person removes pdd:stuck and pdd:working, then runs pdd workflow cancel ${number} in the checkout that holds the stuck run; the next tick starts a new run with a fresh repair count.` : 'A person removes pdd:stuck and pdd:working to let Autopilot try again.'} Its claim is no longer refreshed and expires in 4 hours.`
           : `Issue #${number} has been stuck for 4 hours; retry it with a changed approach or ask in the configured alert channel. Its claim is no longer refreshed and expires in 4 hours unless the issue leaves pdd:stuck.` });
         pendingTimes[key] = claim.stuckSince;
       }

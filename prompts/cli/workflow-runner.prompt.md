@@ -102,9 +102,11 @@ later recorded steps of that area (`build` again after a failed `verify`,
   asks for after a failed PR open, claim check or push. A publication retry is
   never refused;
 - a `done` for a later step of the area (not its first step), such as `verify`,
-  when the worktree content is the same as when that step was last recorded.
-  Save that content fingerprint (the [replay](workflow-replay.prompt.md)
-  `sourceFingerprint`) as `worktreeSha256` in each step record of such a run.
+  when the worktree content is the same as when that step was last recorded, or
+  when the fingerprint is unknown now or in that record: unknown counts as no
+  change. Save the content fingerprint (the [replay](workflow-replay.prompt.md)
+  `sourceFingerprint`) as `worktreeSha256` in each step record of such a run,
+  when it is known.
 
 Count rounds per area name in the run's optional `repairRounds` object
 (`{AREA: count}`), in the same saved update as the step, and add the line
@@ -117,12 +119,15 @@ While `repairLimit` is saved, refuse every `done` of the run in the same way, so
 that the run cannot record a later step or open a PR past the refused round. The
 refusal tells the agent to take the stuck path: add `pdd:stuck`, write one
 comment with the cause, send one `stuck` alert, keep the claim and progress, do
-not retry, and let the coordinator continue with other issues. It also says that
-a person lets Autopilot try again with a new run and a new count by removing
-`pdd:stuck` and `pdd:working` from the issue. Each run, area and issue has its
-own count. The 5 is a constant, not a setting. Manual and legacy runs save no
-count and no fingerprint and are never refused; their skill's 2-repair rule
-applies.
+not retry, and let the coordinator continue with other issues. It also gives the
+way out: to let Autopilot try again, a person removes `pdd:stuck` and
+`pdd:working`, then runs `pdd workflow cancel N` (N is the issue) in the checkout
+that holds the stuck run; the next tick starts a new run with a fresh repair
+count. A stuck run is not ended, so without the cancel a new automatic start of
+the issue in that checkout stays deferred ("issue has an active run"). Each run,
+area and issue has its own count. The 5 is a constant, not a setting. Manual and
+legacy runs save no count and no fingerprint and are never refused; their
+skill's 2-repair rule applies.
 
 ## Record an automatic stopped run
 

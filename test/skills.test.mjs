@@ -902,6 +902,6 @@ test('AUTOPILOT19: ceilings count only real loops, ask for no retry after the li
     'add it again at once (within 10 minutes)', 'Taking back your own expired claim (same coordinator ID and machine) is not a takeover.',
     'The count starts again at 0 when a person removes `pdd:stuck` at the limit', 'Read the issue again first; skip it if it already has `pdd:stuck`.',
     'After the repair or takeover limit, the rule says so: do not retry, do not remove `pdd:stuck`, write no new comment and send no second alert.',
-    'Only a person lets Autopilot try again: they remove `pdd:stuck` and `pdd:working`; a new run then has a new count.',
+    'Only a person lets Autopilot try again. After the repair limit, they remove `pdd:stuck` and `pdd:working`, then run `pdd workflow cancel N` in the checkout that holds the stuck run; the next tick starts a new run with a fresh repair count.',
     'The tick records it in your claim comment, so a later owner of the issue does not send it again.');
 });

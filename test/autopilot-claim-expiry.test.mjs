@@ -786,7 +786,10 @@ test('tick: after a ceiling the 4-hour stuck rule asks for no retry and at most 
     for (let i = 0; i < 3; i++) { f.time += 30 * minute; await f.tick(); }
     const rules = timeRules(f, 'stuck-claim');
     assert.equal(rules.length, 1, `${ceiling}: one rule`);
-    assert.match(rules[0].reason, new RegExp(`stuck for 4 hours after the ${ceiling}\\. Do not retry it, do not remove pdd:stuck and write no new comment; send the one stuck alert only if this stop has none yet\\. A person removes pdd:stuck and pdd:working to let Autopilot try again\\.`));
+    assert.match(rules[0].reason, new RegExp(`stuck for 4 hours after the ${ceiling}\\. Do not retry it, do not remove pdd:stuck and write no new comment; send the one stuck alert only if this stop has none yet\\. `));
+    assert.ok(rules[0].reason.includes(ceiling === 'repair limit'
+      ? 'To let Autopilot try again, a person removes pdd:stuck and pdd:working, then runs pdd workflow cancel 7 in the checkout that holds the stuck run; the next tick starts a new run with a fresh repair count.'
+      : 'A person removes pdd:stuck and pdd:working to let Autopilot try again.'), rules[0].reason);
     assert.doesNotMatch(rules[0].reason, /changed approach/);
   }
 });
