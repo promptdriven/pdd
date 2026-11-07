@@ -6,6 +6,7 @@ import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {mkdirSync,mkdtempSync,readFileSync,realpathSync,rmSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
+import {performance} from 'node:perf_hooks';
 import {dirname,join} from 'node:path';
 import {fixture,packageRoot} from './helpers/workflow-runner-fixture.mjs';
 import {adoptedCorpusRun} from './helpers/workflow-concurrent-adoption.mjs';
@@ -310,4 +311,111 @@ test('2640 repair C: with a prompt area, "all" adds every unchanged base file af
   assert.equal(anchor.outcome,undefined,anchor.reason);
   assert.deepEqual(anchor.vectors.map(v=>[v.path,v.base??null]),[['tests/refund.json',null],['tests/other.json',null],['tests/add.empty.json',r.base],['tests/add.json',r.base]]);
   assert.equal(anchor.vectors[1].snapshot.steps[0].checks[0].value,2,'a base file that PR 1 changes keeps its PR 1 bytes');
+});
+
+// Repair 2: exercise the runner with real Git; only gh and Herdr are fakes.
+test('2640 repair 2 M1: a PR 1 rename blocks like a delete, without pinning a phantom base file',async t=>{
+  const {f,run}=await baseRun(t,{areas:[...PROMPT_AREAS,CODE]});
+  put(run.root,'tests/refund.json',JSON.stringify(scenario('user_stories/add.md','prompts/add.prompt.md',[check('AC1',-3)],'refund')));
+  f.git(run.root,'config','diff.renames','true');
+  f.git(run.root,'mv','tests/add.json','tests/moved.json');
+  assert.equal((await stepDone({step:'scope',summary:'scoped',cwd:run.root},f.agentPorts())).exitCode,0);f.tick();
+  assert.equal((await approveRun({ref:'17',cwd:f.source},f.ports)).exitCode,0);
+  await stepDone({step:'check',summary:'Runtime check: ✓ 1 of 1 criteria',cwd:run.root},f.agentPorts());f.tick();
+  assert.equal((await approveRun({ref:'17',cwd:f.source},f.ports)).exitCode,0);
+  const anchor=f.record().replayBaseline;
+  assert.equal(anchor.outcome,'blocked','the renamed source must fail the changed-scenario inventory');
+  assert.deepEqual(anchor.vectors,[],'the old path must not survive as an unchanged base file');
+  put(run.root,'value.mjs','export const value=2;\n');
+  record(run,['tests/moved.json','tests/add.empty.json','tests/refund.json']);
+  await stepDone({step:'verify',summary:'Replay record supplied',cwd:run.root},f.agentPorts());
+  assert.equal(f.record().replayEvidence.outcome,'blocked');
+  assert.match(f.prs.at(-1).body,/^Code replay: BLOCKED/m);
+});
+
+test('2640 repair 2 F3: an unknown base replay key blocks and names the key and pdd.json',async t=>{
+  for(const replay of [{base_scenario:'all'},{base_scenarios:'all',unexpected:true}]){
+    const {f,run}=await baseRun(t,{files:{...BASE,'pdd.json':JSON.stringify({replay})}});
+    put(run.root,'pdd.json',JSON.stringify({replay:{base_scenarios:'linked'}}));
+    put(run.root,'prompts/add.prompt.md','# Add changed\n');
+    record(run,['tests/add.empty.json','tests/add.json']);
+    await stepDone({step:'verify',summary:'Replay record supplied',cwd:run.root},f.agentPorts());
+    const anchor=f.record().replayBaseline,key=Object.keys(replay).find(key=>key!=='base_scenarios');
+    assert.ok(anchor,'the runner must save the base-selection outcome');
+    assert.equal(anchor.outcome,'blocked','unknown base replay keys must not fall back to linked');
+    assert.deepEqual(anchor.vectors,[]);
+    assert.ok(anchor.reason.includes(key),`the reason must name ${key}`);
+    assert.match(anchor.reason,/pdd\.json/);
+    const line=f.prs.at(-1).body.split('\n').find(line=>line.startsWith('Code replay:'));
+    assert.ok(line.replaceAll('\\','').includes(key));assert.match(line,/pdd\.json/);
+  }
+});
+
+test('2640 repair 2 F1: repo color settings cannot hide linked or all base scenarios',async t=>{
+  for(const select of ['linked','all']){
+    const {f,run}=await baseRun(t,{files:{...BASE,'pdd.json':JSON.stringify({replay:{base_scenarios:select}})}});
+    for(const setting of ['color.ui','color.grep','color.diff'])f.git(run.root,'config',setting,'always');
+    put(run.root,'prompts/add.prompt.md','# Add changed\n');
+    const paths=['tests/add.empty.json','tests/add.json',...(select==='all'?['tests/other.json']:[])];
+    record(run,paths);
+    const out=await stepDone({step:'verify',summary:'Replayed base scenarios with color configured',cwd:run.root},f.agentPorts());
+    assert.equal(out.exitCode,0,out.message);
+    const anchor=f.record().replayBaseline;
+    assert.ok(anchor,'the runner must save an anchor under repo color settings');
+    assert.deepEqual(anchor.vectors.map(v=>v.path),paths,select);
+    assert.match(f.prs.at(-1).body,/^Code replay: PASS/m);
+    assert.doesNotMatch(f.prs.at(-1).body,/\x1b/);
+  }
+});
+
+test('2640 repair 2 F2: 64 KiB whitespace and header-shaped lines do not delay replay reads',async t=>{
+  const prefix='// Generated from prompts/other.prompt.md';
+  const files={...BASE,'space.mjs':' '.repeat(65535)+'\n',
+    'bad.mjs':prefix+' '.repeat(65534-prefix.length)+'x\n','good.mjs':HEADER+'export const value=1;\n'};
+  const {f,run}=await baseRun(t,{files});
+  for(const path of ['space.mjs','bad.mjs','good.mjs'])put(run.root,path,files[path]+'// changed\n');
+  record(run,['tests/add.empty.json','tests/add.json']);
+  const start=performance.now();
+  const out=await stepDone({step:'verify',summary:'Replayed with long source lines',cwd:run.root},f.agentPorts());
+  const elapsed=performance.now()-start;
+  assert.ok(elapsed<4000,`header parsing must stay bounded: ${Math.round(elapsed)} ms`);
+  assert.equal(out.exitCode,0,out.message);
+  const anchor=f.record().replayBaseline;
+  assert.ok(anchor,'the runner must save the header-selected anchor');
+  assert.deepEqual(anchor.vectors.map(v=>v.path),['tests/add.empty.json','tests/add.json']);
+  assert.match(f.prs.at(-1).body,/^Code replay: PASS/m);
+  t.diagnostic(`Replay publication with two 64 KiB lines: ${Math.round(elapsed)} ms`);
+});
+
+test('2640 repair 2 F4: changing a prompt also selects base scenarios of its Stories through other prompts',async t=>{
+  const {f,run}=await baseRun(t,{files:{...BASE,...STORY_MATE}});
+  put(run.root,'prompts/add.prompt.md','# Add changed\n');
+  const paths=['tests/add.cli.json','tests/add.empty.json','tests/add.json'];record(run,paths);
+  const out=await stepDone({step:'verify',summary:'Replayed the prompt and its Stories',cwd:run.root},f.agentPorts());
+  assert.equal(out.exitCode,0,out.message);
+  const anchor=f.record().replayBaseline;
+  assert.ok(anchor,'the runner must save the changed-prompt anchor');
+  assert.deepEqual(anchor.vectors.map(v=>v.path),paths,'the same Story expansion applies to changed prompts and header prompts');
+  assert.match(f.prs.at(-1).body,/^Code replay: PASS/m);
+});
+
+test('2640 repair 2 F7: oversized linked search matches are named in the PR Anchor note with and without other selected files',async t=>{
+  const large=JSON.stringify({...scenario('user_stories/add.md','prompts/add.prompt.md',[check('AC1',3)]),padding:' '.repeat(10*1024*1024)});
+  // Two long canonical paths make the note exceed the ordinary metadata text limit.
+  const parent=`tests/${'a'.repeat(180)}/${'b'.repeat(180)}/${'c'.repeat(180)}`;
+  const paths=[`${parent}/large-1.json`,`${parent}/large-2.json`];
+  for(const small of [false,true]){
+    const {f,run}=await baseRun(t,{files:{...(small?BASE:{}),...Object.fromEntries(paths.map(path=>[path,large]))}});
+    put(run.root,'prompts/add.prompt.md','# Add changed\n');
+    if(small)record(run,['tests/add.empty.json','tests/add.json']);
+    await stepDone({step:'verify',summary:'Oversized base file is visible in the report',cwd:run.root},f.agentPorts());
+    const anchor=f.record().replayBaseline;
+    assert.ok(anchor,'the runner must save the base-file selection note');
+    assert.ok(!anchor.vectors.some(v=>paths.includes(v.path)),'do not load oversized blobs into the anchor');
+    const line=f.prs.at(-1).body.split('\n').find(line=>line.startsWith('Anchor:'));
+    for(const path of paths)assert.ok(line?.includes(path),'the Anchor line must name each skipped file without truncation');
+    assert.ok(line.includes(String(Buffer.byteLength(large))),'the Anchor line must state the byte count');
+    assert.match(line,/10 MiB/);
+    if(small)assert.equal(anchor.vectors.length,2,'keep the readable linked files');
+  }
 });

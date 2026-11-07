@@ -217,7 +217,7 @@ async function rawGit(p, root, ...args) {
 }
 async function changedFiles(run, p, strict = false) {
   try {
-    const tracked = (await rawGit(p, run.root, 'diff', '--name-only', '-z', run.baseSha)).split('\0');
+    const tracked = (await rawGit(p, run.root, 'diff', '--no-color', '--no-renames', '--name-only', '-z', run.baseSha)).split('\0');
     const untracked = (await rawGit(p, run.root, 'ls-files', '--others', '--exclude-standard', '-z')).split('\0');
     return [...new Set([...tracked, ...untracked].filter(Boolean))];
   } catch (error) { if (strict) throw error; return []; }
@@ -361,7 +361,7 @@ const statuses = text => interfaceBlocks(text).map(block => { try { return JSON.
 // The *.prompt.md files that a branch changes against its base and whose Runtime interface is still "draft".
 async function draftPrompts(run, p, branch, base) {
   try {
-    const files = (await git(p, run.root, 'diff', '--name-only', `refs/remotes/origin/${base}...${branch}`)).split('\n').filter(path => path.endsWith('.prompt.md'));
+    const files = (await git(p, run.root, 'diff', '--no-color', '--name-only', `refs/remotes/origin/${base}...${branch}`)).split('\n').filter(path => path.endsWith('.prompt.md'));
     const drafts = [];
     for (const path of files) {
       let text;

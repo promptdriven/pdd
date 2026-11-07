@@ -145,8 +145,9 @@ A base scenario belongs to the run when one of its links names a file in the cha
 - The changed area is every file that the run changed against its base, the links of each changed scenario,
   and, for each changed file that the base `pdd-bindings.json` declares as a `module`, its `stories` and
   `prompt` (see [module binding inventory](runtime-bindings.md)).
-- The changed area also holds each prompt that a changed file names in its PDD header, and the Stories of
-  that prompt (the `story_path` of each base scenario that links to it).
+- The changed area also holds each prompt that a changed file names in its PDD header. For both these
+  prompts and changed prompt files, it includes their Stories (the `story_path` of each base scenario
+  that links to the prompt).
 
 A changed code file links to scenarios in two ways: through `pdd-bindings.json`, or through its own
 header. pdd reads the header from the file on the base commit and from the file in the run. The header is
@@ -163,6 +164,7 @@ The line can start with a comment mark (`//`, `#`, `--`, `;`, `/*`, `*`, `<!--`,
 has `Generated from` and a repository path that ends in `.prompt.md`. After the path, it can have
 ` (sha256: HEX)` with 64 lowercase hex characters, and a `.`. A line without such a path is not a header.
 For example, `Generated from the canonical m1_policy prompt` names no file, so it adds no link.
+Lines longer than 1,100 characters are not parsed as headers. Git color settings do not affect selection.
 
 pdd uses no other link: no folder, file name or text match. When the repository records no link, pdd adds
 no base file and the PR says why.
@@ -184,9 +186,15 @@ Anchor: 0 changed scenarios (0 checks) + all 18 approved on base 6b58b76 (1,722 
 When pdd adds no base file, the line gives the reason. All anchor limits apply to the whole anchor; a
 blocked anchor names its file or check count and the limit. Base approval never gives a pass by itself.
 The agent still replays every anchored check. Changed, removed and added files follow the same rules as
-other anchored files: in prompt space a removed file blocks the anchor; in code space the saved-value rule
+other anchored files: in prompt space a removed or renamed base scenario blocks the anchor. The changed
+inventory includes both the old and new paths of a rename, so the old path cannot survive as an unchanged
+base vector. In code space the saved-value rule
 above lists each change, and a record of the old bytes cannot pass. The explicit `--adopt-corpus` route
 below keeps its declared inventory and never adds base files.
+
+pdd does not read a schema search match over 10 MiB. The Anchor line names each such file, its byte size
+and the limit, even when other files join the anchor. These files have not been inspected or replayed.
+A selected scenario over 2 MiB and at most 10 MiB blocks under the per-file limit and names its path.
 
 ### Add all approved base scenarios
 
@@ -199,15 +207,17 @@ A repository can ask for every approved scenario file on the base, linked or not
 
 The values are `"linked"` (the default: the link rule above) and `"all"`. pdd reads the setting from
 `pdd.json` on the run's base commit, not from the run's copy. So a run cannot change its own selection. A
-`pdd.json` that is not valid JSON, or another value, blocks the anchor, and the reason names `pdd.json`.
+`pdd.json` that is not valid JSON or not an object blocks the anchor. A `replay` that is not an object,
+an unknown key inside `replay`, or an invalid `base_scenarios` value also blocks. The reason names
+`pdd.json` and the unknown key or invalid setting.
 
 With `"all"`, every run with replay evidence adds every scenario file on the base commit, within the same
 limits for the whole anchor: 200 files, 2 MiB for each file, 10 MiB in all, 10,000 steps and 10,000 checks.
 Over a limit, the anchor blocks and states the count. A run with `--adopt-corpus` keeps its declared inventory and adds no base files.
 
-Cost: the first run after you set `"all"` must replay every base scenario. So its agent writes a replay test
-for each of them. These tests stay in the repository. After that, they are normal tests that CI runs, and
-later runs replay them with these tests.
+Cost: expect to write a replay test for each base scenario for the first run after you set `"all"`.
+Keep these tests in the repository and configure CI to run them. Later agents can use them to replay
+the scenarios. pdd does not write or run these tests itself.
 
 ## Adopt an unchanged approved corpus
 

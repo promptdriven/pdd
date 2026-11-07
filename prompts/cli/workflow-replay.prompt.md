@@ -30,10 +30,13 @@ pinRunAnchor(root, {paths, commit, changed, scenarios, codeSpace}) builds a run'
 base commit, `changed` the run's changed paths against it, and `scenarios` the current changed scenario files.
 A file on the base branch counts as approved. Also anchor each base scenario that belongs to the run's changed
 area. Read the base with local Git only: one `git grep -F` for the schema name in `*.json`, one `ls-tree`, one
-`git cat-file --batch`; never gh, a model or the worktree copy of a base file.
+`git cat-file --batch`; never gh, a model or the worktree copy of a base file. Ignore user Git color
+settings when parsing Git output; the scenario search must emit no color codes.
 
 A base scenario is a regular `.json` blob of at most 10 MiB, found by that search, whose parsed schema_version is
-prompt-runtime.program-scenario.v1; skip other and unparsable JSON. Its links are its story_path, every step
+prompt-runtime.program-scenario.v1; skip other and unparsable JSON. Search matches over 10 MiB are not read;
+report each path, byte size and limit in the base note and the PR Anchor line, even when other files are
+selected. Never silently omit them. Its links are its story_path, every step
 entry_path and its entry_paths. The changed area is every changed path, the links of each changed scenario
 (current file and base blob), the `stories` and `prompt` of each changed path that the base commit's
 `pdd-bindings.json` (pdd.bindings.v1) declares as a `module`, and each header prompt. A base scenario belongs when
@@ -44,15 +47,19 @@ A header prompt is the prompt that a changed file names in its PDD header, in it
 The header is one of the first 10 lines: an optional comment opener (`//`, `#`, `--`, `;`, `/*`, `*`, `<!--`,
 `"""` or `'''`), then `Generated from PATH`, then optionally ` (sha256: HEX)`, then optionally `.` and a closer
 (`*/`, `-->`, `"""` or `'''`). PATH is a canonical repository-relative path that ends in `.prompt.md`. Other
-text, such as `Generated from the canonical m1_policy prompt`, is no header. The Stories of a header prompt (the
+text, such as `Generated from the canonical m1_policy prompt`, is no header. Skip header lines longer than
+1,100 characters before parsing them. The Stories of a header prompt or a changed prompt file (the
 story_path of each base scenario that links to it) are also in the changed area.
 
 The base commit's root `pdd.json` selects the base scenarios with `replay.base_scenarios`: `linked` (the rule
 above) or `all` (every base scenario belongs). A missing file, `replay` or `base_scenarios` means `linked`. A
-pdd.json that is not a JSON object, a `replay` that is not an object, or another value blocks, and the reason
-names pdd.json on the base. Read pdd.json in the same `ls-tree` and `cat-file` calls.
+pdd.json that is not valid JSON or not a JSON object, a `replay` that is not an object, an unknown key inside
+`replay`, or another value blocks. The reason names pdd.json on the base and the unknown key or invalid
+value setting. Read pdd.json in the same `ls-tree` and `cat-file` calls.
 
-Without codeSpace, skip base files in `changed`; the changed route pins their current bytes. With codeSpace
+Without codeSpace, skip base files in `changed`; the changed route pins their current bytes. A linked base
+scenario removed or renamed by PR 1 blocks the anchor, like any unreadable changed scenario; never retain
+its old path as an unchanged base vector. With codeSpace
 (a run with no prompt area before code), ignore `paths` and also select changed base files, always with their
 base bytes, so code space cannot change approved values. Each base vector keeps path, raw SHA256, snapshot,
 steps, checks and `base` (the full commit). The anchor keeps `base:{commit,note,select}` (select is `linked` or
@@ -302,7 +309,7 @@ let an agent's free-form PASS summary replace this status.
 ```json
 {
   "status": "draft",
-  "prose_sha256": "71565030cbfc4df42533fe2b12e5672385f31697febf63e62b33af0c0c30f585",
+  "prose_sha256": "ce2ec45357b213af2a6f937ede094b6841e789f227eb7bd137fb64e8f3215efb",
   "entries": [
     {
       "operation": "adoptReplayCorpus",
