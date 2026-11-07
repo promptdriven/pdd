@@ -53,7 +53,7 @@ These commands store settings and determine trust. Selecting a mode starts no ru
 | `pdd autopilot alerts set --discord-channel ID [--token-command CMD]` | Use a Discord bot in one channel: read its token from stdin, or save CMD and run it at each send to get the token |
 | `pdd autopilot alerts test` | Send one test message and confirm that it was posted; for a bot, first check and show the bot name and channel name |
 | `pdd autopilot alerts clear` | Remove the alert destination from this machine |
-| `pdd autopilot alert --issue N --kind usage-limit\|resource\|runtime\|runtime-access\|access\|decision\|stuck\|long-running\|recovered --input - [--update]` | For the coordinator: record one alert and send it to this machine's destination |
+| `pdd autopilot alert --issue N --kind usage-limit\|resource\|interpreter\|interpreter-access\|access\|decision\|stuck\|long-running\|recovered --input - [--update]` | For the coordinator: record one alert and send it to this machine's destination |
 
 The launcher uses the repository settings module to read root `pdd.json`. An
 active mode is `observe` or `auto`; missing or invalid settings count as `off`. It uses an
@@ -197,8 +197,8 @@ PDD_ALERT
 
 Each message names the repository, the issue link, the cause, what Autopilot tried
 and what it needs. Answer on the GitHub issue, so the answer stays with the run.
-A usage limit, a resource failure, a Runtime outage or a Runtime access problem
-(`runtime-access`: this machine cannot read the Runtime health check) is one incident for the
+A usage limit, a resource failure, an interpreter outage or an interpreter access problem
+(`interpreter-access`: this machine cannot read the interpreter health check) is one incident for the
 repository and machine, so a limit that blocks 5 runs sends one alert. A call for another
 blocked issue adds that issue to the incident and sends nothing. The machine is
 the name that Autopilot saved at its first start (this checkout's start first),
@@ -460,14 +460,14 @@ Workflow approval reads `pdd.json` from the main checkout (`sourceRoot`), outsid
 
 `pdd workflow park --reason TEXT` records an automatic stop from its existing run worktree without releasing its claim or treating the worker as done.
 
-`pdd workflow park --runtime --reason TEXT` records that an automatic run waits for Runtime, the hosted PDD interpreter behind `pdd test`. pdd first reads the run's latest `pdd test` result. Only a check with no verdict from the AI service, a busy or not-run check, or an unknown outcome may wait. A failed check, a refusal that names a file rule or a step that took longer than the server time limit is the issue's own work (make the step smaller). A sign-in, access or Runtime address problem needs a person, and waiting does not fix it. For these, the command exits 1, names the fix and parks nothing. If pdd cannot read the result, the outcome counts as unknown. A waiting run asks no person. `pdd workflow status` shows `waiting for Runtime: REASON`, and `pdd graph` shows the hold `Waiting for Runtime`. The run keeps its claim, branch, worktree and progress, and the coordinator can yield its worker slot with `pdd workflow yield N`.
+`pdd workflow park --interpreter --reason TEXT` records that an automatic run waits for the PDD interpreter, the hosted service behind `pdd test`. pdd first reads the run's latest `pdd test` result. Only a check with no verdict from the AI service, a busy or not-run check, or an unknown outcome may wait. A failed check, a refusal that names a file rule or a step that took longer than the server time limit is the issue's own work (make the step smaller). A sign-in, access or interpreter address problem needs a person, and waiting does not fix it. For these, the command exits 1, names the fix and parks nothing. If pdd cannot read the result, the outcome counts as unknown. A waiting run asks no person. `pdd workflow status` shows `waiting for the interpreter: REASON`, and `pdd graph` shows the hold `Waiting for Runtime`. The run keeps its claim, branch, worktree and progress, and the coordinator can yield its worker slot with `pdd workflow yield N`.
 
-### Runtime outage in Autopilot
+### Interpreter outage in Autopilot
 
-While a run waits for Runtime, or an outage or a Runtime access problem is open, each Autopilot tick makes one free health check: a `GET /v1/capacity` read of the Runtime with your gh login. It sends no files and makes no AI call. When nothing waits and nothing is open, a tick makes no check.
+While a run waits for the interpreter, or an outage or an interpreter access problem is open, each Autopilot tick makes one free health check: a `GET /v1/capacity` read of the interpreter with your gh login. It sends no files and makes no AI call. When nothing waits and nothing is open, a tick makes no check.
 
-- Runtime unavailable (no answer, HTTP 408, 429 or 5xx, or maintenance): this is an outage. Only a failed health check opens one. Autopilot sends one `runtime` alert for the repository and machine, wakes no waiting run, and offers other work as usual. New issues can start; their workers wait only at the Runtime check.
-- An answer that is neither healthy nor down (HTTP 401 or 403, a redirect, an HTML page, a 404 that is not JSON, no gh sign-in, or an invalid `PDD_RUNTIME_URL`): this is a sign-in or setup problem on this machine. Autopilot sends one `runtime-access` alert with the fix (`gh auth status`, or check `PDD_RUNTIME_URL`) and resends nothing. The runs stay visibly waiting. After 4 hours, each waiting run follows the stuck rule.
-- Runtime healthy and no outage open: waiting runs, from one issue or from many, are a problem of their own issues. Autopilot wakes each run once to retry. If the same step waits for Runtime again, the coordinator follows the stuck rule.
-- Runtime back after an outage: Autopilot first wakes one waiting run as a test, the oldest. Only when that run saves a new `pdd test` result that passed or failed does Autopilot send one recovery and wake the others, oldest first, within the worker cap. A test run that waits again or goes stuck is no proof, and neither is a test with no verdict within 60 minutes of its wake, also a wake that was never delivered. Each run is the test at most once in an outage.
+- the interpreter unavailable (no answer, HTTP 408, 429 or 5xx, or maintenance): this is an outage. Only a failed health check opens one. Autopilot sends one `interpreter` alert for the repository and machine, wakes no waiting run, and offers other work as usual. New issues can start; their workers wait only at the interpreter check.
+- An answer that is neither healthy nor down (HTTP 401 or 403, a redirect, an HTML page, a 404 that is not JSON, no gh sign-in, or an invalid `PDD_RUNTIME_URL`): this is a sign-in or setup problem on this machine. Autopilot sends one `interpreter-access` alert with the fix (`gh auth status`, or check `PDD_RUNTIME_URL`) and resends nothing. The runs stay visibly waiting. After 4 hours, each waiting run follows the stuck rule.
+- interpreter healthy and no outage open: waiting runs, from one issue or from many, are a problem of their own issues. Autopilot wakes each run once to retry. If the same step waits for the interpreter again, the coordinator follows the stuck rule.
+- the interpreter back after an outage: Autopilot first wakes one waiting run as a test, the oldest. Only when that run saves a new `pdd test` result that passed or failed does Autopilot send one recovery and wake the others, oldest first, within the worker cap. A test run that waits again or goes stuck is no proof, and neither is a test with no verdict within 60 minutes of its wake, also a wake that was never delivered. Each run is the test at most once in an outage.
 - A woken worker first runs `pdd test --read BATCH`. It resends only a check that surely gave no verdict: `pdd test --retry BATCH` only when pdd names it (busy or held checks), and else the Story's check once with `pdd test STORY --max-calls N`, for another check that did not run or an AI-service refusal. It never resends an unknown outcome or a failed check; when the read of an unknown outcome now shows that nothing was sent, it checks the Story once. Each wake reaches the run at most once for each park. `--max-calls`, strict mode and the merge rules do not change.

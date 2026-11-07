@@ -3,7 +3,7 @@
 // data stays in one closed Details section. Fixtures follow Serhan-Asad/pdd-autopilot-sandbox PRs #6 and #7.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DETAILS_OPEN, TOP_NOTE, closingInert, detailsOf, inertText, prArea, prStatus, readPrFields, readablePrBody, readablePrTitle, readablePrTop, userStory } from '../src/workflow-pr-body.mjs';
+import { DETAILS_OPEN, TOP_NOTE, balancedDetails, closingInert, detailsOf, inertText, prArea, prStatus, readPrFields, readablePrBody, readablePrTitle, readablePrTop, userStory } from '../src/workflow-pr-body.mjs';
 import { recordedRuntimeLines } from '../src/workflow-runner.mjs';
 import { AUTO_WORDS, STORY_6, featurePr2, fieldsText6, pr1Auto6, pr1Manual7, pr2Blocked6, pr2Fix6, smallChange } from './helpers/readable-pr-fixtures.mjs';
 
@@ -20,7 +20,7 @@ test('PR 1 in auto mode reads top to bottom as agreed, with one report link and 
   assert.match(text, /- \*\*Problem:\*\* `formatCents\(1205\)` shows "\$12\.50" instead of "\$12\.05"\.\n- \*\*This PR:\*\* no code change\. It holds the Story and 1 test file\.\n- \*\*Verdict:\*\* the prompt is right; the bug is only in the CODE\./);
   assert.match(text, /\| Input \| Today \| Expected \|\n\|---\|---\|---\|\n\| 1205 \| \$12\.50 \| \$12\.05 \|/);
   assert.match(text, /- `user_stories\/format-price\.md`: the issue case and the cents rule/);
-  assert.equal(row(text, 'Prompt tests (`pdd test`)'), '| Prompt tests (`pdd test`) | ✓ 6 of 6 criteria · 6/6 checks · 6 AI calls · [report](https://runtime.promptdriven.ai/r/a3c9ccd5-365a-4f5e-a673-771c6cf586f1) (expires after 7 days) |');
+  assert.equal(row(text, 'Prompt tests (`pdd test`)'), '| Prompt tests (`pdd test`) | ✓ 6 of 6 criteria · 6/6 checks · 6 AI calls · [report](https://interpreter.example/r/a3c9ccd5-365a-4f5e-a673-771c6cf586f1) (expires after 7 days) |');
   assert.equal(row(text, 'Lint (`pdd lint`)'), '| Lint (`pdd lint`) | ✓ 1 of 1 tests pass |');
   assert.equal(row(text, 'Full test suite (CI)'), '| Full test suite (CI) | ⏳ pending |');
   assert.equal(row(text, 'Independent checker'), '| Independent checker | ⏳ pending |');
@@ -173,7 +173,7 @@ test('agent words are inert: no HTML, marker, mention or closing keyword; code s
 });
 
 test('the whole description: readable part, then one closed Details section that keeps every machine line', () => {
-  const details = ['pdd result: pdd test (batch 20261106-165343-1gal, 2026-11-07T00:53:43Z, source current, engine 5f9f2d9a74f4, request 345e19a9): Prompt tests (format-price) (DRAFT): ✓ 6 of 6 criteria · 6/6 checks · 6 AI calls; Report: https://runtime.promptdriven.ai/r/a3c9ccd5 (report links expire after 7 days)',
+  const details = ['pdd result: pdd test (batch 20261106-165343-1gal, 2026-11-07T00:53:43Z, source current, engine 5f9f2d9a74f4, request 345e19a9): Prompt tests (format-price) (DRAFT): ✓ 6 of 6 criteria · 6/6 checks · 6 AI calls; Report: https://interpreter.example/r/a3c9ccd5 (report links expire after 7 days)',
     'Agent note — not checked by pdd: Verdict: the prompt is right; the bug is only in the CODE.', '', 'Part of #1', '',
     `Approved in chat: \`${JSON.stringify(AUTO_WORDS)}\`; actor \`"agent"\` \`"CODEX_THREAD_ID=01a1b371"\``, '', '## Steps', '- **check**: Agent note — not checked by pdd: `done`'].join('\n');
   const body = readablePrBody(top(pr1Auto6()), details);
@@ -327,9 +327,34 @@ test('SF-A and SF-B: an address keeps its text unless an issue reference follows
   for (const text of [block, ...links]) assert.equal(closingInert(closingInert(text)), closingInert(text), 'idempotent');
 });
 
+// The cells of one GitHub table row: `\\` and `\|` are escaped pairs, an unescaped pipe ends a cell (as GitHub's table parser).
+const cells = line => {
+  const out = []; let current = '';
+  for (let i = 1; i < line.length; i++) {
+    if (line[i] === '\\' && i + 1 < line.length) { current += line[i] + line[i + 1]; i++; }
+    else if (line[i] === '|') { out.push(current.trim()); current = ''; }
+    else current += line[i];
+  }
+  return out;
+};
+// Wrong (CodeQL on PR 3052): a backslash before a pipe in a case ends the table cell early, or a second `<` or `>` of a
+// shown tag stays raw.
+test('a table cell keeps backslashes and pipes in their cell, and every < and > of a shown tag is escaped', () => {
+  const facts = pr1Auto6();
+  facts.fields.cases = [{ input: 'a\\|b', before: 'x|y', expected: '`C:\\dir\\file`' }, { input: 'two \\\\|', before: '\\', expected: '<<b>>' }];
+  const lines = top(facts).split('\n'), at = lines.indexOf('## Expected behavior');
+  const [first, second] = lines.slice(at + 4, at + 6);
+  assert.deepEqual(cells(first), ['a\\\\\\|b', 'x\\|y', '`C:\\dir\\file`'], first);
+  assert.deepEqual(cells(second), ['two \\\\\\\\\\|', '\\', '&lt;&lt;b&gt;&gt;'], second);
+  assert.equal(balancedDetails('</details></details >\n</details>'), '&lt;/details&gt;&lt;/details &gt;\n&lt;/details&gt;');
+  assert.equal(balancedDetails('<details>\n</details></details>'), '<details>\n</details>&lt;/details&gt;');
+});
+
 test('SF6 the description says to a person who edits it that pdd owns it; readers never see that note', () => {
   const body = readablePrBody(top(pr1Auto6()), 'Part of #1');
   assert.ok(body.includes(`${DETAILS_OPEN}\n\n${TOP_NOTE}\n\nPart of #1`));
-  assert.match(TOP_NOTE, /^<!-- [^\n]* -->$/); assert.doesNotMatch(TOP_NOTE, /pdd-workflow:/);
+  // One HTML comment on one line: it opens once, closes only at its end, and has no line break.
+  assert.ok(TOP_NOTE.startsWith('<!-- ') && TOP_NOTE.endsWith(' -->') && TOP_NOTE.indexOf('-->') === TOP_NOTE.length - 3 && !/[\r\n]/.test(TOP_NOTE), TOP_NOTE);
+  assert.doesNotMatch(TOP_NOTE, /pdd-workflow:/);
   assert.equal(detailsOf(body).details, 'Part of #1', 'Details are pdd\'s text without the note.');
 });

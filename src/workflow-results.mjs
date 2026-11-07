@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-results.prompt.md (sha256: 79a57c1fbd808e7300d0fbd335078b57efeca0bab145d53e5e6455677814da70).
+// Generated from prompts/cli/workflow-results.prompt.md (sha256: 54fa215df26ccd939d0a42a70494e5efc2005d425c776b0699bf9f264d513c9c).
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -136,11 +136,11 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
 
 // Why pdd's own saved check has no verdict, from its saved rows (summary.json, else batch.json). It reads files only.
 // issue: a failed expectation, a file-rule refusal or a step time limit (fix this issue's files); access: sign-in,
-// access or a Runtime address problem; service: not run, busy, or an AI-service refusal (Runtime); unknown: an
+// access or an interpreter address problem; service: not run, busy, or an AI-service refusal (the interpreter); unknown: an
 // outcome that is not known yet.
 const SERVICE_REFUSALS = new Set(['graph-provider-failure', 'graph-uncertain-child-dispatch']);
 const ACCESS_NOTES = new Set(['blocked', 'auth-required']);
-// pdd's own words for a server step deadline and for a login that Runtime did not accept (any error code).
+// pdd's own words for a server step deadline and for a login that the interpreter did not accept (any error code).
 const TIME_LIMIT_WORDS = /\btook more than [\d.]+ minutes and was stopped\b|\b(?:timeout|timed[ -]out|time[ -]limit|deadline[ -]exceeded)\b/i;
 const SIGN_IN_WORDS = /\(HTTP 40[13]\)|\bgh auth login\b/;
 const words = item => item && typeof item === 'object' ? [item.message, item.engine_message, item.cause].filter(value => typeof value === 'string').join(' ') : '';
@@ -177,7 +177,7 @@ export function savedCheckCause(batch, { env = process.env } = {}) {
   if (shown && savedRows && [...states(savedRows)].some(([key, list]) => shown.has(key) && shown.get(key).join() !== list.join())) return 'unknown';
   return checkCause(summaryRows ?? savedRows);
 }
-// Proof that Runtime gave a verdict after a time: a passed or failed row of this worktree's pdd test that ended at or
+// Proof that the interpreter gave a verdict after a time: a passed or failed row of this worktree's pdd test that ended at or
 // after `since` (a sent check, not a cached pass or a read of an older answer). It reads files only.
 export function checkVerdictSince({ root, since }, { env = process.env } = {}) {
   const directory = join(stateFolder(env), 'batches'), wanted = real(root);

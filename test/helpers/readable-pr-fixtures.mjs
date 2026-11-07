@@ -26,7 +26,7 @@ export function pr1Auto6() {
     thisPr: 'no code change. It holds the Story and 1 test file.',
     diff: { added: 27, removed: 1, files: [{ path: 'user_stories/format-price.md', added: 12, removed: 1 }, { path: 'test/runtime/format-price.json', added: 15, removed: 0 }] },
     records: {
-      promptTests: { result: '✓ 6 of 6 criteria · 6/6 checks · 6 AI calls', pass: true, report: 'https://runtime.promptdriven.ai/r/a3c9ccd5-365a-4f5e-a673-771c6cf586f1', current: true },
+      promptTests: { result: '✓ 6 of 6 criteria · 6/6 checks · 6 AI calls', pass: true, report: 'https://interpreter.example/r/a3c9ccd5-365a-4f5e-a673-771c6cf586f1', current: true },
       lint: { result: '1 of 1 tests pass', pass: true }, replay: null, proof: null, review: null, formalStep: false, ci: null, checker: null, drafts: [] },
     approval: { kind: 'auto', mode: 'auto', login: 'Serhan-Asad', date: '2026-11-06', person: false },
     pr1: null, pr2: null, stacked: false, carriesPr1: false,
@@ -39,7 +39,7 @@ export function pr1Manual7() {
       cases: [{ input: '"one two"', before: '3', expected: '2' }, { input: '"  one  "', before: '3', expected: '1' }], notes: {} },
     thisPr: 'no code change. It holds the Story and 1 test file.',
     diff: { added: 30, removed: 0, files: [{ path: 'user_stories/count-words.md', added: 14, removed: 0 }, { path: 'test/runtime/count-words.json', added: 16, removed: 0 }] },
-    records: { ...pr1Auto6().records, promptTests: { result: '✓ 5 of 5 criteria · 5/5 checks · 0 AI calls', pass: true, report: 'https://runtime.promptdriven.ai/r/dd8c6dd2-d09c-4cd3-ace9-a97d90d230da', current: true } },
+    records: { ...pr1Auto6().records, promptTests: { result: '✓ 5 of 5 criteria · 5/5 checks · 0 AI calls', pass: true, report: 'https://interpreter.example/r/dd8c6dd2-d09c-4cd3-ace9-a97d90d230da', current: true } },
     approval: { kind: 'words', items: [{ route: 'said', at: Date.parse('2026-11-06T17:53:57Z'), words: 'Yes, the Story is right.\nOpen the PR.' }, { route: 'terminal', at: Date.parse('2026-11-06T18:10:00Z'), words: null }] },
     issueReference: 'Part of #3' };
 }

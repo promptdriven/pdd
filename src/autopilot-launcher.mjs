@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 53b19aa54ba023af708549326c3c48e94d09253892591696d5777d4e21f60452).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: f4670086c806d11f3a8132335ded418b4ab325218ca4323b6de145bfc80920ba).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch } from 'node:fs';
@@ -280,7 +280,7 @@ async function readRepairLimited(state, number, p) {
     return run?.v === 1 && run.number === number && run.repo?.toLowerCase() === state.repo.toLowerCase() && run.state === 'stuck' && Boolean(run.repairLimit);
   } catch { return false; }
 }
-// Runs that wait for Runtime (pdd workflow park --runtime), from the same local run records.
+// Runs that wait for the interpreter (pdd workflow park --interpreter), from the same local run records.
 async function readRuntimeWaits(state, p) {
   const commonDir = (await p.checked('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim();
   const folder = join(commonDir, 'pdd', 'runs');
@@ -309,23 +309,23 @@ async function readRuntimeProbe(state, p, probe) {
   return ['running', 'waiting', 'paused'].includes(run.state) ? 'pending' : 'failed';
 }
 const RUNTIME_KEEP = 24 * 60 * 60 * 1000, RUNTIME_ACCESS_LIMIT = 4 * 60 * 60 * 1000, RUNTIME_PROBE_LIMIT = 60 * 60 * 1000;
-const RUNTIME_TRIED = 'pdd retried each call up to 3 times. The runs wait for Runtime and keep their claims, branches and progress; other work goes on.';
-const RUNTIME_NEED = 'No action now. Autopilot checks Runtime at each tick without AI. When it answers again, Autopilot wakes the oldest waiting run as a test and wakes the others after its check reaches a verdict. Look at the Runtime service if this lasts.';
-const ACCESS_TRIED = 'Autopilot checks Runtime at each tick without AI. The runs wait for Runtime, keep their claims, branches and progress, and resend nothing; other work goes on.';
+const RUNTIME_TRIED = 'pdd retried each call up to 3 times. The runs wait for the interpreter and keep their claims, branches and progress; other work goes on.';
+const RUNTIME_NEED = 'No action now. Autopilot checks the interpreter at each tick without AI. When it answers again, Autopilot wakes the oldest waiting run as a test and wakes the others after its check reaches a verdict. Look at the PDD interpreter if this lasts.';
+const ACCESS_TRIED = 'Autopilot checks the interpreter at each tick without AI. The runs wait for the interpreter, keep their claims, branches and progress, and resend nothing; other work goes on.';
 function runtimeWake(wait, kind) {
   const read = `pdd test --read${wait.batch ? ` ${wait.batch}` : ''}`;
-  const why = kind === 'retry' ? 'Runtime answers its health check and no outage is open, so this is a problem of this issue only: this wake is its one retry. If the same step waits for Runtime again, it follows the stuck rule.'
-    : kind === 'probe' ? 'Runtime answers again after an outage. This oldest run is the test: the other waiting runs wake only after its check reaches a verdict.'
-    : 'Runtime is back.';
+  const why = kind === 'retry' ? 'The interpreter answers its health check and no outage is open, so this is a problem of this issue only: this wake is its one retry. If the same step waits for the interpreter again, it follows the stuck rule.'
+    : kind === 'probe' ? 'The interpreter answers again after an outage. This oldest run is the test: the other waiting runs wake only after its check reaches a verdict.'
+    : 'The interpreter is back.';
   // pdd test --retry resends only the checks that pdd names it for (busy or held); a fresh check of the Story sends the others.
   const again = 'check that Story once again with pdd test STORY --max-calls N';
   const resend = wait.cause === 'unknown' ? `Its last check has an unknown outcome: never send it again blind. If the read now shows not run (nothing was sent), ${again}; if it is still unknown, follow the stuck rule.`
     : wait.cause === 'none' ? 'No check result was saved, so no check ran: send the check again once.'
     : `Resend only a check that surely gave no verdict: pdd test --retry ${wait.batch ?? 'BATCH'} only when pdd names it (busy or held checks); for another not run check or an AI-service refusal, ${again}. Never resend a failed (✗) check.`;
-  return `Run #${wait.number} waits for Runtime. ${why} When a worker slot is free (oldest first), wake it with pdd workflow changes ${wait.number} and this text: "${runtimeWakeTag(wait.at)} ${kind === 'retry' ? 'Runtime answers again.' : 'Runtime is back.'} First run ${read} once and read each Story line. ${resend} Keep --max-calls."`;
+  return `Run #${wait.number} waits for the interpreter. ${why} When a worker slot is free (oldest first), wake it with pdd workflow changes ${wait.number} and this text: "${runtimeWakeTag(wait.at)} ${kind === 'retry' ? 'The interpreter answers again.' : 'The interpreter is back.'} First run ${read} once and read each Story line. ${resend} Keep --max-calls."`;
 }
-// The no-AI Runtime part of a tick: one free health check while a run waits for Runtime, or an outage or a
-// Runtime access problem is open. Every run resends its check at most once per wait, and every path ends in a
+// The no-AI interpreter part of a tick: one free health check while a run waits for the interpreter, or an outage or a
+// interpreter access problem is open. Every run resends its check at most once per wait, and every path ends in a
 // wake or in the stuck rule.
 async function runtimeTick(state, p, completion, timeRules, pendingTimes, stateRoot) {
   const waits = (await (p.readRuntimeWaits ?? readRuntimeWaits)(state, p)).sort((a, b) => a.at - b.at || a.number - b.number);
@@ -350,7 +350,7 @@ async function runtimeTick(state, p, completion, timeRules, pendingTimes, stateR
     }
   };
   // A wake (retry, test or recovery) is used when the same step waits again after it, unless that wait began while
-  // Runtime was down: then the outage, not the issue, explains it.
+  // the interpreter was down: then the outage, not the issue, explains it.
   const used = w => retried[w.number]?.mark === w.mark && retried[w.number].at < w.at && outage?.down?.[w.number] !== w.at;
   const wake = [], stuck = [];
   const offer = (w, kind) => { wake.push([w, kind]); retried[w.number] = { mark: w.mark, at: w.at, kind }; };
@@ -358,19 +358,19 @@ async function runtimeTick(state, p, completion, timeRules, pendingTimes, stateR
     // Not healthy and not down: a sign-in or setup problem that a person must fix. Wake nothing and resend nothing.
     access ??= { since: now, first: waits[0]?.number ?? outage?.first, issues: [] };
     Object.assign(access, { detail: health.detail, fix: health.fix });
-    if (access.first) await incident(access, 'runtime-access', { cause: `The free Runtime health check cannot be read (${health.detail}). This is a sign-in or setup problem on this machine, not a Runtime outage.`, tried: ACCESS_TRIED, need: `${health.fix} After 4 hours each waiting run follows the stuck rule.` });
+    if (access.first) await incident(access, 'interpreter-access', { cause: `The free interpreter health check cannot be read (${health.detail}). This is a sign-in or setup problem on this machine, not an interpreter outage.`, tried: ACCESS_TRIED, need: `${health.fix} After 4 hours each waiting run follows the stuck rule.` });
     for (const w of waits) if (now - Math.max(w.at, access.since) >= RUNTIME_ACCESS_LIMIT)
-      stuck.push([w, `Run #${w.number} has waited 4 hours for Runtime, and the free health check still cannot be read (${health.detail}).`]);
+      stuck.push([w, `Run #${w.number} has waited 4 hours for the interpreter, and the free health check still cannot be read (${health.detail}).`]);
   } else if (access && health.state === 'healthy') {
     // A down answer does not show that the sign-in works again; only a healthy answer ends the access problem.
-    if (access.first) await alert(access.first, 'recovered', { cause: `The free Runtime health check answers again (${health.detail}).`, kind: 'runtime-access' });
+    if (access.first) await alert(access.first, 'recovered', { cause: `The free interpreter health check answers again (${health.detail}).`, kind: 'interpreter-access' });
     access = null;
   }
-  // Only a failed health check opens an outage. Waits of several issues while Runtime is healthy are not one.
+  // Only a failed health check opens an outage. Waits of several issues while the interpreter is healthy are not one.
   if (health.state === 'unavailable' && !outage && waits.length)
-    outage = { since: now, first: waits[0].number, issues: [], probed: [], detail: `The free Runtime health check failed (${health.detail}).` };
-  if (outage) await incident(outage, 'runtime', { cause: outage.detail, tried: RUNTIME_TRIED, need: RUNTIME_NEED });
-  // A wait first seen while Runtime is down began in the outage; a wait already found used while healthy stays used.
+    outage = { since: now, first: waits[0].number, issues: [], probed: [], detail: `The free interpreter health check failed (${health.detail}).` };
+  if (outage) await incident(outage, 'interpreter', { cause: outage.detail, tried: RUNTIME_TRIED, need: RUNTIME_NEED });
+  // A wait first seen while the interpreter is down began in the outage; a wait already found used while healthy stays used.
   if (outage && health.state === 'unavailable') outage.down = { ...outage.down, ...Object.fromEntries(waits.filter(w => retried[w.number]?.again !== w.at).map(w => [w.number, w.at])) };
   if (health.state === 'healthy') {
     let recovered = null;
@@ -396,15 +396,15 @@ async function runtimeTick(state, p, completion, timeRules, pendingTimes, stateR
     }
     for (const w of waits) {
       if (wake.some(([item]) => item === w)) continue;
-      if (used(w)) { retried[w.number].again = w.at; stuck.push([w, `Run #${w.number} waits for Runtime again at the same step after its one resend, and Runtime is healthy.`]); }
+      if (used(w)) { retried[w.number].again = w.at; stuck.push([w, `Run #${w.number} waits for the interpreter again at the same step after its one resend, and the interpreter is healthy.`]); }
       else if (recovered) offer(w, 'recovered');
       else if (!outage) offer(w, retried[w.number]?.at === w.at ? retried[w.number].kind : 'retry');
     }
     if (recovered) {
       const count = wake.length;
       const woken = `Autopilot wakes ${count} waiting run${count === 1 ? '' : 's'}, oldest first`;
-      await alert(outage.first, 'recovered', { kind: 'runtime', cause: recovered === 'verdict'
-        ? `Runtime is back: the free health check passed and a test check reached a verdict again. ${woken}.`
+      await alert(outage.first, 'recovered', { kind: 'interpreter', cause: recovered === 'verdict'
+        ? `The interpreter is back: the free health check passed and a test check reached a verdict again. ${woken}.`
         : `The free health check passes again, and no waiting run is left to test. ${woken}; a run that failed its test follows the stuck rule.` });
       outage = null;
     }
@@ -424,12 +424,12 @@ async function runtimeTick(state, p, completion, timeRules, pendingTimes, stateR
   }
   keep();
 }
-// The packet's Runtime fact while an outage or an access problem is open.
+// The packet's interpreter fact while an outage or an access problem is open.
 function runtimePacket(runtime) {
   const { outage, access } = runtime ?? {};
-  const problem = access ? `Runtime cannot be checked (${access.detail}): a sign-in or setup problem that a person must fix. ${access.fix} Autopilot sent one runtime-access alert. Waiting runs stay parked and resend nothing; after 4 hours each follows the stuck rule.` : '';
+  const problem = access ? `The interpreter cannot be checked (${access.detail}): a sign-in or setup problem that a person must fix. ${access.fix} Autopilot sent one interpreter-access alert. Waiting runs stay parked and resend nothing; after 4 hours each follows the stuck rule.` : '';
   if (outage) return { state: outage.probe ? 'testing' : 'unavailable', since: new Date(outage.since).toISOString(),
-    note: `${outage.probe ? `Runtime answers again; run #${outage.probe.number} is the test, and the other waiting runs wake after its check reaches a verdict.` : 'Runtime is unavailable.'} Keep other work moving: code, native tests, CI, merges, dependency reviews and claims. New issues may start; a worker parks only at its Runtime check with pdd workflow park --runtime.${problem ? ` ${problem}` : ''}` };
+    note: `${outage.probe ? `The interpreter answers again; run #${outage.probe.number} is the test, and the other waiting runs wake after its check reaches a verdict.` : 'The interpreter is unavailable.'} Keep other work moving: code, native tests, CI, merges, dependency reviews and claims. New issues may start; a worker parks only at its interpreter check with pdd workflow park --interpreter.${problem ? ` ${problem}` : ''}` };
   if (access) return { state: 'access', since: new Date(access.since).toISOString(), detail: access.detail, note: `${problem} Keep other work moving.` };
   return null;
 }

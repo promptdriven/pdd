@@ -1,5 +1,5 @@
-// #3039: a Runtime outage parks only the runs that need Runtime, frees their slots, alerts once and recovers by itself.
-// Every Runtime, health, HTTP, Discord and clock port is injected; no test calls the real Runtime or a chat service.
+// #3039: an interpreter outage parks only the runs that need the interpreter, frees their slots, alerts once and recovers by itself.
+// Every the interpreter, health, HTTP, Discord and clock port is injected; no test calls the real the interpreter or a chat service.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -18,7 +18,7 @@ import { projectIssueGraph } from '../src/issue-dependencies.mjs';
 import { fixture as runFixture, packageRoot } from './helpers/workflow-runner-fixture.mjs';
 
 const BATCH = '20261027-170500-abcd';
-// pdd's own words for a Runtime 401 and for a server step deadline (runtime-client AUTH_TEXT, runtime-output stepTimeLimit).
+// pdd's own words for an interpreter 401 and for a server step deadline (runtime-client AUTH_TEXT, runtime-output stepTimeLimit).
 const AUTH_TEXT = 'The PDD interpreter did not accept your GitHub login (HTTP 401). Run gh auth login, then run the command again.';
 const TIME_LIMIT = { code: 'graph-provider-failure', step: 'move', minutes: 10, message: 'Step move took more than 10 minutes and was stopped.', fix: 'Make the step smaller, for example split 30 moves into 3 steps of 10.' };
 const origin = { repository: 'example/project', coordinatorId: 'coordinator-a', machine: 'machine-a', claim: { commentId: '11', labelEventId: '12' } };
@@ -52,21 +52,21 @@ function savedCheck(f, rows) {
   writeFileSync(join(folder, 'summary.json'), JSON.stringify({ batch: BATCH, summary_line: 'Prompt tests: no verdict ·', rows: rows.map(row => ({ test: 'tests/a.json', story: 'a', ...row })) }));
 }
 
-test('an AI-service no-verdict parks only this run for Runtime: no question, visible status, slot free, wake by delivery', async t => {
+test('an AI-service no-verdict parks only this run for the interpreter: no question, visible status, slot free, wake by delivery', async t => {
   const { f, ports, root } = await automaticRun(t);
   savedCheck(f, [{ state: 'refused', refusals: [{ code: 'graph-provider-failure' }] }]);
   const before = f.record();
   const parked = await parkAutomaticRun({ reason: 'graph-provider-failure: the AI service failed', runtime: true, cwd: root }, ports());
   assert.equal(parked.exitCode, 0, parked.message);
-  assert.match(parked.message, /waits for Runtime/); assert.match(parked.message, /Ask no person/); assert.match(parked.message, new RegExp(`pdd test --read ${BATCH}`));
+  assert.match(parked.message, /waits for the interpreter/); assert.match(parked.message, /Ask no person/); assert.match(parked.message, new RegExp(`pdd test --read ${BATCH}`));
   const run = f.record();
   assert.equal(run.state, 'paused'); assert.deepEqual(run.runtimeWait, { at: f.clock, reason: 'graph-provider-failure: the AI service failed', batch: BATCH, cause: 'service' });
   assert.equal(run.question ?? null, null, 'no question to a person');
   for (const key of ['area', 'done', 'gate', 'branch', 'root', 'automaticOrigin', 'chats']) assert.deepEqual(run[key], before[key], `${key} is kept`);
   const status = await runStatus({ ref: '17', cwd: f.source }, ports());
-  assert.match(status.message, /State: waiting for Runtime: graph-provider-failure/); assert.doesNotMatch(status.message, /waiting for you/);
+  assert.match(status.message, /State: waiting for the interpreter: graph-provider-failure/); assert.doesNotMatch(status.message, /waiting for you/);
   const listed = JSON.parse((await runStatus({ cwd: f.source, json: true }, ports())).message).runs[0];
-  assert.equal(listed.group, 'working', 'a Runtime wait is not a person question'); assert.match(listed.words, /^waiting for Runtime/);
+  assert.equal(listed.group, 'working', 'an interpreter wait is not a person question'); assert.match(listed.words, /^waiting for the interpreter/);
   // The worker ends its turn: the coordinator may yield the slot under the existing rule.
   const chat = run.chats.find(item => item.area === run.areas[run.area].name);
   f.herdr.paneOf(chat).agent.agent_status = 'done';
@@ -76,7 +76,7 @@ test('an AI-service no-verdict parks only this run for Runtime: no question, vis
   for (const key of ['state', 'runtimeWait', 'area', 'done', 'gate', 'automaticOrigin', 'root', 'branch']) assert.deepEqual(f.record()[key], run[key], `yield keeps ${key}`);
   // The coordinator wakes it through the existing delivery route.
   f.herdr.paneOf(chat).agent.agent_status = 'idle';
-  const text = `${runtimeWakeTag(run.runtimeWait.at)} Runtime is back. First run pdd test --read ${BATCH} once.`;
+  const text = `${runtimeWakeTag(run.runtimeWait.at)} The interpreter is back. First run pdd test --read ${BATCH} once.`;
   const woken = await changeRun({ ref: '17', cwd: f.source, text, packageRoot }, ports());
   assert.equal(woken.exitCode, 0, woken.message);
   assert.equal(f.record().state, 'running'); assert.equal(f.record().runtimeWait, undefined);
@@ -85,7 +85,7 @@ test('an AI-service no-verdict parks only this run for Runtime: no question, vis
   const again = await changeRun({ ref: '17', cwd: f.source, text, packageRoot }, ports());
   assert.equal(again.exitCode, 0, again.message); assert.match(again.message, /Nothing was sent/);
   assert.equal(f.herdr.paneOf(chat).agent.prompts.length, prompts, 'the chat gets the wake once');
-  assert.equal(f.record().changes.filter(change => change.text.startsWith('Runtime wake for the park')).length, 1);
+  assert.equal(f.record().changes.filter(change => change.text.startsWith('The interpreter wake for the park')).length, 1);
 });
 
 for (const [name, rows, words] of [
@@ -93,10 +93,10 @@ for (const [name, rows, words] of [
   ['a file-rule refusal', [{ state: 'refused', refusals: [{ code: 'invalid-input' }] }], /this issue's own work/],
   ['an AI-service refusal next to a failed Story', [{ state: 'refused', refusals: [{ code: 'graph-provider-failure' }] }, { state: 'failed' }], /this issue's own work/],
   ['a sign-in problem', [{ state: 'not_run', note: { code: 'blocked', message: 'Run gh auth login' } }], /access/],
-  ['a Runtime 401 with another error code', [{ state: 'not_run', note: { code: 'invalid-token', message: AUTH_TEXT } }], /a person must fix the sign-in.*gh auth status/],
+  ['an interpreter 401 with another error code', [{ state: 'not_run', note: { code: 'invalid-token', message: AUTH_TEXT } }], /a person must fix the sign-in.*gh auth status/],
   ['a step time limit', [{ state: 'refused', refusals: [{ code: 'graph-provider-failure', message: 'The AI provider failed.' }], time_limit: TIME_LIMIT, reason: { code: TIME_LIMIT.code, message: `${TIME_LIMIT.message} ${TIME_LIMIT.fix}` } }], /this issue's own work.*make the step smaller/],
   ['a passed check', [{ state: 'passed' }], /passed/],
-]) test(`${name} is not a Runtime outage: park --runtime refuses and changes nothing`, async t => {
+]) test(`${name} is not an interpreter outage: park --interpreter refuses and changes nothing`, async t => {
   const { f, ports, root } = await automaticRun(t);
   savedCheck(f, rows);
   const before = f.record();
@@ -146,7 +146,7 @@ test('savedCheckCause: a check still open, a stale summary after an interrupted 
   assert.equal(savedCheckCause('not-a-batch', { env }), 'none');
 });
 
-test('pdd graph shows the Runtime wait as a hold of its own issue only', async () => {
+test('pdd graph shows the interpreter wait as a hold of its own issue only', async () => {
   const key = number => `https://github.com/example/project/issues/${number}`;
   const issue = number => ({ id: number, number, html_url: key(number), title: `Issue ${number}`, body: 'body', state: 'open', user: { login: 'owner' }, labels: [], assignees: [], created_at: '2026-11-05T19:00:00.000Z', updated_at: '2026-11-05T19:00:00.000Z', comments: 0 });
   const issues = [issue(17), issue(18)], reply = value => ({ json: JSON.stringify(value) });
@@ -178,7 +178,7 @@ test('checkCause tells this issue from the service from its saved rows', () => {
     [[{ state: 'refused', refusals: [{ code: 'graph-provider-failure' }], time_limit: TIME_LIMIT }], 'issue'],
     [[{ state: 'unknown', reason: { code: TIME_LIMIT.code, message: `${TIME_LIMIT.message} ${TIME_LIMIT.fix}` } }], 'issue'],
     [[{ state: 'refused', refusals: [{ code: 'graph-provider-failure', engine_message: 'step deadline exceeded after 600 seconds' }] }], 'issue'],
-    // A Runtime 401 is a sign-in problem whatever its error code.
+    // An interpreter 401 is a sign-in problem whatever its error code.
     [[{ state: 'not_run', note: { code: 'invalid-token', message: AUTH_TEXT } }], 'access'],
     [[{ state: 'unknown', why: AUTH_TEXT }], 'access'],
     // pdd's temporary PDD Cloud answer (503 cloud-unavailable) is a service state, not a sign-in problem.
@@ -278,14 +278,14 @@ const issue = number => ({ number, state: 'open', title: `Issue ${number}`, body
 const wait = (number, at, extra = {}) => ({ number, at, batch: BATCH, cause: 'service', mark: '1:2', ...extra });
 const T0 = Date.parse('2026-11-06T12:00:00Z');
 
-test('no run waits for Runtime: the tick makes no health check', async t => {
+test('no run waits for the interpreter: the tick makes no health check', async t => {
   const f = await launcher(t);
   assert.equal((await f.start()).exitCode, 0);
   for (let i = 0; i < 3; i++) { f.time += 30 * minute; await f.tick(); }
   assert.equal(f.healthCalls, 0); assert.equal(f.sent.length, 0);
 });
 
-test('one issue alone with healthy Runtime: one retry of that run only, no alert; the same step again is stuck', async t => {
+test('one issue alone with healthy the interpreter: one retry of that run only, no alert; the same step again is stuck', async t => {
   const f = await launcher(t);
   await f.start(); f.prompts.length = 0;
   const at = f.time; f.waits = [wait(12, at)]; f.time += minute;
@@ -296,7 +296,7 @@ test('one issue alone with healthy Runtime: one retry of that run only, no alert
   assert.equal(f.sent.length, 0, 'an issue-specific failure alerts nobody');
   // The wake is delivered once; an unchanged tick sends nothing more.
   const count = f.prompts.length; f.time += 30 * minute; await f.tick(); assert.equal(f.prompts.length, count);
-  // The worker resends; the same step waits for Runtime again while Runtime is healthy.
+  // The worker resends; the same step waits for the interpreter again while the interpreter is healthy.
   f.waits = []; f.time += minute; await f.tick();
   f.waits = [wait(12, f.time)]; f.time += minute; await f.tick();
   assert.deepEqual(f.rules().map(rule => [rule.kind, rule.number]), [['runtime-stuck', 12]]);
@@ -323,7 +323,7 @@ async function hours(f, count, { persistent = new Set(), after = () => {} } = {}
   return log;
 }
 
-test('a Runtime outage: one runtime alert per repository and machine, other work keeps moving, a test wake, one recovery', async t => {
+test('an interpreter outage: one interpreter alert per repository and machine, other work keeps moving, a test wake, one recovery', async t => {
   const f = await launcher(t);
   await f.start(); f.prompts.length = 0;
   const first = f.time;
@@ -336,12 +336,12 @@ test('a Runtime outage: one runtime alert per repository and machine, other work
   const packet = f.packet();
   assert.equal(packet.runtime.state, 'unavailable'); assert.match(packet.runtime.note, /Keep other work moving/);
   assert.deepEqual(packet.issues.map(item => item.number), [30], 'a new issue may still start');
-  assert.deepEqual(packet.timeRules ?? [], [], 'no wake while Runtime is down');
+  assert.deepEqual(packet.timeRules ?? [], [], 'no wake while the interpreter is down');
   const record = JSON.parse(readFileSync(join(f.ports.stateRoot, 'alerts', readdirSync(join(f.ports.stateRoot, 'alerts'))[0]), 'utf8'));
-  assert.deepEqual(Object.values(record.incidents).map(item => [item.kind, item.issues]), [['runtime', [12, 15]]]);
+  assert.deepEqual(Object.values(record.incidents).map(item => [item.kind, item.issues]), [['interpreter', [12, 15]]]);
   for (let i = 0; i < 2; i++) { f.time += 30 * minute; await f.tick(); }
   assert.equal(f.sent.length, 1, 'the open outage sends nothing more');
-  // Runtime answers again: only one test wake, for the oldest run whose check can be resent (#12 has an unknown outcome).
+  // interpreter answers again: only one test wake, for the oldest run whose check can be resent (#12 has an unknown outcome).
   f.health = { state: 'healthy', detail: 'HTTP 200' }; f.time += 30 * minute;
   await f.tick();
   assert.equal(f.sent.length, 1, 'no recovery before proof');
@@ -353,12 +353,12 @@ test('a Runtime outage: one runtime alert per repository and machine, other work
   f.waits = f.waits.filter(w => w.number !== 15);
   const prompts = f.prompts.length; f.time += 30 * minute; await f.tick();
   assert.equal(f.sent.length, 1); assert.deepEqual(f.prompts.length > prompts ? kinds(f) : [], [], 'no wake without a new verdict');
-  // Its new pdd test result has a verdict: Runtime is back for all.
+  // Its new pdd test result has a verdict: The interpreter is back for all.
   f.probe = 'verdict'; f.time += 30 * minute; await f.tick();
   assert.equal(f.sent.length, 2); assert.match(f.sent[1], /PDD Autopilot recovered: runtime/); assert.match(f.sent[1], /reached a verdict again/);
   assert.deepEqual(kinds(f), [['runtime-ready', 12]]);
   assert.match(f.rules()[0].reason, /unknown outcome: never send it again blind/); assert.doesNotMatch(f.rules()[0].reason, /--retry/, 'an unknown outcome is never resent');
-  assert.match(f.rules()[0].reason, /"Runtime wake for the park at 2026-11-06T12:00:00.000Z\. Runtime is back\./);
+  assert.match(f.rules()[0].reason, /"Interpreter wake for the park at 2026-11-06T12:00:00.000Z\. The interpreter is back\./);
   f.waits = []; f.time += 30 * minute; await f.tick();
   assert.equal(f.sent.length, 2, 'one recovery only');
 });
@@ -388,7 +388,7 @@ test('a test wake that is never delivered holds no other run: 60 minutes later t
   // The test moves to #15 60 minutes after the undelivered wake; then each other run gets its wake or the stuck rule.
   // The wake record of #12 is kept for 24 hours from its wait, so its wait is offered once more a day later.
   assert.deepEqual(log, [['runtime-ready', 12, 33], ['runtime-ready', 15, 93], ['runtime-ready', 12, 123], ['runtime-ready', 18, 123], ['runtime-stuck', 18, 153], ['runtime-ready', 12, 1443]]);
-  assert.equal(f.sent.length, 2, 'one runtime alert and one recovery in 48 hours');
+  assert.equal(f.sent.length, 2, 'one interpreter alert and one recovery in 48 hours');
   assert.match(f.sent[0], /PDD Autopilot alert: runtime /); assert.match(f.sent[1], /PDD Autopilot recovered: runtime/); assert.match(f.sent[1], /reached a verdict again/);
 });
 
@@ -399,24 +399,24 @@ test('a test run that waits again or ends on the stuck path is no proof: one tes
   await f.tick(); assert.equal(f.sent.length, 1);
   f.health = { state: 'healthy', detail: 'HTTP 200' }; f.time += 30 * minute; await f.tick();
   assert.deepEqual(kinds(f), [['runtime-ready', 12]]);
-  // #12 resends and waits again at the same step while Runtime is healthy: its test failed and its one resend is used.
+  // #12 resends and waits again at the same step while the interpreter is healthy: its test failed and its one resend is used.
   f.waits = [wait(15, f.waits[1].at), wait(12, f.time + 5 * minute)]; f.time += 30 * minute; await f.tick();
   assert.deepEqual(kinds(f), [['runtime-ready', 15], ['runtime-stuck', 12]]); assert.equal(f.sent.length, 1);
   // #15 ends on the stuck path: no proof. No waiting run is left to test, so the outage closes with its one recovery.
   f.waits = [wait(12, f.waits[1].at)]; f.probe = 'failed'; f.time += 30 * minute; await f.tick();
-  assert.equal(f.sent.length, 2); assert.match(f.sent[1], /recovered: runtime/); assert.match(f.sent[1], /no waiting run is left to test/); assert.doesNotMatch(f.sent[1], /Runtime is back/);
+  assert.equal(f.sent.length, 2); assert.match(f.sent[1], /recovered: runtime/); assert.match(f.sent[1], /no waiting run is left to test/); assert.doesNotMatch(f.sent[1], /the interpreter is back/);
   const log = await hours(f, 12);
   assert.deepEqual(log.filter(([kind]) => kind === 'runtime-ready'), [], 'each run had one test wake only');
   assert.equal(f.sent.length, 2, 'no repeated alert or recovery');
 });
 
-test('two issues that fail on their own while Runtime is healthy are no outage: one retry each, then the stuck rule', async t => {
+test('two issues that fail on their own while the interpreter is healthy are no outage: one retry each, then the stuck rule', async t => {
   const f = await launcher(t);
   await f.start(); f.prompts.length = 0;
   f.waits = [wait(12, f.time), wait(15, f.time + 2 * minute)]; f.time += 3 * minute;
   const log = await hours(f, 12, { persistent: new Set([12, 15]) });
   assert.deepEqual(log, [['runtime-ready', 12], ['runtime-ready', 15], ['runtime-stuck', 12], ['runtime-stuck', 15]], 'two resends in 12 hours');
-  assert.equal(f.sent.length, 0, 'no runtime alert'); assert.equal(f.packet().runtime, undefined);
+  assert.equal(f.sent.length, 0, 'no interpreter alert'); assert.equal(f.packet().runtime, undefined);
   assert.match(f.prompts.map(text => text).join('\n'), /this wake is its one retry/);
 });
 
@@ -428,7 +428,7 @@ test('a recovery keeps a used retry: a run found stuck before the outage gets no
   f.waits = [wait(12, f.time + 5 * minute)]; f.time += 30 * minute; await f.tick();
   assert.deepEqual(kinds(f), [['runtime-stuck', 12]]);
   const afterStuck = f.prompts.length;
-  // Before the coordinator parks #12, Runtime goes down and #15 waits too.
+  // Before the coordinator parks #12, the interpreter goes down and #15 waits too.
   f.waits.push(wait(15, f.time + minute)); f.health = { state: 'unavailable', detail: 'HTTP 502' }; f.time += 30 * minute; await f.tick();
   assert.equal(f.sent.length, 1);
   f.health = { state: 'healthy', detail: 'HTTP 200' }; f.time += 30 * minute; await f.tick();
@@ -438,23 +438,23 @@ test('a recovery keeps a used retry: a run found stuck before the outage gets no
   assert.ok(!f.prompts.slice(afterStuck).some(text => /pdd workflow changes 12 and this text/.test(text)), '#12 is never woken again');
 });
 
-test('a first victim whose retry fails while Runtime is down keeps its test wake', async t => {
+test('a first victim whose retry fails while the interpreter is down keeps its test wake', async t => {
   const f = await launcher(t);
   await f.start(); f.prompts.length = 0;
   f.waits = [wait(12, f.time)]; f.time += minute; await f.tick();
   assert.deepEqual(kinds(f), [['runtime-ready', 12]]);
-  // The retry fails because Runtime went down: the wait begins in the outage.
+  // The retry fails because the interpreter went down: the wait begins in the outage.
   f.waits = [wait(12, f.time + 5 * minute)]; f.health = { state: 'unavailable', detail: 'no answer' }; f.time += 30 * minute; await f.tick();
   assert.equal(f.sent.length, 1);
   f.health = { state: 'healthy', detail: 'HTTP 200' }; f.time += 30 * minute; await f.tick();
   assert.deepEqual(kinds(f), [['runtime-ready', 12]]); assert.match(f.rules()[0].reason, /is the test/);
 });
 
-test('an unclear health answer is a sign-in or setup problem: one runtime-access alert, runs wait visibly, the stuck rule after 4 hours', async t => {
+test('an unclear health answer is a sign-in or setup problem: one interpreter-access alert, runs wait visibly, the stuck rule after 4 hours', async t => {
   const f = await launcher(t);
   await f.start(); f.prompts.length = 0;
   f.waits = [wait(12, f.time), wait(15, f.time + minute)];
-  f.health = { state: 'access', detail: 'HTTP 401: Runtime did not accept the gh login', fix: 'Run gh auth status on this machine; sign in again with gh auth login, or ask the PDD team for Runtime access.' };
+  f.health = { state: 'access', detail: 'HTTP 401: The interpreter did not accept the gh login', fix: 'Run gh auth status on this machine; sign in again with gh auth login, or ask the PDD team for interpreter access.' };
   f.time += 2 * minute;
   const log = [], packets = [];
   for (let i = 0; i < 96; i++) {
@@ -464,17 +464,17 @@ test('an unclear health answer is a sign-in or setup problem: one runtime-access
     f.time += 30 * minute;
   }
   assert.equal(f.sent.length, 1, 'one alert for the repository and machine in 48 hours');
-  assert.match(f.sent[0], /PDD Autopilot alert: runtime-access/); assert.match(f.sent[0], /HTTP 401/); assert.match(f.sent[0], /gh auth status/);
+  assert.match(f.sent[0], /PDD Autopilot alert: interpreter-access/); assert.match(f.sent[0], /HTTP 401/); assert.match(f.sent[0], /gh auth status/);
   const record = JSON.parse(readFileSync(join(f.ports.stateRoot, 'alerts', readdirSync(join(f.ports.stateRoot, 'alerts'))[0]), 'utf8'));
-  assert.deepEqual(Object.values(record.incidents).map(item => [item.kind, item.issues]), [['runtime-access', [12, 15]]], 'one incident for the repository and machine');
+  assert.deepEqual(Object.values(record.incidents).map(item => [item.kind, item.issues]), [['interpreter-access', [12, 15]]], 'one incident for the repository and machine');
   assert.equal(packets[0].runtime.state, 'access'); assert.match(packets[0].runtime.note, /a person must fix/);
   assert.deepEqual(log.filter(([kind]) => kind === 'runtime-ready'), [], 'nothing is resent');
   const stuck = log.filter(([kind]) => kind === 'runtime-stuck');
   assert.deepEqual(stuck.map(([, number]) => number), [12, 15], 'each run takes the stuck path once');
   for (const [, , at] of stuck) assert.ok(at >= 4 * 60 && at < 4 * 60 + 31, `stuck at ${at} minutes`);
-  assert.match(f.prompts.find(text => text.includes('runtime-stuck')), /waited 4 hours for Runtime.*HTTP 401.*pdd:stuck rule/);
+  assert.match(f.prompts.find(text => text.includes('runtime-stuck')), /waited 4 hours for the interpreter.*HTTP 401.*pdd:stuck rule/);
   f.health = { state: 'healthy', detail: 'HTTP 200' }; await f.tick();
-  assert.equal(f.sent.length, 2); assert.match(f.sent[1], /PDD Autopilot recovered: runtime-access/);
+  assert.equal(f.sent.length, 2); assert.match(f.sent[1], /PDD Autopilot recovered: interpreter-access/);
 });
 
 test('real path: a parked run record, the real health check over HTTP, a test wake and a saved verdict as proof', async t => {
@@ -521,12 +521,12 @@ test('real pdd test: a posted check that did not run is sent again by the Story 
     const exitCode = await runCheck({ words, options, cwd: setup.repo }, ports);
     return { exitCode, out: ports.stdout.text, err: ports.stderr.text, sent: fake.posts.filter(post => post.command === 'check').length - before };
   };
-  // Runtime is not reached at the check POST: pdd posted it, so the saved row is not run with a request ID, not busy.
+  // the interpreter is not reached at the check POST: pdd posted it, so the saved row is not run with a request ID, not busy.
   const first = await pddTest(['place-order'], { '--max-calls': '18' });
   const batch = readdirSync(join(setup.state, 'batches')).sort().at(-1);
   assert.equal(first.exitCode, 5); assert.match(first.out, /NOT RUN .*Nothing was sent/); assert.equal(first.sent, 0);
   assert.equal(savedCheckCause(batch, { env }), 'service');
-  // The run waits for Runtime (its park record, read by the real readRuntimeWaits); the tick wakes it as the test after the outage.
+  // The run waits for the interpreter (its park record, read by the real readRuntimeWaits); the tick wakes it as the test after the outage.
   const f = await launcher(t);
   delete f.ports.readRuntimeWaits; delete f.ports.readRuntimeProbe;
   f.ports.env = { PDD_STATE_DIR: setup.state, PATH: process.env.PATH };
@@ -556,17 +556,17 @@ test('real pdd test: a posted check that did not run is sent again by the Story 
   assert.equal(f.sent.length, 2); assert.match(f.sent[1], /recovered: runtime/); assert.match(f.sent[1], /reached a verdict again/);
 });
 
-test('the runtime alert kind is one incident per repository and machine', async t => {
+test('the interpreter alert kind is one incident per repository and machine', async t => {
   const dir = mkdtempSync(join(tmpdir(), 'pdd-runtime-alert-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
   const env = { HOME: dir, XDG_CONFIG_HOME: join(dir, 'config') }, sent = [];
   mkdirSync(join(dir, 'config', 'pdd'), { recursive: true });
   writeFileSync(join(dir, 'config', 'pdd', 'autopilot-alerts.json'), JSON.stringify({ v: 1, service: 'slack', url: 'https://hooks.slack.com/services/T/B/x' }));
   const ports = { stateRoot: join(dir, 'state'), hostname: () => 'host-a', repository: async () => ({ nameWithOwner: 'owner/repo' }), http: async ({ body }) => { sent.push(body.text); return { status: 200, text: 'ok' }; } };
   const call = (issue, kind, fields) => runAutopilotAlerts({ action: 'alert', cwd: dir, env, issue, kind, text: JSON.stringify(fields) }, ports);
-  const fields = { cause: 'Runtime down', tried: 'retries', need: 'nothing now' };
-  assert.equal((await call('12', 'runtime', fields)).exitCode, 0);
-  assert.match((await call('15', 'runtime', fields)).message, /Added #15 to the open runtime alert/);
+  const fields = { cause: 'The interpreter down', tried: 'retries', need: 'nothing now' };
+  assert.equal((await call('12', 'interpreter', fields)).exitCode, 0);
+  assert.match((await call('15', 'interpreter', fields)).message, /Added #15 to the open interpreter alert/);
   assert.equal(sent.length, 1);
-  assert.match((await call('15', 'recovered', { cause: 'Runtime is back', kind: 'runtime' })).message, /Recovery sent/);
+  assert.match((await call('15', 'recovered', { cause: 'The interpreter is back', kind: 'interpreter' })).message, /Recovery sent/);
   assert.equal(sent.length, 2); assert.match(sent[1], /recovered: runtime/); assert.match(sent[1], /issues\/12, https:\/\/github.com\/owner\/repo\/issues\/15/);
 });

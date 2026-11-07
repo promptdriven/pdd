@@ -88,7 +88,7 @@ for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const or
   const human = run(['workflow', 'list'], packed); assert.equal(human.status, 0); assert.ok(human.stdout.includes('feature'));assert.ok(human.stdout.includes('Listing starts no work.'));
   for (const shell of ['bash', 'zsh']) {
     const result = run(['completion', shell]); assert.equal(result.status, 0, result.stderr);
-    // Retired commands stay out of completion; the alert kind value and the park --runtime flag are not commands.
+    // Retired commands stay out of completion; the alert kind value and the park --interpreter flag are not commands.
     assert.doesNotMatch(result.stdout.split('\n').filter(line => !line.includes('--kind)')).join('\n'), /\b(?:doctor|verify|phone|machine)\b|(?<!-)\bruntime\b/);
     const script = join(sandbox, `completion.${shell}`); writeFileSync(script, result.stdout);
     if (shell === 'bash') {

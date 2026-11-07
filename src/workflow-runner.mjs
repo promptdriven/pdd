@@ -408,7 +408,7 @@ function describe(run, chat = null, { drafts = [], nothing = false } = {}) {
   const area = run.areas[run.area], pr1 = askArea(run) && prOf(run, askArea(run).name);
   if (run.state === 'cancelled') return run.cancelled?.state === 'replaced' ? 'replaced' : 'cancelled';
   if (run.state === 'stuck') return `stuck: ${stuckReason(run)}`;
-  if (runtimeWaiting(run)) return `waiting for Runtime: ${run.runtimeWait.reason}. Autopilot checks Runtime at each tick and wakes it when Runtime is back; an Autopilot alert names any need for a person (pdd autopilot status)`;
+  if (runtimeWaiting(run)) return `waiting for the interpreter: ${run.runtimeWait.reason}. Autopilot checks the interpreter at each tick and wakes it when the interpreter is back; an Autopilot alert names any need for a person (pdd autopilot status)`;
   if (activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting'].includes(chat)) return chatStatusWords(run, chat);
   if (openQuestion(run) && run.state !== 'completed') return `waiting for you: ${run.question.text.split('\n')[0]}`;
   if (chat === 'blocked' && run.state === 'running') return `waiting for you: the chat asks a question in its window (pdd workflow open ${run.number})`;
@@ -2501,7 +2501,7 @@ ${approvalGuide(run)}`, p, true);
   } finally { releaseAdmission?.(); }
 }
 
-// A run that waits for Runtime: no question to a person, its slot can be yielded, and Autopilot wakes it later.
+// A run that waits for the interpreter: no question to a person, its slot can be yielded, and Autopilot wakes it later.
 const runtimeWaiting = run => run.state === 'paused' && Boolean(run.runtimeWait);
 // A wake (a delivered request) or recorded progress ends the wait; the run goes on where it stopped.
 function endRuntimeWait(run) {
@@ -2509,16 +2509,16 @@ function endRuntimeWait(run) {
   delete run.runtimeWait;
   if (run.state === 'paused') run.state = run.gate || openQuestion(run) ? 'waiting' : 'running';
 }
-// The latest pdd test result of the run decides whether it may wait for Runtime: only a no-verdict
+// The latest pdd test result of the run decides whether it may wait for the interpreter: only a no-verdict
 // AI-service, busy, network or unknown result waits. A failed check or a file rule is this issue's own work.
 const RUNTIME_PARK_REFUSALS = {
-  issue: 'pdd test failed an expectation, names a file rule, or a step took longer than the server time limit. This is this issue\'s own work, not a Runtime outage: find the cause and fix it (RUNBOOK §11). For a step time limit, make the step smaller, for example split 30 moves into 3 steps of 10. Nothing was parked.',
-  access: 'pdd test reports a sign-in, access or Runtime address problem. It is not a Runtime outage, and waiting does not fix it: a person must fix the sign-in. Run gh auth status (and check PDD_RUNTIME_URL), then follow the access alert rule. Nothing was parked.',
-  passed: 'The latest pdd test passed; nothing waits for Runtime. Nothing was parked.',
+  issue: 'pdd test failed an expectation, names a file rule, or a step took longer than the server time limit. This is this issue\'s own work, not an interpreter outage: find the cause and fix it (RUNBOOK §11). For a step time limit, make the step smaller, for example split 30 moves into 3 steps of 10. Nothing was parked.',
+  access: 'pdd test reports a sign-in, access or interpreter address problem. It is not an interpreter outage, and waiting does not fix it: a person must fix the sign-in. Run gh auth status (and check PDD_RUNTIME_URL), then follow the access alert rule. Nothing was parked.',
+  passed: 'The latest pdd test passed; nothing waits for the interpreter. Nothing was parked.',
 };
-// The text of an Autopilot Runtime wake starts with its park time, so one park is woken at most once.
-export const runtimeWakeTag = at => `Runtime wake for the park at ${new Date(at).toISOString()}.`;
-const RUNTIME_WAKE_TAG = /^Runtime wake for the park at [^ ]+\./;
+// The text of an Autopilot interpreter wake starts with its park time, so one park is woken at most once.
+export const runtimeWakeTag = at => `Interpreter wake for the park at ${new Date(at).toISOString()}.`;
+const RUNTIME_WAKE_TAG = /^Interpreter wake for the park at [^ ]+\./;
 
 // Record an automatic stop without releasing or waking its worker.
 async function parkAutomaticRunCommand({ reason, runtime = false, cwd }, ports) {
@@ -2542,7 +2542,7 @@ async function parkAutomaticRunCommand({ reason, runtime = false, cwd }, ports) 
   }
   const selectedArea=run.area, selectedGate=structuredClone(run.gate ?? null), selectedState=run.state, selectedOrigin=structuredClone(run.automaticOrigin);
   protectProgress(run,p,{approval:true});
-  const waitLine = wait && `Automatic run waits for Runtime: ${wait.reason}. Ask no person. End your turn now; the coordinator may yield this slot. Autopilot checks Runtime at each tick without AI and wakes this run when Runtime is back. Then run pdd test --read${wait.batch ? ` ${wait.batch}` : ''} first and resend only a check that surely gave no verdict.`;
+  const waitLine = wait && `Automatic run waits for the interpreter: ${wait.reason}. Ask no person. End your turn now; the coordinator may yield this slot. Autopilot checks the interpreter at each tick without AI and wakes this run when the interpreter is back. Then run pdd test --read${wait.batch ? ` ${wait.batch}` : ''} first and resend only a check that surely gave no verdict.`;
   if (!runtime && run.state === 'stuck' && run.parkReason === text) return done('Automatic run is already parked.');
   if (wait && runtimeWaiting(run) && run.runtimeWait.batch === wait.batch) return done(waitLine);
   commitRun(run,p,latest=>{
@@ -2704,10 +2704,10 @@ async function deliveryJournal(run, p, action, { recover = true } = {}) {
 export async function changeRun({ ref, text, cwd, packageRoot = PACKAGE_ROOT }, ports) {
   const p = deps(ports); p.packageRoot = packageRoot; const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
-  // A Runtime wake reaches the run only while it still waits for that park: a second copy sends nothing.
+  // An interpreter wake reaches the run only while it still waits for that park: a second copy sends nothing.
   const wake = RUNTIME_WAKE_TAG.exec(String(text ?? '').trim())?.[0];
   if (wake && !(runtimeWaiting(found.run) && wake === runtimeWakeTag(found.run.runtimeWait.at)))
-    return done(`Run #${found.run.number} does not wait for the Runtime park that this wake names: it was already woken, or it parked again. Nothing was sent.`);
+    return done(`Run #${found.run.number} does not wait for the interpreter park that this wake names: it was already woken, or it parked again. Nothing was sent.`);
   return deliverRequest(found.run, text, p);
 }
 
@@ -2955,7 +2955,7 @@ function detail(run, chat = null, facts = {}) {
   const pending = run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase);
   const next = pending ? `pdd workflow open ${run.number} --new` : activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting'].includes(chat) ? `pdd workflow open ${run.number}`
     : run.gate ? approvalGuide(run)
-    : runtimeWaiting(run) ? `nothing for a person unless an Autopilot alert asks (pdd autopilot status). Autopilot wakes this run when Runtime is back; the worker then reads pdd test --read${run.runtimeWait.batch ? ` ${run.runtimeWait.batch}` : ''} first.`
+    : runtimeWaiting(run) ? `nothing for a person unless an Autopilot alert asks (pdd autopilot status). Autopilot wakes this run when the interpreter is back; the worker then reads pdd test --read${run.runtimeWait.batch ? ` ${run.runtimeWait.batch}` : ''} first.`
     : ended(run) ? null : prOf(run, area?.name) ? (run.pr.length > 1 && run.prBase && run.prBase !== run.baseBranch && run.pr[0]?.state === 'open' && run.pr[0]?.ci === 'failing'
       ? 'Review and merge PR 2 on GitHub: PR 1\'s CI fails, so PR 2 also merges PR 1. Do not merge PR 1 alone. pdd never merges.'
       : `Review and merge ${run.pr.length > 1 && run.prBase && run.prBase !== run.baseBranch ? 'PR 1, then PR 2,' : 'the PR'} on GitHub. pdd never merges.`) : `pdd workflow open ${run.number}`;
@@ -2987,7 +2987,7 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false } = 
   const words = group === 'cancelled' ? (run.cancelled?.state === 'replaced' ? 'replaced' : 'cancelled')
     : group === 'done' ? (run.gate?.kind === 'ask-code' ? 'done at PR 1' : 'done')
     : run.state === 'stuck' ? `stuck: ${stuckReason(run)}`
-    : runtimeWaiting(run) ? `waiting for Runtime: ${run.runtimeWait.reason}`
+    : runtimeWaiting(run) ? `waiting for the interpreter: ${run.runtimeWait.reason}`
     : replacementPending ? `chat replacement pending at ${run.chatReplacement.phase}; run pdd workflow open ${run.number} --new`
     : problem ? chatStatusWords(run, chat)
     : question ? `waiting for you: ${question.text.split('\n')[0]}`

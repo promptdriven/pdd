@@ -56,9 +56,11 @@ export function inertText(value, max = MAX_FIELD) {
   return shown.join('');
 }
 const escapeHtml = text => text.replace(/</g, '&lt;').replace(/>/g, '&gt;').replaceAll('pdd-workflow:', 'pdd-workflow&#58;').replaceAll('pdd-product:', 'pdd-product&#58;');
+// A table cell: each pipe is escaped, and so is each backslash right before it. GitHub reads `\\` as one escaped
+// backslash, so a text `\|` written as `\\|` would end the cell. Other backslashes keep their text, also in code spans.
 const cell = (value, max = MAX_CELL) => {
   const text = inertText(value, max);
-  return text ? text.replace(/\|/g, '\\|') : '—';
+  return text ? text.replace(/(\\*)\|/g, (_, slashes) => `${slashes}${slashes}\\|`) : '—';
 };
 export function codeSpan(value) {
   const text = MARKERS(oneLine(value));
@@ -366,7 +368,7 @@ export function balancedDetails(text) {
     if (code) return code;
     if (/^<details/i.test(tag)) { depth++; return tag; }
     if (depth) { depth--; return tag; }
-    return tag.replace('<', '&lt;').replace('>', '&gt;');
+    return tag.replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }));
   return [...rows, ...(fence ? [fence] : []), ...Array(depth).fill('</details>')].join('\n');
 }

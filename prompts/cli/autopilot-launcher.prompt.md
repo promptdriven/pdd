@@ -452,19 +452,19 @@ it), and does not touch other issues. `self` is this coordinator and machine:
 
 The 24 hours is a constant, not a setting.
 
-### Runtime outage (#3039)
+### Interpreter outage (#3039)
 
-A worker whose `pdd test` has no verdict for a Runtime cause parks its own run
-with `pdd workflow park --runtime` ([workflow runner](workflow-runner.prompt.md)):
+A worker whose `pdd test` has no verdict for an interpreter cause parks its own run
+with `pdd workflow park --interpreter` ([workflow runner](workflow-runner.prompt.md)):
 state `paused` with `runtimeWait {at, reason, batch, cause}`. The tick reads these
 waits from the same local run records as run progress (an injectable
 `readRuntimeWaits` port) and sorts them oldest first. It never parks, wakes or
 changes a run itself; it adds time rules for the coordinator, which wakes a run
 with `pdd workflow changes N` under the existing room and delivery rules.
 
-When no run waits and no outage or Runtime access problem is open, the tick
+When no run waits and no outage or interpreter access problem is open, the tick
 makes no health check. Else it makes one free health check,
-[`checkRuntimeHealth`](runtime-client.prompt.md#free-runtime-health-check)
+[`checkRuntimeHealth`](runtime-client.prompt.md#free-interpreter-health-check)
 (an injectable `runtimeHealth` port): `healthy`, `unavailable` (down) or
 `access` (an answer that is neither: a sign-in or setup problem with a `fix`).
 
@@ -472,22 +472,22 @@ Every wake (`retry`, `probe` or `recovered`) is remembered for its run with the
 run's progress mark (area and number of done steps) and the wait's `at`, for 24
 hours; a recovery does not clear it. A wake is **used** when the same run later
 waits again at the same mark, unless that later wait was first seen while
-Runtime was down (then the outage explains it). So each run resends at most once
+The interpreter was down (then the outage explains it). So each run resends at most once
 per wait, and every path ends in a wake or in the stuck rule:
 
 | Facts | Decision |
 | --- | --- |
-| Health `access` | Send one `runtime-access` alert for this repository and machine that names the detail and the fix (`gh auth status`, `PDD_RUNTIME_URL`); other waiting issues join it. Wake nothing. A run that has waited 4 hours since its `at` or since the problem began (the later one) gets a `runtime-stuck` rule. The first later `healthy` answer sends one recovery (`"kind":"runtime-access"`); a down answer does not end it |
-| No open outage, health `unavailable`, a run waits | Open one outage. Send one `runtime` alert for the oldest waiting issue; other waiting issues join it and send nothing |
+| Health `access` | Send one `interpreter-access` alert for this repository and machine that names the detail and the fix (`gh auth status`, `PDD_RUNTIME_URL`); other waiting issues join it. Wake nothing. A run that has waited 4 hours since its `at` or since the problem began (the later one) gets a `runtime-stuck` rule. The first later `healthy` answer sends one recovery (`"kind":"interpreter-access"`); a down answer does not end it |
+| No open outage, health `unavailable`, a run waits | Open one outage. Send one `interpreter` alert for the oldest waiting issue; other waiting issues join it and send nothing |
 | Open outage, health not `healthy` | Wake nothing. Call the alert again for its first issue (a repeat sends nothing unless the last send failed) and for each newly waiting issue |
-| Open outage, health `healthy` | Wake one test run (`probe`): the oldest waiting run that has not used its wake and has not been the test in this outage, preferring one whose cause is not `unknown`. The test passes only with proof: a new `pdd test` row of that run that passed or failed and ended at or after the wake was offered (an injectable `readRuntimeProbe` port). Then send one recovery (`recovered`, `"kind":"runtime"`), close the outage and offer the other waiting runs, oldest first. A test run that waits again, ends or goes stuck with no such verdict failed, and so does one with no verdict 60 minutes after its wake was offered, also when the wake was never delivered and the run still waits: take the next candidate. With no candidate left, close the outage with one recovery that does not say Runtime is back |
+| Open outage, health `healthy` | Wake one test run (`probe`): the oldest waiting run that has not used its wake and has not been the test in this outage, preferring one whose cause is not `unknown`. The test passes only with proof: a new `pdd test` row of that run that passed or failed and ended at or after the wake was offered (an injectable `readRuntimeProbe` port). Then send one recovery (`recovered`, `"kind":"interpreter"`), close the outage and offer the other waiting runs, oldest first. A test run that waits again, ends or goes stuck with no such verdict failed, and so does one with no verdict 60 minutes after its wake was offered, also when the wake was never delivered and the run still waits: take the next candidate. With no candidate left, close the outage with one recovery that does not say the interpreter is back |
 | Health `healthy`, a run used its wake | A `runtime-stuck` rule, also during an open outage; it is never the test |
 | No open outage, health `healthy` | Waits from one or many issues are no outage: offer each run one `retry` |
 
 An offered wake is a `runtime-ready` time rule with one reason line: the run
-number, why it wakes (`one retry`, `the test` or Runtime back), and the exact
+number, why it wakes (`one retry`, `the test` or the interpreter back), and the exact
 text for `pdd workflow changes N`. That text starts with
-`Runtime wake for the park at ISO.` (the wait's `at`), so pdd delivers it at most
+`Interpreter wake for the park at ISO.` (the wait's `at`), so pdd delivers it at most
 once per park. It tells the worker to run `pdd test --read BATCH` first, to resend
 only a check that surely gave no verdict (`pdd test --retry BATCH` only when pdd
 names it, for busy or held checks; the Story's check once with
@@ -502,7 +502,7 @@ completion tick (a freed slot) while the run still waits. Persist the outage,
 access problem and wakes in the launcher state as `runtime`. While an outage or
 access problem is open, the packet has `runtime: {state, since, note}` with
 state `unavailable`, `testing` or `access`; the note says to keep other work
-moving and that new issues may start and park only at their Runtime check, and
+moving and that new issues may start and park only at their interpreter check, and
 for `access` names the fix and the 4-hour limit. Send alerts through
 [Autopilot alerts](autopilot-alerts.prompt.md) `runAutopilotAlerts` with this
 repository and the state root of this launcher (an injectable `sendAlert` port,

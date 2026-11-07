@@ -348,7 +348,7 @@ failed, the real reason and what to do next: pass that line on as it is.
 | 0 | passed | Put the one-line result in the PR (section 15). If it says DRAFT, offer a simulation. |
 | 1 | failed | Find the cause first ("After a ✗" below). Fix only what the evidence shows. A person decides expected values. |
 | 4 | refused | Nothing was judged (`no verdict ·`): a file breaks a rule, or the AI service failed. Read the reason and the next step under the line. When the reason names a file rule, fix that file (table below); for an AI-service cause, change no file. If a fix changes an expected value, ask the person. |
-| 5 | not run | Sign-in, network, server busy or no AI room. Run `gh auth status`. Wait, then run again. If it stays, tell the person. In Autopilot, do not tell the person: follow pdd-autopilot `steps/handoff.md` "Runtime outage" (`pdd workflow park --runtime`). |
+| 5 | not run | Sign-in, network, server busy or no AI room. Run `gh auth status`. Wait, then run again. If it stays, tell the person. In Autopilot, do not tell the person: follow pdd-autopilot `steps/handoff.md` "Interpreter outage" (`pdd workflow park --interpreter`). |
 | 3 | unknown or still running | Run `pdd test --read BATCH` once with a long shell timeout or exit notification; it waits until every Story ends. Never resend the check. |
 | 2 | command error | Wrong command or story name. Run `pdd test --help`. |
 
@@ -366,7 +366,7 @@ failed, the real reason and what to do next: pass that line on as it is.
 | The expected value may be wrong | The Story does not give this value, or gives another one | Stop. Ask the person: keep the value (you fix the prompt) or change the test. Give an example. |
 | The Story is unclear | Two answers fit the Story | Stop. Ask the person to decide the rule in the Story. |
 | The answer changes between runs | `Rerun: failed 1 of 3 (unstable)` | Make the rule in the prompt firmer. Do not fit the prompt to one answer. |
-| No verdict | `no verdict ·` with an AI-service or limit cause, or `busy ·` when the remaining checks are busy. Exit 3, 4 or 5 can also hide a failed Story: read each Story line | Tell the person, with pdd's next step. Change no file. Never send it again on your own. In Autopilot, do not tell the person: follow pdd-autopilot `steps/handoff.md` "Runtime outage" (`pdd workflow park --runtime`). |
+| No verdict | `no verdict ·` with an AI-service or limit cause, or `busy ·` when the remaining checks are busy. Exit 3, 4 or 5 can also hide a failed Story: read each Story line | Tell the person, with pdd's next step. Change no file. Never send it again on your own. In Autopilot, do not tell the person: follow pdd-autopilot `steps/handoff.md` "Interpreter outage" (`pdd workflow park --interpreter`). |
 
 4. At most 2 fix rounds for the same ✗. Then stop, and tell the person what you tried.
 
@@ -386,7 +386,7 @@ failed, the real reason and what to do next: pass that line on as it is.
 | `graph-result-failure` | Often the prose calls a prompt more than `max_calls` | Make the prose and `max_calls` agree. |
 | `run-admission-failed` | Nothing ran (0 AI calls). Often one step's worst case is bigger than `--max-calls` (section 10). Other causes give the same code with no reason | Raise `--max-calls` (at most 1000), or lower `max_calls` in the prompt's `calls`. The interface `limits` do not help. If it stays, tell the person. |
 | `invalid-context` | `context` is not a list of `{"prompt_path", "paths"}` rows, for example a text note (section 2). | Fix the rows, or use `[]`. |
-| `graph-provider-failure` | The AI service failed. No verdict: pdd prints `no verdict ·` (✗ only when another check failed, in this Story or another Story) | Tell the person, with its AI calls. The person may send it again. Never send it again on your own. In Autopilot, do not tell the person: follow pdd-autopilot `steps/handoff.md` "Runtime outage" (`pdd workflow park --runtime`). |
+| `graph-provider-failure` | The AI service failed. No verdict: pdd prints `no verdict ·` (✗ only when another check failed, in this Story or another Story) | Tell the person, with its AI calls. The person may send it again. Never send it again on your own. In Autopilot, do not tell the person: follow pdd-autopilot `steps/handoff.md` "Interpreter outage" (`pdd workflow park --interpreter`). |
 | `graph-uncertain-child-dispatch` | One AI call did not answer. No verdict. Your test is fine | Same as `graph-provider-failure`. |
 
 ## 12. `pdd simulate` and Save as test
@@ -595,8 +595,8 @@ In a pdd workflow run, pdd writes the PR title and text. The top is for people: 
 blocked), the user story, a short summary, the cases, what changed, a table of checks (PR 1) or proof (PR 2) and
 one approval, next or merge line. pdd fills the status line and the tables only from its own records: saved `pdd test`
 and `pdd lint` results, the replay evidence (§17), the old-code proof, review.md, CI and the checker verdict. It says
-✅ only when each record that the PR needs is there and current. `pdd workflow status N` refreshes the status line and
-the rows of each open PR ("Updated <time>"). All the rest (pdd result lines, your step summaries, approvals,
+✅ only when each record that the PR needs is there and current. `pdd workflow status 42` (the run's issue) refreshes the status line
+and the rows of each open PR ("Updated <time>"). All the rest (pdd result lines, your step summaries, approvals,
 verify.md) stays whole in a closed "Details for tools and audits" section. pdd owns the description: it rewrites the
 part above Details at each status and all of it at each push. Put notes for people in a PR comment.
 

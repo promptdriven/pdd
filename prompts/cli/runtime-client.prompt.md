@@ -279,7 +279,7 @@ The default `gh` port likewise ignores stdin and captures stdout and stderr; it 
 - `gh api user --jq '.login + " " + (.id|tostring)'` once per batch; save the login and the user ID.
 - Every call sends `Authorization: Bearer <token>` with TLS on and `redirect: 'manual'`.
 
-## Free Runtime health check
+## Free interpreter health check
 
 Export `checkRuntimeHealth({env}, ports)` for the [Autopilot launcher](autopilot-launcher.prompt.md) (#3039). It is the free health check: one `GET /v1/capacity` to the configured origin with the `gh auth token` bearer and a 10-second limit, the same read that admission uses. It sends no source, starts no check or lint and makes no AI call. It returns `{state, detail}`, and `fix` for `access`. An answer that is neither healthy nor down is never treated as either: it is a sign-in or setup problem on this machine that a person must fix.
 
@@ -287,10 +287,10 @@ Export `checkRuntimeHealth({env}, ports)` for the [Autopilot launcher](autopilot
 | --- | --- |
 | 200 with a JSON object and no future `maintenance.until`, or 404 with a JSON object body (an older interpreter that still answered) | `healthy` |
 | no answer (network error or timeout), HTTP 408, 429 or 5xx, or a future `maintenance.until` | `unavailable` |
-| HTTP 401 or 403, or no gh token (then nothing is sent) | `access`; `fix` says to run `gh auth status` and sign in again with `gh auth login`, or to ask the PDD team for Runtime access |
+| HTTP 401 or 403, or no gh token (then nothing is sent) | `access`; `fix` says to run `gh auth status` and sign in again with `gh auth login`, or to ask the PDD team for interpreter access |
 | an invalid `PDD_RUNTIME_URL` origin (nothing is sent), a 3xx redirect (not followed), a 200 or 404 that is not a JSON object such as an HTML page or an empty body, or any other status | `access`; `fix` says to check `PDD_RUNTIME_URL` |
 
-`detail` is a short text such as `HTTP 503`, `not reached`, `no answer`, `maintenance`, `no gh sign-in` or `HTTP 401: Runtime did not accept the gh login`; neither `detail` nor `fix` ever holds the token.
+`detail` is a short text such as `HTTP 503`, `not reached`, `no answer`, `maintenance`, `no gh sign-in` or `HTTP 401: The interpreter did not accept the gh login`; neither `detail` nor `fix` ever holds the token.
 
 ## `pdd test`
 

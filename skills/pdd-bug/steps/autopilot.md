@@ -10,7 +10,7 @@ It changes these rules of SKILL.md and RUNBOOK §2, §4, §11, §12 and §14:
 - Expected values (§4): take each one from an issue quote or from the old behavior. A new test value needs no person when the runtime and the checker (blind, from the Story, with a named rule) agree. Else it is a note on the PR. Never change a test to make it pass.
 - A Story or an expected value that seems wrong (§11, §14): ask one question only for a product call the issue does not settle; else pick one and say why on the PR.
 - Cost (RUNBOOK "AI calls"): write the likely check cost on the issue or PR, and do not wait.
-- No AI verdict, busy or not run (§11): ask no person; follow [$pdd-autopilot Runtime outage](../../pdd-autopilot/steps/handoff.md#runtime-outage): `pdd workflow park --runtime`, then end the turn.
+- No AI verdict, busy or not run (§11): ask no person; follow [$pdd-autopilot interpreter outage](../../pdd-autopilot/steps/handoff.md#interpreter-outage): `pdd workflow park --interpreter`; end the turn.
 - Merge: pdd-merge, not a person. New words that users see go in its merge line; they do not stop the run.
 
 Still in force: product calls the issue does not settle, actions that cannot be undone, `--max-calls`, strict mode, and never sending a failed check again.
