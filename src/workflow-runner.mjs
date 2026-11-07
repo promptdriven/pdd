@@ -21,7 +21,7 @@ import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mj
 import { allRuns, currentChat, gitContext, listRuns, readRun, readRunOwnership, resolveRun, runDirFor, runForWorktree, updateRun, writeRun } from './workflow-runs.mjs';
 import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
 import { startChat, sendToChat, herdrCommand, chatSession, openChat, restartChat, validSessionId, closeChats, expandHome, homeVariable, isFolder, observeLifecycle, applyLifecycle, launchAnchor, sessionEvidenceDue, ownSession, observedSession, START_GRACE_MS } from './workflow-chat.mjs';
-import { captureSource, findTests, gitFiles, interfaceBlocks, interfaceSchemaProblems, proseSha256 } from './runtime-preflight.mjs';
+import { captureSource, findTests, gitFiles, interfaceBlocks, interfaceSchemaProblems, isStoryPath, proseSha256 } from './runtime-preflight.mjs';
 import { storyLines, PROMPT_TESTS_LABEL, PROMPT_TESTS_WORDS } from './runtime-output.mjs';
 import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
 import { causeText } from './runtime-output.mjs';
@@ -1279,19 +1279,27 @@ function formalCounterexample(run) {
 }
 const resultText = summary => oneLine(summary).replace(/^[^:]*:\s*/, '');
 const STORY_FILE = /(?:^|\/)user_stories\/[^/]+\.md$/;
+// The Story paths that the step summaries name; `extra` is the summary of a step that `done` records now.
+const namedStories = (run, extra = '') => [...run.areas.flatMap(item => item.steps).filter(step => run.done[step]).map(step => run.done[step]?.summary ?? ''), extra]
+  .flatMap(summary => String(summary).match(/\buser_stories\/[\w./-]+\.md\b/g) ?? []);
 // The Story files of a run: each changed user_stories/*.md (not PLAN.md or README.md) and each one that a step summary names.
 function runStoryPaths(run, files) {
-  const named = run.areas.flatMap(item => item.steps).filter(step => run.done[step]).flatMap(step => String(run.done[step]?.summary ?? '').match(/\buser_stories\/[\w./-]+\.md\b/g) ?? []);
-  return [...new Set([...files, ...named])].filter(path => STORY_FILE.test(path) && !/^(?:plan|readme)\.md$/i.test(path.split('/').at(-1)) && !path.split('/').includes('..'));
+  return [...new Set([...files, ...namedStories(run)])].filter(path => STORY_FILE.test(path) && !/^(?:plan|readme)\.md$/i.test(path.split('/').at(-1)) && !path.split('/').includes('..'));
 }
-// #3029: the formal result is needed when a Story of the run, or the Story of an anchored scenario, has `## Rules to check`.
-function storyRulesToCheck(run, storyPaths) {
-  const anchored = (run.replayBaseline?.vectors ?? []).map(vector => vector?.snapshot?.story_path).filter(path => typeof path === 'string');
-  return [...new Set([...storyPaths, ...anchored])].filter(path => STORY_FILE.test(path) && !isAbsolute(path) && !path.split('/').includes('..')).some(path => {
-    try { return /^##[ \t]+Rules to check[ \t]*$/im.test(readFileSync(join(run.root, path), 'utf8')); } catch { return false; }
-  });
+// #3029: true when a Story of the run (changed or named, user_stories/**/S.md) or the Story of an anchored scenario has
+// `## Rules to check`; false when pdd read a Story of the run and none has it; null (unknown) when pdd found no Story file.
+function storyRulesToCheck(run, files, extra) {
+  const anchored = (run.replayBaseline?.vectors ?? []).map(vector => vector?.snapshot?.story_path);
+  const paths = [...new Set([...files, ...namedStories(run, extra), ...anchored])].filter(path => typeof path === 'string' && isStoryPath(path) && !isAbsolute(path) && !path.split('/').includes('..'));
+  let read = false;
+  for (const path of paths) {
+    let text; try { text = readFileSync(join(run.root, path), 'utf8'); } catch { continue; }
+    if (/^##[ \t]+Rules to check[ \t]*$/im.test(text)) return true;
+    read = true;
+  }
+  return read ? false : null;
 }
-const rulesToCheck = async (run, p) => storyRulesToCheck(run, runStoryPaths(run, await changedFiles(run, p)));
+const rulesToCheck = async (run, p, extra) => storyRulesToCheck(run, await changedFiles(run, p), extra);
 async function readableFacts(run, area, p, evidence, { drafts = [], pending = false, published = null, base, head = 'HEAD', replay = null } = {}) {
   const label = prLabel(run, area), layout = label === 'PR 1' ? 'spec' : 'code';
   const steps = prSteps(run, area), all = run.areas.flatMap(item => item.steps).filter(step => run.done[step]);
@@ -1340,7 +1348,7 @@ async function readableFacts(run, area, p, evidence, { drafts = [], pending = fa
       replay: replay ? { ...replay, ...(replay.formal?.result === 'failed' ? { counterexample: formalCounterexample(run) } : {}) } : null,
       proof: layout === 'code' ? { status: pending ? 'pending' : evidence.proofStatus, ...(native ? { passed: Number(native[1]), total: Number(native[2]) } : {}) } : null,
       review: layout === 'code' ? reviewVerdict(run, area) : null, formalStep: area.steps.includes('formal'), formalDone: Boolean(run.done.formal && !run.done.formal.skipped),
-      rulesToCheck: storyRulesToCheck(run, storyPaths),
+      rulesToCheck: storyRulesToCheck(run, files),
       ci: published?.ci ?? null, checker: published?.checker ?? null, drafts: layout === 'spec' ? drafts : [] },
     approval: mode !== 'manual'
       ? { kind: 'auto', mode, login: await githubLogin(run, p), date: Number.isFinite(automatic.startedAt) ? new Date(automatic.startedAt).toISOString().slice(0, 10) : '', person: approvals.some(item => item.route === 'terminal') }
@@ -1693,7 +1701,7 @@ function savedReadable(facts, head) {
   if (copy.diff) { copy.diff.count = Math.max(copy.diff.count ?? 0, files.length); copy.diff.files = files.slice(0, 40); }
   if (replay) copy.records.replay = { outcome: replay.outcome, reason: replay.reason, counts: replay.counts ?? {},
     ...(replay.mutation ? { mutation: { outcome: replay.mutation.outcome, failures: replay.mutation.failures } } : {}),
-    ...(replay.formal ? { formal: Object.fromEntries(['status', 'result', 'scope', 'reason', 'control_outcome', 'control_exit_code', 'field', 'cause', 'reported'].filter(key => replay.formal[key] !== undefined).map(key => [key, replay.formal[key]])) } : {}),
+    ...(replay.formal ? { formal: Object.fromEntries(['status', 'result', 'scope', 'reason', 'control_outcome', 'control_exit_code', 'field', 'cause', 'reported', 'required'].filter(key => replay.formal[key] !== undefined).map(key => [key, replay.formal[key]])) } : {}),
     ...(replay.counterexample !== undefined ? { counterexample: replay.counterexample } : {}) };
   return { head, facts: { ...copy, pending: false } };
 }
@@ -1914,7 +1922,7 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
   const hasRuntime=runtimeLines(record.summary).length>0;
   if(hasRuntime)record.source={kind:'git-content-v1',sha256:gitFingerprint(run.root)};
   const replay=area.replay_evidence===REPLAY_POLICY && (area.steps.some(item=>item!==step&&!run.done[item]) || area.gate!=='pr' || area.before==='approve'&&!prOf(run,area.name))?await currentReplayEvidence(run,p):null;
-  if(replay){record.replayEvidence=replay;lines.push(formatReplayEvidence(replay,{rules:await rulesToCheck(run,p)}));}
+  if(replay){record.replayEvidence=replay;lines.push(formatReplayEvidence(replay,{rules:await rulesToCheck(run,p,record.summary)}));}
   const applyDone=latest=>{
     if(equalFact(latest.question,observedQuestion))latest.question=null;
     const later=area.steps.includes(step) && latest.done[step]?area.steps.slice(area.steps.indexOf(step)+1).filter(item=>latest.done[item]):[];

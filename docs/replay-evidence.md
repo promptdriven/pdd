@@ -137,8 +137,20 @@ the control command and its nonzero exit code:
 
 When a Story of the run has `## Rules to check`, the code PR is not ready to merge until the formal status
 is recorded with Proved (bounded), Proved (solver) or Not applicable. A Failed result stays publishable with
-its failure line and is not ready to merge. When no Story has `## Rules to check`, the line says
-"Formal check: not needed (no Rules to check in the Story)" and the formal check does not hold the PR.
+its failure line and is not ready to merge.
+
+With scenario vectors, the code replay needs a typed formal block of any result, also when no Story has
+`## Rules to check`. So the line and the row then always give the formal status, the reason and the repair step.
+A missing, malformed or stale block holds the PR. A recorded Not run does not hold it when no Story has
+`## Rules to check`.
+
+The line says "Formal check: not needed (no Rules to check in the Story)" only when pdd read the Stories of the
+run, none has `## Rules to check`, and the prompt area has no scenario vectors. Then the formal check does not
+hold the PR, except a Failed result. pdd finds the Stories of the run in the changed files and in the step
+summaries (`user_stories/**/NAME.md`), and in the `story_path` of each anchored scenario. When pdd finds no
+Story file, it cannot tell, so the formal check counts as needed. The line then adds: "pdd found no Story file
+of this run, so the formal check counts as needed. When the Story has no Rules to check, name its path
+(user_stories/NAME.md) in the formal step summary."
 
 ## Reading the PR status
 

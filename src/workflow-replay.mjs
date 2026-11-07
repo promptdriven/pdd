@@ -31,6 +31,7 @@ const formalResults = ['proved_bounded','proved_solver','failed','not_run','not_
 const FORMAL_LABEL = {proved_bounded:'Proved (bounded)',proved_solver:'Proved (solver)',failed:'Failed + counterexample',not_run:'Not run',not_applicable:'Not applicable'};
 const CONTROL_WORDS = {assertion_failure:'assertion failure',crash:'crash',survived:'survived',not_run:'not run'};
 const AGAIN = 'then run pdd workflow done formal again';
+const UNKNOWN_RULES = 'pdd found no Story file of this run, so the formal check counts as needed. When the Story has no Rules to check, name its path (user_stories/NAME.md) in the formal step summary.';
 const present = value => value !== undefined && value !== null;
 
 export function sourceFingerprint(root) {
@@ -362,8 +363,10 @@ function semanticDetection(mutation, expected) {
 }
 // #3029: the formal block on its own, from the manifest bytes. The first failed check gives the status; every cause is
 // pdd's own sentence (never a parser message or a file snippet). `checks` are the current replay's original identities.
+// With scenario vectors the full code replay needs a typed formal block, so the formal line never says "not needed".
+const need = checks => checks.size ? {required:true} : {};
 function formalFrom(run, bytes, checks, current) {
-  const identity = {manifest_sha256:hash(bytes)};
+  const expected = checks ?? anchorChecks(run), identity = {...need(expected), manifest_sha256:hash(bytes)};
   const not = (status, cause, reported, field) => ({status, ...(field ? {field} : {}), cause, ...(reported ? {reported} : {}), ...identity});
   const malformed = (field, cause, reported) => not('malformed', cause, reported, field);
   let doc;
@@ -385,7 +388,6 @@ function formalFrom(run, bytes, checks, current) {
   if (reported === 'failed' && !Object.hasOwn(formal, 'counterexample')) return malformed('formal.counterexample', 'a failed result needs its counterexample', reported);
   if (reported.startsWith('proved_')) {
     if (formal.control_outcome !== 'assertion_failure') return malformed('formal.control_outcome', 'a proved result needs control_outcome assertion_failure: the planted mistake must fail the formal check by assertion, not crash', reported);
-    const expected = checks ?? anchorChecks(run);
     if (expected.size) {
       if (!semanticDetection(doc.mutation, expected)) return malformed('mutation', 'with scenario vectors, a proved result needs a semantic mutation control that fails by assertion with a nonzero exit and names failed original assertions', reported);
     } else {
@@ -398,13 +400,15 @@ function formalFrom(run, bytes, checks, current) {
     ...(present(formal.control_command) ? {control_command:sanitize(formal.control_command)} : {}), ...(present(formal.control_exit_code) ? {control_exit_code:formal.control_exit_code} : {}),
     source:{kind:'git-content-v1',sha256:doc.source.sha256}, ...identity};
 }
+// The status when pdd cannot read the manifest bytes.
+function formalUnread(error, checks) {
+  if (error.code === 'ENOENT') return {status:'missing', cause:'replay-evidence.json is missing in the run folder', ...need(checks)};
+  return {status:'malformed', field:'file', cause:error.code ? `replay-evidence.json cannot be read (${error.code})` : sanitize(error.message).replace(/\.+$/,''), ...need(checks)};
+}
 export function readFormalEvidence(run) {
   let bytes;
   try { bytes = boundedFile(join(run.runDir,'replay-evidence.json')); }
-  catch (e) {
-    if (e.code === 'ENOENT') return {status:'missing', cause:'replay-evidence.json is missing in the run folder'};
-    return {status:'malformed', field:'file', cause:e.code ? `replay-evidence.json cannot be read (${e.code})` : sanitize(e.message).replace(/\.+$/,'')};
-  }
+  catch (e) { return formalUnread(e, anchorChecks(run)); }
   return formalFrom(run, bytes);
 }
 // A saved status in pdd's words: an older saved record has only the typed result; an absent one is not read yet.
@@ -416,10 +420,11 @@ function formalStatus(value) {
   return ['missing','malformed','stale'].includes(value.status) ? value : unread;
 }
 // The status words, the reason and one repair step, shared by the replay report and the readable PR's Formal check row.
-export function formalStatusText(value) {
+// `rules` is the runner's rulesToCheck: false (no Story of the run has Rules to check), null (pdd found no Story) or true.
+export function formalStatusText(value, rules) {
   const formal = formalStatus(value), status = formal.status;
   const words = status === 'malformed' ? `malformed (${sanitize(formal.field || 'formal')})` : status === 'stale' ? 'stale (source changed)' : status;
-  if (status === 'recorded') return {status, words, detail:'', repair:'', cause:''};
+  if (status === 'recorded') return {status, words, detail:'', repair:'', cause:'', notNeeded:false, note:''};
   const cause = sanitize(formal.cause || 'pdd saved no cause').replace(/\.+$/,'');
   const said = FORMAL_LABEL[formal.reported] ? `the record says ${FORMAL_LABEL[formal.reported]}, but ` : '';
   const detail = status === 'missing' ? `evidence not recorded: ${cause}` : `evidence not accepted: ${said}${cause}`;
@@ -428,7 +433,7 @@ export function formalStatusText(value) {
     : formal.field === 'file' ? `write replay-evidence.json as one regular file in the run folder per docs/replay-evidence.md, ${AGAIN}`
     : formal.field === 'JSON' ? `write replay-evidence.json as valid UTF-8 JSON per docs/replay-evidence.md, ${AGAIN}`
     : `correct ${sanitize(formal.field || 'formal')} per docs/replay-evidence.md, ${AGAIN}`;
-  return {status, words, detail, repair, cause};
+  return {status, words, detail, repair, cause, notNeeded:rules === false && formal.required !== true, note:rules === null ? UNKNOWN_RULES : ''};
 }
 // Every return attaches the formal status, read on its own when the scenario replay stopped before the manifest.
 export function readReplayEvidence(run, paths) {
@@ -475,7 +480,9 @@ function replayRecord(run, paths) {
     result.counts=emptyCounts(checks.length);result.operations.total=steps.length;
     const expected = new Map(checks.map(row=>[key(row),row])), expectedSteps = new Map(steps.map(row=>[stepKey(row),row]));
     requireThat(checks.length > 0 && checks.length <= MAX && expected.size === checks.length && steps.length <= MAX && expectedSteps.size === steps.length, 'Original assertion/operation identities are empty or duplicated.');
-    const bytes = boundedFile(join(run.runDir,'replay-evidence.json')), fingerprint = sourceFingerprint(run.root);
+    let bytes;
+    try { bytes = boundedFile(join(run.runDir,'replay-evidence.json')); } catch (e) { result.formal = formalUnread(e, expected); throw e; }
+    const fingerprint = sourceFingerprint(run.root);
     result.manifest_sha256=hash(bytes);result.formal=formalFrom(run,bytes,expected,fingerprint);
     const doc = parse(bytes);
     requireThat(object(doc) && doc.schema_version === REPLAY_POLICY && doc.run_id === run.runId, 'The replay manifest version or run identity is invalid.');
@@ -522,12 +529,12 @@ function replayRecord(run, paths) {
     return {...result,outcome,reason:counts.blocked ? 'Some checks are blocked.' : counts.not_replayed ? 'Some current assertions or public operations were not replayed.' : !detected ? 'The semantic mutation control did not detect an assertion failure; a crash is not detection.' : outcome==='fail' ? 'Assertion or formal failures were recorded.' : 'All current assertions have source-bound public-boundary replay evidence.'};
   } catch (e) { return {...result,outcome:'blocked',reason:e.code==='ENOENT' ? 'Missing replay-evidence.json or an original vector; code replay is blocked.' : sanitize(e.message || 'Malformed replay evidence.')}; }
 }
-// `rules` false: the runner found no Story with `## Rules to check`, so a formal result that is not recorded is not needed.
+// "not needed" only when no Story of the run has `## Rules to check` and no scenario vectors need the block.
 function formalReport(value, rules) {
-  const formal = formalStatus(value), shown = formalStatusText(formal);
+  const formal = formalStatus(value), shown = formalStatusText(formal, rules);
   if (formal.status === 'recorded') return `Formal check (agent reported): recorded — ${FORMAL_LABEL[formal.result]}; scope: ${render(formal.scope)}; reason: ${render(formal.reason)}; control: ${CONTROL_WORDS[formal.control_outcome] ?? 'not given'}${exit(formal.control_exit_code) ? ` (exit ${formal.control_exit_code})` : ''}.`;
-  if (rules === false) return `Formal check: not needed (no Rules to check in the Story).${formal.status === 'missing' ? '' : ` The formal block is not accepted: ${shown.words} — ${shown.cause}.`}`;
-  return `Formal check (agent reported): ${shown.words} — ${shown.detail}. Repair: ${shown.repair}.`;
+  if (shown.notNeeded) return `Formal check: not needed (no Rules to check in the Story).${formal.status === 'missing' ? '' : ` The formal block is not accepted: ${shown.words} — ${shown.cause}.`}`;
+  return `Formal check (agent reported): ${shown.words} — ${shown.detail}. Repair: ${shown.repair}.${shown.note ? ` ${shown.note}` : ''}`;
 }
 export function formatReplayEvidence(result, {maxCharacters=Infinity, rules} = {}) {
   const counts=result.counts??emptyCounts(), emptyPass=result.outcome==='pass' && !(Number.isSafeInteger(counts.total) && counts.total>0);

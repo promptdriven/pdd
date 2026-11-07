@@ -203,8 +203,9 @@ function proofRows(facts) {
       else if (!(mutation?.outcome === 'assertion_failure' && mutation.failures > 0)) blocked.push(`the ${facts.workflow === 'feature' ? 'planted mistake' : 'old code'} fails no case`);
     }
     // #3029: the formal status that pdd read on its own; a Story with `## Rules to check` (rulesToCheck not false) needs a
-    // recorded Proved or Not applicable result. Without such a Story only a recorded failure holds the PR.
-    const status = replay ? formalStatusText(replay.formal) : null, needed = r.rulesToCheck !== false;
+    // recorded Proved or Not applicable result. With scenario vectors the code replay needs a typed block, so the row is
+    // never "not needed" there. Otherwise, without such a Story, only a recorded failure holds the PR.
+    const status = replay ? formalStatusText(replay.formal, r.rulesToCheck) : null, needed = r.rulesToCheck !== false;
     if (status?.status === 'recorded') {
       const formal = replay.formal, scope = inertText(formal.scope, 80);
       const result = FORMAL[formal.result] ?? (formal.result === 'failed' ? `Failed at ${replay.counterexample ? codeSpan(clip(oneLine(replay.counterexample), 80)) : 'the counterexample in Details'}`
@@ -215,9 +216,9 @@ function proofRows(facts) {
       else if (needed && r.formalStep && formal.result === 'not_run') blocked.push('formal check not run');
     } else if (replay && r.formalStep) {
       // The same words, reason and repair step as the replay header; never a bare "not recorded".
-      if (!needed) rows.push(['Formal check', 'not needed (no Rules to check in the Story)', '—']);
+      if (status.notNeeded) rows.push(['Formal check', 'not needed (no Rules to check in the Story)', '—']);
       else {
-        rows.push(['Formal check', cell(`${status.words} — ${status.detail}. Repair: ${status.repair}.`, 500), '—']);
+        rows.push(['Formal check', cell(`${status.words} — ${status.detail}. Repair: ${status.repair}.${status.note ? ` ${status.note}` : ''}`, 500), '—']);
         if (status.status === 'missing' && r.formalDone !== true) waiting.push('the formal result');
         else blocked.push(`formal check ${inertText(status.words, 80)}`);
       }
