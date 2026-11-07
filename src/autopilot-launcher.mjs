@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: bca1fae004e14cb51a31dc0af5da855fe99018e3fb03801da36dd4e2c4c3aa76).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: aa646112ba704006c408beb74926ae7a1f3b0895da123c5594405840cdfe7bc2).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch } from 'node:fs';
@@ -975,9 +975,11 @@ async function runTick(stateFile, ports, completion) {
       if (Number.isSafeInteger(number) && stuckFor(claim) >= STUCK_CLAIM_AFTER && state.timeSeen[key] !== claim.stuckSince) {
         // After a ceiling (the repair limit of this checkout's run, or the takeover limit), a
         // retry is refused or not allowed: the rule asks for no retry and no further comment.
-        const ceiling = limitedFor(claim) ? 'takeover limit' : await (p.readRepairLimited ?? readRepairLimited)(state, number, p) ? 'repair limit' : null;
+        // Both ceilings can hold at once: name each one, and the cancel step whenever this checkout's run has the repair limit.
+        const takeover = limitedFor(claim), repair = await (p.readRepairLimited ?? readRepairLimited)(state, number, p);
+        const ceiling = takeover && repair ? 'takeover limit and the repair limit' : takeover ? 'takeover limit' : repair ? 'repair limit' : null;
         timeRules.push({ kind: 'stuck-claim', number, reason: ceiling
-          ? `Issue #${number} has been stuck for 4 hours after the ${ceiling}. Do not retry it, do not remove pdd:stuck and write no new comment; send the one stuck alert only if this stop has none yet. ${ceiling === 'repair limit' ? `To let Autopilot try again, a person removes pdd:stuck and pdd:working, then runs pdd workflow cancel ${number} in the checkout that holds the stuck run; the next tick starts a new run with a fresh repair count.` : 'A person removes pdd:stuck and pdd:working to let Autopilot try again.'} Its claim is no longer refreshed and expires in 4 hours.`
+          ? `Issue #${number} has been stuck for 4 hours after the ${ceiling}. Do not retry it, do not remove pdd:stuck and write no new comment; send the one stuck alert only if this stop has none yet. ${repair ? `To let Autopilot try again, a person removes pdd:stuck and pdd:working, then runs pdd workflow cancel ${number} in the checkout that holds the stuck run; the next tick starts a new run with a fresh repair count.` : 'A person removes pdd:stuck and pdd:working to let Autopilot try again.'} Its claim is no longer refreshed and expires in 4 hours.`
           : `Issue #${number} has been stuck for 4 hours; retry it with a changed approach or ask in the configured alert channel. Its claim is no longer refreshed and expires in 4 hours unless the issue leaves pdd:stuck.` });
         pendingTimes[key] = claim.stuckSince;
       }

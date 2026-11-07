@@ -804,13 +804,15 @@ test('tick: the 24-hour alert is recorded in the own claim comment and skipped w
 });
 
 test('tick: after a ceiling the 4-hour stuck rule asks for no retry and at most the one stuck alert', async t => {
-  for (const ceiling of ['repair limit', 'takeover limit']) {
+  // Both ceilings at once (#3041 review S2): the rule names both and keeps the cancel step of the repair limit.
+  for (const ceiling of ['repair limit', 'takeover limit', 'takeover limit and the repair limit']) {
+    const repair = ceiling.includes('repair limit'), takeover = ceiling.includes('takeover limit');
     const f = await tickFixture(t);
     f.issues = [tickIssue(7, { labels: [{ name: 'pdd:working' }, { name: 'pdd:stuck' }] })];
     const stuckSince = at(NOW - 3.75 * hour); // due at the first tick after start
-    f.claims = state => [ownClaim({ owner: state.coordinatorId, coordinatorId: state.coordinatorId, machine: state.machine, stuckSince, ...(ceiling === 'takeover limit' ? { takeovers: 4 } : {}) })];
+    f.claims = state => [ownClaim({ owner: state.coordinatorId, coordinatorId: state.coordinatorId, machine: state.machine, stuckSince, ...(takeover ? { takeovers: 4 } : {}) })];
     assert.equal((await f.start()).exitCode, 0);
-    if (ceiling === 'repair limit') {
+    if (repair) {
       mkdirSync(join(f.cwd, 'pdd', 'runs', '7'), { recursive: true });
       writeFileSync(join(f.cwd, 'pdd', 'runs', '7', 'status.json'), JSON.stringify({ v: 1, number: 7, repo: f.state().repo, state: 'stuck', parkReason: 'Repair limit reached in build: take the stuck path', repairLimit: { area: 'build', step: 'build', at: NOW } }));
     }
@@ -818,7 +820,7 @@ test('tick: after a ceiling the 4-hour stuck rule asks for no retry and at most 
     const rules = timeRules(f, 'stuck-claim');
     assert.equal(rules.length, 1, `${ceiling}: one rule`);
     assert.match(rules[0].reason, new RegExp(`stuck for 4 hours after the ${ceiling}\\. Do not retry it, do not remove pdd:stuck and write no new comment; send the one stuck alert only if this stop has none yet\\. `));
-    assert.ok(rules[0].reason.includes(ceiling === 'repair limit'
+    assert.ok(rules[0].reason.includes(repair
       ? 'To let Autopilot try again, a person removes pdd:stuck and pdd:working, then runs pdd workflow cancel 7 in the checkout that holds the stuck run; the next tick starts a new run with a fresh repair count.'
       : 'A person removes pdd:stuck and pdd:working to let Autopilot try again.'), rules[0].reason);
     assert.doesNotMatch(rules[0].reason, /changed approach/);
