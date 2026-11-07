@@ -4,9 +4,11 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSyn
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
 import { loadAgentDefinitions } from '../src/agent-config.mjs';
+import { codexConfigs } from './helpers/codex-config-args.mjs';
 
 const root = resolve('.');
 const capture = () => ({ text: '', write(s) { this.text += s; } });
@@ -65,13 +67,13 @@ async function fixture(t, options = {}) {
 const issue = (number, extra = {}) => ({ number, state: 'open', title: `Issue ${number}`, body: 'trusted body', user: { login: 'owner' }, author_association: 'OWNER', created_at: '2026-11-04T00:01:00Z', updated_at: '2026-11-04T00:01:00Z', comments: 0, labels: [], html_url: `https://github.com/owner/repo/issues/${number}`, ...extra });
 
 // Native startup cases use the public launcher with fake programs, never live agents.
-async function nativeStartup(t, { kind = 'codex', custom = false, cwdName, body = 'Please fix this synthetic startup case.' } = {}) {
+async function nativeStartup(t, { kind = 'codex', custom = false, cwdName, body = 'Please fix this synthetic startup case.', seed } = {}) {
   const f = await fixture(t, { mode: 'observe', cwdName });
   const bin = join(f.dir, 'bin'), profile = join(f.home, 'profile chosen');
   mkdirSync(bin); mkdirSync(profile);
   f.ports.stateRoot = join(f.dir, 'state');
   const record = join(f.dir, 'native.jsonl');
-  const script = `#!${process.execPath}\nconst fs = require('node:fs'); fs.appendFileSync(${JSON.stringify(record)}, JSON.stringify({command:process.argv[1],argv:process.argv.slice(2),cwd:process.cwd(),env:{CODEX_HOME:process.env.CODEX_HOME,CLAUDE_CONFIG_DIR:process.env.CLAUDE_CONFIG_DIR,PDD_AUTOPILOT_CONTEXT:process.env.PDD_AUTOPILOT_CONTEXT,STARTUP_TEST_VALUE:process.env.STARTUP_TEST_VALUE}})+'\\n');\n`;
+  const script = `#!${process.execPath}\nconst fs = require('node:fs'); fs.appendFileSync(${JSON.stringify(record)}, JSON.stringify({command:process.argv[1],argv:process.argv.slice(2),cwd:process.cwd(),env:{CODEX_HOME:process.env.CODEX_HOME,CLAUDE_CONFIG_DIR:process.env.CLAUDE_CONFIG_DIR,STARTUP_TEST_VALUE:process.env.STARTUP_TEST_VALUE,PDD_AUTOPILOT_CONTEXT:process.env.PDD_AUTOPILOT_CONTEXT}})+'\\n');\n`;
   for (const name of ['codex', 'fake-provider', 'chosen codex wrapper']) writeFileSync(join(bin, name), script, { mode: 0o755 });
   const env = { HOME: f.home, PATH: `${bin}:/usr/bin:/bin`, CODEX_HOME: profile, XDG_CONFIG_HOME: join(f.home, '.config') };
   const value = 'a b\'c"d\\e$HOME';
@@ -96,6 +98,8 @@ async function nativeStartup(t, { kind = 'codex', custom = false, cwdName, body 
     return reply;
   };
   f.issues = [issue(101, { body })];
+  // A saved coordinator identity (no saved agent) lets a case choose the context values.
+  if (seed) { mkdirSync(f.ports.stateRoot); writeFileSync(join(f.ports.stateRoot, `${createHash('sha256').update(f.cwd).digest('hex').slice(0, 20)}.json`), JSON.stringify(seed)); }
   const result = await f.invoke('start', { env, runs: '1' });
   assert.equal(result.exitCode, 0, result.message);
   const calls = existsSync(record) ? readFileSync(record, 'utf8').trim().split('\n').map(JSON.parse) : [];
@@ -138,21 +142,14 @@ function codexStartupConfig({ cwd, call, configs }) {
   assert.ok(configs.some(value => /^check_for_update_on_startup\s*=\s*false$/.test(value)));
   assert.equal(configs.some(value => /^(?:model|model_reasoning_effort|profile)\s*=/.test(value)), false);
   assert.equal(call.argv.some(value => ['-m', '--model', '-p', '--profile'].includes(value)), false);
+  // Every Codex start, fresh or saved, gives its chat commands the process context.
+  const context = codexConfigs(call.argv).set.PDD_AUTOPILOT_CONTEXT;
+  assert.equal(JSON.parse(context).version, 'pdd.autopilot-coordinator.v1');
+  assert.equal(context, call.env.PDD_AUTOPILOT_CONTEXT);
 }
 
 test('native startup: normal Codex uses invocation trust and no update check', async t => {
   codexStartupConfig(await nativeStartup(t));
-});
-
-test('native startup: Codex launch config carries automatic context to spawned commands', async t => {
-  const { call, configs } = await nativeStartup(t);
-  const prefix = 'shell_environment_policy.set.PDD_AUTOPILOT_CONTEXT=';
-  const setting = configs.find(value => value.startsWith(prefix));
-  assert.ok(setting, 'launch config must pass the coordinator context to Codex command tools');
-  const configured = JSON.parse(JSON.parse(setting.slice(prefix.length)));
-  assert.deepEqual(configured, JSON.parse(call.env.PDD_AUTOPILOT_CONTEXT));
-  assert.equal(configured.version, 'pdd.autopilot-coordinator.v1');
-  assert.equal(configured.repository, 'owner/repo');
 });
 
 test('native startup: configured Codex wrapper keeps its environment and saved model', async t => {
@@ -166,6 +163,21 @@ test('native startup: cwd and first message keep shell syntax literal', async t 
 
 test('native startup: invocation overrides leave saved update and trust settings unchanged', async t => {
   codexStartupConfig(await nativeStartup(t));
+});
+
+test('native startup: Codex chat commands get the Autopilot context under any shell environment policy', async t => {
+  // Issue 3031: inherit = "core" or "none" drops the process value; `set` applies after `inherit`.
+  // Shell and TOML syntax in a context value must reach Codex unchanged.
+  const machine = "mac 'single' \"double\" \\slash $HOME $(touch PDD_SENTINEL) `touch PDD_SENTINEL` ; \u007f é";
+  const f = await nativeStartup(t, { seed: { coordinatorId: 'coordinator-3031', machine, activatedAt: '2026-11-04T00:00:00.000Z' } });
+  codexStartupConfig(f);
+  const envelope = { version: 'pdd.autopilot-coordinator.v1', repository: 'owner/repo', coordinatorId: 'coordinator-3031', machine, activation: '2026-11-04T00:00:00.000Z', runs: 1 };
+  const { set } = codexConfigs(f.call.argv);
+  assert.ok(Object.hasOwn(set, 'PDD_AUTOPILOT_CONTEXT'), `expected -c shell_environment_policy.set.PDD_AUTOPILOT_CONTEXT=..., got -c values ${JSON.stringify(f.configs)}`);
+  assert.deepEqual(JSON.parse(set.PDD_AUTOPILOT_CONTEXT), envelope);
+  assert.equal(set.PDD_AUTOPILOT_CONTEXT, f.call.env.PDD_AUTOPILOT_CONTEXT, 'chat commands get the same text as the coordinator process');
+  assert.deepEqual(Object.keys(set), ['PDD_AUTOPILOT_CONTEXT'], 'no Herdr value that the launcher cannot know');
+  assert.equal(f.configs.filter(value => /^shell_environment_policy\./.test(value)).length, 1, 'no other policy key changes');
 });
 
 for (const [kind, flags] of [

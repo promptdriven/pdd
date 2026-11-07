@@ -22,6 +22,20 @@ project key and shell-quote arguments so spaces, quotes, backslashes and shell
 syntax stay literal. Do not write agent config or saved trust, or apply these
 Codex settings to another provider. Timer and later delivery behavior stay unchanged.
 
+The commands that the coordinator Codex chat runs must receive the Autopilot
+context under any Codex `shell_environment_policy`. Codex builds each command
+environment from that policy, and `inherit = "core"` or `"none"` removes the
+process value. So also pass the invocation-only override
+`shell_environment_policy.set.PDD_AUTOPILOT_CONTEXT` with the same JSON text as
+the process `PDD_AUTOPILOT_CONTEXT`, as one TOML basic string, shell-quoted like
+the other arguments. Codex applies `set` after `inherit`; the profile's other
+policy keys and `set` entries stay in effect. Set Herdr pane and socket values
+only when the launcher knows both exact values, because coordinator recovery
+reads the pane id only together with the socket path. The launcher does not know the pane
+shell's socket path, so it sets neither. Limit: a profile `include_only` list
+that omits `PDD_AUTOPILOT_CONTEXT` still removes it, because Codex applies
+`include_only` last. Do not change the profile to work around this.
+
 ## Start and stop
 
 Resolve the Git root, repository identity and package version before starting.
@@ -79,9 +93,6 @@ Use a dedicated Herdr session `pdd-autopilot`, isolated from the default session
 Open its repo workspace at start; launch the interactive agent only for work.
 Persist the owned pane and native launch intent. Inject `PDD_AUTOPILOT_CONTEXT`
 into that exact empty native command along with the saved profile environment.
-For Codex, set the same value through a launch-scoped
-`shell_environment_policy.set.PDD_AUTOPILOT_CONTEXT` override so command tools
-retain automatic admission context without changing the saved profile.
 Reuse the pane only when its owner launch binding matches the current coordinator
 envelope, including optional runs, and the selected agent identity, saved HOME,
 launcher-definition HOME and selected family config-folder path that determine
