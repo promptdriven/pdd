@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 0045013369842046f335271a2f1d9c06e7fb67c3b3b86bac4f47f51add54ccca).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: f3b876c4b198df50d44e36cbffe779b67e87db8545e09cfdd9c04e2c17115406).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch } from 'node:fs';
@@ -300,9 +300,11 @@ function runtimeWake(wait, kind) {
   const why = kind === 'retry' ? 'Runtime answers its health check and no outage is open, so this is a problem of this issue only: this wake is its one retry. If the same step waits for Runtime again, it follows the stuck rule.'
     : kind === 'probe' ? 'Runtime answers again after an outage. This oldest run is the test: the other waiting runs wake only after its check reaches a verdict.'
     : 'Runtime is back.';
-  const resend = wait.cause === 'unknown' ? 'Its last check has an unknown outcome: never send it again blind. If it is still unknown after the read, follow the stuck rule.'
+  // pdd test --retry resends only the checks that pdd names it for (busy or held); a fresh check of the Story sends the others.
+  const again = 'check that Story once again with pdd test STORY --max-calls N';
+  const resend = wait.cause === 'unknown' ? `Its last check has an unknown outcome: never send it again blind. If the read now shows not run (nothing was sent), ${again}; if it is still unknown, follow the stuck rule.`
     : wait.cause === 'none' ? 'No check result was saved, so no check ran: send the check again once.'
-    : `Resend only a check that surely gave no verdict: pdd test --retry ${wait.batch ?? 'BATCH'} for not run or busy, or check that Story once again for an AI-service refusal. Never resend a failed (✗) check.`;
+    : `Resend only a check that surely gave no verdict: pdd test --retry ${wait.batch ?? 'BATCH'} only when pdd names it (busy or held checks); for another not run check or an AI-service refusal, ${again}. Never resend a failed (✗) check.`;
   return `Run #${wait.number} waits for Runtime. ${why} When a worker slot is free (oldest first), wake it with pdd workflow changes ${wait.number} and this text: "${runtimeWakeTag(wait.at)} ${kind === 'retry' ? 'Runtime answers again.' : 'Runtime is back.'} First run ${read} once and read each Story line. ${resend} Keep --max-calls."`;
 }
 // The no-AI Runtime part of a tick: one free health check while a run waits for Runtime, or an outage or a
@@ -361,10 +363,11 @@ async function runtimeTick(state, p, completion, timeRules, pendingTimes, stateR
       const probe = outage.probe;
       if (probe) {
         const result = await (p.readRuntimeProbe ?? readRuntimeProbe)(state, p, probe);
-        const waiting = waits.some(w => w.number === probe.number && w.at === probe.at), again = waits.some(w => w.number === probe.number && w.at > probe.at);
+        const again = waits.some(w => w.number === probe.number && w.at > probe.at);
         if (result === 'verdict') recovered = 'verdict';
-        // A test run that waits again, ends or goes stuck failed; one that gives no verdict within an hour of its wake failed too.
-        else if (result === 'failed' || again || !waiting && now - probe.offeredAt >= RUNTIME_PROBE_LIMIT) delete outage.probe;
+        // A test run that waits again, ends or goes stuck failed; one that gives no verdict within an hour of its wake
+        // failed too, also when the wake was never delivered and the run still waits.
+        else if (result === 'failed' || again || now - probe.offeredAt >= RUNTIME_PROBE_LIMIT) delete outage.probe;
       }
       if (!recovered && !outage.probe) {
         const open = waits.filter(w => !used(w) && !outage.probed.includes(w.number)), next = open.find(w => w.cause !== 'unknown') ?? open[0];

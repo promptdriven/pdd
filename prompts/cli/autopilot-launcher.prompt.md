@@ -268,7 +268,7 @@ per wait, and every path ends in a wake or in the stuck rule:
 | Health `access` | Send one `runtime-access` alert for this repository and machine that names the detail and the fix (`gh auth status`, `PDD_RUNTIME_URL`); other waiting issues join it. Wake nothing. A run that has waited 4 hours since its `at` or since the problem began (the later one) gets a `runtime-stuck` rule. The first later `healthy` answer sends one recovery (`"kind":"runtime-access"`); a down answer does not end it |
 | No open outage, health `unavailable`, a run waits | Open one outage. Send one `runtime` alert for the oldest waiting issue; other waiting issues join it and send nothing |
 | Open outage, health not `healthy` | Wake nothing. Call the alert again for its first issue (a repeat sends nothing unless the last send failed) and for each newly waiting issue |
-| Open outage, health `healthy` | Wake one test run (`probe`): the oldest waiting run that has not used its wake and has not been the test in this outage, preferring one whose cause is not `unknown`. The test passes only with proof: a new `pdd test` row of that run that passed or failed and ended at or after the wake was offered (an injectable `readRuntimeProbe` port). Then send one recovery (`recovered`, `"kind":"runtime"`), close the outage and offer the other waiting runs, oldest first. A test run that waits again, ends or goes stuck with no such verdict failed, and so does one that no longer waits and has no verdict 60 minutes after its wake was offered: take the next candidate. With no candidate left, close the outage with one recovery that does not say Runtime is back |
+| Open outage, health `healthy` | Wake one test run (`probe`): the oldest waiting run that has not used its wake and has not been the test in this outage, preferring one whose cause is not `unknown`. The test passes only with proof: a new `pdd test` row of that run that passed or failed and ended at or after the wake was offered (an injectable `readRuntimeProbe` port). Then send one recovery (`recovered`, `"kind":"runtime"`), close the outage and offer the other waiting runs, oldest first. A test run that waits again, ends or goes stuck with no such verdict failed, and so does one with no verdict 60 minutes after its wake was offered, also when the wake was never delivered and the run still waits: take the next candidate. With no candidate left, close the outage with one recovery that does not say Runtime is back |
 | Health `healthy`, a run used its wake | A `runtime-stuck` rule, also during an open outage; it is never the test |
 | No open outage, health `healthy` | Waits from one or many issues are no outage: offer each run one `retry` |
 
@@ -277,10 +277,14 @@ number, why it wakes (`one retry`, `the test` or Runtime back), and the exact
 text for `pdd workflow changes N`. That text starts with
 `Runtime wake for the park at ISO.` (the wait's `at`), so pdd delivers it at most
 once per park. It tells the worker to run `pdd test --read BATCH` first, to resend
-only a check that surely gave no verdict (`pdd test --retry BATCH` for not run
-or busy, the Story's check once for an AI-service refusal, the check once when no
-result was saved), never an unknown outcome or a failed check, and to keep
-`--max-calls`. For cause `unknown` the text has no resend command. Each rule is a
+only a check that surely gave no verdict (`pdd test --retry BATCH` only when pdd
+names it, for busy or held checks; the Story's check once with
+`pdd test STORY --max-calls N` for another not run check or an AI-service
+refusal, because `--retry` sends nothing for a not run check that pdd already
+posted; the check once when no result was saved), never an unknown outcome or a
+failed check, and to keep `--max-calls`. For cause `unknown` the text has no
+resend command, only the Story's check once when the read now shows not run
+(nothing was sent); else the stuck rule. Each rule is a
 time event keyed by run and `at:kind`: delivered once, offered again on a
 completion tick (a freed slot) while the run still waits. Persist the outage,
 access problem and wakes in the launcher state as `runtime`. While an outage or

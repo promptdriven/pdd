@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-results.prompt.md (sha256: 81efc5eaceea34be57afa1edc4b9f8bace30610c64d1d4898dda161a5838ba3b).
+// Generated from prompts/cli/workflow-results.prompt.md (sha256: 76b820fc3bf5423255a8bbcb94d4e79cc22beadfe3e2a52469f1c1ee1036a4ed).
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -146,7 +146,10 @@ const SIGN_IN_WORDS = /\(HTTP 40[13]\)|\bgh auth login\b/;
 const words = item => item && typeof item === 'object' ? [item.message, item.engine_message, item.cause].filter(value => typeof value === 'string').join(' ') : '';
 const timeLimited = row => Boolean(row.time_limit) || [row.reason, row.note, ...(Array.isArray(row.refusals) ? row.refusals : [])]
   .some(item => item?.code === 'step_timeout' || SERVICE_REFUSALS.has(item?.code) && TIME_LIMIT_WORDS.test(words(item)));
-const signIn = row => ACCESS_NOTES.has(row.note?.code ?? row.reason?.code) || [row.note, row.reason].some(item => SIGN_IN_WORDS.test(words(item))) || SIGN_IN_WORDS.test(String(row.why ?? ''));
+// pdd's own words for a temporary PDD Cloud answer (503 cloud-unavailable): a service state, not a sign-in problem.
+const TEMPORARY_WORDS = /\bTry again in a minute\b/;
+const signIn = row => ![row.note, row.reason].some(item => TEMPORARY_WORDS.test(words(item)))
+  && (ACCESS_NOTES.has(row.note?.code ?? row.reason?.code) || [row.note, row.reason].some(item => SIGN_IN_WORDS.test(words(item))) || SIGN_IN_WORDS.test(String(row.why ?? '')));
 export function checkCause(rows) {
   const open = (Array.isArray(rows) ? rows : []).filter(row => row && typeof row === 'object' && row.state !== 'passed');
   if (!Array.isArray(rows) || !rows.length) return 'none';

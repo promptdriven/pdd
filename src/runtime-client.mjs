@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 267f4bdfed7e29df67c60397203f3196580ade121281c1beb2c48ea6aff3c06b).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 2724d4f271be9efb36eb6806e2ada86545413b9de7214fc21f038dd6b22a3264).
 import {readEvidenceEligibility} from './workflow-runner.mjs';
 import {allRuns} from './workflow-runs.mjs';
 import {assessNativeEvidence, resultLines, usableResult} from './workflow-results.mjs';
@@ -514,11 +514,11 @@ export async function checkRuntimeHealth({ env = process.env } = {}, givenPorts 
     const until = Date.parse(reply.json.maintenance?.until);
     return Number.isFinite(until) && until > ports.now() ? { state: 'unavailable', detail: 'maintenance' } : { state: 'healthy', detail: 'HTTP 200' };
   }
-  // An older interpreter without the capacity read still answered.
-  if (reply.status === 404) return { state: 'healthy', detail: 'HTTP 404' };
+  // An older interpreter without the capacity read still answered with JSON; a 404 page that is not JSON is a wrong address.
+  if (reply.status === 404 && isObject(reply.json)) return { state: 'healthy', detail: 'HTTP 404' };
   if ([401, 403].includes(reply.status)) return { state: 'access', detail: `HTTP ${reply.status}: Runtime did not accept the gh login`, fix: HEALTH_SIGN_IN };
   if (reply.status >= 300 && reply.status < 400) return { state: 'access', detail: `HTTP ${reply.status}: a redirect, not a Runtime answer`, fix: HEALTH_ADDRESS };
-  return { state: 'access', detail: `HTTP ${reply.status}${reply.status === 200 ? ' that is not a Runtime answer' : ''}`, fix: HEALTH_ADDRESS };
+  return { state: 'access', detail: `HTTP ${reply.status}${[200, 404].includes(reply.status) ? ' that is not a Runtime answer' : ''}`, fix: HEALTH_ADDRESS };
 }
 
 // Only capacity refusals that prove no execution can authorize a fresh check ID.

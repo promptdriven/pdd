@@ -10,7 +10,8 @@ import { createServer } from 'node:http';
 import { parkAutomaticRun, runStatus, changeRun, stepDone, startRun, approveRun, yieldAutomaticCapacity, runtimeWakeTag } from '../src/workflow-runner.mjs';
 import { writeRun } from '../src/workflow-runs.mjs';
 import { checkCause, savedCheckCause } from '../src/workflow-results.mjs';
-import { checkRuntimeHealth } from '../src/runtime-client.mjs';
+import { checkRuntimeHealth, runCheck } from '../src/runtime-client.mjs';
+import { fakeRuntime, harbor, portsFor } from './runtime-fake.mjs';
 import { runAutopilotAlerts } from '../src/autopilot-alerts.mjs';
 import { createDependencyReadPorts, readDependencySnapshot } from '../src/issue-dependencies-github.mjs';
 import { projectIssueGraph } from '../src/issue-dependencies.mjs';
@@ -180,6 +181,9 @@ test('checkCause tells this issue from the service from its saved rows', () => {
     // A Runtime 401 is a sign-in problem whatever its error code.
     [[{ state: 'not_run', note: { code: 'invalid-token', message: AUTH_TEXT } }], 'access'],
     [[{ state: 'unknown', why: AUTH_TEXT }], 'access'],
+    // pdd's temporary PDD Cloud answer (503 cloud-unavailable) is a service state, not a sign-in problem.
+    [[{ state: 'not_run', note: { code: 'blocked', message: 'PDD Cloud could not confirm your access. Try again in a minute.' } }], 'service'],
+    [[{ state: 'not_run', note: { code: 'blocked', message: 'Your GitHub login octo is not on the PDD interpreter invite list yet.' } }], 'access'],
     [[{ state: 'running' }], 'unknown'],
   ];
   for (const [rows, cause] of cases) assert.equal(checkCause(rows), cause, JSON.stringify(rows));
@@ -190,6 +194,13 @@ test('the health check is one free GET of /v1/capacity: no source, no check, no 
   const probe = async (reply, gh = { status: 0, stdout: 'gho_token\n' }) => checkRuntimeHealth({ env: { HOME: '/nowhere', PDD_RUNTIME_URL: 'https://runtime.example.test' } }, {
     gh: args => { calls.push(['gh', ...args]); return gh; }, now: () => Date.parse('2026-11-06T12:00:00Z'),
     fetch: async (url, init) => { calls.push([init.method, String(url), init.body ?? null, init.headers.Authorization]); if (reply instanceof Error) throw reply; return new Response(reply.body ?? '', { status: reply.status }); } });
+  // An older interpreter without the capacity read answers 404 with JSON; a 404 page that is not JSON is a wrong address.
+  assert.deepEqual(await probe({ status: 404, body: '{"error":{"code":"not-found"}}' }), { state: 'healthy', detail: 'HTTP 404' });
+  for (const body of ['<html>Not Found</html>', '']) {
+    const health = await probe({ status: 404, body });
+    assert.equal(health.state, 'access', JSON.stringify(body)); assert.match(health.fix, /PDD_RUNTIME_URL/);
+  }
+  calls.length = 0;
   assert.deepEqual(await probe({ status: 200, body: '{"maintenance":null,"slots":{"check":{"running":0,"limit":4}}}' }), { state: 'healthy', detail: 'HTTP 200' });
   assert.deepEqual(calls, [['gh', 'auth', 'token'], ['GET', 'https://runtime.example.test/v1/capacity', null, 'Bearer gho_token']]);
   assert.equal((await probe({ status: 503, body: 'The runtime opens soon.' })).state, 'unavailable');
@@ -352,6 +363,35 @@ test('a Runtime outage: one runtime alert per repository and machine, other work
   assert.equal(f.sent.length, 2, 'one recovery only');
 });
 
+test('a test wake that is never delivered holds no other run: 60 minutes later the next run is the test, then one recovery', async t => {
+  const f = await launcher(t);
+  await f.start(); f.prompts.length = 0;
+  f.waits = [wait(12, f.time), wait(15, f.time + minute), wait(18, f.time + 2 * minute)];
+  f.health = { state: 'unavailable', detail: 'HTTP 503' }; f.time += 3 * minute; await f.tick();
+  assert.equal(f.sent.length, 1);
+  f.health = { state: 'healthy', detail: 'HTTP 200' }; f.time += 30 * minute;
+  // 48 hours of ticks. The wake of #12 never reaches its chat, so its wait stays as it was. #15 gets its wake and its
+  // check reaches a verdict. #18 waits again at the same step after its wake: a failure of its own issue.
+  const log = []; let seen = f.prompts.length;
+  for (let i = 0; i < 96; i++) {
+    await f.tick();
+    const rules = f.prompts.length > seen ? kinds(f) : []; seen = f.prompts.length;
+    log.push(...rules.map(([kind, number]) => [kind, number, Math.round((f.time - T0) / minute)]));
+    for (const [kind, number] of rules) {
+      if (number === 12) continue;
+      f.waits = f.waits.filter(w => w.number !== number);
+      if (kind === 'runtime-ready' && number === 15) f.probe = 'verdict';
+      if (kind === 'runtime-ready' && number === 18) f.waits.push(wait(18, f.time + 5 * minute));
+    }
+    f.time += 30 * minute;
+  }
+  // The test moves to #15 60 minutes after the undelivered wake; then each other run gets its wake or the stuck rule.
+  // The wake record of #12 is kept for 24 hours from its wait, so its wait is offered once more a day later.
+  assert.deepEqual(log, [['runtime-ready', 12, 33], ['runtime-ready', 15, 93], ['runtime-ready', 12, 123], ['runtime-ready', 18, 123], ['runtime-stuck', 18, 153], ['runtime-ready', 12, 1443]]);
+  assert.equal(f.sent.length, 2, 'one runtime alert and one recovery in 48 hours');
+  assert.match(f.sent[0], /PDD Autopilot alert: runtime /); assert.match(f.sent[1], /PDD Autopilot recovered: runtime/); assert.match(f.sent[1], /reached a verdict again/);
+});
+
 test('a test run that waits again or ends on the stuck path is no proof: one test per run per outage, then the stuck rule', async t => {
   const f = await launcher(t);
   await f.start(); f.prompts.length = 0;
@@ -468,6 +508,52 @@ test('real path: a parked run record, the real health check over HTTP, a test wa
   f.time += 30 * minute; await f.tick();
   assert.equal(f.sent.length, 2); assert.match(f.sent[1], /recovered: runtime/); assert.match(f.sent[1], /reached a verdict again/);
   assert.ok(seen.length >= 4 && seen.every(line => line === 'GET /v1/capacity bearer'), 'only the free health read');
+});
+
+test('real pdd test: a posted check that did not run is sent again by the Story check that the wake names, not by --retry', async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, (entry, runtime) => runtime.normal(entry));
+  const env = { HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state };
+  let down = true;
+  const refused = () => { throw Object.assign(new TypeError('fetch failed'), { cause: Object.assign(Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }) }); };
+  const pddTest = async (words, options) => {
+    const { ports } = portsFor(env, { fetch: async (url, init) => { if (down && new URL(url).pathname.startsWith('/v1/check') && init.method === 'POST') refused(); return globalThis.fetch(url, init); } });
+    const before = fake.posts.filter(post => post.command === 'check').length;
+    const exitCode = await runCheck({ words, options, cwd: setup.repo }, ports);
+    return { exitCode, out: ports.stdout.text, err: ports.stderr.text, sent: fake.posts.filter(post => post.command === 'check').length - before };
+  };
+  // Runtime is not reached at the check POST: pdd posted it, so the saved row is not run with a request ID, not busy.
+  const first = await pddTest(['place-order'], { '--max-calls': '18' });
+  const batch = readdirSync(join(setup.state, 'batches')).sort().at(-1);
+  assert.equal(first.exitCode, 5); assert.match(first.out, /NOT RUN .*Nothing was sent/); assert.equal(first.sent, 0);
+  assert.equal(savedCheckCause(batch, { env }), 'service');
+  // The run waits for Runtime (its park record, read by the real readRuntimeWaits); the tick wakes it as the test after the outage.
+  const f = await launcher(t);
+  delete f.ports.readRuntimeWaits; delete f.ports.readRuntimeProbe;
+  f.ports.env = { PDD_STATE_DIR: setup.state, PATH: process.env.PATH };
+  f.time = Date.parse('2026-10-27T15:00:00Z');
+  await f.start(); f.prompts.length = 0;
+  const folder = join(f.cwd, 'pdd', 'runs', '12'); mkdirSync(folder, { recursive: true });
+  const record = { v: 1, number: 12, repo: 'owner/repo', state: 'paused', area: 'tests', done: { reproduce: {}, 'prompt-story': {} }, root: setup.repo,
+    runtimeWait: { at: f.time, reason: 'pdd could not reach the PDD interpreter', batch, cause: savedCheckCause(batch, { env }) } };
+  writeFileSync(join(folder, 'status.json'), JSON.stringify(record));
+  f.health = { state: 'unavailable', detail: 'not reached' }; f.time += 5 * minute; await f.tick();
+  assert.equal(f.sent.length, 1);
+  down = false; f.health = { state: 'healthy', detail: 'HTTP 200' }; f.time += 30 * minute; await f.tick();
+  assert.deepEqual(kinds(f), [['runtime-ready', 12]]);
+  const text = f.rules()[0].reason;
+  assert.match(text, new RegExp(`pdd test --retry ${batch} only when pdd names it \\(busy or held checks\\)`));
+  assert.match(text, /for another not run check or an AI-service refusal, check that Story once again with pdd test STORY --max-calls N/);
+  // The worker reads first. pdd does not name --retry for this row, and --retry sends nothing for it.
+  const read = await pddTest([], { '--read': batch });
+  assert.match(read.out, /NOT RUN .*Nothing was sent/); assert.doesNotMatch(read.err, /--retry/); assert.equal(read.sent, 0);
+  const retry = await pddTest([], { '--retry': batch });
+  assert.equal(retry.exitCode, 5); assert.equal(retry.sent, 0, '--retry sends no check for a posted check that did not run');
+  // The command that the wake names sends the check, and its verdict is the proof of the test wake.
+  delete record.runtimeWait; record.state = 'running'; writeFileSync(join(folder, 'status.json'), JSON.stringify(record));
+  const again = await pddTest(['place-order'], { '--max-calls': '18' });
+  assert.equal(again.sent, 1, 'the Story check sends the check once'); assert.equal(again.exitCode, 0, again.out + again.err);
+  f.time += 30 * minute; await f.tick();
+  assert.equal(f.sent.length, 2); assert.match(f.sent[1], /recovered: runtime/); assert.match(f.sent[1], /reached a verdict again/);
 });
 
 test('the runtime alert kind is one incident per repository and machine', async t => {

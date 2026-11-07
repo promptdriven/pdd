@@ -21,8 +21,8 @@ Export `checkCause(rows)` and `savedCheckCause(batch, {env})`: why a saved check
 | none | `none` |
 | all passed | `passed` |
 | a `failed` row; a `refused` row with no code or a code other than `graph-provider-failure` and `graph-uncertain-child-dispatch` (a file rule); or a step time limit: a `time_limit` field, a `step_timeout` code, or an AI-service code whose words name a timeout, time limit or `took more than N minutes and was stopped` (split the step) | `issue` |
-| a `not_run` or `unknown` row whose note or reason code is `blocked` or `auth-required`, or whose note, reason or `why` says `(HTTP 401)`, `(HTTP 403)` or `gh auth login` (a Runtime 401 with any error code) | `access` |
-| every other row is `refused` with an AI-service code, `not_run`, or `unknown` that names `graph-provider-failure` | `service` |
+| a `not_run` or `unknown` row whose note or reason code is `blocked` or `auth-required`, or whose note, reason or `why` says `(HTTP 401)`, `(HTTP 403)` or `gh auth login` (a Runtime 401 with any error code), unless its note or reason says `Try again in a minute` | `access` |
+| every other row is `refused` with an AI-service code, `not_run` (also pdd's temporary PDD Cloud answer, a `blocked` note that says `Try again in a minute`: a 503 `cloud-unavailable`), or `unknown` that names `graph-provider-failure` | `service` |
 | anything else (an unknown outcome, a check still queued or running) | `unknown` |
 
 Export `checkVerdictSince({root, since}, {env})` for the Autopilot test wake: true when a `check` batch of this worktree (`batch.json` root, compared by real path) has a `passed` or `failed` row whose `ended_at` is at or after `since`. A cached pass or a read of an older answer has no new `ended_at`, so it is no proof. It reads files only.
