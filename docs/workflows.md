@@ -102,7 +102,8 @@ Herdr uses the verified primary repository workspace (the Herdr parent in the ta
 starts from a linked checkout; the invoking source checkout and the allocated run worktree keep their own
 identities. Herdr opens a linked worktree only from such a parent: it refuses a linked checkout and a folder outside Git.
 For a bare parent, pdd opens the run worktree directly from the new parent workspace; Herdr then gives the parent its
-repository identity, and pdd checks it. The chat starts in the run worktree. If Herdr confirms `linked_worktree_source` before any native agent starts, run
+repository identity, and pdd checks it. The chat starts in the run worktree. Until that check passes, each
+`pdd workflow open ISSUE` checks the parent identity and its first tab again before it starts the chat. If Herdr confirms `linked_worktree_source` before any native agent starts, run
 `pdd workflow open ISSUE` to finish that same allocated run. A saved linked-parent failure can recover through
 this command even after an earlier open failed. pdd preserves the old parent shell workspace, records it as
 superseded, and opens the verified parent under an unused label. It does not allocate another Git worktree.

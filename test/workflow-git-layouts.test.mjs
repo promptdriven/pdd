@@ -129,6 +129,8 @@ test('2698: a separate Git directory refuses before any run record, claim, workt
 });
 
 const BARE_IN_PROJECT = ['bare repository in P/.git with a linked worktree', 'bare P/.bare named by the P/.git file'];
+const openAgain = l => openRun({ ref: '17', cwd: l.cwd, packageRoot }, l.f.ports);
+const isCreate = a => a[0] === 'workspace' && a[1] === 'create', isOpen = a => a[0] === 'worktree' && a[1] === 'open';
 
 test('2698: the fake Herdr refuses a linked checkout source and a path of another repository, as real Herdr 0.9.1 does', async t => {
   const l = await layout(t, 'bare repository in P/.git with a linked worktree'), { f } = l, herdr = f.herdr.herdr;
@@ -180,4 +182,70 @@ test('2698: a bare parent that opens the run with another repository identity re
   const saved = l.record().layout;
   assert.equal(saved.repoCreateIntent.parentRoot, l.root); assert.equal(saved.repoRoot.cwd, l.root);
   assert.equal(f.herdr.panes.some(p => p.commands), false, 'no agent starts');
+});
+
+for (const name of BARE_IN_PROJECT) test(`2698: ${name}: a bare parent with another repository identity refuses on every open until it is restored`, async t => {
+  const l = await layout(t, name), { f } = l, herdr = f.ports.herdr;
+  let parent;
+  f.ports.herdr = async args => {
+    const reply = await herdr(args);
+    if (!parent && isOpen(args)) {
+      parent = f.herdr.workspaces.find(w => w.workspace_id === args[args.indexOf('--workspace') + 1]);
+      parent.worktree = { ...parent.worktree, repo_key: join(f.base, 'elsewhere.git') };
+    }
+    return reply;
+  };
+  const started = await l.start();
+  assert.equal(started.exitCode, 1); assert.match(started.message, /herdr_layout_identity_changed/);
+  const opens = f.herdr.calls.filter(isOpen).length;
+  // The run workspace exists now, but each open checks the pending parent again before any agent starts.
+  for (const attempt of [1, 2]) {
+    const refused = await openAgain(l);
+    assert.equal(refused.exitCode, 1, `attempt ${attempt}: ${refused.message}`);
+    assert.match(refused.message, /herdr_layout_identity_changed: .*elsewhere\.git/);
+    const saved = l.record().layout;
+    assert.equal(saved.repoWorkspaceId, parent.workspace_id); assert.equal(saved.repoCreateIntent.parentRoot, l.root);
+    assert.equal(saved.repoRoot.cwd, l.root);
+    assert.equal(f.herdr.panes.some(p => p.commands), false, 'no agent starts');
+  }
+  // The person restores the parent identity but leaves a new tab in it: the saved root is checked too.
+  parent.worktree = { ...parent.worktree, repo_key: l.common };
+  const extra = (await herdr(['tab', 'create', '--workspace', parent.workspace_id, '--cwd', l.root, '--label', 'mine', '--no-focus'])).result.tab;
+  const changed = await openAgain(l);
+  assert.equal(changed.exitCode, 1, changed.message); assert.match(changed.message, /herdr_layout_identity_changed: .*root_pane/);
+  assert.equal(l.record().layout.repoCreateIntent.parentRoot, l.root);
+  assert.equal(f.herdr.panes.some(p => p.commands), false, 'no agent starts');
+  assert.equal(f.herdr.calls.filter(isOpen).length, opens, 'no other worktree open');
+  // With the parent restored, the next open verifies it, clears the pending record and starts the agent.
+  await herdr(['tab', 'close', extra.tab_id]);
+  const opened = await openAgain(l);
+  assert.equal(opened.exitCode, 0, opened.message);
+  const run = l.record();
+  assert.equal(run.layout.repoWorkspaceId, parent.workspace_id); assert.equal(run.layout.repoCreateIntent, null);
+  assert.equal(f.herdr.calls.filter(isCreate).length, 1);
+  assert.equal(f.herdr.paneOf(run.chats.at(-1)).cwd, run.root);
+  assert.equal(f.herdr.panes.filter(p => p.commands).length, 1);
+});
+
+for (const name of BARE_IN_PROJECT) test(`2698: ${name}: after a lost run-open reply, open checks the bare parent, then clears the pending record`, async t => {
+  const l = await layout(t, name), { f } = l, herdr = f.ports.herdr;
+  let lose = true;
+  f.ports.herdr = async args => {
+    const reply = await herdr(args);
+    if (lose && isOpen(args)) { lose = false; throw Object.assign(Error('reply lost'), { code: 'herdr_failed' }); }
+    return reply;
+  };
+  const started = await l.start();
+  assert.equal(started.exitCode, 1); assert.match(started.message, /plan chat startup was not confirmed/);
+  // Herdr opened the run and gave the parent its identity, but pdd did not see the reply: the record stays pending.
+  const saved = l.record().layout, parent = f.herdr.workspaces.find(w => w.workspace_id === saved.repoWorkspaceId);
+  assert.deepEqual(parent.worktree, { checkout_path: l.root, repo_key: l.common, is_linked_worktree: false });
+  assert.equal(saved.repoCreateIntent.parentRoot, l.root);
+  const opened = await openAgain(l);
+  assert.equal(opened.exitCode, 0, opened.message);
+  const run = l.record();
+  assert.equal(run.layout.repoWorkspaceId, parent.workspace_id); assert.equal(run.layout.repoCreateIntent, null);
+  assert.equal(f.herdr.calls.filter(isOpen).length, 1, 'the run workspace that Herdr opened is used');
+  assert.equal(f.herdr.calls.filter(isCreate).length, 1);
+  assert.equal(f.herdr.paneOf(run.chats.at(-1)).cwd, run.root);
 });
