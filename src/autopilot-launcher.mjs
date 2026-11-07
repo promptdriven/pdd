@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 2a7fb278526fb289c9ce48210ee6eb06d310e076c39ceee97ed523475426539b).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: be699adb69225fc880d8a8dc5d2a4b00be66858ad3d8727a77fe1ea1ab4c1fb5).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch } from 'node:fs';
@@ -322,6 +322,7 @@ const relaunchHeld = (state, target) => (state.relaunchTargets ?? []).includes(t
 function relaunchDue(state, p) { const target = relaunchTarget(state, p); return !!target && !relaunchHeld(state, target); }
 // Saved values that name the coordinator pane and its launch; the coordinator identity stays.
 function forgetPane(target) {
+  if (target.ownerLaunch?.profile) target.launchProfile = target.ownerLaunch.profile;
   for (const key of ['paneId', 'workspaceId', 'ownerLaunch', 'contextPane', 'contextBinding', 'relaunchPending', 'relaunchHeld']) delete target[key];
   target.recipeDelivered = false;
 }
@@ -532,7 +533,8 @@ async function wake(state, makeText, p, prepare = async () => {}, explicitStartR
   const recoverySession = JSON.stringify(agent?.agent_session ?? null);
   const envelope = () => coordinatorEnvelope(state);
   if (recovering) {
-    if (!agent || !recoveryTargetMatches(state, oldIntent, p) || !['idle', 'done'].includes(agent.agent_status) || !await currentRecoveryTargetMatches(state, p, true, recoverySession)) {
+    if (!agent || !recoveryTargetMatches(state, oldIntent, p) || !['idle', 'done'].includes(agent.agent_status)
+      || state.ownerLaunch?.paneId === state.paneId && otherTerminal(state.ownerLaunch, agent) || !await currentRecoveryTargetMatches(state, p, true, recoverySession)) {
       p.warn('Autopilot recovery waits: the saved target is not safely idle and unchanged.');
       return false;
     }
@@ -700,7 +702,8 @@ async function wake(state, makeText, p, prepare = async () => {}, explicitStartR
   const elapsedNow = p.elapsedNow ?? (() => Number(process.hrtime.bigint() / 1_000_000n));
   const began = elapsedNow(), deadline = state.ownerLaunch.startedAt + START_GRACE_MS;
   const withinLaunch = () => Math.min(deadline - p.now(), START_GRACE_MS - Math.max(0, elapsedNow() - began)) > 0;
-  if (!await p.scanGuard(latest => { latest.ownerLaunch = state.ownerLaunch; delete latest.relaunchPending; delete latest.relaunchHeld; })) { delete state.ownerLaunch; return false; }
+  if (!await p.scanGuard(latest => { latest.ownerLaunch = state.ownerLaunch; latest.launchProfile = state.ownerLaunch.profile; delete latest.relaunchPending; delete latest.relaunchHeld; })) { delete state.ownerLaunch; return false; }
+  state.launchProfile = state.ownerLaunch.profile;
   delete state.relaunchPending; delete state.relaunchHeld;
   try { await p.scanAction(() => herdr(['pane', 'run', state.paneId, ['env', ...unset, ...env, quote(definition.command), ...args].join(' ')], p), 'launch'); }
   catch (error) { if (error.confirmedRejection || error.code === 'agent_not_found' || error.code === 'pane_not_found') delete state.ownerLaunch; throw error; }
@@ -1275,7 +1278,8 @@ export async function runAutopilotLauncher(input, ports = {}) {
     const previousProfile = previous?.agent && !resumeCustody ? profileBinding(previous, p) : null;
     let probe = p, saved = null;
     if (previousProfile) {
-      if (!previous.ownerLaunch || JSON.stringify(previous.ownerLaunch.profile) !== JSON.stringify(previousProfile) || !previousProfile.home || !previousProfile.definitionHome) return bad('The saved coordinator profile cannot be verified. Inspect the existing coordinator before retrying.');
+      const launchedProfile = previous.ownerLaunch?.profile ?? previous.launchProfile;
+      if (!launchedProfile || JSON.stringify(launchedProfile) !== JSON.stringify(previousProfile) || !previousProfile.home || !previousProfile.definitionHome) return bad('The saved coordinator profile cannot be verified. Inspect the existing coordinator before retrying.');
       const configVariable = { codex:'CODEX_HOME', claude:'CLAUDE_CONFIG_DIR', gemini:'GEMINI_CLI_HOME' }[previous.agent.kind];
       const env = { ...p.env, HOME:previousProfile.definitionHome };
       for (const variable of ['CODEX_HOME','CLAUDE_CONFIG_DIR','GEMINI_CLI_HOME']) {

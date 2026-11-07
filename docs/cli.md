@@ -75,9 +75,10 @@ fresh chat with the current settings.
 
 Autopilot saves the Herdr terminal of each coordinator chat. When the saved
 pane is gone, for example after a failed relaunch, a closed pane or a Herdr
-server restart, the next tick or start opens a fresh pane for the same
-coordinator and delivers the pending work there. A pane that now has the old
-pane ID but another terminal is left alone.
+server restart, the next tick opens a fresh pane for the same coordinator and
+delivers the pending work there. After `pdd autopilot stop`, also during a
+relaunch, the next `pdd autopilot start` does this. A pane that now has the old
+pane ID but another terminal gets no prompt, no close and no launch.
 
 A tick checks GitHub with ETags and wakes the agent only for a repo's first
 start-up recipe or an unseen trusted issue, comment or related PR change.

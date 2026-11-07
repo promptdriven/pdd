@@ -1262,6 +1262,113 @@ for (const [variant, restart] of Object.entries(otherTerminal)) for (const due o
   });
 }
 
+// Issue 3037 second review M1: the relaunch saves a state with no owner launch, and the fresh launch
+// saves a new one a few Herdr calls later. Autopilot can stop between these two saves. Stop and start
+// must then launch the fresh chat for the same coordinator, as the next tick does.
+const afterClear = {
+  'the terminal read of the fresh pane fails': f => {
+    const real = f.ports.herdr; let failed = false;
+    f.ports.herdr = async args => {
+      if (!failed && args[0] === 'pane' && args[1] === 'get' && args[2] === 'w2:p1') { failed = true; throw Object.assign(Error('Herdr timed out'), { code: 'timeout' }); }
+      return real(args);
+    };
+    return () => { assert.equal(failed, true); f.ports.herdr = real; };
+  },
+  'the fresh workspace create fails': f => {
+    const real = f.ports.herdr; let failed = false;
+    f.ports.herdr = async args => {
+      if (!failed && f.closed.length && args[0] === 'workspace' && args[1] === 'create') { failed = true; throw Object.assign(Error('Herdr timed out'), { code: 'timeout' }); }
+      return real(args);
+    };
+    return () => { assert.equal(failed, true); f.ports.herdr = real; };
+  },
+  'the process ends after the clear': f => {
+    // Nothing after the clear runs or reaches the disk: the saved state stays as the clear saved it.
+    const real = f.ports.herdr, file = f.stateFile(); let snapshot = null;
+    f.ports.herdr = async args => {
+      if (!snapshot && f.closed.length && args[0] === 'workspace' && args[1] === 'create') snapshot = readFileSync(file);
+      if (snapshot) throw Object.assign(Error('process ended'), { code: 'process_ended' });
+      return real(args);
+    };
+    return () => { writeFileSync(file, snapshot); f.ports.herdr = real; };
+  },
+  'a person stops Autopilot during the relaunch tick': f => {
+    // Stop does not wait for the tick lock, so the tick's next guard sees the disabled state.
+    const real = f.ports.herdr; let stopped = null;
+    f.ports.herdr = async args => {
+      if (!stopped && args[0] === 'pane' && args[1] === 'get' && args[2] === 'w2:p1') stopped = await f.invoke('stop');
+      return real(args);
+    };
+    return () => { assert.equal(stopped?.exitCode, 0); f.ports.herdr = real; };
+  },
+};
+for (const [failure, inject] of Object.entries(afterClear)) {
+  test(`relaunch: when ${failure}, stop and start launch the fresh chat for the same coordinator`, async t => {
+    const f = await relaunchFixture(t);
+    assert.equal((await f.invoke('start')).exitCode, 0);
+    const original = f.state();
+    f.saveState(state => { delete state.ownerLaunch.fingerprint; });
+    const finish = inject(f), prompts = f.prompts.length;
+    f.issues = [issue(90)]; f.time += 60 * 1000;
+    try { await f.tick(); } catch { /* A Herdr error or a simulated process end may end the tick. */ }
+    finish();
+    assert.deepEqual(f.closed, ['w1:p1']);
+    assert.equal(f.state().ownerLaunch, undefined, 'the clear saved no owner launch');
+    assert.equal(f.launches.length, 1); assert.deepEqual(f.live(), []); assert.equal(f.prompts.length, prompts);
+    f.time += 30 * 60 * 1000;
+    assert.equal((await f.invoke('stop')).exitCode, 0);
+    const started = await f.invoke('start');
+    assert.equal(started.exitCode, 0, started.message);
+    const after = f.state();
+    assert.deepEqual(f.launches.map(launch => launch.pane), ['w1:p1', 'w2:p1']);
+    assert.deepEqual(f.live(), ['w2:p1'], 'one coordinator chat');
+    assert.equal(after.paneId, 'w2:p1'); assert.equal(after.ownerLaunch.paneId, 'w2:p1');
+    assert.equal(after.coordinatorId, original.coordinatorId, 'claims stay with the same coordinator');
+    assert.equal(after.machine, original.machine); assert.equal(after.activatedAt, original.activatedAt);
+    assert.equal(f.context(f.launches.at(-1)).coordinatorId, original.coordinatorId);
+    assert.equal(f.delivered.at(-1), 'w2:p1'); assert.match(f.prompts.at(-1), /"number":90,/);
+    assert.equal(f.packet().recipeFirst, true, 'the fresh chat gets the start-up recipe');
+    const quiet = f.herdrCalls.length; f.status = 304; await f.tick();
+    for (const [group, action] of [['workspace', 'create'], ['pane', 'run'], ['pane', 'close']]) assert.equal(herdrSince(f, quiet, group, action).length, 0, `${group} ${action}`);
+    assert.match((await f.invoke('status')).message, /coordinator idle/);
+  });
+}
+
+test('relaunch: an older state with no owner launch and no launch profile still refuses an ordinary start', async t => {
+  const f = await relaunchFixture(t);
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  assert.equal((await f.invoke('stop')).exitCode, 0);
+  f.saveState(state => { delete state.ownerLaunch; delete state.launchProfile; });
+  const calls = f.herdrCalls.length;
+  const started = await f.invoke('start');
+  assert.equal(started.exitCode, 1);
+  assert.match(started.message, /saved coordinator profile cannot be verified/);
+  assert.equal(herdrSince(f, calls, 'pane', 'run').length, 0); assert.equal(f.state().enabled, false);
+});
+
+// Issue 3037 second review F1: recovery after an uncertain send uses the saved pane, so the saved
+// terminal must still be there; a pane id that another terminal has gets no recovery prompt.
+test('relaunch: uncertain-send recovery never prompts a saved pane id that another terminal has', async t => {
+  const f = await relaunchFixture(t);
+  const real = f.ports.herdr;
+  // Recovery also reads the saved workspace.
+  f.ports.herdr = async args => args[0] === 'workspace' && args[1] === 'get' ? { result: { type: 'workspace_info', workspace: { workspace_id: args[2] } } } : real(args);
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  f.saveState(state => { state.deliveryIntent = { version: 2, paneId: state.paneId, workspaceId: state.workspaceId, at: f.time - 1000, fingerprint: null, payloadDigest: 'earlier' }; });
+  Object.assign(f.panes.get('w1:p1'), { terminal_id: 'term-restarted', session: 'session-restarted' });
+  const calls = f.herdrCalls.length;
+  f.issues = [issue(96)]; f.time += 60 * 1000; await f.tick();
+  assert.equal(herdrSince(f, calls, 'agent', 'prompt').length, 0, 'no recovery prompt reaches the other terminal');
+  for (const [group, action] of [['pane', 'run'], ['pane', 'close'], ['workspace', 'create']]) assert.equal(herdrSince(f, calls, group, action).length, 0, `${group} ${action}`);
+  assert.ok(f.state().deliveryIntent, 'the uncertain custody stays');
+  // Control: with the saved terminal, the same recovery prompts the saved pane.
+  assert.ok(f.warnings.includes('Autopilot recovery waits: the saved target is not safely idle and unchanged.'), f.warnings.join('\n'));
+  Object.assign(f.panes.get('w1:p1'), { terminal_id: 'term1' });
+  f.time += 30 * 60 * 1000; await f.tick();
+  assert.deepEqual(herdrSince(f, calls, 'agent', 'prompt').map(args => args[2]), ['w1:p1']);
+  assert.match(f.prompts.at(-1), /fresh current-state reconciliation/);
+});
+
 test('relaunch: a saved delivery with uncertain custody blocks the relaunch', async t => {
   const f = await relaunchFixture(t);
   assert.equal((await f.invoke('start')).exitCode, 0);

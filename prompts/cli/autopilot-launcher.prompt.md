@@ -209,8 +209,9 @@ new work. The fresh chat gets the start-up recipe first.
   same hold, add the current fingerprint to the relaunch record below, remove
   the saved pane, workspace, owner launch and the pending and held marks, and
   mark the recipe as not delivered. If a check fails before the close, close
-  nothing, keep the work pending and retry on a later tick. If Herdr or the save fails after the close,
-  the saved pane is gone and a later tick or start replaces it.
+  nothing, keep the work pending and retry on a later tick. If Herdr or the
+  save fails, or Autopilot stops, after the close, the saved pane is gone and a
+  later tick, or a start after a stop, replaces it.
 - Then open a fresh repo workspace and pane through the existing route, rearm
   saved worker completion for the fresh pane with the same filter as an
   explicit start, and launch with the current arguments. Deliver pending work as
@@ -257,11 +258,15 @@ pane: a pane that now has its ID is not ours. In one admission hold, check
 that the saved state still names the same pane and owner launch and has no
 intent. Then remove the saved pane, workspace, owner launch and the pending and
 held marks, and mark the recipe as not delivered. Keep the coordinator
-identity, machine, activation, runs cap and relaunch record. Then open a fresh
+identity, machine, activation, runs cap and relaunch record. Keep the profile
+binding of each owner launch, also after it is forgotten, as the last launched
+profile; an ordinary start verifies the saved profile against the owner launch
+or, when none is saved, that last launched profile. Then open a fresh
 pane, rearm saved worker completion for it and launch as after a relaunch. A
-plain tick and an explicit start both do this when they wake the coordinator,
-so a failure after a relaunch close, a pane that a
-person closed and a Herdr server restart recover without help. If the pane has
+plain tick and an explicit start both do this when they wake the coordinator.
+So a failure or a stop after a relaunch close or after this forget step, a pane
+that a person closed and a Herdr server restart recover on the next tick, or
+after a stop on the next start. If the pane has
 the saved terminal but no chat, keep the work pending without a second launch:
 the launched chat may still be starting.
 
@@ -436,7 +441,7 @@ The intent's pane and workspace must match the current saved target. The saved o
 
 Inspect only that saved target. With an uncertain intent, this rule overrides normal missing-pane recovery. If its saved pane or workspace is absent or mismatched, retain the original identifiers and send nothing. Never create, replace, focus, close or interrupt a target for recovery.
 
-Before recovery, inspect the live workspace, pane and agent. Their IDs, repository path and provider must match the saved target and selected launcher. Check the GitHub repository from that path against the saved repository before delivery. Perform live identity, repository and readiness reads outside admission, immediately before the final guard. Under the guard recheck current saved control and submit one prompt. Remote identity can change after observation; do not claim atomic remote attestation. A missing or mismatched current identity sends nothing.
+Before recovery, inspect the live workspace, pane and agent. Their IDs, repository path and provider must match the saved target and selected launcher. If the owner launch saved a `terminal_id`, Herdr must report the same `terminal_id` for the saved pane; another terminal sends nothing. Check the GitHub repository from that path against the saved repository before delivery. Perform live identity, repository and readiness reads outside admission, immediately before the final guard. Under the guard recheck current saved control and submit one prompt. Remote identity can change after observation; do not claim atomic remote attestation. A missing or mismatched current identity sends nothing.
 
 Herdr must report the owned agent as `idle` or `done`. A `working`, `blocked`, `unknown` or missing status, an absent agent, or any failed or unreadable inspection sends nothing. If Herdr reports an `agent_session`, it must stay unchanged through the final guard; a changed or unreadable target sends nothing. Herdr may omit the session ID for a saved, finished agent. In that case, do not refuse on absence alone when the live workspace, pane, repo path and provider still match. `done` permits only a new packet. It does not acknowledge the old submission.
 
