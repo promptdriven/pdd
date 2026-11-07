@@ -16,6 +16,7 @@ import { codexConfigs } from './helpers/codex-config-args.mjs';
 //   selected agent and the start environment, because the launcher refuses a saved agent that has no
 //   owner launch binding. The step then checks that the saved state holds the same agent and environment.
 // - herdr.pane_run runs the launch text in /bin/sh with the herdr_pane env, as a Herdr pane shell does.
+//   The pane env holds Herdr values that the launcher does not know, so a launch that takes them fails AC2.
 //   Each /launches entry is what the started Codex program reads from its arguments: codex_config holds
 //   its -c keys, and command_environment_set its shell_environment_policy.set entries.
 // - codex.config_write: each file added, changed or removed under a codex_profile folder.
@@ -23,9 +24,6 @@ const scenario = JSON.parse(readFileSync(new URL('./runtime/autopilot-codex-comm
 const pointer = (value, path) => path === '' ? value : path.slice(1).split('/').reduce(
   (current, key) => current?.[key.replace(/~1/g, '/').replace(/~0/g, '~')], value);
 const compare = { equals: (actual, value) => assert.deepEqual(actual, value) };
-// Open decision, not a pass: the launcher does not know the pane shell's Herdr socket path, so it sets
-// no Herdr values (prompts/cli/autopilot-launcher.prompt.md, Native Codex startup). Issue 3031.
-const open = { AC2: 'AC2 needs Herdr pane and socket values that the launcher does not know; open decision for issue 3031' };
 
 function files(folder) {
   if (!existsSync(folder)) return {};
@@ -106,7 +104,7 @@ test('replay draft autopilot-codex-command-context Story vectors through runAuto
         assert.equal(check.target, 'world', `Not replayed: unmapped target ${check.target}`);
         assert.ok(compare[check.op], `Not replayed: unmapped comparison ${check.op}`);
         seen.add(check.criterion_id);
-        await st.test(`${check.criterion_id} ${check.path} ${check.op} ${JSON.stringify(check.value)}`, { todo: open[check.criterion_id] },
+        await st.test(`${check.criterion_id} ${check.path} ${check.op} ${JSON.stringify(check.value)}`,
           () => compare[check.op](pointer(world, check.path), check.value));
       }
     });

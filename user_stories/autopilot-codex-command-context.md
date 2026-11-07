@@ -9,8 +9,10 @@ Draft from the reproduce step. The prompt-story step owns the final text.
 ## Acceptance criteria
 
 1. With a Codex profile that keeps only basic shell variables (`inherit = "core"`), the Codex start of the coordinator sets `PDD_AUTOPILOT_CONTEXT` for the commands of the chat to the same start context that the coordinator process gets.
-2. When the coordinator pane has a Herdr pane id and socket path, the Codex start also sets `HERDR_PANE_ID` and `HERDR_SOCKET_PATH` for the commands of the chat to those values.
+2. The Codex start sets `HERDR_PANE_ID` and `HERDR_SOCKET_PATH` for the commands of the chat only when the launcher knows both exact values, and it never invents them. The launcher does not know the socket path of the coordinator pane, so the start sets neither, even when the pane has both.
 3. The Codex start keeps its folder-trust and update-check settings, and Autopilot writes no Codex configuration.
+
+Why AC2 is limited: the Autopilot context alone makes a `pdd workflow run` from the chat automatic (reproduction control B2), and the launcher has no reliable source for the socket path of the pane.
 
 ## Rules to check
 
