@@ -4,8 +4,8 @@ Fix both: the brakes (the real defect) and the warning light (a test or check th
 
 ## 1. What the PDD interpreter is
 
-The PDD interpreter runs a prompt as a program. There is no code: an AI reads the `*.prompt.md` file and acts as the program.
-The interpreter checks the **prompt**, not the code. The repo's own tests check the code.
+The PDD interpreter runs a prompt as a program: an AI reads the `*.prompt.md` file and acts as the program.
+The interpreter checks the **prompt**; the repo's own tests check native code.
 You need a GitHub login (`gh auth status`). A check sends relevant source selected from Git-visible files (max 10 MiB and 10,000 files).
 `pdd test --files` lists the selected files and byte sizes without a network call (section 2). Never put secrets in the repo.
 
@@ -67,6 +67,13 @@ Choose a delimiter absent as a whole line from the payload. Keep it quoted. Neve
 - To change an approved prompt (prose or interface), set `"status": "draft"`, run `pdd test --fill-hash` and ask the
   person to approve again through these routes.
 
+**The interpreted route.** This route does not generate an implementation. It still needs a typed Runtime interface
+derived from the prompt's canonical contract and admitted by the runtime; prose alone does not establish executable
+entry points. Schema and safety admission do not prove that execution preserves the contract's meaning.
+Static native-code binding checks are a separate route. Independent prompt-to-code review does not apply when no
+implementation is generated. Record the actual prompt, interface, selected context and checks instead;
+do not report a code review that did not occur.
+
 **The story** has one line for each criterion. Number from 1. Use straight quotes (`"`), not curly quotes. Text copied
 from a GitHub issue often has curly quotes. Put real values in the text: "$10.65", "2026-11-02". Write what a user
 types and sees, as AC1 below does. Do not name code ("`splitBill(2, 4)` returns …"): the person must read and approve it.
@@ -92,7 +99,7 @@ types and sees, as AC1 below does. Do not name code ("`splitBill(2, 4)` returns 
 - The `input` must match the `input_schema`. An error step has `"expected_error": "unknown-sku"` and a check on `error` `/code`.
 - Check facts, not values that the AI picks freely (wording that the story does not fix, generated IDs).
 - `context` is almost always `[]`. It gives one prompt extra text files to read, in this test only. A file linked in a
-  prompt's `## Dependencies` already goes with that prompt to every run, so link shared data there. Each row is exactly
+  prompt's `## Dependencies` is eligible for that prompt's context, subject to the route's selection below. Link shared data there. Each row is exactly
   `{"prompt_path": …, "paths": […]}`: a prompt of the repo, and at most 16 UTF-8 text files of the repo (120 KiB in all):
   `"context": [{"prompt_path": "prompts/ui.prompt.md", "paths": ["docs/tile-colors.md"]}]`. A text note, a missing key
   or an extra key gives `invalid-context` at `context[N]`. Never give the story, a test or expected values as context:
@@ -103,6 +110,17 @@ follows prompt call targets, local links in `## Dependencies` and Markdown image
 A selected app map adds its prompt paths and stylesheets. Unrelated repository files are not uploaded.
 `pdd test --files [STORY...]` lists exactly which files the same selection uploads, with byte sizes and no network
 call. With no Story, it selects all discovered tests. Add `--app-map PATH` to inspect the selection for the Simulator's app map.
+
+**Uploaded files are not necessarily execution context.** Ordinary interpreter dependency discovery resolves local
+links after dropping `#fragment`. It does not enforce the named section or interpret authoring, generation, runtime,
+verification or testing roles. Graph projection selects direct declared context or retained draft context, appearance
+context and explicit test context. It excludes executable call targets, except dependencies explicitly retained for
+instances. The interface drafter's dependency context defaults to depth 1 and has a byte budget. These are limits
+of these routes, not a description of every adapter; shared-contract adapters have their own rules.
+
+Review the required transitive dependency chain for the intended use. Confirm which files and sections that route
+actually receives. Missing files or sections, cycles, required omissions and unsupported selection semantics leave
+the affected use incomplete. Recursive CLI upload selection alone does not satisfy that review or weaken the contract.
 
 For extra source, put an include list in the repository root's `pdd-source.json`:
 ```json
@@ -399,11 +417,20 @@ Then make sure that every criterion still has a check, and run `pdd test <story>
 
 ### The drawing is the layout spec
 
-When a screen prompt links a `.ui.svg`, that drawing is authoritative for its visible parts, words, spatial order, stable ids and named state. It is a comparison reference, not an optional illustration. Prose and drawing must describe the same parts; prose owns behavior and the sources of dynamic values. Declare the state and viewport beside the view and name each region/control id in the appearance rules. Mark unowned surroundings `data-context-only="true"` or class `context-only`. Keep DOM/focus order in accessibility prose; SVG source order does not set it.
+When a screen prompt links a `.ui.svg`, declare its purpose: illustrative content or a comparison-reference state.
+The SVG owns appearance. Prose owns behavior, accessibility and the authority for actual values. Illustrative sample
+values do not become required runtime values. For a comparison reference, declare the state and its values so the
+page can reproduce them. Prose and drawing must agree on owned parts, visible words, spatial order and stable ids.
+
+Declare ownership, state, reference viewport, fidelity, comparator and tolerances beside the view. The reference
+viewport is a comparison condition, not a fixed runtime screen size. Name each region/control id in the appearance
+rules. Mark unowned surroundings `data-context-only="true"` or class `context-only`. Keep DOM/focus order in
+accessibility prose; SVG source order does not set it. Preserve the declared fidelity and comparison requirements
+when a tool cannot check them; report that gap instead of treating admission as proof.
 
 Before building, run `pdd lint --local` (or add Story names) to see local SVG warnings with 0 AI calls and no network. It checks explicit control names, visible labels and named layout regions in both directions. A generic score field does not specify a drawn score box. Static vocabulary matching is advice: warnings name unmatched parts and never block or approve a prompt. Ordinary `pdd lint` includes this advice before its existing server lint. Resolve disagreements by making the prompt and drawing agree with the requested design.
 
-Build reads the linked drawing as the layout spec and implements its parts, words, ids, order and state. After building, serve the real page in the reference state and run:
+Build reads the linked drawing as the layout spec under its declared purpose and fidelity. For a comparison-reference state, implement its required parts, words, ids and order. After building, serve the real page in that state and run:
 
 ```sh
 pdd test --screen http://127.0.0.1:8080/ --drawing prompts/views/active__stacked.ui.svg
@@ -439,7 +466,9 @@ screens. It holds no code. Without it, the person uses forms (or a terminal for 
   `![Menu with cart lines](views/menu-cart__phone.ui.svg)`. The `phase` in the screen input selects one
   (`"phase": "menu-cart"`), and the AI fills it. Each part to fill or tap has an `id`. The prose says how to fill each
   part and which callback a tap part gets ("region `price-latte-m`, callback `onAdd`, arguments `["latte","M"]`").
-  Use at most 4 mockups for each screen, 64 KiB each, with no scripts.
+  This mockup-screen route reads all references selected from `Appearance` and `Appearance context`, with no
+  four-view cap. The renderer enforces a 256 KiB safety cap per SVG and rejects scripts. The separate
+  appearance-context reader selects at most four views with a 64 KiB total limit (section 16).
 - `input` is the operation input, or the `state` of a mockup screen. `{"$ref": "/state/cart"}` copies a value (roots:
   `/state`, `/event`, `/result`, `/route`, `/world`). Other values are used as written. `state_schema` follows section 3.
 - **A handler** connects a tap or a key to an operation. `match` may use `id`, `region_id`, `callback`, `href`,
@@ -573,6 +602,17 @@ a prompt in it is still draft.
 > Agent note — not checked by pdd: Prompt tests (place-order): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call
 
 ## 16. Known limits today
+
+- The appearance-context reader searches `Appearance`, `Appearance context` and `Dependencies` sections.
+  It selects at most four views, with **64 KiB total SVG bytes** across those views, and records omitted paths.
+  Required omitted context leaves the affected use incomplete. The mockup rendering selector searches only
+  `Appearance` and `Appearance context`; its 256 KiB per-SVG safety cap in section 13 is separate.
+- `validate_svg` checks SVG safety and structure. It does not establish the whole authoring contract, including
+  required title/description, fidelity, ownership, comparator or tolerances. The mockup renderer reads fidelity
+  from its appearance sections; absent or unrecognized fidelity remains `unspecified`, not `measured`.
+- The appearance-context instruction currently treats sample text as illustrative even when the contract declares
+  a comparison-reference state. This is a support gap. Keep the reference's required values and comparison checks;
+  do not silently weaken them or claim this route proves them.
 
 - The report page drops line breaks in strings. The check itself is exact: `"Added #1: Buy milk"` fails against
   `"Added #1: Buy milk\n"`. If expected and got look the same, look for a `\n`.
