@@ -1,7 +1,7 @@
 import { validateSnapshot } from './metrics-store.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
 import { createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 33dc44a7518d2fb7bf424398daf54496e911059e51d2bb93abd85e77ba1308dd).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 89b82d5657c6e776d61a61526e78d26600cd90bf593cb41949ad135ea7c68da8).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -226,7 +226,9 @@ const isScenario = text => JSON.parse(text)?.schema_version === 'prompt-runtime.
 async function scenarioInventory(run, p) {
   const paths = [];
   const saved=new Set(run.replayBaseline?.vectors?.map(vector=>vector.path)??[]);
-  for (const path of await changedFiles(run,p,true)) {
+  const comparison = await git(p,run.root,'merge-base','HEAD',`refs/remotes/origin/${run.baseBranch}`);
+  if (!commitSha(comparison)) throw Error('The original base comparison is unavailable.');
+  for (const path of await changedFiles({...run,baseSha:comparison},p,true)) {
     if(!path.endsWith('.json'))continue;
     // The replay reader reports deleted/malformed saved files with their value diff.
     if(saved.has(path)){paths.push(path);continue;}
@@ -260,7 +262,10 @@ async function adoptionFailure(run,p) {
 }
 async function refreshReplayBaseline(run,p) {
   if (!replayEnabled(run) || run.replayAdoption) return;
-  try { run.replayBaseline = pinReplayVectors(run.root,await scenarioInventory(run,p)); }
+  try {
+    await rawGit(p,run.root,'fetch','origin',`refs/heads/${run.baseBranch}:refs/remotes/origin/${run.baseBranch}`);
+    run.replayBaseline = pinReplayVectors(run.root,await scenarioInventory(run,p));
+  }
   catch { run.replayBaseline = {schema_version:'pdd.replay-vectors.v1',vectors:[],outcome:'blocked',reason:'The changed scenario inventory is unavailable; repair unreadable or malformed JSON candidates and Git listing failures.'}; }
   const applyPublication=publicationUpdate(run,['replayBaseline']);
   commitRun(run,p,applyPublication);
@@ -303,6 +308,7 @@ async function areaMessage(run, index, p, packageRoot) {
   return [
     `Read and follow the selected workflow skill at ${JSON.stringify(resolve(run.skillDir ?? join(packageRoot ?? PACKAGE_ROOT, 'skills', run.skill), 'SKILL.md'))} and its adjacent supporting files. This is a pdd workflow run.${index ? automatic ? ' Earlier areas have advanced.' : ' The person approved the earlier areas.' : ''}`,
     ...(automatic ? [automatic] : []),
+    ...promptReturnLines(run),
     `Issue: ${run.repo}#${run.number} "${oneLine(run.issue.title)}" ${run.issue.url}`,
     `Worktree: ${run.root} (branch ${run.branch}). Work and commit only here.`,
     `Run folder: ${run.runDir}. Put notes there. verify writes verify.md there with the exact test commands and their output.`,
@@ -310,6 +316,7 @@ async function areaMessage(run, index, p, packageRoot) {
     `Area ${index + 1} of ${run.areas.length}: ${area.name}. Steps: ${area.steps.map(step => area.optional.includes(step) ? `${step} (optional: ask the person)` : step).join(', ')}.`,
     `After each step, run: ${pdd} workflow done STEP --summary "one line". It prints what to do next.`,
     ...(prLabel(run, area) === 'PR 2' && prOf(run, askArea(run).name) ? [`PR 1: ${prOf(run, askArea(run).name).url}. This area works on branch ${run.branch}, ${run.prBase === run.baseBranch ? `from the merged ${run.baseBranch}` : 'on top of PR 1'}.`] : []),
+    ...(area.name === 'code' && askArea(run) ? [`If review finds a prompt defect, commit or keep code work, then run ${pdd} workflow open ${run.number} prompt-pr. Stop code work; all prompt corrections belong in PR 1.`] : []),
     area.gate === 'approve'
       ? automatic ? 'Gate: show the result and follow the scoped automatic overlay and owner handoff; preserve required human decisions.' : `Gate: after the last step, show the person the result, ask them to approve or ask for changes, and stop. Never approve for them: ${approvalGuide(run, pdd)}`
       : area.then === 'ask-code'
@@ -416,6 +423,7 @@ function describe(run, chat = null, { drafts = [], nothing = false } = {}) {
   if (run.gate?.kind === 'ask-code' && drafts.length) return `PR 1 open (${pr1?.url}); waiting for you: approve the draft prompt${drafts.length > 1 ? 's' : ''} first, then make the code PR.`;
   if (run.gate?.kind === 'ask-code') return `PR 1 open (${pr1?.url}); waiting for you: code PR now, or stop and merge PR 1. ${codeLater(run)}`;
   if (run.gate) return `waiting for you: approve the ${run.gate.area} area or ask for changes`;
+  if (run.promptReturn && area?.steps.some(step=>!run.done[step])) return `the agent works on ${area.steps.find(step=>!run.done[step])} after returning to prompt space`;
   if (prOf(run, area?.name) && area.gate === 'pr') return `waiting for you: review and merge ${prLabel(run, area)} on GitHub`;
   const step = area?.steps.find(item => !run.done[item]);
   return step ? `the agent works on ${step}` : 'the agent works';
@@ -1234,7 +1242,7 @@ function prBody(run, area, env, drafts = [], tests = true, evidence) {
   const noted = runtime.some(line => hasReportLink(line, env)) || change && hasReportLink(change, env);
   const replayResult = area.replay_evidence === REPLAY_POLICY ? run.replayEvidence ?? readReplayEvidence(run) : null;
   const replay = replayResult ? [formatReplayEvidence(replayResult,{maxCharacters:0}), ''] : [];
-  const prefix = [...failing, ...replay];
+  const prefix = [...failing, ...replay, ...promptReturnLines(run)];
   const top = [...ownLines(run, evidence), ...(verdict ? [`${AGENT_NOTE}: ${verdict}`] : []), ...(change ? [`${AGENT_NOTE}: ${change}${hasReportLink(change, env) ? ' (report links expire after 7 days)' : ''}`] : []), ...runtime];
   if (evidence.lines.some(line => line.includes('pdd-workflow:'))) throw Error('Remove supplied workflow ownership markers from the report; pdd preserves its own marker.');
   const inventory = run.testInventory && label !== 'PR 1' ? [run.testInventory.text.trimEnd(), ...(run.testInventory.saved ? [] : ['warning: The full test inventory report was not saved.']), inventoryCommits(run.testInventory)] : [];
@@ -1313,6 +1321,13 @@ async function publishAreaPr(run, area, p, lines, retry) {
   if (existing) {
     try { await requireExistingDraft(run, existing, p); }
     catch (error) { if(error?.code==='workflow_progress_refused')throw error;return fail(error.message); }
+  }
+  if (label === 'PR 2') {
+    const pr1 = prOf(run,askArea(run).name);
+    let edits;
+    try { edits = await specificationEdits(run,p,run.prBase ?? existing?.base ?? pr1.branch); }
+    catch { return fail('Cannot compare prompts with PR 1. Repair the local prompt branch, then retry publication.'); }
+    if (edits.length) return fail(`Prompt edits belong in PR 1: ${edits.join(', ')}. Run pdd workflow open ${run.number} prompt-pr.`);
   }
   const status = await rawGit(p, run.root, 'status', '--porcelain=v1', '-z', '--untracked-files=all');
   if (status) {
@@ -1573,7 +1588,7 @@ async function recordEvidenceCommand({ ref, summaryFile, cwd }, ports) {
 
 // pdd's own results for a run (pdd test, pdd lint, pdd workflow prove). A read problem gives no results, never a stop.
 function ownResults(run, p) {
-  try { return (p.readRunResults ?? readRunResults)({ root: run.root, runDir: run.runDir, runId: run.runId, since: run.startedAt ?? 0, baseBranch: run.baseBranch ?? null }, { env: p.env, workspace:input=>readEvidenceEligibility(input,p) }); }
+  try { return (p.readRunResults ?? readRunResults)({ root: run.root, runDir: run.runDir, runId: run.runId, since: run.promptReturn?.at ?? run.startedAt ?? 0, baseBranch: run.baseBranch ?? null }, { env: p.env, workspace:input=>readEvidenceEligibility(input,p) }); }
   catch { return []; }
 }
 // The steps whose done output shows pdd's own results, or a visible "no pdd result" warning.
@@ -1612,6 +1627,9 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
     ? refreshCompletedCodeReview(run, step, p) : done(`The run for #${run.number} is complete. Stop.`);
   protectProgress(run,p);
   const area = run.areas[run.area], lines = [];
+  if (await reopenChangedStory(run,p)) return done(`The Story or expected contract changed. Finish the Story steps and show its approval gate again. PR 1 remains the prompt branch. Run pdd workflow open ${run.number}.`);
+  if (run.promptReturn && !area.steps.includes(step) && run.areas.slice(run.area+1).some(item=>item.steps.includes(step)))
+    return fail('This step belongs to a later area. Finish the current prompt work first.');
   if (!area.steps.includes(step)) lines.push(`warning: "${step}" is not a step of the ${area.name} area (${area.steps.join(', ')}). pdd recorded it anyway.`);
   else {
     const before = area.steps.slice(0, area.steps.indexOf(step)).filter(item => !run.done[item] && !area.optional.includes(item));
@@ -1697,15 +1715,19 @@ async function codeBranch(run, area, p) {
       if (reply.code !== undefined && reply.code !== 0) throw Error('fetch rejected');
     } catch { throw Error(`Could not fetch ${ref} from origin. No code branch was created; try again when the remote branch is available.`); }
   };
-  if (state.state === 'merged') {
-    await fetch(run.baseBranch);
-    await git(p, run.root, 'switch', '-q', '-c', name, `refs/remotes/origin/${run.baseBranch}`);
-    run.prBase = run.baseBranch;
-  } else {
-    await fetch(pr1.branch);
-    await git(p, run.root, 'switch', '-q', '-c', name);
-    run.prBase = pr1.branch;
-  }
+  const upstream=state.state==='merged'?run.baseBranch:pr1.branch;
+  await fetch(upstream);
+  if (run.promptReturn) {
+    await git(p,run.root,'switch','-q',name);
+    try { await rawGit(p,run.root,'merge','--no-edit',`refs/remotes/origin/${upstream}`); }
+    catch {
+      await rawGit(p,run.root,'merge','--abort').catch(()=>{});
+      await git(p,run.root,'switch','-q',pr1.branch);
+      throw Error('The updated PR 1 conflicts with the code branch. Resolve the merge on the code branch, return to PR 1, then retry the code gate.');
+    }
+  } else if(state.state==='merged')await git(p,run.root,'switch','-q','-c',name,`refs/remotes/origin/${upstream}`);
+  else await git(p,run.root,'switch','-q','-c',name);
+  run.prBase=upstream;
   run.branch = name;
   return state.state === 'merged' ? ` PR 1 is merged, so the code branch ${name} starts from ${run.baseBranch}.`
     : ` The code branch ${name} starts from PR 1, and PR 2 will be stacked on it.`;
@@ -1860,6 +1882,15 @@ function armCurrentAutomaticChat(run, p) {
 async function startNextChat(run, p, packageRoot) {
   const area = run.areas[run.area], original = structuredClone(run);
   let prior = lastChat(run, area.name);
+  if (run.promptReturn && prior) {
+    // Re-entry keeps native session custody. Never launch a second agent over
+    // the saved pane when revisiting an area that already has a chat.
+    const observed=structuredClone(prior);
+    await openChat({run,chat:observed},{...p,isTTY:false});
+    if (!saveChatObservations(original,prior,observed,p)) throw Error('The returned area chat changed. Open the current area again.');
+    await deliverRequest(run,await areaMessage(run,run.area,p,packageRoot),p,true);
+    return observed;
+  }
   const reusedPane = Boolean(prior?.paneId);
   p.say(`Starting the ${area.name} chat in Herdr…`);
   // The starting identity is saved before the native launch. A failed save or an ended run sends nothing.
@@ -2000,6 +2031,7 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
     && area.steps.every(step => latest.done[step]) && draftStage && !prOf(latest, draftStage.name)
     && (latest.gate.kind === 'approve' && area.gate === 'approve' || latest.gate.kind === 'approve-pr' && area.before === 'approve');
   if (strengthening && !draftEligibility(run)) return fail('Draft publication can be requested only at a ready unpublished approval gate. The run and existing PRs are unchanged.');
+  if (await reopenChangedStory(run,p)) return fail(`The Story or expected contract changed. Finish the Story area and show its gate again: pdd workflow open ${run.number}.`);
   const selectedQuestion=run.question,selectedGate=run.gate,selectedArea=run.area;
   const askCode = area.then === 'ask-code', beforePr = run.gate?.kind === 'approve-pr';
   if (ended(run) && !(askCode && run.gate?.kind === 'ask-code')) return fail(`The run for ${run.repo}#${run.number} is ${run.state}. There is nothing to approve.`);
@@ -2155,12 +2187,14 @@ ${approvalGuide(run)}`, p, true);
     if(error?.code==='workflow_progress_refused')throw error; return fail(`${oneLine(error.message)} Check PR 1, then ${approvalRetry(run, p.pdd)}`); }
   }
   if (askCode && approvalWords === undefined && beforePr) carried.push(...await draftDescription(run, prOf(run, area.name), await pr1Drafts(run, p), p));
+  const approvedContract = run.promptReturn && area.gate === 'approve' ? await storyContract(run,p) : null;
   const now = invocationAt;
   const branch=run.branch,prBase=run.prBase,observedQuestion=selectedQuestion,areaIndex=selectedArea;
   commitRun(run,p,latest=>{
 
 
     if(askCode){latest.branch=branch;latest.prBase=prBase;}
+    if(approvedContract!==null && latest.promptReturn)latest.promptReturn.storyContract=approvedContract;
     if(equalFact(latest.question,observedQuestion))latest.question=null;
     if(latest.area===areaIndex){if(askCode)latest.metricsOrigin={...(latest.metricsOrigin ?? {origin:'unknown'}),requiredOutcome:'code'};if(sameGate(latest.gate,selectedGate))latest.gate=null;latest.area=areaIndex+1;latest.state=latest.question?'waiting':'running';latest.doneAt=null;}
   });
@@ -2588,9 +2622,10 @@ function detail(run, chat = null, facts = {}) {
   const pending = run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase);
   const next = pending ? `pdd workflow open ${run.number} --new` : activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting'].includes(chat) ? `pdd workflow open ${run.number}`
     : run.gate ? approvalGuide(run)
-    : ended(run) ? null : prOf(run, area?.name) ? `Review and merge ${run.pr.length > 1 && run.prBase && run.prBase !== run.baseBranch ? 'PR 1, then PR 2,' : 'the PR'} on GitHub. pdd never merges.` : `pdd workflow open ${run.number}`;
+    : ended(run) ? null : run.promptReturn && area?.steps.some(step=>!run.done[step]) ? `pdd workflow open ${run.number}` : prOf(run, area?.name) ? `Review and merge ${run.pr.length > 1 && run.prBase && run.prBase !== run.baseBranch ? 'PR 1, then PR 2,' : 'the PR'} on GitHub. pdd never merges.` : `pdd workflow open ${run.number}`;
   return [`${run.repo}#${run.number} "${oneLine(run.issue.title)}" · ${run.workflow} · ${run.agent}`,
     `State: ${describe(run, chat, facts)}`,
+    ...promptReturnLines(run),
     ...(pending ? [`Chat replacement pending: ${run.chatReplacement.phase}; retry pdd workflow open ${run.number} --new, or end with pdd workflow cancel ${run.number}.`] : []),
     ...(pending && run.chatReplacement.phase==='launchRequested' ? ['After startup grace, --new sends the saved launch once only if authoritative inspection proves the latest request never ran; unknown or agent processes keep it pending.'] : []),
     ...(area ? [`Area ${run.area + 1} of ${run.areas.length}: ${area.name} — ${steps.join(', ')}`] : []),
@@ -2612,7 +2647,7 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false } = 
   const problem = replacementPending || activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting'].includes(chat);
   const question = openQuestion(run), writing = !problem && Boolean(run.gate) && !question && chat === 'working';
   const group = run.state === 'cancelled' ? 'cancelled' : run.state === 'completed' ? 'done' : run.state === 'stuck' ? 'waiting' : problem ? 'waiting' : writing ? 'working'
-    : run.state === 'stuck' || run.gate || question || running && ['blocked', 'stopped'].includes(chat) ? 'waiting' : prOf(run, area?.name) ? 'pr-open' : 'working';
+    : run.state === 'stuck' || run.gate || question || running && ['blocked', 'stopped'].includes(chat) ? 'waiting' : prOf(run, area?.name) && !(run.promptReturn && area?.steps.some(step=>!run.done[step])) ? 'pr-open' : 'working';
   const step = area?.steps.find(item => !run.done[item]);
   const words = group === 'cancelled' ? (run.cancelled?.state === 'replaced' ? 'replaced' : 'cancelled')
     : group === 'done' ? (run.gate?.kind === 'ask-code' ? 'done at PR 1' : 'done')
@@ -2762,6 +2797,79 @@ function saveChatObservations(run, original, observed, p, { error, phase = 'open
     }
   });
 }
+const promptReturnLines = run => run.promptReturn
+  ? [`Returned to prompt space: ${run.promptReturn.reason}. Code checks from before the return were cleared.`] : [];
+async function specificationEdits(run,p,base) {
+  // Check only prompts. A failed scenario inventory remains the replay owner's
+  // BLOCKED result; it must not turn into an unrelated prompt-listing exception.
+  const delta=await p.execFile('git',['diff','--quiet',base,'--','*.prompt.md'],{cwd:run.root}).catch(error=>{
+    if(error.code===1)return {code:1};
+    throw error;
+  });
+  if(delta.code!==undefined && ![0,1].includes(delta.code))throw Error('Prompt comparison unavailable.');
+  const untracked=(await rawGit(p,run.root,'ls-files','--others','--exclude-standard','-z')).split('\0').filter(path=>path.endsWith('.prompt.md'));
+  return [...(delta.code===1?['tracked prompt changes']:[]),...untracked];
+}
+async function storyContract(run,p) {
+  const facts=[];
+  for (const path of gitFiles(run.root).sort()) {
+    if (/^user_stories\/.*\.md$/.test(path)) facts.push([path,readFileSync(join(run.root,path),'utf8')]);
+    else if(path.endsWith('.json')) {
+      const text=readFileSync(join(run.root,path),'utf8');
+      try {if(isScenario(text))facts.push([path,canonical(JSON.parse(text))]);} catch {
+        if(run.replayBaseline?.vectors?.some(v=>v.path===path))facts.push([path,text]);
+      }
+    }
+  }
+  return JSON.stringify(facts);
+}
+async function reopenChangedStory(run,p) {
+  if(ended(run) || !run.promptReturn || run.areas[run.area]?.then!=='ask-code')return false;
+  const contract=await storyContract(run,p);
+  if(contract===run.promptReturn.storyContract)return false;
+  const story=run.areas.findIndex(item=>item.gate==='approve');
+  if(story<0)return false;
+  commitRun(run,p,latest=>{
+    if(ended(latest) || latest.area!==run.area || latest.promptReturn?.at!==run.promptReturn.at)throw Object.assign(Error('The returned area changed. Look at the current run again.'),{code:'workflow_progress_refused'});
+    for(const item of latest.areas.slice(story))for(const step of item.steps)delete latest.done[step];
+    latest.area=story;latest.gate=null;latest.question=null;latest.state='running';
+    latest.promptReturn.storyContract=contract;
+  });
+  return true;
+}
+async function returnToPrompt(run,selected,p) {
+  const ownership = await continuationOwnership(run,run.root,p);
+  if(ownership)return ownership;
+  if(run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase))return 'Finish the pending chat replacement before returning to prompt space.';
+  const missing=missingHome(run,p.env);if(missing)return missing;
+  if((await rawGit(p,run.root,'status','--porcelain=v1','-z')).length)return 'Commit or keep the current code edits before returning to PR 1; the worktree must be clean.';
+  const prompt=askArea(run),pr1=prOf(run,prompt.name);
+  let state;
+  try {state=await (p.readPrStatus??readWorkflowPrStatus)({cwd:run.root,url:pr1?.url},p.commandPorts);} catch {return 'Cannot read PR 1. Retry when its state is available.';}
+  if(!pr1 || state.state!=='open')return 'Returning to prompt space requires the owned PR 1 to be open.';
+  protectProgress(run,p);
+  const codeBranch=run.branch;
+  try {
+    await rawGit(p,run.root,'fetch','origin',`refs/heads/${pr1.branch}:refs/remotes/origin/${pr1.branch}`);
+    await rawGit(p,run.root,'switch','-q',pr1.branch);
+    await rawGit(p,run.root,'merge','--ff-only',`refs/remotes/origin/${pr1.branch}`);
+  } catch {
+    await rawGit(p,run.root,'switch','-q',codeBranch).catch(()=>{});
+    return 'Cannot fast-forward the owned PR 1 branch. Repair its local branch, then retry.';
+  }
+  const contract=await storyContract(run,p);
+  commitRun(run,p,latest=>{
+    if(latest.area!==run.area || ended(latest))throw Error('The area changed while returning to prompt space.');
+    latest.promptReturn={at:p.now(),reason:'a prompt correction was requested after code work',codeBranch,storyContract:contract};
+    for(const area of latest.areas.slice(selected))for(const step of area.steps)delete latest.done[step];
+    for(const key of ['replayEvidence','testInventory','approvalRecord','publicationPending','chatReplacement'])delete latest[key];
+    latest.runtimeHistory=[];latest.pddHistory=[];latest.evidence=[];latest.evidenceAssociations=[];
+    latest.branch=pr1.branch;latest.prBase=run.baseBranch;latest.area=selected;latest.state='running';latest.gate=null;latest.question=null;
+  });
+  for(const file of ['replay-evidence.json','old-code-proof.json','test-inventory.json','verify.md','formal.md','review.md'])
+    rmSync(join(run.runDir,file),{force:true});
+  return null;
+}
 async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot = PACKAGE_ROOT }, ports) {
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
   const found = await resolveRun(ref, { cwd }, p);
@@ -2772,12 +2880,19 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
   let chat = [...(run.chats ?? [])].reverse().find(item => item.area === run.areas[selected]?.name), started = false, handedOff = false;
   if (selected < 0) return fail(`Unknown area ${area}. Valid areas: ${run.areas.map(item => item.name).join(', ')}.`);
   if (selected > run.area || area !== undefined && !chat) return fail(`The area ${area} has no recorded chat at or before the current area.`);
-  const historical = selected < run.area;
+  let historical = selected < run.area, returned = false, returnWarnings = [];
+  const promptIndex = run.areas.findIndex(item=>item.then==='ask-code');
+  if (historical && promptIndex >= 0 && run.area > promptIndex && selected <= promptIndex) {
+    if (newSession && p.env.PDD_AGENT_SESSION) return fail('Use another terminal outside the agent session to replace this chat.');
+    const refused = await returnToPrompt(run,selected,p);
+    if (refused) return fail(refused);
+    historical=false;returned=true;
+  }
   if (!historical && run.area > 0 && (newSession || !chat)) {
     const ownershipFailure = await continuationOwnership(run, cwd, p);
     if (ownershipFailure) return fail(ownershipFailure);
   }
-  const areaOriginal = area !== undefined && !newSession ? structuredClone(chat) : null;
+  const areaOriginal = area !== undefined && !newSession && !returned ? structuredClone(chat) : null;
   let defaultOriginal = chat ? structuredClone(chat) : undefined;
   if (newSession && historical) return fail(`Select the current area ${run.areas[run.area].name} to start a new session; earlier areas cannot be replaced.`);
   if (newSession && !chat && (!run.chatReplacement || ['launched','rolledBack','ended'].includes(run.chatReplacement.phase))) return fail('The current area has no saved chat to replace. Open it first.');
@@ -2854,6 +2969,7 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
       const saved = areaOriginal ? saveAreaObservations(run, areaOriginal, chat, p)
         : saveChatObservations(run, defaultOriginal, chat, p);
       if (saved && !historical && Number.isFinite(chat.resumedAt) && launchAnchor(chat) !== priorResumeAnchor) armCurrentAutomaticChat(run, p);
+      if (saved && returned) returnWarnings=noticeWarnings(await deliverRequest(run,await areaMessage(run,selected,p,packageRoot),p,true));
       handedOff = true;
       p.releaseRunLock?.();
     } });
@@ -2873,7 +2989,7 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
     const latest = readRun(run.runDir), gateRun = latest?.runId === run.runId ? latest : run;
     const shownGate = gateRun.gate?.promptSnapshot ? snapshotLines(gateRun.gate.promptSnapshot) : [];
     const where = `Herdr session pdd, tab "${chat.label}"`;
-    return done([...shownGate, ...(gateRun.gate ? [approvalGuide(gateRun, p.pdd)] : []), started ? `Started the ${chat.area} chat in ${where}.` : opened.resumed ? `Resumed the ${chat.area} chat in ${where}.` : `The ${chat.area} chat is in ${where}.`,
+    return done([...promptReturnLines(gateRun), ...returnWarnings, ...shownGate, ...(gateRun.gate ? [approvalGuide(gateRun, p.pdd)] : []), started ? `Started the ${chat.area} chat in ${where}.` : opened.resumed ? `Resumed the ${chat.area} chat in ${where}.` : `The ${chat.area} chat is in ${where}.`,
       ...(opened.attached ? [] : [p.env.HERDR_ENV === '1' ? 'pdd focused that tab. If you are in another Herdr session, run: herdr session attach pdd' : 'See it with: herdr session attach pdd'])].join('\n'));
   } catch (error) {
     if (newSession) return fail(`Chat replacement ${run.chatReplacement?.phase ?? 'refused'} (${error.code ?? 'error'}: ${oneLine(error.message)}).${run.chatReplacement ? ` Retry: pdd workflow open ${run.number} --new` : ''}`);

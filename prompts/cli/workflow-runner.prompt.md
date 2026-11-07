@@ -186,6 +186,39 @@ authority and prompt/dependency checks. Scenario changes follow its saved-value 
 do not block publication. Public-boundary execution, mutation and formal checks still apply.
 Adoption supplies no PASS or fresh execution attestation.
 
+## Return to prompt space after code entry
+
+For a two-PR run whose code area has started, explicit `workflow open ISSUE prompt-pr`
+(or its Story area, with optional `--new`) reopens prompt work when the owned PR 1
+is still open. Manual and automatic runs use this same route and current ownership
+checks. Refuse a dirty worktree, unavailable/closed/merged PR 1, or pending chat
+replacement before branch or progress effects. Switch to PR 1's recorded branch;
+never carry code changes into that branch. Preserve both PR identities and decisions
+as history. Record the return and reason (a prompt correction found during code work)
+for status, area briefs and both PR descriptions. Plain historical open for other
+workflows retains its inspection behavior.
+
+Clear completed steps from the selected area onward, current gate/question, stale
+code check results, inventory, proof/replay evidence and source associations. Old
+results cannot become new evidence merely because source bytes match. Reopen the
+selected chat through the ordinary chat path; `--new` now replaces that current
+prompt chat. A prompt-only correction reruns the prompt checks. A changed Story or
+scenario expected contract reopens the existing Story approval gate before prompt
+publication; do not invent a new gate format or reuse the old decision. Keep prompt
+work on PR 1 even while that gate is open. Finishing the prompt area updates its
+existing PR 1 through ordinary publication, then uses the normal code-choice gate.
+
+When code resumes, reuse its recorded branch and PR 2. Merge the updated PR 1 into
+that branch without rewriting published history; a conflict stops with recovery
+advice and retains prompt-space progress. Code generation and every code check run
+again. PR 2 must contain no prompt changes relative to PR 1;
+refuse publication before committing or pushing prompt edits and direct the worker
+back to prompt space. Story and scenario corrections made during this return go
+to PR 1. Preserve the replay owner's saved-value warning policy for code-space vectors. The refreshed ordinary replay anchor comes only from this
+run's changed scenarios, excluding unrelated scenarios brought in from the original
+base branch. Compare with the current merge-base of that original branch, retaining
+immutable `baseSha`; adopted runs keep their declared scope and authority.
+
 ## Failed chat startup and recovery
 
 A Herdr request failure is not evidence that an agent is working. If an initial or later-area start, or explicit open/resume, fails, keep the same run, allocated worktree, selected base, issue claim, completed steps and decisions. Save `chatFailure {area, phase, code, message, at}` (phase `start` or `open`, finite one-line reason), set the active run to `waiting`, and report the failure with `pdd workflow open N` for explicit recovery after Herdr is available. Do not retry the request automatically, restart an unavailable server, allocate again or fabricate a chat/session. A failure after the pane launch request may have dispatched: retain the prepared chat identity supplied by [area chats](workflow-chat.prompt.md), including its unconfirmed flag.
@@ -668,7 +701,7 @@ Call the production [PR evidence preparation](workflow-pr-evidence.prompt.md) bo
 
 ## Open a saved area or replace its session
 
-This is an additive extension; all other runner contracts remain unchanged. An explicit `area` must name an area at or before `run.area` with a recorded chat. Choose its latest saved chat. Unknown, future or unrecorded selectors refuse before persistence or native effects; an unknown-area message lists the workflow's valid area names. Without a selector choose the current area. A fresh `newSession` attempt for an earlier area refuses with advice to select the current area; recovery of an already saved attempt follows its recorded target below; a current area without a saved chat cannot replace one. Historical open delegates to `openChat`, persists only that selected chat's observations (including its same-identity startUnconfirmed flag after a failed resume), and reports its own error without setting/clearing current `chatFailure`, changing run state or invoking current-area recovery. AREA never changes `run.area`, even on failure. This navigation does not enforce read-only historical execution.
+Except for [returning to prompt space](#return-to-prompt-space-after-code-entry), this is a navigation extension; all other runner contracts remain unchanged. An explicit `area` must name an area at or before `run.area` with a recorded chat. Choose its latest saved chat. Unknown, future or unrecorded selectors refuse before persistence or native effects; an unknown-area message lists the workflow's valid area names. Without a selector choose the current area. A fresh `newSession` attempt for an earlier area refuses with advice to select the current area; recovery of an already saved attempt follows its recorded target below; a current area without a saved chat cannot replace one. Historical open delegates to `openChat`, persists only that selected chat's observations (including its same-identity startUnconfirmed flag after a failed resume), and reports its own error without setting/clearing current `chatFailure`, changing run state or invoking current-area recovery. AREA never changes `run.area`, even on failure. This navigation does not enforce read-only historical execution.
 
 For replacement call the module function `restartChat({run,chat,message,pending}, ports)` from [area chats](workflow-chat.prompt.md#explicit-fresh-session). That owner defines native checks and the checkpoint envelope. Build the continuation with `areaMessage` for the same current area plus its completed step names/summaries, remaining steps, open gate and pending question in human-readable words, including what the person must decide; never paste a raw gate object. Explain that already completed steps must not rerun and that prior approval does not approve new work. Preserve the same agent, run/worktree/branch, completed records, question, gate, approvalRecord, decisions and PR records on success and failure; configuration follows the account-selection rule below; replacement never advances or publishes. An eligibility or ownership refusal before intent leaves the entire saved run unchanged, including state and chatFailure. A failure after durable intent retains the pending custody for recovery, without misreporting it as a preflight refusal. After effects begin, record replacement custody, its account commit below and a current-area chat failure when necessary; successful replacement clears that failure but restores running only without a waiting gate/question.
 
