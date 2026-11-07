@@ -12,7 +12,8 @@ import {openHerdrRunLayout,closeHerdrRunLayout,closeHerdrRepoLayoutIfIdle,withHe
 const repository='example/project';
 const copy=x=>structuredClone(x);
 const registries=['ready','intent','refused','malformed'];
-const openStates=['unique','absent','already-open','duplicate-run','wrong-clone','wrong-linked','area-wrong-cwd','duplicate-area','changed-root'];
+// area-shell-moved: the area tab's shell is in another folder (a shell startup cd); a live folder is not identity (2903).
+const openStates=['unique','absent','already-open','duplicate-run','wrong-clone','wrong-linked','area-shell-moved','duplicate-area','changed-root'];
 // Exhaustive Cartesian products: open 4 registry states × 2 inventory orders ×
 // 2 independent clones × 9 live states = 144; parent labels 2×2×4 = 16;
 // cleanup 2×2×7 = 28. Total 188 seeded worlds, real public module boundaries.
@@ -79,7 +80,7 @@ test('bounded live checkout ownership: all 188 seeded worlds',async()=>{
    if(state==='duplicate-run')w.seed('duplicate','duplicate',w.c.cwd,w.c.common,true);
    if(state==='wrong-clone')row.worktree.repo_key=clones[1-target].common;
    if(state==='wrong-linked')row.worktree.is_linked_worktree=false;
-   if(state==='area-wrong-cwd')addArea('wrong',clones[1-target].cwd);
+   if(state==='area-shell-moved')addArea('moved',clones[1-target].cwd);
    if(state==='duplicate-area'){addArea('one',w.c.cwd);addArea('two',w.c.cwd);}
    if(state==='changed-root')w.h.panes.find(p=>p.workspace_id===id).terminal_id='changed';
    if(state==='unique')addArea('existing',w.c.cwd);
@@ -89,11 +90,11 @@ test('bounded live checkout ownership: all 188 seeded worlds',async()=>{
     let result;await assert.doesNotReject(async()=>{result=await w.open();},`${registry}/${order}/${target}/${state}: approved live identity succeeds`);
     assert.equal(result.repoWorkspaceId,`parent-${target}`);
     assert.equal(w.h.workspaces.find(x=>x.workspace_id===result.workspaceId).worktree.checkout_path,w.c.cwd);
-    const pane=w.h.panes.find(p=>p.pane_id===result.paneId);assert.equal(pane.cwd,w.c.cwd);
+    const pane=w.h.panes.find(p=>p.pane_id===result.paneId);assert.equal(pane.workspace_id,result.workspaceId);if(state!=='area-shell-moved')assert.equal(pane.cwd,w.c.cwd);
     assert.equal(w.h.tabs.find(t=>t.tab_id===result.tabId).label,'formal');
     assert.ok(w.checkpoints>0,'verified returned identities checkpointed');
     if(state==='unique'){assert.equal(result.tabId,'area-existing');assert.deepEqual(w.mutate(),[]);}
-    else if(state==='area-wrong-cwd')assert.equal(w.mutate().length,1,'wrong checkout tab is preserved and a matching tab created');
+    else if(state==='area-shell-moved'){assert.equal(result.tabId,'area-moved','the area tab is adopted although its shell moved');assert.deepEqual(w.mutate(),[]);}
     else assert.deepEqual(w.mutate().map(a=>a.slice(0,2).join(':')),['worktree:open','tab:create']);
     // Replay adopts the same workspace/area and does not allocate duplicates.
     const n=w.mutate().length;w.input.run.layout={...result,phase:'ready'};

@@ -159,7 +159,8 @@ test('small-change: run exits at once, done reaches the gate, changes go to the 
   assert.ok(existsSync(run.root) && run.root !== f.source); assert.match(run.branch, /^pdd\/small-change-17-/);
   const first = run.chats[0], pane = f.herdr.paneOf(first);
   assert.equal(pane.commands.length, 1);
-  assert.match(pane.commands[0], /^env PDD_AGENT_SESSION=1 PDD_BIN=\S+ CLAUDE_CONFIG_DIR=\S+ claude --dangerously-skip-permissions --session-id [0-9a-f-]{36} "\$\(cat '.+plan-start\.md'\)"$/);
+  assert.match(pane.commands[0], /^cd '[^']+' && env PDD_AGENT_SESSION=1 PDD_BIN=\S+ CLAUDE_CONFIG_DIR=\S+ claude --dangerously-skip-permissions --session-id [0-9a-f-]{36} "\$\(cat '.+plan-start\.md'\)"$/);
+  assert.ok(pane.commands[0].startsWith(`cd '${run.root}' && `), 'the chat starts in the run worktree (2903)');
   assert.equal(first.session.id, pane.agent.agent_session.value);
   const message = readFileSync(join(run.runDir, 'plan-start.md'), 'utf8');
   for (const part of [join(packageRoot, 'skills/pdd-small-change/SKILL.md'), '#17', 'Use value two', issueUrl, run.root, run.runDir, 'plan', 'scope', '"$PDD_BIN" workflow done'])
@@ -297,7 +298,7 @@ for (const name of ['bug', 'feature']) {
     assert.equal((await f.run()).exitCode, 0);
     let run = f.record();
     assert.deepEqual(areas.map(([area]) => area), ['story', 'prompt-pr', 'code']);
-    assert.match(f.herdr.paneOf(run.chats[0]).commands[0], /^env PDD_AGENT_SESSION=1 PDD_BIN=\S+ codex --no-daemon --dangerously-bypass-approvals-and-sandbox -c 'projects=\{".+"=\{trust_level="trusted"\}\}' -c 'shell_environment_policy\.set\.PDD_BIN="[^"]+"' -c 'shell_environment_policy\.set\.PDD_AGENT_SESSION="1"' "\$\(cat '.+story-start\.md'\)"$/);
+    assert.match(f.herdr.paneOf(run.chats[0]).commands[0], /^cd '[^']+' && env PDD_AGENT_SESSION=1 PDD_BIN=\S+ codex --no-daemon --dangerously-bypass-approvals-and-sandbox -c 'projects=\{".+"=\{trust_level="trusted"\}\}' -c 'shell_environment_policy\.set\.PDD_BIN="[^"]+"' -c 'shell_environment_policy\.set\.PDD_AGENT_SESSION="1"' "\$\(cat '.+story-start\.md'\)"$/);
     for (const [index, [area, steps]] of areas.entries()) {
       assert.equal(f.record().area, index); assert.equal(f.record().chats.at(-1).area, area);
       const optional = JSON.parse(readFileSync(join(packageRoot, `skills/pdd-${name}/workflow.json`), 'utf8')).areas[index].optional;
