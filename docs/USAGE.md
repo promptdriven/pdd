@@ -243,7 +243,7 @@ The command returns at once. It prints where the run is and the commands to open
 
 ### 6.3 What happens
 
-1. pdd reads the issue with `gh`. It makes a new branch (for example `pdd/small-change-42-1a2b3c4d`) and a new Git worktree in the folder `your-clone.pdd-worktrees/` next to your clone. It makes the run folder `your-clone/.git/pdd/runs/42/`. From a linked worktree or with a bare repository, the worktree folder is beside the primary repository and the run folder is in the common Git directory (`git rev-parse --git-common-dir`). [How a run works](workflows.md#how-a-run-works) has the table.
+1. pdd reads the issue with `gh`. It makes a new branch (for example `pdd/small-change-42-1a2b3c4d`) and a new Git worktree in the folder `your-clone.pdd-worktrees/` next to your clone. It makes the run folder `your-clone/.git/pdd/runs/42/`. From a linked worktree or with a bare repository, the worktree folder is beside the primary repository, or beside the project folder that holds a bare repository, and the run folder is in the common Git directory (`git rev-parse --git-common-dir`). [How a run works](workflows.md#how-a-run-works) has the table.
 2. pdd opens the first chat in Herdr, in full-access mode. The Herdr session is `pdd`. Each verified common Git directory has its own repository workspace. It uses the free repository name, then `owner/repo`, then a checkout-qualified label when another clone holds those labels. Each run has a workspace with the repo name, the issue and the workflow, for example `my-app#42 small-change`, with one tab per area. pdd does not touch your default Herdr session.
 3. The chat follows the workflow skill. It gives each step to a fresh subagent. The subagent gets its full brief at once, with file paths, not the chat history.
 4. After each step, the agent tells pdd that the step is done. The step notes go into the run folder.
@@ -492,7 +492,7 @@ git worktree remove ../your-clone.pdd-worktrees/FOLDER
 git branch -D pdd/small-change-42-1a2b3c4d          # the run's local branch
 ```
 
-For a linked worktree or a bare repository, the run worktrees folder is in the table in [How a run works](workflows.md#how-a-run-works). Do not remove a worktree while its run goes on. The run folder stays in `.git/pdd/runs/N` in your clone.
+For a linked worktree or a bare repository, the run worktrees folder is in the table in [How a run works](workflows.md#how-a-run-works). Do not remove a worktree while its run goes on. The run folder stays in `pdd/runs/N` in the common Git directory (`.git/pdd/runs/N` in a normal clone).
 
 All runs share the Herdr session `pdd`. `cancel` closes the tabs of a run. To remove the whole session when no run uses it:
 

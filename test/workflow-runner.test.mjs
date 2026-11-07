@@ -124,7 +124,7 @@ async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
   return f;
 }
 
-// The runner in every Git layout, and its refusal before any record: test/workflow-git-layouts.test.mjs.
+// The runner in each supported Git layout, and its refusal before any record: test/workflow-git-layouts.test.mjs.
 
 test('small-change: run exits at once, done reaches the gate, changes go to the same chat, approve opens a new chat, done verify opens the PR', async t => {
   const f = await fixture(t);

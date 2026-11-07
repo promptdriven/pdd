@@ -19,7 +19,7 @@ or alter sourceRoot in an existing assignment.
 
 ## Supported Git layouts
 
-pdd supports each layout that Git supports for linked worktrees. It identifies the repository only from what Git reports for the invoking checkout: the canonical absolute common Git directory C (`rev-parse --path-format=absolute --git-common-dir`), Git's primary registration R (the first record of `worktree list --porcelain -z`), `core.bare` for a bare R, and the origin. Every origin that pdd reads must name the same GitHub repository. When these facts agree, allocation uses the same intent, claim and `git worktree add` in every layout. Run Git commands that need a work tree only in the invoking checkout or the run worktree. In a bare R, run only reads that need no work tree.
+pdd supports exactly the four layouts in the table below: a normal clone and its linked worktrees, a bare `project.git`, a bare repository in `P/.git`, and a bare `P/.bare` named by a `P/.git` file, each from any of its checkouts. It identifies the repository only from what Git reports for the invoking checkout: the canonical absolute common Git directory C (`rev-parse --path-format=absolute --git-common-dir`), Git's primary registration R (the first record of `worktree list --porcelain -z`), `core.bare` for a bare R, and the origin. Every origin that pdd reads must name the same GitHub repository. When these facts agree, allocation uses the same intent, claim and `git worktree add` in every layout. Run Git commands that need a work tree only in the invoking checkout or the run worktree. In a bare R, run only reads that need no work tree.
 
 | Layout | R | C | Run worktrees folder |
 |---|---|---|---|
@@ -28,10 +28,13 @@ pdd supports each layout that Git supports for linked worktrees. It identifies t
 | Bare repository stored in `P/.git`, with linked worktrees | P | `P/.git` | `P.pdd-worktrees` |
 | Bare `P/.bare`, named by a file `P/.git` that holds `gitdir: ./.bare` | `P/.bare` | R | `P.pdd-worktrees` |
 
+- R and the run worktrees folder must have no control character (the `plain` path rule). Check both before creating any directory or saving any record, so a refusal leaves nothing behind.
 - A normal R must resolve, through Git run in R, to its own checkout root, the same C and the same origin.
 - A bare R must be marked bare in the registration, and R must be C, or the folder that holds C when C is `R/.git`. Git run in R must report a bare repository whose Git directory and common directory are both C, `core.bare=true` and the same origin.
 - A bare C is inside a project folder P when Git, run in P = the parent folder of C, reports C as its Git directory: P holds C as `P/.git`, or P has a `.git` file that names C. Then the run worktrees folder is `P.pdd-worktrees` beside P. Otherwise it is `<C name>.pdd-worktrees` beside C. A folder inside P would be inside Git's discovery area of P's `.git` and is hidden from the person; beside P, it is in the same place as for a normal clone.
 - Lookup also accepts an assignment saved in `<R name>.pdd-worktrees` beside R, so a `.bare` run that an earlier version saved in `P/.bare.pdd-worktrees` stays valid. New allocations always use the table.
+
+A separate Git directory (`git clone --separate-git-dir`) is refused, from its main checkout and from its linked checkouts. Git registers the Git directory itself as the primary worktree, not the main checkout, and Git records no path to the main checkout. So pdd can verify no primary checkout, and a run worktrees folder chosen from the caller would differ between checkouts of one repository. The refusal says that Git finds no work tree at R and names the next step: run the workflow from a normal clone or from a linked worktree of a bare repository.
 
 Any other or inconsistent layout returns recovery_required before saving an allocation record or issue claim or attempting worktree add; the runner exits 1. The diagnostic starts with "Cannot establish repository or allocation metadata identity." When a layout fact disagrees, the next sentence names that fact and both values (for example the origin repositories of R and of the invoking checkout, or R and C), and one sentence gives the next step. The refusal never tells the person to change `core.bare`. It ends with the existing no-record/no-claim/no-confirmed-worktree diagnostic. Other metadata identity failures before durable intent creation keep the same first and last sentences. Preserve the existing unconfirmed-allocation diagnostic once intent is saved.
 

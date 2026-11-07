@@ -177,6 +177,19 @@ test('2698: a separate Git directory whose primary checkout Git cannot name refu
     await refusedWithoutRecord(g, f.input(2703, { cwd }), [JSON.stringify(separate), 'finds no work tree', 'Run the workflow from a normal clone']);
 });
 
+for (const layout of ['linked-normal', 'bare-in-dotgit']) test(`2698: ${layout} whose primary folder name has a tab refuses before any folder, record or claim`, async t => {
+  const f = await fixture(t), primary = join(f.temp, 'pro\tject'), common = join(primary, '.git'), cwd = join(f.temp, 'linked');
+  if (layout === 'linked-normal') await f.git('clone', f.cwd, primary);
+  else { await mkdir(primary); await f.git('clone', '--bare', f.cwd, common); }
+  await f.gitAt(primary, 'remote', 'set-url', 'origin', 'https://github.com/Acme/Project.git');
+  await f.gitAt(primary, 'worktree', 'add', '-b', 'linked-base', cwd, 'main');
+  assert.equal((await f.gitAt(cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir')).stdout.trim(), common);
+  const refused = await refusedWithoutRecord({ ...f, cwd, common }, f.input(2704, { cwd }), [JSON.stringify(primary), 'control character']);
+  assert.equal(refused.state, 'recovery_required');
+  for (const path of [join(common, 'pdd'), primary + '.pdd-worktrees']) await assert.rejects(lstat(path), { code: 'ENOENT' }, path);
+  assert.equal((await lookupRepositoryParent({ cwd, repository: 'Acme/Project', commonDir: common }, f.ports)).state, 'recovery_required');
+});
+
 test('2698: saved intent on bare-in-.git layout retains the unconfirmed allocation diagnostic and custody', async t => {
   const f = await layoutFixture(t, 'bare-in-dotgit'), input = f.input(2698, { cwd: f.cwd });
   const id = randomUUID(), parent = f.primary + '.pdd-worktrees';

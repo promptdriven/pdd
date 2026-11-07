@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-worktree.prompt.md (sha256: 39b433f23fbad5e6b424140b458ed6ab19c684e5df06b1a555981fed87a292e0).
+// Generated from prompts/cli/workflow-worktree.prompt.md (sha256: b4626c68f8a4b018ab842dbfb99c301429c3a1f7f6ef5431e5d080b572599bd7).
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
@@ -171,6 +171,8 @@ async function verifiedPrimary(ctx, c) {
   const C = ctx.commonDir, primary = registrations(await c.git(ctx.sourceRoot, ['worktree', 'list', '--porcelain', '-z']))[0];
   if (!primary?.worktree) disagree(`Git lists no primary worktree registration for this repository. ${REPAIR}`);
   const R = primary.worktree;
+  // Refuse before any folder or record exists: a control character would only fail after the claim is saved.
+  if (!plain(R)) disagree(`Git registers the primary repository at ${shown(R)}, but that path has a control character, so pdd cannot use it safely. Move the repository to a path without control characters, run "git worktree repair", then run the workflow again.`);
   try { await canonicalDirectory(R); }
   catch { disagree(`Git registers the primary repository at ${shown(R)}, but that folder is missing or is not a canonical folder. ${REPAIR}`); }
   if (primary.bare === undefined) {
@@ -214,7 +216,7 @@ export async function lookupRepositoryParent(input, ports = {}) {
 
 async function externalWorktrees(ctx,c) {
   const {worktrees:path}=await verifiedPrimary(ctx,c);
-  if (path.split(sep).some(part => part.toLowerCase() === '.git')) fail();
+  if (!plain(path) || path.split(sep).some(part => part.toLowerCase() === '.git')) fail();
   return path;
 }
 
