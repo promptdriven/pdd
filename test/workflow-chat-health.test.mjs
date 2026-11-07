@@ -60,6 +60,7 @@ test('claude: every turn fails on a login error, so status says the chat cannot 
   const { detail, line, json } = await statusAll(f);
   assert.match(stateLine(detail), /^State: the chat cannot work: the agent's login failed \(Your ANTHROPIC_API_KEY belongs to a disabled organization/);
   assert.match(stateLine(detail), /pdd workflow open 17 --new/, 'status says how to restart the chat');
+  assert.match(stateLine(detail), /Sign the agent in again \(\/login in the chat, or fix its API key\)/, 'status says where to sign in');
   assert.match(nextLine(detail), /pdd workflow open 17 --new/);
   assert.doesNotMatch(detail, /the agent works on/);
   assert.match(line, /^example\/project#17 · small-change · plan · the chat cannot work: the agent's login failed · /);
@@ -170,7 +171,31 @@ test('claude: a gate keeps its words even when the chat cannot work', async t =>
   assert.match(stateLine(detail), /^State: waiting for you: approve the plan area/);
 });
 
-// Codex shows a failed turn as an error line that starts with "■". Its session file keeps the user message, not the error.
+test('claude: a healthy chat that quotes an error line or the limit menu keeps its status words', async t => {
+  const { f, pane } = await claudeChat(t);
+  // No transcript, so only the screen counts. Claude draws its own error line right under the user's prompt line; the
+  // same "  ⎿  " line under a reply or a tool call is quoted text or a tool result.
+  const screens = {
+    'a reply quotes the limit line': "> Start the plan area.\n\n⏺ The issue says Claude Code showed:\n  ⎿  You've hit your weekly limit · resets Nov 6 at 3pm\n\n> \n",
+    'a reply quotes the login line further down': "> Start the plan area.\n\n⏺ I found the cause.\n  The screen showed:\n  ⎿  Not logged in · Please run /login\n  I fix the check now.\n\n> \n",
+    'a reply quotes the limit menu': "> Start the plan area.\n\n⏺ The issue shows the limit menu:\n  ❯ 1. Stop and wait for limit to reset\n    2. Wait here, then continue automatically\n\n> \n",
+  };
+  for (const [name, screen] of Object.entries(screens)) {
+    pane.screen = screen;
+    const shown = await statusAll(f);
+    assert.equal(stateLine(shown.detail), 'State: the agent works on scope', name);
+    assert.equal(shown.json.chatProblem, undefined, name);
+  }
+  // A tool result with a 401 above a real question dialog: the dialog keeps its words.
+  pane.agent.agent_status = 'blocked';
+  pane.screen = "> Check the PR.\n\n⏺ Bash(gh pr view 12)\n  ⎿  Error: gh: HTTP 401: Bad credentials\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n\n Esc to cancel\n";
+  const shown = await statusAll(f);
+  assert.equal(stateLine(shown.detail), 'State: waiting for you: the chat asks a question in its window (pdd workflow open 17)');
+});
+
+// Codex rollout rows, in the shapes that Codex 0.159 to 0.167 writes (copied from real local rollouts; the texts, ids and
+// paths are replaced, and fields that do not matter here are left out). Each turn starts with task_started and ends with
+// task_complete; a failed turn keeps its error there.
 async function codexChat(t) {
   const f = await fixture(t, { agent: 'codex' });
   const home = join(f.base, 'codexhome'); mkdirSync(home); f.ports.env.CODEX_HOME = home;
@@ -184,23 +209,45 @@ async function codexChat(t) {
   pane.agent.agent_status = 'idle';
   const day = new Date(started), folder = join(home, 'sessions', String(day.getFullYear()), String(day.getMonth() + 1).padStart(2, '0'), String(day.getDate()).padStart(2, '0'));
   const file = join(folder, `rollout-2026-10-27T17-00-00-${id}.jsonl`);
-  const write = rows => { mkdirSync(folder, { recursive: true });
-    writeFileSync(file, [{ timestamp: iso(started), type: 'session_meta', payload: { id, cwd: run.root, timestamp: iso(started) } }, ...rows].map(row => JSON.stringify(row)).join('\n') + '\n'); };
+  let ordinal = 0;
+  const row = (at, type, payload) => ({ timestamp: iso(at), ordinal: ordinal++, type, payload });
+  const turnId = n => `${hex.slice(0, 8)}-${hex.slice(8, 12)}-7000-8000-${String(n).padStart(12, '0')}`, seconds = at => Math.floor(at / 1000);
+  const rows = {
+    // The person's message starts a turn.
+    start: (n, text, at) => [
+      row(at, 'event_msg', { type: 'task_started', turn_id: turnId(n), root_turn_id: turnId(n), started_at: seconds(at), model_context_window: 258400, collaboration_mode_kind: 'default' }),
+      row(at, 'response_item', { type: 'message', id: `msg_user_${n}`, role: 'user', content: [{ type: 'input_text', text }] }),
+      row(at, 'turn_context', { turn_id: turnId(n), root_turn_id: turnId(n), cwd: run.root, workspace_roots: [run.root], approval_policy: 'never', sandbox_policy: { type: 'danger-full-access' }, model: 'gpt-test' }),
+      row(at, 'event_msg', { type: 'item_completed', thread_id: id, turn_id: turnId(n), item: { type: 'UserMessage', id: `item_user_${n}`, content: [{ type: 'text', text, text_elements: [] }] }, started_at_ms: at, completed_at_ms: at })],
+    reply: (n, text, at) => [
+      row(at, 'event_msg', { type: 'item_completed', thread_id: id, turn_id: turnId(n), item: { type: 'AgentMessage', id: `item_agent_${n}`, content: [{ type: 'Text', text }], phase: 'final_answer' }, started_at_ms: at, completed_at_ms: at }),
+      row(at, 'response_item', { type: 'message', id: `msg_agent_${n}`, role: 'assistant', content: [{ type: 'output_text', text }] })],
+    // At a real usage limit, the rate-limit windows are empty: this row does not show the limit.
+    tokens: at => row(at, 'event_msg', { type: 'token_count', info: null, rate_limits: { limit_id: 'premium', limit_name: null, primary: null, secondary: null,
+      credits: { has_credits: false, unlimited: false, balance: '0' }, plan_type: null, rate_limit_reached_type: null } }),
+    end: (n, at, startedAt, { reply = null, error } = {}) => row(at, 'event_msg', { type: 'task_complete', turn_id: turnId(n), last_agent_message: reply,
+      ...(error ? { error } : {}), started_at: seconds(startedAt), completed_at: seconds(at), duration_ms: at - startedAt }),
+  };
+  const write = list => { mkdirSync(folder, { recursive: true });
+    const meta = row(started, 'session_meta', { session_id: id, id, timestamp: iso(started), cwd: run.root, originator: 'codex-tui', cli_version: '0.167.0', source: 'cli', model_provider: 'openai' });
+    writeFileSync(file, [meta, ...list.flat()].map(item => JSON.stringify(item)).join('\n') + '\n'); };
   f.tick(60_000);
-  return { f, run, pane, id, write };
+  return { f, run, pane, id, rows, write };
 }
-const codexRows = {
-  user: (text, at) => ({ timestamp: iso(at), type: 'event_msg', payload: { type: 'user_message', message: text } }),
-  reply: (text, at) => ({ timestamp: iso(at), type: 'event_msg', payload: { type: 'agent_message', message: text } }),
-  tokens: (rateLimits, at) => ({ timestamp: iso(at), type: 'event_msg', payload: { type: 'token_count', info: null, rate_limits: rateLimits } }),
-};
-// A long error line wraps; its reset time is on the next screen line.
-const CODEX_LIMIT = "■ You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro)\n  or try again at 4:17 PM.";
+// Codex draws its own error line with "■ " at column 0. A long one wraps; its reset time is on the next screen line.
+const CODEX_LIMIT = "■ You've hit your usage limit. More about your plan at https://example.test/limits\n  or try again at 4:17 PM.";
 const codexScreen = body =>`› Start the build area.\n\n${body}\n\n› Ask Codex to do anything\n\n  ? for shortcuts                                    100% context left\n`;
+// The real error texts, with the address, the middle of the limit text and the request id replaced.
+const CODEX_ERRORS = {
+  limit: { message: 'You’ve hit your usage limit. More at https://example.test/limits or try again at Nov 3rd, 2026 10:35 PM.', codex_error_info: 'usage_limit_exceeded' },
+  unauthorized: { message: 'unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://example.test/v1/responses, request id: req_0000', codex_error_info: { http_connection_failed: { http_status_code: 401 } } },
+  refresh: { message: "Failed to refresh token: 400 Bad Request: Invalid 'refresh_token': empty string.", codex_error_info: 'other' },
+  overloaded: { message: 'Selected model is at capacity. Please try a different model.', codex_error_info: 'server_overloaded' },
+};
+const paneReads = (f, from) => f.herdr.calls.slice(from).filter(([group, verb]) => group === 'pane' && verb === 'read').length;
 
-test('codex: a usage limit on the screen says "usage limit until <time>" and how to restart, also on another account', async t => {
-  const { f, pane, write } = await codexChat(t);
-  write([codexRows.user('Start the build area.', f.clock - 50_000)]);
+test('codex: without its session file, a usage limit on the screen says "usage limit until <time>" and how to restart, also on another account', async t => {
+  const { f, pane } = await codexChat(t);
   pane.screen = codexScreen(CODEX_LIMIT);
   const before = f.herdr.calls.length;
   const { detail, line, json } = await statusAll(f);
@@ -210,19 +257,49 @@ test('codex: a usage limit on the screen says "usage limit until <time>" and how
   assert.match(line, / · the chat cannot work: usage limit until 4:17 PM · /);
   assert.equal(json.group, 'waiting');
   assert.equal(json.chatProblem.kind, 'usage-limit');
+  assert.equal(json.chatProblem.message, "You've hit your usage limit.", 'pdd does not repeat the rest of the limit text');
   assertOnlyReads(f, before);
 });
 
-test('codex: its session file says the account reached its limit, with the time the limit ends', async t => {
-  const { f, pane, write } = await codexChat(t);
-  const ends = Date.parse('2026-10-27T21:30:00Z');
-  write([codexRows.user('Start the build area.', f.clock - 50_000), codexRows.reply('I start with the tests.', f.clock - 40_000),
-    codexRows.tokens({ limit_id: 'codex', primary: { used_percent: 100, window_minutes: 300, resets_at: ends / 1000 }, secondary: null,
-      credits: { has_credits: false, unlimited: false, balance: '0' }, plan_type: 'plus', rate_limit_reached_type: 'primary' }, f.clock - 39_000)]);
-  pane.screen = codexScreen('• I start with the tests.');
-  const { detail, json } = await statusAll(f);
-  assert.match(stateLine(detail), /^State: the chat cannot work: usage limit until Oct 27, 21:30\./);
-  assert.equal(json.chatProblem.until, '2026-10-27T21:30:00.000Z');
+test('codex: its session file says the newest turn failed at the usage limit, with the time Codex names', async t => {
+  const { f, pane, rows, write } = await codexChat(t);
+  const at = f.clock - 50_000;
+  write([rows.start(1, 'Start the build area.', at), rows.tokens(at + 900), rows.end(1, at + 1900, at, { error: CODEX_ERRORS.limit })]);
+  // The error line is no longer on the screen: the file decides, and pdd does not read the screen.
+  pane.screen = '› Ask Codex to do anything\n';
+  const before = f.herdr.calls.length;
+  const { detail, line, json } = await statusAll(f);
+  assert.match(stateLine(detail), /^State: the chat cannot work: usage limit until Nov 3rd, 2026 10:35 PM\./);
+  assert.match(line, / · the chat cannot work: usage limit until Nov 3rd, 2026 10:35 PM · /);
+  assert.equal(json.group, 'waiting');
+  assert.deepEqual(json.chatProblem, { kind: 'usage-limit', agent: 'codex', until: null, message: 'You’ve hit your usage limit.' });
+  assertOnlyReads(f, before);
+  assert.equal(paneReads(f, before), 0, 'the session file decided');
+});
+
+test('codex: its session file says the newest turn failed on the login (a 401, or a failed token refresh)', async t => {
+  const { f, pane, rows, write } = await codexChat(t);
+  const at = f.clock - 50_000;
+  pane.screen = '› Ask Codex to do anything\n';
+  write([rows.start(1, 'Start the build area.', at), rows.reply(1, 'I start with the tests.', at + 5000), rows.end(1, at + 6000, at, { reply: 'I start with the tests.' }),
+    rows.start(2, 'Please go on.', at + 20_000), rows.end(2, at + 36_000, at + 20_000, { error: CODEX_ERRORS.unauthorized })]);
+  const before = f.herdr.calls.length;
+  let shown = await statusAll(f);
+  assert.match(stateLine(shown.detail), /^State: the chat cannot work: the agent's login failed \(unexpected status 401 Unauthorized: Missing bearer/);
+  assert.match(stateLine(shown.detail), /Sign the agent in again \(codex login with this run's CODEX_HOME\), then start a new chat for this area: pdd workflow open 17 --new$/);
+  assert.match(nextLine(shown.detail), /pdd workflow open 17 --new/);
+  assert.match(shown.line, / · the chat cannot work: the agent's login failed · /);
+  assert.equal(shown.json.group, 'waiting');
+  assert.equal(shown.json.chatProblem.kind, 'login');
+  assertOnlyReads(f, before);
+  assert.equal(paneReads(f, before), 0, 'the session file decided');
+  write([rows.start(1, 'Start the build area.', at), rows.end(1, at + 2000, at, { error: CODEX_ERRORS.refresh })]);
+  shown = await statusAll(f);
+  assert.match(stateLine(shown.detail), /^State: the chat cannot work: the agent's login failed \(Failed to refresh token/);
+  // Another error of the newest turn is no login or limit problem.
+  write([rows.start(1, 'Start the build area.', at), rows.end(1, at + 2000, at, { error: CODEX_ERRORS.overloaded })]);
+  shown = await statusAll(f);
+  assert.equal(stateLine(shown.detail), 'State: the agent works on scope');
 });
 
 test('codex: a 401 on the screen says the login failed', async t => {
@@ -235,23 +312,49 @@ test('codex: a 401 on the screen says the login failed', async t => {
   assert.equal(json.group, 'waiting');
 });
 
-test('codex: a healthy chat keeps its status words', async t => {
-  const { f, pane, write } = await codexChat(t);
-  // The limit error is old: a later turn worked (the agent replied after it on the screen).
+test('codex: a chat whose newest turn worked keeps its status words, also when the screen still shows an old error line', async t => {
+  const { f, pane, rows, write } = await codexChat(t);
+  const at = f.clock - 50_000;
+  // The first turn failed at the limit; after the limit, the person asked again and the turn worked.
+  write([rows.start(1, 'Start the build area.', at), rows.tokens(at + 900), rows.end(1, at + 1900, at, { error: CODEX_ERRORS.limit }),
+    rows.start(2, 'Please go on.', at + 20_000), rows.reply(2, 'The tests pass now.', at + 30_000), rows.end(2, at + 31_000, at + 20_000, { reply: 'The tests pass now.' })]);
   pane.screen = codexScreen(`${CODEX_LIMIT}\n\n› Please go on.\n\n• The tests pass now.`);
+  const before = f.herdr.calls.length;
   let shown = await statusAll(f);
   assert.equal(stateLine(shown.detail), 'State: the agent works on scope');
   assert.equal(shown.json.group, 'working');
-  // The session file shows that the newest turn got a reply, so an old error line on the screen does not count.
-  write([codexRows.user('Start the build area.', f.clock - 50_000), codexRows.reply('The tests pass now.', f.clock - 40_000),
-    codexRows.tokens({ primary: { used_percent: 100, window_minutes: 10080, resets_at: (f.clock + 3_600_000) / 1000 }, secondary: null,
-      credits: { has_credits: true, unlimited: false, balance: '400' }, rate_limit_reached_type: null }, f.clock - 39_000)]);
+  assert.equal(shown.json.chatProblem, undefined);
+  assert.equal(paneReads(f, before), 0, 'the session file decided');
+  // The file says the newest turn worked, so an error line on the screen does not count.
   pane.screen = codexScreen(CODEX_LIMIT);
   shown = await statusAll(f);
-  assert.equal(stateLine(shown.detail), 'State: the agent works on scope', 'a full window with credits left is no limit');
-  // The agent works now: pdd does not judge it by the screen.
-  write([codexRows.user('Please go on.', f.clock - 1000)]);
+  assert.equal(stateLine(shown.detail), 'State: the agent works on scope');
+  // A new turn has started: the file gives no answer. The agent works now, so pdd does not judge it by the screen.
+  write([rows.start(1, 'Start the build area.', at), rows.end(1, at + 1900, at, { error: CODEX_ERRORS.limit }), rows.start(2, 'Please go on.', f.clock - 1000)]);
   pane.agent.agent_status = 'working';
   shown = await statusAll(f);
   assert.equal(stateLine(shown.detail), 'State: the agent works on scope');
+});
+
+test('codex: a healthy chat that quotes an error line in its reply keeps its status words', async t => {
+  const { f, pane, rows, write } = await codexChat(t);
+  // No session file, so only the screen counts. Codex indents the lines of a reply under its "•" line, so an indented
+  // "■" line is quoted text, not the agent's own error line.
+  const quotes = [
+    "• The issue shows this screen:\n  ■ You've hit your usage limit. Try again at 4:17 PM.\n  I add a check for it now.",
+    '• The log has this line:\n\n  ■ unexpected status 401 Unauthorized\n\n  I keep the old token check.',
+  ];
+  for (const quote of quotes) {
+    pane.screen = codexScreen(quote);
+    const shown = await statusAll(f);
+    assert.equal(stateLine(shown.detail), 'State: the agent works on scope', quote);
+    assert.equal(shown.json.chatProblem, undefined, quote);
+  }
+  // With its session file, the newest turn that worked decides before the screen.
+  const at = f.clock - 50_000;
+  write([rows.start(1, 'Start the build area.', at), rows.reply(1, 'I add a check for it now.', at + 5000), rows.end(1, at + 6000, at, { reply: 'I add a check for it now.' })]);
+  const before = f.herdr.calls.length;
+  const shown = await statusAll(f);
+  assert.equal(stateLine(shown.detail), 'State: the agent works on scope');
+  assert.equal(paneReads(f, before), 0, 'the session file decided');
 });

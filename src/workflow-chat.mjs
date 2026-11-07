@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: c94ae14c2a9535023d65dee76d39dd56956f51739af28b2531da1f78c63a4c66).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 570a50462e09a6abe0bdbe8b05137c360b464f52c3346e749a60226a55dd778a).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import * as nodeFs from 'node:fs';
@@ -283,14 +283,17 @@ export async function sendToChat(chat, text, ports = {}) {
 // session file and the bottom of its screen; it never sends anything to the chat and never throws.
 const TAIL_BYTES = 256 * 1024, SCREEN_LINES = 15, DAY = 86_400_000, MAX_DAYS = 31;
 const LIMIT_TEXT = /\byou(?:'|’)?ve (?:hit|reached) your\b[^.]*\blimit\b|\byou have (?:hit|reached) your\b[^.]*\blimit\b|\busage limit\b|\bout of credits\b/i;
-const LOGIN_TEXT = /ANTHROPIC_(?:API_KEY|AUTH_TOKEN)|\bAPI key\b|\/login\b|\bnot logged in\b|\b(?:log|sign) ?in again\b|\bauthenticat|\bOAuth\b|\b401\b|\bunauthori[sz]ed\b|\baccess token\b|disabled organization|organization has disabled/i;
+const LOGIN_TEXT = /ANTHROPIC_(?:API_KEY|AUTH_TOKEN)|\bAPI key\b|\/login\b|\bnot logged in\b|\b(?:log|sign) ?in again\b|\bauthenticat|\bOAuth\b|\b401\b|\bunauthori[sz]ed\b|\baccess token\b|\brefresh[_ ]token\b|disabled organization|organization has disabled/i;
 const CLAUDE_MENU = /^(?:❯\s*)?\d\.\s+(?:Stop and wait for (?:the )?limit to reset|Wait here,? then continue automatically)\b/i;
 const REPLY_LINE = /^[⏺●•](?:\s|$)/;
-const oneLine = text => String(text ?? '').replace(/\s+/g, ' ').trim().slice(0, 160);
+const flat = text => String(text ?? '').replace(/\s+/g, ' ').trim(), oneLine = text => flat(text).slice(0, 160);
 const resetWords = text => /\bresets\s+(.+?)\s*$/i.exec(text)?.[1] ?? /\btry again at\s+(.+?)\.?\s*$/i.exec(text)?.[1] ?? null;
 const epochMs = value => Number.isFinite(value) && value > 0 ? (value < 1e12 ? value * 1000 : value) : null;
 const textKind = text => LIMIT_TEXT.test(text) ? 'usage-limit' : LOGIN_TEXT.test(text) ? 'login' : null;
-const problemOf = (kind, agent, text, until = null) => ({ kind, agent, until, resets: kind === 'usage-limit' ? resetWords(oneLine(text)) : null, message: oneLine(text) });
+// A usage-limit text goes on with the agent's plan and account offers, so its message keeps only the first sentence.
+const problemOf = (kind, agent, text, until = null) => kind === 'usage-limit'
+  ? { kind, agent, until, resets: resetWords(flat(text)), message: oneLine(/^.*?[.!?](?=\s|$)/.exec(flat(text))?.[0] ?? text) }
+  : { kind, agent, until, resets: null, message: oneLine(text) };
 
 // The complete JSON rows in the last TAIL_BYTES of a file, or null when it cannot be read.
 function tailRows(fs, path) {
@@ -319,25 +322,19 @@ function claudeVerdict(rows) {
   if (['authentication_failed', 'oauth_org_not_allowed'].includes(last.error) || LOGIN_TEXT.test(text)) return problemOf('login', 'claude', text);
   return null;
 }
-function codexVerdict(rows, now) {
-  const event = (row, type) => row.type === 'event_msg' && row.payload?.type === type;
-  const limits = rows.findLast(row => event(row, 'token_count') && row.payload.rate_limits)?.payload.rate_limits;
-  if (limits) {
-    const credits = limits.credits, usable = credits?.unlimited === true || credits?.has_credits === true;
-    const full = ['primary', 'secondary'].map(name => limits[name]).filter(window => Number(window?.used_percent) >= 100);
-    const ends = full.map(window => epochMs(window.resets_at)).filter(Number.isFinite), until = ends.length ? Math.max(...ends) : null;
-    if ((limits.rate_limit_reached_type || full.length && !usable) && !(until !== null && until <= now))
-      return problemOf('usage-limit', 'codex', 'The account reached its usage limit.', until);
-  }
-  const user = rows.findLastIndex(row => event(row, 'user_message'));
-  if (user < 0) return undefined;
-  const after = rows.slice(user + 1), error = after.findLast(row => event(row, 'error'));
-  if (error) {
-    const text = String(error.payload.message ?? ''), info = error.payload.codex_error_info;
-    const kind = info === 'usage_limit_exceeded' ? 'usage-limit' : info === 'unauthorized' ? 'login' : textKind(text);
-    if (kind) return problemOf(kind, 'codex', text);
-  }
-  return after.some(row => event(row, 'agent_message') || row.type === 'response_item' && row.payload?.type === 'message' && row.payload.role === 'assistant') ? null : undefined;
+// Codex marks each turn with an event_msg row: task_started, then task_complete or turn_aborted. A failed turn keeps its
+// error in its task_complete row ({message, codex_error_info}). The newest of these rows decides, so a later turn that
+// worked clears an older error.
+const CODEX_TURN = new Set(['task_started', 'task_complete', 'turn_aborted']);
+function codexVerdict(rows) {
+  const turn = rows.findLast(row => row.type === 'event_msg' && CODEX_TURN.has(row.payload?.type))?.payload;
+  if (!turn || turn.type === 'task_started') return undefined;
+  const error = turn.type === 'task_complete' && turn.error && typeof turn.error === 'object' ? turn.error : null;
+  if (!error) return null;
+  const text = String(error.message ?? ''), info = error.codex_error_info;
+  const unauthorized = info && typeof info === 'object' && Object.values(info).some(value => value?.http_status_code === 401);
+  const kind = info === 'usage_limit_exceeded' ? 'usage-limit' : unauthorized ? 'login' : textKind(text);
+  return kind ? problemOf(kind, 'codex', text) : null;
 }
 // The Codex session file of this id: only the day folders around the session's start, never the whole tree.
 function codexSessionFile(fs, home, id, chat, now) {
@@ -358,6 +355,15 @@ function codexSessionFile(fs, home, id, chat, now) {
   }
   return found.sort((a, b) => b.at - a.at)[0]?.path ?? null;
 }
+// Is screen line i an error line in the place where the agent itself draws one? Codex draws "■ " at column 0; its replies,
+// tool output and prompts continue at an indent. Claude draws "  ⎿  ", like its tool results and indented reply lines, so
+// its error line counts only right under the user's prompt line of the turn. Elsewhere the marker is quoted text.
+function ownErrorLine(lines, i, agent) {
+  if (agent === 'codex') return /^■\s/.test(lines[i]);
+  if (!/^ {2}⎿ {2}/.test(lines[i])) return false;
+  for (let j = i - 1; j >= 0; j--) if (lines[j].trim() && !/^\s/.test(lines[j])) return INPUT_LINE.test(lines[j].replace(EDGES, ''));
+  return false;
+}
 // The bottom of the screen: the newest error line of the last turn, or the Claude limit menu.
 function screenProblem(screen, agent) {
   const lines = String(screen).split(/\r?\n/), clean = line => line.replace(EDGES, '');
@@ -366,10 +372,11 @@ function screenProblem(screen, agent) {
     const text = clean(lines[i]);
     if (!text) continue;
     seen++;
-    if (CLAUDE_MENU.test(text)) { menu = true; continue; }
+    // The limit menu takes the place of the input box: menu words above an input line are quoted text.
+    if (agent === 'claude' && CLAUDE_MENU.test(text)) { menu ||= !inputs; continue; }
     if (REPLY_LINE.test(text)) break;
     if (INPUT_LINE.test(text)) { if (++inputs > 1) break; continue; }
-    if (!/^[⎿■]/.test(text)) continue;
+    if (!ownErrorLine(lines, i, agent)) continue;
     let body = text.slice(1);
     for (let j = i + 1; j < lines.length && /^\s+\S/.test(lines[j]) && !/^[⎿■⏺●•›>❯]/.test(clean(lines[j])); j++) body += ` ${clean(lines[j])}`;
     const kind = textKind(body);
@@ -392,7 +399,7 @@ export async function chatHealth({ run, chat, live }, ports = {}) {
       } else {
         const file = codexSessionFile(fs, expandHome(chat.configDir, env) ?? expandHome(env.CODEX_HOME, env) ?? join(home, '.codex'), id, chat, now);
         const rows = file ? tailRows(fs, file) : null;
-        verdict = rows ? codexVerdict(rows, now) : undefined;
+        verdict = rows ? codexVerdict(rows) : undefined;
       }
     }
     if (verdict !== undefined) return verdict;

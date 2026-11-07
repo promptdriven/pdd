@@ -395,8 +395,9 @@ const chatStatusWords = (run, chat) => run.chatReplacement && !['launched','roll
 const statusTime = (ms, timeZone) => new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', ...(timeZone ? { timeZone } : {}) }).format(new Date(ms));
 function cannotWorkWords(run, health) {
   const n = run.number, time = health.until !== null ? statusTime(health.until, health.timeZone) : health.resets;
+  const where = health.agent === 'codex' ? "codex login with this run's CODEX_HOME" : '/login in the chat, or fix its API key';
   if (health.kind === 'login') return { short: "the chat cannot work: the agent's login failed",
-    long: `the chat cannot work: the agent's login failed (${health.message}). Sign the agent in again, then start a new chat for this area: pdd workflow open ${n} --new`,
+    long: `the chat cannot work: the agent's login failed (${health.message}). Sign the agent in again (${where}), then start a new chat for this area: pdd workflow open ${n} --new`,
     next: `pdd workflow open ${n} --new (after you sign the agent in again)` };
   if (health.until !== null && health.until <= health.at) return { short: `the chat stopped at its usage limit (reset at ${time})`,
     long: `the chat stopped at its usage limit. The limit reset at ${time}. Open the chat and ask it to go on: pdd workflow open ${n}. Or start a new chat: pdd workflow open ${n} --new`,
