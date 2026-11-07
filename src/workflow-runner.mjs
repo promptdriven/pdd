@@ -1765,9 +1765,9 @@ async function refreshCompletedCodeReview(run, step, p, packageRoot = PACKAGE_RO
       latest.gate.promptSnapshot = snapshot;
     });
     if (run.storyApproval && normalRun(run, p) && run.through === 'code') {
+      protectProgress(run, p);
       const changed = await changedStoryGate(run, run.areas[run.area], step, p, snapshotLines(snapshot));
       if (changed) return doneWithRequests(changed, run, p);
-      protectProgress(run, p);
       return doneWithRequests(await afterPr1(run, run.areas[run.area], p, snapshotLines(snapshot), packageRoot), run, p);
     }
     return doneWithRequests(done([...snapshotLines(snapshot), ...question].join('\n')), run, p);
