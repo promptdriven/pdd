@@ -227,19 +227,30 @@ missing or invalid value uses the default.
   heartbeat of each live claim of this machine (2 REST calls each). So a claim
   does not expire while its chat works. With fewer REST calls left than these
   heartbeats need, it sends none. The tick also wakes no chat with new work
-  until the reset. `pdd dependencies prepare` and `complete` stop their other
-  reads too, and a reply that shows fewer calls than the floor stops the reads
+  until the reset. Native dependency observations for an Autopilot repository
+  also stop non-safety reads. This includes `pdd dependencies prepare`,
+  `complete`, direct snapshot reads and automatic workflow start. A reply that
+  shows fewer calls than the floor stops the reads
   after it. A stopped `complete` keeps its request and analysis; the first tick
   after the reset saves the remaining reviews without a new analysis. Reviews
   that were already saved are never saved twice.
 
-Nothing else waits for the budget. The coordinator and worker chats go on, and
-their own `gh` calls are not counted. Other `pdd` commands are counted but do not
-wait, also the workflow start's claim check. So the budget does not keep 70% of
-the limit for you, and the floor keeps the last 1,000 calls only from the tick
-and the dependency commands: it makes them read less. To
+The coordinator and worker chats go on, and their own `gh` calls are not counted.
+Safety reads, including workflow start's live subject and claim checks, trust,
+permissions and write readbacks, can use the reserve. Writes can use it too.
+Other `pdd` operations are counted but do not wait for this floor. The budget
+does not keep 70% of the limit for you. The floor makes the tick and native
+dependency observations read less. To
 give Autopilot a limit of its own, see the design note
 [A GitHub App token for Autopilot](autopilot-github-app-token.md).
+
+The dependency snapshot is saved beside the repository's GitHub call ledger as
+`github/H.snapshot.json` in the Autopilot state folder. Its temporary lock is
+`github/H.snapshot.json.lock`, with the same repository hash `H` as the ledger.
+If a writer exits while holding this lock, later saves refuse to replace the
+snapshot. To recover, stop local PDD operations for that repository and confirm
+that no snapshot writer is still running. Then remove only that empty lock
+directory. Keep the snapshot and ledger files. The next observation can save again.
 
 ### Alerts
 

@@ -130,8 +130,8 @@ is no longer valid after its reset, so it is left out.
 
 ## Budget
 
-The budget acts only on the Autopilot tick. It does not keep a part of the
-limit for the person:
+The share budget acts on the Autopilot tick. The reserve floor also covers
+native dependency observations for Autopilot repositories:
 
 - `share` is the percent of the hourly REST limit that the counted calls of this
   machine can reach before the tick defers its dependency re-sync (`low`). All
@@ -140,10 +140,11 @@ limit for the person:
   until the reset, except the heartbeats of its own live claims (`reserve`). The
   default is 1,000. Safety reads and other tools can still use this reserve.
 - Below the floor, the [floor guard](#floor-guard) also stops the non-safety reads
-  of the tick and of `pdd dependencies prepare` and `complete` for an Autopilot
-  repository. Safety reads and writes go on. Other `pdd` commands are counted but
-  never wait. The coordinator and worker chats never wait for the budget, and
-  their own `gh` calls are not counted.
+  of the tick and native dependency observations for an Autopilot repository,
+  including `pdd dependencies prepare`, `complete`, direct snapshot reads and
+  automatic start. Safety reads and writes go on. Other `pdd` operations are
+  counted but do not wait for this floor. The coordinator and worker chats never
+  wait for the budget, and their own `gh` calls are not counted.
 
 `githubBudgetSettings(value)` reads `share` (an integer from 1 to
 100) and `floor` (an integer, 0 or more) from the object `autopilot.github` in

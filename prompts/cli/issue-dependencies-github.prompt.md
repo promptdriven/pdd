@@ -131,19 +131,27 @@ this machine (its [call ledger](github-calls.prompt.md#ledger) exists in the sta
 root); each top-level read, owners read, record save and evidence read saves it.
 For another repository, and with caller-supplied GitHub ports, no request changes.
 
-With a `githubFloor` port (the [floor guard](github-calls.prompt.md#floor-guard)),
-each native GET and the batch GraphQL read first ask the guard, unless it is a
+Native reads for a repository with an Autopilot ledger initialize the
+[floor guard](github-calls.prompt.md#floor-guard) from current native settings
+and machine ledgers when no `githubFloor` is supplied. Share that guard within
+one native read session and across ports derived from it, including repository
+observations during automatic start and direct snapshot reads. An explicit guard overrides this default.
+Each native GET and the batch GraphQL read first ask the guard, unless it is a
 [safety read](#safety-reads); a blocked read fails like an unavailable read, so
 the snapshot is incomplete. Each reply goes to `observe`. Writes never ask it.
 
 The native runner passes an optional `purpose` in the options of each call for
 the [call ledger](github-calls.prompt.md#ledger): the claim reads of the owners
-port (issue, timeline and comments of a claimed issue) name `claims`, and the
-batch GraphQL read names its `repository`.
+port (issue, timeline and comments of a claimed issue), plus heartbeat reads
+and writes, name `claims`, and the
+batch GraphQL read names its `repository`. Saved-snapshot issue-index and
+link-identity reads explicitly name purpose `dependencies`, including with an
+injected native runner.
 `github.page` and `github.issue` accept an optional `purpose` field for this; a
-supplied port can ignore it. The native default runner records each gh call
-through `nativeGithubCounter` with the default purpose `dependencies`, in the
-ledger of the repository that the call names.
+supplied port can ignore it. Native transport defaults an omitted purpose to
+`dependencies`, including with an injected runner. The native default runner
+records each gh call through `nativeGithubCounter` in the ledger of the
+repository that the call names.
 
 <a id="saved-dependency-snapshot"></a>
 ## Saved dependency snapshot
@@ -273,11 +281,12 @@ The floor guard never stops a safety read. The pre-write history read of
 `applyDependencyChanges` uses the live port, and its readback snapshots after a
 link write count as safety reads.
 
-`commandGithubFloor({cwd,repository},ports)` returns the floor guard of a `pdd
-dependencies` command for a repository where Autopilot runs on this machine: the
+`commandGithubFloor({cwd,repository},ports)` returns the floor guard for native
+dependency reads of a repository where Autopilot runs on this machine: the
 floor of `autopilot.github` in the checkout's `pdd.json` (default 1,000) and the
 newest limit in the ledgers of this machine. It returns a supplied `githubFloor`,
-and null for other repositories or supplied GitHub ports.
+and null for other repositories or caller-supplied GitHub ports. Native ports
+created by this module retain default guard initialization.
 
 ## Claims, heartbeat and expiry
 

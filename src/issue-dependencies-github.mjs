@@ -15,6 +15,7 @@ import { githubBudgetSettings, githubEtagCache, githubFloorGuard, githubFullLast
 const REVIEW = 'pdd-dependency-review:v1', IMPACT = 'pdd-dependency-impact:v1';
 const NATIVE_GITHUB = Symbol('native github'), NATIVE_OWNERS = Symbol('native owners'), LIVE_GITHUB = Symbol('live github');
 const DEFAULT_CACHE = Symbol('default etag cache');
+const NATIVE_FLOORS = Symbol('native dependency floor guards');
 const NATIVE_READ_SCOPE = Symbol('native dependency read scope'), NATIVE_AUTHORITY = Symbol('native authority');
 const NATIVE_CONTEXT = Symbol('native context'), NATIVE_EVIDENCE = Symbol('native evidence'), NATIVE_SETTINGS = Symbol('native settings');
 const nativeReadScope = () => ({ repositories: new Map(), checkouts: new Map(), authorityData: new Map(), authorityResults: new Map() });
@@ -70,8 +71,7 @@ const notModified = text => /^HTTP\/\S+\s+304\b/.test(String(text ?? ''));
 
 function service(cwd, ports) {
   const exec = ports.execFile ?? execute;
-  const guard = ports.githubFloor;
-  async function run(file, args, input, purpose, conditional = false, repository) {
+  async function run(file, args, input, purpose, conditional = false, repository, guard = ports.githubFloor) {
     let r;
     try { r = await exec(file, args, { ...(cwd ? { cwd } : {}), ...(input === undefined ? {} : { input }), ...(purpose ? { purpose } : {}), ...(repository ? { repository } : {}) }); }
     catch (error) { guard?.observe(githubReply(error?.stdout)); if (conditional && notModified(error?.stdout)) return String(error.stdout); throw error; }
@@ -83,7 +83,17 @@ function service(cwd, ports) {
   // port, a GET sends the saved ETag; a 304 reply returns the saved body and next page and does not count against the limit.
   // A saved full last page, or a saved body that does not parse, sends no ETag: a 304 cannot show a new next page.
   // With a githubFloor port, a read that is not a safety read stops while fewer calls than the floor are left.
-  async function api(endpoint, method = 'GET', input, purpose, repository, safety = false) {
+  async function api(endpoint, method = 'GET', input, purpose = 'dependencies', repository, safety = false) {
+    // Native callers share the guard even when they did not install one. Resolve it by repository so
+    // cross-repository safety reads cannot suppress the selected repository's reserve protection.
+    let guard = ports.githubFloor;
+    const repo = repository ?? /^repos\/([^/?#]+\/[^/?#]+)/.exec(endpoint)?.[1];
+    const floors = ports[NATIVE_FLOORS];
+    if (guard === undefined && repo && floors) {
+      const key = repo.toLowerCase();
+      if (!floors.has(key)) floors.set(key, commandGithubFloor({ cwd, repository: repo }, ports));
+      guard = await floors.get(key);
+    }
     const write = method !== 'GET' && endpoint !== 'graphql';
     // The batch GraphQL read also stops when REST is below the floor: without REST reads the snapshot is not complete.
     if (guard && !write && !safety && !(ports.dependencyReads?.safety > 0) && (guard.blocked('core') || endpoint === 'graphql' && guard.blocked('graphql')))
@@ -95,7 +105,7 @@ function service(cwd, ports) {
       catch { saved = undefined; }
     }
     const executeRequest = () => run('gh', ['api', '--include', '--method', method, endpoint, '-H', 'Accept: application/vnd.github+json',
-      ...(saved ? ['-H', `If-None-Match: ${saved.etag}`] : []), ...(input === undefined ? [] : ['--input', '-'])], input, purpose, !!saved, repository);
+      ...(saved ? ['-H', `If-None-Match: ${saved.etag}`] : []), ...(input === undefined ? [] : ['--input', '-'])], input, purpose, !!saved, repository, guard);
     const mutation = method === 'POST' && /^repos\/[^/]+\/[^/]+\/issues\/[1-9][0-9]*\/(?:comments|dependencies\/blocked_by)$/.test(endpoint)
       || method === 'PATCH' && /^repos\/[^/]+\/[^/]+\/issues\/comments\/[1-9][0-9]*$/.test(endpoint);
     const raw = mutation && ports.admitMutation ? await ports.admitMutation(executeRequest) : await executeRequest();
@@ -193,12 +203,12 @@ function rawGithub(cwd, ports) {
         const path = cursor.split(/[?#]/, 1)[0];
         const canonical = /^repositories\/[1-9][0-9]*\/(.+)$/.exec(path);
         if (cursor && path !== `repos/${repository}/${route}` && canonical?.[1] !== route) throw Error('Foreign pagination cursor');
-        const r = await s.api(cursor || `repos/${repository}/issues${suffix}`, 'GET', undefined, purpose, undefined, safe(purpose, safety));
+        const r = await s.api(cursor || `repos/${repository}/issues${suffix}`, 'GET', undefined, purpose, repository, safe(purpose, safety));
         return { json: JSON.stringify({ items: r.value, next: r.next }) };
       } catch (e) { return { json: JSON.stringify({ error: 'GitHub read unavailable', status: e.status ?? 0 }) }; }
     },
     issue: async ({ repository, issue, purpose, safety }) => {
-      try { return { json: JSON.stringify((await s.api(`repos/${repository}/issues/${issue}`, 'GET', undefined, purpose, undefined, safe(purpose, safety))).value) }; }
+      try { return { json: JSON.stringify((await s.api(`repos/${repository}/issues/${issue}`, 'GET', undefined, purpose, repository, safe(purpose, safety))).value) }; }
       catch (e) { return { json: JSON.stringify({ error: 'GitHub issue unavailable', status: e.status ?? 0 }) }; }
     },
     appendComment: async ({ repository, issue, body }) => {
@@ -407,10 +417,10 @@ function defaultEtagCache(ports) {
 }
 const flushCache = ports => { try { if (ports.githubCache?.[DEFAULT_CACHE]) ports.githubCache.save(); } catch { /* best effort */ } };
 
-// The floor guard of a pdd dependency command for an Autopilot repository: the floor of `autopilot.github` in the
+// The floor guard of native dependency reads for an Autopilot repository: the floor of `autopilot.github` in the
 // checkout's pdd.json (default 1,000) and the newest limit in the ledgers of this machine. Null for other repositories.
 export async function commandGithubFloor({ cwd = '', repository }, ports = {}) {
-  if (ports.githubFloor !== undefined || ports.github || !repositoryName(repository)) return ports.githubFloor ?? null;
+  if (ports.githubFloor !== undefined || (ports.github && !ports.github[NATIVE_GITHUB]) || !repositoryName(repository)) return ports.githubFloor ?? null;
   const root = autopilotRoot(ports);
   if (!autopilotRepository(root, repository)) return null;
   let setting;
@@ -896,13 +906,13 @@ export async function refreshClaimHeartbeat({ cwd = '', repository, claim, coord
   const i = info(claim?.issue), s = service(cwd, ports);
   if (!repositoryName(repository) || !i || !sameRepo(i.repository, repository) || !/^[1-9][0-9]*$/.test(String(claim.commentId ?? ''))
     || !claim.labelEventId || claim.active !== true || claim.coordinatorId !== coordinatorId || claim.machine !== machine || !Number.isFinite(time(at))) return { state: 'skipped' };
-  const endpoint = `repos/${repository}/issues/comments/${claim.commentId}`, comment = (await s.api(endpoint)).value;
+  const endpoint = `repos/${repository}/issues/comments/${claim.commentId}`, comment = (await s.api(endpoint, 'GET', undefined, 'claims', repository, true)).value;
   const record = claimRecord(comment?.body);
   if (String(comment?.id) !== String(claim.commentId) || !record || !sameRepo(record.value.repository, repository) || record.value.coordinatorId !== coordinatorId
     || record.value.machine !== machine || record.value.labelEventId !== String(claim.labelEventId)) return { state: 'skipped' };
   const lastSeen = iso(time(at)), body = editClaimRecord(comment.body, record, { ...record.value, lastSeen });
   if (body === null) throw Error('Claim record cannot take a heartbeat without other changes');
-  const saved = (await s.api(endpoint, 'PATCH', JSON.stringify({ body }))).value;
+  const saved = (await s.api(endpoint, 'PATCH', JSON.stringify({ body }), 'claims', repository)).value;
   if (String(saved?.id) !== String(claim.commentId) || claimRecord(saved.body)?.value.lastSeen !== lastSeen) throw Error('Claim heartbeat readback is unresolved');
   return { state: 'refreshed', lastSeen };
 }
@@ -995,6 +1005,8 @@ function nativeOwners(cwd, ports, { live = true } = {}) {
 export function createDependencyReadPorts({ cwd = '' } = {}, supplied = {}, scope = nativeReadScope()) {
   const ports = { ...supplied };
   Object.defineProperty(ports, NATIVE_READ_SCOPE, { value: scope });
+  // This enumerable symbol follows derived ports, unlike the per-observation scope.
+  if (!supplied.github || supplied.github[NATIVE_GITHUB]) ports[NATIVE_FLOORS] ??= new Map();
   if (!supplied.github) {
     // The native reader of one process: its reads, the saved snapshot of an Autopilot repository, and the ETag cache.
     ports.dependencyReads ??= readSession(defaultStores(ports), typeof supplied.now === 'function' ? supplied.now : Date.now);
@@ -1082,7 +1094,9 @@ async function observeSnapshot({ cwd = '', repository, inputs = [] }, ports, sco
   let roots = [];
   const stored = !!reads?.stored(repository) && !!ports.github[NATIVE_GITHUB];
   try {
-    roots = stored ? await reads.readList(repository, service(cwd, ports).api)
+    const api = service(cwd, ports).api;
+    roots = stored ? await reads.readList(repository, (endpoint, method, input, purpose = 'dependencies', repo = repository) =>
+      api(endpoint, method, input, purpose, repo))
       : await allPages(ports.github, repository, 'issues', 0);
   } catch (e) { roots = e.partialItems ?? []; coverage.scope = false; warn('Open issue pages are incomplete'); }
   let invalidIndex = false;

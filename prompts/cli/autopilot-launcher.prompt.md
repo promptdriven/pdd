@@ -339,11 +339,12 @@ After each intake the tick saves `{at, eligible, claims}` (when `eligible` is a
 list), and a successful heartbeat updates the saved claim's `lastSeen`. These
 are local facts for the next tick; they are not a GitHub observation. The
 60-minute interval is a constant. The floor default is 1,000. Only the tick uses
-the share. Below the floor, the non-safety reads of `pdd dependencies prepare`
-and `complete` stop too ([floor guard](github-calls.prompt.md#floor-guard)), and
-a stopped completion is kept for the next tick after the reset. Claim checks
-outside the tick, such as the workflow start boundary, other `pdd` commands and
-the coordinator and worker chats never wait for it.
+the share. Native dependency observations outside the tick follow the shared
+[floor guard](github-calls.prompt.md#floor-guard), including prepare, complete
+and automatic start. A stopped completion is kept for the next tick after the
+reset. Safety reads, including the workflow start's live subject and claim
+checks, continue below the floor. The coordinator and worker chats never wait
+for this budget.
 
 ## Tick and the skill boundary
 
