@@ -44,6 +44,10 @@ Dispatch `workflow-yield` to workflow runner module function `yieldAutomaticCapa
 
 The `autopilot start --resume-custody FILE` option passes the file path unchanged to the launcher; the launcher owns recovery checks and effects.
 
+## Interface drafting and setup offer
+
+Dispatch `pdd interface draft [PROMPT...] [--all] [--json]` locally to the interface drafting owner. Dispatch `pdd approve PROMPT --automatic --tests COMMAND` to its automatic route. In a Git repository, setup detects prompts without blocks and offers `pdd interface draft --all` before MCP setup. With an interactive confirmation it may draft; a decline or a noninteractive call only prints the command. Reuse setup confirmation ports. Never run native tests or approve a prompt from setup.
+
 ## Dependencies
 
 - [Metrics command](metrics-command.prompt.md): required native generation/verification context for local metrics dispatch.

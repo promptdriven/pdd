@@ -30,6 +30,10 @@ Module function `recordPromptApproval({commonDir,evidence}, ports = {})` appends
 
 Callers prevalidate journal readability and all selected prompt edits before mutation. A failed prompt or journal write never reports success or advances a gate; report any prompt paths already changed if rollback cannot complete. A journal row applies to PR evidence only when its path and hash both match the current published prompt. Later prose invalidates that association. Gate history and standalone journal may describe the same approval: publish copies of the same identified event once without deleting local history; distinct event ids must remain distinct even when all evidence content matches. Only id-less legacy records may use content equality for deduplication.
 
+## Automatic draft evidence
+
+The journal also accepts route `automatic-check-pass`. Such records have null words and retain native test command and success, the complete current prompt-check result, draft provenance, source hashes and prompt kind. This is a distinct route, never relayed person words. Person records may also retain each prompt's kind and native-only reason. The interface drafting owner checks eligibility and current evidence before calling this journal.
+
 ## Dependencies
 
 No other business prompt supplies policy. Native filesystem concurrency, atomic rename, Git common-directory resolution and exact-byte hashing require native acceptance; no Runtime interface or alternate check-only API is declared for these unsupported effects.

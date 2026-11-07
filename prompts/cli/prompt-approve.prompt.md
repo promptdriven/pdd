@@ -1,6 +1,6 @@
 # Prompt approve
 
-Own `src/prompt-approve.mjs`. Export `runApprove({words, cwd, said}, ports)` (returns an exit code) and `approvePromptText(text)` (returns the approved text or null). `pdd approve PROMPT` is the one way pdd sets `"status": "approved"`. It records a person's decision through terminal y/N or, in easy mode, an agent-supplied `--said` value after the person approves in chat. Preserve existing exports, including `presentAndApprove`, and the Simulator callback behavior; this command adds no Simulator approval route.
+Own `src/prompt-approve.mjs`. Export `runApprove({words, cwd, said}, ports)` (returns an exit code) and `approvePromptText(text)` (returns the approved text or null). `pdd approve PROMPT` is the one way pdd sets `"status": "draft"`. It records a person's decision through terminal y/N or, in easy mode, an agent-supplied `--said` value after the person approves in chat. Preserve existing exports, including `presentAndApprove`, and the Simulator callback behavior; this command adds no Simulator approval route.
 
 ## Steps
 
@@ -14,6 +14,12 @@ Own `src/prompt-approve.mjs`. Export `runApprove({words, cwd, said}, ports)` (re
 8. On terminal yes or accepted said: set the top-level `"status"` to `"approved"` and the top-level `"prose_sha256"` to the current prose hash, and keep every other byte (a nested `status` field is never touched). Check that the new text parses to the same interface with only those two values changed and that its prose hash is unchanged. Append durable evidence through the shared owner, with the current path/hash, invoking actor, route, clock time and verbatim words (null for terminal). Print `Approved <path>.`, the approved path/hash and a short evidence line; exit 0 only after evidence is saved. Already-approved/current files keep their existing no-op output and do not invent another approval. If the block has no `prose_sha256` key, exit 4: `Add "prose_sha256": "" to the Runtime interface, then run pdd approve again.`
 
 Ports (tests inject them): `stdout`, `stderr`, `stdin`, `interactive` (default: stdin and stdout are TTYs), `env`, `now`, filesystem and Git execution ports for policy/journal/root resolution. Native filesystem/hash/TTY effects require native tests, not a surrogate Runtime operation.
+
+## Native-only and automatic approval
+
+Show a native-only declaration's kind and reason before approval. It is eligible for the existing person routes after kind/reason validation, without entry schemas or limits. Record the kind and reason with its path/hash. Validate before the already-approved fast path too.
+
+`pdd approve PROMPT --automatic --tests COMMAND` invokes the interface drafting owner's automatic-check-pass route. Never combine it with --said. Strict approval mode still requires a person and refuses this route. Only a complete unchanged draft from this command, with committed unchanged prose and existing code/tests, can qualify. This route does not approve new behavior or native-only blocks. Keep ordinary person routes unchanged.
 
 ## Dependencies
 

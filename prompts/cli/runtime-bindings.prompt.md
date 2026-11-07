@@ -14,3 +14,7 @@ Use the [workspace authority](runtime-workspace.prompt.md) before reading any de
 
 - [Inventory contract](../../docs/runtime-bindings.md), required for generation and verification.
 - [Preflight](runtime-preflight.prompt.md), required for the existing `PreflightError` and `readPrompt` exports and discovery record shapes.
+
+## Runtime prompt coverage
+
+Compose the interface drafting owner's repository coverage as additive `runtime` in bindingCoverage results, including when no module inventory exists. Preserve module binding semantics.

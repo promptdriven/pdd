@@ -110,6 +110,10 @@ Read duration only from the selected retryable refusal's `max_wait_seconds` (the
 
 Use that row's real Story selector, shell-quoted as needed. Missing, blank or `-` Story uses the same timed or untimed sentence ending with `Try again in a few minutes.` and no command. Confirmed unstarted capacity rows use the same plain fallback when no duration is available; locally held unsent rows keep their unsent explanation. Interruption's `Stopped.` explanation takes precedence. None of these selected busy messages may expose interpreter, slot, pool, model, login or account. Keep text-only busy metadata internal; do not add public JSON fields for rendering.
 
+## Runtime prompt coverage
+
+When module binding coverage carries `runtime`, print its own line: `Runtime coverage: N of M prompts checkable, K native-only`. Retain this object in JSON coverage. For a native-only row preserve not_run and show its declared reason. It has no passing criteria or check count. A partial interface counts as checkable, not as proof that all module behavior passed.
+
 ## Dependencies
 
 - [Runtime outcome](runtime-outcome.prompt.md): required for generation and tests; selected evidence, progress and exits.

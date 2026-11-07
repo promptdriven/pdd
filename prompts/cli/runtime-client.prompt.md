@@ -807,6 +807,10 @@ for all running rows with server progress, then the known calls of the other row
 step 5 above), or `AI calls unknown` when there is neither; never an invented zero. A row that a
 read turns into a lost, unknown row drops its old `progress`.
 
+## Missing and native-only interfaces
+
+Use the preflight owner's interface findings in local lint, even without Stories. Keep SVG advice separate. Server lint reports these local findings before authentication or upload. Checks and lint omit native-only scenarios from uploads; keep them as not_run with their declared reason, including called prompts. Mixed selections still run the other scenarios. Native-only is never a pass and does not silently turn a partial result into success. Each test summary shows repository Runtime coverage: N of M prompts checkable, K native-only. Count valid current full/partial blocks as checkable, valid current native-only declarations separately, and include missing/invalid/stale prompts in M. Keep this separate from module binding coverage.
+
 ## Dependencies
 
 - [Native results](workflow-results.prompt.md#native-profile-and-criterion-assessment-draft):

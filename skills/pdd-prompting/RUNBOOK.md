@@ -40,6 +40,18 @@ The block of Harbor Coffee's `place_order` (schemas cut):
  "entries": [{"operation": "place_order", "input_schema": {...}, "result_schema": {...}, "errors": ["unknown-item"]}],
  "calls": [], "resources": [], "limits": {"max_steps": 4, "max_model_calls": 2}, "conventions": []}
 ```
+- `kind` is `full`, `partial` or `native-only`. Without kind, a block means full.
+  Full declares the module's checkable behavior. Partial declares only some operations.
+  Native-only requires `reason`: name the native effect that the bound ports in §21 cannot fake.
+  It needs status and prose_sha256, but no entries or limits. A checker reviews this reason.
+  Approval records it. Checks show `not run: <reason>`; they never count it as passed.
+- Missing blocks: run `pdd interface draft PROMPT`, or `pdd interface draft --all` for the repository.
+  This local command uses explicit schemas and contracts without AI calls. It preserves prose.
+  Uncertain schemas remain draft gaps, so lint cannot claim they are clean.
+- A complete full block drafted from unchanged committed behavior can use
+  `pdd approve PROMPT --automatic --tests COMMAND`. Existing native tests and a complete
+  current prompt check must pass; pdd records `automatic-check-pass` evidence.
+  Strict mode still requires a person. New behavior requires a person.
 - Every schema follows section 3. List every error that the prose can return in `errors`.
 - Do not write `prose_sha256`: `pdd test --fill-hash` fills it.
 - Show the gate. Judge the person's later reply in any chat. A question, change request or earlier message is not approval. No exact phrase is needed. Never invent a decision or edit approval fields. See [Record a chat approval](https://github.com/promptdriven/pdd/blob/main/docs/cli.md#record-a-chat-approval).
