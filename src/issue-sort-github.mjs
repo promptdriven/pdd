@@ -11,7 +11,7 @@ export function readSortComment(comment, authority) {
   if (!/<!--\s*pdd-issue-sort:v1\s*-->/.test(comment.body ?? '')) return null;
   let record;
   try { record = JSON.parse(/```json\s*([\s\S]*?)```/.exec(comment.body)?.[1]); } catch { /* Keep invalid trusted heads visible. */ }
-  return { id: String(comment.id), record: record ?? null, authority, intact: validSort(record) && typeof comment.created_at === 'string' && comment.created_at === comment.updated_at };
+  return { id: String(comment.id), record: validSort(record) ? record : null, authority, intact: validSort(record) && typeof comment.created_at === 'string' && comment.created_at === comment.updated_at };
 }
 export async function addSortContext(snapshot, cwd, ports) {
   if (!cwd && !ports.sortContext) return snapshot;

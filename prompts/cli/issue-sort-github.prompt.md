@@ -24,12 +24,22 @@ comment bodies to recover retries. A failed or unconfirmed write stops the batch
 never blindly retry it. Confirm comments and issue updates by readback. Missing comment identity or update confirmation stops the route before further effects. Labels
 are created only when absent. Do not change claims, trust, approvals or merging.
 
+The native ports consumed here are github.issue({repository,issue}) and
+page({repository,issue,kind,cursor}), which return {json}; appendComment accepts
+{repository,issue,body} and returns the confirmed comment in {json}; sortUpdate
+accepts {repository,issue,label?,assignee?,close?} and returns {ok}; ensureSortLabel
+accepts {repository,label,write}. owners.read({repository,issues}) returns {json}
+with current claims. context.read({cwd,repository,inputs}) returns {json} with
+current source rows. settings.read({cwd,repository}) returns {mode}. clock.now({})
+returns {iso}; wait.sleep({ms}) waits. sortContext.read is an optional injected
+local area/release source. Invalid sort comments retain identity and authority but
+expose record:null and intact:false. This owner declares these transport shapes;
+the dependency reader retains its own trust, claims and native observation rules.
+
 ## Dependencies
 
 - [Sort](issue-sort.prompt.md): required validation and routing policy.
 - [Areas](autopilot-areas.prompt.md): required local area matching and draft policy.
-- [GitHub observations](issue-dependencies-github.prompt.md): required native ports,
-  trust and ownership behavior. Sort hooks only add observations and bookkeeping.
 
 
 <details><summary>Runtime interface</summary>
