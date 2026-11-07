@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-github.prompt.md (sha256: 36d0e5fd080d47226c5d4e249f08028c8b15aebae220b24abc277ad69886b3b2).
+// Generated from prompts/cli/workflow-github.prompt.md (sha256: 0f7ca70ab02fdf897b33049f6d58286d01720fdd949908c973bc02a7670c427a).
 import { execFile } from 'node:child_process';
 import { isAbsolute } from 'node:path';
 import { causeText } from './runtime-output.mjs';
@@ -301,8 +301,9 @@ export async function readWorkflowPrStatus(input, ports = {}) {
   } catch { return { state: 'unknown', ci: 'unknown' }; }
 }
 
-// The latest independent checker verdict (pdd-check) for one PR head: a JSON block with verdict PASS, FAIL or NOT SURE
-// and the exact head SHA, in a comment by the repository owner, a member or a collaborator. Any doubt gives null.
+// The independent checker verdict (pdd-check) for one PR head: a JSON block with verdict PASS, FAIL or NOT SURE and the
+// exact head SHA, in a comment by the repository owner, a member or a collaborator. When those comments give different
+// verdicts for the same head, the verdict is 'split' (with the verdicts), never the newest one. Any doubt gives null.
 export async function readWorkflowPrChecker(input, ports = {}) {
   try {
     const { cwd, url, headSha } = structuredClone(input ?? {});
@@ -310,6 +311,7 @@ export async function readWorkflowPrChecker(input, ports = {}) {
     if (!match || !/^[a-f0-9]{40}$/i.test(String(headSha ?? ''))) return null;
     const output = await dependencies(ports).command(cwd, 'gh', ['api', '--paginate', `repos/${match[1]}/${match[2]}/issues/${match[3]}/comments?per_page=100`, '--jq', '.[] | {body, author_association, html_url, created_at}']);
     let latest = null;
+    const seen = new Set();
     for (const line of output.split('\n').filter(row => row.trim())) {
       let comment;
       try { comment = JSON.parse(line); } catch { continue; }
@@ -318,9 +320,11 @@ export async function readWorkflowPrChecker(input, ports = {}) {
         let check;
         try { check = JSON.parse(block[1]); } catch { continue; }
         if (!['PASS', 'FAIL', 'NOT SURE'].includes(check?.verdict) || String(check.head ?? '').toLowerCase() !== headSha.toLowerCase()) continue;
+        seen.add(check.verdict);
         if (!latest || String(comment.created_at ?? '') >= latest.at) latest = { verdict: check.verdict, url: text(comment.html_url) ? comment.html_url : null, at: String(comment.created_at ?? '') };
       }
     }
+    if (seen.size > 1) return { verdict: 'split', verdicts: ['PASS', 'FAIL', 'NOT SURE'].filter(verdict => seen.has(verdict)), url: latest.url };
     return latest && { verdict: latest.verdict, url: latest.url };
   } catch { return null; }
 }

@@ -302,6 +302,8 @@ for (const name of ['bug', 'feature']) {
     assert.deepEqual(areas.map(([area]) => area), ['story', 'prompt-pr', 'code']);
     assert.match(f.herdr.paneOf(run.chats[0]).commands[0], /^env PDD_AGENT_SESSION=1 PDD_BIN=\S+ codex --no-daemon --dangerously-bypass-approvals-and-sandbox -c 'projects=\{".+"=\{trust_level="trusted"\}\}' "\$\(cat '.+story-start\.md'\)"$/);
     for (const [index, [area, steps]] of areas.entries()) {
+      // #3042 red pair: PR 1's CI is red when the code PR opens, so PR 2 carries PR 1 and never says "merge it first".
+      if (area === 'code') f.ci = [{ conclusion: 'FAILURE' }];
       assert.equal(f.record().area, index); assert.equal(f.record().chats.at(-1).area, area);
       const optional = JSON.parse(readFileSync(join(packageRoot, `skills/pdd-${name}/workflow.json`), 'utf8')).areas[index].optional;
       for (const step of steps) {
@@ -329,7 +331,9 @@ for (const name of ['bug', 'feature']) {
     assert.equal(f.prs[1].baseRefName, f.prs[0].headRefName, 'PR 2 is stacked on the open PR 1');
     // #3042: when PR 2 opens, PR 1's readable Next line links it; nothing else in PR 1 changes.
     assert.match(f.prs[0].body, new RegExp(`^\\*\\*Next:\\*\\* PR 2 \\(the code\\): #${f.prs[1].number}\\. Part of #17\\.$`, 'm'));
-    assert.match(f.prs[1].body, /^Builds on PR 1 \(#\d+\): merge it first\.$/m);
+    assert.match(f.prs[1].body, new RegExp(`^This PR also merges PR 1 \\(#${f.prs[0].number}\\)\\. Do not merge PR 1 alone\\.$`, 'm'));
+    assert.match(f.prs[1].body, /^It is stacked on PR 1's branch `[^`]+`\. PR 1's CI fails, so this PR also merges PR 1\. Do not merge PR 1 alone\.$/m);
+    assert.doesNotMatch(f.prs[1].body, /merge it first|merge PR 1 first/);
     const nothing = await approveRun({ ref: '17', cwd: f.source }, f.ports);
     assert.equal(nothing.exitCode, 1); assert.match(nothing.message, /Nothing to approve/);
   });

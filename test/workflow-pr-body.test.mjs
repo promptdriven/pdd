@@ -50,7 +50,7 @@ test('PR 1 links PR 2 once it exists; a manual run shows the person\'s words on 
 test('PR 2 has the user story, a four-part summary, before/after, git changes and a proof table from records', () => {
   const text = top(pr2Fix6());
   assert.deepEqual(headings(text), ['## User story', '## Summary', '## Before / after', '## What changed (+9 −1, 3 files)', '## Proof']);
-  assert.match(text, /- \*\*Problem:\*\* [^\n]+\n- \*\*Cause:\*\* the cents are padded on the right \(`padEnd`\) instead of the left\.\n- \*\*Fix:\*\* [^\n]+\n- \*\*Result:\*\* all 6 approved cases pass on the real code\./);
+  assert.match(text, /- \*\*Problem:\*\* [^\n]+\n- \*\*Cause:\*\* the cents are padded on the right \(`padEnd`\) instead of the left\.\n- \*\*Fix\u200b:\*\* [^\n]+\n- \*\*Result:\*\* all 6 approved cases pass on the real code\./);
   assert.match(text, /\| Input \| Before \| After \| Expected \|\n\|---\|---\|---\|---\|\n\| 1205 \| \$12\.50 \| \$12\.05 \| \$12\.05 ✓ \|/);
   assert.match(text, /- `test\/format-price\.vectors\.test\.js` \(\+2 −0\)/);
   assert.match(text, /\| Check \| New code \| Old code \|/);
@@ -63,7 +63,7 @@ test('PR 2 has the user story, a four-part summary, before/after, git changes an
   assert.equal(text.split('\n')[0], '⏳ Waiting for CI, the checker and PR 1 (#6)');
   assert.doesNotMatch(text, JARGON); assert.doesNotMatch(text, /\*\*Approval:\*\*/);
   const carried = pr2Fix6(); carried.carriesPr1 = true;
-  assert.ok(top(carried).endsWith('Closes #1.\n\nThis PR also merges PR 1 (#6).'));
+  assert.ok(top(carried).endsWith('Closes #1.\n\nThis PR also merges PR 1 (#6). Do not merge PR 1 alone.'));
   assert.equal(top(carried).split('\n')[0], '⏳ Waiting for CI and the checker');
   for (const mode of ['observe', 'manual']) { const facts = pr2Fix6(); facts.mode = mode; assert.match(top(facts), /\*\*Merge:\*\* waiting for a person to merge\. Closes #1\./); }
   const draft = pr2Fix6(); draft.draft = true; assert.match(top(draft), /\*\*Merge:\*\* waiting for a person to merge \(draft PR\)\. Closes #1\./);
@@ -119,13 +119,14 @@ test('proof and check rows come only from records: agent claims stay in the summ
 test('a feature PR uses feat and a Planted mistake column; a small change uses Problem / Change / Result without PR 1', () => {
   const feature = top(featurePr2());
   assert.match(feature, /\| Check \| New code \| Planted mistake \|/);
+  assert.equal(row(feature, 'Regression tests (old-code proof)'), '| Regression tests (old-code proof) | ✓ pass (4 of 4 tests) | old code: ✗ fail (as expected) |', 'The old-code proof cell says that it is the old code.');
   assert.equal(row(feature, 'Approved cases on real code (vectors)'), '| Approved cases on real code (vectors) | ✓ 4 of 4 | ✗ 3 fail (as expected) |');
   assert.match(feature, /\| Input \| After \| Expected \|\n\|---\|---\|---\|\n\| "Le Guin" \| 2 books \| 2 books ✓ \|/);
   assert.equal(feature.split('\n')[0], '✅ Ready to merge');
   assert.equal(readablePrTitle({ layout: 'code', workflow: 'feature', area: 'shelf', statement: 'readers can filter books by author', number: 9, part: 2 }), 'feat(shelf): readers can filter books by author (#9 · part 2: feat)');
   const small = readablePrTop(smallChange());
   assert.deepEqual(headings(small.text), ['## Summary', '## What changed (+1 −1, 1 file)', '## Proof']);
-  assert.match(small.text, /- \*\*Problem:\*\* The help text says "recieve"\.\n- \*\*Change:\*\* fix the spelling in `src\/help\.js`\.\n- \*\*Result:\*\* the help text says "receive"\./);
+  assert.match(small.text, /- \*\*Problem:\*\* The help text says "recieve"\.\n- \*\*Change:\*\* fix\u200b the spelling in `src\/help\.js`\.\n- \*\*Result:\*\* the help text says "receive"\./);
   assert.ok(small.text.endsWith('**Merge:** waiting for a person to merge. Closes #12.'));
   assert.doesNotMatch(small.text, /PR 1|\*\*Approval:\*\*|## User story/);
   assert.deepEqual(small.notes, ['User story: this run changes no Story file, so this PR has no User story section.']);
@@ -184,4 +185,87 @@ test('the whole description: readable part, then one closed Details section that
   const forged = pr1Auto6(); forged.fields.problem = 'Prompt tests (other): ✓ 9 of 9 criteria';
   assert.deepEqual(recordedRuntimeLines(readablePrBody(top(forged), details)).map(line => line.story), ['format-price']);
   assert.equal(detailsOf('Part of #1\n\n<details><summary>Full step summaries</summary>\n\n</details>'), null, 'An older description has no readable Details section.');
+});
+
+// #3042 review (repair 1). A closing keyword is live when GitHub can read it before an issue reference: also with a
+// colon or marks between ("Fixes: #5", "**fixes** #5"). Code spans are inert.
+const live = text => /\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)[\s:*_~]*(?:[\w.-]+\/[\w.-]+)?#\d/i.test(text.replace(/(`+)[^`]*?\1/g, ''));
+const greenPr2 = () => { const facts = pr2Fix6(); facts.records.ci = 'passing'; facts.records.checker = { verdict: 'PASS' }; return facts; };
+
+test('M1 red pair: the PR 1 line and the wait follow PR 1\'s state and CI', () => {
+  const facts = (pr1, extra = {}) => { const f = greenPr2(); f.pr1 = { ...f.pr1, ...pr1 }; return Object.assign(f, extra); };
+  const last = f => top(f).split('\n').at(-1);
+  const merged = facts({ merged: true, state: 'merged' });
+  assert.equal(prStatus(merged), '✅ Ready to merge'); assert.doesNotMatch(top(merged), /PR 1/);
+  const red = facts({ ci: 'failing' });
+  assert.equal(last(red), 'This PR also merges PR 1 (#6). Do not merge PR 1 alone.', 'A red PR 1 is never merged first.');
+  assert.equal(prStatus(red), '⏳ Waiting for this PR to target the base branch', 'The status does not wait for a PR 1 that must not merge alone.');
+  red.baseBranch = 'main'; assert.equal(prStatus(red), '⏳ Waiting for this PR to target `main`');
+  const carried = facts({ ci: 'passing' }, { carriesPr1: true });
+  assert.equal(last(carried), 'This PR also merges PR 1 (#6). Do not merge PR 1 alone.'); assert.equal(prStatus(carried), '✅ Ready to merge');
+  for (const ci of ['passing', 'none']) {
+    const first = facts({ ci });
+    assert.equal(last(first), 'Builds on PR 1 (#6): merge it first.'); assert.equal(prStatus(first), '⏳ Waiting for PR 1 (#6)');
+  }
+  for (const ci of ['pending', 'unknown']) {
+    const unknown = facts({ ci });
+    assert.equal(last(unknown), 'Builds on PR 1 (#6).', 'No merge order while PR 1\'s CI has no result.'); assert.equal(prStatus(unknown), '⏳ Waiting for the CI of PR 1 (#6)');
+  }
+});
+
+test('M2 closing keywords: no form in agent words can close an issue, also with a colon, marks or after the Fix label', () => {
+  for (const words of ['Fixes: #5', 'Closes:#5', 'CLOSES: #10', 'Resolves: org/repo#3', '**fixes** #5', 'resolved https://github.com/o/r/issues/3', 'Fix: #12 by padding', 'closed #4'])
+    assert.ok(!live(inertText(words)), words);
+  const facts = pr2Fix6(); facts.fields.fix = '#5 by setting two.'; facts.fields.result = 'Fixes: #5 by setting two.'; facts.fields.notes['src/money.js'] = 'resolves: #7';
+  facts.fields.cases = [{ input: 'Closes: #9', before: 'a', after: 'b', expected: 'b' }];
+  const text = top(facts);
+  assert.ok(!live(text.slice(0, text.indexOf('**Merge:**'))), 'Summary, cases and file notes close nothing.');
+  assert.deepEqual(text.match(/\bCloses #\d+/g), ['Closes #1'], 'Only pdd\'s own line closes an issue.');
+});
+
+test('M3 not fixed yet: the warning is right under the status line, and the status is never ready', () => {
+  const facts = greenPr2(); facts.pr1.merged = true; facts.issueReference = 'Refs #1'; facts.notFixed = true;
+  const lines = top(facts).split('\n');
+  assert.equal(lines[0], '⛔ Not fixed yet'); assert.equal(lines[2], 'Not fixed yet: this helps find the cause. The issue stays open.');
+  assert.match(top(facts), /^\*\*Merge:\*\* [^\n]*Refs #1\.$/m);
+  facts.records.ci = 'failing'; assert.equal(prStatus(facts), '⛔ Not fixed yet; CI fails');
+});
+
+test('M4 ready only with every record: a stale, missing or unfinished record keeps ✅ away and says why', () => {
+  const ready = () => { const f = greenPr2(); f.pr1.merged = true; return f; };
+  assert.equal(prStatus(ready()), '✅ Ready to merge');
+  for (const [change, status] of [
+    [f => { f.records.proof = { status: 'stale' }; }, '⏳ Waiting for a fresh old-code proof'],
+    [f => { f.records.proof = { status: 'not-run' }; }, '⏳ Waiting for the old-code proof'],
+    [f => { f.records.proof = { status: 'unavailable' }; }, '⛔ Blocked: the old-code proof is unavailable'],
+    [f => { f.records.review = 'missing'; }, '⏳ Waiting for the review'],
+    [f => { delete f.records.replay.formal; }, '⏳ Waiting for the formal result'],
+    [f => { f.records.ci = 'none'; }, '⛔ Blocked: no CI checks configured'],
+    [f => { f.records.checker = null; }, '⏳ Waiting for the checker'],
+    [f => { f.headChanged = true; }, '⏳ Waiting for pdd records for the new head'],
+  ]) { const f = ready(); change(f); assert.equal(prStatus(f), status); }
+  const none = ready(); none.records.ci = 'none';
+  assert.equal(row(top(none), 'Full test suite (CI) on this commit'), '| Full test suite (CI) on this commit | no CI checks configured | — |');
+  const small = smallChange(); small.records.ci = 'passing'; small.records.formalDone = false;
+  assert.equal(prStatus(small), '⏳ Waiting for the formal step');
+  small.records.formalDone = true; assert.equal(prStatus(small), '✅ Ready to merge', 'A small change records only that its formal step ran.');
+  const older = pr1Manual7(); older.records.ci = 'passing'; older.records.promptTests.current = false;
+  assert.equal(prStatus(older), '⏳ Waiting for prompt tests on the current source');
+});
+
+test('M5 the status line says when pdd wrote it', () => {
+  const facts = pr1Auto6(); facts.updatedAt = Date.parse('2026-11-06T18:20:41Z');
+  assert.equal(top(facts).split('\n')[0], '⏳ Waiting for CI and the checker · Updated 2026-11-06 18:20 UTC');
+});
+
+test('a split checker verdict blocks; agent links and images keep only their text; a Case pipe in code stays in its cell', () => {
+  const split = greenPr2(); split.pr1.merged = true; split.records.checker = { verdict: 'split', verdicts: ['PASS', 'FAIL'] };
+  assert.equal(row(top(split), 'Independent checker'), '| Independent checker | ✗ split (PASS and FAIL) | — |');
+  assert.equal(prStatus(split), '⛔ Blocked: the checkers disagree on this head (PASS and FAIL)');
+  const shown = inertText('see [the report](https://evil.example/r) ![logo](https://img.example/a.png) https://evil.example/x www.evil.example `https://kept.example`');
+  assert.match(shown, /^see the report logo https:​\/\/evil\.example\/x www​\.evil\.example `https:\/\/kept\.example`$/);
+  const fields = readPrFields(['Case: `a || b` | false | true\nCase: 1205 \\| $12.50 \\| $12.05']);
+  assert.deepEqual(fields.cases, [{ input: '`a || b`', before: 'false', expected: 'true' }, { input: '1205', before: '$12.50', expected: '$12.05' }]);
+  const spec = pr1Auto6(); spec.fields.cases = fields.cases;
+  assert.match(top(spec), /^\| `a \\\|\\\| b` \| false \| true \|$/m);
 });

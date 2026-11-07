@@ -565,9 +565,10 @@ ticks. Ticks use the existing action/call budget.
 In a pdd workflow run, pdd writes the PR title and text. The top is for people: a status line (ready, waiting or
 blocked), the user story, a short summary, the cases, what changed, a table of checks (PR 1) or proof (PR 2) and
 one approval, next or merge line. pdd fills the status line and the tables only from its own records: saved `pdd test`
-and `pdd lint` results, the replay evidence (§17), the old-code proof, review.md, CI and the checker verdict. All
-the rest (pdd result lines, your step summaries, approvals, verify.md) stays whole in a closed "Details for tools
-and audits" section.
+and `pdd lint` results, the replay evidence (§17), the old-code proof, review.md, CI and the checker verdict. It says
+✅ only when each record that the PR needs is there and current. `pdd workflow status N` refreshes the status line and
+the rows of each open PR ("Updated <time>"). All the rest (pdd result lines, your step summaries, approvals,
+verify.md) stays whole in a closed "Details for tools and audits" section.
 
 Give pdd the human parts as labeled lines in your `done` summary, one per line. A later line with the same label
 replaces an earlier one, also from a later step of the same PR:
@@ -577,14 +578,15 @@ replaces an earlier one, also from a later step of the same PR:
 | `Title:` | what must be true | what is true after the merge |
 | `Problem:` | the wrong or missing behavior, in one sentence | kept from PR 1 |
 | `Cause:`, `Fix:`, `Result:` | — | one sentence each |
-| `Case:` | `Case: INPUT \| TODAY \| EXPECTED`, one line per issue case | `Case: INPUT \| BEFORE \| AFTER \| EXPECTED` |
+| `Case:` | one line per issue case: input, today, expected | input, before, after, expected |
 | `File:` | `File: PATH — NOTE`, at most one short note per file | the same |
 
 A one-PR run (small change) uses `Problem:`, `Change:` and `Result:`. Use `Area:` only when the owning prompt's
 name is not a good title area. PR 1's Verdict is the verdict line of §14. pdd writes "This PR", the user story (from
 the Story's "As a …" line, §2), the changed files and their +/− counts itself. Your words never fill a table: "CI is
-green" in a summary stays your words. Do not paste logs, warnings or full paths of this computer (`/Users/…`).
-PR 1 cannot merge while a prompt in it is still draft.
+green" in a summary stays your words. Your words cannot close an issue or add a link: only pdd's `Closes #N` closes
+one. Separate the cells of a `Case:` line with `|`; put a value that has a `|` in a code span. Do not paste logs,
+warnings or full paths of this computer (`/Users/…`). PR 1 cannot merge while a prompt in it is still draft.
 
 ```text
 Verdict: the prompt is right; the bug is only in the CODE.
@@ -592,7 +594,10 @@ Before ✓ 6 of 6 criteria https://…/r/… → after ✓ 6 of 6 criteria https
 Prompt tests (format-price): ✓ 6 of 6 criteria · 6/6 checks · 6 AI calls
 Report (format-price): https://…/r/…
 Title: every price shows dollars and two cent digits
+Case: 1205 | $12.50 | $12.05
 ```
+
+In PR 2 the same case has four cells: `Case: 1205 | $12.50 | $12.05 | $12.05`.
 
 ## 16. Known limits today
 

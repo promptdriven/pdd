@@ -30,7 +30,7 @@ import { validateProofRecord } from './workflow-prove.mjs';
 import { readRunResults, resultLines, usableResult, noResultLine, NO_VERDICT, prepareNativeEvidence } from './workflow-results.mjs';
 import { collectTestInventory } from './workflow-inventory.mjs';
 import {adoptReplayCorpus,REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinReplayVectors,readReplayEvidence,formatReplayEvidence} from './workflow-replay.mjs';
-import { DETAILS_OPEN, detailsOf, prArea, readPrFields, readableNextLines, readablePrBody, readablePrTitle, readablePrTop, userStory } from './workflow-pr-body.mjs';
+import { DETAILS_OPEN, balancedDetails, detailsOf, pr1Order, prArea, prStatus, readPrFields, readableNextLines, readablePrBody, readablePrTitle, readablePrTop, sameReadableTop, userStory } from './workflow-pr-body.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const CHANGE_PREFIX = 'The person asks for changes';
@@ -1247,9 +1247,13 @@ async function githubLogin(run, p) {
     return p.githubLogin = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(login) ? login : null;
   } catch { return p.githubLogin = null; }
 }
+// One PR's state, CI and base on GitHub; a read problem stays unknown.
+async function prStatusOf(run, pr, p, cwd = run.root) {
+  try { return await (p.readPrStatus ?? readWorkflowPrStatus)({ cwd, url: pr.url }, p.commandPorts); } catch { return { state: 'unknown', ci: 'unknown' }; }
+}
 // CI and the checker verdict for the head of a published PR, and its base on GitHub. A read problem stays unknown.
 async function publishedChecks(run, pr, headSha, p) {
-  const status = await (p.readPrStatus ?? readWorkflowPrStatus)({ cwd: run.root, url: pr.url }, p.commandPorts);
+  const status = await prStatusOf(run, pr, p);
   let checker = null;
   try { checker = await (p.readPrChecker ?? readWorkflowPrChecker)({ cwd: run.root, url: pr.url, headSha }, p.commandPorts); } catch { checker = null; }
   return { ci: status.ci, base: status.base ?? null, checker };
@@ -1308,7 +1312,10 @@ async function readableFacts(run, area, p, evidence, { drafts = [], pending = fa
   const ask = askArea(run), pr1 = ask && prOf(run, ask.name);
   const pr2 = layout === 'spec' ? run.areas.filter(item => item !== area && item.gate === 'pr').map(item => prOf(run, item.name)).find(Boolean) ?? null : null;
   const stacked = layout === 'code' && Boolean(pr1) && Boolean(run.prBase) && run.prBase !== run.baseBranch;
-  return { layout, single: label === 'the PR', workflow: run.workflow, number: run.number, mode, pending, draft: run.draft === true, issueReference: evidence.issueReference,
+  // A code PR reads PR 1's state and CI on every render, also a new code PR (the red pair of RUNBOOK §2).
+  const first = layout === 'code' && pr1 ? await prStatusOf(run, pr1, p) : null;
+  const pr1Merged = Boolean(pr1) && (run.prBase === run.baseBranch || first?.state === 'merged');
+  return { layout, single: label === 'the PR', workflow: run.workflow, number: run.number, baseBranch: run.baseBranch, mode, pending, draft: run.draft === true, issueReference: evidence.issueReference,
     stories, storyNote: missing.length ? `${missing.join(', ')} has no "As a …, I want …, so that …" line` : storyPaths.length ? 'the Story file could not be read' : 'this run changes no Story file',
     fields, thisPr: holds.length ? `${others.length ? '' : 'no code change. '}It holds ${listed(holds)}.` : 'no code change.', diff,
     area: prArea({ area: fields.area, files, workflow: run.workflow }), title: fields.title,
@@ -1317,14 +1324,16 @@ async function readableFacts(run, area, p, evidence, { drafts = [], pending = fa
       lint: lint ? { result: lintCount ? `${lintCount[1]} of ${lintCount[2]} tests pass` : resultText(lint.summary), pass: lintCount ? Number(lintCount[2]) > 0 && lintCount[1] === lintCount[2] : null } : null,
       replay: replay ? { ...replay, ...(replay.formal?.result === 'failed' ? { counterexample: formalCounterexample(run) } : {}) } : null,
       proof: layout === 'code' ? { status: pending ? 'pending' : evidence.proofStatus, ...(native ? { passed: Number(native[1]), total: Number(native[2]) } : {}) } : null,
-      review: layout === 'code' ? reviewVerdict(run, area) : null, formalStep: area.steps.includes('formal'),
+      review: layout === 'code' ? reviewVerdict(run, area) : null, formalStep: area.steps.includes('formal'), formalDone: Boolean(run.done.formal && !run.done.formal.skipped),
       ci: published?.ci ?? null, checker: published?.checker ?? null, drafts: layout === 'spec' ? drafts : [] },
     approval: mode !== 'manual'
       ? { kind: 'auto', mode, login: await githubLogin(run, p), date: Number.isFinite(automatic.startedAt) ? new Date(automatic.startedAt).toISOString().slice(0, 10) : '', person: approvals.some(item => item.route === 'terminal') }
       : { kind: 'words', items: approvals },
-    pr1: pr1 ? { number: pr1.number, url: pr1.url, merged: run.prBase === run.baseBranch || published?.pr1State === 'merged' } : null,
+    pr1: pr1 ? { number: pr1.number, url: pr1.url, merged: pr1Merged, state: pr1Merged ? 'merged' : first?.state ?? 'unknown', ci: first?.ci ?? 'unknown' } : null,
     pr2: pr2 ? { number: pr2.number, url: pr2.url } : null,
-    stacked, carriesPr1: stacked && published?.base === run.baseBranch && published?.pr1State !== 'merged' };
+    stacked, carriesPr1: stacked && published?.base === run.baseBranch && !pr1Merged,
+    // "Not fixed yet:" makes the issue reference `Refs #N`: the PR helps find the cause and is never ready.
+    notFixed: /^Refs #/.test(evidence.issueReference ?? ''), updatedAt: p.now() };
 }
 // The readable part, made safe like the rest of the body and kept to a bounded size.
 function readableTopText(facts, run) {
@@ -1333,6 +1342,17 @@ function readableTopText(facts, run) {
   return { text: hideLocalPaths(redactTry(top.text), run), notes: top.notes.map(note => hideLocalPaths(redactTry(note), run)) };
 }
 
+// The Details line of a stacked code PR (#3042): where it stands on PR 1, and PR 1's place in the merge order by the same
+// rule as the readable part. Without facts (the publication identity) it names only the branch.
+const STACKED = /^It (?:is|was) stacked on PR 1's branch /;
+function stackedLine(run, facts) {
+  if (!run.prBase || run.prBase === run.baseBranch) return null;
+  const branch = `PR 1's branch \`${run.prBase}\``, order = facts ? pr1Order(facts) : null;
+  if (facts?.pr1?.merged) return `It was stacked on ${branch}; PR 1 is merged.`;
+  if (facts?.carriesPr1) return `It was stacked on ${branch} and now targets \`${run.baseBranch}\`. This PR also merges PR 1. Do not merge PR 1 alone.`;
+  return `It is stacked on ${branch}${{ carried: '. PR 1\'s CI fails, so this PR also merges PR 1. Do not merge PR 1 alone.', first: ': merge PR 1 first.',
+    ci: '. PR 1\'s CI has no result yet.', closed: '. PR 1 is closed without a merge.' }[order] ?? '.'}`;
+}
 // pdd's own result lines for the top of a PR; while source is being published they say so instead.
 const ownLines = (run, evidence) => evidence.pddLines?.length ? (run.publicationPending ? ['pdd result: publication-pending (source is being published).'] : evidence.pddLines) : [];
 // With `readable` (#3042), the description is the readable part and one closed Details section that holds this whole
@@ -1351,9 +1371,9 @@ function prBody(run, area, env, drafts = [], tests = true, evidence, readable = 
   }
   const label = prLabel(run, area), ask = askArea(run), pr1 = ask && prOf(run, ask.name);
   // The readable part says what comes next; the PR 1 head keeps only its issue reference.
+  const stacked = label === 'PR 2' ? stackedLine(run, readable?.facts) : null;
   const head = label === 'PR 1' ? [evidence.issueReference]
-    : label === 'PR 2' ? [evidence.issueReference, '', `PR 2 of this run: the code. It builds on PR 1: ${pr1?.url}.`,
-      ...(run.prBase && run.prBase !== run.baseBranch ? [`It is stacked on PR 1's branch \`${run.prBase}\`: merge PR 1 first.`] : [])]
+    : label === 'PR 2' ? [evidence.issueReference, '', `PR 2 of this run: the code. It builds on PR 1: ${pr1?.url}.`, ...(stacked ? [stacked] : [])]
     : [evidence.issueReference];
   // verify writes "✗ N vectors fail" as its first line when cases still fail; the person must see it first.
   const failing = verify?.split('\n').find(row => row.trim())?.trim().startsWith('✗') ? [`Agent note — not checked by pdd: ${verify.split('\n').find(row => row.trim()).trim()}`] : [];
@@ -1390,7 +1410,8 @@ function prBody(run, area, env, drafts = [], tests = true, evidence, readable = 
     const room=Math.max(0,budget-200-(verify===null?0:1000)-characters(body(null,lifted,approvals,least)));
     prefix[failing.length]=formatReplayEvidence(replayResult,{maxCharacters:characters(replay[0])+room});
   }
-  const verifyText = verify === null ? null : verifyFit(hideLocalPaths(verify, run), budget - 200 - characters(body('', lifted, approvals, least)), env, false, true);
+  // A stray </details> in verify.md never closes the Details section early (#3042).
+  const verifyText = verify === null ? null : balancedDetails(verifyFit(hideLocalPaths(verify, run), budget - 200 - characters(body('', lifted, approvals, least)), env, false, true));
   const inner = withSummaries(steps, full, section => body(verifyText, lifted, approvals, section), budget - 200);
   return readable ? readablePrBody(readable.text, [inner.trimEnd(), ...(notes.length ? ['', ...notes] : [])].join('\n')) : inner;
 }
@@ -1548,12 +1569,12 @@ async function publishAreaPr(run, area, p, lines, retry) {
     if(error?.code==='workflow_progress_refused')throw error; return fail([...lines, `git push to ${run.branch} failed (${causeOf(error)}). Check the network and gh auth, then ${retry}.`].join('\n')); }
     if (await git(p,run.root,'rev-parse','--verify','HEAD^{commit}') !== (codePr ? run.testInventory.headSha : promptHead)) return fail('Source was pushed; the local head changed. The PR stays publication-pending; retry from the pushed source.');
     prepared = await publicationEvidence(run, area, p);
-    let finalBody;
+    let finalBody, finalFacts;
     try {
-      // CI and the checker are read for the pushed head; PR 1's state tells whether this code PR now carries it.
-      const published = await publishedChecks(run, existing, codePr ? run.testInventory.headSha : promptHead, p), ask = askArea(run), pr1 = codePr && ask && prOf(run, ask.name);
-      if (pr1) published.pr1State = (await (p.readPrStatus ?? readWorkflowPrStatus)({ cwd: run.root, url: pr1.url }, p.commandPorts)).state;
-      finalBody=markedReplayBody(run.replayEvidence,false,await readableFor(prepared,{published}));
+      // CI and the checker are read for the pushed head; a code PR also reads PR 1's state and CI (readableFacts).
+      const published = await publishedChecks(run, existing, codePr ? run.testInventory.headSha : promptHead, p), readable = await readableFor(prepared,{published});
+      finalFacts = readable.facts;
+      finalBody=markedReplayBody(run.replayEvidence,false,readable);
     }
     catch (error) {
     if(error?.code==='workflow_progress_refused')throw error; return fail([...lines, `${oneLine(error.message)} Source was pushed; the PR stays publication-pending. ${retry}.`].join('\n')); }
@@ -1571,9 +1592,10 @@ async function publishAreaPr(run, area, p, lines, retry) {
         }
       }
       rememberPublication(existing,observed);
+      if (finalFacts && commitSha(existing.publishedHeadSha)) existing.readable = savedReadable(finalFacts, existing.publishedHeadSha);
     }
     const applyPublication=publicationUpdate(run,codePr?['testInventory']:[]);
-    const metadata=Object.fromEntries(['publishedHeadSha','publicationBodySha256'].filter(key=>Object.hasOwn(existing,key)).map(key=>[key,existing[key]]));
+    const metadata=Object.fromEntries(['publishedHeadSha','publicationBodySha256','readable'].filter(key=>Object.hasOwn(existing,key)).map(key=>[key,existing[key]]));
     commitRun(run,p,latest=>{applyPublication(latest);const pr=latest.pr.find(pr=>pr.url===existing.url&&pr.stage===existing.stage);if(pr)Object.assign(pr,metadata);});
     if (area.then === 'ask-code') await refreshReplayBaseline(run,p);
     lines.push(`Pushed the new commits to ${label}.`);
@@ -1605,6 +1627,7 @@ async function publishAreaPr(run, area, p, lines, retry) {
   if (area.then === 'ask-code') await refreshReplayBaseline(run,p);
   const published = { stage: area.name, number: outcome.pr.number, url: outcome.pr.url, branch: run.branch, base };
   rememberPublication(published,outcome.pr);
+  if (commitSha(published.publishedHeadSha)) published.readable = savedReadable(readable.facts, published.publishedHeadSha);
   const applyPublication=publicationUpdate(run,codePr?['testInventory']:[]);
   commitRun(run,p,latest=>{applyPublication(latest);if(!latest.pr.some(pr=>pr.url===published.url&&pr.stage===published.stage))latest.pr.push(published);});
   // PR 1's Next line now links PR 2 (#3042). A failure there only warns.
@@ -1617,8 +1640,14 @@ async function publishAreaPr(run, area, p, lines, retry) {
   return null;
 }
 // Only the Next line of PR 1's readable part changes: its Details section (pdd's evidence, read on PR 1's own branch)
-// stays byte for byte, because the worktree is on the code branch now.
+// stays byte for byte, because the worktree is on the code branch now. A PR 1 with saved readable facts gets its whole
+// readable part again (refreshReadableTop), with the PR 2 link and its current CI and checker rows.
 async function linkPr2InPr1(run, pr1, pr2, p) {
+  if (pr1.readable?.facts) {
+    const lines = await refreshReadableTop(run, pr1, p, { pr2 });
+    if (lines.length) return lines.map(line => line.startsWith('warning:') ? `warning: pdd could not link PR 2 in the PR 1 description (${line.replace(/^warning: /, '')}). PR 2 is open; PR 1 keeps its previous Next line.` : 'pdd updated the PR 1 description: its Next line links PR 2.');
+    // No refresh (GitHub gave no head, or nothing changed): only the Next line, as below.
+  }
   try {
     await requireExistingDraft(run, pr1, p);
     const body = JSON.parse(String((await p.execFile('gh', ['pr', 'view', pr1.url, '--json', 'body'], { cwd: run.root })).stdout ?? '')).body;
@@ -1635,6 +1664,65 @@ async function linkPr2InPr1(run, pr1, pr2, p) {
   } catch (error) {
     if (error?.code === 'workflow_progress_refused') throw error;
     return [`warning: pdd could not link PR 2 in the PR 1 description (${error.code ?? 'error'}). PR 2 is open; PR 1 keeps its previous Next line.`];
+  }
+}
+
+// The facts of a published readable part, saved on its PR record with the head they are for, so that a later refresh can
+// render the same part again with fresh CI, checker and PR 1 facts (#3042). The copy keeps 40 files (and their count) and
+// only the replay fields that the rows read.
+function savedReadable(facts, head) {
+  const copy = structuredClone(facts), replay = copy.records?.replay, files = copy.diff?.files ?? [];
+  if (copy.diff) { copy.diff.count = Math.max(copy.diff.count ?? 0, files.length); copy.diff.files = files.slice(0, 40); }
+  if (replay) copy.records.replay = { outcome: replay.outcome, reason: replay.reason, counts: replay.counts ?? {},
+    ...(replay.mutation ? { mutation: { outcome: replay.mutation.outcome, failures: replay.mutation.failures } } : {}),
+    ...(replay.formal ? { formal: { result: replay.formal.result, scope: replay.formal.scope, reason: replay.formal.reason, control_outcome: replay.formal.control_outcome } } : {}),
+    ...(replay.counterexample !== undefined ? { counterexample: replay.counterexample } : {}) };
+  return { head, facts: { ...copy, pending: false } };
+}
+// The readable top of one open PR again (#3042): the saved facts of its last publication with the current CI, checker
+// verdict for GitHub's head, PR 1's state and CI (code PR) and PR 2's link (PR 1). Only the part above the Details line
+// changes, and in a stacked code PR the one Details line about PR 1's merge order; the rest stays byte for byte. A head
+// that pdd did not publish waits for pdd's records. A description that is not pdd's own, or that already says the same
+// (apart from its time), is left alone. Any problem only warns; it never changes the run.
+async function refreshReadableTop(run, pr, p, { observed = new Map(), pr2 = null, cwd = run.root } = {}) {
+  const area = run.areas.find(item => item.name === pr.stage), label = area ? prLabel(run, area) : 'the PR', name = `${label === 'the PR' ? 'the PR' : label} (#${pr.number})`;
+  try {
+    const marker = `<!-- pdd-workflow:${run.runId}:${pr.stage} -->`;
+    const view = JSON.parse(String((await p.execFile('gh', ['pr', 'view', pr.url, '--json', 'body,headRefOid'], { cwd })).stdout ?? ''));
+    const body = view?.body, head = view?.headRefOid;
+    if (typeof body !== 'string' || !commitSha(head) || !body.includes(marker) || (body.match(/pdd-workflow:/g) ?? []).length !== 1) return [];
+    const rows = body.split('\n'), open = rows.indexOf(DETAILS_OPEN);
+    if (open < 1) return [];
+    const facts = structuredClone(pr.readable.facts), status = observed.get(pr.url) ?? await prStatusOf(run, pr, p, cwd);
+    let checker = null;
+    try { checker = await (p.readPrChecker ?? readWorkflowPrChecker)({ cwd, url: pr.url, headSha: head }, p.commandPorts); } catch { checker = null; }
+    facts.records = { ...facts.records, ci: status.ci ?? 'unknown', checker };
+    facts.headChanged = head.toLowerCase() !== String(pr.readable.head).toLowerCase();
+    facts.updatedAt = p.now();
+    const ask = askArea(run), first = ask && prOf(run, ask.name);
+    if (facts.layout === 'code' && first && facts.pr1) {
+      const state = observed.get(first.url) ?? await prStatusOf(run, first, p, cwd), merged = run.prBase === run.baseBranch || state.state === 'merged';
+      facts.pr1 = { ...facts.pr1, merged, state: merged ? 'merged' : state.state ?? 'unknown', ci: state.ci ?? 'unknown' };
+      facts.carriesPr1 = Boolean(facts.stacked) && status.base === run.baseBranch && !merged;
+    }
+    if (facts.layout === 'spec') {
+      const code = pr2 ?? run.areas.filter(item => item.gate === 'pr' && item.name !== pr.stage).map(item => prOf(run, item.name)).find(Boolean);
+      if (code) facts.pr2 = { number: code.number, url: code.url };
+    }
+    const top = readableTopText(facts, run).text, details = rows.slice(open);
+    if (facts.layout === 'code' && first) {
+      const anchor = details.indexOf(`PR 2 of this run: the code. It builds on PR 1: ${first.url}.`), line = stackedLine(run, facts);
+      if (anchor >= 0 && line && STACKED.test(details[anchor + 1] ?? '')) details[anchor + 1] = line;
+    }
+    const next = `${top.trimEnd()}\n\n${details.join('\n')}`;
+    if (sameReadableTop(next, body)) return [];
+    await requireExistingDraft(run, pr, p);
+    const reply = await p.execFile('gh', ['pr', 'edit', pr.url, '--body-file', '-'], { cwd, input: next });
+    if (reply.code !== undefined && reply.code !== 0) throw Object.assign(Error('description update failed'), { code: reply.code });
+    return [`pdd updated the top of ${name}: ${prStatus(facts)}.`];
+  } catch (error) {
+    if (error?.code === 'workflow_progress_refused') throw error;
+    return [`warning: pdd could not update the top of ${name} (${error.code ?? 'error'}); it keeps its previous status line.`];
   }
 }
 
@@ -1958,7 +2046,10 @@ async function draftDescription(run, pr1, drafts, p) {
     const head = run.branch === pr1.branch ? 'HEAD' : `refs/remotes/origin/${pr1.branch}`;
     let headSha = '';
     try { headSha = await git(p, run.root, 'rev-parse', '--verify', `${head}^{commit}`); } catch { /* The checker verdict stays unknown. */ }
-    const readable = readableTopText(await readableFacts(run, area, p, evidence, { drafts, published: await publishedChecks(run, pr1, headSha, p), base: pr1.base, head }), run);
+    const facts = await readableFacts(run, area, p, evidence, { drafts, published: await publishedChecks(run, pr1, headSha, p), base: pr1.base, head });
+    const readable = readableTopText(facts, run);
+    // The facts are saved with PR 1's head, so that status can refresh its top later; a pending body is not saved.
+    const remember = () => { if (!run.publicationPending && commitSha(headSha)) commitRun({ ...run }, p, latest => { const pr = latest.pr.find(item => item.url === pr1.url && item.stage === pr1.stage); if (pr) pr.readable = savedReadable(facts, headSha); }); };
     const opening = `${readable.text.trimEnd()}\n\n${DETAILS_OPEN}\n\n`;
     const closing = `${readable.notes.length ? `\n\n${readable.notes.join('\n')}` : ''}\n\n</details>${inside?.after ? `\n\n${inside.after}` : ''}`;
     const owned = /^(?:Check evidence: publication-pending|Agent note — not checked by pdd: (?:Not fixed yet:|Not checked:|Defect:|Not caught because:|Proof \(defect fixed\):|Proof \(gap closed\):|Review:|Verdict:|Before[ :])|Not fixed yet:|Not checked:|Defect:|Not caught because:|Proof \(defect fixed\):|Proof \(gap closed\):|Old-code proof:|Tests vs base:|Review:|Evidence omitted:)/;
@@ -2008,9 +2099,11 @@ async function draftDescription(run, pr1, drafts, p) {
     const fitted = verifyFit(safeRemainder, BODY_BUDGET - characters(leading) - characters(footer) - reserved, p.env, true);
     const placed = section => { const text = section.join('\n'); return fitted.includes(SLOT) ? fitted.replace(SLOT, () => text) : `${fitted}\n\n${text}`; };
     const nextBody = from < 0 ? `${leading}${fitted}${footer}` : withSummaries(steps, texts, section => `${leading}${placed(section)}${footer}`, BODY_BUDGET);
-    if (nextBody === body) return [];
+    // Only the time of the status line changed: nothing to write.
+    if (nextBody === body || sameReadableTop(nextBody, body)) { remember(); return []; }
     const reply = await p.execFile('gh', ['pr', 'edit', pr1.url, '--body-file', '-'], { cwd: run.root, input: nextBody });
     if (reply.code !== undefined && reply.code !== 0) throw Object.assign(Error('PR 1 description update failed.'), { code: reply.code });
+    remember();
     return [`pdd updated the PR 1 description: ${drafts.length ? `draft prompts left: ${drafts.join(', ')}` : 'no draft prompts are left'}.`];
   } catch (error) {
     if(error?.code==='workflow_progress_refused')throw error; return [`warning: pdd could not update the PR 1 description (${error.code ?? 'error'}). ${run.publicationPending ? 'No source was pushed.' : 'The PR retains its previous evidence; after a source push it stays publication-pending.'}`]; }
@@ -2671,11 +2764,16 @@ async function refreshPr(run, p) {
   if (!run.pr?.length || run.state === 'cancelled') return;
   const cwd=existsSync(run.root)?run.root:run.sourceRoot,observations=[];
   for(const pr of run.pr)observations.push({url:pr.url,number:pr.number,stage:pr.stage,fields:await (p.readPrStatus??readWorkflowPrStatus)({cwd,url:pr.url},p.commandPorts)});
+  // #3042: status also refreshes the readable top of each open PR that pdd published, from the same reads.
+  const refreshTops=async()=>{
+    const observed=new Map(observations.map(observation=>[observation.url,observation.fields]));
+    for(const pr of run.pr) if(pr.readable?.facts && observed.get(pr.url)?.state==='open') for(const line of await refreshReadableTop(run,pr,p,{observed,cwd})) p.say(line);
+  };
   const checkedAt=p.now();
   if(!observations.some(observation=>{
     const pr=run.pr.find(pr=>pr.url===observation.url&&pr.number===observation.number&&pr.stage===observation.stage);
     return Object.entries(observation.fields).some(([key,value])=>!equalFact(pr[key],value));
-  }))return;
+  }))return refreshTops();
   commitRun(run,p,latest=>{
     for(const observation of observations){
       const pr=latest.pr.find(pr=>pr.url===observation.url&&pr.number===observation.number&&pr.stage===observation.stage);
@@ -2688,6 +2786,7 @@ async function refreshPr(run, p) {
     if(last.state==='merged'&&area===latest.areas.at(-1))latest.state='completed';
     if(last.state==='merged'&&area?.then==='ask-code'&&latest.gate?.kind==='ask-code'){latest.state='completed';latest.doneAt='PR 1';}
   });
+  await refreshTops();
 }
 
 // What Herdr shows for the current chat of a running run or a run at a gate, with one Herdr call: 'blocked' (a question
@@ -2765,7 +2864,9 @@ function detail(run, chat = null, facts = {}) {
   const pending = run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase);
   const next = pending ? `pdd workflow open ${run.number} --new` : activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting'].includes(chat) ? `pdd workflow open ${run.number}`
     : run.gate ? approvalGuide(run)
-    : ended(run) ? null : prOf(run, area?.name) ? `Review and merge ${run.pr.length > 1 && run.prBase && run.prBase !== run.baseBranch ? 'PR 1, then PR 2,' : 'the PR'} on GitHub. pdd never merges.` : `pdd workflow open ${run.number}`;
+    : ended(run) ? null : prOf(run, area?.name) ? (run.pr.length > 1 && run.prBase && run.prBase !== run.baseBranch && run.pr[0]?.state === 'open' && run.pr[0]?.ci === 'failing'
+      ? 'Review and merge PR 2 on GitHub: PR 1\'s CI fails, so PR 2 also merges PR 1. Do not merge PR 1 alone. pdd never merges.'
+      : `Review and merge ${run.pr.length > 1 && run.prBase && run.prBase !== run.baseBranch ? 'PR 1, then PR 2,' : 'the PR'} on GitHub. pdd never merges.`) : `pdd workflow open ${run.number}`;
   return [`${run.repo}#${run.number} "${oneLine(run.issue.title)}" · ${run.workflow} · ${run.agent}`,
     `State: ${describe(run, chat, facts)}`,
     ...(pending ? [`Chat replacement pending: ${run.chatReplacement.phase}; retry pdd workflow open ${run.number} --new, or end with pdd workflow cancel ${run.number}.`] : []),

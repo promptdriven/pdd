@@ -55,7 +55,7 @@ export function pr2Fix6() {
     diff: { added: 9, removed: 1, files: [{ path: 'src/money.js', added: 1, removed: 1 }, { path: 'test/money.test.js', added: 6, removed: 0 }, { path: 'test/format-price.vectors.test.js', added: 2, removed: 0 }] },
     records: { promptTests: null, lint: null, replay: replayPass(), proof: { status: 'proved', passed: 12, total: 12 }, review: { mustFix: 0 }, formalStep: true,
       ci: null, checker: null, drafts: [] },
-    pr1: { number: 6, url: 'https://github.com/Serhan-Asad/pdd-autopilot-sandbox/pull/6', merged: false }, stacked: true, carriesPr1: false };
+    pr1: { number: 6, url: 'https://github.com/Serhan-Asad/pdd-autopilot-sandbox/pull/6', merged: false, state: 'open', ci: 'passing' }, stacked: true, carriesPr1: false };
 }
 export function pr2Blocked6() {
   const facts = pr2Fix6();
@@ -71,14 +71,14 @@ export function featurePr2() {
     fields: { problem: 'There is no way to list the books of one author.', fix: 'add `filterByAuthor` to the shelf module.', result: 'all 4 approved cases pass.',
       cases: [{ input: '"Le Guin"', after: '2 books', expected: '2 books' }], notes: {} },
     records: { ...facts.records, replay: { ...replayPass(), counts: { total: 4, pass: 4, fail: 0, blocked: 0, not_replayed: 0 }, mutation: { outcome: 'assertion_failure', failures: 3, description: 'filter ignores the author' },
-      formal: { result: 'not_applicable', scope: 'shelf filter', reason: 'no numeric rule to prove', control_outcome: 'not_run' } }, proof: { status: 'not-run' }, ci: 'passing', checker: { verdict: 'PASS' } },
-    pr1: { number: 8, url: 'https://github.com/example/shelf/pull/8', merged: true }, stacked: false };
+      formal: { result: 'not_applicable', scope: 'shelf filter', reason: 'no numeric rule to prove', control_outcome: 'not_run' } }, proof: { status: 'proved', passed: 4, total: 4 }, ci: 'passing', checker: { verdict: 'PASS' } },
+    pr1: { number: 8, url: 'https://github.com/example/shelf/pull/8', merged: true, state: 'merged', ci: 'passing' }, stacked: false };
 }
 export function smallChange() {
   return { ...pr2Fix6(), single: true, workflow: 'small-change', number: 12, mode: 'manual', issueReference: 'Closes #12',
     stories: [], storyNote: 'this run changes no Story file',
     fields: { problem: 'The help text says "recieve".', change: 'fix the spelling in `src/help.js`.', result: 'the help text says "receive".', cases: [], notes: {} },
     diff: { added: 1, removed: 1, files: [{ path: 'src/help.js', added: 1, removed: 1 }] },
-    records: { promptTests: null, lint: null, replay: null, proof: { status: 'proved', passed: 3, total: 3 }, review: null, formalStep: true, ci: 'pending', checker: null, drafts: [] },
+    records: { promptTests: null, lint: null, replay: null, proof: { status: 'proved', passed: 3, total: 3 }, review: null, formalStep: true, formalDone: true, ci: 'pending', checker: null, drafts: [] },
     approval: { kind: 'words', items: [{ route: 'said', at: Date.parse('2026-11-06T12:00:00Z'), words: 'ok, fix the typo' }] }, pr1: null, stacked: false };
 }
