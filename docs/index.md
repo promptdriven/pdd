@@ -7,6 +7,7 @@ Start with the [README](../README.md).
 - [RUNBOOK.md](../RUNBOOK.md): what the agent does for `pdd test`, `pdd lint` and `pdd simulate`.
 - [Interpreter boundaries](runtime-boundaries.md): offline review, server lint, native factory bindings and call-accounting evidence.
 - [CLI reference](cli.md): every command, and how to run from a source checkout.
+- [A GitHub App token for Autopilot](autopilot-github-app-token.md): a design note for a team that wants Autopilot to have its own GitHub limit.
 - [Report a problem](ISSUES.md): how you or your agent files a clear issue about pdd.
 - [Prompting guide](prompting-guide.md): the method. The [pdd-prompting skill](../skills/pdd-prompting/SKILL.md) has the same text in `guide.md`.
 

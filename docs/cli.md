@@ -196,7 +196,8 @@ GraphQL, the tick makes no GitHub call until the reset time; claims last 4
 hours, so they do not expire in that time. Other machines and your own work on
 the same login use the same limit; each machine keeps its own share. The
 workflow start's claim check and other `pdd` commands do not wait for the
-budget.
+budget. To give Autopilot a limit of its own, see the design note
+[A GitHub App token for Autopilot](autopilot-github-app-token.md).
 
 ### Alerts
 
