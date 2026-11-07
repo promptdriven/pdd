@@ -5,6 +5,11 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import {pinReplayVectors} from '../src/workflow-replay.mjs';
+import { DETAILS_OPEN, detailsOf } from '../src/workflow-pr-body.mjs';
+
+// #3042: pdd's own body (evidence, steps, approvals, Verify) now sits in the closed Details section under the readable
+// part. Checks that start at the first line of pdd's body read that section.
+const pddPart = body => detailsOf(body)?.details ?? body;
 
 const packageRoot = resolve(import.meta.dirname, '..');
 const url = number => `https://github.com/example/project/pull/${number}`;
@@ -40,7 +45,8 @@ const commit=()=>cp.execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).t
 const remote=()=>{try{return cp.execFileSync('git',['ls-remote','origin','refs/heads/topic'],{encoding:'utf8'}).trim().split('\\t')[0]}catch{return ''}};
 if(a[0]==='repo')out({nameWithOwner:'example/project',defaultBranchRef:{name:'main'},url:'https://github.com/example/project'});
 else if(a[1]==='list')out(s.prs.filter(p=>!a.includes('--head')||p.headRefName===flag('--head')).map(p=>({...p,headRefOid:remote()||p.headRefOid})));
-else if(a[1]==='view')out(s.prs.find(p=>p.url===a[2])||{body:''});
+else if(a[1]==='view'){const found=s.prs.find(p=>p.url===a[2]),p=found?.headRefName==='topic'?{...found,headRefOid:remote()||found.headRefOid}:found||{body:''};out(String(flag('--json')).split(',').includes('comments')?{...p,comments:(s.comments||[]).map(c=>({author:{login:'reviewer'},authorAssociation:c.author_association,body:c.body,createdAt:c.created_at,url:c.html_url}))}:p)}
+else if(a[0]==='api'&&a.some(x=>x.includes('/comments')))out((s.comments||[]).map(c=>JSON.stringify(c)).join('\\n'));
 else if(a[1]==='create'||a[1]==='edit'){
  if(flag('--body-file')!=='-')throw Error('must read body from stdin');
  const body=fs.readFileSync(0,'utf8'),kind=a[1];s.events.push({kind,body,remote:remote(),head:commit()});
@@ -60,7 +66,7 @@ else if(a[1]==='create'||a[1]==='edit'){
     const script = `import {${method}} from ${JSON.stringify(join(packageRoot, 'src/workflow-runner.mjs'))};const r=await ${method}({ref:'17',step:${JSON.stringify(prompt ? 'check' : 'formal')},summary:${JSON.stringify(summary)},cwd:${JSON.stringify(root)}},{stateDir:${JSON.stringify(join(base, 'pdd-state'))},isTTY:true,env:{HOME:${JSON.stringify(base)}},confirm:async()=>false});process.stdout.write(JSON.stringify(r));`;
     return JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], { cwd: root, encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, PDD_PUBLICATION_GH_STATE: state, GIT_ALLOW_PROTOCOL: 'file' } }));
   };
-  const machine = () => writeFileSync(join(runDir, 'old-code-proof.json'), JSON.stringify({ v: 2, origin: 'pdd.workflow-prove.v2',interruptSignal:'', runId: run.runId, baseSha, headSha: head, test: 'node --test test/value.test.mjs', expect: 'defect', paths: ['test/value.test.mjs'], base: phase(1, true), head: phase(0), outcome: 'proved', cleanupError: '', setupError: '' }));
+  const machine = (proved = head) => writeFileSync(join(runDir, 'old-code-proof.json'), JSON.stringify({ v: 2, origin: 'pdd.workflow-prove.v2',interruptSignal:'', runId: run.runId, baseSha, headSha: proved, test: 'node --test test/value.test.mjs', expect: 'defect', paths: ['test/value.test.mjs'], base: phase(1, true), head: phase(0), outcome: 'proved', cleanupError: '', setupError: '' }));
   const change = () => { writeFileSync(join(root, 'value'), 'new head'); git('commit', '-qam', 'new source'); return git('rev-parse', 'HEAD'); };
   const data = () => JSON.parse(readFileSync(state, 'utf8'));
   return { base, root, bare, git, run, head, runDir, save, invoke, machine, change, data, configure: values => writeFileSync(state, JSON.stringify({ ...data(), ...values })) };
@@ -116,7 +122,8 @@ test('real publication creates code PR with all known-step labels, current machi
   const out = f.invoke(allLabels); assert.equal(out.exitCode, 0, out.message);
   const body = f.data().prs[0].body;
   const order = ['Old-code proof: ✓', 'Not fixed yet:', 'Not checked:', 'Defect: `broken value`', 'Not caught because:', 'Proof (defect fixed):', 'Proof (gap closed):', 'Review: `reviewed`'];
-  let previous = -1; for (const label of order) { const at = body.indexOf(label); assert.ok(at > previous, label); previous = at; }
+  // #3042: the readable part repeats only pdd's fixed "Not fixed yet" line; the order is that of the pdd body in Details.
+  let previous = -1; for (const label of order) { const at = pddPart(body).indexOf(label); assert.ok(at > previous, label); previous = at; }
   assert.match(body, /Refs #17/); assert.doesNotMatch(body, /Closes #17|forged|Review: foreign/);
   const inventory = `Tests vs base: none.\nChanged assertions in kept tests: none.\nNew skips: none.\nStatic inventory only; this inventory did not run tests.\nTest inventory commits: ${f.run.baseSha.slice(0,7)} → ${f.head.slice(0,7)}.`;
   const proofAt = body.indexOf('Old-code proof: ✓'), inventoryAt = body.indexOf(inventory), reviewAt = body.indexOf('Review: `reviewed`');
@@ -129,7 +136,7 @@ test('real prompt publication lifts cross-area labels and never adds machine pro
   const f = fixture(t, { prompt: true }); f.machine();
   const out = f.invoke('Not checked: formal\nNot fixed yet: diagnosis only\nReview: source reviewed');
   assert.equal(out.exitCode, 0, out.message); const body = f.data().prs[0].body;
-  assert.match(body, /^Agent note — not checked by pdd: Not fixed yet: `diagnosis only`\nAgent note — not checked by pdd: Not checked: `formal`\nAgent note — not checked by pdd: Defect: `broken value`\nAgent note — not checked by pdd: Review: `source reviewed`/);
+  assert.match(pddPart(body), /^Agent note — not checked by pdd: Not fixed yet: `diagnosis only`\nAgent note — not checked by pdd: Not checked: `formal`\nAgent note — not checked by pdd: Defect: `broken value`\nAgent note — not checked by pdd: Review: `source reviewed`/);
   assert.match(body, /Refs #17/); assert.doesNotMatch(body, /Old-code proof:|Closes #17|Part of #17/);
 });
 
@@ -160,7 +167,7 @@ test('real existing code PR retains pending after final edit fails and reports p
 test('real existing prompt PR refreshes labels on repeat publication', t => {
   const f = fixture(t, { existing: true, prompt: true }); f.change();
   const out = f.invoke('Not fixed yet: still diagnosing\nNot checked: external\nReview: updated'); assert.equal(out.exitCode, 0, out.message);
-  assert.match(f.data().prs[0].body, /^Agent note — not checked by pdd: Not fixed yet: `still diagnosing`\nAgent note — not checked by pdd: Not checked: `external`/);
+  assert.match(pddPart(f.data().prs[0].body), /^Agent note — not checked by pdd: Not fixed yet: `still diagnosing`\nAgent note — not checked by pdd: Not checked: `external`/);
   assert.match(f.data().prs[0].body, /Review: `updated`/); assert.match(f.data().prs[0].body, /Refs #17/);
   assert.doesNotMatch(f.data().prs[0].body, /Old-code proof:|Closes #17/);
 });
@@ -216,7 +223,7 @@ test('real PR1 approval synchronization refreshes note labels while preserving e
   const out = f.invoke('', 'approveRun');
   assert.equal(out.exitCode, 1, 'A person terminal declines; synchronization does not fabricate approval.');
   const body = f.data().prs[0].body;
-  assert.match(body, /^Agent note — not checked by pdd: Not fixed yet: `diagnosis only`\nAgent note — not checked by pdd: Not checked: `external`/); assert.match(body, /Review: `refreshed`/);
+  assert.match(pddPart(body), /^Agent note — not checked by pdd: Not fixed yet: `diagnosis only`\nAgent note — not checked by pdd: Not checked: `external`/); assert.match(body, /Review: `refreshed`/);
   assert.match(body, /Preserved reviewer prose/); assert.match(body, /^Refs #17$/m); assert.doesNotMatch(body, /Closes #17|Old-code proof:/);
   assert.ok(body.includes('Preserved reviewer prose.\nPart of #17\n'), 'Keep the ordinary issue-reference example and its context byte for byte.');
   const saved = JSON.parse(readFileSync(join(f.runDir, 'status.json'), 'utf8'));
@@ -255,7 +262,7 @@ test('PR1-REFRESH-PROSE: real approval synchronization preserves later ordinary 
   writeFileSync(join(f.runDir, 'review.md'), 'Review: refreshed');
   assert.equal(f.invoke('', 'approveRun').exitCode, 1);
   const body = f.data().prs[0].body;
-  assert.match(body, /^Agent note — not checked by pdd: Defect: `broken value`\nAgent note — not checked by pdd: Review: `refreshed`\n/);
+  assert.match(pddPart(body), /^Agent note — not checked by pdd: Defect: `broken value`\nAgent note — not checked by pdd: Review: `refreshed`\n/);
   assert.doesNotMatch(body, /Old-code proof:/);
   assert.ok(body.includes(example), 'Preserve the complete reviewer example, including fences and literal issue reference.');
   assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1);
@@ -277,7 +284,7 @@ for (const [kind, ordinary] of [
   const body = f.data().prs[0].body;
   assert.equal(f.data().events.filter(event => event.kind === 'edit').length, editsBefore + 1);
   assert.ok(body.includes(ordinary), 'Preserve the complete ordinary reviewer context when room remains.');
-  assert.match(body, /^Agent note — not checked by pdd: Not fixed yet: `diagnosis only`\nAgent note — not checked by pdd: Not checked: `external`\nAgent note — not checked by pdd: Defect: `broken value`\nAgent note — not checked by pdd: Review: `refreshed`\n\npdd result: none\. pdd has no pdd test or pdd lint result of its own for this run \(pdd:no-verdict\)\.\n\nRefs #17\n\n/);
+  assert.match(pddPart(body), /^Agent note — not checked by pdd: Not fixed yet: `diagnosis only`\nAgent note — not checked by pdd: Not checked: `external`\nAgent note — not checked by pdd: Defect: `broken value`\nAgent note — not checked by pdd: Review: `refreshed`\n\npdd result: none\. pdd has no pdd test or pdd lint result of its own for this run \(pdd:no-verdict\)\.\n\nRefs #17\n\n/);
   assert.doesNotMatch(body, /Review: old|Closes #17|Old-code proof:/);
   assert.equal(body.split(marker).length - 1, 1);
   assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1);
@@ -299,7 +306,7 @@ test('PR1-REFRESH-RETENTION: bounded synchronization counts omitted failures and
   assert.equal(f.invoke('', 'approveRun').exitCode, 1);
   const body = f.data().prs[0].body;
   assert.ok([...body].length <= 60000);
-  assert.match(body, /^Agent note — not checked by pdd: Defect: `broken value`/);
+  assert.match(pddPart(body), /^Agent note — not checked by pdd: Defect: `broken value`/);
   assert.doesNotMatch(body, /stale owned label|stale owned review|Part of #17|Closes #17/);
   assert.match(body, /^Refs #17$/m); assert.match(body, /Evidence omitted: \d+ labels, [1-9]\d* failure lines, [1-9]\d* report references/);
   const omitted = /Evidence omitted: (\d+) labels, (\d+) failure lines, (\d+) report references/.exec(body).slice(1).map(Number);
@@ -460,19 +467,101 @@ test('PRSUM-UNICODE: a cut never splits a character or a URL', t => {
   assert.ok(count); assert.equal([...build.lines[0]].length + Number(count[1].replaceAll(',', '')), [...summary].length);
 });
 
-for (const prompt of [false, true]) test(`PRTITLE: a ${prompt ? 'PR 1' : 'code PR'} title is whole when it fits and cut in sight when it does not`, t => {
-  const suffix = prompt ? ' (prompt and Story)' : ' (code)';
-  const fits = fixture(t, { prompt }); fits.run.issue.title = 'b'.repeat(256 - suffix.length); fits.save();
+// #3042: titles were "ISSUE TITLE (prompt and Story)" and "ISSUE TITLE (code)". Now they say the kind, the area and the part:
+// "spec(area): … (#N · part 1: spec)" and "fix(area): … (#N · part 2: fix)", and only the statement is cut.
+for (const prompt of [false, true]) test(`PRTITLE: a ${prompt ? 'PR 1' : 'code PR'} title names its kind, area and part, and is cut in sight when it does not fit`, t => {
+  const prefix = prompt ? 'spec(small-change): ' : 'fix(small-change): ', suffix = prompt ? ' (#17 · part 1: spec)' : ' (#17 · part 2: fix)';
+  const fits = fixture(t, { prompt }); fits.run.issue.title = 'b'.repeat(256 - prefix.length - suffix.length); fits.save();
   assert.equal(fits.invoke('complete').exitCode, 0);
-  assert.equal(fits.data().prs[0].title, fits.run.issue.title + suffix, 'A title that fits GitHub\'s limit is kept whole.');
-  const over = fixture(t, { prompt }); over.run.issue.title = 'b'.repeat(257 - suffix.length); over.save();
+  assert.equal(fits.data().prs[0].title, prefix + fits.run.issue.title + suffix, 'A title that fits GitHub\'s limit is kept whole.');
+  const over = fixture(t, { prompt }); over.run.issue.title = 'b'.repeat(257 - prefix.length - suffix.length); over.save();
   assert.equal(over.invoke('complete').exitCode, 0);
   const cut = over.data().prs[0].title;
-  assert.ok(cut.length <= 256 && cut.endsWith(` …${suffix}`) && cut.startsWith('b'.repeat(200)), cut);
+  assert.ok(cut.length <= 256 && cut.endsWith(` …${suffix}`) && cut.startsWith(prefix + 'b'.repeat(150)), cut);
   const emoji = fixture(t, { prompt }); emoji.run.issue.title = '😀'.repeat(150); emoji.save();
   assert.equal(emoji.invoke('complete').exitCode, 0);
   const title = emoji.data().prs[0].title;
-  assert.ok(title.length <= 256 && title.endsWith(` …${suffix}`), title); assert.doesNotMatch(title, loneSurrogate);
+  assert.ok(title.length <= 256 && title.startsWith(prefix) && title.endsWith(` …${suffix}`), title); assert.doesNotMatch(title, loneSurrogate);
+  const named = fixture(t, { prompt }); assert.equal(named.invoke('Title: the value is two\nArea: Value').exitCode, 0);
+  assert.equal(named.data().prs[0].title, `${prompt ? 'spec' : 'fix'}(value): the value is two${suffix}`, 'The agent\'s Title and Area fields name the PR.');
+});
+
+// #3042: the readable part through the real publication path. Agent words reach only the Summary, the cases and the file
+// notes; the tables come from pdd's records; every machine line stays in the one closed Details section.
+const JARGON = /Agent note|not checked by pdd|OWNER-HANDOFF|overlay|batch|request|pdd-workflow|only when the person asks/i;
+test('READABLE-PR1: PR 1 opens with the user story, the agent fields and a checks table from pdd records; Details keep the rest', t => {
+  const f = fixture(t, { prompt: true });
+  mkdirSync(join(f.root, 'user_stories'));
+  writeFileSync(join(f.root, 'user_stories', 'value.md'), '# Value\n\nAs a maintainer, I want the value to be two,\nso that the report adds up.\n\n## Acceptance criteria\n\n1. The value is two.\n');
+  f.git('add', '.'); f.git('commit', '-qm', 'story');
+  const out = f.invoke('Problem: the value is one.\nCase: value | 1 | 2\nFile: user_stories/value.md — the rule\nPrompt tests (value): ✓ 9 of 9 criteria · 9/9 checks\nCI: green; checker PASS');
+  assert.equal(out.exitCode, 0, out.message);
+  const pr = f.data().prs[0], [visible, rest] = pr.body.split(DETAILS_OPEN);
+  assert.equal(pr.title, 'spec(value): Repair value (#17 · part 1: spec)');
+  assert.match(visible, /^⏳ Waiting for CI · Updated \d{4}-\d\d-\d\d \d\d:\d\d UTC\n\n## User story\n\nAs a maintainer, I want the value to be two, so that the report adds up\.\n\n## Summary\n/);
+  assert.match(visible, /- \*\*Problem:\*\* the value is one\.\n- \*\*This PR:\*\* It holds the Story and 1 other file \(not prompts, Stories or tests\)\./);
+  assert.match(visible, /\| value \| 1 \| 2 \|/); assert.match(visible, /## What changed \(\+\d+ −\d+, 2 files\)/); assert.match(visible, /- `user_stories\/value\.md`: the rule/);
+  assert.match(visible, /\| Prompt tests \(`pdd test`\) \| no pdd result \(`pdd:no-verdict`\) \|/);
+  assert.doesNotMatch(visible, /9 of 9|green|PASS/, 'Agent claims never fill the checks table.'); assert.doesNotMatch(visible, JARGON);
+  assert.match(visible, /\*\*Next:\*\* The code PR starts when you ask for it\. Part of #17\./);
+  for (const kept of ['Agent note — not checked by pdd: Defect: `broken value`', 'Agent note — not checked by pdd: Prompt tests (value)', 'Part of #17', 'Made with `pdd workflow run small-change`.', '## Steps', FULL])
+    assert.ok(rest.includes(kept), `Details keep ${kept}`);
+  assert.equal(pr.body.split(DETAILS_OPEN).length, 2); assert.ok(pr.body.includes('\n</details>\n\n<!-- pdd-workflow:publication-17:prompt-pr -->\n'));
+  assert.equal((pr.body.match(/pdd-workflow:/g) ?? []).length, 1); assert.ok([...pr.body].length <= 60000);
+});
+
+test('READABLE-STORY: without an "As a …" line PR 1 has no User story section and Details say why', t => {
+  const f = fixture(t, { prompt: true });
+  mkdirSync(join(f.root, 'user_stories')); writeFileSync(join(f.root, 'user_stories', 'value.md'), '# Value\n\nThe value is two.\n\n## Acceptance criteria\n\n1. Two.\n');
+  f.git('add', '.'); f.git('commit', '-qm', 'story');
+  assert.equal(f.invoke('check done').exitCode, 0);
+  const body = f.data().prs[0].body, [visible] = body.split(DETAILS_OPEN);
+  assert.doesNotMatch(visible, /## User story/);
+  assert.match(detailsOf(body).details, /^User story: user_stories\/value\.md has no "As a …, I want …, so that …" line, so this PR has no User story section\.$/m);
+});
+
+test('READABLE-CODE: the code PR proof table reads the old-code proof and review.md, never the agent\'s claims', t => {
+  const f = fixture(t); f.machine();
+  const out = f.invoke('Problem: the value is one.\nCause: an old constant.\nFix: set it to two.\nResult: CI green; checker PASS; formal Proved (bounded).\nCase: value | 1 | 2 | 2\nReview: no must-fix');
+  assert.equal(out.exitCode, 0, out.message);
+  const pr = f.data().prs[0], [visible] = pr.body.split(DETAILS_OPEN), proof = visible.slice(visible.indexOf('## Proof'));
+  assert.equal(pr.title, 'fix(small-change): Repair value (#17 · part 2: fix)');
+  assert.match(visible, /- \*\*Cause:\*\* an old constant\.\n- \*\*Fix\u200b:\*\* set it to two\.\n- \*\*Result:\*\* CI green; checker PASS; formal Proved \(bounded\)\./);
+  assert.match(visible, /\| value \| 1 \| 2 \| 2 ✓ \|/);
+  assert.match(proof, /\| Regression tests \(old-code proof\) \| ✓ pass \| ✗ fail \(as expected\) \|/);
+  assert.match(proof, /\| Formal check \| Not recorded: pdd has no formal result for this run \(see Details\) \| — \|/);
+  assert.match(proof, /\| Full test suite \(CI\) on this commit \| ⏳ pending \| — \|/); assert.match(proof, /\| Fresh review \| no must-fix \| — \|/);
+  assert.doesNotMatch(proof, /green|PASS|Proved/, 'Agent claims never fill a proof row.');
+  assert.match(visible, /\*\*Merge:\*\* waiting for a person to merge\. Closes #17\./); assert.doesNotMatch(visible, JARGON);
+  assert.match(detailsOf(pr.body).details, /^Old-code proof: ✓ /m, 'The machine proof line stays in Details.');
+});
+
+test('READABLE-CHECKS: an existing code PR update reads CI and the checker verdict for the pushed head', t => {
+  const verdict = (head, word = 'PASS', author = 'OWNER') => ({ author_association: author, html_url: 'https://github.com/example/project/pull/23#issuecomment-1', created_at: '2026-11-06T12:00:00Z', body: `Checked.\n\n\`\`\`json\n${JSON.stringify({ verdict: word, head, risk: 2 })}\n\`\`\`` });
+  for (const trusted of [false, true]) {
+    // The old-code proof is for the pushed head: a stale proof never gives ✅ (#3042 M4).
+    const f = fixture(t, { existing: true }); const next = f.change(); f.machine(next);
+    const prs = f.data().prs; prs[0].statusCheckRollup = [{ conclusion: 'SUCCESS' }];
+    f.configure({ prs, comments: trusted ? [verdict(next)] : [verdict(f.head), verdict(next, 'FAIL', 'NONE')] });
+    const out = f.invoke('Review: no must-fix'); assert.equal(out.exitCode, 0, out.message);
+    const [visible] = f.data().prs[0].body.split(DETAILS_OPEN);
+    assert.match(f.data().events[0].body, /^⏳ Waiting for the source to be published · Updated [\d-]+ [\d:]+ UTC$/m, 'The description before the push says it is pending.');
+    assert.match(visible, /\| Full test suite \(CI\) on this commit \| ✓ green \| — \|/);
+    if (trusted) { assert.match(visible, /\| Independent checker \| ✓ PASS \| — \|/); assert.match(visible.split('\n')[0], /^✅ Ready to merge · Updated /); }
+    else assert.match(visible, /\| Independent checker \| — \(a person reviews\) \| — \|/, 'A verdict for an older head or from an untrusted author does not count.');
+  }
+});
+
+test('READABLE-REFRESH: an older PR 1 description gets the readable part once, and a second refresh keeps one', t => {
+  const f = fixture(t, { existing: true, prompt: true }); awaitingCode(f);
+  for (let round = 0; round < 2; round++) {
+    assert.equal(f.invoke('', 'approveRun').exitCode, 1);
+    const body = f.data().prs[0].body;
+    assert.equal(body.split(DETAILS_OPEN).length, 2, `Round ${round + 1} has one Details section.`);
+    assert.equal(body.split('\n').filter(line => /^(?:⏳|⛔|✅) /.test(line)).length, 1, 'One status line.');
+    assert.equal(body.split('\n').filter(line => line === '## Checks').length, 1, 'One readable part.');
+    assert.doesNotMatch(body, /PR 1 of this run|only when the person asks/);
+  }
 });
 
 const stepsList = body => body.split('\n## Steps\n')[1].split('\n\n')[0];
@@ -501,14 +590,14 @@ test('PR1-REFRESH-SUMMARIES: a PR 1 update shortens the full summaries again and
   assert.equal(f.data().events.filter(event => event.kind === 'edit').length, edits + 1);
   const body = f.data().prs[0].body, items = sectionItems(fullSection(body)), scope = items.find(item => item.step === 'scope');
   assert.ok([...body].length <= 60000, `The whole description has ${[...body].length} characters.`);
-  assert.match(body, /^Agent note — not checked by pdd: Not checked: `y{400}`$/m); assert.equal(stepsList(body), stepsList(before), 'The Steps list is not cut.');
+  assert.match(pddPart(body), /^Agent note — not checked by pdd: Not checked: `y{400}`$/m); assert.equal(stepsList(body), stepsList(before), 'The Steps list is not cut.');
   assert.deepEqual(items.find(item => item.step === 'check').lines, ['check done']);
   assert.equal(scope.after, ' …'); assert.ok(S.startsWith(scope.lines[0]) && scope.lines[0].length < kept.lines[0].length, 'The block is shortened first.');
   const notice = body.split('\n').find(row => /step summar(?:y was|ies were) shortened to fit the PR size limit/.test(row)), count = /scope \(([\d,]+) characters left out\)/.exec(notice ?? '');
   assert.ok(count && body.indexOf(notice) < body.indexOf(FULL), `One true notice above the block: ${notice}`);
   assert.equal([...scope.lines[0]].length + Number(count[1].replaceAll(',', '')), [...S].length, 'The notice counts what this description leaves out.');
   assert.doesNotMatch(body, /not shown here/); assert.doesNotMatch(outsideCode(body), /@octocat|Fixes #2789|<details open/);
-  assert.equal(outsideCode(body).split('<details').length - 1, 1); assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1);
+  assert.equal(outsideCode(pddPart(body)).split('<details').length - 1, 1); assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1);
 });
 
 test('PR1-REFRESH-CODE-TAGS: a tag inside a code span does not fold the rest of a long PR 1 description', t => {
@@ -590,12 +679,13 @@ test('#2596 PR1 refresh removes a deleted runtime scenario from its contents des
   writeFileSync(join(f.root,'tests/release.json'),JSON.stringify({schema_version:'prompt-runtime.program-scenario.v1',story_path:'user_stories/release.md',criteria:[],steps:[]}));
   f.git('add','.');f.git('commit','-qm','add scenario');
   assert.equal(f.invoke(currentRuntime).exitCode,0);
-  assert.match(f.data().prs[0].body,/PR 1 of this run: the prompt, Story and test cases/);
+  // #3042: the readable Summary's "This PR" line (from the current Git diff) replaced the old "PR 1 of this run: …" sentence.
+  assert.match(f.data().prs[0].body,/^- \*\*This PR:\*\* [^\n]*1 test file/m);
   f.git('rm','tests/release.json');f.git('commit','-qm','remove scenario');
   assert.equal(f.invoke('refreshed').exitCode,0);
   const body=f.data().prs[0].body;
-  assert.match(body,/PR 1 of this run: the prompt and the Story\./);
-  assert.doesNotMatch(body,/PR 1 of this run: the prompt, Story and test cases|^Prompt tests.*✓/m);
+  assert.match(body,/^- \*\*This PR:\*\* /m);
+  assert.doesNotMatch(body,/^- \*\*This PR:\*\* [^\n]*test file|PR 1 of this run|^Prompt tests.*✓/m);
 });
 
 for(const change of ['identical','prompt','dependency','deleted']) test(`#2596 selected-source receipt publication after ${change} content`, async t=>{
@@ -617,4 +707,220 @@ for(const change of ['identical','prompt','dependency','deleted']) test(`#2596 s
   const body=f.data().prs[0].body;
   if(change==='identical')assert.match(body,/^Prompt tests \(place-order\): ✓ 1 of 1 criteria · 2\/2 checks · 1 AI call$/m);
   else assert.doesNotMatch(body,/^Prompt tests.*✓/m);
+});
+
+// #3042 review (repair 1): the real publication and status paths, with real Git and a fake gh.
+const NOT_FIXED_TOP = 'Not fixed yet: this helps find the cause. The issue stays open.';
+// PR 1 open on GitHub with the given checks; the code PR is stacked on PR 1's branch (the reviewer's real run).
+function stackedOnPr1(t, { checks = [{ conclusion: 'FAILURE' }], state = 'OPEN' } = {}) {
+  const f = fixture(t); f.machine();
+  const gh = join(f.base, 'bin', 'gh');
+  writeFileSync(gh, readFileSync(gh, 'utf8').replace("p=>!a.includes('--head')||p.headRefName===flag('--head')", "p=>(!a.includes('--head')||p.headRefName===flag('--head'))&&(!a.includes('--search')||String(p.body).includes(flag('--search').split('\"')[1]))"));
+  f.git('push', '-q', 'origin', 'main:refs/heads/prompt-topic');
+  f.run.prBase = 'prompt-topic'; f.run.workflow = 'bug'; f.save();
+  f.configure({ prs: [{ number: 22, url: url(22), state, headRefName: 'prompt-topic', baseRefName: 'main', body: 'x', statusCheckRollup: checks }] });
+  writeFileSync(join(f.runDir, 'review.md'), 'Review: no must-fix\n');
+  return f;
+}
+const codePr = f => f.data().prs.find(pr => pr.number === 23);
+const liveKeyword = () => /\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)[\s:*_~]*(?:[\w.-]+\/[\w.-]+)?#\d+/gi;
+const SUMMARY = 'Title: the value is two\nProblem: the value is one.\nCause: an old constant.\nFix: Fixes: #5 by setting two.\nResult: all good.';
+
+test('RED-PAIR: a new code PR stacked on a red PR 1 says that it also merges PR 1, and never "merge it first"', t => {
+  for (const [checks, state, line, waits, detail] of [
+    [[{ conclusion: 'FAILURE' }], 'OPEN', 'This PR also merges PR 1 (#22). Do not merge PR 1 alone.', null, "It is stacked on PR 1's branch `prompt-topic`. PR 1's CI fails, so this PR also merges PR 1. Do not merge PR 1 alone."],
+    [[{ conclusion: 'SUCCESS' }], 'OPEN', 'Builds on PR 1 (#22): merge it first.', 'PR 1 (#22)', "It is stacked on PR 1's branch `prompt-topic`: merge PR 1 first."],
+    [[{ status: 'IN_PROGRESS' }], 'OPEN', 'Builds on PR 1 (#22).', 'the CI of PR 1 (#22)', "It is stacked on PR 1's branch `prompt-topic`. PR 1's CI has no result yet."],
+    [[{ conclusion: 'SUCCESS' }], 'MERGED', null, null, "It was stacked on PR 1's branch `prompt-topic`; PR 1 is merged."],
+  ]) {
+    const f = stackedOnPr1(t, { checks, state });
+    const out = f.invoke(SUMMARY); assert.equal(out.exitCode, 0, out.message);
+    const pr = codePr(f), [visible] = pr.body.split(DETAILS_OPEN), status = visible.split('\n')[0];
+    assert.equal(pr.baseRefName, 'prompt-topic');
+    if (line) assert.ok(visible.trimEnd().endsWith(`Closes #17.\n\n${line}`), visible); else assert.doesNotMatch(visible, /PR 1/);
+    if (waits) assert.ok(status.includes(waits), status); else assert.doesNotMatch(status, /PR 1/, status);
+    assert.ok(pddPart(pr.body).split('\n').includes(detail), pddPart(pr.body));
+    if (checks[0].conclusion === 'FAILURE') assert.doesNotMatch(pr.body, /merge it first|merge PR 1 first/, 'A red PR 1 is never merged first.');
+  }
+});
+
+test('CLOSING-REAL: agent words with a colon keyword close nothing; only pdd\'s own Closes line can close the issue', t => {
+  const f = stackedOnPr1(t);
+  assert.equal(f.invoke(SUMMARY).exitCode, 0);
+  const [visible] = codePr(f).body.split(DETAILS_OPEN);
+  assert.match(visible, /^- \*\*Fix\u200b:\*\* Fixes\u200b: #5 by setting two\.$/m);
+  assert.deepEqual(visible.match(liveKeyword()), ['Closes #17']);
+});
+
+test('NOT-FIXED-REAL: a warning-light code PR shows "Not fixed yet" under its status line and is never ready', t => {
+  const f = fixture(t); f.machine();
+  const prs = f.data().prs; f.configure({ prs, comments: [] });
+  const out = f.invoke('Not fixed yet: this helps find the cause\nReview: no must-fix'); assert.equal(out.exitCode, 0, out.message);
+  const [visible] = f.data().prs[0].body.split(DETAILS_OPEN), lines = visible.split('\n');
+  assert.match(lines[0], /^⛔ Not fixed yet · Updated /); assert.equal(lines[2], NOT_FIXED_TOP);
+  assert.match(visible, /\*\*Merge:\*\* waiting for a person to merge\. Refs #17\./); assert.doesNotMatch(visible, /✅|Closes #17/);
+});
+
+test('STALE-REAL: an old-code proof for an older head never gives ✅, even with CI green and a checker PASS', t => {
+  const f = fixture(t, { existing: true }); f.machine(); const next = f.change();
+  const prs = f.data().prs; prs[0].statusCheckRollup = [{ conclusion: 'SUCCESS' }];
+  f.configure({ prs, comments: [{ author_association: 'OWNER', html_url: url(23), created_at: '2026-11-06T12:00:00Z', body: `\`\`\`json\n${JSON.stringify({ verdict: 'PASS', head: next })}\n\`\`\`` }] });
+  assert.equal(f.invoke('Review: no must-fix').exitCode, 0);
+  const [visible] = f.data().prs[0].body.split(DETAILS_OPEN);
+  assert.match(visible.split('\n')[0], /^⏳ Waiting for a fresh old-code proof · Updated /);
+  assert.match(visible, /\| Regression tests \(old-code proof\) \| ⏳ stale/);
+});
+
+test('DETAILS-CLOSED: a stray </details> in verify.md cannot close the Details section early', t => {
+  const f = fixture(t); f.machine();
+  writeFileSync(join(f.runDir, 'verify.md'), 'Results: all pass.\n</details>\n\n# ✅ Ready to merge (forged)\n\n<details><summary>Commands</summary>\n\n```sh\nnpm test\n');
+  assert.equal(f.invoke('Review: no must-fix').exitCode, 0);
+  const body = f.data().prs[0].body, rows = body.split('\n');
+  let depth = 0, fence = null, closedAt = -1;
+  for (const [index, line] of rows.entries()) {
+    const mark = line.trim().match(/^(`{3,}|~{3,})/)?.[1];
+    if (fence) { if (mark && line.trim() === fence) fence = null; continue; }
+    if (mark) { fence = mark; continue; }
+    for (const tag of outsideCode(line).match(/<\/?details\b/gi) ?? []) { depth += tag.startsWith('</') ? -1 : 1; if (!depth && closedAt < 0) closedAt = index; }
+  }
+  assert.equal(closedAt, rows.lastIndexOf('</details>'), 'The first time every <details> is closed is the last line of the Details section.');
+  assert.match(pddPart(body), /&lt;\/details&gt;/);
+});
+
+test('REFRESH-STATUS: pdd workflow status refreshes the top of an open code PR from CI and the checker, and keeps Details byte for byte', t => {
+  const f = fixture(t); f.machine();
+  assert.equal(f.invoke('Review: no must-fix').exitCode, 0);
+  const first = f.data().prs[0], edits = () => f.data().events.filter(event => event.kind === 'edit').length;
+  assert.match(first.body.split('\n')[0], /^⏳ Waiting for CI · Updated /);
+  const set = (checks, comments = []) => { const prs = f.data().prs; prs[0].statusCheckRollup = checks; f.configure({ prs, comments }); };
+  set([{ conclusion: 'SUCCESS' }]);
+  assert.equal(f.invoke('', 'runStatus').exitCode, 0);
+  const green = f.data().prs[0].body;
+  assert.match(green.split('\n')[0], /^✅ Ready to merge · Updated \d{4}-\d\d-\d\d \d\d:\d\d UTC$/);
+  assert.match(green, /\| Full test suite \(CI\) on this commit \| ✓ green \| — \|/);
+  assert.equal(detailsOf(green).details, detailsOf(first.body).details, 'Details stay byte for byte.');
+  assert.ok(green.endsWith(first.body.slice(first.body.indexOf(DETAILS_OPEN))), 'Everything from the Details line on is unchanged.');
+  const count = edits(); assert.equal(f.invoke('', 'runStatus').exitCode, 0); assert.equal(edits(), count, 'A second status with the same facts writes nothing.');
+  set([]);
+  assert.equal(f.invoke('', 'runStatus').exitCode, 0);
+  const none = f.data().prs[0].body;
+  assert.match(none.split('\n')[0], /^⛔ Blocked: no CI checks configured · Updated /); assert.match(none, /\| no CI checks configured \| — \|/);
+  const verdict = (word, author) => ({ author_association: author, html_url: url(23), created_at: `2026-11-06T12:0${word.length}:00Z`, body: `\`\`\`json\n${JSON.stringify({ verdict: word, head: first.headRefOid })}\n\`\`\`` });
+  set([{ conclusion: 'SUCCESS' }], [verdict('FAIL', 'MEMBER'), verdict('PASS', 'OWNER')]);
+  assert.equal(f.invoke('', 'runStatus').exitCode, 0);
+  const split = f.data().prs[0].body;
+  assert.match(split, /\| Independent checker \| ✗ split \(PASS and FAIL\) \| — \|/, 'Two verdicts on one head are a split, not the newest.');
+  assert.match(split.split('\n')[0], /^⛔ Blocked: the checkers disagree on this head/);
+});
+
+test('REFRESH-RED-PAIR: status follows PR 1\'s CI and the retarget before the merge, in the top and in the Details line', t => {
+  const f = stackedOnPr1(t, { checks: [{ status: 'IN_PROGRESS' }] });
+  assert.equal(f.invoke(SUMMARY).exitCode, 0);
+  const before = codePr(f).body;
+  assert.ok(before.split(DETAILS_OPEN)[0].trimEnd().endsWith('Builds on PR 1 (#22).'));
+  const update = change => { const prs = f.data().prs; change(prs); f.configure({ prs }); assert.equal(f.invoke('', 'runStatus').exitCode, 0); return codePr(f).body; };
+  const red = update(prs => { prs[0].statusCheckRollup = [{ conclusion: 'FAILURE' }]; });
+  assert.ok(red.split(DETAILS_OPEN)[0].trimEnd().endsWith('This PR also merges PR 1 (#22). Do not merge PR 1 alone.'));
+  assert.ok(pddPart(red).split('\n').includes("It is stacked on PR 1's branch `prompt-topic`. PR 1's CI fails, so this PR also merges PR 1. Do not merge PR 1 alone."));
+  assert.doesNotMatch(red, /merge it first|merge PR 1 first/);
+  const retargeted = update(prs => { prs[0].statusCheckRollup = [{ conclusion: 'SUCCESS' }]; prs.find(pr => pr.number === 23).baseRefName = 'main'; });
+  assert.ok(retargeted.split(DETAILS_OPEN)[0].trimEnd().endsWith('This PR also merges PR 1 (#22). Do not merge PR 1 alone.'), 'After the retarget the code PR carries PR 1.');
+  assert.ok(pddPart(retargeted).split('\n').includes("It was stacked on PR 1's branch `prompt-topic` and now targets `main`. This PR also merges PR 1. Do not merge PR 1 alone."));
+  const rest = body => { const rows = detailsOf(body).details.split('\n'); return rows.filter(row => !/^It (?:is|was) stacked on PR 1's branch /.test(row)).join('\n'); };
+  assert.equal(rest(retargeted), rest(before), 'Only the merge-order line of Details changes.');
+});
+
+test('REFRESH-PR1: status refreshes PR 1\'s top too: its CI row, its status line and the link to PR 2', t => {
+  const f = fixture(t, { prompt: true });
+  assert.equal(f.invoke('check done').exitCode, 0);
+  const first = f.data().prs[0];
+  assert.match(first.body.split('\n')[0], /^⏳ Waiting for CI · Updated /);
+  const saved = JSON.parse(readFileSync(join(f.runDir, 'status.json'), 'utf8'));
+  saved.pr.push({ stage: 'code', number: 24, url: url(24), branch: 'topic-code', base: 'topic' }); writeFileSync(join(f.runDir, 'status.json'), JSON.stringify(saved));
+  const prs = f.data().prs; prs[0].statusCheckRollup = [{ conclusion: 'SUCCESS' }]; f.configure({ prs });
+  assert.equal(f.invoke('', 'runStatus').exitCode, 0);
+  const body = f.data().prs[0].body, [visible] = body.split(DETAILS_OPEN);
+  assert.match(visible.split('\n')[0], /^✅ Ready to merge · Updated /);
+  assert.match(visible, /\| Full test suite \(CI\) \| ✓ green \|/);
+  assert.match(visible, /^\*\*Next:\*\* PR 2 \(the code\): #24\. Part of #17\.$/m);
+  assert.ok(body.endsWith(first.body.slice(first.body.indexOf(DETAILS_OPEN))), 'PR 1 keeps its Details byte for byte.');
+});
+
+// #3042 review 2: the title and verify.md close nothing; a refresh never writes over a newer publication; an unchanged
+// refresh makes no GitHub call besides the status read.
+const shell = value => `'${String(value).replaceAll("'", "'\\''")}'`;
+// Would GitHub close an issue from this text? Code spans and fences are removed: GitHub reads no reference in code.
+const liveOutsideCode = text => String(text).replace(/^(```|~~~)[^\n]*\n[\s\S]*?^\1\s*$/gm, '').replace(/(?<![`\\])(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)/g, '').match(liveKeyword()) ?? [];
+// The gh command with a shell step: `before` runs before the real gh, `after` after it (its output is kept and printed last).
+const wrapGh = (f, { match, after = '', before = '' }) => {
+  const real = join(f.base, 'bin', 'gh-real'), gh = join(f.base, 'bin', 'gh');
+  writeFileSync(real, readFileSync(gh, 'utf8')); chmodSync(real, 0o755);
+  writeFileSync(gh, `#!/bin/sh\nhit=; case "$*" in ${match}) if [ -z "$INNER" ] && [ -f ${shell(join(f.base, 'trigger'))} ]; then rm ${shell(join(f.base, 'trigger'))}; hit=1; fi;; esac\n`
+    + `if [ -n "$hit" ]; then ${before || ':'}; fi\nout=$(${shell(real)} "$@") || exit $?\nif [ -n "$hit" ]; then ${after || ':'}; fi\nprintf '%s' "$out"\n`);
+  chmodSync(gh, 0o755); writeFileSync(join(f.base, 'trigger'), '1');
+};
+const doneScript = (f, step, summary) => `import {stepDone} from ${JSON.stringify(join(packageRoot, 'src/workflow-runner.mjs'))};const r=await stepDone({ref:'17',step:${JSON.stringify(step)},summary:${JSON.stringify(summary)},cwd:${JSON.stringify(f.root)}},{stateDir:${JSON.stringify(join(f.base, 'pdd-state'))},isTTY:true,env:{HOME:${JSON.stringify(f.base)}},confirm:async()=>false});process.stdout.write(JSON.stringify(r));`;
+const editsOf = f => f.data().events.filter(event => event.kind === 'edit');
+
+test('CLOSING-TITLE-VERIFY: an agent title "Fixes #5 by padding" and verify.md "Fixes #8" / "Resolves: #9" close nothing', t => {
+  const f = stackedOnPr1(t);
+  writeFileSync(join(f.runDir, 'verify.md'), 'Results: all pass.\nThis Fixes #8 and Resolves: #9.\n\n```sh\ngit commit -m "fixes #5"\n```\n');
+  const out = f.invoke('Title: Fixes #5 by padding\nProblem: closes: #6\nCause: c\nFix: Fixes: #7\nResult: ok'); assert.equal(out.exitCode, 0, out.message);
+  const pr = codePr(f), [visible] = pr.body.split(DETAILS_OPEN), details = pr.body.slice(pr.body.indexOf(DETAILS_OPEN));
+  assert.equal(pr.title, 'fix(bug): Fixes\u200b #5 by padding (#17 · part 2: fix)');
+  assert.deepEqual(pr.title.match(liveKeyword()), null, 'The title closes nothing (GitHub puts it into the merge commit).');
+  assert.ok(details.includes('This Fixes\u200b #8 and Resolves\u200b: #9.'), details);
+  assert.ok(details.includes('```sh\ngit commit -m "fixes #5"\n```'), 'A fence in verify.md stays byte for byte.');
+  assert.deepEqual(liveOutsideCode(visible), ['Closes #17']); assert.deepEqual(liveOutsideCode(details), ['Closes #17'], 'Only pdd\'s own Closes line closes an issue.');
+});
+
+test('RACE: a status refresh never writes over a description that a done published after the status read', t => {
+  const f = fixture(t, { existing: true }); f.machine();
+  assert.equal(f.invoke('Review: no must-fix').exitCode, 0);
+  const b1 = f.data().prs[0].body, next = f.change(); f.machine(next);
+  const prs = f.data().prs; prs[0].statusCheckRollup = [{ conclusion: 'SUCCESS' }]; f.configure({ prs });
+  // The worker's done publishes right after GitHub answered the status read, so status holds the older description and head.
+  writeFileSync(join(f.base, 'done.mjs'), doneScript(f, 'review', 'Review: no must-fix'));
+  wrapGh(f, { match: '*comments*', after: `(cd ${shell(f.root)} && INNER=1 ${shell(process.execPath)} ${shell(join(f.base, 'done.mjs'))} > ${shell(join(f.base, 'done.out'))} 2> ${shell(join(f.base, 'done.err'))})` });
+  const before = editsOf(f).length;
+  assert.equal(f.invoke('', 'runStatus').exitCode, 0);
+  assert.equal(JSON.parse(readFileSync(join(f.base, 'done.out'), 'utf8')).exitCode, 0, 'The worker\'s done published during the status.');
+  const edits = editsOf(f), final = f.data().prs[0].body, inventory = body => pddPart(body).split('\n').find(line => line.startsWith('Test inventory commits:'));
+  assert.equal(edits.length, before + 2, 'Only the done wrote (its pending and its final description); the status wrote nothing.');
+  assert.equal(final, edits.at(-1).body);
+  assert.ok(inventory(final).endsWith(`→ ${next.slice(0, 7)}.`), inventory(final)); assert.notEqual(inventory(final), inventory(b1));
+  assert.equal(f.invoke('', 'runStatus').exitCode, 0);
+  const after = f.data().prs[0].body;
+  assert.equal(detailsOf(after).details, detailsOf(final).details, 'The next status keeps the newer Details.');
+  assert.match(after.split('\n')[0], /^✅ Ready to merge · Updated /);
+});
+
+test('RACE-RECORD: a status refresh writes nothing when the run record changed after its first read; the next status writes', t => {
+  const f = fixture(t); f.machine();
+  assert.equal(f.invoke('Review: no must-fix').exitCode, 0);
+  const prs = f.data().prs; prs[0].statusCheckRollup = [{ conclusion: 'SUCCESS' }]; f.configure({ prs });
+  const record = join(f.runDir, 'status.json');
+  // Just before the write, another process saves new readable facts for the PR.
+  wrapGh(f, { match: '*"--json body,headRefOid"', before: `${shell(process.execPath)} -e ${shell(`const fs=require('fs'),r=JSON.parse(fs.readFileSync(${JSON.stringify(record)},'utf8'));r.pr.find(p=>p.number===23).readable.facts.updatedAt=1;fs.writeFileSync(${JSON.stringify(record)},JSON.stringify(r));`)}` });
+  const body = f.data().prs[0].body, count = editsOf(f).length;
+  const first = f.invoke('', 'runStatus'); assert.equal(first.exitCode, 0);
+  assert.equal(editsOf(f).length, count); assert.equal(f.data().prs[0].body, body); assert.doesNotMatch(first.message, /updated the top|could not update/);
+  assert.equal(f.invoke('', 'runStatus').exitCode, 0);
+  assert.equal(editsOf(f).length, count + 1); assert.match(f.data().prs[0].body.split('\n')[0], /^✅ Ready to merge · Updated /);
+});
+
+test('CALLS: a status refresh reads each PR once (with its description, head and comments); a change adds one read and the edit', t => {
+  const f = fixture(t); f.machine();
+  assert.equal(f.invoke('Review: no must-fix').exitCode, 0);
+  const log = join(f.base, 'gh-calls.log'), real = join(f.base, 'bin', 'gh-real'), gh = join(f.base, 'bin', 'gh');
+  writeFileSync(real, readFileSync(gh, 'utf8')); chmodSync(real, 0o755);
+  writeFileSync(gh, `#!/bin/sh\nprintf '%s\\n' "$*" >> ${shell(log)}\nexec ${shell(real)} "$@"\n`); chmodSync(gh, 0o755);
+  const calls = () => { try { return readFileSync(log, 'utf8').trim().split('\n').filter(Boolean); } catch { return []; } };
+  const status = () => { const from = calls().length; assert.equal(f.invoke('', 'runStatus').exitCode, 0); return calls().slice(from); };
+  const prs = f.data().prs; prs[0].statusCheckRollup = [{ conclusion: 'SUCCESS' }]; f.configure({ prs });
+  const changed = status(), same = status();
+  const views = list => list.filter(call => call.startsWith('pr view'));
+  assert.deepEqual(views(same), [`pr view ${url(22)} --json state,mergedAt,statusCheckRollup,baseRefName`, `pr view ${url(23)} --json state,mergedAt,statusCheckRollup,baseRefName,body,headRefOid,comments`], same.join('\n'));
+  assert.deepEqual(same.filter(call => !call.startsWith('pr view')), [], 'No change: no other GitHub call (no comments read, no second view, no edit).');
+  assert.deepEqual(changed.filter(call => !views(same).includes(call)), [`pr view ${url(23)} --json body,headRefOid`, `pr edit ${url(23)} --body-file -`], changed.join('\n'));
 });

@@ -80,6 +80,8 @@ Merge only when all of these are true:
 - a second fresh checker agreed when pdd-check asks for one (risk 4-5, a split verdict, or a change to check, merge or approval code);
 - no question to a person is open.
 
+After a base change, and right before each merge, run `pdd workflow status N`: pdd refreshes the top of both PRs (status line, checks and merge order).
+
 
 ## Outcomes and retries
 

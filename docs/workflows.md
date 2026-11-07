@@ -107,12 +107,12 @@ The check comes first, then the simulation. At the story gate, the chat can offe
 
 After the check and try steps, the chat shows one `Prompt tests` line for each Story (✓, ✗ or no verdict) with its report link, and the Simulator links. You try it, then approve or ask for changes. pdd opens PR 1 only after you approve.
 
-The PR 1 body is short:
+The PR 1 body starts with a part for people: a status line, the user story, a summary (Problem, This PR, Verdict), the expected cases, what changed, a Checks table from pdd's own records (Prompt tests with one report link, lint, CI, checker), the Approval line and the Next line. In an Autopilot `auto` run the Approval line is "Automatic approval: Autopilot `auto` mode, started by <login> on <date>. No person was asked." and the Next line links PR 2, which starts by itself; in a manual run they show your approval words and "The code PR starts when you ask for it." The agent gives the summary and the cases as labeled lines in its `done` summaries ([RUNBOOK §15](../RUNBOOK.md#15-pr-text)). Then one closed "Details for tools and audits" section holds:
 
 1. pdd's own results: one `pdd result:` line for the newest `pdd test` and the newest `pdd lint` that ran in the run worktree after the run started (batch id, time, whether the source is still the same, the interpreter build and model when known, and the result). With none, the line is `pdd result: none. … (pdd:no-verdict)`. This is a label, not a stop.
 2. For a bug: the verdict line and the `Before ✗ … → after ✓ …` line with its report links.
 3. One `Prompt tests (<story>)` line for each Story. With more than one Story, pdd adds them up in a `Prompt tests (all Stories)` line. Then a `Report (<story>)` link for each Story (report links expire after 7 days). When these lines come from a step summary, they start with `Agent note — not checked by pdd:`, because the agent typed them. Lines that `pdd workflow evidence` checked against a saved result have no label.
-4. `Part of #N`, and that the code comes in PR 2 only when you ask.
+4. `Part of #N`.
 5. `Draft prompts: … Approve them before you merge.`, when a prompt is still `draft`.
 6. One short line for each step. A step that `pdd workflow done STEP --skipped REASON` recorded says `skipped (recorded by pdd)`.
 
@@ -134,7 +134,7 @@ Then the chat shows the PR 1 link and asks: "Do you want the code PR now, or sto
 
 | You choose | What happens |
 |---|---|
-| Code now: say it in the chat, or run `pdd workflow approve N` | The code area starts in a new chat. It works on top of PR 1. PR 2 is stacked on PR 1's branch. Merge PR 1 first |
+| Code now: say it in the chat, or run `pdd workflow approve N` | The code area starts in a new chat. It works on top of PR 1. PR 2 is stacked on PR 1's branch. Merge PR 1 first, except when PR 1's CI fails: then PR 2 says "This PR also merges PR 1 (#N). Do not merge PR 1 alone.", its base is set to the base branch and only PR 2 is merged |
 | Stop | The run waits. `status` says that PR 1 is open. If PR 1 is merged and you do not go on, the run ends as "done at PR 1" |
 | Code later: `pdd workflow approve N` at any time | The code area starts. If PR 1 is merged, PR 2 starts from the merged prompts on the saved base branch (`--base BRANCH`, else the repository default) |
 
@@ -170,12 +170,12 @@ pdd does not run tests. The agents do.
 - It runs the new cases, the regression tests and the repo's required checks. When it can, it shows that a new test fails on the old or wrong code, in a throwaway copy.
 - For a small-change behavior fix it writes `Proof (defect fixed):` and `Proof (gap closed):`, and a reason for each removed test or changed assertion.
 - It writes the exact commands, the exit codes and the real output to `verify.md`. It names what no test covers.
-- The body of PR 2, or of the one `small-change` PR, has the step summaries and `verify.md`. It starts with pdd's own `pdd result:` lines (or `pdd result: none. … (pdd:no-verdict)`) and the `Old-code proof:` line. `Prompt tests` lines and report links that come from a step summary follow, each starting with `Agent note — not checked by pdd:`. Report links expire after 7 days.
+- The body of PR 2, or of the one `small-change` PR, starts with the same kind of part for people: a status line, the user story, a summary (PR 2: Problem, Cause, Fix, Result; small change: Problem, Change, Result), before and after cases, what changed, a Proof table (approved cases on the new and the old code, or on a planted mistake in a feature run; the formal result; the regression tests; CI; the review; the checker) and the Merge line. Its status line says `✅ Ready to merge` only when each of these records is there and current, and `⛔ Not fixed yet` for a PR that only helps find the cause. `pdd workflow status N` refreshes the status line and the rows of each open PR of the run (CI, the checker verdict, PR 1's CI and a new base) and says when ("Updated <time>"). A stacked PR 2 follows PR 1's CI: "Builds on PR 1 (#N): merge it first." when PR 1 is green, "This PR also merges PR 1 (#N). Do not merge PR 1 alone." when PR 1 is red or PR 2 already targets the base branch, and "Builds on PR 1 (#N)." while PR 1's CI has no result. Its Details section has the step summaries and `verify.md`. The Details section starts with pdd's own `pdd result:` lines (or `pdd result: none. … (pdd:no-verdict)`) and the `Old-code proof:` line. `Prompt tests` lines and report links that come from a step summary follow, each starting with `Agent note — not checked by pdd:`. Report links expire after 7 days.
 
 Bundled feature/bug code areas declare `replay_evidence: "pdd.replay-evidence.v1"`. The agent writes
 `replay-evidence.json` in the run folder using the [structured replay contract](replay-evidence.md).
 [Corpus adoption](replay-evidence.md#adopt-an-unchanged-approved-corpus) supplies a frozen declared anchor for an existing approved corpus.
-The PR begins with the validated replay status and exact counts, original vector and current source hashes,
+The Proof table shows the replay counts, and the Details section begins with the validated replay status and exact counts, original vector and current source hashes,
 public-boundary execution coverage, semantic mutation control, and formal result with scope and reason.
 Missing, malformed or stale records appear as blocked/not replayed. Assertion failures remain publishable.
 Saved areas and custom workflows without this field retain their behavior. pdd checks structure and identity;

@@ -17,7 +17,7 @@ Read pdd-prompting/review.md.
 
 Both PRs: the full suite is green on the head, with no new skip or only. One exception: new native tests in PR 1 may be red only for the missing behavior. Say so in the verdict; then PR 1 merges only together with its code PR.
 
-Verdict: one PR comment with a JSON block: `verdict` (PASS, FAIL or NOT SURE), `head` (the SHA you checked), `risk` (1-5, before merge), `family`, `session`, `checker_mode`, and the evidence. Never send a failed check again on your own.
+Verdict: one PR comment with a JSON block: `verdict` (PASS, FAIL or NOT SURE), `head` (the SHA you checked), `risk` (1-5, before merge), `family`, `session`, `checker_mode`, and the evidence. Then run `pdd workflow status N` to refresh the PR top. Never send a failed check again on your own.
 
 A second fresh checker must agree when the risk is 4-5, when two verdicts split, or when the PR changes check, merge or approval code. Use the other family when it is installed and signed in; else a second fresh session of the same family, labeled `checker_mode: same-family`.
 
