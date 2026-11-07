@@ -191,7 +191,7 @@ test('Slack: an ok reply is delivered, an error reply fails with only its status
   const sent = await f.alert(30, 'access', { cause: 'Needs <!channel> & a paid plan', tried: 'Read the billing page', need: 'Approve spending' });
   assert.equal(sent.exitCode, 0, sent.stderr);
   assert.match(f.requests.at(-1).body.text, /Needs &lt;!channel&gt; &amp; a paid plan/);
-  assert.equal(f.record().incidents['access@test-host'].result, 'delivered');
+  assert.equal(f.record().incidents['30:access'].result, 'delivered');
   f.noSecret();
 });
 
@@ -375,6 +375,77 @@ test('one usage limit that blocks five issues sends one alert; the issues join i
   f.noSecret();
 });
 
+test('an access or spending decision is one incident per issue: two decisions send two alerts, and a recovery closes only its own', async t => {
+  const f = setup(t);
+  await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);
+  const plan = { cause: 'Issue 70 needs a paid OpenAI plan', tried: 'Read the billing page', need: 'Approve 20 USD per month' };
+  const dataset = { cause: 'Issue 71 needs the private dataset repo', tried: 'Cloned it with the run account', need: 'Grant read access' };
+  f.replies.push(echo, echo);
+  assert.match((await f.alert(70, 'access', plan)).stdout, /Alert sent for #70 access; the webhook confirmed it/);
+  assert.match((await f.alert(71, 'access', dataset)).stdout, /Alert sent for #71 access; the webhook confirmed it/);
+  assert.equal(f.requests.length, 2, 'a second, different decision is sent to the person');
+  assert.equal(f.requests[1].body.content, ['PDD Autopilot alert: access (test-host)', 'Repository: owner/repo', 'Issue: https://github.com/owner/repo/issues/71',
+    `Cause: ${dataset.cause}`, `Tried: ${dataset.tried}`, `Needs: ${dataset.need}`, 'Answer on the GitHub issue.'].join('\n'));
+  assert.deepEqual(Object.keys(f.record().incidents).sort(), ['70:access', '71:access']);
+
+  f.replies.push(echo);
+  await f.alert(70, 'recovered', { cause: 'Spending approved', kind: 'access' });
+  assert.equal(f.requests.at(-1).body.content, ['PDD Autopilot recovered: access (test-host)', 'Repository: owner/repo',
+    'Issue: https://github.com/owner/repo/issues/70', 'What changed: Spending approved'].join('\n'));
+  assert.deepEqual(Object.keys(f.record().incidents), ['71:access'], 'the other decision stays open');
+  assert.match((await f.alert(71, 'access', dataset)).stdout, /Alert for #71 access is already open; nothing sent/);
+  assert.equal(f.requests.length, 3);
+  f.noSecret();
+});
+
+test('the machine in an incident is the coordinator\'s saved machine name, so a host rename finds the same incident', async t => {
+  const f = setup(t);
+  await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);
+  // Launcher states: one of another repository, then this repository's, with the machine name saved at its first start.
+  mkdirSync(f.ports.stateRoot, { recursive: true });
+  writeFileSync(join(f.ports.stateRoot, `${'a'.repeat(20)}.json`), JSON.stringify({ repo: 'owner/other', enabled: true, machine: 'other-repo-machine' }));
+  writeFileSync(join(f.ports.stateRoot, `${'b'.repeat(20)}.json`), JSON.stringify({ repo: 'Owner/Repo', enabled: true, machine: 'saved-machine' }));
+  f.ports.hostname = () => 'renamed-host-2';
+  f.replies.push(echo);
+  await f.alert(12, 'usage-limit', usage);
+  assert.match(f.requests[0].body.content, /^PDD Autopilot alert: usage-limit \(saved-machine\)\n/);
+  f.ports.hostname = () => 'renamed-host-3';
+  assert.match((await f.alert(13, 'usage-limit', usage)).stdout, /Added #13 to the open usage-limit alert on this machine; nothing sent/);
+  assert.equal(f.requests.length, 1, 'a host rename opens no new incident');
+  f.replies.push(echo);
+  await f.alert(13, 'recovered', { cause: 'The usage limit reset', kind: 'usage-limit' });
+  assert.equal(f.requests[1].body.content, ['PDD Autopilot recovered: usage-limit (saved-machine)', 'Repository: owner/repo',
+    'Issues: https://github.com/owner/repo/issues/12, https://github.com/owner/repo/issues/13', 'What changed: The usage limit reset'].join('\n'));
+  assert.deepEqual(f.record().incidents, {}, 'the recovery closes the incident after the rename');
+  f.noSecret();
+});
+
+test('a delivered alerts test ends the status line of an older failed recovery; an open undelivered alert still shows', async t => {
+  const f = setup(t);
+  await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);
+  f.replies.push(echo, { status: 500, text: '' });
+  await f.alert(30, 'decision', { cause: 'Two layouts fit', tried: 'Asked on the issue', need: 'Pick one' });
+  assert.match((await f.alert(30, 'recovered', { cause: 'The layout was chosen', kind: 'decision' })).stdout, /delivery failed \(HTTP 500\)/);
+  assert.deepEqual(f.record().incidents, {}, 'the recovery closed the incident');
+  assert.match((await f.status())[1], /^Alerts: last delivery failed \(HTTP 500\) for #30 decision at /);
+
+  f.time += 60 * 1000;
+  f.replies.push(echo);
+  assert.equal((await f.pdd(['autopilot', 'alerts', 'test'])).exitCode, 0);
+  assert.equal((await f.status()).length, 1, 'the delivered test is the newest send');
+  assert.deepEqual(f.record().log.at(-1), { at: '2026-11-06T10:01:00.000Z', kind: 'test', action: 'test', result: 'delivered' });
+
+  f.replies.push({ status: 500, text: '' });
+  await f.alert(31, 'stuck', { cause: 'No progress', tried: 'Two repairs', need: 'A person to look' });
+  f.replies.push(echo);
+  await f.pdd(['autopilot', 'alerts', 'test']);
+  assert.equal((await f.status())[1], 'Alerts: 1 open alert not delivered; check with pdd autopilot alerts test.');
+  f.replies.push(echo);
+  assert.match((await f.alert(31, 'stuck', { cause: 'No progress', tried: 'Two repairs', need: 'A person to look' })).stdout, /Alert sent for #31 stuck/);
+  assert.equal((await f.status()).length, 1);
+  f.noSecret();
+});
+
 test('invalid alert input is refused with its problem named, and records and sends nothing', async t => {
   const f = setup(t);
   assert.equal((await f.pdd(['autopilot', 'alerts', 'set'], DISCORD)).exitCode, 0, 'a destination exists, so only validation stops a send');
@@ -433,7 +504,10 @@ function fakeDiscord(f) {
       return reply(200, { id, channel_id: CHANNEL, content: request.body.content });
     }
     const message = path?.match(new RegExp(`^/channels/${CHANNEL}/messages/([0-9]+)$`))?.[1];
-    if (request.method === 'GET' && posted.has(message)) return reply(200, { id: message, content: f.discord.readback === 'same' ? posted.get(message) : 'edited by someone else' });
+    // 'normalized' stores the text as a chat service may: LF line ends and no whitespace at line ends or at either end.
+    const stored = text => f.discord.readback === 'same' ? text : f.discord.readback === 'normalized'
+      ? text.replace(/\r\n?/g, '\n').replace(/[ \t]+$/gm, '').trim() : 'edited by someone else';
+    if (request.method === 'GET' && posted.has(message)) return reply(200, { id: message, content: stored(posted.get(message)) });
     return reply(404, { message: 'Unknown' });
   };
   f.route = request => `${request.method} ${request.url.slice('https://discord.com/api/v10'.length)}`;
@@ -487,6 +561,18 @@ test('a Discord bot readback mismatch is unconfirmed, shown in status and not se
   const tested = await f.pdd(['autopilot', 'alerts', 'test']);
   assert.equal(tested.exitCode, 1);
   assert.match(tested.stderr, /Test alert unconfirmed \(readback mismatch\) for Discord bot PDD in #internal-alerts/);
+  f.noSecret();
+});
+
+test('a Discord bot readback that changed only line ends or end spaces is delivered, and the result names the readback', async t => {
+  const f = setup(t); fakeDiscord(f);
+  await f.pdd(['autopilot', 'alerts', 'set', '--discord-channel', CHANNEL], BOT_TOKEN);
+  f.discord.readback = 'normalized';
+  const sent = await f.alert(12, 'stuck', { cause: 'Line one  \r\nLine two\rLine three', tried: 'Two repairs', need: 'A person to look' });
+  assert.equal(sent.stdout, 'Alert sent for #12 stuck; the Discord bot readback confirmed it.\n');
+  assert.match(f.requests.at(-2).body.content, /\nCause: Line one {2}\r\nLine two\rLine three\n/, 'the sent text is unchanged');
+  assert.equal(f.record().incidents['12:stuck'].result, 'delivered');
+  assert.equal((await f.status()).length, 1, 'no false unconfirmed alert in status');
   f.noSecret();
 });
 

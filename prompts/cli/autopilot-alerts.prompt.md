@@ -72,8 +72,9 @@ where VERSION is the package version.
   link embeds. A status that is not 2xx is `failed` (`HTTP 403`). A 2xx reply
   without a numeric message `id` is `unconfirmed` (`no message id`).
 - Readback: `GET /channels/ID/messages/MESSAGE_ID`. It is `delivered` only when
-  the reply has the same `id` and the same `content` after trim. Otherwise it is
-  `unconfirmed`: `readback mismatch`, `readback HTTP N` or `readback no reply`.
+  the reply has the same `id` and the [same content](#delivery-and-readback).
+  Otherwise it is `unconfirmed`: `readback mismatch`, `readback HTTP N` or
+  `readback no reply`.
 - `test` first makes two read-only checks: `GET /users/@me` and
   `GET /channels/ID`. If one fails, exit 1 and send nothing. Otherwise send the
   test message with readback. Exit 0 only when it is delivered. The message names
@@ -84,7 +85,7 @@ where VERSION is the package version.
 | Action | Result |
 | --- | --- |
 | `set` | Trim `text`. Save it when it is a supported webhook. Exit 0 and name the service. Otherwise exit 2 and save nothing. |
-| `test` | Send one test message, `PDD Autopilot test alert (HOST).` Exit 0 only when it is delivered. Exit 1 when no destination is set, or delivery failed or is unconfirmed. Record nothing. A bot destination also makes the [read-only checks](#a-discord-bot-destination). |
+| `test` | Send one test message, `PDD Autopilot test alert (HOST).`, with the host name. Exit 0 only when it is delivered. Exit 1 when no destination is set, or delivery failed or is unconfirmed. A bot destination also makes the [read-only checks](#a-discord-bot-destination). When the test is delivered, add a log row (action `test`, result `delivered`, no issue) to each alert record that already exists on this machine. Otherwise record nothing. |
 | `clear` | Remove the destination file. Exit 0, also when no file exists. |
 
 Supported webhooks use `https`, no user name or password and no port:
@@ -97,8 +98,13 @@ Supported webhooks use `https`, no user name or password and no port:
 
 | Service | Request | Delivered when |
 | --- | --- | --- |
-| Discord | POST JSON `{"content":TEXT,"allowed_mentions":{"parse":[]}}` to the URL with query `wait=true` added | The status is 2xx and the reply is the created message: a string `id` and the same `content` after trim |
+| Discord | POST JSON `{"content":TEXT,"allowed_mentions":{"parse":[]}}` to the URL with query `wait=true` added | The status is 2xx and the reply is the created message: a string `id` and the same content |
 | Slack | POST JSON `{"text":TEXT}`, with `&`, `<` and `>` escaped as `&amp;`, `&lt;`, `&gt;` | The status is 200 and the body is `ok` after trim |
+
+The same content means equal text after this normalization of both sides: CRLF
+and CR become LF, each line loses its trailing whitespace, and the whole text is
+trimmed. A chat service can store the text in this form, so this change alone is
+not a mismatch.
 
 `allowed_mentions` and the Slack escapes stop issue text from paging a whole
 channel. Each send is one request with a 10-second limit. The module does not
@@ -118,20 +124,20 @@ Each send has one result:
 `alert` input: `cwd`, `issue` (a positive integer as text), `kind`, `update`
 (Boolean) and `text`, a JSON object from stdin. Kinds:
 
-| Kind | Use |
-| --- | --- |
 | Kind | Use | One incident per |
 | --- | --- | --- |
 | `usage-limit` | An AI account usage limit; give the reset time when known | repository, machine and kind |
 | `resource` | A CPU, memory or disk failure | repository, machine and kind |
-| `access` | An access or spending decision | repository, machine and kind |
+| `access` | An access or spending decision | repository, issue and kind |
 | `decision` | An unresolved product choice | repository, issue and kind |
 | `stuck` | An issue stuck after its retry time | repository, issue and kind |
 | `recovered` | A matching open incident ended | |
 
-`usage-limit`, `resource` and `access` are machine incidents: they are not
-specific to one issue. One usage limit that blocks 5 runs is one incident and
-one alert. The incident lists every affected issue.
+`usage-limit` and `resource` are machine incidents: they are not specific to
+one issue. One usage limit that blocks 5 runs is one incident and one alert. The
+incident lists every affected issue. An access or spending decision belongs to
+its issue, so two different decisions on two issues are two incidents and two
+alerts, and a recovery of one leaves the other open.
 
 The JSON has nonblank string fields `cause`, `tried` and `need`. For `recovered`
 only `cause` (what changed) is needed, and an optional `kind` names the one
@@ -141,8 +147,19 @@ problem, and records nothing.
 
 Find the repository with `gh repo view --json nameWithOwner` in `cwd`. If that
 fails, read a `github.com` owner and name from the `origin` remote. If both fail,
-exit 1. The issue link is `https://github.com/OWNER/REPO/issues/N`. HOST is this
-machine's host name. An alert or update has these lines:
+exit 1. The issue link is `https://github.com/OWNER/REPO/issues/N`. HOST is the
+machine name of the alert:
+
+- the `machine` value of the coordinator's saved launcher state: the first
+  `<state root>/<20 hex>.json` file, in file-name order, whose `repo` is this
+  repository (ignoring case) and whose `machine` is a nonblank string;
+- else this machine's host name.
+
+The launcher saves `machine` once, at the first start. A host name can change,
+for example when macOS renames the host on a network change. The saved name does
+not change, so a repeat after a rename finds the same incident.
+
+An alert or update has these lines:
 
 ```text
 PDD Autopilot alert: KIND (HOST)
@@ -162,8 +179,7 @@ Repository line, the Issue or Issues line of the closed incidents and
 `What changed: CAUSE`.
 
 The incident of a call is its machine incident (this repository, HOST and kind)
-for `usage-limit`, `resource` and `access`, else the incident of its issue and
-kind. This answers the question **when does a call send, and what ends an
+for `usage-limit` and `resource`, else the incident of its issue and kind. This answers the question **when does a call send, and what ends an
 incident?**
 
 ```mermaid
@@ -203,11 +219,13 @@ above. ID is the first 20 hex characters of the SHA-256 of the lowercase
 `OWNER/REPO`. The record keeps the open incidents (kind, affected issues,
 issues in the last sent message, fields, open and update times, latest result
 and detail) and the newest 200 log rows (time, issue, kind, action `alert`,
-`update`, `retry`, `repeat` or `recovered`, result and detail). It never holds
-the URL.
+`update`, `retry`, `repeat`, `recovered` or `test`, result and detail). It never
+holds the URL.
 
 `alert` exits 0 when the record is saved, whatever the delivery result, so work
-continues. Its message names the issue, the kind and the result. A failed or
+continues. Its message names the issue, the kind and the result. A delivered
+result says `the webhook confirmed it` for a webhook and
+`the Discord bot readback confirmed it` for a bot. A failed or
 unconfirmed result says that `pdd autopilot status` shows it. A `not-configured`
 result says that the alert is recorded on this machine and names
 `pdd autopilot alerts set`. A repeat says that nothing was sent and names
@@ -228,6 +246,12 @@ Alerts: 1 open alert not delivered; last delivery failed (HTTP 404) for #12 usag
 ```
 
 Without a destination the end is `; set one with pdd autopilot alerts set.`
+
+A failed recovery is not sent again, because its incident is closed. A delivered
+`test` adds the newest send to every record, so it ends the `last delivery` part
+of an older failed or unconfirmed send, for example of that recovery. An open
+incident that is not delivered still counts, and the next call for it sends it
+again.
 
 ## Dependencies
 

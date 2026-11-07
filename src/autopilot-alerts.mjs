@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-alerts.prompt.md (sha256: f7808358efc1108b861a43cb4d858d8491f4994a4cb985e3bf1b0ab7d8bb30bd).
+// Generated from prompts/cli/autopilot-alerts.prompt.md (sha256: 3629be959019e794b3d5dce98f7352a43b7efbd14fdb5668f10b23b23649fe20).
 import * as nativeFs from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
@@ -8,8 +8,9 @@ import { promisify } from 'node:util';
 
 const execute = promisify(execFile);
 export const ALERT_KINDS = Object.freeze(['usage-limit', 'resource', 'access', 'decision', 'stuck', 'recovered']);
-// These incidents are not specific to one issue: one incident per repository, machine and kind lists every affected issue.
-const MACHINE_KINDS = Object.freeze(['usage-limit', 'resource', 'access']);
+// These incidents are shared by the whole machine: one incident per repository, machine and kind lists every affected issue.
+// An access or spending decision belongs to its issue, like a product decision.
+const MACHINE_KINDS = Object.freeze(['usage-limit', 'resource']);
 const LOG_LIMIT = 200, TEXT_LIMIT = 1900, FIELD_LIMIT = 500, ISSUE_LIMIT = 10, TIMEOUT_MS = 10000, TOKEN_COMMAND_MS = 30000;
 const SERVICE = { discord: 'Discord', slack: 'Slack', 'discord-bot': 'Discord bot' };
 const DISCORD_API = 'https://discord.com/api/v10';
@@ -41,10 +42,25 @@ const configFile = (env, ports) => {
   const home = homeFolder(env, ports);
   return home ? join(home, '.config', 'pdd', 'autopilot-alerts.json') : null;
 };
+const stateRoot = (env, ports) => ports.stateRoot ?? (home => home && join(home, '.local', 'state', 'pdd', 'autopilot'))(homeFolder(env, ports));
 const recordFile = (repo, env, ports) => {
-  const home = ports.stateRoot ? null : homeFolder(env, ports), root = ports.stateRoot ?? (home && join(home, '.local', 'state', 'pdd', 'autopilot'));
+  const root = stateRoot(env, ports);
   return root ? join(root, 'alerts', `${createHash('sha256').update(repo.toLowerCase()).digest('hex').slice(0, 20)}.json`) : null;
 };
+const STATE_FILE = /^[0-9a-f]{20}\.json$/;
+const hostName = ports => oneLine((ports.hostname ?? osHostname)()) || 'unknown host';
+// The launcher saves the coordinator's machine name once; a host name can change (macOS renames hosts), the saved name does not.
+function machineName(fs, root, repo, ports) {
+  try {
+    for (const name of fs.readdirSync(root).filter(name => STATE_FILE.test(name)).sort()) {
+      let state;
+      try { state = JSON.parse(fs.readFileSync(join(root, name), 'utf8')); } catch { continue; }
+      const saved = typeof state?.repo === 'string' && state.repo.toLowerCase() === repo.toLowerCase() && typeof state.machine === 'string' ? clip(oneLine(state.machine), 100) : '';
+      if (saved) return saved;
+    }
+  } catch { /* No launcher state: use the host name. */ }
+  return hostName(ports);
+}
 
 function writePrivate(fs, file, value) {
   fs.mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
@@ -118,6 +134,9 @@ async function nativeHttp({ method = 'POST', url, headers = {}, body }) {
 }
 
 const success = status => Number.isInteger(status) && status >= 200 && status < 300;
+// Compare text as a chat service may store it: LF line ends, no whitespace at a line end, and no whitespace at either end.
+const normalized = text => text.replace(/\r\n?/g, '\n').split('\n').map(line => line.trimEnd()).join('\n').trim();
+const sameText = (stored, sent) => typeof stored === 'string' && normalized(stored) === normalized(sent);
 const parse = text => { try { return JSON.parse(text); } catch { return undefined; } };
 const botRequest = (ports, token, method, path, body) => (ports.http ?? nativeHttp)({ method, url: `${DISCORD_API}${path}`,
   headers: { authorization: `Bot ${token}`, 'user-agent': USER_AGENT }, ...(body ? { body } : {}) });
@@ -140,7 +159,7 @@ async function botSend(destination, token, text, ports) {
   if (!/^[0-9]{1,25}$/.test(String(posted?.id ?? ''))) return { result: 'unconfirmed', detail: 'no message id' };
   const back = await botGet(ports, token, `${channel}/${posted.id}`);
   if (!back.value) return { result: 'unconfirmed', detail: `readback ${back.detail}` };
-  return back.value.id === posted.id && typeof back.value.content === 'string' && back.value.content.trim() === text.trim()
+  return back.value.id === posted.id && sameText(back.value.content, text)
     ? { result: 'delivered' } : { result: 'unconfirmed', detail: 'readback mismatch' };
 }
 
@@ -165,7 +184,7 @@ async function deliver(destination, text, ports, cwd) {
   if (!discord) return status === 200 && raw === 'ok' ? { result: 'delivered' } : { result: 'unconfirmed', detail: 'no readback' };
   let message;
   try { message = JSON.parse(raw); } catch { /* Checked below. */ }
-  return typeof message?.id === 'string' && typeof message.content === 'string' && message.content.trim() === text.trim()
+  return typeof message?.id === 'string' && sameText(message.content, text)
     ? { result: 'delivered' } : { result: 'unconfirmed', detail: 'no readback' };
 }
 
@@ -202,8 +221,8 @@ function alertText(heading, { kinds, host, repo, issues, fields }) {
   return clip(lines.join('\n'), TEXT_LIMIT);
 }
 
-function outcomeMessage(what, label, outcome) {
-  if (outcome.result === 'delivered') return `${what} sent for ${label}; the webhook confirmed it.`;
+function outcomeMessage(what, label, outcome, confirmer) {
+  if (outcome.result === 'delivered') return `${what} sent for ${label}; ${confirmer} confirmed it.`;
   if (outcome.result === 'not-configured') return `${what} recorded on this machine for ${label}; no alert destination is set (pdd autopilot alerts set). Continue other work.`;
   const again = outcome.result === 'unconfirmed' ? ' It may have arrived, so it is not sent again.' : '';
   return `${what} recorded for ${label}; delivery ${outcome.result} (${outcome.detail}).${again} pdd autopilot status shows it. Continue other work.`;
@@ -228,8 +247,9 @@ async function sendAlert(input, ports, env, fs) {
   try { repo = (await (ports.repository ?? nativeRepository)({ cwd: input.cwd }))?.nameWithOwner; } catch { /* Checked below. */ }
   if (!repoName(repo)) return done(1, 'Autopilot alerts need a GitHub repository; run pdd autopilot alert in its checkout.');
   const file = recordFile(repo, env, ports), record = readRecord(fs, file) ?? { v: 1, repo, incidents: {}, log: [] };
-  const at = new Date((ports.now ?? Date.now)()).toISOString(), host = oneLine((ports.hostname ?? osHostname)()) || 'unknown host';
+  const at = new Date((ports.now ?? Date.now)()).toISOString(), host = machineName(fs, stateRoot(env, ports), repo, ports);
   const destination = readDestination(fs, env, ports), number = Number(issue);
+  const confirmer = destination?.service === 'discord-bot' ? 'the Discord bot readback' : 'the webhook';
   const send = text => destination ? deliver(destination, text, ports, input.cwd) : { result: 'not-configured' };
   const log = (kind, action, outcome) => {
     record.log = [...record.log, { at, issue: number, kind, action, result: outcome.result, ...(outcome.detail ? { detail: outcome.detail } : {}) }].slice(-LOG_LIMIT);
@@ -252,7 +272,7 @@ async function sendAlert(input, ports, env, fs) {
     const outcome = await send(alertText('recovered', { kinds, host, repo, issues: issues.length ? issues : [number], fields: clean }));
     for (const key of keys) delete record.incidents[key];
     log(kinds.join(','), 'recovered', outcome);
-    return save() ? done(0, outcomeMessage('Recovery', `${kinds.join(', ')} (${issueTags(issues.length ? issues : [number])})`, outcome)) : unsaved;
+    return save() ? done(0, outcomeMessage('Recovery', `${kinds.join(', ')} (${issueTags(issues.length ? issues : [number])})`, outcome, confirmer)) : unsaved;
   }
   const machine = MACHINE_KINDS.includes(input.kind), key = machine ? machineKey(input.kind) : `${issue}:${input.kind}`;
   const open = object(record.incidents[key]) ? record.incidents[key] : null;
@@ -273,7 +293,7 @@ async function sendAlert(input, ports, env, fs) {
   record.incidents[key] = { kind: input.kind, issues, listed: issues, fields: clean, openedAt: open?.openedAt ?? at, updatedAt: at,
     result: outcome.result, ...(outcome.detail ? { detail: outcome.detail } : {}) };
   log(input.kind, action, outcome);
-  return save() ? done(0, outcomeMessage(action === 'update' ? 'Update' : 'Alert', label, outcome)) : unsaved;
+  return save() ? done(0, outcomeMessage(action === 'update' ? 'Update' : 'Alert', label, outcome, confirmer)) : unsaved;
 }
 
 export async function runAutopilotAlerts(input = {}, ports = {}) {
@@ -307,10 +327,10 @@ export async function runAutopilotAlerts(input = {}, ports = {}) {
       if (!configFile(env, ports)) return noHome('Nothing was sent.');
       const destination = readDestination(fs, env, ports);
       if (!destination) return done(1, 'No alert destination is set on this machine. Run pdd autopilot alerts set.');
-      const host = oneLine((ports.hostname ?? osHostname)()) || 'unknown host', text = `PDD Autopilot test alert (${host}).`;
-      if (destination.service === 'discord-bot') return await testBot(destination, text, input, ports);
+      const text = `PDD Autopilot test alert (${hostName(ports)}).`, delivered = () => recordTest(fs, env, ports);
+      if (destination.service === 'discord-bot') return await testBot(destination, text, input, ports, delivered);
       const outcome = await deliver(destination, text, ports, input.cwd), service = SERVICE[destination.service];
-      if (outcome.result === 'delivered') return done(0, `Test alert delivered; ${service} confirmed the message.`);
+      if (outcome.result === 'delivered') { delivered(); return done(0, `Test alert delivered; ${service} confirmed the message.`); }
       if (outcome.result === 'failed') return done(1, `Test alert failed (${outcome.detail}). Check the ${service} webhook, then run pdd autopilot alerts set again.`);
       return done(1, `Test alert unconfirmed (${outcome.detail}). Look in the ${service} channel before you test again.`);
     }
@@ -328,8 +348,22 @@ export async function runAutopilotAlerts(input = {}, ports = {}) {
   } catch { return done(1, 'The Autopilot alert command failed; nothing was printed about the webhook.'); }
 }
 
+// A delivered test is the newest send of each existing record, so status drops an older failed send (such as a closed recovery).
+function recordTest(fs, env, ports) {
+  const root = stateRoot(env, ports), at = new Date((ports.now ?? Date.now)()).toISOString();
+  if (!root) return;
+  let names = [];
+  try { names = fs.readdirSync(join(root, 'alerts')).filter(name => STATE_FILE.test(name)); } catch { return; }
+  for (const name of names) {
+    const file = join(root, 'alerts', name), record = readRecord(fs, file);
+    if (!record) continue;
+    record.log = [...record.log, { at, kind: 'test', action: 'test', result: 'delivered' }].slice(-LOG_LIMIT);
+    try { writePrivate(fs, file, record); } catch { /* The test message was still delivered. */ }
+  }
+}
+
 // Read-only identity and channel checks first, then one test message with readback.
-async function testBot(destination, text, input, ports) {
+async function testBot(destination, text, input, ports, delivered) {
   const auth = await botToken(destination, ports, input.cwd);
   if (auth.error) return done(1, `Test alert not sent: the ${auth.error}. Its output is not shown.`);
   const me = await botGet(ports, auth.token, '/users/@me');
@@ -339,7 +373,7 @@ async function testBot(destination, text, input, ports) {
   if (!channel.value) return done(1, `Discord bot ${bot} cannot read channel ${destination.channel} (${channel.detail}). Nothing was sent.`);
   const where = `Discord bot ${bot} in #${clip(oneLine(channel.value.name ?? destination.channel), 100)}`;
   const outcome = await botSend(destination, auth.token, text, ports);
-  if (outcome.result === 'delivered') return done(0, `Test alert delivered; ${where} posted it and the readback matched.`);
+  if (outcome.result === 'delivered') { delivered(); return done(0, `Test alert delivered; ${where} posted it and the readback matched.`); }
   return done(1, `Test alert ${outcome.result} (${outcome.detail}) for ${where}.`);
 }
 

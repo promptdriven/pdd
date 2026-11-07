@@ -110,7 +110,8 @@ pdd autopilot alerts test
 ```
 
 The bot posts with the Discord API v10, with link previews off, and reads the
-message back. Only a matching readback counts as delivered. `test` first checks
+message back. Only a matching readback counts as delivered. A change of line
+ends or of spaces at a line end is not a mismatch. `test` first checks
 the bot and the channel, read-only, and shows the bot name and the channel name.
 pdd never prints the token or the command output. The bot needs permission to
 view the channel, send messages and read message history.
@@ -128,10 +129,12 @@ PDD_ALERT
 
 Each message names the repository, the issue link, the cause, what Autopilot tried
 and what it needs. Answer on the GitHub issue, so the answer stays with the run.
-A usage limit, a resource failure or an access decision is one incident for the
-repository and machine, so a limit that blocks 5 runs sends one alert. A call
-for another blocked issue adds that issue to the incident and sends nothing.
-A decision or a stuck issue is one incident per issue. A repeat call sends
+A usage limit or a resource failure is one incident for the repository and
+machine, so a limit that blocks 5 runs sends one alert. A call for another
+blocked issue adds that issue to the incident and sends nothing. The machine is
+the name that Autopilot saved at its first start, else the host name, so a host
+rename does not open a new incident. An access or spending decision, a product
+decision or a stuck issue is one incident per issue. A repeat call sends
 nothing for a delivered or unconfirmed alert, and sends again an alert that
 failed or had no destination. `--update` sends a material change or the new
 issue list. `--kind recovered` sends one recovery and closes the matching
@@ -139,7 +142,9 @@ alerts; give `"kind"` in the JSON to close only that incident. Every call and
 its delivery result are recorded in
 `~/.local/state/pdd/autopilot/alerts/`. Without a destination, the alert stays in
 that record. `pdd autopilot status` adds one line when an alert was not delivered.
-Work continues in both cases.
+Work continues in both cases. A delivered `pdd autopilot alerts test` ends that
+line for an older failed send, such as a failed recovery. An open alert that was
+not delivered stays in the line until a later call sends it.
 
 ## Runs on a GitHub issue
 
