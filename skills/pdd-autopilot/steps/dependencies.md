@@ -18,6 +18,11 @@ their existing owners. It is distinct from steps/handoff.md.
   For each subject, answer one question: does it need any open issue first? Impact
   analysis of other issues is optional. A request names at most 10 subjects, new
   ones first; the next request carries the rest.
+- A `pending` completion names a `reason` and the `rows` behind it. For
+  `answer-row-mismatch`, copy the named rows exactly from the request and complete
+  again in the same session. For other reasons, do not loop: Autopilot delivers the
+  same subjects again after about 30 minutes, at most 3 times, and names the last
+  reason in "Repeated request N of 3". Then it asks one question on each issue.
 - Reuse saved current reviews. A new or unrelated edited issue does not make them
   stale. A "blocked by" link that a person sets in GitHub applies at once; it needs
   no analysis. A link that a person changes to or from an issue makes its review

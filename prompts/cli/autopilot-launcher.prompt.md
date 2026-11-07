@@ -451,7 +451,14 @@ existing boundary proves submission was never possible. If state or target
 changes before submission, leave work pending;
 never redirect the packet. The single native prompt argument gives the absolute
 path, SHA-256, request ID and repository, and tells the coordinator to read and
-verify the artifact before analysis. Bound and check the complete UTF-8 argument,
+verify the artifact before analysis. When intake's pending JSON marks the send as a
+[repeated delivery](issue-dependencies-intake.prompt.md#repeated-delivery)
+(`redelivery`), the argument also says "Repeated request N of CAP" with the last
+reason and at most 5 row keys, each cut to one plain line, and tells the coordinator
+to follow the dependency review step for that reason. Never send a repeated request while an
+earlier submission has uncertain custody (a saved delivery or reconciliation
+intent): warn and reply busy, so intake does not count it. The semantic identity of
+a repeated send also names its attempt. Bound and check the complete UTF-8 argument,
 including the ordinary coordinator instruction and path, to at most 16384 bytes;
 if it exceeds that bound, leave pending without creating or submitting an
 artifact. Do not fall back to the original JSON. Preserve the final delivery
@@ -470,7 +477,8 @@ uncertain intent as a consequence of this change.
 
 At startup/restart, tick, accepted event, completion and explicit refresh, use the
 same `reconcileDependencyIntake({cwd,repository,trigger,mode},ports)` production
-boundary before selecting new issue work. It recovers saved effects and returns
+boundary before selecting new issue work. Unless a clock is injected, supply the
+launcher clock as its `clock` port, so its repeated-delivery wait follows the tick time. It recovers saved effects and returns
 queued/eligible/skipped/pending; it starts nothing. Keep existing conditional
 polling, recipe-first behavior, idle delivery, activation, trust, profiles, family
 choice and normal workflow handoff. Both observe and auto can work; Off starts no

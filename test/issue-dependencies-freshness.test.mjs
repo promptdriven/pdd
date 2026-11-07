@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { projectIssueGraph } from '../src/issue-dependencies.mjs';
 import { applyDependencyChanges, readDependencySnapshot, saveDependencyReview } from '../src/issue-dependencies-github.mjs';
 import { completeDependencyIntake, prepareDependencyIntake, reconcileDependencyIntake } from '../src/issue-dependencies-intake.mjs';
+import { tickAutopilot } from '../src/autopilot-launcher.mjs';
 
 // Synthetic GitHub world. Issue revisions follow the adapter's public rule:
 // SHA-256 of the issue's title and body.
@@ -26,7 +27,8 @@ function savedReview(id, subject, candidates, dependencies = []) {
 
 // `timeline` holds native events, for example a GitHub "blocked_by_removed" event
 // that names its blocker. `outsiders` are authors that the trust owner does not trust.
-function world({ issues, comments = {}, blockedBy = {}, timeline = {}, outsiders = [] }) {
+// `files` holds the current revision of each readable file locator.
+function world({ issues, comments = {}, blockedBy = {}, timeline = {}, outsiders = [], files = {} }) {
   let nextId = 900;
   const find = (repo, number) => issues.find(item => item.html_url === key(number, repo));
   const github = {
@@ -57,6 +59,7 @@ function world({ issues, comments = {}, blockedBy = {}, timeline = {}, outsiders
     authority: { read: async ({ author }) => ({ authority: outsiders.includes(author) ? 'outsider' : 'trusted' }) },
     // A requirement comment row is read again from the comment itself, as the native port does.
     context: { read: async ({ inputs = [] } = {}) => reply({ inputs: inputs.flatMap(({ key: k }) => {
+      if (Object.hasOwn(files, k)) return [{ key: k, revision: files[k] }];
       const found = Object.values(comments).flat().find(c => k.endsWith(`#issuecomment-${c.id}`));
       return found ? [{ key: k, revision: sha(found.body) }] : [];
     }), conditions: [], execution: [], nativeExecution: true }) },
@@ -65,7 +68,7 @@ function world({ issues, comments = {}, blockedBy = {}, timeline = {}, outsiders
     clock: { now: async () => ({ iso: '2026-11-06T12:00:00.000Z' }) },
     ...extra,
   });
-  return { issues, comments, blockedBy, timeline, ports };
+  return { issues, comments, blockedBy, timeline, files, ports };
 }
 
 // A native GitHub timeline event about one link. A "blocked_by" event names the
@@ -691,4 +694,198 @@ test("a link row saved in a batch does not depend on whether the batch's own lin
   assert.equal(g.node(31).reviewState, 'current', 'the link that was not written leaves no trace in the row');
   assert.equal(g.node(31).eligible, true);
   assert.equal(g.node(30).reviewState, 'unchecked');
+});
+
+// One fake clock, delivery port and completion note for every tick and completion.
+// The delivery port records the repeat marker that intake saved before the send,
+// as the launcher reads it.
+const start = Date.parse('2026-11-06T12:00:00.000Z');
+function redelivery(w) {
+  let at = start;
+  const sent = [], note = { json: '{}' };
+  const pending = { state: {}, read: async () => reply(pending.state), save: async ({ json }) => { pending.state = JSON.parse(json); return { ok: true }; },
+    deliver: async ({ requestJson }) => { sent.push({ request: JSON.parse(requestJson), again: pending.state.redelivery ?? null }); return { state: 'delivered' }; } };
+  const results = { read: async () => ({ json: note.json }), save: async ({ json }) => { note.json = json; return { ok: true }; } };
+  const ports = (extra = {}) => w.ports({ pending, results, clock: { now: async () => ({ iso: new Date(at).toISOString() }) }, ...extra });
+  const tick = (minutes, extra) => { at = start + minutes * 60000; return reconcileDependencyIntake({ repository, trigger: 'tick', mode: 'auto' }, ports(extra)); };
+  return { sent, pending, ports, tick };
+}
+// A GitHub server error on the comments of one issue while the snapshot is read again.
+const serverError = (w, number) => ({ github: { ...w.ports().github, page: async args => {
+  if (args.kind === 'comments' && args.issue === number) throw Error('HTTP 502');
+  return w.ports().github.page(args);
+} } });
+const claimedBy = (owner, number) => ({ owners: { read: async () => reply({ localOwner: 'coordinator', claims: [{ issue: key(number), owner, active: true }], runs: [], runsKnown: true }) } });
+
+test('a request that ends pending is delivered again at the next tick 30 minutes later, names its reason, and completes when the cause is gone', async () => {
+  const file = `https://github.com/${repository}/blob/HEAD/src/parser.mjs`;
+  const i17 = issue(17);
+  const modes = {
+    'observations-incomplete': { ports: w => serverError(w, 103) },
+    'answer-row-mismatch': { answer: review => ({ ...review, candidates: review.candidates.filter(x => x.key !== key(17)) }), rows: [row(i17)] },
+    'input-changed': { examined: { key: file, revision: 'r1' }, change: w => { w.files[file] = 'r2'; }, rows: [{ key: file, revision: 'r2' }] },
+    'owner-changed': { ports: () => claimedBy('another-coordinator', 103) },
+  };
+  for (const [reason, mode] of Object.entries(modes)) {
+    const i103 = issue(103);
+    const w = world({ issues: [i17, i103], comments: { [key(17)]: [savedReview('501', i17, [i17])] }, files: { [file]: 'r1' } });
+    const r = redelivery(w);
+    await r.tick(0);
+    assert.equal(r.sent.length, 1, reason);
+    const first = r.sent[0].request;
+    assert.deepEqual(first.issues, [key(103)], reason);
+
+    let review = answer(first, i103);
+    if (mode.examined) review.inputs = [...review.inputs, mode.examined]; // an extra input that the review used
+    if (mode.answer) review = mode.answer(review);
+    mode.change?.(w);
+    const result = await completeDependencyIntake({ request: first, analysis: { impactJson: '', reviews: [review] } }, r.ports(mode.ports?.(w)));
+    assert.equal(result.state, 'pending', reason);
+    assert.equal(result.reason, reason, 'the result names the reason');
+    assert.deepEqual(result.rows ?? [], mode.rows ?? [], reason);
+    assert.equal(w.comments[key(103)], undefined, `${reason}: nothing is saved`);
+
+    // The cause is gone. Nothing that the delivery fingerprint tracks changed.
+    assert.deepEqual((await r.tick(10)).queued, [key(103)], reason);
+    assert.equal(r.sent.length, 1, `${reason}: no delivery before 30 minutes`);
+    await r.tick(31);
+    assert.equal(r.sent.length, 2, `${reason}: the next tick 30 minutes later delivers again`);
+    const again = r.sent[1];
+    assert.deepEqual(again.request.issues, [key(103)], `${reason}: the same subjects`);
+    assert.notEqual(again.request.id, first.id, `${reason}: a fresh prepare`);
+    assert.deepEqual(again.again, { attempt: 1, cap: 3, reason, rows: mode.rows ?? [] }, reason);
+    await r.tick(45);
+    assert.equal(r.sent.length, 2, `${reason}: one delivery for each wait`);
+
+    review = answer(again.request, i103);
+    if (mode.examined) review.inputs = [...review.inputs, { key: file, revision: 'r2' }];
+    const done = await completeDependencyIntake({ request: again.request, analysis: { impactJson: '', reviews: [review] } }, r.ports());
+    assert.equal(done.state, 'complete', reason);
+    const g = await graph(w);
+    assert.equal(g.node(103).reviewState, 'current', reason);
+    assert.equal(g.node(103).eligible, true, reason);
+    const next = await r.tick(80);
+    assert.equal(r.sent.length, 2, `${reason}: nothing is left to deliver`);
+    assert.ok(next.eligible.includes(key(103)), reason);
+  }
+});
+
+test('after three repeated deliveries the issue gets one visible question with the reason, and nothing is sent again until a person answers', async () => {
+  const i17 = issue(17), i103 = issue(103);
+  const w = world({ issues: [i17, i103], comments: { [key(17)]: [savedReview('501', i17, [i17])] } });
+  const r = redelivery(w);
+  for (let i = 0; i < 4; i++) {
+    await r.tick(i * 31);
+    assert.equal(r.sent.length, i + 1);
+    const { request, again } = r.sent[i];
+    assert.deepEqual(request.issues, [key(103)]);
+    assert.deepEqual(again, i ? { attempt: i, cap: 3, reason: 'observations-incomplete', rows: [] } : null);
+    const result = await completeDependencyIntake({ request, analysis: { impactJson: '', reviews: [answer(request, i103)] } }, r.ports(serverError(w, 103)));
+    assert.equal(result.reason, 'observations-incomplete');
+  }
+  await r.tick(4 * 31, { reviews: { save: async () => ({ id: '', state: 'pending', warnings: [] }) } });
+  assert.equal(r.sent.length, 4, 'the cap holds: no fifth delivery');
+  assert.equal(w.comments[key(103)], undefined, 'the question save is not confirmed');
+  await r.tick(5 * 31);
+  assert.equal(r.sent.length, 4);
+  assert.equal(w.comments[key(103)].length, 1, 'one question on the issue, tried again after the unconfirmed save');
+  assert.match(w.comments[key(103)][0].body, /Question: PDD sent the dependency review of .*issues\/103 4 times.*Last reason: observations-incomplete/);
+  let g = await graph(w);
+  assert.equal(g.node(103).reviewState, 'question');
+  assert.ok(g.node(103).reasons.includes('Review question'));
+  assert.equal(g.node(103).eligible, false);
+  assert.match(g.node(103).facts[0].text, /Last reason: observations-incomplete/, 'the graph shows the question');
+  const head = g.node(103).review;
+
+  for (const minutes of [6 * 31, 7 * 31, 10 * 31]) assert.deepEqual((await r.tick(minutes)).queued, []);
+  assert.equal(r.sent.length, 4, 'no silent retries');
+  assert.equal(w.comments[key(103)].length, 1, 'no second question');
+
+  const words = 'Issue 103 needs no other issue first.';
+  w.comments[key(103)].push(comment('970', words));
+  await r.tick(11 * 31);
+  assert.equal(r.sent.length, 5, "a person's answer queues the issue again");
+  const { request, again } = r.sent[4];
+  assert.equal(again, null, 'the answer starts a new delivery, not a repeat');
+  const review = answer(request, i103, { base: [head] });
+  review.inputs = [...review.inputs, { key: `${key(103)}#issuecomment-970`, revision: sha(words) }];
+  assert.equal((await completeDependencyIntake({ request, analysis: { impactJson: '', reviews: [review] } }, r.ports())).state, 'complete');
+  g = await graph(w);
+  assert.equal(g.node(103).reviewState, 'current');
+  assert.equal(g.node(103).eligible, true);
+});
+
+test('the launcher names a repeated request and its reason, and does not send it while an earlier submission has uncertain custody', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'pdd-redeliver-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const cwd = join(dir, 'repo'), home = join(dir, 'home'), stateRoot = join(dir, 'state');
+  for (const folder of [cwd, home, stateRoot]) mkdirSync(folder);
+  writeFileSync(join(cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: [] } }));
+  const file = join(stateRoot, `${sha(cwd).slice(0, 20)}.json`), activation = '2026-11-06T11:00:00Z';
+  const coordinator = { version: 'pdd.autopilot-coordinator.v1', repository, coordinatorId: 'c', machine: 'm', activation };
+  writeFileSync(file, JSON.stringify({ enabled: true, cwd, repo: repository, stateFile: file, coordinatorId: 'c', machine: 'm', activatedAt: activation,
+    agent: { id: 'codex', kind: 'codex', command: 'codex' }, recipeDelivered: true, environment: { HOME: home }, paneId: 'p', workspaceId: 'w',
+    ownerLaunch: { paneId: 'p', startedAt: 1, coordinator, profile: { agent: { id: 'codex', kind: 'codex' }, home, definitionHome: home, configHome: null } } }));
+  const i17 = issue(17), i103 = issue(103);
+  const w = world({ issues: [i17, i103], comments: { [key(17)]: [savedReview('501', i17, [i17])] } });
+  const note = { json: '{}' }, results = { read: async () => ({ json: note.json }), save: async ({ json }) => { note.json = json; return { ok: true }; } };
+  const { clock, ...observed } = w.ports({ results }); // the launcher supplies the clock
+  let now = start;
+  const prompts = [], warnings = [];
+  const live = { pane_id: 'p', workspace_id: 'w', cwd, foreground_cwd: cwd, tab_id: 't', terminal_id: 'term', agent: 'codex', agent_status: 'idle', agent_session: 'session' };
+  const ports = { stateRoot, now: () => now, warn: text => warnings.push(text), queryIssues: async () => ({ status: 304 }),
+    run: async command => command === 'git' ? { code: 0, stdout: `${cwd}\n` } : { code: 0, stdout: JSON.stringify({ nameWithOwner: repository, url: `https://github.com/${repository}` }) },
+    reconcileDependencyIntake: (args, intakePorts) => reconcileDependencyIntake(args, { ...intakePorts, ...observed }),
+    herdr: async args => {
+      if (args[0] === 'agent' && args[1] === 'get') return { result: { type: 'agent_info', agent: live } };
+      if (args[0] === 'pane' && args[1] === 'get') return { result: { type: 'pane_info', pane: live } };
+      if (args[0] === 'workspace' && args[1] === 'get') return { result: { type: 'workspace_info', workspace: { workspace_id: 'w' } } };
+      if (args[0] === 'pane' && args[1] === 'read') return '';
+      if (args[0] === 'agent' && args[1] === 'prompt') { prompts.push(args.at(-1)); return {}; }
+      throw Error(args.join(' '));
+    } };
+  const requestIn = text => JSON.parse(readFileSync(JSON.parse(/Artifact path: (.+)/.exec(text)[1]), 'utf8'));
+
+  await tickAutopilot(file, ports);
+  assert.equal(prompts.length, 1);
+  assert.doesNotMatch(prompts[0], /Repeated request/);
+  const first = requestIn(prompts[0]);
+  assert.deepEqual(first.issues, [key(103)]);
+  // The coordinator completes while another coordinator holds 103 for a moment.
+  const result = await completeDependencyIntake({ request: first, analysis: { impactJson: '', reviews: [answer(first, i103)] } }, w.ports({ results, ...claimedBy('another-coordinator', 103) }));
+  assert.equal(result.reason, 'owner-changed');
+
+  // 31 minutes later an earlier submission has uncertain custody: nothing is sent.
+  now += 31 * 60000;
+  const saved = JSON.parse(readFileSync(file, 'utf8'));
+  writeFileSync(file, JSON.stringify({ ...saved, deliveryIntent: { version: 2, paneId: 'p', workspaceId: 'w', at: now - 1000, fingerprint: 'earlier', payloadDigest: 'earlier' } }));
+  await tickAutopilot(file, ports);
+  assert.equal(prompts.length, 1, 'no repeated request while custody is uncertain');
+  assert.ok(warnings.some(text => /dependency review waits: a previous submission has uncertain custody/.test(text)));
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).dependencyPending.redelivered, 0, 'a refused send is not counted');
+
+  // Custody is known again: the next tick sends the fresh request once, with the reason.
+  const known = JSON.parse(readFileSync(file, 'utf8')); delete known.deliveryIntent; writeFileSync(file, JSON.stringify(known));
+  now += 60000;
+  await tickAutopilot(file, ports);
+  assert.equal(prompts.length, 2);
+  assert.match(prompts[1], /Repeated request 1 of 3: the last delivery of these issues did not finish\. Last reason: owner-changed\./);
+  const again = requestIn(prompts[1]);
+  assert.deepEqual(again.issues, [key(103)]);
+  assert.notEqual(again.id, first.id);
+  now += 60000;
+  await tickAutopilot(file, ports);
+  assert.equal(prompts.length, 2, 'one repeated request for each wait');
+  assert.equal((await completeDependencyIntake({ request: again, analysis: { impactJson: '', reviews: [answer(again, i103)] } }, w.ports({ results }))).state, 'complete');
+  assert.equal((await graph(w)).node(103).eligible, true);
+
+  // A coordinator that stops after delivery: the repeat says that no result came.
+  const i104 = issue(104); w.issues.push(i104);
+  now += 60000;
+  await tickAutopilot(file, ports);
+  assert.equal(prompts.length, 3);
+  assert.deepEqual(requestIn(prompts[2]).issues, [key(104)]);
+  now += 31 * 60000;
+  await tickAutopilot(file, ports);
+  assert.equal(prompts.length, 4);
+  assert.match(prompts[3], /Repeated request 1 of 3: .*Last reason: not-completed\./);
 });
