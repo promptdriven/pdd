@@ -296,7 +296,10 @@ export function dependencySnapshotStore({ root, repository, fs = nativeFs }) {
           if (!object(entry) || !(entry.observedAt >= epoch) || invalid[n] > entry.observedAt) continue;
           if (!issues[n] || entry.observedAt >= issues[n].observedAt) issues[n] = entry;
         }
-        const next = { v: STORE_VERSION, repository: repo, refreshedAt: epoch, list, issues, invalid };
+        const pending = sides.map(side => side.pendingList).filter(value => object(value) && object(value.rows) && value.at >= list.readAt)
+          .sort((a, b) => b.at - a.at)[0];
+        const next = { v: STORE_VERSION, repository: repo, refreshedAt: epoch, list, issues, invalid,
+          ...(pending && (data.pendingList || pending.at > list.readAt) ? { pendingList: pending } : {}) };
         let text = JSON.stringify(next);
         // Bounded: the oldest issue reads go first; a list that is too large alone is not saved.
         const ordered = Object.entries(issues).sort((a, b) => a[1].observedAt - b[1].observedAt);
@@ -394,13 +397,16 @@ function readSession(storeFor, now) {
     live(repository, n) { const s = state(repository); if (!Number.isSafeInteger(n)) return; s.entries.delete(n); s.blocked.add(n); s.live = true; s.liveIssues.add(n); },
     liveIssue: (repository, n) => state(repository).liveIssues.has(n),
     // True when the saved list was read within `within` milliseconds and its full refresh is still current.
-    recentList(repository, within) { const s = state(repository), at = now(), d = usable(s, at); return !!d && at >= d.list.readAt && at - d.list.readAt < within; },
+    recentList(repository, within) { const s = state(repository), at = now(), d = usable(s, at); return !!d && !d.pendingList && at >= d.list.readAt && at - d.list.readAt < within; },
     // The open issues of the repository: a full read at the first read and once a day, else the changed issues since
-    // the watermark applied to the saved rows. A list that is not read in full is never saved.
+    // the watermark applied to the saved rows. An incomplete list never advances complete coverage; partial rows can be staged.
     async readList(repository, api) {
       const s = state(repository), at = now(), d = usable(s, at), repo = s.repo;
       const rows = new Map(d ? Object.entries(d.list.rows).map(([n, row]) => [Number(n), row]) : []);
-      if (d && this.savedList && !s.live) {
+      if (d && d.pendingList?.at >= d.list.readAt && object(d.pendingList.rows)) {
+        rows.clear(); for (const [n, row] of Object.entries(d.pendingList.rows)) rows.set(Number(n), row);
+      }
+      if (d && this.savedList && !s.live && !d.pendingList) {
         s.list = { rows, complete: true, readAt: d.list.readAt, since: d.list.since, refreshedAt: d.refreshedAt, mode: 'saved' };
         return [...rows.values()].sort((a, b) => b.number - a.number);
       }
@@ -420,7 +426,7 @@ function readSession(storeFor, now) {
         }
       } catch (error) { apply(s, rows, items, d); error.partialItems = [...rows.values()].sort((a, b) => b.number - a.number); throw error; }
       let newest = apply(s, rows, items, d);
-      if (d) {
+      try { if (d) {
         // Links need not move updated_at. Revalidate only the open index metadata, so change facts outside
         // `since` still invalidate the corresponding detail reads. Removals remain the daily refresh's job.
         cursor = `repos/${repo}/issues?state=open&per_page=100`;
@@ -432,7 +438,7 @@ function readSession(storeFor, now) {
           if (!Array.isArray(r.value)) throw Error('GitHub returned no issue list');
           newest = Math.max(newest, apply(s, rows, r.value, d)); cursor = r.next;
         }
-      }
+      } } catch (error) { error.partialItems = [...rows.values()].sort((a, b) => b.number - a.number); throw error; }
       const since = Number.isFinite(newest) ? new Date(Math.max(newest - SINCE_OVERLAP, d ? Date.parse(d.list.since) : -Infinity)).toISOString() : d?.list.since ?? new Date(at - HOUR).toISOString();
       s.list = { rows, complete: true, readAt: at, since, refreshedAt, mode };
       s.live = false;
@@ -473,17 +479,19 @@ function readSession(storeFor, now) {
       s.entries.delete(n); s.blocked.add(n); s.invalid[n] = now(); s.live = true;
       s.list?.rows.delete(n);
     },
-    // Save the list and every issue read in full, after a list read in full. A partial read leaves the saved file.
+    // Save complete list coverage and full issue reads, or stage partial rows against the last complete list.
     commit(repository) {
-      const s = state(repository); if (!s.store || !s.list?.complete) return;
+      const s = state(repository); if (!s.store || !s.list) return;
       const d = saved(s), issues = {};
+      if (!s.list.complete && (!d || d.refreshedAt !== s.list.refreshedAt)) return;
       if (d && d.refreshedAt === s.list.refreshedAt) for (const [n, entry] of Object.entries(d.issues)) {
         const number = Number(n), row = s.list.rows.get(number);
         if (!s.blocked.has(number) && (row ? entry.version === issueRowVersion(row) : s.list.mode !== 'refresh' && object(entry.raw))) issues[n] = entry;
       }
       for (const [n, entry] of s.entries) if (KINDS.every(kind => Array.isArray(entry.kinds[kind])) && (s.list.rows.has(n) || object(entry.raw)) && entry.version !== null) issues[n] = entry;
       const data = { v: STORE_VERSION, repository: s.repo, refreshedAt: s.list.refreshedAt,
-        list: { readAt: s.list.readAt, since: s.list.since, rows: Object.fromEntries(s.list.rows) }, issues,
+        list: s.list.complete ? { readAt: s.list.readAt, since: s.list.since, rows: Object.fromEntries(s.list.rows) } : d.list, issues,
+        ...(!s.list.complete ? { pendingList: { at: s.list.readAt, rows: Object.fromEntries(s.list.rows) } } : {}),
         invalid: { ...(d && d.refreshedAt === s.list.refreshedAt ? d.invalid : {}), ...s.invalid } };
       const merged = s.store.save(data);
       if (merged) s.data = merged;

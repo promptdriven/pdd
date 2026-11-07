@@ -67,6 +67,9 @@ test('one review batch of 10 subjects makes fewer than 300 REST calls on a 200-i
   const used = counts(w, mark);
   assert.ok(used.rest < 300, `REST requests of one batch: ${used.rest}`);
   assert.ok(used.counted < 300, `counted REST calls of one batch: ${used.counted}`);
+  const individual = w.github.since(mark).calls.filter(call => call.method === 'GET' && /\/issues\/comments\/\d+$/.test(call.endpoint));
+  const savedIds = request.issues.flatMap(issue => w.github.reviewComments(Number(issue.split('/').pop())).map(comment => comment.id));
+  assert.ok(individual.every(call => savedIds.includes(call.endpoint.split('/').pop())), 'individual comment GETs only read back newly saved records');
   t.diagnostic(`one batch (complete, completion tick, idle wake): ${JSON.stringify(used)}`);
   assert.equal(w.requests.length, 2, 'the completion or idle wake delivers the next request');
   const next = w.requests.at(-1);
@@ -110,6 +113,11 @@ test('a deleted or moved issue disappears at the full refresh', async t => {
   const mark = w.github.mark(); await w.tick();
   assert.ok(counts(w, mark).rest < 10, `quiet REST requests before refresh: ${counts(w, mark).rest}`);
   w.time += 24 * hour;
+  const beforeRefresh = readJson(fileOf(w, 'snapshot')).refreshedAt;
+  w.github.failRead = call => call.endpoint.includes('/issues?state=open');
+  assert.equal((await savedRead(w)).complete, false, 'a failed daily refresh is incomplete');
+  assert.equal(readJson(fileOf(w, 'snapshot')).refreshedAt, beforeRefresh, 'a failed full refresh does not renew the old index');
+  w.github.failRead = null;
   await w.tick();
   const saved = savedSnapshot(w);
   assert.equal(saved.list.rows[120], undefined, 'the deleted issue is gone after the daily full refresh');
@@ -241,6 +249,22 @@ test('a failed detail read keeps other finished snapshot updates and retries the
   const made = w.github.since(mark);
   assert.ok(made.rest < 20, `recovery REST requests: ${made.rest}`);
   assert.ok(!made.calls.some(call => /issues\/202\/(?:comments|timeline|dependencies)/.test(call.endpoint)), 'the finished issue needs no detail reread');
+  // A failed metadata pass keeps the successful since rows and full issue reads as pending staging.
+  w.time += minute;
+  const prior = readJson(fileOf(w, 'snapshot'));
+  w.github.edit(150, 'Keep the current behavior after recovery.');
+  w.github.failRead = call => call.endpoint.includes('/issues?state=open');
+  const staged = await savedRead(w);
+  assert.equal(staged.complete, false);
+  const disk = readJson(fileOf(w, 'snapshot'));
+  assert.equal(disk.list.readAt, prior.list.readAt, 'a failed metadata pass does not advance complete coverage');
+  assert.ok(disk.pendingList?.rows[150], 'the changed row is kept as pending');
+  w.github.failRead = null; w.time += minute;
+  const retryMark = w.github.mark(), done = await savedRead(w);
+  assert.equal(done.complete, true, done.warnings.join('; '));
+  assert.equal(w.github.since(retryMark).graphql, 0, 'the finished changed issue is reused after staging');
+  assert.equal(readJson(fileOf(w, 'snapshot')).pendingList, undefined, 'successful coverage clears the pending list');
+  assert.deepEqual(view(done), view(await fullRead(w)));
 });
 
 test('crossing the floor in a tick stops further non-safety reads and new deliveries', async t => {

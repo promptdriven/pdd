@@ -165,7 +165,9 @@ readbacks.
 **Store.** `dependencySnapshotStore({root, repository, fs})` keeps
 `ROOT/github/H.snapshot.json` (the `H` of the [call ledger](github-calls.prompt.md#ledger)),
 folder 0700, file 0600, written through a temporary file and a rename. Version 1:
-`{v:1, repository, refreshedAt, list:{readAt, since, rows}, issues, invalid}`.
+`{v:1, repository, refreshedAt, list:{readAt, since, rows}, issues, invalid, pendingList?}`.
+`pendingList` holds `{at, rows}` from an incomplete incremental index read; it
+never advances `list.readAt` or `list.since`, and is not complete coverage.
 `rows` maps each open issue number (no pull requests) to its issue row; `issues`
 maps an issue number to `{version, observedAt, kinds:{comments, blockedBy,
 blocking, timeline}, raw?, partialTimeline?}`; `invalid` maps an issue number to
@@ -204,7 +206,8 @@ session:
 
 `W` is the newest `updated_at` that a read saw, minus 5 minutes, and it never
 moves back. All list reads use the ETag cache. A list that is not read in full
-gives its rows so far as partial roots (incomplete scope) and is never saved. A
+gives its rows so far as partial roots (incomplete scope), without advancing
+complete coverage. A
 deleted or transferred issue leaves the list only at the next full refresh,
 within 24 hours.
 
@@ -220,7 +223,10 @@ current; every other read goes to GitHub and is recorded. At the end of a
 snapshot whose list read was complete, the session saves the list and each issue
 read in full; a partial issue read is not saved, and its row then shows that it
 needs a read. A failed list read keeps the last complete list and its watermark;
-its partial rows cannot establish complete coverage.
+its partial rows cannot establish complete coverage. With a prior complete
+list in the same full-refresh period, keep those rows as `pendingList` and keep finished issue reads. The next
+read starts with those rows but uses the last complete watermark. A successful
+list read clears older pending rows.
 
 **Writes.** A comment append or a new link through the session first and again
 after the write marks the issue: this process reads it live again, its row
