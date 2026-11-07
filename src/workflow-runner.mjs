@@ -399,7 +399,9 @@ function cannotWorkWords(run, health) {
   if (health.kind === 'login') return { short: "the chat cannot work: the agent's login failed",
     long: `the chat cannot work: the agent's login failed (${health.message}). Sign the agent in again (${where}), then start a new chat for this area: pdd workflow open ${n} --new`,
     next: `pdd workflow open ${n} --new (after you sign the agent in again)` };
-  if (health.until !== null && health.until <= health.at) return { short: `the chat stopped at its usage limit (reset at ${time})`,
+  // The limit has ended when its structured end time, else the time of the agent's own reset words, is not after now.
+  const end = health.until ?? health.resetsAt ?? null;
+  if (end !== null && end <= health.at) return { short: `the chat stopped at its usage limit (reset at ${time})`,
     long: `the chat stopped at its usage limit. The limit reset at ${time}. Open the chat and ask it to go on: pdd workflow open ${n}. Or start a new chat: pdd workflow open ${n} --new`,
     next: `pdd workflow open ${n}` };
   const until = time ? ` until ${time}` : '';

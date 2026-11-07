@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 570a50462e09a6abe0bdbe8b05137c360b464f52c3346e749a60226a55dd778a).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 61c9eb226984562ab831b54fd6a916ab8d6440d097d0e25c3f9aab4b74da1e43).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import * as nodeFs from 'node:fs';
@@ -282,18 +282,58 @@ export async function sendToChat(chat, text, ports = {}) {
 // Chat health: an alive agent whose turns fail on its login or its usage limit. It only reads the end of the agent's own
 // session file and the bottom of its screen; it never sends anything to the chat and never throws.
 const TAIL_BYTES = 256 * 1024, SCREEN_LINES = 15, DAY = 86_400_000, MAX_DAYS = 31;
-const LIMIT_TEXT = /\byou(?:'|’)?ve (?:hit|reached) your\b[^.]*\blimit\b|\byou have (?:hit|reached) your\b[^.]*\blimit\b|\busage limit\b|\bout of credits\b/i;
+const LIMIT_TEXT = /\byou(?:'|’)?ve (?:hit|reached) your\b[^.]*\blimit\b|\byou have (?:hit|reached) your\b[^.]*\blimit\b|\busage limit\b|\bout of (?:usage|credits)\b/i;
 const LOGIN_TEXT = /ANTHROPIC_(?:API_KEY|AUTH_TOKEN)|\bAPI key\b|\/login\b|\bnot logged in\b|\b(?:log|sign) ?in again\b|\bauthenticat|\bOAuth\b|\b401\b|\bunauthori[sz]ed\b|\baccess token\b|\brefresh[_ ]token\b|disabled organization|organization has disabled/i;
 const CLAUDE_MENU = /^(?:❯\s*)?\d\.\s+(?:Stop and wait for (?:the )?limit to reset|Wait here,? then continue automatically)\b/i;
 const REPLY_LINE = /^[⏺●•](?:\s|$)/;
 const flat = text => String(text ?? '').replace(/\s+/g, ' ').trim(), oneLine = text => flat(text).slice(0, 160);
-const resetWords = text => /\bresets\s+(.+?)\s*$/i.exec(text)?.[1] ?? /\btry again at\s+(.+?)\.?\s*$/i.exec(text)?.[1] ?? null;
+// Reset words: an optional date, a clock time and an optional time zone. Never the words after them (offers, hints).
+const RESET_TIME = String.raw`(?:(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.? (\d{1,2})(?:st|nd|rd|th)?(?:,? (\d{4}))?,? (?:at )?)?(\d{1,2})(?::(\d{2}))? ?([ap])m\b(?: \(([\w+\-/]{1,40})\))?`;
+const RESET_WORDS = new RegExp(String.raw`\b(?:resets(?: at)?|try again at) (${RESET_TIME})`, 'i'), RESET_ONLY = new RegExp(`^${RESET_TIME}$`, 'i');
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+const zoneParts = (ms, timeZone) => Object.fromEntries(new Intl.DateTimeFormat('en-US', { hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', ...(timeZone ? { timeZone } : {}) })
+  .formatToParts(ms).filter(part => part.type !== 'literal').map(part => [part.type, Number(part.value)]));
+// The epoch ms of a wall-clock time in a time zone (the local zone when none is given).
+function wallTime(year, month, day, hour, minute, timeZone) {
+  const guess = Date.UTC(year, month, day, hour, minute), shown = zoneParts(guess, timeZone);
+  return guess - (Date.UTC(shown.year, shown.month - 1, shown.day, shown.hour, shown.minute) - guess);
+}
+// resetsAt: the reset words as one exact time, else null. Claude names its zone; Codex writes the local time of its own
+// process, and leaves out the date only for a reset on the day of the failed turn (turnAt, known only from its file).
+function resetTime(words, agent, { now, timeZone, turnAt } = {}) {
+  const match = words ? RESET_ONLY.exec(words) : null;
+  if (!match || !Number.isFinite(now)) return null;
+  const [, month, day, year, hour, minute = '0', half, zone] = match, h = Number(hour), m = Number(minute);
+  if (h < 1 || h > 12 || m > 59 || day !== undefined && !(Number(day) >= 1 && Number(day) <= 31) || (agent === 'claude') !== (zone !== undefined)) return null;
+  const tz = zone ?? timeZone, clock = [h % 12 + (half.toLowerCase() === 'p' ? 12 : 0), m];
+  try {
+    if (month) {
+      const at = y => wallTime(y, MONTHS.indexOf(month.slice(0, 3).toLowerCase()), Number(day), ...clock, tz), thisYear = zoneParts(now, tz).year;
+      if (year) return at(Number(year));
+      return at(thisYear) > now + 32 * DAY ? at(thisYear - 1) : at(thisYear);
+    }
+    if (agent !== 'codex' || !Number.isFinite(turnAt)) return null;
+    const date = zoneParts(turnAt, tz);
+    return wallTime(date.year, date.month - 1, date.day, ...clock, tz);
+  } catch { return null; }
+}
+// A usage-limit text goes on with the agent's plan and account offers, and Claude draws more lines of its limit block
+// under its error line. So the message keeps only the limit sentence (to ". ", " · ", a slash command or the end of the
+// first line) and the reset words right after it.
+function limitWords(text) {
+  const all = flat(text), first = flat(String(text ?? '').split('\n')[0]), end = /[.!?](?=\s|$)|\s·\s|\s\/\w/.exec(first);
+  let message = end ? first.slice(0, end.index + (/^[.!?]/.test(end[0]) ? 1 : 0)) : first;
+  const reset = RESET_WORDS.exec(all);
+  if (reset && /^\s*(?:·\s*)?$/.test(all.slice(message.length, reset.index))) message = all.slice(0, reset.index + reset[0].length);
+  return { message: oneLine(message), resets: reset?.[1] ?? null };
+}
 const epochMs = value => Number.isFinite(value) && value > 0 ? (value < 1e12 ? value * 1000 : value) : null;
 const textKind = text => LIMIT_TEXT.test(text) ? 'usage-limit' : LOGIN_TEXT.test(text) ? 'login' : null;
-// A usage-limit text goes on with the agent's plan and account offers, so its message keeps only the first sentence.
-const problemOf = (kind, agent, text, until = null) => kind === 'usage-limit'
-  ? { kind, agent, until, resets: resetWords(flat(text)), message: oneLine(/^.*?[.!?](?=\s|$)/.exec(flat(text))?.[0] ?? text) }
-  : { kind, agent, until, resets: null, message: oneLine(text) };
+function problemOf(kind, agent, text, context = {}, until = null) {
+  if (kind !== 'usage-limit') return { kind, agent, until, resets: null, resetsAt: null, message: oneLine(text) };
+  const { message, resets } = limitWords(text);
+  return { kind, agent, until, resets, resetsAt: until === null ? resetTime(resets, agent, context) : null, message };
+}
 
 // The complete JSON rows in the last TAIL_BYTES of a file, or null when it cannot be read.
 function tailRows(fs, path) {
@@ -312,13 +352,13 @@ function tailRows(fs, path) {
 }
 const blockText = content => typeof content === 'string' ? content : Array.isArray(content) ? content.filter(block => block?.type === 'text').map(block => block.text).join(' ') : '';
 // A file verdict: undefined (the file does not decide), null (no problem) or a problem.
-function claudeVerdict(rows) {
+function claudeVerdict(rows, context) {
   const last = rows.findLast(row => ['user', 'assistant'].includes(row.type) && !row.isMeta && !row.isSidechain);
   if (!last) return undefined;
   if (last.type !== 'assistant' || last.isApiErrorMessage !== true) return null;
   const text = blockText(last.message?.content);
   if (last.error === 'rate_limit' || last.apiError === 'usage_limit_reached')
-    return problemOf('usage-limit', 'claude', text, epochMs(last.apiErrorParams?.rate_limit_info?.resetsAt) ?? epochMs(last.quotaLimits?.resetsAt));
+    return problemOf('usage-limit', 'claude', text, context, epochMs(last.apiErrorParams?.rate_limit_info?.resetsAt) ?? epochMs(last.quotaLimits?.resetsAt));
   if (['authentication_failed', 'oauth_org_not_allowed'].includes(last.error) || LOGIN_TEXT.test(text)) return problemOf('login', 'claude', text);
   return null;
 }
@@ -326,15 +366,15 @@ function claudeVerdict(rows) {
 // error in its task_complete row ({message, codex_error_info}). The newest of these rows decides, so a later turn that
 // worked clears an older error.
 const CODEX_TURN = new Set(['task_started', 'task_complete', 'turn_aborted']);
-function codexVerdict(rows) {
-  const turn = rows.findLast(row => row.type === 'event_msg' && CODEX_TURN.has(row.payload?.type))?.payload;
+function codexVerdict(rows, context) {
+  const row = rows.findLast(item => item.type === 'event_msg' && CODEX_TURN.has(item.payload?.type)), turn = row?.payload;
   if (!turn || turn.type === 'task_started') return undefined;
   const error = turn.type === 'task_complete' && turn.error && typeof turn.error === 'object' ? turn.error : null;
   if (!error) return null;
   const text = String(error.message ?? ''), info = error.codex_error_info;
   const unauthorized = info && typeof info === 'object' && Object.values(info).some(value => value?.http_status_code === 401);
   const kind = info === 'usage_limit_exceeded' ? 'usage-limit' : unauthorized ? 'login' : textKind(text);
-  return kind ? problemOf(kind, 'codex', text) : null;
+  return kind ? problemOf(kind, 'codex', text, { ...context, turnAt: Date.parse(row.timestamp) || epochMs(turn.completed_at) }) : null;
 }
 // The Codex session file of this id: only the day folders around the session's start, never the whole tree.
 function codexSessionFile(fs, home, id, chat, now) {
@@ -365,7 +405,7 @@ function ownErrorLine(lines, i, agent) {
   return false;
 }
 // The bottom of the screen: the newest error line of the last turn, or the Claude limit menu.
-function screenProblem(screen, agent) {
+function screenProblem(screen, agent, context) {
   const lines = String(screen).split(/\r?\n/), clean = line => line.replace(EDGES, '');
   let seen = 0, inputs = 0, menu = false;
   for (let i = lines.length - 1; i >= 0 && seen < SCREEN_LINES; i--) {
@@ -377,36 +417,37 @@ function screenProblem(screen, agent) {
     if (REPLY_LINE.test(text)) break;
     if (INPUT_LINE.test(text)) { if (++inputs > 1) break; continue; }
     if (!ownErrorLine(lines, i, agent)) continue;
+    // Claude draws more lines of its limit block under its error line, so its lines stay apart; Codex wraps one paragraph.
     let body = text.slice(1);
-    for (let j = i + 1; j < lines.length && /^\s+\S/.test(lines[j]) && !/^[⎿■⏺●•›>❯]/.test(clean(lines[j])); j++) body += ` ${clean(lines[j])}`;
-    const kind = textKind(body);
-    if (kind) return problemOf(kind, agent, body);
+    for (let j = i + 1; j < lines.length && /^\s+\S/.test(lines[j]) && !/^[⎿■⏺●•›>❯]/.test(clean(lines[j])); j++) body += `${agent === 'claude' ? '\n' : ' '}${clean(lines[j])}`;
+    const kind = textKind(flat(body));
+    if (kind) return problemOf(kind, agent, body, context);
   }
-  return menu ? problemOf('usage-limit', agent, 'The chat shows its usage-limit menu.') : null;
+  return menu ? problemOf('usage-limit', agent, 'The chat shows its usage-limit menu.', context) : null;
 }
 export async function chatHealth({ run, chat, live }, ports = {}) {
   const agent = chat?.agent ?? run?.agent;
   if (!live?.alive || !['claude', 'codex'].includes(agent)) return null;
   try {
-    const env = ports.env ?? process.env, now = (ports.now ?? Date.now)(), fs = ports.sessionFs ?? nodeFs;
+    const env = ports.env ?? process.env, now = (ports.now ?? Date.now)(), fs = ports.sessionFs ?? nodeFs, context = { now, timeZone: ports.timeZone };
     const home = env.HOME || homedir(), id = validSessionId(live.sessionId) ? live.sessionId : validSessionId(chat.session?.id) ? chat.session.id : null;
     let verdict;
     if (id && typeof run.root === 'string') {
       if (agent === 'claude') {
         const config = expandHome(chat.configDir, env) ?? expandHome(env.CLAUDE_CONFIG_DIR, env) ?? join(home, '.claude');
         const rows = tailRows(fs, join(config, 'projects', run.root.replace(/[^a-zA-Z0-9]/g, '-'), `${id}.jsonl`));
-        verdict = rows ? claudeVerdict(rows) : undefined;
+        verdict = rows ? claudeVerdict(rows, context) : undefined;
       } else {
         const file = codexSessionFile(fs, expandHome(chat.configDir, env) ?? expandHome(env.CODEX_HOME, env) ?? join(home, '.codex'), id, chat, now);
         const rows = file ? tailRows(fs, file) : null;
-        verdict = rows ? codexVerdict(rows) : undefined;
+        verdict = rows ? codexVerdict(rows, context) : undefined;
       }
     }
     if (verdict !== undefined) return verdict;
     // A working agent shows its work; its screen is no evidence that it cannot work.
     if (live.status === 'working') return null;
     const screen = await herdrCommand(ports)(['pane', 'read', chat.paneId, '--source', 'detection']);
-    return typeof screen === 'string' ? screenProblem(screen, agent) : null;
+    return typeof screen === 'string' ? screenProblem(screen, agent, context) : null;
   } catch { return null; }
 }
 
