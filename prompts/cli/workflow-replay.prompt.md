@@ -35,17 +35,32 @@ area. Read the base with local Git only: one `git grep -F` for the schema name i
 A base scenario is a regular `.json` blob of at most 10 MiB, found by that search, whose parsed schema_version is
 prompt-runtime.program-scenario.v1; skip other and unparsable JSON. Its links are its story_path, every step
 entry_path and its entry_paths. The changed area is every changed path, the links of each changed scenario
-(current file and base blob), and the `stories` and `prompt` of each changed path that the base commit's
-`pdd-bindings.json` (pdd.bindings.v1) declares as a `module`. A base scenario belongs when one of its links is in
-the changed area. Use no other link: no folder, name, prose or AI guess. A malformed pdd-bindings.json adds no links.
+(current file and base blob), the `stories` and `prompt` of each changed path that the base commit's
+`pdd-bindings.json` (pdd.bindings.v1) declares as a `module`, and each header prompt. A base scenario belongs when
+one of its links is in the changed area. Use no other link: no folder, name, prose or AI guess. A malformed
+pdd-bindings.json adds no links.
+
+A header prompt is the prompt that a changed file names in its PDD header, in its base blob or its current file.
+The header is one of the first 10 lines: an optional comment opener (`//`, `#`, `--`, `;`, `/*`, `*`, `<!--`,
+`"""` or `'''`), then `Generated from PATH`, then optionally ` (sha256: HEX)`, then optionally `.` and a closer
+(`*/`, `-->`, `"""` or `'''`). PATH is a canonical repository-relative path that ends in `.prompt.md`. Other
+text, such as `Generated from the canonical m1_policy prompt`, is no header. The Stories of a header prompt (the
+story_path of each base scenario that links to it) are also in the changed area.
+
+The base commit's root `pdd.json` selects the base scenarios with `replay.base_scenarios`: `linked` (the rule
+above) or `all` (every base scenario belongs). A missing file, `replay` or `base_scenarios` means `linked`. A
+pdd.json that is not a JSON object, a `replay` that is not an object, or another value blocks, and the reason
+names pdd.json on the base. Read pdd.json in the same `ls-tree` and `cat-file` calls.
 
 Without codeSpace, skip base files in `changed`; the changed route pins their current bytes. With codeSpace
 (a run with no prompt area before code), ignore `paths` and also select changed base files, always with their
 base bytes, so code space cannot change approved values. Each base vector keeps path, raw SHA256, snapshot,
-steps, checks and `base` (the full commit). The anchor keeps `base:{commit,note}`; the note says plainly why no
-base file was added, and names an absent or malformed pdd-bindings.json. Order changed vectors first, then base
-vectors by path. Apply the original limits to the whole anchor. A refusal states the count and the limit, for
-example `250 scenario files (3 changed + 247 approved on base 6b58b76); the limit is 200`. A selected base
+steps, checks and `base` (the full commit). The anchor keeps `base:{commit,note,select}` (select is `linked` or
+`all`); the note says plainly why no base file was added, says when no changed file has a header, and names an
+absent or malformed pdd-bindings.json. Order changed vectors first, then base vectors by path. Apply the
+original limits to the whole anchor, also with `all`. A refusal states the count and the limit, for example
+`250 scenario files (3 changed + 247 linked approved on base 6b58b76); the limit is 200` or
+`201 scenario files (0 changed + all 201 approved on base 6b58b76); the limit is 200`. A selected base
 scenario that fails original validation blocks with its path. No vectors is not_replayed with the note; with
 codeSpace it is blocked, because no anchor exists. Git failure blocks. Never throw.
 
@@ -260,9 +275,12 @@ blocked/not_replayed; real failures do not prevent publication. Hash the bounded
 For adopted runs, retain structured adoption provenance even when replay is blocked.
 The PR replay section displays "Anchor adopted from REPO@COMMIT; approval reference R
 by A; external-assertion-unverified", using cleaned recorded values.
-When the saved anchor has `base` and either vectors or a note, the result has `anchor` {commit, changed, files, checks, note},
-counted from the saved vectors, and the section shows `Anchor: 3 changed scenarios + 18 approved on base 6b58b76
-(1,722 checks).`, or `+ 0 approved on base 6b58b76 (NOTE).` Base approval never gives PASS by itself.
+When the saved anchor has `base` and either vectors or a note, the result has `anchor`
+{commit, select, changed, changed_checks, files, checks, note}, counted from the saved vectors, and the section
+counts files and checks by source: `Anchor: 3 changed scenarios (40 checks) + 18 linked approved on base 6b58b76
+(1,722 checks).`, `Anchor: 0 changed scenarios (0 checks) + all 18 approved on base 6b58b76 (1,722 checks;
+pdd.json sets replay.base_scenarios to "all").`, or `+ 0 linked approved on base 6b58b76 (NOTE).` Base approval
+never gives PASS by itself.
 formatReplayEvidence emits a compact PR section with prominent Code replay PASS/FAIL/BLOCKED/NOT REPLAYED,
 exact counts, source and manifest hashes, current vector hashes labeled "Current vector", public execution totals, semantic control and typed
 formal result. Include: `Agents execute the tests and supply this record. pdd validates structure and identity;
@@ -284,7 +302,7 @@ let an agent's free-form PASS summary replace this status.
 ```json
 {
   "status": "draft",
-  "prose_sha256": "1cb4f063810f2595a38dc02db465c1e89a13625efc5dbe58214b5fc23b54ab47",
+  "prose_sha256": "71565030cbfc4df42533fe2b12e5672385f31697febf63e62b33af0c0c30f585",
   "entries": [
     {
       "operation": "adoptReplayCorpus",
