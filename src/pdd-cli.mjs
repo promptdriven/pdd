@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 94a69924f05591c8c7ae53945196b5c0c2d4f9818576ac474ea8628775b36255).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: dcdd5de58ef228dc0cbfee27145dffb665af9065f6b9795865824b5b76a18b61).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -7,7 +7,7 @@ import { CommandInputError, parseArgv } from './argument-parser.mjs';
 import { renderCompletion } from './completion.mjs';
 import { NAMES, PUBLIC_COMMAND_MANIFEST, PUBLIC_COMMAND_ROUTES, PUBLIC_HELP_TEXT } from './command-catalog.mjs';
 import { listWorkflowAreas, formatWorkflowList } from './workflow-areas.mjs';
-import { setupProject as defaultSetupProject } from './project-setup.mjs';
+import { ignorePddFolder, setupProject as defaultSetupProject } from './project-setup.mjs';
 import { findSkills, setupSkills as defaultSetupSkills } from './skills-install.mjs';
 import { pathDiagnostic as defaultPathDiagnostic } from './path-diagnostic.mjs';
 import { checkWorkflowAgents } from './workflow-agents.mjs';
@@ -25,6 +25,17 @@ const readText = async input => {
   const chunks = []; for await (const chunk of input) chunks.push(Buffer.from(chunk));
   return Buffer.concat(chunks).toString('utf8');
 };
+// Autopilot workers start from the default branch on GitHub, so a setting saved only in this checkout never reaches them.
+async function autopilotGithub(module, name, input, ports, fallback = '') {
+  try { return (await (module ?? await import('./autopilot-github.mjs'))[name](input, ports))?.message || ''; }
+  catch { return fallback; }
+}
+// The autopilot value of the root pdd.json, or undefined when there is none.
+function savedAutopilot(root) {
+  if (!root) return undefined;
+  try { const config = JSON.parse(readFileSync(join(root, 'pdd.json'), 'utf8')); return config !== null && typeof config === 'object' ? config.autopilot : undefined; }
+  catch { return undefined; }
+}
 const skillCount = folders => `${folders.length} PDD skill${folders.length === 1 ? '' : 's'}`;
 const skillNames = folders => folders.map(folder => basename(folder)).join(', ');
 // npx skills update changes only what npx skills add recorded (0.1.8 tester); add replaces any copy.
@@ -56,7 +67,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
   cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, workflowRunner, workflowAreas,
   stdin = process.stdin, confirm, mcpServer, runtimeSlots, contracts, product, productPorts, gitContext, workflowProve, provePorts,
   issueGraph, issueGraphPorts = {}, dependencyIntake, dependencyIntakePorts = {}, autopilotLauncher, autopilotLauncherPorts = {}, workflowAgents = { checkWorkflowAgents }, workflowAgentPorts = {}, setupSkills = defaultSetupSkills,
-  setupProject = defaultSetupProject, setupAgentMcp, autopilot, autopilotPorts = {}, autopilotAlerts, autopilotAlertsPorts = {}, pathDiagnostic = defaultPathDiagnostic } = {}) {
+  setupProject = defaultSetupProject, setupAgentMcp, autopilot, autopilotPorts = {}, autopilotAlerts, autopilotAlertsPorts = {}, autopilotGithub: autopilotGithubModule, autopilotGithubPorts = {}, pathDiagnostic = defaultPathDiagnostic } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
@@ -102,7 +113,12 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         const module = autopilotLauncher ?? await import('./autopilot-launcher.mjs');
         const result = await module.runAutopilotLauncher({ command: plan.local.slice(10), issues: [...plan.operands], runs: plan.options['--runs'], resumeCustody: plan.options['--resume-custody'], cwd, packageRoot, env }, autopilotLauncherPorts);
         if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255 || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid Autopilot reply');
-        line(result.exitCode === 0 ? stdout : stderr, result.message); return result.exitCode;
+        line(result.exitCode === 0 ? stdout : stderr, result.message);
+        if (result.exitCode === 0 && ['autopilot-start', 'autopilot-status'].includes(plan.local)) {
+          const warning = await autopilotGithub(autopilotGithubModule, 'checkAutopilotSettings', { cwd }, autopilotGithubPorts);
+          if (warning) line(stderr, warning);
+        }
+        return result.exitCode;
       } catch (error) { line(stderr, `The Autopilot command failed.${reason(error)}`); return 1; }
     }
     case 'autopilot-alert': case 'autopilot-alerts': {
@@ -149,6 +165,12 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
           : { action: plan.local.slice(10), names: [...plan.operands] };
         const result = await module.runAutopilot(input, { cwd, stdin, stdout, ...autopilotPorts });
         line(result.exitCode === 0 ? stdout : stderr, result.message);
+        if (result.exitCode === 0) {
+          const retry = ['pdd', 'autopilot', input.action === 'mode' ? input.mode : input.action, ...(input.names ?? [])].join(' ');
+          const next = await autopilotGithub(autopilotGithubModule, 'publishAutopilotSettings', { cwd, action: input.action, mode: input.mode, names: input.names, retry },
+            autopilotGithubPorts, `pdd.json on GitHub was not updated. To retry, run ${retry}.`);
+          if (next) line(stdout, next);
+        }
         return result.exitCode;
       } catch (error) { line(stderr, `Autopilot settings failed.${reason(error)}`); return 1; }
     }
@@ -242,17 +264,32 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         const { file, changed } = setupProject({ cwd, packageRoot });
         line(stdout, changed ? `Wrote the PDD block in ${file}.` : `${file} already has this PDD block. No change.`);
       } catch (error) { line(stderr, `pdd setup: ${error.message}`); code = 1; }
+      // One Git context serves the .gitignore part and the Autopilot part.
+      let context = null;
+      try { context = await (gitContext ?? (await import('./workflow-runs.mjs')).gitContext)(cwd); }
+      catch (error) { line(stderr, `pdd setup: the Git repository could not be read.${reason(error)}`); code = 1; }
+      try {
+        if (context?.toplevel) {
+          const { file, changed, negated } = ignorePddFolder({ root: context.toplevel });
+          if (changed) line(stdout, `Added .pdd/ to ${file}. pdd test keeps its local cache there.`);
+          else if (negated) line(stdout, `${file} has a "!" line for .pdd/, so pdd setup did not change the file.`);
+        }
+      } catch (error) { line(stderr, `pdd setup: ${error.message}`); code = 1; }
       try {
         const action = setupAgentMcp ?? (await import('./agent-mcp-setup.mjs')).setupAgentMcp;
         if (await action({ env, packageRoot }, { stdin, stdout, stderr, confirm })) code = 1;
       } catch (error) { line(stderr, `pdd setup: MCP registration failed.${reason(error)}`); code = 1; }
       try {
-        const context = await (gitContext ?? (await import('./workflow-runs.mjs')).gitContext)(cwd);
         const module = autopilot ?? await import('./autopilot.mjs');
+        const before = savedAutopilot(context?.toplevel);
         const result = await module.runAutopilot({ action: 'setup', interactive: !!stdin.isTTY, inRepo: !!context?.toplevel },
           { cwd: context?.toplevel ?? cwd, stdin, stdout, ...autopilotPorts });
         if (result.message) line(result.exitCode === 0 ? stdout : stderr, result.message);
         if (result.exitCode) code = result.exitCode;
+        // Setup saves a first mode only in this checkout and never writes to GitHub, where the workers read it.
+        const saved = savedAutopilot(context?.toplevel)?.mode;
+        if (result.exitCode === 0 && before === undefined && ['off', 'observe', 'auto'].includes(saved))
+          line(stdout, `Setup saved the Autopilot mode only in this checkout. Autopilot workers read pdd.json on GitHub; to update it there, run pdd autopilot ${saved}.`);
       } catch (error) { line(stderr, `Autopilot settings failed.${reason(error)}`); code = 1; }
       return code;
       } });

@@ -827,19 +827,30 @@ test('AUTOPILOT13: runs start by room with no fixed cap, and at most 2 runs chan
 });
 
 // Wrong: old backlog starts by itself, a new repo starts without a way to run its app, or code waits on every repo.
-test('AUTOPILOT14: bounded startup, all backlog, and code right after PR 1 in a repo with a release', () => {
+// Wrong (user repo with no GitHub release): `auto` waits after PR 1 for a "code now" that never comes.
+test('AUTOPILOT14: bounded startup, all backlog, and in auto the code PR right after PR 1 in every repo', () => {
   const text = has('pdd-autopilot/SKILL.md', 'Run only documented bounded startup before dependency review and selection.',
     'After selection, use the available recipe to build, verify and test the chosen path or Story.', 'Include old and new backlog;',
     '`pdd autopilot start` runs a tick with no AI that starts this skill only when there is work.',
-    'A repo with a release starts the code PR as soon as PR 1 is open. A new product waits for a person\'s "code now". One code PR per prompt file closes every issue that waits on it.');
+    'One code PR per prompt file closes every issue that waits on it.');
   assert.match(text, /verification-setup\.md.*find or create and keep the repo’s start-up recipe/);
   assert.ok(text.indexOf('start-up recipe') < text.indexOf('Ready:'));
   const setup = read('pdd-prompting/verification-setup.md');
   assert.match(setup, /Before selecting issues, run documented bounded repository readiness commands, or use the installed CLI readiness already checked when applicable/);
   assert.match(setup, /After selection, run the applicable install\/build and relevant tests, then run the recipe and the Story's action/);
   assert.match(setup, /Report any unavailable or inapplicable step and its reason/);
-  for (const name of ['pdd-bug', 'pdd-feature']) has(`${name}/steps/autopilot.md`, 'A new product waits for a person\'s "code now".',
-    '- Code PR: a repo with a release starts it as soon as PR 1 is open, stacked on PR 1; do not wait for PR 1 to merge, in `observe` too.');
+  // The rule line names `auto` first: no release condition and no "code now" wait there; only `observe` keeps them.
+  for (const file of ['pdd-autopilot/SKILL.md', 'pdd-bug/steps/autopilot.md', 'pdd-feature/steps/autopilot.md']) {
+    const rule = read(file).split('\n').find(line => line.includes('code PR') || line.startsWith('- Code PR:'));
+    assert.ok(rule && rule.includes('as soon as PR 1 is open'), file);
+    const auto = rule.indexOf('`auto`'), observe = rule.indexOf('`observe`');
+    assert.ok(auto >= 0 && observe > auto, `${file}: ${rule}`);
+    assert.doesNotMatch(rule.slice(auto, observe), /release|code now/, file);
+    assert.match(rule.slice(observe), /"code now"/, file);
+    // In `observe`, a repo with a release still starts the code PR at once.
+    assert.match(rule.slice(observe), /release/, file);
+  }
+  for (const name of ['pdd-bug', 'pdd-feature']) has(`${name}/steps/autopilot.md`, 'stacked on PR 1; do not wait for PR 1 to merge.');
 });
 
 // Wrong: the skills read another pdd.json shape than the switch writes, or the Autopilot states live only in comment text.
