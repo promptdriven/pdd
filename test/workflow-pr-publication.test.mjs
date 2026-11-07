@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync, chmodSync, cpSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import {pinReplayVectors,sourceFingerprint} from '../src/workflow-replay.mjs';
 import { DETAILS_OPEN, detailsOf } from '../src/workflow-pr-body.mjs';
@@ -539,20 +539,27 @@ test('READABLE-CODE: the code PR proof table reads the old-code proof and review
 // #3029: the formal status of a real code PR whose prompt area has no scenario vectors (PR 1 changed no scenario file,
 // as in prompt-runtime PRs #670 and #686). The code replay stays NOT REPLAYED; the formal block is read on its own.
 const VALUE_STORY = '# Value\n\nAs a maintainer, I want the value to be two,\nso that the report adds up.\n\n## Acceptance criteria\n\n1. The value is two.\n';
-function formalPublication(t, { rules, formal = null }) {
+// `story` is the Story path (null: the run has no Story file); `before` commits it before the run's base, so the run does not change it.
+function formalPublication(t, { rules, formal = null, story = 'user_stories/value.md', before = false, prepare = () => {}, summary = 'Review: no must-fix' }) {
   const f = fixture(t, { opted: true });
-  mkdirSync(join(f.root, 'user_stories'));
-  writeFileSync(join(f.root, 'user_stories', 'value.md'), VALUE_STORY + (rules ? '\n## Rules to check\n\nWrong: any value other than two.\n' : ''));
-  f.git('add', '.'); f.git('commit', '-qm', 'story'); f.machine(f.git('rev-parse', 'HEAD'));
+  if (story) {
+    mkdirSync(join(f.root, dirname(story)), { recursive: true });
+    writeFileSync(join(f.root, story), VALUE_STORY + (rules ? '\n## Rules to check\n\nWrong: any value other than two.\n' : ''));
+    f.git('add', '.'); f.git('commit', '-qm', 'story');
+    if (before) f.run.baseSha = f.git('rev-parse', 'HEAD');
+  }
+  f.machine(f.git('rev-parse', 'HEAD')); prepare(f);
   // The anchor that pdd saves when PR 1 changes no scenario file: not_replayed, "no original scenario vectors".
   f.run.replayBaseline = pinReplayVectors(f.root, []); f.save();
   if (formal) writeFileSync(join(f.runDir, 'replay-evidence.json'), JSON.stringify({ schema_version: 'pdd.replay-evidence.v1', run_id: f.run.runId,
     source: { kind: 'git-content-v1', sha256: sourceFingerprint(f.root) }, vectors: [], checks: [], operations: [],
     counts: { total: 0, pass: 0, fail: 0, blocked: 0, not_replayed: 0 }, formal }));
-  const out = f.invoke('Review: no must-fix'); assert.equal(out.exitCode, 0, out.message);
+  const out = f.invoke(summary); assert.equal(out.exitCode, 0, out.message);
+  const done = out.message.split('\n').find(line => line.startsWith('Formal check'));
+  if (!f.data().prs.length) return { out, done };
   const body = f.data().prs[0].body, [visible] = body.split(DETAILS_OPEN), lines = visible.split('\n');
   const details = detailsOf(body).details.replace(/\\([\\`*_[\]()|])/g, '$1');
-  return { status: lines[0].replace(/ · Updated .*$/, ''), row: lines.find(line => line.startsWith('| Formal check')), header: details.split('\n').find(line => line.startsWith('Formal check')), details };
+  return { status: lines[0].replace(/ · Updated .*$/, ''), row: lines.find(line => line.startsWith('| Formal check')), header: details.split('\n').find(line => line.startsWith('Formal check')), details, out, done };
 }
 const PROVED_532 = { result: 'proved_bounded', scope: 'All rules of the value Story over 5192 bounded inputs', reason: 'FORMAL_CHECK_PASSED: total=5192',
   control_outcome: 'assertion_failure', control_command: 'node --test test/value.formal.test.mjs (old code)', control_exit_code: 1 };
@@ -580,6 +587,34 @@ test('FORMAL-REAL3: a Story without Rules to check: the formal check is "not nee
   assert.equal(pr.row, '| Formal check | not needed (no Rules to check in the Story) | — |');
   assert.equal(pr.status, '⛔ Blocked: replay evidence is incomplete');
   assert.equal(pr.header, 'Formal check: not needed (no Rules to check in the Story).');
+});
+
+const MISSING_FORMAL = 'missing — evidence not recorded: replay-evidence.json is missing in the run folder. Repair: write the formal block per docs/replay-evidence.md, then run pdd workflow done formal again.';
+const UNKNOWN_RULES = 'pdd found no Story file of this run, so the formal check counts as needed. When the Story has no Rules to check, name its path (user_stories/NAME.md) in the formal step summary.';
+test('FORMAL-REAL4: a Story in a subfolder of user_stories counts: with Rules to check it holds the PR, without them it is "not needed"', t => {
+  let pr = formalPublication(t, { rules: true, story: 'user_stories/journeys/value.md' });
+  assert.equal(pr.row, `| Formal check | ${MISSING_FORMAL} | — |`, 'pdd read the Story, so the row has no "no Story file" note.');
+  assert.equal(pr.status, '⛔ Blocked: replay evidence is incomplete; formal check missing');
+  pr = formalPublication(t, { rules: false, story: 'user_stories/journeys/value.md' });
+  assert.equal(pr.row, '| Formal check | not needed (no Rules to check in the Story) | — |');
+  assert.equal(pr.status, '⛔ Blocked: replay evidence is incomplete');
+});
+
+test('FORMAL-REAL5: a run with no Story file: Rules to check are unknown, so the formal check counts as needed and the row says why', t => {
+  const pr = formalPublication(t, { rules: false, story: null });
+  assert.equal(pr.row, `| Formal check | ${MISSING_FORMAL} ${UNKNOWN_RULES} | — |`);
+  assert.equal(pr.header, `Formal check (agent reported): ${MISSING_FORMAL} ${UNKNOWN_RULES}`);
+  assert.equal(pr.status, '⛔ Blocked: replay evidence is incomplete; formal check missing');
+  assert.doesNotMatch(pr.details, /not needed/);
+});
+
+test('FORMAL-REAL6: done formal sees a Story that only its own summary names', t => {
+  const early = f => { delete f.run.done.review; };
+  // The Story with Rules to check was committed before the run's base, so the run does not change it.
+  let pr = formalPublication(t, { rules: true, before: true, prepare: early, summary: 'Formal: proved the rules of user_stories/value.md' });
+  assert.equal(pr.done, `Formal check (agent reported): ${MISSING_FORMAL}`, pr.out.message);
+  pr = formalPublication(t, { rules: true, before: true, prepare: early, summary: 'Formal: proved the rules' });
+  assert.equal(pr.done, `Formal check (agent reported): ${MISSING_FORMAL} ${UNKNOWN_RULES}`, 'No Story named and none changed: unknown.');
 });
 
 test('READABLE-CHECKS: an existing code PR update reads CI and the checker verdict for the pushed head', t => {

@@ -178,14 +178,22 @@ by assertion, not crash. Present `control_command` and `control_exit_code` value
   `control_exit_code` (integer 1..255). Otherwise malformed `formal.control_command` or `formal.control_exit_code`.
 `failed` needs its counterexample; `not_run` and `not_applicable` need only their typed scope and reason.
 
-The status object has `status`; recorded adds `result`, `scope`, `reason`, `control_outcome`, the optional
+With scenario vectors (the same test as for the control), the full code replay needs a typed formal block of any
+result. So every status then has `required: true`: a block that is missing, malformed or stale holds the code
+replay, and the formal line always gives its status, reason and repair step, never "not needed".
+
+The status object has `status` and, with scenario vectors, `required: true`; recorded adds `result`, `scope`, `reason`, `control_outcome`, the optional
 control command and exit code, and `source`; every other status adds `cause`, `field` for malformed, and
 `reported` (the block's result word when it is a known one, so the text can say what pdd did not accept).
 When pdd read the bytes, `manifest_sha256` is their hash. readReplayEvidence fills its own empty
 `manifest_sha256` from it, and its empty `source` only from a recorded status, which confirmed the fingerprint.
 
-formalStatusText(formal) gives `{status, words, detail, repair, cause}` for the [readable PR owner](workflow-pr-body.prompt.md)
-and this report (status is the normalized status word below). Words are `recorded`, `missing`, `malformed (FIELD)` or `stale (source changed)`. For missing
+formalStatusText(formal, rules?) gives `{status, words, detail, repair, cause, notNeeded, note}` for the
+[readable PR owner](workflow-pr-body.prompt.md) and this report (status is the normalized status word below). `rules` is
+the runner's `rulesToCheck`: true, false, or null (unknown: pdd found no Story file of the run). `notNeeded` is true
+only when the status is not recorded, `rules` is false and the status is not `required`. `note` is
+"pdd found no Story file of this run, so the formal check counts as needed. When the Story has no Rules to check, name
+its path (user_stories/NAME.md) in the formal step summary." when the status is not recorded and `rules` is null, else empty. Words are `recorded`, `missing`, `malformed (FIELD)` or `stale (source changed)`. For missing
 the detail is "evidence not recorded: CAUSE"; for malformed and stale it is "evidence not accepted: CAUSE",
 with "the record says RESULT, but " before CAUSE when `reported` is set. A saved status without `status` but
 with a known `result` is recorded (an older saved record); an absent status is missing, cause "pdd has not read
@@ -289,11 +297,13 @@ formal result. The formal line uses formalStatusText:
 - recorded: `Formal check (agent reported): recorded — RESULT; scope: S; reason: R; control: C.`, where RESULT is
   Proved (bounded), Proved (solver), Failed + counterexample, Not run or Not applicable, and C is the control
   outcome in words (assertion failure, crash, survived, not run) with ` (exit N)` when the block has its exit code.
-- not recorded: `Formal check (agent reported): WORDS — DETAIL. Repair: STEP.` Never a bare "not recorded", and
-  never "has no formal result" when the file holds a formal block that pdd did not accept.
-- not recorded and option `rules` is false (the runner found no Story with `## Rules to check`):
-  `Formal check: not needed (no Rules to check in the Story).`; for malformed or stale it adds
-  ` The formal block is not accepted: WORDS — CAUSE.` Any other `rules` value shows the not-recorded line.
+- not recorded: `Formal check (agent reported): WORDS — DETAIL. Repair: STEP.`, then ` NOTE` when the note is not
+  empty. Never a bare "not recorded", and never "has no formal result" when the file holds a formal block that pdd
+  did not accept.
+- not recorded and `notNeeded` (option `rules` is false: the runner read the run's Stories and none has
+  `## Rules to check`; and no scenario vectors need the block): `Formal check: not needed (no Rules to check in the
+  Story).`; for malformed or stale it adds ` The formal block is not accepted: WORDS — CAUSE.` Any other case shows
+  the not-recorded line. So one PR never says "not needed" while its code replay is blocked for the formal block.
 Include: `Agents execute the tests and supply this record. pdd validates structure and identity;
 it does not independently prove execution or prompt/code equivalence.` Keep details bounded and sanitize
 control characters, private local paths and Try capabilities. Escape HTML and Markdown in displayed metadata

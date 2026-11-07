@@ -214,3 +214,59 @@ test('FORMAL9: without Rules to check the formal check is "not needed" and does 
   const failed = green({ ...RECORDED('failed'), control_outcome: 'assertion_failure' }, { rulesToCheck: false }); failed.records.replay.counterexample = '1205';
   assert.equal(prStatus(failed), '⛔ Blocked: formal check failed at `1205`');
 });
+
+test('FORMAL10: with scenario vectors the code replay needs the formal block, so no line or row says "not needed"', t => {
+  const formalHeader = (result, rules) => shown(replay.formatReplayEvidence(result, { rules }).split('\n').find(row => row.startsWith('Formal check')));
+  const real = (result, records) => { const facts = green(result.formal, records); facts.records.replay = result; return facts; };
+  const REQUIRED = 'A typed formal result, scope, reason and control outcome are required.';
+  for (const [name, change, reason, header, status] of [
+    ['no formal key', m => { delete m.formal; }, REQUIRED,
+      'Formal check (agent reported): missing — evidence not recorded: replay-evidence.json has no formal block. Repair: write the formal block per docs/replay-evidence.md, then run pdd workflow done formal again.',
+      '⛔ Blocked: replay evidence is blocked; formal check missing'],
+    ['blank scope', m => { m.formal.scope = ''; }, REQUIRED,
+      'Formal check (agent reported): malformed (formal.scope) — evidence not accepted: the record says Proved (bounded), but formal.scope must be nonblank text of at most 1000 characters. Repair: correct formal.scope per docs/replay-evidence.md, then run pdd workflow done formal again.',
+      '⛔ Blocked: replay evidence is blocked; formal check malformed (formal.scope)'],
+    ['no file', null, 'Missing replay-evidence.json or an original vector; code replay is blocked.',
+      'Formal check (agent reported): missing — evidence not recorded: replay-evidence.json is missing in the run folder. Repair: write the formal block per docs/replay-evidence.md, then run pdd workflow done formal again.',
+      '⛔ Blocked: replay evidence is blocked; formal check missing'],
+  ]) {
+    const f = fixture(t, { vectors: true }); if (change) { change(f.manifest); f.save(); }
+    const result = f.read();
+    assert.deepEqual([result.outcome, result.reason], ['blocked', reason], name);
+    // No Story has Rules to check, but the code replay still needs the block: the line says what is missing and how to repair it.
+    assert.equal(formalHeader(result, false), header, name);
+    assert.equal(formalOf(result, name).required, true, `${name}: with scenario vectors the formal block is required`);
+    const facts = real(result, { rulesToCheck: false, formalDone: true }), top = readablePrTop(facts).text;
+    assert.equal(formalRow(facts), `| Formal check | ${header.replace('Formal check (agent reported): ', '')} | — |`, name);
+    assert.equal(prStatus(facts), status, name);
+    assert.doesNotMatch(`${top}\n${replay.formatReplayEvidence(result, { rules: false })}`, /not needed/, name);
+  }
+  // A recorded Not run passes the code replay; without Rules to check it does not hold the PR.
+  let f = fixture(t, { vectors: true }); f.manifest.formal = { result: 'not_run', scope: 'Rounding rule', reason: 'No bounded runner', control_outcome: 'not_run' }; f.save();
+  let result = f.read();
+  assert.equal(result.outcome, 'pass', result.reason);
+  assert.equal(formalRow(real(result, { rulesToCheck: false, formalDone: true })), '| Formal check (Rounding rule) | Not run: No bounded runner | — |');
+  assert.equal(prStatus(real(result, { rulesToCheck: false, formalDone: true })), '✅ Ready to merge');
+  // Control: with no scenario vectors and no Rules to check, the formal block is not needed.
+  f = fixture(t); result = f.read();
+  assert.equal(formalOf(result, 'no vectors').required, undefined);
+  assert.equal(formalHeader(result, false), 'Formal check: not needed (no Rules to check in the Story).');
+  assert.equal(formalRow(real(result, { rulesToCheck: false, formalDone: true })), '| Formal check | not needed (no Rules to check in the Story) | — |');
+});
+
+const UNKNOWN = 'pdd found no Story file of this run, so the formal check counts as needed. When the Story has no Rules to check, name its path (user_stories/NAME.md) in the formal step summary.';
+test('FORMAL11: when pdd found no Story file of the run, Rules to check are unknown: the formal check counts as needed and says why', t => {
+  const f = fixture(t);
+  const header = rules => shown(replay.formatReplayEvidence(f.read(), { rules }).split('\n').find(row => row.startsWith('Formal check')));
+  const MISSING_LINE = 'missing — evidence not recorded: replay-evidence.json is missing in the run folder. Repair: write the formal block per docs/replay-evidence.md, then run pdd workflow done formal again.';
+  assert.equal(header(null), `Formal check (agent reported): ${MISSING_LINE} ${UNKNOWN}`);
+  assert.equal(header(true), `Formal check (agent reported): ${MISSING_LINE}`, 'A known Story with Rules to check needs no note.');
+  const facts = green(formalOf(f.read(), 'unknown'), { rulesToCheck: null, formalDone: true });
+  assert.equal(formalRow(facts), `| Formal check | ${MISSING_LINE} ${UNKNOWN} | — |`);
+  assert.equal(prStatus(facts), '⛔ Blocked: formal check missing');
+  assert.equal(prStatus(green(f.read().formal, { rulesToCheck: null, formalDone: false })), '⏳ Waiting for the formal result');
+  // A recorded result shows as recorded; the note is only for a status that is not recorded.
+  f.save();
+  assert.match(header(null), /^Formal check \(agent reported\): recorded — Proved \(bounded\); [^\n]*\(exit 1\)\.$/);
+  assert.equal(prStatus(green(f.read().formal, { rulesToCheck: null })), '✅ Ready to merge');
+});
