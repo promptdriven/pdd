@@ -20,6 +20,13 @@ const shown = text => text.replace(/\\([\\`*_[\]()|])/g, '$1');
 const PROVED = () => ({ result: 'proved_bounded', scope: 'All 5 rules of Story 532 over 5192 bounded inputs', reason: 'FORMAL_CHECK_PASSED: total=5192',
   control_outcome: 'assertion_failure', control_command: 'python formal_check_532.py --old-code', control_exit_code: 1 });
 const REPAIR = /Repair: [^\n]*docs\/replay-evidence\.md, then run pdd workflow done formal again\./;
+// The formal status that pdd read. When pdd gives none (the #670 bug: the block is lost at an early exit), the case
+// fails here by an assertion with the value that pdd gave, not by a TypeError on a later field.
+const formalOf = (result, label = 'formal status') => {
+  assert.ok(result?.formal !== null && typeof result?.formal === 'object' && typeof result.formal.status === 'string',
+    `${label}: pdd gives no formal status (result.formal is ${JSON.stringify(result?.formal)}; the replay says ${result?.outcome}: ${result?.reason})`);
+  return result.formal;
+};
 
 function fixture(t, { vectors = false } = {}) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-formal-'))); t.after(() => rmSync(base, { recursive: true, force: true }));
@@ -51,7 +58,7 @@ test('FORMAL1 #670: with no scenario vectors pdd still reads a proved formal blo
   const result = f.read();
   assert.equal(result.outcome, 'not_replayed');
   assert.equal(result.reason, 'The approved prompt area has no original scenario vectors.', 'The scenario replay reason is the same as before.');
-  assert.equal(result.formal.status, 'recorded'); assert.equal(result.formal.result, 'proved_bounded');
+  assert.equal(formalOf(result).status, 'recorded'); assert.equal(result.formal.result, 'proved_bounded');
   const report = replay.formatReplayEvidence(result);
   assert.match(report, /^Code replay: NOT REPLAYED — /m); assert.doesNotMatch(report, /Code replay: PASS/);
   assert.equal(f.formalLine(result), 'Formal check (agent reported): recorded — Proved (bounded); scope: All 5 rules of Story 532 over 5192 bounded inputs; reason: FORMAL_CHECK_PASSED: total=5192; control: assertion failure (exit 1).');
@@ -71,7 +78,8 @@ test('FORMAL2: with no scenario vectors a Proved result needs its own assertion-
     const f = fixture(t); change(f.manifest.formal); f.save();
     const result = f.read(), line = f.formalLine(result), said = f.manifest.formal.result === 'proved_solver' ? 'Proved (solver)' : 'Proved (bounded)';
     assert.equal(result.outcome, 'not_replayed', field);
-    assert.deepEqual([result.formal.status, result.formal.field, result.formal.reported], ['malformed', field, f.manifest.formal.result], field);
+    const formal = formalOf(result, field);
+    assert.deepEqual([formal.status, formal.field, formal.reported], ['malformed', field, f.manifest.formal.result], field);
     assert.ok(line.startsWith(`Formal check (agent reported): malformed (${field}) — evidence not accepted: the record says ${said}, but `), line);
     assert.match(line, REPAIR); assert.doesNotMatch(line, /has no formal result|recorded —/);
   }
@@ -82,7 +90,7 @@ test('FORMAL2: with no scenario vectors a Proved result needs its own assertion-
   ]) {
     const f = fixture(t); f.manifest.formal = formal; f.save();
     const result = f.read();
-    assert.equal(result.formal.status, 'recorded', words); assert.equal(result.outcome, 'not_replayed', words);
+    assert.equal(formalOf(result, words).status, 'recorded', words); assert.equal(result.outcome, 'not_replayed', words);
     assert.ok(f.formalLine(result).startsWith(`Formal check (agent reported): recorded — ${words}; scope: ${formal.scope}; reason: ${formal.reason}; control: `), f.formalLine(result));
     if (formal.result === 'failed') assert.match(replay.formatReplayEvidence(result), /^✗ Formal check failed/m);
   }
@@ -91,11 +99,11 @@ test('FORMAL2: with no scenario vectors a Proved result needs its own assertion-
 test('FORMAL3: a missing file or a file without a formal block is "missing" with its reason and one repair step', t => {
   const f = fixture(t);
   let result = f.read();
-  assert.equal(result.formal.status, 'missing');
+  assert.equal(formalOf(result, 'no file').status, 'missing');
   assert.equal(f.formalLine(result), 'Formal check (agent reported): missing — evidence not recorded: replay-evidence.json is missing in the run folder. Repair: write the formal block per docs/replay-evidence.md, then run pdd workflow done formal again.');
   assert.doesNotMatch(f.formalLine(result), /not recorded\.$/, 'Never a bare "not recorded" formal line.');
   delete f.manifest.formal; f.save(); result = f.read();
-  assert.equal(result.formal.status, 'missing');
+  assert.equal(formalOf(result, 'no formal key').status, 'missing');
   assert.ok(f.formalLine(result).startsWith('Formal check (agent reported): missing — evidence not recorded: replay-evidence.json has no formal block. Repair: '), f.formalLine(result));
   assert.ok(replay.formatReplayEvidence(result).includes(`Manifest SHA256: ${hash(readFileSync(f.path))}.`), 'pdd read the file, so it shows its hash.');
 });
@@ -114,7 +122,8 @@ test('FORMAL4: a malformed file or field names the field, says what pdd did not 
   ]) {
     const f = fixture(t), text = change(f.manifest); f.save(text ?? f.manifest);
     const result = f.read(), line = f.formalLine(result);
-    assert.deepEqual([result.formal.status, result.formal.field], ['malformed', field], field);
+    const formal = formalOf(result, field);
+    assert.deepEqual([formal.status, formal.field], ['malformed', field], field);
     const start = `Formal check (agent reported): malformed (${field}) — evidence not accepted: ${said ? `the record says ${said}, but ` : ''}`;
     assert.ok(line.startsWith(start), `${field}: ${line}`);
     assert.match(line, REPAIR, field); assert.doesNotMatch(line, /has no formal result|SyntaxError|Unexpected/, field);
@@ -125,10 +134,10 @@ test('FORMAL4: a malformed file or field names the field, says what pdd did not 
 test('FORMAL5: a source change after the formal check makes the record stale, never Proved', t => {
   for (const vectors of [false, true]) {
     const f = fixture(t, { vectors }); f.save();
-    assert.equal(f.read().formal.status, 'recorded', `vectors=${vectors}`);
+    assert.equal(formalOf(f.read(), `vectors=${vectors}`).status, 'recorded', `vectors=${vectors}`);
     writeFileSync(join(f.root, 'code.mjs'), 'export const add=(a,b)=>a-b;\n');
     const result = f.read(), line = f.formalLine(result);
-    assert.equal(result.formal.status, 'stale'); assert.equal(result.formal.reported, 'proved_bounded');
+    assert.equal(formalOf(result, `stale vectors=${vectors}`).status, 'stale'); assert.equal(result.formal.reported, 'proved_bounded');
     assert.ok(line.startsWith('Formal check (agent reported): stale (source changed) — evidence not accepted: the record says Proved (bounded), but the source changed after the record was written'), line);
     assert.match(line, /Repair: run the formal check on the current source and write its formal block with the current fingerprint, then run pdd workflow done formal again\./);
     assert.doesNotMatch(line, /recorded —/);
@@ -141,19 +150,19 @@ test('FORMAL5: a source change after the formal check makes the record stale, ne
 test('FORMAL6: with scenario vectors a Proved result keeps the semantic mutation rule, also when the replay stops early', t => {
   let f = fixture(t, { vectors: true }); f.save();
   let result = f.read();
-  assert.equal(result.outcome, 'pass', result.reason); assert.equal(result.formal.status, 'recorded');
+  assert.equal(result.outcome, 'pass', result.reason); assert.equal(formalOf(result, 'full replay').status, 'recorded');
   // The replay stops at a substituted vector list; pdd still reads the formal block from the same bytes.
   f.manifest.vectors = []; f.save(); result = f.read();
   assert.equal(result.outcome, 'blocked'); assert.equal(result.reason, 'The manifest changed or substituted an original vector hash.');
-  assert.equal(result.formal.status, 'recorded');
+  assert.equal(formalOf(result, 'early exit').status, 'recorded');
   // A survived mutation is no control, even when the formal block names its own command and exit code.
   f = fixture(t, { vectors: true }); f.manifest.mutation.outcome = 'survived'; f.manifest.mutation.failed_checks = []; f.save(); result = f.read();
   assert.equal(result.outcome, 'blocked'); assert.equal(result.reason, 'A proved formal check needs semantic assertion-failure control, not a crash.');
-  assert.deepEqual([result.formal.status, result.formal.field, result.formal.reported], ['malformed', 'mutation', 'proved_bounded']);
+  assert.deepEqual([formalOf(result, 'survived').status, result.formal.field, result.formal.reported], ['malformed', 'mutation', 'proved_bounded']);
   assert.ok(f.formalLine(result).startsWith('Formal check (agent reported): malformed (mutation) — evidence not accepted: the record says Proved (bounded), but '), f.formalLine(result));
   // No saved anchor: the replay is BLOCKED as before, and the formal status still says what the file holds.
   f = fixture(t); f.save(); delete f.run.replayBaseline; result = f.read();
-  assert.equal(result.outcome, 'blocked'); assert.equal(result.formal.status, 'recorded');
+  assert.equal(result.outcome, 'blocked'); assert.equal(formalOf(result, 'no anchor').status, 'recorded');
 });
 
 test('FORMAL7: without Rules to check in the Story the header says "not needed"; with rules it gives the status', t => {
