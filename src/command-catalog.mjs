@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 5c0c0c67380e2ed2681bceefc4aefae45bc525b544d6fe4948c907c07c41468e).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: b87c59915f1d31c8e8c86208257e627b99c8b22c329e88938c6c4d0c4dcc7805).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -29,6 +29,14 @@ const routes = [
     forms: [form('pdd autopilot status', "Show this machine's repo, agent and next tick.")] },
   { id: 'autopilot.add', prefix: ['autopilot', 'add'], local: 'autopilot-add', operands: [{name:'issue',type:'issue',repeat:true}], options: [],
     forms: [form('pdd autopilot add N...', 'Mark named old issues with pdd:autopilot so Autopilot may take them.')] },
+  { id: 'autopilot.alert', prefix: ['autopilot', 'alert'], local: 'autopilot-alert', operands: [],
+    options: [{name:'--issue',kind:'text'},{name:'--kind',kind:'value',choices:['usage-limit','resource','access','decision','stuck','recovered']},{name:'--input',kind:'text'},{name:'--update',kind:'flag'}],
+    forms: [form('pdd autopilot alert --issue N --kind usage-limit|resource|access|decision|stuck|recovered --input - [--update]', 'For the coordinator: record one alert for a real human need or incident and send it to this machine\'s destination. Reads {"cause","tried","need"} JSON from stdin. usage-limit and resource are one alert per repository and machine for all blocked issues; access, decision and stuck are one alert per issue. A repeat sends nothing unless the last send failed; --update sends a material change; recovered sends one recovery and closes the matching alerts.')] },
+  { id: 'autopilot.alerts', prefix: ['autopilot', 'alerts'], local: 'autopilot-alerts', operands: [{name:'action',type:'choice:set,test,clear'}], options: [{name:'--discord-channel',kind:'text'},{name:'--token-command',kind:'text'}],
+    forms: [form('pdd autopilot alerts set', 'Read a Discord or Slack incoming webhook URL from stdin and save it for this machine outside every repository, readable only by you; the URL is never printed.'),
+      form('pdd autopilot alerts set --discord-channel ID [--token-command CMD]', 'Use a Discord bot instead: read its token from stdin and save it readable only by you, or save CMD and run it at each send so the token is never written to disk. The token and the command output are never printed.'),
+      form('pdd autopilot alerts test', 'Send one test message and confirm the posted message; for a bot, first show the bot name and channel name.'),
+      form('pdd autopilot alerts clear', 'Remove the alert destination from this machine.')] },
   { id: 'graph', prefix: ['graph'], local: 'issue-dependency-graph', operands: [], options: [{name:'--open',kind:'flag'},{name:'--issue',kind:'text'},{name:'--repo',kind:'text'}],
     forms: [form('pdd graph', 'Read native dependencies and saved reviews without AI.'), form('pdd graph --open', 'Open the local viewer.'), form('pdd graph --issue N', 'Select a root issue.'), form('pdd graph --open --issue N --repo OWNER/REPO', 'Open a selected issue in an explicit repository, including outside a checkout.')] },
   { id: 'dependencies.prepare', prefix: ['dependencies','prepare'], local: 'dependencies-prepare', operands: [], options: [{name:'--issue',kind:'text'}], forms: [form('pdd dependencies prepare [--issue N]', 'Read a scoped native coordinator packet without AI or GitHub writes.')] },

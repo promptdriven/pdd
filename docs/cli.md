@@ -40,8 +40,13 @@ These commands store settings and determine trust. Selecting a mode starts no ru
 |---|---|
 | `pdd autopilot start [--runs N] [--resume-custody FILE]` | Check sign-ins and the running pdd version, open a dedicated interactive Herdr session and check for work immediately. A user timer checks again every 30 minutes. `--runs` sets an optional concurrent-run cap; omission has no fixed cap. `--resume-custody` supplies the verified original-owner projection for explicit recovery |
 | `pdd autopilot stop` | Disable this repo's timer on this machine and let the current agent step finish |
-| `pdd autopilot status` | Show this machine's repo, agent, timer, coordinator health and next tick without contacting GitHub or waking an agent; an idle coordinator is healthy |
+| `pdd autopilot status` | Show this machine's repo, agent, timer, coordinator health and next tick without contacting GitHub or waking an agent; an idle coordinator is healthy. Adds one line when an [alert](#alerts) was not delivered |
 | `pdd autopilot add N...` | Label named issues `pdd:autopilot`, allowing Autopilot to take older issues |
+| `pdd autopilot alerts set` | Read your Discord or Slack incoming webhook URL from stdin and save it for this machine |
+| `pdd autopilot alerts set --discord-channel ID [--token-command CMD]` | Use a Discord bot in one channel: read its token from stdin, or save CMD and run it at each send to get the token |
+| `pdd autopilot alerts test` | Send one test message and confirm that it was posted; for a bot, first check and show the bot name and channel name |
+| `pdd autopilot alerts clear` | Remove the alert destination from this machine |
+| `pdd autopilot alert --issue N --kind usage-limit\|resource\|access\|decision\|stuck\|recovered --input - [--update]` | For the coordinator: record one alert and send it to this machine's destination |
 
 The launcher uses the repository settings module to read root `pdd.json`. An
 active mode is `observe` or `auto`; missing or invalid settings count as `off`. It uses an
@@ -83,6 +88,72 @@ Claimed issues stay identified as claimed when a trusted change needs attention.
 `add` rejects foreign repository references before writing any labels. Status
 reports unavailable Herdr instead of claiming a healthy running session. Stop
 leaves the interactive session open.
+
+### Alerts
+
+Autopilot can tell you about an incident or a decision that needs you. Set your
+own destination once on each machine:
+
+```sh
+pdd autopilot alerts set    # paste the URL, press Enter, then Ctrl-D
+pdd autopilot alerts test
+```
+
+The URL comes only from stdin, never from an argument, so it stays out of your
+shell history. You can also pipe it from a password manager. pdd saves it in
+`~/.config/pdd/autopilot-alerts.json` (`$XDG_CONFIG_HOME/pdd` when it is set),
+outside every repository, with mode 0600. When `HOME` is empty or not an
+absolute path, pdd uses your account's home folder; without one it saves
+nothing. pdd never prints it, also not in errors. A Discord webhook gets `?wait=true`, so the reply is the posted message.
+A Slack incoming webhook must reply `ok`. Only these replies count as delivered.
+
+A team with a Discord bot can use it instead of a webhook. Give the channel ID and
+the bot token. The token comes from stdin and is saved like the URL, or from your
+own command, which pdd saves and runs at each send, so the token is never written
+to disk:
+
+```sh
+pdd autopilot alerts set --discord-channel 123456789012345678 \
+  --token-command 'gcloud secrets versions access latest --secret=NAME --project=PROJECT'
+pdd autopilot alerts test
+```
+
+The bot posts with the Discord API v10, with link previews off, and reads the
+message back. Only a matching readback counts as delivered. A change of line
+ends or of spaces at a line end is not a mismatch. `test` first checks
+the bot and the channel, read-only, and shows the bot name and the channel name.
+pdd never prints the token or the command output. The bot needs permission to
+view the channel, send messages and read message history.
+
+The coordinator alerts only for a real need: an AI account usage limit (with the
+reset time when known), a CPU, memory or disk failure, an access or spending
+decision, an unresolved product choice, or an issue stuck after its retry time.
+It gives the cause, what it tried and what it needs as JSON on stdin:
+
+```sh
+pdd autopilot alert --issue 12 --kind usage-limit --input - <<'PDD_ALERT'
+{"cause":"Codex usage limit; resets 2026-11-06T18:00Z","tried":"Paused issue 12 and continued other work","need":"More quota or another signed-in account"}
+PDD_ALERT
+```
+
+Each message names the repository, the issue link, the cause, what Autopilot tried
+and what it needs. Answer on the GitHub issue, so the answer stays with the run.
+A usage limit or a resource failure is one incident for the repository and
+machine, so a limit that blocks 5 runs sends one alert. A call for another
+blocked issue adds that issue to the incident and sends nothing. The machine is
+the name that Autopilot saved at its first start, else the host name, so a host
+rename does not open a new incident. An access or spending decision, a product
+decision or a stuck issue is one incident per issue. A repeat call sends
+nothing for a delivered or unconfirmed alert, and sends again an alert that
+failed or had no destination. `--update` sends a material change or the new
+issue list. `--kind recovered` sends one recovery and closes the matching
+alerts; give `"kind"` in the JSON to close only that incident. Every call and
+its delivery result are recorded in
+`~/.local/state/pdd/autopilot/alerts/`. Without a destination, the alert stays in
+that record. `pdd autopilot status` adds one line when an alert was not delivered.
+Work continues in both cases. A delivered `pdd autopilot alerts test` ends that
+line for an older failed send, such as a failed recovery. An open alert that was
+not delivered stays in the line until a later call sends it.
 
 ## Runs on a GitHub issue
 

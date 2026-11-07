@@ -545,6 +545,10 @@ reconcile and wake boundaries; injected substitutes reach this same path.
   verification context for non-model process execution and auth-status parsing.
 - [PATH diagnostics](path-diagnostic.prompt.md): required native generation and
   verification context for the optional version shadowing warning.
+- [Autopilot alerts](autopilot-alerts.prompt.md#status-line): required native
+  generation and verification context for status. When `alertStatusLine` with the
+  saved repository and state root returns a line, status adds it on a second line.
+  It reads local files only; an error adds nothing.
 
 This module has native Node integration tests against the settings module and
 bundled skill. Timer services, real sign-ins and cross-machine skill execution
