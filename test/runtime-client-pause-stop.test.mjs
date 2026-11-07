@@ -7,7 +7,7 @@ import { listRuntimeJobs } from '../src/runtime-slots.mjs';
 import { fakeRuntime, harbor, portsFor, filesUnder, storyTest } from './runtime-fake.mjs';
 
 const pauseReply = (kind, maintenance) => ({ status: 503, headers: { 'retry-after': '7' }, json: {
-  dispatch: 'not_started', job_created: false, usage: { calls: 0 }, accounting_complete: true,
+  dispatch: 'not_started', provider_calls: 0, job_created: false, usage: { calls: 0, known_calls: 0, unknown_calls: 0, provider_calls: 0, accounting_complete: true }, accounting_complete: true,
   error: { code: maintenance ? 'maintenance' : `${kind}-queue-full`, details: maintenance ? { reason: 'synthetic pause' } : { retryable: true, retry_after: 7 } },
 } });
 const receipts = setup => filesUnder(setup.state).filter(path => path.endsWith('.json')).map(path => ({ path, raw: readFileSync(path, 'utf8') }));
@@ -48,7 +48,9 @@ for (const stage of ['check', 'explicit-lint']) test(`post-POST stop: ${stage} t
     if (e.command === kind) {
       paused = true;
       const refusal = { code: `${kind}-queue-timeout`, message: 'No work started.', details: { retryable: true, retry_after: 7 } };
-      receipt = f.job(e.request.requestId, kind, 'refused', { refusals: [refusal], report: { dispatch: 'not_started', provider_calls: 0, refusal, samples: [] } }, 0);
+      receipt = f.job(e.request.requestId, kind, 'refused', { refusals: [refusal], report: { dispatch: 'not_started', provider_calls: 0, accounting_complete: true, refusal, samples: [] } }, 0);
+      receipt.accounting_complete = true;
+      Object.assign(receipt.usage, { calls: 0, known_calls: 0, unknown_calls: 0, accounting_complete: true });
       return { status: 200, json: receipt };
     }
     return f.normal(e);

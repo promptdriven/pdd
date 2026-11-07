@@ -10,13 +10,15 @@ Keep one catalog authoritative for help/parser/completion. Parse before local re
 
 Read the entire [Prompting guide](../../docs/prompting-guide.md) before authoring prompts or Stories. Source files implement these contracts; tests exercise observable behavior from the actual packed package.
 
+The explicit local `workflow prove ISSUE --test COMMAND --expect TEXT` route may execute only the supplied proof command through [old-code proof](workflow-prove.prompt.md), which is required generation/runtime/verification context for this exception. Reading notes or replay evidence never executes supplied commands. Prove reads no gh token, calls no PDD interpreter and performs no publication or workflow approval.
+
+## Caller and installer navigation
+
 pdd pastes no guide, skill or recipe text: help names the paths of the installed Prompting guide and RUNBOOK and gives a short summary ([Learn PDD](pdd-cli.prompt.md#learn-pdd)), and the agent loads the skills on demand.
 
 The package ships nine skills in `skills/` (pdd-prompting, pdd-setup, pdd-small-change, pdd-bug, pdd-feature, pdd-product, pdd-autopilot, pdd-check, pdd-merge). The standard installer (`npx skills add promptdriven/pdd`) finds exactly these: keep every other SKILL.md out of the repo's `skills/` folder. Only `pdd setup` installs them, through [skills install](skills-install.prompt.md), and only for an agent that cannot find them (for example after `npx skills add`, it copies nothing). It writes skills only to the agent's user folder (`~/.agents/skills/`, and `~/.claude/skills/` or `$CLAUDE_CONFIG_DIR/skills/`), never to the person's repo. Workflow runs work with no installed skills: the runner reads the package's `skills/` folder.
 
 Workflow execution uses `pdd workflow run NAME ISSUE [--agent codex|claude] [--base BRANCH]` ([NAMES](command-catalog.prompt.md#names)) and the runner routes done, approve, changes, cancel, status and open. The [runner](workflow-runner.prompt.md) owns run records, area chats, person approval and real GitHub PR effects. The CLI parses and dispatches. No user-supplied native-argument passthrough, hosted engine or auth/provider gate.
-
-The explicit local `workflow prove ISSUE --test COMMAND --expect TEXT` route may execute only the supplied proof command through [old-code proof](workflow-prove.prompt.md), which is required generation/runtime/verification context for this exception. Reading notes or replay evidence never executes supplied commands. Prove reads no gh token, calls no PDD interpreter and performs no publication or workflow approval.
 
 ## PDD interpreter
 
@@ -33,3 +35,5 @@ Every line that pdd writes itself for a person names the commands with the [Name
 Machine-read words keep `check` and `try`, because servers, saved files and scripts depend on them: the wire commands `check` and `try`, the `/v1/try/…` paths, the folder `.pdd/try`, the `PDD Try launcher v1` marker, the `x-pdd-try-*` headers, the saved `tries/` records, the local dispositions `runtime-check` and `runtime-try`, and the workflow step names `check` and `try`. A server text that pdd prints as it got it stays as the server sent it, even when it names an old command.
 
 The package may include a licensed, attributed vendored public TOML parser under `src/vendor/` for safe config validation. It requires no npm install or registry access at runtime.
+
+The local metrics routes dispatch to the metrics command; they require no interpreter call.

@@ -72,7 +72,7 @@ test('PR evidence derives current committed Git head and distinguishes missing, 
 
 test('PR evidence rejects incomplete, extended, foreign and contradictory machine records', async t => {
   const prepare = await boundary(), f = fixture(t);
-  const mutations = [r => delete r.base.observedError, r => r.extra = true, r => r.head.extra = true, r => r.runId = 'foreign',r=>r.baseSha='malformed', r => r.base.exitCode = 0, r => r.head.timedOut = true, r => r.base.expectedFound = false, r => r.head.setupError = 'missing module', r => r.setupError = 'overlay failed', r => r.cleanupError = 'cleanup failed', r => r.head.exitCode = null, r => r.paths = [], r => r.test = '', r => r.origin = 'forged', r => r.headSha = 'not-a-commit', r => r.base.exitCode = '1', r => r.head.timedOut = 'false', r => r.paths = null, r => r.base.stdoutTail = ['bad\nline'], r => r.base.signal = true];
+  const mutations = [r => delete r.base.observedError, r => r.extra = true, r => r.head.extra = true, r => r.runId = 'foreign',r=>r.baseSha='malformed', r => r.base.exitCode = 0, r => r.head.timedOut = true, r => r.base.expectedFound = false, r => r.head.setupError = 'missing module', r => r.setupError = 'overlay failed', r => r.cleanupError = 'cleanup failed', r => r.head.exitCode = null, r => r.test = '', r => r.origin = 'forged', r => r.headSha = 'not-a-commit', r => r.base.exitCode = '1', r => r.head.timedOut = 'false', r => r.paths = null, r => r.base.stdoutTail = ['bad\nline'], r => r.base.signal = true];
   for (const mutate of mutations) {
     const record = proof(f); mutate(record); save(f, record);
     assert.equal((await prepare({ run: f.run, isCode: true })).proofStatus, 'unavailable', `reject ${mutate}`);
@@ -96,4 +96,14 @@ test('PR evidence publishes actual failed proof and respects callback arguments 
   assert.deepEqual(out.lines, ['Old-code proof: ✗ wrong-reason; command `node --test test/regression.test.mjs`; old-code exit `1`; new-code exit `0`; expected `defect`; cause `code: wrong_failure`.', ...agentLines(['Not checked: `native history`', 'Proof (gap closed): `added`'])]);
   assert.equal(out.proofStatus, 'wrong-reason'); assert.equal(out.issueReference, 'Closes #17');
   assert.deepEqual(calls, [['notes', { runDir: f.run.runDir, steps: ['verify'] }], ['head', { root: f.root,baseBranch:'main' }], ['proof', { runDir: f.run.runDir }]]);
+});
+
+// Schema fixtures: real CLI-written empty-path proof is covered by the native fallback test.
+test('2958: PR reader accepts executed empty-path v2 and retains legacy no-changed-tests readability', async t=>{
+ const prepare=await boundary(),f=fixture(t),record=proof(f);record.paths=[];save(f,record);
+ const executed=await prepare({run:f.run,isCode:true});assert.equal(executed.proofStatus,'proved');assert.match(executed.lines[0],/old-code exit `1`.*new-code exit `0`/);
+ record.outcome='no-changed-tests';save(f,record);assert.equal((await prepare({run:f.run,isCode:true})).proofStatus,'unavailable','executed phases cannot be relabeled as a legacy skip');
+ record.base={...phase(null),observedError:''};record.head={...phase(null),observedError:''};save(f,record);
+ const legacy=await prepare({run:f.run,isCode:true});assert.equal(legacy.proofStatus,'no-changed-tests');assert.match(legacy.lines[0],/no-changed-tests.*old-code exit `none`.*new-code exit `none`/);
+ record.base.stdoutTail=['invented execution'];save(f,record);assert.equal((await prepare({run:f.run,isCode:true})).proofStatus,'unavailable');
 });

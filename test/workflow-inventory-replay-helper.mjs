@@ -26,8 +26,10 @@ export async function replay(story) {
     }});
     for(const check of step.checks) {
       const got = check.target === 'result' ? pointer(result,check.path) : check.target === 'world' ? pointer(world,check.path) : calls;
-      assert.equal(check.op,'equals',`${step.step_id}: supported check operator`);
-      assert.deepEqual(got,check.value,`${story} / ${step.step_id} / ${check.criterion_id} / ${check.target}${check.path}`);
+      const message = `${story} / ${step.step_id} / ${check.criterion_id} / ${check.target}${check.path}`;
+      if (check.op === 'equals') assert.deepEqual(got,check.value,message);
+      else if (check.op === 'contains') assert.ok(got.includes(check.value),message);
+      else assert.fail(`${step.step_id}: unsupported check operator ${check.op}`);
     }
     calls=0;
   }

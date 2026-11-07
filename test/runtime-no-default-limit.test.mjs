@@ -110,7 +110,11 @@ test('2704: busy keeps Retry-After, window one, new ID and accepted-check identi
       const scenario = entry.request.scenario, count = (attempts.get(scenario) ?? 0) + 1;
       attempts.set(scenario, count); times.push(made.clock.now);
       if (checks(f).length === 1) { acceptedId = entry.request.requestId; return { status: 202, json: f.check(acceptedId, 'queued') }; }
-      if (checks(f).length === 2) { busyAt = made.clock.now; return { status: 429, headers: { 'retry-after': '7' }, json: { dispatch: 'not_started', error: { code: 'server-full', details: { retryable: true } } } }; }
+      if (checks(f).length === 2) { busyAt = made.clock.now; return { status: 429, headers: { 'retry-after': '7' }, json: {
+        dispatch: 'not_started', provider_calls: 0, accounting_complete: true,
+        usage: { calls: 0, known_calls: 0, unknown_calls: 0, provider_calls: 0, accounting_complete: true },
+        error: { code: 'server-full', details: { retryable: true } },
+      } }; }
       assert.ok(polls >= 3, 'busy window one holds all later sends behind the accepted check');
       assert.ok(made.clock.now - busyAt >= 10000, 'minimum wait and Retry-After are retained');
       return { status: 200, json: f.check(entry.request.requestId) };

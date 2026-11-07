@@ -10,7 +10,7 @@ import { PLACE, fakeRuntime, harbor, portsFor, temp } from './runtime-fake.mjs';
 async function tryStory(setup, fake, words, options = {}, extra = {}) {
   const opened = [];
   const { ports, clock } = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state },
-    { openUrl: async url => { opened.push(url); return true; }, ...extra });
+    { openUrl: async url => { opened.push(url); return true; },caseHandoff:async({testPath})=>({kind:'closed-editor',testPath}), ...extra });
   const code = await runTry({ words, options, cwd: setup.repo }, ports);
   return { code, opened, clock, out: ports.stdout.text, err: ports.stderr.text };
 }
@@ -147,6 +147,7 @@ test('RUNTIME-TRY6: pdd simulate sends the app map it finds, opens on the screen
   assert.equal(missing.code, 2); assert.match(missing.err, /nope\.json/); assert.equal(third.posts.length, 2);
 });
 
+const confirmContinuation=repo=>{const path=join(repo,'tests/place-order.json'),doc=JSON.parse(readFileSync(path,'utf8'));doc.steps.at(-1).checks.push({criterion_id:'AC1',target:'world',path:'',op:'equals',value:doc.initial_world});writeFileSync(path,JSON.stringify(doc,null,2)+'\n');};
 const AC1 = 'An order of 2 Espresso S and 1 Blueberry Muffin L has a total of 900 cents ($9.00).';
 // One case saved on the Try page, as GET /v1/try/<id>/tests returns it (try-page DESIGN.md).
 const savedCase = (id, { story = 'user_stories/place-order.md', criterion = { id: 'AC1', text: AC1 }, name = `Case ${id}` } = {}) => ({
@@ -154,11 +155,12 @@ const savedCase = (id, { story = 'user_stories/place-order.md', criterion = { id
   test: { schema_version: 'prompt-runtime.program-scenario.v1', story_path: story, criteria: [criterion], initial_world: {}, simulation: {}, context: [],
     steps: [{ step_id: `saved-${id}`, entry_path: PLACE, operation: 'place_order',
       input: { customerName: 'Ana', pickupAt: '07:45', items: [{ itemId: 'latte', size: 'M', quantity: 1 }] },
-      checks: [{ criterion_id: criterion.id, target: 'result', path: '/totalCents', op: 'equals', value: 445 }] }] } });
+      checks: [{ criterion_id: criterion.id, target: 'result', path: '/totalCents', op: 'equals', value: 445 },{criterion_id:criterion.id,target:'world',path:'',op:'equals',value:{}}] }] } });
 
 // Wrong: a case saved on the Try page is lost, makes a second test file, or is added twice.
 test('RUNTIME-TRY7: pdd simulate stays open and appends each saved case as a new step of the story\'s test file', async t => {
   const setup = harbor(t, repo => writeFileSync(join(repo, 'user_stories/refund.md'), '# Refund an order\n\n## Acceptance criteria\n\n1. A refund returns the total.\n'));
+  confirmContinuation(setup.repo);
   const original = readFileSync(join(setup.repo, 'tests/place-order.json'), 'utf8');
   let polls = 0, reopened = false;
   const lists = [[], [savedCase('a')], [savedCase('a'), savedCase('b', { criterion: { id: 'ac-1', text: AC1 } }),
@@ -172,16 +174,16 @@ test('RUNTIME-TRY7: pdd simulate stays open and appends each saved case as a new
   const result = await tryStory(setup, fake, ['place-order'], { '--no-open': true }, { interactive: true });
   assert.equal(result.code, 0, result.err);
   assert.equal(result.out.split('\n').filter(text => text.startsWith('added to')).join('\n'), ['added to tests/place-order.json as step saved-a',
-    'added to tests/place-order.json as step saved-b', 'added to tests/refund.json as step saved-d'].join('\n'));
+    'added to tests/place-order.json as step saved-b'].join('\n'));
   assert.match(result.out, /not added: "Case c" checks a criterion that tests\/place-order\.json does not have/);
   const text = readFileSync(join(setup.repo, 'tests/place-order.json'), 'utf8'), doc = JSON.parse(text);
   assert.ok(text.startsWith(original.slice(0, original.lastIndexOf('}', original.lastIndexOf(']')) + 1)));
   assert.deepEqual(doc.steps.map(step => step.step_id), ['sam-orders-espressos-and-a-muffin', 'saved-a', 'saved-b']);
   assert.deepEqual(doc.steps.slice(1).map(step => step.checks[0].criterion_id), ['AC1', 'AC1']);
-  assert.equal(JSON.parse(readFileSync(join(setup.repo, 'tests/refund.json'), 'utf8')).steps[0].step_id, 'saved-d');
+  assert.equal(existsSync(join(setup.repo,'tests/refund.json')),false);assert.match(result.out,/not added:.*original test association/);
   const found = findTests({ root: setup.repo }), checked = preflight({ root: setup.repo, found, selected: found.tests });
   assert.deepEqual(checked.rows.map(row => [row.test, row.refusals.map(item => item.code)]),
-    [['tests/place-order.json', []], ['tests/refund.json', []], ['tests/unknown-item.json', []]]);
+    [['tests/place-order.json', []], ['tests/unknown-item.json', []]]);
   reopened = true;
   const again = await tryStory(setup, fake, ['place-order'], { '--no-open': true });
   assert.equal(again.code, 0); assert.doesNotMatch(again.out, /added to/);
@@ -317,7 +319,7 @@ test('RUNTIME-TRY13: a Try setup that ends unknown is forgotten, and the next pd
 // Wrong: adding a saved case to a compact test file rewrites the whole file (issue 16).
 test('RUNTIME-TRY14: a saved case is added to a one-line test file without rewriting the rest', async t => {
   const setup = harbor(t, repo => {
-    const file = join(repo, 'tests/place-order.json'); writeFileSync(file, `${JSON.stringify(JSON.parse(readFileSync(file, 'utf8')))}\n`);
+    confirmContinuation(repo);const file = join(repo, 'tests/place-order.json'); writeFileSync(file, `${JSON.stringify(JSON.parse(readFileSync(file, 'utf8')))}\n`);
   });
   const original = readFileSync(join(setup.repo, 'tests/place-order.json'), 'utf8');
   const fake = await fakeRuntime(t, (entry, f) => entry.method === 'GET' && entry.url.endsWith('/tests') ? { status: 200, json: { tests: [savedCase('a')] } } : trying()(entry, f));
@@ -349,21 +351,21 @@ test('RUNTIME-TRY16: hostile saved cases write nothing outside tests/ or into no
   };
   const story = harbor(t), parent = readdirSync(join(story.repo, '..')).sort();
   const escape = await run(story, savedCase('a', { story: '../../package' }));
-  assert.equal(escape.code, 0); assert.match(escape.out, /^not added: its story "\.\.\/\.\.\/package" is not a story file in this repository\.$/m);
+  assert.equal(escape.code, 0); assert.match(escape.out, /not added:.*original test association.*retained/mi);
   assert.deepEqual(readdirSync(join(story.repo, '..')).filter(name => name !== 'state').sort(), parent); assert.equal(existsSync(join(story.repo, 'tests/package.json')), false);
   const refund = { story: 'user_stories/refund.md', criterion: { id: 'AC1', text: 'A refund returns the total.' } };
   const addRefund = repo => writeFileSync(join(repo, 'user_stories/refund.md'), '# Refund an order\n\n## Acceptance criteria\n\n1. A refund returns the total.\n');
   const named = harbor(t, addRefund);
   assert.equal((await run(named, { ...savedCase('b', refund), path: '../x.json' })).code, 0);
   assert.equal(existsSync(join(named.repo, '../x.json')), false); assert.equal(existsSync(join(named.repo, 'x.json')), false);
-  assert.ok(existsSync(join(named.repo, 'tests/refund.json')));
+  assert.equal(existsSync(join(named.repo, 'tests/refund.json')),false);
   const linked = harbor(t, repo => {
     addRefund(repo); mkdirSync(join(repo, 'runtime/test'), { recursive: true });
     for (const name of ['place-order.json', 'unknown-item.json']) writeFileSync(join(repo, 'runtime/test', name), readFileSync(join(repo, 'tests', name)));
     rmSync(join(repo, 'tests'), { recursive: true }); symlinkSync(outside, join(repo, 'tests')); writeFileSync(join(repo, '.gitignore'), 'tests\n');
   });
   const viaLink = await run(linked, savedCase('c', refund));
-  assert.match(viaLink.out, /^not added: tests\/ is a symbolic link\. pdd writes test files only inside the repository\.$/m);
+  assert.match(viaLink.out, /not added:.*original test association.*retained/mi);
   assert.deepEqual(readdirSync(outside), []);
   const pkg = harbor(t, repo => {
     const doc = JSON.parse(readFileSync(join(repo, 'tests/place-order.json'), 'utf8'));

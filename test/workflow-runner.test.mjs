@@ -95,6 +95,11 @@ async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
     }
     if (args[0] === 'pr' && args[1] === 'list') {
       const head = args.includes('--head') ? args[args.indexOf('--head') + 1] : null, search = args.includes('--search') ? args[args.indexOf('--search') + 1].split('"')[1] : null;
+      // The synthetic remote-tracking refs model remote effects, including an external push.
+      for (const pr of f.prs) {
+        const observed = await exec('git', ['rev-parse', '--verify', `refs/remotes/origin/${pr.headRefName}`], {cwd:opts.cwd}).catch(()=>null);
+        if (observed) pr.headRefOid = observed.stdout.trim();
+      }
       return { stdout: JSON.stringify(f.prs.filter(pr => (!head || pr.headRefName === head) && (!search || pr.body.includes(search)))) };
     }
     if (args[0] === 'pr' && args[1] === 'view') {
@@ -540,7 +545,7 @@ test('feature: story, approve, PR 1 with prompt work only, then the person asks 
   assert.equal(f.prs.length, 2);
   assert.equal(f.prs[1].title, 'Use value two (code)'); assert.equal(f.prs[1].headRefName, `${run.branch}-code`); assert.equal(f.prs[1].baseRefName, run.branch);
   assert.equal(f.prs[1].body.split('\n')[0], 'Old-code proof: not run.');
-  assert.ok(f.prs[1].body.includes(`Static inventory only; tests were not run.\nTest inventory commits: ${run.baseSha.slice(0,7)} → ${f.git(run.root, 'rev-parse', 'HEAD').slice(0,7)}.`));
+  assert.ok(f.prs[1].body.includes(`Static inventory only; this inventory did not run tests.\nTest inventory commits: ${run.baseSha.slice(0,7)} → ${f.git(run.root, 'rev-parse', 'HEAD').slice(0,7)}.`));
   const inventoryAt = f.prs[1].body.indexOf('Tests vs base:'), issueAt = f.prs[1].body.indexOf('\nCloses #17\n');
   assert.ok(f.prs[1].body.indexOf('Old-code proof: not run.') < inventoryAt && inventoryAt < issueAt);
   assert.match(f.prs[1].body, /^Closes #17$/m); assert.match(f.prs[1].body, /builds on PR 1: https:\/\/github\.com\/example\/project\/pull\/23/); assert.match(f.prs[1].body, /# pass 4/);
@@ -785,7 +790,7 @@ test('a chat that shows a question dialog is waiting for the person in status, a
   pane.agent.agent_status = 'blocked';
   assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /State: waiting for you: the chat asks a question in its window \(pdd workflow open 17\)/);
   const refused = await changeRun({ ref: '17', text: 'yes', cwd: f.source }, f.ports);
-  assert.equal(refused.exitCode, 1); assert.match(refused.message, /question dialog/); assert.match(refused.message, /pdd workflow open 17/);
+  assert.equal(refused.exitCode, 1); assert.match(refused.message, /shows a dialog/); assert.match(refused.message, /pdd workflow open 17/);
   pane.agent.agent_status = 'idle';
   assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /State: the agent works on scope/);
 });
@@ -1259,9 +1264,15 @@ test('0.1.7 #9: a prompt approval committed by hand is pushed to PR 1 before the
   const approval = f.git(run.root, 'rev-parse', 'HEAD');
   const capture = join(f.base, 'gh-body.txt'), gh = join(f.base, 'gh'), gitShim = join(f.base, 'git'), bodyFile = join(f.base, 'gh-pr-body.txt');
   writeFileSync(bodyFile, f.prs[0].body);
+  writeFileSync(bodyFile+'.identity.json',JSON.stringify(f.prs[0]));
   const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
   writeFileSync(gitShim, '#!/bin/sh\nif [ "$1" = fetch ]; then exit 0; fi\nif [ "$1" = push ]; then sha=$("' + realGit + '" rev-parse HEAD) || exit 1; ref=${3#*:}; local_ref=refs/remotes/origin/${ref#refs/heads/}; "' + realGit + '" update-ref "$local_ref" "$sha"; exit 0; fi\nexec "' + realGit + '" "$@"\n'); chmodSync(gitShim, 0o755);
   const ghScript = `#!/bin/sh
+if [ "$1" = repo ] && [ "$2" = view ]; then echo '{"nameWithOwner":"example/project","defaultBranchRef":{"name":"main"},"url":"https://github.com/example/project"}'; exit 0; fi
+if [ "$1" = pr ] && [ "$2" = list ]; then
+  node -e 'const fs=require("fs"),cp=require("child_process"),p=JSON.parse(fs.readFileSync(process.env.GH_PR_BODY_FILE+".identity.json","utf8"));p.body=fs.readFileSync(process.env.GH_PR_BODY_FILE,"utf8");p.headRefOid=cp.execFileSync("git",["rev-parse","refs/remotes/origin/"+p.headRefName],{encoding:"utf8"}).trim();process.stdout.write(JSON.stringify([p]));'
+  exit 0
+fi
 if [ "$1" = pr ] && [ "$2" = edit ]; then cat > "$GH_CAPTURE"; cp "$GH_CAPTURE" "$GH_PR_BODY_FILE"; exit 0; fi
 if [ "$1" = pr ] && [ "$2" = view ]; then
   if [ "$4" = --json ] && [ "$5" = body ]; then

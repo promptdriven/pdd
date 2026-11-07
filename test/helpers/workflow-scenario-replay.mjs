@@ -12,14 +12,18 @@ export async function replayScenario(name, { output } = {}) {
   let prove, evidence;
   try { prove = await import('../../src/workflow-prove.mjs'); } catch (e) { if (e.code !== 'ERR_MODULE_NOT_FOUND') throw e; }
   try { evidence = await import('../../src/workflow-pr-evidence.mjs'); } catch (e) { if (e.code !== 'ERR_MODULE_NOT_FOUND') throw e; }
-  assert.equal(typeof (name === 'workflow-prove' ? prove?.proveRun : evidence?.preparePrEvidence), 'function', `#2594 missing API: ${name}`);
+  for (const operation of new Set(scenario.steps.map(step => step.operation))) {
+    const boundary = { proveRun: prove?.proveRun, preparePrEvidence: evidence?.preparePrEvidence, runPdd }[operation];
+    assert.equal(typeof boundary, 'function', `#2594 missing API: ${operation}`);
+  }
   for (const step of scenario.steps) {
     const calls = { resources: {} }, ports = {};
     for (const [binding, rule] of Object.entries(scenario.simulation)) {
       const [resource, method] = binding.split('.');
+      const id = resource === 'host' ? `workflow-prove-host-${method}` : resource === 'publication' ? `workflow-pr-evidence-publication-${method}` : resource === 'source' ? `workflow-runner-source-${method}` : `pdd-cli-${resource}-${method}`;
+      calls.resources[id] = 0;
       ports[method] = async input => {
-        const id = resource === 'host' ? `workflow-prove-host-${method}` : resource === 'publication' ? `workflow-pr-evidence-publication-${method}` : 'pdd-cli-dispatch-prove';
-        calls.resources[id] = (calls.resources[id] ?? 0) + 1;
+        calls.resources[id]++;
         let reply;
         if (rule.action === 'collection.get') {
           const row = pointer(world, rule.world_pointer).find(row => JSON.stringify(pointer(row, rule.item_key_pointer)) === JSON.stringify(pointer(input, rule.key_argument_pointer)));
@@ -42,14 +46,17 @@ export async function replayScenario(name, { output } = {}) {
     else if (step.operation === 'preparePrEvidence') result = await evidence.preparePrEvidence(step.input, ports);
     else if (step.operation === 'runPdd') {
       let stdout = '', stderr = '';
-      const exit_code = await runPdd(step.input.argv, { cwd: step.input.cwd ?? '.', stdout: { write: s => { stdout += s; } }, stderr: { write: s => { stderr += s; } }, workflowProve: { proveRun: ports.prove } });
+      const exit_code = await runPdd(step.input.argv, { cwd: step.input.cwd ?? '.', stdout: { write: s => { stdout += s; } }, stderr: { write: s => { stderr += s; } }, workflowProve: { proveRun: ports.prove },
+        workflowAgents: { checkWorkflowAgents: ports.checkWorkflowAgents }, pathDiagnostic: ports.pathDiagnostic,
+        workflowRunner: { startRun: ports.startRun }, setupAgentMcp: ports.setupAgentMcp, setupProject: ports.setupProject, setupSkills: ports.setupSkills });
       result = { exit_code, stdout, stderr };
     } else assert.fail(`Unmapped public operation ${step.operation}`);
     operations.push({ vector, step_id: step.step_id, entry_path: step.entry_path, operation: step.operation, executed: true, outcome: 'returned', boundary: { kind: 'function', name: step.operation }, observed_result: clone(result), command: `node --test test/${name}.vectors.test.mjs`, exit_code: 0 });
     for (let i = 0; i < step.checks.length; i++) {
       const check = step.checks[i], actual = pointer(({ result, world, calls, error: null })[check.target], check.path);
-      // An uncalled resource is the observed count zero, not a missing observation.
-      const got = check.target === 'calls' && actual === undefined ? 0 : actual;
+      // Every declared resource has a registered spy, including uncalled operations.
+      if (check.target === 'calls') assert.notEqual(actual, undefined, `Unmapped call count ${check.path}`);
+      const got = actual;
       const identity = { vector, step_id: step.step_id, check_index: i, entry_path: step.entry_path, operation: step.operation, ...Object.fromEntries(['criterion_id', 'target', 'path', 'op'].map(k => [k, check[k]])) };
       let failure;
       try { if (check.op === 'equals') assert.deepEqual(got, check.value); else if (check.op === 'not_equals') assert.notDeepEqual(got, check.value); else if (check.op === 'contains') assert.ok(typeof got === 'string' ? got.includes(check.value) : got.some(x => JSON.stringify(x) === JSON.stringify(check.value))); else assert.fail(`Unmapped check op ${check.op}`); } catch (error) { failure = error; }

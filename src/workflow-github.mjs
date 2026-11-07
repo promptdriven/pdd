@@ -11,7 +11,7 @@ const execute = (file, args, options) => new Promise((resolve, reject) => {
   });
   if (input !== undefined) { child.stdin.on('error', () => {}); child.stdin.end(input); }
 });
-const fields = 'number,url,state,headRefName,baseRefName,headRefOid,mergeCommit,body,isCrossRepository,headRepository,headRepositoryOwner';
+const fields = 'number,url,state,headRefName,baseRefName,headRefOid,mergeCommit,body,isCrossRepository,headRepository,headRepositoryOwner,isDraft';
 const identifier = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$/.test(value);
 const text = value => typeof value === 'string' && value.length > 0 && !/[\u0000-\u001f\u007f]/u.test(value);
 const repositoryName = value => text(value) && /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(value);
@@ -191,7 +191,7 @@ function actualPr(row, intent) {
     baseBranch: row.baseRefName, headSha: row.headRefOid, mergeCommit: row.state === 'MERGED' ? row.mergeCommit.oid : null };
 }
 
-async function lookup(cwd, intent, deps) {
+async function lookup(cwd, intent, deps, draft = false) {
   try {
     const prefix = ['pr', 'list', '--repo', intent.repository, '--state', 'all', '--limit', '100', '--json', fields];
     const responses = [];
@@ -210,16 +210,19 @@ async function lookup(cwd, intent, deps) {
     if (!unique.size) return { state: 'absent' };
     if (unique.size !== 1) fail('workflow_github_pr_ambiguous');
     const row = [...unique.values()][0], pr = actualPr(row, intent);
+    if (draft && row.isDraft !== true) return { state: 'found', outcome: outcome('recovery_required', 'The original PR is not confirmed as a draft. Inspect the existing PR; do not convert it or publish again.') };
     return { state: 'found', outcome: outcome(row.state.toLowerCase(), 'Verified the original workflow pull request.', pr) };
   } catch { return { state: 'refused' }; }
 }
 
 export async function reconcileWorkflowPr(input, ports = {}) {
   try {
-    const { cwd, intent: supplied } = structuredClone(input ?? {}), intent = intentCopy(supplied), deps = dependencies(ports);
+    const { cwd, intent: supplied, draft = false } = structuredClone(input ?? {});
+    if (typeof draft !== 'boolean') fail('workflow_github_draft_invalid');
+    const intent = intentCopy(supplied), deps = dependencies(ports);
     const actual = await repositoryAt(cwd, deps);
     if (!sameRepo(actual.repository, intent.repository)) fail('workflow_github_repository_mismatch');
-    const found = await lookup(cwd, intent, deps);
+    const found = await lookup(cwd, intent, deps, draft);
     if (found.state === 'found') return found.outcome;
   } catch { /* Read failure never authorizes another push or create. */ }
   return outcome('recovery_required', 'The original pull request is missing, changed, ambiguous or unreadable. Reconcile this same intent; do not publish again.');
@@ -228,7 +231,8 @@ export async function reconcileWorkflowPr(input, ports = {}) {
 export async function publishWorkflowPr(input, ports = {}) {
   let effectStarted = false, unpublishedOnly = false;
   try {
-    const { cwd, intent: supplied, body, unpublishedOnly: mode = false } = structuredClone(input ?? {});
+    const { cwd, intent: supplied, body, unpublishedOnly: mode = false, draft = false } = structuredClone(input ?? {});
+    if (typeof draft !== 'boolean') fail('workflow_github_draft_invalid');
     if (typeof mode !== 'boolean') fail('workflow_github_recovery_mode_invalid');
     unpublishedOnly = mode;
     const intent = intentCopy(supplied), deps = dependencies(ports);
@@ -236,7 +240,7 @@ export async function publishWorkflowPr(input, ports = {}) {
     if (characters(body) > PR_BODY_LIMIT) return outcome('failed', `The PR description has ${characters(body).toLocaleString('en-US')} characters. GitHub accepts at most 65,536. Nothing was pushed. Make it shorter, then try again.`);
     const actual = await repositoryAt(cwd, deps);
     if (!sameRepo(actual.repository, intent.repository)) fail('workflow_github_repository_mismatch');
-    const found = await lookup(cwd, intent, deps);
+    const found = await lookup(cwd, intent, deps, draft);
     if (found.state === 'found') return unpublishedOnly
       ? outcome('recovery_required', 'An original PR already exists. Inspect it without unpublished-only publication.') : found.outcome;
     if (found.state !== 'absent') return outcome('recovery_required', 'Cannot confirm the original PR identity. Reconcile the saved intent without another publication.');
@@ -263,17 +267,17 @@ export async function publishWorkflowPr(input, ports = {}) {
     if (remote?.code !== 0 || remote.stdout.trim() !== `${intent.headSha}\trefs/heads/${intent.headBranch}`)
       await deps.command(cwd, 'git', ['push', 'origin', `${intent.headSha}:refs/heads/${intent.headBranch}`]);
     const created = await deps.raw(cwd, 'gh', ['pr', 'create', '--repo', intent.repository, '--head', intent.headBranch,
-      '--base', intent.baseBranch, '--title', intent.title, '--body-file', '-'], body);
+      '--base', intent.baseBranch, '--title', intent.title, '--body-file', '-', ...(draft ? ['--draft'] : [])], body);
     if (created.code !== 0) {
       // Read back first: an exact PR wins. Only GitHub's own refusal with no PR is certain; anything else stays unconfirmed.
-      const found = await lookup(cwd, intent, deps);
+      const found = await lookup(cwd, intent, deps, draft);
       if (found.state === 'found') return found.outcome;
       const refused = found.state === 'absent' && refusal(created.stderr), line = ghLine(created.stderr);
       return refused ? outcome('rejected', refused)
         : outcome('recovery_required', `PR creation is unconfirmed${line ? ` (gh: ${line})` : ''}. Reconcile this same saved intent; do not publish again.`);
     }
     // A successful create exit/printed URL is insufficient; use genuine GitHub readback.
-    return await reconcileWorkflowPr({ cwd, intent }, ports);
+    return await reconcileWorkflowPr({ cwd, intent, draft }, ports);
   } catch {
     return effectStarted || unpublishedOnly
       ? outcome('recovery_required', 'Push or PR creation is unconfirmed. Reconcile this same saved intent; do not publish again.')

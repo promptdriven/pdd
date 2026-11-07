@@ -11,6 +11,8 @@ I can leave my command waiting for runtime capacity within its existing wait.
 5. The lint wait limit also bounds dead-owner reads and saving a request ID before submission, including the 90-second agent lint wait during Try setup.
 6. When my lint wait ends for a local slot or maintenance, pdd names that wait and does not claim that the server stayed busy after 0 lint attempts.
 7. Submissions by the same authenticated owner at the same runtime reuse a clear capacity observation for about 10 seconds.
+8. A Check capacity refusal is busy only when one fail-closed accounting rule proves typed complete zero work across every supplied surface; otherwise it stays unknown and no new Check UUID, claim or POST is sent.
+9. A plain `pdd test --read` reads saved Check IDs only; complete-zero capacity evidence alone never creates a fresh Check attempt, while an authorized in-command or `--retry` can continue after existing waits and guards.
 
 ## Rules to check
 

@@ -81,7 +81,13 @@ test('static convention handles duplicate names, nested assertions, comments, an
   const {analyzeTestChanges}=await inventoryModule();
   const before=`// test('comment', () => {});\ntest('assert', () => {});\ntest('same', () => {\n  test('nested', () => {\n    assert.equal(inside, 1);\n  });\n  assert.equal(outside, 1);\n});\ntest('same', () => assert.ok(second));\ntest(name, () => {});\ntest(\`dynamic \${value}\`, () => {});\n`;
   const after=before.replace('inside, 1','inside, 2').replace('outside, 1','outside, 2').replace('assert.ok(second)','expect(second).toBe(true)').replace("test('assert', () => {});", "test('assert', () => { const unrelated = {skip: true}; });");
-  const report=analyzeTestChanges({files:[{oldPath:'a.spec.mts',newPath:'a.spec.mts',before,after}]});assert.equal(report.available,true);
+  const unknown=analyzeTestChanges({files:[{oldPath:'a.spec.mts',newPath:'a.spec.mts',before,after}]});
+  assert.equal(unknown.available,true);
+  for(const category of ['Tests vs base', 'Changed assertions in kept tests', 'New skips'])
+    assert.ok(unknown.text.includes(`${category}: "a.spec.mts" unavailable ("unknown dynamic test inventory").`));
+  const staticBefore=before.replace('test(name, () => {});\ntest(`dynamic ${value}`, () => {});\n','');
+  const staticAfter=after.replace('test(name, () => {});\ntest(`dynamic ${value}`, () => {});\n','');
+  const report=analyzeTestChanges({files:[{oldPath:'a.spec.mts',newPath:'a.spec.mts',before:staticBefore,after:staticAfter}]});assert.equal(report.available,true);
   assert.match(report.text,/4 → 4 tests\. Removed: none/);assert.ok(report.text.includes('`"nested"` `"    assert.equal(inside, 1);"`'));
   assert.ok(report.text.includes('`"same"` `"  assert.equal(outside, 1);"`'));assert.ok(report.text.includes('`"same"` [2]'));
   assert.ok(!report.text.includes('`"assert"` `"test'));assert.ok(report.text.includes('New skips: none.'));
@@ -101,7 +107,7 @@ test('report truncation retains whole summaries and discloses omitted details, w
   const files=Array.from({length:80},(_,i)=>({oldPath:`test/${i}.mjs`,newPath:`test/${i}.mjs`,before:declaration('lost '+ '😀'.repeat(120)),after:''}));
   const report=analyzeTestChanges({files});assert.equal(report.available,true);assert.ok([...report.text].length<=12000);assert.ok(report.details.length>report.text.length);
   assert.match(report.text,/Inventory details omitted: \d+ lines; full report: test-inventory.json in the run folder\./);
-  assert.equal((report.text.match(/^Tests vs base:/gm)??[]).length>=80,true);assert.ok(report.text.endsWith('Static inventory only; tests were not run.\n'));
+  assert.equal((report.text.match(/^Tests vs base:/gm)??[]).length>=80,true);assert.ok(report.text.endsWith('Static inventory only; this inventory did not run tests.\n'));
   const overflow=analyzeTestChanges({files:Array.from({length:1000},(_,i)=>({oldPath:`test/${'z'.repeat(60)}${i}.js`,newPath:'',before:declaration('gone'),after:''}))});
   assert.ok([...overflow.text].length<=12000);assert.match(overflow.text,/file summaries omitted/);
   assert.equal(analyzeTestChanges({files:Array(1001).fill(files[0])}).reason,'inventory limit exceeded');
@@ -111,7 +117,7 @@ test('equal-length LCS ties retain earliest old then earliest new assertion occu
   const {analyzeTestChanges}=await inventoryModule();
   const body=lines=>`test('kept', () => {\n${lines.join('\n')}\n});\n`;
   const report=analyzeTestChanges({files:[{oldPath:'test/a.js',newPath:'test/a.js',before:body(['assert.ok(A);','assert.ok(B);']),after:body(['assert.ok(B);','assert.ok(B);'])}]});
-  assert.equal(report.text,`Tests vs base: "test/a.js" 1 → 1 tests. Removed: none.\nChanged assertions in kept tests: "test/a.js" \`"kept"\` \`"assert.ok(A);"\` → (removed).\nChanged assertions in kept tests: "test/a.js" \`"kept"\` (added) → \`"assert.ok(B);"\`.\nNew skips: none.\nStatic inventory only; tests were not run.\n`);
+  assert.equal(report.text,`Tests vs base: "test/a.js" 1 → 1 tests. Removed: none.\nChanged assertions in kept tests: "test/a.js" \`"kept"\` \`"assert.ok(A);"\` → (removed).\nChanged assertions in kept tests: "test/a.js" \`"kept"\` (added) → \`"assert.ok(B);"\`.\nNew skips: none.\nStatic inventory only; this inventory did not run tests.\n`);
   const earlierOld=analyzeTestChanges({files:[{oldPath:'test/a.js',newPath:'test/a.js',before:body(['assert.ok(A);','assert.ok(B);']),after:body(['assert.ok(B);','assert.ok(A);'])}]});
   assert.ok(earlierOld.text.includes('(added) → `"assert.ok(B);"`'));assert.ok(earlierOld.text.includes('`"assert.ok(B);"` → (removed)'));
 });

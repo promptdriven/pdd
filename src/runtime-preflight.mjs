@@ -5,7 +5,12 @@ import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, rea
 import { basename, join, posix, isAbsolute } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { expandSource } from './contract-refs.mjs';
+import {loadRuntimeWorkspace as loadWorkspacePolicy,allowsRuntimePath,requireRuntimePath as requireWorkspacePath} from './runtime-workspace.mjs';
 
+function workspaceError(error){if(error?.code?.startsWith('workspace-'))throw Object.assign(new PreflightError(4,error.message),{code:error.code});throw error;}
+function loadRuntimeWorkspace(input){try{return loadWorkspacePolicy(input);}catch(error){workspaceError(error);}}
+function requireRuntimePath(policy,input){try{return requireWorkspacePath(policy,input);}catch(error){workspaceError(error);}}
+function boundedWorkspace(root,supplied){const native=loadRuntimeWorkspace({root});if(!supplied||!supplied.configured)return native;if(!native.configured)return supplied;const allowed=[];for(const a of native.allowed_paths)for(const b of supplied.allowed_paths){if(a===b)allowed.push(a);else if(a.endsWith('/')&&b.startsWith(a))allowed.push(b);else if(b.endsWith('/')&&a.startsWith(b))allowed.push(a);}return Object.freeze({configured:true,allowed_paths:Object.freeze([...new Set(allowed)])});}
 export const TEST_SCHEMA = 'prompt-runtime.program-scenario.v1';
 // The interpreter's upload limit (prompt-runtime server/uploads.py: MAX_UPLOAD 10 MiB, at most 10,000 files).
 // The only size limit on what pdd sends; over it, pdd names the largest files with their sizes.
@@ -84,6 +89,7 @@ export function gitFiles(root) {
 
 const statOf = path => { try { return lstatSync(path, { bigint: true }); } catch (error) { if (['ENOENT', 'ENAMETOOLONG'].includes(error.code)) return null; throw error; } };
 const readText = (root, path) => {
+  requireRuntimePath(loadRuntimeWorkspace({root}),{path,from:'Source read'});
   const stat=statOf(join(root,path));
   sourceLimit([{path,size:Number(stat?.size ?? 0)}]);
   return readFileSync(join(root,path),'utf8');
@@ -153,17 +159,46 @@ export const orphanSummary = orphans => orphans.length === 1 ? `Warning: ${orpha
   : `Warning: ${orphans.length} JSON files in test folders match no Story (the tests of user_stories/**/S.md are S.json and S.<variant>.json). pdd test --files lists them.`;
 
 // Tests, stories and Git-visible regular files of one repo.
-export function findTests({ root, files = gitFiles(root) }) {
-  return discoverTests(root, files);
+export function findTests({ root, files = gitFiles(root), workspace, excludeFixtureProjects = false }) {
+  return discoverTests(root, files,false,workspace,excludeFixtureProjects);
 }
 
-// Git-visible regular files and Stories: discovery reads Story files, never JSON files.
-function discoverStories(root, files, strict = false) {
-  const visible = new Set(), stories = [], storyFiles = [], titles = new Map(), warnings = [], linkedPaths = new Set(), sizes = new Map();
-  let linkedFiles = strict ? filePort(root, new Set(files), true) : undefined;
+// Identify projects by Git-visible names before inspecting any Story or test content.
+function fixtureProjectRoots(root, files) {
+  const directories = new Map();
   for (const path of files) {
+    const parts = path.split('/');
+    if (parts[0] !== 'test' || parts[1] !== 'fixtures') continue;
+    // Do not follow an unchecked link while classifying a name.
+    let safe = true;
+    for (let i = 1; i < parts.length; i++) {
+      const ancestor = statOf(join(root, ...parts.slice(0, i)));
+      if (!ancestor?.isDirectory()) { safe = false; break; }
+    }
+    if (!safe) continue;
+    const stat = statOf(join(root, path));
+    if (!stat || (!stat.isFile() && !stat.isSymbolicLink())) continue;
+    for (let i = 3; i < parts.length - 1; i++) {
+      if (parts[i] !== 'user_stories' && parts[i] !== 'tests') continue;
+      const project = parts.slice(0, i).join('/');
+      if (!directories.has(project)) directories.set(project, new Set());
+      directories.get(project).add(parts[i]);
+    }
+  }
+  return [...directories].filter(([, dirs]) => dirs.has('user_stories') && dirs.has('tests')).map(([path]) => path).sort();
+}
+
+const outsideFixtureProjects = (files, roots) => files.filter(path => !roots.some(root => path.startsWith(`${root}/`)));
+
+// Git-visible regular files and Stories: discovery reads Story files, never JSON files.
+function discoverStories(root, files, strict = false, workspace=loadRuntimeWorkspace({root}), discoveryFiles = null) {
+  workspace=boundedWorkspace(root,workspace);
+  const visible = new Set(), stories = [], storyFiles = [], titles = new Map(), warnings = [], linkedPaths = new Set(), sizes = new Map();
+  let linkedFiles = strict||workspace.configured ? filePort(root, new Set(files), strict,workspace) : undefined;
+  for (const path of files) {
+    if(!allowsRuntimePath(workspace,path))continue;
     let stat = strict ? null : statOf(join(root, path)), linked = false;
-    if (strict || stat?.isSymbolicLink()) {
+    if (strict || workspace.configured || stat?.isSymbolicLink()) {
       linkedFiles ??= sourceFilePort(root, new Set(files));
       try {
         const info = linkedFiles.stat({path});
@@ -173,7 +208,7 @@ function discoverStories(root, files, strict = false) {
     if (!stat?.isFile()) continue;
     visible.add(path); sizes.set(path, Number(stat.size));
     if (linked) linkedPaths.add(path);
-    if (isStoryPath(path)) {
+    if ((!discoveryFiles || discoveryFiles.has(path)) && isStoryPath(path)) {
       // Every Story file can own a test by its name. An index (PLAN.md, README.md) or a file with no acceptance
       // criteria section is not listed as a Story (2048 session, 0.1.6), so it never gets a "has no test" line.
       storyFiles.push(path);
@@ -187,9 +222,11 @@ function discoverStories(root, files, strict = false) {
   return { visible, stories, storyFiles, titles, warnings, sizes, read };
 }
 
-function discoverTests(root, files, strict = false) {
-  const { visible, stories, storyFiles, titles, warnings: storyWarnings, sizes, read } = discoverStories(root, files, strict);
-  const named = new Set(stories.map(story => story.path)), rule = matchTests(storyFiles, [...visible]);
+function discoverTests(root, files, strict = false,workspace=loadRuntimeWorkspace({root}),excludeFixtureProjects=false) {
+  const excluded = excludeFixtureProjects ? fixtureProjectRoots(root, files) : [];
+  const discoveryFiles = new Set(outsideFixtureProjects(files, excluded));
+  const { visible, stories, storyFiles, titles, warnings: storyWarnings, sizes, read } = discoverStories(root, files, strict,workspace,discoveryFiles);
+  const named = new Set(stories.map(story => story.path)), rule = matchTests(storyFiles, [...visible].filter(path => discoveryFiles.has(path)));
   rule.untested = rule.untested.filter(item => named.has(item.storyPath));
   const tests = rule.tests.map(entry => {
     const size = sizes.get(entry.path);
@@ -204,27 +241,50 @@ function discoverTests(root, files, strict = false) {
       throw error;
     }
   });
-  const warnings = [...storyWarnings, ...rule.tests.filter(entry => entry.problem).map(entry => `Warning: ${entry.problem}`),
+  const warnings = [...excluded.map(path => `Warning: skipped nested fixture project ${path}.`), ...storyWarnings, ...rule.tests.filter(entry => entry.problem).map(entry => `Warning: ${entry.problem}`),
     ...rule.untested.map(item => `Warning: ${item.line}`), ...(rule.orphans.length ? [orphanSummary(rule.orphans)] : [])];
-  return { visible, tests, stories, warnings, untested: rule.untested, orphans: rule.orphans };
+  // Discover declarations from already bounded Story reads. Owner files are
+  // opened only after explicit lint selection.
+  const nativeSelections = stories.flatMap(story => {
+    const section = /^## Native validation\s*\n([\s\S]*?)(?=^## |$(?![\s\S]))/m.exec(read(story.path));
+    return section ? [{ storyPath: story.path, story: story.name, section: section[1] }] : [];
+  });
+  const found={ root, visible, tests, stories, nativeSelections, warnings, untested: rule.untested, orphans: rule.orphans, excludedFixtureProjects: excluded, discoveryVisible: new Set([...visible].filter(path => discoveryFiles.has(path))) };
+  Object.defineProperty(found,'workspace',{value:workspace});return found;
 }
 
 // STORY words, by the test name rule: a test path, a story path, a story name or a test file name.
 // Returns {selected, unknown, untested}: untested holds the line of each named Story that has no test.
-export function selectTests(found, words = []) {
+export function selectTests(found, words = [], { native = false } = {}) {
   if (!words.length) return { selected: [...found.tests], unknown: [], untested: [] };
-  const selected = new Set(), unknown = [], untested = [];
+  const selected = new Set(), unknown = [], untested = [], nativeSelections = new Map();
   for (const raw of words) {
     const word = raw.replace(/^\.\//, '');
     const hits = found.tests.filter(test => test.path === word || test.files?.includes(word) || test.storyPath === word || test.storyPaths?.includes(word) || test.story === word
       || word === '.' || (!word.startsWith('../') && word !== '..' && [test.path, ...(test.files ?? []), ...(test.storyPaths ?? []), test.storyPath].some(path => path?.startsWith(word.replace(/\/$/, '') + '/')))
       || basename(test.path, '.json') === word || test.storyPaths?.some(path => storyName(path) === word));
-    const missing = hits.length ? [] : (found.untested ?? []).filter(item => item.storyPath === word || item.story === word);
+    const nativeHits = native ? (found.nativeSelections ?? []).filter(item => item.storyPath === word || item.story === word || word === '.' || (!word.startsWith('../') && word !== '..' && item.storyPath.startsWith(word.replace(/\/$/, '') + '/'))) : [];
+    for (const item of nativeHits) nativeSelections.set(item.storyPath, item);
+    const missing = hits.length || nativeHits.length ? [] : (found.untested ?? []).filter(item => item.storyPath === word || item.story === word);
     if (missing.length) untested.push(...missing.map(item => item.line));
-    else if (!hits.length) unknown.push(raw);
+    else if (!hits.length && !nativeHits.length) unknown.push(raw);
     for (const hit of hits) selected.add(hit);
   }
-  return { selected: found.tests.filter(test => selected.has(test)), unknown, untested };
+  const descriptors = [...nativeSelections.values()].map(item => {
+    const links = [...item.section.matchAll(/\[[^\]]*\]\(([^)\s]+)#native-validation-profile-([^)\s]+)\)/g)];
+    if (links.length !== 1) return {storyPath:item.storyPath,profileId:null,promptPath:null,reason:'Native Story owner link is missing or ambiguous.'};
+    const promptPath = posix.normalize(posix.join(posix.dirname(item.storyPath),links[0][1]));
+    try {
+      if (!promptPath.endsWith('.prompt.md')) throw Error('Native owner must be a module prompt.');
+      const captured = captureSource(found.root,{tests:[item.storyPath,promptPath]});
+      return {storyPath:item.storyPath,promptPath,profileId:links[0][2],sourceReferences:captured.files};
+    } catch (error) {
+      // Workspace/source boundary failures retain their ordinary refusal exit.
+      if (error instanceof PreflightError) throw error;
+      return {storyPath:item.storyPath,promptPath,profileId:links[0][2],reason:error.message};
+    }
+  });
+  return { selected: found.tests.filter(test => selected.has(test)), nativeSelections:descriptors, unknown, untested };
 }
 
 const refusal = (code, section, message, extra = {}) => ({ code, section, message, ...extra });
@@ -484,9 +544,11 @@ export function interfaceSchemaProblems(iface) {
 }
 
 // The prompt file of an entry: {path, text, blocks, interface, error}.
-export function readPrompt(root, visible, path) {
+export function readPrompt(root, visible, path,workspace=loadRuntimeWorkspace({root})) {
+  workspace=boundedWorkspace(root,workspace);
+  if(typeof path==='string')requireRuntimePath(workspace,{path,from:'Prompt'});
   if (typeof path !== 'string' || !path.endsWith('.prompt.md') || !visible.has(path)) return { path, error: 'entry-missing' };
-  const raw = sourceFilePort(root,visible).read({path}).content, prepared = preparedText(root,visible,path,raw,'prompt'), text = prepared.text, blocks = interfaceBlocks(text);
+  const raw = sourceFilePort(root,visible,workspace).read({path}).content, prepared = preparedText(root,visible,path,raw,'prompt',workspace), text = prepared.text, blocks = interfaceBlocks(text);
   if (!blocks.length) return { path, text, blocks, error: 'interface-missing' };
   if (blocks.length > 1) return { path, text, blocks, error: 'pdd-two-interfaces' };
   let value;
@@ -644,7 +706,7 @@ function promptSchemaRefusals(root, found, prompt, prompts, seen = new Set()) {
     refusal(problem.code, problem.pointer, `${prompt.path} ${problem.pointer} ${problem.rule}`, problem.hint ? {hint:problem.hint,path:prompt.path} : {}));
   const called = (Array.isArray(prompt.interface.calls) ? prompt.interface.calls : []).map(call => call?.target).filter(target => typeof target === 'string');
   return [...prompt.schemaIssues, ...called.flatMap(target => {
-    if (!prompts.has(target)) prompts.set(target, readPrompt(root, found.visible, target));
+    if (!prompts.has(target)) prompts.set(target, readPrompt(root, found.visible, target,found.workspace));
     return promptSchemaRefusals(root, found, prompts.get(target), prompts, seen);
   })];
 }
@@ -701,7 +763,7 @@ function checkTest(root, found, test, prompts) {
     if (Object.hasOwn(step, 'model') && (typeof step.model !== 'string' || !step.model.trim())) {
       return refusal('invalid-step-model', `${section}.model`, 'A step model must be a model name (a string).', at);
     }
-    if (!prompts.has(step.entry_path)) prompts.set(step.entry_path, readPrompt(root, found.visible, step.entry_path));
+    if (!prompts.has(step.entry_path)) prompts.set(step.entry_path, readPrompt(root, found.visible, step.entry_path,found.workspace));
     const prompt = prompts.get(step.entry_path), broken = promptRefusal(prompt, section);
     if (broken) return { ...broken, ...at };
     const schemaIssues = promptSchemaRefusals(root, found, prompt, prompts);
@@ -737,7 +799,8 @@ function checkTest(root, found, test, prompts) {
 }
 
 // Rules P1-P10 for the selected tests. Returns rows and warnings; never throws for a test problem.
-export function preflight({ root, found, selected }) {
+export function preflight({ root, found, selected,workspace=found.workspace??loadRuntimeWorkspace({root}) }) {
+  found={...found,workspace};for(const test of selected)requireRuntimePath(workspace,{path:test.path,from:'Selected test'});
   const prompts = new Map(), warnings = [];
   const reviews = numericReviews(root, found, warnings);
   const rows = selected.map(test => {
@@ -773,13 +836,22 @@ function compactInterface(body) {
 }
 
 // --fill-hash: fill draft hashes; optionally compact safe draft interfaces.
-export function fillHashes({ root, files = gitFiles(root), compact = false }) {
+export function fillHashes({ root, files = gitFiles(root), compact = false,workspace=loadRuntimeWorkspace({root}) }) {
+  workspace=boundedWorkspace(root,workspace);
   const result = { filled: [], current: [], refused: [], stale: [], warnings: [] };
   if (compact === true) result.compacted = [];
   for (const path of files) {
-    if (!path.endsWith('.prompt.md') || !statOf(join(root, path))?.isFile()) continue;
-    const text = readText(root, path), blocks = interfaceBlocks(text);
-    try { preparedText(root,new Set(files),path,text,'prompt'); }
+    if (!allowsRuntimePath(workspace,path) || !path.endsWith('.prompt.md') || !statOf(join(root, path))?.isFile()) continue;
+    let text;try{text=filePort(root,new Set(files),true,workspace).read({path}).content;}catch(error){result.refused.push({path,message:error.message});continue;}
+    const blocks = interfaceBlocks(text);
+    try {
+      preparedText(root,new Set(files),path,text,'prompt',workspace);
+      if(workspace.configured){const pending=[path],seen=new Set(),port=sourceFilePort(root,new Set(files));
+      for(let i=0;i<pending.length;i++){const owner=pending[i];if(seen.has(owner))continue;seen.add(owner);const content=owner===path?text:port.read({path:owner}).content;
+        for(const raw of markdownContext(content)){const target=contextPath(raw,owner,new Set(files));if(target){requireRuntimePath(workspace,{path:target,from:owner,chain:[path]});pending.push(target);}}
+        if(owner.endsWith('.prompt.md'))for(const block of interfaceBlocks(content)){let doc;try{doc=JSON.parse(block[1]);}catch{continue;}for(const call of doc.calls??[])if(typeof call?.target==='string'){requireRuntimePath(workspace,{path:call.target,from:owner,chain:[path]});pending.push(call.target);}}
+      }}
+    }
     catch (error) { result.refused.push({path,message:error.message}); continue; }
     if (!blocks.length) continue;
     if (blocks.length > 1) { result.refused.push({ path, message: `${path} has more than one Runtime interface block. Keep one.` }); continue; }
@@ -810,7 +882,12 @@ export function fillHashes({ root, files = gitFiles(root), compact = false }) {
     changed = compacted;
     const next = text.slice(0, start) + changed + text.slice(end);
     if (proseSha256(next) !== hash) { result.refused.push({ path, message: `pdd could not fill "prose_sha256" in ${path} without a change to its text.` }); continue; }
-    if (next !== text) writeFileSync(join(root, path), next);
+    if (next !== text) {
+      requireRuntimePath(loadRuntimeWorkspace({root}),{path,from:'Hash destination'});
+      const safe=filePort(root,new Set(files),true);
+      if(safe.read({path}).content!==text)throw new PreflightError(5,`${path}: changed before hash write.`);
+      writeFileSync(join(root, path), next);
+    }
     (current ? result.current : result.filled).push({ path });
     if (whitespaceChanged) result.compacted.push({ path });
   }
@@ -1135,7 +1212,7 @@ function sourceLimit(files) {
   return total;
 }
 
-function snapshotReader(root, diskVisible, beforeRead = () => {}, strict = false) {
+function snapshotReader(root, diskVisible, beforeRead = () => {}, strict = false, workspace=loadRuntimeWorkspace({root})) {
   const snapshots = new Map();
   let unstable = false;
   root = realpathSync(root);
@@ -1166,8 +1243,9 @@ function snapshotReader(root, diskVisible, beforeRead = () => {}, strict = false
     return true;
   }
   observe('');
-  function inspectRaw(path, from, allowMissing = false, noLinks = false) {
+  function inspectRaw(path, from, allowMissing = false, noLinks = false, control = false) {
     path = sourcePath(path, from);
+    if(!control)requireRuntimePath(workspace,{path,from});
     if (isSecretPath(path)) {
       // Refusal is already decided. Enrich it only along non-following metadata
       // whose ancestors have each been checked as directories.
@@ -1226,6 +1304,7 @@ function snapshotReader(root, diskVisible, beforeRead = () => {}, strict = false
           const local = link.slice(root.length + 1);
           resolved = []; pending = [...local.split('/').map(part => ({part, context:lastLink})), ...pending];
         } else pending = [...link.split('/').map(part => ({part, context:lastLink})), ...pending];
+        if(!control)requireRuntimePath(workspace,{path:posix.normalize([...resolved,...pending.map(x=>x.part)].join('/')),from,chain:[path,current]});
         continue;
       }
       if (isSecretPath(current) || (!pending.length && isSecretPath(path))) refuse('the name looks like a secret. pdd never sends it.', context ?? lastLink);
@@ -1266,19 +1345,22 @@ function snapshotReader(root, diskVisible, beforeRead = () => {}, strict = false
   return { inspectRaw, bytes, snapshots, stable, get unstable() { return unstable; } };
 }
 
-export function sourceFilePort(root, visible = new Set(gitFiles(root))) {
-  return filePort(root, visible);
+export function sourceFilePort(root, visible = new Set(gitFiles(root)),workspace) {
+  return filePort(root, visible,false,workspace);
 }
 
-function filePort(root, visible, strict = false) {
-  const reader = snapshotReader(root, visible, undefined, strict);
+function filePort(root, visible, strict = false,workspace) {
+  let policy=boundedWorkspace(root,workspace),key=JSON.stringify(policy),reader = snapshotReader(root, visible, undefined, strict,policy);
+  const refresh=path=>{const current=boundedWorkspace(root,workspace),next=JSON.stringify(current);requireRuntimePath(current,{path,from:'Source'});if(next!==key){policy=current;key=next;reader=snapshotReader(root,visible,undefined,strict,policy);}};
   return {
     stat({path}) {
-      const file = reader.inspectRaw(path, 'Source', true);
+      if(path!=='pdd-bindings.json')refresh(path);
+      const file = reader.inspectRaw(path, 'Source', true, path==='pdd-bindings.json',path==='pdd-bindings.json');
       return { exists: !!file.stat, is_symlink: false, size: file.size };
     },
     read({path}) {
-      const file = reader.inspectRaw(path, 'Source');
+      if(path!=='pdd-bindings.json')refresh(path);
+      const file = reader.inspectRaw(path, 'Source',false,path==='pdd-bindings.json',path==='pdd-bindings.json');
       if (!file.stat) throw sourceProblem('Source',path,'is missing.');
       try { return { content: reader.bytes(file).toString('utf8') }; }
       catch (error) { if (error === unstableSource) throw new PreflightError(5, `${path}: the file changed while pdd read it.`); throw error; }
@@ -1286,21 +1368,23 @@ function filePort(root, visible, strict = false) {
   };
 }
 
-function preparedText(root, visible, path, text, format) {
-  try { return expandSource({path,text,format},sourceFilePort(root,visible)); }
+function preparedText(root, visible, path, text, format,workspace) {
+  try { return expandSource({path,text,format},sourceFilePort(root,visible,workspace)); }
   catch (error) {
     if (error.code) throw new PreflightError(4, `${error.code}: ${error.message}`);
     throw error;
   }
 }
 
-function captureOnce(root, { tests, appMap = null, prepareSource }, strict = false) {
+function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadRuntimeWorkspace({root}),excludeFixtureProjects=tests === undefined }, strict = false) {
+  const policyBefore=JSON.stringify(loadRuntimeWorkspace({root}));workspace=boundedWorkspace(root,workspace);
   const names = gitFiles(root), visible = new Set(names), overlay = new Map(), payload = new Map(), queue = [], visited = new Set();
+  const chains=new Map(),preparationReads=new Set(),referenceReads=new Set();
   const effective = new Map(), provenance = new Map(), edges = new Map(), shared = new Set(), footprintPayload = new Map();
   let selecting = true;
   const unavailable = new Map();
   const markUnavailable = (path,error) => unavailable.set(path,{path,cause:String(error.message ?? error).replace(/[\r\n\x00-\x1f\x7f]/g,' ').slice(0,4000)});
-  const reader = snapshotReader(root,new Set(names),file => { if (payload.has(file.path)) sourceLimit([...payload.values()]); }, strict);
+  const reader = snapshotReader(root,new Set(names),file => { if (payload.has(file.path)) sourceLimit([...payload.values()]); }, strict,workspace);
   const { inspectRaw, bytes, snapshots } = reader;
   function inspect(path, from) {
     if (overlay.has(path)) return overlay.get(path);
@@ -1309,7 +1393,10 @@ function captureOnce(root, { tests, appMap = null, prepareSource }, strict = fal
     return file;
   }
   function add(raw, from, role = 'context') {
-    const path = sourcePath(raw, from), file = inspect(path, from);
+    const path = sourcePath(raw, from);
+    const chain=chains.get(from)??[];requireRuntimePath(workspace,{path,from,chain});
+    if(!chains.has(path))chains.set(path,[...chain,from]);
+    const file = inspect(path, from);
     for (const selected of payload.keys()) if (selected.startsWith(`${path}/`) || path.startsWith(`${selected}/`)) {
       throw sourceProblem(from, path, `conflicts with selected file ${selected}.`);
     }
@@ -1326,7 +1413,7 @@ function captureOnce(root, { tests, appMap = null, prepareSource }, strict = fal
       const file = overlay.get(path) ?? inspectRaw(path,'Reference',true);
       return {exists:overlay.has(path) || !!file.stat,is_symlink:false,size:file.size};
     },
-    read({path}) { return {content:bytes(inspect(path,'Reference')).toString('utf8')}; },
+    read({path}) {referenceReads.add(path); return {content:bytes(inspect(path,'Reference')).toString('utf8')}; },
   };
   function prepare(file, format) {
     if (effective.has(file.path)) return effective.get(file.path);
@@ -1356,7 +1443,7 @@ function captureOnce(root, { tests, appMap = null, prepareSource }, strict = fal
       try {
         prepared = prepareSource({
           readFile(path) {
-            const file = raw(path);
+            preparationReads.add(path);const file = raw(path);
             if (!file.stat) throw sourceProblem('prepareSource', path, 'is missing.');
             return Buffer.from(bytes(file));
           },
@@ -1381,7 +1468,7 @@ function captureOnce(root, { tests, appMap = null, prepareSource }, strict = fal
       for (const path of overlay.keys()) add(path, 'prepareSource');
     }
     if (visible.has(SOURCE_CONFIG)) {
-      const config = inspect(SOURCE_CONFIG, SOURCE_CONFIG);
+      const config = overlay.get(SOURCE_CONFIG)??inspectRaw(SOURCE_CONFIG, SOURCE_CONFIG, false, false, true);
       let doc;
       try { doc = JSON.parse(bytes(config).toString('utf8')); } catch (error) {
         if (error === unstableSource) throw error;
@@ -1391,10 +1478,13 @@ function captureOnce(root, { tests, appMap = null, prepareSource }, strict = fal
       for (const path of doc.include) { add(path, SOURCE_CONFIG); shared.add(sourcePath(path,SOURCE_CONFIG)); }
     }
     // The test name rule over the effective source (Git-visible files and prepared files); it opens no JSON file.
-    const onDisk = discoverStories(root,names,strict);
-    const named = matchTests(onDisk.storyFiles, [...onDisk.visible, ...overlay.keys()]).tests.filter(test=>!test.problem);
+    const excluded = excludeFixtureProjects ? fixtureProjectRoots(root, names) : [];
+    const discoveryNames = outsideFixtureProjects(names, excluded);
+    const onDisk = discoverStories(root,discoveryNames,strict,workspace);
+    const named = matchTests(onDisk.storyFiles, outsideFixtureProjects([...onDisk.visible, ...overlay.keys()], excluded)).tests.filter(test=>!test.problem);
+    const allNamed=matchTests(onDisk.storyFiles,discoveryNames).tests.flatMap(test=>(test.files??[test.path]).map(path=>({...test,path})));
     const selected = tests ?? named.map(test=>test.path);
-    for (const path of selected) add(path, 'Selected test', 'test');
+    for (const path of selected) add(path, 'Selected test',path.endsWith('.prompt.md')?'context':isStoryPath(path)?'story':'test');
     if (appMap) { add(appMap, 'App map', 'app-map'); shared.add(sourcePath(appMap,'App map')); }
     const storyTests = new Map();
     let siblingsAdded = false;
@@ -1402,10 +1492,10 @@ function captureOnce(root, { tests, appMap = null, prepareSource }, strict = fal
       if (index === queue.length && !siblingsAdded) {
         siblingsAdded = true; selecting = false;
         const selectedStories = new Set(storyTests.keys());
-        for (const test of named) {
+        for (const test of allNamed) {
           if (!selectedStories.has(test.storyPath)) continue;
           if (!storyTests.get(test.storyPath).includes(test.path)) storyTests.get(test.storyPath).push(test.path);
-          try { add(test.path,'Story footprint','test'); } catch (error) { if (reader.unstable || error === unstableSource) throw error; markUnavailable(test.path,error); }
+          try { if(test.problem)markUnavailable(test.path,new Error(test.problem));add(test.path,'Story footprint','test'); } catch (error) { if (reader.unstable || error === unstableSource) throw error; markUnavailable(test.path,error); }
         }
         if (index === queue.length) break;
       }
@@ -1484,7 +1574,7 @@ function captureOnce(root, { tests, appMap = null, prepareSource }, strict = fal
     }));
     const tar = tarFiles(entries);
     if (tar.length > LIMITS.bytes) throw new PreflightError(4, `The source archive is ${formatSize(tar.length)}. The limit is 10 MB.`);
-    const same = !reader.unstable && isDeepStrictEqual(gitFiles(root), names) && reader.stable();
+    const same = !reader.unstable && isDeepStrictEqual(gitFiles(root), names) && reader.stable() && JSON.stringify(loadRuntimeWorkspace({root}))===policyBefore;
     if (!same) return null;
     const stories = new Map();
     for (const path of selected) {
@@ -1510,6 +1600,7 @@ function captureOnce(root, { tests, appMap = null, prepareSource }, strict = fal
       warnings:footprints.flatMap(story=>(story.unavailable ?? []).map(item=>`Warning: ${story.story_path}: footprint unavailable: ${item.cause}`)),
       raw_file_hashes:rawFileHashes,
       raw_prompt_hashes:Object.fromEntries(Object.entries(rawFileHashes).filter(([path])=>path.endsWith('.prompt.md'))),
+      reads:[...new Set([...onDisk.storyFiles,...snapshots.keys()])].filter(path=>path!==SOURCE_CONFIG&&!payload.has(path)&&(snapshots.get(path)?.bytes||onDisk.storyFiles.includes(path))).sort().map(path=>({path,roles:[...(onDisk.storyFiles.includes(path)?['discovery']:[]),...(referenceReads.has(path)?['reference']:[]),...(preparationReads.has(path)?['preparation']:[]),...(!onDisk.storyFiles.includes(path)&&!referenceReads.has(path)&&!preparationReads.has(path)?['footprint']:[])].sort()})),
       sources:entries.map(file=>({path:file.path,bytes:Buffer.from(file.bytes)})) };
   } catch (error) { if (reader.unstable || error === unstableSource) return null; throw error; }
 }
@@ -1528,11 +1619,11 @@ function captureWithPolicy(root, { attempts = 3, ...selection } = {}, strict = f
 }
 
 // A bound capability keeps strict command reads isolated from source-upload reads.
-export function createStrictSourceAccess(root) {
+export function createStrictSourceAccess(root,workspace) {
   return {
-    sourceFilePort(visible = new Set(gitFiles(root))) { return filePort(root, visible, true); },
-    findTests({files = gitFiles(root)} = {}) { return discoverTests(root, files, true); },
-    captureSource(options = {}) { return captureWithPolicy(root, options, true); },
+    sourceFilePort(visible = new Set(gitFiles(root))) { return filePort(root, visible, true,workspace); },
+    findTests({files = gitFiles(root)} = {}) { return discoverTests(root, files, true,workspace); },
+    captureSource(options = {}) { return captureWithPolicy(root, {...options,...(workspace?{workspace}:{})}, true); },
   };
 }
 
@@ -1541,7 +1632,7 @@ export const NO_TESTS = 'No tests found. The test of Story user_stories/S.md is 
 // Why a repo has no tests, by the test name rule (it opens no JSON file): Stories with no test, test-folder JSON
 // that matches no Story, *.prompt names, prompts with no interface.
 export function whyNoTests(root, visible, found = discoverTests(root, [...visible])) {
-  const files = [...visible].sort(), why = [...(found.untested ?? []), ...(found.orphans ?? [])].map(item => item.line);
+  const files = [...visible].filter(path=>allowsRuntimePath(loadRuntimeWorkspace({root}),path)).sort(), why = [...(found.untested ?? []), ...(found.orphans ?? [])].map(item => item.line);
   for (const path of files.filter(file => file.endsWith('.prompt'))) why.push(`PDD prompts must end in .prompt.md: rename ${path} to ${path}.md.`);
   for (const path of files.filter(file => file.endsWith('.prompt.md'))) {
     if (!interfaceBlocks(readText(root, path)).length) why.push(`${path} has no Runtime interface block. See RUNBOOK.md §2.`);
@@ -1552,7 +1643,7 @@ export function whyNoTests(root, visible, found = discoverTests(root, [...visibl
 // Source files named (in backticks) by more than one prompt: one warning line each (real-user cli issue 10).
 export function sharedSourceFiles(root, visible) {
   const owners = new Map();
-  for (const prompt of [...visible].filter(path => path.endsWith('.prompt.md')).sort()) {
+  for (const prompt of [...visible].filter(path => allowsRuntimePath(loadRuntimeWorkspace({root}),path)&&path.endsWith('.prompt.md')).sort()) {
     if (Number(statOf(join(root,prompt))?.size ?? 0) > LIMITS.bytes) continue;
     const text = readText(root, prompt);
     for (const match of text.matchAll(/`([^`\s]+)`/g)) {

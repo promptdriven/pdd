@@ -1,6 +1,6 @@
 // Generated from prompts/cli/workflow-runs.prompt.md (sha256: eba280d9608bc395025961ecacc5e128fada4363776983c3ea5a43143c648fb5).
 import { execFile as execFileCallback } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import * as nativeRunFiles from 'node:fs';
 import { mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir, hostname } from 'node:os';
@@ -8,6 +8,9 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 // The chat owner derives a legacy chat's state; this record only projects it.
 import { chatLifecycle } from './workflow-chat.mjs';
+import { journalRunMutation, drainRunJournal } from './metrics-hooks.mjs';
+import { appendEvents } from './metrics-store.mjs';
+import { recordCaptureGap } from './metrics-gap.mjs';
 
 const ordinary = promisify(execFileCallback);
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -187,6 +190,46 @@ function ownedRun(runDir, ports, action, {create=false}={}) {
   } catch (error) { throw saveError(error); }
   finally { if (release) {try{release();}catch{/* Release trouble cannot undo or misreport a published record. */}} }
 }
+// The status record is the retained outbox; measurement failures never own progress.
+function metricsWarning(ports, message) {
+  try { (ports.metricsWarning ?? (text => process.stderr.write(text + '\n')))(message); } catch { /* Observational only. */ }
+}
+export function metricsSource(run, fs = nativeRunFiles, now = Date.now) {
+  const dir = join(run.commonDir, 'pdd', 'metrics'), file = join(dir, 'installation.json');
+  fs.mkdirSync(dir, {recursive:true, mode:0o700});
+  const temp = join(dir, `.identity-${randomUUID()}`);
+  try {
+    fs.writeFileSync(temp, JSON.stringify({source:`install:${randomUUID()}`,captureStartedAt:new Date(now()).toISOString()}), {mode:0o600,flag:'wx'});
+    try { fs.linkSync(temp,file); } catch (error) { if (error.code !== 'EEXIST') throw error; }
+  } finally { try { fs.unlinkSync(temp); } catch {} }
+  const identity=JSON.parse(fs.readFileSync(file,'utf8'));
+  if (typeof identity.source !== 'string' || !identity.source || !Number.isFinite(Date.parse(identity.captureStartedAt))) throw Error('Invalid installation identity');
+  return identity.source;
+}
+function captureMutation(before, run, ports, fs) {
+  try {
+    const observedAt = new Date((ports.now ?? Date.now)()).toISOString();
+    const source = metricsSource(run,fs,ports.now ?? Date.now);
+    Object.assign(run,journalRunMutation({before,after:run,source,observedAt,transitionId:randomUUID(),observations:run.metricsObservations ?? []}));
+    delete run.metricsObservations;
+  } catch {
+    run.metrics = {...run.metrics, coverageGap:true, coverageGapAt:run.metrics?.coverageGapAt ?? (ports.now ?? Date.now)()};
+    metricsWarning(ports,'Metrics capture incomplete; workflow progress continues.');
+  }
+}
+function deliverMetrics(run, ports) {
+  if (ports.skipMetricsDelivery || !run.metrics?.events?.length) return;
+  let delivery;
+  try { delivery=drainRunJournal({run,root:run.sourceRoot,store:{appendEvents:ports.metricsAppendEvents ?? (input=>appendEvents(input,{commonDir:async()=>run.commonDir}))}}); }
+  catch { metricsWarning(ports,'Metrics journal delivery incomplete; retained events can be retried.');return; }
+  void Promise.resolve(delivery).then(result=>{
+    if (result.ok) return;
+    metricsWarning(ports,'Metrics journal delivery incomplete; retained events can be retried.');
+    try { updateRun(run.runDir, current => { current.metrics={...current.metrics,coverageGap:true,coverageGapAt:current.metrics?.coverageGapAt ?? (ports.now ?? Date.now)()}; return current; }, {...ports,skipMetricsDelivery:true}); }
+    catch { try {(ports.metricsGap ?? recordCaptureGap)({commonDir:run.commonDir,repo:run.repo,issue:run.number,at:(ports.now ?? Date.now)()},ports.metricsFiles);} catch { /* Retained outbox still supplies retry. */ } }
+  }).catch(() => { metricsWarning(ports,'Metrics journal delivery incomplete; retained events can be retried.'); });
+}
+
 function publishRun(run, ports, fs) {
   run.journalSeq = (Number.isSafeInteger(run.journalSeq) ? run.journalSeq : 0) + 1;
   run.updatedAt = (ports.now ?? Date.now)();
@@ -203,7 +246,8 @@ function indexed(run, ports) {
   return run;
 }
 export function writeRun(run, ports = {}) {
-  ownedRun(run.runDir, ports, fs=>publishRun(run,ports,fs), {create:true});
+  ownedRun(run.runDir, ports, fs=>{let before;try{before=JSON.parse(fs.readFileSync(join(run.runDir,'status.json'),'utf8'));}catch{} captureMutation(before,run,ports,fs);return publishRun(run,ports,fs);}, {create:true});
+  deliverMetrics(run,ports);
   return indexed(run,ports);
 }
 export function updateRun(runDir, update, ports = {}) {
@@ -213,8 +257,10 @@ export function updateRun(runDir, update, ports = {}) {
     const original=structuredClone(run);
     const result=update(run);
     if (!object(result) || typeof result.then==='function' || !sameIdentity(original,result)) throw Error('An ordinary update must return the same run identity synchronously');
+    captureMutation(original,result,ports,fs);
     return publishRun(result,ports,fs);
   });
+  deliverMetrics(committed,ports);
   return indexed(committed,ports);
 }
 

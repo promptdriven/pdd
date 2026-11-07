@@ -1,4 +1,4 @@
-// Generated from prompts/cli/contract-refs.prompt.md (sha256: 92a844075d65a211c3f3b05bbe8537ca4cb45e30d73a28ad4227cb90f6cf18cc).
+// Generated from prompts/cli/contract-refs.prompt.md (sha256: 6bb0382ab17f4e58e0e6d156ac6d9ab995f2237d1a2808f2f900e5f6ef961834).
 // Numbers remain tokens until serialization, including values outside binary64.
 class JsonNumber { constructor(text) { this.text = text; Object.freeze(this); } }
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value) && !(value instanceof JsonNumber);
@@ -173,6 +173,7 @@ function expand({ path: consumer, text, format }, files, documents) {
       content = files.read({ path }).content;
       if (typeof content !== 'string') throw new Error('Invalid content');
     } catch (cause) {
+      if(cause?.code==='workspace-path-outside')error('workspace-path-outside',requested,cause.message,chain);
       if (typeof cause?.code==='string' && cause.code.startsWith('contract-')) throw cause;
       error('contract-unsafe', requested, `cannot safely read ${path}`, chain);
     }

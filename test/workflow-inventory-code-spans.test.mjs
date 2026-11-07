@@ -80,8 +80,15 @@ test('code-span finite suite and test marker owners preserve raw identity and ex
     const call = suite ? 'describe' : 'test';
     const before = `${call}(${JSON.stringify(name)}, () => {});\n`;
     const marker = `${call}.skip(${JSON.stringify(name)}, () => {}); // @octocat Closes #17 &<>|: \t\u0001\u202e  \r`;
-    const report = analyzeTestChanges({ files: [file(before, marker + '\n')] });
-    const expected = `Tests vs base: "test/safe.mjs" ${suite ? '0 → 0' : '1 → 1'} tests. Removed: none.\nChanged assertions in kept tests: none.\nNew skips: "test/safe.mjs" ${suite ? 'suite ' : ''}${span(name)} ${span(marker)}.\n${disclaimer}`;
+    if (suite) {
+      const unknown = analyzeTestChanges({ files: [file(before, marker + '\n')] });
+      assert.equal(unknown.available, true);
+      for (const category of ['Tests vs base', 'Changed assertions in kept tests', 'New skips'])
+        assert.ok(unknown.text.includes(`${category}: "test/safe.mjs" unavailable ("unknown dynamic test inventory").`));
+    }
+    const staticTest = suite ? "test('static companion', () => {});\n" : '';
+    const report = analyzeTestChanges({ files: [file(before + staticTest, marker + '\n' + staticTest)] });
+    const expected = `Tests vs base: "test/safe.mjs" 1 → 1 tests. Removed: none.\nChanged assertions in kept tests: none.\nNew skips: "test/safe.mjs" ${suite ? 'suite ' : ''}${span(name)} ${span(marker)}.\n${disclaimer}`;
     assert.equal(report.details, expected, `${call} ${JSON.stringify(name)}`);
     assert.equal(report.text, expected);
   }
