@@ -1,100 +1,110 @@
 # Prompting guide
 
-Write one canonical `.prompt.md` per code module, including frontend children
-generated independently. Explain **what the module must do and why** so a
-maintainer can locate a decision and follow a consequential edge case without
-mentally executing an algorithm. Generated code is one implementation of that
-contract.
+Write one canonical `.prompt.md` per module, including independently generated
+frontend children. Explain **what it must do and why**, with traceable decisions
+and edges.
 
 **Preservation sets the boundary; abstraction chooses the expression.** Keep
-required observations and their reasons. Replace implementation narration with
-domain rules while leaving algorithms, private helpers and representations free
-within the selected [preservation promise](#preservation).
+required observations and reasons. Use domain rules, leaving algorithms, helpers
+and representations free within the [preservation promise](#preservation).
 
-## Give the reader a useful first path
+## First pass: build one contract with three owners
 
-Open with purpose, ownership, inputs, main outcomes and the preservation promise.
-Make the consequential decisions easy to find, with nearby links to their exact
-rules. Use consistent domain terms and explain what the module decides before
-presenting language declarations. These are reading goals, not a mandatory
-section inventory or repeated capability checklist.
+Select the preservation promise from permitted evidence. Organize decisions and
+exact boundaries under these owners; combine them for small contracts:
 
-Give each obligation one authoritative home. Put substantial exact rules,
-exceptional cases and necessary declarations in clearly named `<details>`
-disclosures, grouped by reader task. A summary such as “Required export binding,
-record schema and errors” tells readers what is inside. Keep the first path
-meaningful with disclosures closed; required detail remains part of the contract.
-Avoid a giant undifferentiated reference or hiding details far from their use.
+| Owner | Required meaning | Placement |
+|---|---|---|
+| Domain decisions | Purpose, responsibility, inputs, outcomes, guards and precedence; why consequential rules exist | Visible first; enough to trace ordinary flow and a consequential edge |
+| Public contract | Exact signatures, defaults, bindings, metadata and output schema | Beside a small rule, otherwise one named interface reference |
+| Consequential operations | Evaluation boundaries and effects that qualify a decision, including failure | Beside the affected rule, otherwise one linked compatibility reference |
 
-Keep module-owned policy in the root. Link to the accessible, accepted owner of
-genuine shared policy; state only this module's local consequence beside that
-link. A dependency entry names the authority and its use, without repeating its
-rules. An inaccessible reference, declaration or claimed lookup cannot supply
-missing meaning. Moving requirements to new sidecars is not compression.
+The public contract names **every output key, field or tuple position**, its
+meaning, units and representation. Include conditional presence, ordering and
+identity where observable. A quantity's description cannot substitute for its
+external name. Group repeated shapes once and refer to them from outcomes.
+Recover declarations from interfaces or callers only if they are declared
+consumer context; never require inference from excluded source.
 
-Recover declarations only from interfaces and callers available in the intended
-consumer's permitted context. Retain unavailable essential declarations in a
-labeled required interface reference. Where invocation affects the promise,
-name the **public owner and binding kind once** beside the capability's rule:
-module function, instance method, staticmethod or classmethod as applicable. A
-section heading alone must not determine ownership. This does not require a
-duplicate API catalog or any private implementation shape.
+Retain each public owner and binding kind: module function, instance method,
+staticmethod or classmethod. Preserve public annotations and declaration metadata,
+including evaluation timing and stored representation. Equivalent resolved types
+can expose different raw annotations. Include observable docstrings within the
+selected promise. Retain identifier values exposed through public operations,
+even when stored privately; unrelated private organization remains free.
+
+Give consequential operations one compact expression or ordered table. For each
+boundary, state its guard, evaluation and surviving effects if it fails; include
+skipped work and winning errors. Trace truth conversion, attribute access, hashing,
+equality, formatting and path operations across public calls. Preserve order,
+count, lock state, reentry, captures and repeated reads where observable. Operand
+selection and later consumption may require separate truth tests. Assignment
+order may change surviving state even when successful results match.
+
+This reference qualifies domain decisions; it must not retell their normal route.
+Link each affected rule to its exact boundary and name the local consequence.
+Distinguish optional absence from malformed required values, early exit from
+completion or budget exhaustion, and comparison values from retained or returned
+values. Keep full error class, message and structured data. An annotation or
+unsupported-input disclaimer cannot exclude source-visible consequences.
+
+Use compact grouped mappings for aliases: canonical spellings once, additional
+spellings by target, complete accepted set and unknown-value behavior. Do not
+make readers guess spelling or decode invented codes. Name disclosures by the
+question they answer; keep domain decisions visible when references are closed.
+
+Keep module policy in the root. Shared-policy links state authority and local
+consequence; dependencies declare loading without repeating rules. Inaccessible
+references cannot supply meaning, and new sidecars are not compression.
 
 ## Choose a representation for a consequential question
 
-Identify the hardest consequential reader question about relationships,
-decisions or changes of state. When answering requires following alternatives,
-precedence or a return, use a small Mermaid diagram as the default replacement
-for that structural passage. Choose prose or a table instead for a single rule,
-conjunction, lookup or short linear sequence, or when a complete diagram would
-be harder to read at narrow width. Make that choice deliberately during authoring;
-the delivered prompt need not explain why it has no diagram.
+Use Mermaid when it clarifies branches or returns; prefer prose or a table for a
+single rule, conjunction, lookup or short sequence. The diagram and adjacent
+rules jointly own the answer, replacing repeated structure at equal completeness.
+Label decisions and endings, including exceptions, shared interrupts and precedence.
+Define predicates once, scope negation and resolve overlaps. Keep guards, equations,
+identity and effects near their routes.
 
-Let the diagram and adjacent named rules jointly own the answer. Show normal
-alternatives and endings, and label every decision edge. Every consequential
-branch, return and exception must be represented either in the view or in an
-explicit adjacent rule. Shared interrupts or restarts may be clearer beside the
-figure than as many crossing arrows: state where they apply and which rule wins.
-When the selected question concerns a return, make that return easy to trace.
-A common-case picture must not make omitted behavior seem impossible or optional.
+Use domain states and responsibilities, not invented lifecycles for independent
+gates or stateless components. Prefer short top-to-bottom diagrams with plain
+labels and few branch lanes. Simplify before shrinking labels or introducing codes.
+Mermaid explains relationships; SVG supplies appearance.
 
-Replace the corresponding structural prose or table; do not repeat the complete
-route as a checklist. Keep exact guards, equations, errors, ordering, identity
-and effects in complementary rules close enough to follow without hunting.
-Define predicates once, group mixed Boolean conditions and scope negation.
-Distinguish necessary from sufficient conditions and resolve overlaps. Require
-internal check order only when it changes a promised result or effect.
+### Synthetic example: a small contract with one compatibility boundary
 
-Use domain states, outcomes and responsibilities rather than private calls or
-loops. Do not turn independent gates, supplied status values or a stateless
-component into an invented lifecycle. Prefer a short top-to-bottom layout with
-brief, plain labels and few branch lanes. Simplify the question or choose prose
-before shrinking labels or introducing unexplained codes. Mermaid explains
-relationships; SVG supplies appearance.
-
-### A small synthetic example
-
-This fictional exhibition gives a caption one chance for correction. The reader
-question is **when can a correction return, and what ends review?** Each supplied
-caption has an identity and Boolean attributes: `accurate` means factually
-correct; `fits` means within the exhibit's space allowance. **Ready** means
-`accurate AND fits`. Initially `revision_used` is false.
+A fictional exhibition owns caption approval and permits one correction. The
+supplied caption has an identity and Boolean `accurate` and `fits` attributes.
+**Ready** means `accurate AND fits`. Initially `revision_used` is false. New-work
+requirements authorize this input domain; they are not a source-preservation
+exclusion. Review returns a fresh mapping with exactly `outcome` (one of
+`approved`, `declined`, `pending`) and `caption_id` (the current supplied identity,
+without conversion).
 
 ```mermaid
 flowchart TD
-    R{Ready?} -->|Yes| A([Approved])
+    R{Ready?} -->|Yes| A([approved])
     R -->|No| U{Revision used?}
-    U -->|Yes| D([Declined])
-    U -->|No| C[Correction requested]
-    C -->|Replacement| R
+    U -->|Yes| D([declined])
+    U -->|No| P([pending])
 ```
 
-“Revision used?” reads `revision_used`. On **Replacement**, use the supplied
-replacement caption and set `revision_used` to true before its review. Without a
-replacement, correction remains pending. Each review returns the reached outcome
-with the current caption's supplied identity. Reject inputs outside the stated
-domain; assessing factual accuracy is outside this task. The figure owns routes
-and endings; these adjacent rules own the meanings and observations.
+Accept a replacement only while pending; otherwise raise
+`ValueError("correction unavailable")` without state change.
+An accepted replacement consumes the correction and becomes current before review.
+Without replacement, review leaves state unchanged. Accuracy assessment is outside
+this task. The figure owns review routes; the mapping above owns all outputs.
+
+**Replacement compatibility.** The accepted contract permits assignment hooks;
+keep these two observable commits in order. Errors propagate unchanged, with no
+rollback. A failure returns no mapping and skips review.
+
+| Commit | If this assignment raises before storing |
+|---|---|
+| Set `revision_used` true | Current caption and flag remain unchanged; skip replacement |
+| Set current caption to the supplied replacement | Flag remains true; old caption remains current |
+
+The table owns failure effects; private helpers and storage remain free.
 
 ## Make dependencies navigable and usable
 
@@ -105,28 +115,26 @@ Resolve paths from the file containing the link. **Clickable does not mean
 loaded:** a navigation link alone supplies no context to a generator or runtime.
 
 Use one explicit `## Dependencies` section as the loading declaration. For each
-required input, identify its canonical file or selection, role and required uses
-(authoring, generation, runtime, verification or testing, as applicable).
+required input, identify its canonical file or selection, role, purpose and required uses
+(authoring, generation, runtime, verification or testing, as applicable). The
+canonical prompt owns what a fragment or selection includes and why it is needed;
+a transport adapter must preserve that meaning.
 Identify any other accepted mechanism that supplies required context. Other
 links are navigation-only unless explicitly designated as required; avoid a
 second manual loading list.
 
-Required shared rules must be available with their own required context. A
-missing file or fragment, or a cycle in required context, leaves the affected
+Required shared rules must be available with all transitively required context
+for the declared use. Loading only direct links does not establish completeness.
+A missing file or fragment, or a cycle in required context, leaves the affected
 use incomplete: identify the unresolved chain rather than inventing a
 replacement or claiming completeness. Navigation-only cycles are allowed. A
 changed shared contract can affect consumers whose prompt text is unchanged.
 
-Keep public invocation, concrete inputs, results/errors and required state or
-identity mapping unambiguous for the intended use. Declare necessary runtime
-dependencies and deterministic arithmetic facilities. Tool-specific transport
-formats are derived from the canonical prompt, not another authored policy.
-
-For a module interface, use the path and exports that the implementation exposes.
-For a CLI, name the module it runs. For an API, name its module and public
-exports. Give function entries useful inputs and outcomes. The prompt-space
-checker may warn when these declarations look incomplete; review the warning
-in context rather than editing prose solely to satisfy a check.
+Declare necessary runtime dependencies and deterministic arithmetic facilities.
+Runtime adapters derive transport formats and interfaces from the canonical
+contract without inventing policy. Keep installed commands, workarounds and
+current tool limitations in runbooks, not module prompts. A limitation leaves
+the affected use unsupported or incomplete; it does not narrow the contract.
 
 ## Include readable SVG previews for frontend modules
 
@@ -166,7 +174,9 @@ State whether the content is **illustrative** or a **comparison reference for
 named states**. An illustration identifies its sample content and the authority
 for actual values. A comparison reference shows the named state and all
 module-owned appearance facts within its declared scope. Keep fidelity, state
-and ownership consistent between prose and image. Shared status/text rules stay
+and ownership consistent between prose and image. These declarations belong to
+the canonical contract; runtime metadata must derive from them without changing
+a view's purpose or fidelity. Shared status/text rules stay
 with their owner; sample labels and context-only surroundings do not silently
 become additional requirements.
 
@@ -184,40 +194,77 @@ designs. Keep meaningful labels readable at displayed size. A focused detail vie
 may clarify a necessary label or region while retaining its ownership and
 relationship to the overview; it must not duplicate behavioral policy.
 
-## Edit for reading effort
+## Second pass: remove duplicate explanations, then inspect both reading paths
 
-Remove duplicate obligations, recoverable declarations and private mechanisms.
-Use tables for comparisons across the same few dimensions. Keep labels short
-and move long explanations into adjacent named rules. If a table is unreadable
-at narrow width, split it by reader question or use a short definition list;
-keep each guard with its outcome. Vertical length can be preferable to clipped
-columns or tiny text.
+Review the whole contract, disclosures and assets at equal completeness. Remove
+normal-path narration from operation references, behavior from signature lists
+and declaration paraphrases from prose. Consolidate shared errors and returns.
+Keep one readable ordered expression where native semantics matter, with guards
+and effects explicit; remove its parallel prose translation.
 
-Compare the complete replacement passage, including captions, guards and
-exceptions, with what it removes. Aim for no net growth across the root and its
-required companions; count disclosed requirements and SVG assets in full.
-Preserve meaning and readability before size. A necessary explanation or detail
-view may earn space, but compare it with a concise prose/table alternative.
-Do not use a word cap, diagram quota, dense shorthand or hidden sidecars to
-manufacture savings.
+Readers should find decisions immediately and exact details in named references. Count both closed-disclosure
+text and total required context, including captions, companions and SVG. Moving
+unchanged repetition into disclosures does not improve total economy; a shorter
+total does not excuse an overloaded first read. Remove duplication before moving
+necessary detail. Keep meaningful exceptions visible and references navigable.
 
-Before delivery, use only the declared reading context to explain the purpose,
-locate a consequential decision and trace an edge case. Check that reorganization
-retained the promised observations. Resolve Markdown links and image paths from
-the prompt's actual repository location, and check SVG XML/renderability.
-Inspect actual Markdown, Mermaid and SVG presentation with disclosures closed
-and expanded at the declared narrow and desktop reading widths. Read labels,
-follow branches and returns,
-and look for clipping at displayed scale; containment alone is not legibility.
-Fix presentation defects or identify unavailable inspection as unverified.
+Aim for no net growth; necessary meaning or legibility may earn space. Do not use
+word caps, diagram quotas, opaque shorthand or hidden sidecars. Preserve exact
+defaults, boundaries, payloads and failure precedence. Dependencies name required
+context and facilities, without absent-package lists or repeated independence
+claims. Keep editing records outside the business prompt.
 
-Keep editorial rationales and inspection records outside the business prompt.
-Testing, proofs, benchmark procedures, tool commands, hashes and execution
-machinery belong to the surrounding task, not this authoring guide. They can
-check a contract but cannot replace a missing requirement. The surrounding task
-defines permitted context; author access does not grant a replacement generator
-permission to retrieve an excluded target. Clarity alone establishes neither
-correct execution nor measured human understanding.
+Using only declared context, explain purpose, locate a consequential decision and
+trace an edge. Check preservation after editing. Resolve links and images from
+the prompt's location; check SVG XML and rendering. Inspect Markdown, Mermaid and
+SVG closed and expanded at declared narrow and desktop widths. Read labels and
+trace returns at displayed scale; containment is not legibility. Fix defects or
+mark unavailable inspection unverified.
+
+## Required independent reviews in the surrounding task
+
+For every execution route, before generation or interpretation, a separate reader
+reconciles the prompt against permitted source and accepted contracts, without
+generated code, tests or outcomes. Check
+each of the three owners against that evidence: complete declarations and output
+schema, decisions and exits, then consequential evaluation and failure effects.
+Try a semantics-changing fusion, cache or reorder: if the text permits it, repair
+the exact boundary. Cite evidence and the affected passage for each finding.
+
+Reconcile findings and independently repeat the economy pass on the final prompt.
+Check revised passages and affected boundaries against evidence. Preserve the
+initial draft and accepted audit outside the business prompt. Missing evidence
+or review leaves readiness incomplete. Source conflicts need authorized
+requirements; observations cannot authorize policy changes. Without independent
+policy, source preservation remains provisional behavioral refinement.
+
+For routes that generate code, before any candidate execution, require a separate
+static prompt-to-code review.
+The reviewer receives only the frozen final prompt and first implementation,
+not source, tests, source audits or earlier outcomes. Compare the whole public
+contract and consequential operations; cite prompt and code for changes or gaps.
+Do not invent absent requirements. Preserve first code unchanged and submit one
+reviewed implementation and audit, including an unchanged copy when appropriate.
+Freeze both code sets and audits before functional testing of either set; in a
+matrix, this barrier covers every artifact. No feedback-driven repair or selection.
+
+For interpreted-runtime routes with no generated implementation, mark the
+prompt-to-code review inapplicable and identify the actual execution artifacts
+and checks in the surrounding workflow. Do not invent code or claim code-review
+evidence. Runtime safety and schema admission check execution eligibility; they
+do not establish semantic preservation or replace independent authoring review.
+
+The surrounding workflow owns roles, freezes, tests, cost and records. Expose both
+first and reviewed results, including regressions. Review is an additional
+intervention, not first-generation success or proof that guide wording caused
+improvement. Reviewed success cannot automatically satisfy first-generation
+reconstruction or repeatability criteria; assess compatibility with the unchanged
+rubric and leave unresolved claims explicit.
+
+Keep rationales, inspections, proofs and execution machinery outside the business
+prompt; they cannot supply missing requirements. Task permissions govern context;
+author access does not permit generator access to excluded targets. Clarity proves
+neither correct execution nor human understanding.
 
 <a id="preservation"></a>
 <details>
@@ -226,34 +273,42 @@ correct execution nor measured human understanding.
 ### Select the promise before compressing it
 
 Establish policy from authorized requirements and accepted consumer or shared
-contracts. Distinguish accepted obligations, source observations, authorized
-changes and unresolved conflicts. Source and tests are evidence; source
-mechanisms are not automatically policy, and generated code is not its own
-independent specification.
+contracts. Distinguish obligations, source observations, authorized changes and
+unresolved conflicts. Source mechanisms are not automatically policy; generated
+code is not its own independent specification.
 
 **Behavioral refinement** preserves named behavior and essential interfaces;
 state permitted variation and exclusions. **Drop-in replacement** additionally
 preserves promised invocation, representation, identity and effects. With source
 alone and no selected mode, use provisional behavioral refinement: conservatively
-retain module-owned public declarations, explicit exports and consequential
-observed behavior. Identify uncertain reexports and unavailable consumer
+retain module-owned public declarations and metadata, explicit exports and
+consequential observed behavior. Declaration preservation includes annotation
+evaluation and storage, not only resolved type meaning. Values exposed through
+public operations remain observable even when held by private bindings; preserve
+their identifier values without prescribing unrelated private organization. Identify uncertain reexports and unavailable consumer
 contracts; do not claim unseen compatibility. Interface changes need
 authorization; new work may expressly permit interface design. Unknown evidence
 does not authorize narrower inputs or changed semantics.
 
-Describe the relevant conditions and required result, error, state change or
-external effect, including consequential forbidden behavior. A reader must be
-able to determine what satisfies or violates a rule. Preserve relevant domains,
-units, defaults, absence, equality boundaries, ties, duplicates, order, identity,
-mutability, serialization, errors, effects, concurrency and termination. Missing,
-null, empty, zero and false may differ. Give a rule a stable name when another
-rule needs to refer to it, and explain nonobvious reasons beside the rule.
+State conditions and required results, errors, state changes and external effects,
+including consequential forbidden behavior, so readers can determine compliance.
+Preserve relevant domains, units, defaults, absence, equality boundaries, ties,
+duplicates, order, identity, mutability, serialization, errors, effects, concurrency
+and termination. Missing, null, empty, zero and false may differ. Name shared rules
+and explain nonobvious reasons beside them.
 
-Discover signatures, fields, method kinds, defaults, exports and enum values only
-from available interfaces or demonstrated caller use. Imported utilities are not
-automatically owned exports; names and annotations do not establish business
-meaning. Availability to the author does not imply availability to the generator
-or runtime. Mark consequential gaps and affected promises incomplete.
+Names and annotations do not establish business meaning or runtime validation.
+Under provisional source preservation, retain visible public failures for unsupported
+values as well as successes. Distinguish error categories, including failures before
+explicit rejection, and consequential effects without requiring their private
+container or operation. “Errors propagate” is incomplete when replacement operations
+can fail differently.
+
+Excluding such behavior requires an authorized boundary, not an author's generic
+“out of domain” or “unspecified” disclaimer. Separate a genuinely missing fact
+from a visible consequence; mark only the affected unknown promise incomplete.
+Imported utilities are not automatically owned exports. Author access does not
+imply generator or runtime access.
 
 For financial or evidence-related modules, retain consequential publication time,
 source identity, metric definition, fiscal period and vintage. Do not invent
