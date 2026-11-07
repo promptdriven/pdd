@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: ea3d4229b2ed7525e21dfa72fe8ae06ee7437e6ce155c149937c887309f0e421).
+// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: 1574fe5c30876fc25f8e4be78b0429e706be43565ece657e0e339af53dc88b48).
 import { mkdir, lstat, realpath } from 'node:fs/promises';
 import { openSync, closeSync, readFileSync, writeFileSync, fsyncSync, unlinkSync, lstatSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -209,7 +209,6 @@ export async function openHerdrRunLayout(input, ports) {
   const createIntent = owner?.layout?.repoCreateIntent;
   let repo = parents.find(w => w.workspace_id === parentHint) ?? parents[0];
   if (!workspace) {
-    if (id(hint)) throw identityChanged(hint, 'workspace_id', hint, null);
     let pendingParent;
     if (createIntent) {
       const validIntent = id(createIntent.label) && samePath(createIntent.parentRoot, parent.root)

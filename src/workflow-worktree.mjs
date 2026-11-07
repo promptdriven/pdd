@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-worktree.prompt.md (sha256: dd41895645f1630512b3b7eff559ac94eff77bea82e6d2306d80df880ba2fad3).
+// Generated from prompts/cli/workflow-worktree.prompt.md (sha256: 7d9fc9f2e9474eeae9dc14cf800827c7e6c1fd74eb2c6e4a927b9112adc3f138).
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
@@ -188,7 +188,8 @@ async function externalWorktrees(ctx,c) {
   return path;
 }
 
-async function reconcile(ctx, a, c) {
+async function reconcile(ctx, a, c, expectedBranch = a.branch) {
+  if (expectedBranch !== a.branch && expectedBranch !== `${a.branch}-code`) fail();
   await canonicalDirectory(a.sourceRoot);
   const original = await context(a.sourceRoot, c);
   if (original.commonDir !== a.commonDir || !sameRepo(original.repository, a.repository)) fail();
@@ -201,11 +202,11 @@ async function reconcile(ctx, a, c) {
   const branch = (await c.git(a.worktreePath, ['symbolic-ref', '--quiet', '--short', 'HEAD'])).trim();
   const head = (await c.git(a.worktreePath, ['rev-parse', '--verify', 'HEAD'])).trim();
   if (actual.sourceRoot !== a.worktreePath || actual.commonDir !== a.commonDir || actualGitDir !== a.gitDir
-    || branch !== a.branch || !SHA.test(head) || !sameRepo(actual.repository, a.repository)) fail();
+    || branch !== expectedBranch || !SHA.test(head) || !sameRepo(actual.repository, a.repository)) fail();
   await c.git(a.worktreePath, ['merge-base', '--is-ancestor', a.baseSha, head]);
   const listed = registrations(await c.git(ctx.sourceRoot, ['worktree', 'list', '--porcelain', '-z']));
-  const matching = listed.filter(r => r.worktree === a.worktreePath || r.branch === 'refs/heads/' + a.branch);
-  if (matching.length !== 1 || matching[0].worktree !== a.worktreePath || matching[0].branch !== 'refs/heads/' + a.branch
+  const matching = listed.filter(r => r.worktree === a.worktreePath || r.branch === 'refs/heads/' + expectedBranch);
+  if (matching.length !== 1 || matching[0].worktree !== a.worktreePath || matching[0].branch !== 'refs/heads/' + expectedBranch
     || matching[0].locked === 'initializing' || matching[0].HEAD !== head || matching[0].bare || matching[0].detached || matching[0].prunable) fail();
   // Re-read immutable custody after all awaited Git reads.
   if (!equal(await ownedRecord(ctx, a.runId, c), a)) fail();
@@ -214,10 +215,10 @@ async function reconcile(ctx, a, c) {
 
 export async function lookupIssueWorktree(input, ports = {}) {
   try {
-    const { cwd, runId } = structuredClone(input ?? {});
+    const { cwd, runId, branch } = structuredClone(input ?? {});
     if (!safe(runId)) fail();
     const c = commands(ports), ctx = await context(cwd, c);
-    return await reconcile(ctx, await ownedRecord(ctx, runId, c), c);
+    return await reconcile(ctx, await ownedRecord(ctx, runId, c), c, branch);
   } catch { return result('recovery_required', 'The original worktree assignment is absent, incomplete or changed. Inspect this same run; do not allocate again.'); }
 }
 
