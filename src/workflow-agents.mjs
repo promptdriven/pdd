@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-agents.prompt.md (sha256: cba7dfaf29062535d6ab698ff8184c308b5a340d493105aada3b9708c13b146b).
+// Generated from prompts/cli/workflow-agents.prompt.md (sha256: 0136ca28e9e09c138a84676fc0b2331f3a673341732513a757a790f6a0eccd40).
 import { runAgentProcess, parseAgentAuthStatus } from './agent-adapters.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 
@@ -24,6 +24,17 @@ export const LOGIN_VARIABLES = Object.freeze({
   gemini: Object.freeze(['GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_GENAI_USE_VERTEXAI', 'GOOGLE_GENAI_USE_GCA', 'GOOGLE_APPLICATION_CREDENTIALS', 'GOOGLE_CLOUD_PROJECT']),
   agy: Object.freeze([]),
 });
+// Names that the shell owns when the chat's child sh runs `export NAME=value`: it refuses them (the agent then does not
+// start) or sets its own value. Found with bash, dash, BusyBox ash, zsh and ksh as sh, on macOS and Linux.
+export const SHELL_RESERVED_NAMES = Object.freeze(['BASHOPTS', 'BASHPID', 'BASH_ALIASES', 'BASH_ARGC', 'BASH_ARGV', 'BASH_CMDS', 'BASH_COMMAND',
+  'BASH_LINENO', 'BASH_SOURCE', 'BASH_SUBSHELL', 'BASH_VERSINFO', 'DIRSTACK', 'EGID', 'EPOCHREALTIME', 'EPOCHSECONDS', 'EUID', 'FUNCNAME', 'GID',
+  'GROUPS', 'HISTCMD', 'KSH_VERSION', 'LINENO', 'OPTIND', 'PIPESTATUS', 'PPID', 'RANDOM', 'SECONDS', 'SHELLOPTS', 'SHLVL', 'SRANDOM', 'TTYIDLE',
+  'UID', 'ZSH_EVAL_CONTEXT', 'ZSH_SUBSHELL', '_', 'signals']);
+// One line that names the entry's shell-reserved env names, or null. It never shows a command or an env value.
+export function reservedEnvMessage({ name, env = {} }) {
+  const reserved = Object.keys(env).filter(key => SHELL_RESERVED_NAMES.includes(key));
+  return reserved.length ? `The agents.json entry ${JSON.stringify(String(name))} sets names in env that the shell controls: ${reserved.join(', ')}. pdd cannot give them to the chat. Remove them from that entry's env, then run the command again.` : null;
+}
 const CHOICES = '--agent codex, --agent claude, --agent gemini or --agent agy';
 // --agent is a built-in agent or the name of a ~/.config/pdd/agents.json entry. A built-in name never reads the file.
 export function workflowAgentEntry(requested, { cwd, env = process.env } = {}, load = loadAgentDefinitions) {
@@ -33,7 +44,9 @@ export function workflowAgentEntry(requested, { cwd, env = process.env } = {}, l
   catch (error) { return refuse(`${error.message} Fix ~/.config/pdd/agents.json, or choose ${CHOICES}.`); }
   const found = definitions.find(item => item.name === requested);
   // An enabled default entry (Codex, Claude, Gemini) is the built-in agent.
-  if (found) return { ok: true, agent: found.kind, definition: agents.includes(found.id) ? null : found };
+  if (found && agents.includes(found.id)) return { ok: true, agent: found.kind, definition: null };
+  // The chat's child sh could not set a shell-reserved name, so such an entry refuses before any effect.
+  if (found) return reservedEnvMessage(found) ? refuse(reservedEnvMessage(found)) : { ok: true, agent: found.kind, definition: found };
   const names = definitions.filter(item => !agents.includes(item.id)).map(item => JSON.stringify(item.name));
   return refuse(`Unknown agent ${JSON.stringify(String(requested))}. Choose ${CHOICES}${names.length ? `, or a name from ~/.config/pdd/agents.json: ${names.join(', ')}.` : '. ~/.config/pdd/agents.json has no agent with that name.'}`);
 }

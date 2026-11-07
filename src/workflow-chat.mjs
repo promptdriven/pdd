@@ -1,7 +1,7 @@
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: ced0697c82f24ea86de5d3de63fcd72ee2e23d44d55c3c43c7c24085d57bef4b).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 4082c4f98b13573e08792f119faa51ae454f494f39df896055f805e3c0ecf5ae).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { statSync, writeFileSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
+import { statSync, lstatSync, readdirSync, writeFileSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,7 +10,7 @@ import { promisify } from 'node:util';
 import { PDD_HERDR_SESSION, withHerdrLayoutLock, openHerdrRunLayout, closeHerdrRunLayout, closeHerdrRepoLayoutIfIdle, samePath } from './workflow-herdr-layout.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
 import { tomlString } from './toml-string.mjs';
-import { LOGIN_VARIABLES } from './workflow-agents.mjs';
+import { LOGIN_VARIABLES, reservedEnvMessage } from './workflow-agents.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 
 // The one shared startup grace: Herdr sees a new agent only after it starts.
@@ -121,8 +121,9 @@ export function chatCommand({ agent, cwd, messageFile, sessionId, resumeId, conf
   // Gemini asks a hidden "trust this folder?" question in a new worktree; trust the run worktree for this session.
   const env = ['env', ...unset.flatMap(name => ['-u', name]), 'PDD_AGENT_SESSION=1', `PDD_BIN=${quote(PACKAGE_BIN)}`, ...(configDir && homeVariable(agent) ? [`${homeVariable(agent)}=${quote(configDir)}`] : []), ...(agent === 'gemini' ? ['GEMINI_CLI_TRUST_WORKSPACE=true'] : [])];
   const message = messageFile ? [`"$(cat ${quote(messageFile)})"`] : [];
-  // A child sh reads the private login file once, deletes it and becomes the agent: no login value is in this line.
-  const start = [...(loginFile ? ['sh', '-c', quote('. "$0"; rm -f -- "$0"; exec "$@"'), quote(loginFile)] : []), program ? quote(program) : agent];
+  // A child sh opens the private login file, deletes it, then reads the values and becomes the agent: no login value is
+  // in this line, and no value from the file can keep the file. Any failed step stops the sh before the agent starts.
+  const start = [...(loginFile ? ['sh', '-c', quote(LOGIN_SCRIPT), quote(loginFile)] : []), program ? quote(program) : agent];
   // agy asks "Do you trust the contents of this project?" in a new worktree; --settings trusts it for this session only.
   if (agent === 'agy') return [...env, ...start, '--dangerously-skip-permissions', '--settings', quote(JSON.stringify({ trustedWorkspaces: [cwd] })),
     ...[...new Set(addDirs)].flatMap(dir => ['--add-dir', quote(dir)]),
@@ -136,6 +137,24 @@ export function chatCommand({ agent, cwd, messageFile, sessionId, resumeId, conf
 }
 
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+// `command -p` finds rm whatever PATH is; plain rm (the pane's PATH, before any value is set) serves a shell whose
+// `command -p` does not work (ksh93). The agent does not get descriptor 3.
+const LOGIN_SCRIPT = 'exec 3<"$0" && { command -p rm -f -- "$0" 2>/dev/null || rm -f -- "$0"; } && . /dev/fd/3 && exec "$@" 3<&-';
+const LOGIN_FILE = /^login-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.env$/;
+// Far longer than a pane needs to run a line: an older login file belongs to a launch that never ran.
+export const LOGIN_FILE_MAX_AGE_MS = 5 * 60_000;
+// Delete the run folder's login files that are maxAgeMs or more old (0: all of them): only `login-<uuid>.env` regular
+// files directly in the folder, at most 100 per call. It never throws.
+export function removeStaleLoginFiles(runDir, { maxAgeMs = LOGIN_FILE_MAX_AGE_MS } = {}) {
+  let names;
+  try { names = readdirSync(runDir).filter(name => LOGIN_FILE.test(name)).slice(0, 100); } catch { return; }
+  for (const name of names) {
+    try {
+      const path = join(runDir, name), stat = lstatSync(path);
+      if (stat.isFile() && (maxAgeMs <= 0 || Date.now() - stat.mtimeMs >= maxAgeMs)) rmSync(path, { force: true });
+    } catch { /* already gone or not removable: skip */ }
+  }
+}
 // The run's saved agents.json entry for this agent kind, with its env values read again from agents.json now: the run
 // record keeps only the entry's name, kind, command and env names. Null for a built-in agent.
 export function savedAgentEntry(run, agent, env = process.env) {
@@ -145,6 +164,8 @@ export function savedAgentEntry(run, agent, env = process.env) {
   try { found = loadAgentDefinitions({ cwd: run.root, env }).find(item => item.name === saved.name); }
   catch (error) { throw problem('agent_definition_unavailable', `${error.message} The run uses the agents.json entry ${JSON.stringify(saved.name)}. Fix ~/.config/pdd/agents.json, then retry.`); }
   if (!found || found.kind !== saved.kind) throw problem('agent_definition_unavailable', `This run uses the agents.json entry ${JSON.stringify(saved.name)} (${saved.kind}), but ~/.config/pdd/agents.json has no such ${saved.kind} entry now. Add it again, then retry.`);
+  const reserved = reservedEnvMessage(found);
+  if (reserved) throw problem('agent_definition_unavailable', reserved);
   return { command: saved.command, env: found.env };
 }
 // The login of one launch: the caller's own login variables for this agent kind, then the entry's env (the entry wins).
@@ -164,6 +185,7 @@ export function chatLaunch({ run, agent, configDir, env = process.env }) {
 }
 // One native launch or resume in a pane with the caller's login; a failed request deletes the login file at once.
 async function launchInPane(herdr, paneId, options, { run, env }) {
+  removeStaleLoginFiles(run.runDir);
   const launch = chatLaunch({ run, agent: options.agent, configDir: options.configDir, env });
   try { return await herdr(['pane', 'run', paneId, chatCommand({ ...options, ...launch })]); }
   catch (error) { if (launch.loginFile) rmSync(launch.loginFile, { force: true }); throw error; }
