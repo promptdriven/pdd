@@ -10,7 +10,7 @@ import { constants, openSync, closeSync, fsyncSync, unlinkSync, existsSync, lsta
 
 import * as nativeDeliveryFiles from 'node:fs';
 import { homedir, hostname, tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -1278,6 +1278,20 @@ function formalCounterexample(run) {
   } catch { return null; }
 }
 const resultText = summary => oneLine(summary).replace(/^[^:]*:\s*/, '');
+const STORY_FILE = /(?:^|\/)user_stories\/[^/]+\.md$/;
+// The Story files of a run: each changed user_stories/*.md (not PLAN.md or README.md) and each one that a step summary names.
+function runStoryPaths(run, files) {
+  const named = run.areas.flatMap(item => item.steps).filter(step => run.done[step]).flatMap(step => String(run.done[step]?.summary ?? '').match(/\buser_stories\/[\w./-]+\.md\b/g) ?? []);
+  return [...new Set([...files, ...named])].filter(path => STORY_FILE.test(path) && !/^(?:plan|readme)\.md$/i.test(path.split('/').at(-1)) && !path.split('/').includes('..'));
+}
+// #3029: the formal result is needed when a Story of the run, or the Story of an anchored scenario, has `## Rules to check`.
+function storyRulesToCheck(run, storyPaths) {
+  const anchored = (run.replayBaseline?.vectors ?? []).map(vector => vector?.snapshot?.story_path).filter(path => typeof path === 'string');
+  return [...new Set([...storyPaths, ...anchored])].filter(path => STORY_FILE.test(path) && !isAbsolute(path) && !path.split('/').includes('..')).some(path => {
+    try { return /^##[ \t]+Rules to check[ \t]*$/im.test(readFileSync(join(run.root, path), 'utf8')); } catch { return false; }
+  });
+}
+const rulesToCheck = async (run, p) => storyRulesToCheck(run, runStoryPaths(run, await changedFiles(run, p)));
 async function readableFacts(run, area, p, evidence, { drafts = [], pending = false, published = null, base, head = 'HEAD', replay = null } = {}) {
   const label = prLabel(run, area), layout = label === 'PR 1' ? 'spec' : 'code';
   const steps = prSteps(run, area), all = run.areas.flatMap(item => item.steps).filter(step => run.done[step]);
@@ -1288,9 +1302,7 @@ async function readableFacts(run, area, p, evidence, { drafts = [], pending = fa
     verdict: layout === 'spec' ? verdict?.replace(/^Verdict:\s*/, '') ?? own.verdict : own.verdict,
     cases: own.cases.length ? own.cases : layout === 'code' ? earlier.cases.map(({ after, ...row }) => row) : [] };
   const files = await changedFiles(run, p);
-  const named = all.flatMap(step => String(run.done[step]?.summary ?? '').match(/\buser_stories\/[\w./-]+\.md\b/g) ?? []);
-  const storyPaths = [...new Set([...files, ...named])].filter(path => /(?:^|\/)user_stories\/[^/]+\.md$/.test(path)
-    && !/^(?:plan|readme)\.md$/i.test(path.split('/').at(-1)) && !path.split('/').includes('..'));
+  const storyPaths = runStoryPaths(run, files);
   const stories = [], missing = [];
   for (const path of storyPaths) {
     let text = null;
@@ -1328,6 +1340,7 @@ async function readableFacts(run, area, p, evidence, { drafts = [], pending = fa
       replay: replay ? { ...replay, ...(replay.formal?.result === 'failed' ? { counterexample: formalCounterexample(run) } : {}) } : null,
       proof: layout === 'code' ? { status: pending ? 'pending' : evidence.proofStatus, ...(native ? { passed: Number(native[1]), total: Number(native[2]) } : {}) } : null,
       review: layout === 'code' ? reviewVerdict(run, area) : null, formalStep: area.steps.includes('formal'), formalDone: Boolean(run.done.formal && !run.done.formal.skipped),
+      rulesToCheck: storyRulesToCheck(run, storyPaths),
       ci: published?.ci ?? null, checker: published?.checker ?? null, drafts: layout === 'spec' ? drafts : [] },
     approval: mode !== 'manual'
       ? { kind: 'auto', mode, login: await githubLogin(run, p), date: Number.isFinite(automatic.startedAt) ? new Date(automatic.startedAt).toISOString().slice(0, 10) : '', person: approvals.some(item => item.route === 'terminal') }
@@ -1391,7 +1404,8 @@ function prBody(run, area, env, drafts = [], tests = true, evidence, readable = 
   const runtime = publicationRuntime(run, env, label === 'PR 1' ? 'pr1' : 'current').filter(line => !line.replace(`${AGENT_NOTE}: `, '').startsWith('Report') || !shown.some(url => line.includes(` ${url} `)));
   const noted = runtime.some(line => hasReportLink(line, env)) || change && hasReportLink(change, env);
   const replayResult = area.replay_evidence === REPLAY_POLICY ? run.replayEvidence ?? readReplayEvidence(run) : null;
-  const replay = replayResult ? [formatReplayEvidence(replayResult,{maxCharacters:0}), ''] : [];
+  const rules = readable?.facts?.records?.rulesToCheck;
+  const replay = replayResult ? [formatReplayEvidence(replayResult,{maxCharacters:0,rules}), ''] : [];
   const prefix = [...failing, ...replay];
   const top = [...ownLines(run, evidence), ...(verdict ? [`${AGENT_NOTE}: ${closingInert(verdict)}`] : []), ...(change ? [`${AGENT_NOTE}: ${closingInert(change)}${hasReportLink(change, env) ? ' (report links expire after 7 days)' : ''}`] : []), ...runtime];
   if (evidence.lines.some(line => line.includes('pdd-workflow:'))) throw Error('Remove supplied workflow ownership markers from the report; pdd preserves its own marker.');
@@ -1412,7 +1426,7 @@ function prBody(run, area, env, drafts = [], tests = true, evidence, readable = 
   const { lifted, approvals } = publicationFit(preparedLines, approvalLines, Math.max(0, budget - 200 - (verify === null ? 0 : 1000) - characters(body(null, [], [], least))), env);
   if(replayResult){
     const room=Math.max(0,budget-200-(verify===null?0:1000)-characters(body(null,lifted,approvals,least)));
-    prefix[failing.length]=formatReplayEvidence(replayResult,{maxCharacters:characters(replay[0])+room});
+    prefix[failing.length]=formatReplayEvidence(replayResult,{maxCharacters:characters(replay[0])+room,rules});
   }
   // A stray </details> in verify.md never closes the Details section early (#3042).
   const verifyText = verify === null ? null : balancedDetails(verifyFit(hideLocalPaths(verify, run), budget - 200 - characters(body('', lifted, approvals, least)), env, false, true));
@@ -1679,7 +1693,7 @@ function savedReadable(facts, head) {
   if (copy.diff) { copy.diff.count = Math.max(copy.diff.count ?? 0, files.length); copy.diff.files = files.slice(0, 40); }
   if (replay) copy.records.replay = { outcome: replay.outcome, reason: replay.reason, counts: replay.counts ?? {},
     ...(replay.mutation ? { mutation: { outcome: replay.mutation.outcome, failures: replay.mutation.failures } } : {}),
-    ...(replay.formal ? { formal: { result: replay.formal.result, scope: replay.formal.scope, reason: replay.formal.reason, control_outcome: replay.formal.control_outcome } } : {}),
+    ...(replay.formal ? { formal: Object.fromEntries(['status', 'result', 'scope', 'reason', 'control_outcome', 'control_exit_code', 'field', 'cause', 'reported'].filter(key => replay.formal[key] !== undefined).map(key => [key, replay.formal[key]])) } : {}),
     ...(replay.counterexample !== undefined ? { counterexample: replay.counterexample } : {}) };
   return { head, facts: { ...copy, pending: false } };
 }
@@ -1765,7 +1779,7 @@ async function finishPr(run, area, step, p, lines) {
       latest.metricsObservations=[...(latest.metricsObservations ?? []),{type:'milestone',at:new Date(p.now()).toISOString(),data:{stage:'implementation-ready',pr:pr.number,head:pr.publishedHeadSha}}];
     }
   };
-  if(area.replay_evidence===REPLAY_POLICY)lines.push(formatReplayEvidence(run.replayEvidence));
+  if(area.replay_evidence===REPLAY_POLICY)lines.push(formatReplayEvidence(run.replayEvidence,{rules:await rulesToCheck(run,p)}));
   if (area.then === 'ask-code') {
     // New commits on an open PR 1 keep the question's time, so a yes the person already gave still counts
     // (a change request with pdd workflow changes moves it).
@@ -1900,7 +1914,7 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
   const hasRuntime=runtimeLines(record.summary).length>0;
   if(hasRuntime)record.source={kind:'git-content-v1',sha256:gitFingerprint(run.root)};
   const replay=area.replay_evidence===REPLAY_POLICY && (area.steps.some(item=>item!==step&&!run.done[item]) || area.gate!=='pr' || area.before==='approve'&&!prOf(run,area.name))?await currentReplayEvidence(run,p):null;
-  if(replay){record.replayEvidence=replay;lines.push(formatReplayEvidence(replay));}
+  if(replay){record.replayEvidence=replay;lines.push(formatReplayEvidence(replay,{rules:await rulesToCheck(run,p)}));}
   const applyDone=latest=>{
     if(equalFact(latest.question,observedQuestion))latest.question=null;
     const later=area.steps.includes(step) && latest.done[step]?area.steps.slice(area.steps.indexOf(step)+1).filter(item=>latest.done[item]):[];

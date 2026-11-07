@@ -176,7 +176,7 @@ Bundled feature/bug code areas declare `replay_evidence: "pdd.replay-evidence.v1
 `replay-evidence.json` in the run folder using the [structured replay contract](replay-evidence.md).
 [Corpus adoption](replay-evidence.md#adopt-an-unchanged-approved-corpus) supplies a frozen declared anchor for an existing approved corpus.
 The Proof table shows the replay counts, and the Details section begins with the validated replay status and exact counts, original vector and current source hashes,
-public-boundary execution coverage, semantic mutation control, and formal result with scope and reason.
+public-boundary execution coverage, semantic mutation control, and the [formal status](replay-evidence.md#the-formal-result) with scope, reason and a repair step.
 Missing, malformed or stale records appear as blocked/not replayed. Assertion failures remain publishable.
 Saved areas and custom workflows without this field retain their behavior. pdd checks structure and identity;
 agents execute the tests. A replay status does not independently prove execution or prompt/code equivalence.

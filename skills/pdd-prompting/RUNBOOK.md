@@ -661,7 +661,8 @@ In verify after the last commit, run one `pdd workflow prove <run> --test "<comm
 - Use a solver (Z3, or CrossHair for Python) only when the range is too big to loop. Replay each counterexample
   and 2 witnesses on the real code.
 - Control: the planted mistake must fail the formal check too. If it does not, write "Not run: the check cannot
-  see the mistake". A crash is not assertion detection.
+  see the mistake". A crash is not assertion detection. With no scenario vectors, put the control in the formal
+  block: `control_command` and its nonzero `control_exit_code`.
 - Commit the replay test and the formal test as normal tests. Do not commit raw logs.
 
 **Structured record for a workflow run.**
@@ -672,6 +673,9 @@ hashes and step/check identities in `status.json` as `replayBaseline`, including
 This continues through the final approval publication before code space. Final approval refuses unpublished
 scenario edits; publish approved edits in prompt space first. On entry into code space the published anchor
 freezes; a code-space retry cannot replace it. No selected vectors means not replayed. Adopted runs instead keep their frozen declared scenario inventory, bytes and authority through prompt publication, code entry and every retry; publication never refreshes that adopted anchor.
+pdd reads the formal block on its own, also with no selected vectors. The PR shows its status: recorded,
+missing, malformed (FIELD) or stale (source changed), with the reason and one repair step. When a Story has
+`## Rules to check`, the code PR is not ready to merge until the formal status is recorded with Proved or Not applicable.
 
 Before completing each code-space step, the agent writes `<run-folder>/replay-evidence.json`; update it
 with the formal result after that step. Use the versioned contract in the package's `docs/replay-evidence.md`.

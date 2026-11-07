@@ -60,8 +60,9 @@ as not replayed, never success; counts must reflect that. Unsupported versions a
   A crash, empty failure list, unknown assertion, survived control or not-run control is never detection.
   For not_run, command and exit_code may be null and a nonblank reason is required; never invent an exit.
 - formal: {result:proved_bounded|proved_solver|failed|not_run|not_applicable,scope:nonblank,reason:nonblank,
-  control_outcome:assertion_failure|crash|survived|not_run,counterexample?}. failed requires a counterexample;
-  proved results require assertion_failure control. Not-run/not-applicable remain explicit scoped results.
+  control_outcome:assertion_failure|crash|survived|not_run,control_command?:nonblank,control_exit_code?:integer0..255,
+  counterexample?}. failed requires a counterexample; proved results require assertion_failure control (see
+  [The formal result](#the-formal-result)). Not-run/not-applicable remain explicit scoped results.
 
 All identifier/reason/command strings are bounded (at most1000characters); collections stay within the limits
 above. Reject wrong types and unsupported versions; never coerce truthy flags or counts. SHA256 comparison
@@ -102,6 +103,42 @@ actual recorded data. A copied example is not execution evidence.
   }
 }
 ```
+
+## The formal result
+
+pdd reads the `formal` block on its own, also when the prompt area has no scenario vectors or the scenario
+replay stops early. The code replay status does not change: NOT REPLAYED or BLOCKED never becomes a pass.
+The "Formal check" line of the replay section and the Formal check row of the code PR's Proof table show
+one formal status, with the same words:
+
+| Status | Meaning | Repair step |
+|---|---|---|
+| recorded | pdd accepted the block. The line shows its result, scope, reason and control. | none |
+| missing | There is no `replay-evidence.json`, or the file has no `formal` key. | Write the formal block. |
+| malformed (FIELD) | FIELD is wrong: the file, its JSON, `schema_version`, `run_id`, `source`, a `formal.*` field or `mutation`. | Correct FIELD. |
+| stale (source changed) | `source.sha256` is not the current source fingerprint. | Run the formal check on the current source and write a new block. |
+
+After the repair, run `pdd workflow done formal` again. A line that is not recorded always gives the reason
+and the repair step. When the file holds a block that pdd did not accept, the line says what the block
+claims and why pdd did not accept it.
+
+A proved result needs `control_outcome: "assertion_failure"`: the planted mistake (in a bug run, the old
+code) fails the formal check by an assertion, not by a crash. With scenario vectors, the semantic mutation
+control must also detect the mistake. With no scenario vectors, the formal block holds its own control,
+the control command and its nonzero exit code:
+
+```json
+"formal": {
+  "result": "proved_bounded", "scope": "All 5 rules of the Story over 5192 bounded inputs",
+  "reason": "Every input passes the oracle written from the Story", "control_outcome": "assertion_failure",
+  "control_command": "node --test test/price.formal.test.mjs (on the old code)", "control_exit_code": 1
+}
+```
+
+When a Story of the run has `## Rules to check`, the code PR is not ready to merge until the formal status
+is recorded with Proved (bounded), Proved (solver) or Not applicable. A Failed result stays publishable with
+its failure line and is not ready to merge. When no Story has `## Rules to check`, the line says
+"Formal check: not needed (no Rules to check in the Story)" and the formal check does not hold the PR.
 
 ## Reading the PR status
 
