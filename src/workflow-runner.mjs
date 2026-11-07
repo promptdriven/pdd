@@ -1,7 +1,7 @@
 import { validateSnapshot } from './metrics-store.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
 import { createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 89b82d5657c6e776d61a61526e78d26600cd90bf593cb41949ad135ea7c68da8).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 10f432cc6b031a0224bb6b41c7168089570c5a7eff3863ce60cb3760e86c4317).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -1322,7 +1322,7 @@ async function publishAreaPr(run, area, p, lines, retry) {
     try { await requireExistingDraft(run, existing, p); }
     catch (error) { if(error?.code==='workflow_progress_refused')throw error;return fail(error.message); }
   }
-  if (label === 'PR 2') {
+  if (label === 'PR 2' && run.areas.findIndex(item=>item.name===area.name) > run.areas.findIndex(item=>item.then==='ask-code')) {
     const pr1 = prOf(run,askArea(run).name);
     let edits;
     try { edits = await specificationEdits(run,p,run.prBase ?? existing?.base ?? pr1.branch); }
@@ -1888,6 +1888,10 @@ async function startNextChat(run, p, packageRoot) {
     const observed=structuredClone(prior);
     await openChat({run,chat:observed},{...p,isTTY:false});
     if (!saveChatObservations(original,prior,observed,p)) throw Error('The returned area chat changed. Open the current area again.');
+    if (Number.isFinite(observed.resumedAt) && launchAnchor(observed) !== launchAnchor(prior)) {
+      const saved=readRun(run.runDir);
+      if (saved?.runId===run.runId && saved.area===run.area && launchAnchor(lastChat(saved,area.name))===launchAnchor(observed)) armCurrentAutomaticChat(saved,p);
+    }
     await deliverRequest(run,await areaMessage(run,run.area,p,packageRoot),p,true);
     return observed;
   }
@@ -1956,11 +1960,12 @@ async function showGate(run, p) {
   const observedGate=structuredClone(run.gate);
   try {
     const snapshot=await gatePromptSnapshot(run,p);
+    const contract=run.areas[run.area]?.gate==='approve' ? await storyContract(run,p) : null;
     let applied=false;
-    commitRun(run,p,latest=>{if(latest.gate&&equalFact(latest.gate,observedGate)){latest.gate.promptSnapshot=snapshot;applied=true;}});
-    return applied ? snapshotLines(snapshot) : [];
+    commitRun(run,p,latest=>{if(latest.gate&&equalFact(latest.gate,observedGate)){latest.gate.promptSnapshot=snapshot;if(contract!==null)latest.gate.storyContract=contract;applied=true;}});
+    return applied ? [...snapshotLines(snapshot),...(contract!==null ? [`Story contract: ${contract}`] : [])] : [];
   } catch (error) {
-    commitRun(run,p,latest=>{if(latest.gate&&equalFact(latest.gate,observedGate))delete latest.gate.promptSnapshot;});
+    commitRun(run,p,latest=>{if(latest.gate&&equalFact(latest.gate,observedGate)){delete latest.gate.promptSnapshot;delete latest.gate.storyContract;}});
     return [`Cannot show selected prompts: ${error.message}. Repair the selection, show the gate again and ask the person again.`];
   }
 }
@@ -1996,8 +2001,8 @@ async function saveGateApproval(run, area, record, edits, p, snapshot = run.gate
   // An id-less legacy gate gets a current identity only; timestamps never authorize reuse.
   if (run.gate && !run.gate.id) { const id=p.randomUUID(); commitRun(run,p,latest=>{if(latest.gate)latest.gate.id??=id;}); }
   const gateId = run.gate?.id ?? p.randomUUID(), gateAt = run.gate?.at;
-  const existing = run.decisions.find(decision => decision.gateId === gateId && decision.evidence);
-  if (existing && !edits.length) { run.approvalRecord = { ...(run.approvalRecord?.gateId === gateId ? run.approvalRecord : {}), gateId, kind: existing.via, area: area.name, at: existing.at, evidence: existing.evidence }; return existing; }
+  const existing = [...run.decisions].reverse().find(decision => decision.gateId === gateId && decision.evidence);
+  if (existing && !edits.length && (area.gate!=='approve' || existing.storyContract===run.gate?.storyContract)) { run.approvalRecord = { ...(run.approvalRecord?.gateId === gateId ? run.approvalRecord : {}), gateId, kind: existing.via, area: area.name, at: existing.at, evidence: existing.evidence }; return existing; }
   const at = p.now(), evidence = { id: p.randomUUID(), route: record.via, actor: approvalActor(p.env), at, words: record.text ?? null,
     prompts: (snapshot ?? edits).map(({path,proseSha256}) => ({path,proseSha256})) };
   p.inspectProgress?.();
@@ -2010,7 +2015,7 @@ async function saveGateApproval(run, area, record, edits, p, snapshot = run.gate
     for (const edit of changed.reverse()) { try { fs.writeFileSync(join(run.root, edit.path), edit.text); } catch { left.push(edit.path); } }
     throw Error(`${error.message}${left.length ? ` Rollback failed for: ${left.join(', ')}.` : ''}`);
   }
-  const decision = { gateId, stage: area.name, decision: 'approve', via: record.via, at, gateAt, ...(record.text !== undefined ? {text: record.text} : {}), evidence };
+  const decision = { gateId, stage: area.name, decision: 'approve', via: record.via, at, gateAt, ...(record.text !== undefined ? {text: record.text} : {}), ...(area.gate==='approve' ? {storyContract:run.gate?.storyContract} : {}), evidence };
   const approvalRecord = { gateId, kind: record.via, area: area.name, at, ...(record.via === 'chat' ? { userMessage: record.text, userMessageAt: record.at, sessionId: record.sessionId } : {}), evidence };
   commitRun(run,p,latest=>{latest.decisions.push(decision);latest.approvalRecord=approvalRecord;});
   return decision;
@@ -2068,6 +2073,14 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
     if (run.gate && area.steps.every(step => run.done[step])) {
       const current = await gatePromptSnapshot(run, p);
       if (approvalWords !== undefined && !samePromptReview(current, run.gate.promptSnapshot)) return fail('The selected prompts changed or this gate has no saved review. Show the gate again with done and ask the person again.');
+      if (area.gate === 'approve') {
+        const contract = await storyContract(run,p);
+        if (approvalWords !== undefined && contract !== run.gate.storyContract) return fail('The Story or scenario contract changed or has no saved review. Show the gate again with done and ask the person again.');
+        if (approvalWords === undefined) {
+          p.say(`Story contract: ${contract}`);
+          commitRun(run,p,latest=>{latest.gate.storyContract=contract;});
+        }
+      }
       edits = await approveGatePrompts(run, p);
       if (approvalWords === undefined) { p.say(snapshotLines(current).join('\n')); commitRun(run,p,latest=>{latest.gate.promptSnapshot=current;}); }
     } else readPromptApprovals(await promptApprovalContext(run, p), p);
@@ -2111,6 +2124,7 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
   p.inspectProgress();
   let approvalSnapshot = run.gate?.promptSnapshot;
   try {
+    if (area.gate === 'approve' && run.gate && (!run.gate.storyContract || await storyContract(run,p) !== run.gate.storyContract)) return fail('The Story or scenario contract changed. Show the gate again with done and ask the person again.');
     if (approvalSnapshot) {
       const current = await gatePromptSnapshot(run, p);
       if (!samePromptReview(current, approvalSnapshot)) return fail('The selected prompts changed. Show the gate again and ask the person again.');
@@ -2187,14 +2201,12 @@ ${approvalGuide(run)}`, p, true);
     if(error?.code==='workflow_progress_refused')throw error; return fail(`${oneLine(error.message)} Check PR 1, then ${approvalRetry(run, p.pdd)}`); }
   }
   if (askCode && approvalWords === undefined && beforePr) carried.push(...await draftDescription(run, prOf(run, area.name), await pr1Drafts(run, p), p));
-  const approvedContract = run.promptReturn && area.gate === 'approve' ? await storyContract(run,p) : null;
   const now = invocationAt;
   const branch=run.branch,prBase=run.prBase,observedQuestion=selectedQuestion,areaIndex=selectedArea;
   commitRun(run,p,latest=>{
 
 
     if(askCode){latest.branch=branch;latest.prBase=prBase;}
-    if(approvedContract!==null && latest.promptReturn)latest.promptReturn.storyContract=approvedContract;
     if(equalFact(latest.question,observedQuestion))latest.question=null;
     if(latest.area===areaIndex){if(askCode)latest.metricsOrigin={...(latest.metricsOrigin ?? {origin:'unknown'}),requiredOutcome:'code'};if(sameGate(latest.gate,selectedGate))latest.gate=null;latest.area=areaIndex+1;latest.state=latest.question?'waiting':'running';latest.doneAt=null;}
   });
@@ -2802,7 +2814,8 @@ const promptReturnLines = run => run.promptReturn
 async function specificationEdits(run,p,base) {
   // Check only prompts. A failed scenario inventory remains the replay owner's
   // BLOCKED result; it must not turn into an unrelated prompt-listing exception.
-  const delta=await p.execFile('git',['diff','--quiet',base,'--','*.prompt.md'],{cwd:run.root}).catch(error=>{
+  await rawGit(p,run.root,'fetch','origin',`refs/heads/${base}:refs/remotes/origin/${base}`);
+  const delta=await p.execFile('git',['diff','--quiet',`refs/remotes/origin/${base}`,'--','*.prompt.md'],{cwd:run.root}).catch(error=>{
     if(error.code===1)return {code:1};
     throw error;
   });
@@ -2813,27 +2826,34 @@ async function specificationEdits(run,p,base) {
 async function storyContract(run,p) {
   const facts=[];
   for (const path of gitFiles(run.root).sort()) {
-    if (/^user_stories\/.*\.md$/.test(path)) facts.push([path,readFileSync(join(run.root,path),'utf8')]);
-    else if(path.endsWith('.json')) {
-      const text=readFileSync(join(run.root,path),'utf8');
+    const story=/^user_stories\/.*\.md$/.test(path);
+    if(!story && !path.endsWith('.json'))continue;
+    let text;
+    try {text=readFileSync(join(run.root,path),'utf8');}
+    catch(error) {if(error.code==='ENOENT')continue;throw error;}
+    if (story) facts.push([path,text]);
+    else {
       try {if(isScenario(text))facts.push([path,canonical(JSON.parse(text))]);} catch {
         if(run.replayBaseline?.vectors?.some(v=>v.path===path))facts.push([path,text]);
       }
     }
   }
-  return JSON.stringify(facts);
+  return createHash('sha256').update(JSON.stringify(facts)).digest('hex');
+}
+function approvedStoryContract(run) {
+  const story=run.areas.find(item=>item.gate==='approve');
+  return [...run.decisions].reverse().find(item=>item.stage===story?.name && item.decision==='approve')?.storyContract;
 }
 async function reopenChangedStory(run,p) {
   if(ended(run) || !run.promptReturn || run.areas[run.area]?.then!=='ask-code')return false;
   const contract=await storyContract(run,p);
-  if(contract===run.promptReturn.storyContract)return false;
+  if(contract===approvedStoryContract(run))return false;
   const story=run.areas.findIndex(item=>item.gate==='approve');
   if(story<0)return false;
   commitRun(run,p,latest=>{
     if(ended(latest) || latest.area!==run.area || latest.promptReturn?.at!==run.promptReturn.at)throw Object.assign(Error('The returned area changed. Look at the current run again.'),{code:'workflow_progress_refused'});
     for(const item of latest.areas.slice(story))for(const step of item.steps)delete latest.done[step];
     latest.area=story;latest.gate=null;latest.question=null;latest.state='running';
-    latest.promptReturn.storyContract=contract;
   });
   return true;
 }
@@ -2857,10 +2877,9 @@ async function returnToPrompt(run,selected,p) {
     await rawGit(p,run.root,'switch','-q',codeBranch).catch(()=>{});
     return 'Cannot fast-forward the owned PR 1 branch. Repair its local branch, then retry.';
   }
-  const contract=await storyContract(run,p);
   commitRun(run,p,latest=>{
     if(latest.area!==run.area || ended(latest))throw Error('The area changed while returning to prompt space.');
-    latest.promptReturn={at:p.now(),reason:'a prompt correction was requested after code work',codeBranch,storyContract:contract};
+    latest.promptReturn={at:p.now(),reason:'a prompt correction was requested after code work',codeBranch};
     for(const area of latest.areas.slice(selected))for(const step of area.steps)delete latest.done[step];
     for(const key of ['replayEvidence','testInventory','approvalRecord','publicationPending','chatReplacement'])delete latest[key];
     latest.runtimeHistory=[];latest.pddHistory=[];latest.evidence=[];latest.evidenceAssociations=[];
