@@ -235,7 +235,8 @@ leaves the session list, and the saved store gets its `invalid` time.
 **Claims.** The claim scan inside a snapshot reads through the session, so an
 unchanged claimed issue costs no call, and claim expiry is computed again with
 the current time. Its observation is the session's `owners`, so the tick and
-prepare need no second claim read of all open issues. A batch history has only
+prepare need no second claim read of all open issues. A failed scan stays
+incomplete; these callers must not fall back to a live all-issue claim scan. A batch history has only
 PR references, so a claim check never takes it from the store.
 
 <a id="safety-reads"></a>

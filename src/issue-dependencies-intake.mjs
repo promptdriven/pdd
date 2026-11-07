@@ -28,7 +28,10 @@ const RESUMABLE = ['observations-incomplete', 'write-unconfirmed', 'github-limit
 // The claims that this process's last snapshot read for these root issues, else one owners read.
 async function ownersFor(ports, repository, issues) {
   const seen = ports.dependencyReads?.owners;
-  if (!ports.snapshots && seen?.repository === repository.toLowerCase() && issues.every(key => seen.issues.includes(issueKey(key) ?? key))) return { json: seen.json };
+  if (!ports.snapshots && seen?.repository === repository.toLowerCase() && issues.every(key => seen.issues.includes(issueKey(key) ?? key))) {
+    if (typeof seen.json !== 'string') throw Error('Claim observations are incomplete');
+    return { json: seen.json };
+  }
   return ports.owners.read({ repository, issues });
 }
 // The kept completion of this repository: the request and analysis of a stopped completion. Supplied as
@@ -319,6 +322,8 @@ export async function reconcileDependencyIntake({ cwd = '', repository, trigger,
   if (mode === 'off') return { queued: [], eligible: [], skipped: [], pending: false };
   // A completion that stopped (a failed read, a lost write or the GitHub limit) is finished first, without a new analysis.
   if (await resumeCompletion({ cwd, repository }, ports)) ({ snapshot } = await snapshotRead(ports, { cwd, repository }));
+  if (!ports.snapshots && reads?.owners?.repository === repository.toLowerCase() && reads.owners.json === null)
+    return { queued: [], eligible: [], skipped: [], pending: true, claims: [] };
   let graph = projectIssueGraph({ snapshot });
   const subjects = graph.nodes.filter(n => root(n.key, repository) && n.nativeState === 'open').map(n => n.key);
   // The claim scan of the snapshot gives the claims: the open issues are not read again.

@@ -223,7 +223,8 @@ invalid. Non-off
 reconciliation also reads current ownership once for
 its selected root subjects before recovery, delivery or eligibility handoff; the
 claims of the native snapshot's own claim scan are that read, so the open issues
-are not read again.
+are not read again. If that native scan fails, return pending with no queued or
+eligible subjects; do not replace it with a live all-issue scan.
 It reprojects saved decisions and
 coalesces pending subjects. Native close/reopen/merge/relation changes normally
 need only reprojection; substantive changes require the selected coordinator.

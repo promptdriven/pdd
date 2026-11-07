@@ -1086,6 +1086,7 @@ async function observeSnapshot({ cwd = '', repository, inputs = [] }, ports, sco
   for (let at = 0; at < queue.length; at++) await read(queue[at]);
   if (context.nativeExecution) {
     const local = issues.filter(i => info(i.key)?.repository === repository && i.state !== 'unknown');
+    if (reads && ports.owners[NATIVE_OWNERS]) reads.owners = { repository, issues: local.map(i => i.key), json: null };
     try {
       const observation = parse((await ports.owners.read({ repository, issues: local.map(i => i.key) })).json);
       if (!Array.isArray(observation.claims) || !Array.isArray(observation.runs) || typeof observation.runsKnown !== 'boolean') throw Error('Incomplete execution observation');
