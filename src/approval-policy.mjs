@@ -1,4 +1,4 @@
-// Generated from prompts/cli/approval-policy.prompt.md (sha256: 64a7ab10f72675b3c6f459cc221300bd33557aa1521de383586fa9023367d0e6).
+// Generated from prompts/cli/approval-policy.prompt.md (sha256: 9f626bf268a72f0b66c233325fee7473e2b815671e7b102eb06729a93fa154c1).
 import * as nativeFs from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -34,7 +34,7 @@ export function approvalActor(env = process.env) {
   return { kind: 'terminal', id: env.USER || env.LOGNAME || 'unknown' };
 }
 function validEvidence(e) {
-  return object(e) && (!Object.hasOwn(e, 'id') || typeof e.id === 'string' && e.id.length > 0) && ['said','terminal','chat'].includes(e.route) && object(e.actor) && ['agent','terminal'].includes(e.actor.kind) && typeof e.actor.id === 'string' && Number.isSafeInteger(e.at) && (e.words === null || typeof e.words === 'string') && Array.isArray(e.prompts) && e.prompts.every(p => object(p) && typeof p.path === 'string' && /^[a-f0-9]{64}$/.test(p.proseSha256));
+  return object(e) && (!Object.hasOwn(e, 'id') || typeof e.id === 'string' && e.id.length > 0) && ['said','terminal','chat','automatic-check-pass'].includes(e.route) && (e.route !== 'automatic-check-pass' || e.words === null && object(e.checks) && e.checks.native?.exit_code === 0 && e.checks.prompt?.exit_code === 0 && object(e.checks.source) && object(e.checks.draft)) && object(e.actor) && ['agent','terminal'].includes(e.actor.kind) && typeof e.actor.id === 'string' && Number.isSafeInteger(e.at) && (e.words === null || typeof e.words === 'string') && Array.isArray(e.prompts) && e.prompts.every(p => object(p) && typeof p.path === 'string' && /^[a-f0-9]{64}$/.test(p.proseSha256));
 }
 export function readPromptApprovals({ commonDir }, ports = {}) {
   const fs = ports.fs ?? nativeFs;

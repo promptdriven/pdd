@@ -47,7 +47,7 @@ test('native-only missing a reason refuses before approval even when marked curr
 
 test('kind parsing refuses unknown kinds and preserves full, partial and legacy schemas', () => {
   const minimal={limits:{max_steps:1,max_model_calls:1},entries:[]};
-  assert.equal(interfaceSchemaProblems({...minimal,kind:'other'})[0]?.code,'interface-kind-invalid');
+  for(const kind of ['other',null,false,0,'']) assert.equal(interfaceSchemaProblems({...minimal,kind})[0]?.code,'interface-kind-invalid');
   assert.equal(interfaceSchemaProblems({kind:'native-only',reason:'Real kernel process identity.'}).length,0);
   for (const kind of [undefined,'full','partial']) assert.equal(interfaceSchemaProblems({...minimal,...(kind ? {kind} : {})}).length,0);
 });

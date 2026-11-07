@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 24749f8134d07d67ebf243d105f31d95e5206e46bdb7133dbfe3b93b2d733b72).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 266341dd9da7a3658533810a7049b16fc6bba50a0e77f7b0ad685114208d2422).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
@@ -525,7 +525,7 @@ function limitProblems(iface) {
 // Every schema problem of one interface: entry input and result schemas (any root) and resource operation schemas (object root).
 export function interfaceKindProblems(iface) {
   if (!isObject(iface)) return [{code:'invalid-interface',pointer:'',rule:'must be an object.'}];
-  const kind = iface.kind ?? 'full';
+  const kind = Object.hasOwn(iface, 'kind') ? iface.kind : 'full';
   if (!['full', 'partial', 'native-only'].includes(kind)) return [{code:'interface-kind-invalid',pointer:'/kind',rule:'must be full, partial or native-only.'}];
   if (kind === 'native-only' && (typeof iface.reason !== 'string' || !iface.reason.trim())) return [{code:'native-reason-missing',pointer:'/reason',rule:'must name the native effect that bound ports cannot fake (RUNBOOK §21).'}];
   return [];

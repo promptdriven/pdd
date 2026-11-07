@@ -1,4 +1,4 @@
-// Generated from prompts/cli/prompt-approve.prompt.md (sha256: 8821baa81e0596ba99db30d9ddb283c968e280c83edabf35ea22a9dca8c00d9c).
+// Generated from prompts/cli/prompt-approve.prompt.md (sha256: 34553a235162b7fdc386c10b1c50eb0a0b98395699c498d40549d64b480bad16).
 import { approvalActor, readApprovalPolicy, readSaidWords, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -236,7 +236,7 @@ export function promptPath(root, cwd, word) {
 }
 
 // pdd approve PROMPT. Returns the exit code.
-export async function runApprove({ words = [], cwd = process.cwd(), said } = {}, ports = {}) {
+export async function runApprove({ words = [], cwd = process.cwd(), said, automatic = false, tests } = {}, ports = {}) {
   const stdout = ports.stdout ?? process.stdout, stderr = ports.stderr ?? process.stderr, stdin = ports.stdin ?? process.stdin;
   const interactive = ports.interactive ?? (!!process.stdin.isTTY && !!process.stdout.isTTY);
   try {
@@ -246,6 +246,12 @@ export async function runApprove({ words = [], cwd = process.cwd(), said } = {},
     if (top.status !== 0) throw new Stop(2, 'pdd approve works in a Git repository.');
     const root = realpathSync(top.stdout.trim()), path = promptPath(root, cwd, words[0]);
     if (!path) throw new Stop(2, `${relative(root, resolve(realpathSync(cwd), words[0])).split(sep).join('/')} is not a Git-visible *.prompt.md file in this repository.`);
+    if (automatic) {
+      if(said !== undefined) throw new Stop(2,'--automatic does not combine with --said.');
+      const {runAutomaticApproval}=await import('./interface-draft.mjs');
+      return runAutomaticApproval({path,root,tests},{...ports,stdout,stderr});
+    }
+    if(tests !== undefined) throw new Stop(2,'--tests requires --automatic.');
     const { strictApprovals } = readApprovalPolicy({ root }, ports);
     const env = ports.env ?? process.env;
     const agent = approvalActor(env).kind === 'agent';

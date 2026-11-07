@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: dcdd5de58ef228dc0cbfee27145dffb665af9065f6b9795865824b5b76a18b61).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 9a4cf175ba3f29e47cd485b74620043cfae9303f7e86387daed34821b67e3c37).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -48,7 +48,7 @@ const RUNNER_ROUTES = {
   'workflow-park': plan => ['parkAutomaticRun', { reason: plan.options['--reason'] }],
   'workflow-yield': plan => ['yieldAutomaticCapacity', { ref: plan.operands[0] }],
   'workflow-done': plan => ['stepDone', { step: plan.operands[0], ...(plan.options['--summary'] !== undefined ? { summary: plan.options['--summary'] } : {}), ...(plan.options['--skipped'] !== undefined ? { skipped: plan.options['--skipped'] } : {}) }],
-  'workflow-approve': plan => ['approveRun', { ref: plan.operands[0], ...(plan.options['--said'] !== undefined ? { said: plan.options['--said'] } : {}), ...(plan.options['--draft'] !== undefined ? { draft: plan.options['--draft'] } : {}) }],
+  'workflow-approve': plan => ['approveRun', { ref: plan.operands[0], ...(plan.options['--said'] !== undefined ? { said: plan.options['--said'],automatic:!!plan.options['--automatic'],tests:plan.options['--tests'] } : {}), ...(plan.options['--draft'] !== undefined ? { draft: plan.options['--draft'] } : {}) }],
   'workflow-ask': plan => ['askPerson', { text: plan.operands.join(' ') }],
   'workflow-changes': plan => ['changeRun', { ref: plan.operands[0], text: plan.operands.slice(1).join(' ') }],
   'workflow-cancel': plan => ['cancelRun', { ref: plan.operands[0] }],
@@ -339,7 +339,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     }
     case 'prompt-approve': {
       const { runApprove } = await import('./prompt-approve.mjs');
-      return runApprove({ words: [...plan.operands], cwd, said: plan.options['--said'] }, { stdout, stderr, stdin, env });
+      return runApprove({ words: [...plan.operands], cwd, said: plan.options['--said'],automatic:!!plan.options['--automatic'],tests:plan.options['--tests'] }, { stdout, stderr, stdin, env });
     }
     case 'completion': stdout.write(renderCompletion(plan.operands[0]));return 0;
     case 'workflow-list':

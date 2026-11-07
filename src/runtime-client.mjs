@@ -1,5 +1,5 @@
 import { interfaceFindings } from './interface-draft.mjs';
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: d091d31f3f3448ec47f9e4d9dfd6c89a7c53a281d33981fc191d49fa86311671).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 9727169a1bfde0faf95a4c491ff393eed8a3aabbefac54a453c0a129a0b6fe57).
 import {readEvidenceEligibility} from './workflow-runner.mjs';
 import {allRuns} from './workflow-runs.mjs';
 import {assessNativeEvidence, resultLines, usableResult} from './workflow-results.mjs';
