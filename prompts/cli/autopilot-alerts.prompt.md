@@ -131,6 +131,7 @@ Each send has one result:
 | `access` | An access or spending decision | repository, issue and kind |
 | `decision` | An unresolved product choice | repository, issue and kind |
 | `stuck` | An issue stuck after its retry time | repository, issue and kind |
+| `long-running` | Information only: an issue claimed 24 hours ago with no merge | repository, issue and kind |
 | `recovered` | A matching open incident ended | |
 
 `usage-limit` and `resource` are machine incidents: they are not specific to
@@ -141,7 +142,7 @@ alerts, and a recovery of one leaves the other open.
 
 The JSON has nonblank string fields `cause`, `tried` and `need`. For `recovered`
 only `cause` (what changed) is needed, and an optional `kind` names the one
-incident that ended: `usage-limit`, `resource`, `access`, `decision` or `stuck`.
+incident that ended: `usage-limit`, `resource`, `access`, `decision`, `stuck` or `long-running`.
 A missing or invalid issue, kind or field exits 2 with one line that names the
 problem, and records nothing.
 

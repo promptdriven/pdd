@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-alerts.prompt.md (sha256: 908a5a62afd039ae532cf73e6aa60d99a868a5e79b7aa69842447fa095c2b343).
+// Generated from prompts/cli/autopilot-alerts.prompt.md (sha256: c1c0b328f2ca7a1e7e84d8332461cbb6732e4a3a8a634ec67a9976bc62fd5a72).
 import * as nativeFs from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
@@ -7,7 +7,7 @@ import { dirname, isAbsolute, join } from 'node:path';
 import { promisify } from 'node:util';
 
 const execute = promisify(execFile);
-export const ALERT_KINDS = Object.freeze(['usage-limit', 'resource', 'access', 'decision', 'stuck', 'recovered']);
+export const ALERT_KINDS = Object.freeze(['usage-limit', 'resource', 'access', 'decision', 'stuck', 'long-running', 'recovered']);
 // These incidents are shared by the whole machine: one incident per repository, machine and kind lists every affected issue.
 // An access or spending decision belongs to its issue, like a product decision.
 const MACHINE_KINDS = Object.freeze(['usage-limit', 'resource']);

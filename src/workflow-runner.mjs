@@ -400,11 +400,13 @@ function clearChatFailure(run) {
 // A gate whose chat still works: after a change request it revises, else it writes the gate message (0.1.6 tester: status
 // said "waiting for you" about a minute before the chat had asked).
 const revising = run => { const last = run.changes?.at(-1); return Boolean(last && !last.answer && last.stage === run.gate.area && last.at >= run.gate.at); };
+// A run stopped at the repair limit keeps that one-line reason, also after a later park (#3041).
+const stuckReason = run => run.repairLimit?.area ? repairLimitReason(run.repairLimit.area) : run.parkReason ?? 'automatic work stopped';
 // chat: what Herdr shows (chatState); facts: {drafts, nothing} read by the caller (gateFacts). describe itself makes no calls.
 function describe(run, chat = null, { drafts = [], nothing = false } = {}) {
   const area = run.areas[run.area], pr1 = askArea(run) && prOf(run, askArea(run).name);
   if (run.state === 'cancelled') return run.cancelled?.state === 'replaced' ? 'replaced' : 'cancelled';
-  if (run.state === 'stuck') return `stuck: ${run.parkReason ?? 'automatic work stopped'}`;
+  if (run.state === 'stuck') return `stuck: ${stuckReason(run)}`;
   if (activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting'].includes(chat)) return chatStatusWords(run, chat);
   if (openQuestion(run) && run.state !== 'completed') return `waiting for you: ${run.question.text.split('\n')[0]}`;
   if (chat === 'blocked' && run.state === 'running') return `waiting for you: the chat asks a question in its window (pdd workflow open ${run.number})`;
@@ -1578,6 +1580,27 @@ function ownResults(run, p) {
 }
 // The steps whose done output shows pdd's own results, or a visible "no pdd result" warning.
 const PROOF_STEPS = ['check', 'try', 'verify'];
+// Repair ceiling (#3041): in an Autopilot run, a repair round is a real return to an earlier
+// step after a failure: a `done` for a step that clears later recorded steps of its area
+// (build again after verify, formal or review). A retry of a step with nothing recorded after
+// it (a publication, claim or push retry) is not a round. A later step of the area (a check
+// such as verify) recorded again on unchanged or unknown worktree content is not a round either. After
+// 5 rounds in one area, pdd refuses another, records the stop as `stuck`, and refuses every
+// later `done` of that run. Manual runs keep their skill's own repair rule and save no count.
+const REPAIR_ROUNDS = 5, REPAIR_REFUSED = Symbol('repair refused');
+const repairLimitReason = name => `Repair limit reached in ${name}: take the stuck path`;
+// The way out is a person's: a stuck run is still active, so a new automatic start waits until it is cancelled.
+const repairRefusal = (name, step, rounds, number) => `pdd refused ${rounds ? 'another repair round' : `${step}`}: the ${name} area of this Autopilot run has had ${REPAIR_ROUNDS} repair rounds. pdd did not record ${step}; the run is stuck ("${repairLimitReason(name)}"). Take the stuck path: add pdd:stuck, write one comment with the cause, send one stuck alert, keep the claim and progress, and let the coordinator continue with other issues. Do not retry it. To let Autopilot try again, a person removes pdd:stuck and pdd:working, then runs pdd workflow cancel ${number} in the checkout that holds the stuck run; the next tick starts a new run with a fresh repair count.`;
+function repairRound(run, area, step, worktree) {
+  if (!Object.hasOwn(run, 'automaticOrigin') || !area.steps.includes(step) || !run.done[step]) return null;
+  const index = area.steps.indexOf(step);
+  if (!area.steps.slice(index + 1).some(item => run.done[item])) return null;
+  // A later step on unchanged content is a retry, not a round. An unknown fingerprint (now or when last recorded) counts as no change.
+  const recorded = run.done[step].worktreeSha256;
+  if (index > 0 && (typeof worktree !== 'string' || typeof recorded !== 'string' || recorded === worktree)) return null;
+  const used = Number.isSafeInteger(run.repairRounds?.[area.name]) ? run.repairRounds[area.name] : 0;
+  return used >= REPAIR_ROUNDS ? REPAIR_REFUSED : used + 1;
+}
 function canRefreshCodeReview(run, step) {
   const area = run.areas[run.area];
   return run.state === 'completed' && run.doneAt === 'PR 1'
@@ -1612,6 +1635,16 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
     ? refreshCompletedCodeReview(run, step, p) : done(`The run for #${run.number} is complete. Stop.`);
   protectProgress(run,p);
   const area = run.areas[run.area], lines = [];
+  // After the repair limit, the run is stuck: no step of it is recorded, so it cannot go on to open a PR.
+  if (Object.hasOwn(run, 'automaticOrigin') && run.repairLimit) return fail(repairRefusal(run.repairLimit.area, step, false, run.number));
+  const worktree = Object.hasOwn(run, 'automaticOrigin') ? gitFingerprint(run.root) : null;
+  if (repairRound(run, area, step, worktree) === REPAIR_REFUSED) {
+    commitRun(run, p, latest => {
+      if (ended(latest) || latest.area !== run.area || repairRound(latest, area, step, worktree) !== REPAIR_REFUSED) throw Object.assign(Error('The run changed; look again.'), { code: 'workflow_progress_refused' });
+      latest.state = 'stuck'; latest.parkReason = repairLimitReason(area.name); latest.repairLimit = { area: area.name, step, at: p.now() };
+    });
+    return fail(repairRefusal(area.name, step, true, run.number));
+  }
   if (!area.steps.includes(step)) lines.push(`warning: "${step}" is not a step of the ${area.name} area (${area.steps.join(', ')}). pdd recorded it anyway.`);
   else {
     const before = area.steps.slice(0, area.steps.indexOf(step)).filter(item => !run.done[item] && !area.optional.includes(item));
@@ -1620,7 +1653,8 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
   const observedQuestion=run.question, observedGate=run.gate;
   const reason = skipped === undefined ? null : keepLines(skipped) || 'no reason given';
   const record = { at: p.now(), summary: keepLines(reason === null ? summary : [`skipped: ${reason}`, summary].filter(Boolean).join('\n')), area: area.name,
-    ...(reason === null ? {} : { skipped: { reason } }), ...(PROOF_STEPS.includes(step) ? { pddResults: ownResults(run, p) } : {}) };
+    ...(reason === null ? {} : { skipped: { reason } }), ...(PROOF_STEPS.includes(step) ? { pddResults: ownResults(run, p) } : {}),
+    ...(typeof worktree === 'string' ? { worktreeSha256: worktree } : {}) };
   if (PROOF_STEPS.includes(step) && reason === null) {
     const usable = record.pddResults.some(usableResult), shown = usable || !record.pddResults.length ? resultLines(record.pddResults) : [...resultLines(record.pddResults), noResultLine()];
     lines.push(...(usable ? ['pdd recorded its own results with this step:'] : ['warning: pdd has no result of its own for this run yet. pdd recorded the step with the label "no pdd result".']), ...shown,
@@ -1632,6 +1666,9 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
   const replay=area.replay_evidence===REPLAY_POLICY && (area.steps.some(item=>item!==step&&!run.done[item]) || area.gate!=='pr' || area.before==='approve'&&!prOf(run,area.name))?await currentReplayEvidence(run,p):null;
   if(replay){record.replayEvidence=replay;lines.push(formatReplayEvidence(replay));}
   const applyDone=latest=>{
+    const round=repairRound(latest,area,step,worktree);
+    if(round===REPAIR_REFUSED)throw Object.assign(Error('The run changed; look again.'),{code:'workflow_progress_refused'});
+    if(round){latest.repairRounds={...latest.repairRounds,[area.name]:round};lines.push(`Repair round ${round} of ${REPAIR_ROUNDS} in the ${area.name} area of this Autopilot run.`);}
     if(equalFact(latest.question,observedQuestion))latest.question=null;
     const later=area.steps.includes(step) && latest.done[step]?area.steps.slice(area.steps.indexOf(step)+1).filter(item=>latest.done[item]):[];
     if(later.length){
@@ -2616,7 +2653,7 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false } = 
   const step = area?.steps.find(item => !run.done[item]);
   const words = group === 'cancelled' ? (run.cancelled?.state === 'replaced' ? 'replaced' : 'cancelled')
     : group === 'done' ? (run.gate?.kind === 'ask-code' ? 'done at PR 1' : 'done')
-    : run.state === 'stuck' ? `stuck: ${run.parkReason ?? 'automatic work stopped'}`
+    : run.state === 'stuck' ? `stuck: ${stuckReason(run)}`
     : replacementPending ? `chat replacement pending at ${run.chatReplacement.phase}; run pdd workflow open ${run.number} --new`
     : problem ? chatStatusWords(run, chat)
     : question ? `waiting for you: ${question.text.split('\n')[0]}`

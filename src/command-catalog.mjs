@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: b87c59915f1d31c8e8c86208257e627b99c8b22c329e88938c6c4d0c4dcc7805).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 36c0cf60461a5b9b793024513a41f37a0c8c377b109d59389aff9b926b69638e).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -30,8 +30,8 @@ const routes = [
   { id: 'autopilot.add', prefix: ['autopilot', 'add'], local: 'autopilot-add', operands: [{name:'issue',type:'issue',repeat:true}], options: [],
     forms: [form('pdd autopilot add N...', 'Mark named old issues with pdd:autopilot so Autopilot may take them.')] },
   { id: 'autopilot.alert', prefix: ['autopilot', 'alert'], local: 'autopilot-alert', operands: [],
-    options: [{name:'--issue',kind:'text'},{name:'--kind',kind:'value',choices:['usage-limit','resource','access','decision','stuck','recovered']},{name:'--input',kind:'text'},{name:'--update',kind:'flag'}],
-    forms: [form('pdd autopilot alert --issue N --kind usage-limit|resource|access|decision|stuck|recovered --input - [--update]', 'For the coordinator: record one alert for a real human need or incident and send it to this machine\'s destination. Reads {"cause","tried","need"} JSON from stdin. usage-limit and resource are one alert per repository and machine for all blocked issues; access, decision and stuck are one alert per issue. A repeat sends nothing unless the last send failed; --update sends a material change; recovered sends one recovery and closes the matching alerts.')] },
+    options: [{name:'--issue',kind:'text'},{name:'--kind',kind:'value',choices:['usage-limit','resource','access','decision','stuck','long-running','recovered']},{name:'--input',kind:'text'},{name:'--update',kind:'flag'}],
+    forms: [form('pdd autopilot alert --issue N --kind usage-limit|resource|access|decision|stuck|long-running|recovered --input - [--update]', 'For the coordinator: record one alert for a real human need or incident and send it to this machine\'s destination. Reads {"cause","tried","need"} JSON from stdin. usage-limit and resource are one alert per repository and machine for all blocked issues; access, decision and stuck are one alert per issue. A repeat sends nothing unless the last send failed; --update sends a material change; recovered sends one recovery and closes the matching alerts.')] },
   { id: 'autopilot.alerts', prefix: ['autopilot', 'alerts'], local: 'autopilot-alerts', operands: [{name:'action',type:'choice:set,test,clear'}], options: [{name:'--discord-channel',kind:'text'},{name:'--token-command',kind:'text'}],
     forms: [form('pdd autopilot alerts set', 'Read a Discord or Slack incoming webhook URL from stdin and save it for this machine outside every repository, readable only by you; the URL is never printed.'),
       form('pdd autopilot alerts set --discord-channel ID [--token-command CMD]', 'Use a Discord bot instead: read its token from stdin and save it readable only by you, or save CMD and run it at each send so the token is never written to disk. The token and the command output are never printed.'),

@@ -892,3 +892,27 @@ test('AUTOPILOT17: a red-test PR 1 merges only together with its code PR, at the
   assert.ok(text.indexOf('Red pair') < text.indexOf('gh pr merge PR'));
   for (const name of ['pdd-bug', 'pdd-feature']) assert.doesNotMatch(read(`${name}/steps/autopilot.md`), /after PR 1 merges/, name);
 });
+
+// Wrong (#3041): an Autopilot run repairs forever, two machines pass one issue back and forth, or a long run
+// goes unseen; or the manual repair rule changes with it.
+test('AUTOPILOT18: per-issue ceilings: 5 repair rounds in one area, no 4th takeover, one alert after 24 hours', () => {
+  for (const name of WORKFLOWS) has(`${name}/steps/autopilot.md`, 'Keep repairing while a useful correction is available',
+    'for at most 5 repair rounds in one area', 'pdd refuses a 6th', 'take the stuck path: `pdd:stuck`, one comment with the cause, one `stuck` alert. Keep its claim and progress');
+  for (const name of ['pdd-bug', 'pdd-feature']) has(`${name}/SKILL.md`, 'allow 2 repairs after initial review');
+  has('pdd-autopilot/steps/handoff.md', 'One area of an Autopilot run has at most 5 repair rounds',
+    'After 3 takeovers of one issue, do not take it over again', '`takeover-limit` rule. Take the stuck path (step 8); keep the claim and progress.',
+    'Send one `stuck` alert.', '24 hours after the claim with no merge, the tick sends one `long-running` rule. Send one informational alert for that issue and keep working; it is not a stop.');
+});
+
+// Wrong (#3041 repair): a ceiling stops a healthy run (a PR-open retry counted as a repair, a machine
+// that takes back its own claim counted as a takeover), or nobody can let Autopilot continue after it.
+test('AUTOPILOT19: ceilings count only real loops, ask for no retry after the limit, and a person can reset them', () => {
+  for (const name of WORKFLOWS) has(`${name}/steps/autopilot.md`, '(a round is a return to an earlier step that clears later steps; a retry of the same step is not one)');
+  has('pdd-autopilot/steps/handoff.md', 'a retry after a failed PR open, claim check or push is not one',
+    'After the refusal, pdd marks the run stuck and refuses every later `done` of it.',
+    'add it again at once (within 10 minutes)', 'Taking back your own expired claim (same coordinator ID and machine) is not a takeover.',
+    'The count starts again at 0 when a person removes `pdd:stuck` at the limit', 'Read the issue again first; skip it if it already has `pdd:stuck`.',
+    'After the repair or takeover limit, the rule says so: do not retry, do not remove `pdd:stuck`, write no new comment and send no second alert.',
+    'Only a person lets Autopilot try again. After the repair limit, they remove `pdd:stuck` and `pdd:working`, then run `pdd workflow cancel N` in the checkout that holds the stuck run; the next tick starts a new run with a fresh repair count.',
+    'The tick records it in your claim comment, so a later owner of the issue does not send it again.');
+});

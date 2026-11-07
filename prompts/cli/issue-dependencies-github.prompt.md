@@ -98,8 +98,11 @@ of each labeled issue: the earliest label event of the current claim era (a nati
 removal ends an era), and the one trusted comment by that event's actor whose JSON
 record names the repository, coordinatorId, machine and that labelEventId. Each
 claim is `{issue,owner,active,coordinatorId,machine,commentId,labelEventId}` with
-optional `lastSeen` (ISO time), `expired: true` and `stuckSince` (time of the
-current `pdd:stuck` label event). Read the time through `clock.now({})`. The
+optional `lastSeen` (ISO time), `expired: true`, `stuckSince` (time of the
+current `pdd:stuck` label event), `claimedAt`, `takeovers`, `previousOwner` and
+`longRunningAlertedAt` (see [takeovers](#takeovers)). The owners reply also
+gives `localMachine`, the machine of the local launcher state, next to
+`localOwner`. Read the time through `clock.now({})`. The
 default clock follows the caller's injected `now` in milliseconds.
 
 | Claim | Expired when |
@@ -133,9 +136,49 @@ such edit exists, make no edit and throw. The edit uses the scan's admission gua
 like other scan mutations. Read back the saved `lastSeen`. Return
 `{state:"refreshed",lastSeen}` or `{state:"skipped"}`; an unavailable read, edit or
 readback throws. A repeated heartbeat is safe: it only sets a time.
+`recordLongRunningAlert({cwd,repository,claim,coordinatorId,machine,at},ports)`
+does the same for the top-level `longRunningAlertedAt` member and returns
+`{state:"recorded",longRunningAlertedAt}` or `{state:"skipped"}`.
 `withoutClaimHeartbeat(body)` returns the body without its top-level `lastSeen`
-member, with the same check, or the same body when there is none or no such edit
-exists, so that a heartbeat edit is not new trusted work.
+and `longRunningAlertedAt` members, with the same check, or the same body when
+there are none or no such edit exists, so that a tick edit is not new trusted
+work.
+
+### Takeovers
+
+Count takeovers from GitHub data, not from a value an agent writes. Each ended
+era (its `pdd:working` label was removed) ends in one of three ways:
+
+- A takeover: its claim was already expired when its label was removed (apply the
+  expiry rules above at the removal time, with only earlier facts; a claim comment
+  edited after the removal counts as seen at the removal), and the actor of the
+  removal added the label again at once, within 10 minutes, for a claim record of
+  another coordinator ID or machine.
+- A re-claim: the same, but both claim records name the same coordinator ID and
+  machine. It is not a takeover.
+- Else a release: the normal end of a live claim, or a person's removal of an
+  expired label that no new claim follows at once. It ends the claim chain, and
+  the count starts again at 0.
+
+A takeover and a re-claim continue the claim chain. `claimedAt` is the label
+event time of the first era of the current chain. A removal of `pdd:stuck` at a
+time when the claim was takeover-limited (below) also starts the count again at
+0: this is how a person lets Autopilot continue after the limit. A removal before
+the limit changes nothing. `takeovers` is the count over the eras since the last
+reset (omit it when 0). With `takeovers`, `previousOwner` is
+`{coordinatorId,machine}` of the most recent earlier era of the chain whose claim
+record names another owner than the current claim. `longRunningAlertedAt` is the
+earliest top-level `longRunningAlertedAt` of a claim record in the current chain.
+
+Export `takeoverLimited(claim, self)`: true when `takeovers` plus 1 for an
+expired claim is more than 3. `self` (`{coordinatorId,machine}`, optional) is the
+reader's own coordinator: its own expired claim adds no 1, because taking it back
+is a re-claim. Such a limited claim is not taken over a 4th time, and a 4th
+takeover made anyway does not admit a start. In the snapshot, add the hold
+`Taken over N times; take the stuck path, not another takeover` (N is
+`takeovers`), with `self` from `localOwner` and `localMachine`. It is an ordinary
+hold, so the issue is not eligible. The limit 3 and the 10 minutes are
+constants, not settings.
 
 ## Repository-bound authority
 

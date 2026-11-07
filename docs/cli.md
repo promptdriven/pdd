@@ -53,7 +53,7 @@ These commands store settings and determine trust. Selecting a mode starts no ru
 | `pdd autopilot alerts set --discord-channel ID [--token-command CMD]` | Use a Discord bot in one channel: read its token from stdin, or save CMD and run it at each send to get the token |
 | `pdd autopilot alerts test` | Send one test message and confirm that it was posted; for a bot, first check and show the bot name and channel name |
 | `pdd autopilot alerts clear` | Remove the alert destination from this machine |
-| `pdd autopilot alert --issue N --kind usage-limit\|resource\|access\|decision\|stuck\|recovered --input - [--update]` | For the coordinator: record one alert and send it to this machine's destination |
+| `pdd autopilot alert --issue N --kind usage-limit\|resource\|access\|decision\|stuck\|long-running\|recovered --input - [--update]` | For the coordinator: record one alert and send it to this machine's destination |
 
 The launcher uses the repository settings module to read root `pdd.json`. An
 active mode is `observe` or `auto`; missing or invalid settings count as `off`. It uses an
@@ -133,7 +133,7 @@ coordinator may take it over. The last-seen time is only the claim comment's Git
 time; the recorded `lastSeen` value never extends a claim. In `off` mode a tick
 does nothing on this machine: it releases no claim and writes no `lastSeen`, so the claims expire after 4 hours, as
 on a stopped machine; their runs then cannot open or update a PR. After 4
-hours stuck, the owner tries a changed approach or asks for help, and the claim then expires. Related PRs are associated through same-repository closing references;
+hours stuck, the owner tries a changed approach or asks for help, and the claim then expires. After a ceiling (the repair limit or the takeover limit), the owner does not retry and sends no second alert. After 3 takeovers of one issue, its expired claim is not taken over again: `pdd graph` shows "Taken over 3 times", a 4th start is refused, and the tick asks one coordinator once to take the stuck path. A takeover is the removal of an expired `pdd:working` whose remover adds the label again within 10 minutes for another coordinator or machine. A coordinator that takes back its own expired claim (same coordinator ID and machine) makes no takeover. To let Autopilot continue after the takeover limit, a person removes `pdd:stuck`: this resets the count. A normal release, or a person's removal of an expired `pdd:working`, also starts the count again. When people and coordinators share one GitHub login, pdd cannot tell them apart: a person's cleanup of an expired `pdd:working` followed by an Autopilot claim within 10 minutes counts as a takeover. Removing `pdd:stuck` at the limit always resets the count. 24 hours after the claim with no merge, the tick asks the owner once for an informational alert and records it in the claim comment, so that no machine sends it again; work continues. Related PRs are associated through same-repository closing references;
 trusted PR discussion comments and state transitions can wake waiting work once.
 Claimed issues stay identified as claimed when a trusted change needs attention.
 `add` rejects foreign repository references before writing any labels. Status
@@ -186,7 +186,8 @@ view the channel, send messages and read message history.
 The coordinator alerts only for a real need: an AI account usage limit (with the
 reset time when known), a CPU, memory or disk failure, an access or spending
 decision, an unresolved product choice, or an issue stuck after its retry time.
-It gives the cause, what it tried and what it needs as JSON on stdin:
+It also sends one informational `long-running` alert when an issue was claimed 24
+hours ago and has no merge yet; work goes on. It gives the cause, what it tried and what it needs as JSON on stdin:
 
 ```sh
 pdd autopilot alert --issue 12 --kind usage-limit --input - <<'PDD_ALERT'
@@ -201,7 +202,7 @@ machine, so a limit that blocks 5 runs sends one alert. A call for another
 blocked issue adds that issue to the incident and sends nothing. The machine is
 the name that Autopilot saved at its first start (this checkout's start first),
 else the host name, so a host rename does not open a new incident. An access or spending decision, a product
-decision or a stuck issue is one incident per issue. A repeat call sends
+decision, a stuck issue or a long-running issue is one incident per issue. A repeat call sends
 nothing for a delivered or unconfirmed alert, and sends again an alert that
 failed or had no destination. `--update` sends a material change or the new
 issue list. `--kind recovered` sends one recovery and closes the matching
@@ -314,7 +315,7 @@ The tools are `try_open`, `try_state`, `try_run`, `try_check` and `try_save_case
 
 | Command | What it does |
 |---|---|
-| `pdd workflow done STEP [--summary TEXT] [--skipped REASON]` | Record a finished step. `check`, `try` and `verify` also record pdd's own latest `pdd test`, `pdd lint` and `pdd workflow prove` results, or warn that pdd has none; the summary stays an agent note. `--skipped REASON` records that the step was skipped, and why. Print the next instruction: the next step, the gate, or "pdd opens the PR now". After the last step of an area with a PR gate, push the branch and open the PR |
+| `pdd workflow done STEP [--summary TEXT] [--skipped REASON]` | Record a finished step. `check`, `try` and `verify` also record pdd's own latest `pdd test`, `pdd lint` and `pdd workflow prove` results, or warn that pdd has none; the summary stays an agent note. `--skipped REASON` records that the step was skipped, and why. Print the next instruction: the next step, the gate, or "pdd opens the PR now". After the last step of an area with a PR gate, push the branch and open the PR. In an Autopilot run, a `done` that returns to an earlier step and clears later recorded steps is a repair round; a retry of the same step (after a failed PR open, claim check or push) or a check recorded again on unchanged files is not. After 5 rounds in one area, pdd refuses another, marks the run stuck ("Repair limit reached in AREA: take the stuck path" in `status`) and refuses every later `done` of it. To let Autopilot try again, a person removes `pdd:stuck` and `pdd:working`, then runs `pdd workflow cancel N` in the checkout that holds the stuck run; the next tick starts a new run with a fresh repair count. Without the cancel, a new automatic start of the issue in that checkout waits: "Automatic start deferred: issue has an active run" |
 | `pdd workflow ask QUESTION` | Show the person that the chat waits for an answer in the middle of a step. `status` then says "waiting for you" with the question |
 
 The agent runs these from the run's worktree. pdd finds the run from that folder. You do not run them yourself.
