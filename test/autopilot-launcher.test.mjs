@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, existsSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, existsSync, realpathSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -1041,6 +1041,8 @@ async function relaunchFixture(t, options = {}) {
     }
     return {};
   };
+  f.panes = panes;
+  f.live = () => [...panes.values()].filter(pane => pane.agent && !pane.closed).map(pane => pane.pane_id);
   f.packet = (index = -1) => JSON.parse(f.prompts.at(index).trimEnd().split('\n').at(-1));
   f.context = launch => JSON.parse(codexConfigs(launch.argv).set.PDD_AUTOPILOT_CONTEXT);
   f.saveState = change => { const state = f.state(); change(state); writeFileSync(f.stateFile(), JSON.stringify(state)); };
@@ -1144,4 +1146,200 @@ test('relaunch: stop and start with an upgraded package gives the fresh chat the
   assert.equal(f.delivered.at(-1), 'w2:p1');
   assert.ok(f.prompts.at(-1).includes(JSON.stringify(join(root, 'skills', 'pdd-autopilot', 'SKILL.md'))), 'the fresh chat reads the upgraded skill');
   assert.equal(f.packet().recipeFirst, true);
+});
+
+// Issue 3037 review M1: a failure after the relaunch `pane close` leaves the saved state naming the
+// closed pane. Herdr answers `agent_not_found` for that pane, so only `pane get` shows that it is gone.
+// Each case stops the relaunch at one point after the close; a later tick or start must replace the pane.
+const afterClose = {
+  'a Herdr error': f => {
+    const real = f.ports.herdr; let closed = false;
+    f.ports.herdr = async args => {
+      if (closed && args[0] === 'pane' && args[1] === 'get') { closed = false; throw Object.assign(Error('Herdr timed out'), { code: 'timeout' }); }
+      const reply = await real(args);
+      if (args[0] === 'pane' && args[1] === 'close') closed = true;
+      return reply;
+    };
+    return () => { f.ports.herdr = real; };
+  },
+  'a failed state save': f => {
+    // The state file is a folder for the one save after the close, so that save fails.
+    const real = f.ports.herdr, warn = f.ports.warn, file = f.stateFile(), aside = `${file}.aside`; let closed = false, swapped = false;
+    f.ports.herdr = async args => {
+      if (closed && args[0] === 'pane' && args[1] === 'get') { closed = false; renameSync(file, aside); mkdirSync(file); swapped = true; }
+      const reply = await real(args);
+      if (args[0] === 'pane' && args[1] === 'close') closed = true;
+      return reply;
+    };
+    f.ports.warn = text => { if (swapped) { rmSync(file, { recursive: true }); renameSync(aside, file); swapped = false; } warn(text); };
+    return () => { assert.equal(swapped, false); f.ports.herdr = real; f.ports.warn = warn; };
+  },
+  'a process end': f => {
+    // Nothing after the close runs or reaches the disk: the saved state stays as it was at the close.
+    const real = f.ports.herdr, file = f.stateFile(); let snapshot = null;
+    f.ports.herdr = async args => {
+      if (snapshot) throw Object.assign(Error('process ended'), { code: 'process_ended' });
+      const reply = await real(args);
+      if (args[0] === 'pane' && args[1] === 'close') snapshot = readFileSync(file);
+      return reply;
+    };
+    return () => { writeFileSync(file, snapshot); f.ports.herdr = real; };
+  },
+};
+for (const [failure, inject] of Object.entries(afterClose)) for (const recovery of ['a plain tick', 'stop and start']) {
+  test(`relaunch: after ${failure} after the close, ${recovery} replaces the gone pane for the same coordinator`, async t => {
+    const f = await relaunchFixture(t);
+    assert.equal((await f.invoke('start')).exitCode, 0);
+    const original = f.state();
+    f.saveState(state => { delete state.ownerLaunch.fingerprint; });
+    const finish = inject(f), prompts = f.prompts.length;
+    f.issues = [issue(90)]; f.time += 60 * 1000;
+    try { await f.tick(); } catch { /* A simulated process end may end the tick. */ }
+    finish();
+    assert.deepEqual(f.closed, ['w1:p1']);
+    assert.equal(f.state().paneId, 'w1:p1', 'the saved state still names the closed pane');
+    assert.equal(f.launches.length, 1); assert.equal(f.prompts.length, prompts);
+    // GitHub still lists issue 90; a lost ETag gets the full list again.
+    f.time += 30 * 60 * 1000;
+    if (recovery === 'a plain tick') await f.tick();
+    else {
+      assert.equal((await f.invoke('stop')).exitCode, 0);
+      const started = await f.invoke('start');
+      assert.equal(started.exitCode, 0, started.message);
+    }
+    const after = f.state();
+    assert.deepEqual(f.launches.map(launch => launch.pane), ['w1:p1', 'w2:p1']);
+    assert.equal(after.paneId, 'w2:p1'); assert.equal(after.ownerLaunch.paneId, 'w2:p1');
+    assert.equal(after.coordinatorId, original.coordinatorId, 'claims stay with the same coordinator');
+    assert.equal(after.machine, original.machine); assert.equal(after.activatedAt, original.activatedAt);
+    assert.equal(after.ownerLaunch.terminalId, 'term2');
+    assert.equal(f.context(f.launches.at(-1)).coordinatorId, original.coordinatorId);
+    assert.equal(f.delivered.at(-1), 'w2:p1'); assert.match(f.prompts.at(-1), /"number":90,/);
+    assert.equal(f.packet().recipeFirst, true, 'the fresh chat gets the start-up recipe');
+    assert.deepEqual(f.live(), ['w2:p1'], 'one coordinator chat');
+    const quiet = f.herdrCalls.length; f.status = 304; await f.tick();
+    for (const [group, action] of [['workspace', 'create'], ['pane', 'run'], ['pane', 'close']]) assert.equal(herdrSince(f, quiet, group, action).length, 0, `${group} ${action}`);
+    assert.doesNotMatch((await f.invoke('status')).message, /coordinator unavailable|relaunch (pending|held)/);
+  });
+}
+
+// Issue 3037 review F1: a Herdr server restart can give the saved pane id to a new terminal. The
+// saved terminal identity keeps the relaunch from closing it and keeps work out of it.
+const otherTerminal = {
+  'another chat has': f => { Object.assign(f.panes.get('w1:p1'), { terminal_id: 'term-restarted' }); },
+  'an empty restored pane has': f => { Object.assign(f.panes.get('w1:p1'), { terminal_id: 'term-restarted', agent: false }); },
+  'another chat gets just before the close': f => {
+    const real = f.ports.herdr; let gets = 0;
+    f.ports.herdr = async args => {
+      if (args[0] === 'agent' && args[1] === 'get' && args[2] === 'w1:p1' && ++gets === 2) Object.assign(f.panes.get('w1:p1'), { terminal_id: 'term-restarted' });
+      return real(args);
+    };
+  },
+};
+for (const [variant, restart] of Object.entries(otherTerminal)) for (const due of [true, false]) {
+  if (!due && variant.endsWith('before the close')) continue;
+  test(`relaunch: a saved pane id that ${variant} after a Herdr restart stays open and gets no work${due ? ' when a relaunch is due' : ''}; the coordinator gets a fresh pane`, async t => {
+    const f = await relaunchFixture(t);
+    assert.equal((await f.invoke('start')).exitCode, 0);
+    const original = f.state();
+    if (due) f.saveState(state => { delete state.ownerLaunch.fingerprint; });
+    restart(f);
+    const restarted = (await f.invoke('status')).message;
+    const calls = f.herdrCalls.length, prompts = f.prompts.length;
+    f.issues = [issue(97)]; f.time += 60 * 1000; await f.tick();
+    assert.deepEqual(f.closed, [], 'the other pane is never closed');
+    assert.equal(f.panes.get('w1:p1').closed, false);
+    for (const [group, action] of [['agent', 'prompt'], ['pane', 'run'], ['pane', 'close']]) assert.equal(herdrSince(f, calls, group, action).filter(args => args[2] === 'w1:p1').length, 0, `${group} ${action}`);
+    const after = f.state();
+    assert.equal(after.paneId, 'w2:p1'); assert.equal(after.coordinatorId, original.coordinatorId);
+    assert.deepEqual(f.launches.map(launch => launch.pane), ['w1:p1', 'w2:p1']);
+    assert.equal(f.prompts.length, prompts + 1); assert.equal(f.delivered.at(-1), 'w2:p1');
+    assert.match(f.prompts.at(-1), /"number":97,/); assert.equal(f.packet().recipeFirst, true);
+    assert.equal(f.state().relaunchTargets, undefined, 'a replaced pane is not a relaunch');
+    assert.equal(original.ownerLaunch.terminalId, 'term1', 'the launch saves the terminal identity');
+    if (!variant.endsWith('before the close')) assert.match(restarted, /coordinator unavailable \((saved target does not match|missing)\)/, 'status does not report the other terminal as the coordinator');
+    assert.match((await f.invoke('status')).message, /coordinator idle/);
+  });
+}
+
+test('relaunch: a saved delivery with uncertain custody blocks the relaunch', async t => {
+  const f = await relaunchFixture(t);
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  f.saveState(state => {
+    delete state.ownerLaunch.fingerprint;
+    state.deliveryIntent = { version: 2, paneId: state.paneId, workspaceId: state.workspaceId, at: f.time - 1000, fingerprint: null, payloadDigest: 'earlier' };
+  });
+  const calls = f.herdrCalls.length;
+  f.issues = [issue(93)]; f.time += 60 * 1000; await f.tick();
+  assert.deepEqual(f.closed, []);
+  assert.equal(herdrSince(f, calls, 'pane', 'run').length, 0);
+  assert.equal(herdrSince(f, calls, 'workspace', 'create').length, 0);
+  assert.equal(f.state().paneId, 'w1:p1');
+  assert.doesNotMatch((await f.invoke('status')).message, /relaunch (pending|held)/);
+});
+
+test('relaunch: the hold rechecks the chat just before the close and closes nothing when it is working', async t => {
+  const f = await relaunchFixture(t);
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  f.saveState(state => { delete state.ownerLaunch.fingerprint; });
+  const real = f.ports.herdr; let gets = 0;
+  // The first `agent get` in the wake sees an idle chat; the recheck inside the hold sees a new turn.
+  f.ports.herdr = async args => { if (args[0] === 'agent' && args[1] === 'get' && ++gets === 2) f.agentStatus = 'working'; return real(args); };
+  const calls = f.herdrCalls.length, prompts = f.prompts.length;
+  f.issues = [issue(94)]; f.time += 60 * 1000; await f.tick();
+  assert.equal(gets, 2);
+  assert.deepEqual(f.closed, []); assert.equal(f.prompts.length, prompts);
+  assert.equal(herdrSince(f, calls, 'pane', 'run').length, 0);
+  assert.ok(f.warnings.some(text => /could not be closed safely/.test(text)));
+  f.ports.herdr = real; f.agentStatus = 'idle'; f.status = 304; await f.tick();
+  assert.deepEqual(f.closed, ['w1:p1']); assert.equal(f.delivered.at(-1), 'w2:p1');
+  assert.match(f.prompts.at(-1), /"number":94,/);
+});
+
+test('relaunch: a blocked chat is not closed and gets no input; status shows the pending relaunch', async t => {
+  const f = await relaunchFixture(t);
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  f.saveState(state => { delete state.ownerLaunch.fingerprint; });
+  f.agentStatus = 'blocked';
+  const calls = f.herdrCalls.length, prompts = f.prompts.length;
+  f.issues = [issue(95)]; f.time += 60 * 1000; await f.tick();
+  assert.deepEqual(f.closed, []); assert.equal(f.prompts.length, prompts);
+  assert.equal(herdrSince(f, calls, 'pane', 'run').length, 0);
+  const status = (await f.invoke('status')).message;
+  assert.match(status, /coordinator blocked/);
+  assert.equal(status.split('\n').filter(text => /^Coordinator relaunch pending after upgrade/.test(text)).length, 1, status);
+  f.agentStatus = 'idle'; f.status = 304; await f.tick();
+  assert.deepEqual(f.closed, ['w1:p1']); assert.equal(f.delivered.at(-1), 'w2:p1');
+});
+
+test('relaunch: a second relaunch for the same fingerprint is held; the current chat gets work and status shows one line', async t => {
+  const f = await relaunchFixture(t);
+  const older = join(f.dir, 'pdd-other-install');
+  mkdirSync(older); writeFileSync(join(older, 'package.json'), JSON.stringify({ name: 'pdd', version: '0.0.1' }));
+  // Starts from two installs alternate, so the fingerprint changes on each start.
+  for (const packageRoot of [older, root, older]) assert.equal((await f.invoke('start', { packageRoot })).exitCode, 0);
+  const original = f.state();
+  assert.deepEqual(f.closed, ['w1:p1', 'w2:p1']); assert.equal(f.launches.length, 3);
+  const writes = f.githubWrites().length, prompts = f.prompts.length;
+  const started = await f.invoke('start');
+  assert.equal(started.exitCode, 0, started.message);
+  assert.deepEqual(f.closed, ['w1:p1', 'w2:p1'], 'no third relaunch');
+  assert.equal(f.launches.length, 3);
+  assert.equal(f.prompts.length, prompts + 1); assert.equal(f.delivered.at(-1), 'w3:p1', 'the current chat gets work');
+  assert.equal(f.warnings.filter(text => /did not relaunch the coordinator chat again/.test(text)).length, 1);
+  const held = (await f.invoke('status')).message;
+  assert.equal(held.split('\n').filter(text => /^Coordinator relaunch held/.test(text)).length, 1, held);
+  assert.doesNotMatch(held, /relaunch pending/);
+  assert.equal(original.relaunchTargets.length, 2, 'the relaunch record');
+  f.status = 304; await f.tick();
+  assert.equal(f.launches.length, 3); assert.equal(f.closed.length, 2);
+  assert.equal(f.warnings.filter(text => /did not relaunch the coordinator chat again/.test(text)).length, 1, 'one warning');
+  assert.equal(f.githubWrites().length, writes);
+  // A person closes the coordinator pane: a fresh chat starts with the current settings.
+  f.panes.get('w3:p1').closed = true;
+  f.issues = [issue(98)]; f.status = 200; f.time += 60 * 1000; await f.tick();
+  assert.equal(f.launches.at(-1).pane, 'w4:p1'); assert.equal(f.delivered.at(-1), 'w4:p1');
+  assert.equal(f.state().ownerLaunch.fingerprint, f.module.autopilotLaunchFingerprint(f.state()));
+  assert.equal(f.state().coordinatorId, original.coordinatorId);
+  assert.doesNotMatch((await f.invoke('status')).message, /relaunch (pending|held)/);
 });
