@@ -14,7 +14,7 @@ coordinator and worker chats make themselves are not counted.
 | Export | Result |
 |---|---|
 | `GITHUB_PURPOSES` | `['dependencies','claims','issues','pulls','writes','setup','other']`, in status order |
-| `GITHUB_SHARE`, `GITHUB_FLOOR` | The defaults `30` (percent) and `500` (calls) |
+| `GITHUB_SHARE`, `GITHUB_FLOOR` | The defaults `30` (percent) and `1000` (calls) |
 | `githubCall(args)` | `{api, method, endpoint, conditional}` of one gh argument list |
 | `githubPurpose(args)` | The purpose of a call that its caller does not name |
 | `githubRepository(args)` | The lowercase `owner/name` that a call names, or `null` |
@@ -29,7 +29,8 @@ coordinator and worker chats make themselves are not counted.
 | `githubBudgetSettings(value)` | `{share, floor}` from `autopilot.github` in `pdd.json` |
 | `githubBudget({usage, share, floor})` | See [Budget](#budget) |
 | `githubStatusLine({usage, machine, budget})` | The one status line |
-| `githubEtagCache({root, repository, fs})` | `{file, get(endpoint), set(endpoint, entry), save()}` |
+| `githubEtagCache({root, repository, fs, now})` | `{file, get(endpoint), set(endpoint, entry), save()}` |
+| `githubFloorGuard({floor, entries, now})` | `{floor, observe(reply), blocked(resource), stopped}`: see [Floor guard](#floor-guard) |
 | `githubFullLastPage(endpoint, items, next)` | True for a [full last page](#full-last-page): never read it with its ETag |
 
 `fs` is the injected file port (native `node:fs`). `now` is a clock in
@@ -136,9 +137,13 @@ limit for the person:
   machine can reach before the tick defers its dependency re-sync (`low`). All
   other reads and writes of the tick go on.
 - `floor` is the number of calls left below which the tick makes no GitHub call
-  until the reset, except the heartbeats of its own live claims (`reserve`).
-- `pdd` commands are counted but never wait for the budget. The coordinator and
-  worker chats never wait for it, and their own `gh` calls are not counted.
+  until the reset, except the heartbeats of its own live claims (`reserve`). The
+  default is 1,000, so the person and their other tools keep at least that many.
+- Below the floor, the [floor guard](#floor-guard) also stops the non-safety reads
+  of the tick and of `pdd dependencies prepare` and `complete` for an Autopilot
+  repository. Safety reads and writes go on. Other `pdd` commands are counted but
+  never wait. The coordinator and worker chats never wait for the budget, and
+  their own `gh` calls are not counted.
 
 `githubBudgetSettings(value)` reads `share` (an integer from 1 to
 100) and `floor` (an integer, 0 or more) from the object `autopilot.github` in
@@ -178,13 +183,32 @@ budget part is absent without `budget`. `X` is the rounded percentage.
 ## ETag cache
 
 `githubEtagCache` keeps `ROOT/github/H.etags.json` (the same `H`), an object
-from endpoint to `{etag, body, next}`: the ETag, the exact body text and the next
-page path of a 200 reply. `get` returns a saved entry with a string `etag` and
-`body`, else undefined. `set` keeps an entry with a nonempty `etag`. `save`
-writes, through a temporary file and a rename, only the entries that this read
-got or set, so the file holds the working set of the last read. A read that got
-or set no entry (it failed early) keeps the saved file. A read or write
-failure gives an empty cache or a lost save; it only costs counted reads.
+from endpoint to `{etag, body, next, at}`: the ETag, the exact body text and the
+next page path of a 200 reply, and the time (`now`) when this cache last got or
+set it. `get` returns a saved entry with a string `etag` and `body`, else
+undefined. `set` keeps an entry with a nonempty `etag`. The tick and the `pdd`
+commands of one repository share this file. So `save` merges: it reads the file
+as it is then, puts the entries that this cache got or set over it, and keeps
+the entries used in the last 24 hours, newest first, at most 5,000 entries and
+32 MiB of bodies. It writes through a temporary file and a rename, mode 0600. A
+cache that got or set no entry (it failed early) keeps the saved file. A read or
+write failure gives an empty cache or a lost save; it only costs counted reads.
+
+<a id="floor-guard"></a>
+### Floor guard
+
+`githubFloorGuard({floor, entries, now})` starts from the newest valid rate of
+each resource in `entries` (as `githubUsage` gives it) and follows each later
+reply: `observe(reply)` takes the `rate` of a `githubReply` result, and a reply
+without rate headers changes nothing. `blocked(resource)` (default `core`) is
+true while the newest remaining of that resource is less than `floor` and its
+reset is not past; then `stopped` stays true for this guard. A caller asks
+`blocked('core')` before each non-safety REST read and `blocked('graphql')`
+before a non-safety GraphQL read, and stops that read. Safety reads (claim
+checks, heartbeats, trust and permission reads, the reads that a write depends
+on and readbacks after writes) and writes never ask it. A rate-limit reply (403
+or 429 with no calls left) is a reply with remaining 0, so the reads after it
+stop at once instead of failing one by one.
 
 <a id="full-last-page"></a>
 ### A full last page
@@ -210,4 +234,4 @@ navigation only: the [Autopilot launcher](autopilot-launcher.prompt.md#github-bu
 counts its calls, applies the budget, shows the status line and reads review
 pages with the full-last-page rule; the
 [dependency GitHub reader](issue-dependencies-github.prompt.md#conditional-reads)
-uses the ETag cache and the full-last-page rule.
+uses the ETag cache, the full-last-page rule and the floor guard.

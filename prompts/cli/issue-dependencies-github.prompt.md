@@ -6,7 +6,9 @@ Own `src/issue-dependencies-github.mjs`. Export module functions
 `applyDependencyChanges({cwd,repository,issue,reviewId},ports)` and
 `saveDependencyImpact({repository,issue,impact},ports)`, plus the claim
 heartbeat functions `refreshClaimHeartbeat` and `withoutClaimHeartbeat`
-([claims](#claims-heartbeat-and-expiry)).
+([claims](#claims-heartbeat-and-expiry)), and the
+[saved snapshot](#saved-dependency-snapshot) functions `dependencySnapshotStore`,
+`issueRowVersion` and `commandGithubFloor`.
 Own GitHub transport, append-only review storage and recovery. The pure model owns
 which review is current and what is ready. No function calls AI or starts work.
 All outside access uses injected ports. Existing issue bodies and comments remain
@@ -42,9 +44,12 @@ Read capture time through injected `clock.now({})`, returning `{iso}`.
 The default native adapter may batch fresh observations for unclaimed root issues:
 read their issue fields, including the complete current GitHub Assignees field,
 lossless native IDs, labels, complete comments, blocked-by,
-blocking and cross-referenced open PR history directly from GitHub. Reuse these
-observations only within that snapshot; a saved projection or issue timestamp does
-not establish freshness. Each nested connection must be complete and validated.
+blocking and cross-referenced open PR history directly from GitHub. Without a
+[saved snapshot](#saved-dependency-snapshot), reuse these observations only within
+that snapshot. With one, a saved read whose change facts match the current issue
+row is current for review data; a saved projection or issue timestamp never
+establishes freshness for a [safety read](#safety-reads). Each nested connection
+must be complete and validated.
 If the batch, any required field or pagination is unavailable or incomplete, use
 the existing REST reads for the affected root; a failed required read makes the
 snapshot incomplete. Claimed issues retain full current claim-history and owner
@@ -80,7 +85,14 @@ union of their durable non-issue locators; inputs is omitted when that union is 
 A review's link row comes from native links through the pure model; it is not a locator to read.
 Its default uses actual bytes in a verified selected-repository checkout, or the
 same repository's current default-branch content API when no matching checkout
-exists. Within one context read, the verified checkout/repository resolution may be reused for its source locators; each source byte and comment revision is still read fresh, and a later context read resolves again. Read native comments by their owning repository/issue/comment identity.
+exists. Within one context read, the verified checkout/repository resolution may be reused for its source locators; each source byte is still read fresh, and a later context read resolves again. Read native comments by their owning repository/issue/comment identity.
+A comment row takes its body from the complete comment pages of its issue that
+this process read (the [read session](#saved-dependency-snapshot)): one GET for
+each comment is not needed. A comment that is not on those complete pages is
+gone, hence missing. Only a comment of an issue that this process did not read is
+one more read. The native context reads the supplied inputs once, at the end of
+the snapshot, with the saved review rows; a supplied context port keeps its first
+read with the inputs.
 An unavailable local-only plan or required source stays missing, hence stale or
 pending. Recovery with empty cache follows the saved input locators, never a local
 cache or the old packet. Unrelated paths are not part of this comparison.
@@ -111,8 +123,18 @@ searches for its own earlier comment, so a new claim, a label event or a record
 after a full page is seen. A 200 reply with an ETag replaces
 the saved entry. Without a saved entry, or for a write, the request is as before;
 any other non-2xx reply is the existing failure. This is not a saved projection:
-each read still asks GitHub, so freshness stays as above. Without the port no
-request changes.
+each read still asks GitHub, so freshness stays as above. The launcher tick
+supplies its cache. For every other caller of the native ports (the `pdd
+dependencies` commands, the workflow start and continuation checks, the graph)
+the default is the same ETag file of the repository when Autopilot runs for it on
+this machine (its [call ledger](github-calls.prompt.md#ledger) exists in the state
+root); each top-level read, owners read, record save and evidence read saves it.
+For another repository, and with caller-supplied GitHub ports, no request changes.
+
+With a `githubFloor` port (the [floor guard](github-calls.prompt.md#floor-guard)),
+each native GET and the batch GraphQL read first ask the guard, unless it is a
+[safety read](#safety-reads); a blocked read fails like an unavailable read, so
+the snapshot is incomplete. Each reply goes to `observe`. Writes never ask it.
 
 The native runner passes an optional `purpose` in the options of each call for
 the [call ledger](github-calls.prompt.md#ledger): the claim reads of the owners
@@ -122,6 +144,114 @@ batch GraphQL read names its `repository`.
 supplied port can ignore it. The native default runner records each gh call
 through `nativeGithubCounter` with the default purpose `dependencies`, in the
 ledger of the repository that the call names.
+
+<a id="saved-dependency-snapshot"></a>
+## Saved dependency snapshot
+
+Why: on a repository with about 200 open issues, each tick read every issue,
+comment, link and history again, and Autopilot used the whole GitHub limit of the
+login. Most issues do not change in 30 minutes. So one process reads only what
+changed since the saved snapshot, and all callers use the same snapshot.
+
+**Read session.** `createDependencyReadPorts` gives native ports (no supplied
+`github`) one read session as the port `dependencyReads`, and keeps a supplied
+one; the ports that a caller passes on keep it. A session lives for one process
+(one tick, one command). It holds: the issue list and the issue reads of this
+process, the saved snapshot of each repository, the comment bodies of the
+complete comment pages read (`noteComments`), the claims of the last snapshot
+(`owners`), the trust lookups of each repository, and a safety count for
+readbacks.
+
+**Store.** `dependencySnapshotStore({root, repository, fs})` keeps
+`ROOT/github/H.snapshot.json` (the `H` of the [call ledger](github-calls.prompt.md#ledger)),
+folder 0700, file 0600, written through a temporary file and a rename. Version 1:
+`{v:1, repository, refreshedAt, list:{readAt, since, rows}, issues, invalid}`.
+`rows` maps each open issue number (no pull requests) to its issue row; `issues`
+maps an issue number to `{version, observedAt, kinds:{comments, blockedBy,
+blocking, timeline}, raw?, partialTimeline?}`; `invalid` maps an issue number to
+the time of a write. Another version or repository is no snapshot. `save` merges
+with the file as it is then: the newer `refreshedAt` wins; with the same one, the
+newer list read wins (this save on a tie), each issue keeps its newer observation,
+and an observation older than the issue's `invalid` time is dropped. The oldest
+issue reads go first above 64 MiB or 10,000 issues; a list alone above 64 MiB is
+not saved. The store also has `completion` (`read`, `save`, `clear`) for the
+[kept completion](issue-dependencies-intake.prompt.md#kept-completion) beside it,
+`ROOT/github/H.completion.json`, mode 0600. A lost or failed save only costs reads.
+The launcher supplies the store as `snapshotStore`. Native ports default to the
+store of a repository where Autopilot runs on this machine (its ledger exists
+under `autopilotStateRoot`, else `$HOME/.local/state/pdd/autopilot`);
+`snapshotStore: null` turns it off. Without a store, no read is reused across
+processes and the snapshot reads as before.
+
+**Change facts.** `issueRowVersion(row)` is the JSON list `[updated_at, comments,
+state, issue_dependencies_summary]` of a GitHub issue row, or null when
+`updated_at` is not a valid time. A row with null facts is never reused. GitHub
+moves `updated_at` for an edit, a comment, a comment edit, a label or a close; the
+link counts in `issue_dependencies_summary` show a link change too.
+
+**Issue list.** With a store, the snapshot reads the open issue list through the
+session:
+
+| Saved snapshot | Read |
+|---|---|
+| None, older than 24 hours, or from the future | Full refresh: `state=open&per_page=100`, all pages. `refreshedAt` is now; no saved issue read is reused |
+| Current | `state=all&sort=updated&direction=desc&since=W&per_page=100`, all pages, applied to the saved rows: an open issue replaces its row, any other row leaves the list, and a closed issue whose facts changed loses its saved read |
+| Current, and the caller asks for the saved list (`savedList`) and this process wrote nothing | No list read: the saved rows |
+
+`W` is the newest `updated_at` that a read saw, minus 5 minutes, and it never
+moves back. All list reads use the ETag cache. A list that is not read in full
+gives its rows so far as partial roots (incomplete scope) and is never saved. A
+deleted or transferred issue leaves the list only at the next full refresh,
+within 24 hours.
+
+**Issue reads.** An issue read is current when this process read it after the
+list, or when its saved read has the change facts of its current row, was
+observed after `refreshedAt`, and no write of this process or a later saved
+`invalid` time came after it. A closed same-repository issue outside the list
+keeps its saved read only between full refreshes (a `since` read shows its
+changes). An issue in another repository is always read. With a store, an open
+root issue is its current list row; a current saved read serves its comments,
+links and history; the batch GraphQL read covers only the roots that are not
+current; every other read goes to GitHub and is recorded. At the end of a
+snapshot whose list read was complete, the session saves the list and each issue
+read in full; a partial issue read is not saved, and its row then shows that it
+needs a read.
+
+**Writes.** A comment append or a new link through the session first and again
+after the write marks the issue: this process reads it live again, its row
+leaves the session list, and the saved store gets its `invalid` time.
+
+**Claims.** The claim scan inside a snapshot reads through the session, so an
+unchanged claimed issue costs no call, and claim expiry is computed again with
+the current time. Its observation is the session's `owners`, so the tick and
+prepare need no second claim read of all open issues. A batch history has only
+PR references, so a claim check never takes it from the store.
+
+<a id="safety-reads"></a>
+**Safety reads.** These always ask GitHub. A 304 reply is a live answer; a skip
+because of `since`, the change facts or the store is not allowed:
+
+- the default owners port (`owners.read` outside a snapshot): the claim checks
+  before a start, a push, an approve, a park, an open, a yield and a merge, and the
+  owner check of a completion; the native owners port is live, and only the claim
+  scan inside one snapshot reads through the session;
+- the subject of `checkDependencyStart`: the session reads its issue, claim,
+  labels and links live (`live`), not from the store;
+- the heartbeat of an own claim and its readback;
+- trust: the repository and collaborator reads (once for each repository in one
+  process);
+- the history and comments that a write depends on, and the readback of each
+  comment append and new link.
+
+The floor guard never stops a safety read. The pre-write history read of
+`applyDependencyChanges` uses the live port, and its readback snapshots after a
+link write count as safety reads.
+
+`commandGithubFloor({cwd,repository},ports)` returns the floor guard of a `pdd
+dependencies` command for a repository where Autopilot runs on this machine: the
+floor of `autopilot.github` in the checkout's `pdd.json` (default 1,000) and the
+newest limit in the ledgers of this machine. It returns a supplied `githubFloor`,
+and null for other repositories or supplied GitHub ports.
 
 ## Claims, heartbeat and expiry
 

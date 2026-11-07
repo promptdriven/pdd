@@ -20,7 +20,10 @@ their existing owners. It is distinct from steps/handoff.md.
   ones first; the next request carries the rest.
 - A `pending` completion names a `reason` and the `rows` behind it. For
   `answer-row-mismatch`, copy the named rows exactly from the request and complete
-  again in the same session. For other reasons, do not loop: Autopilot delivers the
+  again in the same session. For `github-limit`, `observations-incomplete` and
+  `write-unconfirmed`, Autopilot keeps your analysis and saves the rest after the
+  reset or the next tick; reviews already saved are not saved twice. For other
+  reasons, do not loop: Autopilot delivers the
   same subjects again after about 30 minutes, at most 3 times, and names the last
   reason in "Repeated request N of 3". Then it asks one question on each issue.
 - Reuse saved current reviews. A new or unrelated edited issue does not make them
