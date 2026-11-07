@@ -67,17 +67,23 @@ worktree in this checkout. So check this first, read-only. Call the
 [worktree allocator](workflow-worktree.prompt.md#verified-repository-parent)
 export `lookupRepositoryParent({cwd,repository,commonDir})` with the checkout,
 its canonical Git common directory and the Autopilot repository, through the
-launcher's process port. Use only that export: it applies the allocator's own
-identity checks, and the allocator owns which Git layouts it supports. Ready
-means workflows can start here. The check makes no AI call, no GitHub call, no
-allocation record, no issue claim and no worktree. An `allocationCheck({cwd,repository})`
-port can replace it and returns `{state:"ready"|"refused",message}`.
+launcher's process port. That export alone decides: it applies the allocator's
+own identity checks, and the allocator owns which Git layouts and origins it
+supports. The launcher has no origin or layout rule of its own, so a checkout
+that the allocator accepts is never refused. Ready means workflows can start
+here. The check makes no AI call, no GitHub call, no allocation record, no issue
+claim and no worktree. An `allocationCheck({cwd,repository})` port can replace it
+and returns `{state:"ready"|"refused",message}`.
 
-On a refusal, name the cause from local Git reads, in this order: no `origin`
-remote; an `origin` that is not a GitHub repository address; an `origin` that
-names another repository than the Autopilot repository; else a Git layout that
-pdd cannot verify. Never print the origin URL. End with the next step: run
-Autopilot from a normal clone of the repository.
+Only after a refusal, name the cause from local Git reads, in this order: Git
+could not be read (for example a timeout), with the next step to retry; no
+`origin` remote; an `origin` that is not a GitHub repository address; an `origin`
+that names another repository than the Autopilot repository; else a Git layout
+that pdd cannot verify. Read the origin's repository with the
+[allocator's](workflow-worktree.prompt.md) `githubOriginRepository`, so both
+accept the same origins. Never print the origin URL. Except for a Git read
+failure, end with the next step: run Autopilot from a normal clone of the
+repository.
 
 - Start runs the check after it knows the repository and before it checks
   sign-ins, opens a workspace, launches an agent or changes the timer. A refusal
@@ -85,10 +91,12 @@ Autopilot from a normal clone of the repository.
   step. It enables nothing, claims nothing and leaves every timer as it was,
   including the timers of other checkouts.
 - A tick runs the check only when it is about to offer fresh work: an eligible
-  issue without a live claim. On a refusal, the tick offers no fresh work and warns
+  issue without a live claim and without a hold label (`pdd:stuck`,
+  `pdd:code-pending`). On a refusal, the tick offers no fresh work and warns
   with the folder and the cause. It does not mark those issues seen, so a later
   tick offers them when workflows can start. Other deliveries stay as they are:
-  the start-up recipe, dependency review, time rules, reviews and own claims.
+  the start-up recipe, dependency review, time rules, own claims, and reviews and
+  trusted comments on claimed or held issues.
 - Status runs the check with the saved repository, or else the repository that
   `origin` names, and makes no GitHub call. On a refusal it adds the line
   `Workflows cannot start in this folder: CAUSE NEXT STEP` right after its first line.
@@ -195,11 +203,20 @@ separately instead of claiming healthy running state when its server is absent.
 
 `status --all` works from any folder, also outside a Git repository. It reads
 each saved launcher state on this machine and prints one line for each:
-repository, folder, mode from that folder's settings (`unknown` when they cannot
-be read), enabled or disabled, timer active or inactive, and coordinator state as
-above. Without saved state it prints `No Autopilot on this machine.` It reads
-local files, timer status and Herdr only: no Git root, no GitHub call, no AI and
-no change.
+repository, folder, mode from that folder's settings, enabled or disabled, timer
+active or inactive, and coordinator state as above. Without saved state it prints
+`No Autopilot on this machine.` It reads local files, timer status and Herdr
+only: no Git root of the caller, no GitHub call, no AI and no change.
+
+Each line is independent: a missing or broken folder or state changes no other
+line. The timer, Herdr server and coordinator reads run from the caller's folder,
+never from a saved folder, so a deleted folder still shows its true timer and
+coordinator. Read the mode only when the saved folder exists and is its Git root;
+else show `unknown` with a short reason: `unknown (no folder saved)`,
+`unknown (folder missing)`, `unknown (not a Git repository)` or
+`unknown (settings unreadable)`. A timer that
+cannot be read shows `timer unknown`. A state file that is not a JSON object
+prints `FILE: saved state unreadable`, and it counts as a line.
 
 Concurrent ticks for one local state serialize with a local
 lock; independent machines have separate state. A lock blocks only for a valid
@@ -741,6 +758,7 @@ reconcile and wake boundaries; injected substitutes reach this same path.
   bundled package path for recipe, room, claim and stuck-run behavior. Its
   references to pdd-check and pdd-merge own their downstream work.
 
+- [Worktree allocator](workflow-worktree.prompt.md): required native generation and verification context for workflow readiness: `lookupRepositoryParent` decides, and `githubOriginRepository` reads the origin's repository for a refusal cause.
 - [Herdr workspace identity](workflow-herdr-layout.prompt.md): required native generation and verification context for comparing the saved checkout and live pane paths.
 - [Area-chat delivery](workflow-chat.prompt.md#message-delivery): required authoring, native generation and verification context for shared readiness and ordered submission.
 - [Agent configuration](agent-config.prompt.md): required native generation and

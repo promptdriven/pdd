@@ -27,11 +27,19 @@ function repository(dir, name, origin, mode = 'auto') {
   return realpathSync(cwd);
 }
 
-function fixture(t, origin = 'https://github.com/owner/repo.git') {
+// `git clone --separate-git-dir`: Git registers the Git directory itself as the primary worktree and finds no
+// work tree there, so the allocator cannot find the primary checkout and refuses. This stays refused after #2698.
+function separateGitDir(cwd) {
+  git(cwd, 'init', '-q', '--separate-git-dir', `${cwd}-git`);
+  return cwd;
+}
+
+function fixture(t, origin = 'https://github.com/owner/repo.git', layout = 'normal') {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-autopilot-readiness-')));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const home = join(dir, 'home'); mkdirSync(home);
   const cwd = repository(dir, 'repo', origin);
+  if (layout === 'separate-git-dir') separateGitDir(cwd);
   const f = { dir, home, cwd, time: Date.parse('2026-11-04T00:00:00Z'), calls: [], timers: [], prompts: [], herdrCalls: [], issues: [], warnings: [] };
   f.ports = {
     stateRoot: join(home, 'state'), now: () => f.time, warn: text => f.warnings.push(text),
@@ -40,6 +48,7 @@ function fixture(t, origin = 'https://github.com/owner/repo.git') {
     run: async (command, args, options = {}) => {
       f.calls.push([command, ...args]);
       if (command === 'git') {
+        if (f.gitTimesOut?.(args)) throw Error('timeout');
         try { return { code: 0, stdout: execFileSync('git', args, { cwd: options.cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }), stderr: '' }; }
         catch (error) { return { code: error.status ?? 1, stdout: String(error.stdout ?? ''), stderr: String(error.stderr ?? '') }; }
       }
@@ -55,7 +64,7 @@ function fixture(t, origin = 'https://github.com/owner/repo.git') {
     },
     timer: async (action, state) => { f.timers.push([action, state.cwd]); return action === 'start' || action === 'status' && f.timers.some(([a, c]) => a === 'start' && c === state.cwd); },
     queryIssues: async () => ({ status: 200, etag: '"one"', issues: structuredClone(f.issues) }),
-    comments: async () => [],
+    comments: async number => structuredClone(f.comments?.[number] ?? []),
     reconcileDependencyIntake: async () => ({ eligible: f.issues.map(row => row.html_url), queued: [], skipped: [] }),
     herdr: async args => {
       f.herdrCalls.push(args);
@@ -110,6 +119,22 @@ test('start refuses a checkout whose origin names another repository, before any
   assert.equal(readFileSync(other, 'utf8'), otherText, "another checkout's Autopilot is unchanged");
 });
 
+test('start refuses a checkout whose Git layout the allocator cannot verify, before any timer, chat or claim', async t => {
+  // The origin names the right repository, so only the allocator's own layout check can refuse here.
+  const f = fixture(t, 'https://github.com/owner/repo.git', 'separate-git-dir');
+
+  const result = await f.invoke('start');
+
+  assert.equal(result.exitCode, 1, result.message);
+  assert.equal(result.message, `Autopilot did not start: pdd workflows cannot start in ${f.cwd}. pdd cannot verify the Git layout of this checkout, so it cannot make issue worktrees here. Run Autopilot from a normal clone of owner/repo. Nothing was started or claimed, and every timer is unchanged.`);
+  assert.ok(f.calls.some(call => call.join(' ') === 'git worktree list --porcelain -z'), 'the allocator read the Git registration');
+  assert.deepEqual(f.timers, [], 'no timer was started, stopped or changed');
+  assert.deepEqual(f.herdrCalls, [], 'no Herdr workspace or chat was opened');
+  assert.ok(!f.calls.some(([command, sub]) => command === 'gh' && sub === 'api'), 'no GitHub claim, label or comment');
+  assert.equal(f.state()?.enabled ?? false, false, 'Autopilot is not enabled for this checkout');
+  assert.equal(f.allocated(), false, 'no allocation record or worktree');
+});
+
 test('start in a normal clone of the repository starts as before and names the repository and folder', async t => {
   const f = fixture(t);
 
@@ -145,6 +170,46 @@ test('a tick holds new issue work while workflows cannot start, then offers it w
   assert.match(f.prompts.at(-1), /"number":7/);
 });
 
+test('a tick holds new issue work in a checkout whose Git layout the allocator cannot verify', async t => {
+  // Autopilot already runs here, for example since before this check existed. Then the checkout gets a separate Git directory.
+  const f = fixture(t);
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  const delivered = f.prompts.length;
+  separateGitDir(f.cwd);
+  f.issues = [issue(7)];
+  f.calls.length = 0;
+  f.time += 30 * 60 * 1000;
+
+  await f.tick();
+
+  assert.equal(f.prompts.length, delivered, 'no packet offers the issue');
+  assert.ok(f.calls.some(call => call.join(' ') === 'git worktree list --porcelain -z'), 'the allocator read the Git registration');
+  assert.deepEqual(f.warnings, [`Autopilot held 1 issue(s): pdd workflows cannot start in ${f.cwd}. pdd cannot verify the Git layout of this checkout, so it cannot make issue worktrees here. Run Autopilot from a normal clone of owner/repo.`]);
+  assert.equal(f.allocated(), false, 'no allocation record or worktree');
+  assert.ok(!f.calls.some(([command, ...args]) => command === 'gh' && args.includes('--method')), 'no claim, label or comment');
+});
+
+test('while workflows cannot start, a tick still delivers a trusted comment on a held issue and holds only new work', async t => {
+  const f = fixture(t);
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  // Issue 8 waits for its code PR (pdd:code-pending). The first tick only records it.
+  f.issues = [{ ...issue(8), labels: [{ name: 'pdd:code-pending' }] }];
+  f.time += 30 * 60 * 1000;
+  await f.tick();
+  const delivered = f.prompts.length;
+
+  git(f.cwd, 'remote', 'set-url', 'origin', 'https://github.com/other/thing.git');
+  f.comments = { 8: [{ id: 81, user: { login: 'owner' }, author_association: 'OWNER', body: 'The code PR can merge now.', created_at: '2026-11-04T02:00:00Z', updated_at: '2026-11-04T02:00:00Z' }] };
+  f.issues = [{ ...issue(8), labels: [{ name: 'pdd:code-pending' }], comments: 1, updated_at: '2026-11-04T02:00:00Z' }, issue(7)];
+  f.time += 30 * 60 * 1000;
+  await f.tick();
+
+  assert.equal(f.prompts.length, delivered + 1, 'one packet goes out');
+  assert.match(f.prompts.at(-1), /The code PR can merge now\./, 'the trusted comment on the held issue is delivered');
+  assert.doesNotMatch(f.prompts.at(-1), /"number":7/, 'the new issue is held');
+  assert.ok(f.warnings.some(text => text.startsWith('Autopilot held 1 issue(s): pdd workflows cannot start in')), f.warnings.join('\n'));
+});
+
 test('status names the folder and says why workflows cannot start there, without GitHub', async t => {
   const f = fixture(t);
   assert.equal((await f.invoke('start')).exitCode, 0);
@@ -164,6 +229,21 @@ test('status names the folder and says why workflows cannot start there, without
   const local = await f.invoke('status');
   assert.equal(local.message.split('\n')[1], 'Workflows cannot start in this folder: Its origin remote is not a GitHub repository address. Run Autopilot from a normal clone of owner/repo.');
   assert.ok(!f.calls.some(([command]) => command === 'gh'), 'status makes no GitHub call');
+});
+
+test('status accepts every origin form that the allocator accepts, and names a Git read failure as one', async t => {
+  const f = fixture(t);
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  for (const origin of ['https://GitHub.com/owner/repo.git', 'https://github.com:443/owner/repo.git', 'https://github.com/Owner/Repo', 'ssh://git@github.com/owner/repo.git', 'git@github.com:owner/repo.git']) {
+    git(f.cwd, 'remote', 'set-url', 'origin', origin);
+    const status = await f.invoke('status');
+    assert.equal(status.exitCode, 0, status.message);
+    assert.doesNotMatch(status.message, /Workflows cannot start/, origin);
+  }
+
+  f.gitTimesOut = args => args[0] === 'remote';
+  const slow = await f.invoke('status');
+  assert.equal(slow.message.split('\n')[1], 'Workflows cannot start in this folder: pdd could not read Git in this checkout. Try again.');
 });
 
 test('outside a Git repository every Autopilot command that needs a repo says so and exits 1', async t => {
@@ -231,4 +311,68 @@ test('status --all lists every repository with Autopilot on this machine from an
   assert.equal(await runPdd(['autopilot', 'status', '--all'], { cwd: outside, env: { HOME: join(dir, 'nobody'), PATH: process.env.PATH }, stdout: empty, stderr: capture(), autopilotLauncherPorts: { ...ports, stateRoot: join(dir, 'nobody', 'state') } }), 0);
   assert.equal(empty.text, 'No Autopilot on this machine.\n');
   assert.equal(dirname(outside), dir);
+});
+
+test('status --all keeps each line independent when a saved folder is gone or a state file is broken', async t => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-autopilot-all-gone-')));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const home = join(dir, 'home'), outside = join(dir, 'not-a-repo'), stateRoot = join(home, 'state');
+  mkdirSync(home); mkdirSync(outside); mkdirSync(stateRoot);
+  const one = repository(dir, 'one', 'https://github.com/owner/one.git', 'auto');
+  const two = repository(dir, 'two', 'https://github.com/owner/two.git', 'observe');
+  const gone = join(dir, 'gone'), id = cwd => createHash('sha256').update(cwd).digest('hex').slice(0, 20);
+  const goneId = '0'.repeat(20); // Sorts first, so a failure there would reach every later line.
+  const files = {
+    [join(stateRoot, `${goneId}.json`)]: JSON.stringify({ repo: 'owner/gone', cwd: gone, enabled: true, timerInstalled: true, paneId: 'p0', workspaceId: 'w0', agent: { id: 'codex', kind: 'codex' } }),
+    [join(stateRoot, `${'1'.repeat(20)}.json`)]: JSON.stringify({ repo: 'owner/plain', cwd: outside, enabled: false }),
+    [join(stateRoot, `${id(one)}.json`)]: JSON.stringify({ repo: 'owner/one', cwd: one, enabled: true, paneId: 'p1', workspaceId: 'w1', agent: { id: 'codex', kind: 'codex' } }),
+    [join(stateRoot, `${id(two)}.json`)]: JSON.stringify({ repo: 'owner/two', cwd: two, enabled: false }),
+    [join(stateRoot, `${'e'.repeat(20)}.json`)]: '[]',
+    [join(stateRoot, `${'f'.repeat(20)}.json`)]: 'null',
+  };
+  for (const [file, text] of Object.entries(files)) writeFileSync(file, text);
+  // The timer of the deleted folder is still installed.
+  const active = new Set([goneId, id(one)].map(name => `gui/501/pdd-autopilot-${name}`));
+  const calls = [];
+  const ports = {
+    stateRoot, platform: 'darwin', uid: 501,
+    run: async (command, args, options = {}) => {
+      calls.push({ command, args, cwd: options.cwd });
+      // Like a real spawn: a missing working folder fails before the program runs.
+      if (!existsSync(options.cwd)) throw Object.assign(Error(`spawn ${command} ENOENT`), { code: 'ENOENT' });
+      if (command === 'git') {
+        try { return { code: 0, stdout: execFileSync('git', args, { cwd: options.cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }), stderr: '' }; }
+        catch (error) { return { code: error.status ?? 1, stdout: String(error.stdout ?? ''), stderr: String(error.stderr ?? '') }; }
+      }
+      if (command === 'launchctl') return { code: args[0] === 'print' && active.has(args[1]) ? 0 : 113, stdout: '', stderr: '' };
+      if (command === 'herdr') {
+        const [, , kind, action, pane] = args;
+        if (kind === 'status') return { code: 0, stdout: '{"running":true}', stderr: '' };
+        if (kind === 'agent' && action === 'get' && pane === 'p1') return { code: 0, stdout: JSON.stringify({ result: { type: 'agent_info', agent: { pane_id: 'p1', workspace_id: 'w1', cwd: one, agent: 'codex', agent_status: 'idle' } } }), stderr: '' };
+        return { code: 1, stdout: '', stderr: '{"error":{"code":"agent_not_found","message":"agent not found"}}' };
+      }
+      throw Error(`unexpected process ${command} ${args}`);
+    },
+  };
+  const stdout = capture(), stderr = capture();
+  const exitCode = await runPdd(['autopilot', 'status', '--all'], { cwd: outside, env: { HOME: home, PATH: process.env.PATH }, stdout, stderr, autopilotLauncherPorts: ports,
+    autopilotGithub: { checkAutopilotSettings: async () => { throw Error('no GitHub'); } } });
+
+  assert.equal(exitCode, 0, stderr.text);
+  // Lines follow the order of the state file names; the ids of one and two depend on the temporary folder.
+  const expected = {
+    [goneId]: `owner/gone in ${gone} · mode unknown (folder missing) · Autopilot enabled · timer active · coordinator unavailable (missing)`,
+    ['1'.repeat(20)]: `owner/plain in ${outside} · mode unknown (not a Git repository) · Autopilot disabled · timer inactive · coordinator unavailable (not recorded)`,
+    [id(one)]: `owner/one in ${one} · mode auto · Autopilot enabled · timer active · coordinator idle`,
+    [id(two)]: `owner/two in ${two} · mode observe · Autopilot disabled · timer inactive · coordinator unavailable (not recorded)`,
+    ['e'.repeat(20)]: `${'e'.repeat(20)}.json: saved state unreadable`,
+    ['f'.repeat(20)]: `${'f'.repeat(20)}.json: saved state unreadable`,
+  };
+  const lines = stdout.text.trimEnd().split('\n');
+  assert.equal(lines[0], 'Autopilot on this machine (6):');
+  assert.equal(lines[1], expected[goneId], 'the missing folder sorts first');
+  assert.deepEqual(lines.slice(1), Object.keys(expected).sort().map(name => expected[name]));
+  assert.ok(!calls.some(call => call.cwd === gone), 'no process runs in the missing folder');
+  assert.ok(!calls.some(({ command, args }) => command === 'gh' || command === 'launchctl' && args[0] !== 'print'), 'no GitHub call and timers are only read');
+  for (const [file, text] of Object.entries(files)) assert.equal(readFileSync(file, 'utf8'), text, 'saved state is unchanged');
 });
