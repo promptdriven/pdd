@@ -82,10 +82,15 @@ test('alerts set saves a webhook from stdin outside the repository with private 
   const before = readFileSync(f.config, 'utf8');
   const argv = await f.pdd(['autopilot', 'alerts', 'set', SLACK]);
   assert.equal(argv.exitCode, 2, 'the URL is never accepted as an argument');
-  for (const bad of ['https://example.com/api/webhooks/1/abc', 'http://discord.com/api/webhooks/1/abc', 'https://discord.com/api/webhooks/1/SECRET extra', '']) {
+  // Only the parsed host counts: a Discord or Slack name in the path, the query or a longer host is another site.
+  for (const bad of ['https://example.com/api/webhooks/1/abc', 'http://discord.com/api/webhooks/1/abc', 'https://discord.com/api/webhooks/1/SECRET extra', '',
+    'https://evil.example/discord.com/api/webhooks/1/abc', 'https://discord.com.evil.example/api/webhooks/1/abc', 'https://evil.example/api/webhooks/1/abc?discord.com',
+    'https://evil.example/hooks.slack.com/services/T000/B000/XXXX', 'https://hooks.slack.com.evil.example/services/T000/B000/XXXX']) {
     const refused = await f.pdd(['autopilot', 'alerts', 'set'], bad);
     assert.equal(refused.exitCode, 2, bad);
-    assert.ok(!refused.stderr.includes('example.com'), 'a refused value is not echoed');
+    assert.equal(refused.stdout, '', bad);
+    if (bad) assert.equal(refused.stderr.indexOf(bad), -1, 'a refused value is not echoed');
+    if (URL.canParse(bad)) assert.equal(refused.stderr.indexOf(new URL(bad).hostname), -1, 'a refused host is not echoed');
   }
   assert.equal(readFileSync(f.config, 'utf8'), before, 'a refused value saves nothing');
   assert.equal(f.requests.length, 0, 'set sends nothing');
@@ -507,7 +512,8 @@ function fakeDiscord(f) {
   f.discord = { me: 200, channel: 200, readback: 'same' };
   f.ports.http = async request => {
     f.requests.push(structuredClone(request));
-    const path = request.url.startsWith('https://discord.com/api/v10/') ? request.url.slice('https://discord.com/api/v10'.length) : null;
+    const url = new URL(request.url);
+    const path = url.origin === 'https://discord.com' && url.pathname.startsWith('/api/v10/') ? url.pathname.slice('/api/v10'.length) + url.search : null;
     const reply = (status, value) => ({ status, text: JSON.stringify(value) });
     if (request.method === 'GET' && path === '/users/@me') return f.discord.me === 200 ? reply(200, { id: '42', username: 'PDD', bot: true }) : reply(f.discord.me, { message: 'no' });
     if (request.method === 'GET' && path === `/channels/${CHANNEL}`) return f.discord.channel === 200 ? reply(200, { id: CHANNEL, name: 'internal-alerts', type: 0 }) : reply(f.discord.channel, { message: 'no' });
