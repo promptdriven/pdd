@@ -62,6 +62,43 @@ for (const agent of ['claude', 'codex']) for (const newSession of [false, true])
   });
 }
 
+for (const newSession of [false, true]) test(`2905: conflicting saved layout ID refuses despite a matching workspace (${newSession ? '--new' : 'open'})`, async t => {
+  const {f, run, chat} = await closed(t);
+  const matching = await f.herdr.herdr(['worktree', 'open', '--workspace', run.layout.repoWorkspaceId,
+    '--path', run.root, '--label', 'interrupted-recovery', '--no-focus']);
+  const matchingId = matching.result.workspace.workspace_id;
+  const foreign = await f.herdr.herdr(['workspace', 'create', '--cwd', f.source, '--label', 'foreign']);
+  run.layout.workspaceId = foreign.result.workspace.workspace_id;
+  save(f, run);
+  const inventory = structuredClone({workspaces: f.herdr.workspaces, tabs: f.herdr.tabs, panes: f.herdr.panes});
+  const message = readFileSync(chat.messageFile);
+  f.herdr.calls.length = 0;
+
+  const result = await open(f, {newSession});
+  assert.notEqual(result.exitCode, 0, 'a live conflicting saved ID must refuse before adopting a match');
+  assert.match(result.message, /herdr_layout_identity_changed/);
+  assert.ok(result.message.includes(run.layout.workspaceId), result.message);
+  assert.ok(result.message.includes(run.root), result.message);
+  assert.ok(result.message.includes(f.source), result.message);
+  for (const key of ['runId', 'root', 'branch', 'commonDir', 'layout', 'chats', 'area', 'done', 'pr', 'gate', 'decisions'])
+    assert.deepEqual(f.record()[key], run[key], key);
+  assert.deepEqual({workspaces: f.herdr.workspaces, tabs: f.herdr.tabs, panes: f.herdr.panes}, inventory);
+  assert.ok(f.herdr.calls.every(a => a[0] === 'status' || ['list', 'get'].includes(a[1])), 'refusal makes only Herdr reads');
+  assert.ok(readFileSync(chat.messageFile).equals(message));
+
+  // A missing saved ID permits retry after an interrupted workspace allocation.
+  run.layout.workspaceId = chat.workspaceId;
+  save(f, run);
+  f.herdr.calls.length = 0;
+  const retry = await open(f, {newSession});
+  assert.equal(retry.exitCode, 0, retry.message);
+  assert.equal(f.record().layout.workspaceId, matchingId);
+  assert.equal(f.record().chats.at(-1).session.id, chat.session.id);
+  assert.equal(launches(f).length, 1);
+  assert.equal(f.herdr.calls.filter(a => ['create', 'open'].includes(a[1]) && a[0] !== 'tab').length, 0);
+  assert.deepEqual(f.herdr.workspaces, inventory.workspaces);
+});
+
 for (const newSession of [false, true]) test(`2905: closed workspace without a resumable session starts the area once (${newSession})`, async t => {
   const {f, run, chat} = await closed(t, 'gemini');
   chat.session = null;

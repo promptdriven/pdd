@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: 1574fe5c30876fc25f8e4be78b0429e706be43565ece657e0e339af53dc88b48).
+// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: 72dfea7fd02e4af8ddcab32d143576f33109e1fd8edff35580bfb83cb3204d34).
 import { mkdir, lstat, realpath } from 'node:fs/promises';
 import { openSync, closeSync, readFileSync, writeFileSync, fsyncSync, unlinkSync, lstatSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -197,7 +197,7 @@ export async function openHerdrRunLayout(input, ports) {
   const conflict = rows.find(row => samePath(row.worktree?.checkout_path, cwd) && !runWorkspace(row, cwd, commonDir));
   if (conflict) throw identityChanged(conflict.workspace_id, 'worktree', {checkout_path: cwd, repo_key: commonDir, is_linked_worktree: true}, conflict.worktree);
   const hint = owner?.layout?.workspaceId ?? owner?.chats?.at(-1)?.workspaceId;
-  if (!matches.length && id(hint) && rows.some(w => w.workspace_id === hint))
+  if (id(hint) && rows.some(w => w.workspace_id === hint))
     ownedWorkspace(rows, {workspaceId: hint, commonDir, runId: input.runId}, cwd);
   let workspace = matches[0], opened;
   let custody = {};
