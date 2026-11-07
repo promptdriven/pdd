@@ -344,6 +344,10 @@ function claimRecord(body) {
 }
 const claimMetadata = body => claimRecord(body)?.value ?? null;
 const CLAIM_EXPIRES_AFTER = 4 * 60 * 60 * 1000, LEGACY_CLAIM_EXPIRES_AFTER = 24 * 60 * 60 * 1000;
+// Takeover ceiling (#3041): after 3 takeovers, an expired claim is not taken over a 4th
+// time, and a 4th takeover made anyway does not admit a start.
+const TAKEOVER_LIMIT = 3;
+export const takeoverLimited = claim => (Number.isSafeInteger(claim?.takeovers) ? claim.takeovers : 0) + (claim?.expired === true ? 1 : 0) > TAKEOVER_LIMIT;
 // A "lastSeen" member with a JSON scalar value, anywhere in the record text.
 const LAST_SEEN = /(,\s*)?"lastSeen"\s*:\s*(?:"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null)(\s*,)?/g;
 const time = value => typeof value === 'string' ? Date.parse(value) : NaN;
@@ -381,14 +385,44 @@ async function winningClaim(repository, key, github, authority, now = NaN) {
   if (!labels.includes('pdd:working')) return null;
   const timeline = await allPages(github, repository, 'timeline', i.issue), comments = await allPages(github, repository, 'comments', i.issue);
   let candidates = [], stuck = null;
+  const ended = [];
   // Events arrive in service order. Only a native removal ends the active claim era.
-  for (const event of timeline) {
+  for (const [index, event] of timeline.entries()) {
     if (event.label?.name === 'pdd:working') {
-      if (event.event === 'unlabeled') candidates = [];
+      if (event.event === 'unlabeled') { if (candidates.length) ended.push({ winner: candidates[0], end: event, index }); candidates = []; }
       if (event.event === 'labeled') candidates.push(event);
     }
     if (event.label?.name === 'pdd:stuck') stuck = event.event === 'labeled' ? event : event.event === 'unlabeled' ? null : stuck;
   }
+  // The one trusted claim comment of an era: by the winning label event's actor, naming that event.
+  const recordOf = async winner => {
+    if (!winner?.id || !winner.actor?.login) return null;
+    const matching = [];
+    for (const comment of comments) {
+      const metadata = claimMetadata(comment.body);
+      if (metadata && sameRepo(metadata.repository, repository) && metadata.labelEventId === String(winner.id)
+        && comment.user?.login?.toLowerCase() === winner.actor.login.toLowerCase()
+        && (await authority.read({ repository, author: comment.user.login })).authority === 'trusted') matching.push({ comment, metadata });
+    }
+    return matching.length === 1 ? matching[0] : null;
+  };
+  // The heartbeat time of a matched claim record: its comment's GitHub server time. The
+  // current era and the takeover count below use this one rule.
+  const heartbeatTime = ({ comment }) => Number.isFinite(time(comment.updated_at)) ? time(comment.updated_at) : time(comment.created_at);
+  // Takeovers (#3041): an ended era whose claim was already expired when its label was
+  // removed, by the same expiry rules at that time and with only earlier facts. A
+  // normal release of a live claim ends the claim chain; claimedAt is the chain start.
+  let takeovers = 0, chain = null;
+  for (const era of ended) {
+    const at = time(era.end.created_at), match = await recordOf(era.winner);
+    const server = match ? heartbeatTime(match) : NaN;
+    const seen = Number.isFinite(server) ? Math.min(server, at) : [...comments.flatMap(c => [time(c.created_at), time(c.updated_at)]), ...timeline.slice(0, era.index).map(e => time(e.created_at))]
+      .filter(value => Number.isFinite(value) && value < at).reduce((latest, value) => Math.max(latest, value), -Infinity);
+    const expiredAtEnd = Number.isFinite(at) && Number.isFinite(seen) && at - seen >= (Number.isFinite(server) ? CLAIM_EXPIRES_AFTER : LEGACY_CLAIM_EXPIRES_AFTER);
+    chain ??= era.winner;
+    if (expiredAtEnd) takeovers++; else chain = null;
+  }
+  const claimedAt = time((chain ?? candidates[0])?.created_at);
   // Expiry: a heartbeat claim is expired 4 hours after its last-seen time. A legacy
   // claim (no unique matching claim record, a bare label, or a claim comment with no
   // server time) is expired after 24 hours with no issue activity. An unknown time or
@@ -400,24 +434,19 @@ async function winningClaim(repository, key, github, authority, now = NaN) {
     const expired = Number.isFinite(now) && Number.isFinite(seen) && now - seen >= (heartbeat ? CLAIM_EXPIRES_AFTER : LEGACY_CLAIM_EXPIRES_AFTER);
     const stuckSince = labels.includes('pdd:stuck') ? time(stuck?.created_at) : NaN;
     return { ...claim, active: !expired, ...(Number.isFinite(seen) ? { lastSeen: iso(seen) } : {}), ...(expired ? { expired: true } : {}),
-      ...(Number.isFinite(stuckSince) ? { stuckSince: iso(stuckSince) } : {}) };
+      ...(Number.isFinite(stuckSince) ? { stuckSince: iso(stuckSince) } : {}), ...(Number.isFinite(claimedAt) ? { claimedAt: iso(claimedAt) } : {}),
+      ...(takeovers ? { takeovers } : {}) };
   };
   const winner = candidates[0];
   if (!winner?.id || !winner.actor?.login) return facts({ issue: key, owner: '', coordinatorId: '', machine: '', commentId: '', labelEventId: '' });
-  const matching = [];
-  for (const comment of comments) {
-    const metadata = claimMetadata(comment.body);
-    if (metadata && sameRepo(metadata.repository, repository) && metadata.labelEventId === String(winner.id)
-      && comment.user?.login?.toLowerCase() === winner.actor.login.toLowerCase()
-      && (await authority.read({ repository, author: comment.user.login })).authority === 'trusted') matching.push({ comment, metadata });
-  }
-  if (matching.length !== 1) return facts({ issue: key, owner: '', coordinatorId: '', machine: '', commentId: '', labelEventId: String(winner.id) });
-  const { comment, metadata } = matching[0];
+  const match = await recordOf(winner);
+  if (!match) return facts({ issue: key, owner: '', coordinatorId: '', machine: '', commentId: '', labelEventId: String(winner.id) });
+  const { comment, metadata } = match;
   // A claim record makes the comment a heartbeat claim from its creation. Its last-seen
   // time is only the comment's GitHub server time: updated_at, else created_at, at most
   // now. A recorded lastSeen never extends the claim, so no writer clock or written
   // value keeps a dead claim live. With no server time, the legacy rule applies.
-  const server = Number.isFinite(time(comment.updated_at)) ? time(comment.updated_at) : time(comment.created_at);
+  const server = heartbeatTime(match);
   const lastSeen = Number.isFinite(server) && Number.isFinite(now) ? Math.min(server, now) : server;
   return facts({ issue: key, owner: metadata.coordinatorId, coordinatorId: metadata.coordinatorId, machine: metadata.machine,
     commentId: String(comment.id), labelEventId: String(winner.id) }, lastSeen);
@@ -674,6 +703,8 @@ export async function readDependencySnapshot({ cwd = '', repository, inputs = []
         const claims = observation.claims.filter(c => canonical(c.issue) === issue.key && c.active);
         const expired = !claims.length && observation.claims.find(c => canonical(c.issue) === issue.key && c.active === false && c.expired === true && c.lastSeen);
         if (expired) issue.holds = [...issue.holds.filter(hold => hold !== 'Claimed'), `Expired claim, last seen ${expired.lastSeen}`];
+        const limited = observation.claims.find(c => canonical(c.issue) === issue.key && takeoverLimited(c));
+        if (limited) issue.holds.push(`Taken over ${limited.takeovers} times; take the stuck path, not another takeover`);
         const runs = observation.runs.filter(r => canonical(r.issue) === issue.key);
         if (observation.runsKnown) issue.runIds = runs.map(r => r.runId).filter(Boolean);
         if (claims.length === 1 && claims[0].coordinatorId && claims[0].commentId && claims[0].labelEventId) {

@@ -95,8 +95,9 @@ of each labeled issue: the earliest label event of the current claim era (a nati
 removal ends an era), and the one trusted comment by that event's actor whose JSON
 record names the repository, coordinatorId, machine and that labelEventId. Each
 claim is `{issue,owner,active,coordinatorId,machine,commentId,labelEventId}` with
-optional `lastSeen` (ISO time), `expired: true` and `stuckSince` (time of the
-current `pdd:stuck` label event). Read the time through `clock.now({})`. The
+optional `lastSeen` (ISO time), `expired: true`, `stuckSince` (time of the
+current `pdd:stuck` label event), `claimedAt` and `takeovers` (see
+[takeovers](#takeovers)). Read the time through `clock.now({})`. The
 default clock follows the caller's injected `now` in milliseconds.
 
 | Claim | Expired when |
@@ -131,6 +132,24 @@ readback throws. A repeated heartbeat is safe: it only sets a time.
 `withoutClaimHeartbeat(body)` returns the body without its top-level `lastSeen`
 member, with the same check, or the same body when there is none or no such edit
 exists, so that a heartbeat edit is not new trusted work.
+
+### Takeovers
+
+Count takeovers from GitHub data, not from a value an agent writes. A takeover is
+an ended era whose claim was already expired when its `pdd:working` label was
+removed: apply the expiry rules above at the removal time, with only earlier
+facts (a claim comment edited after the removal counts as seen at the removal). Count
+these eras over the whole timeline as `takeovers` (omit it when 0). An era that
+ends while its claim is live is a normal release: it ends the claim chain.
+`claimedAt` is the label event time of the first era of the current chain, so a
+takeover continues the chain.
+
+Export `takeoverLimited(claim)`: true when `takeovers` plus 1 for an expired
+claim is more than 3. Such a claim is not taken over a 4th time, and a 4th
+takeover made anyway does not admit a start. In the snapshot, add the hold
+`Taken over N times; take the stuck path, not another takeover` (N is
+`takeovers`). It is an ordinary hold, so the issue is not eligible. The limit 3
+is a constant, not a setting.
 
 ## Repository-bound authority
 

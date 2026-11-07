@@ -277,6 +277,27 @@ show a claim comment with `lastSeen` through `withoutClaimHeartbeat` and with it
 creation time, so that a heartbeat alone is not new work. The 4-hour stuck time
 and the claim expiry times are constants, not settings.
 
+### Per-issue ceilings
+
+Two more time rules use the same claims, delivery and persistence. Each is sent
+once per issue, only for an issue that is open in the cached list (a merge closes
+it), and does not touch other issues:
+
+- `long-running`: for an own active claim whose `claimedAt` is 24 hours old, ask
+  the skill to send one informational alert for that issue and keep working. It
+  is information, not a stop: heartbeats and work continue.
+- `takeover-limit`: for a claim that is
+  [`takeoverLimited`](issue-dependencies-github.prompt.md#takeovers), of any
+  owner, while the issue has no `pdd:stuck`, ask the skill not to take it over
+  again and to take the stuck path (`pdd:stuck`, one comment with the cause, one
+  `stuck` alert), keeping its claim and progress. Such a claim is not in the
+  expired-claim set: `pdd:working` stays a hold, the item has no `expiredClaim`,
+  its selection reasons add `takeover-limit`, and the idle-claim rule does not
+  apply when it is expired. A change of that reason alone updates the saved
+  selection.
+
+The 24 hours is a constant, not a setting.
+
 Use same-repository closing references in PR bodies to associate PRs with issues.
 Resolve trusted related PR metadata on change (state, draft, merge and head),
 including when a PR leaves the open list. Fetch PR discussion comments on changed

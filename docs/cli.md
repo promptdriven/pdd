@@ -78,7 +78,7 @@ over. The last-seen time is only the claim comment's GitHub edit or creation
 time; the recorded `lastSeen` value never extends a claim. In `off` mode a tick
 does nothing on this machine: it releases no claim and writes no `lastSeen`, so the claims expire after 4 hours, as
 on a stopped machine; their runs then cannot open or update a PR. After 4
-hours stuck, the owner tries a changed approach or asks for help, and the claim then expires. Related PRs are associated through same-repository closing references;
+hours stuck, the owner tries a changed approach or asks for help, and the claim then expires. After 3 takeovers of one issue, its expired claim is not taken over again: `pdd graph` shows "Taken over 3 times", a 4th start is refused, and the tick asks a coordinator once to take the stuck path. 24 hours after the claim with no merge, the tick asks the owner once for an informational alert; work continues. Related PRs are associated through same-repository closing references;
 trusted PR discussion comments and state transitions can wake waiting work once.
 Claimed issues stay identified as claimed when a trusted change needs attention.
 `add` rejects foreign repository references before writing any labels. Status
@@ -185,7 +185,7 @@ The tools are `try_open`, `try_state`, `try_run`, `try_check` and `try_save_case
 
 | Command | What it does |
 |---|---|
-| `pdd workflow done STEP [--summary TEXT] [--skipped REASON]` | Record a finished step. `check`, `try` and `verify` also record pdd's own latest `pdd test`, `pdd lint` and `pdd workflow prove` results, or warn that pdd has none; the summary stays an agent note. `--skipped REASON` records that the step was skipped, and why. Print the next instruction: the next step, the gate, or "pdd opens the PR now". After the last step of an area with a PR gate, push the branch and open the PR |
+| `pdd workflow done STEP [--summary TEXT] [--skipped REASON]` | Record a finished step. `check`, `try` and `verify` also record pdd's own latest `pdd test`, `pdd lint` and `pdd workflow prove` results, or warn that pdd has none; the summary stays an agent note. `--skipped REASON` records that the step was skipped, and why. Print the next instruction: the next step, the gate, or "pdd opens the PR now". After the last step of an area with a PR gate, push the branch and open the PR. In an Autopilot run, a `done` for a step that its area already recorded is a repair round; after 5 rounds in one area, pdd refuses another and says to take the stuck path |
 | `pdd workflow ask QUESTION` | Show the person that the chat waits for an answer in the middle of a step. `status` then says "waiting for you" with the question |
 
 The agent runs these from the run's worktree. pdd finds the run from that folder. You do not run them yourself.

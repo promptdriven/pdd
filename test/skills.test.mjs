@@ -881,3 +881,14 @@ test('AUTOPILOT17: a red-test PR 1 merges only together with its code PR, at the
   assert.ok(text.indexOf('Red pair') < text.indexOf('gh pr merge PR'));
   for (const name of ['pdd-bug', 'pdd-feature']) assert.doesNotMatch(read(`${name}/steps/autopilot.md`), /after PR 1 merges/, name);
 });
+
+// Wrong (#3041): an Autopilot run repairs forever, two machines pass one issue back and forth, or a long run
+// goes unseen; or the manual repair rule changes with it.
+test('AUTOPILOT18: per-issue ceilings: 5 repair rounds in one area, no 4th takeover, one alert after 24 hours', () => {
+  for (const name of WORKFLOWS) has(`${name}/steps/autopilot.md`, 'Keep repairing while a useful correction is available',
+    'for at most 5 repair rounds in one area', 'pdd refuses a 6th', 'take the stuck path: `pdd:stuck`, one comment with the cause, one `stuck` alert. Keep its claim and progress');
+  for (const name of ['pdd-bug', 'pdd-feature']) has(`${name}/SKILL.md`, 'allow 2 repairs after initial review');
+  has('pdd-autopilot/steps/handoff.md', 'One area of an Autopilot run has at most 5 repair rounds',
+    'After 3 takeovers of one issue, do not take it over again', '`takeover-limit` rule. Take the stuck path (step 8); keep the claim and progress.',
+    'Send one `stuck` alert.', '24 hours after the claim with no merge, the tick sends one `long-running` rule. Send one informational alert for that issue and keep working; it is not a stop.');
+});

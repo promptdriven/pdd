@@ -29,7 +29,7 @@ Prepare rereads GitHub, repository-bound trust and current ownership, then
 projects with the model. Queue only root-repository subjects the owner can receive;
 external prerequisites remain context. `owners.read({repository,issues})` returns
 JSON `{localOwner,claims:[{issue,owner,active,coordinatorId,machine,commentId,labelEventId}],runs:[],runsKnown}`.
-A claim may also carry `lastSeen`, `expired` and `stuckSince` from the
+A claim may also carry `lastSeen`, `expired`, `stuckSince`, `claimedAt` and `takeovers` from the
 [claim expiry rules](issue-dependencies-github.prompt.md#claims-heartbeat-and-expiry).
 An expired claim is not active, so it is neither owned elsewhere nor an own claim.
 The runs list reuses current local active-run/allocation observations, with issue,

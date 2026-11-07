@@ -513,3 +513,115 @@ test('workflow: an automatic run does not push or open its PR after its claim ex
   assert.equal(f.pushes.length, 1);
   assert.equal(f.prs.length, 1);
 });
+
+// Issue #3041: per-issue ceilings for takeovers and for a long-running claim.
+// Each era: the label event, its claim comment with a last GitHub edit, and how it ended.
+function claimHistory(eras) {
+  const timeline = [], comments = [];
+  eras.forEach((era, n) => {
+    const label = 701 + 2 * n, coordinatorId = `coordinator-${n}`, machine = `machine-${n}`;
+    timeline.push(labeled(label, at(era.from)));
+    comments.push({ id: 901 + n, user: { login: 'owner' }, created_at: at(era.from), updated_at: at(era.seen),
+      body: claimBody({ coordinatorId, machine, labelEventId: String(label) }, n ? `Took over an expired claim of coordinator-${n - 1}.` : 'Autopilot claim.') });
+    if (era.to !== undefined) timeline.push(labeled(label + 1, at(era.to), 'unlabeled'));
+  });
+  return { timeline, comments };
+}
+// Era n starts at T0 + 6n hours, its last heartbeat is 1 hour later, and the next
+// coordinator takes it over 5 hours after that heartbeat (the claim expired after 4).
+const T0 = NOW - 40 * hour;
+const takenOver = count => Array.from({ length: count + 1 }, (_, n) => ({ from: T0 + 6 * n * hour, seen: T0 + (6 * n + 1) * hour, ...(n < count ? { to: T0 + 6 * (n + 1) * hour } : {}) }));
+
+test('takeover ceiling: after 3 takeovers an expired claim is not taken over again, and pdd graph shows why', async t => {
+  const world = checkout(t), issue = issueRow(7, { updated_at: at(NOW - 20 * hour) });
+  const two = await observe(world, { issue, ...claimHistory(takenOver(2)) });
+  assert.deepEqual([two.claim.takeovers, two.claim.expired, two.claim.claimedAt], [2, true, at(T0)], 'a takeover continues the claim chain');
+  assert.equal(two.node.eligible, true, 'after 2 takeovers an expired claim can be taken over a 3rd time');
+
+  const three = await observe(world, { issue, ...claimHistory(takenOver(3)) });
+  assert.deepEqual([three.claim.takeovers, three.claim.expired], [3, true]);
+  const reason = 'Taken over 3 times; take the stuck path, not another takeover';
+  assert.ok(three.node.reasons.includes(reason), three.node.reasons.join('; '));
+  assert.equal(three.node.eligible, false, 'no 4th takeover');
+
+  let saved = '';
+  const view = await runIssueGraph({ cwd: world.cwd, repository: repo }, {
+    snapshots: { read: args => readDependencySnapshot(args, three.ports) },
+    cache: { read: async () => ({ json: saved }), write: async ({ json }) => { saved = json; return { ok: true }; } },
+    refresh: { schedule: async () => ({ ok: true }) },
+  });
+  assert.equal(view.exitCode, 0, view.message);
+  assert.ok(view.message.split('\n').includes(`  ${reason}`), view.message);
+});
+
+test('takeover ceiling: the 3rd takeover may start; a 4th takeover made anyway is refused at start', async t => {
+  const world = checkout(t), issue = issueRow(7, { updated_at: at(NOW - 5 * minute) });
+  const settings = { read: async () => ({ mode: 'auto', activation: 'activation' }) };
+  const startAs = async (history, n) => {
+    const observed = await observe(world, { issue, ...claimHistory(history) });
+    world.localOwner(`coordinator-${n}`);
+    const coordinator = { repository: repo, coordinatorId: `coordinator-${n}`, machine: `machine-${n}`, activation: 'activation', claim: { commentId: String(901 + n), labelEventId: String(701 + 2 * n) } };
+    return { observed, start: await checkDependencyStart({ cwd: world.cwd, repository: repo, issue: issue.html_url, coordinator }, { ...observed.ports, settings }) };
+  };
+  const live = history => history.map((era, n) => n === history.length - 1 ? { ...era, from: NOW - 10 * minute, seen: NOW - 5 * minute } : era);
+  const third = await startAs(live(takenOver(3)), 3);
+  assert.deepEqual([third.observed.claim.takeovers, third.observed.claim.active], [3, true]);
+  assert.deepEqual(third.start, { allowed: true, reason: 'ok' });
+  const fourth = await startAs(live(takenOver(4)), 4);
+  assert.equal(fourth.observed.claim.takeovers, 4);
+  assert.ok(fourth.observed.node.reasons.includes('Taken over 4 times; take the stuck path, not another takeover'), fourth.observed.node.reasons.join('; '));
+  assert.deepEqual(fourth.start, { allowed: false, reason: 'dependency' });
+});
+
+test('takeover ceiling: a normal release of a live claim is not a takeover and starts a new claim chain', async t => {
+  const world = checkout(t), issue = issueRow(7, { updated_at: at(NOW - 20 * hour) });
+  // Era 0 ends 30 minutes after its last heartbeat: the run ended and its owner removed the label.
+  const history = takenOver(3); history[0] = { ...history[0], to: history[0].seen + 30 * minute };
+  const { claim, node } = await observe(world, { issue, ...claimHistory(history) });
+  assert.equal(claim.takeovers, 2);
+  assert.equal(claim.claimedAt, at(history[1].from), 'the chain starts after the normal release');
+  assert.equal(node.eligible, true);
+});
+
+test('tick: after 3 takeovers the expired claim stays a hold and coordinators get one takeover-limit rule', async t => {
+  const f = await tickFixture(t);
+  f.issues = [tickIssue(8)];
+  let claim = { issue: key(8), owner: 'coordinator-old', coordinatorId: 'coordinator-old', machine: 'machine-old', commentId: '801', labelEventId: '601', active: false, expired: true, lastSeen: at(NOW - 5 * hour), takeovers: 3 };
+  f.claims = () => [claim];
+  assert.equal((await f.start()).exitCode, 0);
+  for (let i = 0; i < 3; i++) { f.time += 30 * minute; await f.tick(); }
+  const rules = timeRules(f, 'takeover-limit');
+  assert.deepEqual(rules.map(row => row.number), [8], 'one rule for the issue');
+  assert.match(rules[0].reason, /taken over 3 times\. Do not take it over again: take the stuck path \(pdd:stuck, one comment with the cause, one stuck alert\)/);
+  for (const text of f.prompts) for (const item of JSON.parse(text.trim().split('\n').at(-1)).issues ?? []) assert.equal(item.expiredClaim, undefined, 'never offered for a 4th takeover');
+  assert.deepEqual(f.state().seen[8].selectionReasons, ['pdd:working', 'takeover-limit']);
+  assert.equal(f.patches.length, 0);
+
+  // With 2 takeovers the same expired claim is offered for takeover, as before.
+  const g = await tickFixture(t);
+  g.issues = [tickIssue(8)];
+  g.claims = () => [{ ...claim, takeovers: 2 }];
+  g.eligible = () => [key(8)];
+  assert.equal((await g.start()).exitCode, 0);
+  assert.equal(timeRules(g, 'takeover-limit').length, 0);
+  assert.ok(g.prompts.some(text => (JSON.parse(text.trim().split('\n').at(-1)).issues ?? []).some(item => item.number === 8 && item.expiredClaim)), 'offered with expiredClaim');
+});
+
+test('tick: 24 hours after the claim with no merge, the owner gets one long-running rule and work continues', async t => {
+  const f = await tickFixture(t);
+  f.issues = [tickIssue(7, { comments: 1, updated_at: at(NOW) }), tickIssue(9, { state: 'closed' })];
+  f.claims = state => [ownClaim({ owner: state.coordinatorId, coordinatorId: state.coordinatorId, machine: state.machine, claimedAt: at(NOW - 23 * hour) }),
+    ownClaim({ issue: key(9), owner: state.coordinatorId, coordinatorId: state.coordinatorId, machine: state.machine, commentId: '909', claimedAt: at(NOW - 30 * hour) })];
+  assert.equal((await f.start()).exitCode, 0);
+  f.issueComments = { 7: [f.ownComment(at(NOW))] };
+  f.time += 30 * minute; await f.tick();
+  assert.equal(timeRules(f, 'long-running').length, 0, '23.5 hours after the claim is not due; a closed issue is not due');
+  f.time += 30 * minute; await f.tick();
+  const rules = timeRules(f, 'long-running');
+  assert.deepEqual(rules.map(row => row.number), [7]);
+  assert.match(rules[0].reason, /claimed 24 hours ago and has no merge yet\. Send one informational alert for it, then keep working; this is not a stop\./);
+  const patches = f.patches.length;
+  for (let i = 0; i < 3; i++) { f.time += 30 * minute; await f.tick(); }
+  assert.equal(timeRules(f, 'long-running').length, 1, 'once per issue');
+  assert.equal(f.patches.length, patches + 3, 'the claim is still refreshed: work continues');
+});

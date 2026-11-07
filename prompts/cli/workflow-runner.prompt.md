@@ -91,6 +91,21 @@ The same claim check runs before `done` commits, pushes or opens an area PR for
 such a run. A run whose claim expired or now belongs to another coordinator gets
 the same denial and pushes nothing; the issue keeps its history.
 
+## Autopilot repair ceiling
+
+For a run with `automaticOrigin`, a `stepDone` for a step that its current area
+has already recorded is one repair round: `build` again after a failed `verify`,
+`formal` or `review`, or `check` again after a failed check. Count rounds per
+area name in the run's optional `repairRounds` object (`{AREA: count}`), in the
+same saved update as the step, and add the line `Repair round N of 5 in the AREA
+area of this Autopilot run.` After 5 rounds in one area, refuse the next round
+before any effect: exit 1, record nothing, and tell the agent to take the stuck
+path: add `pdd:stuck`, write one comment with the cause, send one `stuck` alert,
+keep the claim and progress, and let the coordinator continue with other issues.
+Each area and each issue has its own count. The 5 is a constant, not a setting.
+Manual and legacy runs save no count and are never refused; their skill's
+2-repair rule applies.
+
 ## Record an automatic stopped run
 
 Native module function `parkAutomaticRun({reason,cwd},ports)` records an actual automatic stop from that run's existing worktree. Its current automatic worker or authorized coordinator can invoke `pdd workflow park --reason TEXT`; no worker needs to be resumed. Resolve the current run, require its existing automatic origin and current continuation ownership, and preserve current run identity, area, gate, history, chat, claim, worktree and progress under the existing saved-run update. Require a nonblank actual reason. On a non-ended run, record state `stuck` and its reason; an ended or replaced run is not revived. A repeated identical park is harmless. Status and list output show the saved stuck reason and do not describe the agent as working. This records a stop only: do not close or wake a chat, release a claim or allocation, invoke yield or infer native completion. Existing STOP, current ownership and revision rules remain in force. Current native done or positively ended evidence is still required by the existing capacity handoff.

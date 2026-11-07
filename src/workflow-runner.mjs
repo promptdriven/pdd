@@ -1578,6 +1578,17 @@ function ownResults(run, p) {
 }
 // The steps whose done output shows pdd's own results, or a visible "no pdd result" warning.
 const PROOF_STEPS = ['check', 'try', 'verify'];
+// Repair ceiling (#3041): in an Autopilot run, a `done` for a step that its area already
+// recorded (build again after verify, formal or review; check again) is one repair round.
+// After 5 rounds in one area, pdd refuses another and the issue takes the stuck path.
+// Manual runs keep their skill's own repair rule and save no count.
+const REPAIR_ROUNDS = 5;
+function repairRound(run, area, step) {
+  if (!Object.hasOwn(run, 'automaticOrigin') || !area.steps.includes(step) || !run.done[step]) return null;
+  const used = Number.isSafeInteger(run.repairRounds?.[area.name]) ? run.repairRounds[area.name] : 0;
+  if (used >= REPAIR_ROUNDS) throw Object.assign(Error(`pdd refused another repair round: the ${area.name} area of this Autopilot run has had ${REPAIR_ROUNDS} repair rounds. pdd did not record ${step}. Take the stuck path: add pdd:stuck, write one comment with the cause, send one stuck alert, keep the claim and progress, and let the coordinator continue with other issues.`), { code: 'workflow_progress_refused' });
+  return used + 1;
+}
 function canRefreshCodeReview(run, step) {
   const area = run.areas[run.area];
   return run.state === 'completed' && run.doneAt === 'PR 1'
@@ -1612,6 +1623,7 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
     ? refreshCompletedCodeReview(run, step, p) : done(`The run for #${run.number} is complete. Stop.`);
   protectProgress(run,p);
   const area = run.areas[run.area], lines = [];
+  repairRound(run, area, step);
   if (!area.steps.includes(step)) lines.push(`warning: "${step}" is not a step of the ${area.name} area (${area.steps.join(', ')}). pdd recorded it anyway.`);
   else {
     const before = area.steps.slice(0, area.steps.indexOf(step)).filter(item => !run.done[item] && !area.optional.includes(item));
@@ -1632,6 +1644,8 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
   const replay=area.replay_evidence===REPLAY_POLICY && (area.steps.some(item=>item!==step&&!run.done[item]) || area.gate!=='pr' || area.before==='approve'&&!prOf(run,area.name))?await currentReplayEvidence(run,p):null;
   if(replay){record.replayEvidence=replay;lines.push(formatReplayEvidence(replay));}
   const applyDone=latest=>{
+    const round=repairRound(latest,area,step);
+    if(round){latest.repairRounds={...latest.repairRounds,[area.name]:round};lines.push(`Repair round ${round} of ${REPAIR_ROUNDS} in the ${area.name} area of this Autopilot run.`);}
     if(equalFact(latest.question,observedQuestion))latest.question=null;
     const later=area.steps.includes(step) && latest.done[step]?area.steps.slice(area.steps.indexOf(step)+1).filter(item=>latest.done[item]):[];
     if(later.length){

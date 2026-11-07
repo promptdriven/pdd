@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: a97b682125c1e441381f8afbd0afbd9f4cf4f6cf33a18c90b5a3d8dea9e26793).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: a5a44ed0f8e98baa3de480788c6fa501ef9bb2f80c88209434c1d997b39d5299).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch } from 'node:fs';
@@ -15,7 +15,7 @@ import { appendEvents } from './metrics-store.mjs';
 import { recordCaptureGap } from './metrics-gap.mjs';
 import * as nativeFiles from 'node:fs';
 import { reconcileDependencyIntake } from './issue-dependencies-intake.mjs';
-import { createDependencyReadPorts, refreshClaimHeartbeat, withoutClaimHeartbeat } from './issue-dependencies-github.mjs';
+import { createDependencyReadPorts, refreshClaimHeartbeat, takeoverLimited, withoutClaimHeartbeat } from './issue-dependencies-github.mjs';
 import { sendToChat, START_GRACE_MS } from './workflow-chat.mjs';
 import { acquireRunLock } from './workflow-runner.mjs';
 import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
@@ -25,6 +25,7 @@ const INTERVAL = 30 * 60 * 1000;
 const STUCK_AFTER = 60 * 60 * 1000;
 const CLAIM_IDLE_AFTER = 60 * 60 * 1000;
 const STUCK_CLAIM_AFTER = 4 * 60 * 60 * 1000;
+const LONG_RUNNING_AFTER = 24 * 60 * 60 * 1000;
 const HEARTBEAT_SLACK = 5 * 1000;
 const SESSION = 'pdd-autopilot';
 const ACK = '<!-- pdd:autopilot:thanks -->';
@@ -784,7 +785,9 @@ async function runTick(stateFile, ports, completion) {
     // Claims observed by the intake: refresh this coordinator's own live claims
     // (no AI call) and let expired claims of any owner become selectable work.
     const observedClaims = (Array.isArray(intake.claims) ? intake.claims : []).filter(claim => claim && typeof claim.issue === 'string');
-    const expiredClaims = new Map(observedClaims.filter(claim => claim.expired === true && claim.active === false).map(claim => [claim.issue.toLowerCase(), claim]));
+    // After 3 takeovers an expired claim is not offered for a 4th: it stays a hold (#3041).
+    const limitedClaims = new Map(observedClaims.filter(takeoverLimited).map(claim => [claim.issue.toLowerCase(), claim]));
+    const expiredClaims = new Map(observedClaims.filter(claim => claim.expired === true && claim.active === false && !takeoverLimited(claim)).map(claim => [claim.issue.toLowerCase(), claim]));
     const ownClaims = observedClaims.filter(claim => claim.active === true && claim.coordinatorId === state.coordinatorId && claim.machine === state.machine && claim.commentId && claim.labelEventId);
     const stuckFor = claim => p.now() - (typeof claim.stuckSince === 'string' ? Date.parse(claim.stuckSince) : NaN);
     for (const claim of ownClaims) {
@@ -810,6 +813,24 @@ async function runTick(stateFile, ports, completion) {
       if (Number.isSafeInteger(number) && stuckFor(claim) >= STUCK_CLAIM_AFTER && state.timeSeen[key] !== claim.stuckSince) {
         timeRules.push({ kind: 'stuck-claim', number, reason: `Issue #${number} has been stuck for 4 hours; retry it with a changed approach or ask in the configured alert channel. Its claim is no longer refreshed and expires in 4 hours unless the issue leaves pdd:stuck.` });
         pendingTimes[key] = claim.stuckSince;
+      }
+    }
+    // Per-issue ceilings (#3041), each sent once per issue. Only open issues count: a merge closes the issue.
+    const openIssues = new Map((state.cachedIssues ?? []).filter(issue => !issue.pull_request && issue.state === 'open').map(issue => [String(issue.html_url).toLowerCase(), issue]));
+    const issueNumber = claim => Number(/\/issues\/([1-9][0-9]*)$/.exec(claim.issue)?.[1]);
+    for (const claim of ownClaims) {
+      const number = issueNumber(claim), key = `long:${number}`, since = Date.parse(claim.claimedAt);
+      if (openIssues.has(claim.issue.toLowerCase()) && Number.isFinite(since) && p.now() - since >= LONG_RUNNING_AFTER && state.timeSeen[key] === undefined) {
+        timeRules.push({ kind: 'long-running', number, reason: `Issue #${number} was claimed 24 hours ago and has no merge yet. Send one informational alert for it, then keep working; this is not a stop.` });
+        pendingTimes[key] = claim.claimedAt;
+      }
+    }
+    for (const claim of limitedClaims.values()) {
+      const number = issueNumber(claim), key = `takeover:${number}`, issue = openIssues.get(claim.issue.toLowerCase());
+      const stuck = issue?.labels?.some(label => (typeof label === 'string' ? label : label.name) === 'pdd:stuck');
+      if (issue && !stuck && state.timeSeen[key] === undefined) {
+        timeRules.push({ kind: 'takeover-limit', number, reason: `Issue #${number} has been taken over ${claim.takeovers} times. Do not take it over again: take the stuck path (pdd:stuck, one comment with the cause, one stuck alert) and keep its claim and progress.` });
+        pendingTimes[key] = claim.takeovers;
       }
     }
     for (const { number, changedAt } of await (p.readRunProgress ?? readRunProgress)(state, p)) {
@@ -840,18 +861,20 @@ async function runTick(stateFile, ports, completion) {
         const becameGraphEligible = graphEligible === true && previous && previous.graphEligible !== true;
         const expiredClaim = labels.includes('pdd:working') ? expiredClaims.get(String(issue.html_url).toLowerCase()) : undefined;
         const holdLabels = labels.filter(name => name === 'pdd:working' ? !expiredClaim : ['pdd:stuck', 'pdd:code-pending'].includes(name));
-        const blocked = holdLabels.length > 0, claimNote = expiredClaim ? ['expired-claim'] : [];
+        const limitedClaim = limitedClaims.get(String(issue.html_url).toLowerCase()), limited = Boolean(limitedClaim);
+        const blocked = holdLabels.length > 0, claimNote = limited ? ['takeover-limit'] : expiredClaim ? ['expired-claim'] : [];
         // A heartbeat edit of a claim comment is not issue activity. GitHub moves the issue
         // update time to the time of a comment edit, so the issue update time counts only
         // when it is later than the newest heartbeat edit.
         const heartbeatEdit = latestTime(rows.filter(heartbeat).map(row => row.updated_at)), issueUpdate = Date.parse(issue.updated_at);
         const claimActivity = latestTime([...(issueUpdate > heartbeatEdit + HEARTBEAT_SLACK ? [issue.updated_at] : []), ...rows.flatMap(row => heartbeat(row) ? [row.created_at] : [row.created_at, row.updated_at])]);
         const claimKey = `claim:${issue.number}`;
-        const claimDue = labels.includes('pdd:working') && !expiredClaim && Number.isFinite(claimActivity) && p.now() - claimActivity >= CLAIM_IDLE_AFTER && state.timeSeen[claimKey] !== claimActivity;
+        const claimDue = labels.includes('pdd:working') && !expiredClaim && limitedClaim?.expired !== true && Number.isFinite(claimActivity) && p.now() - claimActivity >= CLAIM_IDLE_AFTER && state.timeSeen[claimKey] !== claimActivity;
         const recheckReadyBaseline = previous?.waiting === true && graphEligible === true && !blocked;
         const unassigned = !issue.assignee && (!Array.isArray(issue.assignees) || issue.assignees.length === 0);
         const reconsiderReady = config.mode === 'auto' && graphEligible === true && !blocked && unassigned;
-        if (previous?.source === source && previous.mode === config.mode && !becameGraphEligible && !claimDue && !recheckReadyBaseline && !reconsiderReady) {
+        const sameLimit = Boolean(previous?.selectionReasons?.includes('takeover-limit')) === limited;
+        if (previous?.source === source && previous.mode === config.mode && sameLimit && !becameGraphEligible && !claimDue && !recheckReadyBaseline && !reconsiderReady) {
           if (graphEligible === false) previous.graphEligible = false;
           if (previous.view) { selection.state=previous.selectionState ?? (previous.waiting ? 'waiting' : 'ready'); selection.reasons=previous.selectionReasons ?? (previous.waiting ? ['previously-observed-wait'] : []); }
           continue;
