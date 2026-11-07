@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { projectIssueGraph } from '../src/issue-dependencies.mjs';
 import { applyDependencyChanges, readDependencySnapshot, saveDependencyReview } from '../src/issue-dependencies-github.mjs';
 import { completeDependencyIntake, prepareDependencyIntake, reconcileDependencyIntake } from '../src/issue-dependencies-intake.mjs';
-import { tickAutopilot } from '../src/autopilot-launcher.mjs';
+import { autopilotLaunchFingerprint, tickAutopilot } from '../src/autopilot-launcher.mjs';
 
 // Synthetic GitHub world. Issue revisions follow the adapter's public rule:
 // SHA-256 of the issue's title and body.
@@ -880,7 +880,7 @@ test('the launcher names a repeated request and its reason, and does not send it
   const coordinator = { version: 'pdd.autopilot-coordinator.v1', repository, coordinatorId: 'c', machine: 'm', activation };
   writeFileSync(file, JSON.stringify({ enabled: true, cwd, repo: repository, stateFile: file, coordinatorId: 'c', machine: 'm', activatedAt: activation,
     agent: { id: 'codex', kind: 'codex', command: 'codex' }, recipeDelivered: true, environment: { HOME: home }, paneId: 'p', workspaceId: 'w',
-    ownerLaunch: { paneId: 'p', startedAt: 1, coordinator, profile: { agent: { id: 'codex', kind: 'codex' }, home, definitionHome: home, configHome: null } } }));
+    ownerLaunch: { paneId: 'p', startedAt: 1, coordinator, profile: { agent: { id: 'codex', kind: 'codex' }, home, definitionHome: home, configHome: null }, fingerprint: autopilotLaunchFingerprint({ cwd, agent: { kind: 'codex' } }) } }));
   const i17 = issue(17), i103 = issue(103);
   const w = world({ issues: [i17, i103], comments: { [key(17)]: [savedReview('501', i17, [i17])] } });
   const note = { json: '{}' }, results = { read: async () => ({ json: note.json }), save: async ({ json }) => { note.json = json; return { ok: true }; } };
