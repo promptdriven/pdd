@@ -1,16 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { execFile as nodeExecFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { projectIssueGraph, validateDependencyChange } from './issue-dependencies.mjs';
+import { projectIssueGraph, validateDependencyChange, issueKey } from './issue-dependencies.mjs';
 import { createDependencyReadPorts, readDependencySnapshot, saveDependencyReview, saveDependencyImpact, applyDependencyChanges } from './issue-dependencies-github.mjs';
 
 const snapshotRead = (ports, args) => ports.snapshots?.read ? ports.snapshots.read(args) : readDependencySnapshot(args, ports);
 const root = (key, repository) => key.toLowerCase().startsWith(`https://github.com/${repository.toLowerCase()}/issues/`);
-// Apply the shared model's canonical GitHub issue identity at this boundary.
-const issueKey = value => {
-  const m = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/issues\/([1-9][0-9]*)\/?$/.exec(value ?? '');
-  return m ? `https://github.com/${m[1].toLowerCase()}/issues/${m[2]}` : null;
-};
 const json = value => typeof value === 'string' ? JSON.parse(value) : value;
 const rows = snapshot => new Map([...snapshot.issues.map(x => [x.key, x.revision]), ...snapshot.inputs.map(x => [x.key, x.revision])]);
 const sameRows = (a, b) => a.every(x => b.get(x.key) === x.revision);
