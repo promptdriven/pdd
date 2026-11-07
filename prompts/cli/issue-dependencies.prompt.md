@@ -2,6 +2,9 @@
 
 Own `src/issue-dependencies.mjs`. Export module functions
 `projectIssueGraph({snapshot})` and `validateDependencyChange({snapshot,dependent,blocker})`.
+Also export `issueKey(value)`: it returns the canonical issue key below for a GitHub
+issue URL in any owner/repository letter case, else `null`. Callers that compare an
+issue URL with graph keys use it, so one canonical form serves every module.
 These pure functions own identities, current-review selection, freshness, native edge
 meaning and dependency eligibility. They use supplied observations only. They have
 no AI, filesystem, network, clock, scheduler or browser port. This is a new interface;

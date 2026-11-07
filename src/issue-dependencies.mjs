@@ -1,7 +1,8 @@
 // Implements prompts/cli/issue-dependencies.prompt.md.
 const object = x => x !== null && typeof x === 'object' && !Array.isArray(x);
 const unique = xs => [...new Set(xs)];
-const issueKey = value => {
+// The one canonical GitHub issue identity: OWNER/REPO ignores letter case.
+export const issueKey = value => {
   const m = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/issues\/([1-9][0-9]*)\/?$/.exec(value ?? '');
   return m ? `https://github.com/${m[1].toLowerCase()}/issues/${m[2]}` : null;
 };

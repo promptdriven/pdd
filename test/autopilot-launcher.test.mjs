@@ -251,6 +251,24 @@ test('old and new issues are eligible; claimed work is distinguished and closed 
   assert.equal(f.state().activatedAt, '2026-11-04T00:00:00.000Z');
 });
 
+test('a GitHub owner spelled with capitals matches the canonical lowercase eligibility URL (#3035)', async t => {
+  const f = await fixture(t);
+  const run = f.ports.run;
+  f.ports.run = async (command, args, opts) => command === 'gh' && args[0] === 'repo'
+    ? { code: 0, stdout: '{"nameWithOwner":"Serhan-Asad/PDD-Sandbox","url":"https://github.com/Serhan-Asad/PDD-Sandbox"}', stderr: '' }
+    : run(command, args, opts);
+  // GitHub spells html_url with the owner's capitals; the dependency graph stores canonical lowercase keys.
+  const mixed = number => issue(number, { user: { login: 'Serhan-Asad' }, html_url: `https://github.com/Serhan-Asad/PDD-Sandbox/issues/${number}` });
+  f.issues = [mixed(1), mixed(2), mixed(3)];
+  f.ports.reconcileDependencyIntake = async () => ({ eligible: ['https://github.com/serhan-asad/pdd-sandbox/issues/1', 'https://github.com/serhan-asad/pdd-sandbox/issues/3'], queued: [], skipped: [] });
+  const started = await f.invoke('start');
+  assert.equal(started.exitCode, 0, started.message);
+  const packet = JSON.parse(f.prompts.at(-1).trim().split('\n').at(-1));
+  assert.deepEqual(packet.issues.map(item => [item.number, item.eligible]), [[1, true], [3, true]]);
+  assert.equal(packet.issues[0].url, 'https://github.com/Serhan-Asad/PDD-Sandbox/issues/1', 'the offered item keeps GitHub spelling');
+  assert.deepEqual(f.state().seen[2].selectionReasons, ['dependency-not-ready'], 'an issue absent from eligible still waits');
+});
+
 test('stranger text never reaches AI; a trusted comment admits only trusted text; acknowledgement once', async t => {
   const f = await fixture(t); await f.invoke('start');
   f.issues = [issue(8, { title: 'STRANGER TITLE', body: 'STRANGER BODY', user: { login: 'outside' }, author_association: 'NONE' })];

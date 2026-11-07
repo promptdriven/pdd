@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: eb52a62d4f0432918b7e2f74f2eac8ce5707407ca1578ea4fc5f3d0ee9219907).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: ea5fa2b8417cf84ff12d4a608a82e3b1385cecb5dbf1148a1ac96e74fe95b1b1).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch } from 'node:fs';
@@ -15,6 +15,7 @@ import { appendEvents } from './metrics-store.mjs';
 import { recordCaptureGap } from './metrics-gap.mjs';
 import * as nativeFiles from 'node:fs';
 import { reconcileDependencyIntake } from './issue-dependencies-intake.mjs';
+import { issueKey } from './issue-dependencies.mjs';
 import { createDependencyReadPorts } from './issue-dependencies-github.mjs';
 import { sendToChat, START_GRACE_MS } from './workflow-chat.mjs';
 import { acquireRunLock } from './workflow-runner.mjs';
@@ -815,7 +816,9 @@ async function runTick(stateFile, ports, completion) {
         for (const pull of related) await reviewSubmissions(pull, state, p);
         const source = digest({ issue: [issue.title, issue.body, issue.updated_at, issue.comments, [...labels].sort()], comments: rows.map(row => [row.id, row.updated_at, row.user?.login, row.body]), pulls: related.map(pull => [pull.row.number, pull.present, pull.row.updated_at, pull.row.comments, pull.row.title, pull.row.body, Object.values(pull.reviews ?? {})]) });
         const previous = state.seen[issue.number];
-        const graphEligible = Array.isArray(intake.eligible) ? intake.eligible.includes(issue.html_url) : undefined;
+        // GitHub spells html_url with the owner's capitals; graph keys are canonical lowercase.
+        const issueIdentity = issueKey(issue.html_url) ?? issue.html_url;
+        const graphEligible = Array.isArray(intake.eligible) ? intake.eligible.some(key => (issueKey(key) ?? key) === issueIdentity) : undefined;
         const becameGraphEligible = graphEligible === true && previous && previous.graphEligible !== true;
         const blocked = labels.some(name => ['pdd:working', 'pdd:stuck', 'pdd:code-pending'].includes(name));
         const claimActivity = [issue.updated_at, ...rows.flatMap(row => [row.created_at, row.updated_at])].map(value => Date.parse(value)).filter(Number.isFinite).reduce((latest, at) => Math.max(latest, at), -Infinity);
