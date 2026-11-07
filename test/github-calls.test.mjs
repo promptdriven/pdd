@@ -159,7 +159,7 @@ test('budget: below the floor the tick makes no GitHub call until the reset, the
   w.seed(1, { resource: 'core', remaining: 120, limit: 5000, resetAt: NOW + 20 * minute });
   const calls = w.gh.length;
   const result = await w.tick();
-  assert.match(result.message, /GitHub limit low: 120 REST calls left, below the floor of 500; Autopilot waits until 2026-11-06T12:20:00.000Z/);
+  assert.match(result.message, /GitHub limit low: 120 REST calls left, below the floor of 1000; Autopilot waits until 2026-11-06T12:20:00.000Z/);
   assert.equal(w.gh.length, calls, 'no GitHub call at all, also no heartbeat');
   w.time += 10 * minute; await w.tick();
   assert.equal(w.gh.length, calls, 'still waiting before the reset');
@@ -403,7 +403,7 @@ test('budget: below the floor the tick still sends the heartbeat of its own live
   for (const step of [15, 10]) {
     w.time += step * minute;
     const calls = w.gh.length, intakes = w.intakes, result = await w.tick();
-    assert.match(result.message, /GitHub limit low: \d+ REST calls left, below the floor of 500; Autopilot waits until 2026-11-06T13:00:00.000Z/);
+    assert.match(result.message, /GitHub limit low: \d+ REST calls left, below the floor of 1000; Autopilot waits until 2026-11-06T13:00:00.000Z/);
     assert.equal(w.intakes, intakes, 'no dependency re-sync');
     assert.deepEqual(w.gh.slice(calls).map(args => [args[args.indexOf('--method') + 1], endpointOf(args)]),
       [['GET', `repos/${repo}/issues/comments/901`], ['PATCH', `repos/${repo}/issues/comments/901`]], 'only the heartbeat: 2 REST calls');
@@ -422,5 +422,5 @@ test('budget: below the floor the tick still sends the heartbeat of its own live
 test('status line: in reserve the budget part names the calls left and the floor', () => {
   const usage = githubUsage([{ at: NOW - minute, api: 'rest', purpose: 'claims', status: 200, resource: 'core', remaining: 120, limit: 5000, resetAt: NOW + 20 * minute }], NOW);
   assert.equal(githubStatusLine({ usage, budget: githubBudget({ usage }) }),
-    'GitHub calls in the last hour: 1 (claims 1); no conditional reads; REST limit 120 of 5000 left until 12:20Z; budget reserve (120 REST calls left, below the floor of 500): Autopilot on this machine used 1 of 1500 (30%).');
+    'GitHub calls in the last hour: 1 (claims 1); no conditional reads; REST limit 120 of 5000 left until 12:20Z; budget reserve (120 REST calls left, below the floor of 1000): Autopilot on this machine used 1 of 1500 (30%).');
 });
