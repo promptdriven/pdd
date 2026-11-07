@@ -71,7 +71,7 @@ async function nativeStartup(t, { kind = 'codex', custom = false, cwdName, body 
   mkdirSync(bin); mkdirSync(profile);
   f.ports.stateRoot = join(f.dir, 'state');
   const record = join(f.dir, 'native.jsonl');
-  const script = `#!${process.execPath}\nconst fs = require('node:fs'); fs.appendFileSync(${JSON.stringify(record)}, JSON.stringify({command:process.argv[1],argv:process.argv.slice(2),cwd:process.cwd(),env:{CODEX_HOME:process.env.CODEX_HOME,CLAUDE_CONFIG_DIR:process.env.CLAUDE_CONFIG_DIR,STARTUP_TEST_VALUE:process.env.STARTUP_TEST_VALUE}})+'\\n');\n`;
+  const script = `#!${process.execPath}\nconst fs = require('node:fs'); fs.appendFileSync(${JSON.stringify(record)}, JSON.stringify({command:process.argv[1],argv:process.argv.slice(2),cwd:process.cwd(),env:{CODEX_HOME:process.env.CODEX_HOME,CLAUDE_CONFIG_DIR:process.env.CLAUDE_CONFIG_DIR,PDD_AUTOPILOT_CONTEXT:process.env.PDD_AUTOPILOT_CONTEXT,STARTUP_TEST_VALUE:process.env.STARTUP_TEST_VALUE}})+'\\n');\n`;
   for (const name of ['codex', 'fake-provider', 'chosen codex wrapper']) writeFileSync(join(bin, name), script, { mode: 0o755 });
   const env = { HOME: f.home, PATH: `${bin}:/usr/bin:/bin`, CODEX_HOME: profile, XDG_CONFIG_HOME: join(f.home, '.config') };
   const value = 'a b\'c"d\\e$HOME';
@@ -142,6 +142,17 @@ function codexStartupConfig({ cwd, call, configs }) {
 
 test('native startup: normal Codex uses invocation trust and no update check', async t => {
   codexStartupConfig(await nativeStartup(t));
+});
+
+test('native startup: Codex launch config carries automatic context to spawned commands', async t => {
+  const { call, configs } = await nativeStartup(t);
+  const prefix = 'shell_environment_policy.set.PDD_AUTOPILOT_CONTEXT=';
+  const setting = configs.find(value => value.startsWith(prefix));
+  assert.ok(setting, 'launch config must pass the coordinator context to Codex command tools');
+  const configured = JSON.parse(JSON.parse(setting.slice(prefix.length)));
+  assert.deepEqual(configured, JSON.parse(call.env.PDD_AUTOPILOT_CONTEXT));
+  assert.equal(configured.version, 'pdd.autopilot-coordinator.v1');
+  assert.equal(configured.repository, 'owner/repo');
 });
 
 test('native startup: configured Codex wrapper keeps its environment and saved model', async t => {
