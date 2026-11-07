@@ -1,3 +1,4 @@
+import { runtimeCoverage } from './interface-draft.mjs';
 import {loadRuntimeWorkspace,allowsRuntimePath,requireRuntimePath} from './runtime-workspace.mjs';
 // Generated from prompts/cli/runtime-bindings.prompt.md (sha256: 5b44de22d54982cc69e3bb046c106a1b1b908e37ea32ef66e3db988f2c465d81).
 import { lstatSync } from 'node:fs';
@@ -7,7 +8,8 @@ import { PreflightError, readPrompt, isSecretPath, sourceFilePort,gitFiles } fro
 export function bindingCoverage({ root, found, selected }) {
   const workspace=loadRuntimeWorkspace({root});
   const controlVisible=new Set(gitFiles(root));
-  const unavailable = { available: false, bound: null, total: null, modules: [] };
+  const runtime = runtimeCoverage({root});
+  const unavailable = { available: false, bound: null, total: null, modules: [], runtime };
   const fail = (path, why) => { throw Object.assign(new PreflightError(4, `pdd-bindings.json: ${path}: ${why}`), { bindingInventory: true }); };
   const regular = path => {
     if (typeof path !== 'string' || !path || path.includes('\\') || path.startsWith('/') || path.split('/').some(p => !p || p === '.' || p === '..')) fail(String(path), 'use an existing repository-relative regular Git-visible path');
@@ -56,5 +58,5 @@ export function bindingCoverage({ root, found, selected }) {
     }
     modules.push({ path: item.module, state: bound ? 'bound' : 'unbound', ...(bound ? {} : { reason: item.reason, port_attempt: item.port_attempt }) });
   }
-  return { available: true, bound: modules.filter(m => m.state === 'bound').length, total: modules.length, modules };
+  return { runtime, available: true, bound: modules.filter(m => m.state === 'bound').length, total: modules.length, modules };
 }

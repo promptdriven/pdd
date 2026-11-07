@@ -1,3 +1,4 @@
+import { interfaceFindings } from './interface-draft.mjs';
 // Generated from prompts/cli/runtime-client.prompt.md (sha256: d091d31f3f3448ec47f9e4d9dfd6c89a7c53a281d33981fc191d49fa86311671).
 import {readEvidenceEligibility} from './workflow-runner.mjs';
 import {allRuns} from './workflow-runs.mjs';
@@ -986,7 +987,7 @@ function localSetup(cwd, words) {
 
 // Each JSON file in a test folder that matches no Story (text shows one summary line; --files and --json list each).
 // The tests that a check uploads: every row but those that discovery could not use.
-const sentTests = rows => rows.filter(row => !row.unsent).map(row => row.test);
+const sentTests = rows => rows.filter(row => !row.unsent && !row.native_only?.length).map(row => row.test);
 const unmatchedLines = found => (found.orphans ?? []).map(item => `Warning: ${item.line}`);
 
 function storyList(found) {
@@ -1002,7 +1003,8 @@ function select(found, words, root) {
   return selected;
 }
 
-const localRows = rows => rows.map(row => ({ ...row, state: row.refusals.length ? 'refused' : 'ready', phase: row.refusals.length ? 'local' : 'server',
+const localRows = rows => rows.map(row => ({ ...row, state: row.refusals.length ? 'refused' : row.native_only?.length ? 'not_run' : 'ready', phase: row.refusals.length || row.native_only?.length ? 'local' : 'server',
+  ...(row.native_only?.length ? {unsent:true,note:{code:'native-only',message:row.native_only.map(item => `${item.path}: ${item.reason}`).join('; ')}} : {}),
   request_ids: [], calls: 0, report_url: null, checks: null, failed_checks: [], all_checks: [] }));
 
 const capturedManifests = new WeakMap();
@@ -1661,6 +1663,14 @@ function runFiles(cwd, words, options, ports) {
 async function runLintOnly(context, cwd, words, options, setRelease) {
   const { ports } = context, origin = runtimeOrigin(ports.env), { root, found, normalized } = localSetup(cwd, words);
   context.excludeFixtureProjects = words.length === 0;
+  const paths = words.length ? undefined : [...found.discoveryVisible].filter(path => path.endsWith('.prompt.md'));
+  const findings = paths ? interfaceFindings({root,paths}) : [];
+  if (findings.length) {
+    const summary = 'Lint refused Runtime interfaces. 0 AI calls. No files were sent.';
+    if (context.json) line(ports.stdout,JSON.stringify({repo:root,exit_code:4,lint_state:'refused',problems:findings,rows:[],summary_line:summary}));
+    else for (const text of [...findings.map(item => `${item.code}: ${item.message}`),summary]) line(ports.stdout,text);
+    return 4;
+  }
   const selected = select(found, normalized, root);
   context.coverage = bindingCoverage({ root, found, selected });
   // A test that the test name rule cannot use is refused here and never sent; the other tests are linted.
@@ -1668,6 +1678,12 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
     refusals: [], request_ids: [], warnings: [], steps: Array.isArray(test.doc?.steps) ? test.doc.steps.filter(isObject) : [],
     criterion_texts: Object.fromEntries((Array.isArray(test.doc?.criteria) ? test.doc.criteria : []).filter(isObject).map(item => [item.id, item.text])),
     ...(discoveryRefusal(test) ? { state: 'refused', phase: 'local', refusals: [discoveryRefusal(test)], steps: [] } : {}) }));
+  const nativeRows = new Map(preflight({root,found,selected}).rows.filter(row => row.native_only?.length).map(row => [row.test,row]));
+  for (const row of rows) {
+    const native = nativeRows.get(row.test);
+    if (native && !native.refusals.length) Object.assign(row,{state:'not_run',phase:'local',native_only:native.native_only,unsent:true,note:{code:'native-only',message:native.native_only.map(item => `${item.path}: ${item.reason}`).join('; ')}});
+  }
+  if (rows.every(row => row.native_only?.length)) return printResult(context,rows);
   const local = row => row.phase === 'local';
   const {readPrompt,interfaceSchemaProblems} = await import('./runtime-preflight.mjs');
   const prompts = new Map();
@@ -1676,6 +1692,8 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
     seen.add(path);
     if (!prompts.has(path)) prompts.set(path,readPrompt(root,found.visible,path));
     const prompt = prompts.get(path);
+    const finding = interfaceFindings({root,paths:[path]});
+    if (finding.length) return finding;
     if (!prompt.interface) return [];
     const own = interfaceSchemaProblems(prompt.interface).filter(problem =>
       ['invalid-limits','invalid-interface'].includes(problem.code) && problem.pointer.startsWith('/limits'))
@@ -1688,7 +1706,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   });
   const limited = limitRows.some(row => !local(row) && row.refusals.length);
   if (limited || rows.every(local)) {
-    const refusedRows = limitRows.map(row => ({story:row.story,title:row.title,test:row.test,state:row.refusals.length ? 'refused' : 'not_run',refusals:row.refusals}));
+    const refusedRows = limitRows.map(row => ({story:row.story,title:row.title,test:row.test,state:row.refusals.length ? 'refused' : 'not_run',refusals:row.refusals,note:row.note}));
     const problems = [];
     for (const problem of refusedRows.flatMap(row => row.refusals)) {
       if (!problems.some(item => item.code === problem.code && item.path === problem.path && item.section === problem.section)) problems.push(problem);
@@ -2315,9 +2333,10 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
           const { found, normalized } = localSetup(cwd, words), selected = select(found, normalized, root);
           promptPaths = ports.captureSource(root, { tests: selected.filter(test => !test.error).map(test => test.path), appMap: null }).files.map(file => file.path).filter(path => path.endsWith('.prompt.md'));
         }
+        const problems = interfaceFindings({root,paths:promptPaths});
         const warnings = lintSvgLayouts({ root, files, promptPaths }), summary = `SVG layout lint: ${warnings.length} warnings. 0 AI calls. No checks were sent.`;
-        line(ports.stdout, context.json ? JSON.stringify({ repo: root, exit_code: 0, warnings, summary_line: summary }) : [...warnings, summary].join('\n'));
-        return 0;
+        line(ports.stdout, context.json ? JSON.stringify({ repo: root, exit_code: problems.length ? 4 : 0, problems, warnings, summary_line: summary }) : [...problems.map(item => `${item.code}: ${item.message}`), ...warnings, summary].join('\n'));
+        return problems.length ? 4 : 0;
       } catch (error) { throw new Stop(2, error.message); }
     }
     requestedCalls(options['--max-calls']);

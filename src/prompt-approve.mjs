@@ -64,6 +64,8 @@ function nested(schema, indent) {
 // The interface in plain words, for the person who approves it.
 export function describeInterface(path, iface) {
   const out = [`${path} (${iface.status})`];
+  if (iface.kind) out.push(`Kind: ${iface.kind}`);
+  if (iface.kind === 'native-only') out.push(`Reason: ${iface.reason}`);
   for (const entry of Array.isArray(iface.entries) ? iface.entries : []) {
     out.push(`Operation ${entry?.operation}`, 'Input:', ...describe(entry?.input_schema, '  '), 'Result:', ...describe(entry?.result_schema, '  '),
       `Errors: ${Array.isArray(entry?.errors) && entry.errors.length ? entry.errors.join(', ') : 'none'}`);
@@ -207,12 +209,12 @@ export async function askApproval({ root, path, stdout, answers, expectedHash, s
   if (expectedHash !== undefined && expectedHash !== hash) {
     return { state: 'declined', exitCode: 4, message: `${path}: the prompt changed since you clicked Approve. Not approved; look at the new text, then click Approve again.` };
   }
-  if (iface.status === 'approved' && current) return { state: 'done', exitCode: 0, message: `${path} is already approved and current.` };
   const problems = interfaceSchemaProblems(iface);
   if (problems.length) {
     for (const problem of problems) line(stdout, `  ${problem.code}  ${problem.pointer}  ${problem.rule}`);
     return { state: 'declined', exitCode: 4, message: `Fix these in ${path} before you approve.` };
   }
+  if (iface.status === 'approved' && current) return { state: 'done', exitCode: 0, message: `${path} is already approved and current.` };
   for (const row of [...describeInterface(path, iface), ...proseView(root, path, text)]) line(stdout, row);
   if (iface.status === 'approved') line(stdout, 'The text changed after it was approved. Read the prompt again before you answer.');
   if (said === undefined) stdout.write(`Approve ${path}? y/n `);
@@ -266,7 +268,7 @@ export async function runApprove({ words = [], cwd = process.cwd(), said } = {},
     const answers = said === undefined ? lineReader(stdin) : { close() {} };
     const commit = async ({ text, next, hash }) => {
       const fs = ports.fs ?? { writeFileSync };
-      const evidence = { id: (ports.randomUUID ?? randomUUID)(), route: said === undefined ? 'terminal' : 'said', actor: approvalActor(env), at: (ports.now ?? Date.now)(), words: said ?? null, prompts: [{ path, proseSha256: hash }] };
+      const evidence = { id: (ports.randomUUID ?? randomUUID)(), route: said === undefined ? 'terminal' : 'said', actor: approvalActor(env), at: (ports.now ?? Date.now)(), words: said ?? null, prompts: [{ path, proseSha256: hash, ...(() => { const iface = JSON.parse(interfaceBlocks(text)[0][1]); return {kind:iface.kind ?? 'full',...(iface.kind === 'native-only' ? {reason:iface.reason} : {})}; })() }] };
       try {
         fs.writeFileSync(join(root, path), next);
         await recordPromptApproval({ commonDir, evidence }, ports);

@@ -478,6 +478,8 @@ export function tryUsageHeaders(usage) {
 }
 
 export function coverageText(coverage) {
-  if (!coverage?.available) return 'Module binding coverage unavailable: no pdd-bindings.json.';
-  return [`${coverage.bound} of ${coverage.total} modules bound`, ...coverage.modules.filter(m => m.state === 'unbound').map(m => `  ${m.path}: ${m.reason} Port attempted: ${m.port_attempt}`)].join('\n');
+  const runtime = coverage?.runtime;
+  const promptLine = runtime ? `Runtime coverage: ${runtime.checkable} of ${runtime.total} prompts checkable, ${runtime.native_only} native-only\n` : '';
+  if (!coverage?.available) return promptLine + 'Module binding coverage unavailable: no pdd-bindings.json.';
+  return promptLine + [`${coverage.bound} of ${coverage.total} modules bound`, ...coverage.modules.filter(m => m.state === 'unbound').map(m => `  ${m.path}: ${m.reason} Port attempted: ${m.port_attempt}`)].join('\n');
 }
