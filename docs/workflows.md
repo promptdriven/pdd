@@ -87,11 +87,20 @@ you     review and merge on GitHub
 9. Completing the last step of an area with a PR gate pushes the branch and opens the PR. For bug and feature, the review-completion hold in point 5 overrides generic completion after each step: keep PR 2 unopened during repairs.
 10. You merge the PRs on GitHub. `pdd workflow status` reads the PR state. When the last PR is merged, the run is completed.
 
-A workflow can start from a normal checkout or a linked worktree, including one whose primary repository is bare. All linked checkouts share the same issue claims and allocation records in the common Git directory. New run worktrees live beside the primary repository in `<primary-name>.pdd-worktrees/`; a bare `project.git` uses `project.git.pdd-worktrees/`. pdd verifies the origin and physical Git identity and keeps `core.bare` unchanged. A refusal before saving allocation intent leaves no issue claim or allocation record. If intent was saved but allocation is unconfirmed, preserve it and inspect that exact run before trying recovery.
+A workflow can start from a normal checkout or from a linked worktree, in every layout that Git supports for linked worktrees. All checkouts of one repository share the same issue claims and allocation records in the common Git directory. pdd reads what Git reports for your checkout: the common Git directory, the primary registration in `git worktree list`, `core.bare` and the origin. It allocates only when they agree and every origin names the same GitHub repository. New run worktrees live in one folder beside the primary repository:
 
-Herdr uses the verified primary repository workspace as the parent when a run starts from a linked checkout;
-the invoking source checkout and the allocated run worktree keep their own identities. This also supports a
-verified bare primary. If Herdr confirms `linked_worktree_source` before any native agent starts, run
+| Layout | Run worktrees folder | Herdr parent |
+|---|---|---|
+| Normal clone `project/`, or a linked worktree of it | `project.pdd-worktrees/` | `project/` |
+| Bare `project.git/` with linked worktrees | `project.git.pdd-worktrees/` | `project.git/` |
+| Bare repository stored in `project/.git` with linked worktrees | `project.pdd-worktrees/` | `project/` |
+| Bare `project/.bare/` and a file `project/.git` with `gitdir: ./.bare` | `project.pdd-worktrees/` | `project/.bare/` |
+
+When the bare repository is inside a project folder, the run worktrees go beside that folder, not inside it. pdd runs Git commands that need a work tree only in your checkout or in the run worktree. It keeps `core.bare` unchanged and does not fetch to allocate. When the facts disagree, pdd refuses and names what disagrees and the next step, for example two origins that name different repositories. A separate Git directory (`git clone --separate-git-dir`) is refused, because Git does not record where its primary checkout is. A refusal before saving allocation intent leaves no issue claim or allocation record. If intent was saved but allocation is unconfirmed, preserve it and inspect that exact run before trying recovery.
+
+Herdr uses the verified primary repository workspace (the Herdr parent in the table) as the parent when a run
+starts from a linked checkout; the invoking source checkout and the allocated run worktree keep their own
+identities. The chat starts in the run worktree. If Herdr confirms `linked_worktree_source` before any native agent starts, run
 `pdd workflow open ISSUE` to finish that same allocated run. A saved linked-parent failure can recover through
 this command even after an earlier open failed. pdd preserves the old parent shell workspace, records it as
 superseded, and opens the verified parent under an unused label. It does not allocate another Git worktree.
