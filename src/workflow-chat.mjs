@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: f12c54bd6876e5d96bb9f4db3ca4fe1d117dd63ad142a7a1fec0b6bc061c42d9).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 3054665c11cc91f58c5c2c1c04a4c025ca151265b8778065b4aa4a7c51597fb9).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
@@ -25,9 +25,10 @@ const AGENT_MARKER = /^(?:CLAUDECODE|CLAUDE_CODE_(?:CHILD_SESSION|SESSION_ID|SES
 // The variable that names the agent's config folder (the run keeps its value as configDir).
 // Antigravity CLI has no config-folder variable: it uses the person's home, so its runs keep no configDir.
 export const homeVariable = agent => agent === 'claude' ? 'CLAUDE_CONFIG_DIR' : agent === 'gemini' ? 'GEMINI_CLI_HOME' : agent === 'agy' ? null : 'CODEX_HOME';
-// The folders outside the run worktree that an Antigravity chat reads with its file tools: pdd's runs folder
-// (`<clone>/.git/pdd/runs`) and the worktrees folder (`<clone>.pdd-worktrees`).
-export const agentDirs = run => run?.commonDir && run?.sourceRoot ? [join(run.commonDir, 'pdd/runs'), `${run.sourceRoot}.pdd-worktrees`] : [];
+// The folders outside the run worktree that an Antigravity or Gemini chat reads with its file tools: pdd's runs
+// folder (`<clone>/.git/pdd/runs`) and the folder that holds the run worktree (`<clone>.pdd-worktrees`). A run from
+// a linked checkout has its worktree beside the primary repository, not beside that checkout.
+export const agentDirs = run => run?.commonDir && run?.root ? [join(run.commonDir, 'pdd/runs'), dirname(run.root)] : [];
 // A leading "~" or "~/" is the home folder: zsh leaves "~" as text in "env CODEX_HOME=~/x pdd …" (0.1.6 tester), and the
 // agent then refuses the folder.
 export function expandHome(dir, env = process.env) {
@@ -121,7 +122,8 @@ export function chatCommand({ agent, cwd, messageFile, sessionId, resumeId, conf
   if (agent === 'agy') return [...env, 'agy', '--dangerously-skip-permissions', '--settings', quote(JSON.stringify({ trustedWorkspaces: [cwd] })),
     ...[...new Set(addDirs)].flatMap(dir => ['--add-dir', quote(dir)]),
     ...(resumeId ? ['--conversation', resumeId] : []), ...(messageFile ? ['--prompt-interactive', ...message] : [])].join(' ');
-  if (agent === 'gemini') return [...env, 'gemini', '--yolo', ...(commonDir && sourceRoot ? ['--include-directories', quote(join(commonDir, 'pdd/runs')), '--include-directories', quote(`${sourceRoot}.pdd-worktrees`)] : []), ...(resumeId ? ['--resume', resumeId] : []), ...(messageFile ? ['--prompt-interactive', ...message] : [])].join(' ');
+  const included = addDirs.length ? [...new Set(addDirs)] : commonDir && sourceRoot ? [join(commonDir, 'pdd/runs'), `${sourceRoot}.pdd-worktrees`] : [];
+  if (agent === 'gemini') return [...env, 'gemini', '--yolo', ...included.flatMap(dir => ['--include-directories', quote(dir)]), ...(resumeId ? ['--resume', resumeId] : []), ...(messageFile ? ['--prompt-interactive', ...message] : [])].join(' ');
   if (agent === 'claude') return [...env, 'claude', '--dangerously-skip-permissions', ...(resumeId ? ['--resume', resumeId] : ['--session-id', sessionId]), ...message].join(' ');
   // Codex builds each command's environment from shell_environment_policy; `set` applies after `inherit`.
   return [...env, 'codex', ...(resumeId ? ['resume', resumeId] : []), '--no-daemon', '--dangerously-bypass-approvals-and-sandbox',

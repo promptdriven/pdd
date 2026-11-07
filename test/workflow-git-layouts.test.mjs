@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fixture, packageRoot } from './helpers/workflow-runner-fixture.mjs';
 import { startRun, runStatus, cancelRun } from '../src/workflow-runner.mjs';
+import { agentDirs, chatCommand } from '../src/workflow-chat.mjs';
 
 const ORIGIN = 'https://github.com/example/project.git';
 // For each layout: the folder to start from, Git's primary registration R (the Herdr parent),
@@ -78,6 +79,10 @@ for (const name of Object.keys(LAYOUTS)) test(`2698: ${name}: run, Herdr parent,
   const pane = f.herdr.paneOf(run.chats[0]);
   assert.equal(pane.cwd, run.root); assert.equal(pane.commands.length, 1); assert.match(pane.commands[0], / codex /);
   assert.equal(f.herdr.panes.filter(p => p.agent).length, 1);
+  // agy and Gemini chats read the run folder and the folder that really holds the run worktrees.
+  assert.deepEqual(agentDirs(run), [join(l.common, 'pdd/runs'), l.folder]);
+  const gemini = chatCommand({ agent: 'gemini', cwd: run.root, commonDir: run.commonDir, sourceRoot: run.sourceRoot, addDirs: agentDirs(run) });
+  assert.ok(gemini.includes(`--include-directories '${l.folder}'`), gemini);
   // Status from the invoking checkout and from the run worktree.
   for (const cwd of [l.cwd, run.root]) {
     const status = await runStatus({ ref: '17', cwd }, f.ports);
