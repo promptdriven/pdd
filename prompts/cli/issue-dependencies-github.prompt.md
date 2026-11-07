@@ -101,14 +101,14 @@ default clock follows the caller's injected `now` in milliseconds.
 
 | Claim | Expired when |
 |---|---|
-| Heartbeat: its record has a top-level `lastSeen` time | 4 hours after its last-seen time: the latest of the recorded `lastSeen` and the claim comment's GitHub `created_at` and `updated_at`. A time later than now counts as now. Other issue activity does not refresh it. `lastSeen` is that last-seen time. |
-| Legacy: no top-level `lastSeen`, no unique matching comment, or a bare label | 24 hours with no issue activity: the latest issue update, comment creation or edit, or timeline event. `lastSeen` is that activity time. |
+| Heartbeat: the one matching claim comment, from its creation, with or without a `lastSeen` | 4 hours after its last-seen time: the claim comment's GitHub `updated_at` (its `created_at` when it has no `updated_at`), and at most now. Other issue activity does not refresh it. `lastSeen` is that last-seen time. |
+| Legacy: no unique matching comment, a bare label, or a matching comment with no GitHub time | 24 hours with no issue activity: the latest issue update, comment creation or edit, or timeline event. `lastSeen` is that activity time. |
 
-The comment times are GitHub server times. So a recorded `lastSeen` from a wrong
-clock (for example a local time written with `Z`), a copied old time or a failed
-heartbeat readback cannot expire a claim sooner than 4 hours after the claim
-comment was created or last edited on GitHub. Any edit of the claim comment counts
-as a heartbeat. A `lastSeen` inside a nested object is not read.
+Only the GitHub server times of the claim comment count. A recorded `lastSeen`
+value never extends a claim and never shortens it: a wrong or fast writer clock,
+a future or copied old time, or a failed heartbeat readback does not change the
+last-seen time. A recorded `lastSeen` is advisory. Any edit of the claim comment
+counts as a heartbeat.
 
 An unknown time or clock never expires a claim. An expired claim has `active: false`:
 it is not owned elsewhere, and it does not admit its old owner to a start or a

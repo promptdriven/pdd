@@ -72,20 +72,23 @@ async function observe(world, facts) {
 }
 
 const expiredReason = time => `Expired claim, last seen ${at(time)}`;
+// As on GitHub, a heartbeat edit sets the comment's updated_at to the time it writes.
 const cases = [
   { name: 'a heartbeat 1 minute short of 4 hours keeps the claim live', lastSeen: NOW - 4 * hour + minute, expired: false },
   { name: 'a heartbeat 4 hours old expires the claim even with recent issue activity', lastSeen: NOW - 4 * hour, activity: NOW - 10 * minute, expired: true, seen: NOW - 4 * hour },
-  { name: 'a legacy claim with issue activity 23 hours ago stays live', activity: NOW - 23 * hour, expired: false },
-  { name: 'a legacy claim with no issue activity for 24 hours expires', activity: NOW - 24 * hour, expired: true, seen: NOW - 24 * hour },
+  { name: 'a claim record before its first heartbeat is live 1 minute short of 4 hours after creation', created: NOW - 4 * hour + minute, expired: false },
+  { name: 'a claim record with no heartbeat expires 4 hours after creation even with recent issue activity', created: NOW - 4 * hour, activity: NOW - 10 * minute, expired: true, seen: NOW - 4 * hour },
+  { name: 'a prose claim with issue activity 23 hours ago stays live', prose: true, activity: NOW - 23 * hour, expired: false },
+  { name: 'a prose claim with no issue activity for 24 hours expires', prose: true, activity: NOW - 24 * hour, expired: true, seen: NOW - 24 * hour },
   { name: 'a bare label with no claim comment expires after 24 hours without activity', bare: true, activity: NOW - 25 * hour, expired: true, seen: NOW - 25 * hour },
-  { name: 'a legacy claim with no readable activity time never expires', unknownTimes: true, expired: false },
+  { name: 'a claim with no readable time never expires', unknownTimes: true, expired: false },
 ];
 for (const c of cases) test(`claim expiry: ${c.name}`, async t => {
-  const world = checkout(t), activity = c.activity ?? NOW - 30 * hour;
+  const world = checkout(t), activity = c.activity ?? Math.max(c.lastSeen ?? -Infinity, c.created ?? -Infinity, NOW - 30 * hour);
   const issue = issueRow(7, { updated_at: c.unknownTimes ? undefined : at(activity) });
-  const claimAt = c.unknownTimes ? undefined : at(Math.min(activity, NOW - 26 * hour));
-  const comments = c.bare ? [] : [{ id: 901, user: { login: 'owner' }, created_at: claimAt, updated_at: claimAt,
-    body: claimBody(c.lastSeen === undefined ? {} : { lastSeen: at(c.lastSeen) }) }];
+  const claimAt = c.unknownTimes ? undefined : at(c.created ?? Math.min(activity, NOW - 26 * hour)), editAt = c.lastSeen === undefined ? claimAt : at(c.lastSeen);
+  const comments = c.bare ? [] : [{ id: 901, user: { login: 'owner' }, created_at: claimAt, updated_at: editAt,
+    body: c.prose ? 'Autopilot claim on machine-a.' : claimBody(c.lastSeen === undefined ? {} : { lastSeen: at(c.lastSeen) }) }];
   const timeline = [labeled(701, claimAt)];
   // A dependency review needs readable comment times, so the unknown-time case has none.
   const { node, claim, snapshot } = await observe(world, { issue, comments, timeline, review: !c.unknownTimes });
@@ -169,8 +172,41 @@ test('claim expiry: a lastSeen nested in another object is not read as the heart
   const world = checkout(t), claimAt = at(NOW - 26 * hour), issue = issueRow(7, { updated_at: claimAt });
   const comments = [{ id: 901, user: { login: 'owner' }, created_at: claimAt, updated_at: claimAt, body: claimBody({ previous: { lastSeen: at(NOW - minute) } }) }];
   const { claim } = await observe(world, { issue, comments, timeline: [labeled(701, claimAt)] });
-  assert.equal(claim.expired, true, 'with no top-level lastSeen it is a legacy claim with no activity for 24 hours');
+  assert.equal(claim.expired, true, 'the claim comment\'s GitHub time is the last-seen time; a nested lastSeen is not read');
   assert.equal(claim.lastSeen, claimAt);
+});
+
+// A recorded lastSeen never extends a claim: only the claim comment's GitHub time counts.
+test('claim expiry: a lastSeen in the future does not keep a dead claim live', async t => {
+  const world = checkout(t), lastEdit = NOW - 5 * hour, issue = issueRow(7, { updated_at: at(lastEdit) });
+  const comments = [{ id: 901, user: { login: 'owner' }, created_at: at(NOW - 30 * hour), updated_at: at(lastEdit), body: claimBody({ lastSeen: at(NOW + 3 * 24 * hour) }) }];
+  const facts = { issue, comments, timeline: [labeled(701, at(NOW - 30 * hour))] };
+  world.now = lastEdit + 4 * hour - minute;
+  const live = await observe(world, facts);
+  assert.equal(live.claim.active, true);
+  assert.equal(live.claim.lastSeen, at(lastEdit));
+  world.now = NOW;
+  const { claim, node } = await observe(world, facts);
+  assert.equal(claim.expired, true, 'expired 4 hours after the last GitHub edit');
+  assert.equal(claim.lastSeen, at(lastEdit));
+  assert.ok(node.reasons.includes(expiredReason(lastEdit)), node.reasons.join('; '));
+  assert.equal(node.eligible, true);
+});
+
+test('heartbeat: a writer clock 1 day ahead does not keep a stopped machine\'s claim live', async t => {
+  const world = checkout(t), edit = NOW - 5 * hour, claimAt = at(NOW - 30 * hour);
+  const service = commentService([{ id: 901, user: { login: 'owner' }, created_at: claimAt, updated_at: claimAt, body: claimBody() }], { serverTime: () => edit });
+  const result = await refreshClaimHeartbeat({ repository: repo, claim: ownClaim(), coordinatorId: 'coordinator-a', machine: 'machine-a', at: at(edit + 24 * hour) }, { execFile: service.execFile });
+  assert.deepEqual(result, { state: 'refreshed', lastSeen: at(edit + 24 * hour) });
+  const saved = service.comments.get('901');
+  assert.equal(saved.updated_at, at(edit), 'GitHub keeps its own edit time');
+  const facts = { issue: issueRow(7, { updated_at: at(edit) }), comments: [saved], timeline: [labeled(701, claimAt)] };
+  world.now = edit + 4 * hour - minute;
+  assert.equal((await observe(world, facts)).claim.active, true);
+  world.now = NOW;
+  const { claim } = await observe(world, facts);
+  assert.equal(claim.expired, true, 'the machine stopped 5 hours ago; the fast clock does not hold the claim');
+  assert.equal(claim.lastSeen, at(edit));
 });
 
 // GitHub sets a comment's updated_at to its own (server) time on each edit.
@@ -454,8 +490,10 @@ test('workflow: an automatic run does not push or open its PR after its claim ex
   writeFileSync(join(stateRoot, `${sha(root).slice(0, 20)}.json`), JSON.stringify({ repo: 'example/project', cwd: root, coordinatorId: origin.coordinatorId }));
   writeFileSync(join(f.source, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: [] } }));
   const fixturePath = join(f.base, 'reader.json'), logPath = join(f.base, 'gh.log');
-  const claimFor = lastSeen => writeFileSync(fixturePath, JSON.stringify({ labels: ['pdd:working'], events: [{ id: 12, event: 'labeled', label: { name: 'pdd:working' }, actor: { login: 'example' } }],
-    comments: [{ id: 11, user: { login: 'example' }, body: JSON.stringify({ repository: origin.repository, coordinatorId: origin.coordinatorId, machine: origin.machine, labelEventId: '12', lastSeen }) }] }));
+  // As on GitHub, the claim comment has its creation time and its last heartbeat edit time.
+  const claimedAt = at(f.clock - 30 * hour);
+  const claimFor = lastSeen => writeFileSync(fixturePath, JSON.stringify({ labels: ['pdd:working'], events: [{ id: 12, event: 'labeled', label: { name: 'pdd:working' }, actor: { login: 'example' }, created_at: claimedAt }],
+    comments: [{ id: 11, user: { login: 'example' }, created_at: claimedAt, updated_at: lastSeen, body: JSON.stringify({ repository: origin.repository, coordinatorId: origin.coordinatorId, machine: origin.machine, labelEventId: '12', lastSeen }) }] }));
   const original = f.ports.execFile;
   const execFile = (file, args, opts) => file === 'gh' && args[0] === 'api' && args[1] === '--include'
     ? exec(process.execPath, [join(packageRoot, 'test/helpers/continuation-fake-gh.mjs'), ...args], { ...opts, env: { ...process.env, READER_FIXTURE_FILE: fixturePath, READER_GH_LOG: logPath } })

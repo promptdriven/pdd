@@ -70,12 +70,13 @@ names count as trusted. The `pdd-autopilot` skill owns the start-up recipe,
 `pdd:working` claim and one comment across machines, capacity and progress
 tracking. Only Autopilot uses `pdd:working`; a person or a manual session assigns
 a person instead. Each tick writes a `lastSeen` time into its own claim comments
-without an AI call. A claim with no `lastSeen` update for 4 hours, or an older
-claim without `lastSeen` and with no issue activity for 24 hours, is expired:
+without an AI call; that edit is the heartbeat. A claim comment with no GitHub
+edit for 4 hours (counted from its creation until the first heartbeat), or a
+claim without a claim record and with no issue activity for 24 hours, is expired:
 `pdd graph` shows "Expired claim, last seen" and another coordinator may take it
-over. The last-seen time is the later of `lastSeen` and the claim comment's
-GitHub creation or edit time. In `off` mode a tick does nothing on this machine: it
-releases no claim and writes no `lastSeen`, so the claims expire after 4 hours, as
+over. The last-seen time is only the claim comment's GitHub edit or creation
+time; the recorded `lastSeen` value never extends a claim. In `off` mode a tick
+does nothing on this machine: it releases no claim and writes no `lastSeen`, so the claims expire after 4 hours, as
 on a stopped machine; their runs then cannot open or update a PR. After 4
 hours stuck, the owner tries a changed approach or asks for help, and the claim then expires. Related PRs are associated through same-repository closing references;
 trusted PR discussion comments and state transitions can wake waiting work once.

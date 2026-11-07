@@ -221,12 +221,14 @@ missing or unreadable records supply no progress fact.
 
 For an eligible trusted issue with a live `pdd:working` claim, use the latest issue update or
 comment creation/edit time already returned and cached by the tick as claim
-activity (including label refresh). A heartbeat edit is not activity: for a claim
-comment with `lastSeen`, use its creation time. GitHub moves the issue update time
-to the time of a comment edit, so with such a comment, use the issue update time
-only when it is more than 5 seconds later than that comment's newest edit time. An
-issue change that a later heartbeat hides is then not activity; comments and
-comment edits still are. At 60 minutes, representing the skill's
+activity. A heartbeat edit is not activity: for a claim comment with `lastSeen`,
+use its creation time. GitHub moves the issue update time to the time of a comment
+edit, so with such a comment, use the issue update time only when it is more than
+5 seconds later than that comment's newest edit time. The tick sends heartbeats
+before it reads the issues, so with such a comment a change only on the issue
+(such as a label or a PR link) is hidden by the next heartbeat and is not activity;
+comments and comment edits still are. Without such a comment, the issue update time
+(a label change too) is activity. At 60 minutes, representing the skill's
 "about 1 hour", offer one line naming the issue number and asking the skill to
 review stalled work under its claim rule. This is an observation only: idle age
 does not authorize takeover, release the `pdd:working` claim, or make the issue fresh
