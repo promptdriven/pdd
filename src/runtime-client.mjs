@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 2a6f602d522e774bec6b9b8c95376ae98217de1e777d2f9f66e308085a2a45b2).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: c448b8d61b194f12ba865c67e30fc5dec0b8b43090c06084175d50729f198e58).
 import {readEvidenceEligibility} from './workflow-runner.mjs';
 import {allRuns} from './workflow-runs.mjs';
 import {assessNativeEvidence, resultLines, usableResult} from './workflow-results.mjs';
@@ -1496,9 +1496,10 @@ async function runLint(context) {
       if (wait !== undefined) { if (await pause(wait)) continue; return busy(); }
     }
     if (!lost && ['queued', 'running'].includes(answer?.state)) {
-      Object.assign(context.lint, { state: answer.state, pending: true, unknown: false });
+      const note = { code: context.interrupted ? 'interrupted' : 'deadline', message: pendingLintMessage(context, answer) };
+      Object.assign(context.lint, { state: answer.state, pending: true, unknown: false, note });
       saveBatch(context);
-      return { kind: 'pending', answer };
+      return { kind: 'pending', answer, note };
     }
     return lost || !answer ? { kind: 'unknown' } : { kind: 'answer', answer };
   }
@@ -1527,7 +1528,7 @@ async function checkBatch(context, rows, priorLint = null) {
   if (context.interrupted) { notSent('not_run', { note: lint.note ?? { code: null, message: 'Stopped before sending.' } }); return; }
   if (lint.kind === 'pending') {
     context.lintPending = true;
-    notSent('not_run', { note: { code: 'lint-pending', message: pendingLintMessage(context, lint.answer) } });
+    notSent('not_run', { note: { code: context.interrupted ? 'interrupted' : 'lint-pending', message: pendingLintMessage(context, lint.answer) } });
     return;
   }
   if (lint.kind === 'not_run' || lint.kind === 'stop') { notSent('not_run', { note: lint.note, ...(lint.note?.code === 'lint-busy' ? { calls: 0, phase: 'lint' } : {}) }); return; }
@@ -1754,7 +1755,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
   const lint = await runLint(context);
   if (lint.kind === 'pending') { context.lintPending = true; Object.assign(context.lint, { state: lint.answer.state, pending: true });
-    for (const row of rows) if (!local(row)) Object.assign(row, { state: 'not_run', calls: 0, phase: 'lint', note: { code: 'lint-pending', message: pendingLintMessage(context, lint.answer) } });
+    for (const row of rows) if (!local(row)) Object.assign(row, { state: 'not_run', calls: 0, phase: 'lint', note: { code: context.interrupted ? 'interrupted' : 'lint-pending', message: pendingLintMessage(context, lint.answer) } });
     saveBatch(context); line(ports.stderr, pendingLintMessage(context, lint.answer)); return printResult(context, rows); }
   if (lint.kind === 'not_run' && context.json) {
     for (const row of rows) if (!local(row)) Object.assign(row, { state: 'not_run', calls: 0, note: lint.note });

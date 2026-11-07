@@ -50,10 +50,12 @@ for (const mode of ['check', 'lint', 'try']) test(`LINT-PENDING: ${mode} reports
   if (mode === 'check') {
     const json = JSON.parse(r.ports.stdout.text);
     assert.equal(json.rows[0].state, 'not run');
+    assert.equal(json.rows[0].reason.code, 'deadline');
     assert.equal(json.rows[0].calls, 0);
     assert.equal(json.rows[0].request_id, null);
     const saved = JSON.parse(readFileSync(join(r.setup.state, 'batches', json.batch, 'batch.json')));
     assert.equal(saved.lint.pending, true);
+    assert.equal(saved.lint.reason.code, 'deadline');
     const next = await read(r, json.batch);
     assert.equal(next.code, 3);
     assert.equal(next.json.rows[0].reason.code, 'timeout-flag');

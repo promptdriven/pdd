@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-outcome.prompt.md (sha256: eaa0a67727b80a877f65d4972ecf885b346cb61ae31c78aa823cba30cc7b2e5f).
+// Generated from prompts/cli/runtime-outcome.prompt.md (sha256: a46b7f321148b07ef3c5a5c9370d33da018ba3c01cbe3bf588669aa732495204).
 // What happened to one selected test: the one place that turns a server answer into an outcome.
 export const PROVIDER_TEXT = 'the AI provider failed during the run. It is not a failed check. Do not send it again yet.';
 export const CHECK_STATES = Object.freeze(['waiting', 'sent', 'passed', 'failed', 'refused', 'partial', 'not run']);
@@ -7,7 +7,7 @@ export const CHECK_STATES = Object.freeze(['waiting', 'sent', 'passed', 'failed'
 export function resultOutcome(row = {}) {
   const supplied = row.note ?? (row.reason && typeof row.reason === 'object' ? row.reason : null);
   const originalCode = supplied?.code || row.code || (row.time_limit ? 'deadline' : null) || row.provider?.code || (row.state === 'sending' ? 'dispatch-uncertain' : null) || row.refusals?.[0]?.code;
-  let code = ['check-busy', 'lint-busy'].includes(originalCode) ? 'server-busy' : originalCode;
+  let code = ['check-busy', 'lint-busy'].includes(originalCode) ? 'server-busy' : originalCode === 'lint-pending' ? 'deadline' : originalCode;
   const states = { ready: 'waiting', queued: 'sent', running: 'sent', sending: 'partial', not_run: 'not run', unknown: 'partial' };
   let state = Object.hasOwn(states, row.state) ? states[row.state] : CHECK_STATES.includes(row.state) ? row.state : 'partial';
   if (code === 'broken-test') state = 'not run';

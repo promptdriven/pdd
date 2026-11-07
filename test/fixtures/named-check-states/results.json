@@ -13,5 +13,6 @@
   {"input":{"state":"running","note":{"code":"timeout-flag","message":"--timeout 1"}},"state":"sent","code":"timeout-flag"},
   {"input":{"state":"sending"},"state":"partial","code":"dispatch-uncertain"},
   {"input":{"state":"unknown","provider":{"code":"graph-provider-failure"}},"state":"partial","code":"graph-provider-failure"},
-  {"input":{"state":"constructor"},"state":"partial","code":"no-server-verdict"}
+  {"input":{"state":"constructor"},"state":"partial","code":"no-server-verdict"},
+  {"input":{"state":"not_run","note":{"code":"lint-pending","message":"Lint is still running"}},"state":"not run","code":"deadline"}
 ]

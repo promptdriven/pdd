@@ -1040,7 +1040,9 @@ precede admission, or describe a busy/refused unsent check as sent.
 For a new Check, start the explicit --timeout clock after the free lint gate
 returns. With no explicit limit, ordinary Check stays uncapped, including
 free lint. For an explicitly bounded noninteractive Check, free lint uses the
-standalone agent lint wait (90 seconds), independent of the paid Check clock. A standalone lint --timeout
+standalone agent lint wait (90 seconds), independent of the paid Check clock.
+When that wait ends, keep the lint-pending recovery note but project deadline
+for the held row and lint metadata. It is not a timeout-flag result. A standalone lint --timeout
 still bounds lint. Each explicit timeout result names --timeout, with reason
 code timeout-flag; server/default deadlines use deadline. A partial lint cannot
 admit Check or Try, including saved continuation and retry.

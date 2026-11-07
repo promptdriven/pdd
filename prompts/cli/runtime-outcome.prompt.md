@@ -30,7 +30,9 @@ result names. Keep raw server refusal codes in refusal records.
 | not_run, not run | not run | no-server-verdict |
 
 A supplied reason or note code wins over defaults. Map check-busy and lint-busy
-to server-busy. A retryable not-run capacity refusal also uses server-busy in
+to server-busy. Map the internal recovery note lint-pending to public deadline
+when an invocation ends its wait for a running lint. Interruption uses
+interrupted instead. A retryable not-run capacity refusal also uses server-busy in
 public rows; retain its server code in raw refusals. Preserve broken-test as a not-run reason, for a caller that cannot
 run a malformed test; this module does not decide which tests to skip. A caller
 stopped by its explicit `--timeout` reports timeout-flag and names `--timeout` in
