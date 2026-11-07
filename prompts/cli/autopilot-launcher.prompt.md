@@ -278,7 +278,9 @@ dependency intake returns; add no other GitHub read for them. For each active
 claim of this coordinator and machine, call the GitHub reader's
 [`refreshClaimHeartbeat`](issue-dependencies-github.prompt.md#claims-heartbeat-and-expiry)
 with the current clock time, under the scan's admission guard. The tick, not the
-AI, writes `lastSeen`: the first heartbeat adds it to a new claim record. A failed
+AI, writes the `lastSeen` time: the first heartbeat sets the existing value (the
+`"lastSeen": ""` marker of a new claim record), or adds the member when it is
+missing. A failed
 heartbeat warns and the tick continues. Never refresh another owner's claim or an expired
 claim, also an own one: expiry is final, and the old owner gets the issue back
 only through the skill's takeover rule.
