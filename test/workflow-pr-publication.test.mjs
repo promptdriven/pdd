@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSy
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import {pinReplayVectors} from '../src/workflow-replay.mjs';
+import {pinReplayVectors,sourceFingerprint} from '../src/workflow-replay.mjs';
 import { DETAILS_OPEN, detailsOf } from '../src/workflow-pr-body.mjs';
 
 // #3042: pdd's own body (evidence, steps, approvals, Verify) now sits in the closed Details section under the readable
@@ -534,6 +534,50 @@ test('READABLE-CODE: the code PR proof table reads the old-code proof and review
   assert.doesNotMatch(proof, /green|PASS|Proved/, 'Agent claims never fill a proof row.');
   assert.match(visible, /\*\*Merge:\*\* waiting for a person to merge\. Closes #17\./); assert.doesNotMatch(visible, JARGON);
   assert.match(detailsOf(pr.body).details, /^Old-code proof: ✓ /m, 'The machine proof line stays in Details.');
+});
+
+// #3029: the formal status of a real code PR whose prompt area has no scenario vectors (PR 1 changed no scenario file,
+// as in prompt-runtime PRs #670 and #686). The code replay stays NOT REPLAYED; the formal block is read on its own.
+const VALUE_STORY = '# Value\n\nAs a maintainer, I want the value to be two,\nso that the report adds up.\n\n## Acceptance criteria\n\n1. The value is two.\n';
+function formalPublication(t, { rules, formal = null }) {
+  const f = fixture(t, { opted: true });
+  mkdirSync(join(f.root, 'user_stories'));
+  writeFileSync(join(f.root, 'user_stories', 'value.md'), VALUE_STORY + (rules ? '\n## Rules to check\n\nWrong: any value other than two.\n' : ''));
+  f.git('add', '.'); f.git('commit', '-qm', 'story'); f.machine(f.git('rev-parse', 'HEAD'));
+  if (formal) writeFileSync(join(f.runDir, 'replay-evidence.json'), JSON.stringify({ schema_version: 'pdd.replay-evidence.v1', run_id: f.run.runId,
+    source: { kind: 'git-content-v1', sha256: sourceFingerprint(f.root) }, vectors: [], checks: [], operations: [],
+    counts: { total: 0, pass: 0, fail: 0, blocked: 0, not_replayed: 0 }, formal }));
+  const out = f.invoke('Review: no must-fix'); assert.equal(out.exitCode, 0, out.message);
+  const body = f.data().prs[0].body, [visible] = body.split(DETAILS_OPEN), lines = visible.split('\n');
+  const details = detailsOf(body).details.replace(/\\([\\`*_[\]()|])/g, '$1');
+  return { status: lines[0].replace(/ · Updated .*$/, ''), row: lines.find(line => line.startsWith('| Formal check')), header: details.split('\n').find(line => line.startsWith('Formal check')), details };
+}
+const PROVED_532 = { result: 'proved_bounded', scope: 'All rules of the value Story over 5192 bounded inputs', reason: 'FORMAL_CHECK_PASSED: total=5192',
+  control_outcome: 'assertion_failure', control_command: 'node --test test/value.formal.test.mjs (old code)', control_exit_code: 1 };
+
+test('FORMAL-REAL1: a Story with Rules to check and no replay-evidence.json: the PR names the missing formal result and is not ready', t => {
+  const pr = formalPublication(t, { rules: true });
+  assert.equal(pr.status, '⛔ Blocked: replay evidence is incomplete; formal check missing');
+  assert.equal(pr.row, '| Formal check | missing — evidence not recorded: replay-evidence.json is missing in the run folder. Repair: write the formal block per docs/replay-evidence.md, then run pdd workflow done formal again. | — |');
+  assert.equal(pr.header, 'Formal check (agent reported): missing — evidence not recorded: replay-evidence.json is missing in the run folder. Repair: write the formal block per docs/replay-evidence.md, then run pdd workflow done formal again.');
+  assert.match(pr.details, /^Code replay: NOT REPLAYED — /m);
+  assert.doesNotMatch(pr.details, /Formal check \(agent reported\): not recorded\./);
+});
+
+test('FORMAL-REAL2: no scenario vectors and a proved formal block with its own control: the PR shows Proved, the replay stays NOT REPLAYED', t => {
+  const pr = formalPublication(t, { rules: true, formal: PROVED_532 });
+  assert.equal(pr.row, '| Formal check (All rules of the value Story over 5192 bounded inputs) | Proved (bounded) | ✗ fails (as expected) |');
+  assert.equal(pr.status, '⛔ Blocked: replay evidence is incomplete', 'Only the scenario replay holds the PR, not the formal result.');
+  assert.equal(pr.header, 'Formal check (agent reported): recorded — Proved (bounded); scope: All rules of the value Story over 5192 bounded inputs; reason: FORMAL_CHECK_PASSED: total=5192; control: assertion failure (exit 1).');
+  assert.match(pr.details, /^Code replay: NOT REPLAYED — The approved prompt area has no original scenario vectors\./m);
+  assert.doesNotMatch(pr.details, /Code replay: PASS|Manifest SHA256: unavailable/);
+});
+
+test('FORMAL-REAL3: a Story without Rules to check: the formal check is "not needed" and does not hold the PR', t => {
+  const pr = formalPublication(t, { rules: false });
+  assert.equal(pr.row, '| Formal check | not needed (no Rules to check in the Story) | — |');
+  assert.equal(pr.status, '⛔ Blocked: replay evidence is incomplete');
+  assert.equal(pr.header, 'Formal check: not needed (no Rules to check in the Story).');
 });
 
 test('READABLE-CHECKS: an existing code PR update reads CI and the checker verdict for the pushed head', t => {

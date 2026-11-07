@@ -5,7 +5,8 @@ retaining approved prompt-space vectors for comparison. Validate structure and i
 prove equivalence, approve a prompt, or infer success from prose. Preserve existing runtime source fingerprints.
 
 Export REPLAY_POLICY (`pdd.replay-evidence.v1`), sourceFingerprint(root), pinReplayVectors(root, paths),
-readReplayEvidence(run, paths?), formatReplayEvidence(result, options?), and adoptReplayCorpus(root, declarationPath, ports). The runner owns policy opt-in and publication.
+readReplayEvidence(run, paths?), readFormalEvidence(run), formalStatusText(formal), formatReplayEvidence(result, options?),
+and adoptReplayCorpus(root, declarationPath, ports). The runner owns policy opt-in and publication.
 
 ## Original identities
 
@@ -144,6 +145,52 @@ A saved anchor outcome may only be blocked or not_replayed and remains that outc
 paths are supplied; still collect comparable saved-value warnings before returning it. Any other saved
 outcome is malformed and blocked. A report with zero checks never displays PASS.
 
+### The formal result on its own
+
+The formal step proves the Story's `## Rules to check` with its own tests, also when the approved prompt area
+has no scenario vectors. So pdd reads the `formal` block on its own (#3029). readFormalEvidence(run) reads the
+same bounded manifest file for its formal status only. readReplayEvidence always attaches this status as
+`formal`, on every return: no anchor, a saved not_replayed or blocked anchor, no current vectors, a missing,
+stale or malformed manifest, and a full replay. In a full replay it validates the bytes that the replay read.
+The scenario replay outcome and reason stay exactly as the rules above say: a formal result never turns
+NOT REPLAYED or BLOCKED into a pass, and an invalid formal block still blocks a full replay as before.
+
+| Status | When | Repair step |
+|---|---|---|
+| recorded | every check below passes | none |
+| missing | no replay-evidence.json, or the file has no `formal` key | write the formal block per docs/replay-evidence.md |
+| malformed (FIELD) | the first failed check names FIELD: `file`, `JSON`, `schema_version`, `run_id`, `source`, `formal`, a `formal.*` field or `mutation` | correct FIELD per docs/replay-evidence.md |
+| stale (source changed) | `source.sha256` is not the current sourceFingerprint(run.root), or the current source cannot be read | run the formal check on the current source and write its formal block with the current fingerprint |
+
+Each repair step ends with "then run pdd workflow done formal again". Check order decides the status, and the
+first failed check wins: read the file (absent is missing; unsafe or unreadable is malformed `file`), UTF-8 JSON,
+schema_version, run_id, the `formal` key (absent is missing), the source shape, the current fingerprint (stale),
+then the typed formal fields, the counterexample of a failed result and the control below. Causes are pdd's own
+finite sentences: never a parser message, a file snippet or a local path.
+
+Control for a proved result (`proved_bounded`, `proved_solver`) always needs `control_outcome: assertion_failure`
+(else malformed `formal.control_outcome`): the planted mistake (in a bug run, the old code) fails the formal check
+by assertion, not crash. Present `control_command` and `control_exit_code` values are always typed as below.
+- With scenario vectors (the saved anchor, or the current full replay, has original checks): the manifest's
+  semantic mutation control must detect, by the mutation rule below, with failed checks that name known original
+  assertions. Otherwise malformed `mutation`.
+- With no scenario vectors: the formal block carries its own control, `control_command` (nonblank) and
+  `control_exit_code` (integer 1..255). Otherwise malformed `formal.control_command` or `formal.control_exit_code`.
+`failed` needs its counterexample; `not_run` and `not_applicable` need only their typed scope and reason.
+
+The status object has `status`; recorded adds `result`, `scope`, `reason`, `control_outcome`, the optional
+control command and exit code, and `source`; every other status adds `cause`, `field` for malformed, and
+`reported` (the block's result word when it is a known one, so the text can say what pdd did not accept).
+When pdd read the bytes, `manifest_sha256` is their hash. readReplayEvidence fills its own empty
+`manifest_sha256` from it, and its empty `source` only from a recorded status, which confirmed the fingerprint.
+
+formalStatusText(formal) gives `{words, detail, repair}` for the [readable PR owner](workflow-pr-body.prompt.md)
+and this report: words are `recorded`, `missing`, `malformed (FIELD)` or `stale (source changed)`. For missing
+the detail is "evidence not recorded: CAUSE"; for malformed and stale it is "evidence not accepted: CAUSE",
+with "the record says RESULT, but " before CAUSE when `reported` is set. A saved status without `status` but
+with a known `result` is recorded (an older saved record); an absent status is missing, cause "pdd has not read
+the formal result for this record".
+
 ### Saved-value changes: show, do not lock
 
 Keep the original anchor for comparison; never replace it or approve changed expectations.
@@ -204,8 +251,10 @@ prompt-space adoption still require exact scenario bytes. Never change the sourc
   A crash, empty failure list, unknown assertion, survived control or not-run control is never detection.
   For not_run, command and exit_code may be null and a nonblank reason is required; never invent an exit.
 - formal: {result:proved_bounded|proved_solver|failed|not_run|not_applicable,scope:nonblank,reason:nonblank,
-  control_outcome:assertion_failure|crash|survived|not_run,counterexample?}. failed requires a counterexample;
-  proved results require assertion_failure control. Not-run/not-applicable remain explicit scoped results.
+  control_outcome:assertion_failure|crash|survived|not_run,control_command?:nonblank,control_exit_code?:integer0..255,
+  counterexample?}. failed requires a counterexample; proved results require assertion_failure control, bound to
+  the semantic mutation with vectors, else to the block's own command and nonzero exit (see
+  [the formal result on its own](#the-formal-result-on-its-own)). Not-run/not-applicable remain explicit scoped results.
 
 All identifier/reason/command strings are bounded (at most1000characters); collections stay within the limits
 above. Reject wrong types and unsupported versions; never coerce truthy flags or counts. SHA256 comparison
@@ -228,7 +277,7 @@ flowchart TD
     F -->|No| P[pass]
 ```
 
-An invalid proved formal control is blocked. Record exact derived counts, public operation totals/executed,
+An invalid proved formal control blocks a full replay; the formal status says why. Record exact derived counts, public operation totals/executed,
 mutation outcome and formal type/scope/reason. Retain explicit assertion/formal failure lines even alongside
 blocked/not_replayed; real failures do not prevent publication. Hash the bounded manifest bytes for provenance.
 For adopted runs, retain structured adoption provenance even when replay is blocked.
@@ -236,7 +285,16 @@ The PR replay section displays "Anchor adopted from REPO@COMMIT; approval refere
 by A; external-assertion-unverified", using cleaned recorded values.
 formatReplayEvidence emits a compact PR section with prominent Code replay PASS/FAIL/BLOCKED/NOT REPLAYED,
 exact counts, source and manifest hashes, current vector hashes labeled "Current vector", public execution totals, semantic control and typed
-formal result. Include: `Agents execute the tests and supply this record. pdd validates structure and identity;
+formal result. The formal line uses formalStatusText:
+- recorded: `Formal check (agent reported): recorded — RESULT; scope: S; reason: R; control: C.`, where RESULT is
+  Proved (bounded), Proved (solver), Failed + counterexample, Not run or Not applicable, and C is the control
+  outcome in words (assertion failure, crash, survived, not run) with ` (exit N)` when the block has its exit code.
+- not recorded: `Formal check (agent reported): WORDS — DETAIL. Repair: STEP.` Never a bare "not recorded", and
+  never "has no formal result" when the file holds a formal block that pdd did not accept.
+- not recorded and option `rules` is false (the runner found no Story with `## Rules to check`):
+  `Formal check: not needed (no Rules to check in the Story).`; for malformed or stale it adds
+  ` The formal block is not accepted: WORDS — CAUSE.` Any other `rules` value shows the not-recorded line.
+Include: `Agents execute the tests and supply this record. pdd validates structure and identity;
 it does not independently prove execution or prompt/code equivalence.` Keep details bounded and sanitize
 control characters, private local paths and Try capabilities. Escape HTML and Markdown in displayed metadata
 so JSON errors, vector paths, scopes or reasons cannot open comments/details or hide the report/trust boundary.
