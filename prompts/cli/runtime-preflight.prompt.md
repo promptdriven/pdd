@@ -91,9 +91,19 @@ A conflict is one test entry: its `path` is the first of its files in sort order
 
 ## Rules (engine eae2202a codes; `pdd-*` codes are pdd only)
 
-A story may have more than one test file (for example a different starting world): `S.json` and `S.<variant>.json` by the [test name rule](#test-name-rule). Each file must still cover every criterion of its story (P5, P6). There is no P11.
+A story may have more than one test file (for example a different starting world): `S.json` and `S.<variant>.json` by the [test name rule](#test-name-rule). Each file reports coverage of every Story criterion under P5, P6 and Criteria with no check. There is no P11.
 
-Check each selected test. Stop at the first broken rule; that test is refused and is not sent.
+Check each selected test. Stop at the first broken rule; that test is refused and is not sent. A missing or unreadable dependency, invalid file or source boundary failure belongs to that test. Keep its reason and fix hint and continue with the other selected tests. Shared configuration, source consistency and aggregate upload limits retain their existing refusal rules.
+
+Export native `scenarioShapeRefusal(doc,path)` for the client to apply the same document, criterion, step and check shape rules to captured bytes. Return the existing refusal shape or null. This reuses P1, criterion/ID and step/check/model shape checks; it adds no authored rule and does not replace prompt/schema admission. A malformed captured test is unsent, and the client rebuilds the upload without it before dispatch or cache reuse.
+
+### Criteria with no check
+
+P5 still refuses extra or changed criterion text. A Story item omitted from the test is instead not checked. P6 still refuses duplicate IDs and malformed or unknown checks. A criterion with no assigned check or no exact check is not checked, with that structural reason. Do not guess observability from English wording. Negative behavior can have an exact world or call-count check.
+
+Expose `not_checked` on preflight rows as an array of `{criterion_id,text,reason}`. Keep authored IDs; omitted Story items get a unique `ac-N` ID based on their Story position, with a suffix if needed. Keep the full Story total and texts. Continue all other validation rules. If no criterion has an exact check, return a local refusal with a fix hint and send nothing.
+
+For a valid test with some exact checks, source capture keeps every authored step, input and expected value. In the captured scenario only, append omitted Story items to `criteria` and add engine `check_exemptions` with `reason:"out-of-scope"` and nonblank `detail` from each not-checked reason. This is automatic structural coverage metadata; authored `criteria_scope` and nonempty `check_exemptions` remain refused by P3. Leave Story and repository bytes unchanged. Use the same effective bytes for files preview, lint, paid checks, source identity and recovery. Do not claim the exempt criteria passed.
 
 | # | Rule | Code |
 |---|---|---|
@@ -101,8 +111,8 @@ Check each selected test. Stop at the first broken rule; that test is refused an
 | P2 | `story_path` is set, names a Git-visible file, and names the Story that the [test name rule](#test-name-rule) matched: `<test> is the test of <story> by its name, but its story_path names <other>. Make them agree.` | `pdd-no-story`, `story-missing`, `pdd-story-mismatch` |
 | P3 | No `criteria_scope`; `check_exemptions` absent or empty | `pdd-partial-test` |
 | P4 | The story has criteria | `story-criteria-missing` |
-| P5 | Test criterion texts equal the story items (sorted). Name the first missing or extra line | `story-criterion-mismatch` |
-| P6 | Unique IDs; each ID has a check and an exact check (the engine's exact predicate) | `duplicate-criterion`, `unchecked-criteria`, `criterion-needs-exact-check` |
+| P5 | Test criterion texts belong to the Story items, including multiplicity. Extra or changed text refuses; omitted items follow Criteria with no check | `story-criterion-mismatch` |
+| P6 | Unique IDs; report missing checks under Criteria with no check | `duplicate-criterion`, `unchecked-criteria` |
 | P7 | `entry_path` is a Git-visible `*.prompt.md` with one interface block, `approved` or `draft`, hash current | `entry-missing`, `interface-missing`, `pdd-two-interfaces`, `invalid-json`, `interface-unapproved`, `interface-stale` |
 | P8 | `operation` is in the interface `entries` | `entry-operation-missing` |
 | P9 | `input` matches `input_schema`. Skip an input that holds `$step_result`. Report every problem of every step at once | `invalid-input` |

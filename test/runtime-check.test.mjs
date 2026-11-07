@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { captureSource, defaultMaxCalls, gitFiles, isSecretPath, numberWarnings, proseSha256, storyCriteria, tarFiles } from '../src/runtime-preflight.mjs';
 import { runCheck } from '../src/runtime-client.mjs';
+import { fakeRuntime, portsFor } from './runtime-fake.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -86,9 +87,6 @@ const RULES = [
   ['P4 no criteria', 'story-criteria-missing', r => writeFileSync(join(r, 'user_stories/place-order.md'), '# Place a coffee order\n\nNo list.\n')],
   ['P5 mismatch', 'story-criterion-mismatch', (r, doc) => { doc.criteria[1].text = 'The order keeps the name.'; }],
   ['P6 duplicate', 'duplicate-criterion', (r, doc) => { doc.criteria[1].id = 'AC1'; }],
-  ['P6 unchecked', 'unchecked-criteria', (r, doc) => { doc.steps[0].checks = doc.steps[0].checks.filter(c => c.criterion_id !== 'AC2'); }],
-  ['P6 inexact', 'criterion-needs-exact-check', (r, doc) => {
-    doc.steps[0].checks = [...doc.steps[0].checks.filter(c => c.criterion_id !== 'AC2'), { criterion_id: 'AC2', target: 'result', path: '/customerName', op: 'exists' }]; }],
   ['P7 entry missing', 'entry-missing', (r, doc) => { doc.steps[0].entry_path = 'prompts/gone.prompt.md'; }],
   ['P7 no interface', 'interface-missing', r => writeFileSync(join(r, 'prompts/place_order.prompt.md'), '# Place an order\n')],
   ['P7 two interfaces', 'pdd-two-interfaces', r => { const f = join(r, 'prompts/place_order.prompt.md'), s = readFileSync(f, 'utf8'); writeFileSync(f, s + s.slice(s.indexOf('<details>'))); }],
@@ -121,10 +119,10 @@ test('RUNTIME-RULES2: quantity 0 gives the exact field and rule; the number warn
   writeJson(file, doc);
   const result = await check(repo, home, ['place-order'], {});
   assert.equal(result.code, 4);
-  assert.deepEqual(result.out.split('\n').slice(2, 3), ['Prompt tests (place-order): no verdict · 0 of 3 criteria · 0/0 checks · 1 refused · 0 AI calls']);
-  assert.equal(result.out.split('\n').filter(Boolean).slice(3, 6).join('\n').startsWith('REFUSED before sending'), true);
-  assert.equal(result.out.split('\n').filter(Boolean).slice(3, 6).join('\n'), ['REFUSED before sending (not sent, 0 AI calls)',
-    '  tests/place-order.json  step 1  invalid-input', '  steps[0] input /items/0/quantity is 0. The prompt allows 1 to 20.'].join('\n'));
+  assert.match(result.out, /1 tests could not run/);
+  assert.ok(result.out.indexOf('tests/place-order.json') < result.out.indexOf('Prompt tests'));
+  assert.match(result.out, /invalid-input/);
+  assert.match(result.out, /steps\[0\].*\/items\/0\/quantity/);
   assert.match(result.out, /Warning: possible numeric mismatch.*899.*AC1.*900\./);
   const prompt = join(repo, 'prompts/place_order.prompt.md');
   writeFileSync(prompt, readFileSync(prompt, 'utf8').replace('"approved"', '"draft"'));
@@ -214,12 +212,14 @@ test('RUNTIME-CLI1: check and try help, option ranges and option mixes', t => {
   assert.match(pdd('simulate', '--help').stdout, /pdd simulate --stop \[STORY\]/);
   assert.doesNotMatch(pdd('completion', 'bash').stdout, /--request/);
   for (const args of [['test', '--max-calls', '0'], ['test', '--max-calls', '1001'], ['test', '--timeout', 'x'], ['simulate', '--tab', 'phone'],
-    ['test', '--request', 'nope'], ['test', '--fill-hash', '--json'], ['test', '--files', '--json'], ['test', '--read', 'a', 'b'],
+    ['test', '--request', 'nope'], ['test', '--fill-hash', '--json'], ['test', '--read', 'a', 'b'],
     ['simulate', '--stop', '--new'], ['simulate', 'a', 'b']]) {
     const result = pdd(...args);
     assert.equal(result.status, 2, `${args.join(' ')}: ${result.stdout}${result.stderr}`); assert.equal(result.stdout, '', args.join(' '));
   }
   assert.equal(pdd('test', '--files', 'place-order').status, 0);
+  const manifest = pdd('test', '--files', '--json', 'place-order');
+  assert.equal(manifest.status, 0); assert.ok(JSON.parse(manifest.stdout).files.some(file => file.path === 'tests/place-order.json'));
   const filled = pdd('test', '--fill-hash');
   assert.equal(filled.status, 0, filled.stderr); assert.match(filled.stdout, /Hashes: 0 filled, 1 current/);
 });
@@ -300,14 +300,19 @@ test('RUNTIME-DRAFT1: a draft interface with a current hash passes preflight and
 });
 
 // Wrong: a second test file for a story (another starting world) is refused (lead, Oct 27: P11 removed).
-test('RUNTIME-RULES4: a story may have two test files (S.json and S.<variant>.json); each one must still cover every criterion', async t => {
+test('RUNTIME-RULES4: a story may have two test files (S.json and S.<variant>.json); each one reports omitted criteria without blocking its checks', async t => {
   const { repo, home } = harbor(t), second = join(repo, 'tests/place-order.second-world.json');
   cpSync(join(repo, 'tests/place-order.json'), second);
   const both = await check(repo, home, ['place-order']);
   assert.equal(both.code, 5, both.err); assert.equal(both.calls.gh, 1);
   const doc = readJson(second); doc.criteria.pop(); doc.steps[0].checks = doc.steps[0].checks.filter(c => c.criterion_id !== 'AC3'); writeJson(second, doc);
-  const partial = await check(repo, home, ['tests/place-order.second-world.json']);
-  assert.equal(partial.code, 4); assert.equal(partial.json.rows[0].refusals[0].code, 'story-criterion-mismatch');
+  const fake = await fakeRuntime(t, (entry, fake) => fake.normal(entry));
+  const { ports } = portsFor({HOME:home,PDD_STATE_DIR:join(home,'state'),PDD_RUNTIME_URL:fake.origin});
+  const partialCode = await runCheck({cwd:repo,words:['tests/place-order.second-world.json'],options:{'--json':true}},ports);
+  const partial = JSON.parse(ports.stdout.text);
+  assert.notEqual(partialCode,0); assert.equal(partial.rows[0].not_checked.length,1);
+  assert.equal(partial.rows[0].not_checked[0].criterion_id,'ac-3');
+  assert.equal(fake.posts.filter(post=>post.command==='check').length,1);
   // Another name is not a test of the Story; two files with one name are an error that names both.
   cpSync(join(repo, 'tests/place-order.json'), join(repo, 'tests/place-order-2.json'));
   const unknown = await check(repo, home, ['tests/place-order-2.json'], {});

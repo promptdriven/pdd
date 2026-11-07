@@ -42,6 +42,14 @@ executes a native test, repairs fixtures, asks for permissions or broadens sourc
 discovery. Physical reader, CLI display and mixed-selection integration require
 native tests; the supplied assessor scenarios do not prove them.
 
+## Independent selected tests
+
+For `pdd lint`, `pdd test` and `pdd test --files`, isolate missing/unreadable dependency and invalid-file failures per selected test before combined source capture. Refuse that row locally, set `unsent:true`, retain its reason and actionable hint, and continue the other selected tests. Never upload or dispatch a broken test. Preserve other refusal rules, including shared configuration and aggregate capture limits.
+
+Retain `not_checked` criteria in rows and saved batches. Before dispatch or cache reuse, reconcile criterion coverage, texts and steps with the actual effective captured scenario. A source edit between preflight and capture cannot hide a captured exemption or retain a stale exemption after the captured test becomes complete. A server pass with not-checked criteria becomes `not_run`, with its real checked results, usage and report retained: the Story is not a full pass. Failures remain failures. Lint also reports incomplete criterion coverage and cannot exit zero. Recovery retains these facts and uses the same effective capture. Such a Story cannot enter the complete-pass cache.
+
+List broken tests first in text and JSON, with file, reason and fix step. Count unsent refused rows as `N tests could not run` in summaries, including files preview. Any broken selection exits nonzero even when all other rows pass. Save both broken and executed rows when a batch exists; JSON files preview records rows and the actual manifest. With no runnable test, report locally without authentication or upload.
+
 ## Reuse complete Story passes
 
 Ordinary test CLI calls opt into local reuse with `cache:true`; direct `runCheck`
@@ -306,7 +314,7 @@ above, in text and JSON. This holds whether the original command ended pending
 or already passed. A confirmed passing lint row remains `passed`, never
 `not_run` or `lint-finished` merely because no Check was requested. A fully passing
 read exits 0 with `Lint: N of M tests pass. 0 AI calls. No checks were sent.`;
-refusals remain refused with exit 4. Send no fresh lint or paid Check and give no
+refusals remain refused with exit 4. A row with not-checked criteria follows Independent selected tests instead of becoming a full pass. Send no fresh lint or paid Check and give no
 advice to start a fresh Check for this lint-only read. Preserve unresolved-lint
 handling and the existing [saved Check intent and continuation policy](#continue-the-original-saved-check),
 including its legacy classification; passing lint alone never establishes Check intent.
