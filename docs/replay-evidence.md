@@ -127,7 +127,8 @@ execution claims. Review commands, results and committed replay tests before mer
 New bundled feature/bug code areas opt in explicitly. Saved areas and custom workflows without the field,
 and small-change, keep their publication behavior. A custom opt-in with an approved prompt area uses
 `then: "ask-code"` to establish the original-vector anchor. A workflow whose code area has no such earlier area
-gets the [approved scenarios on the base](#approved-scenarios-on-the-base) that link to its changes.
+gets the [approved scenarios on the base](#approved-scenarios-on-the-base) that link to its changes, or all of
+them when the repository asks for that.
 [Corpus adoption](#adopt-an-unchanged-approved-corpus) can instead supply a declared anchor to a fresh workflow whose first area is code. Absent anchors are blocked, never reconstructed
 from code-space files.
 
@@ -144,9 +145,27 @@ A base scenario belongs to the run when one of its links names a file in the cha
 - The changed area is every file that the run changed against its base, the links of each changed scenario,
   and, for each changed file that the base `pdd-bindings.json` declares as a `module`, its `stories` and
   `prompt` (see [module binding inventory](runtime-bindings.md)).
+- The changed area also holds each prompt that a changed file names in its PDD header, and the Stories of
+  that prompt (the `story_path` of each base scenario that links to it).
+
+A changed code file links to scenarios in two ways: through `pdd-bindings.json`, or through its own
+header. pdd reads the header from the file on the base commit and from the file in the run. The header is
+one of the first 10 lines of the file, for example:
+
+```text
+// Generated from prompts/cli/workflow-runner.prompt.md.
+# Generated from prompts/modules/src/app/policy.py.prompt.md.
+"""Generated from prompts/app.prompt.md."""
+<!-- Generated from prompts/page.prompt.md -->
+```
+
+The line can start with a comment mark (`//`, `#`, `--`, `;`, `/*`, `*`, `<!--`, `"""` or `'''`). Then it
+has `Generated from` and a repository path that ends in `.prompt.md`. After the path, it can have
+` (sha256: HEX)` with 64 lowercase hex characters, and a `.`. A line without such a path is not a header.
+For example, `Generated from the canonical m1_policy prompt` names no file, so it adds no link.
 
 pdd uses no other link: no folder, file name or text match. When the repository records no link, pdd adds
-no base file and the PR says why. A changed code file links to scenarios only through `pdd-bindings.json`.
+no base file and the PR says why.
 
 With an approved prompt area, pdd builds the anchor at each prompt-space publication. A base file that PR 1
 changes is a changed scenario, with its PR 1 bytes. When code space starts, the anchor freezes. Without a
@@ -154,10 +173,12 @@ prompt area before code, pdd builds the anchor at each code step and publication
 far. It always takes those files from the base commit, so a code-space edit cannot change their values.
 
 Each base file in `replayBaseline` keeps its path, raw SHA256, snapshot, check identities and `base` (the
-full base commit). The PR shows, for example:
+full base commit). The anchor keeps `base.select` (`linked` or `all`). The PR line counts the files and checks
+of each source, for example:
 
 ```text
-Anchor: 3 changed scenarios + 18 approved on base 6b58b76 (1,722 checks).
+Anchor: 3 changed scenarios (40 checks) + 18 linked approved on base 6b58b76 (1,722 checks).
+Anchor: 0 changed scenarios (0 checks) + all 18 approved on base 6b58b76 (1,722 checks; pdd.json sets replay.base_scenarios to "all").
 ```
 
 When pdd adds no base file, the line gives the reason. All anchor limits apply to the whole anchor; a
@@ -166,6 +187,27 @@ The agent still replays every anchored check. Changed, removed and added files f
 other anchored files: in prompt space a removed file blocks the anchor; in code space the saved-value rule
 above lists each change, and a record of the old bytes cannot pass. The explicit `--adopt-corpus` route
 below keeps its declared inventory and never adds base files.
+
+### Add all approved base scenarios
+
+A repository can ask for every approved scenario file on the base, linked or not. Set this in the root
+`pdd.json`:
+
+```json
+{"replay": {"base_scenarios": "all"}}
+```
+
+The values are `"linked"` (the default: the link rule above) and `"all"`. pdd reads the setting from
+`pdd.json` on the run's base commit, not from the run's copy. So a run cannot change its own selection. A
+`pdd.json` that is not valid JSON, or another value, blocks the anchor, and the reason names `pdd.json`.
+
+With `"all"`, every run with replay evidence adds every scenario file on the base commit, within the same
+limits for the whole anchor: 200 files, 2 MiB for each file, 10 MiB in all, 10,000 steps and 10,000 checks.
+Over a limit, the anchor blocks and states the count. A run with `--adopt-corpus` keeps its declared inventory and adds no base files.
+
+Cost: the first run after you set `"all"` must replay every base scenario. So its agent writes a replay test
+for each of them. These tests stay in the repository. After that, they are normal tests that CI runs, and
+later runs replay them with these tests.
 
 ## Adopt an unchanged approved corpus
 
