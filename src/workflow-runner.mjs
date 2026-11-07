@@ -1,7 +1,7 @@
 import { validateSnapshot } from './metrics-store.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
 import { createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 33dc44a7518d2fb7bf424398daf54496e911059e51d2bb93abd85e77ba1308dd).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 258a733855d83fa150501cac76303450ec5b9c2330d1e42e56965e4783361fef).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -1569,7 +1569,7 @@ async function finishPr(run, area, step, p, lines, packageRoot = PACKAGE_ROOT) {
 const promptPathChanges = (approved, current) => !Array.isArray(approved) ? [] : [
   ...current.filter(path => !approved.includes(path)).map(path => `Prompt added: ${path}`),
   ...approved.filter(path => !current.includes(path)).map(path => `Prompt removed: ${path}`)];
-async function normalPromptGate(run, area, step, p, lines, contents, packageRoot) {
+async function changedStoryGate(run, area, step, p, lines) {
   const approval = run.storyApproval, snapshot = run.gate?.promptSnapshot;
   if (!approval?.fingerprint || !Array.isArray(snapshot)) return null;
   const paths = snapshot.map(row => row.path);
@@ -1579,12 +1579,20 @@ async function normalPromptGate(run, area, step, p, lines, contents, packageRoot
     const gateId = run.gate.id;
     commitRun(run, p, latest => { if (latest.gate?.id === gateId) {
       if (!latest.gate.storyChanges?.length || fingerprintChanges(latest.gate.storySnapshot, current).length) latest.gate.id = p.randomUUID();
+      latest.state = 'waiting'; latest.doneAt = null; latest.gate.kind = 'approve-pr';
       latest.gate.storyChanges = changes; latest.gate.storySnapshot = current;
     } });
     return done([...lines, `pdd recorded ${step}. The Story, an expected value or the prompt list changed after the person approved the Story, so the Story gate is open again. pdd does not open ${prLabel(run, area)} until the person approves the change.`,
       await cardText(run, p, { changes, results: pddTestLines(run, p) }), cardGate, approvalGuide(run, p.pdd),
       'If they ask for changes or say no, revise or undo the change in this chat, run done again for the step you changed, and show the new card.'].join('\n'));
   }
+  return null;
+}
+async function normalPromptGate(run, area, step, p, lines, contents, packageRoot) {
+  if (!run.storyApproval?.fingerprint || !Array.isArray(run.gate?.promptSnapshot)) return null;
+  const changed = await changedStoryGate(run, area, step, p, lines);
+  if (changed) return changed;
+  const paths = run.gate.promptSnapshot.map(row => row.path);
   const check = fullCheckPass({ root: run.root, since: run.startedAt ?? 0, tests: contents.tests, prompts: paths }, p);
   if (check.pass) return automaticPr1(run, area, step, p, lines, check, packageRoot);
   // A typed summary cannot replace pdd's saved check results.
@@ -1757,6 +1765,8 @@ async function refreshCompletedCodeReview(run, step, p, packageRoot = PACKAGE_RO
       latest.gate.promptSnapshot = snapshot;
     });
     if (run.storyApproval && normalRun(run, p) && run.through === 'code') {
+      const changed = await changedStoryGate(run, run.areas[run.area], step, p, snapshotLines(snapshot));
+      if (changed) return doneWithRequests(changed, run, p);
       protectProgress(run, p);
       return doneWithRequests(await afterPr1(run, run.areas[run.area], p, snapshotLines(snapshot), packageRoot), run, p);
     }
@@ -1833,7 +1843,7 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
     return doneWithRequests(done(lines.join('\n')), run, p);
   }
   // Try before PR 1 (#13): the person tries the result and approves before pdd opens the area's PR.
-  if (area.gate === 'pr' && area.before === 'approve' && !prOf(run, area.name)) {
+  if (area.gate === 'pr' && area.before === 'approve' && (!prOf(run, area.name) || normal && run.storyApproval)) {
     const contents = await worktreeContents(run, p);
     lines.push(...await showGate(run, p));
     if (normal) {

@@ -31,6 +31,7 @@ export async function fixture(t, { agent = 'claude', name = 'small-change' } = {
       // Like a real push, keep the remote-tracking branch current.
       const [from, to] = args[2].split(':'), sha = (await exec('git', ['rev-parse', from], { cwd: opts.cwd })).stdout.trim();
       await exec('git', ['update-ref', to.replace('refs/heads/', 'refs/remotes/origin/'), sha], { cwd: opts.cwd });
+      for (const pr of f.prs) if (`refs/heads/${pr.headRefName}` === to) pr.headRefOid = sha;
       return { stdout: '' };
     }
     if (file === 'git' && args[0] === 'ls-remote') {

@@ -4,7 +4,7 @@ import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { captureSource } from './runtime-preflight.mjs';
+import { captureSource, findTests } from './runtime-preflight.mjs';
 
 const SCENARIO = 'prompt-runtime.program-scenario.v1';
 const BATCH = /^\d{8}-\d{6}-[a-z0-9]{4}$/;
@@ -64,7 +64,14 @@ function section(text, heading) {
   return (end < 0 ? rest : rest.slice(0, end)).map(line => line.trimEnd()).filter(line => line.trim());
 }
 const CRITERIA = /^##\s+acceptance criteria\s*$/i, KEEP = /^##\s+(?:what\s+)?must not change\s*$/i, RULES = /^##\s+rules to check\s*$/i;
-const criteriaOf = text => (section(text, CRITERIA) ?? []).filter(line => /^\s*\d+[.)]\s+/.test(line)).map(line => line.trim());
+function criteriaOf(text) {
+  const blocks = [];
+  for (const line of section(text, CRITERIA) ?? []) {
+    if (/^\s*\d+[.)]\s+/.test(line)) blocks.push(line.trim());
+    else if (blocks.length) blocks[blocks.length - 1] += `\n${line}`;
+  }
+  return blocks;
+}
 function bounded(lines, path, word = 'lines') {
   if (lines.length <= PART_LINES) return lines;
   return [...lines.slice(0, PART_LINES), `… ${lines.length - PART_LINES} more ${word} in ${path}`];
@@ -114,7 +121,7 @@ function storyBlock(root, path, tests) {
   const criteria = criteriaOf(text), keep = section(text, KEEP), rules = section(text, RULES), own = tests.filter(test => test.doc?.story_path === path);
   const indent = lines => lines.map(line => `  ${line}`);
   const full = [`Story: ${where}`,
-    ...indent(criteria.length ? ['Acceptance criteria:', ...bounded(criteria, where)] : ['Acceptance criteria: none found.']),
+    ...indent(criteria.length ? ['Acceptance criteria:', ...bounded(criteria.flatMap(block => block.split('\n')), where)] : ['Acceptance criteria: none found.']),
     ...indent(keep?.length ? ['Must not change:', ...bounded(keep, where)] : ['Must not change: not stated.']),
     ...indent(rules?.length ? ['Rules to check:', ...bounded(rules, where)] : ['Rules to check: none.']),
     ...own.flatMap(test => indent(table(root, test)))];
@@ -234,7 +241,10 @@ export function fullCheckPass({ root, since = 0, tests = [], prompts = [] } = {}
       if (!prior || at > prior.at || at === prior.at && name > prior.name) latest.set(row.test, { name, at, batch, summary });
     }
   }
-  const selected = [...new Set([...tests, ...[...latest.keys()].filter(path => existsSync(join(root, path)))])].sort();
+  let discovered = [];
+  try { discovered = (ports.findTests ?? findTests)({ root }).tests.map(test => test.path); }
+  catch (error) { problems.push({ kind: 'unavailable', path: '.', detail: `cannot discover the project tests (${clip(error.message, 120)})` }); }
+  const selected = [...new Set([...tests, ...discovered, ...[...latest.keys()].filter(path => existsSync(join(root, path)))])].sort();
   const captures = new Map(), covered = new Set();
   const captured = list => {
     const key = JSON.stringify([...list].sort());
@@ -244,6 +254,11 @@ export function fullCheckPass({ root, since = 0, tests = [], prompts = [] } = {}
   for (const path of selected) {
     const found = latest.get(path);
     if (!found) { problems.push({ kind: 'missing', path, detail: 'no saved check has this test' }); continue; }
+    const summary = found.summary;
+    if (!summary || summary.batch !== found.name || typeof summary.repo !== 'string' || real(summary.repo) !== wanted
+      || typeof summary.source_sha256 !== 'string' || summary.source_sha256 !== found.batch.source_sha256) {
+      problems.push({ kind: 'unavailable', path, detail: `batch ${found.name}: summary identity does not match the batch` }); continue;
+    }
     const row = Array.isArray(found.summary?.rows) ? found.summary.rows.find(item => item?.test === path) : undefined;
     const state = row?.state ?? 'unknown';
     judged.push({ path, batch: found.name, state });

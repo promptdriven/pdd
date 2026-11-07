@@ -12,7 +12,7 @@ The card has these lines, in this order:
 2. `Asked: "…"`: what the reporter asked, from the issue text that the run saved at start (`run.issue.asked`). Remove HTML comments. Use the first quoted block (its `>` lines) when the text has one; else use the first paragraph that is not a heading. Join its lines with one space and cut it at about 300 characters at a word end, with `…`. When the run has no saved issue text, write `Asked: not saved in this run; read the issue.`
 3. The verdict line: the first `Verdict: …` sentence in the run's step summaries, newest summary first. A run with none shows `Verdict: not recorded yet.`
 4. For each Story file that the run changes (`*.md` under a `user_stories` folder, except `PLAN.md` and `README.md`), and each Story that a changed test file names in `story_path`, in path order: `Story: ABSOLUTE PATH`, then these parts, each indented by two spaces:
-   - `Acceptance criteria:` and the numbered lines under `## Acceptance criteria`.
+   - `Acceptance criteria:` and the complete numbered criterion blocks under `## Acceptance criteria`, including continuation lines. Keep their line order and apply the part line bound with an explicit omitted-line count.
    - `Must not change:` and the lines under `## What must not change` (also `## Must not change`; any letter case). When there is no such section: `Must not change: not stated.`
    - `Rules to check:` and the lines under `## Rules to check`. When there is no such section: `Rules to check: none.`
    - For each changed test file whose `story_path` names this Story: `Test cases (ABSOLUTE PATH):` and a table `| Case | Input | Expected |`, one row for each step. Case is the `step_id`. Input is the compact JSON of `input`. Expected is `error CODE` when the step has `expected_error`, then each check as `CRITERION PATH OP VALUE` (VALUE as compact JSON), joined with `; `. Cut the Case cell at about 60 characters, the Input cell at about 70 and the Expected cell at about 140, each with `…`, and write a `|` in a cell as `\|`.
@@ -34,7 +34,7 @@ A file that cannot be read, or a test file that is not valid JSON, shows `(canno
 
 `storyFingerprint({root, changed})` returns `{stories, tests}` for the Story files and test files that the run changes (the same selection as the card, including Stories named by the changed tests, and also `PLAN.md`):
 
-- Each Story row is `{path, sha256, criteria}`: the SHA-256 of the exact bytes (null if unreadable), and the numbered lines under `## Acceptance criteria`.
+- Each Story row is `{path, sha256, criteria}`: the SHA-256 of the exact bytes (null if unreadable), and the complete numbered criterion blocks under `## Acceptance criteria`, including continuation lines joined by newlines. This stored list is not truncated.
 - Each test row is `{path, sha256, cases}`. The SHA-256 covers only what the person decides: the canonical JSON of `{criteria, cases}`. Each case is `{case, error, expected}`: the `step_id`, the `expected_error` or null, and the sorted list of `[criterion_id, target, op, value]` of its checks. The input and the check path are not part of it: RUNBOOK §11 lets the agent fix an input or a check path. `cases` keeps each case's expected text as the card shows it. A test file that cannot be read or parsed gets the SHA-256 of its bytes (or of an empty text) and no cases.
 
 `fingerprintChanges(saved, current)` returns a list of plain change lines; an empty list means no change:
@@ -44,9 +44,9 @@ A file that cannot be read, or a test file that is not valid JSON, shows `(canno
 
 ## Full check pass
 
-`fullCheckPass({root, since, tests, prompts}, ports)` decides from pdd's own saved check results whether the prompt check passed in full on the current files. It reads the `pdd test` batches in `ports.env.PDD_STATE_DIR`, else `HOME/.pdd/runtime`, folder `batches/<batch>`, with the same batch-name rule as [workflow results](workflow-results.prompt.md). It uses a batch only when its `batch.json` has `intent` `check`, the same real `root`, and `created_at` at or after `since`. It reads the row states and criteria counts from the batch's `summary.json`.
+`fullCheckPass({root, since, tests, prompts}, ports)` decides from pdd's own saved check results whether the prompt check passed in full on the current files. It reads the `pdd test` batches in `ports.env.PDD_STATE_DIR`, else `HOME/.pdd/runtime`, folder `batches/<batch>`, with the same batch-name rule as [workflow results](workflow-results.prompt.md). It uses a batch only when its `batch.json` has `intent` `check`, the same real `root`, and `created_at` at or after `since`. It reads the row states and criteria counts from the batch's `summary.json` only when its `batch` equals the batch folder name, its real `repo` equals the batch root and its `source_sha256` equals the batch source hash. A missing or mismatched identity is unavailable, not a pass.
 
-The tests to judge are the given `tests` (the run's changed test files) and every test of these batches. For each test, the newest batch that has it decides (newest `created_at`, then batch name). The test passes only when:
+The tests to judge are the given `tests` (the run's changed test files), all scenarios independently discovered by runtime preflight `findTests` in the current project, and every still-present test of these batches. Discovery cannot depend on saved results: an existing scenario with no result must block a full pass. Discovery failure is unavailable. Keep the newest result per test so a selective recheck can reuse still-current results from an earlier full check. For each test, the newest batch that has it decides (newest `created_at`, then batch name). The test passes only when:
 - its summary row has `state` `passed`, and its `criteria` has `total` above 0, equal to the current test file's number of criteria, and `passed` equal to `total`; and
 - its source did not change after the check: the batch's saved `contract_snapshots` row for its Story equals the same row of `captureSource(root, {tests: ROW TESTS, appMap: null})` today, including its test selection, files and reference provenance. Equal file hashes alone cannot replace this row comparison. A nonempty snapshot list with no row for the selected test is unavailable and never falls back. A batch with no snapshots instead needs its `source_sha256` to equal today's capture of all its tests.
 
@@ -64,6 +64,6 @@ Return `{pass, tests, problems}`. `tests` is one row `{path, batch, state}` for 
 
 ## Dependencies
 
-- [Runtime preflight](runtime-preflight.prompt.md): `captureSource` and `interfaceBlocks`.
+- [Runtime preflight](runtime-preflight.prompt.md): `captureSource`, `findTests` and `interfaceBlocks`.
 - [Workflow results](workflow-results.prompt.md): the batch folder and name rule for pdd's own results.
 - RUNBOOK §2 (Story, test and prompt files), §4 (expected values) and §11 (what an agent may fix).

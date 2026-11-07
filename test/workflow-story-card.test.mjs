@@ -13,6 +13,9 @@ import * as runner from '../src/workflow-runner.mjs';
 const { approveRun, runStatus, startRun, stepDone } = runner;
 const showStoryCard = (...args) => { assert.equal(typeof runner.showStoryCard, 'function', 'workflow card must be available'); return runner.showStoryCard(...args); };
 import { writeRun } from '../src/workflow-runs.mjs';
+import { fakeRuntime, portsFor, storyTest } from './runtime-fake.mjs';
+import { runCheck } from '../src/runtime-client.mjs';
+import { renderJson } from '../src/runtime-output.mjs';
 import { captureSource } from '../src/runtime-preflight.mjs';
 import { fixture, packageRoot } from './helpers/workflow-runner-fixture.mjs';
 
@@ -24,7 +27,7 @@ const RULE = 'The total is the sum of the line totals, in whole cents; a rounded
 const said = (f, words, extra = {}) => ({ ...f.agentPorts(extra), stdin: (async function* () { yield words; })() });
 
 // A feature run whose issue text has a quoted request, with the Harbor fixture as the Story, its test and its prompt.
-async function storyGate(t, { through, start = {}, existingStory = false } = {}) {
+async function storyGate(t, { through, start = {}, existingStory = false, existingScenario = false } = {}) {
   const f = await fixture(t, { name: 'feature', agent: 'codex' });
   f.ports.env.PDD_STATE_DIR = join(f.state, 'runtime');
   const original = f.ports.execFile;
@@ -32,6 +35,13 @@ async function storyGate(t, { through, start = {}, existingStory = false } = {})
     ? { stdout: JSON.stringify({ number: 17, html_url: 'https://github.com/example/project/issues/17', title: 'Show the order total',
       body: `<!-- template -->\n## User request\n\n> ${ASKED}\n\nMore notes that are not the request.` }) }
     : original(file, args, opts);
+  if (existingScenario) {
+    for (const dir of ['user_stories', 'tests', 'prompts']) mkdirSync(join(f.source, dir), { recursive: true });
+    cpSync(join(harbor, PROMPT), join(f.source, PROMPT));
+    storyTest(f.source, 'existing-order');
+    f.git(f.source, 'add', '.'); f.git(f.source, 'commit', '-qm', 'Existing scenario');
+    f.git(f.source, 'update-ref', 'refs/remotes/origin/main', f.git(f.source, 'rev-parse', 'HEAD'));
+  }
   if (existingStory) {
     mkdirSync(join(f.source, 'user_stories'), { recursive: true });
     writeFileSync(join(f.source, STORY), `${readFileSync(join(harbor, STORY), 'utf8').trimEnd()}\n\n## Rules to check\n\n${RULE}\n\n## What must not change\n\n${KEEP}\n`);
@@ -46,6 +56,7 @@ async function storyGate(t, { through, start = {}, existingStory = false } = {})
   await f.done('visual', undefined, { skipped: 'no screen' });
   for (const dir of ['prompts', 'user_stories', 'tests']) mkdirSync(join(run.root, dir), { recursive: true });
   cpSync(join(harbor, PROMPT), join(run.root, PROMPT));
+  if (existingScenario) writeFileSync(join(run.root, PROMPT), readFileSync(join(run.root, PROMPT), 'utf8').replace('Return the order:', 'Return the priced order:'));
   cpSync(join(harbor, TEST), join(run.root, TEST));
   writeFileSync(join(run.root, STORY), `${readFileSync(join(harbor, STORY), 'utf8').trimEnd()}\n\n## Rules to check\n\n${RULE}\n\n## What must not change\n\n${KEEP}\n`);
   f.git(run.root, 'add', '.'); f.git(run.root, 'commit', '-qm', 'Story, test and prompt');
@@ -62,7 +73,7 @@ function saveCheck(f, { state = 'passed', criteria = { passed: 3, total: 3 }, te
   writeFileSync(join(folder, 'batch.json'), JSON.stringify({ version: 1, batch: name, root: f.run.root, created_at: new Date(f.clock).toISOString(), intent: 'check',
     source_sha256: capture.sha256, files: capture.files.map(file => file.path), contract_snapshots: capture.stories, rows: tests.map(test => ({ test, state, request_ids: [] })) }));
   const line = `Prompt tests (place-order): ${state === 'passed' ? '✓' : '✗'} ${criteria ? `${criteria.passed} of ${criteria.total} criteria` : 'no verdict'}`;
-  writeFileSync(join(folder, 'summary.json'), JSON.stringify({ batch: name, summary_line: line, rows: tests.map(test => ({ test, state, criteria, summary_line: line })) }));
+  writeFileSync(join(folder, 'summary.json'), JSON.stringify(renderJson({ batch: name, repo: f.run.root, sourceSha256: capture.sha256, exitCode: state === 'passed' ? 0 : 1, rows: tests.map(test => ({ test, story: test, state, criteria })), summaryLine: line })));
   return name;
 }
 const approveStory = async (f, words = 'Yes, this is what I asked for.', extra = {}) => {
@@ -451,4 +462,125 @@ test('#2962 a saved code choice can retry code entry with no new question', asyn
     assert.equal(f.record().through, 'code');
     assert.equal(f.prompts.length, 0);
   }
+});
+
+
+for (const kind of ['Story', 'expected']) test(`#2962 repair 1: open PR 1 waits for approval of changed ${kind}`, async t => {
+  const f = await storyGate(t);
+  await approveStory(f);
+  saveCheck(f); await f.done('check');
+  const pushes = f.pushes.length, edits = f.edits.length, approval = f.record().storyApproval;
+  // A saved code choice must not bypass the revised Story gate.
+  const record = f.record(); record.through = 'code'; writeRun(record);
+  if (kind === 'Story') writeFileSync(join(f.run.root, STORY), readFileSync(join(f.run.root, STORY), 'utf8').replace('900 cents', '950 cents'));
+  else {
+    const doc = JSON.parse(readFileSync(join(f.run.root, TEST), 'utf8'));
+    doc.steps[0].checks.find(check => check.path === '/totalCents').value = 950;
+    writeFileSync(join(f.run.root, TEST), JSON.stringify(doc));
+  }
+  saveCheck(f);
+  const out = await f.done('check');
+  assert.equal(f.pushes.length, pushes, 'unapproved behavior must not be pushed');
+  assert.equal(f.edits.length, edits, 'unapproved behavior must not update the PR body');
+  assert.equal(f.record().areas[f.record().area].name, 'prompt-pr');
+  assert.equal(f.record().gate.kind, 'approve-pr');
+  assert.ok(f.record().gate.storyChanges.some(line => line.includes(kind === 'Story' ? STORY : TEST)));
+  assert.ok(out.message.includes(join(f.run.root, STORY)));
+  assert.deepEqual(f.record().storyApproval, approval);
+  // Reapproval permits the existing PR update, then follows the saved code choice.
+  await approveStory(f, 'Approve the revised case.');
+  assert.equal(f.prs.length, 1);
+  assert.ok(f.pushes.length > pushes);
+  assert.equal(f.record().areas[f.record().area].name, 'code');
+});
+
+test('#2962 repair 1: open PR 1 accepts a checked prompt-only repair with the same Story approval', async t => {
+  const f = await storyGate(t);
+  await approveStory(f); saveCheck(f); await f.done('check');
+  const approval = f.record().storyApproval, pushes = f.pushes.length;
+  writeFileSync(join(f.run.root, PROMPT), readFileSync(join(f.run.root, PROMPT), 'utf8').replace('Return the order:', 'Return the priced order:'));
+  await f.done('check');
+  assert.equal(f.pushes.length, pushes, 'a stale check cannot publish a prompt repair');
+  saveCheck(f); await f.done('check');
+  assert.ok(f.pushes.length > pushes);
+  assert.equal(f.prs.length, 1);
+  assert.deepEqual(f.record().storyApproval, approval);
+});
+
+test('#2962 repair 1: an unchecked existing scenario blocks the full pass; selective rechecks reuse current results', async t => {
+  const f = await storyGate(t, { existingScenario: true });
+  await approveStory(f);
+  saveCheck(f); await f.done('check');
+  assert.equal(f.prs.length, 0, 'an unchecked existing Story must block automatic PR 1');
+  // The full check can be accumulated across batches. The latest place-order result replaces its failure.
+  f.tick(); saveCheck(f, { tests: ['tests/existing-order.json'] });
+  f.tick(); saveCheck(f, { state: 'failed', criteria: { passed: 2, total: 3 } });
+  await f.done('check'); assert.equal(f.prs.length, 0);
+  f.tick(); saveCheck(f); await f.done('check');
+  assert.equal(f.prs.length, 1);
+});
+
+for (const field of ['batch', 'repo', 'source_sha256']) test(`#2962 repair 1: a foreign summary ${field} cannot supply a verdict`, async t => {
+  const f = await storyGate(t);
+  await approveStory(f);
+  const name = saveCheck(f), path = join(f.ports.env.PDD_STATE_DIR, 'batches', name, 'summary.json');
+  const summary = JSON.parse(readFileSync(path, 'utf8'));
+  summary[field] = field === 'batch' ? '20261027-170000-zzzz' : field === 'repo' ? f.source : '0'.repeat(64);
+  writeFileSync(path, JSON.stringify(summary));
+  await f.done('check');
+  assert.equal(f.prs.length, 0, 'a mismatched summary must block automatic PR 1');
+  f.tick(); saveCheck(f); await f.done('check'); assert.equal(f.prs.length, 1);
+});
+
+test('#2962 repair 1: the native card retains wrapped criteria and reports bounded omissions', async t => {
+  const f = await storyGate(t), path = join(f.run.root, STORY);
+  const lines = readFileSync(path, 'utf8').split('\n'), first = lines.findIndex(line => /^1\. /.test(line));
+  lines.splice(first + 1, 0, '   criterion-continuation-1', '   criterion-continuation-2');
+  writeFileSync(path, lines.join('\n'));
+  const exec = promisify(callbackExec);
+  const card = async () => (await exec(process.execPath, [join(packageRoot, 'bin/pdd.mjs'), 'workflow', 'card', '17'], { cwd: f.run.root, env: { ...process.env, ...f.ports.env } })).stdout;
+  const shown = await card();
+  for (const line of lines.slice(first, first + 3)) assert.ok(shown.includes(line.trim()), 'the full criterion must be shown before approval');
+  lines.splice(first + 1, 0, ...Array.from({ length: 20 }, (_, i) => `   continuation-${i}`));
+  writeFileSync(path, lines.join('\n'));
+  const bounded = await card();
+  assert.ok(bounded.split('\n').length <= 160);
+  assert.ok(bounded.split('\n').some(line => line.includes('…') && line.includes(join(f.run.root, STORY))), 'omitted criterion lines name the file');
+  assert.equal(bounded.includes('continuation-19'), false);
+});
+
+test('#2962 repair 1: the real saved-result writer supplies automatic publication evidence', async t => {
+  const f = await storyGate(t); await approveStory(f);
+  const fake = await fakeRuntime(t, (entry, runtime) => {
+    if (entry.command === 'lint') return { status: 200, json: runtime.lint(entry.request.requestId) };
+    const id = entry.request?.requestId ?? entry.url.split('/').at(-1);
+    return { status: 200, json: runtime.check(id, 'passed', ['AC1', 'AC2', 'AC3'].map(criterion_id => ({ criterion_id, target: 'result', path: '/totalCents', op: 'equals', expected: 900, actual: 900, passed: true }))) };
+  });
+  const made = portsFor({ ...f.ports.env, PDD_RUNTIME_URL: fake.origin }); made.clock.now = f.clock;
+  const exit = await runCheck({ cwd: f.run.root, words: [], options: { '--json': true } }, made.ports);
+  assert.equal(exit, 0, made.ports.stderr.text);
+  const result = JSON.parse(made.ports.stdout.text);
+  assert.equal(result.rows[0].state, 'passed');
+  assert.deepEqual(result.rows[0].criteria, { passed: 3, total: 3 });
+  await f.done('check'); assert.equal(f.prs.length, 1);
+  assert.deepEqual(f.record().decisions.at(-1).evidence.basis.batches, [result.batch]);
+});
+
+
+test('#2962 repair 1: a saved code choice after merged PR 1 cannot bypass a revised Story', async t => {
+  const f = await storyGate(t, { through: 'code' });
+  await approveStory(f);
+  f.ports.readPrStatus = async () => ({ state: 'closed', ci: 'none' });
+  saveCheck(f); await f.done('check');
+  delete f.ports.readPrStatus;
+  f.merged = true; f.mergedNumbers = [f.prs[0].number];
+  await runStatus({ ref: '17', cwd: f.source }, f.ports);
+  assert.equal(f.record().doneAt, 'PR 1');
+  writeFileSync(join(f.run.root, STORY), readFileSync(join(f.run.root, STORY), 'utf8').replace('900 cents', '950 cents'));
+  const pushes = f.pushes.length, edits = f.edits.length;
+  await f.done('check');
+  assert.equal(f.record().areas[f.record().area].name, 'prompt-pr', 'a revised Story must block saved code entry');
+  assert.equal(f.record().gate.kind, 'approve-pr');
+  assert.ok(f.record().gate.storyChanges.some(line => line.includes(STORY)));
+  assert.equal(f.pushes.length, pushes); assert.equal(f.edits.length, edits);
 });
