@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: aa646112ba704006c408beb74926ae7a1f3b0895da123c5594405840cdfe7bc2).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 53b19aa54ba023af708549326c3c48e94d09253892591696d5777d4e21f60452).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch } from 'node:fs';
@@ -18,11 +18,12 @@ import { reconcileDependencyIntake } from './issue-dependencies-intake.mjs';
 import { issueKey } from './issue-dependencies.mjs';
 import { createDependencyReadPorts, recordLongRunningAlert, refreshClaimHeartbeat, takeoverLimited, withoutClaimHeartbeat } from './issue-dependencies-github.mjs';
 import { sendToChat, START_GRACE_MS } from './workflow-chat.mjs';
-import { acquireRunLock } from './workflow-runner.mjs';
+import { acquireRunLock, runtimeWakeTag } from './workflow-runner.mjs';
+import { checkVerdictSince } from './workflow-results.mjs';
 import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
 import { samePath } from './workflow-herdr-layout.mjs';
 import { tomlString } from './toml-string.mjs';
-import { alertStatusLine } from './autopilot-alerts.mjs';
+import { alertStatusLine, runAutopilotAlerts } from './autopilot-alerts.mjs';
 
 const INTERVAL = 30 * 60 * 1000;
 const STUCK_AFTER = 60 * 60 * 1000;
@@ -279,6 +280,159 @@ async function readRepairLimited(state, number, p) {
     return run?.v === 1 && run.number === number && run.repo?.toLowerCase() === state.repo.toLowerCase() && run.state === 'stuck' && Boolean(run.repairLimit);
   } catch { return false; }
 }
+// Runs that wait for Runtime (pdd workflow park --runtime), from the same local run records.
+async function readRuntimeWaits(state, p) {
+  const commonDir = (await p.checked('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim();
+  const folder = join(commonDir, 'pdd', 'runs');
+  let names;
+  try { names = readdirSync(folder); } catch { return []; }
+  const waits = [];
+  for (const name of names) {
+    if (!/^[1-9][0-9]*$/.test(name)) continue;
+    try {
+      const run = read(join(folder, name, 'status.json')), wait = run?.runtimeWait;
+      if (run?.v === 1 && run.number === Number(name) && run.repo?.toLowerCase() === state.repo.toLowerCase() && run.state === 'paused' && Number.isFinite(wait?.at))
+        waits.push({ number: run.number, at: wait.at, batch: typeof wait.batch === 'string' ? wait.batch : null, cause: wait.cause ?? 'unknown', mark: `${run.area}:${Object.keys(run.done ?? {}).length}` });
+    } catch { /* Missing or unreadable records supply no wait. */ }
+  }
+  return waits;
+}
+// The proof of a test wake: a pdd test verdict (pass or fail) of the test run, saved after the wake was offered.
+// A test run that waits again, or that ends or goes stuck with no such verdict, failed the test.
+async function readRuntimeProbe(state, p, probe) {
+  const commonDir = (await p.checked('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim();
+  let run = null;
+  try { run = read(join(commonDir, 'pdd', 'runs', String(probe.number), 'status.json')); } catch { /* No fact at this tick. */ }
+  if (run?.v !== 1 || run.number !== probe.number || run.repo?.toLowerCase() !== state.repo.toLowerCase()) return 'pending';
+  if (typeof run.root === 'string' && checkVerdictSince({ root: run.root, since: probe.offeredAt }, { env: p.env })) return 'verdict';
+  if (run.state === 'paused' && run.runtimeWait?.at > probe.at) return 'failed';
+  return ['running', 'waiting', 'paused'].includes(run.state) ? 'pending' : 'failed';
+}
+const RUNTIME_KEEP = 24 * 60 * 60 * 1000, RUNTIME_ACCESS_LIMIT = 4 * 60 * 60 * 1000, RUNTIME_PROBE_LIMIT = 60 * 60 * 1000;
+const RUNTIME_TRIED = 'pdd retried each call up to 3 times. The runs wait for Runtime and keep their claims, branches and progress; other work goes on.';
+const RUNTIME_NEED = 'No action now. Autopilot checks Runtime at each tick without AI. When it answers again, Autopilot wakes the oldest waiting run as a test and wakes the others after its check reaches a verdict. Look at the Runtime service if this lasts.';
+const ACCESS_TRIED = 'Autopilot checks Runtime at each tick without AI. The runs wait for Runtime, keep their claims, branches and progress, and resend nothing; other work goes on.';
+function runtimeWake(wait, kind) {
+  const read = `pdd test --read${wait.batch ? ` ${wait.batch}` : ''}`;
+  const why = kind === 'retry' ? 'Runtime answers its health check and no outage is open, so this is a problem of this issue only: this wake is its one retry. If the same step waits for Runtime again, it follows the stuck rule.'
+    : kind === 'probe' ? 'Runtime answers again after an outage. This oldest run is the test: the other waiting runs wake only after its check reaches a verdict.'
+    : 'Runtime is back.';
+  // pdd test --retry resends only the checks that pdd names it for (busy or held); a fresh check of the Story sends the others.
+  const again = 'check that Story once again with pdd test STORY --max-calls N';
+  const resend = wait.cause === 'unknown' ? `Its last check has an unknown outcome: never send it again blind. If the read now shows not run (nothing was sent), ${again}; if it is still unknown, follow the stuck rule.`
+    : wait.cause === 'none' ? 'No check result was saved, so no check ran: send the check again once.'
+    : `Resend only a check that surely gave no verdict: pdd test --retry ${wait.batch ?? 'BATCH'} only when pdd names it (busy or held checks); for another not run check or an AI-service refusal, ${again}. Never resend a failed (✗) check.`;
+  return `Run #${wait.number} waits for Runtime. ${why} When a worker slot is free (oldest first), wake it with pdd workflow changes ${wait.number} and this text: "${runtimeWakeTag(wait.at)} ${kind === 'retry' ? 'Runtime answers again.' : 'Runtime is back.'} First run ${read} once and read each Story line. ${resend} Keep --max-calls."`;
+}
+// The no-AI Runtime part of a tick: one free health check while a run waits for Runtime, or an outage or a
+// Runtime access problem is open. Every run resends its check at most once per wait, and every path ends in a
+// wake or in the stuck rule.
+async function runtimeTick(state, p, completion, timeRules, pendingTimes, stateRoot) {
+  const waits = (await (p.readRuntimeWaits ?? readRuntimeWaits)(state, p)).sort((a, b) => a.at - b.at || a.number - b.number);
+  const saved = state.runtime ?? {}, now = p.now();
+  // A wake is kept while its run works on it, so a second wait of the same step is seen; a recovery keeps it too.
+  const retried = Object.fromEntries(Object.entries(saved.retried ?? {}).filter(([, value]) => now - value.at < RUNTIME_KEEP));
+  let outage = saved.outage ? structuredClone(saved.outage) : null, access = saved.access ? structuredClone(saved.access) : null;
+  const keep = () => {
+    state.runtime = { ...(outage ? { outage } : {}), ...(access ? { access } : {}), ...(Object.keys(retried).length ? { retried } : {}) };
+    if (!Object.keys(state.runtime).length) delete state.runtime;
+  };
+  if (!waits.length && !outage && !access) return keep();
+  const health = await (p.runtimeHealth ?? (async input => (await import('./runtime-client.mjs')).checkRuntimeHealth(input)))({ env: p.env });
+  const send = p.sendAlert ?? (input => runAutopilotAlerts({ action: 'alert', cwd: state.cwd, env: p.env, ...input },
+    { ...p.alertPorts, repository: async () => ({ nameWithOwner: state.repo }), stateRoot, now: p.now }));
+  const alert = async (number, kind, fields) => { try { await send({ issue: String(number), kind, text: JSON.stringify(fields) }); } catch { /* The alert record is best effort; work goes on. */ } };
+  // The first call opens the one incident of this repository and machine; later calls join it or resend a failed alert.
+  const incident = async (record, kind, fields) => {
+    for (const number of [record.first, ...waits.map(w => w.number).filter(n => n !== record.first && !record.issues.includes(n))]) {
+      await alert(number, kind, fields);
+      if (!record.issues.includes(number)) record.issues.push(number);
+    }
+  };
+  // A wake (retry, test or recovery) is used when the same step waits again after it, unless that wait began while
+  // Runtime was down: then the outage, not the issue, explains it.
+  const used = w => retried[w.number]?.mark === w.mark && retried[w.number].at < w.at && outage?.down?.[w.number] !== w.at;
+  const wake = [], stuck = [];
+  const offer = (w, kind) => { wake.push([w, kind]); retried[w.number] = { mark: w.mark, at: w.at, kind }; };
+  if (health.state === 'access') {
+    // Not healthy and not down: a sign-in or setup problem that a person must fix. Wake nothing and resend nothing.
+    access ??= { since: now, first: waits[0]?.number ?? outage?.first, issues: [] };
+    Object.assign(access, { detail: health.detail, fix: health.fix });
+    if (access.first) await incident(access, 'runtime-access', { cause: `The free Runtime health check cannot be read (${health.detail}). This is a sign-in or setup problem on this machine, not a Runtime outage.`, tried: ACCESS_TRIED, need: `${health.fix} After 4 hours each waiting run follows the stuck rule.` });
+    for (const w of waits) if (now - Math.max(w.at, access.since) >= RUNTIME_ACCESS_LIMIT)
+      stuck.push([w, `Run #${w.number} has waited 4 hours for Runtime, and the free health check still cannot be read (${health.detail}).`]);
+  } else if (access && health.state === 'healthy') {
+    // A down answer does not show that the sign-in works again; only a healthy answer ends the access problem.
+    if (access.first) await alert(access.first, 'recovered', { cause: `The free Runtime health check answers again (${health.detail}).`, kind: 'runtime-access' });
+    access = null;
+  }
+  // Only a failed health check opens an outage. Waits of several issues while Runtime is healthy are not one.
+  if (health.state === 'unavailable' && !outage && waits.length)
+    outage = { since: now, first: waits[0].number, issues: [], probed: [], detail: `The free Runtime health check failed (${health.detail}).` };
+  if (outage) await incident(outage, 'runtime', { cause: outage.detail, tried: RUNTIME_TRIED, need: RUNTIME_NEED });
+  // A wait first seen while Runtime is down began in the outage; a wait already found used while healthy stays used.
+  if (outage && health.state === 'unavailable') outage.down = { ...outage.down, ...Object.fromEntries(waits.filter(w => retried[w.number]?.again !== w.at).map(w => [w.number, w.at])) };
+  if (health.state === 'healthy') {
+    let recovered = null;
+    if (outage) {
+      // One test wake at a time, at most one for each run in this outage. It passes only with a new verdict.
+      outage.probed ??= [];
+      const probe = outage.probe;
+      if (probe) {
+        const result = await (p.readRuntimeProbe ?? readRuntimeProbe)(state, p, probe);
+        const again = waits.some(w => w.number === probe.number && w.at > probe.at);
+        if (result === 'verdict') recovered = 'verdict';
+        // A test run that waits again, ends or goes stuck failed; one that gives no verdict within an hour of its wake
+        // failed too, also when the wake was never delivered and the run still waits.
+        else if (result === 'failed' || again || now - probe.offeredAt >= RUNTIME_PROBE_LIMIT) delete outage.probe;
+      }
+      if (!recovered && !outage.probe) {
+        const open = waits.filter(w => !used(w) && !outage.probed.includes(w.number)), next = open.find(w => w.cause !== 'unknown') ?? open[0];
+        if (next) { outage.probe = { number: next.number, at: next.at, offeredAt: now }; outage.probed.push(next.number); }
+        else recovered = 'untested';
+      }
+      const current = !recovered && waits.find(w => w.number === outage.probe.number && w.at === outage.probe.at);
+      if (current) offer(current, 'probe');
+    }
+    for (const w of waits) {
+      if (wake.some(([item]) => item === w)) continue;
+      if (used(w)) { retried[w.number].again = w.at; stuck.push([w, `Run #${w.number} waits for Runtime again at the same step after its one resend, and Runtime is healthy.`]); }
+      else if (recovered) offer(w, 'recovered');
+      else if (!outage) offer(w, retried[w.number]?.at === w.at ? retried[w.number].kind : 'retry');
+    }
+    if (recovered) {
+      const count = wake.length;
+      const woken = `Autopilot wakes ${count} waiting run${count === 1 ? '' : 's'}, oldest first`;
+      await alert(outage.first, 'recovered', { kind: 'runtime', cause: recovered === 'verdict'
+        ? `Runtime is back: the free health check passed and a test check reached a verdict again. ${woken}.`
+        : `The free health check passes again, and no waiting run is left to test. ${woken}; a run that failed its test follows the stuck rule.` });
+      outage = null;
+    }
+  }
+  for (const [w, kind] of wake) {
+    const key = `runtime:${w.number}`, value = `${w.at}:${kind}`;
+    // A capacity handoff frees a slot: offer a still-waiting run again. pdd delivers one wake per park.
+    if (state.timeSeen[key] === value && !completion) continue;
+    timeRules.push({ kind: 'runtime-ready', number: w.number, reason: runtimeWake(w, kind) });
+    pendingTimes[key] = value;
+  }
+  for (const [w, why] of stuck) {
+    const key = `runtime:${w.number}`, value = `${w.at}:stuck`;
+    if (state.timeSeen[key] === value) continue;
+    timeRules.push({ kind: 'runtime-stuck', number: w.number, reason: `${why} Follow the pdd:stuck rule: the label, one comment with the cause, one stuck alert, and pdd workflow park --reason TEXT in its worktree.` });
+    pendingTimes[key] = value;
+  }
+  keep();
+}
+// The packet's Runtime fact while an outage or an access problem is open.
+function runtimePacket(runtime) {
+  const { outage, access } = runtime ?? {};
+  const problem = access ? `Runtime cannot be checked (${access.detail}): a sign-in or setup problem that a person must fix. ${access.fix} Autopilot sent one runtime-access alert. Waiting runs stay parked and resend nothing; after 4 hours each follows the stuck rule.` : '';
+  if (outage) return { state: outage.probe ? 'testing' : 'unavailable', since: new Date(outage.since).toISOString(),
+    note: `${outage.probe ? `Runtime answers again; run #${outage.probe.number} is the test, and the other waiting runs wake after its check reaches a verdict.` : 'Runtime is unavailable.'} Keep other work moving: code, native tests, CI, merges, dependency reviews and claims. New issues may start; a worker parks only at its Runtime check with pdd workflow park --runtime.${problem ? ` ${problem}` : ''}` };
+  if (access) return { state: 'access', since: new Date(access.since).toISOString(), detail: access.detail, note: `${problem} Keep other work moving.` };
+  return null;
+}
 function message(state, issues, timeRules = []) {
   const skillPath = resolve(state.packageRoot ?? dirname(dirname(self)), 'skills', 'pdd-autopilot', 'SKILL.md');
   const variable = { codex: 'CODEX_HOME', claude: 'CLAUDE_CONFIG_DIR', gemini: 'GEMINI_CLI_HOME' }[state.agent.kind];
@@ -286,7 +440,7 @@ function message(state, issues, timeRules = []) {
   const workflow = { pddBin: join(state.packageRoot ?? dirname(dirname(self)), 'bin', 'pdd.mjs'), agent: state.agent.kind, home: state.environment?.HOME, configHome: path ? { variable, path } : null };
   const start = state.startAction?.mode === state.currentMode && state.startAction?.repository === state.repo ? state.startAction : null;
   const authority = start ? `The operator invoked pdd autopilot start for ${state.repo} in ${state.currentMode} mode. ${state.currentMode === 'auto' ? 'This action establishes scope for ordinary eligible work and automatic merge under the repository review, testing, strict approval and other rules.' : 'Follow observe mode limits.'} This is an operator action, not a quoted person reply or checker approval. Use the existing supported approval routes for the actual action where applicable; never treat it as a later person reply.\n` : '';
-  return `Read and follow the bundled skill at ${JSON.stringify(skillPath)} and its relative supporting files. ${authority}When recipeFirst is true, follow its bounded startup readiness, then dependency review, room, pdd:working claim and stuck-run rules. Inspect claimed issues for progress and stale claims; do not treat them as unclaimed work. An item with expiredClaim has an expired claim; take it over only under the skill's expired-claim rule. The packet contains only trusted text; further issue/comment reads must preserve that boundary. Use the skill's pdd-check and pdd-merge handoffs for review and merge work. For an issue you start, pass its decisionId with --origin autopilot --decision-id TOKEN to pdd workflow run; pass --outcome code or prompt-only when the required outcome is known.\n${JSON.stringify({ repository: state.repo, coordinatorId: state.coordinatorId, machine: state.machine, activatedAt: state.activatedAt, ...(start ? { startAction: start } : {}), currentMode: state.currentMode, recipeFirst: !state.recipeDelivered, workflow, ...(state.runs === undefined ? {} : { runs: state.runs }), issues, ...(timeRules.length ? { timeRules } : {}) })}\n`;
+  return `Read and follow the bundled skill at ${JSON.stringify(skillPath)} and its relative supporting files. ${authority}When recipeFirst is true, follow its bounded startup readiness, then dependency review, room, pdd:working claim and stuck-run rules. Inspect claimed issues for progress and stale claims; do not treat them as unclaimed work. An item with expiredClaim has an expired claim; take it over only under the skill's expired-claim rule. The packet contains only trusted text; further issue/comment reads must preserve that boundary. Use the skill's pdd-check and pdd-merge handoffs for review and merge work. For an issue you start, pass its decisionId with --origin autopilot --decision-id TOKEN to pdd workflow run; pass --outcome code or prompt-only when the required outcome is known.\n${JSON.stringify({ repository: state.repo, coordinatorId: state.coordinatorId, machine: state.machine, activatedAt: state.activatedAt, ...(start ? { startAction: start } : {}), currentMode: state.currentMode, recipeFirst: !state.recipeDelivered, workflow, ...(state.runs === undefined ? {} : { runs: state.runs }), issues, ...(timeRules.length ? { timeRules } : {}), ...(runtimePacket(state.runtime) ? { runtime: runtimePacket(state.runtime) } : {}) })}\n`;
 }
 function coordinatorEnvelope(state) {
   return { version: 'pdd.autopilot-coordinator.v1', repository: state.repo, coordinatorId: state.coordinatorId, machine: state.machine, activation: state.activatedAt, ...(state.runs === undefined ? {} : { runs: state.runs }) };
@@ -1019,6 +1173,7 @@ async function runTick(stateFile, ports, completion) {
         pendingTimes[key] = changedAt;
       }
     }
+    await runtimeTick(state, p, completion, timeRules, pendingTimes, dirname(stateFile));
     for (const issue of state.cachedIssues ?? []) {
       const labels = issue.labels?.map(x => typeof x === 'string' ? x : x.name) ?? [];
       if (issue.pull_request || issue.state !== 'open') continue;
@@ -1176,7 +1331,7 @@ async function runTick(stateFile, ports, completion) {
   } finally {
     try {
       if (state && scanGuard) await scanGuard(latest => {
-        for (const key of ['retryAt','cachedIssues','etag','pages','acknowledged','commentCache','seen','timeSeen','pullCache','recipeDelivered','dependencyPending','deliveryIntent','reconciliationIntent','uncertainDeliveryHistory','paneId','workspaceId','ownerLaunch','contextPane','contextBinding','relaunchPending','relaunchHeld']) {
+        for (const key of ['retryAt','cachedIssues','etag','pages','acknowledged','commentCache','seen','timeSeen','pullCache','recipeDelivered','dependencyPending','deliveryIntent','reconciliationIntent','uncertainDeliveryHistory','paneId','workspaceId','ownerLaunch','contextPane','contextBinding','relaunchPending','relaunchHeld','runtime']) {
           if (Object.hasOwn(state, key)) latest[key] = state[key]; else delete latest[key];
         }
         latest.nextTick = (ports.now ?? Date.now)() + INTERVAL;

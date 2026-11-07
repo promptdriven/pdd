@@ -585,7 +585,8 @@ async function readLocalOccupied({ cwd, repository }, ports = {}) {
         && ['ended', 'failed'].includes(observed.state)) continue;
     }
     runs.push({ issue: `https://github.com/${repository.toLowerCase()}/issues/${run.number}`, runId,
-      state: chat?.startUnconfirmed || (state === 'starting' && !finishedTurn) ? 'starting' : ['running', 'waiting', 'paused', 'stuck', 'question'].includes(run.state) ? run.state : 'unknown', ...(finishedTurn ? { occupied: false } : {}) });
+      state: chat?.startUnconfirmed || (state === 'starting' && !finishedTurn) ? 'starting' : ['running', 'waiting', 'paused', 'stuck', 'question'].includes(run.state) ? run.state : 'unknown', ...(finishedTurn ? { occupied: false } : {}),
+      ...(run.state === 'paused' && run.runtimeWait ? { waiting: 'runtime' } : {}) });
   }
   const index = join(context.commonDir, 'pdd', 'worktree-assignments');
   let indexExists = false;
@@ -791,6 +792,7 @@ export async function readDependencySnapshot({ cwd = '', repository, inputs = []
         if (limited) issue.holds.push(`Taken over ${limited.takeovers} times; take the stuck path, not another takeover`);
         const runs = observation.runs.filter(r => canonical(r.issue) === issue.key);
         if (observation.runsKnown) issue.runIds = runs.map(r => r.runId).filter(Boolean);
+        if (runs.some(r => r.waiting === 'runtime') && !issue.holds.includes('Waiting for Runtime')) issue.holds.push('Waiting for Runtime');
         if (claims.length === 1 && claims[0].coordinatorId && claims[0].commentId && claims[0].labelEventId) {
           const { coordinatorId, commentId, labelEventId } = claims[0];
           issue.executionClaim = { coordinatorId, commentId, labelEventId };
