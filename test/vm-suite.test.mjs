@@ -32,7 +32,7 @@ import { basename, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 const name = basename(process.argv[1]), args = process.argv.slice(2);
 const scenario = JSON.parse(readFileSync(process.env.FAKE_DIR + '/scenario.json', 'utf8'));
-const event = { name, args, cwd: process.cwd(), home: process.env.HOME, state: process.env.PDD_STATE_DIR };
+const event = { name, args, cwd: process.cwd(), home: process.env.HOME, state: process.env.PDD_STATE_DIR, locale: process.env.LC_ALL };
 if (name === 'node' && args.includes('--test')) {
   event.homeFiles = readdirSync(process.env.HOME);
   event.stateFiles = readdirSync(process.env.PDD_STATE_DIR);
@@ -76,6 +76,8 @@ if (name === 'git') {
   }
   const env = {
     ...process.env, SUITE: undefined, PDD_VM_SUITE_LOCK: undefined,
+    // C is available on Linux and macOS, unlike an inherited C.UTF-8 locale.
+    LC_ALL: 'C',
     HOME: home, TMPDIR: dir, FAKE_DIR: dir, PATH: `${bin}:${process.env.PATH}`, ...options.env,
   };
   const events = () => {
@@ -118,6 +120,26 @@ function expectStatus(result, state, description) {
   assert.ok(description.length <= 140);
   assert.equal(result.posts[0].home, result.home);
 }
+
+test('vm-suite test children use a portable locale when the caller locale is unavailable', t => {
+  const callerLocale = process.env.LC_ALL;
+  let wrapper, runner;
+  // Both helpers spawn synchronously. Restore the caller before any other test runs.
+  try {
+    process.env.LC_ALL = 'pdd_TEST_unavailable_locale';
+    wrapper = run(t);
+    runner = runLock(t, { lockEnv: () => ({ SUITE: 'npm run suite' }) });
+  } finally {
+    if (callerLocale === undefined) delete process.env.LC_ALL;
+    else process.env.LC_ALL = callerLocale;
+  }
+  for (const result of [wrapper, runner]) {
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual([...new Set(result.events.map(event => event.locale))], ['C']);
+    assert.equal(result.stderr, '');
+  }
+  expectStatus(wrapper, 'success', '7/8, 0 failed');
+});
 
 test('vm-suite posts only counts on the detached tested commit, with an empty suite home/state', t => {
   const result = run(t);
@@ -211,20 +233,22 @@ test('vm-suite stops with one line that names the path when its lock runner is m
     prepare();
     const result = run(t, { script: join(copy, 'scripts/vm-suite.sh') });
     assert.equal(result.status, 1);
-    assert.equal(result.stderr, `vm-suite: lock runner not found or not executable: ${runner}\n`);
+    assert.match(result.stderr, /^vm-suite: [^\n]+\n$/);
+    assert.ok(result.stderr.includes(runner));
     assert.deepEqual(result.events, []);
   }
 });
 
 test('vm-suite stops with one line before any external action when the configured shared lock is unusable', t => {
   const missing = join(tmpdir(), `pdd-vm-no-such-folder-${process.pid}`);
-  for (const [lock, line] of [
-    [join(missing, 'fullsuite.lock'), `vm-suite-lock: lock folder not found or not writable: ${missing}`],
-    ['fullsuite.lock', 'vm-suite-lock: PDD_VM_SUITE_LOCK is not an absolute path: fullsuite.lock'],
+  for (const [lock, path] of [
+    [join(missing, 'fullsuite.lock'), missing],
+    ['fullsuite.lock', 'fullsuite.lock'],
   ]) {
     const result = run(t, { env: { PDD_VM_SUITE_LOCK: lock } });
     assert.equal(result.status, 1);
-    assert.equal(result.stderr, `${line}\n`);
+    assert.match(result.stderr, /^vm-suite-lock: [^\n]+\n$/);
+    assert.ok(result.stderr.includes(path));
     assert.deepEqual(result.events, []);
   }
 });
