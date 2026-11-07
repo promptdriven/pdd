@@ -262,7 +262,7 @@ test('a failed detail read keeps other finished snapshot updates and retries the
   w.github.failRead = null; w.time += minute;
   const retryMark = w.github.mark(), done = await savedRead(w);
   assert.equal(done.complete, true, done.warnings.join('; '));
-  assert.equal(w.github.since(retryMark).graphql, 0, 'the finished changed issue is reused after staging');
+  assert.ok(!w.github.since(retryMark).calls.some(call => call.api === 'graphql' && /\bcomments\s*\(/.test(call.query)), 'the finished changed issue is reused after staging; only link metadata is read');
   assert.equal(readJson(fileOf(w, 'snapshot')).pendingList, undefined, 'successful coverage clears the pending list');
   assert.deepEqual(view(done), view(await fullRead(w)));
 });

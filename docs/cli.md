@@ -195,11 +195,11 @@ Autopilot keeps one saved dependency snapshot for each repository in the same
 folder (`*.snapshot.json`, private to you). The tick, `pdd dependencies complete`
 and the claim scan use it. A read asks GitHub only for the issues that changed
 since the last read (`since`, in update order), and reads the comments, links and
-history of an issue again only when its update time, comment count or link counts
-changed. It also checks the open index with conditional requests for link counts
-that can change without a new update time. Once a day it rebuilds the open list,
-so a deleted or moved
-issue leaves it. Safety reads always ask GitHub (a `304` is fine): the claim
+history of an issue again when its update time, comment count or link identities
+changed. It checks the open index with conditional requests and compares native
+link identities in batches. Equal link counts can still mean different blockers.
+Incomplete batch connections fall back to complete REST link pages. Once a day
+it rebuilds the open list, so a deleted or moved issue leaves it. Safety reads always ask GitHub (a `304` is fine): the claim
 checks before a start, a push and a merge, heartbeats, trust, and the readback
 after each write. A quiet tick then makes a few calls instead of hundreds, and
 a batch reuses the same observations. After `pdd dependencies complete`, the next

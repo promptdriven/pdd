@@ -215,14 +215,15 @@ export async function completeDependencyIntake({ cwd = '', request, analysis }, 
   };
   let snapshot;
   try { ({ snapshot } = await snapshotRead(ports, args)); } catch { return finish(pendingResult('observations-incomplete')); }
-  // Reviews of this request that an earlier call already saved count as done.
+  // Saved intents need no duplicate append; their pending effects still need confirmation.
   const savedIds = new Map();
   for (const review of analysis.reviews) {
     const saved = snapshot.reviews.find(r => !prepared.reviews.some(p => p.id === r.id) && sameReview(r, review));
     if (saved) savedIds.set(review.issue, saved.id);
   }
   const subjects = request.issues.filter(key => !savedIds.has(key)), remaining = analysis.reviews.filter(r => !savedIds.has(r.issue));
-  if (request.issues.length && !subjects.length && analysis.reviews.length === request.issues.length) {
+  if (request.issues.length && !subjects.length && analysis.reviews.length === request.issues.length
+    && analysis.reviews.every(r => r.effects !== 'pending' || !r.dependencies.length)) {
     const questions = analysis.reviews.flatMap(r => r.questions);
     return finish({ state: questions.length ? 'question' : 'complete', reviewIds: analysis.reviews.map(r => savedIds.get(r.issue)), eligible: [], questions });
   }
@@ -289,21 +290,30 @@ export async function completeDependencyIntake({ cwd = '', request, analysis }, 
   }
   const ids = []; const questions = [];
   for (const review of analysis.reviews) {
-    if (savedIds.has(review.issue)) { ids.push(savedIds.get(review.issue)); questions.push(...review.questions); continue; }
-    // The link row holds the subject's links after this request's validated additions.
-    const saved = { ...review, inputs: [...review.inputs, links(proposed, review.issue, review.dependencies).row] };
-    const result = await (ports.reviews?.save ?? saveDependencyReview)({ repository: request.repository, issue: review.issue, review: saved }, ports);
-    if (result.state !== 'saved' || !result.id) return finish(pendingResult('write-unconfirmed', { stage: 'review-save', issue: review.issue, reviewIds: ids, questions }));
-    ids.push(result.id); questions.push(...review.questions);
+    let id = savedIds.get(review.issue);
+    if (!id) {
+      // The link row holds the subject's links after this request's validated additions.
+      const saved = { ...review, inputs: [...review.inputs, links(proposed, review.issue, review.dependencies).row] };
+      const result = await (ports.reviews?.save ?? saveDependencyReview)({ repository: request.repository, issue: review.issue, review: saved }, ports);
+      if (result.state !== 'saved' || !result.id) return finish(pendingResult('write-unconfirmed', { stage: 'review-save', issue: review.issue, reviewIds: ids, questions }));
+      id = result.id;
+    }
+    ids.push(id); questions.push(...review.questions);
     if (review.effects === 'pending' && review.dependencies.length) {
-      const applied = await (ports.reviews?.apply ?? applyDependencyChanges)({ cwd, repository: request.repository, issue: review.issue, reviewId: result.id }, ports);
+      if (savedIds.has(review.issue)) {
+        const node = projectIssueGraph({ snapshot }).nodes.find(n => n.key === review.issue);
+        const head = snapshot.reviews.find(r => r.id === node?.review && r.authority === 'trusted' && r.intact);
+        if (head?.continuation === id && head.outcome === 'complete' && head.effects === 'confirmed') continue;
+        if (head?.base.includes(id) && head.outcome === 'question') { ids.push(head.id); questions.push(...head.questions); continue; }
+      }
+      const applied = await (ports.reviews?.apply ?? applyDependencyChanges)({ cwd, repository: request.repository, issue: review.issue, reviewId: id }, ports);
       // A refused write (a person removed the link, or it closes a cycle) ends as one saved question.
       if (applied.state === 'question') { if (applied.reviewId) ids.push(applied.reviewId); questions.push(...(applied.questions ?? [])); continue; }
       if (applied.state !== 'confirmed') return finish(pendingResult('write-unconfirmed', { stage: 'edge-confirmation', issue: review.issue, reviewIds: ids, questions }));
     }
   }
   // The saved snapshot takes the new reviews now, so the next request comes from it without another full observation.
-  if (remaining.length && ports.dependencyReads?.stored(request.repository) && !ports.snapshots) {
+  if (analysis.reviews.length && ports.dependencyReads?.stored(request.repository) && !ports.snapshots) {
     try { await snapshotRead(ports, { cwd, repository: request.repository }); } catch { /* The next tick reads the changes. */ }
   }
   return finish({ state: questions.length ? 'question' : 'complete', reviewIds: ids, eligible: [], questions });

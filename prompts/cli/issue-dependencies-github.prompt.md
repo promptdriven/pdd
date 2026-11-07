@@ -158,23 +158,30 @@ changed since the saved snapshot, and all callers use the same snapshot.
 one; the ports that a caller passes on keep it. A session lives for one process
 (one tick, one command). It holds: the issue list and the issue reads of this
 process, the saved snapshot of each repository, the comment bodies of the
-complete comment pages read (`noteComments`), the claims of the last snapshot
+complete comment pages read (`noteComments`), replacing all prior comments of an
+issue on each reread and clearing them on invalidation, the claims of the last snapshot
 (`owners`), the trust lookups of each repository, and a safety count for
 readbacks.
 
 **Store.** `dependencySnapshotStore({root, repository, fs})` keeps
 `ROOT/github/H.snapshot.json` (the `H` of the [call ledger](github-calls.prompt.md#ledger)),
-folder 0700, file 0600, written through a temporary file and a rename. Version 1:
+folder 0700, file 0600, written through a temporary file and a rename. Hold an
+exclusive repository file lock across load, merge and rename. A busy lock waits
+briefly and retries; an unavailable lock refuses the save without replacing data. Version 1:
 `{v:1, repository, refreshedAt, list:{readAt, since, rows}, issues, invalid, pendingList?}`.
 `pendingList` holds `{at, rows}` from an incomplete incremental index read; it
 never advances `list.readAt` or `list.since`, and is not complete coverage.
-`rows` maps each open issue number (no pull requests) to its issue row; `issues`
+`rows` maps each open issue number (no pull requests) to its issue row, including
+`nativeLinkVersion`, the SHA-256 digest of the JSON list of sorted unique full
+issue URLs in blocked-by order, then blocking order; `issues`
 maps an issue number to `{version, observedAt, kinds:{comments, blockedBy,
 blocking, timeline}, raw?, partialTimeline?}`; `invalid` maps an issue number to
 the time of a write. Another version or repository is no snapshot. `save` merges
 with the file as it is then: the newer `refreshedAt` wins; with the same one, the
 newer list read wins (this save on a tie), each issue keeps its newer observation,
-and an observation older than the issue's `invalid` time is dropped. The oldest
+and an observation older than the issue's `invalid` time is dropped. Keep the
+greatest invalidation time per issue across both files, including different
+full-refresh periods. A stale process must never restore invalidated observations. The oldest
 issue reads go first above 64 MiB or 10,000 issues; a list alone above 64 MiB is
 not saved. The store also has `completion` (`read`, `save`, `clear`) for the
 [kept completion](issue-dependencies-intake.prompt.md#kept-completion) beside it,
@@ -186,14 +193,20 @@ under `autopilotStateRoot`, else `$HOME/.local/state/pdd/autopilot`);
 processes and the snapshot reads as before.
 
 **Change facts.** `issueRowVersion(row)` is the JSON list `[updated_at, comments,
-state, issue_dependencies_summary]` of a GitHub issue row, or null when
-`updated_at` is not a valid time. A row with null facts is never reused. GitHub
-moves `updated_at` for an edit, a comment, a comment edit, a label or a close; the
-link counts in `issue_dependencies_summary` show a link change too. After an
-incremental list read, conditionally read the open index pages to compare change
-facts, including link counts, for issues outside `since`. This metadata pass
-does not discard missing rows; the daily full refresh owns removals. It does not
-reread unchanged comments or history.
+state, issue_dependencies_summary]`, or null when `updated_at` is not a valid time.
+A null version is never reused. Saved freshness also compares the current native
+link identity version against the complete saved link pages.
+Link counts and update times alone cannot detect a swap of blockers. Compare the
+sorted full issue identities in each direction on every incremental catch-up,
+including known closed prerequisites. Batch these lightweight link observations
+through GraphQL; zero counts in both directions in the current open index need
+no link query. Incomplete
+or unavailable connections use complete REST link pages instead. If those reads
+fail, the list is incomplete and cannot establish saved freshness. The version
+covers each direction separately. An identity change invalidates saved details
+even when all counts and update times stay equal. Continue conditionally reading
+open index pages for row metadata outside `since`; missing rows leave only at the
+daily full refresh. Unchanged comments and history need no reread.
 
 **Issue list.** With a store, the snapshot reads the open issue list through the
 session:

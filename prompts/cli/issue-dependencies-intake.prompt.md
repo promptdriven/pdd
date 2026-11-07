@@ -191,7 +191,12 @@ and the analysis of the other subjects is finished work too. So:
   outcome, dependencies, questions and effects. The checks of this section then
   cover only the other subjects; the result lists the saved ID for each skipped
   review in request order. A repeated or resumed completion of the same request so
-  saves nothing twice and needs no new analysis.
+  saves no duplicate intent and needs no new analysis. A saved pending link intent
+  is unfinished: resume its effects through the GitHub owner before reporting
+  completion. Confirm already present edges without adding them twice. A confirmed
+  continuation ends that intent; an existing question continuation returns its
+  questions. An unconfirmed effect returns `write-unconfirmed` at
+  `edge-confirmation` and keeps the completion for another retry.
 - A pending result with reason `observations-incomplete`, `write-unconfirmed` or
   `github-limit` keeps `{request, analysis, reason, attempts}` through the
   `completions` port (`read`, `save`, `clear`), default the kept completion file

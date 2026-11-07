@@ -250,6 +250,7 @@ const trimRow = row => ({ id: row.id, number: row.number, html_url: row.html_url
   state_reason: row.state_reason ?? null, user: login(row.user), labels: Array.isArray(row.labels) ? row.labels.map(l => typeof l === 'string' ? l : { name: l?.name }) : row.labels,
   assignees: Array.isArray(row.assignees) ? row.assignees.map(a => object(a) ? { login: a.login } : a) : row.assignees, assignee: login(row.assignee),
   created_at: row.created_at, updated_at: row.updated_at, comments: row.comments,
+  ...(row.nativeLinkVersion !== undefined ? { nativeLinkVersion: row.nativeLinkVersion } : {}),
   ...(row.issue_dependencies_summary !== undefined ? { issue_dependencies_summary: row.issue_dependencies_summary } : {}) });
 const linkedIssue = value => object(value) ? { html_url: value.html_url, number: value.number, ...(object(value.repository) ? { repository: { full_name: value.repository.full_name } } : {}) } : value;
 const trimItems = {
@@ -259,6 +260,55 @@ const trimItems = {
     ...(e.blocked_by ? { blocked_by: linkedIssue(e.blocked_by) } : {}), ...(e.blocking ? { blocking: linkedIssue(e.blocking) } : {}),
     ...(object(e.source) ? { source: { issue: object(e.source.issue) ? { ...(e.source.issue.pull_request ? { pull_request: {} } : {}), state: e.source.issue.state } : e.source.issue } } : {}) })),
 };
+
+// Counts prove absence, but cannot distinguish equal-size swaps. Observe identities in both directions.
+const linkVersion = (blockedBy, blocking) => hash(JSON.stringify([blockedBy, blocking].map(items =>
+  [...new Set(items.map(x => info(x.html_url ?? x.url)?.key ?? fail('invalid-link')))].sort())));
+async function nativeLinkVersions(repository, rows, api) {
+  const versions = new Map(), needed = [];
+  for (const row of rows) {
+    const summary = row.issue_dependencies_summary;
+    if (object(summary) && ['blocked_by', 'blocking', 'total_blocked_by', 'total_blocking'].every(k => summary[k] === 0))
+      versions.set(row.number, linkVersion([], []));
+    else needed.push(row);
+  }
+  for (let offset = 0; offset < needed.length; offset += 25) {
+    const batch = needed.slice(offset, offset + 25), [owner, name] = repository.split('/');
+    const selection = 'url number blockedBy(first:100) { nodes { url } pageInfo { hasNextPage } } blocking(first:100) { nodes { url } pageInfo { hasNextPage } }';
+    const query = `query($owner:String!,$name:String!${batch.map((_, i) => `,$n${i}:Int!`).join('')}) { repository(owner:$owner,name:$name) { ${batch.map((_, i) => `i${i}:issue(number:$n${i}) { ${selection} }`).join(' ')} } }`;
+    let data;
+    try {
+      const reply = (await api('graphql', 'POST', JSON.stringify({ query, variables: { owner, name, ...Object.fromEntries(batch.map((r, i) => [`n${i}`, r.number])) } }), 'dependencies', repository)).value;
+      if (!reply.errors?.length) data = reply.data?.repository;
+    } catch { /* Complete REST pages below are the fallback. */ }
+    for (const [i, row] of batch.entries()) {
+      const live = data?.[`i${i}`];
+      try {
+        const complete = connection => object(connection) && Array.isArray(connection.nodes) && connection.pageInfo?.hasNextPage === false
+          && connection.nodes.every(x => info(x?.url));
+        if (live?.number === row.number && info(live.url)?.key === info(row.html_url)?.key && complete(live.blockedBy) && complete(live.blocking)) {
+          versions.set(row.number, linkVersion(live.blockedBy.nodes, live.blocking.nodes));
+          continue;
+        }
+        const pages = [];
+        for (const direction of ['blocked_by', 'blocking']) {
+          const items = [], seen = new Set();
+          let cursor = `repos/${repository}/issues/${row.number}/dependencies/${direction}?per_page=100`;
+          while (cursor) {
+            if (seen.has(cursor)) throw Error('Repeated GitHub cursor');
+            seen.add(cursor);
+            const reply = await api(cursor);
+            if (!Array.isArray(reply.value)) throw Error('Incomplete link identities');
+            items.push(...reply.value); cursor = reply.next;
+          }
+          pages.push(items);
+        }
+        versions.set(row.number, linkVersion(...pages));
+      } catch { throw Error('Current link identities unavailable'); }
+    }
+  }
+  return versions;
+}
 
 // One private, versioned, bounded file for each repository: the issue rows of the last list read and the full reads of
 // each issue, keyed by the change facts of its row. A save merges with the file as it is then: the newer list read
@@ -285,12 +335,24 @@ export function dependencySnapshotStore({ root, repository, fs = nativeFs }) {
   return {
     file, repository: repo, load, completion,
     save(data) {
+      const lock = `${file}.lock`;
+      let held = false;
       try {
+        fs.mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+        for (let attempt = 0; !held; attempt++) {
+          try { fs.mkdirSync(lock, { mode: 0o700 }); held = true; }
+          catch (error) {
+            if (error.code !== 'EEXIST' || attempt >= 200) return null;
+            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+          }
+        }
         const current = load(), epoch = Math.max(data.refreshedAt, current?.refreshedAt ?? -Infinity);
         const sides = [current, data].filter(side => side && side.refreshedAt === epoch);
         // On a tie the list of this save wins: it was read after the saved one.
         const list = sides.length === 2 && current.list.readAt > data.list.readAt ? current.list : sides.at(-1).list;
-        const invalid = Object.assign({}, ...sides.map(side => side.invalid ?? {}));
+        const invalid = {};
+        for (const side of [current, data]) for (const [n, at] of Object.entries(side?.invalid ?? {}))
+          if (Number.isFinite(at)) invalid[n] = Math.max(invalid[n] ?? -Infinity, at);
         const issues = {};
         for (const side of sides) for (const [n, entry] of Object.entries(side.issues)) {
           if (!object(entry) || !(entry.observedAt >= epoch) || invalid[n] > entry.observedAt) continue;
@@ -315,6 +377,7 @@ export function dependencySnapshotStore({ root, repository, fs = nativeFs }) {
         fs.renameSync(temp, file);
         return next;
       } catch { return null; /* A lost save only costs reads. */ }
+      finally { if (held) try { fs.rmdirSync(lock); } catch { /* A leftover lock refuses future saves. */ } }
     },
   };
 }
@@ -371,14 +434,17 @@ function readSession(storeFor, now) {
   const saved = s => { if (s.data === undefined) s.data = s.store?.load() ?? null; return s.data; };
   const usable = (s, at) => { const d = saved(s); return d && at >= d.refreshedAt && at - d.refreshedAt < FULL_REFRESH ? d : null; };
   // The current read of one issue: this process's own read, else a saved read whose change facts match the current row.
+  const matches = (entry, row, version) => version !== null && entry.version === version
+    && (row.nativeLinkVersion === undefined || Array.isArray(entry.kinds?.blockedBy) && Array.isArray(entry.kinds?.blocking)
+      && row.nativeLinkVersion === linkVersion(entry.kinds.blockedBy, entry.kinds.blocking));
   const fresh = (s, n) => {
     const row = s.list?.rows.get(n), version = row ? issueRowVersion(row) : undefined;
     const own = s.entries.get(n);
-    if (own) return !row || version !== null && own.version === version ? own : null;
+    if (own) return !row || matches(own, row, version) ? own : null;
     if (s.blocked.has(n) || !s.list?.complete) return null;
     const d = saved(s), entry = d?.issues?.[n];
     if (!entry || d.refreshedAt !== s.list.refreshedAt || !(entry.observedAt >= d.refreshedAt) || d.invalid?.[n] > entry.observedAt) return null;
-    if (row) return version !== null && entry.version === version ? entry : null;
+    if (row) return matches(entry, row, version) ? entry : null;
     // An issue outside the open list is current while since reads cover its changes; it needs its saved issue.
     return s.list.mode !== 'refresh' && object(entry.raw) ? entry : null;
   };
@@ -439,6 +505,20 @@ function readSession(storeFor, now) {
           newest = Math.max(newest, apply(s, rows, r.value, d)); cursor = r.next;
         }
       } } catch (error) { error.partialItems = [...rows.values()].sort((a, b) => b.number - a.number); throw error; }
+      try {
+        const linked = [...rows.values(), ...Object.entries(d?.issues ?? {}).filter(([n, entry]) => !rows.has(Number(n)) && entry.raw).map(([, entry]) => ({ ...entry.raw, issue_dependencies_summary: undefined }))];
+        const versions = await nativeLinkVersions(repo, linked, api);
+        for (const row of linked) {
+          const version = versions.get(row.number);
+          if (rows.has(row.number)) row.nativeLinkVersion = version;
+          else {
+            const entry = d.issues[row.number];
+            if (linkVersion(entry.kinds.blockedBy, entry.kinds.blocking) !== version) {
+              s.entries.delete(row.number); s.blocked.add(row.number); s.invalid[row.number] = at;
+            }
+          }
+        }
+      } catch (error) { error.partialItems = [...rows.values()].sort((a, b) => b.number - a.number); throw error; }
       const since = Number.isFinite(newest) ? new Date(Math.max(newest - SINCE_OVERLAP, d ? Date.parse(d.list.since) : -Infinity)).toISOString() : d?.list.since ?? new Date(at - HOUR).toISOString();
       s.list = { rows, complete: true, readAt: at, since, refreshedAt, mode };
       s.live = false;
@@ -448,6 +528,7 @@ function readSession(storeFor, now) {
     // True when every kind of this issue has a current read.
     current(repository, n) { const s = state(repository); if (!s.store) return false; const entry = fresh(s, n); return !!entry && KINDS.every(kind => Array.isArray(entry.kinds?.[kind])); },
     noteComments(issueKey, items, complete) {
+      for (const key of this.comments.keys()) if (key.startsWith(`${issueKey}#issuecomment-`)) this.comments.delete(key);
       for (const comment of items) if (/^[1-9][0-9]*$/.test(String(comment?.id ?? ''))) this.comments.set(`${issueKey}#issuecomment-${comment.id}`, comment);
       if (complete) this.commentIssues.add(issueKey); else this.commentIssues.delete(issueKey);
     },
@@ -475,7 +556,7 @@ function readSession(storeFor, now) {
     // A write to an issue: this process reads it live again, and no saved read of it before now is used again.
     invalidate(repository, n) {
       const s = state(repository); if (!Number.isSafeInteger(n)) return;
-      this.commentIssues.delete(`https://github.com/${s.repo}/issues/${n}`);
+      this.noteComments(`https://github.com/${s.repo}/issues/${n}`, [], false);
       s.entries.delete(n); s.blocked.add(n); s.invalid[n] = now(); s.live = true;
       s.list?.rows.delete(n);
     },
@@ -1001,7 +1082,7 @@ async function observeSnapshot({ cwd = '', repository, inputs = [] }, ports, sco
   let roots = [];
   const stored = !!reads?.stored(repository) && !!ports.github[NATIVE_GITHUB];
   try {
-    roots = stored ? await reads.readList(repository, endpoint => service(cwd, ports).api(endpoint, 'GET', undefined, 'dependencies'))
+    roots = stored ? await reads.readList(repository, service(cwd, ports).api)
       : await allPages(ports.github, repository, 'issues', 0);
   } catch (e) { roots = e.partialItems ?? []; coverage.scope = false; warn('Open issue pages are incomplete'); }
   let invalidIndex = false;

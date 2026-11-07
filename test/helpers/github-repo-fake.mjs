@@ -139,6 +139,7 @@ export function createGithubRepoFake({ repository = 'acme/widgets', owner = 'acm
     const call = { method, endpoint, conditional: !!sent, api: endpoint === 'graphql' ? 'graphql' : 'rest', at: f.now() };
     f.calls.push(call);
     if (endpoint === 'graphql') {
+      call.query = JSON.parse(input).query;
       if (f.graphqlRemaining <= 0) { call.status = 403; return { code: 1, stdout: [...headers(403, { resource: 'graphql' }), '', JSON.stringify({ message: 'API rate limit exceeded' })].join('\r\n'), stderr: 'gh: HTTP 403\n' }; }
       f.graphqlRemaining--; call.status = 200;
       return { code: 0, stdout: [...headers(200, { resource: 'graphql' }), '', JSON.stringify(graphql(input))].join('\r\n'), stderr: '' };
