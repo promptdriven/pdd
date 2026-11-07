@@ -8,7 +8,7 @@ Use Node.js 22.16.0 or newer. The CLI and tests have no dependency installation 
 
 ```sh
 node bin/pdd.mjs --help
-node --test examples/ticket-status/test/status.test.mjs
+node --test test/cli.test.mjs
 npm test
 ```
 

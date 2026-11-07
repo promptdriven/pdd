@@ -13,6 +13,8 @@ PR 1 (prompt, Story, tests): read the issue first and write 3 input → result p
 
 PR 2 (code): read the issue, the PR 1 Story (open or merged) and the diff. Build the head and run the changed path with the repo's start-up recipe, with the Story as the script. Follow `verification-setup.md` in the pdd-prompting skill to repeat the real action from a fresh checkout and report setup, behavior and dependency scope separately. For a screen change, take before and after screenshots and write one line on what changed.
 
+Read pdd-prompting/review.md.
+
 Both PRs: the full suite is green on the head, with no new skip or only. One exception: new native tests in PR 1 may be red only for the missing behavior. Say so in the verdict; then PR 1 merges only together with its code PR.
 
 Verdict: one PR comment with a JSON block: `verdict` (PASS, FAIL or NOT SURE), `head` (the SHA you checked), `risk` (1-5, before merge), `family`, `session`, `checker_mode`, and the evidence. Never send a failed check again on your own.

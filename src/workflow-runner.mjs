@@ -1,5 +1,6 @@
 import { validateSnapshot } from './metrics-store.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
+import { createDependencyReadPorts } from './issue-dependencies-github.mjs';
 // Generated from prompts/cli/workflow-runner.prompt.md (sha256: 33dc44a7518d2fb7bf424398daf54496e911059e51d2bb93abd85e77ba1308dd).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
@@ -18,6 +19,7 @@ import { readWorkflowAreas } from './workflow-areas.mjs';
 import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, reconcileWorkflowPr, readWorkflowPrStatus } from './workflow-github.mjs';
 import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mjs';
 import { allRuns, currentChat, gitContext, listRuns, readRun, readRunOwnership, resolveRun, runDirFor, runForWorktree, updateRun, writeRun } from './workflow-runs.mjs';
+import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
 import { startChat, sendToChat, herdrCommand, chatSession, openChat, restartChat, validSessionId, closeChats, expandHome, homeVariable, isFolder, observeLifecycle, applyLifecycle, launchAnchor, sessionEvidenceDue, ownSession, observedSession, START_GRACE_MS } from './workflow-chat.mjs';
 import { captureSource, findTests, gitFiles, interfaceBlocks, interfaceSchemaProblems, proseSha256 } from './runtime-preflight.mjs';
 import { storyLines, PROMPT_TESTS_LABEL, PROMPT_TESTS_WORDS } from './runtime-output.mjs';
@@ -94,8 +96,8 @@ const sameOwner = (a, b) => a.pid === b.pid && a.token === b.token;
 function deadOwner(owner) {
   try { process.kill(owner.pid, 0); return false; } catch (error) { if (error.code === 'ESRCH') return true; throw lockProblem(); }
 }
-function acquireRunLock(runDir) {
-  const path = join(runDir, 'chat-replacement.lock'), claim = `${path}.claim`, owner = { pid: process.pid, token: randomUUID() };
+export function acquireRunLock(runDir, filename = 'chat-replacement.lock') {
+  const path = join(runDir, filename), claim = `${path}.claim`, owner = { pid: process.pid, token: randomUUID() };
   const create = () => {
     const fd = openSync(path, 'wx', 0o600);
     try { writeFileSync(fd, JSON.stringify(owner)); fsyncSync(fd); } finally { closeSync(fd); }
@@ -280,12 +282,27 @@ async function unpublishedScenarios(run,p) {
     (originals.has(path) || isScenario(readFileSync(join(run.root,path),'utf8'))));
 }
 
+function automaticHandoff(run, p, packageRoot = PACKAGE_ROOT) {
+  if (!validSavedAutomaticOrigin(run) || !['pdd-bug','pdd-feature','pdd-small-change'].includes(run.skill)) return null;
+  try {
+    const root = realpathSync(run.sourceRoot), config = JSON.parse(readFileSync(join(root, 'pdd.json'), 'utf8'));
+    const mode = config?.autopilot?.mode, id = createHash('sha256').update(root).digest('hex').slice(0, 20);
+    const folder = p.autopilotStateRoot ?? join(p.env.HOME || homedir(), '.local', 'state', 'pdd', 'autopilot');
+    const saved = JSON.parse(readFileSync(join(folder, `${id}.json`), 'utf8'));
+    const action = saved.startAction, overlay = resolve(run.skillDir ?? join(packageRoot, 'skills', run.skill), 'steps', 'autopilot.md');
+    if (!['auto','observe'].includes(mode) || !saved.enabled || saved.repo?.toLowerCase() !== run.repo.toLowerCase() || saved.coordinatorId !== run.automaticOrigin.coordinatorId || saved.machine !== run.automaticOrigin.machine || action?.command !== 'pdd autopilot start' || action.repository?.toLowerCase() !== run.repo.toLowerCase() || action.mode !== mode || !existsSync(overlay)) return null;
+    return `Automatic run: the operator invoked ${action.command} for ${run.repo} in ${mode} mode. Read ${JSON.stringify(overlay)} and the actual owner handoff and run notes in ${JSON.stringify(run.runDir)}. Follow their scoped delegation for covered ordinary non-strict gates through the supported approval route; preserve strict approval and all repository, product, Try, code and merge restrictions. This action is not a quoted later person reply or checker approval. Current package CLI: ${pddCommand(packageRoot)}.`;
+  } catch { return null; }
+}
+
 async function areaMessage(run, index, p, packageRoot) {
   const area = run.areas[index], pdd = '"$PDD_BIN"', earlier = run.areas.slice(0, index).flatMap(item => item.steps);
   const summaries = earlier.filter(step => run.done[step]).map(step => `${step}: ${oneLine(run.done[step].summary).replace(/[.\s]+$/, '') || 'done'}`);
   const files = index ? await changedFiles(run, p) : [];
+  const automatic = automaticHandoff(run, p, packageRoot);
   return [
-    `Use the ${run.skill} skill: ${join(run.skillDir ?? join(packageRoot ?? PACKAGE_ROOT, 'skills', run.skill), 'SKILL.md')}. This is a pdd workflow run.${index ? ' The person approved the earlier areas.' : ''}`,
+    `Read and follow the selected workflow skill at ${JSON.stringify(resolve(run.skillDir ?? join(packageRoot ?? PACKAGE_ROOT, 'skills', run.skill), 'SKILL.md'))} and its adjacent supporting files. This is a pdd workflow run.${index ? automatic ? ' Earlier areas have advanced.' : ' The person approved the earlier areas.' : ''}`,
+    ...(automatic ? [automatic] : []),
     `Issue: ${run.repo}#${run.number} "${oneLine(run.issue.title)}" ${run.issue.url}`,
     `Worktree: ${run.root} (branch ${run.branch}). Work and commit only here.`,
     `Run folder: ${run.runDir}. Put notes there. verify writes verify.md there with the exact test commands and their output.`,
@@ -294,11 +311,11 @@ async function areaMessage(run, index, p, packageRoot) {
     `After each step, run: ${pdd} workflow done STEP --summary "one line". It prints what to do next.`,
     ...(prLabel(run, area) === 'PR 2' && prOf(run, askArea(run).name) ? [`PR 1: ${prOf(run, askArea(run).name).url}. This area works on branch ${run.branch}, ${run.prBase === run.baseBranch ? `from the merged ${run.baseBranch}` : 'on top of PR 1'}.`] : []),
     area.gate === 'approve'
-      ? `Gate: after the last step, show the person the result, ask them to approve or ask for changes, and stop. Never approve for them: ${approvalGuide(run, pdd)}`
+      ? automatic ? 'Gate: show the result and follow the scoped automatic overlay and owner handoff; preserve required human decisions.' : `Gate: after the last step, show the person the result, ask them to approve or ask for changes, and stop. Never approve for them: ${approvalGuide(run, pdd)}`
       : area.then === 'ask-code'
       ? 'After the last step, pdd pushes the branch and opens PR 1 (prompt, Story and tests). Then show it and ask whether to make the code PR now. Never push, open a PR or merge yourself.'
       : `After the last step, pdd pushes the branch and opens ${prLabel(run, area)}. Never push, open a PR or merge yourself.`,
-    `Read the PDD skills (pdd-prompting too) from ${join(packageRoot ?? PACKAGE_ROOT, 'skills')}: an installed copy with the same name may be older.`,
+    `Read the shared prompting skill at ${JSON.stringify(resolve(packageRoot ?? PACKAGE_ROOT, 'skills', 'pdd-prompting', 'SKILL.md'))}; an installed copy with the same name may be older.`,
   ].join('\n') + '\n';
 }
 
@@ -387,6 +404,7 @@ const revising = run => { const last = run.changes?.at(-1); return Boolean(last 
 function describe(run, chat = null, { drafts = [], nothing = false } = {}) {
   const area = run.areas[run.area], pr1 = askArea(run) && prOf(run, askArea(run).name);
   if (run.state === 'cancelled') return run.cancelled?.state === 'replaced' ? 'replaced' : 'cancelled';
+  if (run.state === 'stuck') return `stuck: ${run.parkReason ?? 'automatic work stopped'}`;
   if (activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting'].includes(chat)) return chatStatusWords(run, chat);
   if (openQuestion(run) && run.state !== 'completed') return `waiting for you: ${run.question.text.split('\n')[0]}`;
   if (chat === 'blocked' && run.state === 'running') return `waiting for you: the chat asks a question in its window (pdd workflow open ${run.number})`;
@@ -416,8 +434,69 @@ function installedCandidateIdentity(packageRoot, skillDir) {
   } catch {return 'unknown';}
 }
 
-async function startRunCommand({ name, issue, agent = 'codex', base, adoptCorpus, draft = false, origin, decisionId, outcome, cwd, packageRoot = PACKAGE_ROOT }, ports) {
+const exactKeys = (value, keys) => value !== null && typeof value === 'object' && !Array.isArray(value)
+  && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
+const nonempty = value => typeof value === 'string' && value.trim().length > 0;
+function validSavedAutomaticOrigin(run) {
+  const origin = run.automaticOrigin;
+  return exactKeys(origin, ['repository', 'coordinatorId', 'machine', 'claim'])
+    && ['repository', 'coordinatorId', 'machine'].every(key => nonempty(origin[key]))
+    && exactKeys(origin.claim, ['commentId', 'labelEventId'])
+    && ['commentId', 'labelEventId'].every(key => nonempty(origin.claim[key]))
+    && nonempty(run.repo) && origin.repository.toLowerCase() === run.repo.toLowerCase()
+    && nonempty(run.issue?.url);
+}
+function explicitlyStopped(run, ports) {
+  if (!Object.hasOwn(run, 'automaticOrigin')) return false;
+  try {
+    const root = realpathSync(run.sourceRoot);
+    const id = createHash('sha256').update(root).digest('hex').slice(0, 20);
+    const folder = ports.autopilotStateRoot ?? join(ports.env.HOME || homedir(), '.local', 'state', 'pdd', 'autopilot');
+    return JSON.parse(readFileSync(join(folder, `${id}.json`), 'utf8'))?.enabled === false;
+  } catch { return false; }
+}
+async function continuationOwnership(run, cwd, ports) {
+  if (!Object.hasOwn(run, 'automaticOrigin')) return null;
+  const origin = run.automaticOrigin;
+  const reason = 'Automatic continuation refused: current claim ownership is unavailable or changed. Restore the admitted claim and retry.';
+  if (!validSavedAutomaticOrigin(run)) return reason;
+  try {
+    const { json } = await createDependencyReadPorts({ cwd: run.sourceRoot }, ports).owners.read({ repository: run.repo, issues: [run.issue.url] });
+    const observation = JSON.parse(json);
+    if (!observation || typeof observation !== 'object' || !Array.isArray(observation.claims)
+      || observation.localOwner !== origin.coordinatorId
+      || observation.claims.some(claim => !claim || typeof claim !== 'object' || Array.isArray(claim)
+        || !nonempty(claim.issue) || typeof claim.active !== 'boolean')) return reason;
+    const claims = observation.claims.filter(claim => claim?.issue === run.issue.url && claim?.active === true);
+    if (claims.length !== 1) return reason;
+    const claim = claims[0];
+    if (!['owner', 'coordinatorId', 'machine', 'commentId', 'labelEventId'].every(key => nonempty(claim[key]))
+      || claim.owner !== origin.coordinatorId || claim.coordinatorId !== origin.coordinatorId
+      || claim.machine !== origin.machine || claim.commentId !== origin.claim.commentId
+      || claim.labelEventId !== origin.claim.labelEventId) return reason;
+    return null;
+  } catch { return reason; }
+}
+
+function validAutomaticContext(value) {
+  const envelope = value?.version === 'pdd.autopilot-coordinator.v1';
+  const keys = envelope ? ['version', 'repository', 'coordinatorId', 'machine', 'activation'] : ['repository', 'coordinatorId', 'machine', 'activation', 'claim'];
+  if (value?.runs !== undefined) keys.push('runs');
+  return exactKeys(value, keys) && ['repository', 'coordinatorId', 'machine', 'activation'].every(k => nonempty(value[k]))
+    && (value.runs === undefined || Number.isSafeInteger(value.runs) && value.runs > 0)
+    && (envelope || exactKeys(value.claim, ['commentId', 'labelEventId']) && nonempty(value.claim.commentId) && nonempty(value.claim.labelEventId));
+}
+
+async function startRunUnlocked({ name, issue, agent = 'codex', base, adoptCorpus, coordinator, draft = false, origin, decisionId, outcome, cwd, packageRoot = PACKAGE_ROOT }, ports) {
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
+  const automatic = coordinator !== undefined || Object.hasOwn(p.env, 'PDD_AUTOPILOT_CONTEXT');
+  if (Object.hasOwn(p.env, 'PDD_AUTOPILOT_CONTEXT')) {
+    let environmentContext;
+    try { environmentContext = JSON.parse(p.env.PDD_AUTOPILOT_CONTEXT); } catch { return fail('Invalid automatic start context.'); }
+    if (!validAutomaticContext(environmentContext)) return fail('Invalid automatic start context.');
+    if (coordinator === undefined) coordinator = environmentContext;
+  }
+  if (automatic && !validAutomaticContext(coordinator)) return fail('Invalid automatic start context.');
   if (typeof draft !== 'boolean') return fail('Draft publication must be a Boolean.');
   let workflow;
   try { workflow = readWorkflowAreas({ packageRoot, name, cwd, home: p.env.HOME || homedir() }); } catch (error) { return fail(error.message); }
@@ -463,9 +542,29 @@ async function startRunCommand({ name, issue, agent = 'codex', base, adoptCorpus
   try { cliVersion=JSON.parse(readFileSync(join(packageRoot,'package.json'),'utf8')).version || 'unknown'; } catch {}
   try { skillVersion=/^  pdd-skills:\s*(\S+)/m.exec(readFileSync(join(workflow.dir,'SKILL.md'),'utf8'))?.[1] ?? 'unknown'; } catch {}
   const metricsOrigin={origin:actualOrigin, ...(actualOrigin === 'autopilot' ? {decisionId} : {}), requiredOutcome:['code','prompt-only'].includes(outcome) ? outcome : 'unknown',cliVersion,skillVersion,candidateVersion:installedCandidateIdentity(packageRoot,workflow.dir)};
+  let automaticOrigin;
+  if (automatic) {
+    try {
+      // Intake is a separate owner. A missing binding is never a manual start.
+      const check = p.checkDependencyStart ?? (await import('./issue-dependencies-intake.mjs')).checkDependencyStart;
+      if (typeof check !== 'function') throw Error('missing intake');
+      const readPorts = createDependencyReadPorts({ cwd: context.toplevel }, p);
+      const observation = JSON.parse((await readPorts.owners.read({ repository: binding.repository, issues: [binding.issue.url] })).json);
+      const claims = observation.claims.filter(c => c.issue === binding.issue.url && c.active === true);
+      if (claims.length !== 1 || observation.localOwner !== coordinator.coordinatorId || coordinator.repository.toLowerCase() !== binding.repository.toLowerCase()) return fail('Automatic start deferred: owner.');
+      const claim = claims[0];
+      if (claim.owner !== coordinator.coordinatorId || claim.coordinatorId !== coordinator.coordinatorId || claim.machine !== coordinator.machine || !nonempty(claim.commentId) || !nonempty(claim.labelEventId)) return fail('Automatic start deferred: owner.');
+      if (coordinator.version) { const { version, ...identity } = coordinator; coordinator = { ...identity, claim: { commentId: claim.commentId, labelEventId: claim.labelEventId } }; }
+      if (coordinator.claim.commentId !== claim.commentId || coordinator.claim.labelEventId !== claim.labelEventId) return fail('Automatic start deferred: owner.');
+      const decision = await check({ cwd: context.toplevel, repository: binding.repository, issue: binding.issue.url, coordinator }, readPorts);
+      if (!decision?.allowed) return fail(`Automatic start deferred: ${decision?.reason ?? 'unknown'}.`);
+      if (existing && !ended(existing)) return fail('Automatic start deferred: issue has an active run.');
+      automaticOrigin = { repository: binding.repository, coordinatorId: coordinator.coordinatorId, machine: coordinator.machine, claim: { ...coordinator.claim } };
+    } catch { return fail('Automatic start is unavailable: native admission binding is incomplete.'); }
+  }
   if (existing?.draft !== undefined && typeof existing.draft !== 'boolean') return fail('The saved draft publication policy must be a Boolean.');
   if (existing && !ended(existing) && draft && existing.draft !== true) return fail(`Issue #${number} already has a nondraft run. Use pdd workflow approve ${number} --draft at its ready unpublished gate; starting again cannot change that policy.`);
-  if (existing?.state === 'completed') return fail(`Issue #${number} already has a run (${existing.workflow}, ${describe(existing)}). Open it: pdd workflow open ${number}. Status: pdd workflow status ${number}.`);
+  if (existing?.state === 'completed' && !automatic) return fail(`Issue #${number} already has a run (${existing.workflow}, ${describe(existing)}). Open it: pdd workflow open ${number}. Status: pdd workflow status ${number}.`);
   const warnings = [...(workflow.warnings ?? [])], baseBranch = explicitBase ? base : binding.defaultBranch;
   // A requested origin branch must be usable before releasing a cancelled run's claim.
   if (explicitBase) {
@@ -505,8 +604,8 @@ async function startRunCommand({ name, issue, agent = 'codex', base, adoptCorpus
         + (minutes === null || minutes < 60 ? ' It may still be working; close its chat if it is.' : ''));
     }
     const released = await releaseIssueClaim({ cwd: context.toplevel, runId: existing.runId, issueNumber: number }, p.commandPorts);
-    if (released.state !== 'released') return fail(`Issue #${number} has a ${replacing ? 'replaced' : 'cancelled'} run, but pdd could not free the issue: ${released.message}`);
-    if (!replacing) warnings.push(`Issue #${number} had a cancelled run. Its worktree stays at ${existing.root} (branch ${existing.branch}). This run gets a new worktree and branch.`);
+    if (released.state !== 'released') return fail(`Issue #${number} has a ${replacing ? 'replaced' : existing.state} run, but pdd could not free the issue: ${released.message}`);
+    if (!replacing) warnings.push(`Issue #${number} had a ${existing.state} run. Its worktree stays at ${existing.root} (branch ${existing.branch}). This run gets a new worktree and branch.`);
   }
   if (!explicitBase && adoptCorpus === undefined) {
     p.say(`Fetching origin/${baseBranch}…`);
@@ -530,7 +629,7 @@ async function startRunCommand({ name, issue, agent = 'codex', base, adoptCorpus
       }
     } finally {rmSync(frozenFolder,{recursive:true,force:true});}
   }
-  // Keep the cancelled run's record next to the new one; only a plain issue number names the active run.
+  // Keep the ended run's record next to the new one; only a plain issue number names the active run.
   if (existing) renameSync(runDir, `${runDir}-cancelled-${existing.runId.slice(0, 8)}`);
   const productMarkers = [...new Set(String(binding.issue.body ?? '').match(/<!-- pdd-product: run=[^\r\n]+? -->/g) ?? [])];
   if (productMarkers.length > 1) warnings.push('Warning: The issue has multiple planned-run markers; its product association is unverified.');
@@ -538,7 +637,7 @@ async function startRunCommand({ name, issue, agent = 'codex', base, adoptCorpus
     ...(productMarkers.length === 1 ? { productMarker: productMarkers[0] } : {}),
     issue: { number, title: binding.issue.title, url: binding.issue.url }, number, root: a.worktreePath, branch: a.branch,
     baseBranch, baseSha: a.baseSha, sourceRoot: a.sourceRoot, commonDir: a.commonDir, runDir, agent,
-    configDir, draft, metricsOrigin, metricsObservations:[{type:'coverage',at:new Date(p.now()).toISOString(),data:{complete:false}}],
+    configDir, draft, metricsOrigin, metricsObservations:[{type:'coverage',at:new Date(p.now()).toISOString(),data:{complete:false}}], ...(automaticOrigin ? { automaticOrigin } : {}),
     startedAt: p.now(), state: 'running', areas: workflow.areas, area: 0, done: {}, gate: null, chats: [], decisions: [], changes: [],
     approvalRecord: null, pr: [], prState: null, cancelled: null, warnings, journalSeq: 0,
     previous: existing ? [...(existing.previous ?? []), { runId: existing.runId, root: existing.root, branch: existing.branch, runDir: `${runDir}-cancelled-${existing.runId.slice(0, 8)}` }] : [] };
@@ -1379,6 +1478,9 @@ async function askCodeLines(run, area, p) {
 }
 
 async function finishPr(run, area, step, p, lines) {
+  // A coordinator that lost or let expire its claim does not push to the issue.
+  const ownership = await continuationOwnership(run, run.root, p);
+  if (ownership) return fail(ownership);
   const label = prLabel(run, area), existing = prOf(run, area.name);
   const selectedArea=run.area,selectedGate=run.gate;
   lines.push(`pdd recorded ${step}. pdd opens ${label} now.`);
@@ -1578,10 +1680,9 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
     return doneWithRequests(await finishPr(run,area,step,p,lines),run,p);
   }
   lines.push(...await showGate(run, p));
+  const automatic = automaticHandoff(run, p, packageRoot);
   lines.push(`pdd recorded ${step}. The ${area.name} area is done.`,
-    'Gate: show the person the result, ask them to approve it or ask for changes, and stop. Do not approve for them.',
-    approvalGuide(run, p.pdd),
-    'If they ask for changes, revise in this chat, run done again for the step you changed, and ask again.');
+    ...(automatic ? [automatic, 'Gate: show the result and follow the scoped automatic overlay and owner handoff; preserve required human decisions.'] : ['Gate: show the person the result, ask them to approve it or ask for changes, and stop. Do not approve for them.', approvalGuide(run, p.pdd), 'If they ask for changes, revise in this chat, run done again for the step you changed, and ask again.']));
   return doneWithRequests(done(lines.join('\n')), run, p);
 }
 
@@ -1741,9 +1842,25 @@ async function draftDescription(run, pr1, drafts, p) {
 // A terminal in the run's own chat pane (Herdr session pdd) belongs to the chat; a person's other Herdr tab does not.
 const chatPane = (run, env) => env.HERDR_PANE_ID && /[\\/]sessions[\\/]([^\\/]+)[\\/][^\\/]+$/.exec(String(env.HERDR_SOCKET_PATH ?? ''))?.[1] === PDD_HERDR_SESSION
   ? (run.chats ?? []).find(chat => chat.paneId === env.HERDR_PANE_ID) ?? null : null;
+
+function armCurrentAutomaticChat(run, p) {
+  if (!run.automaticOrigin) return;
+  let coordinatorPaneId;
+  try {
+    const id = createHash('sha256').update(realpathSync(run.sourceRoot)).digest('hex').slice(0, 20);
+    const folder = p.autopilotStateRoot ?? join(p.env.HOME || homedir(), '.local', 'state', 'pdd', 'autopilot');
+    const state = JSON.parse(readFileSync(join(folder, `${id}.json`), 'utf8'));
+    if (state.enabled) coordinatorPaneId = state.paneId;
+  } catch {}
+  if (!coordinatorPaneId && /[\\/]sessions[\\/]pdd-autopilot[\\/]/.test(String(p.env.HERDR_SOCKET_PATH ?? ''))) coordinatorPaneId = p.env.HERDR_PANE_ID;
+  if (!armSavedWorkerCompletion(run, coordinatorPaneId, p)) p.say(`Automatic completion observer unavailable. After positive completion evidence, run pdd workflow yield ${run.number}.`);
+  else p.say(`If automatic completion observation becomes unavailable, inspect the worker and run pdd workflow yield ${run.number} after positive completion evidence.`);
+}
+
 async function startNextChat(run, p, packageRoot) {
   const area = run.areas[run.area], original = structuredClone(run);
   let prior = lastChat(run, area.name);
+  const reusedPane = Boolean(prior?.paneId);
   p.say(`Starting the ${area.name} chat in Herdr…`);
   // The starting identity is saved before the native launch. A failed save or an ended run sends nothing.
   const checkpoint = async (chat, layout) => {
@@ -1761,7 +1878,9 @@ async function startNextChat(run, p, packageRoot) {
     const chat = await startChat({ run, area: area.name, message: await areaMessage(run, run.area, p, packageRoot) }, { ...p, checkpoint });
     run.chats.push(chat);
     // Cancel closes the saved starting chat; a late launch reply cannot report a started chat in an ended run.
-    if (!saveChatObservations(original, prior, chat, p)) endedMeanwhile();
+    const saved = saveChatObservations(original, prior, chat, p);
+    if (!saved) endedMeanwhile();
+    if (saved && !chat.startUnconfirmed && !reusedPane) armCurrentAutomaticChat(run, p);
     return run.chats.at(-1);
   } catch (error) {
     if (['workflow_progress_refused', 'workflow_run_save_failed'].includes(error?.code)) throw error;
@@ -1871,6 +1990,9 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
   const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
   const run = found.run, area = run.areas[run.area], label = `${run.repo}#${run.number} "${oneLine(run.issue.title)}"`;
+  if (explicitlyStopped(run, p)) return fail('Automatic continuation refused: Autopilot is stopped. Start Autopilot and retry.');
+  const ownershipFailure = await continuationOwnership(run, cwd, p);
+  if (ownershipFailure) return fail(ownershipFailure);
   if (run.draft !== undefined && typeof run.draft !== 'boolean') return fail('The saved draft publication policy must be a Boolean.');
   const strengthening = draft && run.draft !== true;
   const draftStage = run.areas.slice(run.area).find(item => item.gate === 'pr');
@@ -1937,6 +2059,22 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
       : askCode ? `Make the code PR now and approve the code gate and all selected draft prompts for ${label}? PR 1: ${prOf(run, area.name)?.url} (y/N) ` : `Approve the ${area.name} area and all selected draft prompts for ${label}? (y/N) `)) return fail([...carried, 'Not approved. The run is unchanged.'].join('\n'));
     record = { via: 'terminal' };
   }
+  let releaseAdmission;
+  const admitApproval = async () => {
+    if (!Object.hasOwn(run, 'automaticOrigin')) return null;
+    try {
+      const context = await gitContext(run.sourceRoot, p);
+      if (!context) return 'Automatic continuation refused: admission lock is unavailable.';
+      const dir = join(context.commonDir, 'pdd');
+      mkdirSync(dir, { recursive: true });
+      releaseAdmission = acquireRunLock(dir, 'autopilot-admission.lock');
+      if (explicitlyStopped(run, p)) return 'Automatic continuation refused: Autopilot is stopped. Start Autopilot and retry.';
+      return null;
+    } catch { return 'Automatic continuation refused: admission lock is unavailable.'; }
+  };
+  try {
+  const admissionFailure = await admitApproval();
+  if (admissionFailure) return fail(admissionFailure);
   const invocationAt=p.now();
   p.inspectProgress();
   let approvalSnapshot = run.gate?.promptSnapshot;
@@ -1991,11 +2129,16 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
 ${approvalGuide(run)}`, p, true);
       return done([...head, `PR 1: ${url}`, approveFirst(run, drafts), ...noticeWarnings(notice)].join('\n'));
     }
+    releaseAdmission?.(); releaseAdmission = null;
     if (!await confirm(p, `Make the code PR now and approve the code gate and all selected draft prompts for ${label}? PR 1: ${url} (y/N) `)) {
       const notice = await deliverRequest(run, `pdd opened PR 1: ${url}. The person approved it in their terminal and stops here for now. Tell them exactly: "PR 1 is open: ${url}. ${codeLater(run)}" Then stop.
 ${approvalGuide(run)}`, p, true);
       return done([...head, `PR 1: ${url}`, `Stopped at PR 1. ${codeLater(run)}`, ...noticeWarnings(notice)].join('\n'));
     }
+  }
+  if (beforePr && askCode && !releaseAdmission) {
+    const admissionFailure = await admitApproval();
+    if (admissionFailure) return fail(admissionFailure);
   }
   if (beforePr && askCode) saved = null;
   if (!saved) {
@@ -2031,7 +2174,31 @@ ${approvalGuide(run)}`, p, true);
   return done([...carried, ...finalNotices, `Approved the ${area.name} area of ${label}.${said}${based}`,
     `Started area ${run.area + 1} of ${run.areas.length}: ${next.name} (${next.steps.join(', ')}) in a new chat: Herdr session pdd, tab "${chat.label}".`,
     `Watch it: pdd workflow open ${run.number}`, ...(agent ? ['This chat\'s work is done. Stop here.'] : [])].join('\n'));
+  } finally { releaseAdmission?.(); }
 }
+
+// Record an automatic stop without releasing or waking its worker.
+async function parkAutomaticRunCommand({ reason, cwd }, ports) {
+  const p = deps(ports), run = await runForWorktree(cwd, p);
+  if (!run) return fail('Park requires the existing run worktree.');
+  const text = String(reason ?? '').trim();
+  if (!text) return fail('Give the actual stop reason with --reason.');
+  if (!run.automaticOrigin) return fail('Park requires an automatic run.');
+  if (ended(run)) return fail('An ended run cannot be parked.');
+  if (explicitlyStopped(run, p)) return fail('Autopilot is stopped.');
+  const ownership = await continuationOwnership(run, cwd, p);
+  if (ownership) return fail(ownership);
+  const selectedArea=run.area, selectedGate=structuredClone(run.gate ?? null), selectedState=run.state, selectedOrigin=structuredClone(run.automaticOrigin);
+  protectProgress(run,p,{approval:true});
+  if (run.state === 'stuck' && run.parkReason === text) return done('Automatic run is already parked.');
+  commitRun(run,p,latest=>{
+    if (latest.area !== selectedArea || !sameGate(latest.gate,selectedGate) || latest.state !== selectedState || !equalFact(latest.automaticOrigin,selectedOrigin) || explicitlyStopped(latest,p))
+      throw Object.assign(Error('The run or Autopilot changed; look again.'),{code:'workflow_progress_refused'});
+    latest.state='stuck'; latest.parkReason=text;
+  });
+  return done('Automatic run parked: '+text);
+}
+export const parkAutomaticRun = saveGuard(parkAutomaticRunCommand);
 
 // The agent asks the person in the middle of a step: status shows the question until the next done or the answer.
 async function askPersonCommand({ text, cwd }, ports) {
@@ -2179,8 +2346,8 @@ async function deliveryJournal(run, p, action, { recover = true } = {}) {
   } finally { release(); }
 }
 
-export async function changeRun({ ref, text, cwd }, ports) {
-  const p = deps(ports), found = await resolveRun(ref, { cwd }, p);
+export async function changeRun({ ref, text, cwd, packageRoot = PACKAGE_ROOT }, ports) {
+  const p = deps(ports); p.packageRoot = packageRoot; const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
   return deliverRequest(found.run, text, p);
 }
@@ -2236,7 +2403,7 @@ Nothing was sent to the chat.` };
       if (entry.inFlight) return progress(entry);
       run = latest(); if (!targetCurrent(run)) return failure({ code: 'chat_target_changed' });
       const message = entry.kind === 'notice' ? entry.text : entry.kind === 'answer' ? `${ANSWER_PREFIX}: ${entry.text} Go on with the step.`
-        : `${CHANGE_PREFIX}: ${entry.text} Revise in this chat, run done again for the step you changed, then show the result and ask again.\nRequest ${entry.id}. After addressing it, record agent uptake with a short note:\n${uptakeCommand(entry.id, p)}`;
+        : validSavedAutomaticOrigin(run) ? `Submitted request: ${entry.text} Address it in this chat and record uptake. This request is not an approval. Read the owner handoff and applicable automatic overlay before deciding what follows. Current package CLI: ${pddCommand(p.packageRoot ?? PACKAGE_ROOT)}.\nRequest ${entry.id}. After addressing it, record agent uptake with a short note:\n${uptakeCommand(entry.id, { ...p, pdd: pddCommand(p.packageRoot ?? PACKAGE_ROOT) })}` : `${CHANGE_PREFIX}: ${entry.text} Revise in this chat, run done again for the step you changed, then show the result and ask again.\nRequest ${entry.id}. After addressing it, record agent uptake with a short note:\n${uptakeCommand(entry.id, p)}`;
       let custodyFailed = false, claimed = false;
       const transport = herdrCommand(p), guardedHerdr = async args => {
         try { return await transport(args); }
@@ -2444,11 +2611,12 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false } = 
   const replacementPending = run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase);
   const problem = replacementPending || activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting'].includes(chat);
   const question = openQuestion(run), writing = !problem && Boolean(run.gate) && !question && chat === 'working';
-  const group = run.state === 'cancelled' ? 'cancelled' : run.state === 'completed' ? 'done' : problem ? 'waiting' : writing ? 'working'
-    : run.gate || question || running && ['blocked', 'stopped'].includes(chat) ? 'waiting' : prOf(run, area?.name) ? 'pr-open' : 'working';
+  const group = run.state === 'cancelled' ? 'cancelled' : run.state === 'completed' ? 'done' : run.state === 'stuck' ? 'waiting' : problem ? 'waiting' : writing ? 'working'
+    : run.state === 'stuck' || run.gate || question || running && ['blocked', 'stopped'].includes(chat) ? 'waiting' : prOf(run, area?.name) ? 'pr-open' : 'working';
   const step = area?.steps.find(item => !run.done[item]);
   const words = group === 'cancelled' ? (run.cancelled?.state === 'replaced' ? 'replaced' : 'cancelled')
     : group === 'done' ? (run.gate?.kind === 'ask-code' ? 'done at PR 1' : 'done')
+    : run.state === 'stuck' ? `stuck: ${run.parkReason ?? 'automatic work stopped'}`
     : replacementPending ? `chat replacement pending at ${run.chatReplacement.phase}; run pdd workflow open ${run.number} --new`
     : problem ? chatStatusWords(run, chat)
     : question ? `waiting for you: ${question.text.split('\n')[0]}`
@@ -2605,6 +2773,10 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
   if (selected < 0) return fail(`Unknown area ${area}. Valid areas: ${run.areas.map(item => item.name).join(', ')}.`);
   if (selected > run.area || area !== undefined && !chat) return fail(`The area ${area} has no recorded chat at or before the current area.`);
   const historical = selected < run.area;
+  if (!historical && run.area > 0 && (newSession || !chat)) {
+    const ownershipFailure = await continuationOwnership(run, cwd, p);
+    if (ownershipFailure) return fail(ownershipFailure);
+  }
   const areaOriginal = area !== undefined && !newSession ? structuredClone(chat) : null;
   let defaultOriginal = chat ? structuredClone(chat) : undefined;
   if (newSession && historical) return fail(`Select the current area ${run.areas[run.area].name} to start a new session; earlier areas cannot be replaced.`);
@@ -2671,14 +2843,17 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
       chat = await restartChat({ run: replacementRun, chat, message, pending: recovering ? pending : undefined }, { ...p, checkpoint });
       if (run.chatReplacement?.phase === 'ended') return done(`Ended the historical ${chat.area} replacement attempt without launching or resuming it. The current chat and progress are kept.`);
       if (run.chatReplacement?.phase === 'rolledBack') return done(`Restored the usable ${chat.area} chat. The same replacement attempt was rolled back.`);
+      if (run.chatReplacement?.phase === 'launched' && chat.area === run.areas[run.area]?.name && !chat.startUnconfirmed) armCurrentAutomaticChat(run, p);
       if (run.chatReplacement?.recovery?.resumeRequested) return done(`Resumed this attempt's ${chat.area} session in Herdr session pdd; no second first message was sent. The run, completed work, gates and approvals are kept.`);
       return done(`Started one fresh ${chat.area} chat in Herdr session pdd. The run, completed work, gates and approvals are kept.`);
     }
     if (!chat) { chat = await startNextChat(run, p, packageRoot); defaultOriginal = structuredClone(chat); started = true; }
     p.say(`Opening the ${chat.area} chat in Herdr…`);
+    const priorResumeAnchor = launchAnchor(chat);
     const opened = await openChat({ run, chat }, { ...p, beforeAttach: async () => {
-      if (areaOriginal) saveAreaObservations(run, areaOriginal, chat, p);
-      else saveChatObservations(run, defaultOriginal, chat, p);
+      const saved = areaOriginal ? saveAreaObservations(run, areaOriginal, chat, p)
+        : saveChatObservations(run, defaultOriginal, chat, p);
+      if (saved && !historical && Number.isFinite(chat.resumedAt) && launchAnchor(chat) !== priorResumeAnchor) armCurrentAutomaticChat(run, p);
       handedOff = true;
       p.releaseRunLock?.();
     } });
@@ -2713,6 +2888,91 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
 }
 
 const openRunCommand = (args, ports) => lockedMutation(args, ports, openRunLocked);
+
+async function startRunCommand(args, ports = {}) {
+  if (Object.hasOwn(args, 'automaticOrigin')) return fail('Invalid automatic start context.');
+  const p = deps(ports);
+  const nativeSession = /[\\/]sessions[\\/]([^\\/]+)[\\/][^\\/]+$/.exec(String(p.env.HERDR_SOCKET_PATH ?? ''))?.[1];
+  const recoverCoordinator = args.coordinator === undefined && !Object.hasOwn(p.env, 'PDD_AUTOPILOT_CONTEXT') && nativeSession === 'pdd-autopilot';
+  if (args.coordinator === undefined && !Object.hasOwn(p.env, 'PDD_AUTOPILOT_CONTEXT') && !recoverCoordinator) return startRunUnlocked(args, ports);
+  if (args.coordinator !== undefined && !validAutomaticContext(args.coordinator)) return fail('Invalid automatic start context.');
+  if (Object.hasOwn(p.env, 'PDD_AUTOPILOT_CONTEXT')) {
+    try { if (!validAutomaticContext(JSON.parse(p.env.PDD_AUTOPILOT_CONTEXT))) return fail('Invalid automatic start context.'); }
+    catch { return fail('Invalid automatic start context.'); }
+  }
+  let context, release;
+  try {
+    context = await gitContext(args.cwd, p);
+    if (!context) return fail('Run this inside a Git checkout of the repository that has the issue.');
+    let recoveryFile, root;
+    if (recoverCoordinator) {
+      root = realpathSync(context.toplevel);
+      const id = createHash('sha256').update(root).digest('hex').slice(0, 20);
+      const folder = ports.autopilotStateRoot ?? join(p.env.HOME || homedir(), '.local', 'state', 'pdd', 'autopilot');
+      recoveryFile = join(folder, `${id}.json`);
+      let selected;
+      try { selected = JSON.parse(readFileSync(recoveryFile, 'utf8')); } catch { selected = null; }
+      if (!selected || !p.env.HERDR_PANE_ID || selected.paneId !== p.env.HERDR_PANE_ID)
+        return await startRunUnlocked(args, ports);
+    }
+    const dir = join(context.commonDir, 'pdd');
+    mkdirSync(dir, { recursive: true });
+    release = acquireRunLock(dir, 'autopilot-admission.lock');
+    if (recoverCoordinator) {
+      let state;
+      try { state = JSON.parse(readFileSync(recoveryFile, 'utf8')); } catch { return fail('Automatic start unavailable: current coordinator state is missing.'); }
+      const coordinator = {version:'pdd.autopilot-coordinator.v1',repository:state.repo,coordinatorId:state.coordinatorId,machine:state.machine,activation:state.activatedAt,...(state.runs === undefined ? {} : {runs:state.runs})};
+      if (state.enabled !== true || state.paneId !== p.env.HERDR_PANE_ID || state.ownerLaunch?.paneId !== state.paneId || !equalFact(state.ownerLaunch?.coordinator, coordinator) || !validAutomaticContext(coordinator) || realpathSync(state.cwd) !== root)
+        return fail('Automatic start unavailable: current coordinator ownership does not match.');
+      args = {...args,coordinator};
+    }
+    return await startRunUnlocked(args, ports);
+  } catch { return fail('Automatic start is unavailable: admission lock could not be acquired.'); }
+  finally { release?.(); }
+}
+
+// A completed registered turn can yield capacity without claiming the chat process exited.
+async function yieldAutomaticCapacityCommand({ ref, cwd }, ports) {
+  const p = deps(ports);
+  const found = await resolveRun(ref, { cwd }, p);
+  if (found.error) return fail(found.error);
+  const run = found.run;
+  if (ports.expectedCompletion) {
+    const expected = ports.expectedCompletion, chat = currentChat(run);
+    if (run.runId !== expected.runId || run.areas?.[run.area]?.name !== expected.area || chat?.paneId !== expected.paneId || launchAnchor(chat) !== expected.startAnchor)
+      return fail('Capacity handoff refused: completion identity changed.');
+  }
+  if (!run.automaticOrigin) return fail('Capacity handoff requires a saved automatic run.');
+  const reason = run.state === 'completed'
+    ? (validSavedAutomaticOrigin(run) ? null : 'Capacity handoff requires a valid saved automatic origin and repository association.')
+    : await continuationOwnership(run, cwd, p);
+  if (reason) return fail(reason);
+  if (!['waiting', 'paused', 'stuck', 'question', 'completed', 'cancelled'].includes(run.state))
+    return fail('Capacity handoff requires a waiting or ended run.');
+  const chat = currentChat(run);
+  if (!chat || chat.startUnconfirmed || run.chatFailure || run.chatReplacement && !['launched', 'rolledBack', 'ended'].includes(run.chatReplacement.phase))
+    return fail('Capacity handoff cannot confirm the current chat has stopped.');
+  const live = await chatSession(chat, p), now = p.now();
+  const own = sessionEvidenceDue(chat, live, now) && !observedSession(chat, chat.agent ?? run.agent)
+    ? await ownSession({ run, chat, since: launchAnchor(chat), ports: p }) : null;
+  const observed = observeLifecycle(chat, live, now, chat.agent ?? run.agent, own?.kind === 'match' ? own.id : null);
+  const completedTurn = live.alive && live.status === 'done' && observed.exact;
+  const endedChat = !live.alive && ['agent_not_found', 'server_not_running'].includes(live.code) && ['ended', 'failed'].includes(observed.state);
+  if (!completedTurn && !endedChat)
+    return fail('Capacity handoff cannot confirm the current chat has stopped.');
+  if (['completed', 'cancelled'].includes(run.state)) {
+    const released = await releaseIssueClaim({ cwd: run.sourceRoot, runId: run.runId, issueNumber: run.number }, p.commandPorts);
+    if (released.state !== 'released') return fail(`Capacity handoff could not release the issue allocation: ${released.message}`);
+  }
+  const request = p.requestAutopilotCompletion ?? (await import('./autopilot-launcher.mjs')).requestAutopilotCompletion;
+  p.releaseRunLock?.();
+  const result = await request({ cwd: run.sourceRoot, env: p.env }, ports);
+  if (result.state === 'reconciled') return done('Capacity handoff reconciled with Autopilot.');
+  if (result.state === 'inactive') return done('Capacity handoff complete; Autopilot is inactive.');
+  if (result.state === 'busy') return fail('Capacity handoff could not reconcile: Autopilot is busy.');
+  return fail('Capacity handoff could not confirm Autopilot reconciliation.');
+}
+export const yieldAutomaticCapacity = saveGuard(yieldAutomaticCapacityCommand);
 
 export const startRun=saveGuard(startRunCommand);
 

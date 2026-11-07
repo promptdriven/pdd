@@ -1,11 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { chatCommand, herdrCommand, startChat } from '../src/workflow-chat.mjs';
+import { codexConfigs, tomlBasicString } from './helpers/codex-config-args.mjs';
+
+const packageRoot = fileURLToPath(new URL('..', import.meta.url));
 
 const temp = t => { const path = realpathSync(mkdtempSync(join(tmpdir(), "pdd-chat 'q' "))); t.after(() => rmSync(path, { recursive: true, force: true })); return path; };
 // A fake native CLI that prints its argv and the marker the chat gets.
@@ -24,11 +28,47 @@ test('the shell line gives the native CLI the whole first message as one argumen
     assert.equal(out.argv.at(-1), message.replace(/\n+$/, ''), agent);
     assert.equal(out.marker, '1');
     if (agent === 'claude') { assert.deepEqual(out.argv.slice(0, -1), ['--dangerously-skip-permissions', '--session-id', id]); assert.equal(out.config, join(root, "cfg 'c'")); }
-    else assert.deepEqual(out.argv.slice(0, -1), ['--no-daemon', '--dangerously-bypass-approvals-and-sandbox', '-c', `projects={${JSON.stringify(cwd)}={trust_level="trusted"}}`]);
+    else assert.deepEqual(out.argv.slice(0, -1), ['--no-daemon', '--dangerously-bypass-approvals-and-sandbox', '-c', `projects={${JSON.stringify(cwd)}={trust_level="trusted"}}`,
+      '-c', `shell_environment_policy.set.PDD_BIN="${join(packageRoot, 'bin/pdd.mjs')}"`, '-c', 'shell_environment_policy.set.PDD_AGENT_SESSION="1"']);
   }
   assert.equal(readdirSync(root).some(name => name.includes('broken')), false);
   assert.match(chatCommand({ agent: 'claude', cwd, resumeId: id }), new RegExp(`claude --dangerously-skip-permissions --resume '${id}'$`));
   assert.match(chatCommand({ agent: 'codex', cwd, resumeId: id }), new RegExp(`codex resume '${id}' --no-daemon --dangerously-bypass-approvals-and-sandbox -c `));
+});
+
+test('Codex chats: new and resumed launches keep PDD_BIN and PDD_AGENT_SESSION under any shell_environment_policy', async t => {
+  // Issue 3036: inherit = "core" or "none" drops the process values; `set` applies after `inherit`.
+  // A pdd installed under a path with shell and TOML syntax must reach Codex unchanged. (Node loads no module from a path with a backslash.)
+  const root = temp(t), pkg = join(root, `pdd 'single' "double" $HOME é`), bin = join(root, 'bin'), cwd = join(root, 'work tree');
+  cpSync(join(packageRoot, 'src'), join(pkg, 'src'), { recursive: true }); mkdirSync(join(pkg, 'bin')); mkdirSync(bin); mkdirSync(cwd);
+  writeFileSync(join(pkg, 'bin/pdd.mjs'), '');
+  const installed = await import(pathToFileURL(join(pkg, 'src/workflow-chat.mjs')).href);
+  const pddBin = join(pkg, 'bin/pdd.mjs');
+  writeFileSync(join(bin, 'codex'), `#!${process.execPath}\nprocess.stdout.write(JSON.stringify({argv:process.argv.slice(2),bin:process.env.PDD_BIN??null,session:process.env.PDD_AGENT_SESSION??null}));\n`, { mode: 0o755 });
+  const file = join(root, 'start.md'); writeFileSync(file, 'Use the pdd-bug skill.');
+  const id = '11111111-1111-4111-8111-111111111111';
+  for (const [form, line] of [['new', installed.chatCommand({ agent: 'codex', cwd, messageFile: file, configDir: root })], ['resume', installed.chatCommand({ agent: 'codex', cwd, resumeId: id, configDir: root })]]) {
+    const out = JSON.parse(execFileSync('/bin/sh', ['-c', line], { cwd: root, env: { PATH: `${bin}:/usr/bin:/bin` }, encoding: 'utf8' }));
+    const { set, config } = codexConfigs(out.argv);
+    assert.deepEqual(set, { PDD_BIN: pddBin, PDD_AGENT_SESSION: '1' }, `${form}: expected shell_environment_policy.set PDD_BIN and PDD_AGENT_SESSION, got -c values ${JSON.stringify(out.argv)}`);
+    assert.deepEqual({ bin: out.bin, session: out.session }, { bin: pddBin, session: '1' }, `${form}: the env prefix stays`);
+    assert.deepEqual(Object.keys(config), ['projects'], `${form}: no other override`);
+    assert.deepEqual(out.argv.slice(0, form === 'resume' ? 2 : 0), form === 'resume' ? ['resume', id] : [], form);
+    if (form === 'new') assert.equal(out.argv.at(-1), 'Use the pdd-bug skill.');
+  }
+  for (const agent of ['claude', 'gemini', 'agy']) for (const options of [{ messageFile: file, sessionId: id }, { resumeId: id }])
+    assert.doesNotMatch(installed.chatCommand({ agent, cwd, configDir: root, ...options }), /shell_environment_policy/, agent);
+});
+
+test('Codex chats: a worktree path with a control character stays one valid TOML project key', t => {
+  const root = temp(t), bin = join(root, 'bin'), cwd = join(root, 'work \u007f\t tree "x" \\ é');
+  mkdirSync(bin); writeFileSync(join(bin, 'codex'), nativeScript, { mode: 0o755 }); writeFileSync(join(root, 'start.md'), 'Use the pdd-bug skill.');
+  for (const options of [{ messageFile: join(root, 'start.md') }, { resumeId: '11111111-1111-4111-8111-111111111111' }]) {
+    const out = JSON.parse(execFileSync('/bin/sh', ['-c', chatCommand({ agent: 'codex', cwd, ...options })], { cwd: root, env: { PATH: `${bin}:/usr/bin:/bin` }, encoding: 'utf8' }));
+    const table = /^\{("(?:\\.|[^"\\])*")=\{trust_level="trusted"\}\}$/.exec(codexConfigs(out.argv).config.projects);
+    assert.ok(table, `one trusted project key: ${codexConfigs(out.argv).config.projects}`);
+    assert.equal(tomlBasicString(table[1]), cwd);
+  }
 });
 
 test('PIPE1: native launch preserves more than 64 KiB of guidance and zero/nonzero exit status', t => {

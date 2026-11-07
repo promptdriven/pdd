@@ -5,6 +5,12 @@ The public command catalog also includes `pdd autopilot off`, `pdd autopilot obs
 
 Own `src/command-catalog.mjs`; export only `PUBLIC_COMMAND_ROUTES`, `PUBLIC_COMMAND_IDS`, `PUBLIC_COMMAND_MANIFEST`, `NAMES` ([Names](#names)), `PUBLIC_HELP_TEXT` ([Help text](#help-text)) and `BUNDLED_WORKFLOW_NAMES` (feature, bug, small-change, product). Catalog the complete small alpha surface: root help, --version, completion bash|zsh, workflow list [--json] and setup (`pdd setup`, local `setup`, no operands or options; its help says that it installs the PDD skills for Codex and Claude if they are missing, adds the short PDD block to CLAUDE.md, else AGENTS.md, and that repeat setup keeps an existing Autopilot mode). Each route has stable id, exact prefix, local disposition, operand/option specs and plain help forms. Expose no excluded command, private schema/type, service flag or hosted execution operation. Help, parser and completion share this one authority.
 
+Catalog `dependencies prepare` (local `dependencies-prepare`, optional text `--issue`), `dependencies complete` (local `dependencies-complete`, text `--input`), and `workflow yield` (local `workflow-yield`, run reference). Show their forms `pdd dependencies prepare [--issue N]`, `pdd dependencies complete --input -`, and `pdd workflow yield N`.
+
+Catalog `graph` (local `issue-dependency-graph`, no operands, flags `--open` and text options `--issue`, `--repo`). Show forms `pdd graph`, `pdd graph --open`, `pdd graph --issue N` and `pdd graph --open --issue N --repo OWNER/REPO`.
+
+Catalog `workflow park` as local `workflow-park`, with required text `--reason`; show `pdd workflow park --reason TEXT` for recording an automatic stop in its existing worktree.
+
 ## Authoring
 
 Read the full [Prompting guide](../../docs/prompting-guide.md) before authoring prompts or Stories. Follow the [public alpha boundary](public-boundary.prompt.md) for native authoring/generation scope and shared local command policy. These authoring obligations do not add runtime facts: the complete catalog route declarations below own what the pure data module exposes.
@@ -30,12 +36,17 @@ Help forms and completion name only the `NAMES` words.
 
 ## Autopilot routes
 
-Catalog four local routes before the product routes: `autopilot.start` (`autopilot start`, local `autopilot-start`, no operands, optional text --runs); `autopilot.stop` and `autopilot.status` (matching prefixes/dispositions, no operands/options); `autopilot.add` (`autopilot add`, local `autopilot-add`, required repeated issue operands). Forms and descriptions:
+Catalog four local routes before the product routes: `autopilot.start` (`autopilot start`, local `autopilot-start`, no operands, optional text --runs and --resume-custody); `autopilot.stop` and `autopilot.status` (matching prefixes/dispositions, no operands/options); `autopilot.add` (`autopilot add`, local `autopilot-add`, required repeated issue operands). Forms and descriptions:
 
-- `pdd autopilot start [--runs N]`: Start this repo in an interactive Herdr agent; check now and every 30 minutes without AI on empty ticks. --runs optionally caps concurrent runs.
+- `pdd autopilot start [--runs N] [--resume-custody FILE]`: Start this repo in an interactive Herdr agent; check now and every 30 minutes without AI on empty ticks. --runs optionally caps concurrent runs; --resume-custody supplies the verified original-owner projection.
 - `pdd autopilot stop`: Stop this machine's timer; let the current agent step finish.
 - `pdd autopilot status`: Show this machine's repo, agent and next tick.
 - `pdd autopilot add N...`: Mark named old issues with pdd:autopilot so Autopilot may take them.
+
+Catalog two alert routes after `autopilot.add`. [Autopilot alerts](autopilot-alerts.prompt.md) owns their behavior and validation.
+
+- `autopilot.alert` (`autopilot alert`, local `autopilot-alert`, no operands; text `--issue`, value `--kind` with usage-limit, resource, access, decision, stuck and recovered, text `--input`, flag `--update`). Form `pdd autopilot alert --issue N --kind usage-limit|resource|access|decision|stuck|recovered --input - [--update]`. Help says it is for the coordinator; it records one alert for a real human need or incident and sends it to this machine's destination; it reads `{"cause","tried","need"}` JSON from stdin; usage-limit and resource are one alert per repository and machine for all blocked issues; access, decision and stuck are one alert per issue; a repeat sends nothing unless the last send failed; `--update` sends a material change; recovered sends one recovery and closes the matching alerts.
+- `autopilot.alerts` (`autopilot alerts`, local `autopilot-alerts`, one operand of choice set, test or clear, text options `--discord-channel` and `--token-command`). Four forms: `pdd autopilot alerts set` reads a Discord or Slack incoming webhook URL from stdin and saves it for this machine outside every repository, readable only by the user, and never prints it; `pdd autopilot alerts set --discord-channel ID [--token-command CMD]` uses a Discord bot instead, reading its token from stdin and saving it readable only by the user, or saving CMD and running it at each send so the token is never written to disk, and never prints the token or the command output; `pdd autopilot alerts test` sends one test message and confirms the posted message, and for a bot first shows the bot name and channel name; `pdd autopilot alerts clear` removes the destination. No form takes the URL as an argument. The operand keeps the prefix at two words, so `pdd autopilot alerts --help` works through the existing parser.
 
 The [launcher](autopilot-launcher.prompt.md) owns behavior and --runs numeric interpretation. No fixed run cap, headless flag or additional setup question. Include routes in help and completion. Preserve all unrelated forms and ordering.
 
@@ -205,8 +216,8 @@ The closing lines are exactly:
 
 ```text
 Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex, /pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting).
-workflow run opens the first area chat in Herdr session pdd and exits. The person approves each area; after the last step pdd pushes the branch and opens a real PR.
-pdd never merges.
+workflow run opens the first area chat in Herdr session pdd and exits. Manual workflows follow RUNBOOK §2 and its person gates; pdd opens a real PR.
+The CLI has no merge command. Auto agents use pdd-merge after repository review and tests, with required human approvals.
 ```
 
 (`run` is the [NAMES](#names) word. Codex calls a skill with `$name`, Claude Code with `/name`.)

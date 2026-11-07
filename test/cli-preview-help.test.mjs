@@ -24,7 +24,7 @@ test('launch help is local and keeps the PR warning for root and every runner ro
    const description=stdout.text.split('\n').find(line=>line.startsWith('  pdd workflow '+words[1]+' '));
    assert.ok(description,words.join(' '));assert.doesNotMatch(description,/PREVIEW:/);
   }
-  assert.match(stdout.text,/opens a real PR/);assert.match(stdout.text,/never merges/);
+  assert.match(stdout.text,/opens a real PR/);
  }
  for(const words of [['session','--help'],['workflow','bug','--help']])assert.equal(await runPdd(words,{stdout:capture(),stderr:capture(),workflowRunner:new Proxy({},{get:forbidden})}),2,words.join(' '));
 });

@@ -116,7 +116,7 @@ test('root help keeps its first line, every form line and its closing lines; com
   // Command help: first line, empty line, its own forms, empty line and the three closing lines; no learn or path lines.
   assert.equal(scoped[1], ''); assert.deepEqual(scoped.slice(2, 2 + testRows.length), testRows); assert.equal(scoped[2 + testRows.length], '');
   const closing = scoped.slice(3 + testRows.length);
-  assert.equal(closing.length, 3); assert.match(closing.at(-1), /never merges/);
+  assert.equal(closing.length, 3);
   assert.doesNotMatch(scoped.join('\n'), /help prompting|prompting-guide\.md|RUNBOOK\.md/);
   // Root help: the same first line, every catalog form in order, the learn line and two path lines, the same closing lines.
   const all = PUBLIC_COMMAND_MANIFEST.flatMap(row => formLine(row).split('\n'));

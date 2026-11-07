@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: fa977100489b0eed24ffc2645108d215bc764d283a4532260aaf0b5cf167dd7a).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: dcdd5de58ef228dc0cbfee27145dffb665af9065f6b9795865824b5b76a18b61).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -7,7 +7,7 @@ import { CommandInputError, parseArgv } from './argument-parser.mjs';
 import { renderCompletion } from './completion.mjs';
 import { NAMES, PUBLIC_COMMAND_MANIFEST, PUBLIC_COMMAND_ROUTES, PUBLIC_HELP_TEXT } from './command-catalog.mjs';
 import { listWorkflowAreas, formatWorkflowList } from './workflow-areas.mjs';
-import { setupProject as defaultSetupProject } from './project-setup.mjs';
+import { ignorePddFolder, setupProject as defaultSetupProject } from './project-setup.mjs';
 import { findSkills, setupSkills as defaultSetupSkills } from './skills-install.mjs';
 import { pathDiagnostic as defaultPathDiagnostic } from './path-diagnostic.mjs';
 import { checkWorkflowAgents } from './workflow-agents.mjs';
@@ -18,6 +18,24 @@ const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const line = (stream, text) => stream.write(`${text}\n`);
 // The real reason of an unexpected error, after the fixed safe line.
 const reason = error => { const text = causeText(error?.message ?? error); return text ? ` Reason: ${text}` : ''; };
+// Stdin as text: a string from tests, else the whole stream.
+const readText = async input => {
+  if (typeof input === 'string') return input;
+  if (!input?.[Symbol.asyncIterator]) return '';
+  const chunks = []; for await (const chunk of input) chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks).toString('utf8');
+};
+// Autopilot workers start from the default branch on GitHub, so a setting saved only in this checkout never reaches them.
+async function autopilotGithub(module, name, input, ports, fallback = '') {
+  try { return (await (module ?? await import('./autopilot-github.mjs'))[name](input, ports))?.message || ''; }
+  catch { return fallback; }
+}
+// The autopilot value of the root pdd.json, or undefined when there is none.
+function savedAutopilot(root) {
+  if (!root) return undefined;
+  try { const config = JSON.parse(readFileSync(join(root, 'pdd.json'), 'utf8')); return config !== null && typeof config === 'object' ? config.autopilot : undefined; }
+  catch { return undefined; }
+}
 const skillCount = folders => `${folders.length} PDD skill${folders.length === 1 ? '' : 's'}`;
 const skillNames = folders => folders.map(folder => basename(folder)).join(', ');
 // npx skills update changes only what npx skills add recorded (0.1.8 tester); add replaces any copy.
@@ -27,6 +45,8 @@ const RUNNER_ROUTES = {
   'workflow-run': plan => ['startRun', { name: plan.operands[0], issue: plan.operands[1], agent: plan.options['--agent'] ?? 'codex', ...(plan.options['--base'] !== undefined ? { base: plan.options['--base'] } : {}), ...(plan.options['--adopt-corpus'] !== undefined ? { adoptCorpus: plan.options['--adopt-corpus'] } : {}), ...(plan.options['--draft'] !== undefined ? { draft: plan.options['--draft'] } : {}), ...(plan.options['--origin'] !== undefined ? {origin:plan.options['--origin']} : {}), ...(plan.options['--decision-id'] !== undefined ? {decisionId:plan.options['--decision-id']} : {}), ...(plan.options['--outcome'] !== undefined ? {outcome:plan.options['--outcome']} : {}) }],
   'workflow-evidence-associate': plan => ['associateEvidenceWorkspace', { ref: plan.operands[0], workspace: plan.options['--workspace'], stage: plan.options['--stage'], tests: plan.options['--test'] }],
   'workflow-evidence': plan => ['recordEvidence', { ref: plan.operands[0], summaryFile: plan.options['--summary'] }],
+  'workflow-park': plan => ['parkAutomaticRun', { reason: plan.options['--reason'] }],
+  'workflow-yield': plan => ['yieldAutomaticCapacity', { ref: plan.operands[0] }],
   'workflow-done': plan => ['stepDone', { step: plan.operands[0], ...(plan.options['--summary'] !== undefined ? { summary: plan.options['--summary'] } : {}), ...(plan.options['--skipped'] !== undefined ? { skipped: plan.options['--skipped'] } : {}) }],
   'workflow-approve': plan => ['approveRun', { ref: plan.operands[0], ...(plan.options['--said'] !== undefined ? { said: plan.options['--said'] } : {}), ...(plan.options['--draft'] !== undefined ? { draft: plan.options['--draft'] } : {}) }],
   'workflow-ask': plan => ['askPerson', { text: plan.operands.join(' ') }],
@@ -46,8 +66,8 @@ export function renderHelp(prefix = [], packageRoot = PACKAGE_ROOT) {
 export async function runPdd(argv, { stdout = process.stdout, stderr = process.stderr,
   cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, workflowRunner, workflowAreas,
   stdin = process.stdin, confirm, mcpServer, runtimeSlots, contracts, product, productPorts, gitContext, workflowProve, provePorts,
-  autopilotLauncher, autopilotLauncherPorts = {}, workflowAgents = { checkWorkflowAgents }, workflowAgentPorts = {}, setupSkills = defaultSetupSkills,
-  setupProject = defaultSetupProject, setupAgentMcp, autopilot, autopilotPorts = {}, pathDiagnostic = defaultPathDiagnostic } = {}) {
+  issueGraph, issueGraphPorts = {}, dependencyIntake, dependencyIntakePorts = {}, autopilotLauncher, autopilotLauncherPorts = {}, workflowAgents = { checkWorkflowAgents }, workflowAgentPorts = {}, setupSkills = defaultSetupSkills,
+  setupProject = defaultSetupProject, setupAgentMcp, autopilot, autopilotPorts = {}, autopilotAlerts, autopilotAlertsPorts = {}, autopilotGithub: autopilotGithubModule, autopilotGithubPorts = {}, pathDiagnostic = defaultPathDiagnostic } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
@@ -61,13 +81,64 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     } catch { /* An optional PATH diagnostic never prevents the requested command. */ }
   }
   switch (plan.local) {
+    case 'issue-dependency-graph': {
+      try { const module = issueGraph ?? await import('./issue-dependency-graph.mjs');
+        const result = await module.runIssueGraph({cwd, repository:plan.options['--repo'], issue:plan.options['--issue'], open:!!plan.options['--open']}, issueGraphPorts);
+        (result.exitCode ? stderr : stdout).write(result.message); return result.exitCode;
+      } catch (error) { line(stderr, `Graph failed.${reason(error)}`); return 1; }
+    }
+    case 'dependencies-prepare': case 'dependencies-complete': {
+      if (plan.local === 'dependencies-complete' && plan.options['--input'] !== '-') { line(stderr, 'Use pdd dependencies complete --input -.'); return 2; }
+      if (plan.local === 'dependencies-prepare' && plan.options['--issue'] !== undefined && !/^[1-9]\d*$/.test(plan.options['--issue'])) { line(stderr, 'Use pdd dependencies prepare --issue N with a positive issue number.'); return 2; }
+      try { const module = dependencyIntake ?? await import('./issue-dependencies-intake.mjs');
+        let payload = stdin;
+        if (plan.local === 'dependencies-complete' && typeof stdin !== 'string' && stdin?.[Symbol.asyncIterator]) {
+          const chunks = []; for await (const chunk of stdin) chunks.push(Buffer.from(chunk));
+          payload = Buffer.concat(chunks).toString('utf8');
+        }
+        const result = await module.runDependencyIntake(plan.local === 'dependencies-prepare' ? {command:'prepare',cwd,issue:plan.options['--issue']} : {command:'complete',cwd,stdin:payload},dependencyIntakePorts);
+        if (plan.local === 'dependencies-complete' && result.exitCode === 0) {
+          let state = 'unknown';
+          try { const launcher = autopilotLauncher ?? await import('./autopilot-launcher.mjs');
+            const wake = await launcher.requestAutopilotCompletion({cwd, env}, autopilotLauncherPorts);
+            if (['reconciled', 'inactive', 'busy', 'unknown'].includes(wake?.state)) state = wake.state;
+          } catch { /* Completion intake remains accepted even if the wake fails. */ }
+          if (state === 'busy' || state === 'unknown') line(stderr, 'Autopilot reconciliation was not confirmed.');
+        }
+        (result.exitCode ? stderr : stdout).write(result.message); return result.exitCode;
+      } catch(error) { line(stderr, `Dependency intake failed.${reason(error)}`); return 1; }
+    }
     case 'autopilot-start': case 'autopilot-stop': case 'autopilot-status': case 'autopilot-add': {
       try {
         const module = autopilotLauncher ?? await import('./autopilot-launcher.mjs');
-        const result = await module.runAutopilotLauncher({ command: plan.local.slice(10), issues: [...plan.operands], runs: plan.options['--runs'], cwd, packageRoot, env }, autopilotLauncherPorts);
+        const result = await module.runAutopilotLauncher({ command: plan.local.slice(10), issues: [...plan.operands], runs: plan.options['--runs'], resumeCustody: plan.options['--resume-custody'], cwd, packageRoot, env }, autopilotLauncherPorts);
         if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255 || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid Autopilot reply');
-        line(result.exitCode === 0 ? stdout : stderr, result.message); return result.exitCode;
+        line(result.exitCode === 0 ? stdout : stderr, result.message);
+        if (result.exitCode === 0 && ['autopilot-start', 'autopilot-status'].includes(plan.local)) {
+          const warning = await autopilotGithub(autopilotGithubModule, 'checkAutopilotSettings', { cwd }, autopilotGithubPorts);
+          if (warning) line(stderr, warning);
+        }
+        return result.exitCode;
       } catch (error) { line(stderr, `The Autopilot command failed.${reason(error)}`); return 1; }
+    }
+    case 'autopilot-alert': case 'autopilot-alerts': {
+      const action = plan.local === 'autopilot-alert' ? 'alert' : plan.operands[0];
+      if (action === 'alert' && plan.options['--input'] !== '-') { line(stderr, 'Use pdd autopilot alert --issue N --kind KIND --input - with the alert JSON on stdin.'); return 2; }
+      const discordChannel = plan.options['--discord-channel'], tokenCommand = plan.options['--token-command'];
+      if (action !== 'set' && (discordChannel !== undefined || tokenCommand !== undefined)) { line(stderr, 'Use --discord-channel and --token-command only with pdd autopilot alerts set.'); return 2; }
+      try {
+        const module = autopilotAlerts ?? await import('./autopilot-alerts.mjs');
+        let text = '';
+        // A token command replaces the stdin secret, so stdin is not read for it.
+        if (action === 'alert' || action === 'set' && tokenCommand === undefined) {
+          if (action === 'set' && stdin?.isTTY) line(stderr, `Paste the ${discordChannel === undefined ? 'webhook URL' : 'bot token'}, press Enter, then press Ctrl-D. pdd never prints it.`);
+          text = await readText(stdin);
+        }
+        const result = await module.runAutopilotAlerts({ action, cwd, env, text, issue: plan.options['--issue'], kind: plan.options['--kind'], update: plan.options['--update'] === true,
+          ...(discordChannel === undefined ? {} : { discordChannel }), ...(tokenCommand === undefined ? {} : { tokenCommand }) }, autopilotAlertsPorts);
+        if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255 || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid alert reply');
+        line(result.exitCode === 0 ? stdout : stderr, result.message); return result.exitCode;
+      } catch { line(stderr, 'The Autopilot alert command failed.'); return 1; }
     }
     case 'metrics': {
       const args = [...(plan.commandId === 'metrics' ? [] : [plan.commandId.split('.')[1]]), ...plan.operands];
@@ -94,6 +165,12 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
           : { action: plan.local.slice(10), names: [...plan.operands] };
         const result = await module.runAutopilot(input, { cwd, stdin, stdout, ...autopilotPorts });
         line(result.exitCode === 0 ? stdout : stderr, result.message);
+        if (result.exitCode === 0) {
+          const retry = ['pdd', 'autopilot', input.action === 'mode' ? input.mode : input.action, ...(input.names ?? [])].join(' ');
+          const next = await autopilotGithub(autopilotGithubModule, 'publishAutopilotSettings', { cwd, action: input.action, mode: input.mode, names: input.names, retry },
+            autopilotGithubPorts, `pdd.json on GitHub was not updated. To retry, run ${retry}.`);
+          if (next) line(stdout, next);
+        }
         return result.exitCode;
       } catch (error) { line(stderr, `Autopilot settings failed.${reason(error)}`); return 1; }
     }
@@ -112,7 +189,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         return result.exitCode;
       } catch (error) { line(stderr, `The product command failed.${reason(error)}`); return 1; }
     }
-    case 'workflow-request-uptake': case 'workflow-run': case 'workflow-done': case 'workflow-ask': case 'workflow-approve': case 'workflow-changes':
+    case 'workflow-park': case 'workflow-yield': case 'workflow-request-uptake': case 'workflow-run': case 'workflow-done': case 'workflow-ask': case 'workflow-approve': case 'workflow-changes':
     case 'workflow-cancel': case 'workflow-status': case 'workflow-open': case 'workflow-evidence': case 'workflow-evidence-associate': {
       if (plan.local === 'workflow-evidence-associate' && (!plan.options['--workspace']?.trim() || !plan.options['--stage'] || !plan.options['--test']?.length)) {
         line(stderr, 'Use pdd workflow evidence-associate ISSUE --workspace PATH --stage current|pr1 --test PATH... .'); return 2;
@@ -134,7 +211,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       try {
         const runner = workflowRunner ?? await import('./workflow-runner.mjs');
         if (typeof runner[name] !== 'function') throw Error('Missing runner export');
-        const result = await runner[name]({ ...input, cwd, packageRoot }, { say: text => line(stderr, text), ...(plan.local === 'workflow-run' ? { env } : {}) });
+        const result = await runner[name]({ ...input, cwd, packageRoot }, { say: text => line(stderr, text), ...(['workflow-run', 'workflow-yield'].includes(plan.local) ? { env } : {}) });
         if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255
           || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid runner reply');
         line(result.exitCode === 0 ? stdout : stderr, result.message);
@@ -187,17 +264,32 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         const { file, changed } = setupProject({ cwd, packageRoot });
         line(stdout, changed ? `Wrote the PDD block in ${file}.` : `${file} already has this PDD block. No change.`);
       } catch (error) { line(stderr, `pdd setup: ${error.message}`); code = 1; }
+      // One Git context serves the .gitignore part and the Autopilot part.
+      let context = null;
+      try { context = await (gitContext ?? (await import('./workflow-runs.mjs')).gitContext)(cwd); }
+      catch (error) { line(stderr, `pdd setup: the Git repository could not be read.${reason(error)}`); code = 1; }
+      try {
+        if (context?.toplevel) {
+          const { file, changed, negated } = ignorePddFolder({ root: context.toplevel });
+          if (changed) line(stdout, `Added .pdd/ to ${file}. pdd test keeps its local cache there.`);
+          else if (negated) line(stdout, `${file} has a "!" line for .pdd/, so pdd setup did not change the file.`);
+        }
+      } catch (error) { line(stderr, `pdd setup: ${error.message}`); code = 1; }
       try {
         const action = setupAgentMcp ?? (await import('./agent-mcp-setup.mjs')).setupAgentMcp;
         if (await action({ env, packageRoot }, { stdin, stdout, stderr, confirm })) code = 1;
       } catch (error) { line(stderr, `pdd setup: MCP registration failed.${reason(error)}`); code = 1; }
       try {
-        const context = await (gitContext ?? (await import('./workflow-runs.mjs')).gitContext)(cwd);
         const module = autopilot ?? await import('./autopilot.mjs');
+        const before = savedAutopilot(context?.toplevel);
         const result = await module.runAutopilot({ action: 'setup', interactive: !!stdin.isTTY, inRepo: !!context?.toplevel },
           { cwd: context?.toplevel ?? cwd, stdin, stdout, ...autopilotPorts });
         if (result.message) line(result.exitCode === 0 ? stdout : stderr, result.message);
         if (result.exitCode) code = result.exitCode;
+        // Setup saves a first mode only in this checkout and never writes to GitHub, where the workers read it.
+        const saved = savedAutopilot(context?.toplevel)?.mode;
+        if (result.exitCode === 0 && before === undefined && ['off', 'observe', 'auto'].includes(saved))
+          line(stdout, `Setup saved the Autopilot mode only in this checkout. Autopilot workers read pdd.json on GitHub; to update it there, run pdd autopilot ${saved}.`);
       } catch (error) { line(stderr, `Autopilot settings failed.${reason(error)}`); code = 1; }
       return code;
       } });

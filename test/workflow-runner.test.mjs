@@ -162,7 +162,7 @@ test('small-change: run exits at once, done reaches the gate, changes go to the 
   assert.match(pane.commands[0], /^env PDD_AGENT_SESSION=1 PDD_BIN=\S+ CLAUDE_CONFIG_DIR=\S+ claude --dangerously-skip-permissions --session-id [0-9a-f-]{36} "\$\(cat '.+plan-start\.md'\)"$/);
   assert.equal(first.session.id, pane.agent.agent_session.value);
   const message = readFileSync(join(run.runDir, 'plan-start.md'), 'utf8');
-  for (const part of [`Use the pdd-small-change skill: ${join(packageRoot, 'skills/pdd-small-change/SKILL.md')}`, '#17', 'Use value two', issueUrl, run.root, run.runDir, 'plan', 'scope', '"$PDD_BIN" workflow done'])
+  for (const part of [join(packageRoot, 'skills/pdd-small-change/SKILL.md'), '#17', 'Use value two', issueUrl, run.root, run.runDir, 'plan', 'scope', '"$PDD_BIN" workflow done'])
     assert.ok(message.includes(part), part);
   assert.ok(message.split('\n').length <= 14, message);
   assert.doesNotMatch(message, /Prompting guide/);
@@ -197,10 +197,10 @@ test('small-change: run exits at once, done reaches the gate, changes go to the 
   assert.ok(f.herdr.paneOf(second).commands[0].includes(`CLAUDE_CONFIG_DIR='${first.configDir}'`));
   assert.equal(pane.agent.prompts.length, 1, 'approval never writes into the old chat');
   const buildMessage = readFileSync(join(run.runDir, 'build-start.md'), 'utf8');
-  for (const part of ['Use the pdd-small-change skill', 'build', 'change', 'verify', 'Change value.mjs to 2.', 'verify.md']) assert.ok(buildMessage.includes(part), part);
+  for (const part of [join(packageRoot, 'skills/pdd-small-change/SKILL.md'), 'build', 'change', 'verify', 'Change value.mjs to 2.', 'verify.md']) assert.ok(buildMessage.includes(part), part);
   // Skills may not be installed (pdd setup installs them only when missing), so every area chat learns where the package skills are.
   // Installed copies (for example from npx skills add) can be older than this pdd, so the chat reads the package's copies.
-  for (const text of [message, buildMessage]) assert.ok(text.includes(`Read the PDD skills (pdd-prompting too) from ${join(packageRoot, 'skills')}: an installed copy with the same name may be older.`), text);
+  for (const text of [message, buildMessage]) assert.ok(text.includes(join(packageRoot, 'skills/pdd-prompting/SKILL.md')), text);
 
   f.tick();
   writeFileSync(join(run.root, 'value.mjs'), 'export const value = 2;\n'); f.git(run.root, 'commit', '-qam', 'Use value two');
@@ -297,7 +297,7 @@ for (const name of ['bug', 'feature']) {
     assert.equal((await f.run()).exitCode, 0);
     let run = f.record();
     assert.deepEqual(areas.map(([area]) => area), ['story', 'prompt-pr', 'code']);
-    assert.match(f.herdr.paneOf(run.chats[0]).commands[0], /^env PDD_AGENT_SESSION=1 PDD_BIN=\S+ codex --no-daemon --dangerously-bypass-approvals-and-sandbox -c 'projects=\{".+"=\{trust_level="trusted"\}\}' "\$\(cat '.+story-start\.md'\)"$/);
+    assert.match(f.herdr.paneOf(run.chats[0]).commands[0], /^env PDD_AGENT_SESSION=1 PDD_BIN=\S+ codex --no-daemon --dangerously-bypass-approvals-and-sandbox -c 'projects=\{".+"=\{trust_level="trusted"\}\}' -c 'shell_environment_policy\.set\.PDD_BIN="[^"]+"' -c 'shell_environment_policy\.set\.PDD_AGENT_SESSION="1"' "\$\(cat '.+story-start\.md'\)"$/);
     for (const [index, [area, steps]] of areas.entries()) {
       assert.equal(f.record().area, index); assert.equal(f.record().chats.at(-1).area, area);
       const optional = JSON.parse(readFileSync(join(packageRoot, `skills/pdd-${name}/workflow.json`), 'utf8')).areas[index].optional;
@@ -460,7 +460,7 @@ test('a workflow skill in the project wins the lookup, and the chat is told wher
   const run = f.record();
   assert.deepEqual(run.areas.map(area => area.name), ['draft', 'build']); assert.equal(run.skillDir, skill);
   const message = readFileSync(join(run.runDir, 'draft-start.md'), 'utf8');
-  assert.match(message, /Use the pdd-docs skill/); assert.ok(message.includes(join(skill, 'SKILL.md')));
+  assert.ok(message.includes(join(skill, 'SKILL.md')));
   assert.match(message, /Steps: outline, write/);
 });
 

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: d81029894e8a893e849b731fc57893dfb33795a72e56ded4c171dc1395e204ed).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: f12c54bd6876e5d96bb9f4db3ca4fe1d117dd63ad142a7a1fec0b6bc061c42d9).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
@@ -9,6 +9,7 @@ const PACKAGE_BIN = join(dirname(dirname(fileURLToPath(import.meta.url))), 'bin/
 import { promisify } from 'node:util';
 import { PDD_HERDR_SESSION, withHerdrLayoutLock, openHerdrRunLayout, closeHerdrRunLayout, closeHerdrRepoLayoutIfIdle, samePath } from './workflow-herdr-layout.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
+import { tomlString } from './toml-string.mjs';
 
 // The one shared startup grace: Herdr sees a new agent only after it starts.
 export const START_GRACE_MS = 30_000;
@@ -122,8 +123,10 @@ export function chatCommand({ agent, cwd, messageFile, sessionId, resumeId, conf
     ...(resumeId ? ['--conversation', resumeId] : []), ...(messageFile ? ['--prompt-interactive', ...message] : [])].join(' ');
   if (agent === 'gemini') return [...env, 'gemini', '--yolo', ...(commonDir && sourceRoot ? ['--include-directories', quote(join(commonDir, 'pdd/runs')), '--include-directories', quote(`${sourceRoot}.pdd-worktrees`)] : []), ...(resumeId ? ['--resume', resumeId] : []), ...(messageFile ? ['--prompt-interactive', ...message] : [])].join(' ');
   if (agent === 'claude') return [...env, 'claude', '--dangerously-skip-permissions', ...(resumeId ? ['--resume', resumeId] : ['--session-id', sessionId]), ...message].join(' ');
+  // Codex builds each command's environment from shell_environment_policy; `set` applies after `inherit`.
   return [...env, 'codex', ...(resumeId ? ['resume', resumeId] : []), '--no-daemon', '--dangerously-bypass-approvals-and-sandbox',
-    '-c', quote(`projects={${JSON.stringify(cwd)}={trust_level="trusted"}}`), ...message].join(' ');
+    '-c', quote(`projects={${tomlString(cwd)}={trust_level="trusted"}}`),
+    '-c', quote(`shell_environment_policy.set.PDD_BIN=${tomlString(PACKAGE_BIN)}`), '-c', quote(`shell_environment_policy.set.PDD_AGENT_SESSION=${tomlString('1')}`), ...message].join(' ');
 }
 
 function spawnServer(env) {

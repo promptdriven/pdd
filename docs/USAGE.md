@@ -178,6 +178,9 @@ If you installed the pdd command, `pdd setup` in the top folder of the repo does
 1. They pick `CLAUDE.md` if it exists, else `AGENTS.md`. If neither exists, they make `AGENTS.md`.
 2. They add one short block (7 lines) between `<!-- pdd:start -->` and `<!-- pdd:end -->`. The block says that this project uses PDD and that prompts are the source. It names the skills and `pdd workflow run`. It tells the agent to read `RUNBOOK.md` before a runtime check.
 3. They keep all other text. A second run changes nothing. They never paste the guide.
+4. In a Git repo, they add the line `.pdd/` to the root `.gitignore` when no line there ignores that folder. `pdd test` keeps its local cache in `.pdd/`. They only append that line. When a `!` line keeps the folder or a path in it in Git (such as `!.pdd/config.json`), they change nothing and tell you.
+
+To turn on Autopilot for the repo, run `pdd autopilot observe` or `pdd autopilot auto`. Autopilot workers read `pdd.json` on the default branch on GitHub, so these commands also update `pdd.json` there, or open a PR when the branch needs one. Each command changes only its own part of the copy on GitHub. `pdd setup` saves a first mode only in your checkout. See [Repository Autopilot settings](cli.md#repository-autopilot-settings).
 
 Then open Codex or Claude Code as usual, in your project, and call a skill. In Codex:
 
@@ -205,7 +208,7 @@ In a chat, the work stays in your folder: no worktree and no automatic PR. To tu
 
 ## 6. Run a workflow on a GitHub issue
 
-`pdd workflow run` takes one GitHub issue to real PRs. The work happens in a few chats in Herdr. You approve at each gate. pdd opens the PRs. It never merges.
+`pdd workflow run` takes one GitHub issue to real PRs. The work happens in a few chats in Herdr. In manual workflows, you approve at each gate. The pdd CLI opens the PRs; the agent handles merges.
 
 ### 6.1 Prepare the repository
 
@@ -335,7 +338,7 @@ For all workflows:
 - verify writes the exact test commands and their real output to `verify.md` in the run folder.
 - The PR body has the step summaries. PR 2 and the `small-change` PR also have `verify.md`. Code PRs show a `Tests vs base:` block with removed cases, changed assertions and new skips before any `Prompt tests` lines and report links. Report links expire after 7 days.
 - pdd does not run the tests itself. Read the test output in the PR before you merge.
-pdd never merges and has no merge command. To ask your agent to merge, follow [RUNBOOK §2](../RUNBOOK.md#2-the-files).
+The pdd CLI has no merge command. In manual workflows, ask your agent to merge under [RUNBOOK §2](../RUNBOOK.md#2-the-files). In Autopilot `auto` mode, pdd-merge handles eligible merges after repository review and test rules pass; required human approvals still apply.
 
 ### 6.8 Check a run
 

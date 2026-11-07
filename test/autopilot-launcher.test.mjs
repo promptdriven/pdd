@@ -1,12 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, existsSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, utimesSync, existsSync, realpathSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
 import { loadAgentDefinitions } from '../src/agent-config.mjs';
+import { codexConfigs, tomlBasicString } from './helpers/codex-config-args.mjs';
 
 const root = resolve('.');
 const capture = () => ({ text: '', write(s) { this.text += s; } });
@@ -25,8 +27,8 @@ async function fixture(t, options = {}) {
     pathDiagnostic: () => [],
     run: async (command, args) => {
       f.runs.push([command, args]);
-      if (command === 'git') return { code: 0, stdout: cwd + '\n', stderr: '' };
-      if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: '{"nameWithOwner":"owner/repo"}', stderr: '' };
+      if (command === 'git') return { code: 0, stdout: (args.includes('--git-common-dir') ? join(cwd, '.git') : cwd) + '\n', stderr: '' };
+      if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: '{"nameWithOwner":"owner/repo","url":"https://github.com/owner/repo"}', stderr: '' };
       if (command === 'gh' && args[0] === 'auth') return { code: 0, stdout: '', stderr: '' };
       if (command === 'gh' && args[0] === 'api') { if (args.some(x => String(x).includes('/reviews?'))) return { code: 0, stdout: 'HTTP/2.0 200 OK\r\n\r\n[]', stderr: '' }; if (args.some(x => String(x).includes('/permission'))) return { code: 0, stdout: 'HTTP/2.0 200 OK\r\n\r\n{"permission":"none"}', stderr: '' }; f.ack.push(args); return { code: 0, stdout: '{}', stderr: '' }; }
       if (command === 'herdr') return { code: 0, stdout: '1.0', stderr: '' };
@@ -35,20 +37,23 @@ async function fixture(t, options = {}) {
     timer: async (action, state) => { f.timers.push([action, structuredClone(state)]); if (action === 'start') f.active = true; if (action === 'stop') f.active = false; return f.active; },
     queryIssues: async (state) => { f.polls.push(state.etag); return { status: f.status ?? 200, etag: f.etag, issues: structuredClone(f.issues) }; },
     comments: async number => { f.comments.push(number); return f.issueComments?.[number] ?? []; },
+    reconcileDependencyIntake: async () => ({ eligible: f.issues.map(issue => issue.html_url), queued: [], skipped: [] }),
     herdr: async args => {
       f.herdrCalls ??= []; f.herdrCalls.push(args);
       if (args[0] === 'status') return { running: f.serverRunning !== false };
-      if (args[0] === 'workspace') return { result: { workspace: { workspace_id: 'w1' }, root_pane: { pane_id: 'p1' } } };
+      const live = { pane_id:'p1', workspace_id:'w1', cwd, foreground_cwd:cwd, tab_id:'t1', terminal_id:'term1', agent:'codex', agent_status:f.agentStatus ?? 'idle', agent_session:'session' };
+      if (args[0] === 'workspace') return { result: { type:'workspace_info', workspace: { workspace_id: 'w1' }, root_pane: { pane_id: 'p1' } } };
+      if (args[0] === 'pane' && args[1] === 'get') return { result: { type:'pane_info', pane:live } };
       if (args[0] === 'agent' && args[1] === 'get') {
         if (!f.agentStarted) throw Object.assign(Error('agent_not_found'), { code: 'agent_not_found' });
-        return { result: { agent: { agent_status: f.agentStatus ?? 'idle' } } };
+        return { result: { type:'agent_info', agent:live } };
       }
-      if (args[0] === 'pane') {
-        f.agentStarted = true;
-        const packetFile = readdirSync(f.ports.stateRoot).find(x => x.endsWith('.message.md'));
-        f.prompts.push(readFileSync(join(f.ports.stateRoot, packetFile), 'utf8'));
+      if (args[0] === 'pane' && args[1] === 'run') { f.agentStarted = true; return {}; }
+      if (args[0] === 'pane' && args[1] === 'read') return '';
+      if (args[0] === 'agent' && args[1] === 'prompt') {
+        const instruction = args.at(-1), match = /Artifact path: (.+)/.exec(instruction);
+        f.prompts.push(match ? readFileSync(JSON.parse(match[1]), 'utf8') : instruction);
       }
-      if (args[0] === 'agent' && args[1] === 'prompt') f.prompts.push(args[3] ?? args[2]);
       return {};
     },
   };
@@ -62,15 +67,16 @@ async function fixture(t, options = {}) {
 const issue = (number, extra = {}) => ({ number, state: 'open', title: `Issue ${number}`, body: 'trusted body', user: { login: 'owner' }, author_association: 'OWNER', created_at: '2026-11-04T00:01:00Z', updated_at: '2026-11-04T00:01:00Z', comments: 0, labels: [], html_url: `https://github.com/owner/repo/issues/${number}`, ...extra });
 
 // Native startup cases use the public launcher with fake programs, never live agents.
-async function nativeStartup(t, { kind = 'codex', custom = false, cwdName, body = 'Please fix this synthetic startup case.' } = {}) {
+async function nativeStartup(t, { kind = 'codex', custom = false, cwdName, body = 'Please fix this synthetic startup case.', seed, codexHome = true } = {}) {
   const f = await fixture(t, { mode: 'observe', cwdName });
   const bin = join(f.dir, 'bin'), profile = join(f.home, 'profile chosen');
   mkdirSync(bin); mkdirSync(profile);
   f.ports.stateRoot = join(f.dir, 'state');
   const record = join(f.dir, 'native.jsonl');
-  const script = `#!${process.execPath}\nconst fs = require('node:fs'); fs.appendFileSync(${JSON.stringify(record)}, JSON.stringify({command:process.argv[1],argv:process.argv.slice(2),cwd:process.cwd(),env:{CODEX_HOME:process.env.CODEX_HOME,CLAUDE_CONFIG_DIR:process.env.CLAUDE_CONFIG_DIR,STARTUP_TEST_VALUE:process.env.STARTUP_TEST_VALUE}})+'\\n');\n`;
+  const script = `#!${process.execPath}\nconst fs = require('node:fs'); fs.appendFileSync(${JSON.stringify(record)}, JSON.stringify({command:process.argv[1],argv:process.argv.slice(2),cwd:process.cwd(),env:{CODEX_HOME:process.env.CODEX_HOME,CLAUDE_CONFIG_DIR:process.env.CLAUDE_CONFIG_DIR,STARTUP_TEST_VALUE:process.env.STARTUP_TEST_VALUE,PDD_AUTOPILOT_CONTEXT:process.env.PDD_AUTOPILOT_CONTEXT}})+'\\n');\n`;
   for (const name of ['codex', 'fake-provider', 'chosen codex wrapper']) writeFileSync(join(bin, name), script, { mode: 0o755 });
   const env = { HOME: f.home, PATH: `${bin}:/usr/bin:/bin`, CODEX_HOME: profile, XDG_CONFIG_HOME: join(f.home, '.config') };
+  if (!codexHome) delete env.CODEX_HOME;
   const value = 'a b\'c"d\\e$HOME';
   env.CLAUDE_CONFIG_DIR = join(f.home, value);
   let selected = { id: kind, kind, command: kind === 'codex' ? 'codex' : join(bin, 'fake-provider'), env: {} };
@@ -93,6 +99,8 @@ async function nativeStartup(t, { kind = 'codex', custom = false, cwdName, body 
     return reply;
   };
   f.issues = [issue(101, { body })];
+  // A saved coordinator identity (no saved agent) lets a case choose the context values.
+  if (seed) { mkdirSync(f.ports.stateRoot); writeFileSync(join(f.ports.stateRoot, `${createHash('sha256').update(f.cwd).digest('hex').slice(0, 20)}.json`), JSON.stringify(seed)); }
   const result = await f.invoke('start', { env, runs: '1' });
   assert.equal(result.exitCode, 0, result.message);
   const calls = existsSync(record) ? readFileSync(record, 'utf8').trim().split('\n').map(JSON.parse) : [];
@@ -101,7 +109,7 @@ async function nativeStartup(t, { kind = 'codex', custom = false, cwdName, body 
   assert.equal(call.command, selected.command === 'codex' ? join(bin, 'codex') : selected.command);
   // process.cwd() resolves the temporary directory's /var symlink on macOS.
   assert.equal(call.cwd, realpathSync(f.cwd));
-  assert.equal(call.env.CODEX_HOME, profile); assert.equal(call.env.CLAUDE_CONFIG_DIR, env.CLAUDE_CONFIG_DIR);
+  assert.equal(call.env.CODEX_HOME, codexHome ? profile : undefined); assert.equal(call.env.CLAUDE_CONFIG_DIR, env.CLAUDE_CONFIG_DIR);
   assert.equal(call.env.STARTUP_TEST_VALUE, custom ? value : undefined);
   assert.ok(Object.keys(process.env).length === Object.keys(parentEnv).length && Object.entries(parentEnv).every(([key, value]) => process.env[key] === value), 'parent environment is unchanged');
   assert.deepEqual(snapshot(f.home), saved, 'agent settings and file inventory remain unchanged');
@@ -110,14 +118,14 @@ async function nativeStartup(t, { kind = 'codex', custom = false, cwdName, body 
     if (call.argv[i] === '-c' || call.argv[i] === '--config') configs.push(call.argv[++i]);
     else if (!call.argv[i].startsWith('-')) operands.push(call.argv[i]);
   }
-  assert.equal(operands.length, 1, 'interactive first message is one operand');
-  const packet = JSON.parse(operands[0].trimEnd().split('\n').at(-1));
+  assert.equal(operands.length, 0, 'the interactive process starts before its first message');
+  const packet = JSON.parse(f.prompts[0].trimEnd().split('\n').at(-1));
   assert.equal(packet.issues[0].body, body); assert.equal(packet.recipeFirst, true); assert.equal(packet.runs, 1);
   assert.equal(f.timers.filter(([action]) => action === 'start').length, 1);
   assert.equal(f.state().nextTick, f.time + 30 * 60 * 1000);
   f.status = 304; await f.tick();
   assert.equal(f.prompts.length, 1, 'unchanged tick sends no extra packet');
-  assert.equal(f.herdrCalls.filter(args => args[0] === 'pane').length, 1);
+  assert.equal(f.herdrCalls.filter(args => args[0] === 'pane' && args[1] === 'run').length, 1);
   assert.equal(existsSync(join(f.dir, 'PDD_SENTINEL')), false);
   assert.equal(existsSync(join(f.cwd, 'PDD_SENTINEL')), false);
   return { ...f, call, configs };
@@ -131,10 +139,15 @@ function codexStartupConfig({ cwd, call, configs }) {
   assert.ok(trust, 'invocation config must include project trust');
   const table = trust.match(/^projects\s*=\s*\{\s*("(?:\\.|[^"\\])*")\s*=\s*\{\s*trust_level\s*=\s*("(?:\\.|[^"\\])*")\s*\}\s*\}$/);
   assert.ok(table, 'trust config must name one project key');
-  assert.equal(JSON.parse(table[1]), cwd); assert.equal(JSON.parse(table[2]), 'trusted');
+  assert.equal(tomlBasicString(table[1]), cwd); assert.equal(JSON.parse(table[2]), 'trusted');
   assert.ok(configs.some(value => /^check_for_update_on_startup\s*=\s*false$/.test(value)));
   assert.equal(configs.some(value => /^(?:model|model_reasoning_effort|profile)\s*=/.test(value)), false);
   assert.equal(call.argv.some(value => ['-m', '--model', '-p', '--profile'].includes(value)), false);
+  // Every Codex start, fresh or saved, gives its chat commands the process context and Codex profile folder.
+  const { set } = codexConfigs(call.argv);
+  assert.equal(JSON.parse(set.PDD_AUTOPILOT_CONTEXT).version, 'pdd.autopilot-coordinator.v1');
+  assert.equal(set.PDD_AUTOPILOT_CONTEXT, call.env.PDD_AUTOPILOT_CONTEXT);
+  assert.equal(set.CODEX_HOME, call.env.CODEX_HOME);
 }
 
 test('native startup: normal Codex uses invocation trust and no update check', async t => {
@@ -154,21 +167,51 @@ test('native startup: invocation overrides leave saved update and trust settings
   codexStartupConfig(await nativeStartup(t));
 });
 
+test('native startup: Codex chat commands get the Autopilot context under any shell environment policy', async t => {
+  // Issue 3031: inherit = "core" or "none" drops the process value; `set` applies after `inherit`.
+  // Shell and TOML syntax in a context value must reach Codex unchanged.
+  const machine = "mac 'single' \"double\" \\slash $HOME $(touch PDD_SENTINEL) `touch PDD_SENTINEL` ; \u007f é";
+  const f = await nativeStartup(t, { seed: { coordinatorId: 'coordinator-3031', machine, activatedAt: '2026-11-04T00:00:00.000Z' } });
+  codexStartupConfig(f);
+  const envelope = { version: 'pdd.autopilot-coordinator.v1', repository: 'owner/repo', coordinatorId: 'coordinator-3031', machine, activation: '2026-11-04T00:00:00.000Z', runs: 1 };
+  const { set } = codexConfigs(f.call.argv);
+  assert.ok(Object.hasOwn(set, 'PDD_AUTOPILOT_CONTEXT'), `expected -c shell_environment_policy.set.PDD_AUTOPILOT_CONTEXT=..., got -c values ${JSON.stringify(f.configs)}`);
+  assert.deepEqual(JSON.parse(set.PDD_AUTOPILOT_CONTEXT), envelope);
+  assert.equal(set.PDD_AUTOPILOT_CONTEXT, f.call.env.PDD_AUTOPILOT_CONTEXT, 'chat commands get the same text as the coordinator process');
+  assert.deepEqual(Object.keys(set), ['PDD_AUTOPILOT_CONTEXT', 'CODEX_HOME'], 'no Herdr value that the launcher cannot know');
+  assert.equal(f.configs.filter(value => /^shell_environment_policy\./.test(value)).length, 2, 'no other policy key changes');
+});
+
+test('native startup: Codex chat commands keep an explicit CODEX_HOME and get none without one', async t => {
+  // Under inherit = "core", a pdd workflow run from the coordinator must keep the coordinator's Codex profile.
+  const explicit = await nativeStartup(t);
+  assert.equal(codexConfigs(explicit.call.argv).set.CODEX_HOME, join(explicit.home, 'profile chosen'));
+  const none = await nativeStartup(t, { codexHome: false });
+  codexStartupConfig(none);
+  assert.equal(Object.hasOwn(codexConfigs(none.call.argv).set, 'CODEX_HOME'), false, 'no invented profile folder');
+});
+
+test('native startup: a cwd with a control character stays one valid TOML project key', async t => {
+  codexStartupConfig(await nativeStartup(t, { cwdName: 'repo \u007f\t del' }));
+});
+
 for (const [kind, flags] of [
   ['claude', ['--dangerously-skip-permissions']],
-  ['gemini', ['--yolo', '--prompt-interactive']],
-  ['agy', ['--dangerously-skip-permissions', '--prompt-interactive']],
+  ['gemini', ['--yolo']],
+  ['agy', ['--dangerously-skip-permissions']],
 ]) test(`native startup: ${kind} keeps its interactive launch without Codex config`, async t => {
   const { call, configs } = await nativeStartup(t, { kind, custom: kind !== 'agy' });
   for (const flag of flags) assert.ok(call.argv.includes(flag));
+  if (kind === 'gemini' || kind === 'agy') assert.equal(call.argv.includes('--prompt-interactive'), false);
   assert.equal(configs.length, 0);
 });
 
 test('autopilot routes parse and dispatch without setup or a runtime call', async () => {
   const stdout = capture(), stderr = capture(); let seen;
   assert.equal(parseArgv(['autopilot', 'start', '--runs', '1200000']).local, 'autopilot-start');
-  assert.equal(await runPdd(['autopilot', 'start', '--runs', '3'], { cwd: '/repo', stdout, stderr, autopilotLauncher: { runAutopilotLauncher: async input => { seen = input; return { exitCode: 0, message: 'started' }; } } }), 0);
+  assert.equal(await runPdd(['autopilot', 'start', '--runs', '3'], { cwd: '/repo', stdout, stderr, autopilotGithubPorts: { github: {} }, autopilotLauncher: { runAutopilotLauncher: async input => { seen = input; return { exitCode: 0, message: 'started' }; } } }), 0);
   assert.equal(seen.command, 'start'); assert.equal(seen.runs, '3');
+  assert.equal(await runPdd(['autopilot','start','--resume-custody','owner.json'], {cwd:'/repo',stdout:capture(),stderr:capture(),autopilotGithubPorts:{github:{}},autopilotLauncher:{runAutopilotLauncher:async input=>{seen=input;return {exitCode:0,message:'started'};}}}),0); assert.equal(seen.resumeCustody,'owner.json');
   assert.equal(stdout.text, 'started\n'); assert.equal(stderr.text, '');
   assert.deepEqual(parseArgv(['autopilot', 'add', '12', '15']).operands, ['12', '15']);
 });
@@ -178,22 +221,67 @@ test('start installs a timer and runs the recipe immediately; unchanged empty ti
   assert.equal((await f.invoke('start')).exitCode, 0);
   assert.equal(f.polls.length, 1); assert.equal(f.prompts.length, 1);
   assert.match(f.prompts[0], /"recipeFirst":true/);
+  const context = JSON.parse(f.prompts[0].trim().split('\n').at(-1));
+  assert.deepEqual(context.startAction, { command: 'pdd autopilot start', repository: 'owner/repo', mode: 'auto' });
+  assert.equal(context.currentMode, 'auto');
+  assert.match(f.prompts[0], /ordinary eligible work and automatic merge under the repository review, testing, strict approval and other rules/);
   assert.equal(f.state().runs, undefined);
   assert.equal(f.state().nextTick, f.time + 1800000);
   f.status = 304; await f.tick(); await f.tick();
   assert.equal(f.prompts.length, 1); assert.deepEqual(f.polls, [undefined, '"one"', '"one"']);
+  const prior=f.state(), configured=prior.environment.CODEX_HOME;
+  f.ports.selectAgent=async (_state, ports)=>{ assert.equal(ports.env.CODEX_HOME,configured); return {id:'codex',kind:'codex',command:'codex',env:{}}; };
+  const restarted=await f.invoke('start',{env:{HOME:f.home,PATH:process.env.PATH,CODEX_HOME:join(f.dir,'unrelated-profile')}});
+  assert.equal(restarted.exitCode,0,restarted.message); assert.equal(f.state().coordinatorId,prior.coordinatorId); assert.deepEqual(f.state().ownerLaunch,prior.ownerLaunch); assert.equal(f.state().environment.CODEX_HOME,configured);
+  const original=f.state(), replacement=structuredClone(original), history=[{kind:'legacy-uncertain',payloadDigest:'kept'}];
+  replacement.enabled=false; replacement.coordinatorId='replacement'; replacement.agent={id:'agy',kind:'agy',command:'agy'}; replacement.uncertainDeliveryHistory=history; replacement.runs=3;
+  replacement.ownerLaunch={...replacement.ownerLaunch,coordinator:{...replacement.ownerLaunch.coordinator,coordinatorId:'replacement'},profile:{agent:{id:'agy',kind:'agy'},home:f.home,definitionHome:f.home,configHome:null}};
+  writeFileSync(f.stateFile(),JSON.stringify(replacement));
+  const launch=original.ownerLaunch, artifact=join(f.dir,'custody.json');
+  writeFileSync(artifact,JSON.stringify({repository:original.repo,sourceRoot:f.cwd,coordinatorId:original.coordinatorId,machine:original.machine,activation:original.activatedAt,paneId:original.paneId,workspaceId:original.workspaceId,agent:launch.profile.agent,home:launch.profile.home,definitionHome:launch.profile.definitionHome,configHome:launch.profile.configHome,launchStartedAt:launch.startedAt}));
+  f.ports.selectAgent=async()=>({id:'codex',kind:'codex',command:'codex',env:{}});
+  f.ports.listRuns=async()=>[{number:17,repo:original.repo,state:'waiting',issue:{url:'https://github.com/owner/repo/issues/17'},automaticOrigin:{repository:original.repo,coordinatorId:original.coordinatorId,machine:original.machine,claim:{commentId:'11',labelEventId:'12'}}}];
+  f.ports.owners={read:async()=>({json:JSON.stringify({claims:[{issue:'https://github.com/owner/repo/issues/17',active:true,owner:original.coordinatorId,coordinatorId:original.coordinatorId,machine:original.machine,commentId:'11',labelEventId:'12'}]})})};
+  const oldHerdr=f.ports.herdr; f.ports.herdr=async args=>{
+    const live={pane_id:original.paneId,workspace_id:original.workspaceId,cwd:f.cwd,foreground_cwd:f.cwd,tab_id:'t1',terminal_id:'term1',agent:'codex',agent_status:'idle',agent_session:'session'};
+    if(args[0]==='pane'&&args[1]==='get')return {result:{type:'pane_info',pane:live}};
+    if(args[0]==='workspace'&&args[1]==='get')return {result:{type:'workspace_info',workspace:{workspace_id:original.workspaceId}}};
+    if(args[0]==='agent'&&args[1]==='get')return {result:{type:'agent_info',agent:live}};
+    return oldHerdr(args);
+  };
+  const recovered=await f.invoke('start',{resumeCustody:artifact}); assert.equal(recovered.exitCode,0,recovered.message);
+  const restored=f.state(); assert.equal(restored.coordinatorId,original.coordinatorId); assert.equal(restored.agent.kind,'codex'); assert.deepEqual(restored.uncertainDeliveryHistory,history); assert.equal(restored.runs,undefined);
+  f.ports.listRuns=async()=>[]; const semanticOnly=await f.invoke('start',{resumeCustody:artifact}); assert.equal(semanticOnly.exitCode,0,semanticOnly.message); assert.equal(f.state().coordinatorId,original.coordinatorId); assert.deepEqual(f.state().uncertainDeliveryHistory,history); assert.equal(f.state().runs,undefined);
 });
 
-test('new and named issues are eligible; claimed work is distinguished and closed/old issues excluded', async t => {
+test('old and new issues are eligible; claimed work is distinguished and closed issues excluded', async t => {
   const f = await fixture(t); await f.invoke('start');
   f.issues = [issue(1), issue(2, { created_at: '2026-01-01T00:00:00Z' }), issue(3, { created_at: '2026-01-01T00:00:00Z', labels: [{ name: 'pdd:autopilot' }] }), issue(4, { pull_request: {} }), issue(5, { state: 'closed' }), issue(6, { labels: [{ name: 'pdd:working' }] })];
   await f.tick();
   const prompt = f.prompts.at(-1);
-  assert.match(prompt, /"number":1,/); assert.match(prompt, /"number":3,/);
-  for (const n of [2, 4, 5, 6]) assert.doesNotMatch(prompt, new RegExp(`"number":${n},`));
-  await f.tick(); assert.equal(f.prompts.length, 2); // Already-seen work must stay quiet.
+  assert.match(prompt, /"number":1,/); assert.match(prompt, /"number":2,/); assert.match(prompt, /"number":3,/);
+  for (const n of [4, 5, 6]) assert.doesNotMatch(prompt, new RegExp(`"number":${n},`));
+  await f.tick(); assert.equal(f.prompts.length, 3); // Auto reconsiders still-unclaimed ready work.
   await f.invoke('stop'); f.time += 3600000; await f.invoke('start');
   assert.equal(f.state().activatedAt, '2026-11-04T00:00:00.000Z');
+});
+
+test('a GitHub owner spelled with capitals matches the canonical lowercase eligibility URL (#3035)', async t => {
+  const f = await fixture(t);
+  const run = f.ports.run;
+  f.ports.run = async (command, args, opts) => command === 'gh' && args[0] === 'repo'
+    ? { code: 0, stdout: '{"nameWithOwner":"Serhan-Asad/PDD-Sandbox","url":"https://github.com/Serhan-Asad/PDD-Sandbox"}', stderr: '' }
+    : run(command, args, opts);
+  // GitHub spells html_url with the owner's capitals; the dependency graph stores canonical lowercase keys.
+  const mixed = number => issue(number, { user: { login: 'Serhan-Asad' }, html_url: `https://github.com/Serhan-Asad/PDD-Sandbox/issues/${number}` });
+  f.issues = [mixed(1), mixed(2), mixed(3)];
+  f.ports.reconcileDependencyIntake = async () => ({ eligible: ['https://github.com/serhan-asad/pdd-sandbox/issues/1', 'https://github.com/serhan-asad/pdd-sandbox/issues/3'], queued: [], skipped: [] });
+  const started = await f.invoke('start');
+  assert.equal(started.exitCode, 0, started.message);
+  const packet = JSON.parse(f.prompts.at(-1).trim().split('\n').at(-1));
+  assert.deepEqual(packet.issues.map(item => [item.number, item.eligible]), [[1, true], [3, true]]);
+  assert.equal(packet.issues[0].url, 'https://github.com/Serhan-Asad/PDD-Sandbox/issues/1', 'the offered item keeps GitHub spelling');
+  assert.deepEqual(f.state().seen[2].selectionReasons, ['dependency-not-ready'], 'an issue absent from eligible still waits');
 });
 
 test('stranger text never reaches AI; a trusted comment admits only trusted text; acknowledgement once', async t => {
@@ -224,7 +312,7 @@ test('trusted issue comments are filtered, and failed delivery is retried', asyn
   assert.match(f.prompts[1], /trusted body/); assert.doesNotMatch(f.prompts[1], /OUTSIDER/);
 });
 
-test('stop disables only the timer and status is local; runs is optional, never fixed', async t => {
+test('stop disables only the timer; status does not poll GitHub; runs is optional, never fixed', async t => {
   const f = await fixture(t); await f.invoke('start', { runs: '7' });
   assert.match(f.prompts[0], /"runs":7/);
   const polls = f.polls.length;
@@ -232,7 +320,8 @@ test('stop disables only the timer and status is local; runs is optional, never 
   const before = f.herdrCalls.length;
   await f.invoke('stop'); await f.tick(); await f.invoke('stop');
   assert.equal(f.herdrCalls.length, before); assert.equal(f.polls.length, polls);
-  assert.match((await f.invoke('status')).message, /stopped/);
+  const stoppedStatus = (await f.invoke('status')).message;
+  assert.match(stoppedStatus, /Autopilot disabled/); assert.match(stoppedStatus, /timer inactive/);
   assert.equal((await f.invoke('start', { runs: '0' })).exitCode, 2);
 });
 
@@ -312,6 +401,7 @@ test('native Linux and macOS user timers pin Node, script, state and environment
 
 test('native HTTP tick uses ETags and revalidates cached later pages, including a close', async t => {
   const f = await fixture(t); delete f.ports.queryIssues;
+  f.ports.reconcileDependencyIntake = async () => ({ eligible: [issue(31).html_url], queued: [], skipped: [] });
   let phase = 0; const queries = [];
   const run = f.ports.run;
   f.ports.run = async (command, args, opts) => {
@@ -402,7 +492,8 @@ test('fresh setup and mode/trust commands feed the launcher and bundled skills w
   execFileSync('git', ['init', '--quiet', f.cwd]);
   const stdout = capture(), stderr = capture();
   const env = { HOME: f.home, PATH: process.env.PATH };
-  const dependencies = { cwd: f.cwd, packageRoot: root, env, stdout, stderr };
+  // A GitHub stub for the pdd.json copy on GitHub: no real gh runs.
+  const dependencies = { cwd: f.cwd, packageRoot: root, env, stdout, stderr, autopilotGithubPorts: { github: { repository: async () => { throw Error('Tests never call GitHub'); } } } };
   assert.equal(await runPdd(['setup'], { ...dependencies, stdin: { isTTY: false },
     pathDiagnostic: () => [], workflowAgents: { checkWorkflowAgents: async () => ({ ok: true, agent: 'codex', message: '' }) }, setupAgentMcp: async () => 0 }), 0, stderr.text);
   assert.ok(readFileSync(join(f.cwd, 'AGENTS.md'), 'utf8').includes('pdd:start'));
@@ -537,11 +628,12 @@ for (const kind of ['stuck', 'code-pending', 'own working', 'observe PR waiting'
   assert.equal(f.prompts.length, 0);
 });
 
-test('an ordinary open issue is delivered once; only unseen trusted changes wake it again', async t => {
-  const f = await fixture(t); f.issues = [issue(71)]; await f.invoke('start');
+test('observe mode deduplicates an ordinary open issue until trusted changes', async t => {
+  const f = await fixture(t, {mode:'observe'}); f.issues = [issue(71)]; await f.invoke('start');
   f.prompts.length = 0; f.status = 304;
   for (let tick = 0; tick < 4; tick++) await f.tick();
   assert.equal(f.prompts.length, 0);
+  await f.invoke('start'); assert.equal(f.prompts.length, 0);
   f.status = 200; f.issues[0].comments = 1; f.issues[0].updated_at = '2026-11-04T01:00:00Z';
   f.issueComments = { 71: [{ id: 1, body: 'STRANGER', user: { login: 'outside' } }] };
   await f.tick(); assert.equal(f.prompts.length, 0);
@@ -558,7 +650,7 @@ test('new work stays pending while the agent is busy and is coalesced when idle'
   for (let tick = 0; tick < 4; tick++) { await f.tick(); f.status = 304; }
   assert.equal(f.prompts.length, 0);
   f.agentStatus = 'idle'; await f.tick(); assert.equal(f.prompts.length, 1);
-  await f.tick(); assert.equal(f.prompts.length, 1);
+  await f.tick(); assert.equal(f.prompts.length, 2);
 });
 
 test('trusted PR head and closure changes wake an observe issue once each', async t => {
@@ -616,6 +708,84 @@ test('Linux start warns about logout when lingering is not enabled; status detec
   assert.doesNotMatch(status.message, /Autopilot running/); assert.match(status.message, /Herdr/);
 });
 
+test('status reports the saved coordinator state without waking it or querying GitHub', async t => {
+  for (const coordinatorStatus of ['working', 'starting', 'idle', 'blocked', 'done']) {
+    const f = await fixture(t); await f.invoke('start');
+    f.agentStatus = coordinatorStatus;
+    const polls = f.polls.length, prompts = f.prompts.length, timerCalls = f.timers.length;
+    const status = await f.invoke('status');
+    assert.equal(status.exitCode, 0);
+    assert.match(status.message, new RegExp(`coordinator ${coordinatorStatus}`));
+    assert.equal(f.polls.length, polls);
+    assert.equal(f.prompts.length, prompts);
+    assert.ok(f.timers.slice(timerCalls).every(([action]) => action === 'status'));
+    assert.ok(f.herdrCalls.some(args => args[0] === 'agent' && args[1] === 'get'));
+  }
+});
+
+test('status shows a working saved coordinator after stop without restarting or querying GitHub', async t => {
+  const f = await fixture(t); await f.invoke('start'); await f.invoke('stop');
+  f.agentStatus = 'working';
+  const timers = f.timers.length, prompts = f.prompts.length, herdrCalls = f.herdrCalls.length;
+  const gitHubCalls = f.runs.filter(([command]) => command === 'gh').length;
+  const status = await f.invoke('status');
+  assert.equal(status.exitCode, 0);
+  assert.match(status.message, /Autopilot disabled/); assert.match(status.message, /timer inactive/);
+  assert.match(status.message, /Herdr running/); assert.match(status.message, /coordinator working/);
+  assert.ok(f.timers.slice(timers).every(([action]) => action === 'status'));
+  assert.ok(f.herdrCalls.slice(herdrCalls).some(args => args[0] === 'agent' && args[1] === 'get'));
+  assert.equal(f.runs.filter(([command]) => command === 'gh').length, gitHubCalls);
+  assert.equal(f.prompts.length, prompts);
+  assert.equal(f.herdrCalls.slice(herdrCalls).some(args => args[0] === 'pane' && args[1] === 'run'), false);
+});
+
+test('status shows a missing saved coordinator after stop without restarting or querying GitHub', async t => {
+  const f = await fixture(t); await f.invoke('start'); await f.invoke('stop');
+  f.agentStarted = false;
+  const timers = f.timers.length, prompts = f.prompts.length, herdrCalls = f.herdrCalls.length;
+  const gitHubCalls = f.runs.filter(([command]) => command === 'gh').length;
+  const status = await f.invoke('status');
+  assert.equal(status.exitCode, 0);
+  assert.match(status.message, /Autopilot disabled/); assert.match(status.message, /timer inactive/);
+  assert.match(status.message, /Herdr running/); assert.match(status.message, /coordinator unavailable/);
+  assert.match(status.message, /missing/);
+  assert.doesNotMatch(status.message, /coordinator (?:working|starting|idle|blocked|done)/);
+  assert.ok(f.timers.slice(timers).every(([action]) => action === 'status'));
+  assert.ok(f.herdrCalls.slice(herdrCalls).some(args => args[0] === 'agent' && args[1] === 'get'));
+  assert.equal(f.runs.filter(([command]) => command === 'gh').length, gitHubCalls);
+  assert.equal(f.prompts.length, prompts);
+  assert.equal(f.herdrCalls.slice(herdrCalls).some(args => args[0] === 'pane' && args[1] === 'run'), false);
+});
+
+test('status does not call a live Herdr server a running repo coordinator when the saved agent is gone', async t => {
+  const f = await fixture(t); await f.invoke('start'); f.agentStarted = false;
+  const status = await f.invoke('status');
+  assert.equal(status.exitCode, 0);
+  assert.match(status.message, /coordinator unavailable \(missing\)/i);
+  assert.doesNotMatch(status.message, /Autopilot running/);
+});
+
+test('status reports an unrecorded or mismatched coordinator as unavailable', async t => {
+  const f = await fixture(t); await f.invoke('start');
+  const state = f.state(); delete state.paneId; delete state.workspaceId;
+  writeFileSync(f.stateFile(), JSON.stringify(state));
+  let status = await f.invoke('status');
+  assert.match(status.message, /coordinator unavailable \(not recorded\)/i);
+  assert.doesNotMatch(status.message, /Autopilot running/);
+
+  state.paneId = 'p1'; state.workspaceId = 'w1'; writeFileSync(f.stateFile(), JSON.stringify(state));
+  const herdr = f.ports.herdr;
+  f.ports.herdr = async args => {
+    if (args[0] === 'agent' && args[1] === 'get') return { result: { type: 'agent_info', agent: {
+      pane_id: 'p1', workspace_id: 'w1', cwd: join(f.dir, 'other-repo'), agent: 'codex', agent_status: 'idle'
+    } } };
+    return herdr(args);
+  };
+  status = await f.invoke('status');
+  assert.match(status.message, /coordinator unavailable \(saved target does not match\)/i);
+  assert.doesNotMatch(status.message, /Autopilot running/);
+});
+
 test('macOS start does not check Linux lingering or warn about loginctl', async t => {
   const f = await fixture(t); const run = f.ports.run;
   f.ports.platform = 'darwin';
@@ -633,13 +803,24 @@ test('overlapping ticks cannot deliver twice from a snapshot read before lock ac
   const f = await fixture(t); await f.invoke('start'); f.prompts.length = 0; f.issues = [issue(77)];
   // Keep the existing native-operation barrier separate from optional telemetry lookup.
   f.ports.metricsContext = async () => ({toplevel:f.cwd,commonDir:f.cwd});
-  const run = f.ports.run; let reads = 0, release;
-  f.ports.run = async (cmd, args, opts) => {
-    if (cmd === 'git' && ++reads === 2) await new Promise(resolve => { release = resolve; });
-    return run(cmd, args, opts);
+  const query = f.ports.queryIssues; let reads = 0, release;
+  f.ports.queryIssues = async state => {
+    if (++reads === 2) await new Promise(resolve => { release = resolve; });
+    return query(state);
   };
   const first = f.tick(), second = f.tick(); await first; release?.(); await second;
   assert.equal(f.prompts.length, 1);
+  f.prompts.length = 0;
+  let entered, unblock, resume;
+  const enteredScan = new Promise(resolve => { entered = resolve; });
+  f.ports.queryIssues = async state => { entered(); await new Promise(resolve => { unblock = resolve; }); return query(state); };
+  f.ports.armStartScan = (_identity, options) => { resume = options.resume; };
+  f.ports.waitForScan = async () => {};
+  const oldScan = f.tick(); await enteredScan;
+  assert.equal((await f.invoke('start')).exitCode, 0); assert.equal(typeof resume, 'function');
+  assert.equal(f.prompts.length, 0); unblock(); await oldScan;
+  f.ports.queryIssues = query; await resume();
+  assert.equal(f.prompts.length, 1); assert.match(f.prompts[0], /\"number\":77,/);
 });
 
 test('trusted PR comments wake a waiting issue once; outsider PR comments stay quiet', async t => {
@@ -727,10 +908,11 @@ test('trust removal and outsider-only updates stay quiet for issue and PR discus
     const run = f.ports.run; let permissions = 0;
     f.ports.run = async (cmd, args, opts) => { if (args.some(x => String(x).endsWith('/permission'))) permissions++; return run(cmd, args, opts); };
     f.status = 304; for (let tick = 0; tick < 4; tick++) await f.tick();
-    assert.equal(f.prompts.length, 0); assert.equal(permissions, 0, 'Quiet ticks must not refresh cached permissions');
+    if (channel === 'PR') { assert.equal(f.prompts.length, 0); assert.equal(permissions, 0, 'Quiet ticks must not refresh cached permissions'); }
+    else { assert.equal(f.prompts.length, 4); for (const packet of f.prompts) assert.doesNotMatch(packet, /REVOKED TEXT/); f.prompts.length = 0; }
     f.status = 200; const changed = f.issues.find(x => x.number === number); changed.comments = 2; changed.updated_at = '2026-11-04T01:00:00Z';
     f.issueComments[number].push({ id: 2, body: 'OUTSIDER ONLY', user: { login: 'outside' } });
-    await f.tick(); assert.equal(f.prompts.length, 0);
+    await f.tick(); if (channel === 'PR') assert.equal(f.prompts.length, 0); else { assert.equal(f.prompts.length, 1); assert.doesNotMatch(f.prompts[0], /REVOKED TEXT|OUTSIDER ONLY/); f.prompts.length = 0; }
     changed.comments = 3; changed.updated_at = '2026-11-04T02:00:00Z';
     f.issueComments[number].push({ id: 3, body: 'New owner feedback', user: { login: 'owner' } });
     await f.tick(); assert.equal(f.prompts.length, 1);
@@ -753,6 +935,7 @@ for (const change of ['unclaim with waiting PR', 'auto with stuck issue']) test(
   const f = await fixture(t, { mode: 'observe' });
   f.issues = [issue(84, { labels: [{ name: change.startsWith('unclaim') ? 'pdd:working' : 'pdd:stuck' }] }), pr(97, 84)];
   f.ports.pullRequest = async () => ({ state: 'open', head: { sha: 'a' } });
+  f.ports.reconcileDependencyIntake = async () => ({ eligible: [], queued: [], skipped: [] });
   await f.invoke('start'); f.prompts.length = 0;
   if (change.startsWith('unclaim')) f.issues[0].labels = [];
   else writeFileSync(join(f.cwd, 'pdd.json'), '{"autopilot":{"mode":"auto","trust":[]}}');
@@ -836,6 +1019,28 @@ test('time rule revalidates trust on a cached due claim without forwarding stran
   f.time += hour; await f.tick(); assert.equal(f.prompts.length, 0);
 });
 
+test('time rules read active status file modification times from the Git common directory', async t => {
+  const f = await fixture(t); delete f.ports.readRunProgress;
+  const changedAt = f.time;
+  const record = (number, state = 'running', repo = 'owner/repo') => {
+    const folder = join(f.cwd, '.git', 'pdd', 'runs', String(number)); mkdirSync(folder, { recursive: true });
+    const file = join(folder, 'status.json');
+    writeFileSync(file, JSON.stringify({ v: 1, number, repo, state, updatedAt: changedAt - hour }));
+    utimesSync(file, new Date(changedAt), new Date(changedAt));
+    return file;
+  };
+  const active = record(107); record(108, 'completed'); record(109, 'cancelled'); record(110, 'running', 'owner/other');
+  const broken = record(111); writeFileSync(broken, 'incomplete');
+  await f.invoke('start'); f.prompts.length = 0; f.status = 304;
+  f.time += hour - 1; await f.tick(); assert.equal(f.prompts.length, 0, 'Use file change time, not stale embedded metadata');
+  f.time++; await f.tick(); assert.equal(f.prompts.length, 1);
+  assert.deepEqual(packet(f).timeRules.map(event => event.number), [107]);
+  await f.tick(); assert.equal(f.prompts.length, 1);
+  f.agentStatus = 'working'; utimesSync(active, new Date(f.time), new Date(f.time)); f.time += hour; await f.tick();
+  writeFileSync(active, JSON.stringify({ v: 1, number: 107, repo: 'owner/repo', state: 'completed' }));
+  f.agentStatus = 'idle'; await f.tick(); assert.equal(f.prompts.length, 1);
+});
+
 test('an unchanged empty tick with no local progress or usage data still sends zero prompts', async t => {
   const f = await fixture(t); await f.invoke('start'); f.prompts.length = 0; f.status = 304;
   for (let i = 0; i < 4; i++) { f.time += hour; await f.tick(); }
@@ -848,4 +1053,482 @@ test('a claim with no readable activity time never invents a due event', async t
   await f.invoke('start'); f.prompts.length = 0; f.status = 304;
   for (let i = 0; i < 3; i++) { f.time += hour; await f.tick(); }
   assert.equal(f.prompts.length, 0);
+});
+
+// Issue 3037: a coordinator chat keeps the launch settings it started with, so a chat that this package
+// would launch differently is relaunched at an idle moment. A stateful fake of the Herdr calls the
+// launcher makes: each workspace holds one pane, and `pane close` ends that pane, as Herdr 0.9.1 does
+// for the only pane of a workspace. `pane run` runs the launch text in /bin/sh with a fake codex
+// that records the arguments it gets. No live Herdr, agent, GitHub or model call.
+async function relaunchFixture(t, options = {}) {
+  const f = await fixture(t, options);
+  const bin = join(f.dir, 'bin'), record = join(f.dir, 'codex.jsonl');
+  mkdirSync(bin);
+  writeFileSync(join(bin, 'codex'), `#!${process.execPath}\nrequire('node:fs').appendFileSync(${JSON.stringify(record)}, JSON.stringify(process.argv.slice(2))+'\\n');\n`, { mode: 0o755 });
+  f.env = { HOME: f.home, PATH: `${bin}:/usr/bin:/bin` };
+  f.invoke = async (command, extra = {}) => f.module.runAutopilotLauncher({ command, cwd: f.cwd, env: f.env, packageRoot: root, issues: [], ...extra }, f.ports);
+  const panes = new Map(); let workspaces = 0;
+  f.launches = []; f.closed = []; f.delivered = []; f.armed = [];
+  f.ports.armWorkerCompletion = identity => f.armed.push(identity);
+  f.ports.allRuns = () => f.savedRuns ?? [];
+  const missing = (code, id) => Object.assign(Error(`${id} not found`), { code, confirmedRejection: true });
+  f.ports.herdr = async args => {
+    f.herdrCalls ??= []; f.herdrCalls.push(args);
+    const [group, action, id] = args;
+    if (group === 'status') return { running: true };
+    if (group === 'workspace' && action === 'create') {
+      const n = ++workspaces, pane = { pane_id: `w${n}:p1`, workspace_id: `w${n}`, tab_id: `w${n}:t1`, terminal_id: `term${n}`, session: `session-${n}`, agent: false, closed: false };
+      panes.set(pane.pane_id, pane);
+      return { id: 'cli:workspace:create', result: { type: 'workspace_created', workspace: { workspace_id: pane.workspace_id }, root_pane: { pane_id: pane.pane_id } } };
+    }
+    const pane = panes.get(id);
+    if (!pane || pane.closed) throw missing(group === 'agent' ? 'agent_not_found' : 'pane_not_found', id);
+    const live = { pane_id: pane.pane_id, workspace_id: pane.workspace_id, cwd: f.cwd, foreground_cwd: f.cwd, tab_id: pane.tab_id, terminal_id: pane.terminal_id, agent: 'codex', agent_status: f.agentStatus ?? 'idle', agent_session: pane.session };
+    if (group === 'pane' && action === 'get') return { result: { type: 'pane_info', pane: live } };
+    if (group === 'agent' && action === 'get') { if (!pane.agent) throw missing('agent_not_found', id); return { result: { type: 'agent_info', agent: live } }; }
+    if (group === 'pane' && action === 'run') {
+      const before = existsSync(record) ? readFileSync(record, 'utf8').trim().split('\n').length : 0;
+      execFileSync('/bin/sh', ['-c', args[3]], { cwd: f.cwd, env: { PATH: '/usr/bin:/bin', HOME: f.home }, timeout: 10000 });
+      pane.agent = true; f.launches.push({ pane: id, argv: JSON.parse(readFileSync(record, 'utf8').trim().split('\n')[before]) });
+      return {};
+    }
+    if (group === 'pane' && action === 'close') { pane.closed = true; f.closed.push(id); return { id: 'cli:pane:close', result: { type: 'ok' } }; }
+    if (group === 'pane' && action === 'read') return '';
+    if (group === 'agent' && action === 'prompt') {
+      const instruction = args.at(-1), match = /Artifact path: (.+)/.exec(instruction);
+      f.prompts.push(match ? readFileSync(JSON.parse(match[1]), 'utf8') : instruction); f.delivered.push(id);
+      return {};
+    }
+    return {};
+  };
+  f.panes = panes;
+  f.live = () => [...panes.values()].filter(pane => pane.agent && !pane.closed).map(pane => pane.pane_id);
+  f.packet = (index = -1) => JSON.parse(f.prompts.at(index).trimEnd().split('\n').at(-1));
+  f.context = launch => JSON.parse(codexConfigs(launch.argv).set.PDD_AUTOPILOT_CONTEXT);
+  f.saveState = change => { const state = f.state(); change(state); writeFileSync(f.stateFile(), JSON.stringify(state)); };
+  f.githubWrites = () => f.runs.filter(([command, args]) => command === 'gh' && args.some((value, i) => args[i - 1] === '--method' && value !== 'GET'));
+  return f;
+}
+const herdrSince = (f, from, group, action) => f.herdrCalls.slice(from).filter(args => args[0] === group && args[1] === action);
+
+test('relaunch: an idle chat launched without a launch fingerprint is replaced with current arguments; claims stay', async t => {
+  const f = await relaunchFixture(t);
+  f.issues = [issue(64, { labels: [{ name: 'pdd:working' }] })];
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  const original = f.state();
+  f.savedRuns = [{ runId: 'run-64', number: 64, repo: 'owner/repo', state: 'running', sourceRoot: f.cwd, automaticOrigin: { repository: 'owner/repo', coordinatorId: original.coordinatorId, machine: original.machine, claim: { commentId: '11', labelEventId: '12' } }, areas: [{ name: 'code' }], area: 0, chats: [{ area: 'code', paneId: 'worker-pane', startedAt: 5 }] }];
+  // A chat that an older package launched has no saved fingerprint.
+  f.saveState(state => { delete state.ownerLaunch.fingerprint; });
+  const calls = f.herdrCalls.length, writes = f.githubWrites().length, prompts = f.prompts.length;
+  f.status = 304; f.time += 60 * 1000; await f.tick();
+  assert.deepEqual(f.closed, ['w1:p1'], 'only the saved coordinator pane is closed');
+  assert.deepEqual(herdrSince(f, calls, 'pane', 'run').map(args => args[2]), ['w2:p1']);
+  const after = f.state();
+  assert.equal(after.paneId, 'w2:p1'); assert.equal(after.workspaceId, 'w2');
+  assert.equal(after.coordinatorId, original.coordinatorId, 'claims stay with the same coordinator');
+  assert.equal(after.machine, original.machine); assert.equal(after.activatedAt, original.activatedAt);
+  assert.deepEqual(after.seen, original.seen, 'saved progress stays');
+  assert.equal(typeof after.ownerLaunch.fingerprint, 'string');
+  assert.equal(after.ownerLaunch.paneId, 'w2:p1');
+  assert.deepEqual(f.context(f.launches.at(-1)), { version: 'pdd.autopilot-coordinator.v1', repository: 'owner/repo', coordinatorId: original.coordinatorId, machine: original.machine, activation: original.activatedAt });
+  assert.equal(f.prompts.length, prompts + 1); assert.equal(f.delivered.at(-1), 'w2:p1');
+  assert.equal(f.packet().recipeFirst, true, 'the fresh chat gets the start-up recipe');
+  assert.equal(f.githubWrites().length, writes, 'no claim label or comment changes');
+  assert.equal(f.armed.at(-1).coordinatorPaneId, 'w2:p1', 'worker completion follows the fresh coordinator pane');
+  const quiet = f.herdrCalls.length; await f.tick(); await f.tick();
+  assert.equal(herdrSince(f, quiet, 'pane', 'close').length, 0); assert.equal(herdrSince(f, quiet, 'pane', 'run').length, 0);
+  assert.equal(f.prompts.length, prompts + 1);
+});
+
+test('relaunch: a working chat with another fingerprint gets no input; status shows the pending relaunch until it is idle', async t => {
+  const f = await relaunchFixture(t);
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  const original = f.state();
+  f.saveState(state => { state.ownerLaunch.fingerprint = 'launched-by-another-package'; });
+  f.agentStatus = 'working'; f.issues = [issue(72)];
+  const calls = f.herdrCalls.length, prompts = f.prompts.length;
+  for (let tick = 0; tick < 2; tick++) { await f.tick(); f.status = 304; }
+  assert.equal(f.prompts.length, prompts, 'no input reaches the working chat');
+  assert.equal(herdrSince(f, calls, 'agent', 'prompt').length, 0);
+  assert.equal(herdrSince(f, calls, 'pane', 'close').length, 0, 'a working turn is never interrupted');
+  assert.equal(herdrSince(f, calls, 'pane', 'run').length, 0);
+  assert.equal(f.state().paneId, 'w1:p1');
+  const pending = await f.invoke('status');
+  assert.equal(pending.exitCode, 0);
+  assert.match(pending.message, /coordinator working/);
+  assert.equal(pending.message.split('\n').filter(text => /^Coordinator relaunch pending after upgrade/.test(text)).length, 1, pending.message);
+  f.agentStatus = 'idle'; await f.tick();
+  assert.deepEqual(f.closed, ['w1:p1']);
+  assert.equal(f.state().paneId, 'w2:p1'); assert.equal(f.state().coordinatorId, original.coordinatorId);
+  assert.equal(f.delivered.at(-1), 'w2:p1');
+  assert.match(f.prompts.at(-1), /"number":72,/, 'pending work reaches the fresh chat');
+  assert.ok(Object.hasOwn(codexConfigs(f.launches.at(-1).argv).set, 'PDD_AUTOPILOT_CONTEXT'));
+  const done = await f.invoke('status');
+  assert.doesNotMatch(done.message, /relaunch pending/);
+});
+
+test('relaunch: a chat with the current fingerprint is reused across ticks and an ordinary restart', async t => {
+  const f = await relaunchFixture(t);
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  const launch = f.state().ownerLaunch;
+  assert.equal(typeof launch.fingerprint, 'string');
+  f.status = 304; await f.tick(); await f.tick();
+  f.issues = [issue(81)]; f.status = 200; await f.tick();
+  assert.equal(f.delivered.at(-1), 'w1:p1'); assert.match(f.prompts.at(-1), /"number":81,/);
+  // Another caller PATH at start and the timer's saved environment are ordinary.
+  assert.equal((await f.invoke('stop')).exitCode, 0);
+  f.env = { ...f.env, PATH: `${f.env.PATH}:${join(f.dir, 'elsewhere')}` };
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  f.status = 304; await f.tick();
+  assert.equal(f.closed.length, 0);
+  assert.equal(f.launches.length, 1, 'one native launch');
+  assert.deepEqual(f.state().ownerLaunch, launch);
+  assert.doesNotMatch((await f.invoke('status')).message, /relaunch pending/);
+});
+
+test('relaunch: the fingerprint covers an explicit CODEX_HOME launch argument and stays the same across ticks and a restart', async t => {
+  const f = await relaunchFixture(t);
+  const profile = join(f.home, "codex 'profile'"); mkdirSync(profile);
+  f.env = { ...f.env, CODEX_HOME: profile };
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  const state = f.state(), launch = state.ownerLaunch;
+  assert.equal(state.environment.CODEX_HOME, profile);
+  assert.equal(launch.fingerprint, f.module.autopilotLaunchFingerprint(state));
+  const { CODEX_HOME, ...withoutProfile } = state.environment;
+  assert.notEqual(launch.fingerprint, f.module.autopilotLaunchFingerprint({ ...state, environment: withoutProfile }), 'the CODEX_HOME argument is in the fingerprint');
+  f.status = 304; await f.tick(); await f.tick();
+  f.issues = [issue(82)]; f.status = 200; await f.tick();
+  assert.equal(f.delivered.at(-1), 'w1:p1');
+  assert.equal((await f.invoke('stop')).exitCode, 0);
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  f.status = 304; await f.tick();
+  assert.equal(f.closed.length, 0);
+  assert.equal(f.launches.length, 1, 'one native launch');
+  assert.deepEqual(f.state().ownerLaunch, launch);
+});
+
+test('relaunch: stop and start with an upgraded package gives the fresh chat the context override', async t => {
+  const f = await relaunchFixture(t);
+  const older = join(f.dir, 'pdd-older');
+  mkdirSync(older); writeFileSync(join(older, 'package.json'), JSON.stringify({ name: 'pdd', version: '0.0.1' }));
+  assert.equal((await f.invoke('start', { packageRoot: older })).exitCode, 0);
+  const original = f.state();
+  assert.equal(original.paneId, 'w1:p1'); assert.equal(f.launches.length, 1);
+  assert.equal((await f.invoke('stop')).exitCode, 0);
+  const started = await f.invoke('start');
+  assert.equal(started.exitCode, 0, started.message);
+  assert.deepEqual(f.closed, ['w1:p1']);
+  assert.equal(f.launches.length, 2); assert.equal(f.launches[1].pane, 'w2:p1');
+  const { set } = codexConfigs(f.launches[1].argv);
+  assert.ok(Object.hasOwn(set, 'PDD_AUTOPILOT_CONTEXT'), `fresh chat argv: ${JSON.stringify(f.launches[1].argv)}`);
+  assert.deepEqual(JSON.parse(set.PDD_AUTOPILOT_CONTEXT), { version: 'pdd.autopilot-coordinator.v1', repository: 'owner/repo', coordinatorId: original.coordinatorId, machine: original.machine, activation: original.activatedAt });
+  const after = f.state();
+  assert.equal(after.coordinatorId, original.coordinatorId); assert.equal(after.packageRoot, root);
+  assert.equal(f.delivered.at(-1), 'w2:p1');
+  assert.ok(f.prompts.at(-1).includes(JSON.stringify(join(root, 'skills', 'pdd-autopilot', 'SKILL.md'))), 'the fresh chat reads the upgraded skill');
+  assert.equal(f.packet().recipeFirst, true);
+});
+
+// Issue 3037 review M1: a failure after the relaunch `pane close` leaves the saved state naming the
+// closed pane. Herdr answers `agent_not_found` for that pane, so only `pane get` shows that it is gone.
+// Each case stops the relaunch at one point after the close; a later tick or start must replace the pane.
+const afterClose = {
+  'a Herdr error': f => {
+    const real = f.ports.herdr; let closed = false;
+    f.ports.herdr = async args => {
+      if (closed && args[0] === 'pane' && args[1] === 'get') { closed = false; throw Object.assign(Error('Herdr timed out'), { code: 'timeout' }); }
+      const reply = await real(args);
+      if (args[0] === 'pane' && args[1] === 'close') closed = true;
+      return reply;
+    };
+    return () => { f.ports.herdr = real; };
+  },
+  'a failed state save': f => {
+    // The state file is a folder for the one save after the close, so that save fails.
+    const real = f.ports.herdr, warn = f.ports.warn, file = f.stateFile(), aside = `${file}.aside`; let closed = false, swapped = false;
+    f.ports.herdr = async args => {
+      if (closed && args[0] === 'pane' && args[1] === 'get') { closed = false; renameSync(file, aside); mkdirSync(file); swapped = true; }
+      const reply = await real(args);
+      if (args[0] === 'pane' && args[1] === 'close') closed = true;
+      return reply;
+    };
+    f.ports.warn = text => { if (swapped) { rmSync(file, { recursive: true }); renameSync(aside, file); swapped = false; } warn(text); };
+    return () => { assert.equal(swapped, false); f.ports.herdr = real; f.ports.warn = warn; };
+  },
+  'a process end': f => {
+    // Nothing after the close runs or reaches the disk: the saved state stays as it was at the close.
+    const real = f.ports.herdr, file = f.stateFile(); let snapshot = null;
+    f.ports.herdr = async args => {
+      if (snapshot) throw Object.assign(Error('process ended'), { code: 'process_ended' });
+      const reply = await real(args);
+      if (args[0] === 'pane' && args[1] === 'close') snapshot = readFileSync(file);
+      return reply;
+    };
+    return () => { writeFileSync(file, snapshot); f.ports.herdr = real; };
+  },
+};
+for (const [failure, inject] of Object.entries(afterClose)) for (const recovery of ['a plain tick', 'stop and start']) {
+  test(`relaunch: after ${failure} after the close, ${recovery} replaces the gone pane for the same coordinator`, async t => {
+    const f = await relaunchFixture(t);
+    assert.equal((await f.invoke('start')).exitCode, 0);
+    const original = f.state();
+    f.saveState(state => { delete state.ownerLaunch.fingerprint; });
+    const finish = inject(f), prompts = f.prompts.length;
+    f.issues = [issue(90)]; f.time += 60 * 1000;
+    try { await f.tick(); } catch { /* A simulated process end may end the tick. */ }
+    finish();
+    assert.deepEqual(f.closed, ['w1:p1']);
+    assert.equal(f.state().paneId, 'w1:p1', 'the saved state still names the closed pane');
+    assert.equal(f.launches.length, 1); assert.equal(f.prompts.length, prompts);
+    // GitHub still lists issue 90; a lost ETag gets the full list again.
+    f.time += 30 * 60 * 1000;
+    if (recovery === 'a plain tick') await f.tick();
+    else {
+      assert.equal((await f.invoke('stop')).exitCode, 0);
+      const started = await f.invoke('start');
+      assert.equal(started.exitCode, 0, started.message);
+    }
+    const after = f.state();
+    assert.deepEqual(f.launches.map(launch => launch.pane), ['w1:p1', 'w2:p1']);
+    assert.equal(after.paneId, 'w2:p1'); assert.equal(after.ownerLaunch.paneId, 'w2:p1');
+    assert.equal(after.coordinatorId, original.coordinatorId, 'claims stay with the same coordinator');
+    assert.equal(after.machine, original.machine); assert.equal(after.activatedAt, original.activatedAt);
+    assert.equal(after.ownerLaunch.terminalId, 'term2');
+    assert.equal(f.context(f.launches.at(-1)).coordinatorId, original.coordinatorId);
+    assert.equal(f.delivered.at(-1), 'w2:p1'); assert.match(f.prompts.at(-1), /"number":90,/);
+    assert.equal(f.packet().recipeFirst, true, 'the fresh chat gets the start-up recipe');
+    assert.deepEqual(f.live(), ['w2:p1'], 'one coordinator chat');
+    const quiet = f.herdrCalls.length; f.status = 304; await f.tick();
+    for (const [group, action] of [['workspace', 'create'], ['pane', 'run'], ['pane', 'close']]) assert.equal(herdrSince(f, quiet, group, action).length, 0, `${group} ${action}`);
+    assert.doesNotMatch((await f.invoke('status')).message, /coordinator unavailable|relaunch (pending|held)/);
+  });
+}
+
+// Issue 3037 review F1: a Herdr server restart can give the saved pane id to a new terminal. The
+// saved terminal identity keeps the relaunch from closing it and keeps work out of it.
+const otherTerminal = {
+  'another chat has': f => { Object.assign(f.panes.get('w1:p1'), { terminal_id: 'term-restarted' }); },
+  'an empty restored pane has': f => { Object.assign(f.panes.get('w1:p1'), { terminal_id: 'term-restarted', agent: false }); },
+  'another chat gets just before the close': f => {
+    const real = f.ports.herdr; let gets = 0;
+    f.ports.herdr = async args => {
+      if (args[0] === 'agent' && args[1] === 'get' && args[2] === 'w1:p1' && ++gets === 2) Object.assign(f.panes.get('w1:p1'), { terminal_id: 'term-restarted' });
+      return real(args);
+    };
+  },
+};
+for (const [variant, restart] of Object.entries(otherTerminal)) for (const due of [true, false]) {
+  if (!due && variant.endsWith('before the close')) continue;
+  test(`relaunch: a saved pane id that ${variant} after a Herdr restart stays open and gets no work${due ? ' when a relaunch is due' : ''}; the coordinator gets a fresh pane`, async t => {
+    const f = await relaunchFixture(t);
+    assert.equal((await f.invoke('start')).exitCode, 0);
+    const original = f.state();
+    if (due) f.saveState(state => { delete state.ownerLaunch.fingerprint; });
+    restart(f);
+    const restarted = (await f.invoke('status')).message;
+    const calls = f.herdrCalls.length, prompts = f.prompts.length;
+    f.issues = [issue(97)]; f.time += 60 * 1000; await f.tick();
+    assert.deepEqual(f.closed, [], 'the other pane is never closed');
+    assert.equal(f.panes.get('w1:p1').closed, false);
+    for (const [group, action] of [['agent', 'prompt'], ['pane', 'run'], ['pane', 'close']]) assert.equal(herdrSince(f, calls, group, action).filter(args => args[2] === 'w1:p1').length, 0, `${group} ${action}`);
+    const after = f.state();
+    assert.equal(after.paneId, 'w2:p1'); assert.equal(after.coordinatorId, original.coordinatorId);
+    assert.deepEqual(f.launches.map(launch => launch.pane), ['w1:p1', 'w2:p1']);
+    assert.equal(f.prompts.length, prompts + 1); assert.equal(f.delivered.at(-1), 'w2:p1');
+    assert.match(f.prompts.at(-1), /"number":97,/); assert.equal(f.packet().recipeFirst, true);
+    assert.equal(f.state().relaunchTargets, undefined, 'a replaced pane is not a relaunch');
+    assert.equal(original.ownerLaunch.terminalId, 'term1', 'the launch saves the terminal identity');
+    if (!variant.endsWith('before the close')) assert.match(restarted, /coordinator unavailable \((saved target does not match|missing)\)/, 'status does not report the other terminal as the coordinator');
+    assert.match((await f.invoke('status')).message, /coordinator idle/);
+  });
+}
+
+// Issue 3037 second review M1: the relaunch saves a state with no owner launch, and the fresh launch
+// saves a new one a few Herdr calls later. Autopilot can stop between these two saves. Stop and start
+// must then launch the fresh chat for the same coordinator, as the next tick does.
+const afterClear = {
+  'the terminal read of the fresh pane fails': f => {
+    const real = f.ports.herdr; let failed = false;
+    f.ports.herdr = async args => {
+      if (!failed && args[0] === 'pane' && args[1] === 'get' && args[2] === 'w2:p1') { failed = true; throw Object.assign(Error('Herdr timed out'), { code: 'timeout' }); }
+      return real(args);
+    };
+    return () => { assert.equal(failed, true); f.ports.herdr = real; };
+  },
+  'the fresh workspace create fails': f => {
+    const real = f.ports.herdr; let failed = false;
+    f.ports.herdr = async args => {
+      if (!failed && f.closed.length && args[0] === 'workspace' && args[1] === 'create') { failed = true; throw Object.assign(Error('Herdr timed out'), { code: 'timeout' }); }
+      return real(args);
+    };
+    return () => { assert.equal(failed, true); f.ports.herdr = real; };
+  },
+  'the process ends after the clear': f => {
+    // Nothing after the clear runs or reaches the disk: the saved state stays as the clear saved it.
+    const real = f.ports.herdr, file = f.stateFile(); let snapshot = null;
+    f.ports.herdr = async args => {
+      if (!snapshot && f.closed.length && args[0] === 'workspace' && args[1] === 'create') snapshot = readFileSync(file);
+      if (snapshot) throw Object.assign(Error('process ended'), { code: 'process_ended' });
+      return real(args);
+    };
+    return () => { writeFileSync(file, snapshot); f.ports.herdr = real; };
+  },
+  'a person stops Autopilot during the relaunch tick': f => {
+    // Stop does not wait for the tick lock, so the tick's next guard sees the disabled state.
+    const real = f.ports.herdr; let stopped = null;
+    f.ports.herdr = async args => {
+      if (!stopped && args[0] === 'pane' && args[1] === 'get' && args[2] === 'w2:p1') stopped = await f.invoke('stop');
+      return real(args);
+    };
+    return () => { assert.equal(stopped?.exitCode, 0); f.ports.herdr = real; };
+  },
+};
+for (const [failure, inject] of Object.entries(afterClear)) {
+  test(`relaunch: when ${failure}, stop and start launch the fresh chat for the same coordinator`, async t => {
+    const f = await relaunchFixture(t);
+    assert.equal((await f.invoke('start')).exitCode, 0);
+    const original = f.state();
+    // A state that an older package saved: an owner launch with no fingerprint and no launchProfile.
+    f.saveState(state => { delete state.ownerLaunch.fingerprint; delete state.launchProfile; });
+    const finish = inject(f), prompts = f.prompts.length;
+    f.issues = [issue(90)]; f.time += 60 * 1000;
+    try { await f.tick(); } catch { /* A Herdr error or a simulated process end may end the tick. */ }
+    finish();
+    assert.deepEqual(f.closed, ['w1:p1']);
+    assert.equal(f.state().ownerLaunch, undefined, 'the clear saved no owner launch');
+    assert.equal(f.launches.length, 1); assert.deepEqual(f.live(), []); assert.equal(f.prompts.length, prompts);
+    f.time += 30 * 60 * 1000;
+    assert.equal((await f.invoke('stop')).exitCode, 0);
+    const started = await f.invoke('start');
+    assert.equal(started.exitCode, 0, started.message);
+    const after = f.state();
+    assert.deepEqual(f.launches.map(launch => launch.pane), ['w1:p1', 'w2:p1']);
+    assert.deepEqual(f.live(), ['w2:p1'], 'one coordinator chat');
+    assert.equal(after.paneId, 'w2:p1'); assert.equal(after.ownerLaunch.paneId, 'w2:p1');
+    assert.equal(after.coordinatorId, original.coordinatorId, 'claims stay with the same coordinator');
+    assert.equal(after.machine, original.machine); assert.equal(after.activatedAt, original.activatedAt);
+    assert.equal(f.context(f.launches.at(-1)).coordinatorId, original.coordinatorId);
+    assert.equal(f.delivered.at(-1), 'w2:p1'); assert.match(f.prompts.at(-1), /"number":90,/);
+    assert.equal(f.packet().recipeFirst, true, 'the fresh chat gets the start-up recipe');
+    const quiet = f.herdrCalls.length; f.status = 304; await f.tick();
+    for (const [group, action] of [['workspace', 'create'], ['pane', 'run'], ['pane', 'close']]) assert.equal(herdrSince(f, quiet, group, action).length, 0, `${group} ${action}`);
+    assert.match((await f.invoke('status')).message, /coordinator idle/);
+  });
+}
+
+test('relaunch: an older state with no owner launch and no launch profile still refuses an ordinary start', async t => {
+  const f = await relaunchFixture(t);
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  assert.equal((await f.invoke('stop')).exitCode, 0);
+  f.saveState(state => { delete state.ownerLaunch; delete state.launchProfile; });
+  const calls = f.herdrCalls.length;
+  const started = await f.invoke('start');
+  assert.equal(started.exitCode, 1);
+  assert.match(started.message, /saved coordinator profile cannot be verified/);
+  assert.equal(herdrSince(f, calls, 'pane', 'run').length, 0); assert.equal(f.state().enabled, false);
+});
+
+// Issue 3037 second review F1: recovery after an uncertain send uses the saved pane, so the saved
+// terminal must still be there; a pane id that another terminal has gets no recovery prompt.
+test('relaunch: uncertain-send recovery never prompts a saved pane id that another terminal has', async t => {
+  const f = await relaunchFixture(t);
+  const real = f.ports.herdr;
+  // Recovery also reads the saved workspace.
+  f.ports.herdr = async args => args[0] === 'workspace' && args[1] === 'get' ? { result: { type: 'workspace_info', workspace: { workspace_id: args[2] } } } : real(args);
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  f.saveState(state => { state.deliveryIntent = { version: 2, paneId: state.paneId, workspaceId: state.workspaceId, at: f.time - 1000, fingerprint: null, payloadDigest: 'earlier' }; });
+  Object.assign(f.panes.get('w1:p1'), { terminal_id: 'term-restarted', session: 'session-restarted' });
+  const calls = f.herdrCalls.length;
+  f.issues = [issue(96)]; f.time += 60 * 1000; await f.tick();
+  assert.equal(herdrSince(f, calls, 'agent', 'prompt').length, 0, 'no recovery prompt reaches the other terminal');
+  for (const [group, action] of [['pane', 'run'], ['pane', 'close'], ['workspace', 'create']]) assert.equal(herdrSince(f, calls, group, action).length, 0, `${group} ${action}`);
+  assert.ok(f.state().deliveryIntent, 'the uncertain custody stays');
+  // Control: with the saved terminal, the same recovery prompts the saved pane.
+  assert.ok(f.warnings.includes('Autopilot recovery waits: the saved target is not safely idle and unchanged.'), f.warnings.join('\n'));
+  Object.assign(f.panes.get('w1:p1'), { terminal_id: 'term1' });
+  f.time += 30 * 60 * 1000; await f.tick();
+  assert.deepEqual(herdrSince(f, calls, 'agent', 'prompt').map(args => args[2]), ['w1:p1']);
+  assert.match(f.prompts.at(-1), /fresh current-state reconciliation/);
+});
+
+test('relaunch: a saved delivery with uncertain custody blocks the relaunch', async t => {
+  const f = await relaunchFixture(t);
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  f.saveState(state => {
+    delete state.ownerLaunch.fingerprint;
+    state.deliveryIntent = { version: 2, paneId: state.paneId, workspaceId: state.workspaceId, at: f.time - 1000, fingerprint: null, payloadDigest: 'earlier' };
+  });
+  const calls = f.herdrCalls.length;
+  f.issues = [issue(93)]; f.time += 60 * 1000; await f.tick();
+  assert.deepEqual(f.closed, []);
+  assert.equal(herdrSince(f, calls, 'pane', 'run').length, 0);
+  assert.equal(herdrSince(f, calls, 'workspace', 'create').length, 0);
+  assert.equal(f.state().paneId, 'w1:p1');
+  assert.doesNotMatch((await f.invoke('status')).message, /relaunch (pending|held)/);
+});
+
+test('relaunch: the hold rechecks the chat just before the close and closes nothing when it is working', async t => {
+  const f = await relaunchFixture(t);
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  f.saveState(state => { delete state.ownerLaunch.fingerprint; });
+  const real = f.ports.herdr; let gets = 0;
+  // The first `agent get` in the wake sees an idle chat; the recheck inside the hold sees a new turn.
+  f.ports.herdr = async args => { if (args[0] === 'agent' && args[1] === 'get' && ++gets === 2) f.agentStatus = 'working'; return real(args); };
+  const calls = f.herdrCalls.length, prompts = f.prompts.length;
+  f.issues = [issue(94)]; f.time += 60 * 1000; await f.tick();
+  assert.equal(gets, 2);
+  assert.deepEqual(f.closed, []); assert.equal(f.prompts.length, prompts);
+  assert.equal(herdrSince(f, calls, 'pane', 'run').length, 0);
+  assert.ok(f.warnings.some(text => /could not be closed safely/.test(text)));
+  f.ports.herdr = real; f.agentStatus = 'idle'; f.status = 304; await f.tick();
+  assert.deepEqual(f.closed, ['w1:p1']); assert.equal(f.delivered.at(-1), 'w2:p1');
+  assert.match(f.prompts.at(-1), /"number":94,/);
+});
+
+test('relaunch: a blocked chat is not closed and gets no input; status shows the pending relaunch', async t => {
+  const f = await relaunchFixture(t);
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  f.saveState(state => { delete state.ownerLaunch.fingerprint; });
+  f.agentStatus = 'blocked';
+  const calls = f.herdrCalls.length, prompts = f.prompts.length;
+  f.issues = [issue(95)]; f.time += 60 * 1000; await f.tick();
+  assert.deepEqual(f.closed, []); assert.equal(f.prompts.length, prompts);
+  assert.equal(herdrSince(f, calls, 'pane', 'run').length, 0);
+  const status = (await f.invoke('status')).message;
+  assert.match(status, /coordinator blocked/);
+  assert.equal(status.split('\n').filter(text => /^Coordinator relaunch pending after upgrade/.test(text)).length, 1, status);
+  f.agentStatus = 'idle'; f.status = 304; await f.tick();
+  assert.deepEqual(f.closed, ['w1:p1']); assert.equal(f.delivered.at(-1), 'w2:p1');
+});
+
+test('relaunch: a second relaunch for the same fingerprint is held; the current chat gets work and status shows one line', async t => {
+  const f = await relaunchFixture(t);
+  const older = join(f.dir, 'pdd-other-install');
+  mkdirSync(older); writeFileSync(join(older, 'package.json'), JSON.stringify({ name: 'pdd', version: '0.0.1' }));
+  // Starts from two installs alternate, so the fingerprint changes on each start.
+  for (const packageRoot of [older, root, older]) assert.equal((await f.invoke('start', { packageRoot })).exitCode, 0);
+  const original = f.state();
+  assert.deepEqual(f.closed, ['w1:p1', 'w2:p1']); assert.equal(f.launches.length, 3);
+  const writes = f.githubWrites().length, prompts = f.prompts.length;
+  const started = await f.invoke('start');
+  assert.equal(started.exitCode, 0, started.message);
+  assert.deepEqual(f.closed, ['w1:p1', 'w2:p1'], 'no third relaunch');
+  assert.equal(f.launches.length, 3);
+  assert.equal(f.prompts.length, prompts + 1); assert.equal(f.delivered.at(-1), 'w3:p1', 'the current chat gets work');
+  assert.equal(f.warnings.filter(text => /did not relaunch the coordinator chat again/.test(text)).length, 1);
+  const held = (await f.invoke('status')).message;
+  assert.equal(held.split('\n').filter(text => /^Coordinator relaunch held/.test(text)).length, 1, held);
+  assert.doesNotMatch(held, /relaunch pending/);
+  assert.equal(original.relaunchTargets.length, 2, 'the relaunch record');
+  f.status = 304; await f.tick();
+  assert.equal(f.launches.length, 3); assert.equal(f.closed.length, 2);
+  assert.equal(f.warnings.filter(text => /did not relaunch the coordinator chat again/.test(text)).length, 1, 'one warning');
+  assert.equal(f.githubWrites().length, writes);
+  // A person closes the coordinator pane: a fresh chat starts with the current settings.
+  f.panes.get('w3:p1').closed = true;
+  f.issues = [issue(98)]; f.status = 200; f.time += 60 * 1000; await f.tick();
+  assert.equal(f.launches.at(-1).pane, 'w4:p1'); assert.equal(f.delivered.at(-1), 'w4:p1');
+  assert.equal(f.state().ownerLaunch.fingerprint, f.module.autopilotLaunchFingerprint(f.state()));
+  assert.equal(f.state().coordinatorId, original.coordinatorId);
+  assert.doesNotMatch((await f.invoke('status')).message, /relaunch (pending|held)/);
 });
