@@ -2,7 +2,7 @@
 name: pdd-autopilot
 description: Use when Autopilot is on for a repo, to pick ready issues, claim them and run each one to an outcome.
 metadata:
-  pdd-skills: 0.1.20
+  pdd-skills: 0.1.21
 ---
 
 # PDD Autopilot
