@@ -4,13 +4,15 @@ const issueURL = x => typeof x === 'string' && /^https:\/\/github\.com\/[\w.-]+\
 const text = x => typeof x === 'string';
 const list = x => Array.isArray(x) && x.every(text);
 const exact = (x, keys) => x && typeof x === 'object' && !Array.isArray(x) && Object.keys(x).sort().join() === keys.split(',').sort().join();
+const fixLocator = value => /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/(?:pull\/[1-9]\d*|commit\/[a-f\d]{7,64})\b/i.test(value)
+  || /\b[a-f\d]{7,64}\b/i.test(value) || /(?:^|[\s(`])(?:[\w.-]+\/)*[\w.-]+\.[a-z\d]+:[1-9]\d*\b/i.test(value);
 export function validSort(record) {
   const r = record;
   return !!(exact(r, 'schema_version,issue,base,inputs,belongs,status,genuine,paths,rootCause,severity,question') && r.schema_version === 'pdd.issue-sort.v1' && issueURL(r.issue)
     && list(r.base) && new Set(r.base).size === r.base.length && Array.isArray(r.inputs) && r.inputs.length && r.inputs.every(x => exact(x, 'key,revision') && text(x.key) && x.key && text(x.revision) && x.revision) && new Set(r.inputs.map(x => x.key)).size === r.inputs.length
     && exact(r.belongs, 'kind,area,repository') && ['area','repository','old-code','unknown'].includes(r.belongs.kind) && text(r.belongs.area) && text(r.belongs.repository)
     && (r.belongs.kind !== 'repository' || /^[\w.-]+\/[\w.-]+$/.test(r.belongs.repository))
-    && exact(r.status, 'state,release,fix,evidence') && ['still-happens','partly-fixed','fixed','unclear'].includes(r.status.state) && text(r.status.release) && r.status.release && text(r.status.fix) && (r.status.state !== 'fixed' || r.status.fix.trim()) && list(r.status.evidence) && r.status.evidence.length && r.status.evidence.every(x => x.trim())
+    && exact(r.status, 'state,release,fix,evidence') && ['still-happens','partly-fixed','fixed','unclear'].includes(r.status.state) && text(r.status.release) && r.status.release && text(r.status.fix) && (r.status.state !== 'fixed' || fixLocator(r.status.fix)) && list(r.status.evidence) && r.status.evidence.length && r.status.evidence.every(x => x.trim())
     && exact(r.genuine, 'kind,duplicateOf,reason') && ['bug','feature','docs','duplicate','not-genuine','unclear'].includes(r.genuine.kind) && text(r.genuine.reason) && text(r.genuine.duplicateOf)
     && (r.genuine.kind !== 'duplicate' || issueURL(r.genuine.duplicateOf) && r.genuine.duplicateOf !== r.issue)
     && (!['not-genuine'].includes(r.genuine.kind) && r.belongs.kind !== 'old-code' || r.genuine.reason.trim())
@@ -78,16 +80,22 @@ export function sortPlan({ snapshot }) {
 }
 export function projectSortGraph(snapshot, graph) {
   if (!snapshot.sortContext) return graph;
-  const plan = sortPlan({ snapshot });
+  const plan = sortPlan({ snapshot }), unsafeGroups = new Set();
+  const uncertainSibling = (area, cause) => snapshot.issues.some(issue => issue.key.startsWith(`https://github.com/${snapshot.repository.toLowerCase()}/issues/`) && issue.state === 'open' && issue.authority === 'trusted' && !selectedSort(snapshot, issue)
+    && (issue.sorts ?? []).some(saved => saved.authority === 'trusted' && saved.intact && validSort(saved.record) && saved.record.rootCause === cause
+      && resolveArea({ ...snapshot.sortContext, evidence: { paths: saved.record.paths, keywords: [issue.title, issue.sortText ?? ''], labels: issue.labels ?? [], area: saved.record.belongs.area } }).area === area));
   for (const group of plan.groups) {
     const umbrella = graph.nodes.find(x => x.key === group.umbrella);
     const members = graph.nodes.filter(x => group.members.includes(x.key));
+    if (uncertainSibling(group.area, group.rootCause)) { unsafeGroups.add(group.umbrella); umbrella.eligible = false; umbrella.reasons.push('Group sort pending'); }
+    if (members.some(x => x.key === group.umbrella ? !['idle','running'].includes(x.executionState) : x.executionState !== 'idle')) unsafeGroups.add(group.umbrella);
+    if (unsafeGroups.has(group.umbrella)) umbrella.eligible = false;
     const blockers = [...new Set(members.flatMap(x => x.blockers))];
     if (members.some(x => x.reviewState !== 'current' || x.reasons.includes('Incomplete relevant observations') || x.facts.length)) {
-      umbrella.eligible = false; umbrella.reasons.push('Group review pending');
+      unsafeGroups.add(group.umbrella); umbrella.eligible = false; umbrella.reasons.push('Group review pending');
     }
     if (blockers.some(x => group.members.includes(x))) {
-      for (const member of members) { member.eligible = false; member.reasons.push('Group needs dependency review'); }
+      unsafeGroups.add(group.umbrella); for (const member of members) { member.eligible = false; member.reasons.push('Group needs dependency review'); }
     }
     const prospective = [...graph.edges, ...group.members.filter(x => x !== group.umbrella).map(dependent => ({ dependent, blocker: group.umbrella }))];
     const cycle = (key, stack = new Set(), done = new Set()) => {
@@ -97,17 +105,18 @@ export function projectSortGraph(snapshot, graph) {
       if (prospective.filter(x => x.dependent === key).some(x => cycle(x.blocker, stack, done))) return true;
       stack.delete(key); done.add(key); return false;
     };
-    if (cycle(group.umbrella)) for (const member of members) { member.eligible = false; member.reasons.push('Group dependency cycle'); }
+    if (cycle(group.umbrella)) { unsafeGroups.add(group.umbrella); for (const member of members) { member.eligible = false; member.reasons.push('Group dependency cycle'); } }
     for (const blocker of blockers.filter(x => !group.members.includes(x))) {
       if (!umbrella.blockers.includes(blocker)) umbrella.blockers.push(blocker);
       const native = graph.nodes.find(x => x.key === blocker);
-      if (!native || native.nativeState !== 'completed') { umbrella.eligible = false; umbrella.reasons.push('Group prerequisite pending'); }
+      if (!native || native.nativeState !== 'completed') { unsafeGroups.add(group.umbrella); umbrella.eligible = false; umbrella.reasons.push('Group prerequisite pending'); }
     }
   }
   for (const node of graph.nodes) {
     const route = plan.routes.find(x => x.issue === node.key);
     if (!route) continue;
-    node.sort = { action: route.action, area: route.area, owner: route.owner, umbrella: route.umbrella, members: route.members };
+    if (!route.umbrella && route.record?.rootCause && uncertainSibling(route.area, route.record.rootCause)) { unsafeGroups.add(node.key); node.eligible = false; node.reasons.push('Group sort pending'); }
+    node.sort = { action: route.action, area: route.area, owner: route.owner, umbrella: route.umbrella, members: route.members, ready: !unsafeGroups.has(route.umbrella || node.key) };
     if (route.action !== 'work' || route.umbrella && route.umbrella !== node.key) {
       node.eligible = false;
       node.reasons.push(route.umbrella && route.umbrella !== node.key ? 'Waiting for root-cause umbrella' : `Sort: ${route.reason}`);
@@ -117,7 +126,8 @@ export function projectSortGraph(snapshot, graph) {
   return graph;
 }
 
-export function sortClosingReferences({ snapshot, issue, code }) {
+export function sortClosingReferences({ snapshot, issue, code, graph }) {
   const group = sortPlan({ snapshot }).groups.find(x => x.umbrella === issue);
+  if (!group || graph?.nodes.find(x => x.key === issue)?.sort?.ready !== true) return [];
   return (group?.members ?? []).filter(x => x !== issue).map(key => `${code ? 'Closes' : 'Refs'} ${key}`);
 }

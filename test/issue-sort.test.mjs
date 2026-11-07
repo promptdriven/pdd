@@ -25,6 +25,9 @@ test('completion validates and saves a sort record, and refuses malformed record
   const bad = fixture();
   await assert.rejects(complete(bad, [{ ...bad.record(1), severity: 'critical' }]), /invalid-analysis/);
   assert.equal(bad.writes.length, 0);
+  const missingFix = fixture();
+  await assert.rejects(complete(missingFix, [missingFix.record(1, { status: { state: 'fixed', release: '1.0.0', fix: 'fixed', evidence: ['done'] } })]), /invalid-analysis/);
+  assert.equal(missingFix.writes.length, 0);
 });
 
 test('only changed sort inputs require a new record', async () => {
@@ -226,6 +229,8 @@ test('without an area map, different area hints still form one default area', as
   w.save(w.record(2, { belongs: { kind: 'area', area: 'docs', repository: '' } })); w.review(2);
   assert.equal((await node(w)).sort?.area, 'default');
   assert.deepEqual((await graph(w)).nodes.filter(x => x.eligible).map(x => x.key), [key(1)]);
+  w.issues[1].body += ' A new requirement.';
+  assert.equal((await node(w)).eligible, false, 'the known sibling needs a fresh sort before a group run');
 });
 
 test('the coordinator packet redacts an outsider sort record', async () => {

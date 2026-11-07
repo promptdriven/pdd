@@ -1,5 +1,6 @@
 import { validateSnapshot } from './metrics-store.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
+import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts } from './issue-dependencies-github.mjs';
 // Generated from prompts/cli/workflow-runner.prompt.md (sha256: 33dc44a7518d2fb7bf424398daf54496e911059e51d2bb93abd85e77ba1308dd).
@@ -1366,7 +1367,7 @@ async function publishAreaPr(run, area, p, lines, retry) {
   if (run.automaticOrigin) {
     try {
       const { snapshot } = await (p.readDependencySnapshot ?? readDependencySnapshot)({ cwd: run.sourceRoot || run.root, repository: run.repo }, p);
-      const references = sortClosingReferences({ snapshot, issue: `https://github.com/${run.repo.toLowerCase()}/issues/${run.number}`, code: label !== 'PR 1' });
+      const references = sortClosingReferences({ snapshot, issue: `https://github.com/${run.repo.toLowerCase()}/issues/${run.number}`, code: label !== 'PR 1', graph: projectIssueGraph({ snapshot }) });
       prepared = { ...prepared, issueReference: [prepared.issueReference, ...references].join('\n') };
     } catch { /* Unproved members get no closing promise. */ }
   }

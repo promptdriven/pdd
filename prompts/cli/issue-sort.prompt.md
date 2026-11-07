@@ -11,7 +11,7 @@ A sort record has schema_version pdd.issue-sort.v1, issue (full GitHub URL), bas
 ({kind:bug|feature|docs|duplicate|not-genuine|unclear,duplicateOf,reason}), paths
 (examined repo paths), rootCause (a short kebab-case tag or empty if unknown),
 severity (high|medium|low), and question (empty or one question).
-Require evidence, a fixing commit/PR/code locator for fixed, a different full
+Require evidence and a usable fixing locator for fixed: a GitHub PR/commit URL, a 7-to-64-digit hexadecimal commit identifier, or a file path with a line number. Reject a plain claim such as fixed or done. Require a different full
 issue URL for duplicate, and a reason for not-genuine or old-code. Reject malformed
 records before effects. A record must include its issue row, current area/release
 row, its current label row (without PDD work labels), and every trusted requirement comment for its issue. Every examined input
@@ -30,9 +30,16 @@ unknown owner is one question. Current unresolved local status is a question.
 Only work routes can group. Same area and nonempty rootCause share one umbrella:
 retain a running member if exactly one exists, else the lowest issue number.
 Multiple running members hold the group. Do not group across areas or repository.
+A previously sorted sibling with changed or incomplete inputs holds its known group until another sort. Its stale decision can hold work but cannot authorize an effect.
 Members wait for that umbrella; group selection must not create a dependency
 cycle or bypass any member's prerequisites, including a prerequisite closed as not planned. Check paths through issues outside the group too. The dependency graph retains
-its own links and reviews. The code PR for the umbrella closes every member.
+its own links and reviews. The code PR for the umbrella closes every member only while the group is safe.
+`projectSortGraph(snapshot,graph)` adds each node's sort action, area, owner,
+umbrella, members and ready flag. Ready is false for an unsafe group; it does not
+replace ordinary eligibility. `sortClosingReferences({snapshot,issue,code,graph})`
+returns extra full-URL Refs lines for prompt PRs or Closes lines for code PRs.
+Require the current projected graph's group-ready flag before adding these lines;
+an invalid or unobserved group supplies no extra references.
 
 
 ## Dependencies

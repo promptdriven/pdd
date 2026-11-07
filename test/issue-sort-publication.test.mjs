@@ -9,6 +9,7 @@ import { fixture as workflow } from './helpers/workflow-runner-fixture.mjs';
 import { fixture as sortWorld, repository, key } from './helpers/issue-sort-fixture.mjs';
 
 test('an umbrella code PR closes all three current group members through ordinary publication', async t => {
+  for (const unsafe of [false, true]) {
   const f = await workflow(t);
   assert.equal((await f.run()).exitCode, 0);
   let run = f.record(); f.tick();
@@ -18,6 +19,7 @@ test('an umbrella code PR closes all three current group members through ordinar
   const w = sortWorld([17,18,19]);
   for (const n of [17,18,19]) { w.save(w.record(n)); w.review(n); }
   const snapshot = (await readDependencySnapshot({ repository }, w.ports)).snapshot;
+  if (unsafe) snapshot.coverage.issues.find(x => x.key === key(18)).comments = false;
   run.automaticOrigin = { repository, coordinatorId: 'coordinator', machine: 'test-machine', claim: { commentId: '500', labelEventId: '600' } };
   writeRun(run, f.ports);
   const ports = f.agentPorts({
@@ -34,5 +36,6 @@ test('an umbrella code PR closes all three current group members through ordinar
   }
   assert.equal(f.prs.length, 1);
   assert.match(f.prs[0].body, /Closes #17/);
-  for (const n of [18,19]) assert.ok(f.prs[0].body.includes(`Closes ${key(n)}`));
+  for (const n of [18,19]) assert.equal(f.prs[0].body.includes(`Closes ${key(n)}`), !unsafe);
+  }
 });
