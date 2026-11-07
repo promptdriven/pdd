@@ -157,7 +157,9 @@ nodes. Never remove a human edge to break a cycle. Unknown linked facts give
 Issue `assignees`, when present, is the current complete GitHub Assignees list; an
 empty array means unassigned. Missing or malformed assignee facts are unknown and
 prevent new automatic selection. A nonempty list prevents new automatic selection.
-The `pdd:working` claim also prevents new automatic selection. An open PR or a
+The `pdd:working` claim also prevents new automatic selection. A hold that starts
+with `Expired claim` is a note: show it in reasons, but it does not hold execution
+or selection. The GitHub reader supplies it in place of an expired claim. An open PR or a
 saved active or completed workflow alone is not an ownership hold. These rules
 apply to new automatic selection, not as a new global manual-workflow gate.
 

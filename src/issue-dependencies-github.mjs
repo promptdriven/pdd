@@ -3,6 +3,7 @@ import { execFile as execCallback } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { join, resolve, relative, isAbsolute } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { runAutopilot } from './autopilot.mjs';
 import { resolveWorkflowRepository } from './workflow-github.mjs';
 import { gitContext, currentChat, stateDirFor } from './workflow-runs.mjs';
@@ -52,7 +53,8 @@ function service(cwd, ports) {
   async function api(endpoint, method = 'GET', input) {
     const executeRequest = () => run('gh', ['api', '--include', '--method', method, endpoint, '-H', 'Accept: application/vnd.github+json',
       ...(input === undefined ? [] : ['--input', '-'])], input);
-    const mutation = method === 'POST' && /^repos\/[^/]+\/[^/]+\/issues\/[1-9][0-9]*\/(?:comments|dependencies\/blocked_by)$/.test(endpoint);
+    const mutation = method === 'POST' && /^repos\/[^/]+\/[^/]+\/issues\/[1-9][0-9]*\/(?:comments|dependencies\/blocked_by)$/.test(endpoint)
+      || method === 'PATCH' && /^repos\/[^/]+\/[^/]+\/issues\/comments\/[1-9][0-9]*$/.test(endpoint);
     const raw = mutation && ports.admitMutation ? await ports.admitMutation(executeRequest) : await executeRequest();
     const boundary = raw.search(/\r?\n\r?\n/), header = boundary >= 0 ? raw.slice(0, boundary) : '';
     const body = boundary >= 0 ? raw.slice(boundary).trim() : raw;
@@ -329,30 +331,79 @@ async function launcherState(cwd, repository, ports) {
   return state && sameRepo(state.repo, repository) && state.cwd === root ? state : null;
 }
 
-function claimMetadata(body) {
-  const blocks = [...String(body ?? '').matchAll(/```(?:json)?\s*\n([\s\S]*?)\n```/g)].map(m => m[1]);
-  blocks.push(String(body ?? '').trim());
+// A claim comment carries one JSON record. `text` is its exact source so a
+// heartbeat changes only the lastSeen value and keeps the rest of the comment.
+function claimRecord(body) {
+  const source = String(body ?? ''), blocks = [...source.matchAll(/```(?:json)?\s*\n([\s\S]*?)\n```/g)].map(m => m[1]);
+  blocks.push(source.trim());
   for (const text of blocks) try {
     const value = JSON.parse(text);
-    if (object(value) && ['repository', 'coordinatorId', 'machine', 'labelEventId'].every(k => typeof value[k] === 'string' && value[k])) return value;
+    if (object(value) && ['repository', 'coordinatorId', 'machine', 'labelEventId'].every(k => typeof value[k] === 'string' && value[k])) return { value, text };
   } catch { /* Legacy prose claims have unknown coordinator identity. */ }
   return null;
 }
+const claimMetadata = body => claimRecord(body)?.value ?? null;
+const CLAIM_EXPIRES_AFTER = 4 * 60 * 60 * 1000, LEGACY_CLAIM_EXPIRES_AFTER = 24 * 60 * 60 * 1000;
+// A "lastSeen" member with a JSON scalar value, anywhere in the record text.
+const LAST_SEEN = /(,\s*)?"lastSeen"\s*:\s*(?:"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null)(\s*,)?/g;
+const time = value => typeof value === 'string' ? Date.parse(value) : NaN;
+const iso = at => new Date(at).toISOString();
 
-async function winningClaim(repository, key, github, authority) {
+// Set or remove only the top-level lastSeen member and keep every other byte. Each
+// place where the member can be is tried; an edit counts only when the new body
+// parses to exactly the expected record, so a nested lastSeen is never changed.
+// Return null when no such edit exists.
+function editClaimRecord(body, record, expected) {
+  const accept = text => { const next = String(body).replace(record.text, () => text); return isDeepStrictEqual(claimRecord(next)?.value, expected) ? next : null; };
+  const set = Object.hasOwn(expected, 'lastSeen'), value = JSON.stringify(expected.lastSeen);
+  if (set && !Object.hasOwn(record.value, 'lastSeen')) return accept(record.text.replace(/\}\s*$/, `,"lastSeen":${value}}`));
+  for (const match of record.text.matchAll(LAST_SEEN)) {
+    const [whole, before = '', after = ''] = match, member = set ? `${before}"lastSeen":${value}${after}` : before && after ? ',' : '';
+    const next = accept(record.text.slice(0, match.index) + member + record.text.slice(match.index + whole.length));
+    if (next !== null) return next;
+  }
+  return null;
+}
+
+// The claim comment body without its top-level lastSeen member. A heartbeat alone
+// must not look like new trusted work to the tick.
+export function withoutClaimHeartbeat(body) {
+  const record = claimRecord(body);
+  if (!record || !Object.hasOwn(record.value, 'lastSeen')) return body;
+  const { lastSeen, ...rest } = record.value;
+  return editClaimRecord(body, record, rest) ?? body;
+}
+
+async function winningClaim(repository, key, github, authority, now = NaN) {
   const i = info(key), raw = parse((await github.issue({ repository, issue: i.issue })).json);
   if (raw.error) throw Error('Current claim issue unavailable');
-  const labeled = raw.labels?.some(l => (typeof l === 'string' ? l : l.name) === 'pdd:working');
-  if (!labeled) return null;
+  const labels = raw.labels?.map(l => typeof l === 'string' ? l : l.name) ?? [];
+  if (!labels.includes('pdd:working')) return null;
   const timeline = await allPages(github, repository, 'timeline', i.issue), comments = await allPages(github, repository, 'comments', i.issue);
-  let candidates = [];
+  let candidates = [], stuck = null;
   // Events arrive in service order. Only a native removal ends the active claim era.
-  for (const event of timeline) if (event.label?.name === 'pdd:working') {
-    if (event.event === 'unlabeled') candidates = [];
-    if (event.event === 'labeled') candidates.push(event);
+  for (const event of timeline) {
+    if (event.label?.name === 'pdd:working') {
+      if (event.event === 'unlabeled') candidates = [];
+      if (event.event === 'labeled') candidates.push(event);
+    }
+    if (event.label?.name === 'pdd:stuck') stuck = event.event === 'labeled' ? event : event.event === 'unlabeled' ? null : stuck;
   }
+  // Expiry: a heartbeat claim is expired 4 hours after its last-seen time. A legacy
+  // claim (a record with no top-level lastSeen, no unique matching claim record, a bare
+  // label, or a claim comment with no server time) is expired after 24 hours with no
+  // issue activity. An unknown time or clock never expires a claim.
+  const facts = (claim, lastSeen) => {
+    const heartbeat = Number.isFinite(lastSeen);
+    const seen = heartbeat ? lastSeen : [time(raw.updated_at), ...comments.flatMap(c => [time(c.created_at), time(c.updated_at)]),
+      ...timeline.map(e => time(e.created_at))].filter(Number.isFinite).reduce((latest, at) => Math.max(latest, at), -Infinity);
+    const expired = Number.isFinite(now) && Number.isFinite(seen) && now - seen >= (heartbeat ? CLAIM_EXPIRES_AFTER : LEGACY_CLAIM_EXPIRES_AFTER);
+    const stuckSince = labels.includes('pdd:stuck') ? time(stuck?.created_at) : NaN;
+    return { ...claim, active: !expired, ...(Number.isFinite(seen) ? { lastSeen: iso(seen) } : {}), ...(expired ? { expired: true } : {}),
+      ...(Number.isFinite(stuckSince) ? { stuckSince: iso(stuckSince) } : {}) };
+  };
   const winner = candidates[0];
-  if (!winner?.id || !winner.actor?.login) return { issue: key, active: true, owner: '', coordinatorId: '', machine: '', commentId: '', labelEventId: '' };
+  if (!winner?.id || !winner.actor?.login) return facts({ issue: key, owner: '', coordinatorId: '', machine: '', commentId: '', labelEventId: '' });
   const matching = [];
   for (const comment of comments) {
     const metadata = claimMetadata(comment.body);
@@ -360,10 +411,35 @@ async function winningClaim(repository, key, github, authority) {
       && comment.user?.login?.toLowerCase() === winner.actor.login.toLowerCase()
       && (await authority.read({ repository, author: comment.user.login })).authority === 'trusted') matching.push({ comment, metadata });
   }
-  if (matching.length !== 1) return { issue: key, active: true, owner: '', coordinatorId: '', machine: '', commentId: '', labelEventId: String(winner.id) };
+  if (matching.length !== 1) return facts({ issue: key, owner: '', coordinatorId: '', machine: '', commentId: '', labelEventId: String(winner.id) });
   const { comment, metadata } = matching[0];
-  return { issue: key, active: true, owner: metadata.coordinatorId, coordinatorId: metadata.coordinatorId, machine: metadata.machine,
-    commentId: String(comment.id), labelEventId: String(winner.id) };
+  // A top-level lastSeen member, with any value ("" in a new record), makes the comment a
+  // heartbeat claim; a record without it (older pdd) keeps the legacy rule. The last-seen
+  // time is only the comment's GitHub server time: updated_at, else created_at, at most
+  // now. A recorded lastSeen never extends the claim, so no writer clock or written
+  // value keeps a dead claim live. With no server time, the legacy rule applies.
+  const server = !Object.hasOwn(metadata, 'lastSeen') ? NaN
+    : Number.isFinite(time(comment.updated_at)) ? time(comment.updated_at) : time(comment.created_at);
+  const lastSeen = Number.isFinite(server) && Number.isFinite(now) ? Math.min(server, now) : server;
+  return facts({ issue: key, owner: metadata.coordinatorId, coordinatorId: metadata.coordinatorId, machine: metadata.machine,
+    commentId: String(comment.id), labelEventId: String(winner.id) }, lastSeen);
+}
+
+// Heartbeat: the owning coordinator writes the current time as the top-level lastSeen
+// of its own winning claim comment. It edits nothing else and no other comment.
+export async function refreshClaimHeartbeat({ cwd = '', repository, claim, coordinatorId, machine, at }, ports = {}) {
+  const i = info(claim?.issue), s = service(cwd, ports);
+  if (!repositoryName(repository) || !i || !sameRepo(i.repository, repository) || !/^[1-9][0-9]*$/.test(String(claim.commentId ?? ''))
+    || !claim.labelEventId || claim.active !== true || claim.coordinatorId !== coordinatorId || claim.machine !== machine || !Number.isFinite(time(at))) return { state: 'skipped' };
+  const endpoint = `repos/${repository}/issues/comments/${claim.commentId}`, comment = (await s.api(endpoint)).value;
+  const record = claimRecord(comment?.body);
+  if (String(comment?.id) !== String(claim.commentId) || !record || !sameRepo(record.value.repository, repository) || record.value.coordinatorId !== coordinatorId
+    || record.value.machine !== machine || record.value.labelEventId !== String(claim.labelEventId)) return { state: 'skipped' };
+  const lastSeen = iso(time(at)), body = editClaimRecord(comment.body, record, { ...record.value, lastSeen });
+  if (body === null) throw Error('Claim record cannot take a heartbeat without other changes');
+  const saved = (await s.api(endpoint, 'PATCH', JSON.stringify({ body }))).value;
+  if (String(saved?.id) !== String(claim.commentId) || claimRecord(saved.body)?.value.lastSeen !== lastSeen) throw Error('Claim heartbeat readback is unresolved');
+  return { state: 'refreshed', lastSeen };
 }
 
 // One current custody observation for both dependency reconciliation and admission.
@@ -438,7 +514,8 @@ async function readLocalOccupied({ cwd, repository }, ports = {}) {
 function nativeOwners(cwd, ports) {
   const owner = { read: async ({ repository, issues }) => {
     const state = await launcherState(cwd, repository, ports), claims = [];
-    for (const key of issues) { const claim = await winningClaim(repository, key, ports.github, ports.authority); if (claim) claims.push(claim); }
+    let now = NaN; try { now = time((await ports.clock.now({})).iso); } catch { /* An unknown clock expires no claim. */ }
+    for (const key of issues) { const claim = await winningClaim(repository, key, ports.github, ports.authority, now); if (claim) claims.push(claim); }
     return { json: JSON.stringify({ localOwner: state?.coordinatorId ?? '', claims, ...await readLocalOccupied({ cwd, repository }, ports) }) };
   } };
   Object.defineProperty(owner, NATIVE_OWNERS, { value: true });
@@ -452,7 +529,8 @@ export function createDependencyReadPorts({ cwd = '' } = {}, supplied = {}, scop
   ports.authority = supplied.authority?.[NATIVE_AUTHORITY] ? nativeAuthority(cwd, ports) : supplied.authority ?? nativeAuthority(cwd, ports);
   ports.context = supplied.context?.[NATIVE_CONTEXT] ? nativeContext(cwd, ports) : supplied.context ?? nativeContext(cwd, ports);
   ports.evidence = supplied.evidence?.[NATIVE_EVIDENCE] ? nativeEvidence(cwd, ports) : supplied.evidence ?? nativeEvidence(cwd, ports);
-  ports.clock ??= { now: async () => ({ iso: new Date().toISOString() }) };
+  // The default clock follows the caller's injected `now` (milliseconds) when present.
+  ports.clock ??= { now: async () => ({ iso: new Date(typeof supplied.now === 'function' ? supplied.now() : Date.now()).toISOString() }) };
   ports.owners = supplied.owners?.[NATIVE_OWNERS] ? nativeOwners(cwd, ports) : supplied.owners ?? nativeOwners(cwd, ports);
   const settings = { read: async ({ cwd: at = cwd, repository }) => {
     const state = await launcherState(at, repository, ports), root = await selectedCheckout(at, repository, ports);
@@ -596,6 +674,8 @@ export async function readDependencySnapshot({ cwd = '', repository, inputs = []
       if (!Array.isArray(observation.claims) || !Array.isArray(observation.runs) || typeof observation.runsKnown !== 'boolean') throw Error('Incomplete execution observation');
       for (const issue of local) {
         const claims = observation.claims.filter(c => canonical(c.issue) === issue.key && c.active);
+        const expired = !claims.length && observation.claims.find(c => canonical(c.issue) === issue.key && c.active === false && c.expired === true && c.lastSeen);
+        if (expired) issue.holds = [...issue.holds.filter(hold => hold !== 'Claimed'), `Expired claim, last seen ${expired.lastSeen}`];
         const runs = observation.runs.filter(r => canonical(r.issue) === issue.key);
         if (observation.runsKnown) issue.runIds = runs.map(r => r.runId).filter(Boolean);
         if (claims.length === 1 && claims[0].coordinatorId && claims[0].commentId && claims[0].labelEventId) {

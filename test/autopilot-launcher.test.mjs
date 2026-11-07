@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, existsSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, utimesSync, existsSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -27,7 +27,7 @@ async function fixture(t, options = {}) {
     pathDiagnostic: () => [],
     run: async (command, args) => {
       f.runs.push([command, args]);
-      if (command === 'git') return { code: 0, stdout: cwd + '\n', stderr: '' };
+      if (command === 'git') return { code: 0, stdout: (args.includes('--git-common-dir') ? join(cwd, '.git') : cwd) + '\n', stderr: '' };
       if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: '{"nameWithOwner":"owner/repo","url":"https://github.com/owner/repo"}', stderr: '' };
       if (command === 'gh' && args[0] === 'auth') return { code: 0, stdout: '', stderr: '' };
       if (command === 'gh' && args[0] === 'api') { if (args.some(x => String(x).includes('/reviews?'))) return { code: 0, stdout: 'HTTP/2.0 200 OK\r\n\r\n[]', stderr: '' }; if (args.some(x => String(x).includes('/permission'))) return { code: 0, stdout: 'HTTP/2.0 200 OK\r\n\r\n{"permission":"none"}', stderr: '' }; f.ack.push(args); return { code: 0, stdout: '{}', stderr: '' }; }
@@ -1017,6 +1017,28 @@ test('time rule revalidates trust on a cached due claim without forwarding stran
   await f.invoke('start'); f.prompts.length = 0; f.status = 304;
   writeFileSync(join(f.cwd, 'pdd.json'), '{"autopilot":{"mode":"auto","trust":[]}}');
   f.time += hour; await f.tick(); assert.equal(f.prompts.length, 0);
+});
+
+test('time rules read active status file modification times from the Git common directory', async t => {
+  const f = await fixture(t); delete f.ports.readRunProgress;
+  const changedAt = f.time;
+  const record = (number, state = 'running', repo = 'owner/repo') => {
+    const folder = join(f.cwd, '.git', 'pdd', 'runs', String(number)); mkdirSync(folder, { recursive: true });
+    const file = join(folder, 'status.json');
+    writeFileSync(file, JSON.stringify({ v: 1, number, repo, state, updatedAt: changedAt - hour }));
+    utimesSync(file, new Date(changedAt), new Date(changedAt));
+    return file;
+  };
+  const active = record(107); record(108, 'completed'); record(109, 'cancelled'); record(110, 'running', 'owner/other');
+  const broken = record(111); writeFileSync(broken, 'incomplete');
+  await f.invoke('start'); f.prompts.length = 0; f.status = 304;
+  f.time += hour - 1; await f.tick(); assert.equal(f.prompts.length, 0, 'Use file change time, not stale embedded metadata');
+  f.time++; await f.tick(); assert.equal(f.prompts.length, 1);
+  assert.deepEqual(packet(f).timeRules.map(event => event.number), [107]);
+  await f.tick(); assert.equal(f.prompts.length, 1);
+  f.agentStatus = 'working'; utimesSync(active, new Date(f.time), new Date(f.time)); f.time += hour; await f.tick();
+  writeFileSync(active, JSON.stringify({ v: 1, number: 107, repo: 'owner/repo', state: 'completed' }));
+  f.agentStatus = 'idle'; await f.tick(); assert.equal(f.prompts.length, 1);
 });
 
 test('an unchanged empty tick with no local progress or usage data still sends zero prompts', async t => {

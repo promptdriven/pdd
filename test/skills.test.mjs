@@ -811,11 +811,14 @@ test('AUTOPILOT10: the Autopilot text holds no team process, times, machines or 
   }
 });
 
-// Wrong (two machines on one repo): both work on one issue, or a dead claim blocks the issue forever.
-test('AUTOPILOT12: claim remains until removed and competing coordinators back off', () => {
+// Wrong (two machines on one repo): both work on one issue, or a dead claim blocks the issue forever (#3032).
+test('AUTOPILOT12: claim remains until removed or expired and competing coordinators back off', () => {
   has('pdd-autopilot/SKILL.md', 'add the `pdd:working` label and one short comment that names this machine and coordinator ID.',
-    'If coordinators race, the earlier label event wins.', 'Skip a claimed issue.',
-    'The claim keeps Autopilot ownership until removed, even while the run is paused or the launcher is stopped.', 'Remove the label when the run ends.');
+    'If coordinators race, the earlier label event wins.', 'Skip an issue with a live claim.',
+    'The claim keeps Autopilot ownership until it is removed or expires, even while the run is paused.', 'Remove the label when the run ends.',
+    'A claim with no `lastSeen` update for 4 hours is expired.', 'Stop work on that issue and do not push to it.',
+    // A coordinator that lost its claim must not end the new owner's claim era (#3032).
+    'Only the owner of the current live claim removes it', 'Do not remove `pdd:working`, also when your run ends');
 });
 
 // Wrong: a fixed number of runs, or three runs that change one prompt file at once.

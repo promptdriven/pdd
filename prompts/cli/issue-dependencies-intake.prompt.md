@@ -29,6 +29,9 @@ Prepare rereads GitHub, repository-bound trust and current ownership, then
 projects with the model. Queue only root-repository subjects the owner can receive;
 external prerequisites remain context. `owners.read({repository,issues})` returns
 JSON `{localOwner,claims:[{issue,owner,active,coordinatorId,machine,commentId,labelEventId}],runs:[],runsKnown}`.
+A claim may also carry `lastSeen`, `expired` and `stuckSince` from the
+[claim expiry rules](issue-dependencies-github.prompt.md#claims-heartbeat-and-expiry).
+An expired claim is not active, so it is neither owned elsewhere nor an own claim.
 The runs list reuses current local active-run/allocation observations, with issue,
 runId and state; deduplicate the same observed slot by its existing identity.
 Use the existing occupied-slot classification in this repository/commonDir.
@@ -134,6 +137,8 @@ It reprojects saved decisions and
 coalesces pending subjects. Native close/reopen/merge/relation changes normally
 need only reprojection; substantive changes require the selected coordinator.
 Off permits reads and retains saved data but queues no automatic analysis/start.
+A non-off reconciliation also returns `claims`, the claims of that ownership read,
+so the launcher can refresh its own claims and offer expired ones without another read.
 Observe and auto both analyze and return execution-eligible subjects to the
 existing scheduler; observe leaves merging to a person. No reconciliation operation launches work.
 

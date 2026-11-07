@@ -224,7 +224,9 @@ export async function reconcileDependencyIntake({ cwd = '', repository, trigger,
   const incomplete = candidates.filter(n => n.reasons.includes('Incomplete relevant observations'));
   const queued = candidates.filter(n => !skipped.includes(n.key) && !n.reasons.includes('Incomplete relevant observations')).map(n => n.key);
   const eligible = graph.nodes.filter(n => subjects.includes(n.key) && !skipped.includes(n.key) && n.eligible).map(n => n.key);
-  if (!queued.length || !ports.pending) return { queued, eligible, skipped, pending: Boolean(queued.length || incomplete.length) };
+  // The observed winning claims, with heartbeat and expiry facts, for the tick.
+  const claims = Array.isArray(owners.claims) ? owners.claims : [];
+  if (!queued.length || !ports.pending) return { queued, eligible, skipped, pending: Boolean(queued.length || incomplete.length), claims };
   const prepared = await prepareDependencyIntake({ cwd, repository }, { ...ports, snapshots: { read: async () => ({ snapshot }) }, owners: { read: async () => ({ json: JSON.stringify(owners) }) } });
   const order = a => a.slice().sort((x,y) => x.key.localeCompare(y.key) || x.revision.localeCompare(y.revision));
   const selectedSnapshot = JSON.parse(prepared.request.snapshotJson);
@@ -234,12 +236,12 @@ export async function reconcileDependencyIntake({ cwd = '', repository, trigger,
   if (fingerprint !== pending.delivered || trigger === 'refresh') {
     pending.requested = fingerprint;
     const stored = await ports.pending.save({ repository, json: JSON.stringify(pending) });
-    if (!stored.ok) return { queued, eligible, skipped, pending: true };
+    if (!stored.ok) return { queued, eligible, skipped, pending: true, claims };
     const delivered = await ports.pending.deliver({ repository, requestJson: JSON.stringify(prepared.request) });
     if (delivered.state === 'delivered') pending.delivered = fingerprint;
     await ports.pending.save({ repository, json: JSON.stringify(pending) });
   }
-  return { queued, eligible, skipped, pending: Boolean(incomplete.length || pending.requested !== pending.delivered) };
+  return { queued, eligible, skipped, pending: Boolean(incomplete.length || pending.requested !== pending.delivered), claims };
 }
 
 export async function runDependencyIntake({ command, cwd = '', issue, stdin }, ports = {}) {

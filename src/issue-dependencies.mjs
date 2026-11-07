@@ -224,8 +224,10 @@ export function projectIssueGraph({ snapshot }) {
     if (issue.authority !== 'trusted') reasons.push('Untrusted issue');
     if (issue.state === 'completed') reasons.push('Issue completed');
     if (issue.state === 'not_planned') reasons.push('Issue not planned');
-    const holds = issue.holds.filter(hold => hold !== 'Open PR');
-    reasons.push(...holds);
+    // An expired claim is a note for readers, not a hold: it leaves selection open.
+    const notes = issue.holds.filter(hold => /^Expired claim\b/.test(hold));
+    const holds = issue.holds.filter(hold => hold !== 'Open PR' && !notes.includes(hold));
+    reasons.push(...holds, ...notes);
     if (graphEdges.some(e => e.dependent === key && e.reason === 'GitHub dependency; no saved reason')) reasons.push('GitHub dependency; no saved reason');
     const executionState = issue.execution === 'running' ? 'running' : holds.length ? 'held' : issue.execution;
     const assigneesKnown = Array.isArray(issue.assignees) && issue.assignees.every(name => typeof name === 'string' && name.trim());
