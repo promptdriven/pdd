@@ -1,9 +1,9 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: d091d31f3f3448ec47f9e4d9dfd6c89a7c53a281d33981fc191d49fa86311671).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 2a6f602d522e774bec6b9b8c95376ae98217de1e777d2f9f66e308085a2a45b2).
 import {readEvidenceEligibility} from './workflow-runner.mjs';
 import {allRuns} from './workflow-runs.mjs';
 import {assessNativeEvidence, resultLines, usableResult} from './workflow-results.mjs';
 import {loadRuntimeWorkspace,allowsRuntimePath,requireRuntimePath,RuntimeWorkspaceError} from './runtime-workspace.mjs';
-import { hasProgress, outcomeDone, outcomeFor, outcomeOverall, outcomeText, progressText } from './runtime-outcome.mjs';
+import { hasProgress, outcomeDone, outcomeFor, outcomeOverall, outcomeText, progressText, resultOutcome, resultOverall } from './runtime-outcome.mjs';
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -1181,10 +1181,10 @@ function batchRecord(context) {
   return { version: 1, batch, origin, root, head: context.head, login: identity.login, user_id: identity.userId,
     source_sha256: capture.sha256, files: capture.files.map(file => file.path), bytes: capture.bytes, timeout_min: context.timeoutMin,
     exclude_fixture_projects: context.excludeFixtureProjects === true,
-    created_at: new Date(context.startedAt).toISOString(), intent: context.intent, lint, warnings, coverage: context.coverage,
+    created_at: new Date(context.startedAt).toISOString(), intent: context.intent, lint: lint ? { ...lint, recovery_state: lint.state, ...resultOutcome(lint.public_result ?? lint) } : lint, warnings, coverage: context.coverage,
     contract_snapshots: capture.stories,
     test_cache: context.testCache ? { tokens: [...context.testCache.tokens] } : context.savedTestCache,
-    rows: rows.map(row => ({ test: row.test, story: row.story, story_path: row.story_path, title: row.title, request_ids: row.request_ids, state: row.state,
+    rows: rows.map(row => ({ test: row.test, story: row.story, story_path: row.story_path, title: row.title, request_ids: row.request_ids, recovery_state: row.state, ...resultOutcome(row),
       ...(!row.request_ids.length && Object.hasOwn(row, 'calls') ? { calls: row.calls } : {}),
       ...(row.unsent ? { unsent: true } : {}), progress: row.progress, ahead: row.ahead, phase: row.phase, post_verdict: row.post_verdict ?? null, compatibility: row.compatibility, client_advice: row.client_advice, report_url: row.report_url, refusals: row.refusals, note: row.note ?? null, why: row.why ?? null, next_step: row.next_step ?? null,
       sent_at: row.sent_at ?? null, ended_at: row.ended_at ?? null, max_calls: row.max_calls, warnings: row.warnings, steps: row.steps, criteria_total: row.criteria_total,
@@ -1226,8 +1226,18 @@ function adoptClaims(context, row) {
     }
   }
 }
+function markDeadline(context, rows) {
+  if (context.interrupted || !Number.isFinite(context.deadline) || context.ports.now() < context.deadline) return;
+  for (const row of rows) if (!row.time_limit && (['ready', 'waiting', 'sending', 'queued', 'running'].includes(row.state)
+    || row.state === 'unknown' && row.lost || heldForLint(row) || row.busy && row.can_retry)) {
+    row.note = { code: context.timeoutMin && !context.agentLimit ? 'timeout-flag' : 'deadline',
+      message: context.timeoutMin && !context.agentLimit ? `Stopped waiting at --timeout ${context.timeoutMin} min.` : 'The wait deadline ended.' };
+  }
+}
+
 function saveBatch(context) {
   if (!context.batch) return;
+  markDeadline(context, [...context.rows, ...(context.lint ? [context.lint] : [])]);
   for (const row of context.rows) {
     adoptClaims(context, row);
     const id = row.request_ids.at(-1), answer = id && context.store.read(join(context.folder, `${id}.json`));
@@ -1262,6 +1272,8 @@ async function postJob(context, path, command, request, row, timeoutMs, deadline
   const reply = await context.runtime.post(path, request, context.capture.tar, timeoutMs);
   const verdict = judgePost(reply, id, command, context.secrets);
   verdict.observed_at = context.ports.now();
+  if (row && verdict.answer && ['queued', 'running', 'passed', 'failed'].includes(outcomeFor(verdict.answer, { kind: 'check' }).state))
+    line(context.ports.stderr, `Sent 1 check at ${clock(context.ports.now())}: ${row.test}.`);
   if (row) row.post_verdict = verdict.kind;
   if (verdict.maintenance) maintenanceNotice(context, verdict, reply);
   if (verdict.answer) saveAnswer(context, id, verdict.answer);
@@ -1422,7 +1434,9 @@ const waitWord = (answer, read) => read?.kind === 'again' ? `waiting for an answ
 // Every lint asks for complete per-test verdicts: only they can admit a test.
 async function runLint(context) {
   const agent = context.agentLimit ?? !context.ports.interactive;
-  const lintEnd = context.batch ? context.deadline : Math.min(context.deadline, agent ? context.startedAt + AGENT_WAIT_MIN * 60_000 : Infinity);
+  const lintEnd = context.intent === 'check' && !context.checkDeadlineStarted
+    ? context.timeoutMin && !context.ports.interactive ? context.startedAt + AGENT_WAIT_MIN * 60_000 : Infinity
+    : context.batch ? context.deadline : Math.min(context.deadline, agent ? context.startedAt + AGENT_WAIT_MIN * 60_000 : Infinity);
   const tick = progressTicker(context.ports.stderr, context.ports.now);
   line(context.ports.stderr, `Checking ${context.capture.files.length} files (${formatSize(context.capture.bytes)}) on the PDD interpreter (lint, 0 AI calls)…`);
   let paused = false;
@@ -1494,13 +1508,17 @@ async function runLint(context) {
 // lint ended without a pass for it (final); not run and held while the lint itself has no verdict yet.
 function unsentByLint(outcome) {
   if (outcome.state === 'refused') return ['refused', { refusals: outcome.refusals, note: null }];
-  return ['not_run', { refusals: [], note: { code: null, message: outcome.state === 'unknown' ? 'The lint result is unknown, so pdd sent no checks.'
+  return ['not_run', { refusals: [], note: { code: outcome.code || 'no-server-verdict', message: outcome.state === 'unknown' ? 'The lint result is unknown, so pdd sent no checks.'
     : `No lint pass for this test (${outcome.reason ?? outcome.message}), so pdd sent no checks.` } }];
 }
 
 async function checkBatch(context, rows, priorLint = null) {
   const { ports } = context, sendable = rows.filter(row => row.state === 'ready');
   const lint = priorLint ?? await runLint(context);
+  if (context.intent === 'check' && !context.checkDeadlineStarted) {
+    context.checkDeadlineStarted = true;
+    context.deadline = context.timeoutMin ? ports.now() + context.timeoutMin * 60_000 : Infinity;
+  }
   context.lastCheckLint = lint;
   context.lint.state = lint.answer?.state ?? lint.kind;
   context.lint.unknown = false;
@@ -1515,6 +1533,7 @@ async function checkBatch(context, rows, priorLint = null) {
   if (lint.kind === 'not_run' || lint.kind === 'stop') { notSent('not_run', { note: lint.note, ...(lint.note?.code === 'lint-busy' ? { calls: 0, phase: 'lint' } : {}) }); return; }
   if (lint.kind === 'refused') { notSent('refused', { phase: 'lint', refusals: [lint.refusal] }); return; }
   const verdicts = judgeLint(lint.answer, sendable, context.root, context.visible, context.secrets, context.capture);
+  context.lint.public_result = resultOverall([...verdicts.values()]);
   const toSend = sendable.filter(row => verdicts.get(row).state === 'passed');
   for (const [row, outcome] of verdicts) if (outcome.state !== 'passed') notSent(...unsentByLint(outcome), row);
   const refused = sendable.filter(row => row.state === 'refused').length, held = sendable.length - toSend.length - refused;
@@ -1523,10 +1542,8 @@ async function checkBatch(context, rows, priorLint = null) {
   if (toSend.length) lintDiagnostics(context, lint.answer, sendable);
   const judged = toSend.length === sendable.length ? 'Lint passed.' : [refused ? `Lint refused ${refused} of ${sendable.length} tests.` : '',
     held ? `Lint gave no verdict for ${held} of ${sendable.length} tests.` : ''].filter(Boolean).join(' ');
-  // A rerun after a changed interpreter identity reuses this invocation's lint and its per-test gate.
-  if (priorLint) line(ports.stderr, `Sending ${toSend.length} more check${toSend.length === 1 ? '' : 's'}: interpreter build or model changed`);
-  else line(ports.stderr, `${judged} Sent ${toSend.length} check${toSend.length === 1 ? '' : 's'} `
-    + `at ${clock(ports.now())}: ${context.capture.files.length} files, ${formatSize(context.capture.bytes)}${context.otherNote ? ` ${context.otherNote}` : ''}.`);
+  line(ports.stderr, judged);
+  if (context.otherNote) line(ports.stderr, context.otherNote);
   // Only now is there something to read again (lead, Oct 27): after lint passes, before the first check POST.
   if (toSend.length && !priorLint) line(ports.stderr, `If pdd stops, read the results with: pdd test --read ${context.batch}`);
   for (const row of toSend) row.eligible = true;
@@ -1618,6 +1635,7 @@ function printResult(context, rows, extra = {}) {
     if (sameJob(answer, id, 'lint') && ['passed', 'failed', 'refused'].includes(answer.state))
       return printLintResult(context, rows, lintProblems(context, answer), context.warnings ?? [], answer);
   }
+  markDeadline(context, rows);
   rows = rows.map(row => heldForLint(row) && !row.dispatchIncomplete ? { ...row, calls: 0 } : row);
   const { ports } = context, exitCode = exitCodeFor(rows, { interrupted: context.interrupted, lintUnknown: context.lintUnknown || context.lintPending });
   const engines = [...new Set(rows.map(row => row.engine_sha).filter(sha => sha && !sameEngine(sha)))].filter(sha => firstToday(context, sha));
@@ -1695,7 +1713,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
     }
     const summary = limited ? 'Lint refused local Runtime limits. 0 AI calls. No files were sent.' : 'Lint refused every selected test before sending. 0 AI calls. No files were sent.';
     if (context.json) line(ports.stdout, JSON.stringify({batch:null,repo:root,exit_code:4,lint_state:'refused',summary_line:summary,
-      coverage:context.coverage,problems,rows:refusedRows,warnings:found.warnings}));
+      coverage:context.coverage,problems,rows:refusedRows.map(row => ({...row,...resultOutcome(row)})),warnings:found.warnings}));
     else {
       for (const problem of problems) {
         line(ports.stderr, `${problem.code}  ${problem.message}`);
@@ -1735,29 +1753,32 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   context.store.saveRepo(root, { ...repoState, last_batch: batch });
   context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
   const lint = await runLint(context);
-  if (lint.kind === 'pending') { Object.assign(context.lint, { state: lint.answer.state, pending: true });
+  if (lint.kind === 'pending') { context.lintPending = true; Object.assign(context.lint, { state: lint.answer.state, pending: true });
     for (const row of rows) if (!local(row)) Object.assign(row, { state: 'not_run', calls: 0, phase: 'lint', note: { code: 'lint-pending', message: pendingLintMessage(context, lint.answer) } });
-    saveBatch(context); throw new Stop(3, pendingLintMessage(context, lint.answer)); }
+    saveBatch(context); line(ports.stderr, pendingLintMessage(context, lint.answer)); return printResult(context, rows); }
   if (lint.kind === 'not_run' && context.json) {
     for (const row of rows) if (!local(row)) Object.assign(row, { state: 'not_run', calls: 0, note: lint.note });
     saveBatch(context); line(ports.stderr, lint.note.message);
-    line(ports.stdout, JSON.stringify({ batch, repo: root, exit_code: 5, lint_state: 'not_run', summary_line: `Lint did not run. 0 AI calls. No checks were sent.`, coverage: context.coverage, problems: [],
-      rows: rows.map(row => ({ story: row.story, title: row.title, test: row.test, state: row.state, refusals: row.refusals })), warnings: [...new Set([...context.warnings, ...context.unmatched])] }));
+    line(ports.stdout, JSON.stringify({ batch, repo: root, exit_code: 5, lint_state: 'not run', summary_line: `Lint did not run. 0 AI calls. No checks were sent.`, coverage: context.coverage, problems: [],
+      rows: rows.map(row => ({ story: row.story, title: row.title, test: row.test, ...resultOutcome(row), refusals: row.refusals })), warnings: [...new Set([...context.warnings, ...context.unmatched])] }));
     return 5;
   }
   if (lint.kind === 'not_run' || lint.kind === 'stop') throw new Stop(5, `${lint.note.message}${lint.note.code && lint.note.code !== 'blocked' ? ` (${lint.note.code})` : ''}`);
   const answer = lint.answer;
-  if (context.interrupted || lint.kind === 'unknown') throw new Stop(3, 'The lint result is unknown. Run pdd lint again; a lint uses no AI calls.');
+  if (context.interrupted || lint.kind === 'unknown') {
+    context.lintUnknown = true;
+    for (const row of rows) if (!local(row)) Object.assign(row, { state: 'unknown', calls: 0, note: lint.note });
+    saveBatch(context); return printResult(context, rows);
+  }
   const problems = lintProblems(context, answer, lint.kind === 'refused' ? lint.refusal : null);
   // Each row is its selected test's lint outcome; a refusal of the lint request itself refuses every row.
   const verdicts = judgeLint(answer, rows.filter(row => !local(row)), root, found.visible, context.secrets, context.capture);
-  if (lint.kind !== 'refused' && [...verdicts.values()].some(outcome => outcome.state === 'unknown'))
-    throw new Stop(3, 'The lint result is unknown. Run pdd lint again; a lint uses no AI calls.');
+  context.lintUnknown = lint.kind !== 'refused' && [...verdicts.values()].some(outcome => outcome.state === 'unknown');
   for (const [row, outcome] of verdicts) {
     Object.assign(row, lint.kind === 'refused' ? { state: 'refused', refusals: problems }
-      : { state: outcome.state, refusals: outcome.refusals, ...(outcome.reason ? { note: { code: null, message: outcome.reason } } : {}) });
+      : { state: outcome.state, refusals: outcome.refusals, ...(outcome.reason ? { note: { code: outcome.code || 'no-server-verdict', message: outcome.reason } } : {}) });
   }
-  Object.assign(context.lint, { state: answer?.state ?? lint.kind, unknown: rows.some(row => row.state === 'unknown'), pending: false });
+  Object.assign(context.lint, { state: answer?.state ?? lint.kind, unknown: rows.some(row => row.state === 'unknown'), pending: false, public_result: resultOverall(rows) });
   saveBatch(context);
   return printLintResult(context, rows, problems, found.warnings, answer);
 }
@@ -1790,11 +1811,11 @@ function printLintResult(context, rows, problems, warnings = [], answer = null) 
     if (!problems.some(item => item.code === problem.code && (item.path ?? null) === (problem.path ?? null))) problems.push({ ...problem, path: problem.path ?? null, section: null });
   }
   const passing = rows.filter(row => row.state === 'passed').length, lintState = outcomeOverall(rows), exitCode = exitCodeFor(rows);
-  const summary = `Lint: ${passing} of ${rows.length} tests pass. 0 AI calls. No checks were sent.`;
+  const summary = `Lint: ${passing} of ${rows.length} tests pass. 0 AI calls. No checks were sent.${rows.some(row => row.state !== 'passed') ? ' ' + rows.filter(row => row.state !== 'passed').map(outcomeText).join('; ') : ''}`;
   const reportedCoverage = answer?.result?.capabilities_complete ?? answer?.result?.report?.lint?.capabilities_complete;
   const capabilityCoverage = typeof reportedCoverage === 'boolean' ? reportedCoverage : null;
-  const result = { batch, repo: root, exit_code: exitCode, lint_state: lintState, summary_line: summary, capabilities_complete: capabilityCoverage, coverage: context.coverage, problems,
-    rows: rows.map(row => ({ story: row.story, title: row.title, test: row.test, state: row.state, refusals: row.refusals, compatibility: row.compatibility, client_advice: row.client_advice, ...(row.note ? { reason: row.note } : {}) })), warnings: [...new Set([...(context.warnings ?? []), ...(context.unmatched ?? [])])] };
+  const result = { batch, repo: root, exit_code: exitCode, lint_state: resultOutcome({ state: lintState }).state, summary_line: summary, capabilities_complete: capabilityCoverage, coverage: context.coverage, problems,
+    rows: rows.map(row => ({ story: row.story, title: row.title, test: row.test, ...resultOutcome(row), refusals: row.refusals, compatibility: row.compatibility, client_advice: row.client_advice })), warnings: [...new Set([...(context.warnings ?? []), ...(context.unmatched ?? [])])] };
   if (context.folder) context.store.write(join(context.folder, 'summary.json'), result);
   if (context.json) {
     line(ports.stdout, JSON.stringify(result));
@@ -1805,8 +1826,7 @@ function printLintResult(context, rows, problems, warnings = [], answer = null) 
     out.push('Lint problems (from the PDD interpreter):');
     for (const item of problems) out.push(`  ${[item.code, item.path, item.section, item.message].filter(Boolean).join('  ')}`, ...(item.hint ? [`    ${item.hint}`] : []));
   }
-  for (const row of rows) out.push(`  ${row.test}  ${row.state === 'passed' ? 'passes lint' : row.state === 'refused' ? `refused: ${row.refusals.map(item => item.code).join(', ')}`
-    : `${outcomeText(row)}${row.note ? `: ${row.note.message}` : ''}`}`);
+  for (const row of rows) out.push(`  ${row.test}  ${outcomeText(row)}${row.note ? `: ${row.note.message}` : ''}`);
   for (const row of rows.filter(row => row.compatibility)) out.push(`Compatibility (${cleanText(row.story, context.secrets)} / ${cleanText(row.test, context.secrets)}): ${JSON.stringify(row.compatibility, null, 2)}`,
     `  Client advice: ${JSON.stringify(row.client_advice)}`);
   if (typeof capabilityCoverage === 'boolean') out.push(`Capability inventory complete: ${capabilityCoverage}.`);
@@ -1855,7 +1875,7 @@ async function readUnsentLint(context, rows) {
     answer = read.kind === 'state' ? read.answer : null;
     if (answer) saveAnswer(context, id, answer);
   }
-  if (answer) await finishReservation(context, lint, answer);
+  if (answer) { lint.note = null; delete lint.public_result; await finishReservation(context, lint, answer); }
   context.lintPending = false; context.lintUnknown = false;
   const lintView = noVerdictAdvice(answer, projectAnswer(answer ?? {}, { origin: context.origin, secrets: context.secrets }));
   const unknown = () => {
@@ -1876,7 +1896,8 @@ async function readUnsentLint(context, rows) {
   const busy = answer.state === 'refused' && rawRefusals.some(item => lintQueueWait(item) !== null);
   Object.assign(lint, { state: answer.state, pending: false, unknown: false });
   const sourceRecovered = recoverSourceContext(context);
-  for (const [row, outcome] of judgeLint(answer, held, context.root, context.visible, context.secrets, context.capture)) {
+  const judged = judgeLint(answer, held, context.root, context.visible, context.secrets, context.capture);
+  for (const [row, outcome] of judged) {
     const [state, extra] = busy ? ['not_run', { refusals: [], note: { code: 'lint-busy', message: 'The saved lint could not get a slot. No checks ran. Run the same command again later.' } }]
       : outcome.state === 'passed' ? context.intent === 'lint-only' ? ['passed', { refusals: [], note: null }]
         : ['not_run', { refusals: [], note: { code: 'lint-finished', message: 'The saved lint finished. This check was not sent. Run a fresh pdd test command to start checks.' } }]
@@ -1889,6 +1910,7 @@ async function readUnsentLint(context, rows) {
     Object.assign(row, { state, calls: 0, phase: 'lint', why: lintView.why, next_step: lintView.next_step, ...extra });
     if (!busy && outcome.state === 'unknown') context.lintUnknown = lint.unknown = true;
   }
+  lint.public_result = resultOverall([...judged.values()]);
 }
 
 function heldForLint(row) {
@@ -1965,6 +1987,9 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
   await ownBatch(context, name);
   const saved = store.read(join(context.folder, 'batch.json'));
   if (!saved) throw new Stop(2, `No saved batch ${name}.`);
+  for (const row of [...saved.rows, ...(saved.lint ? [saved.lint] : [])]) {
+    if (row.recovery_state !== undefined) { row.state = row.recovery_state; delete row.reason; }
+  }
   if (saved.root !== root) throw new Stop(2, 'This saved batch belongs to a different repository.');
   if(loadRuntimeWorkspace({root}).configured)ports.captureSource(root,{tests:saved.rows.filter(row=>!row.unsent).map(row=>row.test),appMap:null,excludeFixtureProjects:saved.exclude_fixture_projects === true});
   const identity = signIn(ports.gh, context.store);
@@ -2251,7 +2276,7 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
   const context = { ports, cacheEnabled: cache || !!options['--lf'] || !!options['--cache-clear'], json: options['--json'] === true, details: options['--details'] === true, interrupted: false, warnings: [] };
   let release = () => {};
   try {
-    if (options['--lint'] === true && words.length && (options['--local']===undefined||options['--local']===true&&!Object.hasOwn(options,'--timeout')) && Object.keys(options).every(key => ['--lint','--local','--json','--timeout'].includes(key))) {
+    if (options['--lint'] === true && options['--local'] === undefined && words.length && Object.keys(options).every(key => ['--lint','--local','--json','--timeout'].includes(key))) {
       const {root,found,normalized} = localSetup(cwd,words);
       const selection = selectTests(found,normalized,{native:true});
       if (selection.nativeSelections?.length) {
@@ -2315,8 +2340,8 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
           const { found, normalized } = localSetup(cwd, words), selected = select(found, normalized, root);
           promptPaths = ports.captureSource(root, { tests: selected.filter(test => !test.error).map(test => test.path), appMap: null }).files.map(file => file.path).filter(path => path.endsWith('.prompt.md'));
         }
-        const warnings = lintSvgLayouts({ root, files, promptPaths }), summary = `SVG layout lint: ${warnings.length} warnings. 0 AI calls. No checks were sent.`;
-        line(ports.stdout, context.json ? JSON.stringify({ repo: root, exit_code: 0, warnings, summary_line: summary }) : [...warnings, summary].join('\n'));
+        const warnings = lintSvgLayouts({ root, files, promptPaths }), summary = `partial: checked SVG layout only; prompts not checked (local-only). ${warnings.length} warnings. 0 AI calls. No checks were sent.`;
+        line(ports.stdout, context.json ? JSON.stringify({ repo: root, exit_code: 0, state: 'partial', lint_state: 'partial', ...resultOutcome({ state: 'partial', note: { code: 'local-only', message: 'checked SVG layout only; prompts not checked' } }), rows: [], warnings, summary_line: summary }) : [...warnings, summary].join('\n'));
         return 0;
       } catch (error) { throw new Stop(2, error.message); }
     }
@@ -2343,7 +2368,7 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
         coverage: { available: false, bound: null, total: null, modules: [] }, problems: [{ code: 'binding-invalid', path: 'pdd-bindings.json', message: error.message }], rows: [], warnings: [] }));
       else if (context.coverage && error.exitCode !== 5) {
         if (context.json) line(ports.stdout, JSON.stringify({ batch: context.batch ?? null, repo: context.root, exit_code: error.exitCode,
-          coverage: context.coverage, lint_state: error.exitCode === 3 ? 'unknown' : 'not_run', problems: [], rows: [], warnings: context.warnings, message: error.message }));
+          coverage: context.coverage, lint_state: error.exitCode === 3 ? 'partial' : 'not run', ...resultOutcome({ state: error.exitCode === 3 ? 'partial' : 'not run', note: { code: error.exitCode === 3 && context.timeoutMin ? 'timeout-flag' : 'no-server-verdict', message: error.message } }), problems: [], rows: [], warnings: context.warnings, message: error.message }));
         else line(ports.stdout, coverageText(context.coverage));
       }
       return error.exitCode;
@@ -2889,7 +2914,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
   }
   const startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
   const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-  Object.assign(context, { capture, identity, batch, startedAt, deadline: context.timeoutMin ? startedAt + context.timeoutMin * 60_000 : Infinity, rows: fresh,
+  Object.assign(context, { capture, identity, batch, startedAt, deadline: Infinity, rows: fresh,
     intent: 'check', head: head.status === 0 ? head.stdout.trim() : null, secrets: [identity.token], lint: { request_ids: [], state: null } });
   context.folder = context.store.folder('batches', batch);
   setRelease(interruptible(context));

@@ -1,4 +1,5 @@
-// Generated from prompts/cli/workflow-results.prompt.md (sha256: 889481fd15c18d7e592a074046af2ee4b3e0f97361bfad926ea721c720b65ad2).
+// Generated from prompts/cli/workflow-results.prompt.md (sha256: 72ec59afdb5514521335f8e1a9029bd0efc40d9e54db4e172144b211fa1f0caf).
+import { outcomeText, resultOutcome } from './runtime-outcome.mjs';
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -64,7 +65,7 @@ function identity(rows) {
   return { engine, model, ...(engineCached ? { engineCached } : {}), ...(modelCached ? { modelCached } : {}) };
 }
 // A prove result that is not current is shown, but it is never pdd's proof.
-export const usableResult = result => result.kind === 'native evidence' ? result.assessment?.identity?.stage !== 'pr1' && result.assessment?.storyNativeProof !== 'none' && ['pdd-observed','qualified-external'].includes(result.assessment?.storyNativeProof) : result.kind !== 'pdd workflow prove' || result.state === 'current';
+export const usableResult = result => result.states?.some(row => row.state === 'partial') ? false : result.kind === 'native evidence' ? result.assessment?.identity?.stage !== 'pr1' && result.assessment?.storyNativeProof !== 'none' && ['pdd-observed','qualified-external'].includes(result.assessment?.storyNativeProof) : result.kind !== 'pdd workflow prove' || result.state === 'current';
 
 // pdd's own saved results for one run: the newest `pdd test` check batch, the newest `pdd lint` batch (both from the
 // runtime state folder, for this worktree, made at or after the run started) and the run's `pdd workflow prove` record.
@@ -103,18 +104,23 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
     const sha256 = /^[a-f0-9]{64}$/.test(batch.source_sha256 ?? '') ? batch.source_sha256 : null;
     try { if (sha256 && tests.length) source = capture(check.association?.sourceAnchor?.root ?? root, { tests, appMap: null }).sha256 === sha256 ? 'current' : 'changed'; }
     catch { source = 'unknown'; }
-    const stories = Array.isArray(summary?.rows) ? [...new Set(summary.rows.map(row => text(row?.summary_line)).filter(Boolean))] : [];
+    const states = batch.rows.map(row => ({ test: row.test, ...resultOutcome(row) }));
+    const stateEvidence = batch.rows.map(row => `${row.test}: ${outcomeText(row)}`).join('; ');
+    const incomplete = states.some(row => row.state !== 'passed');
+    const recorded = text(summary?.summary_line);
+    const safeSummary = incomplete && /✓/.test(recorded) ? 'Prompt tests: no full pass' : recorded;
+    const stories = Array.isArray(summary?.rows) ? [...new Set(summary.rows.map(row => text(row?.summary_line)).filter(value => value && (!incomplete || !value.includes('✓'))))] : [];
     results.push({ kind: 'pdd test', batch: check.name, at: check.at, source, sourceSha256: sha256, tests, requests: requestsOf(batch.rows), reports: reportsOf(batch.rows),
       ...(check.association?.runId?{producerRoot:batch.root,association:{runId:check.association.runId,repo:check.association.repo,
         workspaceRoot:check.association.producerRoot,tests:check.association.tests,source_sha256:check.association.source_sha256,
         stage:check.association.stage,sourceAnchor:check.association.sourceAnchor}}:{}),
-      ...(check.association?{stage:check.association.stage,sourceAnchor:check.association.sourceAnchor}:{}),summary: text(summary?.summary_line) || 'result not saved (the check did not finish)', stories,
+      ...(check.association?{stage:check.association.stage,sourceAnchor:check.association.sourceAnchor}:{}),states, summary: [safeSummary || 'result not saved (the check did not finish)', stateEvidence].filter(Boolean).join('; '), stories,
       ...identity(batch.rows) });
   }
   if (lint) {
     const rows = lint.batch.rows.filter(row => row && typeof row === 'object');
-    const passing = rows.filter(row => row.state === 'passed').length, ended = ['passed', 'failed', 'refused'].includes(lint.batch.lint?.state) || rows.every(row => ['passed', 'failed', 'refused'].includes(row.state));
-    results.push({ kind: 'pdd lint', batch: lint.name, at: lint.at, ...(lint.association?{stage:lint.association.stage,sourceAnchor:lint.association.sourceAnchor}:{}),requests: requestsOf([lint.batch.lint]), summary: ended ? `Lint: ${passing} of ${rows.length} tests pass. 0 AI calls.` : 'Lint: result unknown (the lint did not finish).' });
+    const passing = rows.filter(row => row.state === 'passed').length;
+    results.push({ kind: 'pdd lint', batch: lint.name, at: lint.at, ...(lint.association?{stage:lint.association.stage,sourceAnchor:lint.association.sourceAnchor}:{}),requests: requestsOf([lint.batch.lint]), states: rows.map(row => ({ test: row.test, ...resultOutcome(row) })), summary: [`Lint: ${passing} of ${rows.length} tests pass. 0 AI calls.`, ...rows.map(row => `${row.test}: ${outcomeText(row)}`)].join(' ') });
   }
   if (runDir) {
     const proof = proveResult(join(runDir, 'old-code-proof.json'), { runId, since, root, baseBranch }, git);
