@@ -11,7 +11,7 @@ The card has these lines, in this order:
 1. `Story card: OWNER/REPO#N "TITLE"`, then `Issue: URL`.
 2. `Asked: "…"`: what the reporter asked, from the issue text that the run saved at start (`run.issue.asked`). Remove HTML comments. Use the first quoted block (its `>` lines) when the text has one; else use the first paragraph that is not a heading. Join its lines with one space and cut it at about 300 characters at a word end, with `…`. When the run has no saved issue text, write `Asked: not saved in this run; read the issue.`
 3. The verdict line: the first `Verdict: …` sentence in the run's step summaries, newest summary first. A `pdd-bug` run with none shows `Verdict: not recorded yet.` Another run with none shows no verdict line.
-4. For each Story file that the run changes (`*.md` under a `user_stories` folder, except `PLAN.md` and `README.md`), in path order: `Story: ABSOLUTE PATH`, then these parts, each indented by two spaces:
+4. For each Story file that the run changes (`*.md` under a `user_stories` folder, except `PLAN.md` and `README.md`), and each Story that a changed test file names in `story_path`, in path order: `Story: ABSOLUTE PATH`, then these parts, each indented by two spaces:
    - `Acceptance criteria:` and the numbered lines under `## Acceptance criteria`.
    - `Must not change:` and the lines under `## What must not change` (also `## Must not change`; any letter case). When there is no such section: `Must not change: not stated.`
    - `Rules to check:` and the lines under `## Rules to check`. When there is no such section: `Rules to check: none.`
