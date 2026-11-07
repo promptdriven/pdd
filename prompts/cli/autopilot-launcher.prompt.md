@@ -1,7 +1,8 @@
 # Autopilot launcher
 
 Own `src/autopilot-launcher.mjs`. Export module functions `runAutopilotLauncher(input, ports)` and
-`tickAutopilot(stateFile, ports)` and `requestAutopilotCompletion({cwd,env}, ports)`. This launcher connects a repository to the
+`tickAutopilot(stateFile, ports)` and `requestAutopilotCompletion({cwd,env}, ports)`, and the pure
+`autopilotLaunchFingerprint(state)` that returns the launch fingerprint below for a saved state. This launcher connects a repository to the
 person's interactive coding agent in a dedicated Herdr session. It adds no
 approval, merge, quota-reset or headless execution route. Preserve existing
 setup, workflow and interpreter behavior.
@@ -77,7 +78,7 @@ If an explicit start finds an active scan holding the tick lock, arrange one det
 
 Start persists a repo/machine state outside the checkout, installs a 30-minute
 user timer and runs the first tick immediately. Repeated start reuses the timer
-and saved activation time. An explicit start rearms the existing one-shot worker completion bridge for saved current automatic chats belonging to this repository and coordinator; timer ticks do not recreate listeners. Yield retains its current claim and ownership checks. If observation is unavailable, report the manual completion-evidence and yield fallback. In auto mode, on every fresh reconciliation, including ordinary timer ticks, explicit start, completion and capacity refill, reconsider currently graph-eligible, open, unassigned and unclaimed work even when an earlier packet was acknowledged and its trusted content is unchanged. Delivery alone is not worker admission; preserve trust, ownership, custody and waiting checks and make a fresh selection observation. In observe mode retain unchanged notification deduplication; in all modes keep it for work that is not currently ready and for empty scans. Each reconciliation considers all open eligible
+and saved activation time. An explicit start rearms the existing one-shot worker completion bridge for saved current automatic chats belonging to this repository and coordinator; timer ticks do not recreate listeners, except for the fresh pane after a [coordinator relaunch](#coordinator-relaunch) or a [gone coordinator pane](#gone-coordinator-pane). Yield retains its current claim and ownership checks. If observation is unavailable, report the manual completion-evidence and yield fallback. In auto mode, on every fresh reconciliation, including ordinary timer ticks, explicit start, completion and capacity refill, reconsider currently graph-eligible, open, unassigned and unclaimed work even when an earlier packet was acknowledged and its trusted content is unchanged. Delivery alone is not worker admission; preserve trust, ownership, custody and waiting checks and make a fresh selection observation. In observe mode retain unchanged notification deduplication; in all modes keep it for work that is not currently ready and for empty scans. Each reconciliation considers all open eligible
 backlog, regardless of creation or activation time.
 Optional --runs is a positive safe integer with no product maximum. Omission
 means no fixed cap. Persist only the selected launcher identity/config-folder
@@ -101,7 +102,9 @@ into that exact empty native command along with the saved profile environment.
 Reuse the pane only when its owner launch binding matches the current coordinator
 envelope, including optional runs, and the selected agent identity, saved HOME,
 launcher-definition HOME and selected family config-folder path that determine
-the native launch. Persist only those safe binding values; an absent legacy
+the native launch. Persist only those safe binding values, the launch
+fingerprint in [Coordinator relaunch](#coordinator-relaunch) and the terminal
+identity in [Gone coordinator pane](#gone-coordinator-pane); an absent legacy
 profile binding does not match. Leave an old live pane with an absent or
 different binding untouched: never prompt, interrupt, kill or close it. Allocate
 a distinct explicitly owned pane and coordinator through the native launch route,
@@ -113,8 +116,8 @@ or submission stays pending without blind resend. If
 `agent_session` is unavailable, pane occupancy alone is not native process or
 environment attestation. The narrow uncertain-send recovery below may use the
 same saved pane only when its owner launch/profile, idle/done status and readable
-screen still match. If the saved pane no longer exists, recreate the repo
-workspace/pane and preserve the queued work, except during that recovery. Recreated native owners use
+screen still match. If the saved pane [is gone](#gone-coordinator-pane),
+recreate the repo workspace/pane and preserve the queued work, except during that recovery. Recreated native owners use
 saved HOME and selected config-folder bindings. Reload commands and non-profile
 environment overrides from the saved launcher-definition HOME, never a later
 caller HOME, and only within the saved agent family. If the named definition now
@@ -137,10 +140,14 @@ show enabled/disabled, timer activity, Herdr availability, coordinator state,
 repo, agent, and next tick (or none), without waking AI or querying GitHub.
 Whenever Herdr is available, inspect the saved coordinator with the existing
 `agent get` operation, including when the timer is inactive. Confirm that its pane,
-workspace, repository path and provider match saved local state. Report a missing,
+workspace, repository path, provider and any saved terminal identity match saved local state. Report a missing,
 unreadable or mismatched coordinator as unavailable; a live Herdr server alone
 does not mean this repo's coordinator is running. For a matching coordinator,
 report its actual `working`, `starting`, `idle`, `blocked` or `done` state; idle is healthy.
+While a relaunch for the saved owner launch is pending, add one line that starts
+with `Coordinator relaunch pending after upgrade`. While a
+[held relaunch](#relaunch-once-per-fingerprint) mark matches the saved owner
+launch, add one line that starts with `Coordinator relaunch held`.
 Status never repairs, replaces or wakes a coordinator. Report unavailable Herdr
 separately instead of claiming healthy running state when its server is absent.
 Concurrent ticks for one local state serialize with a local
@@ -169,6 +176,104 @@ up to 5 seconds, checking at 100-millisecond intervals using elapsed time. On
 timeout return a clear nonzero error without config, timer or workspace changes
 and without delayed application. The deadline covers only lock acquisition; once
 acquired, await the actual save and timer effects and report their result.
+
+## Coordinator relaunch
+
+A running chat keeps the launch settings that it started with. A later package
+or launch argument does not reach it. So record a launch fingerprint in the
+owner launch at each native launch: the SHA-256 of the resolved invoked package
+root, its `package.json` version, the provider family and the provider arguments
+that this package builds. Put a fixed placeholder for the coordinator context
+value in those arguments; the coordinator envelope binds that value. Do not put
+the process environment, the configured executable or reloaded definition
+values in the fingerprint. They can differ between an explicit start and a
+timer tick, and a difference would relaunch on ordinary ticks. Store only the
+digest.
+
+A relaunch is due when the owner launch binding above matches, the saved
+fingerprint is absent or differs from the current one, no delivery or
+reconciliation intent is saved, and the reloaded definition keeps the saved
+family. An absent fingerprint means that an older package launched the chat.
+A custody projection has no fingerprint, so an adopted chat also relaunches at
+its next idle moment.
+When a relaunch is due, every tick and explicit start considers it, also without
+new work. The fresh chat gets the start-up recipe first.
+
+- If Herdr reports the chat as `working`, `starting`, `blocked` or another
+  status that is not `idle` or `done`, send nothing and close nothing. Keep the
+  work pending. Save a relaunch-pending mark with the saved pane and launch
+  start time; status shows it until the relaunch is done.
+- If the chat is `idle` or `done`, end it with Herdr `pane close` for the saved
+  coordinator pane only. Hold admission for the close. In that hold, first
+  recheck that the saved state is enabled with the same pane, workspace and
+  owner launch and no intent, and that Herdr reports the same pane, workspace,
+  provider, repository path, saved `terminal_id` and `agent_session` as `idle`
+  or `done`. If Herdr reports another `terminal_id`, the saved pane
+  [is gone](#gone-coordinator-pane): close nothing and forget it in the same
+  hold. After the close, `pane get` must report `pane_not_found`. Then, in the
+  same hold, add the current fingerprint to the relaunch record below, remove
+  the saved pane, workspace, owner launch and the pending and held marks, and
+  mark the recipe as not delivered. If a check fails before the close, close
+  nothing, keep the work pending and retry on a later tick. If Herdr or the
+  save fails, or Autopilot stops, after the close, the saved pane is gone and a
+  later tick, or a start after a stop, replaces it.
+- Then open a fresh repo workspace and pane through the existing route, rearm
+  saved worker completion for the fresh pane with the same filter as an
+  explicit start, and launch with the current arguments. Deliver pending work as
+  usual.
+
+A relaunch keeps the coordinator identity, machine, activation and runs cap,
+so claims, saved runs, progress, queued work and history do not change. Never
+relaunch during uncertain-send recovery. Never close another pane, workspace or
+process. Stop still only disables the timer.
+
+<a id="relaunch-once-per-fingerprint"></a>
+**Relaunch once per fingerprint.** For each relaunch, save the current
+fingerprint, which the fresh chat gets, in a relaunch record of the 8 most
+recent. If a due relaunch would use a fingerprint that the record already has,
+the fingerprint is not stable, for example when starts from two installs alternate. Do not
+relaunch again: the current chat stays and gets work as usual. Save a held mark
+with the saved pane, launch start time and that fingerprint, warn once, and
+remove the pending mark. Status shows the held line while the mark matches the
+saved owner launch. When no relaunch is due, remove the held mark. A replaced
+gone pane is not a relaunch, so a person can close the coordinator pane in
+Herdr to get a fresh chat with the current settings.
+
+### Gone coordinator pane
+
+Just before each native launch, read the pane with Herdr `pane get` and save
+its `terminal_id` in the owner launch. Herdr gives each terminal a new
+`terminal_id`. After a Herdr server restart, a pane ID can name another
+terminal, for example a restored empty pane or a chat that a person started. If
+`pane get` reports `pane_not_found` there, launch nothing and replace the pane on
+a later tick.
+
+The saved coordinator pane is gone when one of these is true:
+
+- `agent get` reports `pane_not_found`, or Herdr is not running.
+- `agent get` reports `agent_not_found` and `pane get` reports
+  `pane_not_found`. Herdr also gives `agent_not_found` for a closed pane, so
+  `agent get` alone does not tell a closed pane from a pane without a chat.
+- Herdr reports a `terminal_id` for the saved pane that differs from the one in
+  its owner launch. A missing value on either side does not show a difference,
+  so an owner launch from an older package uses only the rules above.
+
+Outside uncertain-send recovery, never close, prompt or launch into a gone
+pane: a pane that now has its ID is not ours. In one admission hold, check
+that the saved state still names the same pane and owner launch and has no
+intent. Then remove the saved pane, workspace, owner launch and the pending and
+held marks, and mark the recipe as not delivered. Keep the coordinator
+identity, machine, activation, runs cap and relaunch record. Keep the profile
+binding of each owner launch, also after it is forgotten, as the last launched
+profile; an ordinary start verifies the saved profile against the owner launch
+or, when none is saved, that last launched profile. Then open a fresh
+pane, rearm saved worker completion for it and launch as after a relaunch. A
+plain tick and an explicit start both do this when they wake the coordinator.
+So a failure or a stop after a relaunch close or after this forget step, a pane
+that a person closed and a Herdr server restart recover on the next tick, or
+after a stop on the next start. If the pane has
+the saved terminal but no chat, keep the work pending without a second launch:
+the launched chat may still be starting.
 
 ## Tick and the skill boundary
 
@@ -385,7 +490,7 @@ The intent's pane and workspace must match the current saved target. The saved o
 
 Inspect only that saved target. With an uncertain intent, this rule overrides normal missing-pane recovery. If its saved pane or workspace is absent or mismatched, retain the original identifiers and send nothing. Never create, replace, focus, close or interrupt a target for recovery.
 
-Before recovery, inspect the live workspace, pane and agent. Their IDs, repository path and provider must match the saved target and selected launcher. Check the GitHub repository from that path against the saved repository before delivery. Perform live identity, repository and readiness reads outside admission, immediately before the final guard. Under the guard recheck current saved control and submit one prompt. Remote identity can change after observation; do not claim atomic remote attestation. A missing or mismatched current identity sends nothing.
+Before recovery, inspect the live workspace, pane and agent. Their IDs, repository path and provider must match the saved target and selected launcher. If the owner launch saved a `terminal_id`, Herdr must report the same `terminal_id` for the saved pane; another terminal sends nothing. Check the GitHub repository from that path against the saved repository before delivery. Perform live identity, repository and readiness reads outside admission, immediately before the final guard. Under the guard recheck current saved control and submit one prompt. Remote identity can change after observation; do not claim atomic remote attestation. A missing or mismatched current identity sends nothing.
 
 Herdr must report the owned agent as `idle` or `done`. A `working`, `blocked`, `unknown` or missing status, an absent agent, or any failed or unreadable inspection sends nothing. If Herdr reports an `agent_session`, it must stay unchanged through the final guard; a changed or unreadable target sends nothing. Herdr may omit the session ID for a saved, finished agent. In that case, do not refuse on absence alone when the live workspace, pane, repo path and provider still match. `done` permits only a new packet. It does not acknowledge the old submission.
 

@@ -47,7 +47,7 @@ These commands store settings and determine trust. Selecting a mode starts no ru
 |---|---|
 | `pdd autopilot start [--runs N] [--resume-custody FILE]` | Check sign-ins and the running pdd version, open a dedicated interactive Herdr session and check for work immediately. A user timer checks again every 30 minutes. `--runs` sets an optional concurrent-run cap; omission has no fixed cap. `--resume-custody` supplies the verified original-owner projection for explicit recovery |
 | `pdd autopilot stop` | Disable this repo's timer on this machine and let the current agent step finish |
-| `pdd autopilot status` | Show this machine's repo, agent, timer, coordinator health and next tick without waking an agent; an idle coordinator is healthy. It reads `pdd.json` on GitHub only to warn when its Autopilot settings differ from this checkout. Adds one line when an [alert](#alerts) was not delivered |
+| `pdd autopilot status` | Show this machine's repo, agent, timer, coordinator health and next tick without waking an agent; an idle coordinator is healthy. It reads `pdd.json` on GitHub only to warn when its Autopilot settings differ from this checkout. Another line shows a pending or held coordinator relaunch, and one line an [alert](#alerts) that was not delivered |
 | `pdd autopilot add N...` | Label named issues `pdd:autopilot`. Autopilot does not need this label: it considers every open issue |
 | `pdd autopilot alerts set` | Read your Discord or Slack incoming webhook URL from stdin and save it for this machine |
 | `pdd autopilot alerts set --discord-channel ID [--token-command CMD]` | Use a Discord bot in one channel: read its token from stdin, or save CMD and run it at each send to get the token |
@@ -81,6 +81,27 @@ no model call. Later starts on this machine keep that agent, also after
 `pdd autopilot stop`. To select Codex, sign in to Codex and run the first
 `pdd autopilot start` from Codex or from a plain terminal. From a Claude Code
 session, run `env -u CLAUDECODE pdd autopilot start`.
+
+A coordinator chat keeps the launch settings that it started with. Autopilot
+saves a fingerprint of the pdd package and the launch arguments with each
+coordinator launch. When a start or tick finds a chat with another or no
+fingerprint, for example after you install a newer pdd, it ends that chat
+when the chat is idle or done and starts a fresh chat with the current
+settings. The coordinator identity stays the same, so claims, saved runs and
+progress do not change. A busy chat is not interrupted: its work stays pending,
+and `pdd autopilot status` shows `Coordinator relaunch pending after upgrade`
+until the relaunch is done. Autopilot relaunches for the same settings only
+once. If the settings change again, for example when starts from two pdd
+installs alternate, the current chat stays and gets work, and status shows
+`Coordinator relaunch held`. Close the coordinator pane in Herdr to start a
+fresh chat with the current settings.
+
+Autopilot saves the Herdr terminal of each coordinator chat. When the saved
+pane is gone, for example after a failed relaunch, a closed pane or a Herdr
+server restart, the next tick opens a fresh pane for the same coordinator and
+delivers the pending work there. After `pdd autopilot stop`, also during a
+relaunch, the next `pdd autopilot start` does this. A pane that now has the old
+pane ID but another terminal gets no prompt, no close and no launch.
 
 A tick checks GitHub with ETags and wakes the agent only for a repo's first
 start-up recipe or an unseen trusted issue, comment or related PR change.
