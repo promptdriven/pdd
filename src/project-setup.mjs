@@ -1,5 +1,5 @@
-// Generated from prompts/cli/project-setup.prompt.md (sha256: 832ea686a2670273a127e0266c4be36908fd9ed101a6d5a5d77f5b4a42c14800).
-import { existsSync, lstatSync, readFileSync, writeFileSync } from 'node:fs';
+// Generated from prompts/cli/project-setup.prompt.md (sha256: 78a7aa227709558cd5675ce6d0a38a6f64062cd4f56eae6e793589192513a61c).
+import { appendFileSync, existsSync, lstatSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const START = '<!-- pdd:start -->', END = '<!-- pdd:end -->';
@@ -32,15 +32,21 @@ export function setupProject({ cwd, packageRoot }) {
 }
 
 // pdd test keeps its local cache in .pdd/ at the Git root; a commit must never carry it.
+// Bytes, not text: a line check needs ASCII only, and the append keeps every old byte (also non-UTF-8 ones).
 const IGNORED = new Set(['.pdd', '.pdd/', '/.pdd', '/.pdd/']);
 export function ignorePddFolder({ root }) {
   const file = join(root, '.gitignore');
   let old = null;
   try {
     if (!lstatSync(file).isFile()) throw Error(`${file} is not a regular file. Add the line .pdd/ to it by hand.`);
-    old = readFileSync(file, 'utf8');
+    old = readFileSync(file);
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  if (old !== null && old.split(/\r?\n/).some(line => IGNORED.has(line.trim()))) return { file, changed: false };
-  writeFileSync(file, `${old ?? ''}${old && !old.endsWith('\n') ? '\n' : ''}.pdd/\n`);
-  return { file, changed: true };
+  if (old === null) { writeFileSync(file, '.pdd/\n', { flag: 'wx' }); return { file, changed: true, negated: false }; }
+  // Git drops trailing spaces and a CR, never leading spaces; the last matching line wins.
+  const lines = old.toString('latin1').split('\n').map(line => line.replace(/[ \r]+$/, ''));
+  const last = lines.findLast(line => IGNORED.has(line) || line.startsWith('!') && IGNORED.has(line.slice(1)));
+  if (last !== undefined) return { file, changed: false, negated: last.startsWith('!') };
+  const newline = old.includes('\r\n') ? '\r\n' : '\n';
+  appendFileSync(file, `${old.length && old.at(-1) !== 0x0a ? newline : ''}.pdd/${newline}`);
+  return { file, changed: true, negated: false };
 }

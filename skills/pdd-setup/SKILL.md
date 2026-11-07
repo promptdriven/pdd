@@ -13,7 +13,7 @@ Add one short PDD block to the file that this repo's agents read, and keep `.pdd
 2. Write this block exactly. Leave out the RUNBOOK.md line if the pdd-prompting skill has no RUNBOOK.md.
 3. If the file already has a `<!-- pdd:start -->` … `<!-- pdd:end -->` block, replace only that block. Otherwise add the block at the end, after one empty line. Keep all other text.
 4. If the block is already the same, change nothing. If only one marker is there, stop and ask the person.
-5. In a Git repo, add the line `.pdd/` to the root `.gitignore` if no line there is `.pdd`, `.pdd/`, `/.pdd` or `/.pdd/`. Create the file if needed. `pdd test` keeps its local cache in `.pdd/`.
+5. In a Git repo, add the line `.pdd/` at the end of the root `.gitignore` if no line there is `.pdd`, `.pdd/`, `/.pdd` or `/.pdd/` (no space at the start). Create the file if needed. Keep all other bytes. If the last such line starts with `!`, change nothing and tell the person. `pdd test` keeps its local cache in `.pdd/`.
 
 ```markdown
 <!-- pdd:start -->

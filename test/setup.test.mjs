@@ -114,11 +114,16 @@ test('SETUP6: in a Git repo, pdd setup adds .pdd/ to the root .gitignore once an
   writeFileSync(ignore, 'node_modules/\n# keep');
   assert.equal(run().status, 0);
   assert.equal(readFileSync(ignore, 'utf8'), 'node_modules/\n# keep\n.pdd/\n');
-  for (const line of ['/.pdd/', '.pdd', '  .pdd/  ']) {
+  // Git drops trailing spaces and a CR, so these lines already ignore .pdd/.
+  for (const line of ['/.pdd/', '.pdd', '.pdd/  ', '/.pdd\r']) {
     writeFileSync(ignore, `dist/\n${line}\n`);
     assert.equal(run().status, 0);
     assert.equal(readFileSync(ignore, 'utf8'), `dist/\n${line}\n`, line);
   }
+  // Git keeps leading spaces, so this line does not ignore .pdd/.
+  writeFileSync(ignore, '  .pdd/\n');
+  assert.equal(run().status, 0);
+  assert.equal(readFileSync(ignore, 'utf8'), '  .pdd/\n.pdd/\n');
   // Git itself now ignores the cache folder.
   mkdirSync(join(project, '.pdd/cache/test'), { recursive: true });
   writeFileSync(join(project, '.pdd/cache/test/stories.json'), '{}');
@@ -126,4 +131,35 @@ test('SETUP6: in a Git repo, pdd setup adds .pdd/ to the root .gitignore once an
   assert.equal(run().status, 0);
   const status = spawnSync('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: project, encoding: 'utf8' });
   assert.equal(status.stdout.includes('.pdd/'), false, status.stdout);
+});
+
+// Wrong (M2): setup rewrites the whole .gitignore, so a byte that is not UTF-8 becomes U+FFFD, or it overrides a "!.pdd/" line.
+test('SETUP7: pdd setup only appends to .gitignore, keeps every old byte and line end, and respects a !.pdd/ line', t => {
+  const { project, run } = fixture(t);
+  spawnSync('git', ['init', '-q', project]);
+  const ignore = join(project, '.gitignore');
+  const cases = [
+    ['# caf\xe9 files\nbuild/\n', '.pdd/\n'],
+    ['node_modules/\r\ndist/\r\n', '.pdd/\r\n'],
+    ['a\r\n\xff\xfe', '\r\n.pdd/\r\n'],
+  ];
+  for (const [old, added] of cases) {
+    const before = Buffer.from(old, 'latin1');
+    writeFileSync(ignore, before);
+    const result = run();
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(readFileSync(ignore), Buffer.concat([before, Buffer.from(added)]), JSON.stringify(old));
+    const check = spawnSync('git', ['check-ignore', '-q', '.pdd/cache/test/stories.json'], { cwd: project });
+    assert.equal(check.status, 0, `Git must ignore .pdd/ after ${JSON.stringify(old)}`);
+  }
+  // A "!" line keeps .pdd/ in Git; the last matching line counts, as in Git.
+  for (const [text, negated] of [['.pdd*\n!.pdd/\n', true], ['.pdd/\n!/.pdd\r\n', true], ['!.pdd/\n.pdd/\n', false]]) {
+    writeFileSync(ignore, text);
+    const result = run();
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(readFileSync(ignore, 'utf8'), text);
+    const lines = result.stdout.split('\n').filter(line => line.includes(ignore));
+    assert.equal(lines.length, negated ? 1 : 0, result.stdout);
+    if (negated) assert.match(lines[0], /"!" line for \.pdd\/.*did not change/);
+  }
 });

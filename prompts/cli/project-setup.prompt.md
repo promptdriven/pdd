@@ -24,16 +24,17 @@ Return `{file, changed}`: the absolute file path and whether the file was writte
 
 ## Ignore `.pdd/`
 
-`pdd test` keeps its local cache in `.pdd/` at the Git root. That folder must never go into a commit. `ignorePddFolder({root})` gets the Git top-level folder and changes only `<root>/.gitignore`:
+`pdd test` keeps its local cache in `.pdd/` at the Git root. That folder must never go into a commit. `ignorePddFolder({root})` gets the Git top-level folder and changes only `<root>/.gitignore`. Read the lines as Git does: drop spaces and a CR at the end of a line, and keep spaces at its start. An ignore line is `.pdd`, `.pdd/`, `/.pdd` or `/.pdd/`. A negation line is `!` and an ignore line. The last ignore or negation line counts, as in Git:
 
 | `.gitignore` | Result |
 | --- | --- |
 | Does not exist | Create it with the one line `.pdd/` |
-| Has a line that is `.pdd`, `.pdd/`, `/.pdd` or `/.pdd/` (spaces around it do not count) | Write nothing |
-| Has no such line | Add the line `.pdd/` at the end. If the file does not end with a newline, add one first |
+| Its last such line is an ignore line | Write nothing |
+| Its last such line is a negation line | Write nothing, and return `negated: true`: the person keeps `.pdd/` in Git |
+| Has no such line | Append the line `.pdd/`. If the file does not end with a newline, append one first. Use CRLF for both when the file has a CRLF, else LF |
 | Is not a regular file (a folder or a symbolic link) | Throw an error that names the file and says to add `.pdd/` by hand; write nothing |
 
-Keep all other text. Return `{file, changed}`: the absolute `.gitignore` path and whether the file was written.
+Keep every old byte: read the file as bytes and only append. A file that is not valid UTF-8 keeps its bytes. Return `{file, changed, negated}`: the absolute `.gitignore` path, whether the file was written, and whether a negation line kept it unchanged.
 
 ## Dependencies
 

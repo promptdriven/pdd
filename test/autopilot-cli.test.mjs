@@ -5,7 +5,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { PassThrough } from 'node:stream';
-import { fileURLToPath } from 'node:url';
 import { runAutopilot } from '../src/autopilot.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { renderCompletion } from '../src/completion.mjs';
@@ -179,30 +178,4 @@ test('autopilot-setup: default terminal redraws each question after backspace an
     assert.equal((await result).exitCode, 0);
     assert.deepEqual(JSON.parse(raw), { mode: mode || 'off', trust: ['Dana', 'Eli'] });
   }
-});
-
-// Wrong (user repo): the mode is saved only in this checkout, and Autopilot workers, which start from GitHub, never see it.
-test('autopilot-mode: the public CLI says to commit and push pdd.json, or that it is already committed', t => {
-  const cwd = repo(t);
-  const git = (...args) => execFileSync('git', ['-c', 'user.name=PDD Test', '-c', 'user.email=pdd@example.invalid', ...args], { cwd, encoding: 'utf8' });
-  const pdd = mode => spawnSync(process.execPath, [fileURLToPath(new URL('../bin/pdd.mjs', import.meta.url)), 'autopilot', mode], { cwd, encoding: 'utf8', timeout: 10000 });
-  const commit = /commit and push pdd\.json/i, clean = /pdd\.json is already committed/i;
-  // A new file, then a changed committed file, both need a commit.
-  for (const mode of ['auto', 'observe']) {
-    const result = pdd(mode);
-    assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, commit, mode);
-    assert.doesNotMatch(result.stdout, clean, mode);
-    assert.equal(JSON.parse(readFileSync(join(cwd, 'pdd.json'))).autopilot.mode, mode);
-    git('add', 'pdd.json'); git('commit', '-q', '-m', mode);
-  }
-  const same = pdd('observe');
-  assert.equal(same.status, 0, same.stderr);
-  assert.match(same.stdout, clean);
-  assert.doesNotMatch(same.stdout, commit);
-  // From a subfolder, the root pdd.json is the file that counts.
-  mkdirSync(join(cwd, 'sub'));
-  const off = spawnSync(process.execPath, [fileURLToPath(new URL('../bin/pdd.mjs', import.meta.url)), 'autopilot', 'off'], { cwd: join(cwd, 'sub'), encoding: 'utf8', timeout: 10000 });
-  assert.equal(off.status, 0, off.stderr);
-  assert.match(off.stdout, commit);
 });

@@ -847,6 +847,8 @@ test('AUTOPILOT14: bounded startup, all backlog, and in auto the code PR right a
     assert.ok(auto >= 0 && observe > auto, `${file}: ${rule}`);
     assert.doesNotMatch(rule.slice(auto, observe), /release|code now/, file);
     assert.match(rule.slice(observe), /"code now"/, file);
+    // In `observe`, a repo with a release still starts the code PR at once.
+    assert.match(rule.slice(observe), /release/, file);
   }
   for (const name of ['pdd-bug', 'pdd-feature']) has(`${name}/steps/autopilot.md`, 'stacked on PR 1; do not wait for PR 1 to merge.');
 });
