@@ -8,7 +8,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { runAutopilotLauncher } from '../src/autopilot-launcher.mjs';
 import { codexConfigs } from './helpers/codex-config-args.mjs';
 
-// Replay the draft autopilot-codex-command-context Story vectors on the real launcher (RUNBOOK §17).
+// Replay the autopilot-codex-command-context Story vectors on the real launcher (RUNBOOK §17).
 // The launcher prompt has no Runtime interface yet, so these are native results only.
 // Bindings (fake programs only: no live agent, Herdr session, GitHub call or model call):
 // - World paths such as /repo and /home/sam live under a temporary root. Herdr pane values stay literal.
@@ -93,7 +93,7 @@ async function replayStep(t, step, world, root) {
   for (const [key, value] of Object.entries(saved.environment)) assert.equal(state.environment[key], host(value), `binding: saved ${key} matches the world`);
 }
 
-test('replay draft autopilot-codex-command-context Story vectors through runAutopilotLauncher', async t => {
+test('replay autopilot-codex-command-context Story vectors through runAutopilotLauncher', async t => {
   assert.ok(scenario.steps.length > 0);
   const root = mkdtempSync(join(tmpdir(), 'pdd-3031-vectors-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));

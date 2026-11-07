@@ -4,8 +4,6 @@ I can start Autopilot with a Codex profile that limits shell variables, and the 
 
 Issue: https://github.com/promptdriven/pdd/issues/3031
 
-Draft from the reproduce step. The prompt-story step owns the final text.
-
 ## Acceptance criteria
 
 1. With a Codex profile that keeps only basic shell variables (`inherit = "core"`), the Codex start of the coordinator sets `PDD_AUTOPILOT_CONTEXT` for the commands of the chat to the same start context that the coordinator process gets.
