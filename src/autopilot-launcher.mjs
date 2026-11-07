@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 5b21cb70b4349309e90ac81fbea86562e9466cff4d40a0a1e61c0c7ebc3c3672).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 03fb341296f075dc690f493fadfb39248ca8d70aad2440a69892d25d1a52c772).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -62,9 +62,11 @@ function portsFor(state, ports) {
 }
 const keepEnv = env => Object.fromEntries(['HOME', 'PATH', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME', 'XDG_CONFIG_HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS'].filter(k => typeof env[k] === 'string').map(k => [k, env[k]]));
 const NOT_GIT = 'This folder is not a Git repository. cd into the repo you want Autopilot to work on, then run the command again.';
+// Git translates its messages; pdd reads the "not a git repository" text only in the C locale.
+const gitRootIn = p => p.execute('git', ['rev-parse', '--show-toplevel'], { env: { ...p.env, LC_ALL: 'C', LANG: 'C' } });
 const stateFolder = (ports, env) => ports.stateRoot ?? join(env.HOME || homedir(), '.local', 'state', 'pdd', 'autopilot');
 async function gitRoot(p) {
-  const result = await p.execute('git', ['rev-parse', '--show-toplevel']);
+  const result = await gitRootIn(p);
   if (result.code === 0 && result.stdout.trim()) return result.stdout.trim();
   throw Object.assign(Error(/not a git repository/i.test(result.stderr ?? '') ? NOT_GIT : 'Autopilot could not read this Git repository; retry.'), { exact: true });
 }
@@ -1279,7 +1281,7 @@ export async function withAutopilotModeLock({ cwd, env }, action, ports = {}) {
     catch (error) { return { code: error.code === 'ENOENT' ? -1 : 1, stdout: error.stdout ?? '', stderr: error.stderr ?? '' }; }
   } : ports.run;
   const p = portsFor(state, { ...ports, ...(run ? { run } : {}), env });
-  const root = await p.execute('git', ['rev-parse', '--show-toplevel']);
+  const root = await gitRootIn(p);
   if (root.code !== 0) {
     if (/not a git repository/i.test(root.stderr)) return action();
     return bad('Autopilot settings could not verify the Git repository; retry.');

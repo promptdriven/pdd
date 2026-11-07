@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot.prompt.md (sha256: 5bf8bf70a653bfddcd9a6f94cbc054d40484fc0014f3eee2abf338916de8cc02).
+// Generated from prompts/cli/autopilot.prompt.md (sha256: 7d9ad34e9e850b33e76212fbd25b44cf789877684196e1f054901f6393209c1e).
 import * as nativeFs from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -112,7 +112,8 @@ export async function runAutopilot(input, ports = {}) {
     const cwd = ports.cwd ?? process.cwd(), exec = ports.execFile ?? execute;
     let root = cwd;
     if (!ports.config) {
-      try { root = String((await exec('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8' })).stdout).trim(); }
+      // Git translates its messages; read the "not a git repository" text in the C locale.
+      try { root = String((await exec('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8', env: { ...process.env, LC_ALL: 'C', LANG: 'C' } })).stdout).trim(); }
       catch (error) {
         if (action === 'setup') return result(0, '');
         return result(1, /not a git repository/i.test(String(error?.stderr ?? ''))
