@@ -1,5 +1,5 @@
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 8561239cfbaee628a941fa78786bba994a93ef4d0dc5602cf3090f96cf803467).
 import { interfaceFindings } from './interface-draft.mjs';
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 9727169a1bfde0faf95a4c491ff393eed8a3aabbefac54a453c0a129a0b6fe57).
 import {readEvidenceEligibility} from './workflow-runner.mjs';
 import {allRuns} from './workflow-runs.mjs';
 import {assessNativeEvidence, resultLines, usableResult} from './workflow-results.mjs';
@@ -21,6 +21,8 @@ import { askApproval, lineReader, promptPath } from './prompt-approve.mjs';
 import { OPEN_STATES, causeText, cleanText, exitCodeFor, progressTicker, projectAnswer, refusalView, renderJson, renderText, summaryLine, stepTimeLimit, tryUsage, validLink, coverageText } from './runtime-output.mjs';
 import { lintSvgLayouts } from './svg-layout.mjs';
 import { compareScreen, formatScreenComparison } from './screen-compare.mjs';
+
+const localInterfaceProblem = problem => ['interface-missing','interface-kind-invalid','native-reason-missing','interface-draft-incomplete'].includes(problem.code);
 
 // The one place in pdd that names the PDD runtime address; PDD_RUNTIME_URL overrides it.
 export const DEFAULT_RUNTIME_URL = 'https://runtime.promptdriven.ai';
@@ -1664,7 +1666,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   const { ports } = context, origin = runtimeOrigin(ports.env), { root, found, normalized } = localSetup(cwd, words);
   context.excludeFixtureProjects = words.length === 0;
   const paths = words.length ? undefined : [...found.discoveryVisible].filter(path => path.endsWith('.prompt.md'));
-  const findings = paths ? interfaceFindings({root,paths}) : [];
+  const findings = paths ? interfaceFindings({root,paths}).filter(localInterfaceProblem) : [];
   if (findings.length) {
     const summary = 'Lint refused Runtime interfaces. 0 AI calls. No files were sent.';
     if (context.json) line(ports.stdout,JSON.stringify({repo:root,exit_code:4,lint_state:'refused',problems:findings,rows:[],summary_line:summary}));
@@ -1692,7 +1694,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
     seen.add(path);
     if (!prompts.has(path)) prompts.set(path,readPrompt(root,found.visible,path));
     const prompt = prompts.get(path);
-    const finding = interfaceFindings({root,paths:[path]});
+    const finding = interfaceFindings({root,paths:[path]}).filter(localInterfaceProblem);
     if (finding.length) return finding;
     if (!prompt.interface) return [];
     const own = interfaceSchemaProblems(prompt.interface).filter(problem =>
@@ -2333,7 +2335,7 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
           const { found, normalized } = localSetup(cwd, words), selected = select(found, normalized, root);
           promptPaths = ports.captureSource(root, { tests: selected.filter(test => !test.error).map(test => test.path), appMap: null }).files.map(file => file.path).filter(path => path.endsWith('.prompt.md'));
         }
-        const problems = interfaceFindings({root,paths:promptPaths});
+        const problems = interfaceFindings({root,paths:promptPaths}).filter(localInterfaceProblem);
         const warnings = lintSvgLayouts({ root, files, promptPaths }), summary = `SVG layout lint: ${warnings.length} warnings. 0 AI calls. No checks were sent.`;
         line(ports.stdout, context.json ? JSON.stringify({ repo: root, exit_code: problems.length ? 4 : 0, problems, warnings, summary_line: summary }) : [...problems.map(item => `${item.code}: ${item.message}`), ...warnings, summary].join('\n'));
         return problems.length ? 4 : 0;

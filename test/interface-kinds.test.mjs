@@ -124,3 +124,14 @@ test('native-only text output includes its reason and a separate Runtime coverag
   assert.match(p.stdout.text,/Runtime coverage: 0 of 1 prompts checkable, 1 native-only/);
   assert.doesNotMatch(p.stdout.text,/✓/);
 });
+
+
+test('local lint keeps unresolved draft gaps visible when the prose hash is stale', async t => {
+  const setup=harbor(t,repo=>{
+    declaration(repo,{kind:'partial',entries:[],draft_gaps:['Declare the operation schemas.'],limits:{max_steps:1,max_model_calls:1}});
+    const file=join(repo,PLACE);writeFileSync(file,readFileSync(file,'utf8')+'\nChanged prose.\n');
+  });
+  const p=ports(setup);
+  assert.equal(await runCheck({cwd:setup.repo,options:{'--lint':true,'--local':true,'--json':true}},p),4);
+  assert.ok(JSON.parse(p.stdout.text).problems.some(problem=>problem.code==='interface-draft-incomplete'));
+});

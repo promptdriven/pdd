@@ -480,3 +480,8 @@ The automatic approval route requires a complete draft from this command,
 unchanged committed prose, code and tests, passing existing native tests, and full
 prompt-check results on current source. It records `automatic-check-pass` with the
 command, results and source hashes. New behavior requires a person.
+
+Automatic native-test commands use `node --test TEST...`, `npm test` or
+`npm run test:NAME`. Node files must be committed test files. The command must
+finish with a TAP report, at least one test, all tests passed, and no failures.
+Build scripts and commands without test results do not qualify.

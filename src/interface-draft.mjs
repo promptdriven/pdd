@@ -17,8 +17,9 @@ export function interfaceFindings({root, paths = promptPaths(root)}) {
   return paths.flatMap(path => {
     try {
       const prompt = readPrompt(root, visible, path), problem = promptRefusal(prompt, 'interface');
-      if (problem) return [{...problem, path}];
-      return interfaceSchemaProblems(prompt.interface).map(item => ({code:item.code,path,section:item.pointer,message:`${path} ${item.pointer} ${item.rule}`}));
+      if (!prompt.interface) return [{...problem,path}];
+      const schema=interfaceSchemaProblems(prompt.interface).map(item => ({code:item.code,path,section:item.pointer,message:`${path} ${item.pointer} ${item.rule}`}));
+      return problem && !schema.some(item=>item.code===problem.code) ? [{...problem,path},...schema] : schema;
     } catch (error) { return [{code:error.code ?? 'interface-unreadable',path,message:error.message}]; }
   });
 }
@@ -77,7 +78,12 @@ function inferInterface(root,path,text) {
   let iface;
   if(candidates.length===1) {
     const value=candidates[0];
-    iface={...value,kind:Object.hasOwn(value,'kind') ? value.kind : 'full',status:'draft',prose_sha256:'',calls:value.calls ?? [],resources:value.resources ?? [],limits:value.limits ?? {max_steps:1000,max_model_calls:1000}};
+    iface={...value,kind:Object.hasOwn(value,'kind') ? value.kind : 'full',status:'draft',prose_sha256:''};
+    const missing=['calls','resources','limits'].filter(key=>!Object.hasOwn(value,key));
+    if(missing.length) {
+      iface.kind='partial';
+      iface.draft_gaps=[...(Array.isArray(iface.draft_gaps) ? iface.draft_gaps : []),`Declare ${missing.join(', ')} from the owning contract.`];
+    }
     if(iface.kind==='native-only') throw Error('Drafting cannot choose native-only. Declare and review its reason.');
   } else {
     const operations=[...text.matchAll(/\b(?:Export|export|exports)\s+(?:(?:async|module|function)\s+)*`?([A-Za-z_$][\w$]*)\s*\(/g)].map(match=>match[1]);
@@ -87,7 +93,7 @@ function inferInterface(root,path,text) {
       const code=files.read({path:own}).content;
       for(const match of code.matchAll(/^export\s+(?:async\s+)?function\s+([\w$]+)\s*\(/gm)) operations.push(match[1]);
     }
-    iface={kind:'partial',status:'draft',prose_sha256:'',entries:[...new Set(operations)].map(operation=>({operation})),calls:[],resources:[],limits:{max_steps:1000,max_model_calls:1000},
+    iface={kind:'partial',status:'draft',prose_sha256:'',entries:[...new Set(operations)].map(operation=>({operation})),
       draft_gaps:[candidates.length>1 ? 'More than one interface declaration is present; select the owning contract.' : 'Declare complete input_schema and result_schema for each public operation. Review calls, resources and limits against the prompt.']};
   }
   return iface;
@@ -141,13 +147,13 @@ function sourceSnapshot(root) {
 function nativeTestArgs(root,command,head) {
   if(typeof command!=='string' || !command.trim()) throw Error('Name the existing native tests with --tests COMMAND.');
   const words=command.trim().split(/\s+/);
-  if(words[0]==='node' && words[1]==='--test' && words.length>2 && words.slice(2).every(path=>/^[\w./-]+\.(?:[cm]js|ts)$/.test(path) && !path.startsWith('-'))) {
+  if(words[0]==='node' && words[1]==='--test' && words.length>2 && words.slice(2).every(path=>/^[\w./-]+\.(?:[cm]js|ts)$/.test(path) && !path.startsWith('-') && /(?:^|\/)tests?\/|\.(?:test|spec)\.[cm]?[jt]s$/.test(path))) {
     for(const path of words.slice(2)) git(root,['show',`${head}:${path}`]);
-    return [process.execPath,words.slice(1)];
+    return [process.execPath,['--test-reporter=tap',...words.slice(1)]];
   }
   if(words[0]==='npm' && (words.length===2 && words[1]==='test' || words.length===3 && words[1]==='run')) {
     const name=words[1]==='test' ? 'test' : words[2], pkg=JSON.parse(git(root,['show',`${head}:package.json`]));
-    if(typeof pkg.scripts?.[name]==='string' && pkg.scripts[name].trim()) return ['npm',words.slice(1)];
+    if(/^(?:test|test:.+)$/.test(name) && typeof pkg.scripts?.[name]==='string' && pkg.scripts[name].trim()) return ['npm',words.slice(1)];
   }
   throw Error('Use existing committed tests: node --test TEST... or npm test or npm run SCRIPT.');
 }
@@ -162,19 +168,28 @@ export async function runAutomaticApproval({path,root,tests},ports={}) {
     if(!promptPath(root,root,path)) throw Error('Name one Git-visible regular prompt.');
     const file=join(root,path),text=readFileSync(file,'utf8'),blocks=interfaceBlocks(text);
     if(blocks.length!==1) throw Error('Draft a Runtime interface before automatic approval.');
-    const iface=JSON.parse(blocks[0][1]),record=drafts(root)[path];
+    const records=drafts(root),iface=JSON.parse(blocks[0][1]),record=records[path];
     if(!record || iface.status!=='draft' || iface.kind==='native-only' || interfaceFindings({root,paths:[path]}).length || !iface.entries?.length)
       throw Error('Automatic approval needs a complete draft made by pdd interface draft.');
     if(sha256(JSON.stringify(iface))!==record.interface_sha256 || proseSha256(text)!==record.prose_sha256 || record.original_sha256!==sha256(text.replace(blocks[0][0],'')))
       throw Error('The draft changed. Ask a person to approve the new contract.');
     const head=git(root,['rev-parse','HEAD']).trim();
-    if(head!==record.head || sha256(git(root,['show',`${head}:${path}`]))!==record.original_sha256)
+    if(sha256(git(root,['show',`${record.head}:${path}`]))!==record.original_sha256)
       throw Error('The committed prompt changed or this draft includes new behavior. Ask a person.');
-    const before=sourceSnapshot(root),committed=git(root,['ls-tree','-r','--name-only','-z',head]).split('\0').filter(Boolean);
+    const before=sourceSnapshot(root),committed=git(root,['ls-tree','-r','--name-only','-z',record.head]).split('\0').filter(Boolean);
     for(const name of new Set([...Object.keys(before),...committed])) {
       if(name.startsWith('.pdd/')) continue;
-      const expected=name===path ? record.original_sha256 : before[name];
-      if(!committed.includes(name) || expected===undefined || sha256(git(root,['show',`${head}:${name}`],true))!==expected)
+      let expected=name===path ? record.original_sha256 : before[name];
+      const other=records[name];
+      if(name!==path && other?.head===record.head && name.endsWith('.prompt.md') && before[name]) {
+        const otherText=readFileSync(join(root,name),'utf8'),otherBlocks=interfaceBlocks(otherText);
+        if(otherBlocks.length===1) {
+          const value=JSON.parse(otherBlocks[0][1]);
+          if(['draft','approved'].includes(value.status) && sha256(otherText.replace(otherBlocks[0][0],''))===other.original_sha256
+            && sha256(JSON.stringify({...value,status:'draft'}))===other.interface_sha256) expected=other.original_sha256;
+        }
+      }
+      if(!committed.includes(name) || expected===undefined || sha256(git(root,['show',`${record.head}:${name}`],true))!==expected)
         throw Error('Automatic approval needs unchanged committed source and existing tests.');
     }
     const [program,args]=nativeTestArgs(root,tests,head);
@@ -185,6 +200,9 @@ export async function runAutomaticApproval({path,root,tests},ports={}) {
         }));
       });
     if(native.code!==0) throw Error('Existing native tests did not pass. No prompt was approved.');
+    const count = key => {const matches=[...(native.stdout ?? '').matchAll(new RegExp(`^# ${key} (\\d+)\\s*$`,'gm'))];return matches.length===1 ? Number(matches[0][1]) : null;};
+    const nativeCounts={total:count('tests'),passed:count('pass'),failed:count('fail')};
+    if(!(nativeCounts.total>0) || nativeCounts.passed!==nativeCounts.total || nativeCounts.failed!==0) throw Error('The native command did not report a complete passing TAP test run.');
     if(JSON.stringify(sourceSnapshot(root))!==JSON.stringify(before)) throw Error('Source changed during native tests. No prompt was approved.');
     const found=findTests({root,excludeFixtureProjects:true});
     // Follow calls too: every scenario that can reach the drafted contract must pass in full.
@@ -195,7 +213,9 @@ export async function runAutomaticApproval({path,root,tests},ports={}) {
       const prompt=readPrompt(root,found.visible,entry);
       return (prompt.interface?.calls ?? []).some(call=>reaches(call.target,seen));
     };
-    const selected=found.tests.filter(test=>(test.doc?.steps ?? []).some(step=>reaches(step.entry_path)));
+    const affected=found.tests.filter(test=>(test.doc?.steps ?? []).some(step=>reaches(step.entry_path)));
+    const stories=new Set(affected.map(test=>test.storyPath ?? test.story));
+    const selected=found.tests.filter(test=>stories.has(test.storyPath ?? test.story));
     if(!selected.length || selected.some(test=>test.error)) throw Error('No complete existing prompt tests cover this draft.');
     let output='';
     const checkPorts={...ports,stdout:{write:chunk=>{output+=chunk;}},stderr};
@@ -215,7 +235,7 @@ export async function runAutomaticApproval({path,root,tests},ports={}) {
     const next=approvePromptText(text);
     if(!next) throw Error('The prompt could not be approved safely.');
     const evidence={id:(ports.randomUUID ?? randomUUID)(),route:'automatic-check-pass',actor:approvalActor(ports.env ?? process.env),at:(ports.now ?? Date.now)(),words:null,
-      prompts:[{path,proseSha256:record.prose_sha256,kind:iface.kind ?? 'full'}],checks:{native:{command:tests,exit_code:native.code},prompt:result,source:before,draft:record}};
+      prompts:[{path,proseSha256:record.prose_sha256,kind:iface.kind ?? 'full'}],checks:{native:{command:tests,exit_code:native.code,counts:nativeCounts},prompt:result,head,source:before,draft:record}};
     try {
       writeFileSync(file,next);
       await recordPromptApproval({commonDir,evidence},ports);

@@ -51,10 +51,11 @@ test('bulk draft keeps uncertain exports as gaps and reports each prompt indepen
   const report=JSON.parse(result.out);
   assert.deepEqual(report.summary,{drafted:2,existing:0,lint_clean:1,refused:1,total:2});
   const gap=report.rows.find(row=>row.path.includes('mystery'));
-  assert.equal(gap.problems[0].code,'interface-draft-incomplete');
+  assert.ok(gap.problems.some(problem=>problem.code==='interface-draft-incomplete'));
   const iface=JSON.parse(interfaceBlocks(readFileSync(join(setup.repo,gap.path),'utf8'))[0][1]);
   assert.equal(iface.kind,'partial');assert.equal(iface.entries[0].operation,'mystery');
   assert.equal(Object.hasOwn(iface.entries[0],'input_schema'),false);
+  for(const field of ['calls','resources','limits']) assert.equal(Object.hasOwn(iface,field),false);
 });
 
 test('draft reads declared shared contracts and expands schema references for lint', async t => {
@@ -120,4 +121,22 @@ test('setup offers offline drafts, respects a decline, and does not approve an a
     assert.equal(blocks.length,answer==='y' ? 1 : 0);
     if(blocks.length) assert.equal(JSON.parse(blocks[0][1]).status,'draft');
   }
+});
+
+
+test('draft leaves missing execution limits as a visible gap instead of inventing them', async t => {
+  const setup=harbor(t,repo=>{
+    explicitContract(repo);
+    const file=join(repo,PLACE),text=readFileSync(file,'utf8');
+    const match=[...text.matchAll(/```json\n([\s\S]*?)\n```/g)].at(-1),contract=JSON.parse(match[1]);
+    delete contract.limits;
+    writeFileSync(file,text.replace(match[1],JSON.stringify(contract)));
+  });
+  const result=await draft(setup,[PLACE,'--json']);
+  assert.equal(result.code,4,result.err+result.out);
+  const row=JSON.parse(result.out).rows[0];
+  assert.equal(row.lint_clean,false);
+  assert.ok(row.problems.some(problem=>problem.code==='interface-draft-incomplete'));
+  const iface=JSON.parse(interfaceBlocks(readFileSync(join(setup.repo,PLACE),'utf8'))[0][1]);
+  assert.equal(iface.kind,'partial');assert.equal(Object.hasOwn(iface,'limits'),false);
 });
