@@ -49,8 +49,8 @@ Also export `approvalRecords(run)`: the same approval rows that `approvalLines` 
 
 ```json
 {
-  "status": "approved",
-  "prose_sha256": "e677a7334f6e05a16ec5d8cb8b0ae990513bdb617c8164198aa9911613877bd5",
+  "status": "draft",
+  "prose_sha256": "fbb05f6c0a0ea5c4eb456b5107805364ba8ca5ef8bab2e1841a409d768da4962",
   "entries": [
     {
       "operation": "preparePrEvidence",
