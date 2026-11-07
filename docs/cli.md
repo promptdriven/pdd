@@ -196,13 +196,15 @@ folder (`*.snapshot.json`, private to you). The tick, `pdd dependencies complete
 and the claim scan use it. A read asks GitHub only for the issues that changed
 since the last read (`since`, in update order), and reads the comments, links and
 history of an issue again only when its update time, comment count or link counts
-changed. Once a day it reads the whole open list again, so a deleted or moved
+changed. It also checks the open index with conditional requests for link counts
+that can change without a new update time. Once a day it rebuilds the open list,
+so a deleted or moved
 issue leaves it. Safety reads always ask GitHub (a `304` is fine): the claim
 checks before a start, a push and a merge, heartbeats, trust, and the readback
 after each write. A quiet tick then makes a few calls instead of hundreds, and
-one batch of 10 reviews about 50. After `pdd dependencies complete`, the next
+a batch reuses the same observations. After `pdd dependencies complete`, the next
 request comes from the saved snapshot: the completion tick and the idle wake
-read no issue list for 10 minutes after the last full read.
+reuse the dependency issue list for 10 minutes after its last complete read.
 
 The budget acts on the tick, and its floor on the dependency commands too. It
 has two settings in `pdd.json`, a share (default 30%) and a floor (default 1,000

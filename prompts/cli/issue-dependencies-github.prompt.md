@@ -187,7 +187,11 @@ processes and the snapshot reads as before.
 state, issue_dependencies_summary]` of a GitHub issue row, or null when
 `updated_at` is not a valid time. A row with null facts is never reused. GitHub
 moves `updated_at` for an edit, a comment, a comment edit, a label or a close; the
-link counts in `issue_dependencies_summary` show a link change too.
+link counts in `issue_dependencies_summary` show a link change too. After an
+incremental list read, conditionally read the open index pages to compare change
+facts, including link counts, for issues outside `since`. This metadata pass
+does not discard missing rows; the daily full refresh owns removals. It does not
+reread unchanged comments or history.
 
 **Issue list.** With a store, the snapshot reads the open issue list through the
 session:
@@ -215,7 +219,8 @@ links and history; the batch GraphQL read covers only the roots that are not
 current; every other read goes to GitHub and is recorded. At the end of a
 snapshot whose list read was complete, the session saves the list and each issue
 read in full; a partial issue read is not saved, and its row then shows that it
-needs a read.
+needs a read. A failed list read keeps the last complete list and its watermark;
+its partial rows cannot establish complete coverage.
 
 **Writes.** A comment append or a new link through the session first and again
 after the write marks the issue: this process reads it live again, its row
@@ -236,7 +241,8 @@ because of `since`, the change facts or the store is not allowed:
   owner check of a completion; the native owners port is live, and only the claim
   scan inside one snapshot reads through the session;
 - the subject of `checkDependencyStart`: the session reads its issue, claim,
-  labels and links live (`live`), not from the store;
+  labels and links live (`live`), not from the store; those reads bypass the floor
+  and the review-data batch;
 - the heartbeat of an own claim and its readback;
 - trust: the repository and collaborator reads (once for each repository in one
   process);

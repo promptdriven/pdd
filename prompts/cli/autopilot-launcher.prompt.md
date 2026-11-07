@@ -304,6 +304,11 @@ permission reads use the same ETag cache (a full last page is read without its
 ETag), saved again at the end of the tick. At the end of each tick, after the
 state save, `compact` keeps the ledger to its last 2 hours.
 
+The floor guard also covers the launcher's non-safety comment, PR and review
+reads after intake. Every reply updates the guard. Hold-label index reads and
+permission checks stay live. Crossing the floor during intake does not permit
+new work delivery from an incomplete observation.
+
 After the settings read and the existing rate-limit wait, and before the
 intake, the tick computes `githubBudget` from the entries of all ledgers on this
 machine and the settings' `github` value:

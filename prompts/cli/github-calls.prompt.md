@@ -138,7 +138,7 @@ limit for the person:
   other reads and writes of the tick go on.
 - `floor` is the number of calls left below which the tick makes no GitHub call
   until the reset, except the heartbeats of its own live claims (`reserve`). The
-  default is 1,000, so the person and their other tools keep at least that many.
+  default is 1,000. Safety reads and other tools can still use this reserve.
 - Below the floor, the [floor guard](#floor-guard) also stops the non-safety reads
   of the tick and of `pdd dependencies prepare` and `complete` for an Autopilot
   repository. Safety reads and writes go on. Other `pdd` commands are counted but
@@ -203,8 +203,9 @@ reply: `observe(reply)` takes the `rate` of a `githubReply` result, and a reply
 without rate headers changes nothing. `blocked(resource)` (default `core`) is
 true while the newest remaining of that resource is less than `floor` and its
 reset is not past; then `stopped` stays true for this guard. A caller asks
-`blocked('core')` before each non-safety REST read and `blocked('graphql')`
-before a non-safety GraphQL read, and stops that read. Safety reads (claim
+`blocked('core')` before each non-safety REST read, and `blocked('core')` and
+`blocked('graphql')` before a non-safety GraphQL read (a dependency snapshot
+without REST reads is not complete anyway), and stops that read. Safety reads (claim
 checks, heartbeats, trust and permission reads, the reads that a write depends
 on and readbacks after writes) and writes never ask it. A rate-limit reply (403
 or 429 with no calls left) is a reply with remaining 0, so the reads after it
