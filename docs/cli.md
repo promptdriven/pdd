@@ -70,11 +70,13 @@ names count as trusted. The `pdd-autopilot` skill owns the start-up recipe,
 `pdd:working` claim and one comment across machines, capacity and progress
 tracking. Only Autopilot uses `pdd:working`; a person or a manual session assigns
 a person instead. Each tick writes a `lastSeen` time into its own claim comments
-without an AI call; that edit is the heartbeat. A claim comment with no GitHub
-edit for 4 hours (counted from its creation until the first heartbeat), or a
-claim without a claim record and with no issue activity for 24 hours, is expired:
-`pdd graph` shows "Expired claim, last seen" and another coordinator may take it
-over. The last-seen time is only the claim comment's GitHub edit or creation
+without an AI call; that edit is the heartbeat. A new claim record has
+`"lastSeen": ""`. A claim record with a top-level `lastSeen` and no GitHub edit
+for 4 hours (counted from its creation until the first heartbeat) is expired. A
+claim record without `lastSeen`, as older pdd writes it, a claim without a claim
+record, or a bare label is expired after 24 hours with no issue activity. For an
+expired claim, `pdd graph` shows "Expired claim, last seen" and another
+coordinator may take it over. The last-seen time is only the claim comment's GitHub edit or creation
 time; the recorded `lastSeen` value never extends a claim. In `off` mode a tick
 does nothing on this machine: it releases no claim and writes no `lastSeen`, so the claims expire after 4 hours, as
 on a stopped machine; their runs then cannot open or update a PR. After 4
@@ -84,6 +86,13 @@ Claimed issues stay identified as claimed when a trusted change needs attention.
 `add` rejects foreign repository references before writing any labels. Status
 reports unavailable Herdr instead of claiming a healthy running session. Stop
 leaves the interactive session open.
+
+Upgrade all coordinators of one repository at the same time, when no run is in
+the middle of a step. Older pdd sends no heartbeat, so its claims follow the
+24-hour rule until their owner upgrades. It still pushes at its last `done`
+without a claim check and removes `pdd:working` when its run ends. A stopped
+launcher or `off` mode lets its claims expire after 4 hours. The heartbeat moves
+claimed issues to the top of "recently updated" every 30 minutes.
 
 ## Runs on a GitHub issue
 

@@ -101,10 +101,12 @@ default clock follows the caller's injected `now` in milliseconds.
 
 | Claim | Expired when |
 |---|---|
-| Heartbeat: the one matching claim comment, from its creation, with or without a `lastSeen` | 4 hours after its last-seen time: the claim comment's GitHub `updated_at` (its `created_at` when it has no `updated_at`), and at most now. Other issue activity does not refresh it. `lastSeen` is that last-seen time. |
-| Legacy: no unique matching comment, a bare label, or a matching comment with no GitHub time | 24 hours with no issue activity: the latest issue update, comment creation or edit, or timeline event. `lastSeen` is that activity time. |
+| Heartbeat: the one matching claim record has a top-level `lastSeen` member, with any value (`""` too) | 4 hours after its last-seen time: the claim comment's GitHub `updated_at` (its `created_at` when it has no `updated_at`), and at most now. Other issue activity does not refresh it. `lastSeen` is that last-seen time. |
+| Legacy: a matching record with no top-level `lastSeen` (as older pdd writes it), no unique matching comment, a bare label, or a matching comment with no GitHub time | 24 hours with no issue activity: the latest issue update, comment creation or edit, or timeline event. `lastSeen` is that activity time. |
 
-Only the GitHub server times of the claim comment count. A recorded `lastSeen`
+A new claim record has `"lastSeen": ""`, so it uses the heartbeat rule from its
+creation; the first heartbeat writes a time. The member, not its value, selects the
+heartbeat rule. Only the GitHub server times of the claim comment count. A recorded `lastSeen`
 value never extends a claim and never shortens it: a wrong or fast writer clock,
 a future or copied old time, or a failed heartbeat readback does not change the
 last-seen time. A recorded `lastSeen` is advisory. Any edit of the claim comment

@@ -25,7 +25,7 @@ their existing owners. It is distinct from steps/handoff.md.
   eligible, and keep checking the rest when the current graph is available.
   Graph reads use `pdd graph` and never trigger analysis.
 - After the existing claim winner is established, retain the launcher's opaque
-  coordinatorId in the same single claim comment that names the machine. Include a JSON object with string fields repository, coordinatorId, machine and labelEventId, matching the winning label event. Do not write `lastSeen`: the launcher tick adds it and keeps it current. Different
+  coordinatorId in the same single claim comment that names the machine. Include a JSON object with string fields repository, coordinatorId, machine and labelEventId, matching the winning label event, and the heartbeat marker `"lastSeen": ""`. Write no time into `lastSeen`: the launcher tick writes it and keeps it current. Different
   coordinators on one machine keep different IDs. Reuse the existing label/event
   winner and [Autopilot claim rule](../SKILL.md); the current GitHub `Assignees`
   field is the source of human ownership. Keep the `pdd:working` claim until it

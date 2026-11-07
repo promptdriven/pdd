@@ -390,9 +390,9 @@ async function winningClaim(repository, key, github, authority, now = NaN) {
     if (event.label?.name === 'pdd:stuck') stuck = event.event === 'labeled' ? event : event.event === 'unlabeled' ? null : stuck;
   }
   // Expiry: a heartbeat claim is expired 4 hours after its last-seen time. A legacy
-  // claim (no unique matching claim record, a bare label, or a claim comment with no
-  // server time) is expired after 24 hours with no issue activity. An unknown time or
-  // clock never expires a claim.
+  // claim (a record with no top-level lastSeen, no unique matching claim record, a bare
+  // label, or a claim comment with no server time) is expired after 24 hours with no
+  // issue activity. An unknown time or clock never expires a claim.
   const facts = (claim, lastSeen) => {
     const heartbeat = Number.isFinite(lastSeen);
     const seen = heartbeat ? lastSeen : [time(raw.updated_at), ...comments.flatMap(c => [time(c.created_at), time(c.updated_at)]),
@@ -413,11 +413,13 @@ async function winningClaim(repository, key, github, authority, now = NaN) {
   }
   if (matching.length !== 1) return facts({ issue: key, owner: '', coordinatorId: '', machine: '', commentId: '', labelEventId: String(winner.id) });
   const { comment, metadata } = matching[0];
-  // A claim record makes the comment a heartbeat claim from its creation. Its last-seen
+  // A top-level lastSeen member, with any value ("" in a new record), makes the comment a
+  // heartbeat claim; a record without it (older pdd) keeps the legacy rule. The last-seen
   // time is only the comment's GitHub server time: updated_at, else created_at, at most
   // now. A recorded lastSeen never extends the claim, so no writer clock or written
   // value keeps a dead claim live. With no server time, the legacy rule applies.
-  const server = Number.isFinite(time(comment.updated_at)) ? time(comment.updated_at) : time(comment.created_at);
+  const server = !Object.hasOwn(metadata, 'lastSeen') ? NaN
+    : Number.isFinite(time(comment.updated_at)) ? time(comment.updated_at) : time(comment.created_at);
   const lastSeen = Number.isFinite(server) && Number.isFinite(now) ? Math.min(server, now) : server;
   return facts({ issue: key, owner: metadata.coordinatorId, coordinatorId: metadata.coordinatorId, machine: metadata.machine,
     commentId: String(comment.id), labelEventId: String(winner.id) }, lastSeen);

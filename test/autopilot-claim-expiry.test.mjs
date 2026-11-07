@@ -76,8 +76,11 @@ const expiredReason = time => `Expired claim, last seen ${at(time)}`;
 const cases = [
   { name: 'a heartbeat 1 minute short of 4 hours keeps the claim live', lastSeen: NOW - 4 * hour + minute, expired: false },
   { name: 'a heartbeat 4 hours old expires the claim even with recent issue activity', lastSeen: NOW - 4 * hour, activity: NOW - 10 * minute, expired: true, seen: NOW - 4 * hour },
-  { name: 'a claim record before its first heartbeat is live 1 minute short of 4 hours after creation', created: NOW - 4 * hour + minute, expired: false },
-  { name: 'a claim record with no heartbeat expires 4 hours after creation even with recent issue activity', created: NOW - 4 * hour, activity: NOW - 10 * minute, expired: true, seen: NOW - 4 * hour },
+  { name: 'a new claim record with "lastSeen": "" is live 1 minute short of 4 hours after creation', marker: true, created: NOW - 4 * hour + minute, expired: false },
+  { name: 'a new claim record with "lastSeen": "" expires 4 hours after creation even with recent issue activity', marker: true, created: NOW - 4 * hour, activity: NOW - 10 * minute, expired: true, seen: NOW - 4 * hour },
+  // A claim record without lastSeen, as older pdd writes it, keeps the 24-hour rule.
+  { name: 'a legacy claim with issue activity 23 hours ago stays live', activity: NOW - 23 * hour, expired: false },
+  { name: 'a legacy claim with no issue activity for 24 hours expires', activity: NOW - 24 * hour, expired: true, seen: NOW - 24 * hour },
   { name: 'a prose claim with issue activity 23 hours ago stays live', prose: true, activity: NOW - 23 * hour, expired: false },
   { name: 'a prose claim with no issue activity for 24 hours expires', prose: true, activity: NOW - 24 * hour, expired: true, seen: NOW - 24 * hour },
   { name: 'a bare label with no claim comment expires after 24 hours without activity', bare: true, activity: NOW - 25 * hour, expired: true, seen: NOW - 25 * hour },
@@ -88,7 +91,7 @@ for (const c of cases) test(`claim expiry: ${c.name}`, async t => {
   const issue = issueRow(7, { updated_at: c.unknownTimes ? undefined : at(activity) });
   const claimAt = c.unknownTimes ? undefined : at(c.created ?? Math.min(activity, NOW - 26 * hour)), editAt = c.lastSeen === undefined ? claimAt : at(c.lastSeen);
   const comments = c.bare ? [] : [{ id: 901, user: { login: 'owner' }, created_at: claimAt, updated_at: editAt,
-    body: c.prose ? 'Autopilot claim on machine-a.' : claimBody(c.lastSeen === undefined ? {} : { lastSeen: at(c.lastSeen) }) }];
+    body: c.prose ? 'Autopilot claim on machine-a.' : claimBody(c.lastSeen !== undefined ? { lastSeen: at(c.lastSeen) } : c.marker ? { lastSeen: '' } : {}) }];
   const timeline = [labeled(701, claimAt)];
   // A dependency review needs readable comment times, so the unknown-time case has none.
   const { node, claim, snapshot } = await observe(world, { issue, comments, timeline, review: !c.unknownTimes });
@@ -172,8 +175,28 @@ test('claim expiry: a lastSeen nested in another object is not read as the heart
   const world = checkout(t), claimAt = at(NOW - 26 * hour), issue = issueRow(7, { updated_at: claimAt });
   const comments = [{ id: 901, user: { login: 'owner' }, created_at: claimAt, updated_at: claimAt, body: claimBody({ previous: { lastSeen: at(NOW - minute) } }) }];
   const { claim } = await observe(world, { issue, comments, timeline: [labeled(701, claimAt)] });
-  assert.equal(claim.expired, true, 'the claim comment\'s GitHub time is the last-seen time; a nested lastSeen is not read');
+  assert.equal(claim.expired, true, 'with no top-level lastSeen it is a legacy claim with no activity for 24 hours');
   assert.equal(claim.lastSeen, claimAt);
+});
+
+// Claims written by older pdd have no lastSeen: issue activity keeps them live for 24 hours.
+test('claim expiry: an older claim record 5 hours old with a worker comment 10 minutes ago is live', async t => {
+  const world = checkout(t), claimAt = at(NOW - 5 * hour), issue = issueRow(7, { updated_at: at(NOW - 10 * minute) });
+  const comments = [{ id: 901, user: { login: 'owner' }, created_at: claimAt, updated_at: claimAt, body: claimBody() },
+    { id: 902, user: { login: 'owner' }, created_at: at(NOW - 10 * minute), updated_at: at(NOW - 10 * minute), body: 'Progress: tests pass locally.' }];
+  const { claim, node } = await observe(world, { issue, comments, timeline: [labeled(701, claimAt)] });
+  assert.equal(claim.active, true);
+  assert.equal(claim.expired, undefined);
+  assert.equal(node.eligible, false, 'a live claim stays skipped');
+});
+
+test('claim expiry: an older claim record 23 hours old with activity 1 hour ago is live', async t => {
+  const world = checkout(t), claimAt = at(NOW - 23 * hour), issue = issueRow(7, { updated_at: at(NOW - hour) });
+  const comments = [{ id: 901, user: { login: 'owner' }, created_at: claimAt, updated_at: claimAt, body: claimBody() },
+    { id: 902, user: { login: 'owner' }, created_at: at(NOW - hour), updated_at: at(NOW - hour), body: 'Waiting for review on the PR.' }];
+  const { claim } = await observe(world, { issue, comments, timeline: [labeled(701, claimAt)] });
+  assert.equal(claim.active, true);
+  assert.equal(claim.expired, undefined);
 });
 
 // A recorded lastSeen never extends a claim: only the claim comment's GitHub time counts.
@@ -239,6 +262,13 @@ test('heartbeat: the owner updates only lastSeen in its own claim comment', asyn
   assert.ok(body.startsWith('Autopilot claim on machine-a.\n\n```json\n'), 'the readable text stays');
   const saved = JSON.parse(/```json\n([\s\S]*?)\n```/.exec(body)[1]);
   assert.deepEqual(saved, { ...record({}), lastSeen: at(NOW + 30 * minute) });
+});
+
+test('heartbeat: the first heartbeat writes a time into the "lastSeen": "" marker', async () => {
+  const service = commentService([{ id: 901, user: { login: 'owner' }, body: claimBody({ lastSeen: '' }) }]);
+  const result = await refreshClaimHeartbeat({ repository: repo, claim: ownClaim(), coordinatorId: 'coordinator-a', machine: 'machine-a', at: at(NOW) }, { execFile: service.execFile });
+  assert.deepEqual(result, { state: 'refreshed', lastSeen: at(NOW) });
+  assert.deepEqual(recordOf(service.comments.get('901').body), { ...record({}), lastSeen: at(NOW) });
 });
 
 test('heartbeat: another owner, another claim era or an expired claim is never edited', async () => {
