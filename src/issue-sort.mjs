@@ -51,7 +51,7 @@ export function sortPlan({ snapshot }) {
     if (record.status.state === 'fixed' || record.belongs.kind === 'old-code' || ['duplicate','not-genuine'].includes(record.genuine.kind)) {
       route.action = live ? 'hold' : 'close'; route.reason = record.belongs.kind === 'old-code' ? 'old-code' : record.genuine.kind === 'duplicate' ? 'duplicate' : record.status.state === 'fixed' ? 'fixed' : 'not-genuine'; continue;
     }
-    const area = resolveArea({ ...snapshot.sortContext, evidence: { paths: record.paths, keywords: [issue.title], labels: issue.labels ?? [], repository: record.belongs.kind === 'repository' ? record.belongs.repository : '', area: record.belongs.area } });
+    const area = resolveArea({ ...snapshot.sortContext, evidence: { paths: record.paths, keywords: [issue.title, issue.sortText ?? ''], labels: issue.labels ?? [], repository: record.belongs.kind === 'repository' ? record.belongs.repository : '', area: record.belongs.area } });
     Object.assign(route, { area: area.area, owner: area.owner });
     if (record.belongs.kind === 'unknown' || area.state === 'unsure') { route.action = live ? 'hold' : 'question'; route.reason = 'needs-owner'; continue; }
     if (record.belongs.kind === 'repository' && area.owner === 'autopilot') { route.action = live ? 'hold' : 'link'; route.owner = `repo:${record.belongs.repository}`; route.reason = 'another-repository'; continue; }

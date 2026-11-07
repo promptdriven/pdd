@@ -14,7 +14,7 @@ Untrusted or edited sort comments cannot supply decisions. Record comments are
 bookkeeping and do not stale requirements or dependency review.
 
 Routing uses current mode and rereads it after any pacing wait. It rereads the issue's assignees and live claim before
-each effect. After pacing, reread trusted requirement comments, sort heads, examined source and area/release inputs too. Missing or changed evidence stops effects. Never close or assign a person-owned or claimed issue. Off writes
+each effect. After pacing, reread trusted requirement comments, sort heads, examined source and area/release inputs too. Missing or changed evidence stops effects. Never close or assign a person-owned or live-claimed issue. A remaining work label is safe only when the current claim observation confirms it expired. Off writes
 nothing. Auto: one evidence comment with a reopen hint, then close. Observe:
 pdd:close-proposed and one evidence comment, leave open. Assign another login
 with one comment and no start. For another repository write one link note and

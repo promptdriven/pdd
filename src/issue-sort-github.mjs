@@ -115,7 +115,7 @@ export async function routeSortIssues({ cwd, repository, snapshot, mode }, ports
       subject.labels = (raw.labels ?? []).map(x => typeof x === 'string' ? x : x.name);
       await addSortContext(fresh, cwd, ports);
       if (JSON.stringify(selectedSort(fresh, subject)) !== JSON.stringify(route.record)) return false;
-      return hash(JSON.stringify({ title: raw.title ?? '', body: raw.body ?? '' })) === route.record.inputs.find(x => x.key === route.issue)?.revision && Array.isArray(owners.claims) && raw.state === 'open' && Array.isArray(raw.assignees) && !raw.assignees.length && Array.isArray(raw.labels) && !raw.labels.some(x => (typeof x === 'string' ? x : x.name) === 'pdd:working') && !(owners.claims ?? []).some(x => x.issue === route.issue && x.active);
+      return hash(JSON.stringify({ title: raw.title ?? '', body: raw.body ?? '' })) === route.record.inputs.find(x => x.key === route.issue)?.revision && Array.isArray(owners.claims) && raw.state === 'open' && Array.isArray(raw.assignees) && !raw.assignees.length && Array.isArray(raw.labels) && (!raw.labels.some(x => (typeof x === 'string' ? x : x.name) === 'pdd:working') || owners.claims.some(x => x.issue === route.issue && x.expired === true && x.active === false)) && !(owners.claims ?? []).some(x => x.issue === route.issue && x.active);
     };
     if (!await unowned()) continue;
     const marker = `<!-- pdd-issue-route:v1 -->\n<!-- ${hash(JSON.stringify({ record: route.record, action: route.action, owner: route.owner, mode: route.action === 'close' ? mode : '' }))} -->`;

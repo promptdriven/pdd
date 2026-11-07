@@ -291,3 +291,31 @@ test('the area draft carries observed past assignees without assigning them', as
   assert.equal(w.issues[0].assignees.length, 0);
   assert.equal(w.writes.length, 0);
 });
+
+test('a changed area map replaces an undelivered sort request fingerprint', async () => {
+  const w = fixture(); let saved = {}; const deliveries = [];
+  w.ports.pending = { read: async () => ({ json: JSON.stringify(saved) }), save: async ({ json }) => { saved = JSON.parse(json); return { ok: true }; }, deliver: async ({ requestJson }) => { deliveries.push(JSON.parse(requestJson)); return { state: 'delivered' }; } };
+  await reconcileDependencyIntake({ repository, mode: 'auto' }, w.ports);
+  w.context.areas = [{ name: 'cli', owner: 'autopilot', match: { paths: ['src/**'] } }];
+  await reconcileDependencyIntake({ repository, mode: 'auto' }, w.ports);
+  assert.equal(deliveries.length, 2);
+});
+
+test('keyword rules can resolve an owner from the trusted issue body', async () => {
+  const w = fixture([1], { context: { areas: [{ name: 'runtime', owner: 'runtime-owner', match: { keywords: ['hosted interpreter'] } }] } });
+  w.issues[0].body = 'The hosted interpreter gives an invalid result.';
+  w.save(w.record(1, { belongs: { kind: 'area', area: '', repository: '' } })); w.review(1);
+  assert.equal((await node(w)).sort?.owner, 'runtime-owner');
+  assert.equal((await node(w)).eligible, false);
+});
+
+test('a confirmed expired claim does not block a fixed-issue route', async () => {
+  const w = fixture(); w.save(w.record(1, { status: fixed(w) })); w.review(1);
+  w.issues[0].labels.push('pdd:working');
+  w.claims.push({ issue: key(1), active: false, expired: true, lastSeen: '2026-11-06T01:00:00Z' });
+  const context = w.ports.context.read;
+  w.ports.context.read = async args => ({ json: JSON.stringify({ ...JSON.parse((await context(args)).json), nativeExecution: true }) });
+  assert.equal((await node(w)).sort?.action, 'close');
+  await reconcileDependencyIntake({ repository, mode: 'auto' }, w.ports);
+  assert.equal(w.issues[0].state, 'closed');
+});

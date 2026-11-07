@@ -693,7 +693,7 @@ export async function readDependencySnapshot({ cwd = '', repository, inputs = []
     if (labels.includes('pdd:working')) holds.push('Claimed');
     if (labels.includes('pdd:stuck')) holds.push('Stuck');
     if (labels.includes('pdd:code-pending')) holds.push('Code pending');
-    const issue = { key, sorts: [], labels, nodeId: /^[1-9][0-9]*$/.test(String(raw.id)) ? String(raw.id) : '', title: raw.title ?? '', revision: requirementRevision,
+    const issue = { key, sorts: [], labels, sortText: authority.authority === 'trusted' ? raw.body ?? '' : '', nodeId: /^[1-9][0-9]*$/.test(String(raw.id)) ? String(raw.id) : '', title: raw.title ?? '', revision: requirementRevision,
       state: !detailKnown ? 'unknown' : raw.state === 'open' ? 'open' : raw.state === 'closed' ? raw.state_reason === 'not_planned' ? 'not_planned' : 'completed' : 'unknown',
       authority: authority.authority === 'trusted' ? 'trusted' : authority.authority === 'outsider' ? 'untrusted' : 'unknown',
       conditions: conditionRows.map(c => c.text ?? c.condition).filter(Boolean), execution: execution?.execution ?? execution?.state ?? (labels.includes('pdd:working') ? 'running' : context.nativeExecution ? 'unknown' : 'idle'), holds: [...new Set(holds)],
