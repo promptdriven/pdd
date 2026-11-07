@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-github.prompt.md (sha256: 18b73b02774882d9809c7fdc67e64e6d0713eba51aa624c547280491fd7f8ebd).
+// Generated from prompts/cli/autopilot-github.prompt.md (sha256: f4f472d907f4be7da0ad8dd1e67077e06da8b3ccb6e72c1d85152dcf5d5c1e17).
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -287,7 +287,7 @@ export async function publishAutopilotSettings({ cwd, action, mode, names, retry
       if (outcome === RACE) continue;
       const lines = [...outcome.lines];
       if (!sameSettings(outcome.value, local)) lines.push(`This checkout has other Autopilot settings (${outcome.place}: ${settings(outcome.value)}; this checkout: ${settings(local)}).`);
-      if (outcome.pull) lines.push('Run git pull to update your local copy.');
+      if (outcome.pull) lines.push('pdd.json on GitHub is updated. To update your local copy, run git restore pdd.json, then git pull.');
       return { state: outcome.state, message: lines.join('\n') };
     }
     return notUpdated(`pdd.json on ${clean(defaultBranch)} changed again while pdd wrote it`);

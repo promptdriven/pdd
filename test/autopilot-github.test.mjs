@@ -76,7 +76,7 @@ function fakeGithub({ files = {}, refuse = 0, offline = '', refs = 201, onPut, p
 }
 const writes = calls => calls.filter(call => call.method !== 'GET');
 const lines = text => text.trimEnd().split('\n');
-const PULL = 'Run git pull to update your local copy.';
+const PULL = 'pdd.json on GitHub is updated. To update your local copy, run git restore pdd.json, then git pull.';
 const noGithub = Error('Tests never call GitHub');
 // For a test that runs the native port: real git, and a gh that never runs.
 function gitOnly(blocked) {
@@ -138,6 +138,34 @@ test('autopilot-github: mode and trust commands write only pdd.json to the defau
   assert.equal(git('status', '--porcelain', '--untracked-files=all'), before.status);
   assert.equal(readFileSync(join(cwd, 'notes.txt'), 'utf8'), 'uncommitted work\n');
   assert.equal(JSON.parse(readFileSync(join(cwd, 'pdd.json'))).strict_approvals, false);
+});
+
+// Wrong: the printed hint does not work, because the local write leaves pdd.json changed and a plain git pull stops on it.
+test('autopilot-github: the printed commands update the local copy after a direct write', async t => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-autopilot-github-pull-')));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const git = (cwd, ...args) => spawnSync('git', ['-c', 'user.name=PDD Test', '-c', 'user.email=pdd@example.invalid', ...args], { cwd, encoding: 'utf8' });
+  const origin = join(root, 'origin.git'), hub = join(root, 'github'), cwd = join(root, 'checkout');
+  git(root, 'init', '-q', '--bare', '-b', 'main', origin);
+  git(root, 'clone', '-q', origin, hub);
+  writeFileSync(join(hub, 'pdd.json'), `${JSON.stringify({ autopilot: { mode: 'off', trust: [] } })}\n`);
+  git(hub, 'add', 'pdd.json'); git(hub, 'commit', '-q', '-m', 'start'); git(hub, 'push', '-q', 'origin', 'HEAD:main');
+  git(root, 'clone', '-q', origin, cwd);
+  // The fake GitHub PUT also makes the real commit on origin/main.
+  const fake = fakeGithub({ files: { main: file({ autopilot: { mode: 'off', trust: [] } }, 'blob-main') }, onPut: body => {
+    writeFileSync(join(hub, 'pdd.json'), Buffer.from(body.content, 'base64'));
+    git(hub, 'commit', '-q', '-am', body.message); git(hub, 'push', '-q', 'origin', 'HEAD:main');
+  } });
+  const result = await invoke(cwd, ['autopilot', 'auto'], { autopilotGithubPorts: fake.ports });
+  assert.equal(result.exitCode, 0, result.stderr);
+  const hint = lines(result.stdout).at(-1);
+  assert.equal(hint, PULL);
+  assert.notEqual(git(cwd, 'pull', '-q', '--ff-only').status, 0, 'a plain git pull stops on the local pdd.json change');
+  const [, restore, pull] = /run (git restore pdd\.json), then (git pull)\.$/.exec(hint);
+  for (const command of [restore, pull]) { const run = git(cwd, ...command.split(' ').slice(1)); assert.equal(run.status, 0, `${command}: ${run.stderr}`); }
+  assert.equal(git(cwd, 'rev-parse', 'HEAD').stdout, git(cwd, 'rev-parse', 'origin/main').stdout);
+  assert.equal(git(cwd, 'status', '--porcelain').stdout, '');
+  assert.deepEqual(JSON.parse(readFileSync(join(cwd, 'pdd.json'), 'utf8')).autopilot, { mode: 'auto', trust: [] });
 });
 
 // Wrong (M2): a stale checkout copies its whole autopilot value to GitHub, so trust turns the mode on again,
