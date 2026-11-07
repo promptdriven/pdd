@@ -20,9 +20,13 @@ their existing owners. It is distinct from steps/handoff.md.
   ones first; the next request carries the rest.
 - Reuse saved current reviews. A new or unrelated edited issue does not make them
   stale. A "blocked by" link that a person sets in GitHub applies at once; it needs
-  no analysis. A link change to or from an issue makes its review stale. A person's
-  link change wins: never name a prerequisite whose link a person removed (completion
-  refuses it); if you still think it is needed, record a question. A stale or
+  no analysis. A link that a person changes to or from an issue makes its review
+  stale; a link that PDD writes for another issue's review does not. A person's link
+  change wins: do not name a prerequisite whose link a person removed. If you still
+  think it is needed, record a question. Completion refuses a link that a confirmed
+  review named; a write that a removal or a cycle refuses becomes one question on
+  the issue. A person's answer (a trusted comment after the question) queues the
+  issue again. An outsider's issue is never queued. A stale or
   unchecked review is refreshed through the ordinary `pdd dependencies prepare`,
   analysis and `pdd dependencies complete --input -` path; do not treat its old
   result as current. Keep questions and unknown facts pending. After a review

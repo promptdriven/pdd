@@ -107,9 +107,12 @@ function headIds(snapshot, graph = projectIssueGraph({ snapshot })) {
 
 // A stale review has a changed input, a changed named prerequisite or an
 // affected impact, so it needs a new review. Unchecked (new) issues go first.
-function selectSubjects(graph, repository, issue) {
+// An outsider's issue can never be eligible, so it is never a subject: one such
+// issue must not hold every batch.
+function selectSubjects(graph, snapshot, repository, issue) {
   const number = key => Number(key.split('/').pop());
-  return graph.nodes.filter(x => root(x.key, repository) && x.nativeState === 'open' && (issue ? x.key === issue || x.key.endsWith(`/issues/${issue}`) : ['unchecked', 'stale'].includes(x.reviewState)))
+  const outsider = new Set(snapshot.issues.filter(i => i.authority === 'untrusted').map(i => issueKey(i.key)));
+  return graph.nodes.filter(x => root(x.key, repository) && x.nativeState === 'open' && !outsider.has(x.key) && (issue ? x.key === issue || x.key.endsWith(`/issues/${issue}`) : ['unchecked', 'stale'].includes(x.reviewState)))
     .sort((a, b) => (a.reviewState === 'unchecked' ? 0 : 1) - (b.reviewState === 'unchecked' ? 0 : 1) || number(b.key) - number(a.key));
 }
 
@@ -118,7 +121,7 @@ export async function prepareDependencyIntake({ cwd = '', repository, issue }, p
   const observed = await snapshotRead(ports, { cwd, repository });
   const snapshot = observed.snapshot;
   const graph = projectIssueGraph({ snapshot });
-  const selected = selectSubjects(graph, repository, issue);
+  const selected = selectSubjects(graph, snapshot, repository, issue);
   let owners = { claims: [] }; if (selected.length) owners = json((await ports.owners.read({ repository, issues: selected.map(node => node.key) })).json);
   const skipped = selected.filter(x => x.reasons.includes('Incomplete relevant observations') || ownedElsewhere(owners, x.key)).map(x => x.key);
   // Small batches: one new issue never waits for a large review.
@@ -145,12 +148,17 @@ export async function completeDependencyIntake({ cwd = '', request, analysis }, 
   const args = { cwd, repository: request.repository }; if (inputMap.size) args.inputs = [...inputMap.values()];
   const { snapshot } = await snapshotRead(ports, args); const current = rows(snapshot); const prior = rows(prepared);
   const relevantIncomplete = value => { try { const graph = projectIssueGraph({ snapshot: value }); return (!value.complete && !request.issues.length) || request.issues.some(key => { const node = graph.nodes.find(n => n.key === issueKey(key)); return !node || node.reasons.includes('Incomplete relevant observations'); }); } catch { return true; } };
-  if (relevantIncomplete(prepared) || relevantIncomplete(snapshot) || request.issues.some(k => !prior.has(k) || current.get(k) !== prior.get(k) || snapshot.issues.find(i => i.key === k)?.authority !== 'trusted') || !sameRows([...inputMap.values()], current)) return pendingResult();
+  // Check only what freshness tracks: the rows the reviews used, the subjects, their
+  // heads and links, and named prerequisites in the root repository. A change
+  // elsewhere (an unrelated input, or a prerequisite in another repository, where
+  // only open or closed matters) must not hold a result that nothing re-delivers.
+  if (relevantIncomplete(prepared) || relevantIncomplete(snapshot) || request.issues.some(k => !prior.has(k) || current.get(k) !== prior.get(k) || snapshot.issues.find(i => i.key === k)?.authority !== 'trusted') || !sameRows(analysis.reviews.flatMap(r => r.inputs), current)) return pendingResult();
   // Only the subjects' own heads and the issues their reviews name must be
   // unchanged. A new or edited unrelated issue or review does not matter.
   const subjectHeads = value => headIds(value).filter(id => request.issues.includes(value.reviews.find(r => r.id === id)?.issue));
   if (subjectHeads(prepared).join('\0') !== subjectHeads(snapshot).join('\0')) return pendingResult();
-  if (analysis.reviews.some(r => r.dependencies.some(d => prior.has(issueKey(d.key)) && current.get(issueKey(d.key)) !== prior.get(issueKey(d.key))))) return pendingResult();
+  const rootNamed = k => k && root(k, request.repository) && prior.has(k);
+  if (analysis.reviews.some(r => r.dependencies.some(d => rootNamed(issueKey(d.key)) && current.get(issueKey(d.key)) !== prior.get(issueKey(d.key))))) return pendingResult();
   // A link change to or from a subject after prepare means its analysis saw old links.
   if (request.issues.some(k => links(prepared, k).row.revision !== links(snapshot, k).row.revision)) return pendingResult();
   const owners = request.issues.length ? json((await ports.owners.read({ repository: request.repository, issues: request.issues })).json) : { claims: [] };
@@ -171,6 +179,8 @@ export async function completeDependencyIntake({ cwd = '', request, analysis }, 
     if (review.dependencies.some(d => removed.includes(issueKey(d.key)))) throw invalidAnalysis();
     if ((review.outcome === 'question' && (review.dependencies.length || review.effects !== 'none')) || (review.dependencies.length && (review.outcome !== 'pending' || review.effects !== 'pending')) || (!review.dependencies.length && review.effects !== 'none') || !['complete','question','pending'].includes(review.outcome) || !Array.isArray(review.dependencies) || !Array.isArray(review.questions) || (review.outcome === 'complete' && review.questions.length) || review.dependencies.some(d => !d.reason?.trim() || !Array.isArray(d.evidence) || !d.evidence.length)) throw invalidAnalysis();
     for (const dependency of review.dependencies) { const decision = validateDependencyChange({ snapshot: proposed, dependent: review.issue, blocker: dependency.key }); if (!decision.allowed && decision.reason !== 'duplicate') throw invalidAnalysis(); if (decision.allowed) proposed.edges.push({ dependent: review.issue, blocker: dependency.key }); }
+    // The proposed state holds this intent, so its links are PDD links in every saved link row.
+    if (review.dependencies.length) proposed.reviews.push({ ...review, id: '', authority: 'trusted', intact: true });
   }
   // Persist fully validated impact before unrelated per-subject saves/effects.
   // Exact current local-host records make normal retries append-free.
@@ -188,6 +198,8 @@ export async function completeDependencyIntake({ cwd = '', request, analysis }, 
     ids.push(result.id); questions.push(...review.questions);
     if (review.effects === 'pending' && review.dependencies.length) {
       const applied = await (ports.reviews?.apply ?? applyDependencyChanges)({ cwd, repository: request.repository, issue: review.issue, reviewId: result.id }, ports);
+      // A refused write (a person removed the link, or it closes a cycle) ends as one saved question.
+      if (applied.state === 'question') { if (applied.reviewId) ids.push(applied.reviewId); questions.push(...(applied.questions ?? [])); continue; }
       if (applied.state !== 'confirmed') return pendingResult('edge-confirmation', review.issue, ids, questions);
     }
   }
@@ -211,7 +223,7 @@ export async function reconcileDependencyIntake({ cwd = '', repository, trigger,
     }
   }
   if (recovered) { ({ snapshot } = await snapshotRead(ports, { cwd, repository })); graph = projectIssueGraph({ snapshot }); }
-  const candidates = selectSubjects(graph, repository);
+  const candidates = selectSubjects(graph, snapshot, repository);
   const incomplete = candidates.filter(n => n.reasons.includes('Incomplete relevant observations'));
   const queued = candidates.filter(n => !skipped.includes(n.key) && !n.reasons.includes('Incomplete relevant observations')).map(n => n.key);
   const eligible = graph.nodes.filter(n => subjects.includes(n.key) && !skipped.includes(n.key) && n.eligible).map(n => n.key);

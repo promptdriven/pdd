@@ -119,40 +119,71 @@ function coverageReasons(key, outgoing, coverage, snapshot) {
   return result;
 }
 
-// The link row of a review records the native links to and from its issue. The
-// links that the review itself names are left out, so its own effects never
-// change the row. A removed named link is checked separately in freshness.
-function linkRow(issue, edges, named = []) {
-  const own = new Set(named), links = [];
+// PDD links: "D blocked by X" that a trusted, intact review of D with pending or
+// confirmed effects names. PDD writes them from a review, so they are not a
+// person's link change for X. A confirmed one that is now absent was removed by a
+// person (PDD never removes a link).
+function pddLinks(reviews) {
+  const written = new Set(), confirmed = [];
+  for (const r of reviews) if (r.issue && r.authority === 'trusted' && r.intact === true && ['pending', 'confirmed'].includes(r.effects))
+    for (const d of r.dependencies) if (d.key) {
+      written.add(`${r.issue}\n${d.key}`);
+      if (r.effects === 'confirmed') confirmed.push({ dependent: r.issue, blocker: d.key });
+    }
+  return { written, confirmed };
+}
+
+// The link row of a review records the person-made links to and from its issue.
+// The links that the review itself names are left out, so its own effects never
+// change the row. A PDD link from another issue's review is left out too, so
+// "B blocked by A" written for B never makes A stale. A removed named link is
+// checked separately in freshness.
+function linkRow(issue, edges, reviews, named = []) {
+  const own = new Set(named), { written, confirmed } = pddLinks(reviews), links = [];
   for (const e of edges) {
     if (e.dependent === issue && !own.has(e.blocker)) links.push(`blocked-by ${e.blocker}`);
-    if (e.blocker === issue) links.push(`blocking ${e.dependent}`);
+    if (e.blocker === issue && !written.has(`${e.dependent}\n${issue}`)) links.push(`blocking ${e.dependent}`);
   }
+  for (const l of confirmed) if (l.blocker === issue && !edges.some(e => e.dependent === l.dependent && e.blocker === issue)) links.push(`blocking-removed ${l.dependent}`);
   return { key: `${issue}${LINKS}`, revision: JSON.stringify(unique(links).sort()) };
 }
-function currentRows(head, snapshot, issues, edges) {
+// A saved link row is compared without the links that are PDD links now. So a
+// later review that names a link a person made does not make the other issue stale.
+function savedLinkRow(revision, issue, written) {
+  let list;
+  try { list = JSON.parse(revision); } catch { return revision; }
+  if (!Array.isArray(list)) return revision;
+  return JSON.stringify(list.filter(x => !(typeof x === 'string' && x.startsWith('blocking ') && written.has(`${x.slice(9)}\n${issue}`))).sort());
+}
+function currentRows(head, snapshot, issues, edges, reviews) {
   const current = new Map([...rowMap(snapshot.inputs), ...[...issues.values()].filter(i => i.revision).map(i => [i.key, i.revision])]);
-  const links = linkRow(head.issue, edges, head.dependencies.map(d => d.key));
+  const links = linkRow(head.issue, edges, reviews, head.dependencies.map(d => d.key));
   return current.set(links.key, links.revision);
 }
 
 // A review depends only on what it used (its inputs, including its link row)
 // and the issues it names as prerequisites, at their examined candidate
 // revisions. A new or edited unrelated issue is not part of that answer.
-function freshnessInputs(head, snapshot, issues, edges) {
-  const current = currentRows(head, snapshot, issues, edges);
-  const candidates = rowMap(head.candidates), required = new Map(head.inputs.map(i => [i.key, i.revision]));
+function freshnessInputs(head, snapshot, issues, edges, reviews) {
+  const current = currentRows(head, snapshot, issues, edges, reviews), { written } = pddLinks(reviews), links = `${head.issue}${LINKS}`;
+  const candidates = rowMap(head.candidates);
+  const required = new Map(head.inputs.map(i => [i.key, i.key === links ? savedLinkRow(i.revision, head.issue, written) : i.revision]));
   for (const { key } of head.dependencies) if (!required.has(key) && candidates.has(key)) required.set(key, candidates.get(key));
   return { current, deficits: [...required].filter(([key, revision]) => !current.has(key) || current.get(key) !== revision) };
 }
 
+// A trusted requirement comment on the issue that a question did not examine is
+// a person's answer, so the question needs a new review.
+const answered = (head, snapshot) => head.outcome === 'question' && rows(snapshot.inputs).some(r => /#issuecomment-[1-9][0-9]*$/.test(r.key)
+  && coverageIssueKey(r.key) === head.issue && !head.inputs.some(i => i.key === r.key));
+
 const namedLinkRemoved = (head, edges) => head.outcome === 'complete'
   && head.dependencies.some(d => !edges.some(e => e.dependent === head.issue && e.blocker === d.key));
 
-function freshness(head, snapshot, issues, edges) {
+function freshness(head, snapshot, issues, edges, reviews) {
   // PDD never removes a link, so a named link that is now absent is a person's change.
-  if (namedLinkRemoved(head, edges)) return false;
-  const { current, deficits } = freshnessInputs(head, snapshot, issues, edges);
+  if (namedLinkRemoved(head, edges) || answered(head, snapshot)) return false;
+  const { current, deficits } = freshnessInputs(head, snapshot, issues, edges, reviews);
   const coverage = coverageRows(snapshot), headRepository = issueRepository(head.issue);
   // Only current impacts hosted in the head's root repository that name this head apply.
   const impacts = snapshot.impacts.filter(i => headRepository && issueRepository(i.host) === headRepository && i.authority !== 'outsider'
@@ -197,11 +228,11 @@ export function projectIssueGraph({ snapshot }) {
   }
   const graphEdges = edges.map(e => {
     const s = selected.get(e.dependent), head = s.head;
-    const reason = head && freshness(head, snapshot, issues, edges) && head.dependencies.find(d => d.key === e.blocker);
+    const reason = head && freshness(head, snapshot, issues, edges, reviews) && head.dependencies.find(d => d.key === e.blocker);
     if (reason) return { ...e, reason: reason.reason, evidence: reason.evidence };
     const observed = selectReview(reviews.filter(r => r.issue === e.dependent), true).head;
-    const current = observed && currentRows(observed, snapshot, issues, edges);
-    const displayReason = observed && observed.inputs.every(i => current.get(i.key) === i.revision)
+    const changed = observed && new Set(freshnessInputs(observed, snapshot, issues, edges, reviews).deficits.map(([k]) => k));
+    const displayReason = observed && observed.inputs.every(i => !changed.has(i.key))
       && observed.dependencies.find(d => d.key === e.blocker);
     return { ...e, reason: displayReason ? `Unverified saved reason: ${displayReason.reason}` : 'GitHub dependency; no saved reason',
       evidence: displayReason?.evidence ?? [] };
@@ -212,7 +243,7 @@ export function projectIssueGraph({ snapshot }) {
     const currentInputs = new Set([...snapshot.inputs.map(row => locator(row.key)), ...issues.keys(), `${key}${LINKS}`]);
     if (head && head.inputs.some(row => !currentInputs.has(locator(row.key)))) { reasons.push('Required context unavailable', `Observation unavailable: context ${key}`); covered = false; }
     let reviewState = selection.state, review = head?.id ?? '';
-    if (head) reviewState = !freshness(head, snapshot, issues, edges) ? 'stale' : head.outcome === 'complete' ? 'current' : head.outcome;
+    if (head) reviewState = !freshness(head, snapshot, issues, edges, reviews) ? 'stale' : head.outcome === 'complete' ? 'current' : head.outcome;
     // A removed named link makes the review stale, so intake reviews it again.
     const humanChange = !!head && namedLinkRemoved(head, edges);
     const reviewReason = { unchecked: 'Unchecked', stale: 'Stale review', question: 'Review question', pending: 'Pending effects',
@@ -222,7 +253,7 @@ export function projectIssueGraph({ snapshot }) {
     if (!snapshot.complete) reasons.push('Incomplete sync');
     if (!covered) { reasons.push('Incomplete relevant observations'); reasons.push(...coverageReasons(key, outgoing, coverage, snapshot)); }
     if (head && reviewState === 'stale' && coverage && coverage !== false) {
-      const missing = freshnessInputs(head, snapshot, issues, edges).deficits.find(([candidate]) => { const issue = coverageIssueKey(candidate); return issue && !coverage.get(issue)?.reviewImpact; });
+      const missing = freshnessInputs(head, snapshot, issues, edges, reviews).deficits.find(([candidate]) => { const issue = coverageIssueKey(candidate); return issue && !coverage.get(issue)?.reviewImpact; });
       if (missing) { const issue = coverageIssueKey(missing[0]); reasons.push('Impact discovery unavailable: ' + key); reasons.push('Observation unavailable: comments ' + issue); }
     }
     const facts = [...ownFacts.get(key)], visited = new Set([key]);
@@ -264,7 +295,7 @@ export function projectIssueGraph({ snapshot }) {
 }
 
 // The link facts that a dependency review records and respects. `row` is the
-// review's link row: its issue's current native links, without the links in
+// review's link row: its issue's current person-made links, without the links in
 // `dependencies`. `removed` lists the blockers that a trusted confirmed review of
 // the issue named and that are no longer linked. PDD never removes a link, so a
 // person removed them, and a new review must not add them back.
@@ -274,7 +305,7 @@ export function dependencyLinks({ snapshot, issue, dependencies = [] }) {
   const linked = new Set(edges.filter(e => e.dependent === key).map(e => e.blocker));
   const removed = unique(reviews.filter(r => r.issue === key && r.authority === 'trusted' && r.intact === true && r.effects === 'confirmed')
     .flatMap(r => r.dependencies.map(d => d.key)).filter(blocker => blocker && !linked.has(blocker)));
-  return { row: linkRow(key, edges, dependencies.map(d => issueKey(d?.key ?? d)).filter(Boolean)), removed };
+  return { row: linkRow(key, edges, reviews, dependencies.map(d => issueKey(d?.key ?? d)).filter(Boolean)), removed };
 }
 
 export function validateDependencyChange({ snapshot, dependent, blocker }) {

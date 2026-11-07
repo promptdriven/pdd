@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { projectIssueGraph } from '../src/issue-dependencies.mjs';
-import { applyDependencyChanges, readDependencySnapshot } from '../src/issue-dependencies-github.mjs';
+import { applyDependencyChanges, readDependencySnapshot, saveDependencyReview } from '../src/issue-dependencies-github.mjs';
 import { completeDependencyIntake, prepareDependencyIntake, reconcileDependencyIntake } from '../src/issue-dependencies-intake.mjs';
 
 // Synthetic GitHub world. Issue revisions follow the adapter's public rule:
@@ -24,7 +24,9 @@ function savedReview(id, subject, candidates, dependencies = []) {
     inputs: [row(subject)], candidates: candidates.map(row), outcome: 'complete', dependencies, questions: [], effects: dependencies.length ? 'confirmed' : 'none' }));
 }
 
-function world({ issues, comments = {}, blockedBy = {} }) {
+// `timeline` holds native events, for example a GitHub "blocked_by_removed" event
+// that names its blocker. `outsiders` are authors that the trust owner does not trust.
+function world({ issues, comments = {}, blockedBy = {}, timeline = {}, outsiders = [] }) {
   let nextId = 900;
   const find = (repo, number) => issues.find(item => item.html_url === key(number, repo));
   const github = {
@@ -35,6 +37,7 @@ function world({ issues, comments = {}, blockedBy = {} }) {
       const items = kind === 'comments' ? comments[subject] ?? []
         : kind === 'blockedBy' ? (blockedBy[subject] ?? []).map(html_url => ({ html_url }))
         : kind === 'blocking' ? Object.entries(blockedBy).filter(([, blockers]) => blockers.includes(subject)).map(([html_url]) => ({ html_url }))
+        : kind === 'timeline' ? timeline[subject] ?? []
         : [];
       return reply({ items, next: '' });
     },
@@ -51,15 +54,41 @@ function world({ issues, comments = {}, blockedBy = {} }) {
   };
   const ports = (extra = {}) => ({
     github,
-    authority: { read: async () => ({ authority: 'trusted' }) },
-    context: { read: async () => reply({ inputs: [], conditions: [], execution: [], nativeExecution: true }) },
+    authority: { read: async ({ author }) => ({ authority: outsiders.includes(author) ? 'outsider' : 'trusted' }) },
+    // A requirement comment row is read again from the comment itself, as the native port does.
+    context: { read: async ({ inputs = [] } = {}) => reply({ inputs: inputs.flatMap(({ key: k }) => {
+      const found = Object.values(comments).flat().find(c => k.endsWith(`#issuecomment-${c.id}`));
+      return found ? [{ key: k, revision: sha(found.body) }] : [];
+    }), conditions: [], execution: [], nativeExecution: true }) },
     owners: { read: async () => reply({ localOwner: 'coordinator', claims: [], runs: [], runsKnown: true }) },
     evidence: { read: async () => reply({ source: [], requirements: [] }) },
     clock: { now: async () => ({ iso: '2026-11-06T12:00:00.000Z' }) },
     ...extra,
   });
-  return { issues, comments, blockedBy, ports };
+  return { issues, comments, blockedBy, timeline, ports };
 }
+
+// A native GitHub timeline event about one link. A "blocked_by" event names the
+// blocker; a "blocking" event names the dependent.
+const linkEvent = (event, number, repo = repository) => ({ event, [event.startsWith('blocking') ? 'blocking' : 'blocked_by']: { number, repository: { full_name: repo } } });
+// One reconcile delivery port that records each delivered request.
+function deliveries() {
+  const delivered = [];
+  const pending = { state: {}, read: async () => reply(pending.state), save: async ({ json }) => { pending.state = JSON.parse(json); return { ok: true }; },
+    deliver: async ({ requestJson }) => { delivered.push(JSON.parse(requestJson)); return { state: 'delivered' }; } };
+  return { delivered, pending };
+}
+// One review round: prepare, answer each subject (with its current head as base) and complete.
+async function round(w, all, answers = {}, extra = {}) {
+  const { request } = await prepareDependencyIntake({ repository, ...extra }, w.ports());
+  const g = projectIssueGraph({ snapshot: JSON.parse(request.snapshotJson) });
+  const reviews = request.issues.map(k => {
+    const head = g.nodes.find(n => n.key === k).review;
+    return answer(request, all.find(item => item.html_url === k), { base: head ? [head] : [], ...(answers[k] ?? {}) });
+  });
+  return { request, result: await completeDependencyIntake({ request, analysis: { impactJson: '', reviews } }, w.ports()) };
+}
+const needs = (number, why, repo = repository) => ({ outcome: 'pending', dependencies: [{ key: key(number, repo), reason: why, evidence: [key(number, repo)] }] });
 
 async function graph(w, ports = w.ports(), cwd = '') {
   const { snapshot } = await readDependencySnapshot({ cwd, repository }, ports);
@@ -324,14 +353,19 @@ test('a new review cannot add back a link that a person removed; it records a qu
   assert.deepEqual(w.blockedBy[key(17)], []);
 
   // A pending intent from another coordinator cannot add the link back either.
+  // The refused write ends as one visible question, not as a pending intent.
   w.comments[key(17)].push(comment('950', recordBody({ analysis: 'Issue 17 needs issue 18 first.', base: [result.reviewIds[0]], continuation: '', issue: key(17),
     inputs: [row(i17)], candidates: [row(i17)], outcome: 'pending', dependencies: needs18, questions: [], effects: 'pending' })));
   g = await graph(w);
   assert.equal(g.node(17).reviewState, 'pending');
   const applied = await applyDependencyChanges({ repository, issue: key(17), reviewId: '950' }, w.ports());
-  assert.equal(applied.state, 'pending');
+  assert.equal(applied.state, 'question');
   assert.ok(applied.warnings.includes('Human dependency change'));
+  assert.equal(applied.questions.length, 1);
   assert.deepEqual(w.blockedBy[key(17)], []);
+  g = await graph(w);
+  assert.equal(g.node(17).reviewState, 'question');
+  assert.deepEqual(g.node(17).facts.map(fact => fact.text), applied.questions);
 });
 
 test('a person adds a link: the dependent waits at once and the reviews at both ends are queued again', async () => {
@@ -425,4 +459,236 @@ test('with no checkout the default policy applies: write collaborators are trust
   assert.equal(g.node(10).eligible, false);
   assert.ok(g.node(10).reasons.includes('Incomplete relevant observations'));
   assert.equal(g.node(12).eligible, true, 'an unrelated issue is not affected');
+});
+
+test('a person adds and then removes a link: a later review that names another issue writes that link', async () => {
+  const i17 = issue(17), i18 = issue(18), i19 = issue(19), all = [i17, i18, i19];
+  const w = world({ issues: all });
+  assert.equal((await round(w, all)).result.state, 'complete');
+
+  // A person adds "17 blocked by 18" in GitHub, and later removes it.
+  w.blockedBy[key(17)] = [key(18)];
+  w.timeline[key(17)] = [linkEvent('blocked_by_added', 18)];
+  w.timeline[key(18)] = [linkEvent('blocking_added', 17)];
+  let g = await graph(w);
+  assert.equal(g.node(17).reviewState, 'stale');
+  assert.equal((await round(w, all)).result.state, 'complete');
+  w.blockedBy[key(17)] = [];
+  w.timeline[key(17)].push(linkEvent('blocked_by_removed', 18));
+  w.timeline[key(18)].push(linkEvent('blocking_removed', 17));
+  g = await graph(w);
+  assert.equal(g.node(17).reviewState, 'stale');
+
+  // The new review names 19. The person's removal was about 18, so the link to 19 is written.
+  const { request, result } = await round(w, all, { [key(17)]: needs(19, 'Issue 17 calls the API that issue 19 adds.') });
+  assert.deepEqual(request.issues, [key(18), key(17)]);
+  assert.equal(result.state, 'complete');
+  assert.deepEqual(w.blockedBy[key(17)], [key(19)]);
+  g = await graph(w);
+  assert.equal(g.node(17).reviewState, 'current');
+  assert.equal(g.node(17).dependencyState, 'waiting');
+  assert.ok(g.node(17).reasons.includes('Open prerequisite'));
+  assert.equal(g.node(19).reviewState, 'current', 'the link that PDD wrote does not make 19 stale');
+  assert.equal(g.node(19).eligible, true);
+  const tick = await reconcileDependencyIntake({ repository, trigger: 'tick', mode: 'auto' }, w.ports());
+  assert.deepEqual(tick.queued, []);
+  assert.deepEqual(tick.eligible.sort(), [key(18), key(19)].sort());
+});
+
+test('a refused link write becomes one visible question, not a pending intent that nothing delivers again', async () => {
+  const i17 = issue(17), i18 = issue(18), i19 = issue(19), i20 = issue(20), all = [i17, i18, i19, i20];
+  const w = world({ issues: all });
+  assert.equal((await round(w, all)).result.state, 'complete');
+  // A person added and removed "17 blocked by 18". Its most recent event is a removal.
+  w.timeline[key(17)] = [linkEvent('blocked_by_added', 18), linkEvent('blocked_by_removed', 18)];
+
+  const saved = w.comments[key(17)].length;
+  let { result } = await round(w, all, { [key(17)]: needs(18, 'Issue 17 extends the parser from issue 18.') }, { issue: '17' });
+  assert.equal(result.state, 'question');
+  assert.equal(result.questions.length, 1);
+  assert.match(result.questions[0], /A person removed the GitHub link/);
+  assert.equal(w.comments[key(17)].length, saved + 2, 'the intent and one question');
+  assert.deepEqual(w.blockedBy[key(17)] ?? [], [], "the person's removal stands");
+  let g = await graph(w);
+  assert.equal(g.node(17).reviewState, 'question');
+  assert.ok(g.node(17).reasons.includes('Review question'));
+  assert.deepEqual(g.node(17).facts.map(fact => fact.text), result.questions);
+  const tick = await reconcileDependencyIntake({ repository, trigger: 'tick', mode: 'auto' }, w.ports());
+  assert.deepEqual(tick.queued, []);
+  assert.equal(w.comments[key(17)].length, saved + 2, 'no retry and no second question');
+
+  // A removal event whose blocker GitHub does not name refuses every addition, also as a question.
+  w.timeline[key(19)] = [{ event: 'blocked_by_removed' }];
+  ({ result } = await round(w, all, { [key(19)]: needs(20, 'Issue 19 uses the table that issue 20 adds.') }, { issue: '19' }));
+  assert.equal(result.state, 'question');
+  assert.match(result.questions[0], /cannot tell which one/);
+  assert.deepEqual(w.blockedBy[key(19)] ?? [], []);
+  g = await graph(w);
+  assert.equal(g.node(19).reviewState, 'question');
+  assert.equal(g.node(20).reviewState, 'current');
+});
+
+test('a removed link where the issue is the prerequisite does not stop links that the issue needs', async () => {
+  const i17 = issue(17), i18 = issue(18), i19 = issue(19), all = [i17, i18, i19];
+  const w = world({ issues: all });
+  assert.equal((await round(w, all)).result.state, 'complete');
+  // A person adds and removes "19 blocked by 17". In 17's history this is a "blocking" change.
+  w.blockedBy[key(19)] = [key(17)];
+  w.timeline[key(19)] = [linkEvent('blocked_by_added', 17)];
+  w.timeline[key(17)] = [linkEvent('blocking_added', 19)];
+  assert.equal((await round(w, all)).result.state, 'complete');
+  w.blockedBy[key(19)] = [];
+  w.timeline[key(19)].push(linkEvent('blocked_by_removed', 17));
+  w.timeline[key(17)].push(linkEvent('blocking_removed', 19));
+  let g = await graph(w);
+  assert.equal(g.node(17).reviewState, 'stale');
+
+  const { result } = await round(w, all, { [key(17)]: needs(18, 'Issue 17 calls the API that issue 18 adds.') });
+  assert.equal(result.state, 'complete');
+  assert.deepEqual(w.blockedBy[key(17)], [key(18)]);
+  g = await graph(w);
+  assert.equal(g.node(17).reviewState, 'current');
+  assert.equal(g.node(17).dependencyState, 'waiting');
+  assert.equal(g.node(18).eligible, true);
+});
+
+test("an outsider's open issue does not hold the batch: a new trusted issue is reviewed and becomes eligible", async () => {
+  const i17 = issue(17), i50 = issue(50, { user: { login: 'stranger' } }), i103 = issue(103);
+  const w = world({ issues: [i17, i50, i103], outsiders: ['stranger'], comments: { [key(17)]: [savedReview('501', i17, [i17])] } });
+  const { delivered, pending } = deliveries();
+  await reconcileDependencyIntake({ repository, trigger: 'tick', mode: 'auto' }, w.ports({ pending }));
+  assert.equal(delivered.length, 1);
+  assert.deepEqual(delivered[0].issues, [key(103)], 'the outsider issue is not a subject');
+  const result = await completeDependencyIntake({ request: delivered[0], analysis: { impactJson: '', reviews: [answer(delivered[0], i103)] } }, w.ports());
+  assert.equal(result.state, 'complete');
+
+  const g = await graph(w);
+  assert.equal(g.node(103).reviewState, 'current');
+  assert.equal(g.node(103).eligible, true);
+  assert.equal(g.node(50).eligible, false);
+  assert.ok(g.node(50).reasons.includes('Untrusted issue'));
+  const next = await reconcileDependencyIntake({ repository, trigger: 'tick', mode: 'auto' }, w.ports({ pending }));
+  assert.deepEqual(next.queued, []);
+  assert.ok(next.eligible.includes(key(103)));
+  assert.equal(delivered.length, 1);
+  assert.deepEqual((await prepareDependencyIntake({ repository, issue: '50' }, w.ports())).queued, [], 'not even by name');
+});
+
+test('an edit to a named prerequisite in another repository, or to an unrelated comment, during the review does not hold the result', async () => {
+  const i17 = issue(17), i20 = issue(20), r5 = { ...issue(5), id: 5005, html_url: key(5, runtime) };
+  const note = comment('530', 'Issue 20 also changes the parser.');
+  const w = world({ issues: [i17, i20, r5], blockedBy: { [key(20)]: [key(5, runtime)] }, comments: { [key(20)]: [savedReview('520', i20, [i17, i20]), note] } });
+  const { delivered, pending } = deliveries();
+  await reconcileDependencyIntake({ repository, trigger: 'tick', mode: 'auto' }, w.ports({ pending }));
+  assert.deepEqual(delivered[0].issues, [key(17)]);
+
+  r5.body = 'A person edits runtime issue 5 while the coordinator reviews issue 17.';
+  note.body = 'Issue 20 also changes the parser and the lexer.'; // Issue 17's review did not use this comment.
+  const review = answer(delivered[0], i17, needs(5, 'Issue 17 needs the runtime API from runtime issue 5.', runtime));
+  const result = await completeDependencyIntake({ request: delivered[0], analysis: { impactJson: '', reviews: [review] } }, w.ports());
+  assert.equal(result.state, 'complete');
+  assert.deepEqual(w.blockedBy[key(17)], [key(5, runtime)]);
+  const g = await graph(w);
+  assert.equal(g.node(17).reviewState, 'current');
+  assert.equal(g.node(17).dependencyState, 'waiting');
+  const next = await reconcileDependencyIntake({ repository, trigger: 'tick', mode: 'auto' }, w.ports({ pending }));
+  assert.deepEqual(next.queued, [], 'no saved review used the edited comment');
+});
+
+test("a link that PDD writes from a review does not make the prerequisite's review stale; a person's change to it does", async () => {
+  const i17 = issue(17), i104 = issue(104), all = [i17, i104];
+  const w = world({ issues: [i17] });
+  assert.equal((await round(w, all)).result.state, 'complete');
+  w.issues.push(i104);
+  const { result } = await round(w, all, { [key(104)]: needs(17, 'Issue 104 changes the code that issue 17 adds.') });
+  assert.equal(result.state, 'complete');
+  assert.deepEqual(w.blockedBy[key(104)], [key(17)]);
+  let g = await graph(w);
+  assert.equal(g.node(17).reviewState, 'current', 'B blocked by A, written by PDD, does not delay A');
+  assert.equal(g.node(17).eligible, true);
+  assert.equal(g.node(104).dependencyState, 'waiting');
+  assert.deepEqual((await prepareDependencyIntake({ repository }, w.ports())).queued, [], 'nothing is left to review');
+
+  w.blockedBy[key(104)] = []; // A person removes the link that PDD wrote.
+  g = await graph(w);
+  assert.equal(g.node(17).reviewState, 'stale', 'a person changed a link from 17');
+  assert.equal(g.node(104).reviewState, 'stale');
+  assert.ok(g.node(104).reasons.includes('Human dependency change'));
+});
+
+test("a person's answer to a dependency question queues the issue for review again", async () => {
+  const i17 = issue(17), all = [i17];
+  const w = world({ issues: all, outsiders: ['stranger'] });
+  const asked = 'Must the installer from issue 17 ship first? Please answer here.';
+  assert.equal((await round(w, all, { [key(17)]: { outcome: 'question', questions: [asked] } })).result.state, 'question');
+  const { delivered, pending } = deliveries();
+  let tick = await reconcileDependencyIntake({ repository, trigger: 'tick', mode: 'auto' }, w.ports({ pending }));
+  assert.deepEqual(tick.queued, [], 'an unanswered question is not sent again');
+
+  w.comments[key(17)].push(comment('960', 'I am not a maintainer, but please hurry.', 'stranger'));
+  let g = await graph(w);
+  assert.equal(g.node(17).reviewState, 'question', "an outsider's comment is not an answer");
+
+  const answerText = 'No. Issue 17 needs nothing first.';
+  w.comments[key(17)].push(comment('961', answerText));
+  g = await graph(w);
+  assert.equal(g.node(17).reviewState, 'stale');
+  assert.equal(g.node(17).eligible, false);
+  tick = await reconcileDependencyIntake({ repository, trigger: 'tick', mode: 'auto' }, w.ports({ pending }));
+  assert.deepEqual(tick.queued, [key(17)]);
+  assert.equal(delivered.length, 1);
+  assert.deepEqual(delivered[0].issues, [key(17)]);
+
+  const head = projectIssueGraph({ snapshot: JSON.parse(delivered[0].snapshotJson) }).nodes.find(n => n.key === key(17)).review;
+  const review = { ...answer(delivered[0], i17, { base: [head] }) };
+  review.inputs = [...review.inputs, { key: `${key(17)}#issuecomment-961`, revision: sha(answerText) }];
+  const result = await completeDependencyIntake({ request: delivered[0], analysis: { impactJson: '', reviews: [review] } }, w.ports());
+  assert.equal(result.state, 'complete');
+  g = await graph(w);
+  assert.equal(g.node(17).reviewState, 'current');
+  assert.equal(g.node(17).eligible, true);
+});
+
+test('a PDD link keeps the prerequisite current in one batch and when a later review names a link that a person made', async () => {
+  // New issues 30 and 31 are reviewed in one request, and 31's review names 30.
+  const i30 = issue(30), i31 = issue(31), all = [i30, i31];
+  const w = world({ issues: all });
+  const { request, result } = await round(w, all, { [key(31)]: needs(30, 'Issue 31 uses the schema that issue 30 adds.') });
+  assert.deepEqual(request.issues, [key(31), key(30)]);
+  assert.equal(result.state, 'complete');
+  let g = await graph(w);
+  assert.equal(g.node(30).reviewState, 'current');
+  assert.equal(g.node(30).eligible, true);
+  assert.equal(g.node(31).dependencyState, 'waiting');
+
+  // A person adds "32 blocked by 30". Both ends are reviewed again, and 30's row now holds the link.
+  const i32 = issue(32); all.push(i32); // `all` is the world's issue list
+  assert.equal((await round(w, all)).result.state, 'complete');
+  w.blockedBy[key(32)] = [key(30)];
+  assert.equal((await round(w, all)).result.state, 'complete');
+  g = await graph(w);
+  assert.equal(g.node(30).reviewState, 'current');
+  // A later review of 32 names the link that the person made. That is not a link change for 30.
+  assert.equal((await round(w, all, { [key(32)]: needs(30, 'Issue 32 extends the schema from issue 30.') }, { issue: '32' })).result.state, 'complete');
+  g = await graph(w);
+  assert.equal(g.node(32).reviewState, 'current');
+  assert.equal(g.node(30).reviewState, 'current');
+  assert.equal(g.node(30).eligible, true);
+});
+
+test("a link row saved in a batch does not depend on whether the batch's own link write happens", async () => {
+  // 30 names 31. 31 is newer, so its review is saved first; then the save of 30's intent fails.
+  const i30 = issue(30), i31 = issue(31);
+  const w = world({ issues: [i30, i31] });
+  const { request } = await prepareDependencyIntake({ repository }, w.ports());
+  assert.deepEqual(request.issues, [key(31), key(30)]);
+  const reviews = [answer(request, i31), answer(request, i30, needs(31, 'Issue 30 uses the table that issue 31 adds.'))];
+  const reviewsPort = { save: (args, ports) => args.issue === key(30) ? { id: '', state: 'pending', warnings: [] } : saveDependencyReview(args, ports) };
+  const result = await completeDependencyIntake({ request, analysis: { impactJson: '', reviews } }, w.ports({ reviews: reviewsPort }));
+  assert.equal(result.state, 'pending');
+  assert.equal(result.pendingStage, 'review-save');
+  const g = await graph(w);
+  assert.equal(g.node(31).reviewState, 'current', 'the link that was not written leaves no trace in the row');
+  assert.equal(g.node(31).eligible, true);
+  assert.equal(g.node(30).reviewState, 'unchecked');
 });
