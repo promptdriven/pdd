@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: c74913ca2484251e01ff41fa3f37dfa9f7d985968c807de6e3e135f11315bdc5).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 018ce6b0f1f63d9008f1bfcef7fe0b734a02ad847229c2f35425d3464eb26df6).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch } from 'node:fs';
@@ -928,14 +928,37 @@ async function runTick(stateFile, ports, completion) {
     };
     p.scanTransport = action => p.scanAction(action, state.reconciliationIntent ? 'reconciliation' : 'intent');
     if (state.retryAt > p.now()) return outcome('unknown', `GitHub rate limited; next attempt after ${new Date(state.retryAt).toISOString()}.`);
-    // The GitHub budget of Autopilot on this machine, from the local ledgers and the newest limit that GitHub reported.
-    let budget = { state: 'normal' };
-    try { budget = githubBudget({ usage: githubUsage(githubMachineEntries({ root: p.githubRoot }), p.now()), ...githubBudgetSettings(config.github) }); }
-    catch { /* An unreadable ledger leaves the budget normal. */ }
+    // The GitHub budget of the tick on this machine, from the local ledgers and the newest limit that GitHub reported.
+    let budget = { state: 'normal' }, restLeft;
+    try {
+      const usage = githubUsage(githubMachineEntries({ root: p.githubRoot }), p.now());
+      restLeft = usage.rate.core?.remaining;
+      budget = githubBudget({ usage, ...githubBudgetSettings(config.github) });
+    } catch { /* An unreadable ledger leaves the budget normal. */ }
+    // Heartbeats of this coordinator's own live claims (no AI call). A saved claim can have expired since it was
+    // observed: expiry is final, so it gets no heartbeat.
+    const ownClaimsOf = claims => claims.filter(claim => claim && typeof claim.issue === 'string' && claim.active === true && claim.coordinatorId === state.coordinatorId
+      && claim.machine === state.machine && claim.commentId && claim.labelEventId);
+    const stuckFor = claim => p.now() - (typeof claim.stuckSince === 'string' ? Date.parse(claim.stuckSince) : NaN);
+    const sendHeartbeats = async (claims, saved) => {
+      for (const claim of claims) {
+        // After 4 hours stuck the owner stops refreshing, so the claim expires unless the issue leaves pdd:stuck.
+        if (stuckFor(claim) >= STUCK_CLAIM_AFTER) continue;
+        if (saved && !(Date.parse(claim.lastSeen) + STUCK_CLAIM_AFTER > p.now())) continue;
+        try {
+          const beat = await (p.refreshClaimHeartbeat ?? refreshClaimHeartbeat)({ cwd: state.cwd, repository: state.repo, claim, coordinatorId: state.coordinatorId, machine: state.machine, at: new Date(p.now()).toISOString() },
+            { execFile: async (file, args, options) => p.execute(file, args, { purpose: 'claims', ...options }), admitMutation: action => p.scanAction(action) });
+          if (beat?.state === 'refreshed' && typeof beat.lastSeen === 'string') claim.lastSeen = beat.lastSeen;
+        } catch (error) { p.warn(`Claim heartbeat deferred for ${claim.issue}: ${line(error.message)}`); }
+      }
+    };
     if (budget.state === 'reserve' && budget.resetAt > p.now()) {
-      // Never use the last part of the limit: no GitHub call until the reset. Claims live 4 hours, the reset is at most 1 hour away.
-      state.retryAt = budget.resetAt;
-      return outcome('unknown', `GitHub limit low: ${budget.remaining} ${budget.resource === 'graphql' ? 'GraphQL points' : 'REST calls'} left, below the floor of ${budget.floor}; Autopilot waits until ${new Date(budget.resetAt).toISOString()}.`);
+      // Below the floor: no GitHub call until the reset, except the heartbeats of the own live claims of the last intake
+      // (2 REST calls each), so a claim does not expire while its chat works when reserve comes back after each reset.
+      // No rate-limit wait is saved: each tick until the reset computes the budget again and sends the heartbeats again.
+      const claims = ownClaimsOf(Array.isArray(state.githubIntake?.claims) ? state.githubIntake.claims : []);
+      if (!(Number.isFinite(restLeft) && restLeft < 2 * claims.length)) await sendHeartbeats(claims, true);
+      return outcome('unknown', `GitHub limit low: ${budget.remaining} ${budget.resource === 'graphql' ? 'GraphQL points' : 'REST calls'} left, below the floor of ${budget.floor}; Autopilot waits until ${new Date(budget.resetAt).toISOString()}, except the heartbeats of this machine's claims.`);
     }
     // A due relaunch wakes even without new work; the fresh chat starts with the recipe.
     const relaunch = relaunchTarget(state, p);
@@ -992,19 +1015,8 @@ async function runTick(stateFile, ports, completion) {
     // (no AI call) and let expired claims of any owner become selectable work.
     const observedClaims = (Array.isArray(intake.claims) ? intake.claims : []).filter(claim => claim && typeof claim.issue === 'string');
     const expiredClaims = new Map(observedClaims.filter(claim => claim.expired === true && claim.active === false).map(claim => [claim.issue.toLowerCase(), claim]));
-    const ownClaims = observedClaims.filter(claim => claim.active === true && claim.coordinatorId === state.coordinatorId && claim.machine === state.machine && claim.commentId && claim.labelEventId);
-    const stuckFor = claim => p.now() - (typeof claim.stuckSince === 'string' ? Date.parse(claim.stuckSince) : NaN);
-    for (const claim of ownClaims) {
-      // After 4 hours stuck the owner stops refreshing, so the claim expires unless the issue leaves pdd:stuck.
-      if (stuckFor(claim) >= STUCK_CLAIM_AFTER) continue;
-      // A saved claim can have expired since it was observed: expiry is final, so it gets no heartbeat.
-      if (deferIntake && !(Date.parse(claim.lastSeen) + STUCK_CLAIM_AFTER > p.now())) continue;
-      try {
-        const beat = await (p.refreshClaimHeartbeat ?? refreshClaimHeartbeat)({ cwd: state.cwd, repository: state.repo, claim, coordinatorId: state.coordinatorId, machine: state.machine, at: new Date(p.now()).toISOString() },
-          { execFile: async (file, args, options) => p.execute(file, args, { purpose: 'claims', ...options }), admitMutation: action => p.scanAction(action) });
-        if (beat?.state === 'refreshed' && typeof beat.lastSeen === 'string') claim.lastSeen = beat.lastSeen;
-      } catch (error) { p.warn(`Claim heartbeat deferred for ${claim.issue}: ${line(error.message)}`); }
-    }
+    const ownClaims = ownClaimsOf(observedClaims);
+    await sendHeartbeats(ownClaims, deferIntake);
 
     const result = p.queryIssues ? await p.queryIssues(state) : await queryIssues(state, p);
     if (result.status === 429 || result.rateLimited) { state.retryAt = result.resetAt || p.now() + INTERVAL; return outcome('unknown', 'GitHub rate limited; waiting until reset.'); }

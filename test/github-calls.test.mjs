@@ -391,3 +391,36 @@ test('ETag: a repeated record append through the cache finds its own comment aft
   assert.deepEqual([two.state, two.id], ['saved', '5101'], 'the retry finds comment 101');
   assert.equal(w.posts, 1, 'no second copy of the record');
 });
+
+test('budget: below the floor the tick still sends the heartbeat of its own live claim at each tick, and nothing else', async t => {
+  const w = await tickWorld(t);
+  w.issues = [w.issue(7, { labels: [{ name: 'pdd:working' }] })];
+  assert.equal((await w.invoke('start')).exitCode, 0);
+  w.ownClaim(); w.time += 30 * minute; await w.tick();
+  assert.equal(w.patches.length, 1, 'the intake saw the own claim and the tick sent its heartbeat');
+  // Other use on this login leaves 120 calls until the reset at 13:00.
+  w.remaining = 120; w.seed(1, { resource: 'core', remaining: 120, limit: 5000, resetAt: reset() * 1000 });
+  for (const step of [15, 10]) {
+    w.time += step * minute;
+    const calls = w.gh.length, intakes = w.intakes, result = await w.tick();
+    assert.match(result.message, /GitHub limit low: \d+ REST calls left, below the floor of 500; Autopilot waits until 2026-11-06T13:00:00.000Z/);
+    assert.equal(w.intakes, intakes, 'no dependency re-sync');
+    assert.deepEqual(w.gh.slice(calls).map(args => [args[args.indexOf('--method') + 1], endpointOf(args)]),
+      [['GET', `repos/${repo}/issues/comments/901`], ['PATCH', `repos/${repo}/issues/comments/901`]], 'only the heartbeat: 2 REST calls');
+  }
+  assert.equal(w.patches.length, 3, 'a heartbeat at each tick in reserve');
+  assert.match(w.patches.at(-1), new RegExp(`"lastSeen":"${at(w.time)}"`));
+  // With fewer REST calls left than the heartbeats need, the tick sends none.
+  w.seed(1, { resource: 'core', remaining: 1, limit: 5000, resetAt: reset() * 1000 });
+  w.time += 3 * minute;
+  const calls = w.gh.length; await w.tick();
+  assert.equal(w.gh.length, calls, 'no GitHub call with 1 REST call left');
+  w.time += 10 * minute; await w.tick();
+  assert.equal(w.intakes, 3, 'after the reset the tick works as usual');
+});
+
+test('status line: in reserve the budget part names the calls left and the floor', () => {
+  const usage = githubUsage([{ at: NOW - minute, api: 'rest', purpose: 'claims', status: 200, resource: 'core', remaining: 120, limit: 5000, resetAt: NOW + 20 * minute }], NOW);
+  assert.equal(githubStatusLine({ usage, budget: githubBudget({ usage }) }),
+    'GitHub calls in the last hour: 1 (claims 1); no conditional reads; REST limit 120 of 5000 left until 12:20Z; budget reserve (120 REST calls left, below the floor of 500): Autopilot on this machine used 1 of 1500 (30%).');
+});

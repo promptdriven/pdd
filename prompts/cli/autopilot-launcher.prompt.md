@@ -302,11 +302,19 @@ After the settings read and the existing rate-limit wait, and before the
 intake, the tick computes `githubBudget` from the entries of all ledgers on this
 machine and the settings' `github` value:
 
-- `reserve`: save the reported `resetAt` as the rate-limit wait (`retryAt`) and
-  return `unknown` with `GitHub limit low: R REST calls left, below the floor of F;
-  Autopilot waits until ISO.` (`GraphQL points` for the GraphQL resource). The
-  tick makes no GitHub call, not even a heartbeat: claims live 4 hours and a
-  reset is at most 1 hour away.
+- `reserve`: the tick sends only the heartbeats of its own live claims and
+  returns `unknown` with `GitHub limit low: R REST calls left, below the floor of F;
+  Autopilot waits until ISO, except the heartbeats of this machine's claims.`
+  (`GraphQL points` for the GraphQL resource). It makes no other GitHub call: no
+  intake, no issue list, no wake. It does not save a rate-limit wait (`retryAt`),
+  so each tick until `resetAt` computes the budget again and sends the
+  heartbeats again. The claims are the saved `claims` of the last intake, with
+  the filters of the `low` case below. A heartbeat is 2 REST calls (a read and an
+  edit); when the newest `core` remaining is known and less than 2 for each of
+  these claims, the tick sends none. Why: one reserve window ends at the reset,
+  within 1 hour, but reserve can come back after each reset when other use on
+  the same login empties the limit. Without heartbeats a claim would then expire
+  after 4 hours while its chat still works.
 - `low`: when the last intake result was saved less than 60 minutes ago, the
   tick does not run the intake. It uses the saved `eligible` list and `claims`
   and warns once per tick with the used and allowed calls and the time of the next
@@ -319,8 +327,9 @@ machine and the settings' `github` value:
 After each intake the tick saves `{at, eligible, claims}` (when `eligible` is a
 list), and a successful heartbeat updates the saved claim's `lastSeen`. These
 are local facts for the next tick; they are not a GitHub observation. The
-60-minute interval is a constant. Claim checks outside the tick, such as the
-workflow start boundary, do not use this budget.
+60-minute interval is a constant. Only the tick uses this budget. Claim checks
+outside the tick, such as the workflow start boundary, other `pdd` commands and
+the coordinator and worker chats never wait for it.
 
 ## Tick and the skill boundary
 

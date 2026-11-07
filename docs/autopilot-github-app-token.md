@@ -10,7 +10,8 @@ GitHub gives one person 5,000 REST calls each hour, for all of their work. When
 several coordinators run on one login, they can use the whole limit. Then every
 `gh` call of that person fails with HTTP 403 until the reset, also their own
 work, CI log reads and release steps. The [GitHub API budget](cli.md#github-api-budget)
-keeps Autopilot to a share of the limit, but the limit is still shared.
+only makes the tick read less. The chats' own `gh` calls are not counted and do
+not wait, and the limit is still shared.
 
 ## The design
 

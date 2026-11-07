@@ -4,9 +4,10 @@ Own `src/github-calls.mjs`. Autopilot uses the person's own `gh` sign-in. Its
 REST limit (5,000 calls each hour for a person) is also the limit of the
 person's own work. Several coordinators on one login used the whole limit. This
 module counts each `gh` call that pdd makes, keeps a small local ledger for each
-repository on this machine, tells how much of the limit Autopilot may use, and
-keeps ETags and bodies for conditional reads. It makes no GitHub call itself and
-adds no credentials.
+repository on this machine, tells the tick when to read less, and keeps ETags
+and bodies for conditional reads. It makes no GitHub call itself and adds no
+credentials. It counts only the calls that pdd runs: the `gh` calls that the
+coordinator and worker chats make themselves are not counted.
 
 ## Exports
 
@@ -128,8 +129,18 @@ is no longer valid after its reset, so it is left out.
 
 ## Budget
 
-Autopilot may use `share` percent of the hourly REST limit; the rest stays for
-the person. `githubBudgetSettings(value)` reads `share` (an integer from 1 to
+The budget acts only on the Autopilot tick. It does not keep a part of the
+limit for the person:
+
+- `share` is the percent of the hourly REST limit that the counted calls of this
+  machine can reach before the tick defers its dependency re-sync (`low`). All
+  other reads and writes of the tick go on.
+- `floor` is the number of calls left below which the tick makes no GitHub call
+  until the reset, except the heartbeats of its own live claims (`reserve`).
+- `pdd` commands are counted but never wait for the budget. The coordinator and
+  worker chats never wait for it, and their own `gh` calls are not counted.
+
+`githubBudgetSettings(value)` reads `share` (an integer from 1 to
 100) and `floor` (an integer, 0 or more) from the object `autopilot.github` in
 `pdd.json`; a missing or invalid value takes the default.
 
@@ -141,7 +152,7 @@ else 5000. `used` is `usage.counted`. The result is
 
 | State | When | The tick |
 |---|---|---|
-| `reserve` | The newest `core` or `graphql` remaining is less than `floor` (first `core`) | Makes no GitHub call until `resetAt` |
+| `reserve` | The newest `core` or `graphql` remaining is less than `floor` (first `core`) | Makes no GitHub call until `resetAt`, except the heartbeats of its own live claims ([tick](autopilot-launcher.prompt.md#github-budget)) |
 | `low` | Otherwise, `used ≥ allowed` | Defers the dependency re-sync and keeps heartbeats ([tick](autopilot-launcher.prompt.md#github-budget)) |
 | `normal` | Otherwise | Works as usual |
 
@@ -152,6 +163,11 @@ repository's usage, `machine` the usage of all ledgers on this machine (default
 `usage`), `budget` is optional:
 
 `GitHub calls in the last hour: N (P1 C1, P2 C2); H of K conditional reads were 304 (X%); REST limit R of L left until HH:MMZ; budget S: Autopilot on this machine used U of A (Y%).`
+
+In `reserve`, `S` is `reserve (M REST calls left, below the floor of F)`, with
+the budget's `remaining` and `floor`, and `GraphQL points` for the `graphql`
+resource. `U` and `A` are the budget's `used` and `allowed`: the counted calls
+of this machine, not the calls of the chats.
 
 The purposes come in `GITHUB_PURPOSES` order and only with a count; with no
 call the parenthesis is absent. Without conditional reads the second part is

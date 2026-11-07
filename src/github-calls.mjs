@@ -206,7 +206,9 @@ export function githubStatusLine({ usage, machine = usage, budget }) {
   const hits = usage.conditional ? `${usage.notModified} of ${usage.conditional} conditional reads were 304 (${Math.round(100 * usage.notModified / usage.conditional)}%)` : 'no conditional reads';
   const core = machine.rate.core;
   const left = core ? `REST limit ${core.remaining}${finite(core.limit) ? ` of ${core.limit}` : ''} left until ${clock(core.resetAt)}` : 'REST limit not seen in the last hour';
-  const plan = budget ? `; budget ${budget.state}: Autopilot on this machine used ${budget.used} of ${budget.allowed} (${budget.share}%)` : '';
+  // In reserve the budget part names its reason: the calls left and the floor.
+  const reason = budget?.state === 'reserve' ? ` (${budget.remaining} ${budget.resource === 'graphql' ? 'GraphQL points' : 'REST calls'} left, below the floor of ${budget.floor})` : '';
+  const plan = budget ? `; budget ${budget.state}${reason}: Autopilot on this machine used ${budget.used} of ${budget.allowed} (${budget.share}%)` : '';
   return `GitHub calls in the last hour: ${usage.calls}${usage.calls ? ` (${parts.join(', ')})` : ''}; ${hits}; ${left}${plan}.`;
 }
 
