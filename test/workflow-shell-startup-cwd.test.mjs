@@ -95,26 +95,32 @@ test('2903: a real Herdr ID change still refuses, and start, approve, open and s
   let run = f.record();
   f.herdr.panes.find(p => p.pane_id === run.layout.paneId).terminal_id = 'replaced-terminal';
   const effects = () => f.herdr.calls.filter(a => (a[0] === 'tab' && a[1] === 'create') || (a[0] === 'pane' && a[1] === 'run')).length, before = effects();
-  const reason = /\(herdr_layout_identity_changed: Herdr session pdd, workspace "[^"]+": its first tab \(the run's own shell tab\) is gone or has other Herdr IDs\. Look at that workspace in Herdr, undo the change, then try again\.\)/;
+  const { workspaceId, terminalId: savedTerminal } = run.layout;
+  // Structure, not wording: the reason line has the code once and names the workspace, there is no JSON,
+  // and the saved and the live values follow on their own lines.
   const readable = (message, what) => {
-    assert.match(message, reason, what);
     assert.equal(count(message, 'herdr_layout_identity_changed'), 1, `${what}: the code appears once`);
     assert.doesNotMatch(message, /[{}]/, `${what}: no JSON`);
+    const lines = message.split('\n'), at = lines.findIndex(line => line.includes('herdr_layout_identity_changed'));
+    assert.ok(lines[at].includes(`"${workspaceId}"`), `${what}: the reason names the workspace: ${message}`);
+    return { lines, at };
   };
   const details = (message, what) => {
-    const lines = message.split('\n');
-    assert.ok(lines.some(line => /^Expected root_pane: tabId "[^"]+", paneId "[^"]+", terminalId "[^"]+"$/.test(line)), `${what}: ${message}`);
-    assert.ok(lines.some(line => /^Found root_pane: .*pane_id "[^"]+", terminal_id "replaced-terminal"/.test(line)), `${what}: ${message}`);
+    const { lines, at } = readable(message, what);
+    const expected = lines.findIndex((line, i) => i > at && line.startsWith('Expected root_pane: '));
+    const found = lines.findIndex((line, i) => i > expected && line.startsWith('Found root_pane: '));
+    assert.ok(expected > at && lines[expected].includes(`"${savedTerminal}"`), `${what}: the saved terminal follows the reason: ${message}`);
+    assert.ok(found > expected && lines[found].includes('"replaced-terminal"'), `${what}: the live terminal follows: ${message}`);
   };
 
   f.tick(); assert.equal((await stepDone({ step: 'scope', summary: 'Change value.mjs to 2.', cwd: run.root }, f.agentPorts())).exitCode, 0);
   f.tick(); const approved = await approveRun({ ref: '17', cwd: f.source }, f.ports);
-  assert.equal(approved.exitCode, 1); readable(approved.message, 'approve'); details(approved.message, 'approve');
-  assert.match(approved.message, /Start it: pdd workflow open 17/);
+  assert.equal(approved.exitCode, 1); details(approved.message, 'approve');
+  assert.match(approved.message, /pdd workflow open 17/, 'approve names the next command');
 
   const opened = await openRun({ ref: '17', cwd: f.source, packageRoot }, f.ports);
-  assert.equal(opened.exitCode, 1); readable(opened.message, 'open'); details(opened.message, 'open');
-  assert.match(opened.message.split('\n')[0], /^pdd could not open the build chat \(/);
+  assert.equal(opened.exitCode, 1); details(opened.message, 'open');
+  assert.equal(readable(opened.message, 'open').at, 0, 'open gives the reason on its first line');
 
   const status = await runStatus({ ref: '17', cwd: f.source }, f.ports);
   readable(status.message, 'status');
@@ -133,10 +139,30 @@ test('2903: a fresh start with a changed Herdr ID prints the reason and its valu
   };
   const started = await f.run();
   assert.equal(started.exitCode, 1);
-  const lines = started.message.split('\n'), at = lines.findIndex(line => line.includes('chat startup was not confirmed'));
-  assert.match(lines[at], /\(herdr_layout_identity_changed: Herdr session pdd, workspace "[^"]+": the new area tab does not show the pane that Herdr made\. Look at that workspace in Herdr, undo the change, then try again\.\)\.$/);
-  assert.equal(count(started.message, 'herdr_layout_identity_changed'), 1);
-  assert.match(lines[at + 1], /^Expected area_pane: workspace_id "[^"]+", tab_id "[^"]+", pane_id "[^"]+", terminal_id "[^"]+"/);
-  assert.match(lines[at + 2], /^Found area_pane: .*terminal_id "other-terminal"/);
-  assert.equal(lines[at + 3], 'Start it with: pdd workflow open 17');
+  // Structure, not wording: the code once in a reason line that names the workspace, no JSON, the values, then the next command.
+  assert.equal(count(started.message, 'herdr_layout_identity_changed'), 1, started.message);
+  assert.doesNotMatch(started.message, /[{}]/, started.message);
+  const lines = started.message.split('\n'), at = lines.findIndex(line => line.includes('herdr_layout_identity_changed'));
+  const area = f.herdr.workspaces.find(w => w.worktree?.is_linked_worktree), made = f.herdr.panes.find(p => p.terminal_id === 'other-terminal');
+  assert.ok(lines[at].includes(`"${area.workspace_id}"`), started.message);
+  assert.ok(lines[at + 1].startsWith('Expected area_pane: ') && lines[at + 1].includes(`"${made.pane_id}"`), started.message);
+  assert.ok(lines[at + 2].startsWith('Found area_pane: ') && lines[at + 2].includes('"other-terminal"'), started.message);
+  assert.ok(lines[at + 3].startsWith('Start it with: ') && lines[at + 3].includes('pdd workflow open 17'), started.message);
+});
+
+test('2903: an identity refusal names the tab that changed, and its Found line leaves out the live folder', async t => {
+  // Without saved root custody, a run workspace with two shell tabs cannot show which one is the run's first tab.
+  const f = await liveLayout(t);
+  await f.open();
+  const legacy = await f.open({ run: { runId: f.input.runId, chats: [] }, stageId: 'plan' }).catch(error => error);
+  assert.equal(legacy.code, 'herdr_layout_identity_changed', legacy.message); assert.equal(legacy.field, 'root_tab');
+  // A changed root terminal: the Found line shows the live Herdr IDs, not the folder of the moved shell.
+  const g = await liveLayout(t), elsewhere = join(g.base, 'elsewhere'); mkdirSync(elsewhere);
+  g.herdr.shellStartFolder = elsewhere;
+  const first = await g.open();
+  g.herdr.panes.find(p => p.pane_id === first.root.paneId).terminal_id = 'replaced-terminal';
+  const changed = await g.open({ run: ownerFor(g, first) }).catch(error => error);
+  assert.equal(changed.field, 'root_pane', changed.message);
+  const found = changed.message.split('\n').find(line => line.startsWith('Found '));
+  assert.ok(found?.includes('"replaced-terminal"') && !found.includes(elsewhere) && !/\bcwd\b/.test(found), changed.message);
 });

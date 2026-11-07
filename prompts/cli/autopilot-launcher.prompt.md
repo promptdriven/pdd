@@ -99,6 +99,20 @@ Use a dedicated Herdr session `pdd-autopilot`, isolated from the default session
 Open its repo workspace at start; launch the interactive agent only for work.
 Persist the owned pane and native launch intent. Inject `PDD_AUTOPILOT_CONTEXT`
 into that exact empty native command along with the saved profile environment.
+
+<a id="start-in-the-repository"></a>**Start in the repository.** The native launch line starts with
+`cd <shell-quoted repository Git root> && `, then the `env` command. A new Herdr pane runs the person's
+shell startup files, and a `cd` there (for example in `~/.zshrc`) can move the shell to another folder
+before the launcher types the line. The `cd` makes the agent start in the repository anyway, as in the
+[area chat](workflow-chat.prompt.md). If the `cd` fails, the shell does not start the agent, and the work
+stays pending. No check reads the pane's live folder (Herdr `cwd` and `foreground_cwd`) before that
+launch. After it, Herdr shows the repository as the live folder of the pane and of its agent. So status
+and uncertain-send recovery still compare that folder with the saved repository path: a workspace that
+`workspace create` made has no Herdr Git identity, and the folder ties the pane to this repository. The
+[relaunch close](#coordinator-relaunch) does not compare it, because it can meet a chat that an older
+launch started in the shell startup folder. Run each `gh repo view` repository check in the saved
+repository path, never in the pane's live folder.
+
 Reuse the pane only when its owner launch binding matches the current coordinator
 envelope, including optional runs, and the selected agent identity, saved HOME,
 launcher-definition HOME and selected family config-folder path that determine
@@ -182,7 +196,8 @@ acquired, await the actual save and timer effects and report their result.
 A running chat keeps the launch settings that it started with. A later package
 or launch argument does not reach it. So record a launch fingerprint in the
 owner launch at each native launch: the SHA-256 of the resolved invoked package
-root, its `package.json` version, the provider family and the provider arguments
+root, its `package.json` version, the provider family, the `cd` that
+[starts the launch line](#start-in-the-repository) and the provider arguments
 that this package builds, exactly as the launch builds them: the TOML project key
 and, when the saved state has an explicit `CODEX_HOME`, its `set` override. Put a
 fixed placeholder for the coordinator context value in those arguments; the
@@ -210,9 +225,10 @@ new work. The fresh chat gets the start-up recipe first.
   coordinator pane only. Hold admission for the close. In that hold, first
   recheck that the saved state is enabled with the same pane, workspace and
   owner launch and no intent, and that Herdr reports the same pane, workspace,
-  provider, repository path, saved `terminal_id` and `agent_session` as `idle`
-  or `done`. If Herdr reports another `terminal_id`, the saved pane
-  [is gone](#gone-coordinator-pane): close nothing and forget it in the same
+  provider, saved `terminal_id` and `agent_session` as `idle` or `done`. Do not
+  compare the chat's live folder: a chat that an older launch started without
+  the `cd` runs in the shell startup folder, and this relaunch replaces it. If
+  Herdr reports another `terminal_id`, the saved pane [is gone](#gone-coordinator-pane): close nothing and forget it in the same
   hold. After the close, `pane get` must report `pane_not_found`. Then, in the
   same hold, add the current fingerprint to the relaunch record below, remove
   the saved pane, workspace, owner launch and the pending and held marks, and
@@ -493,7 +509,7 @@ The intent's pane and workspace must match the current saved target. The saved o
 
 Inspect only that saved target. With an uncertain intent, this rule overrides normal missing-pane recovery. If its saved pane or workspace is absent or mismatched, retain the original identifiers and send nothing. Never create, replace, focus, close or interrupt a target for recovery.
 
-Before recovery, inspect the live workspace, pane and agent. Their IDs, repository path and provider must match the saved target and selected launcher. If the owner launch saved a `terminal_id`, Herdr must report the same `terminal_id` for the saved pane; another terminal sends nothing. Check the GitHub repository from that path against the saved repository before delivery. Perform live identity, repository and readiness reads outside admission, immediately before the final guard. Under the guard recheck current saved control and submit one prompt. Remote identity can change after observation; do not claim atomic remote attestation. A missing or mismatched current identity sends nothing.
+Before recovery, inspect the live workspace, pane and agent. Their IDs, repository path and provider must match the saved target and selected launcher. If the owner launch saved a `terminal_id`, Herdr must report the same `terminal_id` for the saved pane; another terminal sends nothing. Check the GitHub repository against the saved repository before delivery, with `gh repo view` in the saved repository path. Perform live identity, repository and readiness reads outside admission, immediately before the final guard. Under the guard recheck current saved control and submit one prompt. Remote identity can change after observation; do not claim atomic remote attestation. A missing or mismatched current identity sends nothing.
 
 Herdr must report the owned agent as `idle` or `done`. A `working`, `blocked`, `unknown` or missing status, an absent agent, or any failed or unreadable inspection sends nothing. If Herdr reports an `agent_session`, it must stay unchanged through the final guard; a changed or unreadable target sends nothing. Herdr may omit the session ID for a saved, finished agent. In that case, do not refuse on absence alone when the live workspace, pane, repo path and provider still match. `done` permits only a new packet. It does not acknowledge the old submission.
 
