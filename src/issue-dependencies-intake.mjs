@@ -267,7 +267,7 @@ export async function completeDependencyIntake({ cwd = '', request, analysis }, 
   // #3053: one paced effect stream; route only after complete validation.
   if (prepared.sortContext) {
     try {
-      const write = pacedSortWrites(ports);
+      const write = pacedSortWrites(ports, { cwd, repository: request.repository });
       await saveSortBatch({ repository: request.repository, snapshot, sorts }, ports, write);
       const settings = await ports.settings.read({ cwd, repository: request.repository });
       await routeSortIssues({ cwd, repository: request.repository, snapshot, mode: settings.mode }, ports, write);

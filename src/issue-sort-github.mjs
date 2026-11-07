@@ -59,18 +59,19 @@ export function validateSortBatch({ snapshot, prepared, issues, sorts }) {
   return sorts;
 }
 // One effect stream per operation; the caller shares it for saving and routing.
-export function pacedSortWrites(ports) {
+export function pacedSortWrites(ports, { cwd = ports.cwd ?? '', repository } = {}) {
   let last = null;
   return async action => {
     const now = Date.parse((await ports.clock.now({})).iso);
     if (last !== null && now - last < 1000) await (ports.wait?.sleep ?? (async ({ ms }) => new Promise(resolve => setTimeout(resolve, ms))))({ ms: 1000 - (now - last) });
+    if (ports.settings && !['auto','observe'].includes((await ports.settings.read({ cwd, repository })).mode)) throw Error('sort-mode-changed');
     if (ports.admitEffect && !await ports.admitEffect()) throw Error('sort-write-pending');
     const result = await action();
     last = Date.parse((await ports.clock.now({})).iso);
     return result;
   };
 }
-export async function saveSortBatch({ repository, snapshot, sorts }, ports, write = pacedSortWrites(ports)) {
+export async function saveSortBatch({ repository, snapshot, sorts }, ports, write = pacedSortWrites(ports, { repository })) {
   for (const record of sorts) {
     const issue = snapshot.issues.find(x => x.key === record.issue);
     if (JSON.stringify(selectedSort(snapshot, issue)) === JSON.stringify(record)) continue;
@@ -80,7 +81,7 @@ export async function saveSortBatch({ repository, snapshot, sorts }, ports, writ
     (issue.sorts ??= []).push({ id: String(result.id), authority: 'trusted', intact: true, record });
   }
 }
-export async function routeSortIssues({ cwd, repository, snapshot, mode }, ports, write = pacedSortWrites(ports)) {
+export async function routeSortIssues({ cwd, repository, snapshot, mode }, ports, write = pacedSortWrites(ports, { cwd, repository })) {
   cwd ??= ports.cwd ?? '';
   const plan = sortPlan({ snapshot });
   if (!['auto','observe'].includes(mode)) return plan;

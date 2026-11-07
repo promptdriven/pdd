@@ -19,7 +19,7 @@ nothing. Auto: one evidence comment with a reopen hint, then close. Observe:
 pdd:close-proposed and one evidence comment, leave open. Assign another login
 with one comment and no start. For another repository write one link note and
 no start. Unsure: pdd:needs-owner and one question. Every write is serial, at
-least 1000 ms after the preceding write, including record saves. Use immutable
+least 1000 ms after the preceding write, including record saves. The shared writer checks current mode after each wait, before both record and route effects. Use immutable
 comment bodies to recover retries. A failed or unconfirmed write stops the batch;
 never blindly retry it. Confirm comments and issue updates by readback. Missing comment identity or update confirmation stops the route before further effects. Labels
 are created only when absent. Do not change claims, trust, approvals or merging.

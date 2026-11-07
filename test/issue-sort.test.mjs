@@ -212,6 +212,12 @@ test('off refuses a sort completion without effects', async () => {
   const w = fixture([1], { mode: 'off' });
   assert.equal((await complete(w, [w.record(1, { status: fixed(w) })])).state, 'pending');
   assert.equal(w.writes.length, 0);
+  const raced = fixture(); let mode = 'auto';
+  raced.ports.settings.read = async () => ({ mode });
+  const append = raced.ports.github.appendComment;
+  raced.ports.github.appendComment = async args => { const result = await append(args); if (args.body.includes('pdd-dependency-review:')) mode = 'off'; return result; };
+  assert.equal((await complete(raced, [raced.record(1)])).state, 'pending');
+  assert.equal(raced.writes.filter(x => x.body?.includes('pdd-issue-sort:')).length, 0);
 });
 
 test('a changed area label needs a fresh sort while PDD work labels do not', async () => {
