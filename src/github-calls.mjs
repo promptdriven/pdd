@@ -242,3 +242,13 @@ export function githubEtagCache({ root, repository, fs = nativeFs }) {
     },
   };
 }
+
+// GitHub's ETag covers only the body, and a 304 reply has no Link header. A full page without a next page keeps its
+// body and its ETag when the list grows past it, so a conditional read would keep the saved "no next page" and miss
+// the new items. Such a page is never read with its ETag.
+export function githubFullLastPage(endpoint, items, next) {
+  if (!Array.isArray(items) || next) return false;
+  const query = String(endpoint ?? '').split('#', 1)[0].split('?')[1] ?? '';
+  const asked = Number(new URLSearchParams(query).get('per_page'));
+  return items.length >= (Number.isInteger(asked) && asked >= 1 ? Math.min(asked, 100) : 30);
+}

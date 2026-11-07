@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: cd0898212e42a1e09289ea23e3fec763f130c022f29cbadd45345ede7f64eec7).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: c74913ca2484251e01ff41fa3f37dfa9f7d985968c807de6e3e135f11315bdc5).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch } from 'node:fs';
@@ -23,7 +23,7 @@ import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
 import { samePath } from './workflow-herdr-layout.mjs';
 import { tomlString } from './toml-string.mjs';
 import { alertStatusLine } from './autopilot-alerts.mjs';
-import { countGithubCalls, githubBudget, githubBudgetSettings, githubEtagCache, githubLedger, githubMachineEntries, githubStateRoot, githubStatusLine, githubUsage } from './github-calls.mjs';
+import { countGithubCalls, githubBudget, githubBudgetSettings, githubEtagCache, githubFullLastPage, githubLedger, githubMachineEntries, githubStateRoot, githubStatusLine, githubUsage } from './github-calls.mjs';
 
 const INTERVAL = 30 * 60 * 1000;
 const STUCK_AFTER = 60 * 60 * 1000;
@@ -815,7 +815,8 @@ async function reviewSubmissions(pull, state, p) {
     let endpoint = `repos/${state.repo}/pulls/${pull.row.number}/reviews?per_page=100`;
     const pages = {}, rows = [];
     while (endpoint) {
-      const old = pull.reviewPages?.[endpoint], r = await githubGet(endpoint, p, old?.etag);
+      // Reviews come in ascending order: a full last page keeps its ETag when review 101 arrives, so it is read in full.
+      const old = pull.reviewPages?.[endpoint], r = await githubGet(endpoint, p, old && !githubFullLastPage(endpoint, old.rows, old.next) ? old.etag : undefined);
       const page = r.status === 304 ? old : { etag: r.etag, rows: r.value, next: r.link?.match(/<https:\/\/api\.github\.com\/([^>]+)>; rel="next"/)?.[1] };
       if (!Array.isArray(page?.rows)) throw Error('GitHub reviews unavailable; retry next tick.');
       pages[endpoint] = page; rows.push(...page.rows); endpoint = page.next;

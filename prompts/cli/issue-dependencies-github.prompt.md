@@ -100,7 +100,15 @@ The native REST reads use `gh api --include`. With a supplied `githubCache` port
 sends `If-None-Match: ETAG`. A 304 reply is a current GitHub answer that the
 resource has not changed; it does not count against the limit. Return the saved
 body and next page for it. gh exits with 1 for a 304 and prints the headers:
-read the reply from that failed command too. A 200 reply with an ETag replaces
+read the reply from that failed command too. A saved entry for a
+[full last page](github-calls.prompt.md#full-last-page) (`githubFullLastPage` of
+the endpoint, the saved list and its saved next page), or one whose body does not
+parse, sends no ETag: the page is read in full. Otherwise a 304 for a page of
+exactly 100 comments or history events keeps the saved "no next page", and the
+read misses item 101 and still reports `complete`. This rule covers the claim
+check's history and comment pages and the comment pages that a record append
+searches for its own earlier comment, so a new claim, a label event or a record
+after a full page is seen. A 200 reply with an ETag replaces
 the saved entry. Without a saved entry, or for a write, the request is as before;
 any other non-2xx reply is the existing failure. This is not a saved projection:
 each read still asks GitHub, so freshness stays as above. Without the port no

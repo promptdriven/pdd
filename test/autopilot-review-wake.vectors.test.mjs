@@ -196,6 +196,20 @@ test('AC1/2/4: conditional review pages find a new submission beyond an unchange
   assert.equal(f.requests.filter(row => row.endpoint === 'repos/owner/repo/pulls/90').length, 0, 'Review reads do not refetch unchanged PR details.');
 });
 
+// Issue #3046: a page keeps its ETag when a next page appears, so a full last page of 100 reviews is read without its ETag.
+test('a new submission after a full last page of 100 reviews wakes once', async t => {
+  const f = await fixture(t, [Array.from({ length: 100 }, (_, index) => review({ id: 1 + index, state: 'COMMENTED', body: `Note ${index + 1}` }))]);
+  await f.tick(); assert.equal(f.prompts.length, 0);
+  f.reviewPages.push([]); f.pageVersions.push(1); f.addReview(review(), 1);
+  f.requests.length = 0; await f.tick();
+  assert.equal(f.prompts.length, 1, 'review 101 on the new second page wakes the agent');
+  assert.deepEqual(reviewsIn(f).map(row => row.id).slice(-2), [100, 1001]);
+  const reads = f.requests.filter(row => row.endpoint.includes('/reviews'));
+  assert.deepEqual(reads.map(row => [row.endpoint.includes('page=2'), row.args.some(value => value.startsWith('If-None-Match: '))]), [[false, false], [true, false]]);
+  f.requests.length = 0; await f.tick(); assert.equal(f.prompts.length, 1);
+  assert.deepEqual(f.requests.filter(row => row.endpoint.includes('/reviews')).map(row => row.status), [304, 304], 'a page with a next page and a page that is not full stay conditional');
+});
+
 test('AC3/4: an ordinary review lookup failure defers its issue while unrelated work proceeds', async t => {
   const f = await fixture(t);
   f.rows.push(issue(71)); f.issueVersion++; await f.tick(); f.prompts.length = 0;

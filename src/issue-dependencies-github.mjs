@@ -9,7 +9,7 @@ import { resolveWorkflowRepository } from './workflow-github.mjs';
 import { gitContext, currentChat, stateDirFor } from './workflow-runs.mjs';
 import { chatLifecycle, chatSession, observeLifecycle, sessionEvidenceDue, observedSession, ownSession, launchAnchor, validSessionId } from './workflow-chat.mjs';
 import { dependencyLinks, projectIssueGraph, validateDependencyChange } from './issue-dependencies.mjs';
-import { nativeGithubCounter } from './github-calls.mjs';
+import { githubFullLastPage, nativeGithubCounter } from './github-calls.mjs';
 
 const REVIEW = 'pdd-dependency-review:v1', IMPACT = 'pdd-dependency-impact:v1';
 const NATIVE_GITHUB = Symbol('native github'), NATIVE_OWNERS = Symbol('native owners');
@@ -77,8 +77,14 @@ function service(cwd, ports) {
   }
   // purpose names what the read is for in the GitHub call ledger, repository the ledger of a GraphQL call. With a githubCache
   // port, a GET sends the saved ETag; a 304 reply returns the saved body and next page and does not count against the limit.
+  // A saved full last page, or a saved body that does not parse, sends no ETag: a 304 cannot show a new next page.
   async function api(endpoint, method = 'GET', input, purpose, repository) {
-    const cache = method === 'GET' ? ports.githubCache : null, saved = cache?.get(endpoint);
+    const cache = method === 'GET' ? ports.githubCache : null;
+    let saved = cache?.get(endpoint);
+    if (saved) {
+      try { saved = { ...saved, value: parse(saved.body) }; if (githubFullLastPage(endpoint, saved.value, saved.next)) saved = undefined; }
+      catch { saved = undefined; }
+    }
     const executeRequest = () => run('gh', ['api', '--include', '--method', method, endpoint, '-H', 'Accept: application/vnd.github+json',
       ...(saved ? ['-H', `If-None-Match: ${saved.etag}`] : []), ...(input === undefined ? [] : ['--input', '-'])], input, purpose, !!saved, repository);
     const mutation = method === 'POST' && /^repos\/[^/]+\/[^/]+\/issues\/[1-9][0-9]*\/(?:comments|dependencies\/blocked_by)$/.test(endpoint)
@@ -87,7 +93,7 @@ function service(cwd, ports) {
     const boundary = raw.search(/\r?\n\r?\n/), header = boundary >= 0 ? raw.slice(0, boundary) : '';
     const body = boundary >= 0 ? raw.slice(boundary).trim() : raw;
     const status = Number(header.match(/^HTTP\/\S+\s+(\d+)/m)?.[1] ?? 200);
-    if (status === 304 && saved) return { value: parse(saved.body), next: saved.next ?? '' };
+    if (status === 304 && saved) return { value: saved.value, next: saved.next ?? '' };
     if (status < 200 || status >= 300) throw Object.assign(Error('GitHub observation unavailable'), { status });
     const link = header.match(/^link:\s*(.*)$/im)?.[1] ?? '';
     const nextRelation = link.match(/<([^>]+)>\s*;\s*rel=(?:"next"|next)\s*(?:,|$)/i)?.[1];

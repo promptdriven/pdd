@@ -178,7 +178,9 @@ GitHub calls in the last hour: 212 (dependencies 120, claims 14, issues 60, pull
 A conditional read sends the ETag of the last reply. A `304` reply means that
 nothing changed, and GitHub does not count it against the limit. The tick and the
 dependency re-sync use conditional reads. The dependency re-sync keeps its ETags
-and reply bodies in the same folder.
+and reply bodies in the same folder. The dependency re-sync and the review reads
+read a full page (100 items) that has no next page without its ETag: a `304`
+reply does not show that a next page came.
 
 By default Autopilot on one machine uses at most 30% of the hourly REST limit,
 and never the last 500 calls. Change this in `pdd.json`:

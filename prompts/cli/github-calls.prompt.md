@@ -29,6 +29,7 @@ adds no credentials.
 | `githubBudget({usage, share, floor})` | See [Budget](#budget) |
 | `githubStatusLine({usage, machine, budget})` | The one status line |
 | `githubEtagCache({root, repository, fs})` | `{file, get(endpoint), set(endpoint, entry), save()}` |
+| `githubFullLastPage(endpoint, items, next)` | True for a [full last page](#full-last-page): never read it with its ETag |
 
 `fs` is the injected file port (native `node:fs`). `now` is a clock in
 milliseconds (native `Date.now`).
@@ -169,10 +170,28 @@ got or set, so the file holds the working set of the last read. A read that got
 or set no entry (it failed early) keeps the saved file. A read or write
 failure gives an empty cache or a lost save; it only costs counted reads.
 
+<a id="full-last-page"></a>
+### A full last page
+
+GitHub's ETag covers only the body of a reply, and a 304 reply has no `Link`
+header. So when a list grows past a full page, that page keeps its body and its
+ETag, and a conditional read of it gets a 304 with the saved "no next page". The
+reader then never asks for the new page and reports the read as complete. In a
+list in ascending order (comments, the issue history, reviews) a full page never
+changes again, so the miss would last.
+
+`githubFullLastPage(endpoint, items, next)` is true when `items` is a list, `next`
+is empty and `items` has at least `P` entries. `P` is the `per_page` value of the
+endpoint's query (at most 100), else GitHub's default 30. A caller never sends the
+saved ETag for such a page: it reads the page in full and follows a new next
+page. A page with a next page, or with fewer than `P` entries, stays conditional:
+a new entry changes its body, or GitHub serves the saved next page.
+
 ## Dependencies
 
 None: this module uses only the injected file port and clock. Its consumers, for
 navigation only: the [Autopilot launcher](autopilot-launcher.prompt.md#github-budget)
-counts its calls, applies the budget and shows the status line; the
+counts its calls, applies the budget, shows the status line and reads review
+pages with the full-last-page rule; the
 [dependency GitHub reader](issue-dependencies-github.prompt.md#conditional-reads)
-uses the ETag cache.
+uses the ETag cache and the full-last-page rule.

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { countGithubCalls, githubBudget, githubLedger, githubPurpose, githubReply, githubStatusLine, githubUsage, githubEtagCache, nativeGithubCounter } from '../src/github-calls.mjs';
-import { readDependencySnapshot } from '../src/issue-dependencies-github.mjs';
+import { createDependencyReadPorts, readDependencySnapshot, saveDependencyReview } from '../src/issue-dependencies-github.mjs';
 
 // Issue #3046: Autopilot counts its GitHub calls, keeps a budget and reads less.
 const repo = 'owner/repo', minute = 60 * 1000, hour = 60 * minute;
@@ -297,4 +297,97 @@ test('native counter: a pdd command records each gh call in the ledger of its re
     [['rest', 'dependencies', 200, 'owner/repo'], ['graphql', 'dependencies', 200, 'owner/repo'], ['rest', 'dependencies', 404, 'owner/repo']]);
   assert.deepEqual(readdirSync(join(dir, 'github')), [`${createHash('sha256').update('owner/repo').digest('hex').slice(0, 20)}.jsonl`],
     'gh api user names no repository and is not recorded');
+});
+
+// The native reader with a fake GitHub that pages lists by 100. As on GitHub (checked live), the ETag is a hash of the
+// body only, so a page keeps its ETag when a next page appears, and a 304 reply has no Link header.
+function pagedWorld() {
+  const w = { calls: [], posts: 0, comments: [], timeline: [] };
+  w.issue = { id: 1007, number: 7, html_url: key(7), title: 'Issue 7', body: 'Fix it.', state: 'open', user: { login: 'owner' }, labels: [], assignees: [], created_at: at(NOW - 3 * hour), updated_at: at(NOW - 3 * hour) };
+  w.comment = (n, body = `comment ${n}`) => ({ id: 5000 + n, body, user: { login: 'owner' }, created_at: at(NOW - 2 * hour + n * 1000), updated_at: at(NOW - 2 * hour + n * 1000), html_url: `${key(7)}#issuecomment-${5000 + n}` });
+  const lists = () => ({ 'issues/7/comments': w.comments, 'issues/7/timeline': w.timeline, 'issues/7/dependencies/blocked_by': [], 'issues/7/dependencies/blocking': [] });
+  const fake = async (file, args, options = {}) => {
+    if (file !== 'gh') throw Error(`no ${file} in this fixture`);
+    const endpoint = endpointOf(args), method = args[args.indexOf('--method') + 1], sent = args.find(word => /^If-None-Match: /.test(word))?.slice(15);
+    w.calls.push({ endpoint, method, sent });
+    if (endpoint === 'graphql') return { code: 0, stdout: reply(200, { errors: [{ message: 'not in this fixture' }] }, { resource: 'graphql' }) };
+    if (method === 'POST' && endpoint === `repos/${repo}/issues/7/comments`) {
+      w.posts++; const row = w.comment(w.comments.length + 1, JSON.parse(options.input).body); w.comments.push(row);
+      return { code: 0, stdout: reply(201, row) };
+    }
+    const [path, query = ''] = endpoint.split('?'), route = path.replace(`repos/${repo}/`, ''), page = Number(new URLSearchParams(query).get('page') ?? 1);
+    let body, link;
+    if (route === 'issues') body = [w.issue];
+    else if (route === 'issues/7') body = w.issue;
+    else if (/^issues\/comments\/[0-9]+$/.test(route)) body = w.comments.find(row => route === `issues/comments/${row.id}`);
+    else if (lists()[route]) {
+      const all = lists()[route]; body = all.slice((page - 1) * 100, page * 100);
+      if (all.length > page * 100) link = `<https://api.github.com/${path}?per_page=100&page=${page + 1}>; rel="next"`;
+    }
+    assert.ok(body !== undefined, `unexpected endpoint ${endpoint}`);
+    const tag = `"${createHash('sha256').update(JSON.stringify(body)).digest('hex').slice(0, 12)}"`;
+    if (sent === tag) return { code: 1, stdout: reply(304), stderr: 'gh: HTTP 304\n' };
+    return { code: 0, stdout: reply(200, body, { etag: tag, link }) };
+  };
+  w.ports = (cache, extra = {}) => ({ execFile: countGithubCalls(fake, { ledger: null }), ...(cache ? { githubCache: cache } : {}),
+    authority: { read: async () => ({ authority: 'trusted' }) },
+    context: { read: async () => ({ json: JSON.stringify({ inputs: [], conditions: [], execution: [] }) }) },
+    owners: { read: async () => ({ json: JSON.stringify({ localOwner: '', claims: [], runs: [], runsKnown: true }) }) },
+    clock: { now: async () => ({ iso: at(NOW) }) }, ...extra });
+  return w;
+}
+const etagDir = t => { const dir = mkdtempSync(join(tmpdir(), 'pdd-github-full-page-')); t.after(() => rmSync(dir, { recursive: true, force: true })); return dir; };
+// One read with the saved ETag cache of the last read, as one tick's intake does it.
+const cachedRead = async (dir, read) => { const cache = githubEtagCache({ root: dir, repository: repo }); try { return await read(cache); } finally { cache.save(); } };
+
+test('ETag: a full last page is read again, so comment 101 after exactly 100 comments is seen and the read stays complete', async t => {
+  const dir = etagDir(t), w = pagedWorld();
+  w.comments = Array.from({ length: 100 }, (_, i) => w.comment(i + 1));
+  const snapshot = cache => readDependencySnapshot({ repository: repo }, w.ports(cache)).then(result => result.snapshot);
+  const one = await cachedRead(dir, snapshot);
+  assert.equal(one.complete, true, one.warnings.join('; '));
+  w.comments.push(w.comment(101, 'A new trusted comment after a full page.'));
+  const before = w.calls.length;
+  const two = await cachedRead(dir, snapshot), second = w.calls.slice(before);
+  const fresh = await snapshot(null);
+  assert.ok(JSON.stringify(fresh).includes(`${key(7)}#issuecomment-5101`), 'the uncached read sees comment 101');
+  assert.deepEqual(two, fresh, 'the cached read sees comment 101 too and gives the same observation');
+  assert.equal(two.complete, true, two.warnings.join('; '));
+  const page = second.find(call => call.endpoint === `repos/${repo}/issues/7/comments?per_page=100`);
+  assert.equal(page.sent, undefined, 'the full first page with no next page is read without its ETag');
+  assert.ok(second.some(call => call.endpoint === `repos/${repo}/issues/7/comments?per_page=100&page=2`), 'and the new second page is read');
+  assert.ok(second.filter(call => call.endpoint.includes('/dependencies/') || call.endpoint.includes('/timeline')).every(call => call.sent), 'a page that is not full stays conditional');
+});
+
+test('ETag: a claim check through the cache sees a new claim era after a full last page of history and comments', async t => {
+  const dir = etagDir(t), w = pagedWorld();
+  const event = (id, extra = {}) => ({ id, event: 'subscribed', actor: { login: 'owner' }, created_at: at(NOW - 2 * hour + id), ...extra });
+  const claim = (n, coordinatorId, labelEventId) => w.comment(n, `Autopilot claim on machine-a.\n\n\`\`\`json\n${JSON.stringify({ repository: repo, coordinatorId, machine: 'machine-a', labelEventId, lastSeen: '' })}\n\`\`\``);
+  w.issue.labels = [{ name: 'pdd:working' }];
+  w.timeline = [...Array.from({ length: 99 }, (_, i) => event(i + 1)), event(701, { event: 'labeled', label: { name: 'pdd:working' } })];
+  w.comments = [...Array.from({ length: 99 }, (_, i) => w.comment(i + 1)), claim(100, 'coordinator-a', '701')];
+  const owners = cache => createDependencyReadPorts({}, w.ports(cache, { owners: undefined })).owners.read({ repository: repo, issues: [key(7)] }).then(raw => JSON.parse(raw.json).claims);
+  const [first] = await cachedRead(dir, owners);
+  assert.deepEqual([first.coordinatorId, first.labelEventId, first.active], ['coordinator-a', '701', true]);
+  // The label is removed and added again by another coordinator, which posts its own claim: item 101 and 102.
+  w.timeline.push(event(702, { event: 'unlabeled', label: { name: 'pdd:working' } }), event(703, { event: 'labeled', label: { name: 'pdd:working' } }));
+  w.comments.push(claim(101, 'coordinator-b', '703'));
+  w.issue = { ...w.issue, updated_at: at(NOW - hour) };
+  const [second] = await cachedRead(dir, owners);
+  const [fresh] = await owners(null);
+  assert.deepEqual([fresh.coordinatorId, fresh.labelEventId], ['coordinator-b', '703']);
+  assert.deepEqual(second, fresh, 'the cached claim check sees the new claim, not the old one');
+});
+
+test('ETag: a repeated record append through the cache finds its own comment after a full last page and posts no copy', async t => {
+  const dir = etagDir(t), w = pagedWorld();
+  w.comments = Array.from({ length: 100 }, (_, i) => w.comment(i + 1));
+  const row = { key: key(7), revision: createHash('sha256').update(JSON.stringify({ title: 'Issue 7', body: 'Fix it.' })).digest('hex') };
+  const review = { analysis: 'Checked for the full-page case.', base: [], continuation: '', issue: key(7), inputs: [row], candidates: [row], outcome: 'complete', dependencies: [], questions: [], effects: 'none' };
+  const save = cache => saveDependencyReview({ repository: repo, issue: key(7), review }, w.ports(cache));
+  const one = await cachedRead(dir, save);
+  assert.deepEqual([one.state, one.id, w.posts], ['saved', '5101', 1]);
+  const two = await cachedRead(dir, save);
+  assert.deepEqual([two.state, two.id], ['saved', '5101'], 'the retry finds comment 101');
+  assert.equal(w.posts, 1, 'no second copy of the record');
 });

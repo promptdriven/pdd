@@ -352,7 +352,10 @@ leaves the list. The list stays in update order, newest first. `T` stays the
 same until the next full read, so the same URL with its ETag gets a 304 when
 nothing changed since the last tick. With one page, without a saved `T` or
 cached list, or after 6 hours, the tick makes a full read. A deleted or moved
-issue leaves the list at the next full read.
+issue leaves the list at the next full read. The issue list needs no
+[full-last-page](github-calls.prompt.md#full-last-page) rule: in update order,
+newest first, a new or changed issue changes the first page, and a changed page
+gives a fresh next page.
 HTTP 304 reuses metadata, not a model turn. On changed candidates only, fetch
 comments needed to identify trusted consent and filter their text. HTTP 429 is
 a rate limit; HTTP 403 counts only when the remaining allowance is zero or its
@@ -476,7 +479,10 @@ forward untrusted PR text. Cache details so unchanged ticks need no PR-detail qu
 Check submitted reviews for known related PRs on each tick, including when the
 issues list returns HTTP 304 and the issue and PR head are unchanged. Use
 conditional requests and revalidate each review page, following GitHub's next
-page links without truncation. A new trusted submission, identified by PR number
+page links without truncation. A saved
+[full last page](github-calls.prompt.md#full-last-page) (100 reviews and no next
+page) is read without its ETag: reviews come in ascending order, so that page
+keeps its ETag when review 101 arrives on a new page. A new trusted submission, identified by PR number
 and GitHub review ID, is unseen work and wakes the idle agent once. Include its
 identity, trusted author, submission metadata, state and body in the packet and
 fingerprint; unchanged repeats stay quiet. Reviews use the same trust and pending
