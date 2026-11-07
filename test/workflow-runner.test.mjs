@@ -297,7 +297,7 @@ for (const name of ['bug', 'feature']) {
     assert.equal((await f.run()).exitCode, 0);
     let run = f.record();
     assert.deepEqual(areas.map(([area]) => area), ['story', 'prompt-pr', 'code']);
-    assert.match(f.herdr.paneOf(run.chats[0]).commands[0], /^env PDD_AGENT_SESSION=1 PDD_BIN=\S+ codex --no-daemon --dangerously-bypass-approvals-and-sandbox -c 'projects=\{".+"=\{trust_level="trusted"\}\}' "\$\(cat '.+story-start\.md'\)"$/);
+    assert.match(f.herdr.paneOf(run.chats[0]).commands[0], /^env PDD_AGENT_SESSION=1 PDD_BIN=\S+ codex --no-daemon --dangerously-bypass-approvals-and-sandbox -c 'projects=\{".+"=\{trust_level="trusted"\}\}' -c 'shell_environment_policy\.set\.PDD_BIN="[^"]+"' -c 'shell_environment_policy\.set\.PDD_AGENT_SESSION="1"' "\$\(cat '.+story-start\.md'\)"$/);
     for (const [index, [area, steps]] of areas.entries()) {
       assert.equal(f.record().area, index); assert.equal(f.record().chats.at(-1).area, area);
       const optional = JSON.parse(readFileSync(join(packageRoot, `skills/pdd-${name}/workflow.json`), 'utf8')).areas[index].optional;
