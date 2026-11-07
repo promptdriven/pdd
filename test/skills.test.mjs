@@ -152,7 +152,7 @@ const RUNBOOK = () => readFileSync(join(skills, 'pdd-prompting/RUNBOOK.md'), 'ut
 // Every "section N" that a skill names, with the RUNBOOK title it must have. Add a row when a skill names a new section.
 const RUNBOOK_SECTIONS = { 11: '`pdd test`', 21: 'Fake the outside world', 2: 'The files', 3: 'Schema rules', 4: 'Expected values', 6: 'Command-line programs (`cli`)',
   7: 'A prompt that calls another prompt', 8: 'Check paths', 9: 'Money and dates', 10: 'AI calls', 12: '`pdd simulate` and Save as test', 13: 'Give your app a screen (app map)',
-  14: 'Bug workflow', 17: 'Code space: replay evidence and the formal check', 18: 'Patterns: a pure function and a state sequence' };
+  14: 'Bug workflow', 15: 'PR text', 17: 'Code space: replay evidence and the formal check', 18: 'Patterns: a pure function and a state sequence' };
 const section14 = () => RUNBOOK().slice(RUNBOOK().indexOf(`## 17. ${RUNBOOK_SECTIONS[17]}`));
 
 // Wrong (0.1.3 vectors): PR 2 tests drift from the approved PR 1 cases, or a failing case is hidden.
@@ -251,7 +251,9 @@ test('SKILLS16: check notes go to <run folder>/check.md, and every workflow runs
   for (const name of ['pdd-bug', 'pdd-feature']) {
     const check = read(`${name}/steps/check.md`);
     assert.match(check, /Write your notes to `<run folder>\/check\.md`, never to verify\.md\./, name);
-    assert.match(check, name === 'pdd-feature' ? /In your `done` summary put only every `Prompt tests \(<story>\): …` line/ : /Then put pdd test's `Prompt tests` line\(s\) and the report link\(s\)\./, name);
+    // #3042: the summary also carries the PR 1 fields (RUNBOOK §15), so the feature brief no longer says "put only".
+    assert.match(check, name === 'pdd-feature' ? /In your `done` summary put every `Prompt tests \(<story>\): …` line/ : /Then put pdd test's `Prompt tests` line\(s\) and the report link\(s\)\./, name);
+    assert.match(check, /PR 1 fields of RUNBOOK §15/, name);
   }
   assert.match(read('pdd-small-change/steps/change.md'), /`pdd test`[^\n]*Keep its notes out of verify\.md\./);
   // A question dialog (request_user_input) blocks the chat, and Herdr then refuses pdd's text, so `changes` fails.

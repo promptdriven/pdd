@@ -20,7 +20,7 @@ When the person asks you to report a problem with pdd itself, follow
 | File | What it holds |
 |---|---|
 | `prompts/<job>.prompt.md` | The program in plain English, then `## Dependencies`, then one Runtime interface block. |
-| `user_stories/<story>.md` | One story with a numbered `## Acceptance criteria` list. pdd skips index files: `PLAN.md`, `README.md` and any file with no `## Acceptance criteria` heading. |
+| `user_stories/<story>.md` | One story: first one line "As a …, I want …, so that …" in the words of the issue (the PR shows it as the user story), then a numbered `## Acceptance criteria` list. pdd skips index files: `PLAN.md`, `README.md` and any file with no `## Acceptance criteria` heading. |
 | `tests/<story>.json` | The test for that story. pdd finds it by its name and folder: `<story>.json` with a folder named `tests` or `test` anywhere in its path, not only as the direct parent (`tests/`, `test/runtime/`, `runtime/tests/`). pdd does not look inside other JSON files to find tests, and a test can have any size up to the upload limit (section 1). Every `.json` file in a `tests` or `test` folder named `<story>.json` or `<story>.<word>.json` is a test of that story, so give fixtures and other data files other names. If the repo's own tests are in `tests/` or `test/`, use `tests/runtime/` or `test/runtime/`. |
 
 **1 story = 1 test file = many cases.** Each case is one step. Steps run in order and share the saved data.
@@ -562,15 +562,37 @@ ticks. Ticks use the existing action/call budget.
 
 ## 15. PR text
 
-In a pdd workflow run, pdd writes the PR text. Its top starts with pdd's own lines that begin with "pdd result:",
-read from the saved `pdd test` and `pdd lint` results (or one "pdd result: none" line with pdd:no-verdict). Put the `Prompt tests` line(s)
-that `pdd test` prints, with their report links, in your check summary. pdd shows them below its own lines, each
-starting with `Agent note — not checked by pdd:`. One Story gives one line, `Prompt tests (<story>): …`. 2 or more
-Stories give one line each and a last `Prompt tests:` line for all. The link expires after 7 days. Anyone with the
-link can open it. Do not paste logs, warnings or full paths of this computer (`/Users/…`). PR 1 cannot merge while
-a prompt in it is still draft.
-> pdd result: pdd test (batch 20261103-120000-k3f9, 2026-11-03T12:00:00Z, source current): Prompt tests (place-order): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call; Report: https://…/r/617480ac-… (report links expire after 7 days)<br>
-> Agent note — not checked by pdd: Prompt tests (place-order): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call
+In a pdd workflow run, pdd writes the PR title and text. The top is for people: a status line (ready, waiting or
+blocked), the user story, a short summary, the cases, what changed, a table of checks (PR 1) or proof (PR 2) and
+one approval, next or merge line. pdd fills the status line and the tables only from its own records: saved `pdd test`
+and `pdd lint` results, the replay evidence (§17), the old-code proof, review.md, CI and the checker verdict. All
+the rest (pdd result lines, your step summaries, approvals, verify.md) stays whole in a closed "Details for tools
+and audits" section.
+
+Give pdd the human parts as labeled lines in your `done` summary, one per line. A later line with the same label
+replaces an earlier one, also from a later step of the same PR:
+
+| Label | PR 1 (prompt, Story and tests) | PR 2 (code) |
+|---|---|---|
+| `Title:` | what must be true | what is true after the merge |
+| `Problem:` | the wrong or missing behavior, in one sentence | kept from PR 1 |
+| `Cause:`, `Fix:`, `Result:` | — | one sentence each |
+| `Case:` | `Case: INPUT \| TODAY \| EXPECTED`, one line per issue case | `Case: INPUT \| BEFORE \| AFTER \| EXPECTED` |
+| `File:` | `File: PATH — NOTE`, at most one short note per file | the same |
+
+A one-PR run (small change) uses `Problem:`, `Change:` and `Result:`. Use `Area:` only when the owning prompt's
+name is not a good title area. PR 1's Verdict is the verdict line of §14. pdd writes "This PR", the user story (from
+the Story's "As a …" line, §2), the changed files and their +/− counts itself. Your words never fill a table: "CI is
+green" in a summary stays your words. Do not paste logs, warnings or full paths of this computer (`/Users/…`).
+PR 1 cannot merge while a prompt in it is still draft.
+
+```text
+Verdict: the prompt is right; the bug is only in the CODE.
+Before ✓ 6 of 6 criteria https://…/r/… → after ✓ 6 of 6 criteria https://…/r/…
+Prompt tests (format-price): ✓ 6 of 6 criteria · 6/6 checks · 6 AI calls
+Report (format-price): https://…/r/…
+Title: every price shows dollars and two cent digits
+```
 
 ## 16. Known limits today
 

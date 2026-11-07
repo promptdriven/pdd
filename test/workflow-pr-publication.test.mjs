@@ -5,6 +5,11 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import {pinReplayVectors} from '../src/workflow-replay.mjs';
+import { DETAILS_OPEN, detailsOf } from '../src/workflow-pr-body.mjs';
+
+// #3042: pdd's own body (evidence, steps, approvals, Verify) now sits in the closed Details section under the readable
+// part. Checks that start at the first line of pdd's body read that section.
+const pddPart = body => detailsOf(body)?.details ?? body;
 
 const packageRoot = resolve(import.meta.dirname, '..');
 const url = number => `https://github.com/example/project/pull/${number}`;
@@ -41,6 +46,7 @@ const remote=()=>{try{return cp.execFileSync('git',['ls-remote','origin','refs/h
 if(a[0]==='repo')out({nameWithOwner:'example/project',defaultBranchRef:{name:'main'},url:'https://github.com/example/project'});
 else if(a[1]==='list')out(s.prs.filter(p=>!a.includes('--head')||p.headRefName===flag('--head')).map(p=>({...p,headRefOid:remote()||p.headRefOid})));
 else if(a[1]==='view')out(s.prs.find(p=>p.url===a[2])||{body:''});
+else if(a[0]==='api'&&a.some(x=>x.includes('/comments')))out((s.comments||[]).map(c=>JSON.stringify(c)).join('\\n'));
 else if(a[1]==='create'||a[1]==='edit'){
  if(flag('--body-file')!=='-')throw Error('must read body from stdin');
  const body=fs.readFileSync(0,'utf8'),kind=a[1];s.events.push({kind,body,remote:remote(),head:commit()});
@@ -129,7 +135,7 @@ test('real prompt publication lifts cross-area labels and never adds machine pro
   const f = fixture(t, { prompt: true }); f.machine();
   const out = f.invoke('Not checked: formal\nNot fixed yet: diagnosis only\nReview: source reviewed');
   assert.equal(out.exitCode, 0, out.message); const body = f.data().prs[0].body;
-  assert.match(body, /^Agent note — not checked by pdd: Not fixed yet: `diagnosis only`\nAgent note — not checked by pdd: Not checked: `formal`\nAgent note — not checked by pdd: Defect: `broken value`\nAgent note — not checked by pdd: Review: `source reviewed`/);
+  assert.match(pddPart(body), /^Agent note — not checked by pdd: Not fixed yet: `diagnosis only`\nAgent note — not checked by pdd: Not checked: `formal`\nAgent note — not checked by pdd: Defect: `broken value`\nAgent note — not checked by pdd: Review: `source reviewed`/);
   assert.match(body, /Refs #17/); assert.doesNotMatch(body, /Old-code proof:|Closes #17|Part of #17/);
 });
 
@@ -160,7 +166,7 @@ test('real existing code PR retains pending after final edit fails and reports p
 test('real existing prompt PR refreshes labels on repeat publication', t => {
   const f = fixture(t, { existing: true, prompt: true }); f.change();
   const out = f.invoke('Not fixed yet: still diagnosing\nNot checked: external\nReview: updated'); assert.equal(out.exitCode, 0, out.message);
-  assert.match(f.data().prs[0].body, /^Agent note — not checked by pdd: Not fixed yet: `still diagnosing`\nAgent note — not checked by pdd: Not checked: `external`/);
+  assert.match(pddPart(f.data().prs[0].body), /^Agent note — not checked by pdd: Not fixed yet: `still diagnosing`\nAgent note — not checked by pdd: Not checked: `external`/);
   assert.match(f.data().prs[0].body, /Review: `updated`/); assert.match(f.data().prs[0].body, /Refs #17/);
   assert.doesNotMatch(f.data().prs[0].body, /Old-code proof:|Closes #17/);
 });
@@ -216,7 +222,7 @@ test('real PR1 approval synchronization refreshes note labels while preserving e
   const out = f.invoke('', 'approveRun');
   assert.equal(out.exitCode, 1, 'A person terminal declines; synchronization does not fabricate approval.');
   const body = f.data().prs[0].body;
-  assert.match(body, /^Agent note — not checked by pdd: Not fixed yet: `diagnosis only`\nAgent note — not checked by pdd: Not checked: `external`/); assert.match(body, /Review: `refreshed`/);
+  assert.match(pddPart(body), /^Agent note — not checked by pdd: Not fixed yet: `diagnosis only`\nAgent note — not checked by pdd: Not checked: `external`/); assert.match(body, /Review: `refreshed`/);
   assert.match(body, /Preserved reviewer prose/); assert.match(body, /^Refs #17$/m); assert.doesNotMatch(body, /Closes #17|Old-code proof:/);
   assert.ok(body.includes('Preserved reviewer prose.\nPart of #17\n'), 'Keep the ordinary issue-reference example and its context byte for byte.');
   const saved = JSON.parse(readFileSync(join(f.runDir, 'status.json'), 'utf8'));
@@ -255,7 +261,7 @@ test('PR1-REFRESH-PROSE: real approval synchronization preserves later ordinary 
   writeFileSync(join(f.runDir, 'review.md'), 'Review: refreshed');
   assert.equal(f.invoke('', 'approveRun').exitCode, 1);
   const body = f.data().prs[0].body;
-  assert.match(body, /^Agent note — not checked by pdd: Defect: `broken value`\nAgent note — not checked by pdd: Review: `refreshed`\n/);
+  assert.match(pddPart(body), /^Agent note — not checked by pdd: Defect: `broken value`\nAgent note — not checked by pdd: Review: `refreshed`\n/);
   assert.doesNotMatch(body, /Old-code proof:/);
   assert.ok(body.includes(example), 'Preserve the complete reviewer example, including fences and literal issue reference.');
   assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1);
@@ -277,7 +283,7 @@ for (const [kind, ordinary] of [
   const body = f.data().prs[0].body;
   assert.equal(f.data().events.filter(event => event.kind === 'edit').length, editsBefore + 1);
   assert.ok(body.includes(ordinary), 'Preserve the complete ordinary reviewer context when room remains.');
-  assert.match(body, /^Agent note — not checked by pdd: Not fixed yet: `diagnosis only`\nAgent note — not checked by pdd: Not checked: `external`\nAgent note — not checked by pdd: Defect: `broken value`\nAgent note — not checked by pdd: Review: `refreshed`\n\npdd result: none\. pdd has no pdd test or pdd lint result of its own for this run \(pdd:no-verdict\)\.\n\nRefs #17\n\n/);
+  assert.match(pddPart(body), /^Agent note — not checked by pdd: Not fixed yet: `diagnosis only`\nAgent note — not checked by pdd: Not checked: `external`\nAgent note — not checked by pdd: Defect: `broken value`\nAgent note — not checked by pdd: Review: `refreshed`\n\npdd result: none\. pdd has no pdd test or pdd lint result of its own for this run \(pdd:no-verdict\)\.\n\nRefs #17\n\n/);
   assert.doesNotMatch(body, /Review: old|Closes #17|Old-code proof:/);
   assert.equal(body.split(marker).length - 1, 1);
   assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1);
@@ -299,7 +305,7 @@ test('PR1-REFRESH-RETENTION: bounded synchronization counts omitted failures and
   assert.equal(f.invoke('', 'approveRun').exitCode, 1);
   const body = f.data().prs[0].body;
   assert.ok([...body].length <= 60000);
-  assert.match(body, /^Agent note — not checked by pdd: Defect: `broken value`/);
+  assert.match(pddPart(body), /^Agent note — not checked by pdd: Defect: `broken value`/);
   assert.doesNotMatch(body, /stale owned label|stale owned review|Part of #17|Closes #17/);
   assert.match(body, /^Refs #17$/m); assert.match(body, /Evidence omitted: \d+ labels, [1-9]\d* failure lines, [1-9]\d* report references/);
   const omitted = /Evidence omitted: (\d+) labels, (\d+) failure lines, (\d+) report references/.exec(body).slice(1).map(Number);
@@ -460,19 +466,100 @@ test('PRSUM-UNICODE: a cut never splits a character or a URL', t => {
   assert.ok(count); assert.equal([...build.lines[0]].length + Number(count[1].replaceAll(',', '')), [...summary].length);
 });
 
-for (const prompt of [false, true]) test(`PRTITLE: a ${prompt ? 'PR 1' : 'code PR'} title is whole when it fits and cut in sight when it does not`, t => {
-  const suffix = prompt ? ' (prompt and Story)' : ' (code)';
-  const fits = fixture(t, { prompt }); fits.run.issue.title = 'b'.repeat(256 - suffix.length); fits.save();
+// #3042: titles were "ISSUE TITLE (prompt and Story)" and "ISSUE TITLE (code)". Now they say the kind, the area and the part:
+// "spec(area): … (#N · part 1: spec)" and "fix(area): … (#N · part 2: fix)", and only the statement is cut.
+for (const prompt of [false, true]) test(`PRTITLE: a ${prompt ? 'PR 1' : 'code PR'} title names its kind, area and part, and is cut in sight when it does not fit`, t => {
+  const prefix = prompt ? 'spec(small-change): ' : 'fix(small-change): ', suffix = prompt ? ' (#17 · part 1: spec)' : ' (#17 · part 2: fix)';
+  const fits = fixture(t, { prompt }); fits.run.issue.title = 'b'.repeat(256 - prefix.length - suffix.length); fits.save();
   assert.equal(fits.invoke('complete').exitCode, 0);
-  assert.equal(fits.data().prs[0].title, fits.run.issue.title + suffix, 'A title that fits GitHub\'s limit is kept whole.');
-  const over = fixture(t, { prompt }); over.run.issue.title = 'b'.repeat(257 - suffix.length); over.save();
+  assert.equal(fits.data().prs[0].title, prefix + fits.run.issue.title + suffix, 'A title that fits GitHub\'s limit is kept whole.');
+  const over = fixture(t, { prompt }); over.run.issue.title = 'b'.repeat(257 - prefix.length - suffix.length); over.save();
   assert.equal(over.invoke('complete').exitCode, 0);
   const cut = over.data().prs[0].title;
-  assert.ok(cut.length <= 256 && cut.endsWith(` …${suffix}`) && cut.startsWith('b'.repeat(200)), cut);
+  assert.ok(cut.length <= 256 && cut.endsWith(` …${suffix}`) && cut.startsWith(prefix + 'b'.repeat(150)), cut);
   const emoji = fixture(t, { prompt }); emoji.run.issue.title = '😀'.repeat(150); emoji.save();
   assert.equal(emoji.invoke('complete').exitCode, 0);
   const title = emoji.data().prs[0].title;
-  assert.ok(title.length <= 256 && title.endsWith(` …${suffix}`), title); assert.doesNotMatch(title, loneSurrogate);
+  assert.ok(title.length <= 256 && title.startsWith(prefix) && title.endsWith(` …${suffix}`), title); assert.doesNotMatch(title, loneSurrogate);
+  const named = fixture(t, { prompt }); assert.equal(named.invoke('Title: the value is two\nArea: Value').exitCode, 0);
+  assert.equal(named.data().prs[0].title, `${prompt ? 'spec' : 'fix'}(value): the value is two${suffix}`, 'The agent\'s Title and Area fields name the PR.');
+});
+
+// #3042: the readable part through the real publication path. Agent words reach only the Summary, the cases and the file
+// notes; the tables come from pdd's records; every machine line stays in the one closed Details section.
+const JARGON = /Agent note|not checked by pdd|OWNER-HANDOFF|overlay|batch|request|pdd-workflow|only when the person asks/i;
+test('READABLE-PR1: PR 1 opens with the user story, the agent fields and a checks table from pdd records; Details keep the rest', t => {
+  const f = fixture(t, { prompt: true });
+  mkdirSync(join(f.root, 'user_stories'));
+  writeFileSync(join(f.root, 'user_stories', 'value.md'), '# Value\n\nAs a maintainer, I want the value to be two,\nso that the report adds up.\n\n## Acceptance criteria\n\n1. The value is two.\n');
+  f.git('add', '.'); f.git('commit', '-qm', 'story');
+  const out = f.invoke('Problem: the value is one.\nCase: value | 1 | 2\nFile: user_stories/value.md — the rule\nPrompt tests (value): ✓ 9 of 9 criteria · 9/9 checks\nCI: green; checker PASS');
+  assert.equal(out.exitCode, 0, out.message);
+  const pr = f.data().prs[0], [visible, rest] = pr.body.split(DETAILS_OPEN);
+  assert.equal(pr.title, 'spec(value): Repair value (#17 · part 1: spec)');
+  assert.ok(visible.startsWith('⏳ Waiting for CI\n\n## User story\n\nAs a maintainer, I want the value to be two, so that the report adds up.\n\n## Summary\n'), visible);
+  assert.match(visible, /- \*\*Problem:\*\* the value is one\.\n- \*\*This PR:\*\* It holds the Story and 1 other file \(not prompts, Stories or tests\)\./);
+  assert.match(visible, /\| value \| 1 \| 2 \|/); assert.match(visible, /## What changed \(\+\d+ −\d+, 2 files\)/); assert.match(visible, /- `user_stories\/value\.md`: the rule/);
+  assert.match(visible, /\| Prompt tests \(`pdd test`\) \| no pdd result \(`pdd:no-verdict`\) \|/);
+  assert.doesNotMatch(visible, /9 of 9|green|PASS/, 'Agent claims never fill the checks table.'); assert.doesNotMatch(visible, JARGON);
+  assert.match(visible, /\*\*Next:\*\* The code PR starts when you ask for it\. Part of #17\./);
+  for (const kept of ['Agent note — not checked by pdd: Defect: `broken value`', 'Agent note — not checked by pdd: Prompt tests (value)', 'Part of #17', 'Made with `pdd workflow run small-change`.', '## Steps', FULL])
+    assert.ok(rest.includes(kept), `Details keep ${kept}`);
+  assert.equal(pr.body.split(DETAILS_OPEN).length, 2); assert.ok(pr.body.includes('\n</details>\n\n<!-- pdd-workflow:publication-17:prompt-pr -->\n'));
+  assert.equal((pr.body.match(/pdd-workflow:/g) ?? []).length, 1); assert.ok([...pr.body].length <= 60000);
+});
+
+test('READABLE-STORY: without an "As a …" line PR 1 has no User story section and Details say why', t => {
+  const f = fixture(t, { prompt: true });
+  mkdirSync(join(f.root, 'user_stories')); writeFileSync(join(f.root, 'user_stories', 'value.md'), '# Value\n\nThe value is two.\n\n## Acceptance criteria\n\n1. Two.\n');
+  f.git('add', '.'); f.git('commit', '-qm', 'story');
+  assert.equal(f.invoke('check done').exitCode, 0);
+  const body = f.data().prs[0].body, [visible] = body.split(DETAILS_OPEN);
+  assert.doesNotMatch(visible, /## User story/);
+  assert.match(detailsOf(body).details, /^User story: user_stories\/value\.md has no "As a …, I want …, so that …" line, so this PR has no User story section\.$/m);
+});
+
+test('READABLE-CODE: the code PR proof table reads the old-code proof and review.md, never the agent\'s claims', t => {
+  const f = fixture(t); f.machine();
+  const out = f.invoke('Problem: the value is one.\nCause: an old constant.\nFix: set it to two.\nResult: CI green; checker PASS; formal Proved (bounded).\nCase: value | 1 | 2 | 2\nReview: no must-fix');
+  assert.equal(out.exitCode, 0, out.message);
+  const pr = f.data().prs[0], [visible] = pr.body.split(DETAILS_OPEN), proof = visible.slice(visible.indexOf('## Proof'));
+  assert.equal(pr.title, 'fix(small-change): Repair value (#17 · part 2: fix)');
+  assert.match(visible, /- \*\*Cause:\*\* an old constant\.\n- \*\*Fix:\*\* set it to two\.\n- \*\*Result:\*\* CI green; checker PASS; formal Proved \(bounded\)\./);
+  assert.match(visible, /\| value \| 1 \| 2 \| 2 ✓ \|/);
+  assert.match(proof, /\| Regression tests \(old-code proof\) \| ✓ pass \| ✗ fail \(as expected\) \|/);
+  assert.match(proof, /\| Formal check \| Not recorded: pdd has no formal result for this run \(see Details\) \| — \|/);
+  assert.match(proof, /\| Full test suite \(CI\) on this commit \| ⏳ pending \| — \|/); assert.match(proof, /\| Fresh review \| no must-fix \| — \|/);
+  assert.doesNotMatch(proof, /green|PASS|Proved/, 'Agent claims never fill a proof row.');
+  assert.match(visible, /\*\*Merge:\*\* waiting for a person to merge\. Closes #17\./); assert.doesNotMatch(visible, JARGON);
+  assert.match(detailsOf(pr.body).details, /^Old-code proof: ✓ /m, 'The machine proof line stays in Details.');
+});
+
+test('READABLE-CHECKS: an existing code PR update reads CI and the checker verdict for the pushed head', t => {
+  const verdict = (head, word = 'PASS', author = 'OWNER') => ({ author_association: author, html_url: 'https://github.com/example/project/pull/23#issuecomment-1', created_at: '2026-11-06T12:00:00Z', body: `Checked.\n\n\`\`\`json\n${JSON.stringify({ verdict: word, head, risk: 2 })}\n\`\`\`` });
+  for (const trusted of [false, true]) {
+    const f = fixture(t, { existing: true }); f.machine(); const next = f.change();
+    const prs = f.data().prs; prs[0].statusCheckRollup = [{ conclusion: 'SUCCESS' }];
+    f.configure({ prs, comments: trusted ? [verdict(next)] : [verdict(f.head), verdict(next, 'FAIL', 'NONE')] });
+    const out = f.invoke('Review: no must-fix'); assert.equal(out.exitCode, 0, out.message);
+    const [visible] = f.data().prs[0].body.split(DETAILS_OPEN);
+    assert.match(f.data().events[0].body, /^⏳ Waiting for the source to be published$/m, 'The description before the push says it is pending.');
+    assert.match(visible, /\| Full test suite \(CI\) on this commit \| ✓ green \| — \|/);
+    if (trusted) { assert.match(visible, /\| Independent checker \| ✓ PASS \| — \|/); assert.equal(visible.split('\n')[0], '✅ Ready to merge'); }
+    else assert.match(visible, /\| Independent checker \| — \(a person reviews\) \| — \|/, 'A verdict for an older head or from an untrusted author does not count.');
+  }
+});
+
+test('READABLE-REFRESH: an older PR 1 description gets the readable part once, and a second refresh keeps one', t => {
+  const f = fixture(t, { existing: true, prompt: true }); awaitingCode(f);
+  for (let round = 0; round < 2; round++) {
+    assert.equal(f.invoke('', 'approveRun').exitCode, 1);
+    const body = f.data().prs[0].body;
+    assert.equal(body.split(DETAILS_OPEN).length, 2, `Round ${round + 1} has one Details section.`);
+    assert.equal(body.split('\n').filter(line => /^(?:⏳|⛔|✅) /.test(line)).length, 1, 'One status line.');
+    assert.equal(body.split('\n').filter(line => line === '## Checks').length, 1, 'One readable part.');
+    assert.doesNotMatch(body, /PR 1 of this run|only when the person asks/);
+  }
 });
 
 const stepsList = body => body.split('\n## Steps\n')[1].split('\n\n')[0];
@@ -501,14 +588,14 @@ test('PR1-REFRESH-SUMMARIES: a PR 1 update shortens the full summaries again and
   assert.equal(f.data().events.filter(event => event.kind === 'edit').length, edits + 1);
   const body = f.data().prs[0].body, items = sectionItems(fullSection(body)), scope = items.find(item => item.step === 'scope');
   assert.ok([...body].length <= 60000, `The whole description has ${[...body].length} characters.`);
-  assert.match(body, /^Agent note — not checked by pdd: Not checked: `y{400}`$/m); assert.equal(stepsList(body), stepsList(before), 'The Steps list is not cut.');
+  assert.match(pddPart(body), /^Agent note — not checked by pdd: Not checked: `y{400}`$/m); assert.equal(stepsList(body), stepsList(before), 'The Steps list is not cut.');
   assert.deepEqual(items.find(item => item.step === 'check').lines, ['check done']);
   assert.equal(scope.after, ' …'); assert.ok(S.startsWith(scope.lines[0]) && scope.lines[0].length < kept.lines[0].length, 'The block is shortened first.');
   const notice = body.split('\n').find(row => /step summar(?:y was|ies were) shortened to fit the PR size limit/.test(row)), count = /scope \(([\d,]+) characters left out\)/.exec(notice ?? '');
   assert.ok(count && body.indexOf(notice) < body.indexOf(FULL), `One true notice above the block: ${notice}`);
   assert.equal([...scope.lines[0]].length + Number(count[1].replaceAll(',', '')), [...S].length, 'The notice counts what this description leaves out.');
   assert.doesNotMatch(body, /not shown here/); assert.doesNotMatch(outsideCode(body), /@octocat|Fixes #2789|<details open/);
-  assert.equal(outsideCode(body).split('<details').length - 1, 1); assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1);
+  assert.equal(outsideCode(pddPart(body)).split('<details').length - 1, 1); assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1);
 });
 
 test('PR1-REFRESH-CODE-TAGS: a tag inside a code span does not fold the rest of a long PR 1 description', t => {
@@ -590,12 +677,13 @@ test('#2596 PR1 refresh removes a deleted runtime scenario from its contents des
   writeFileSync(join(f.root,'tests/release.json'),JSON.stringify({schema_version:'prompt-runtime.program-scenario.v1',story_path:'user_stories/release.md',criteria:[],steps:[]}));
   f.git('add','.');f.git('commit','-qm','add scenario');
   assert.equal(f.invoke(currentRuntime).exitCode,0);
-  assert.match(f.data().prs[0].body,/PR 1 of this run: the prompt, Story and test cases/);
+  // #3042: the readable Summary's "This PR" line (from the current Git diff) replaced the old "PR 1 of this run: …" sentence.
+  assert.match(f.data().prs[0].body,/^- \*\*This PR:\*\* [^\n]*1 test file/m);
   f.git('rm','tests/release.json');f.git('commit','-qm','remove scenario');
   assert.equal(f.invoke('refreshed').exitCode,0);
   const body=f.data().prs[0].body;
-  assert.match(body,/PR 1 of this run: the prompt and the Story\./);
-  assert.doesNotMatch(body,/PR 1 of this run: the prompt, Story and test cases|^Prompt tests.*✓/m);
+  assert.match(body,/^- \*\*This PR:\*\* /m);
+  assert.doesNotMatch(body,/^- \*\*This PR:\*\* [^\n]*test file|PR 1 of this run|^Prompt tests.*✓/m);
 });
 
 for(const change of ['identical','prompt','dependency','deleted']) test(`#2596 selected-source receipt publication after ${change} content`, async t=>{

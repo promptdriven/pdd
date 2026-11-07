@@ -69,7 +69,9 @@ Optional `ports.execFile(file,args,{cwd})` returns or resolves `{stdout,stderr?,
 
 ## PR status for the runner
 
-`readWorkflowPrStatus({cwd,url},ports)` reads one PR with `gh pr view <url> --json state,mergedAt,statusCheckRollup` and returns `{state,ci}`. `state` is open, merged or closed. `ci` is none, pending, passing or failing: any failed, cancelled or timed-out check is failing; else any check not complete is pending; else passing when there are checks. A read failure returns `{state:'unknown',ci:'unknown'}`. It never writes.
+`readWorkflowPrStatus({cwd,url},ports)` reads one PR with `gh pr view <url> --json state,mergedAt,statusCheckRollup,baseRefName` and returns `{state,ci}`, plus `base` (the PR's base branch name) when GitHub gives one. `state` is open, merged or closed. `ci` is none, pending, passing or failing: any failed, cancelled or timed-out check is failing; else any check not complete is pending; else passing when there are checks. A read failure returns `{state:'unknown',ci:'unknown'}`. It never writes.
+
+`readWorkflowPrChecker({cwd,url,headSha},ports)` reads the independent checker verdict for one PR head, for the [readable PR part](workflow-pr-body.prompt.md). It reads the PR's issue comments with `gh api --paginate repos/OWNER/REPO/issues/N/comments?per_page=100 --jq '.[] | {body, author_association, html_url, created_at}'` and accepts only comments whose author association is OWNER, MEMBER or COLLABORATOR. In each fenced JSON block (` ```json ` or ` ``` `) it accepts an object whose `verdict` is `PASS`, `FAIL` or `NOT SURE` and whose `head` equals `headSha` (40 hex characters, case-insensitive). It returns the newest such verdict as `{verdict,url}` (url is the comment's link or null), or null for an invalid URL or head, no verdict, or any read problem. Unparseable lines and blocks are skipped. It never writes.
 
 ## Dependencies
 

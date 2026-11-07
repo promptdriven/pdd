@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { detailsOf } from '../src/workflow-pr-body.mjs';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -54,11 +55,13 @@ function exactWords(f, expected) {
   });
   return state;
 }
-function bounded(body, expectedWords, { code = false } = {}) {
-  assert.equal(typeof body, 'string', 'successful publication supplies a description');
-  const size = [...body].length;
+function bounded(whole, expectedWords, { code = false } = {}) {
+  assert.equal(typeof whole, 'string', 'successful publication supplies a description');
+  const size = [...whole].length;
   assert.ok(size <= 60000, `complete published description has ${size} Unicode code points; maximum 60000`);
-  assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1, 'one canonical ownership marker');
+  assert.equal((whole.match(/pdd-workflow:/g) ?? []).length, 1, 'one canonical ownership marker');
+  // #3042: pdd's own body (evidence, approvals, Steps) sits in the Details section under the readable part; its order rules apply there.
+  const body = detailsOf(whole)?.details ?? whole;
   const rows = body.split('\n').filter(row => /^Approved in (?:chat|terminal|area chat):/.test(row));
   const omission = body.match(/(\d+) approval evidence records? omitted/i);
   assert.ok(omission, 'budget omission explicitly names and counts omitted approval evidence records');

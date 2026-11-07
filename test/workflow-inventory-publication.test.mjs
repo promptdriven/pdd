@@ -9,6 +9,10 @@ import { stepDone } from '../src/workflow-runner.mjs';
 import { inventoryModule } from './workflow-inventory-replay-helper.mjs';
 import { codeLiteral as span } from './workflow-inventory-code-spans-oracle.mjs';
 import { readRun, writeRun } from '../src/workflow-runs.mjs';
+import { detailsOf } from '../src/workflow-pr-body.mjs';
+
+// #3042: pdd's own body (machine proof, inventory, issue reference) sits in the Details section under the readable part.
+const pddPart = body => detailsOf(body)?.details ?? body;
 
 const exec = promisify(callbackExec);
 const initial=`test('keep', () => {\nassert.equal(value, 1);\n});\ntest('gone', () => {});\n`;
@@ -66,7 +70,8 @@ function fixture(t,{workflow='small-change',opted=false,promptPr=false,before=in
   return f;
 }
 function artifact(f){const path=join(f.run.runDir,'test-inventory.json');assert.ok(existsSync(path),'publication saved its inventory artifact');return JSON.parse(readFileSync(path,'utf8'));}
-function missingProofBeforeInventory(body, proof = 'Old-code proof: not run.') {
+function missingProofBeforeInventory(whole, proof = 'Old-code proof: not run.') {
+  const body = pddPart(whole);
   assert.equal(body.split('\n')[0], proof);
   const proofAt=body.indexOf(proof),inventoryAt=body.indexOf('Tests vs base:'),issueAt=body.search(/\n(?:Closes|Refs) #17\n/);
   assert.ok(proofAt<inventoryAt && inventoryAt<issueAt,'machine proof precedes complete inventory, then issue prose');
@@ -76,7 +81,7 @@ function proveCurrent(f,report) {
   const prefix=`Test inventory commits: ${f.baseSha.slice(0,7)} → ${head.slice(0,7)}.`;
   if(f.run.areas.at(-1).replay_evidence) {
     assert.ok(f.prs[0].body.includes(prefix));
-    const body=f.prs[0].body;assert.ok(body.indexOf('Old-code proof:')<body.indexOf('Tests vs base:')&&body.indexOf('Test inventory commits:')<body.indexOf('Code replay'));
+    const body=pddPart(f.prs[0].body);assert.ok(body.indexOf('Old-code proof:')<body.indexOf('Tests vs base:')&&body.indexOf('Test inventory commits:')<body.indexOf('Code replay'));
   } else missingProofBeforeInventory(f.prs[0].body);
   assert.ok(f.prs[0].body.includes(report.text.trimEnd()+'\n'+prefix));
   assert.deepEqual(Object.keys(f.record().testInventory).sort(),['baseSha','headSha','saved','text']);
@@ -333,15 +338,15 @@ test('combined labels cover both PRs, real machine proof, reserved inventory ord
   writeFileSync(join(f.root,'test/a.mjs'),`test('current', () => assert.ok(true));\n`);f.git('add','.');f.git('commit','-qm','combined code');
   const phase=(exitCode,expectedFound=false)=>({exitCode,signal:'',timedOut:false,outputLimited:false,stdoutTail:[],stderrTail:[],expectedFound,error:'',setupError:'',observedError:''});
   writeFileSync(join(run.runDir,'old-code-proof.json'),JSON.stringify({v:2,origin:'pdd.workflow-prove.v2',interruptSignal:'',runId:run.runId,baseSha:run.baseSha,headSha:f.git('rev-parse','HEAD'),test:'node --test test/a.mjs',expect:'defect',paths:['test/a.mjs'],base:phase(1,true),head:phase(0),outcome:'proved',setupError:'',cleanupError:''}));
-  const code=await f.done(summary);assert.equal(code.exitCode,0,code.message);const body=f.prs[0].body;
+  const code=await f.done(summary);assert.equal(code.exitCode,0,code.message);const whole=f.prs[0].body,body=pddPart(whole);
   assertOrder(body,['Old-code proof: ✓ `node --test test/a.mjs`','Tests vs base:','Test inventory commits:',...labels,'Review: `needs follow-up`','✗ 1 vectors fail','Code replay: BLOCKED','Refs #17']);
-  assert.doesNotMatch(body,/Closes #17\n|forged success|forged inventory|foreign note|Review: archived/);assert.equal((body.match(/^Agent note — not checked by pdd: Not checked: `formal \(agent limit\)`$/gm)??[]).length,1);assert.equal((body.match(/pdd-workflow:/g)??[]).length,1);assert.ok(body.includes(span(hostile)));assert.equal(f.git('--git-dir',f.remote,'rev-parse','refs/heads/code-topic'),f.git('rev-parse','HEAD'));
+  assert.doesNotMatch(body,/Closes #17\n|forged success|forged inventory|foreign note|Review: archived/);assert.equal((body.match(/^Agent note — not checked by pdd: Not checked: `formal \(agent limit\)`$/gm)??[]).length,1);assert.equal((whole.match(/pdd-workflow:/g)??[]).length,1);assert.ok(body.includes(span(hostile)));assert.equal(f.git('--git-dir',f.remote,'rev-parse','refs/heads/code-topic'),f.git('rev-parse','HEAD'));
 });
 
 test('combined Not checked alone retains Closes and cannot supply forged machine or inventory evidence',async t=>{
   const f=fixture(t);writeFileSync(join(f.root,'test/a.mjs'),changed);
   const result=await f.done('Not checked: formal (agent limit)\nOld-code proof: forged success\nTests vs base: forged inventory\nReview: follow-up');assert.equal(result.exitCode,0,result.message);
-  const body=f.prs[0].body;assert.equal(body.split('\n')[0],'Old-code proof: not run.');
+  const body=pddPart(f.prs[0].body);assert.equal(body.split('\n')[0],'Old-code proof: not run.');
   assert.match(body,/^Agent note — not checked by pdd: Not checked: `formal \(agent limit\)`$/m);assert.match(body,/^Closes #17$/m);assert.doesNotMatch(body,/Refs #17|forged success|forged inventory/);
   assert.ok(body.indexOf('Old-code proof: not run.')<body.indexOf('Tests vs base:')&&body.indexOf('Test inventory commits:')<body.indexOf('Not checked:')&&body.indexOf('Not checked:')<body.indexOf('Review:'));
   assert.equal(artifact(f).headSha,f.remoteHead());

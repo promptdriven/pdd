@@ -289,7 +289,7 @@ export async function readWorkflowPrStatus(input, ports = {}) {
   try {
     const { cwd, url } = structuredClone(input ?? {});
     if (!text(url) || !/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/[1-9][0-9]*$/.test(url)) fail('workflow_github_pr_url_invalid');
-    const row = parseJson(await dependencies(ports).command(cwd, 'gh', ['pr', 'view', url, '--json', 'state,mergedAt,statusCheckRollup']));
+    const row = parseJson(await dependencies(ports).command(cwd, 'gh', ['pr', 'view', url, '--json', 'state,mergedAt,statusCheckRollup,baseRefName']));
     const state = { OPEN: 'open', MERGED: 'merged', CLOSED: 'closed' }[row?.state];
     if (!state) fail('workflow_github_pr_state_invalid');
     const checks = Array.isArray(row.statusCheckRollup) ? row.statusCheckRollup : [];
@@ -297,6 +297,30 @@ export async function readWorkflowPrStatus(input, ports = {}) {
     const ci = !checks.length ? 'none'
       : checks.some(check => ['FAILURE', 'CANCELLED', 'TIMED_OUT', 'ERROR', 'ACTION_REQUIRED', 'STARTUP_FAILURE'].includes(outcome(check))) ? 'failing'
       : checks.some(check => !['SUCCESS', 'NEUTRAL', 'SKIPPED'].includes(outcome(check))) ? 'pending' : 'passing';
-    return { state, ci };
+    return { state, ci, ...(text(row.baseRefName) ? { base: row.baseRefName } : {}) };
   } catch { return { state: 'unknown', ci: 'unknown' }; }
+}
+
+// The latest independent checker verdict (pdd-check) for one PR head: a JSON block with verdict PASS, FAIL or NOT SURE
+// and the exact head SHA, in a comment by the repository owner, a member or a collaborator. Any doubt gives null.
+export async function readWorkflowPrChecker(input, ports = {}) {
+  try {
+    const { cwd, url, headSha } = structuredClone(input ?? {});
+    const match = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/([1-9][0-9]*)$/.exec(String(url ?? ''));
+    if (!match || !/^[a-f0-9]{40}$/i.test(String(headSha ?? ''))) return null;
+    const output = await dependencies(ports).command(cwd, 'gh', ['api', '--paginate', `repos/${match[1]}/${match[2]}/issues/${match[3]}/comments?per_page=100`, '--jq', '.[] | {body, author_association, html_url, created_at}']);
+    let latest = null;
+    for (const line of output.split('\n').filter(row => row.trim())) {
+      let comment;
+      try { comment = JSON.parse(line); } catch { continue; }
+      if (!['OWNER', 'MEMBER', 'COLLABORATOR'].includes(comment?.author_association) || typeof comment.body !== 'string') continue;
+      for (const block of comment.body.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)) {
+        let check;
+        try { check = JSON.parse(block[1]); } catch { continue; }
+        if (!['PASS', 'FAIL', 'NOT SURE'].includes(check?.verdict) || String(check.head ?? '').toLowerCase() !== headSha.toLowerCase()) continue;
+        if (!latest || String(comment.created_at ?? '') >= latest.at) latest = { verdict: check.verdict, url: text(comment.html_url) ? comment.html_url : null, at: String(comment.created_at ?? '') };
+      }
+    }
+    return latest && { verdict: latest.verdict, url: latest.url };
+  } catch { return null; }
 }
