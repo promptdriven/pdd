@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-alerts.prompt.md (sha256: 3629be959019e794b3d5dce98f7352a43b7efbd14fdb5668f10b23b23649fe20).
+// Generated from prompts/cli/autopilot-alerts.prompt.md (sha256: 908a5a62afd039ae532cf73e6aa60d99a868a5e79b7aa69842447fa095c2b343).
 import * as nativeFs from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
@@ -50,9 +50,12 @@ const recordFile = (repo, env, ports) => {
 const STATE_FILE = /^[0-9a-f]{20}\.json$/;
 const hostName = ports => oneLine((ports.hostname ?? osHostname)()) || 'unknown host';
 // The launcher saves the coordinator's machine name once; a host name can change (macOS renames hosts), the saved name does not.
-function machineName(fs, root, repo, ports) {
+// This checkout's own state (the launcher's id for its Git top level) comes first, so machines that share one home keep their own incidents.
+function machineName(fs, root, repo, ports, cwd) {
   try {
-    for (const name of fs.readdirSync(root).filter(name => STATE_FILE.test(name)).sort()) {
+    const own = `${createHash('sha256').update(String(cwd)).digest('hex').slice(0, 20)}.json`;
+    const names = fs.readdirSync(root).filter(name => STATE_FILE.test(name)).sort();
+    for (const name of [...names.filter(name => name === own), ...names.filter(name => name !== own)]) {
       let state;
       try { state = JSON.parse(fs.readFileSync(join(root, name), 'utf8')); } catch { continue; }
       const saved = typeof state?.repo === 'string' && state.repo.toLowerCase() === repo.toLowerCase() && typeof state.machine === 'string' ? clip(oneLine(state.machine), 100) : '';
@@ -247,7 +250,7 @@ async function sendAlert(input, ports, env, fs) {
   try { repo = (await (ports.repository ?? nativeRepository)({ cwd: input.cwd }))?.nameWithOwner; } catch { /* Checked below. */ }
   if (!repoName(repo)) return done(1, 'Autopilot alerts need a GitHub repository; run pdd autopilot alert in its checkout.');
   const file = recordFile(repo, env, ports), record = readRecord(fs, file) ?? { v: 1, repo, incidents: {}, log: [] };
-  const at = new Date((ports.now ?? Date.now)()).toISOString(), host = machineName(fs, stateRoot(env, ports), repo, ports);
+  const at = new Date((ports.now ?? Date.now)()).toISOString(), host = machineName(fs, stateRoot(env, ports), repo, ports, input.cwd);
   const destination = readDestination(fs, env, ports), number = Number(issue);
   const confirmer = destination?.service === 'discord-bot' ? 'the Discord bot readback' : 'the webhook';
   const send = text => destination ? deliver(destination, text, ports, input.cwd) : { result: 'not-configured' };

@@ -420,6 +420,19 @@ test('the machine in an incident is the coordinator\'s saved machine name, so a 
   f.noSecret();
 });
 
+test('the machine name comes from this checkout\'s launcher state first, so machines that share one home keep their own incidents', async t => {
+  const f = setup(t);
+  await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);
+  mkdirSync(f.ports.stateRoot, { recursive: true });
+  // Another checkout of the same repository on another machine; its state file sorts first.
+  writeFileSync(join(f.ports.stateRoot, `${'0'.repeat(20)}.json`), JSON.stringify({ repo: 'owner/repo', enabled: true, machine: 'machine-a' }));
+  writeFileSync(join(f.ports.stateRoot, `${createHash('sha256').update(f.cwd).digest('hex').slice(0, 20)}.json`), JSON.stringify({ repo: 'owner/repo', enabled: true, machine: 'machine-b' }));
+  f.replies.push(echo);
+  await f.alert(51, 'usage-limit', usage);
+  assert.match(f.requests[0].body.content, /^PDD Autopilot alert: usage-limit \(machine-b\)\n/);
+  f.noSecret();
+});
+
 test('a delivered alerts test ends the status line of an older failed recovery; an open undelivered alert still shows', async t => {
   const f = setup(t);
   await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);

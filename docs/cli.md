@@ -141,8 +141,8 @@ and what it needs. Answer on the GitHub issue, so the answer stays with the run.
 A usage limit or a resource failure is one incident for the repository and
 machine, so a limit that blocks 5 runs sends one alert. A call for another
 blocked issue adds that issue to the incident and sends nothing. The machine is
-the name that Autopilot saved at its first start, else the host name, so a host
-rename does not open a new incident. An access or spending decision, a product
+the name that Autopilot saved at its first start (this checkout's start first),
+else the host name, so a host rename does not open a new incident. An access or spending decision, a product
 decision or a stuck issue is one incident per issue. A repeat call sends
 nothing for a delivered or unconfirmed alert, and sends again an alert that
 failed or had no destination. `--update` sends a material change or the new

@@ -150,14 +150,18 @@ fails, read a `github.com` owner and name from the `origin` remote. If both fail
 exit 1. The issue link is `https://github.com/OWNER/REPO/issues/N`. HOST is the
 machine name of the alert:
 
-- the `machine` value of the coordinator's saved launcher state: the first
-  `<state root>/<20 hex>.json` file, in file-name order, whose `repo` is this
-  repository (ignoring case) and whose `machine` is a nonblank string;
+- the `machine` value of the coordinator's saved launcher state: first this
+  checkout's own state file (the launcher's id: the first 20 hex characters of
+  the SHA-256 of `cwd`, which is the Git top level for the coordinator), then
+  the other `<state root>/<20 hex>.json` files in file-name order. Use the first
+  one whose `repo` is this repository (ignoring case) and whose `machine` is a
+  nonblank string;
 - else this machine's host name.
 
 The launcher saves `machine` once, at the first start. A host name can change,
 for example when macOS renames the host on a network change. The saved name does
-not change, so a repeat after a rename finds the same incident.
+not change, so a repeat after a rename finds the same incident. This checkout's
+state comes first, so two machines that share one home keep their own incidents.
 
 An alert or update has these lines:
 
