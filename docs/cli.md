@@ -10,9 +10,9 @@ Typing `pdd check` or `pdd try` runs nothing and prints the name of the command 
 
 | Command | What it does |
 |---|---|
-| `pdd setup` | Install the five [PDD skills](USAGE.md#4-the-pdd-skills) when they are missing, and say where. Then add or update the short PDD block (7 lines, between `<!-- pdd:start -->` and `<!-- pdd:end -->`) in `CLAUDE.md` of this folder, else in `AGENTS.md`. If neither exists, make `AGENTS.md`. Repeat setup keeps an existing Autopilot mode |
+| `pdd setup` | Install the five [PDD skills](USAGE.md#4-the-pdd-skills) when they are missing, and say where. Then add or update the short PDD block (7 lines, between `<!-- pdd:start -->` and `<!-- pdd:end -->`) in `CLAUDE.md` of this folder, else in `AGENTS.md`. If neither exists, make `AGENTS.md`. In a Git repository, add the line `.pdd/` to the root `.gitignore` when no line ignores that folder; `pdd test` keeps its local cache there. Repeat setup keeps an existing Autopilot mode |
 
-`pdd setup` copies the skills to `~/.agents/skills` (Codex and Gemini) and `~/.claude/skills`, or `$CLAUDE_CONFIG_DIR/skills` when it is set (Claude Code). If `npx skills` already installed them, it copies nothing. When the skills it finds are older than this pdd, or differ from its skills, it says so and prints the command that updates them: `npx skills add promptdriven/pdd -g -a codex -a claude-code -y`, without `-g` for a copy in the project. After an update of the pdd command, it replaces an older copy that has the `.pdd-skill.json` marker. It never touches a copy without the marker, or a symlink. No other pdd command copies skills. The `pdd-setup` skill writes the same block in a chat. Run it in the top folder of the repo.
+`pdd setup` copies the skills to `~/.agents/skills` (Codex and Gemini) and `~/.claude/skills`, or `$CLAUDE_CONFIG_DIR/skills` when it is set (Claude Code). If `npx skills` already installed them, it copies nothing. When the skills it finds are older than this pdd, or differ from its skills, it says so and prints the command that updates them: `npx skills add promptdriven/pdd -g -a codex -a claude-code -y`, without `-g` for a copy in the project. After an update of the pdd command, it replaces an older copy that has the `.pdd-skill.json` marker. It never touches a copy without the marker, or a symlink. No other pdd command copies skills. The `pdd-setup` skill does the same in a chat. Run it in the top folder of the repo.
 
 Setup previews the exact MCP configuration changes for the Codex, Claude Code and Gemini agents it finds, then asks once (y/N). Only `y` writes those changes, including the approval setting for this Codex server. Registrations pin this running pdd executable, so another installation earlier on PATH cannot receive its tools. Other configuration is preserved. Codex uses `$CODEX_HOME/config.toml` (default `~/.codex/config.toml`) and the `mcp_servers.pdd` entry with `default_tools_approval_mode = "approve"`. Claude Code uses the `mcpServers.pdd` entry in its configuration; Gemini uses `mcpServers.pdd` in `~/.gemini/settings.json` with server trust. Each entry runs `pdd mcp`. A conflicting existing entry is preserved and reported.
 
@@ -30,7 +30,7 @@ Setup also reports the running pdd executable and version, the `pdd` paths in or
 | `pdd autopilot trust NAME...` | Add one or more explicitly trusted GitHub names |
 | `pdd autopilot untrust NAME` | Remove one explicitly trusted GitHub name |
 
-Settings live in the repository's `pdd.json`, for example `{"autopilot":{"mode":"off","trust":[]}}`. Other settings are preserved. Invalid saved modes count as `off` with a notice; setup leaves them unchanged, and a mode command replaces them. Names match ignoring case. The repository owner, people with write access (including access through an organization team), and explicitly added names are trusted independently. An incomplete lookup never establishes trust for an unknown person.
+Settings live in the repository's `pdd.json`, for example `{"autopilot":{"mode":"off","trust":[]}}`. Other settings are preserved. Autopilot workers start from GitHub and read the committed `pdd.json`, not your local copy. After `pdd autopilot off`, `observe` or `auto`, one more line tells you to commit and push `pdd.json`, or says that it is already committed when Git shows no change. Push the change before you run `pdd autopilot start`. Invalid saved modes count as `off` with a notice; setup leaves them unchanged, and a mode command replaces them. Names match ignoring case. The repository owner, people with write access (including access through an organization team), and explicitly added names are trusted independently. An incomplete lookup never establishes trust for an unknown person.
 
 These commands store settings and determine trust. Selecting a mode starts no run and makes no interpreter call. Approval policy, including `strict_approvals`, stays independent.
 
@@ -41,7 +41,7 @@ These commands store settings and determine trust. Selecting a mode starts no ru
 | `pdd autopilot start [--runs N] [--resume-custody FILE]` | Check sign-ins and the running pdd version, open a dedicated interactive Herdr session and check for work immediately. A user timer checks again every 30 minutes. `--runs` sets an optional concurrent-run cap; omission has no fixed cap. `--resume-custody` supplies the verified original-owner projection for explicit recovery |
 | `pdd autopilot stop` | Disable this repo's timer on this machine and let the current agent step finish |
 | `pdd autopilot status` | Show this machine's repo, agent, timer, coordinator health and next tick without contacting GitHub or waking an agent; an idle coordinator is healthy |
-| `pdd autopilot add N...` | Label named issues `pdd:autopilot`, allowing Autopilot to take older issues |
+| `pdd autopilot add N...` | Label named issues `pdd:autopilot`. Autopilot does not need this label: it considers every open issue |
 
 The launcher uses the repository settings module to read root `pdd.json`. An
 active mode is `observe` or `auto`; missing or invalid settings count as `off`. It uses an
@@ -51,6 +51,15 @@ LaunchAgent. On Linux, start warns when user-session lingering is off or
 unavailable: `loginctl enable-linger` keeps the timer after logout. The tick
 service preserves a Herdr server it starts when the tick exits. See the chat with
 `herdr session attach pdd-autopilot`.
+
+The first start of a repo on this machine selects the agent. It tries the agent of
+the session that runs the command first: Claude Code when you run it from Claude
+Code, Codex when you run it from Codex. Then it tries Codex, Claude Code, agy and
+Gemini, in that order, and takes the first one that is signed in. This check makes
+no model call. Later starts on this machine keep that agent, also after
+`pdd autopilot stop`. To select Codex, sign in to Codex and run the first
+`pdd autopilot start` from Codex or from a plain terminal. From a Claude Code
+session, run `env -u CLAUDECODE pdd autopilot start`.
 
 A tick checks GitHub with ETags and wakes the agent only for a repo's first
 start-up recipe or an unseen trusted issue, comment or related PR change.
@@ -62,10 +71,12 @@ Code too: the user timer keeps empty ticks out of the conversation. Paginated
 queues revalidate every cached page; changed candidates may require comment and
 write-permission lookups. GitHub rate limits wait until the reset time.
 
-Only issues created since the first start, or carrying `pdd:autopilot`, enter the
-queue. On an outsider's issue, a static reply says "thanks, a maintainer will
-look" until a trusted person comments. The agent receives only trusted people's
-text, including comments. Owners, people with write access and configured trusted
+Every open issue can enter the queue, old or new, with or without `pdd:autopilot`.
+Autopilot starts fresh work only on an issue that the current dependency review
+lists as eligible. That review checks dependencies, trust, the GitHub Assignees
+field and the `pdd:working` claim; a missing result waits. On an outsider's issue,
+a static reply says "thanks, a maintainer will look" until a trusted person comments.
+The agent receives only trusted people's text, including comments. Owners, people with write access and configured trusted
 names count as trusted. The `pdd-autopilot` skill owns the start-up recipe,
 `pdd:working` claim and one comment across machines, capacity and progress
 tracking. Related PRs are associated through same-repository closing references;

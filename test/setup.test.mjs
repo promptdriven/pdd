@@ -97,3 +97,33 @@ test('SETUP5: pdd help says how to call a PDD skill in Codex and in Claude Code'
   assert.equal(help.status, 0, help.stderr);
   assert.ok(help.stdout.includes('Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex, /pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting).'), help.stdout);
 });
+
+// Wrong: setup leaves .pdd/ (the pdd test cache) open to a commit, adds the line twice, or loses the person's ignore rules.
+test('SETUP6: in a Git repo, pdd setup adds .pdd/ to the root .gitignore once and keeps other lines', t => {
+  const { project, run } = fixture(t);
+  spawnSync('git', ['init', '-q', project]);
+  const ignore = join(project, '.gitignore');
+  const first = run();
+  assert.equal(first.status, 0, first.stderr);
+  assert.equal(readFileSync(ignore, 'utf8'), '.pdd/\n');
+  assert.ok(first.stdout.includes(ignore), first.stdout);
+  const second = run();
+  assert.equal(second.status, 0, second.stderr);
+  assert.equal(readFileSync(ignore, 'utf8'), '.pdd/\n');
+  assert.equal(second.stdout.includes(ignore), false, second.stdout);
+  writeFileSync(ignore, 'node_modules/\n# keep');
+  assert.equal(run().status, 0);
+  assert.equal(readFileSync(ignore, 'utf8'), 'node_modules/\n# keep\n.pdd/\n');
+  for (const line of ['/.pdd/', '.pdd', '  .pdd/  ']) {
+    writeFileSync(ignore, `dist/\n${line}\n`);
+    assert.equal(run().status, 0);
+    assert.equal(readFileSync(ignore, 'utf8'), `dist/\n${line}\n`, line);
+  }
+  // Git itself now ignores the cache folder.
+  mkdirSync(join(project, '.pdd/cache/test'), { recursive: true });
+  writeFileSync(join(project, '.pdd/cache/test/stories.json'), '{}');
+  writeFileSync(ignore, '');
+  assert.equal(run().status, 0);
+  const status = spawnSync('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: project, encoding: 'utf8' });
+  assert.equal(status.stdout.includes('.pdd/'), false, status.stdout);
+});

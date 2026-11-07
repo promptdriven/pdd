@@ -1,4 +1,5 @@
 // Generated from prompts/cli/pdd-cli.prompt.md (sha256: fa977100489b0eed24ffc2645108d215bc764d283a4532260aaf0b5cf167dd7a).
+import { execFile } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -7,7 +8,7 @@ import { CommandInputError, parseArgv } from './argument-parser.mjs';
 import { renderCompletion } from './completion.mjs';
 import { NAMES, PUBLIC_COMMAND_MANIFEST, PUBLIC_COMMAND_ROUTES, PUBLIC_HELP_TEXT } from './command-catalog.mjs';
 import { listWorkflowAreas, formatWorkflowList } from './workflow-areas.mjs';
-import { setupProject as defaultSetupProject } from './project-setup.mjs';
+import { ignorePddFolder, setupProject as defaultSetupProject } from './project-setup.mjs';
 import { findSkills, setupSkills as defaultSetupSkills } from './skills-install.mjs';
 import { pathDiagnostic as defaultPathDiagnostic } from './path-diagnostic.mjs';
 import { checkWorkflowAgents } from './workflow-agents.mjs';
@@ -18,6 +19,10 @@ const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const line = (stream, text) => stream.write(`${text}\n`);
 // The real reason of an unexpected error, after the fixed safe line.
 const reason = error => { const text = causeText(error?.message ?? error); return text ? ` Reason: ${text}` : ''; };
+// Autopilot workers start from GitHub, so a mode saved only in this checkout never reaches them.
+const commitLine = cwd => new Promise(resolve => execFile('git', ['status', '--porcelain', '--ignored', '--', ':/pdd.json'], { cwd, encoding: 'utf8' },
+  (error, out) => resolve(error ? '' : out.trim() ? 'Commit and push pdd.json. Autopilot workers start from GitHub and read the committed copy.'
+    : 'pdd.json is already committed. Push it if GitHub does not have it yet.')));
 const skillCount = folders => `${folders.length} PDD skill${folders.length === 1 ? '' : 's'}`;
 const skillNames = folders => folders.map(folder => basename(folder)).join(', ');
 // npx skills update changes only what npx skills add recorded (0.1.8 tester); add replaces any copy.
@@ -123,6 +128,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
           : { action: plan.local.slice(10), names: [...plan.operands] };
         const result = await module.runAutopilot(input, { cwd, stdin, stdout, ...autopilotPorts });
         line(result.exitCode === 0 ? stdout : stderr, result.message);
+        if (result.exitCode === 0 && input.action === 'mode') { const next = await commitLine(cwd); if (next) line(stdout, next); }
         return result.exitCode;
       } catch (error) { line(stderr, `Autopilot settings failed.${reason(error)}`); return 1; }
     }
@@ -215,6 +221,13 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       try {
         const { file, changed } = setupProject({ cwd, packageRoot });
         line(stdout, changed ? `Wrote the PDD block in ${file}.` : `${file} already has this PDD block. No change.`);
+      } catch (error) { line(stderr, `pdd setup: ${error.message}`); code = 1; }
+      try {
+        const context = await (gitContext ?? (await import('./workflow-runs.mjs')).gitContext)(cwd);
+        if (context?.toplevel) {
+          const { file, changed } = ignorePddFolder({ root: context.toplevel });
+          if (changed) line(stdout, `Added .pdd/ to ${file}. pdd test keeps its local cache there.`);
+        }
       } catch (error) { line(stderr, `pdd setup: ${error.message}`); code = 1; }
       try {
         const action = setupAgentMcp ?? (await import('./agent-mcp-setup.mjs')).setupAgentMcp;

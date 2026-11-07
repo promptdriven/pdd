@@ -1,5 +1,5 @@
-// Generated from prompts/cli/project-setup.prompt.md (sha256: 858668c63ebd6e8ed987bc1cc12b513f887538119c421e11ca5ccbb5023c6c06).
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+// Generated from prompts/cli/project-setup.prompt.md (sha256: 832ea686a2670273a127e0266c4be36908fd9ed101a6d5a5d77f5b4a42c14800).
+import { existsSync, lstatSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const START = '<!-- pdd:start -->', END = '<!-- pdd:end -->';
@@ -28,5 +28,19 @@ export function setupProject({ cwd, packageRoot }) {
   if (!text.endsWith('\n')) text += '\n';
   if (text === old) return { file, changed: false };
   writeFileSync(file, text);
+  return { file, changed: true };
+}
+
+// pdd test keeps its local cache in .pdd/ at the Git root; a commit must never carry it.
+const IGNORED = new Set(['.pdd', '.pdd/', '/.pdd', '/.pdd/']);
+export function ignorePddFolder({ root }) {
+  const file = join(root, '.gitignore');
+  let old = null;
+  try {
+    if (!lstatSync(file).isFile()) throw Error(`${file} is not a regular file. Add the line .pdd/ to it by hand.`);
+    old = readFileSync(file, 'utf8');
+  } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  if (old !== null && old.split(/\r?\n/).some(line => IGNORED.has(line.trim()))) return { file, changed: false };
+  writeFileSync(file, `${old ?? ''}${old && !old.endsWith('\n') ? '\n' : ''}.pdd/\n`);
   return { file, changed: true };
 }

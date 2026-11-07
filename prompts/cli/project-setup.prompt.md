@@ -1,6 +1,6 @@
 # Project setup
 
-Own `src/project-setup.mjs`. Export `setupProject({cwd, packageRoot})`. It does what the [pdd-setup skill](../../skills/pdd-setup/SKILL.md) tells an agent to do, without an agent: it adds or updates one short PDD block in the file that the project's agents read. `pdd setup` calls it.
+Own `src/project-setup.mjs`. Export `setupProject({cwd, packageRoot})` and `ignorePddFolder({root})`. They do what the [pdd-setup skill](../../skills/pdd-setup/SKILL.md) tells an agent to do, without an agent: `setupProject` adds or updates one short PDD block in the file that the project's agents read, and `ignorePddFolder` keeps the local `.pdd/` folder out of Git. `pdd setup` calls both.
 
 ## The block
 
@@ -20,7 +20,20 @@ The block is the fenced block in `<packageRoot>/skills/pdd-setup/SKILL.md`: from
 - The file ends with a newline after the block.
 - If the new text equals the old text, write nothing.
 
-Return `{file, changed}`: the absolute file path and whether the file was written. Never paste the guide or a workflow. Never touch another file.
+Return `{file, changed}`: the absolute file path and whether the file was written. Never paste the guide or a workflow. `setupProject` never touches another file.
+
+## Ignore `.pdd/`
+
+`pdd test` keeps its local cache in `.pdd/` at the Git root. That folder must never go into a commit. `ignorePddFolder({root})` gets the Git top-level folder and changes only `<root>/.gitignore`:
+
+| `.gitignore` | Result |
+| --- | --- |
+| Does not exist | Create it with the one line `.pdd/` |
+| Has a line that is `.pdd`, `.pdd/`, `/.pdd` or `/.pdd/` (spaces around it do not count) | Write nothing |
+| Has no such line | Add the line `.pdd/` at the end. If the file does not end with a newline, add one first |
+| Is not a regular file (a folder or a symbolic link) | Throw an error that names the file and says to add `.pdd/` by hand; write nothing |
+
+Keep all other text. Return `{file, changed}`: the absolute `.gitignore` path and whether the file was written.
 
 ## Dependencies
 
