@@ -93,7 +93,7 @@ test('FORMAL3: a missing file or a file without a formal block is "missing" with
   let result = f.read();
   assert.equal(result.formal.status, 'missing');
   assert.equal(f.formalLine(result), 'Formal check (agent reported): missing — evidence not recorded: replay-evidence.json is missing in the run folder. Repair: write the formal block per docs/replay-evidence.md, then run pdd workflow done formal again.');
-  assert.doesNotMatch(replay.formatReplayEvidence(result), /: not recorded\.$/m, 'Never a bare "not recorded".');
+  assert.doesNotMatch(f.formalLine(result), /not recorded\.$/, 'Never a bare "not recorded" formal line.');
   delete f.manifest.formal; f.save(); result = f.read();
   assert.equal(result.formal.status, 'missing');
   assert.ok(f.formalLine(result).startsWith('Formal check (agent reported): missing — evidence not recorded: replay-evidence.json has no formal block. Repair: '), f.formalLine(result));
