@@ -28,11 +28,13 @@ Gemini CLI serves only a paid Gemini API key, Vertex AI or Code Assist; free and
 | Kind | Login variables |
 | --- | --- |
 | `claude` | `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX` |
-| `codex` | `OPENAI_API_KEY`, `CODEX_API_KEY`, `OPENAI_BASE_URL` |
+| `codex` | `OPENAI_API_KEY`, `CODEX_API_KEY`, `CODEX_ACCESS_TOKEN`, `OPENAI_FEDERATION_RULE_ID`, `OPENAI_IDENTITY_TOKEN_FILE`, `OPENAI_WORKLOAD_IDENTITY_CONTEXT`, `OPENAI_BASE_URL` |
 | `gemini` | `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_GENAI_USE_GCA`, `GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_CLOUD_PROJECT` |
 | `agy` | none: Antigravity CLI keeps its sign-in in the person's home |
 
 The config-folder variable (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `GEMINI_CLI_HOME`) is not in this list: the run saves it as `configDir`, and the chat owner sets or unsets it from that saved value. This module never reads, prints or stores a login value.
+
+The Codex list covers API keys, an access token and workload identity login. A stale workload identity selection on the Herdr server must not choose the chat's account.
 
 `ANTHROPIC_BASE_URL` and `OPENAI_BASE_URL` are in the list because the endpoint goes with the key: a stale endpoint from the Herdr server must never get the caller's key, and a caller without one gets the agent's default endpoint. The Gemini start check (`gemini --version`) does not check sign-in. So a caller without any Gemini login variable gives the chat none, and Gemini then uses only its own settings in its config folder; the free-account `hint` above appears for this case.
 
@@ -78,7 +80,7 @@ Number settings that a person may choose (for example `COLUMNS`, `LINES`, `HISTS
 ```json
 {
   "status": "draft",
-  "prose_sha256": "929dd2f2e8cb0eea4f49a7f9014fb379248b4749e460a96b634e93c9b2631fbb",
+  "prose_sha256": "ad7081577ca3c3008e1f927a9abe76a5a70a2c99cb2bafa01d38e95856650184",
   "entries": [{
     "operation": "chooseWorkflowAgent",
     "input_schema": {

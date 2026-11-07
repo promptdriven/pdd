@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 4082c4f98b13573e08792f119faa51ae454f494f39df896055f805e3c0ecf5ae).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: af63c5484f6b0781adc17d7dfb1a90fdb911919eb5cee5a004d2e1094c0621c2).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, lstatSync, readdirSync, writeFileSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
@@ -138,8 +138,8 @@ export function chatCommand({ agent, cwd, messageFile, sessionId, resumeId, conf
 
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 // `command -p` finds rm whatever PATH is; plain rm (the pane's PATH, before any value is set) serves a shell whose
-// `command -p` does not work (ksh93). The agent does not get descriptor 3.
-const LOGIN_SCRIPT = 'exec 3<"$0" && { command -p rm -f -- "$0" 2>/dev/null || rm -f -- "$0"; } && . /dev/fd/3 && exec "$@" 3<&-';
+// `command -p` does not work (ksh93). Disable shell tracing before reading values. The agent does not get descriptor 3.
+const LOGIN_SCRIPT = 'set +xv && exec 3<"$0" && { command -p rm -f -- "$0" 2>/dev/null || rm -f -- "$0"; } && . /dev/fd/3 && exec "$@" 3<&-';
 const LOGIN_FILE = /^login-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.env$/;
 // Far longer than a pane needs to run a line: an older login file belongs to a launch that never ran.
 export const LOGIN_FILE_MAX_AGE_MS = 5 * 60_000;

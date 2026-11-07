@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-agents.prompt.md (sha256: 0136ca28e9e09c138a84676fc0b2331f3a673341732513a757a790f6a0eccd40).
+// Generated from prompts/cli/workflow-agents.prompt.md (sha256: 3cd75468a0c40badcdcb79fdc2f5c94dc1e46ac32fac7480277f708d237a9eda).
 import { runAgentProcess, parseAgentAuthStatus } from './agent-adapters.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 
@@ -20,7 +20,7 @@ export const GEMINI_FREE_HINT = 'With a free or Google One account, Gemini CLI d
 // variable is apart: the run saves it as configDir.
 export const LOGIN_VARIABLES = Object.freeze({
   claude: Object.freeze(['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX']),
-  codex: Object.freeze(['OPENAI_API_KEY', 'CODEX_API_KEY', 'OPENAI_BASE_URL']),
+  codex: Object.freeze(['OPENAI_API_KEY', 'CODEX_API_KEY', 'CODEX_ACCESS_TOKEN', 'OPENAI_FEDERATION_RULE_ID', 'OPENAI_IDENTITY_TOKEN_FILE', 'OPENAI_WORKLOAD_IDENTITY_CONTEXT', 'OPENAI_BASE_URL']),
   gemini: Object.freeze(['GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_GENAI_USE_VERTEXAI', 'GOOGLE_GENAI_USE_GCA', 'GOOGLE_APPLICATION_CREDENTIALS', 'GOOGLE_CLOUD_PROJECT']),
   agy: Object.freeze([]),
 });
