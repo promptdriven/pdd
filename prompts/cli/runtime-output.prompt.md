@@ -4,6 +4,10 @@ Own `src/runtime-output.mjs`. It turns `pdd test` rows into the terminal table, 
 
 ## Rows
 
+Preserve an optional `path` on each local shared-reader refusal in `jsonRow`.
+It names the affected repository-relative prompt, including a called prompt.
+Omit it when absent; keep all existing refusal fields and cleaning rules.
+
 A row is one test: `story`, `title`, `test`, `state`, `checks {passed, total}`, `failed_checks [{criterion_id, step_id, criterion_text, target, path, expected, actual, diagnosis}]`, `refusals [{code, field, section, message, engine_message, hint, reason, fix, where, cause}]`, `calls`, `seconds`, `requested_model`, `report_url`, `request_id`, diagnosis fields `why`, `who`, `next_step`, and the outcome fields `progress` and `ahead` when the server supplied them. When usage accounting is known, JSON may also include `known_calls`, `unknown_calls` and `accounting_complete`. A complete receipt keeps its numeric `usage.calls` total even when `known_calls` is lower. Incomplete multi-ID usage keeps `calls` unknown and reports the summed known lower bound and unknown count. A confirmed unstarted capacity row has `busy:true`, `can_retry:true` and state `not_run`; it is not a source refusal or failed assertion. Render its capacity advice without a Fix-the-test line and mark a summary containing only passed rows and actual busy rows (with at least one busy row) `busy`, not ✗. Mixed actual failures retain ✗. Preserve request ID, report and zero-call accounting. States: `passed`, `failed`, `refused`, `not_run`, `unknown`, `queued`, `running`.
 
 - From a server answer: checks come from `result.report.samples[0].steps[].checks[]`; refusals from `result.refusals` (prompt-runtime #379 adds `reason` in plain words, `fix`, `file`, `at`, `where` = file and place as one text, and `cause`: `call-budget`, `ai-service`, `test`, `prompt`, `server` or `unknown`; `where` falls back to `file` and `at`; each is null when missing); calls from `usage.calls`; the model from `usage.requested_model` (else the report's `evaluation.requested_model`). pdd uses the canonical selected outcome, not the server's display `outcome` string.

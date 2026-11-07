@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: dcdd5de58ef228dc0cbfee27145dffb665af9065f6b9795865824b5b76a18b61).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 4050948021e20bb7f63d554e01cb4ab64fd65b20af8360e23a5f234293de4d39).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -311,6 +311,10 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         line(stderr, `pdd stopped with an internal error. If it sent checks, read them with pdd test --read. Do not send them again.${reason(error)}`);
         return 3;
       }
+    case 'project-files': {
+      const { runProjectFiles } = await import('./project-files.mjs');
+      return runProjectFiles({ cwd, json: !!plan.options['--json'] }, { stdout, stderr });
+    }
     case 'prompt-approve': {
       const { runApprove } = await import('./prompt-approve.mjs');
       return runApprove({ words: [...plan.operands], cwd, said: plan.options['--said'] }, { stdout, stderr, stdin, env });

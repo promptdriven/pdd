@@ -2,6 +2,32 @@
 
 Own `src/runtime-preflight.mjs`. It does all local work for `pdd test` and `pdd simulate` before anything goes to the PDD runtime: it finds the files, the tests and the stories, checks each test, computes the prose hash, fills draft hashes and builds the source tar. It makes no network call and never reads a token.
 
+## Shared authored-file reader
+
+This module owns prompt reading and Story/test pairing for lint, test, approve
+and the read-only files view. Preserve existing public functions and refusal
+rules. `readPrompt` returns the authored `rawText` beside effective `text`;
+expand references through the existing safe contract resolver before parsing.
+Keep numeric source tokens when parsing the effective Runtime interface.
+Approval displays that expanded interface but edits only the authored text.
+
+Export `promptSchemaRefusals(root, found, prompt, prompts, seen)` as the common
+parse/schema check for one prompt and its called prompts. Return all reached
+schema problems with code, section (JSON pointer), message and prompt path;
+retain fix hints. Missing/duplicate interfaces, invalid status and invalid JSON retain their
+existing codes and reasons. Calls are traversed once per path. Check hash/status
+freshness separately through the existing `promptRefusal`: approval must still
+fill an empty or stale hash after a person's decision. Validate parse/schema
+problems even for a current approved prompt before approval's no-op return.
+
+The files view uses `findTests`, `readPrompt`, `promptRefusal`,
+`promptSchemaRefusals` and `preflight`. It must not invent another folder walk,
+parser, contract resolver or test name rule. Selection remains lazy for lint,
+test and approve: an unrelated bad prompt must not refuse selected good work.
+The files view deliberately inspects every eligible prompt and discovered test.
+No interface kind is inferred here; a separate interface owner can extend the
+reader's metadata.
+
 ## Opt-in authored workspace
 
 Load the [workspace authority](runtime-workspace.prompt.md) before authored discovery. Carry its policy through `findTests`, `readPrompt`, `checkTest`, `fillHashes`, `sourceFilePort`, `captureSource` and every method/descendant of `createStrictSourceAccess`, preserving existing invocation defaults. Accept additive `workspace` in the existing object arguments of `findTests`, `preflight` and `fillHashes`, in capture options, and as the last optional argument of `readPrompt`, `sourceFilePort` and `createStrictSourceAccess`. A strict capability retains it for all methods. Absence loads policy for that root; `checkTest` is private and inherits its caller capability. Do not use ambient mutable mode. Convert workspace configuration or required-path failures to `PreflightError` exit 4 while retaining the boundary code, chain and remedy.

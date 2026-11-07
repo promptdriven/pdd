@@ -41,6 +41,32 @@ When another change of `pdd.json` on GitHub comes between pdd's read and its wri
 
 These commands store settings and determine trust. Selecting a mode starts no run and makes no interpreter call. Approval policy, including `strict_approvals`, stays independent.
 
+## Inspect authored files
+
+`pdd files [--json]` lists prompts, Runtime interfaces, Stories, tests and refusal
+reasons. It reads working files only. It does not sign in, call the interpreter,
+fill hashes or approve prompts. It works from any folder in a Git repository.
+
+The reader expands `$contract` references and preserves numeric JSON tokens for
+lint, test and approval. Approval shows resolved fields and constraints. It keeps
+the references in the authored file when it records a person's approval.
+
+The JSON result has `schema_version: "pdd.files.v1"` and arrays `prompts`,
+`stories`, `tests`, `orphans`, `refusals` and `warnings`. Paths are relative to the
+repository root. Prompt rows include `has_interface`, resolved `references`,
+paired `stories` and `tests`, and `refusals`. `has_interface` is null when a
+source/reference failure prevents reading the interface. Story rows list their tests. Test
+rows list every conflict member in `files`, their name-matched `stories`, reached
+`prompts` and preflight `refusals`. Each refusal gives `path`, `code`, `section`
+and `message`, plus a fix `hint` when available. No interface kind is inferred.
+
+The list uses the same workspace limits, fixture exclusions and Story/test name
+rule as an all-Story check. Missing tests and orphan JSON files are visible.
+Inspection returns exit 0 when it can produce the list, including when files
+have refusals. Exit 0 is not a lint or test pass. Root/configuration failures
+return an error. `pdd test --files` remains the exact upload-file preview for a
+selected check.
+
 ## Autopilot on this machine
 
 | Command | What it does |

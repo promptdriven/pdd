@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: b87c59915f1d31c8e8c86208257e627b99c8b22c329e88938c6c4d0c4dcc7805).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: d4830cc4e745fba6e00b71dc2c33a7ebdd8d43520c7e36f99d7b1008a75e4e23).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -118,6 +118,8 @@ const routes = [
     options: [{ name: '--json', kind: 'flag' }, { name: '--timeout', kind: 'integer', min: 1, max: 120 }, { name: '--local', kind: 'flag' }],
     forms: [form(`pdd ${lint} [STORY...] [--json] [--timeout MIN]`, 'Print local SVG layout warnings, then the PDD interpreter lint (0 AI calls) on selected Stories and their dependencies; sends no checks.'),
       form(`pdd ${lint} --local [STORY...] [--json]`, 'Check linked SVG layout parts locally with warning diagnostics and 0 AI/network calls.')] },
+  { id: 'files', prefix: ['files'], local: 'project-files', operands: [], options: [{ name: '--json', kind: 'flag' }],
+    forms: [form('pdd files [--json]', 'List prompts, Runtime interfaces, Stories, tests and refusal reasons; no network calls.')] },
   { id: 'approve', prefix: ['approve'], local: 'prompt-approve', operands: [{ name: 'prompt', type: 'text' }], options: [{name:'--said',kind:'text'}],
     forms: [form('pdd approve PROMPT [--said WORDS]', "Show one prompt's runtime interface and text changes since its last approval. Approve only that prompt. Easy mode accepts the person's nonblank words without grading them. " + approvalHelp('pdd approve PATH'))] },
   // A quiet word (`sim`) parses like the prefix, with nothing added; help names `sim` once, completion never.

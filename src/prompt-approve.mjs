@@ -1,4 +1,4 @@
-// Generated from prompts/cli/prompt-approve.prompt.md (sha256: 8821baa81e0596ba99db30d9ddb283c968e280c83edabf35ea22a9dca8c00d9c).
+// Generated from prompts/cli/prompt-approve.prompt.md (sha256: eb08fe9c85392fabd170df5d9319ad236a9258a913b5c6b837caa479daac3c86).
 import { approvalActor, readApprovalPolicy, readSaidWords, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -6,7 +6,7 @@ import { lstatSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { relative, resolve, sep, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { isDeepStrictEqual } from 'node:util';
-import { gitFiles, interfaceBlocks, interfaceSchemaProblems, proseSha256 } from './runtime-preflight.mjs';
+import { gitFiles, interfaceBlocks, promptSchemaRefusals, readPrompt, proseSha256 } from './runtime-preflight.mjs';
 
 class Stop extends Error { constructor(exitCode, message) { super(message); this.exitCode = exitCode; } }
 const line = (stream, text) => stream.write(`${text}\n`);
@@ -198,21 +198,21 @@ export function lineReader(stdin) {
 // Show one prompt, ask the person, and approve on y. expectedHash (from the Try page) must equal the local prose hash.
 // Returns {state: 'done' | 'declined', exitCode, message}; prints the view and the question to stdout.
 export async function askApproval({ root, path, stdout, answers, expectedHash, said, commit }) {
-  const text = readFileSync(join(root, path), 'utf8'), blocks = interfaceBlocks(text);
-  if (blocks.length !== 1) return { state: 'declined', exitCode: 4, message: `${path} has ${blocks.length ? 'more than one' : 'no'} Runtime interface block.` };
-  let iface;
-  try { iface = JSON.parse(blocks[0][1]); } catch { iface = null; }
-  if (!isObject(iface)) return { state: 'declined', exitCode: 4, message: `The Runtime interface of ${path} is not a JSON object.` };
+  const visible = new Set(gitFiles(root)), prompt = readPrompt(root, visible, path);
+  const problems = promptSchemaRefusals(root, { visible }, prompt, new Map([[path, prompt]]));
+  if (problems.length) {
+    for (const problem of problems) {
+      line(stdout, `  ${problem.code}  ${problem.section}  ${problem.message}`);
+      if (problem.hint) line(stdout, problem.hint);
+    }
+    return { state: 'declined', exitCode: 4, message: `Fix these in ${path} before you approve.` };
+  }
+  const text = prompt.rawText, iface = prompt.interface;
   const hash = proseSha256(text), current = iface.prose_sha256 === hash;
   if (expectedHash !== undefined && expectedHash !== hash) {
     return { state: 'declined', exitCode: 4, message: `${path}: the prompt changed since you clicked Approve. Not approved; look at the new text, then click Approve again.` };
   }
   if (iface.status === 'approved' && current) return { state: 'done', exitCode: 0, message: `${path} is already approved and current.` };
-  const problems = interfaceSchemaProblems(iface);
-  if (problems.length) {
-    for (const problem of problems) line(stdout, `  ${problem.code}  ${problem.pointer}  ${problem.rule}`);
-    return { state: 'declined', exitCode: 4, message: `Fix these in ${path} before you approve.` };
-  }
   for (const row of [...describeInterface(path, iface), ...proseView(root, path, text)]) line(stdout, row);
   if (iface.status === 'approved') line(stdout, 'The text changed after it was approved. Read the prompt again before you answer.');
   if (said === undefined) stdout.write(`Approve ${path}? y/n `);

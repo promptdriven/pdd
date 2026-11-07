@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 24749f8134d07d67ebf243d105f31d95e5206e46bdb7133dbfe3b93b2d733b72).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 0294198de7f2a51989ca8b93d57a46883ca38da3d08a085dd97a65c4267810ae).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
@@ -548,9 +548,10 @@ export function readPrompt(root, visible, path,workspace=loadRuntimeWorkspace({r
   workspace=boundedWorkspace(root,workspace);
   if(typeof path==='string')requireRuntimePath(workspace,{path,from:'Prompt'});
   if (typeof path !== 'string' || !path.endsWith('.prompt.md') || !visible.has(path)) return { path, error: 'entry-missing' };
-  const raw = sourceFilePort(root,visible,workspace).read({path}).content, prepared = preparedText(root,visible,path,raw,'prompt',workspace), text = prepared.text, blocks = interfaceBlocks(text);
-  if (!blocks.length) return { path, text, blocks, error: 'interface-missing' };
-  if (blocks.length > 1) return { path, text, blocks, error: 'pdd-two-interfaces' };
+  const rawText = sourceFilePort(root,visible,workspace).read({path}).content, prepared = preparedText(root,visible,path,rawText,'prompt',workspace), text = prepared.text, blocks = interfaceBlocks(text);
+  const source = { path, rawText, text, blocks, references: prepared.references };
+  if (!blocks.length) return { ...source, error: 'interface-missing' };
+  if (blocks.length > 1) return { ...source, error: 'pdd-two-interfaces' };
   let value;
   try {
     value = JSON.parse(blocks[0][1], function(key, value, context) {
@@ -560,9 +561,9 @@ export function readPrompt(root, visible, path,workspace=loadRuntimeWorkspace({r
       }
       return value;
     });
-  } catch (error) { return { path, text, blocks, error: 'invalid-json', detail: error.message }; }
-  if (!isObject(value)) return { path, text, blocks, error: 'invalid-json', detail: 'The interface is not a JSON object.' };
-  return { path, text, blocks, interface: value, prose: proseSha256(text), references:prepared.references };
+  } catch (error) { return { ...source, error: 'invalid-json', detail: error.message }; }
+  if (!isObject(value)) return { ...source, error: 'invalid-json', detail: 'The interface is not a JSON object.' };
+  return { ...source, interface: value, prose: proseSha256(text) };
 }
 
 // Drafts may run; until the server takes them, its refusal gets this plain text.
@@ -699,13 +700,16 @@ function firstDifference(testTexts, storyTexts) {
 }
 
 // The schema rules of a prompt and of the prompts it calls, all at once (cached per prompt).
-function promptSchemaRefusals(root, found, prompt, prompts, seen = new Set()) {
-  if (!prompt?.interface || seen.has(prompt.path)) return [];
+export function promptSchemaRefusals(root, found, prompt, prompts, seen = new Set()) {
+  if (!prompt || seen.has(prompt.path)) return [];
   seen.add(prompt.path);
+  if (prompt.error) return [{ ...promptRefusal(prompt, 'interface'), path: prompt.path }];
+  if (!prompt.interface) return [];
   prompt.schemaIssues ??= interfaceSchemaProblems(prompt.interface).map(problem =>
-    refusal(problem.code, problem.pointer, `${prompt.path} ${problem.pointer} ${problem.rule}`, problem.hint ? {hint:problem.hint,path:prompt.path} : {}));
+    refusal(problem.code, problem.pointer, `${prompt.path} ${problem.pointer} ${problem.rule}`, {path:prompt.path, ...(problem.hint ? {hint:problem.hint} : {})}));
   const called = (Array.isArray(prompt.interface.calls) ? prompt.interface.calls : []).map(call => call?.target).filter(target => typeof target === 'string');
-  return [...prompt.schemaIssues, ...called.flatMap(target => {
+  const statusProblems = ['draft', 'approved'].includes(prompt.interface.status) ? [] : [{ ...promptRefusal(prompt, 'interface'), path: prompt.path }];
+  return [...statusProblems, ...prompt.schemaIssues, ...called.flatMap(target => {
     if (!prompts.has(target)) prompts.set(target, readPrompt(root, found.visible, target,found.workspace));
     return promptSchemaRefusals(root, found, prompts.get(target), prompts, seen);
   })];
