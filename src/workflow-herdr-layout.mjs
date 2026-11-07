@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: 61858b1694da5f27c8560ce2f93d1ccf35d0c5d2502d43e970cfd635e3c0398e).
+// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: ea3d4229b2ed7525e21dfa72fe8ae06ee7437e6ce155c149937c887309f0e421).
 import { mkdir, lstat, realpath } from 'node:fs/promises';
 import { openSync, closeSync, readFileSync, writeFileSync, fsyncSync, unlinkSync, lstatSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -28,12 +28,12 @@ const CHANGES = {
   root_pane: ROOT_CHANGED, tab_id: ROOT_CHANGED, pane_id: ROOT_CHANGED, terminal_id: ROOT_CHANGED,
   parent_root: 'its first shell tab is gone or has other Herdr IDs, or it has other tabs or panes',
   root_tab: 'pdd has no saved first tab for this run, and the workspace does not have exactly one shell tab',
-  parent_custody: 'pdd has no complete saved first tab for this repository workspace',
+  parent_custody: 'pdd has no complete saved first tab for this repository workspace, or that saved tab names another folder',
   root_panes: 'it has other panes besides its first shell pane', area_panes: 'an area tab does not have exactly one pane',
   area_tab: 'more than one tab has this area name', pane: 'an area tab pane has no complete Herdr IDs',
   area_pane: 'the new area tab does not show the pane that Herdr made'};
-// Herdr screen fields that say nothing about identity. Live Herdr rows also leave out the shell's folder (`cwd`):
-// it is not identity, so the Found line must not suggest that it caused the refusal.
+// Herdr screen fields that say nothing about identity. Pane rows also leave out the shell's folder (`cwd`):
+// it is not identity, so neither the Expected nor the Found line may suggest that it caused the refusal.
 const NOISE = new Set(['agent_status', 'focused', 'revision', 'scroll', 'foreground_cwd']);
 const LIVE_NOISE = new Set([...NOISE, 'cwd']);
 // A value as readable `name value` pairs: no JSON dump, but every string stays escaped.
@@ -47,14 +47,14 @@ function readable(value, prefix = '', noise = NOISE) {
 const detail = (name, value, noise) => { const text = `${name}: ${readable(value, '', noise).join(', ') || 'nothing'}`; return text.length > 500 ? `${text.slice(0, 499)}…` : text; };
 // The run expected one value and live Herdr shows another. The first line says what changed and what to do;
 // the escaped values follow on later lines. Repair never closes or deletes anything.
-// `found` is live Herdr data unless the caller passes NOISE for a saved record.
-function identityChanged(workspaceId, field, expected, found, foundNoise = LIVE_NOISE) {
+// Both lines leave out the same fields; only a refusal of pdd's saved folder (`parent_custody`) passes NOISE to show it.
+function identityChanged(workspaceId, field, expected, found, noise = LIVE_NOISE) {
   const what = field === 'workspace_id' ? (Array.isArray(found) || workspaceId === null ? 'more than one workspace shows this run worktree' : 'the saved workspace is gone')
     : CHANGES[field] ?? `its ${field} changed`;
   const where = id(workspaceId) ? `Herdr session ${PDD_HERDR_SESSION}, workspace ${shown(workspaceId)}` : `Herdr session ${PDD_HERDR_SESSION}`;
   // The message starts with the code, as every other layout error does (callers show it once; tests match on it).
   return Object.assign(new Error([`herdr_layout_identity_changed: ${where}: ${what}. Look at ${id(workspaceId) ? 'that workspace' : 'its workspaces'} in Herdr, undo the change, then try again.`,
-    detail(`Expected ${field}`, expected), detail(`Found ${field}`, found, foundNoise)].join('\n')), { code: 'herdr_layout_identity_changed', field, expected, found });
+    detail(`Expected ${field}`, expected, noise), detail(`Found ${field}`, found, noise)].join('\n')), { code: 'herdr_layout_identity_changed', field, expected, found });
 }
 async function ensureDirectory(directory) {
   await mkdir(directory, {recursive:true,mode:0o700});
@@ -134,7 +134,9 @@ async function assertParentRoot(command, workspaceId, root, cwd) {
   const tabs = await tabsFor(command, workspaceId), panes = await paneRows(command, workspaceId);
   const pane = panes.find(p => p.tab_id === root?.tabId && p.pane_id === root?.paneId && p.terminal_id === root?.terminalId);
   const tab = tabs.find(t => t.tab_id === root?.tabId);
-  if (!completeParentRoot(root, cwd) || tabs.length !== 1 || panes.length !== 1 || !tab || !pane)
+  // pdd's saved record of the first tab must name the repository root; then only the Herdr IDs are compared.
+  if (!completeParentRoot(root, cwd)) throw identityChanged(workspaceId, 'parent_custody', {cwd}, root ?? null, NOISE);
+  if (tabs.length !== 1 || panes.length !== 1 || !tab || !pane)
     throw identityChanged(workspaceId, 'parent_root', root, {tabCount: tabs.length, paneCount: panes.length, pane: pane ?? null});
   return {tab, pane};
 }

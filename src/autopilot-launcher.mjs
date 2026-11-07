@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: b27c94d69f3abe842d072365f351d6f0af34677c1876554944934e0b3cae5382).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 139c3b47d0b2f2c5e3b3f60a26fbbb3a85aa3511a41a97733ec332c5bca2e06a).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch } from 'node:fs';
@@ -368,10 +368,11 @@ async function closeStaleCoordinator(state, agent, p) {
       const current = (await herdr(['agent', 'get', pane], p)).result?.agent;
       if (!current || current.pane_id !== pane) return null;
       // Another terminal has this pane id: the saved chat is gone and the other pane stays open.
-      // The live folder is not compared: a chat that an older launch started without the `cd` is in the shell startup folder.
+      // A saved terminal id is the proof, and then the live folder is not compared: a chat that an older launch started
+      // without the `cd` is in the shell startup folder. Without a saved terminal id, only the folder ties the pane to this repository.
       if (!otherTerminal(ownerLaunch, current)) {
         if (current.workspace_id !== workspace || current.agent !== state.agent.kind
-          || (typeof ownerLaunch.terminalId === 'string' && current.terminal_id !== ownerLaunch.terminalId)
+          || (typeof ownerLaunch.terminalId === 'string' ? current.terminal_id !== ownerLaunch.terminalId : !samePath(current.cwd, state.cwd))
           || !['idle', 'done'].includes(current.agent_status) || JSON.stringify(current.agent_session ?? null) !== session) return null;
         try { await herdr(['pane', 'close', pane], p); } catch { /* The pane inventory below decides. */ }
         if (!await gone()) return null;
