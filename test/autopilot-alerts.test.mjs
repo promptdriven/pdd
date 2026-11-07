@@ -35,7 +35,8 @@ function setup(t) {
       return typeof reply === 'function' ? reply(request) : reply;
     },
   };
-  f.env = { HOME: home, PATH: process.env.PATH };
+  // Every XDG folder is set, so a runner's own XDG_CONFIG_HOME cannot point status at another config file.
+  f.env = { HOME: home, XDG_CONFIG_HOME: join(home, '.config'), XDG_STATE_HOME: join(home, '.local', 'state'), PATH: process.env.PATH };
   f.pdd = async (argv, stdin = '') => {
     const stdout = capture(), stderr = capture();
     const exitCode = await runPdd(argv, { cwd, env: f.env, stdin, stdout, stderr, autopilotAlertsPorts: f.ports });
