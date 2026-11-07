@@ -475,7 +475,7 @@ test('CONTINUATION native table: parsed remote lint timeout and parsed recovery 
   assert.equal(p.clock.now - START, 240000);
 });
 
-test('CONTINUATION preservation: concurrent legacy capacity retries adopt claims after historical IDs', async t => {
+test('CONTINUATION accounting: concurrent retry fails closed for an unproven legacy admission', async t => {
   const r = await setup(t, { timeout: 1 }); const { batch } = await r.first();
   const s = saved(r, batch), oldId = '33333333-3333-4333-8333-333333333333';
   const folder = join(r.h.state, 'batches', batch), lintId = s.doc.lint.request_ids.at(-1);
@@ -484,6 +484,28 @@ test('CONTINUATION preservation: concurrent legacy capacity retries adopt claims
   writeFileSync(s.path, JSON.stringify(s.doc));
   writeFileSync(join(folder, lintId + '.json'), JSON.stringify(r.f.lint(lintId)));
   writeFileSync(join(folder, oldId + '.admission.json'), JSON.stringify({ dispatch: 'not_started', error: { code: 'check-queue-full', details: { retryable: true, retry_after: 1 } } }));
+  const replies = await Promise.all([recovery(r, batch, true), recovery(r, batch, true)]);
+  assert.equal(paid(r).length, 0, 'legacy queue receipt has no accounting proof, so it must not authorize a paid POST');
+  assert.ok(replies.every(reply => reply.clock.uuids === 0), 'fail closed before allocating replacement IDs');
+  const final = saved(r, batch).doc.rows[0];
+  assert.deepEqual(final.request_ids, [oldId]);
+  assert.equal(final.state, 'unknown'); assert.equal(final.unknown_calls, 1); assert.equal(final.accounting_complete, false);
+  assert.equal(final.capacity_uncertain, true); assert.equal(final.can_retry, false);
+});
+
+test('CONTINUATION preservation: concurrent proved capacity retries adopt claims after historical IDs', async t => {
+  const r = await setup(t, { timeout: 1 }); const { batch } = await r.first();
+  const s = saved(r, batch), oldId = '44444444-4444-4444-8444-444444444444';
+  const folder = join(r.h.state, 'batches', batch), lintId = s.doc.lint.request_ids.at(-1);
+  Object.assign(s.doc.lint, { state: 'passed', pending: false, unknown: false });
+  Object.assign(s.doc.rows[0], { request_ids: [oldId], state: 'not_run', phase: 'server', busy: true, can_retry: true, eligible: true, note: { code: 'check-busy' } });
+  writeFileSync(s.path, JSON.stringify(s.doc));
+  writeFileSync(join(folder, lintId + '.json'), JSON.stringify(r.f.lint(lintId)));
+  writeFileSync(join(folder, oldId + '.admission.json'), JSON.stringify({
+    requestId: oldId, id: oldId, command: 'check', dispatch: 'not_started', provider_calls: 0, accounting_complete: true,
+    usage: { calls: 0, known_calls: 0, unknown_calls: 0, accounting_complete: true },
+    error: { code: 'check-queue-full', details: { retryable: true, retry_after: 1 } },
+  }));
   const replies = await Promise.all([recovery(r, batch, true), recovery(r, batch, true)]);
   assert.equal(paid(r).length, 1); assert.deepEqual(replies.map(reply => reply.code).sort(), [0, 3], 'one owner and one live-owner refusal');
   const final = saved(r, batch).doc.rows[0];

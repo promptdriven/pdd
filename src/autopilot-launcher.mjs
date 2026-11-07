@@ -1,7 +1,7 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 2d203de33eb462a110cabe49ea27de298f13736d82212181005babc873de35e4).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 79dab46d08aaedcd219bd7ee1d8924030cc13e9988d3cd7bf9b81b40536cea0d).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync, linkSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,8 +10,14 @@ import { loadAgentDefinitions } from './agent-config.mjs';
 import { pathDiagnostic } from './path-diagnostic.mjs';
 import { runAutopilot } from './autopilot.mjs';
 import { checkWorkflowAgents } from './workflow-agents.mjs';
+import { gitContext, metricsSource } from './workflow-runs.mjs';
+import { appendEvents } from './metrics-store.mjs';
+import { recordCaptureGap } from './metrics-gap.mjs';
+import * as nativeFiles from 'node:fs';
 
 const INTERVAL = 30 * 60 * 1000;
+const STUCK_AFTER = 60 * 60 * 1000;
+const CLAIM_IDLE_AFTER = 60 * 60 * 1000;
 const SESSION = 'pdd-autopilot';
 const ACK = '<!-- pdd:autopilot:thanks -->';
 const ACK_TEXT = `thanks, a maintainer will look\n\n${ACK}`;
@@ -164,10 +170,13 @@ async function queryIssues(state, p) {
   }
   return { status: 200, etag, issues, pages };
 }
-async function githubGet(endpoint, p) {
-  const result = await p.execute('gh', ['api', '--include', '--method', 'GET', endpoint]);
+async function githubGet(endpoint, p, etag) {
+  const args = ['api', '--include', '--method', 'GET', endpoint];
+  if (etag) args.push('-H', `If-None-Match: ${etag}`);
+  const result = await p.execute('gh', args);
   const r = response(result.stdout);
   if (r.rateLimited) throw Object.assign(Error('GitHub rate limited; waiting until reset.'), { resetAt: r.resetAt || p.now() + INTERVAL });
+  if (r.status === 304 && etag) return r;
   if (r.status === 404) return { ...r, value: null };
   if (r.status !== 200) throw Error('GitHub lookup unavailable; eligible work will be retried next tick.');
   return { ...r, value: JSON.parse(r.body) };
@@ -193,12 +202,36 @@ async function trusted(row, state, config, p) {
   }
   return p.permissions.get(login);
 }
-function message(state, issues) {
+async function readRunProgress(state, p) {
+  const commonDir = (await p.checked('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim();
+  const folder = join(commonDir, 'pdd', 'runs');
+  let names;
+  try { names = readdirSync(folder); } catch { return []; }
+  const progress = [];
+  for (const name of names) {
+    if (!/^[1-9][0-9]*$/.test(name)) continue;
+    try {
+      const file = join(folder, name, 'status.json'), run = read(file);
+      if (run?.v === 1 && run.number === Number(name) && run.repo?.toLowerCase() === state.repo.toLowerCase() && ['running', 'waiting'].includes(run.state)) {
+        progress.push({ number: run.number, changedAt: statSync(file).mtimeMs });
+      }
+    } catch { /* Missing or unreadable records supply no progress fact. */ }
+  }
+  return progress;
+}
+function message(state, issues, timeRules = []) {
   const skill = state.agent.kind === 'codex' ? '$pdd-autopilot' : '/pdd-autopilot';
   const skillPath = join(state.packageRoot ?? dirname(dirname(self)), 'skills', 'pdd-autopilot', 'SKILL.md');
-  return `${skill}\nLoad and follow the bundled skill at ${JSON.stringify(skillPath)}. Run its start-up recipe first when recipeFirst is true, then follow its room, pdd:working claim and stuck-run rules. Inspect claimed issues for progress and stale claims; do not treat them as unclaimed work. The packet contains only trusted text; further issue/comment reads must preserve that boundary. Use the skill's pdd-check and pdd-merge handoffs for review and merge work.\n${JSON.stringify({ repository: state.repo, activatedAt: state.activatedAt, recipeFirst: !state.recipeDelivered, ...(state.runs === undefined ? {} : { runs: state.runs }), issues })}\n`;
+  return `${skill}\nLoad and follow the bundled skill at ${JSON.stringify(skillPath)}. Run its start-up recipe first when recipeFirst is true, then follow its room, pdd:working claim and stuck-run rules. Inspect claimed issues for progress and stale claims; do not treat them as unclaimed work. The packet contains only trusted text; further issue/comment reads must preserve that boundary. Use the skill's pdd-check and pdd-merge handoffs for review and merge work. For an issue you start, pass its decisionId with --origin autopilot --decision-id TOKEN to pdd workflow run; pass --outcome code or prompt-only when the required outcome is known.\n${JSON.stringify({ repository: state.repo, activatedAt: state.activatedAt, recipeFirst: !state.recipeDelivered, ...(state.runs === undefined ? {} : { runs: state.runs }), issues, ...(timeRules.length ? { timeRules } : {}) })}\n`;
 }
-async function wake(state, text, p) {
+async function wake(state, text, p, capture = async () => {}) {
+  const deliver = async action => {
+    const observe = async status => { try { await capture(status); } catch { /* Measurement cannot change delivery. */ } };
+    await observe('attempted');
+    try { await action(); }
+    catch (error) { await observe(['agent_not_found','pane_not_found','agent_blocked'].includes(error?.code) ? 'failed' : 'uncertain'); throw error; }
+    await observe('confirmed');
+  };
   await openWorkspace(state, p);
   let agent;
   try { agent = (await herdr(['agent', 'get', state.paneId], p)).result?.agent; }
@@ -208,7 +241,7 @@ async function wake(state, text, p) {
   }
   if (agent) {
     if (!['idle', 'done'].includes(agent.agent_status)) return false;
-    await herdr(['agent', 'prompt', state.paneId, text], p); return true;
+    await deliver(() => herdr(['agent', 'prompt', state.paneId, text], p)); return true;
   }
   const file = state.stateFile.replace(/\.json$/, '.message.md');
   writeFileSync(file, text, { mode: 0o600 });
@@ -222,7 +255,7 @@ async function wake(state, text, p) {
     : ['--dangerously-skip-permissions', '--prompt-interactive', input];
   if (definition.kind === 'gemini') args.splice(0, 1, '--yolo');
   const env = Object.entries({ ...keepEnv(p.env), ...definition.env }).map(([k, v]) => `${k}=${quote(v)}`);
-  await herdr(['pane', 'run', state.paneId, ['env', ...env, quote(definition.command), ...args].join(' ')], p);
+  await deliver(() => herdr(['pane', 'run', state.paneId, ['env', ...env, quote(definition.command), ...args].join(' ')], p));
   return true;
 }
 
@@ -260,6 +293,26 @@ function cachePullRequests(state) {
     if (refs.length || state.pullCache[row.number]) state.pullCache[row.number] = { ...state.pullCache[row.number], row, refs, present: true };
   }
 }
+async function reviewSubmissions(pull, state, p) {
+  p.reviewReads ??= new Map();
+  if (!p.reviewReads.has(pull.row.number)) p.reviewReads.set(pull.row.number, (async () => {
+    let endpoint = `repos/${state.repo}/pulls/${pull.row.number}/reviews?per_page=100`;
+    const pages = {}, rows = [];
+    while (endpoint) {
+      const old = pull.reviewPages?.[endpoint], r = await githubGet(endpoint, p, old?.etag);
+      const page = r.status === 304 ? old : { etag: r.etag, rows: r.value, next: r.link?.match(/<https:\/\/api\.github\.com\/([^>]+)>; rel="next"/)?.[1] };
+      if (!Array.isArray(page?.rows)) throw Error('GitHub reviews unavailable; retry next tick.');
+      pages[endpoint] = page; rows.push(...page.rows); endpoint = page.next;
+    }
+    pull.reviewPages = pages;
+    pull.reviews ??= {};
+    // A review ID names one submission. Later edits or dismissals are not new work.
+    for (const row of rows) if (row.submitted_at && !Object.hasOwn(pull.reviews, row.id)) {
+      pull.reviews[row.id] = { id: row.id, user: row.user, submitted_at: row.submitted_at, state: row.state, body: row.body, commit_id: row.commit_id };
+    }
+  })());
+  await p.reviewReads.get(pull.row.number);
+}
 async function relatedPullRequests(number, state, config, p) {
   const result = [];
   for (const saved of Object.values(state.pullCache)) {
@@ -276,7 +329,11 @@ async function relatedPullRequests(number, state, config, p) {
     for (const row of saved.discussion ?? []) {
       if (row.body !== ACK_TEXT && await trusted(row, state, config, p)) discussion.push({ id: row.id, updatedAt: row.updated_at, author: row.user.login, body: row.body });
     }
-    result.push({ ...saved.snapshot, comments: discussion });
+    const reviews = [];
+    for (const row of Object.values(saved.reviews ?? {})) if (await trusted(row, state, config, p)) {
+      reviews.push({ id: row.id, author: row.user.login, submittedAt: row.submitted_at, state: row.state, body: row.body, commit: row.commit_id });
+    }
+    result.push({ ...saved.snapshot, comments: discussion, reviews });
   }
   return result.sort((a, b) => a.number - b.number);
 }
@@ -290,7 +347,7 @@ async function revalidateView(view, state, config, p) {
     return result;
   };
   const pulls = [];
-  for (const pull of view.pulls) if (await allowed(pull.author)) pulls.push({ ...pull, comments: await retain(pull.comments) });
+  for (const pull of view.pulls) if (await allowed(pull.author)) pulls.push({ ...pull, comments: await retain(pull.comments), reviews: await retain(pull.reviews ?? []) });
   return { ...view, text: view.text && await allowed(view.text.author) ? view.text : undefined, comments: await retain(view.comments), pulls };
 }
 
@@ -309,12 +366,24 @@ export async function tickAutopilot(stateFile, ports = {}) {
     if (![200, 304].includes(result.status)) throw Error('GitHub issue check failed; check gh auth status.');
     delete state.retryAt;
     if (result.status !== 304) { state.cachedIssues = result.issues; state.etag = result.etag; if (result.pages) state.pages = result.pages; }
-    state.acknowledged ??= {}; state.commentCache ??= {}; state.seen ??= {};
+    state.acknowledged ??= {}; state.commentCache ??= {}; state.seen ??= {}; state.timeSeen ??= {};
     cachePullRequests(state);
-    const work = [], pending = {}, warnings = [];
+    const work = [], pending = {}, warnings = [], selections = [];
+    const timeRules = [], pendingTimes = {};
+    for (const { number, changedAt } of await (p.readRunProgress ?? readRunProgress)(state, p)) {
+      const key = `run:${number}`;
+      if (p.now() - changedAt >= STUCK_AFTER && state.timeSeen[key] !== changedAt) {
+        timeRules.push({ kind: 'stuck-run', number, reason: `Run #${number} has had no progress for 60 minutes; follow the pdd:stuck rule.` });
+        pendingTimes[key] = changedAt;
+      }
+    }
     for (const issue of state.cachedIssues ?? []) {
       const labels = issue.labels?.map(x => typeof x === 'string' ? x : x.name) ?? [];
-      if (issue.pull_request || issue.state !== 'open' || (Date.parse(issue.created_at) < Date.parse(state.activatedAt) && !labels.includes('pdd:autopilot'))) continue;
+      if (issue.pull_request || issue.state !== 'open') continue;
+      const eligibleAge = !(Date.parse(issue.created_at) < Date.parse(state.activatedAt) && !labels.includes('pdd:autopilot'));
+      const selection = {number:issue.number, inScope:eligibleAge, state:'unknown', reasons:eligibleAge ? ['readiness-unknown'] : ['outside-activation-scope']};
+      selections.push(selection);
+      if (!eligibleAge) continue;
       try {
         const version = `${issue.updated_at}:${issue.comments}`;
         let rows = [];
@@ -324,9 +393,13 @@ export async function tickAutopilot(stateFile, ports = {}) {
           state.commentCache[issue.number] = { version, rows };
         }
         const related = Object.values(state.pullCache).filter(pull => pull.refs.includes(issue.number)).sort((a, b) => a.row.number - b.row.number);
-        const source = digest({ issue: [issue.title, issue.body, issue.updated_at, issue.comments, [...labels].sort()], comments: rows.map(row => [row.id, row.updated_at, row.user?.login, row.body]), pulls: related.map(pull => [pull.row.number, pull.present, pull.row.updated_at, pull.row.comments, pull.row.title, pull.row.body]) });
+        for (const pull of related) await reviewSubmissions(pull, state, p);
+        const source = digest({ issue: [issue.title, issue.body, issue.updated_at, issue.comments, [...labels].sort()], comments: rows.map(row => [row.id, row.updated_at, row.user?.login, row.body]), pulls: related.map(pull => [pull.row.number, pull.present, pull.row.updated_at, pull.row.comments, pull.row.title, pull.row.body, Object.values(pull.reviews ?? {})]) });
         const previous = state.seen[issue.number];
-        if (previous?.source === source && previous.mode === config.mode) continue;
+        const claimActivity = [issue.updated_at, ...rows.flatMap(row => [row.created_at, row.updated_at])].map(value => Date.parse(value)).filter(Number.isFinite).reduce((latest, at) => Math.max(latest, at), -Infinity);
+        const claimKey = `claim:${issue.number}`;
+        const claimDue = labels.includes('pdd:working') && Number.isFinite(claimActivity) && p.now() - claimActivity >= CLAIM_IDLE_AFTER && state.timeSeen[claimKey] !== claimActivity;
+        if (previous?.source === source && previous.mode === config.mode && !claimDue) { if (previous.view) { selection.state=previous.waiting ? 'waiting' : 'ready'; selection.reasons=previous.waiting ? (previous.selectionReasons ?? ['previously-observed-wait']) : []; } continue; }
         const trustedComments = []; let acknowledged = false;
         for (const row of rows) {
           if (await trusted(row, state, config, p)) {
@@ -336,6 +409,7 @@ export async function tickAutopilot(stateFile, ports = {}) {
         }
         const authorTrusted = await trusted(issue, state, config, p);
         if (!authorTrusted && !trustedComments.length) {
+          selection.state='excluded'; selection.reasons=['no-trusted-issue-or-comment'];
           if (!state.acknowledged[issue.number] && !acknowledged) {
             const reply = await p.execute('gh', ['api', '--include', '--method', 'POST', `repos/${state.repo}/issues/${issue.number}/comments`, '-f', `body=${ACK_TEXT}`]);
             if (reply.code !== 0) {
@@ -353,13 +427,19 @@ export async function tickAutopilot(stateFile, ports = {}) {
         const event = digest(view);
         const blocked = labels.some(name => ['pdd:working', 'pdd:stuck', 'pdd:code-pending'].includes(name));
         const waiting = blocked || config.mode === 'observe' && pulls.some(pr => pr.state === 'open');
-        const observed = { event, view, source, mode: config.mode, waiting, blocked };
+        if (!waiting) { selection.state='ready'; selection.reasons=[]; }
+        if (waiting) { selection.state='waiting'; selection.reasons=blocked ? labels.filter(name => ['pdd:working','pdd:stuck','pdd:code-pending'].includes(name)) : ['open-pr-observe-mode']; }
+        const observed = { event, view, source, mode: config.mode, waiting, blocked, selectionReasons:selection.reasons };
         const sameTrustedWork = previous?.view && digest(await revalidateView(previous.view, state, config, p)) === event;
         const becameReady = previous && !waiting && (previous.blocked && !blocked || previous.mode === 'observe' && config.mode === 'auto');
-        if (!previous && waiting || sameTrustedWork && !becameReady) {
+        if (!claimDue && (!previous && waiting || sameTrustedWork && !becameReady)) {
           state.seen[issue.number] = observed; continue;
         }
         work.push(item); pending[issue.number] = observed;
+        if (claimDue) {
+          timeRules.push({ kind: 'idle-claim', number: issue.number, reason: `Issue #${issue.number} has a pdd:working claim idle for about 1 hour; inspect takeover under the skill's claim rule.` });
+          pendingTimes[claimKey] = claimActivity;
+        }
       } catch (error) {
         if (error.resetAt) throw error;
         warnings.push(`Deferred #${issue.number}: ${line(error.message)}`);
@@ -368,9 +448,57 @@ export async function tickAutopilot(stateFile, ports = {}) {
     }
     if (!read(stateFile)?.enabled) return ok('Autopilot stopped.');
     let delivered = false;
-    if (work.length || !state.recipeDelivered) {
-      delivered = await wake(state, message(state, work), p);
-      if (delivered) { state.recipeDelivered = true; Object.assign(state.seen, pending); }
+    const metricsContext=p.metricsContext ?? (cwd=>gitContext(cwd,{execFile:(file,args,options)=>p.execute(file,args,options)}));
+    const metricsFiles={...nativeFiles,...p.metricsFiles};
+    const metricsWarn=message=>{try{p.warn(message);}catch{}};
+    const metricsGap=input=>(p.metricsGap ?? recordCaptureGap)(input,metricsFiles);
+    {
+      try {
+        const context=await metricsContext(state.cwd), source=metricsSource({commonDir:context.commonDir},metricsFiles,p.now);
+        const folder=join(context.commonDir,'pdd','metrics','decisions'); metricsFiles.mkdirSync(folder,{recursive:true,mode:0o700});
+        const at=new Date(p.now()).toISOString(), snapshotId=`snapshot:${randomUUID()}`, events=[];
+        for (const selection of selections) {
+          const item=work.find(row => row.number===selection.number);
+          const id=randomUUID(), file=join(folder,`${id}.json`), temp=join(folder,`.${id}.tmp`), fd=metricsFiles.openSync(temp,'wx',0o600);
+          const base={schema:'pdd.metrics.event.v1',repo:state.repo.toLowerCase(),issue:selection.number,at,observedAt:at,source};
+          const facts=[{...base,id:`${id}:selection`,type:'selection',data:{snapshotId,inScope:selection.inScope,state:selection.state,reasons:selection.reasons}}];
+          try { metricsFiles.writeFileSync(fd,JSON.stringify({id,repo:state.repo.toLowerCase(),issue:selection.number,snapshotId,at,offered:!!item,pendingSnapshot:true,events:facts})); metricsFiles.fsyncSync(fd); } finally { metricsFiles.closeSync(fd); }
+          metricsFiles.renameSync(temp,file);
+          if (item) item.decisionId=id; events.push(...facts);
+        }
+        const fd=metricsFiles.openSync(folder,'r'); try { metricsFiles.fsyncSync(fd); } finally { metricsFiles.closeSync(fd); }
+        // Publish the complete issue membership only after all decisions are durable.
+        const snapshots=join(context.commonDir,'pdd','metrics','snapshots'); metricsFiles.mkdirSync(snapshots,{recursive:true,mode:0o700});
+        const snapshotFile=join(snapshots,`${snapshotId.slice(9)}.json`), snapshotTemp=`${snapshotFile}.tmp`;
+        const snapshotFd=metricsFiles.openSync(snapshotTemp,'wx',0o600);
+        try { metricsFiles.writeFileSync(snapshotFd,JSON.stringify({snapshotId,repo:state.repo.toLowerCase(),observedAt:at,source,events})); metricsFiles.fsyncSync(snapshotFd); } finally { metricsFiles.closeSync(snapshotFd); }
+        metricsFiles.renameSync(snapshotTemp,snapshotFile);
+        const snapshotDirFd=metricsFiles.openSync(snapshots,'r'); try {metricsFiles.fsyncSync(snapshotDirFd);} finally {metricsFiles.closeSync(snapshotDirFd);}
+        try { await (p.metricsAppendEvents ?? (input=>appendEvents(input,{commonDir:async()=>context.commonDir})))({root:state.cwd,events}); } catch { for (const selection of selections) try {metricsGap({commonDir:context.commonDir,repo:state.repo,issue:selection.number,at:p.now()});} catch {} metricsWarn('Metrics selection capture incomplete.'); }
+      } catch {
+        try { const context=await metricsContext(state.cwd); for (const selection of selections) metricsGap({commonDir:context.commonDir,repo:state.repo,issue:selection.number,at:p.now()}); } catch { /* No writable storage remains; the warning is the available evidence. */ }
+        if (selections.length) metricsWarn('Metrics decision capture incomplete; workflow origin remains unknown.');
+      }
+    }
+    if (work.length || timeRules.length || !state.recipeDelivered) {
+      const capture = async status => {
+        try {
+          const context=await metricsContext(state.cwd), at=new Date(p.now()).toISOString(), source=metricsSource({commonDir:context.commonDir},metricsFiles,p.now);
+          const events=work.filter(item=>item.decisionId).map(item=>({schema:'pdd.metrics.event.v1',id:`${item.decisionId}:launch:${status}`,repo:state.repo.toLowerCase(),issue:item.number,type:'launch',at,observedAt:at,source,data:{origin:'autopilot',decisionId:item.decisionId,status}}));
+          for (const event of events) {
+            const file=join(context.commonDir,'pdd','metrics','decisions',`${event.data.decisionId}.json`);
+            const record=JSON.parse(metricsFiles.readFileSync(file,'utf8'));
+            if (!record.events.some(row=>row.id===event.id)) record.events.push(event);
+            const temp=`${file}.${randomUUID()}.tmp`, fd=metricsFiles.openSync(temp,'wx',0o600);
+            try { metricsFiles.writeFileSync(fd,JSON.stringify(record)); metricsFiles.fsyncSync(fd); } finally { metricsFiles.closeSync(fd); }
+            metricsFiles.renameSync(temp,file);
+            const dirfd=metricsFiles.openSync(dirname(file),'r'); try { metricsFiles.fsyncSync(dirfd); } finally { metricsFiles.closeSync(dirfd); }
+          }
+          if(events.length) await (p.metricsAppendEvents ?? (input=>appendEvents(input,{commonDir:async()=>context.commonDir})))({root:state.cwd,events});
+        } catch { try { const context=await metricsContext(state.cwd); for(const item of work) metricsGap({commonDir:context.commonDir,repo:state.repo,issue:item.number,at:p.now()}); } catch {} if (work.length) metricsWarn('Metrics launch capture incomplete.'); }
+      };
+      delivered = await wake(state, message(state, work, timeRules), p, capture);
+      if (delivered) { state.recipeDelivered = true; Object.assign(state.seen, pending); Object.assign(state.timeSeen, pendingTimes); }
     }
     return ok([delivered ? `Autopilot offered ${work.length} issue(s).` : 'Autopilot tick complete.', ...warnings].join(' '));
   } catch (e) {

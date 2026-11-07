@@ -34,8 +34,8 @@ test('PROVE-NATIVE4: setup diagnostics disqualify literal matches; stdout/stderr
  const {proveRun}=await api(),f=fixture(t);f.put('test/new.test.mjs',regression);f.put('src/value.mjs','export default true;');f.commit();await proveRun({ref:'2594',cwd:f.root,test:"node -e \"console.error('Error: Cannot find module defect-x');process.exit(1)\"",expect:'defect-x'});assert.equal(f.proof().outcome,'setup-error');assert.match(f.proof().setupError,/Cannot find module/);
  await proveRun({ref:'2594',cwd:f.root,test:"node -e \"if(!require('fs').readFileSync('src/value.mjs','utf8').includes('true')){process.stdout.write('defect-');process.stderr.write('x');process.exit(1)}\"",expect:'defect-x'});assert.equal(f.proof().outcome,'wrong-reason');
 });
-test('PROVE-NATIVE5: fixture-only and deleted tests do not execute; symlink tests and base ancestry are unsafe', async t => {
- const {proveRun}=await api(),f=fixture(t);f.put('fixtures/data','x');f.commit();await proveRun({ref:'2594',cwd:f.root,test:'exit 77',expect:'x'});assert.equal(f.proof().outcome,'no-changed-tests');assert.equal(f.proof().base.exitCode,null);
+test('PROVE-NATIVE5: fixture-only runs without overlay; symlink tests remain unsafe', async t => {
+ const {proveRun}=await api(),f=fixture(t);f.put('fixtures/data','x');f.commit();await proveRun({ref:'2594',cwd:f.root,test:"node -e \"console.log(require('fs').existsSync('fixtures/data'))\"",expect:'x'});assert.equal(f.proof().outcome,'old-passes');assert.deepEqual(f.proof().paths,[]);assert.equal(f.proof().base.exitCode,0);assert.equal(f.proof().head.exitCode,0);assert.deepEqual(f.proof().base.stdoutTail,['false']);assert.deepEqual(f.proof().head.stdoutTail,['true']);assert.equal(f.git('worktree','list','--porcelain').split('worktree ').length,2);
  symlinkSync('../src/value.mjs',join(f.root,'test-link.test.mjs'));f.commit();await proveRun({ref:'2594',cwd:f.root,test:'true',expect:'x'});assert.equal(f.proof().outcome,'setup-error');
 });
 test('PROVE-NATIVE6: default readRun accepts real selection and rejects an absent run without a record', async t => {
@@ -58,7 +58,7 @@ test('PROVE-NATIVE10: cleanup failures override proof; rename/save errors return
  const {proveRun}=await api(),f=fixture(t);f.put('test/new.test.mjs',regression);f.put('src/value.mjs','export default true;');f.commit();const result=await proveRun({ref:'2594',cwd:f.root,test:command,expect:'defect-x'},{cleanup:async({root,worktrees})=>{for(const path of worktrees)execFileSync('git',['worktree','remove','--force',path],{cwd:root});return {error:'deliberate cleanup failure'};}});assert.equal(result.exitCode,1);assert.equal(f.proof().outcome,'setup-error');assert.equal(f.proof().cleanupError,'deliberate cleanup failure');rmSync(join(f.runDir,'old-code-proof.json'));mkdirSync(join(f.runDir,'old-code-proof.json'));const saveFailure=await proveRun({ref:'2594',cwd:f.root,test:command,expect:'defect-x'});assert.deepEqual(saveFailure,{exitCode:1,message:'Old-code proof: ✗ setup-error (could not save result).'});assert.equal(lstatSync(join(f.runDir,'old-code-proof.json')).isDirectory(),true);
 });
 test('PROVE-NATIVE11: deletions never overlay and signalled execution never establishes proof', async t => {
- const {proveRun}=await api(),f=fixture(t);f.put('test/deleted.test.mjs','throw Error("deleted");');f.commit();f.run.baseSha=f.git('rev-parse','HEAD');f.git('push','-q','origin',`${f.run.baseSha}:refs/heads/main`);writeFileSync(join(f.runDir,'status.json'),JSON.stringify(f.run));f.git('rm','test/deleted.test.mjs');f.commit();await proveRun({ref:'2594',cwd:f.root,test:'exit 77',expect:'x'});assert.equal(f.proof().outcome,'no-changed-tests');assert.equal(f.proof().base.exitCode,null);f.put('test/new.test.mjs',regression);f.commit();await proveRun({ref:'2594',cwd:f.root,test:'kill -TERM $$',expect:'defect-x'});assert.equal(f.proof().outcome,'signalled');assert.equal(f.proof().base.signal,'SIGTERM');assert.equal(f.proof().head.signal,'SIGTERM');
+ const {proveRun}=await api(),f=fixture(t);f.put('test/deleted.test.mjs','throw Error("deleted");');f.put('test/remaining.test.mjs',"import fs from 'node:fs';console.log(fs.existsSync('test/deleted.test.mjs'));\n");f.commit();f.run.baseSha=f.git('rev-parse','HEAD');f.git('push','-q','origin',`${f.run.baseSha}:refs/heads/main`);writeFileSync(join(f.runDir,'status.json'),JSON.stringify(f.run));f.git('rm','test/deleted.test.mjs');f.commit();await proveRun({ref:'2594',cwd:f.root,test:'node --test test/remaining.test.mjs',expect:'x'});assert.equal(f.proof().outcome,'old-passes');assert.deepEqual(f.proof().paths,[]);assert.equal(f.proof().base.exitCode,0);assert.equal(f.proof().head.exitCode,0);assert.ok(f.proof().base.stdoutTail.includes('# true'));assert.ok(f.proof().head.stdoutTail.includes('# false'));assert.equal(f.git('worktree','list','--porcelain').split('worktree ').length,2);f.put('test/new.test.mjs',regression);f.commit();await proveRun({ref:'2594',cwd:f.root,test:'kill -TERM $$',expect:'defect-x'});assert.equal(f.proof().outcome,'signalled');assert.equal(f.proof().base.signal,'SIGTERM');assert.equal(f.proof().head.signal,'SIGTERM');
 });
 
 test('2904: the per-phase limit is 10 minutes by default, a person sets 1 to 120 minutes, and a bad value runs nothing', async t => {
@@ -68,4 +68,48 @@ test('2904: the per-phase limit is 10 minutes by default, a person sets 1 to 120
  assert.deepEqual(await limits({}),[600000,600000]);
  assert.deepEqual(await limits({timeoutMinutes:45}),[2700000,2700000]);
  for(const timeoutMinutes of [0,121,1.5]){let called=0;assert.deepEqual(await proveRun({test:'x',expect:'y',timeoutMinutes},new Proxy({}, {get(){called++;throw Error('effect');}})),{exitCode:2,message:'pdd workflow prove --timeout takes whole minutes from 1 to 120.'});assert.equal(called,0);}
+});
+
+// Approved existing-test fallback: paths describe the overlay, never command authority.
+test('2958-FALLBACK-EMPTY: an empty committed diff executes unchanged tests twice and cleans snapshots', async t => {
+ const {proveRun}=await api(),f=fixture(t);
+ f.put('test/remaining.test.mjs',"import assert from 'node:assert/strict';import fs from 'node:fs';assert.equal(fs.readFileSync('src/value.mjs','utf8'),'export default false;\\n');assert.equal(fs.existsSync('test/untracked.test.mjs'),false);console.log('committed existing test');\n");
+ const base=f.commit();f.git('push','-q','origin',`${base}:refs/heads/main`);
+ f.put('src/value.mjs','throw Error("dirty implementation");');f.put('test/remaining.test.mjs','throw Error("dirty test");');f.put('test/untracked.test.mjs','throw Error("untracked");');
+ const result=await proveRun({ref:'2594',cwd:f.root,test:'node --test test/remaining.test.mjs',expect:'defect-x'}),r=f.proof();
+ assert.equal(result.exitCode,1);assert.equal(r.outcome,'old-passes');assert.deepEqual(r.paths,[]);assert.equal(r.baseSha,base);assert.equal(r.headSha,base);
+ for(const phase of [r.base,r.head]){assert.equal(phase.exitCode,0);assert.ok(phase.stdoutTail.includes('# committed existing test'));}
+ assert.equal(f.git('worktree','list','--porcelain').split('worktree ').length,2);assert.match(readFileSync(join(f.root,'test/remaining.test.mjs'),'utf8'),/dirty test/);
+});
+
+test('2958-FALLBACK-LANDED: public CLI executes identical landed map, CSS and adapter assertions on computed snapshots', async t => {
+ const {runPdd}=await import('../src/pdd-cli.mjs'),{validateProofRecord}=await api(),f=fixture(t);
+ const files=['app/maps/checkout.json','app/styles/checkout.css','app/adapters/checkout.mjs'];
+ const old=['{"destination":"/legacy"}\n','.confirm-target { min-height: 1px; }\n','export const destination = "/legacy";\n'];
+ const fixed=['{"destination":"/checkout"}\n','.confirm-target { min-height: 44px; }\n','export const destination = "/checkout";\n'];
+ files.forEach((path,i)=>f.put(path,old[i]));
+ f.put('test/landed.test.mjs',`import test from 'node:test';import assert from 'node:assert/strict';import {readFileSync} from 'node:fs';import {destination} from '../app/adapters/checkout.mjs';
+ test('map route',()=>assert.equal(JSON.parse(readFileSync('app/maps/checkout.json','utf8')).destination,'/checkout','code: map-route-defect'));
+ test('CSS target size',()=>assert.ok(Number(/min-height:\\s*(\\d+)px/.exec(readFileSync('app/styles/checkout.css','utf8'))?.[1])>=44,'code: target-size-defect'));
+ test('adapter route',()=>assert.equal(destination,'/checkout','code: adapter-route-defect'));
+ `);
+ const base=f.commit();f.git('push','-q','origin',`${base}:refs/heads/main`);files.forEach((path,i)=>f.put(path,fixed[i]));const head=f.commit();
+ assert.deepEqual(f.git('diff','--name-only',base,head).split('\n'),[files[2],files[0],files[1]]);
+ let stdout='',stderr='';const exit=await runPdd(['workflow','prove','2594','--test','node --test test/landed.test.mjs','--expect','code: map-route-defect','--timeout','1'],{cwd:f.root,stdout:{write:s=>stdout+=s},stderr:{write:s=>stderr+=s}});
+ const r=f.proof();assert.equal(exit,0,stderr);assert.equal(stderr,'');assert.match(stdout,/Old-code proof: ✓/);assert.deepEqual(r.paths,[]);assert.equal(r.baseSha,base);assert.equal(r.headSha,head);assert.equal(r.base.exitCode,1);assert.equal(r.base.expectedFound,true);assert.equal(r.base.setupError,'');assert.equal(r.head.exitCode,0);assert.equal(validateProofRecord(r),true);assert.equal(JSON.parse(readFileSync(join(f.runDir,'status.json'))).baseSha,f.baseSha);
+ const {readRunResults}=await import('../src/workflow-results.mjs');const {preparePrEvidence}=await import('../src/workflow-pr-evidence.mjs');
+ assert.equal(readRunResults({root:f.root,runDir:f.runDir,runId:f.run.runId,baseBranch:'main'})[0].state,'current');
+ assert.equal((await preparePrEvidence({run:{...f.run,steps:[]},isCode:true})).proofStatus,'proved');
+ assert.equal(f.git('worktree','list','--porcelain').split('worktree ').length,2);
+ for(let i=0;i<files.length;i++){
+  const control=join(f.runDir,`control-${i}`);f.git('worktree','add','--detach',control,head);
+  try{writeFileSync(join(control,files[i]),old[i]);let failed;const env={...process.env};delete env.NODE_TEST_CONTEXT;try{execFileSync(process.execPath,['--test','test/landed.test.mjs'],{cwd:control,encoding:'utf8',env});}catch(error){failed=error;}
+   assert.equal(failed?.status,1,'semantic control must fail');assert.match(failed.stdout,/ERR_ASSERTION/);assert.match(failed.stdout,new RegExp(['map-route-defect','target-size-defect','adapter-route-defect'][i]));assert.match(failed.stdout,/# pass 2/);assert.doesNotMatch(failed.stdout,/ERR_MODULE_NOT_FOUND|SyntaxError/);
+  }finally{f.git('worktree','remove','--force',control);}
+ }
+});
+
+test('2958-FALLBACK-MISSING: changed test overlay never supplies the missing native implementation', async t=>{
+ const {proveRun}=await api(),f=fixture(t);f.put('app/native/native-checkout-defect.mjs','export const enabled = true;\n');f.put('test/new.test.mjs',"import assert from 'node:assert/strict';import {enabled} from '../app/native/native-checkout-defect.mjs';assert.equal(enabled,true);\n");f.commit();
+ const answer=await proveRun({ref:'2594',cwd:f.root,test:command,expect:'native-checkout-defect'}),r=f.proof();assert.equal(answer.exitCode,1);assert.equal(r.outcome,'setup-error');assert.deepEqual(r.paths,['test/new.test.mjs']);assert.equal(r.base.exitCode,1);assert.match(r.base.setupError,/ERR_MODULE_NOT_FOUND/);assert.equal(r.base.expectedFound,true);assert.equal(r.head.exitCode,0);assert.equal(f.git('worktree','list','--porcelain').split('worktree ').length,2);
 });

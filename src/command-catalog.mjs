@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 424747280e02e114b56e6b14b19b6faf42f05eb70931620ce7c2a88dd26c1a68).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 5c0c0c67380e2ed2681bceefc4aefae45bc525b544d6fe4948c907c07c41468e).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -16,6 +16,11 @@ ${command} --said - <<'PDD_SAID'
 PDD_SAID
 Choose a delimiter absent as a whole line from the words. Keep the delimiter quoted. --said - reads all UTF-8 stdin, including trailing newlines. Simple words may use --said WORDS. Without --said, a person can use terminal y/N. Root pdd.json strict_approvals true requires a person terminal.`;
 const routes = [
+  { id: 'metrics', prefix: ['metrics'], local: 'metrics', operands: [], options: [{name:'--json',kind:'flag'},{name:'--date',kind:'text'},{name:'--snapshot',kind:'text'},{name:'--timezone',kind:'text'},{name:'--at',kind:'text'},{name:'--expected-source',kind:'text-list'}],
+    forms: [form('pdd metrics [--json] [--date YYYY-MM-DD | --snapshot ID] [--timezone IANA] [--at UTC] [--expected-source ID...]', 'Show metrics for this repository.')] },
+  { id: 'metrics.export', prefix: ['metrics', 'export'], local: 'metrics', operands: [{name:'file',type:'text'}], options: [{name:'--timezone',kind:'text'}], forms: [form('pdd metrics export FILE [--timezone IANA]', 'Export metrics for sharing.')] },
+  { id: 'metrics.import', prefix: ['metrics', 'import'], local: 'metrics', operands: [{name:'file',type:'text'}], options: [], forms: [form('pdd metrics import FILE', 'Import a metrics bundle.')] },
+  { id: 'metrics.record', prefix: ['metrics', 'record'], local: 'metrics', operands: [{name:'file',type:'text'}], options: [], forms: [form('pdd metrics record FILE', 'Record explicit metrics observations.')] },
   { id: 'autopilot.start', prefix: ['autopilot', 'start'], local: 'autopilot-start', operands: [], options: [{name:'--runs',kind:'text'}],
     forms: [form('pdd autopilot start [--runs N]', 'Start this repo in an interactive Herdr agent; check now and every 30 minutes without AI on empty ticks. --runs optionally caps concurrent runs.')] },
   { id: 'autopilot.stop', prefix: ['autopilot', 'stop'], local: 'autopilot-stop', operands: [], options: [],
@@ -33,8 +38,8 @@ const routes = [
   // `workflow start` is a quiet word for now; a later change moves it to `removed`: one data edit.
   { id: 'workflow.run', prefix: ['workflow', run], local: 'workflow-run', quiet: ['workflow', 'start'],
     operands: [{name:'name',type:'workflow-name'},{name:'issue',type:'issue'}],
-    options:[{name:'--agent',kind:'value',choices:['codex','claude','gemini','agy']},{name:'--base',kind:'text'},{name:'--adopt-corpus',kind:'text'}],
-    forms:[form(`pdd workflow ${run} NAME ISSUE [--agent codex|claude|gemini|agy] [--base BRANCH]`, 'Start the first area chat for a GitHub issue in Herdr and exit; --base selects an existing origin branch (default: repository default); --adopt-corpus FILE adopts exact unchanged approved content for a fresh replay-evidence-enabled workflow; pdd later pushes the issue branch and opens a real PR.')] },
+    options:[{name:'--agent',kind:'value',choices:['codex','claude','gemini','agy']},{name:'--base',kind:'text'},{name:'--adopt-corpus',kind:'text'},{name:'--draft',kind:'flag'},{name:'--origin',kind:'value',choices:['manual','autopilot','unknown']},{name:'--decision-id',kind:'text'},{name:'--outcome',kind:'value',choices:['code','prompt-only']}],
+    forms:[form(`pdd workflow ${run} NAME ISSUE [--agent codex|claude|gemini|agy] [--base BRANCH] [--draft]`, 'Start the first area chat for a GitHub issue in Herdr and exit; --base selects an existing origin branch (default: repository default); --draft requests draft PRs for this run; --adopt-corpus FILE adopts exact unchanged approved content for a fresh replay-evidence-enabled workflow; --origin, --decision-id and --outcome record optional metrics metadata; pdd later pushes the issue branch and opens a real PR.')] },
   { id: 'workflow.prove', prefix: ['workflow', 'prove'], local: 'workflow-prove',
     operands: [{name:'issue',type:'issue'}], options: [{name:'--test',kind:'text'},{name:'--expect',kind:'text'},{name:'--timeout',kind:'integer',min:1,max:120}],
     forms: [form('pdd workflow prove ISSUE --test COMMAND --expect TEXT [--timeout MIN]', 'Run committed changed tests on the fetched base branch merge-base and committed head with a limit per phase (default 10 minutes; --timeout sets 1 to 120); save a non-gating report that pull requests show as pdd\'s own result.')] },
@@ -44,6 +49,9 @@ const routes = [
   { id: 'workflow.evidence', prefix: ['workflow', 'evidence'], local: 'workflow-evidence',
     operands: [{name:'issue',type:'issue'}], options: [{name:'--summary',kind:'text'}],
     forms: [form('pdd workflow evidence ISSUE --summary FILE', 'Record source-verified saved check JSON without rerunning steps, gates or publication.')] },
+  { id: 'workflow.evidence-associate', prefix: ['workflow', 'evidence-associate'], local: 'workflow-evidence-associate',
+    operands: [{name:'issue',type:'issue'}], options: [{name:'--workspace',kind:'text'},{name:'--stage',kind:'value',choices:['current','pr1']},{name:'--test',kind:'text-list'}],
+    forms: [form('pdd workflow evidence-associate ISSUE --workspace PATH --stage current|pr1 --test PATH...', "Register this run's evidence workspace, stage and selected tests; no checks or workflow progress.")] },
   { id: 'workflow.ask', prefix: ['workflow', 'ask'], local: 'workflow-ask',
     operands: [{name:'question',type:'text',repeat:true}], options: [],
     forms: [form('pdd workflow ask QUESTION', 'For the agent in a run worktree: show the person that the chat waits for their answer.')] },
@@ -51,8 +59,8 @@ const routes = [
     operands: [{name:'request-id',type:'text'}], options: [{name:'--summary',kind:'text'}],
     forms: [form(`pdd workflow ${requestUptake} REQUEST_ID --summary TEXT`, 'For the agent in a run worktree: acknowledge a delivered change request with a short note.')] },
   { id: 'workflow.approve', prefix: ['workflow', 'approve'], local: 'workflow-approve',
-    operands: [{name:'issue',type:'issue',optional:true}], options: [{name:'--said',kind:'text'}],
-    forms: [form('pdd workflow approve [ISSUE] [--said WORDS]', 'Approve the gate and all its selected draft prompts in one step. ' + approvalHelp('pdd workflow approve N'))] },
+    operands: [{name:'issue',type:'issue',optional:true}], options: [{name:'--said',kind:'text'},{name:'--draft',kind:'flag'}],
+    forms: [form('pdd workflow approve [ISSUE] [--said WORDS] [--draft]', 'Approve the gate and all its selected draft prompts in one step; --draft requests draft PRs at the current unpublished gate. ' + approvalHelp('pdd workflow approve N'))] },
   { id: 'workflow.changes', prefix: ['workflow', 'changes'], local: 'workflow-changes',
     operands: [{name:'issue',type:'issue'},{name:'request',type:'text',repeat:true}], options: [],
     forms: [form('pdd workflow changes ISSUE TEXT', 'Send a change request to the same area chat; the gate stays open.')] },

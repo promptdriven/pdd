@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-view.prompt.md (sha256: e43adbca1b77ed5e3176573a71f328f0dbb59f5a4f82bc284395456bb2f5d7eb).
+// Generated from prompts/cli/workflow-view.prompt.md (sha256: 4e1cd64fe9c1cded7df701bbf009e85bf8f17895604d2abe7d4d4c0c723f5213).
 import { execFile } from 'node:child_process';
 import { lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { resolveRun } from './workflow-runs.mjs';
 import { findTests, interfaceBlocks, isSecretPath, LIMITS, proseSha256 } from './runtime-preflight.mjs';
 import { PROMPT_TESTS_WORDS } from './runtime-output.mjs';
+import { resultLines } from './workflow-results.mjs';
 
 const execute = promisify(execFile);
 const text = value => String(value ?? '').replace(/[\x00-\x1f\x7f]/g, ' ').trim();
@@ -119,6 +120,10 @@ export async function viewRun({ ref, cwd }, ports = {}) {
     ...(array(run.pr).length ? run.pr.map(pr => `PR: ${text(pr.url)} (${text(pr.state ?? 'unknown')}, saved)`) : ['PRs: none recorded.']),
     ...runtime.map(line => text(line)), ...(reports.length ? reports.map(url => `Report: ${text(url)}`) : ['Interpreter reports: not recorded.']),
     ...(tries.length ? tries.map(url => `Try: ${text(url)}`) : ['Try: not recorded.']),
+    ...Object.entries(run.done ?? {}).flatMap(([step, record]) => [
+      `Step: ${text(record.area ?? array(run.areas).find(area => array(area.steps).includes(step))?.name ?? 'unknown')} / ${text(step)}`,
+      ...resultLines(record.pddResults ?? []).map(line => `  ${line}`),
+      ...(record.summary ? [`  Agent note — not checked by pdd: ${text(record.summary)}`] : [])]),
     `Revision: ${revision?.trim() ?? 'unavailable'}; ${dirty === null ? 'working-tree state unavailable' : dirty ? 'uncommitted changes' : 'clean checkout'}.`,
     'Review links show current files; recorded approvals do not certify later edits.',
     ...(changed === null ? ['Changes since the base are unavailable; listing available authored files.'] : []),

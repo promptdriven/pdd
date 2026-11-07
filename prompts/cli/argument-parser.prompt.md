@@ -42,6 +42,8 @@ this rule changes only the diagnostic for a number in the workflow-name position
 
 Runner routes accept exactly their catalogued operands and options. An option of kind `text` takes any one nonblank value (`--summary`, `--said`). Preserve its exact bytes including leading/trailing spaces and option-like strings such as "--help"; consumed text values are not help flags. Empty/whitespace-only, duplicate and missing values refuse before effects. A route whose last operand is repeated text (workflow.changes) supports `--` to end options, and a help word after `--` is text. Issue operands are a positive number, `owner/repo#number` or a GitHub issue URL. Workflow and step names are lowercase words joined by single hyphens, at most 64 characters. Whether a workflow, run or step exists belongs to the runner. Reject unsafe names, unsupported issues, unknown options and extra operands with exit 2 before any effect. Help for every route is local.
 
+Option kind `text-list` takes one or more nonblank words up to the next word that starts with `-` or the end of argv. Preserve each word's bytes and order in a fresh frozen array at that option's key. An empty list, including an option immediately followed by a help flag, refuses. Duplicate options still refuse; ordinary `text` options still take exactly one value. This supplies the catalog's selected test paths; the runner owns their path safety, uniqueness and source meaning.
+
 Option kind `integer` takes decimal digits with no sign, within the option's `min` and `max`. Option kind `uuid` takes one UUID (8-4-4-4-12 hex digits). Which `check` and `try` options go together belongs to the [runtime client](runtime-client.prompt.md).
 
 Option kind `optional-integer` consumes the following word only when it is decimal digits; validate against
@@ -50,7 +52,14 @@ or Story operand remains available for ordinary parsing. This supports --serve [
 
 Accept the catalog's `pdd mcp` route without operands or options; normal local help forms apply. Parsing never starts the server or registers it.
 
+## Scope command syntax
+
+For the [scope routes](command-catalog.prompt.md#durable-scope-routes), parse exactly one selector: `--batch NAME` or `--runs RUN_ID[,RUN_ID...]`. Set with batch requires `--issues ISSUE[,ISSUE...]`; set with runs excludes issues. Set requires `--through prompt-pr`; extend requires `--through code`; show and revoke exclude through and issues. Mutations accept optional `--said WORDS`; show excludes it. Reject empty list members, duplicate members, duplicate or incompatible options and missing values before effects. Preserve IDs, name and said text exactly; do not resolve identity or interpret person words. Owner validation remains authoritative.
+
 ## Dependencies
 
 - [Command catalog](command-catalog.prompt.md): required authoring/generation/runtime/verification/testing context for `PUBLIC_COMMAND_ROUTES`, exact prefixes, operand/option declarations and local dispositions. Parsing uses these route facts, with no outside calls.
+- [Workflow scope](workflow-scope.prompt.md): required authoring/generation/runtime/verification/testing context for canonical scope policy associated with scope route validation; this parser owns syntax and the scope module owns policy.
 - Native authoring/generation also uses the repository context identified in Authoring above. The runtime-client link in Argument validation identifies ownership of downstream combination checks; parsing never calls it and needs no runtime client/session/token context.
+
+Workflow run parses the catalog origin, decision-id and outcome options as observational metadata and forwards them without granting workflow authority.

@@ -16,15 +16,15 @@
     },
     {
       "id": "AC4",
-      "text": "Each phase requests the per-phase limit (10 minutes by default, or the person's --timeout of 1 to 120 whole minutes), a 2-second process-group kill grace and a 1 MiB output cap; base timeout, head timeout, output overflow and child signals have distinct unsuccessful reports and exit 1."
+      "text": "Each phase requests the per-phase limit (10 minutes by default, or the person's `--timeout` of 1 to 120 whole minutes), a 2-second process-group kill grace and a 1 MiB output cap; base timeout, head timeout, output overflow and child signals have distinct unsuccessful reports and exit 1."
     },
     {
       "id": "AC5",
-      "text": "No changed test gives \"no-changed-tests\"; missing commits, unsafe overlay setup, exit 126/127 and known missing-fixture/import failures give \"setup-error\" with a cause and short actual output tail when available even when output contains \"defect-x\"; setup-looking output from a passing phase does not disqualify proof."
+      "text": "Missing commits, unsafe overlay setup, exit 126/127 and known missing-fixture/import failures give \"setup-error\" with a cause and short actual output tail when available even when output contains \"defect-x\"; setup-looking output from a passing phase does not disqualify proof."
     },
     {
       "id": "AC6",
-      "text": "The proof compares committed regular added, modified or renamed tests and supplemental files against the merge-base of HEAD with the fetched selected base branch, excluding base-branch changes already merged into HEAD, and ignores deleted files and implementation."
+      "text": "When tests change, the overlay contains committed regular added, modified or renamed tests and supplemental files from the diff against the merge-base of HEAD with the fetched selected base branch, excluding base-branch changes already merged into HEAD, deleted files and implementation."
     },
     {
       "id": "AC7",
@@ -160,22 +160,6 @@
             "runDir": "/runs/signalled",
             "root": "/repo/signalled",
             "baseSha": "0000000000000000000000000000000000000008",
-            "baseBranch": "alpha"
-          },
-          "error": ""
-        }
-      },
-      {
-        "request": {
-          "ref": "2594",
-          "cwd": "/repo/no-tests"
-        },
-        "reply": {
-          "run": {
-            "runId": "run-no-tests",
-            "runDir": "/runs/no-tests",
-            "root": "/repo/no-tests",
-            "baseSha": "0000000000000000000000000000000000000009",
             "baseBranch": "alpha"
           },
           "error": ""
@@ -676,28 +660,6 @@
             ],
             "error": "",
             "baseSha": "0000000000000000000000000000000000000008"
-          }
-        }
-      },
-      {
-        "request": {
-          "root": "/repo/no-tests",
-          "baseBranch": "alpha"
-        },
-        "reply": {
-          "snapshot": {
-            "headSha": "000000000000000000000000000000000000006d",
-            "baseAvailable": true,
-            "headAvailable": true,
-            "files": [
-              {
-                "path": "test/fixtures/seed.json",
-                "status": "M",
-                "mode": "100644"
-              }
-            ],
-            "error": "",
-            "baseSha": "0000000000000000000000000000000000000009"
           }
         }
       },
@@ -1921,8 +1883,9 @@
       "overlay": 0,
       "runProcess": 0,
       "cleanup": 0,
-      "snapshot": []
-    }
+      "snapshot": 0
+    },
+    "outside_requests": []
   },
   "simulation": {
     "host.readRun": {
@@ -2286,29 +2249,6 @@
         {
           "call_index": 9,
           "args": {
-            "root": "/repo/no-tests",
-            "baseBranch": "alpha"
-          },
-          "result": {
-            "snapshot": {
-              "headSha": "000000000000000000000000000000000000006d",
-              "baseAvailable": true,
-              "headAvailable": true,
-              "files": [
-                {
-                  "path": "test/fixtures/seed.json",
-                  "status": "M",
-                  "mode": "100644"
-                }
-              ],
-              "error": "",
-              "baseSha": "0000000000000000000000000000000000000009"
-            }
-          }
-        },
-        {
-          "call_index": 10,
-          "args": {
             "root": "/repo/missing-base",
             "baseBranch": "alpha"
           },
@@ -2350,7 +2290,7 @@
           }
         },
         {
-          "call_index": 11,
+          "call_index": 10,
           "args": {
             "root": "/repo/unsafe-overlay",
             "baseBranch": "alpha"
@@ -2393,7 +2333,7 @@
           }
         },
         {
-          "call_index": 12,
+          "call_index": 11,
           "args": {
             "root": "/repo/missing-fixture",
             "baseBranch": "alpha"
@@ -2436,7 +2376,7 @@
           }
         },
         {
-          "call_index": 13,
+          "call_index": 12,
           "args": {
             "root": "/repo/merge-base-after-base-merge",
             "baseBranch": "alpha"
@@ -2479,7 +2419,7 @@
           }
         },
         {
-          "call_index": 14,
+          "call_index": 13,
           "args": {
             "root": "/repo/exit-126-setup",
             "baseBranch": "alpha"
@@ -2522,7 +2462,7 @@
           }
         },
         {
-          "call_index": 15,
+          "call_index": 14,
           "args": {
             "root": "/repo/exit-127-setup",
             "baseBranch": "alpha"
@@ -2565,7 +2505,7 @@
           }
         },
         {
-          "call_index": 16,
+          "call_index": 15,
           "args": {
             "root": "/repo/passing-head-setup-looking-output",
             "baseBranch": "alpha"
@@ -2608,7 +2548,7 @@
           }
         },
         {
-          "call_index": 17,
+          "call_index": 16,
           "args": {
             "root": "/repo/safe-proof-values",
             "baseBranch": "alpha"
@@ -2651,7 +2591,7 @@
           }
         },
         {
-          "call_index": 18,
+          "call_index": 17,
           "args": {
             "root": "/repo/literal-command-controls",
             "baseBranch": "alpha"
@@ -2694,7 +2634,7 @@
           }
         },
         {
-          "call_index": 19,
+          "call_index": 18,
           "args": {
             "root": "/repo/head-fails-tap-tail",
             "baseBranch": "alpha"
@@ -2736,7 +2676,9 @@
             }
           }
         }
-      ]
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
     },
     "host.createWorktree": {
       "action": "fixture.lookup",
@@ -4389,6 +4331,67 @@
         "exitCode": 0,
         "message": "Old-code proof: synthetic reply."
       }
+    },
+    "agents.checkWorkflowAgents": {
+      "action": "port.write",
+      "world_pointer": "/outside_requests",
+      "result_template": {
+        "ok": false,
+        "agent": null,
+        "message": ""
+      }
+    },
+    "diagnostics.pathDiagnostic": {
+      "action": "port.write",
+      "world_pointer": "/outside_requests",
+      "result_template": {
+        "lines": []
+      }
+    },
+    "dispatch.startRun": {
+      "action": "port.write",
+      "world_pointer": "/outside_requests",
+      "result_template": {
+        "exitCode": 1,
+        "message": ""
+      }
+    },
+    "setup.setupAgentMcp": {
+      "action": "port.write",
+      "world_pointer": "/outside_requests",
+      "result_template": {
+        "exitCode": 1
+      }
+    },
+    "setup.setupProject": {
+      "action": "port.write",
+      "world_pointer": "/outside_requests",
+      "result_template": {
+        "file": "",
+        "changed": false
+      }
+    },
+    "setup.setupSkills": {
+      "action": "port.write",
+      "world_pointer": "/outside_requests",
+      "result_template": {
+        "results": []
+      }
+    },
+    "source.capture": {
+      "action": "port.write",
+      "world_pointer": "/outside_requests",
+      "result_template": {
+        "sha256": "",
+        "error": ""
+      }
+    },
+    "source.fingerprint": {
+      "action": "port.write",
+      "world_pointer": "/outside_requests",
+      "result_template": {
+        "value": null
+      }
     }
   },
   "context": [],
@@ -4948,55 +4951,6 @@
       "model": "gpt-6.1-sol"
     },
     {
-      "step_id": "no-tests",
-      "entry_path": "prompts/cli/workflow-prove.prompt.md",
-      "operation": "proveRun",
-      "input": {
-        "ref": "2594",
-        "cwd": "/repo/no-tests",
-        "test": "node --test test/new.test.mjs",
-        "expect": "defect-x"
-      },
-      "checks": [
-        {
-          "criterion_id": "AC5",
-          "target": "result",
-          "path": "/exitCode",
-          "op": "equals",
-          "value": 1
-        },
-        {
-          "criterion_id": "AC5",
-          "target": "result",
-          "path": "/message",
-          "op": "equals",
-          "value": "Old-code proof: ✗ no-changed-tests; command `node --test test/new.test.mjs`; old-code exit `none`; new-code exit `none`; expected `defect-x`; cause `no-changed-tests`."
-        },
-        {
-          "criterion_id": "AC5",
-          "target": "world",
-          "path": "/saved/8/record/outcome",
-          "op": "equals",
-          "value": "no-changed-tests"
-        },
-        {
-          "criterion_id": "AC5",
-          "target": "calls",
-          "path": "/resources/workflow-prove-host-runProcess",
-          "op": "equals",
-          "value": 0
-        },
-        {
-          "criterion_id": "AC5",
-          "target": "calls",
-          "path": "/resources/workflow-prove-host-cleanup",
-          "op": "equals",
-          "value": 0
-        }
-      ],
-      "model": "gpt-6.1-sol"
-    },
-    {
       "step_id": "missing-base",
       "entry_path": "prompts/cli/workflow-prove.prompt.md",
       "operation": "proveRun",
@@ -5024,7 +4978,7 @@
         {
           "criterion_id": "AC5",
           "target": "world",
-          "path": "/saved/9/record/outcome",
+          "path": "/saved/8/record/outcome",
           "op": "equals",
           "value": "setup-error"
         },
@@ -5073,7 +5027,7 @@
         {
           "criterion_id": "AC5",
           "target": "world",
-          "path": "/saved/10/record/outcome",
+          "path": "/saved/9/record/outcome",
           "op": "equals",
           "value": "setup-error"
         },
@@ -5122,7 +5076,7 @@
         {
           "criterion_id": "AC5",
           "target": "world",
-          "path": "/saved/11/record/outcome",
+          "path": "/saved/10/record/outcome",
           "op": "equals",
           "value": "setup-error"
         },
@@ -5187,6 +5141,62 @@
               "cwd": "/repo/cli"
             }
           ]
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-agents-checkWorkflowAgents",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-diagnostics-pathDiagnostic",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-dispatch-startRun",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupAgentMcp",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupProject",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupSkills",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/workflow-runner-source-capture",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/workflow-runner-source-fingerprint",
+          "op": "equals",
+          "value": 0
         }
       ],
       "model": "gpt-6.1-sol"
@@ -5233,6 +5243,62 @@
           "path": "/stderr",
           "op": "equals",
           "value": "pdd workflow prove requires nonblank --test and --expect.\n"
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-agents-checkWorkflowAgents",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-diagnostics-pathDiagnostic",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-dispatch-startRun",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupAgentMcp",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupProject",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupSkills",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/workflow-runner-source-capture",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/workflow-runner-source-fingerprint",
+          "op": "equals",
+          "value": 0
         }
       ],
       "model": "gpt-6.1-sol"
@@ -5276,6 +5342,62 @@
           "path": "/resources/pdd-cli-dispatch-prove",
           "op": "equals",
           "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-agents-checkWorkflowAgents",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-diagnostics-pathDiagnostic",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-dispatch-startRun",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupAgentMcp",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupProject",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupSkills",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/workflow-runner-source-capture",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/workflow-runner-source-fingerprint",
+          "op": "equals",
+          "value": 0
         }
       ],
       "model": "gpt-6.1-sol"
@@ -5315,6 +5437,62 @@
           "criterion_id": "AC8",
           "target": "calls",
           "path": "/resources/pdd-cli-dispatch-prove",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-agents-checkWorkflowAgents",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-diagnostics-pathDiagnostic",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-dispatch-startRun",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupAgentMcp",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupProject",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupSkills",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/workflow-runner-source-capture",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/workflow-runner-source-fingerprint",
           "op": "equals",
           "value": 0
         }
@@ -5359,6 +5537,62 @@
           "path": "/resources/pdd-cli-dispatch-prove",
           "op": "equals",
           "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-agents-checkWorkflowAgents",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-diagnostics-pathDiagnostic",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-dispatch-startRun",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupAgentMcp",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupProject",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupSkills",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/workflow-runner-source-capture",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/workflow-runner-source-fingerprint",
+          "op": "equals",
+          "value": 0
         }
       ],
       "model": "gpt-6.1-sol"
@@ -5391,21 +5625,21 @@
         {
           "criterion_id": "AC7",
           "target": "world",
-          "path": "/saved/12/record/baseSha",
+          "path": "/saved/11/record/baseSha",
           "op": "equals",
           "value": "000000000000000000000000000000000000012d"
         },
         {
           "criterion_id": "AC7",
           "target": "world",
-          "path": "/saved/12/record/v",
+          "path": "/saved/11/record/v",
           "op": "equals",
           "value": 2
         },
         {
           "criterion_id": "AC6",
           "target": "world",
-          "path": "/saved/12/record/paths",
+          "path": "/saved/11/record/paths",
           "op": "equals",
           "value": [
             "test/new.test.mjs",
@@ -5451,21 +5685,21 @@
         {
           "criterion_id": "AC7",
           "target": "world",
-          "path": "/saved/13/record/baseSha",
+          "path": "/saved/12/record/baseSha",
           "op": "equals",
           "value": "000000000000000000000000000000000000012e"
         },
         {
           "criterion_id": "AC7",
           "target": "world",
-          "path": "/saved/13/record/v",
+          "path": "/saved/12/record/v",
           "op": "equals",
           "value": 2
         },
         {
           "criterion_id": "AC6",
           "target": "world",
-          "path": "/saved/13/record/paths",
+          "path": "/saved/12/record/paths",
           "op": "equals",
           "value": [
             "test/new.test.mjs",
@@ -5511,21 +5745,21 @@
         {
           "criterion_id": "AC7",
           "target": "world",
-          "path": "/saved/14/record/baseSha",
+          "path": "/saved/13/record/baseSha",
           "op": "equals",
           "value": "000000000000000000000000000000000000012f"
         },
         {
           "criterion_id": "AC7",
           "target": "world",
-          "path": "/saved/14/record/v",
+          "path": "/saved/13/record/v",
           "op": "equals",
           "value": 2
         },
         {
           "criterion_id": "AC6",
           "target": "world",
-          "path": "/saved/14/record/paths",
+          "path": "/saved/13/record/paths",
           "op": "equals",
           "value": [
             "test/new.test.mjs",
@@ -5571,21 +5805,21 @@
         {
           "criterion_id": "AC7",
           "target": "world",
-          "path": "/saved/15/record/baseSha",
+          "path": "/saved/14/record/baseSha",
           "op": "equals",
           "value": "0000000000000000000000000000000000000130"
         },
         {
           "criterion_id": "AC7",
           "target": "world",
-          "path": "/saved/15/record/v",
+          "path": "/saved/14/record/v",
           "op": "equals",
           "value": 2
         },
         {
           "criterion_id": "AC6",
           "target": "world",
-          "path": "/saved/15/record/paths",
+          "path": "/saved/14/record/paths",
           "op": "equals",
           "value": [
             "test/new.test.mjs",
@@ -5631,21 +5865,21 @@
         {
           "criterion_id": "AC7",
           "target": "world",
-          "path": "/saved/16/record/baseSha",
+          "path": "/saved/15/record/baseSha",
           "op": "equals",
           "value": "0000000000000000000000000000000000000131"
         },
         {
           "criterion_id": "AC7",
           "target": "world",
-          "path": "/saved/16/record/v",
+          "path": "/saved/15/record/v",
           "op": "equals",
           "value": 2
         },
         {
           "criterion_id": "AC6",
           "target": "world",
-          "path": "/saved/16/record/paths",
+          "path": "/saved/15/record/paths",
           "op": "equals",
           "value": [
             "test/new.test.mjs",
@@ -5691,21 +5925,21 @@
         {
           "criterion_id": "AC7",
           "target": "world",
-          "path": "/saved/17/record/test",
+          "path": "/saved/16/record/test",
           "op": "equals",
           "value": "printf \"C:\\tmp\\q\"\r\n\t\u0000   pdd-workflow:"
         },
         {
           "criterion_id": "AC7",
           "target": "world",
-          "path": "/saved/17/record/expect",
+          "path": "/saved/16/record/expect",
           "op": "equals",
           "value": "defect-x"
         },
         {
           "criterion_id": "AC7",
           "target": "world",
-          "path": "/saved/17/record/outcome",
+          "path": "/saved/16/record/outcome",
           "op": "equals",
           "value": "proved"
         },
@@ -5747,7 +5981,7 @@
         {
           "criterion_id": "AC7",
           "target": "world",
-          "path": "/saved/18/record/head/stdoutTail",
+          "path": "/saved/17/record/head/stdoutTail",
           "op": "equals",
           "value": [
             "AssertionError: defect-x",
@@ -5767,14 +6001,14 @@
         {
           "criterion_id": "AC7",
           "target": "world",
-          "path": "/saved/18/record/head/observedError",
+          "path": "/saved/17/record/head/observedError",
           "op": "equals",
           "value": "AssertionError: defect-x"
         },
         {
           "criterion_id": "AC7",
           "target": "world",
-          "path": "/saved/18/record/outcome",
+          "path": "/saved/17/record/outcome",
           "op": "equals",
           "value": "head-fails"
         },

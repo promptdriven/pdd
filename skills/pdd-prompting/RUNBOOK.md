@@ -42,7 +42,7 @@ The block of Harbor Coffee's `place_order` (schemas cut):
 ```
 - Every schema follows section 3. List every error that the prose can return in `errors`.
 - Do not write `prose_sha256`: `pdd test --fill-hash` fills it.
-- Show the gate. Judge the person's later reply in any chat. A question, change request or earlier message is not approval. No exact phrase is needed. Never invent a decision or edit approval fields. See [Record a chat approval](https://github.com/promptdriven/pdd/blob/alpha/docs/cli.md#record-a-chat-approval).
+- Show the gate. Judge the person's later reply in any chat. A question, change request or earlier message is not approval. No exact phrase is needed. Never invent a decision or edit approval fields. See [Record a chat approval](https://github.com/promptdriven/pdd/blob/main/docs/cli.md#record-a-chat-approval).
 - After actual approval, record the exact words for the ready gate and all its drafts:
 
 ```sh
@@ -507,6 +507,40 @@ Cut from the Harbor Coffee app map (`…` marks cut parts):
    "state": {"cart": {"$ref": "/result/cart"}, …every other state field…}}, …]}
 ```
 
+### Automatic Screen timers
+
+The Runtime app-map contract supports host-scheduled Screen actions through the optional root `timers` array. The host schedules an action for the declared handler; it does not run JavaScript from the page. Keep requested timed game behavior in the app map and its operation. Script removal in section 20 does not mean timed Screen behavior is unsupported.
+
+Each timer row has exactly `id`, `screen`, `interval_ms`, `enabled_pointer`, `generation_pointer`,
+`handler`, `input`, `state` and `next`; `after` is optional. The map may have at most 16 timers.
+IDs are unique and match `[A-Za-z0-9_-]{1,48}`. At most one timer may name each existing
+non-wildcard screen. `interval_ms` is a strict integer from 1000 to 3600000. It sets a wait, not a
+guaranteed tick rate. `enabled_pointer` selects a present, required Boolean state field with a valid
+initial value. `generation_pointer` selects a present, required integer field from 0 through
+9007199254740991, with a valid initial value. The handler must be an executable operation admitted
+by the normal app-map rules.
+
+The timer event has exactly `timer_id` (string), `generation`, `sequence` and `elapsed_ms` (integers
+from 0 through 9007199254740991). A timer has no browser target. Its `input` can copy app state and
+use only individually proved `/event/<field>` references. For example:
+
+```json
+"input": {
+  "state": {"$ref": "/state"},
+  "timer_id": {"$ref": "/event/timer_id"},
+  "generation": {"$ref": "/event/generation"},
+  "sequence": {"$ref": "/event/sequence"},
+  "elapsed_ms": {"$ref": "/event/elapsed_ms"}
+}
+```
+
+See the [Snake timer declaration](https://github.com/promptdriven/prompt-runtime/blob/main/prompts/examples/snake/app-map.json#L609-L675)
+for a full map example and the [Runtime timer declaration](https://github.com/promptdriven/prompt-runtime/blob/main/prompts/prompt_runtime/program_app_map.prompt.md#L770-L798)
+for admission rules. The [host scheduling contract](https://github.com/promptdriven/prompt-runtime/blob/main/prompts/server/web/screen_ticks.prompt.md)
+waits for a live visible Screen and for ordinary or pending work to finish. It waits a fixed delay
+after a completed action, submits one funded tick through the existing FIFO, and does not queue missed
+ticks. Ticks use the existing action/call budget.
+
 ## 14. Bug workflow
 
 1. Reproduce: turn the issue into a test. Add a criterion to the story and a step that checks it to the story's test file.
@@ -735,7 +769,9 @@ CSS properties, scripts and active content. Embedded `<style>` elements are remo
 provide stylesheet rules. External URLs are removed; retained URL attributes must be repository-local, without a
 scheme, host or parent traversal. CSS URLs, scripts, unsafe functions and indirection such as `var()` are filtered.
 Allowed CSS functions are `rgb`, `rgba`, `hsl`, `hsla`, `calc`, `min`, `max` and `clamp`, subject to the same safety
-filters. A removed element, attribute or declaration cannot satisfy a structured HTML assertion.
+filters. A removed element, attribute or declaration cannot satisfy a structured HTML assertion. Script removal applies
+to page content; it does not disable host-scheduled app-map timers (section 13). Do not infer that timed Screen behavior
+is unsupported from this cleanup rule.
 
 The all-Story check estimate includes entry executions, declared saved-data operations and nested prompt-call allowances; conditional operations can use fewer calls. The hard `--max-calls` cap stays authoritative. Named HTTP responses include `x-pdd-ai-calls`, `x-pdd-try-used`, `x-pdd-try-remaining`, `x-pdd-try-cap` and `x-pdd-usage-source` (`runtime` for a receipt, `last-known` for local zero-call responses). Startup shows session usage on stderr. Program stdout, HTTP bodies and status codes retain their program values; CLI stderr carries program text followed by accounting. No model call or repeat dispatch is made for accounting.
 
@@ -756,7 +792,7 @@ Each linked prompt includes complete schemas, resource declarations and limits; 
 
 ### Seed a SQL connection
 
-[Module](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/database.mjs) · [Prompt](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/database.prompt.md) · [Story](https://github.com/promptdriven/pdd/blob/alpha/user_stories/fake-database.md) · [Scenario](https://github.com/promptdriven/pdd/blob/alpha/test/runtime/fake-database.json)
+[Module](https://github.com/promptdriven/pdd/blob/main/examples/fakes/database.mjs) · [Prompt](https://github.com/promptdriven/pdd/blob/main/examples/fakes/database.prompt.md) · [Story](https://github.com/promptdriven/pdd/blob/main/user_stories/fake-database.md) · [Scenario](https://github.com/promptdriven/pdd/blob/main/test/runtime/fake-database.json)
 
 Bind one logical connection to one `world_pointer` for all reads, writes and transactions. Starting rows live under `rows`; SQL executes in real in-memory SQLite. Named scalar argument `id` binds `:id`. Inspect `/database/rows/books`, not SQLite snapshot internals. For dynamic nullable parameters use `statement_argument_pointer` plus JSON-text `parameters_argument_pointer`; never interpolate values into SQL.
 
@@ -796,7 +832,7 @@ Passing prompt check (DRAFT): [2/2 checks · 2 AI calls](https://runtime.promptd
 
 ### Read UTF-8 files
 
-[Module](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/files.mjs) · [Prompt](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/files.prompt.md) · [Story](https://github.com/promptdriven/pdd/blob/alpha/user_stories/fake-files.md) · [Scenario](https://github.com/promptdriven/pdd/blob/alpha/test/runtime/fake-files.json)
+[Module](https://github.com/promptdriven/pdd/blob/main/examples/fakes/files.mjs) · [Prompt](https://github.com/promptdriven/pdd/blob/main/examples/fakes/files.prompt.md) · [Story](https://github.com/promptdriven/pdd/blob/main/user_stories/fake-files.md) · [Scenario](https://github.com/promptdriven/pdd/blob/main/test/runtime/fake-files.json)
 
 Files are keyed by exact POSIX path, each with UTF-8 `content` and `is_symlink`. `blob.write` additionally selects a content argument; `blob.stat` supports exists/is_symlink/size. These fakes never open a host path. Ownership, permissions, races, fsync and atomic rename require explicit ports and native tests.
 
@@ -829,7 +865,7 @@ Passing prompt check (DRAFT): [1/1 checks · 2 AI calls](https://runtime.promptd
 
 ### Hash exact bytes
 
-[Module](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/hash.mjs) · [Prompt](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/hash.prompt.md) · [Story](https://github.com/promptdriven/pdd/blob/alpha/user_stories/fake-hash.md) · [Scenario](https://github.com/promptdriven/pdd/blob/alpha/test/runtime/fake-hash.json)
+[Module](https://github.com/promptdriven/pdd/blob/main/examples/fakes/hash.mjs) · [Prompt](https://github.com/promptdriven/pdd/blob/main/examples/fakes/hash.prompt.md) · [Story](https://github.com/promptdriven/pdd/blob/main/user_stories/fake-hash.md) · [Scenario](https://github.com/promptdriven/pdd/blob/main/test/runtime/fake-hash.json)
 
 The prompt calls `compute.hash_utf8` with `{text}` and returns `{value}`. The deterministic compute action hashes exact bytes; do not ask the model to calculate a digest. `hash_json` hashes the interpreter's canonical JSON representation and is not interchangeable with an application-specific canonical serializer.
 
@@ -870,11 +906,11 @@ The `simulation` entry of the scenario:
 
 `hash_json` hashes the interpreter's canonical JSON: keys sorted by UTF-16 code units, no spaces, and the interpreter's own spelling of numbers (a subset of RFC 8785). An application's own serializer can give other bytes, for example for floats or non-ASCII keys. To hash exact bytes that the application made, use `hash_utf8`. Native tests must prove that the hash and the serializer match.
 
-Lint accepts this declaration also when the native code hashes inside (for example with Python `hashlib`) and takes no `compute` argument. Keep the native signature. [Module binding coverage](https://github.com/promptdriven/pdd/blob/alpha/docs/runtime-bindings.md) checks that the prompt can reach its operations. It does not run native hashing. Native tests own that, and a lint pass is not a behavior pass.
+Lint accepts this declaration also when the native code hashes inside (for example with Python `hashlib`) and takes no `compute` argument. Keep the native signature. [Module binding coverage](https://github.com/promptdriven/pdd/blob/main/docs/runtime-bindings.md) checks that the prompt can reach its operations. It does not run native hashing. Native tests own that, and a lint pass is not a behavior pass.
 
 ### Inject a fixed-answer callback
 
-[Module](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/service.mjs) · [Prompt](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/service.prompt.md) · [Story](https://github.com/promptdriven/pdd/blob/alpha/user_stories/fake-service.md) · [Scenario](https://github.com/promptdriven/pdd/blob/alpha/test/runtime/fake-service.json)
+[Module](https://github.com/promptdriven/pdd/blob/main/examples/fakes/service.mjs) · [Prompt](https://github.com/promptdriven/pdd/blob/main/examples/fakes/service.prompt.md) · [Story](https://github.com/promptdriven/pdd/blob/main/user_stories/fake-service.md) · [Scenario](https://github.com/promptdriven/pdd/blob/main/test/runtime/fake-service.json)
 
 The native `lookup(service, id)` uses the supplied callback; resource `service.lookup` binds that same boundary. `port.write` appends actual argument objects at `/requests` and returns the fixed `result_template`. Assert both the reply and exact request list. The fixed answer does not prove authentication, transport, timeout handling or any live service effect. Never include credentials in fixtures.
 
@@ -972,7 +1008,7 @@ I can look up the same item twice and see each supplied reply.
 
 ### Separate decide from do
 
-[Module](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/decision.mjs) · [Prompt](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/decision.prompt.md) · [Story](https://github.com/promptdriven/pdd/blob/alpha/user_stories/fake-decision.md) · [Scenario](https://github.com/promptdriven/pdd/blob/alpha/test/runtime/fake-decision.json)
+[Module](https://github.com/promptdriven/pdd/blob/main/examples/fakes/decision.mjs) · [Prompt](https://github.com/promptdriven/pdd/blob/main/examples/fakes/decision.prompt.md) · [Story](https://github.com/promptdriven/pdd/blob/main/user_stories/fake-decision.md) · [Scenario](https://github.com/promptdriven/pdd/blob/main/test/runtime/fake-decision.json)
 
 `decideReply` is a pure public decision over supplied facts; `doLookup` obtains those facts through the injected callback and applies the same rule. The first step proves an unavailable decision without I/O; the second proves the exact effect request and available result. Split only when the native design benefits: SQL and callbacks do not require a split merely to bind them.
 
@@ -997,7 +1033,7 @@ Passing prompt check (DRAFT): [4/4 checks · 3 AI calls](https://runtime.promptd
 
 ### Keep factory instances with handles
 
-[Module](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/factory.mjs) · [Prompt](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/factory.prompt.md) · [Story](https://github.com/promptdriven/pdd/blob/alpha/user_stories/fake-factory.md) · [Scenario](https://github.com/promptdriven/pdd/blob/alpha/test/runtime/fake-factory.json)
+[Module](https://github.com/promptdriven/pdd/blob/main/examples/fakes/factory.mjs) · [Prompt](https://github.com/promptdriven/pdd/blob/main/examples/fakes/factory.prompt.md) · [Story](https://github.com/promptdriven/pdd/blob/main/user_stories/fake-factory.md) · [Scenario](https://github.com/promptdriven/pdd/blob/main/test/runtime/fake-factory.json)
 
 Use `schema_version: "prompt-runtime.interface.v2"`, `instance_types: [{"name":"Greeter","resource":"instances"}]`, and write-access collection resource `instances`. Factory entry `instance` is `{"kind":"factory","type":"Greeter","path":"/handle"}`; method uses kind `method` with the same type/path. Mark both handle fields with the `handle` convention. Store captured state under the executor-issued `instance_handle`; never fabricate a handle or expose closure configuration as a new native method argument. The next step takes `{"$step_result":{"step_id":"create","path":"/handle"}}`. Native callers still receive an object with a method; the handle is its JSON transport identity.
 
@@ -1052,19 +1088,14 @@ This is an agent instruction example, not an executable Runtime program. The wor
 
 Use a small task such as a change to `examples/fakes/service.prompt.md`, its `user_stories/fake-service.md` and `test/runtime/fake-service.json`. The following is an illustrative route, not approval or a command to spend calls. The coordinator records the task, accepted decisions, source identity, exclusive file owners, current stage, unresolved failures/approvals and durable report paths in the run folder. It keeps that ledger between stages instead of each child's full conversation.
 
-| Role | Supplied context and exclusive writes | Durable handoff |
-|---|---|---|
-| Fresh author | Governing AGENTS/skill, prompt-story step, full prompting guide, relevant RUNBOOK sections, task/acceptance, owner prompt and required dependencies, relevant callers/cases. Write only the three assigned draft paths. No inherited chat. | Paths, changed behavior, required context still missing, case coverage and open choices. Coordinator shows drafts at the Story gate. |
-| Fresh CHECK agent | Governing instructions, check step, frozen selected drafts/dependencies/source, authorized call cap and §11. Write only run-folder check evidence. | Start `pdd test fake-service --max-calls 6` once after required lint and authorization; retain printed batch/read command, report links and each Story's actual verdict. |
-| Fresh repair author | Governing author instructions, failed criterion, exact input/expected/actual, relevant owning prompt/dependencies, failed report and authorized repair scope. Write only assigned repair paths. | Cause and minimal change; original failure stays visible. Never change an expected value to get a pass. Changed prompts return to the required gate; check only the affected Story. |
-| Fresh independent verifier and fresh reviewer | Each receives its own step, governing rules, approved cases, current source, required dependencies/regressions and failure evidence. Exclusive run-folder evidence; neither inherits the author's conversation. | After the person requests code and build completes, verifier runs the real public boundary and required regressions under §17. Reviewer remains separately eligible. An unrun or unmapped check is not a pass. |
-| Native validation supervisor | Governing rules, exact pinned VM/source/cwd, complete required command/coverage, runner controls and outside-repo evidence paths. Write only native execution evidence. | For example, run `node --test test/*.test.mjs` on the existing VM when authorized. Keep actual runner session ID or PID plus start time, command, stdout/stderr and terminal exit receipt. |
+1. **Author.** Give a fresh author the governing AGENTS and skill instructions, full prompting guide, relevant RUNBOOK sections, task and acceptance, owning prompt, dependencies and relevant callers and cases. Assign exclusive draft paths without inherited chat. The author returns the paths, changed behavior, missing context, case coverage and open choices; the coordinator shows the required Story gate.
+2. **Long CHECK.** Give a fresh checker the governing instructions, frozen drafts, dependencies, source, authorized call cap and §11. After authorization and required lint, run `pdd test fake-service --max-calls 6` once. Retain the printed batch/read command, report links and each Story's actual verdict, including failures, refusals and no verdict. For a check expected to exceed a short wait, choose the longest blocking wait allowed by the tool and the active progress and cancellation requirements on the first call. If it returns a session or cell ID, continue bounded waits on that same ID until terminal, cancelled or interrupted, within tool limits. These are tool wait continuations, not separate process/status polling; do not restart or separately poll an uncertain check. If the tool stops CHECK, use its printed saved-batch read command as §11 directs; do not resubmit uncertain work. The CLI's progress stream and internal receipt polling need no coordinator turn; reads can continue lint-held checks under §11.
+3. **Repair.** Give a fresh author the failed criterion, exact input, expected and actual values, owning prompt, dependencies, report and authorized repair scope. Preserve the original failure and expected values, make a minimal repair, return changed prompts to the required gate and check only the affected Story under the existing rules.
+4. **Independent verify.** After the person requests code and build completes, give a fresh eligible verifier the approved cases, current source, dependencies, regressions and failure evidence. Verify the real public boundary and regressions under §17. Independent review remains separately eligible; unrun or unmapped checks are not passes.
 
-For CHECK, use one completion-oriented tool wait with the longest supported timeout or exit notification. The CLI's 30-second stderr progress and its internal receipt polling do not require a coordinator model turn. On a tool interruption/explicit caller timeout, retain the original batch and use its printed `pdd test --read BATCH` command once to continue waiting. Reads can continue lint-held checks under §11; do not describe every read as GET-only. Do not resubmit an uncertain job. Preserve no-verdict, refused and failed Story results.
+For a long external native process, retain its runner session ID or PID, start time, command, stdout/stderr and terminal receipt. Use that runner's completion wait or exit notification, not CHECK's batch recovery. Report compact progress or failure changes from the existing runner/log stream. Cancel only the owned session or process through its supported control, then wait for termination and record the actual exit, signal or unknown result. If the runner cannot notify or wait until exit, state that limit and record necessary bounded status turns. A missing receipt or lost connection is unknown, not success or permission to start a second process.
 
-For a long external native process, use that runner's completion wait or exit notification, not CHECK's batch API. Retain identity before waiting. Progress comes from the existing runner/log stream; report a compact stage or failure change. Cancel only the owned session/process through its supported control, then wait for termination and record the actual exit/signal or unknown result. If the runner cannot notify or wait until exit, state that limit and record the necessary bounded status turns. A missing receipt or lost connection is unknown, not success or permission to start a second process.
-
-The coordinator resumes reasoning on a stage change, actionable failure, user steering or completion. For example: author finished → show gate; delayed CHECK failure → retain expected Available/actual Reserved and send the failed criterion to repair; repaired draft → show its gate again; successful CHECK → existing prompt/Simulator review and person approval → PR 1 → ask for code; only after the person requests code → build → independent verify → formal → fresh independent review under §17; native failure → keep its first receipt and repair/rerun under the existing limit; interruption → record the incomplete result and recovery decision. Do not hide failed tests, source evidence, required dependencies or approvals to make a brief smaller. Request missing governing context before continuing. Try stays optional; ask the person and wait for agreement before it starts.
+The coordinator resumes reasoning on a stage change, actionable failure, user steering or completion. Preserve source evidence, dependencies, failures and approvals; request missing governing context. After a successful CHECK, follow the existing prompt/Simulator review and person approval before PR 1, then ask for code. After build, follow verify, formal and fresh independent review under §17. Keep a native failure's first receipt and repair or rerun under the existing limit; record incomplete results and recovery decisions after interruption. Try stays optional; ask the person and wait for agreement before it starts.
 
 In a synthetic prompt-only benchmark, independent draft verification stays a draft/manual review. It never claims that an unchanged native implementation fulfills the newly drafted rule, and it is separate from §17 code proof.
 

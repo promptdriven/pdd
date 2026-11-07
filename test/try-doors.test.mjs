@@ -79,12 +79,12 @@ test('doors: create one safe launcher, preserve argv/stdin/streams/exit and reus
 });
 
 test('doors: save last appends observed case only once in the original test', async t => {
-  const setup = clip(t), ready = await opened(t, setup);
+  const setup = clip(t);const originalDoc=JSON.parse(readFileSync(join(setup.repo,'tests/place-order.json'),'utf8'));originalDoc.steps[0].checks.push({criterion_id:'AC1',target:'world',path:'',op:'equals',value:{}});writeFileSync(join(setup.repo,'tests/place-order.json'),JSON.stringify(originalDoc,null,2)+'\n');const ready=await opened(t,setup,{},(entry,f)=>({status:200,json:{...f.job(entry.json.requestId,'call','passed',{program_result:{stdout:'bad\n',stderr:'invalid\n',exit_code:7},report:{input_world:{},world:{}}},1),session_id:entry.url.split('/')[3]}}));
   assert.equal(ready.code, 0, ready.ports.stderr.text);
   const { runShim } = await import('../src/try-doors.mjs');
   assert.equal(await runShim(ready.descriptor, ['bad'], ready.makePorts()), 7);
   const file = join(setup.repo, 'tests/place-order.json'), before = readFileSync(file, 'utf8');
-  const save = ready.makePorts();
+  const save = ready.makePorts({caseHandoff:async({testPath})=>({kind:'closed-editor',testPath})});
   assert.equal(await runTry({ cwd: setup.repo, options: { '--save-last': true } }, save), 0, save.stderr.text);
   const doc = JSON.parse(readFileSync(file, 'utf8'));
   assert.equal(doc.steps.length, 2);

@@ -1,0 +1,8 @@
+{
+  "story_path": "user_stories/workflow-storage-contention-test.md",
+  "purpose": "Native-only requirement inventory; not an executable Interpreter scenario or evidence of a passing implementation.",
+  "cases": [
+    {"id":"held-callback-and-compatible-write","criteria":[1,2,3],"given":"A native update callback holds ordinary ownership; a compatible whole-record writer attempts a save.","expect":"The writer cannot publish during callback ownership. After release, record both outcomes: success follows callback commit and saves the intended whole record; finite contention refusal reports failure and leaves the callback commit intact. An attempt announcement alone does not prove acquisition or waiting; use no fixed sleep."},
+    {"id":"preservation-controls","criteria":[3],"given":"The other storage checks and original successful unrelated-progress cases.","expect":"Retain their assertions and accepted production requirements; do not alter runtime wait policy or mask a lost successful update."}
+  ]
+}

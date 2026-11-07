@@ -134,6 +134,87 @@ const replay = {
       assert.equal(!f.herdr.workspaces.some(w => w.workspace_id === first.workspaceId), expected.runClosed);
       assert.equal(!existsSync(f.input.cwd), expected.gitCheckoutRemoved);
     }
+  },
+  async '2859-created-parent-attachment-retry'(t, expected) {
+    const f = await liveLayout(t), original = f.ports.command;
+    f.ports.command = async args => {
+      if (args[0] === 'worktree' && args[1] === 'open' && args[args.indexOf('--path') + 1] === f.input.sourceRoot) {
+        f.herdr.calls.push(args);
+        const id = args[args.indexOf('--workspace') + 1], row = f.herdr.workspaces.find(w => w.workspace_id === id);
+        row.worktree = {checkout_path: f.input.sourceRoot, repo_key: f.input.commonDir, is_linked_worktree: false};
+        return {id: 'cli:worktree:open', result: {workspace: structuredClone(row), already_open: true}};
+      }
+      const reply = await original(args);
+      if (args[0] === 'workspace' && args[1] === 'create') {
+        const id = reply.result.workspace.workspace_id;
+        f.herdr.workspaces.find(w => w.workspace_id === id).worktree = null;
+        reply.result.workspace.worktree = null;
+      }
+      return reply;
+    };
+    let saved, interrupt = true;
+    f.ports.checkpoint = async custody => {
+      saved = structuredClone(custody);
+      if (interrupt && custody.repoWorkspaceId && custody.repoRoot) { interrupt = false; throw Error('parent checkpoint saved'); }
+    };
+    await assert.rejects(f.open(), /parent checkpoint saved/);
+    const owner = {runId: f.input.runId, root: f.input.cwd, commonDir: f.input.commonDir,
+      repo: f.input.repository, number: f.input.issueNumber, workflow: f.input.workflowName, layout: saved, chats: []};
+    const opened = await f.layout.withHerdrLayoutLock(() => f.layout.openHerdrRunLayout({...f.input, run: owner}, f.ports), f.ports);
+    const parent = f.herdr.workspaces.find(w => w.workspace_id === saved.repoWorkspaceId);
+    assert.equal(Boolean(parent && parent.worktree?.checkout_path === f.input.sourceRoot && parent.worktree.repo_key === f.input.commonDir), expected.sameParentAttached);
+    assert.equal(f.herdr.workspaces.filter(w => w.worktree?.checkout_path === f.input.sourceRoot && w.worktree.repo_key === f.input.commonDir).length - 1, Number(expected.duplicateParent));
+    assert.equal(f.herdr.calls.some(args => args[0] === 'worktree' && args[1] === 'open' && args[args.indexOf('--workspace') + 1] !== saved.repoWorkspaceId && args[args.indexOf('--path') + 1] === f.input.sourceRoot), expected.unrelatedBlankAdoptedByLabel);
+    assert.equal(Boolean(opened.workspaceId && opened.tabId), true);
+    for (const kind of ['root', 'identity']) {
+      const g = await liveLayout(t), command = g.ports.command;
+      g.ports.command = async args => {
+        if (args[0] === 'worktree' && args[1] === 'open' && args[args.indexOf('--path') + 1] === g.input.sourceRoot) {
+          g.herdr.calls.push(args);
+          const id = args[args.indexOf('--workspace') + 1], row = g.herdr.workspaces.find(w => w.workspace_id === id);
+          row.worktree = {checkout_path: g.input.sourceRoot, repo_key: g.input.commonDir, is_linked_worktree: false};
+          return {id: 'cli:worktree:open', result: {workspace: structuredClone(row), already_open: true}};
+        }
+        const reply = await command(args);
+        if (args[0] === 'workspace' && args[1] === 'create') {
+          const id = reply.result.workspace.workspace_id;
+          g.herdr.workspaces.find(w => w.workspace_id === id).worktree = null;
+          reply.result.workspace.worktree = null;
+        }
+        return reply;
+      };
+      let custody, stop = true;
+      g.ports.checkpoint = async value => { custody = structuredClone(value); if (stop && value.repoWorkspaceId && value.repoRoot) { stop = false; throw Error('saved'); } };
+      await assert.rejects(g.open(), /saved/);
+      const row = g.herdr.workspaces.find(w => w.workspace_id === custody.repoWorkspaceId);
+      if (kind === 'root') g.herdr.panes.find(p => p.workspace_id === row.workspace_id).terminal_id = 'changed';
+      else row.worktree = {checkout_path: g.input.cwd, repo_key: g.input.commonDir, is_linked_worktree: false};
+      await assert.rejects(g.layout.withHerdrLayoutLock(() => g.layout.openHerdrRunLayout({...g.input, run: {runId: g.input.runId, layout: custody, chats: []}}, g.ports), g.ports), {code: 'herdr_layout_identity_changed'});
+      assert.equal(g.herdr.calls.some(args => args[0] === 'worktree' && args[1] === 'open' && args[args.indexOf('--workspace') + 1] === custody.repoWorkspaceId), expected.changedRootOrForeignIdentityMutated);
+    }
+  },
+  async '2859-create-reply-lost'(t, expected) {
+    const f = await liveLayout(t), original = f.ports.command;
+    f.ports.command = async args => {
+      const reply = await original(args);
+      if (args[0] === 'workspace' && args[1] === 'create') {
+        const id = reply.result.workspace.workspace_id;
+        f.herdr.workspaces.find(w => w.workspace_id === id).worktree = null;
+        reply.result.workspace.worktree = null;
+        throw Error('create reply lost');
+      }
+      return reply;
+    };
+    let saved; f.ports.checkpoint = async custody => {saved = structuredClone(custody);};
+    await assert.rejects(f.open(), /create reply lost/);
+    assert.equal(Boolean(saved.repoCreateIntent), expected.uncertaintyRetained);
+    const owner = {runId: f.input.runId, root: f.input.cwd, commonDir: f.input.commonDir,
+      repo: f.input.repository, number: f.input.issueNumber, workflow: f.input.workflowName, layout: saved, chats: []};
+    await assert.rejects(f.layout.withHerdrLayoutLock(() => f.layout.openHerdrRunLayout({...f.input, run: owner}, f.ports), f.ports), {code: 'herdr_layout_identity_changed'});
+    assert.equal(f.herdr.calls.filter(args => args[0] === 'workspace' && args[1] === 'create').length - 1, Number(expected.duplicateParent));
+    const parentId = f.herdr.workspaces[0].workspace_id;
+    assert.equal(f.herdr.calls.some(args => args[0] === 'worktree' && args[1] === 'open'
+      && args[args.indexOf('--workspace') + 1] === parentId && args[args.indexOf('--path') + 1] === f.input.sourceRoot), expected.blankRowAdoptedByLabel);
   }
 };
 for (const vector of inventory.cases) test(`native replay ${vector.id}: ${vector.criteria.join(', ')}`, async t => {

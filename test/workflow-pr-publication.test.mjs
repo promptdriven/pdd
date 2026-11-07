@@ -39,7 +39,7 @@ const flag=n=>a[a.indexOf(n)+1],out=x=>process.stdout.write(typeof x==='string'?
 const commit=()=>cp.execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();
 const remote=()=>{try{return cp.execFileSync('git',['ls-remote','origin','refs/heads/topic'],{encoding:'utf8'}).trim().split('\\t')[0]}catch{return ''}};
 if(a[0]==='repo')out({nameWithOwner:'example/project',defaultBranchRef:{name:'main'},url:'https://github.com/example/project'});
-else if(a[1]==='list')out(s.prs.filter(p=>!a.includes('--head')||p.headRefName===flag('--head')));
+else if(a[1]==='list')out(s.prs.filter(p=>!a.includes('--head')||p.headRefName===flag('--head')).map(p=>({...p,headRefOid:remote()||p.headRefOid})));
 else if(a[1]==='view')out(s.prs.find(p=>p.url===a[2])||{body:''});
 else if(a[1]==='create'||a[1]==='edit'){
  if(flag('--body-file')!=='-')throw Error('must read body from stdin');
@@ -118,7 +118,7 @@ test('real publication creates code PR with all known-step labels, current machi
   const order = ['Old-code proof: ✓', 'Not fixed yet:', 'Not checked:', 'Defect: `broken value`', 'Not caught because:', 'Proof (defect fixed):', 'Proof (gap closed):', 'Review: `reviewed`'];
   let previous = -1; for (const label of order) { const at = body.indexOf(label); assert.ok(at > previous, label); previous = at; }
   assert.match(body, /Refs #17/); assert.doesNotMatch(body, /Closes #17|forged|Review: foreign/);
-  const inventory = `Tests vs base: none.\nChanged assertions in kept tests: none.\nNew skips: none.\nStatic inventory only; tests were not run.\nTest inventory commits: ${f.run.baseSha.slice(0,7)} → ${f.head.slice(0,7)}.`;
+  const inventory = `Tests vs base: none.\nChanged assertions in kept tests: none.\nNew skips: none.\nStatic inventory only; this inventory did not run tests.\nTest inventory commits: ${f.run.baseSha.slice(0,7)} → ${f.head.slice(0,7)}.`;
   const proofAt = body.indexOf('Old-code proof: ✓'), inventoryAt = body.indexOf(inventory), reviewAt = body.indexOf('Review: `reviewed`');
   assert.ok(proofAt >= 0 && proofAt < inventoryAt && inventoryAt < reviewAt, 'current machine proof, complete collector inventory, then Review');
   assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1);

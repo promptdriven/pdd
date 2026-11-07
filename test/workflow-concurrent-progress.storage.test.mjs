@@ -6,6 +6,8 @@ import * as storage from '../src/workflow-runs.mjs';
 import {fixture} from './helpers/workflow-delivery-fixture.mjs';
 import {readFileSync} from 'node:fs';
 const inventory=JSON.parse(readFileSync(new URL('./workflow-concurrent-progress/cases.json',import.meta.url)));
+const contentionInventory=JSON.parse(readFileSync(new URL('./workflow-storage-contention-test/cases.json',import.meta.url)));
+function contentionRow(id){const value=contentionInventory.cases.find(c=>c.id===id);assert.ok(value,`missing native case ${id}`);return value;}
 function row(id){const value=inventory.cases.find(c=>c.id===id);assert.ok(value);return value;}
 // Native replay of the approved callback cases. The baseline must fail by assertion,
 // not by importing an export that it does not have.
@@ -32,21 +34,56 @@ async function indexControl(t){
  console.log(JSON.stringify({case:'index-failure-after-successful-commit',writeRunCommit:true}));
 }
 
-test('2753 compatible whole write waits for an in-progress native callback commit',async t=>{
+async function heldCallbackScenario(t, holdUntilRefusal){
+ contentionRow('held-callback-and-compatible-write');contentionRow('preservation-controls');
  row('storage-compatibility-and-local-boundary');assert.equal(typeof storage.updateRun,'function');
  const {Worker}=await import('node:worker_threads');
- const f=await fixture(t,{agent:'codex',name:'bug'});await f.run();const run=f.record(),barrier=new SharedArrayBuffer(4),states=[];
+ const f=await fixture(t,{agent:'codex',name:'bug'});await f.run();const run=f.record(),barrier=new SharedArrayBuffer(4),workers=[];
  const release=()=>{Atomics.store(new Int32Array(barrier),0,1);Atomics.notify(new Int32Array(barrier),0);};
- function launch(mode,record){const worker=new Worker(new URL('./helpers/workflow-concurrent-storage-worker.mjs',import.meta.url),{workerData:{runDir:run.runDir,mode,barrier,record,stateDir:f.ports.stateDir}});t.after(async()=>{release();await worker.terminate();});let ready,complete;const held=new Promise((r,j)=>{ready=r;worker.on('error',j);}),result=new Promise((r,j)=>{complete=r;worker.on('error',j);});worker.on('message',m=>{if(m.held||m.attempting)ready();else{states.push({mode,...m});complete(m);}});return {held,result};}
+ t.after(async()=>{release();await Promise.all(workers.map(worker=>worker.terminate()));});
+ function launch(mode,record){
+  const worker=new Worker(new URL('./helpers/workflow-concurrent-storage-worker.mjs',import.meta.url),{workerData:{runDir:run.runDir,mode,barrier,record,stateDir:f.ports.stateDir}});workers.push(worker);
+  const exited = new Promise(resolve => worker.once('exit', resolve));
+  let ready,complete,rejectReady,rejectResult,finished=false;
+  const held=new Promise((resolve,reject)=>{ready=resolve;rejectReady=reject;});
+  const result=new Promise((resolve,reject)=>{complete=resolve;rejectResult=reject;});
+  // Attach rejection handlers immediately, including when startup fails before result is awaited.
+  held.catch(()=>{});result.catch(()=>{});
+  const fail=error=>{rejectReady(error);rejectResult(error);};
+  worker.on('error',fail);worker.on('exit',code=>{if(!finished)fail(Error(`${mode} worker exited before reporting its outcome (code ${code})`));});
+  worker.on('message',m=>{if(m.held||m.attempting)ready();else{finished=true;if(m.error)rejectReady(Error(`${mode} worker failed before its signal: ${JSON.stringify(m.error)}`));complete(m);}});
+  return {held,result,exited};
+ }
  const updater=launch('update');await updater.held;
  const writer=launch('write',{...run,message:'Compatible replacement committed last'});await writer.held;
- // Give the whole writer an opportunity to publish while callback ownership
- // is held, then observe native storage before releasing the first update.
- await new Promise(resolve=>setTimeout(resolve,30));
+ // The announcement does not establish acquisition or waiting. Observe storage
+ // under ownership, then accept either documented outcome after release.
  const before=storage.readRun(run.runDir);assert.notEqual(before.message,'Compatible replacement committed last','whole write cannot publish inside callback ownership');
- release();const outcomes=await Promise.all([updater.result,writer.result]);for(const out of outcomes)assert.equal(out.error,undefined);
- assert.equal(f.record().message,'Compatible replacement committed last');
-});
+ // In the refusal control the callback stays held until the writer finishes.
+ // In the other case release it after the attempt announcement.
+ const refused=holdUntilRefusal?await writer.result:undefined;
+ release();const [updated,written]=await Promise.all([updater.result,writer.result]);
+ await Promise.all([updater.exited,writer.exited]);
+ if(holdUntilRefusal){
+  assert.equal(written,refused);
+  assert.equal(written.error?.code,'workflow_run_save_failed','held ownership must produce a finite save refusal');
+  // Deliberately restore the former assertion only for the committed mutation control.
+  if(process.env.PDD_STORAGE_OLD_SUCCESS_ASSERTION==='1') assert.equal(written.error,undefined,'old unconditional success assertion');
+ }
+ assert.equal(updated.error,undefined,`callback worker: ${JSON.stringify(updated)}`);
+ assert.equal(updated.result.message,'Callback committed first');
+ if(written.error){
+  assert.equal(written.error.code,'workflow_run_save_failed',`writer refusal: ${JSON.stringify(written)}`);
+  assert.equal(f.record().message,'Callback committed first',`failed writer must leave callback commit intact: ${JSON.stringify(written)}`);
+ }else{
+  assert.equal(written.result.message,'Compatible replacement committed last',`writer outcome: ${JSON.stringify(written)}`);
+  assert.deepEqual(f.record(),written.result,'successful whole write retains its intended record');
+ }
+ console.log(JSON.stringify({case:'held-callback-and-compatible-write',holdUntilRefusal,writer:written.error?{failure:written.error}:{success:true}}));
+}
+
+test('2753 compatible whole write respects a held native callback',async t=>heldCallbackScenario(t,false));
+test('2753 held callback forces finite whole-write refusal',async t=>heldCallbackScenario(t,true));
 
 test('2753 native ownership failures release only acquired ownership and retain commit truth',async t=>{
  row('storage-compatibility-and-local-boundary');assert.equal(typeof storage.updateRun,'function');

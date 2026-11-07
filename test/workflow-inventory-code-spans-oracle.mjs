@@ -26,4 +26,4 @@ export function pathLiteral(value) {
   const entities = new Map([['&', 38], ['<', 60], ['>', 62], ['`', 96], ['|', 124], [':', 58], ['@', 64], ['#', 35]]);
   return [...jsonLiteral(value)].map(char => entities.has(char) ? `&#${entities.get(char)};` : char).join('');
 }
-export const disclaimer = 'Static inventory only; tests were not run.\n';
+export const disclaimer = 'Static inventory only; this inventory did not run tests.\n';

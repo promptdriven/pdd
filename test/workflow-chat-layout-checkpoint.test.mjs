@@ -7,6 +7,36 @@ import {openRun} from '../src/workflow-runner.mjs';
 import {fixture, packageRoot} from './helpers/workflow-runner-fixture.mjs';
 
 const allocations = h => h.calls.filter(a => a[0] === 'workspace' && a[1] === 'create' || a[0] === 'worktree' && a[1] === 'open' || a[0] === 'tab' && a[1] === 'create');
+
+test('2859: the runner keeps created parent root custody through the complete chat checkpoint', async t => {
+  const f = await fixture(t), command = f.ports.herdr, commonDir = f.git(f.source, 'rev-parse', '--path-format=absolute', '--git-common-dir');
+  let created;
+  f.ports.herdr = async args => {
+    if (args[0] === 'worktree' && args[1] === 'open' && args[args.indexOf('--path') + 1] === f.source) {
+      f.herdr.calls.push(args);
+      const workspaceId = args[args.indexOf('--workspace') + 1], row = f.herdr.workspaces.find(w => w.workspace_id === workspaceId);
+      row.worktree = {checkout_path: f.source, repo_key: commonDir, is_linked_worktree: false};
+      return {id: 'cli:worktree:open', result: {workspace: structuredClone(row), already_open: true}};
+    }
+    const reply = await command(args);
+    if (args[0] === 'workspace' && args[1] === 'create') {
+      created = {repoWorkspaceId: reply.result.workspace.workspace_id, repoRoot: {
+        tabId: reply.result.tab.tab_id, paneId: reply.result.root_pane.pane_id,
+        terminalId: reply.result.root_pane.terminal_id, cwd: reply.result.root_pane.cwd}};
+      f.herdr.workspaces.find(w => w.workspace_id === created.repoWorkspaceId).worktree = null;
+      reply.result.workspace.worktree = null;
+    }
+    return reply;
+  };
+  assert.equal((await f.run()).exitCode, 0);
+  const run = f.record();
+  assert.deepEqual(run.layout.repoRoot, created.repoRoot);
+  assert.equal(run.layout.repoWorkspaceId, created.repoWorkspaceId);
+  assert.equal(run.layout.repoCreateIntent, null);
+  assert.deepEqual(f.herdr.calls.find(args => args[0] === 'worktree' && args[1] === 'open'),
+    ['worktree', 'open', '--workspace', created.repoWorkspaceId, '--path', f.source, '--no-focus']);
+});
+
 for (const stopAfter of [0, 1, 2, 3]) {
   test(`ordinary start stops after ${stopAfter} allocations when durable custody fails under lock`, async t => {
     const f = await fixture(t), root = join(f.base, 'assigned');

@@ -7,3 +7,5 @@
 - Report the exact commands, exit codes and real output, and what no test covers.
 - verify.md shows commands and results only: no local absolute paths (like /Users/… or /home/…) and no raw logs.
 - For a screen, run the local headless comparison in RUNBOOK §13. A Screen vs drawing table is mandatory in verify.md and the code PR; a missing part fails verify. Return to build on differences.
+
+- Independently repeat the affected real behavior from a fresh checkout using `verification-setup.md` in the pdd-prompting skill. Report setup, native behavior, dependency scope and prompt-interpreter results separately; retain evidence outside the checkout.

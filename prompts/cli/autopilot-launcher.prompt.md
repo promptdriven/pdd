@@ -85,7 +85,7 @@ flowchart TD
     T[Timer or immediate first tick] --> S{Enabled locally and in repo?}
     S -->|No| E[Return without AI]
     S -->|Yes| Q[Conditional GitHub issues request]
-    Q --> W{Recipe or unseen actionable change?}
+    Q --> W{Recipe, unseen actionable change or due time rule?}
     W -->|No| E
     W -->|Yes| P[Prepare trusted packet]
     P --> A[Start or wake interactive pdd-autopilot skill]
@@ -122,20 +122,57 @@ Removing one waiting reason or changing mode is not eligibility while another
 waiting reason remains.
 Keep claimed issues marked `claimed: true`, never present them as unclaimed.
 
+Elapsed time can also offer work without a GitHub change or an AI call in the
+tick. Use the clock and local run-progress reader as injectable ports. Read this
+repository's active PDD run records in the Git common directory's
+`pdd/runs/*/status.json`; the file's last modification time is its last change.
+At 60 minutes without a change, offer one line naming the run number and asking
+the skill to follow its `pdd:stuck` rule. Completed and cancelled runs are over;
+missing or unreadable records supply no progress fact.
+
+For an eligible trusted issue with `pdd:working`, use the latest issue update or
+comment creation/edit time already returned and cached by the tick as claim
+activity (including label refresh). At 60 minutes, representing the skill's
+"about 1 hour", offer one line naming the issue number and asking the skill to
+inspect takeover. Keep it claimed. Do not fetch label events or make another
+query to measure age; an absent or unreadable activity time cannot be due.
+Revalidate trust before delivering a due claim, even when
+the cached source is unchanged; stranger text never enters a timed packet.
+
+Persist each successfully delivered time event by rule, run/issue number and
+last activity time. Unchanged overdue events stay quiet, including after a
+restart; a new activity time can become due again. Coalesce due reasons with
+trusted work in the packet's `timeRules` array, with one actionable `reason`
+line per event. Busy or failed delivery consumes no event; reassess current
+facts when idle so refreshed or ended events are not delivered stale. Neither
+timer marks, terminates or takes over a run itself; the skill owns those actions.
+The two 60-minute thresholds are constants, not settings, caps or hard stops.
+
 Use same-repository closing references in PR bodies to associate PRs with issues.
 Resolve trusted related PR metadata on change (state, draft, merge and head),
 including when a PR leaves the open list. Fetch PR discussion comments on changed
 comment metadata and include only trusted comments (with identity/edit metadata)
 in the packet and fingerprint; outsider comments alone must not wake AI. Never
-forward untrusted PR text. Cache details so unchanged ticks need no detail query.
-Revalidate cached PR commenters against current explicit trust and write access
-before delivery; revocation must not allow previously trusted text into a new
-packet. Cached data is not cached authority. Compare the previous and current
-trusted views under current authority, so revocation alone, or revocation plus
-an outsider comment, never becomes new work. If the cached issue/comment/PR
-source state and mode are unchanged, return quietly before permission lookups;
-revalidate authority when there is an actual source change to assess or deliver. A PR waiting for a person in
-observe mode is quiet until its relevant trusted state changes.
+forward untrusted PR text. Cache details so unchanged ticks need no PR-detail query.
+
+Check submitted reviews for known related PRs on each tick, including when the
+issues list returns HTTP 304 and the issue and PR head are unchanged. Use
+conditional requests and revalidate each review page, following GitHub's next
+page links without truncation. A new trusted submission, identified by PR number
+and GitHub review ID, is unseen work and wakes the idle agent once. Include its
+identity, trusted author, submission metadata, state and body in the packet and
+fingerprint; unchanged repeats stay quiet. Reviews use the same trust and pending
+delivery rules as other trusted work.
+
+Revalidate cached PR commenters and reviewers against current explicit trust and
+write access before delivery; revocation must not allow previously trusted text
+into a new packet. Cached data is not cached authority. Compare the previous and
+current trusted views under current authority, so revocation alone, or revocation
+plus an outsider comment or review, never becomes new work. If the cached issue,
+comment, PR and review source state and mode are unchanged, return quietly before
+permission lookups. Revalidate authority when there is an actual source change to
+assess or deliver. A PR waiting for a person in observe mode is quiet until its
+relevant trusted state changes.
 
 Only a successful idle-agent delivery records the fingerprint. A failed or
 busy delivery remains pending. Never submit to a working, blocked or unknown
@@ -174,6 +211,8 @@ count, time-based run termination or new refusal is introduced by the launcher.
 
 ## Dependencies
 
+- [Metrics store](metrics-store.prompt.md), [run records](workflow-runs.prompt.md) and [metrics gaps](metrics-gap.prompt.md): required native generation/verification context for observational selector/launch storage and identity.
+
 - [Autopilot settings](autopilot.prompt.md): required native generation and
   verification context for read-only settings resolution and notices.
 - [Autopilot skill](../../skills/pdd-autopilot/SKILL.md): required authoring,
@@ -193,3 +232,17 @@ count, time-based run termination or new refusal is introduced by the launcher.
 This module has native Node integration tests against the settings module and
 bundled skill. Timer services, real sign-ins and cross-machine skill execution
 need live verification; syntax-only checks do not prove those effects.
+
+Give each offered issue a durable decision token tied to its repository and issue, and include it in the trusted work packet for explicit workflow invocation. Delivery is an offer, never a confirmed start. Do not alter selection or custody rules.
+
+Save a complete selector snapshot of observed open issues with known scope and reasons, and unknown readiness where unavailable. Atomically publish the full snapshot after its decision records are durable. Offers do not establish worker launch. If capture or delivery fails, retain retry facts and a durable coverage-gap observation where storage permits, without changing wake or custody behavior.
+
+Record each actual wake delivery attempt and its confirmed delivery, uncertain or failed result against each offered decision ID. An offer or coordinator tick is not a worker start. Save the selection snapshot even when its membership is empty. Metrics capture must not change delivery or custody behavior.
+
+Classify known trusted unblocked selector facts as ready even on unchanged ticks; unavailable facts remain unknown. Retain each actual launch attempt and outcome in the existing decision outbox before best-effort delivery, using stable identities for idempotent replay. A busy agent or failed setup before delivery is not an attempt.
+
+Each measurement callback is independently best effort outside the native delivery try/catch. A failed attempted callback cannot suppress delivery; a failed confirmed callback cannot change a successful send into an uncertain result. Throwing warning callbacks must not escape telemetry. Preserve timeRules in messages and time-only wakes, pendingTimes/timeSeen, idle-claim processing and review-inclusive source digests. Decision IDs from an incomplete snapshot cannot establish verified origin. Metrics filesystem and append/gap operations admit controlled injected ports; defaults remain native.
+
+Telemetry repository discovery uses the same injected native process port as the existing launcher; a separate real process must not escape a controlled caller. A metricsContext port may supply the same repository/common-directory observation for controlled verification.
+
+Pass the already observed common directory to the store commonDir port; telemetry must not rediscover it through an un-injected process.

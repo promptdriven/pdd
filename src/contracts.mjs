@@ -1,3 +1,4 @@
+import {loadRuntimeWorkspace,allowsRuntimePath} from './runtime-workspace.mjs';
 // Generated from prompts/cli/contracts.prompt.md (sha256: 660173b5feb8cc47d0a2a5c98b137071f5c7baf288bb28f25ac826bb4e8f20c0).
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -21,7 +22,7 @@ export function runContracts({words = [],options = {},cwd = process.cwd()} = {},
   const root=git.stdout.trim();
   try {
     const access=createStrictSourceAccess(root);
-    const visible=new Set(gitFiles(root)), files=access.sourceFilePort(visible);
+    const workspace=loadRuntimeWorkspace({root}), visible=new Set(gitFiles(root).filter(path=>allowsRuntimePath(workspace,path))), files=access.sourceFilePort(visible);
     const warnings = [];
     const readDiscovered = path => {
       if (files.stat({path}).size > LIMITS.bytes) { warnings.push(`${path}: discovery/catalog unavailable (too big; limit 10 MB).`); return []; }
