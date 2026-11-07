@@ -10,7 +10,7 @@ The card has these lines, in this order:
 
 1. `Story card: OWNER/REPO#N "TITLE"`, then `Issue: URL`.
 2. `Asked: "…"`: what the reporter asked, from the issue text that the run saved at start (`run.issue.asked`). Remove HTML comments. Use the first quoted block (its `>` lines) when the text has one; else use the first paragraph that is not a heading. Join its lines with one space and cut it at about 300 characters at a word end, with `…`. When the run has no saved issue text, write `Asked: not saved in this run; read the issue.`
-3. The verdict line: the first `Verdict: …` sentence in the run's step summaries, newest summary first. A `pdd-bug` run with none shows `Verdict: not recorded yet.` Another run with none shows no verdict line.
+3. The verdict line: the first `Verdict: …` sentence in the run's step summaries, newest summary first. A run with none shows `Verdict: not recorded yet.`
 4. For each Story file that the run changes (`*.md` under a `user_stories` folder, except `PLAN.md` and `README.md`), and each Story that a changed test file names in `story_path`, in path order: `Story: ABSOLUTE PATH`, then these parts, each indented by two spaces:
    - `Acceptance criteria:` and the numbered lines under `## Acceptance criteria`.
    - `Must not change:` and the lines under `## What must not change` (also `## Must not change`; any letter case). When there is no such section: `Must not change: not stated.`
@@ -26,15 +26,15 @@ The card has these lines, in this order:
 11. `Try: you can ask to try it in the Simulator before you approve.`
 12. `Approve, or tell me what to change.`
 
-The card has at most 160 lines. When the Stories need more, show the first Stories in full while they fit. Each later Story shows only `Story: ABSOLUTE PATH (not shown in full: N criteria, M cases)`. The last Story line is followed by `… K more Stories not shown in full. Read their files.` Lines 10 to 12 always show.
+The card has at most 160 lines. Cap each list of Stories, plans, tests, prompts, results and changes at 20 entries with an omitted count. Truncate any remaining overflow with an omitted-line count before the final three lines. The card keeps these final lines even for large batches. When the Stories need more, show the first Stories in full while they fit. Each later Story shows only `Story: ABSOLUTE PATH (not shown in full: N criteria, M cases)`. The last Story line is followed by `… K more Stories not shown in full. Read their files.` Lines 10 to 12 always show.
 
-A file that cannot be read, or a test file that is not valid JSON, shows `(cannot read PATH)` in its place. The card never stops for one bad file.
+A file that cannot be read, or a test file that is not valid JSON, shows `(cannot read PATH)` in its place. The card never stops for one bad file. A path outside the physical run root, including a symlink target outside it, is unreadable; never show its content.
 
 ## The Story fingerprint
 
-`storyFingerprint({root, changed})` returns `{stories, tests}` for the Story files and test files that the run changes (the same selection as the card, and also `PLAN.md`):
+`storyFingerprint({root, changed})` returns `{stories, tests}` for the Story files and test files that the run changes (the same selection as the card, including Stories named by the changed tests, and also `PLAN.md`):
 
-- Each Story row is `{path, sha256, criteria}`: the SHA-256 of the exact bytes, and the numbered lines under `## Acceptance criteria`.
+- Each Story row is `{path, sha256, criteria}`: the SHA-256 of the exact bytes (null if unreadable), and the numbered lines under `## Acceptance criteria`.
 - Each test row is `{path, sha256, cases}`. The SHA-256 covers only what the person decides: the canonical JSON of `{criteria, cases}`. Each case is `{case, error, expected}`: the `step_id`, the `expected_error` or null, and the sorted list of `[criterion_id, target, op, value]` of its checks. The input and the check path are not part of it: RUNBOOK §11 lets the agent fix an input or a check path. `cases` keeps each case's expected text as the card shows it. A test file that cannot be read or parsed gets the SHA-256 of its bytes (or of an empty text) and no cases.
 
 `fingerprintChanges(saved, current)` returns a list of plain change lines; an empty list means no change:
@@ -47,10 +47,10 @@ A file that cannot be read, or a test file that is not valid JSON, shows `(canno
 `fullCheckPass({root, since, tests, prompts}, ports)` decides from pdd's own saved check results whether the prompt check passed in full on the current files. It reads the `pdd test` batches in `ports.env.PDD_STATE_DIR`, else `HOME/.pdd/runtime`, folder `batches/<batch>`, with the same batch-name rule as [workflow results](workflow-results.prompt.md). It uses a batch only when its `batch.json` has `intent` `check`, the same real `root`, and `created_at` at or after `since`. It reads the row states and criteria counts from the batch's `summary.json`.
 
 The tests to judge are the given `tests` (the run's changed test files) and every test of these batches. For each test, the newest batch that has it decides (newest `created_at`, then batch name). The test passes only when:
-- its summary row has `state` `passed`, and its `criteria` has `total` above 0 and `passed` equal to `total`; and
+- its summary row has `state` `passed`, and its `criteria` has `total` above 0, equal to the current test file's number of criteria, and `passed` equal to `total`; and
 - its source did not change after the check: the batch's saved `contract_snapshots` row for its Story equals the same row of `captureSource(root, {tests: ROW TESTS, appMap: null})` today. A batch with no snapshots instead needs its `source_sha256` to equal today's capture of all its tests.
 
-Every given prompt path (the run's changed prompts that have a Runtime interface block) must be in the files of a passing test's snapshot row (or of its batch `files` without snapshots).
+Every given prompt path (all of the run's selected changed prompts) must be in the files of a passing test's snapshot row (or of its batch `files` without snapshots).
 
 Return `{pass, tests, problems}`. `tests` is one row `{path, batch, state}` for each judged test. Each problem is `{kind, path, detail}` with one of these kinds:
 - `failed`: the state is `failed`, or a criterion did not pass.
