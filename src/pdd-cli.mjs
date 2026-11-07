@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: dcdd5de58ef228dc0cbfee27145dffb665af9065f6b9795865824b5b76a18b61).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 4ee6c1b3bd62fbbcbbc33f8b28350dd80359b366289995db2df05a411a8667e1).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -111,10 +111,10 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     case 'autopilot-start': case 'autopilot-stop': case 'autopilot-status': case 'autopilot-add': {
       try {
         const module = autopilotLauncher ?? await import('./autopilot-launcher.mjs');
-        const result = await module.runAutopilotLauncher({ command: plan.local.slice(10), issues: [...plan.operands], runs: plan.options['--runs'], resumeCustody: plan.options['--resume-custody'], cwd, packageRoot, env }, autopilotLauncherPorts);
+        const result = await module.runAutopilotLauncher({ command: plan.local.slice(10), issues: [...plan.operands], runs: plan.options['--runs'], resumeCustody: plan.options['--resume-custody'], all: plan.options['--all'] === true, cwd, packageRoot, env }, autopilotLauncherPorts);
         if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255 || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid Autopilot reply');
         line(result.exitCode === 0 ? stdout : stderr, result.message);
-        if (result.exitCode === 0 && ['autopilot-start', 'autopilot-status'].includes(plan.local)) {
+        if (result.exitCode === 0 && ['autopilot-start', 'autopilot-status'].includes(plan.local) && plan.options['--all'] !== true) {
           const warning = await autopilotGithub(autopilotGithubModule, 'checkAutopilotSettings', { cwd }, autopilotGithubPorts);
           if (warning) line(stderr, warning);
         }

@@ -43,17 +43,38 @@ These commands store settings and determine trust. Selecting a mode starts no ru
 
 ## Autopilot on this machine
 
+Run Autopilot commands inside the repo folder. Each repo has its own Autopilot on each machine.
+
 | Command | What it does |
 |---|---|
 | `pdd autopilot start [--runs N] [--resume-custody FILE]` | Check sign-ins and the running pdd version, open a dedicated interactive Herdr session and check for work immediately. A user timer checks again every 30 minutes. `--runs` sets an optional concurrent-run cap; omission has no fixed cap. `--resume-custody` supplies the verified original-owner projection for explicit recovery |
 | `pdd autopilot stop` | Disable this repo's timer on this machine and let the current agent step finish |
-| `pdd autopilot status` | Show this machine's repo, agent, timer, coordinator health and next tick without waking an agent; an idle coordinator is healthy. It reads `pdd.json` on GitHub only to warn when its Autopilot settings differ from this checkout. Another line shows a pending or held coordinator relaunch, and one line an [alert](#alerts) that was not delivered |
+| `pdd autopilot status [--all]` | Show this machine's repo, the folder Autopilot works in, agent, timer, coordinator health and next tick without waking an agent; an idle coordinator is healthy. It reads `pdd.json` on GitHub only to warn when its Autopilot settings differ from this checkout. Another line says when pdd workflows cannot start in this folder, and why. Other lines show a pending or held coordinator relaunch and an [alert](#alerts) that was not delivered. `--all` works from any folder and lists every repository with Autopilot on this machine: repository, folder, mode, enabled or disabled, timer and coordinator state. It reads only local files, the timer and Herdr: no GitHub call |
 | `pdd autopilot add N...` | Label named issues `pdd:autopilot`. Autopilot does not need this label: it considers every open issue |
 | `pdd autopilot alerts set` | Read your Discord or Slack incoming webhook URL from stdin and save it for this machine |
 | `pdd autopilot alerts set --discord-channel ID [--token-command CMD]` | Use a Discord bot in one channel: read its token from stdin, or save CMD and run it at each send to get the token |
 | `pdd autopilot alerts test` | Send one test message and confirm that it was posted; for a bot, first check and show the bot name and channel name |
 | `pdd autopilot alerts clear` | Remove the alert destination from this machine |
 | `pdd autopilot alert --issue N --kind usage-limit\|resource\|access\|decision\|stuck\|recovered --input - [--update]` | For the coordinator: record one alert and send it to this machine's destination |
+
+Outside a Git repository, `start`, `stop`, `status`, `add`, `off`, `observe`,
+`auto`, `trust` and `untrust` stop with exit code 1 and say: `This folder is not a
+Git repository. cd into the repo you want Autopilot to work on, then run the
+command again.` A successful start says which repository and folder it works
+in, for example `Autopilot started for OWNER/NAME in /path/to/checkout.`
+
+Before start turns on the timer or opens a chat, it checks that `pdd workflow
+run` can make an issue worktree in this checkout. The check uses the same rules as
+the workflow worktree allocator. It reads Git only: no AI, no GitHub call, no
+claim and no worktree. When the checkout cannot make issue worktrees, for example
+because its `origin` remote names another repository, start stops with exit code
+1. The message names the folder, the cause and the next step: run Autopilot from
+a normal clone of the repository. Start then changes no timer, also not the timers
+of other checkouts, and claims no issue. A tick makes the same check before it
+offers new issue work. While the check fails, the tick offers no new issue, writes
+a warning to the timer log and keeps those issues for a later tick. It still
+delivers the start-up recipe, dependency review, time rules, reviews and the
+work of existing claims.
 
 The launcher uses the repository settings module to read root `pdd.json`. An
 active mode is `observe` or `auto`; missing or invalid settings count as `off`. It uses an

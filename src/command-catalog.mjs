@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: b87c59915f1d31c8e8c86208257e627b99c8b22c329e88938c6c4d0c4dcc7805).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 2e49c21036b9f6c2edc7ee45023df143925d3418b5745044ffcadf668dc00dda).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -25,8 +25,8 @@ const routes = [
     forms: [form('pdd autopilot start [--runs N] [--resume-custody FILE]', 'Start this repo in an interactive Herdr agent; check now and every 30 minutes without AI on empty ticks. --runs optionally caps concurrent runs; --resume-custody supplies the verified original-owner projection.')] },
   { id: 'autopilot.stop', prefix: ['autopilot', 'stop'], local: 'autopilot-stop', operands: [], options: [],
     forms: [form('pdd autopilot stop', "Stop this machine's timer; let the current agent step finish.")] },
-  { id: 'autopilot.status', prefix: ['autopilot', 'status'], local: 'autopilot-status', operands: [], options: [],
-    forms: [form('pdd autopilot status', "Show this machine's repo, agent and next tick.")] },
+  { id: 'autopilot.status', prefix: ['autopilot', 'status'], local: 'autopilot-status', operands: [], options: [{name:'--all',kind:'flag'}],
+    forms: [form('pdd autopilot status [--all]', "Show this machine's repo, folder, agent and next tick; --all lists every repository with Autopilot on this machine, from any folder.")] },
   { id: 'autopilot.add', prefix: ['autopilot', 'add'], local: 'autopilot-add', operands: [{name:'issue',type:'issue',repeat:true}], options: [],
     forms: [form('pdd autopilot add N...', 'Mark named old issues with pdd:autopilot so Autopilot may take them.')] },
   { id: 'autopilot.alert', prefix: ['autopilot', 'alert'], local: 'autopilot-alert', operands: [],

@@ -1,7 +1,7 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 2214a7aaeaad37454c57af1f9573672a6246644990899971df90a1ead82b8c4b).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 7fa5665e8c4e81c803c10a06d555f1ba31a18d549a52f0f3fe556c6ef8c49816).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
 import { homedir, hostname } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,6 +23,7 @@ import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
 import { samePath } from './workflow-herdr-layout.mjs';
 import { tomlString } from './toml-string.mjs';
 import { alertStatusLine } from './autopilot-alerts.mjs';
+import { lookupRepositoryParent } from './workflow-worktree.mjs';
 
 const INTERVAL = 30 * 60 * 1000;
 const STUCK_AFTER = 60 * 60 * 1000;
@@ -60,6 +61,32 @@ function portsFor(state, ports) {
   return { ...ports, env, run, execute, checked, warn: ports.warn ?? (text => process.stderr.write(`${text}\n`)), now: ports.now ?? Date.now };
 }
 const keepEnv = env => Object.fromEntries(['HOME', 'PATH', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME', 'XDG_CONFIG_HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS'].filter(k => typeof env[k] === 'string').map(k => [k, env[k]]));
+const NOT_GIT = 'This folder is not a Git repository. cd into the repo you want Autopilot to work on, then run the command again.';
+const stateFolder = (ports, env) => ports.stateRoot ?? join(env.HOME || homedir(), '.local', 'state', 'pdd', 'autopilot');
+async function gitRoot(p) {
+  const result = await p.execute('git', ['rev-parse', '--show-toplevel']);
+  if (result.code === 0 && result.stdout.trim()) return result.stdout.trim();
+  throw Object.assign(Error(/not a git repository/i.test(result.stderr ?? '') ? NOT_GIT : 'Autopilot could not read this Git repository; retry.'), { exact: true });
+}
+const GITHUB_ORIGIN = /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*?)(?:\.git)?$/;
+// Read-only: can `pdd workflow run` make an issue worktree in this checkout? The allocator decides.
+async function workflowReadiness(state, p) {
+  if (p.allocationCheck) return p.allocationCheck({ cwd: state.cwd, repository: state.repo });
+  const git = async args => { try { return await p.execute('git', args, { cwd: state.cwd }); } catch { return { code: 1, stdout: '', stderr: '' }; } };
+  const refused = cause => ({ state: 'refused', message: `${cause} Run Autopilot from a normal clone of ${state.repo ?? 'the GitHub repository'}.` });
+  const origin = await git(['remote', 'get-url', 'origin']);
+  if (origin.code !== 0 || !origin.stdout.trim()) return refused('This checkout has no origin remote.');
+  const named = GITHUB_ORIGIN.exec(origin.stdout.trim())?.[1];
+  if (!named) return refused('Its origin remote is not a GitHub repository address.');
+  if (state.repo && named.toLowerCase() !== state.repo.toLowerCase()) return refused(`Its origin remote names ${named}, not ${state.repo}.`);
+  const common = await git(['rev-parse', '--path-format=absolute', '--git-common-dir']);
+  let commonDir;
+  try { commonDir = realpathSync(resolve(state.cwd, common.stdout.trim())); } catch { commonDir = null; }
+  const parent = common.code === 0 && commonDir ? await lookupRepositoryParent({ cwd: state.cwd, repository: state.repo ?? named, commonDir }, {
+    execFile: async (file, args, { cwd }) => { const result = await p.execute(file, args, { cwd }); return { stdout: result.stdout, stderr: result.stderr, code: result.code }; },
+  }) : { state: 'recovery_required' };
+  return parent.state === 'ready' ? { state: 'ready', message: '' } : refused('pdd cannot verify the Git layout of this checkout, so it cannot make issue worktrees here.');
+}
 async function selectAgent(state, p, saved = null) {
   let definitions = loadAgentDefinitions({ cwd: state.cwd, env: p.env });
   definitions.push({ id: 'agy', kind: 'agy', command: 'agy', env: {} });
@@ -1058,6 +1085,20 @@ async function runTick(stateFile, ports, completion) {
         p.warn(warnings.at(-1));
       }
     }
+    // Fresh work leads to a claim and a workflow start, so offer it only where workflows can start.
+    const fresh = work.filter(item => item.eligible && (!item.claimed || item.expiredClaim));
+    if (fresh.length) {
+      const readiness = await workflowReadiness(state, p);
+      if (readiness.state !== 'ready') {
+        warnings.push(`Autopilot held ${fresh.length} issue(s): pdd workflows cannot start in ${state.cwd}. ${line(readiness.message)}`);
+        p.warn(warnings.at(-1));
+        for (const item of fresh) {
+          work.splice(work.indexOf(item), 1); delete pending[item.number];
+          const selection = selections.find(row => row.number === item.number);
+          if (selection) { selection.state = 'waiting'; selection.reasons = ['workflows-unavailable']; }
+        }
+      }
+    }
     if (!await scanGuard()) return outcome('inactive', 'Autopilot changed.');
     let delivered = false;
     const metricsContext=p.metricsContext ?? (cwd=>gitContext(cwd,{execFile:(file,args,options)=>p.execute(file,args,options)}));
@@ -1249,15 +1290,38 @@ export async function withAutopilotModeLock({ cwd, env }, action, ports = {}) {
   } finally { releaseAdmission?.(); }
 }
 
+// Every saved launcher state on this machine, read-only: local files, timer status and Herdr only.
+async function machineStatus(folder, ports, env) {
+  let names = [];
+  try { names = readdirSync(folder).filter(name => /^[0-9a-f]{20}\.json$/.test(name)).sort(); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  const rows = []; let serverRunning;
+  for (const name of names) {
+    let saved;
+    try { saved = read(join(folder, name)); } catch { rows.push(`${name}: saved state unreadable`); continue; }
+    if (!saved || typeof saved !== 'object' || Array.isArray(saved)) continue;
+    const state = { ...saved, id: name.slice(0, -5), stateFile: join(folder, name) };
+    const p = portsFor(state, { ...ports, env });
+    let mode = 'unknown', timerActive = false;
+    try { if (typeof state.cwd === 'string') mode = (await settings(state, p)).mode; } catch { /* The folder or its settings cannot be read. */ }
+    try { timerActive = Boolean(await timer('status', state, p)); } catch { /* Report inactive. */ }
+    if (serverRunning === undefined) { try { serverRunning = (await herdr(['status', 'server', '--json'], p)).running === true; } catch { serverRunning = false; } }
+    const coordinator = serverRunning ? await coordinatorHealth(state, p) : { state: 'unavailable', reason: 'Herdr is not running' };
+    rows.push(`${state.repo ?? 'repository unknown'} in ${state.cwd ?? 'an unknown folder'} · mode ${mode} · Autopilot ${state.enabled ? 'enabled' : 'disabled'} · timer ${timerActive ? 'active' : 'inactive'} · coordinator ${coordinator.state === 'unavailable' ? `unavailable (${coordinator.reason})` : coordinator.state}`);
+  }
+  return ok(rows.length ? [`Autopilot on this machine (${rows.length}):`, ...rows].join('\n') : 'No Autopilot on this machine.');
+}
+
 export async function runAutopilotLauncher(input, ports = {}) {
   const { command, packageRoot, runs, resumeCustody, issues = [] } = input;
   let state = { cwd: input.cwd, environment: keepEnv(input.env ?? process.env) };
   let p = portsFor(state, { ...ports, env: input.env });
   let controlLock, releaseAdmission;
   try {
-    state.cwd = (await p.checked('git', ['rev-parse', '--show-toplevel'])).trim();
+    if (command === 'status' && input.all) return await machineStatus(stateFolder(ports, p.env), ports, input.env);
+    state.cwd = await gitRoot(p);
     const id = createHash('sha256').update(state.cwd).digest('hex').slice(0, 20);
-    const folder = ports.stateRoot ?? join(p.env.HOME || homedir(), '.local', 'state', 'pdd', 'autopilot');
+    const folder = stateFolder(ports, p.env);
     const stateFile = join(folder, `${id}.json`);
     if (command === 'start' || command === 'stop') {
       mkdirSync(folder, { recursive: true, mode: 0o700 });
@@ -1287,7 +1351,9 @@ export async function runAutopilotLauncher(input, ports = {}) {
           ? '\nCoordinator relaunch held: the launch settings changed again after a relaunch for the same settings, so the current chat stays and gets work. Close the coordinator pane in Herdr to start a fresh chat with the current settings.' : '');
       let alerts = '';
       try { alerts = (ports.alertStatusLine ?? alertStatusLine)({ repo: state.repo, env: p.env }, { stateRoot: ports.stateRoot }); } catch { /* Alerts never change status. */ }
-      return ok(`Autopilot ${state.enabled ? 'enabled' : 'disabled'}; timer ${timerActive ? 'active' : 'inactive'}; Herdr ${serverRunning ? 'running' : 'unavailable'}; coordinator ${coordinatorState}: ${state.repo ?? state.cwd} · ${state.agent?.id ?? 'no agent'} · next tick: ${timerActive && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}${relaunch}${alerts ? `\n${alerts}` : ''}`);
+      const readiness = await workflowReadiness(state, p);
+      const workflows = readiness.state === 'ready' ? '' : `\nWorkflows cannot start in this folder: ${line(readiness.message)}`;
+      return ok(`Autopilot ${state.enabled ? 'enabled' : 'disabled'}; timer ${timerActive ? 'active' : 'inactive'}; Herdr ${serverRunning ? 'running' : 'unavailable'}; coordinator ${coordinatorState}: ${state.repo ? `${state.repo} in ${state.cwd}` : state.cwd} · ${state.agent?.id ?? 'no agent'} · next tick: ${timerActive && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}${workflows}${relaunch}${alerts ? `\n${alerts}` : ''}`);
     }
     if (command === 'stop') {
       if (previous) { state.enabled = false; state.nextTick = null; state.controlRevision = randomUUID(); save(stateFile, state); }
@@ -1316,6 +1382,8 @@ export async function runAutopilotLauncher(input, ports = {}) {
       return ok(`Marked ${issues.length} issue(s) with pdd:autopilot.`);
     }
     if (command !== 'start') return { exitCode: 2, message: 'Use pdd autopilot start, stop, status or add.' };
+    const readiness = await workflowReadiness(state, p);
+    if (readiness.state !== 'ready') return bad(`Autopilot did not start: pdd workflows cannot start in ${state.cwd}. ${readiness.message} Nothing was started or claimed, and every timer is unchanged.`);
     if ((await p.execute('gh', ['auth', 'status'])).code !== 0) return bad('GitHub is not signed in; run gh auth login.');
     try { if ((await p.execute('herdr', ['--version'])).code !== 0) throw Error(); }
     catch { return bad('Herdr is missing or unavailable; install Herdr, then run herdr --help.'); }
@@ -1389,8 +1457,8 @@ export async function runAutopilotLauncher(input, ports = {}) {
       }
     }
     catch (e) { warning += ` Warning: ${line(e.message)}; next tick will retry.`; }
-    return ok(`Autopilot running: ${state.repo} · ${state.agent.id} · pdd ${version} · next tick: ${new Date(state.nextTick).toISOString()}. See: herdr session attach ${SESSION}.${warning}${warnings.length ? ' ' + warnings.map(line).join(' ') : ''}`);
-  } catch (e) { return bad(`Autopilot: ${e.code === 'ENOENT' ? 'install git, gh and Herdr, and sign in to your agent, then retry.' : line(e.message)}`); }
+    return ok(`Autopilot started for ${state.repo} in ${state.cwd}. Agent ${state.agent.id} · pdd ${version} · next tick: ${new Date(state.nextTick).toISOString()}. See: herdr session attach ${SESSION}.${warning}${warnings.length ? ' ' + warnings.map(line).join(' ') : ''}`);
+  } catch (e) { return bad(e.exact ? e.message : `Autopilot: ${e.code === 'ENOENT' ? 'install git, gh and Herdr, and sign in to your agent, then retry.' : line(e.message)}`); }
   finally { releaseAdmission?.(); controlLock?.(); }
 }
 

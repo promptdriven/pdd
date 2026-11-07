@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot.prompt.md (sha256: 6dce639945fb8645d79768449211043aa6bd207a8a8a50d974e7b273e0f44fe1).
+// Generated from prompts/cli/autopilot.prompt.md (sha256: 5bf8bf70a653bfddcd9a6f94cbc054d40484fc0014f3eee2abf338916de8cc02).
 import * as nativeFs from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -113,7 +113,12 @@ export async function runAutopilot(input, ports = {}) {
     let root = cwd;
     if (!ports.config) {
       try { root = String((await exec('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8' })).stdout).trim(); }
-      catch { return action === 'setup' ? result(0, '') : result(1, 'Autopilot settings need a Git repository.'); }
+      catch (error) {
+        if (action === 'setup') return result(0, '');
+        return result(1, /not a git repository/i.test(String(error?.stderr ?? ''))
+          ? 'This folder is not a Git repository. cd into the repo you want Autopilot to work on, then run the command again.'
+          : 'Autopilot settings could not read the Git repository; retry.');
+      }
     }
     const config = ports.config ?? nativeConfig(root, ports.fs ?? nativeFs);
     const { raw } = await config.read({ key: 'autopilot' });
