@@ -340,7 +340,7 @@ async function tickFixture(t, { mode = 'auto' } = {}) {
   writeFileSync(join(cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode, trust: [] } }));
   const f = { time: NOW, prompts: [], patches: [], warnings: [], issues: [], issueComments: {}, claimComments: new Map(), status: 200, claims: () => [], eligible: () => [] };
   f.ports = {
-    stateRoot: join(home, 'state'), now: () => f.time, readRunProgress: async () => [], warn: text => f.warnings.push(text),
+    stateRoot: join(home, 'state'), now: () => f.time, readRunProgress: async () => [], warn: text => f.warnings.push(text), allocationCheck: async () => ({ state: 'ready', message: '' }),
     selectAgent: async () => ({ id: 'codex', kind: 'codex', command: 'codex', env: {} }), pathDiagnostic: () => [],
     run: async (command, args, options = {}) => {
       if (command === 'git') return { code: 0, stdout: cwd + '\n', stderr: '' };

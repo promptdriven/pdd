@@ -54,7 +54,7 @@ function setup(t) {
     writeFileSync(join(f.ports.stateRoot, `${id}.json`), JSON.stringify({ repo: 'owner/repo', enabled: true, agent: { id: 'codex' } }));
     const stdout = capture(), stderr = capture();
     const exitCode = await runPdd(['autopilot', 'status'], { cwd, env: f.env, stdout, stderr, autopilotLauncherPorts: {
-      stateRoot: f.ports.stateRoot, timer: async () => false, herdr: async () => ({ running: false }),
+      stateRoot: f.ports.stateRoot, timer: async () => false, herdr: async () => ({ running: false }), allocationCheck: async () => ({ state: 'ready', message: '' }),
       run: async command => { assert.equal(command, 'git', 'status runs only local git'); return { code: 0, stdout: `${cwd}\n`, stderr: '' }; },
     } });
     f.outputs.push(stdout.text, stderr.text);

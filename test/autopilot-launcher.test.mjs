@@ -21,6 +21,8 @@ async function fixture(t, options = {}) {
   const f = { dir, cwd, home, time: Date.parse('2026-11-04T00:00:00Z'), polls: [], prompts: [], runs: [], timers: [], comments: [], ack: [], issues: [], etag: '"one"', active: false };
   f.ports = {
     stateRoot: join(home, 'state'), now: () => f.time,
+    // These fakes stand for a checkout where pdd workflows can start (#3050).
+    allocationCheck: async () => ({ state: 'ready', message: '' }),
     readRunProgress: async () => f.runProgress ?? [],
     warn: text => { (f.warnings ??= []).push(text); },
     selectAgent: async () => ({ id: 'codex', kind: 'codex', command: 'codex', env: {} }),

@@ -45,6 +45,10 @@ that omits one of these names still removes it, because Codex applies
 ## Start and stop
 
 Resolve the Git root, repository identity and package version before starting.
+Outside a Git repository, start, stop, status and add return exit code 1 with
+exactly `This folder is not a Git repository. cd into the repo you want Autopilot
+to work on, then run the command again.` and change nothing. Report another Git
+failure as a Git read failure; a sign-in message is only for a real sign-in failure.
 Check gh sign-in, Herdr availability and installed agent sign-ins, without making
 an AI request. Prefer the current agent family when signed in, then Codex,
 Claude, agy and Gemini. Use configured local launchers from agent-config for the
@@ -55,6 +59,43 @@ agent agy and the selected launcher environment. Its non-model `agy models`
 probe establishes sign-in; a generic agent listing does not.
 Missing dependencies produce a single actionable line; no question or installer.
 Check the pdd version from the invoked package and warn about PATH shadowing.
+
+### Workflow readiness
+
+A coordinator can only start issue work if `pdd workflow run` can make an issue
+worktree in this checkout. So check this first, read-only. Call the
+[worktree allocator](workflow-worktree.prompt.md#verified-repository-parent)
+export `lookupRepositoryParent({cwd,repository,commonDir})` with the checkout,
+its canonical Git common directory and the Autopilot repository, through the
+launcher's process port. Use only that export: it applies the allocator's own
+identity checks, and the allocator owns which Git layouts it supports. Ready
+means workflows can start here. The check makes no AI call, no GitHub call, no
+allocation record, no issue claim and no worktree. An `allocationCheck({cwd,repository})`
+port can replace it and returns `{state:"ready"|"refused",message}`.
+
+On a refusal, name the cause from local Git reads, in this order: no `origin`
+remote; an `origin` that is not a GitHub repository address; an `origin` that
+names another repository than the Autopilot repository; else a Git layout that
+pdd cannot verify. Never print the origin URL. End with the next step: run
+Autopilot from a normal clone of the repository.
+
+- Start runs the check after it knows the repository and before it checks
+  sign-ins, opens a workspace, launches an agent or changes the timer. A refusal
+  returns exit code 1 with one line that names the folder, the cause and the next
+  step. It enables nothing, claims nothing and leaves every timer as it was,
+  including the timers of other checkouts.
+- A tick runs the check only when it is about to offer fresh work: an eligible
+  issue without a live claim. On a refusal, the tick offers no fresh work and warns
+  with the folder and the cause. It does not mark those issues seen, so a later
+  tick offers them when workflows can start. Other deliveries stay as they are:
+  the start-up recipe, dependency review, time rules, reviews and own claims.
+- Status runs the check with the saved repository, or else the repository that
+  `origin` names, and makes no GitHub call. On a refusal it adds the line
+  `Workflows cannot start in this folder: CAUSE NEXT STEP` right after its first line.
+
+A successful start prints `Autopilot started for OWNER/NAME in FOLDER.`, where
+FOLDER is the Git root that Autopilot works in, then the agent, package version,
+next tick and the Herdr attach command.
 
 Read settings through [Autopilot settings](autopilot.prompt.md), calling its
 module function `runAutopilot({action: "setup", interactive: false, inRepo: true},
@@ -137,7 +178,8 @@ timer definition, leaving the current step to
 finish. Stop checks and removes the owned timer even if saved installation state
 is absent or false, including after a failed start. Repeated stop is harmless. Status reads local state and timer activity;
 show enabled/disabled, timer activity, Herdr availability, coordinator state,
-repo, agent, and next tick (or none), without waking AI or querying GitHub.
+repo, the folder Autopilot works in, agent, and next tick (or none), without waking AI or querying GitHub.
+
 Whenever Herdr is available, inspect the saved coordinator with the existing
 `agent get` operation, including when the timer is inactive. Confirm that its pane,
 workspace, repository path, provider and any saved terminal identity match saved local state. Report a missing,
@@ -150,6 +192,15 @@ with `Coordinator relaunch pending after upgrade`. While a
 launch, add one line that starts with `Coordinator relaunch held`.
 Status never repairs, replaces or wakes a coordinator. Report unavailable Herdr
 separately instead of claiming healthy running state when its server is absent.
+
+`status --all` works from any folder, also outside a Git repository. It reads
+each saved launcher state on this machine and prints one line for each:
+repository, folder, mode from that folder's settings (`unknown` when they cannot
+be read), enabled or disabled, timer active or inactive, and coordinator state as
+above. Without saved state it prints `No Autopilot on this machine.` It reads
+local files, timer status and Herdr only: no Git root, no GitHub call, no AI and
+no change.
+
 Concurrent ticks for one local state serialize with a local
 lock; independent machines have separate state. A lock blocks only for a valid
 live owner. Empty, malformed and dead-owner locks are reclaimed. Publish the
