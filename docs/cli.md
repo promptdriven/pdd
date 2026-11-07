@@ -269,6 +269,10 @@ with the file, reason and fix step. Missing or unreadable dependencies and inval
 test files do not stop other selected tests. The summary counts tests that could
 not run. JSON and saved batches retain these rows. The command exits nonzero if
 any selected test is broken. Broken tests are not sent for paid checks.
+This also applies when a selected test changes during source capture. Capture
+checks its criterion texts and coverage against the captured Story before upload
+or cached-pass reuse. Authored partial-test metadata still refuses the test.
+A test with no exact criterion is refused and keeps all not-checked reasons.
 
 A Story criterion with no check or no exact check is reported as
 `not checked: <reason>`. Other criteria still run. An omitted Story item is also

@@ -123,6 +123,7 @@ test('RUNTIME-RULES2: quantity 0 gives the exact field and rule; the number warn
   assert.ok(result.out.indexOf('tests/place-order.json') < result.out.indexOf('Prompt tests'));
   assert.match(result.out, /invalid-input/);
   assert.match(result.out, /steps\[0\].*\/items\/0\/quantity/);
+  assert.match(result.out, /\/items\/0\/quantity[^\n]*\b0\b[^\n]*\b1\b[^\n]*\b20\b/);
   assert.match(result.out, /Warning: possible numeric mismatch.*899.*AC1.*900\./);
   const prompt = join(repo, 'prompts/place_order.prompt.md');
   writeFileSync(prompt, readFileSync(prompt, 'utf8').replace('"approved"', '"draft"'));

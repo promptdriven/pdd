@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 81b1f5e8e73dc5af27ed26762ad986b93aa5fe920481632c5837eb8b36fd3290).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 8fa749bc8ce4e5fe817f7b74ccc7d0b464a0a2422b367315af2c7a321e362bf7).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
@@ -745,6 +745,32 @@ function criterionPlan(doc, story) {
   return {criteria,not_checked,checked:criteria.length-not_checked.length};
 }
 
+// This applies to authored/effective input before capture adds automatic exemptions.
+function partialTestRefusal(doc) {
+  if (Object.hasOwn(doc, 'criteria_scope') || (Object.hasOwn(doc, 'check_exemptions') && !(Array.isArray(doc.check_exemptions) && !doc.check_exemptions.length))) {
+    return refusal('pdd-partial-test', Object.hasOwn(doc, 'criteria_scope') ? 'criteria_scope' : 'check_exemptions', 'In the beta a test checks the whole story. Remove criteria_scope and check_exemptions.');
+  }
+  return null;
+}
+
+function capturedCriterionPlan(doc, story, path) {
+  let broken = partialTestRefusal(doc);
+  const plan = broken ? null : criterionPlan(doc, story);
+  if (!broken && !story.length) broken = refusal('story-criteria-missing', 'story_path', `${doc.story_path} has no numbered "## Acceptance criteria" list.`);
+  if (!broken && !plan) {
+    const testTexts = doc.criteria.map(item => item.text).sort(), storyTexts = [...story].sort();
+    broken = !isDeepStrictEqual(testTexts, storyTexts)
+      ? refusal('story-criterion-mismatch', 'criteria', firstDifference(testTexts, storyTexts))
+      : refusal('criterion-needs-exact-check', 'criteria', 'The checks do not establish valid criterion coverage.');
+  }
+  if (!broken && !plan.checked) broken = refusal('unchecked-criteria', 'criteria', 'No criterion has an exact check.',
+    {hint:'Add an exact result, world or call-count check for an observable criterion.'});
+  if (broken) throw Object.assign(new PreflightError(4, `${path}: ${broken.message}`), broken,
+    {message:`${path}: ${broken.message}`,hint:broken.hint ?? 'Fix the test criterion text or partial-test metadata, then run the selection again.'},
+    plan ? {not_checked:plan.not_checked,criteria_total:plan.criteria.length} : {});
+  return plan;
+}
+
 // The schema rules of a prompt and of the prompts it calls, all at once (cached per prompt).
 function promptSchemaRefusals(root, found, prompt, prompts, seen = new Set()) {
   if (!prompt?.interface || seen.has(prompt.path)) return [];
@@ -818,9 +844,7 @@ function checkTest(root, found, test, prompts) {
   if (typeof doc.story_path !== 'string' || !doc.story_path) return refusal('pdd-no-story', 'story_path', 'The test has no story_path. Name its story, for example "user_stories/<story>.md".');
   if (!found.visible.has(doc.story_path)) return refusal('story-missing', 'story_path', `${doc.story_path} is not a Git-visible file.`);
   if (test.storyPath && doc.story_path !== test.storyPath) return discoveryRefusal({ ...test, doc });
-  if (Object.hasOwn(doc, 'criteria_scope') || (Object.hasOwn(doc, 'check_exemptions') && !(Array.isArray(doc.check_exemptions) && !doc.check_exemptions.length))) {
-    return refusal('pdd-partial-test', Object.hasOwn(doc, 'criteria_scope') ? 'criteria_scope' : 'check_exemptions', 'In the beta a test checks the whole story. Remove criteria_scope and check_exemptions.');
-  }
+  const partial = partialTestRefusal(doc); if (partial) return partial;
   if (!Array.isArray(doc.criteria) || !doc.criteria.length) return refusal('invalid-criterion', 'criteria', 'The test has no criteria.');
   const ids = new Set();
   for (const [index, item] of doc.criteria.entries()) {
@@ -1521,9 +1545,9 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
     let content = expanded.references.length ? Buffer.from(expanded.text,'utf8') : bytes(file);
     if (format === 'scenario') {
       let doc; try { doc = JSON.parse(content.toString('utf8')); } catch { /* Keep invalid-source handling. */ }
-      if (typeof doc?.story_path === 'string' && Array.isArray(doc.criteria) && Array.isArray(doc.steps)) {
+      if (typeof doc?.story_path === 'string' && !scenarioShapeRefusal(doc, file.path)) {
         add(doc.story_path, file.path, 'story');
-        const plan = criterionPlan(doc, storyCriteria(bytes(inspect(doc.story_path, file.path)).toString('utf8')));
+        const plan = capturedCriterionPlan(doc, storyCriteria(bytes(inspect(doc.story_path, file.path)).toString('utf8')), file.path);
         if (plan?.not_checked.length && plan.checked) content = Buffer.from(JSON.stringify({...doc,criteria:plan.criteria,
           check_exemptions:plan.not_checked.map(item => ({criterion_id:item.criterion_id,reason:'out-of-scope',detail:item.reason}))}), 'utf8');
       }

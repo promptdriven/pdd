@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 6ac01d9bf56da3876eb3a8ceacccffdd0736e989191d6edbdf3b55aa3f5d23e6).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 617ea3c91d3a1b267cf4548fd9670f874d5208bea61cbb44796398f6460b448d).
 import {readEvidenceEligibility} from './workflow-runner.mjs';
 import {allRuns} from './workflow-runs.mjs';
 import {assessNativeEvidence, resultLines, usableResult} from './workflow-results.mjs';
@@ -1040,8 +1040,9 @@ function capturedCriteria(rows, capture) {
 // Retry a refused combined capture per test, so a broken closure cannot hide good tests.
 const sourceUnavailable = error => !error.selection && (error instanceof PreflightError && error.exitCode === 4 || ['EACCES','EPERM','EISDIR'].includes(error.code));
 function refuseSource(row, error) {
+  if (error.not_checked?.length) Object.assign(row, {not_checked:error.not_checked,criteria_total:error.criteria_total});
   Object.assign(row, {state:'refused',phase:'local',unsent:true,calls:0,refusals:[{code:error.code ?? 'source-unavailable',
-    section:'source',message:error.message,hint:error.hint ?? 'Restore the named dependency, make it readable, or correct its declared path.'}]});
+    section:error.section ?? 'source',message:error.message,hint:error.hint ?? 'Restore the named dependency, make it readable, or correct its declared path.'}]});
 }
 function captureIndependent(root, rows, ports, options) {
   const capture = tests => {

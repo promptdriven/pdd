@@ -158,6 +158,8 @@ Remove only JSON whitespace (space, tab, CR and LF) between tokens inside the ro
 
 Return `raw_file_hashes`, keyed by repository-relative path, containing SHA-256 of exact authored Story, test and reached prompt bytes from the same captured snapshot. Keep these separate from effective source hashes, including when interface formatting or reference expansion changes effective bytes.
 
+Before adding automatic criterion exemptions, validate P3–P6 against the effective captured scenario and its captured Story. Authored partial-test metadata remains a refusal. Changed or extra criterion text remains a refusal. Derive missing coverage from those same bytes; a plan with no exact criterion refuses with `unchecked-criteria` and retains every `not_checked` reason and `criteria_total`. A missing plan never means complete coverage. Capture refuses locally with the rule code and section, before upload, cache reuse or dispatch. The client isolates this refusal and rebuilds without that test; good selected siblings continue. Automatic exemptions are added only after this validation succeeds, without editing authored files.
+
 
 Default shared-reference preparation uses the synchronous module function
 `expandSource` from [references](contract-refs.prompt.md). Expand before
