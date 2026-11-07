@@ -1478,6 +1478,9 @@ async function askCodeLines(run, area, p) {
 }
 
 async function finishPr(run, area, step, p, lines) {
+  // A coordinator that lost or let expire its claim does not push to the issue.
+  const ownership = await continuationOwnership(run, run.root, p);
+  if (ownership) return fail(ownership);
   const label = prLabel(run, area), existing = prOf(run, area.name);
   const selectedArea=run.area,selectedGate=run.gate;
   lines.push(`pdd recorded ${step}. pdd opens ${label} now.`);

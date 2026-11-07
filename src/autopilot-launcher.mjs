@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 1ada2c5d311bbb3edfd2db154d4a151d1a43ecb969769856b9a4ddbc5d3954ad).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 1572743cf4e1ff1b1ac8f13f7fe98c12893a0782140f85f0bff667771e79d290).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch } from 'node:fs';
@@ -15,7 +15,7 @@ import { appendEvents } from './metrics-store.mjs';
 import { recordCaptureGap } from './metrics-gap.mjs';
 import * as nativeFiles from 'node:fs';
 import { reconcileDependencyIntake } from './issue-dependencies-intake.mjs';
-import { createDependencyReadPorts } from './issue-dependencies-github.mjs';
+import { createDependencyReadPorts, refreshClaimHeartbeat, withoutClaimHeartbeat } from './issue-dependencies-github.mjs';
 import { sendToChat, START_GRACE_MS } from './workflow-chat.mjs';
 import { acquireRunLock } from './workflow-runner.mjs';
 import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
@@ -24,6 +24,7 @@ import { samePath } from './workflow-herdr-layout.mjs';
 const INTERVAL = 30 * 60 * 1000;
 const STUCK_AFTER = 60 * 60 * 1000;
 const CLAIM_IDLE_AFTER = 60 * 60 * 1000;
+const STUCK_CLAIM_AFTER = 4 * 60 * 60 * 1000;
 const SESSION = 'pdd-autopilot';
 const ACK = '<!-- pdd:autopilot:thanks -->';
 const ACK_TEXT = `thanks, a maintainer will look\n\n${ACK}`;
@@ -244,6 +245,8 @@ async function trusted(row, state, config, p) {
   }
   return p.permissions.get(login);
 }
+// A trusted claim comment that carries a lastSeen heartbeat.
+const heartbeat = row => typeof row?.body === 'string' && withoutClaimHeartbeat(row.body) !== row.body;
 async function readRunProgress(state, p) {
   const commonDir = (await p.checked('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim();
   const folder = join(commonDir, 'pdd', 'runs');
@@ -268,7 +271,7 @@ function message(state, issues, timeRules = []) {
   const workflow = { pddBin: join(state.packageRoot ?? dirname(dirname(self)), 'bin', 'pdd.mjs'), agent: state.agent.kind, home: state.environment?.HOME, configHome: path ? { variable, path } : null };
   const start = state.startAction?.mode === state.currentMode && state.startAction?.repository === state.repo ? state.startAction : null;
   const authority = start ? `The operator invoked pdd autopilot start for ${state.repo} in ${state.currentMode} mode. ${state.currentMode === 'auto' ? 'This action establishes scope for ordinary eligible work and automatic merge under the repository review, testing, strict approval and other rules.' : 'Follow observe mode limits.'} This is an operator action, not a quoted person reply or checker approval. Use the existing supported approval routes for the actual action where applicable; never treat it as a later person reply.\n` : '';
-  return `Read and follow the bundled skill at ${JSON.stringify(skillPath)} and its relative supporting files. ${authority}When recipeFirst is true, follow its bounded startup readiness, then dependency review, room, pdd:working claim and stuck-run rules. Inspect claimed issues for progress and stale claims; do not treat them as unclaimed work. The packet contains only trusted text; further issue/comment reads must preserve that boundary. Use the skill's pdd-check and pdd-merge handoffs for review and merge work. For an issue you start, pass its decisionId with --origin autopilot --decision-id TOKEN to pdd workflow run; pass --outcome code or prompt-only when the required outcome is known.\n${JSON.stringify({ repository: state.repo, coordinatorId: state.coordinatorId, machine: state.machine, activatedAt: state.activatedAt, ...(start ? { startAction: start } : {}), currentMode: state.currentMode, recipeFirst: !state.recipeDelivered, workflow, ...(state.runs === undefined ? {} : { runs: state.runs }), issues, ...(timeRules.length ? { timeRules } : {}) })}\n`;
+  return `Read and follow the bundled skill at ${JSON.stringify(skillPath)} and its relative supporting files. ${authority}When recipeFirst is true, follow its bounded startup readiness, then dependency review, room, pdd:working claim and stuck-run rules. Inspect claimed issues for progress and stale claims; do not treat them as unclaimed work. An item with expiredClaim has an expired claim; take it over only under the skill's expired-claim rule. The packet contains only trusted text; further issue/comment reads must preserve that boundary. Use the skill's pdd-check and pdd-merge handoffs for review and merge work. For an issue you start, pass its decisionId with --origin autopilot --decision-id TOKEN to pdd workflow run; pass --outcome code or prompt-only when the required outcome is known.\n${JSON.stringify({ repository: state.repo, coordinatorId: state.coordinatorId, machine: state.machine, activatedAt: state.activatedAt, ...(start ? { startAction: start } : {}), currentMode: state.currentMode, recipeFirst: !state.recipeDelivered, workflow, ...(state.runs === undefined ? {} : { runs: state.runs }), issues, ...(timeRules.length ? { timeRules } : {}) })}\n`;
 }
 function coordinatorEnvelope(state) {
   return { version: 'pdd.autopilot-coordinator.v1', repository: state.repo, coordinatorId: state.coordinatorId, machine: state.machine, activation: state.activatedAt, ...(state.runs === undefined ? {} : { runs: state.runs }) };
@@ -775,7 +778,21 @@ async function runTick(stateFile, ports, completion) {
     };
     const intake = await (ports.reconcileDependencyIntake ?? reconcileDependencyIntake)(
       { cwd: state.cwd, repository: state.repo, trigger: completion ? 'completion' : 'tick', mode: config.mode },
-      { ...ports, env: p.env, execFile: async (file, args, options) => p.execute(file, args, options), pending: dependencyPending, admitEffect: scanGuard, admitMutation: action => p.scanAction(action) });
+      { ...ports, env: p.env, execFile: async (file, args, options) => p.execute(file, args, options), clock: ports.clock ?? { now: async () => ({ iso: new Date(p.now()).toISOString() }) }, pending: dependencyPending, admitEffect: scanGuard, admitMutation: action => p.scanAction(action) });
+    // Claims observed by the intake: refresh this coordinator's own live claims
+    // (no AI call) and let expired claims of any owner become selectable work.
+    const observedClaims = (Array.isArray(intake.claims) ? intake.claims : []).filter(claim => claim && typeof claim.issue === 'string');
+    const expiredClaims = new Map(observedClaims.filter(claim => claim.expired === true && claim.active === false).map(claim => [claim.issue.toLowerCase(), claim]));
+    const ownClaims = observedClaims.filter(claim => claim.active === true && claim.coordinatorId === state.coordinatorId && claim.machine === state.machine && claim.commentId && claim.labelEventId);
+    const stuckFor = claim => p.now() - (typeof claim.stuckSince === 'string' ? Date.parse(claim.stuckSince) : NaN);
+    for (const claim of ownClaims) {
+      // After 4 hours stuck the owner stops refreshing, so the claim expires unless the issue leaves pdd:stuck.
+      if (stuckFor(claim) >= STUCK_CLAIM_AFTER) continue;
+      try {
+        await (p.refreshClaimHeartbeat ?? refreshClaimHeartbeat)({ cwd: state.cwd, repository: state.repo, claim, coordinatorId: state.coordinatorId, machine: state.machine, at: new Date(p.now()).toISOString() },
+          { execFile: async (file, args, options) => p.execute(file, args, options), admitMutation: action => p.scanAction(action) });
+      } catch (error) { p.warn(`Claim heartbeat deferred for ${claim.issue}: ${line(error.message)}`); }
+    }
 
     const result = p.queryIssues ? await p.queryIssues(state) : await queryIssues(state, p);
     if (result.status === 429 || result.rateLimited) { state.retryAt = result.resetAt || p.now() + INTERVAL; return outcome('unknown', 'GitHub rate limited; waiting until reset.'); }
@@ -786,6 +803,13 @@ async function runTick(stateFile, ports, completion) {
     cachePullRequests(state);
     const work = [], pending = {}, warnings = [], selections = [];
     const timeRules = [], pendingTimes = {};
+    for (const claim of ownClaims) {
+      const number = Number(/\/issues\/([1-9][0-9]*)$/.exec(claim.issue)?.[1]), key = `stuck:${number}`;
+      if (Number.isSafeInteger(number) && stuckFor(claim) >= STUCK_CLAIM_AFTER && state.timeSeen[key] !== claim.stuckSince) {
+        timeRules.push({ kind: 'stuck-claim', number, reason: `Issue #${number} has been stuck for 4 hours; retry it with a changed approach or ask in the configured alert channel. Its claim is no longer refreshed and expires in 4 hours unless the issue leaves pdd:stuck.` });
+        pendingTimes[key] = claim.stuckSince;
+      }
+    }
     for (const { number, changedAt } of await (p.readRunProgress ?? readRunProgress)(state, p)) {
       const key = `run:${number}`;
       if (p.now() - changedAt >= STUCK_AFTER && state.timeSeen[key] !== changedAt) {
@@ -812,10 +836,13 @@ async function runTick(stateFile, ports, completion) {
         const previous = state.seen[issue.number];
         const graphEligible = Array.isArray(intake.eligible) ? intake.eligible.includes(issue.html_url) : undefined;
         const becameGraphEligible = graphEligible === true && previous && previous.graphEligible !== true;
-        const blocked = labels.some(name => ['pdd:working', 'pdd:stuck', 'pdd:code-pending'].includes(name));
-        const claimActivity = [issue.updated_at, ...rows.flatMap(row => [row.created_at, row.updated_at])].map(value => Date.parse(value)).filter(Number.isFinite).reduce((latest, at) => Math.max(latest, at), -Infinity);
+        const expiredClaim = labels.includes('pdd:working') ? expiredClaims.get(String(issue.html_url).toLowerCase()) : undefined;
+        const holdLabels = labels.filter(name => name === 'pdd:working' ? !expiredClaim : ['pdd:stuck', 'pdd:code-pending'].includes(name));
+        const blocked = holdLabels.length > 0, claimNote = expiredClaim ? ['expired-claim'] : [];
+        // A heartbeat edit of a claim comment is not issue activity.
+        const claimActivity = [issue.updated_at, ...rows.flatMap(row => heartbeat(row) ? [row.created_at] : [row.created_at, row.updated_at])].map(value => Date.parse(value)).filter(Number.isFinite).reduce((latest, at) => Math.max(latest, at), -Infinity);
         const claimKey = `claim:${issue.number}`;
-        const claimDue = labels.includes('pdd:working') && Number.isFinite(claimActivity) && p.now() - claimActivity >= CLAIM_IDLE_AFTER && state.timeSeen[claimKey] !== claimActivity;
+        const claimDue = labels.includes('pdd:working') && !expiredClaim && Number.isFinite(claimActivity) && p.now() - claimActivity >= CLAIM_IDLE_AFTER && state.timeSeen[claimKey] !== claimActivity;
         const recheckReadyBaseline = previous?.waiting === true && graphEligible === true && !blocked;
         const unassigned = !issue.assignee && (!Array.isArray(issue.assignees) || issue.assignees.length === 0);
         const reconsiderReady = config.mode === 'auto' && graphEligible === true && !blocked && unassigned;
@@ -846,12 +873,12 @@ async function runTick(stateFile, ports, completion) {
           continue;
         }
         const pulls = await relatedPullRequests(issue.number, state, config, p);
-        const item = { number: issue.number, url: issue.html_url, eligible: graphEligible === true, ...(labels.includes('pdd:working') ? { claimed: true } : {}), ...(authorTrusted ? { title: issue.title, body: issue.body } : {}), comments: trustedComments.map(row => ({ author: row.user.login, body: row.body })), ...(pulls.length ? { pullRequests: pulls } : {}) };
-        const view = { text: authorTrusted ? { author: issue.user.login, title: item.title, body: item.body } : undefined, comments: trustedComments.map(row => ({ id: row.id, updatedAt: row.updated_at, author: row.user.login, body: row.body })), labels: labels.filter(name => !['pdd:working', 'pdd:stuck', 'pdd:code-pending'].includes(name)).sort(), pulls: pulls.map(pull => ({ ...pull, author: state.pullCache[pull.number].row.user.login })) };
+        const item = { number: issue.number, url: issue.html_url, eligible: graphEligible === true, ...(labels.includes('pdd:working') ? { claimed: true } : {}), ...(expiredClaim ? { expiredClaim: { lastSeen: expiredClaim.lastSeen } } : {}), ...(authorTrusted ? { title: issue.title, body: issue.body } : {}), comments: trustedComments.map(row => ({ author: row.user.login, body: row.body })), ...(pulls.length ? { pullRequests: pulls } : {}) };
+        const view = { text: authorTrusted ? { author: issue.user.login, title: item.title, body: item.body } : undefined, comments: trustedComments.map(row => heartbeat(row) ? { id: row.id, updatedAt: row.created_at, author: row.user.login, body: withoutClaimHeartbeat(row.body) } : { id: row.id, updatedAt: row.updated_at, author: row.user.login, body: row.body }), labels: labels.filter(name => !['pdd:working', 'pdd:stuck', 'pdd:code-pending'].includes(name)).sort(), ...(expiredClaim ? { expiredClaim: true } : {}), pulls: pulls.map(pull => ({ ...pull, author: state.pullCache[pull.number].row.user.login })) };
         const event = digest(view);
         const waiting = blocked || graphEligible !== true;
-        if (!waiting) { selection.state='ready'; selection.reasons=[]; }
-        if (waiting && (blocked || graphEligible === false)) { selection.state='waiting'; selection.reasons=blocked ? labels.filter(name => ['pdd:working','pdd:stuck','pdd:code-pending'].includes(name)) : ['dependency-not-ready']; }
+        if (!waiting) { selection.state='ready'; selection.reasons=[...claimNote]; }
+        if (waiting && (blocked || graphEligible === false)) { selection.state='waiting'; selection.reasons=[...(blocked ? holdLabels : ['dependency-not-ready']), ...claimNote]; }
         const observed = { event, view, source, mode: config.mode, waiting, blocked, selectionState:selection.state, selectionReasons:selection.reasons, ...(graphEligible === undefined ? {} : { graphEligible }) };
         const sameTrustedWork = previous?.view && digest(await revalidateView(previous.view, state, config, p)) === event;
         const becameReady = previous && !waiting && (previous.waiting || previous.blocked && !blocked || previous.mode === 'observe' && config.mode === 'auto');

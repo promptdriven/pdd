@@ -87,6 +87,9 @@ claim, worktree and custody on denial. Preserve all ordinary approval, scope, dr
 review and identity guards. Manual and legacy runs retain their existing behavior.
 Do not rerun start admission for continuation: this run occupies its own subject.
 This boundary does not promise an atomic GitHub-to-process launch.
+The same claim check runs before `done` commits, pushes or opens an area PR for
+such a run. A run whose claim expired or now belongs to another coordinator gets
+the same denial and pushes nothing; the issue keeps its history.
 
 ## Record an automatic stopped run
 

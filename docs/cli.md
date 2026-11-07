@@ -68,7 +68,13 @@ look" until a trusted person comments. The agent receives only trusted people's
 text, including comments. Owners, people with write access and configured trusted
 names count as trusted. The `pdd-autopilot` skill owns the start-up recipe,
 `pdd:working` claim and one comment across machines, capacity and progress
-tracking. Related PRs are associated through same-repository closing references;
+tracking. Only Autopilot uses `pdd:working`; a person or a manual session assigns
+a person instead. Each tick writes a `lastSeen` time into its own claim comments
+without an AI call. A claim with no `lastSeen` update for 4 hours, or an older
+claim without `lastSeen` and with no issue activity for 24 hours, is expired:
+`pdd graph` shows "Expired claim, last seen" and another coordinator may take it
+over. After 4 hours stuck, the owner tries a changed approach or asks for help,
+and the claim then expires. Related PRs are associated through same-repository closing references;
 trusted PR discussion comments and state transitions can wake waiting work once.
 Claimed issues stay identified as claimed when a trusted change needs attention.
 `add` rejects foreign repository references before writing any labels. Status

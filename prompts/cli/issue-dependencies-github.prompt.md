@@ -4,7 +4,9 @@ Own `src/issue-dependencies-github.mjs`. Export module functions
 `readDependencySnapshot({cwd,repository,inputs},ports)`,
 `saveDependencyReview({repository,issue,review},ports)` and
 `applyDependencyChanges({cwd,repository,issue,reviewId},ports)` and
-`saveDependencyImpact({repository,issue,impact},ports)`.
+`saveDependencyImpact({repository,issue,impact},ports)`, plus the claim
+heartbeat functions `refreshClaimHeartbeat` and `withoutClaimHeartbeat`
+([claims](#claims-heartbeat-and-expiry)).
 Own GitHub transport, append-only review storage and recovery. The pure model owns
 which review is current and what is ready. No function calls AI or starts work.
 All outside access uses injected ports. Existing issue bodies and comments remain
@@ -85,6 +87,40 @@ Condition source facts and current executionClaim/runIds come from the same
 native requirement/claim/run observations. Unknown provenance is not a claim-only
 hold that the pre-start check may discard. The selected native coordinator supplies semantic conditions; the adapter does
 not infer installation or deployment from a PR merge.
+
+## Claims, heartbeat and expiry
+
+Only Autopilot uses `pdd:working`. The native owners port reads the winning claim
+of each labeled issue: the earliest label event of the current claim era (a native
+removal ends an era), and the one trusted comment by that event's actor whose JSON
+record names the repository, coordinatorId, machine and that labelEventId. Each
+claim is `{issue,owner,active,coordinatorId,machine,commentId,labelEventId}` with
+optional `lastSeen` (ISO time), `expired: true` and `stuckSince` (time of the
+current `pdd:stuck` label event). Read the time through `clock.now({})`. The
+default clock follows the caller's injected `now` in milliseconds.
+
+| Claim | Expired when |
+|---|---|
+| Heartbeat: its record has a `lastSeen` time | 4 hours after `lastSeen`. Other issue activity does not refresh it. A future `lastSeen` counts as now. |
+| Legacy: no `lastSeen`, no unique matching comment, or a bare label | 24 hours with no issue activity: the latest issue update, comment creation or edit, or timeline event. `lastSeen` is that activity time. |
+
+An unknown time or clock never expires a claim. An expired claim has `active: false`:
+it is not owned elsewhere, and it does not admit its old owner to a start or a
+continuation. In the snapshot, it replaces the `Claimed` hold with the hold
+`Expired claim, last seen <lastSeen>`, and execution follows the run observation.
+The pure model shows that hold as a reason and does not block on it. A takeover
+removes and adds `pdd:working`, so a new era starts and the old record no longer
+matches. Never edit or delete an old claim comment.
+
+`refreshClaimHeartbeat({cwd,repository,claim,coordinatorId,machine,at},ports)`
+acts only on an active claim of that coordinator and machine. It rereads the
+comment by `commentId`, requires the same record identity and labelEventId, sets
+`lastSeen` to `at` and keeps every other byte of the comment. The edit uses the
+scan's admission guard, like other scan mutations. Read back the saved `lastSeen`.
+Return `{state:"refreshed",lastSeen}` or `{state:"skipped"}`; an unavailable read,
+edit or readback throws. A repeated heartbeat is safe: it only sets a time.
+`withoutClaimHeartbeat(body)` returns the body without its `lastSeen` field, or
+the same body when there is none, so that a heartbeat edit is not new trusted work.
 
 ## Repository-bound authority
 

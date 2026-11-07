@@ -219,13 +219,14 @@ At 60 minutes without a change, offer one line naming the run number and asking
 the skill to follow its `pdd:stuck` rule. Completed and cancelled runs are over;
 missing or unreadable records supply no progress fact.
 
-For an eligible trusted issue with `pdd:working`, use the latest issue update or
+For an eligible trusted issue with a live `pdd:working` claim, use the latest issue update or
 comment creation/edit time already returned and cached by the tick as claim
-activity (including label refresh). At 60 minutes, representing the skill's
+activity (including label refresh). A heartbeat edit is not activity: for a claim
+comment with `lastSeen`, use its creation time. At 60 minutes, representing the skill's
 "about 1 hour", offer one line naming the issue number and asking the skill to
-review stalled work under its claim rule. This is an observation only: age does
-not authorize takeover, release the `pdd:working` claim, or make the issue fresh
-work. Keep it claimed until the existing claim owner removes the label. Do not
+review stalled work under its claim rule. This is an observation only: idle age
+does not authorize takeover, release the `pdd:working` claim, or make the issue fresh
+work. Only the [claim expiry](#claim-heartbeat-and-expiry) makes a claim available. Do not
 fetch label events or make another query to measure age; an absent or unreadable
 activity time cannot be due. Revalidate trust before delivering a due claim,
 even when the cached source is unchanged; stranger text never enters a timed
@@ -239,6 +240,31 @@ line per event. Busy or failed delivery consumes no event; reassess current
 facts when idle so refreshed or ended events are not delivered stale. Neither
 timer marks, terminates or takes over a run itself; the skill owns those actions.
 The two 60-minute thresholds are constants, not settings, caps or hard stops.
+
+### Claim heartbeat and expiry
+
+Each tick keeps claims current without an AI call. Use the `claims` that the
+dependency intake returns; add no other GitHub read for them. For each active
+claim of this coordinator and machine, call the GitHub reader's
+[`refreshClaimHeartbeat`](issue-dependencies-github.prompt.md#claims-heartbeat-and-expiry)
+with the current clock time, under the scan's admission guard. A failed heartbeat
+warns and the tick continues. Never refresh another owner's claim or an expired
+claim, also an own one: expiry is final, and the old owner gets the issue back
+only through the skill's takeover rule.
+
+An own claim whose issue has had `pdd:stuck` for 4 hours (`stuckSince`) is not
+refreshed again, so it expires 4 hours later unless the issue leaves `pdd:stuck`.
+For it, offer one `stuck-claim` time rule, once per stuck time, that asks the
+skill to retry with a changed approach or ask in the configured alert channel.
+
+An expired claim (`expired: true`) does not hold its issue: `pdd:working` alone
+is then not a waiting reason, and a currently eligible issue is fresh work. Its
+item keeps `claimed: true` and adds `expiredClaim: {lastSeen}`; its selection
+reason is `expired-claim`. A live claim of any owner stays a hold. The idle-claim
+rule does not apply to an expired claim. In the trusted view and fingerprint,
+show a claim comment with `lastSeen` through `withoutClaimHeartbeat` and with its
+creation time, so that a heartbeat alone is not new work. The 4-hour stuck time
+and the claim expiry times are constants, not settings.
 
 Use same-repository closing references in PR bodies to associate PRs with issues.
 Resolve trusted related PR metadata on change (state, draft, merge and head),
@@ -293,7 +319,7 @@ consumes no delivery fingerprint. If submission may have happened, retain
 uncertain custody: do not blindly resend or invent an acknowledgement. An
 acknowledgement establishes submission, not agent uptake or completed work. Coalesce pending
 changes and preserve them across workspace or pane recreation. The skill owns
-cross-machine claims (pdd:working plus one comment), room scheduling and running
+cross-machine claims and takeover (pdd:working plus one comment), room scheduling and running
 issue progress; launcher polling must not repeatedly prompt that owner about the
 same work.
 
