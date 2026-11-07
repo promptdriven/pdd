@@ -125,9 +125,47 @@ independently prove execution or prompt/code equivalence. The schema does not au
 execution claims. Review commands, results and committed replay tests before merging.
 
 New bundled feature/bug code areas opt in explicitly. Saved areas and custom workflows without the field,
-and small-change, keep their publication behavior. Custom opt-in without corpus adoption needs an approved prompt area with
-`then: "ask-code"` to establish the original-vector anchor. [Corpus adoption](#adopt-an-unchanged-approved-corpus) can instead supply that anchor to a fresh workflow whose first area is code. Otherwise absent anchors are blocked, never reconstructed
+and small-change, keep their publication behavior. A custom opt-in with an approved prompt area uses
+`then: "ask-code"` to establish the original-vector anchor. A workflow whose code area has no such earlier area
+gets the [approved scenarios on the base](#approved-scenarios-on-the-base) that link to its changes.
+[Corpus adoption](#adopt-an-unchanged-approved-corpus) can instead supply a declared anchor to a fresh workflow whose first area is code. Absent anchors are blocked, never reconstructed
 from code-space files.
+
+## Approved scenarios on the base
+
+A file on the run's base branch counts as approved: it was reviewed and merged there. So the anchor also
+holds the approved scenario files on the base commit that belong to the area that the run changes. You give
+no flag. Manual and Autopilot runs work the same. pdd reads the base with local Git only and makes no GitHub
+or AI call.
+
+A base scenario belongs to the run when one of its links names a file in the changed area:
+
+- Its links are its `story_path`, each step `entry_path` and its `entry_paths`.
+- The changed area is every file that the run changed against its base, the links of each changed scenario,
+  and, for each changed file that the base `pdd-bindings.json` declares as a `module`, its `stories` and
+  `prompt` (see [module binding inventory](runtime-bindings.md)).
+
+pdd uses no other link: no folder, file name or text match. When the repository records no link, pdd adds
+no base file and the PR says why. A changed code file links to scenarios only through `pdd-bindings.json`.
+
+With an approved prompt area, pdd builds the anchor at each prompt-space publication. A base file that PR 1
+changes is a changed scenario, with its PR 1 bytes. When code space starts, the anchor freezes. Without a
+prompt area before code, pdd builds the anchor at each code step and publication from the files changed so
+far. It always takes those files from the base commit, so a code-space edit cannot change their values.
+
+Each base file in `replayBaseline` keeps its path, raw SHA256, snapshot, check identities and `base` (the
+full base commit). The PR shows, for example:
+
+```text
+Anchor: 3 changed scenarios + 18 approved on base 6b58b76 (1,722 checks).
+```
+
+When pdd adds no base file, the line gives the reason. All anchor limits apply to the whole anchor; a
+blocked anchor names its file or check count and the limit. Base approval never gives a pass by itself.
+The agent still replays every anchored check. Changed, removed and added files follow the same rules as
+other anchored files: in prompt space a removed file blocks the anchor; in code space the saved-value rule
+above lists each change, and a record of the old bytes cannot pass. The explicit `--adopt-corpus` route
+below keeps its declared inventory and never adds base files.
 
 ## Adopt an unchanged approved corpus
 
