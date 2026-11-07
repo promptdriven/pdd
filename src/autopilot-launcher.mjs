@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 7fa5665e8c4e81c803c10a06d555f1ba31a18d549a52f0f3fe556c6ef8c49816).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 5b21cb70b4349309e90ac81fbea86562e9466cff4d40a0a1e61c0c7ebc3c3672).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -23,7 +23,7 @@ import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
 import { samePath } from './workflow-herdr-layout.mjs';
 import { tomlString } from './toml-string.mjs';
 import { alertStatusLine } from './autopilot-alerts.mjs';
-import { lookupRepositoryParent } from './workflow-worktree.mjs';
+import { lookupRepositoryParent, githubOriginRepository } from './workflow-worktree.mjs';
 
 const INTERVAL = 30 * 60 * 1000;
 const STUCK_AFTER = 60 * 60 * 1000;
@@ -68,24 +68,31 @@ async function gitRoot(p) {
   if (result.code === 0 && result.stdout.trim()) return result.stdout.trim();
   throw Object.assign(Error(/not a git repository/i.test(result.stderr ?? '') ? NOT_GIT : 'Autopilot could not read this Git repository; retry.'), { exact: true });
 }
-const GITHUB_ORIGIN = /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*?)(?:\.git)?$/;
-// Read-only: can `pdd workflow run` make an issue worktree in this checkout? The allocator decides.
+// Read-only: can `pdd workflow run` make an issue worktree in this checkout? The allocator alone decides;
+// local Git reads only name the cause after it refuses.
 async function workflowReadiness(state, p) {
   if (p.allocationCheck) return p.allocationCheck({ cwd: state.cwd, repository: state.repo });
-  const git = async args => { try { return await p.execute('git', args, { cwd: state.cwd }); } catch { return { code: 1, stdout: '', stderr: '' }; } };
-  const refused = cause => ({ state: 'refused', message: `${cause} Run Autopilot from a normal clone of ${state.repo ?? 'the GitHub repository'}.` });
+  let unreadable = false;
+  const execute = async (file, args, cwd) => { try { return await p.execute(file, args, { cwd }); } catch (error) { unreadable = true; throw error; } };
+  const git = async args => { try { return await execute('git', args, state.cwd); } catch { return { code: 1, stdout: '', stderr: '' }; } };
   const origin = await git(['remote', 'get-url', 'origin']);
+  const named = origin.code === 0 ? githubOriginRepository(origin.stdout) : null;
+  const repository = state.repo ?? named;
+  const common = await git(['rev-parse', '--path-format=absolute', '--git-common-dir']);
+  let commonDir = null;
+  if (common.code === 0 && common.stdout.trim()) { try { commonDir = realpathSync(resolve(state.cwd, common.stdout.trim())); } catch { /* Not verifiable. */ } }
+  if (repository && commonDir) {
+    const parent = await lookupRepositoryParent({ cwd: state.cwd, repository, commonDir }, {
+      execFile: async (file, args, { cwd }) => { const result = await execute(file, args, cwd); return { stdout: result.stdout, stderr: result.stderr, code: result.code }; },
+    });
+    if (parent.state === 'ready') return { state: 'ready', message: '' };
+  }
+  if (unreadable) return { state: 'refused', message: 'pdd could not read Git in this checkout. Try again.' };
+  const refused = cause => ({ state: 'refused', message: `${cause} Run Autopilot from a normal clone of ${repository ?? 'the GitHub repository'}.` });
   if (origin.code !== 0 || !origin.stdout.trim()) return refused('This checkout has no origin remote.');
-  const named = GITHUB_ORIGIN.exec(origin.stdout.trim())?.[1];
   if (!named) return refused('Its origin remote is not a GitHub repository address.');
   if (state.repo && named.toLowerCase() !== state.repo.toLowerCase()) return refused(`Its origin remote names ${named}, not ${state.repo}.`);
-  const common = await git(['rev-parse', '--path-format=absolute', '--git-common-dir']);
-  let commonDir;
-  try { commonDir = realpathSync(resolve(state.cwd, common.stdout.trim())); } catch { commonDir = null; }
-  const parent = common.code === 0 && commonDir ? await lookupRepositoryParent({ cwd: state.cwd, repository: state.repo ?? named, commonDir }, {
-    execFile: async (file, args, { cwd }) => { const result = await p.execute(file, args, { cwd }); return { stdout: result.stdout, stderr: result.stderr, code: result.code }; },
-  }) : { state: 'recovery_required' };
-  return parent.state === 'ready' ? { state: 'ready', message: '' } : refused('pdd cannot verify the Git layout of this checkout, so it cannot make issue worktrees here.');
+  return refused('pdd cannot verify the Git layout of this checkout, so it cannot make issue worktrees here.');
 }
 async function selectAgent(state, p, saved = null) {
   let definitions = loadAgentDefinitions({ cwd: state.cwd, env: p.env });
@@ -982,7 +989,7 @@ async function runTick(stateFile, ports, completion) {
     if (result.status !== 304) { state.cachedIssues = result.issues; state.etag = result.etag; if (result.pages) state.pages = result.pages; }
     state.acknowledged ??= {}; state.commentCache ??= {}; state.seen ??= {}; state.timeSeen ??= {};
     cachePullRequests(state);
-    const work = [], pending = {}, warnings = [], selections = [];
+    const work = [], pending = {}, warnings = [], selections = [], held = new Set();
     const timeRules = [], pendingTimes = {};
     for (const claim of ownClaims) {
       const number = Number(/\/issues\/([1-9][0-9]*)$/.exec(claim.issue)?.[1]), key = `stuck:${number}`;
@@ -1075,6 +1082,7 @@ async function runTick(stateFile, ports, completion) {
           state.seen[issue.number] = observed; continue;
         }
         work.push(item); pending[issue.number] = observed;
+        if (blocked) held.add(item);
         if (claimDue) {
           timeRules.push({ kind: 'idle-claim', number: issue.number, reason: `Issue #${issue.number} has a pdd:working claim idle for about 1 hour; review stalled work under the skill's claim rule. Age alone does not authorize takeover or release the claim.` });
           pendingTimes[claimKey] = claimActivity;
@@ -1086,7 +1094,8 @@ async function runTick(stateFile, ports, completion) {
       }
     }
     // Fresh work leads to a claim and a workflow start, so offer it only where workflows can start.
-    const fresh = work.filter(item => item.eligible && (!item.claimed || item.expiredClaim));
+    // A held issue (pdd:stuck, pdd:code-pending) is not fresh: its reviews and trusted comments still go out.
+    const fresh = work.filter(item => item.eligible && !held.has(item) && (!item.claimed || item.expiredClaim));
     if (fresh.length) {
       const readiness = await workflowReadiness(state, p);
       if (readiness.state !== 'ready') {
@@ -1290,24 +1299,42 @@ export async function withAutopilotModeLock({ cwd, env }, action, ports = {}) {
   } finally { releaseAdmission?.(); }
 }
 
+const isFolder = path => { try { return typeof path === 'string' && path !== '' && statSync(path).isDirectory(); } catch { return false; } };
+// The mode of one saved folder, read only when that folder exists and is its own Git root.
+async function savedMode(state, ports, env) {
+  if (typeof state.cwd !== 'string' || !state.cwd) return 'unknown (no folder saved)';
+  if (!isFolder(state.cwd)) return 'unknown (folder missing)';
+  const p = portsFor(state, { ...ports, env });
+  try {
+    const root = await p.execute('git', ['rev-parse', '--show-toplevel']);
+    if (root.code !== 0 || !samePath(root.stdout.trim(), state.cwd)) return 'unknown (not a Git repository)';
+    return (await settings(state, p)).mode;
+  } catch { return 'unknown (settings unreadable)'; }
+}
+const GONE = Symbol('gone');
 // Every saved launcher state on this machine, read-only: local files, timer status and Herdr only.
-async function machineStatus(folder, ports, env) {
+// Each line is independent. Timer and Herdr reads run from the caller's folder, never from a saved folder.
+async function machineStatus(folder, ports, env, cwd) {
   let names = [];
   try { names = readdirSync(folder).filter(name => /^[0-9a-f]{20}\.json$/.test(name)).sort(); }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
-  const rows = []; let serverRunning;
+  const here = isFolder(cwd) ? cwd : env?.HOME || homedir();
+  let serverRunning = false;
+  if (names.length) { try { serverRunning = (await herdr(['status', 'server', '--json'], portsFor({ cwd: here }, { ...ports, env }))).running === true; } catch { /* Herdr is not running. */ } }
+  const rows = [];
   for (const name of names) {
     let saved;
-    try { saved = read(join(folder, name)); } catch { rows.push(`${name}: saved state unreadable`); continue; }
-    if (!saved || typeof saved !== 'object' || Array.isArray(saved)) continue;
+    try { saved = read(join(folder, name), GONE); } catch { saved = null; }
+    if (saved === GONE) continue;
+    if (!saved || typeof saved !== 'object' || Array.isArray(saved)) { rows.push(`${name}: saved state unreadable`); continue; }
     const state = { ...saved, id: name.slice(0, -5), stateFile: join(folder, name) };
-    const p = portsFor(state, { ...ports, env });
-    let mode = 'unknown', timerActive = false;
-    try { if (typeof state.cwd === 'string') mode = (await settings(state, p)).mode; } catch { /* The folder or its settings cannot be read. */ }
-    try { timerActive = Boolean(await timer('status', state, p)); } catch { /* Report inactive. */ }
-    if (serverRunning === undefined) { try { serverRunning = (await herdr(['status', 'server', '--json'], p)).running === true; } catch { serverRunning = false; } }
-    const coordinator = serverRunning ? await coordinatorHealth(state, p) : { state: 'unavailable', reason: 'Herdr is not running' };
-    rows.push(`${state.repo ?? 'repository unknown'} in ${state.cwd ?? 'an unknown folder'} · mode ${mode} · Autopilot ${state.enabled ? 'enabled' : 'disabled'} · timer ${timerActive ? 'active' : 'inactive'} · coordinator ${coordinator.state === 'unavailable' ? `unavailable (${coordinator.reason})` : coordinator.state}`);
+    const p = portsFor({ ...state, cwd: here }, { ...ports, env });
+    const mode = await savedMode(state, ports, env);
+    let timerState = 'unknown';
+    try { timerState = await timer('status', state, p) ? 'active' : 'inactive'; } catch { /* Report unknown. */ }
+    let coordinator = { state: 'unavailable', reason: 'Herdr is not running' };
+    if (serverRunning) { try { coordinator = await coordinatorHealth(state, p); } catch { coordinator = { state: 'unavailable', reason: 'status unreadable' }; } }
+    rows.push(`${typeof state.repo === 'string' ? line(state.repo) : 'repository unknown'} in ${typeof state.cwd === 'string' ? line(state.cwd) : 'an unknown folder'} · mode ${mode} · Autopilot ${state.enabled ? 'enabled' : 'disabled'} · timer ${timerState} · coordinator ${coordinator.state === 'unavailable' ? `unavailable (${coordinator.reason})` : coordinator.state}`);
   }
   return ok(rows.length ? [`Autopilot on this machine (${rows.length}):`, ...rows].join('\n') : 'No Autopilot on this machine.');
 }
@@ -1318,7 +1345,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
   let p = portsFor(state, { ...ports, env: input.env });
   let controlLock, releaseAdmission;
   try {
-    if (command === 'status' && input.all) return await machineStatus(stateFolder(ports, p.env), ports, input.env);
+    if (command === 'status' && input.all) return await machineStatus(stateFolder(ports, p.env), ports, input.env, input.cwd);
     state.cwd = await gitRoot(p);
     const id = createHash('sha256').update(state.cwd).digest('hex').slice(0, 20);
     const folder = stateFolder(ports, p.env);

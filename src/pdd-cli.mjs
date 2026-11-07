@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 4ee6c1b3bd62fbbcbbc33f8b28350dd80359b366289995db2df05a411a8667e1).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 723e0acddc2cd2523a7f55b5a2f5601fa076194d5e57da6911c0f254a219853e).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';

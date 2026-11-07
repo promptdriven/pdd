@@ -64,17 +64,30 @@ command again.` A successful start says which repository and folder it works
 in, for example `Autopilot started for OWNER/NAME in /path/to/checkout.`
 
 Before start turns on the timer or opens a chat, it checks that `pdd workflow
-run` can make an issue worktree in this checkout. The check uses the same rules as
-the workflow worktree allocator. It reads Git only: no AI, no GitHub call, no
-claim and no worktree. When the checkout cannot make issue worktrees, for example
-because its `origin` remote names another repository, start stops with exit code
-1. The message names the folder, the cause and the next step: run Autopilot from
-a normal clone of the repository. Start then changes no timer, also not the timers
-of other checkouts, and claims no issue. A tick makes the same check before it
-offers new issue work. While the check fails, the tick offers no new issue, writes
-a warning to the timer log and keeps those issues for a later tick. It still
-delivers the start-up recipe, dependency review, time rules, reviews and the
-work of existing claims.
+run` can make an issue worktree in this checkout. The workflow worktree allocator
+makes this decision, so Autopilot accepts the same Git layouts and the same
+`origin` forms as `pdd workflow run`. The check reads Git only: no AI, no GitHub
+call, no claim and no worktree. When the checkout cannot make issue worktrees, for
+example because its `origin` remote names another repository or Git keeps its
+files in a separate Git directory, start stops with exit code 1. The message names
+the folder, the cause and the next step: run Autopilot from a normal clone of the
+repository. When Git could not be read, the message says so and tells you to try
+again. Start then changes no timer, also not the timers of other checkouts, and
+claims no issue.
+
+A tick makes the same check before it offers new issue work. Issues with
+`pdd:stuck` or `pdd:code-pending` are not new work. While the check fails, the
+tick offers no new issue, writes a warning to the timer log and keeps those issues
+for a later tick. It still delivers the start-up recipe, dependency review, time
+rules, the work of existing claims, and reviews and trusted comments on claimed
+and held issues.
+
+In `status --all`, each line is independent. A saved folder that is gone still
+shows its real timer and coordinator state, with `mode unknown (folder missing)`.
+A saved folder that is not a Git repository shows `mode unknown (not a Git
+repository)`. A timer that cannot be read shows `timer unknown`, and a broken
+state file shows `FILE: saved state unreadable`. One bad line changes no other
+line.
 
 The launcher uses the repository settings module to read root `pdd.json`. An
 active mode is `observe` or `auto`; missing or invalid settings count as `off`. It uses an
