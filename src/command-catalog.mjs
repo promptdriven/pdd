@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: b87c59915f1d31c8e8c86208257e627b99c8b22c329e88938c6c4d0c4dcc7805).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 4b26014a9711700ef86d1580a73413471b149d51dafc6bf795faf92edadd5aa8).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -47,13 +47,13 @@ const routes = [
     forms: [form('pdd product status [--json]', 'Count Stories by part and slice from the product plan; no interpreter calls.')] },
   { id: 'product.next', prefix: ['product', 'next'], local: 'product-next', operands: [], options: [],
     forms: [form('pdd product next', 'Show ready planned runs and their start commands; no interpreter calls.')] },
-  { id: 'product.start', prefix: ['product', 'start'], local: 'product-start', operands: [{name:'run',type:'text'}], options: [{name:'--no-run',kind:'flag'},{name:'--agent',kind:'value',choices:['codex','claude','gemini','agy']}],
-    forms: [form('pdd product start RUN [--no-run] [--agent codex|claude|gemini|agy]', 'Create or reuse the run issue and start a normal feature run; --no-run only prepares the issue. No interpreter calls.')] },
+  { id: 'product.start', prefix: ['product', 'start'], local: 'product-start', operands: [{name:'run',type:'text'}], options: [{name:'--no-run',kind:'flag'},{name:'--agent',kind:'text',choices:['codex','claude','gemini','agy']}],
+    forms: [form('pdd product start RUN [--no-run] [--agent codex|claude|gemini|agy|ENTRY]', 'Create or reuse the run issue and start a normal feature run; --no-run only prepares the issue; ENTRY is a name from ~/.config/pdd/agents.json. No interpreter calls.')] },
   // `workflow start` is a quiet word for now; a later change moves it to `removed`: one data edit.
   { id: 'workflow.run', prefix: ['workflow', run], local: 'workflow-run', quiet: ['workflow', 'start'],
     operands: [{name:'name',type:'workflow-name'},{name:'issue',type:'issue'}],
-    options:[{name:'--agent',kind:'value',choices:['codex','claude','gemini','agy']},{name:'--base',kind:'text'},{name:'--adopt-corpus',kind:'text'},{name:'--draft',kind:'flag'},{name:'--origin',kind:'value',choices:['manual','autopilot','unknown']},{name:'--decision-id',kind:'text'},{name:'--outcome',kind:'value',choices:['code','prompt-only']}],
-    forms:[form(`pdd workflow ${run} NAME ISSUE [--agent codex|claude|gemini|agy] [--base BRANCH] [--draft]`, 'Start the first area chat for a GitHub issue in Herdr and exit; --base selects an existing origin branch (default: repository default); --draft requests draft PRs for this run; --adopt-corpus FILE adopts exact unchanged approved content for a fresh replay-evidence-enabled workflow; --origin, --decision-id and --outcome record optional metrics metadata; pdd later pushes the issue branch and opens a real PR.')] },
+    options:[{name:'--agent',kind:'text',choices:['codex','claude','gemini','agy']},{name:'--base',kind:'text'},{name:'--adopt-corpus',kind:'text'},{name:'--draft',kind:'flag'},{name:'--origin',kind:'value',choices:['manual','autopilot','unknown']},{name:'--decision-id',kind:'text'},{name:'--outcome',kind:'value',choices:['code','prompt-only']}],
+    forms:[form(`pdd workflow ${run} NAME ISSUE [--agent codex|claude|gemini|agy|ENTRY] [--base BRANCH] [--draft]`, 'Start the first area chat for a GitHub issue in Herdr and exit; ENTRY is a name from ~/.config/pdd/agents.json; --base selects an existing origin branch (default: repository default); --draft requests draft PRs for this run; --adopt-corpus FILE adopts exact unchanged approved content for a fresh replay-evidence-enabled workflow; --origin, --decision-id and --outcome record optional metrics metadata; pdd later pushes the issue branch and opens a real PR.')] },
   { id: 'workflow.prove', prefix: ['workflow', 'prove'], local: 'workflow-prove',
     operands: [{name:'issue',type:'issue'}], options: [{name:'--test',kind:'text'},{name:'--expect',kind:'text'},{name:'--timeout',kind:'integer',min:1,max:120}],
     forms: [form('pdd workflow prove ISSUE --test COMMAND --expect TEXT [--timeout MIN]', 'Run committed changed tests on the fetched base branch merge-base and committed head with a limit per phase (default 10 minutes; --timeout sets 1 to 120); save a non-gating report that pull requests show as pdd\'s own result.')] },

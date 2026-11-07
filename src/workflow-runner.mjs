@@ -1,7 +1,7 @@
 import { validateSnapshot } from './metrics-store.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
 import { createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 33dc44a7518d2fb7bf424398daf54496e911059e51d2bb93abd85e77ba1308dd).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 0bb4a85183a00425a801f81b98cd69345a2599039f56f52be51e169e9f259513).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -21,6 +21,7 @@ import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mj
 import { allRuns, currentChat, gitContext, listRuns, readRun, readRunOwnership, resolveRun, runDirFor, runForWorktree, updateRun, writeRun } from './workflow-runs.mjs';
 import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
 import { startChat, sendToChat, herdrCommand, chatSession, openChat, restartChat, validSessionId, closeChats, expandHome, homeVariable, isFolder, observeLifecycle, applyLifecycle, launchAnchor, sessionEvidenceDue, ownSession, observedSession, START_GRACE_MS } from './workflow-chat.mjs';
+import { workflowAgentEntry } from './workflow-agents.mjs';
 import { captureSource, findTests, gitFiles, interfaceBlocks, interfaceSchemaProblems, proseSha256 } from './runtime-preflight.mjs';
 import { storyLines, PROMPT_TESTS_LABEL, PROMPT_TESTS_WORDS } from './runtime-output.mjs';
 import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
@@ -501,9 +502,13 @@ async function startRunUnlocked({ name, issue, agent = 'codex', base, adoptCorpu
   let workflow;
   try { workflow = readWorkflowAreas({ packageRoot, name, cwd, home: p.env.HOME || homedir() }); } catch (error) { return fail(error.message); }
   if (adoptCorpus !== undefined && (typeof adoptCorpus !== 'string' || !adoptCorpus.trim() || !workflow.areas.some(area=>area.replay_evidence===REPLAY_POLICY))) return {exitCode:2,message:'--adopt-corpus requires a declaration path and an explicitly replay-evidence-enabled workflow.'};
-  if (!['codex', 'claude', 'gemini', 'agy'].includes(agent)) return fail('Choose --agent codex, --agent claude, --agent gemini or --agent agy.');
+  // A built-in agent, or a ~/.config/pdd/agents.json entry name that runs as its kind with its own command.
+  const chosen = workflowAgentEntry(agent, { cwd, env: p.env });
+  if (!chosen.ok) return fail(chosen.message);
+  agent = chosen.agent;
+  const definition = chosen.definition, profileEnv = definition ? { ...p.env, ...definition.env } : p.env;
   // Save the initial profile for later chats; explicit Codex replacement may select another.
-  const variable = homeVariable(agent), configDir = variable && p.env[variable] ? resolve(cwd, expandHome(p.env[variable], p.env)) : null;
+  const variable = homeVariable(agent), configDir = variable && profileEnv[variable] ? resolve(cwd, expandHome(profileEnv[variable], profileEnv)) : null;
   if (configDir && !isFolder(configDir)) return fail(`${variable} is "${configDir}", but that folder does not exist. Fix ${variable} and run the command again.`);
   const explicitBase = base !== undefined;
   const badBase = () => fail('Use --base with a branch name, for example feature/checkout.');
@@ -637,6 +642,8 @@ async function startRunUnlocked({ name, issue, agent = 'codex', base, adoptCorpu
     ...(productMarkers.length === 1 ? { productMarker: productMarkers[0] } : {}),
     issue: { number, title: binding.issue.title, url: binding.issue.url }, number, root: a.worktreePath, branch: a.branch,
     baseBranch, baseSha: a.baseSha, sourceRoot: a.sourceRoot, commonDir: a.commonDir, runDir, agent,
+    // The agents.json entry by name, kind and command; its env values may be secrets, so only their names are saved.
+    ...(definition ? { agentDefinition: { name: definition.name, kind: definition.kind, command: definition.command, envNames: Object.keys(definition.env) } } : {}),
     configDir, draft, metricsOrigin, metricsObservations:[{type:'coverage',at:new Date(p.now()).toISOString(),data:{complete:false}}], ...(automaticOrigin ? { automaticOrigin } : {}),
     startedAt: p.now(), state: 'running', areas: workflow.areas, area: 0, done: {}, gate: null, chats: [], decisions: [], changes: [],
     approvalRecord: null, pr: [], prState: null, cancelled: null, warnings, journalSeq: 0,
@@ -662,7 +669,7 @@ async function startRunUnlocked({ name, issue, agent = 'codex', base, adoptCorpu
   const chat = run.chats[0];
   return done([...warnings,
     `Started ${name} for ${run.repo}#${number} "${oneLine(run.issue.title)}".`,
-    `Area 1 of ${run.areas.length}: ${first.name} (${first.steps.join(', ')}). ${agent === 'claude' ? 'Claude' : agent === 'gemini' ? 'Gemini' : agent === 'agy' ? 'Antigravity' : 'Codex'} works in Herdr session pdd, tab "${chat.label}".`,
+    `Area 1 of ${run.areas.length}: ${first.name} (${first.steps.join(', ')}). ${agent === 'claude' ? 'Claude' : agent === 'gemini' ? 'Gemini' : agent === 'agy' ? 'Antigravity' : 'Codex'}${definition ? ` (agents.json entry ${JSON.stringify(definition.name)})` : ''} works in Herdr session pdd, tab "${chat.label}".`,
     ...(agent === 'claude' && !claudeTrusts(run.sourceRoot, run.configDir, p.env) ? ['Claude may first ask you to trust the new worktree folder. Open the chat and choose "Yes, I trust this folder".'] : []),
     `Base: origin/${run.baseBranch}`,
     `Worktree: ${run.root} (branch ${run.branch})`,
@@ -2589,7 +2596,7 @@ function detail(run, chat = null, facts = {}) {
   const next = pending ? `pdd workflow open ${run.number} --new` : activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting'].includes(chat) ? `pdd workflow open ${run.number}`
     : run.gate ? approvalGuide(run)
     : ended(run) ? null : prOf(run, area?.name) ? `Review and merge ${run.pr.length > 1 && run.prBase && run.prBase !== run.baseBranch ? 'PR 1, then PR 2,' : 'the PR'} on GitHub. pdd never merges.` : `pdd workflow open ${run.number}`;
-  return [`${run.repo}#${run.number} "${oneLine(run.issue.title)}" · ${run.workflow} · ${run.agent}`,
+  return [`${run.repo}#${run.number} "${oneLine(run.issue.title)}" · ${run.workflow} · ${run.agent}${run.agentDefinition?.name ? ` ${JSON.stringify(run.agentDefinition.name)}` : ''}`,
     `State: ${describe(run, chat, facts)}`,
     ...(pending ? [`Chat replacement pending: ${run.chatReplacement.phase}; retry pdd workflow open ${run.number} --new, or end with pdd workflow cancel ${run.number}.`] : []),
     ...(pending && run.chatReplacement.phase==='launchRequested' ? ['After startup grace, --new sends the saved launch once only if authoritative inspection proves the latest request never ran; unknown or agent processes keep it pending.'] : []),
