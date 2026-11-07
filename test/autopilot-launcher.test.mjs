@@ -1186,6 +1186,27 @@ test('relaunch: a chat with the current fingerprint is reused across ticks and a
   assert.doesNotMatch((await f.invoke('status')).message, /relaunch pending/);
 });
 
+test('relaunch: the fingerprint covers an explicit CODEX_HOME launch argument and stays the same across ticks and a restart', async t => {
+  const f = await relaunchFixture(t);
+  const profile = join(f.home, "codex 'profile'"); mkdirSync(profile);
+  f.env = { ...f.env, CODEX_HOME: profile };
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  const state = f.state(), launch = state.ownerLaunch;
+  assert.equal(state.environment.CODEX_HOME, profile);
+  assert.equal(launch.fingerprint, f.module.autopilotLaunchFingerprint(state));
+  const { CODEX_HOME, ...withoutProfile } = state.environment;
+  assert.notEqual(launch.fingerprint, f.module.autopilotLaunchFingerprint({ ...state, environment: withoutProfile }), 'the CODEX_HOME argument is in the fingerprint');
+  f.status = 304; await f.tick(); await f.tick();
+  f.issues = [issue(82)]; f.status = 200; await f.tick();
+  assert.equal(f.delivered.at(-1), 'w1:p1');
+  assert.equal((await f.invoke('stop')).exitCode, 0);
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  f.status = 304; await f.tick();
+  assert.equal(f.closed.length, 0);
+  assert.equal(f.launches.length, 1, 'one native launch');
+  assert.deepEqual(f.state().ownerLaunch, launch);
+});
+
 test('relaunch: stop and start with an upgraded package gives the fresh chat the context override', async t => {
   const f = await relaunchFixture(t);
   const older = join(f.dir, 'pdd-older');
@@ -1367,7 +1388,8 @@ for (const [failure, inject] of Object.entries(afterClear)) {
     const f = await relaunchFixture(t);
     assert.equal((await f.invoke('start')).exitCode, 0);
     const original = f.state();
-    f.saveState(state => { delete state.ownerLaunch.fingerprint; });
+    // A state that an older package saved: an owner launch with no fingerprint and no launchProfile.
+    f.saveState(state => { delete state.ownerLaunch.fingerprint; delete state.launchProfile; });
     const finish = inject(f), prompts = f.prompts.length;
     f.issues = [issue(90)]; f.time += 60 * 1000;
     try { await f.tick(); } catch { /* A Herdr error or a simulated process end may end the tick. */ }

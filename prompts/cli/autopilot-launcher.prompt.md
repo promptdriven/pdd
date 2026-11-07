@@ -183,8 +183,11 @@ A running chat keeps the launch settings that it started with. A later package
 or launch argument does not reach it. So record a launch fingerprint in the
 owner launch at each native launch: the SHA-256 of the resolved invoked package
 root, its `package.json` version, the provider family and the provider arguments
-that this package builds. Put a fixed placeholder for the coordinator context
-value in those arguments; the coordinator envelope binds that value. Do not put
+that this package builds, exactly as the launch builds them: the TOML project key
+and, when the saved state has an explicit `CODEX_HOME`, its `set` override. Put a
+fixed placeholder for the coordinator context value in those arguments; the
+coordinator envelope binds that value. The saved state, not the caller, gives
+`CODEX_HOME`, so it is the same on each tick. Do not put
 the process environment, the configured executable or reloaded definition
 values in the fingerprint. They can differ between an explicit start and a
 timer tick, and a difference would relaunch on ordinary ticks. Store only the
