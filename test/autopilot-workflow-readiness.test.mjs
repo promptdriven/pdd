@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, existsSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { runAutopilotLauncher, tickAutopilot } from '../src/autopilot-launcher.mjs';
+import { runAutopilotLauncher, tickAutopilot, withAutopilotModeLock } from '../src/autopilot-launcher.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
 
 // #3050: Autopilot checks that `pdd workflow run` can make an issue worktree before it
@@ -210,6 +210,40 @@ test('while workflows cannot start, a tick still delivers a trusted comment on a
   assert.ok(f.warnings.some(text => text.startsWith('Autopilot held 1 issue(s): pdd workflows cannot start in')), f.warnings.join('\n'));
 });
 
+test('while workflows cannot start, an own live claim still gets its heartbeat and its new trusted comment, and only new claim or start work is held', async t => {
+  const f = fixture(t);
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  const { coordinatorId, machine } = f.state();
+  const heartbeats = [];
+  f.ports.refreshClaimHeartbeat = async input => { heartbeats.push(input.claim.issue); };
+  // Issue 9 has this coordinator's live claim. Issue 10 has an expired claim: a takeover is new claim work.
+  const working = { ...issue(9), labels: [{ name: 'pdd:working' }] }, expired = { ...issue(10), labels: [{ name: 'pdd:working' }] };
+  f.ports.reconcileDependencyIntake = async () => ({ eligible: f.issues.map(row => row.html_url), queued: [], skipped: [], claims: [
+    { issue: working.html_url, active: true, expired: false, coordinatorId, machine, commentId: 'c9', labelEventId: 'l9' },
+    { issue: expired.html_url, active: false, expired: true, lastSeen: '2026-11-01T00:00:00Z' }] });
+  f.issues = [working, expired];
+  f.time += 30 * 60 * 1000;
+  await f.tick();
+  const delivered = f.prompts.length;
+
+  git(f.cwd, 'remote', 'set-url', 'origin', 'https://github.com/other/thing.git');
+  const comment = (id, body) => ({ id, user: { login: 'owner' }, author_association: 'OWNER', body, created_at: '2026-11-04T00:45:00Z', updated_at: '2026-11-04T00:45:00Z' });
+  f.comments = { 9: [comment(91, 'Please address the review.')], 10: [comment(101, 'Take this over.')] };
+  f.issues = [{ ...working, comments: 1, updated_at: '2026-11-04T00:45:00Z' }, { ...expired, comments: 1, updated_at: '2026-11-04T00:45:00Z' }, issue(7)];
+  heartbeats.length = 0; f.warnings.length = 0;
+  f.time += 30 * 60 * 1000;
+  await f.tick();
+
+  assert.deepEqual(heartbeats, [working.html_url], 'the own live claim gets its heartbeat');
+  assert.equal(f.prompts.length, delivered + 1, 'one packet goes out');
+  assert.match(f.prompts.at(-1), /"number":9/);
+  assert.match(f.prompts.at(-1), /Please address the review\./, 'the new trusted comment on the live claim is delivered');
+  assert.doesNotMatch(f.prompts.at(-1), /"number":10|Take this over\./, 'the expired claim is held');
+  assert.doesNotMatch(f.prompts.at(-1), /"number":7/, 'the new issue is held');
+  assert.deepEqual(f.warnings, [`Autopilot held 2 issue(s): pdd workflows cannot start in ${f.cwd}. Its origin remote names other/thing, not owner/repo. Run Autopilot from a normal clone of owner/repo.`]);
+  assert.equal(f.allocated(), false);
+});
+
 test('status names the folder and says why workflows cannot start there, without GitHub', async t => {
   const f = fixture(t);
   assert.equal((await f.invoke('start')).exitCode, 0);
@@ -259,6 +293,59 @@ test('outside a Git repository every Autopilot command that needs a repo says so
     assert.equal(stdout.text, '', argv[0]);
   }
   assert.equal(existsSync(join(home, 'state')) && readdirSync(join(home, 'state')).length > 0, false, 'nothing is saved');
+});
+
+// Git translates its messages. These commands give the same answer when Git prints German.
+const AUTOPILOT_COMMANDS = [['start'], ['stop'], ['status'], ['add', '5'], ['off'], ['observe'], ['auto'], ['trust', 'someone'], ['untrust', 'someone']];
+const GERMAN = { LANG: 'de_DE.UTF-8', LC_ALL: 'de_DE.UTF-8' };
+
+test('outside a Git repository the message is the same when real Git prints German', async t => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-autopilot-nogit-de-')));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const home = join(dir, 'home'), cwd = join(dir, 'folder'); mkdirSync(home); mkdirSync(cwd);
+  const env = { HOME: home, PATH: process.env.PATH, ...GERMAN };
+  const probe = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd, env, encoding: 'utf8' });
+  if (probe.status === 0 || /not a git repository/i.test(probe.stderr)) {
+    t.skip(probe.status === 0 ? 'the temporary folder is inside a Git repository' : 'Git prints no German messages here (no de_DE.UTF-8 locale or no Git translations)');
+    return;
+  }
+  for (const argv of AUTOPILOT_COMMANDS) {
+    const run = spawnSync(process.execPath, [join(packageRoot, 'bin', 'pdd.mjs'), 'autopilot', ...argv], { cwd, env, encoding: 'utf8' });
+    assert.equal(run.status, 1, `${argv[0]}: ${run.stderr}`);
+    assert.equal(run.stderr, `${NOT_GIT}\n`, argv[0]);
+    assert.equal(run.stdout, '', argv[0]);
+  }
+  assert.equal(existsSync(join(home, '.local')), false, 'nothing is saved');
+});
+
+test('outside a Git repository the message is the same when Git prints another language', async t => {
+  // Git on a machine with a German locale: it prints English only when the call itself sets the C locale.
+  const message = env => {
+    const locale = env.LC_ALL || env.LC_MESSAGES || env.LANG || '';
+    return ['C', 'POSIX'].includes(locale) ? 'fatal: not a git repository (or any of the parent directories): .git\n'
+      : 'Schwerwiegend: Kein Git-Repository (oder irgendeines der Elternverzeichnisse): .git\n';
+  };
+  const machine = { ...process.env, ...GERMAN }, calls = [];
+  const notGit = (command, args) => { calls.push([command, ...args].join(' ')); assert.equal(command, 'git'); };
+  const run = async (command, args, options = {}) => { notGit(command, args); return { code: 128, stdout: '', stderr: message(options.env ?? machine) }; };
+  const execFile = async (command, args, options = {}) => { notGit(command, args); throw Object.assign(Error('Command failed'), { code: 128, stdout: '', stderr: message(options.env ?? machine) }); };
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-autopilot-nogit-fake-')));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const home = join(dir, 'home'), cwd = join(dir, 'folder'), stateRoot = join(home, 'state'); mkdirSync(home); mkdirSync(cwd);
+  const env = { HOME: home, PATH: process.env.PATH, ...GERMAN };
+  for (const argv of AUTOPILOT_COMMANDS) {
+    const stdout = capture(), stderr = capture();
+    const exitCode = await runPdd(['autopilot', ...argv], { cwd, env, stdout, stderr, autopilotLauncherPorts: { stateRoot, run }, autopilotPorts: { execFile },
+      autopilotGithub: { checkAutopilotSettings: async () => { throw Error('no GitHub'); }, publishAutopilotSettings: async () => { throw Error('no GitHub'); } } });
+    assert.equal(exitCode, 1, `${argv[0]}: ${stderr.text}`);
+    assert.equal(stderr.text, `${NOT_GIT}\n`, argv[0]);
+    assert.equal(stdout.text, '', argv[0]);
+  }
+  // The settings write boundary hands a folder outside Git to the settings action, which then says so.
+  const locked = await withAutopilotModeLock({ cwd, env }, async () => ({ exitCode: 1, message: NOT_GIT }), { stateRoot, execFile });
+  assert.equal(locked.message, NOT_GIT);
+  assert.deepEqual([...new Set(calls)], ['git rev-parse --show-toplevel'], 'only the Git root lookup runs');
+  assert.equal(existsSync(stateRoot), false, 'nothing is saved');
 });
 
 test('status --all lists every repository with Autopilot on this machine from any folder, read-only and without GitHub', async t => {

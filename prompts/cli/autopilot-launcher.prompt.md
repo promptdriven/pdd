@@ -49,6 +49,10 @@ Outside a Git repository, start, stop, status and add return exit code 1 with
 exactly `This folder is not a Git repository. cd into the repo you want Autopilot
 to work on, then run the command again.` and change nothing. Report another Git
 failure as a Git read failure; a sign-in message is only for a real sign-in failure.
+Git translates its messages. So run each Git call whose error text pdd reads (this
+Git root lookup and the one in `withAutopilotModeLock`) with `LC_ALL=C` and
+`LANG=C`, and keep the rest of the environment. Then a Git that prints German or
+another language gives the same result.
 Check gh sign-in, Herdr availability and installed agent sign-ins, without making
 an AI request. Prefer the current agent family when signed in, then Codex,
 Claude, agy and Gemini. Use configured local launchers from agent-config for the
@@ -95,8 +99,8 @@ repository.
   `pdd:code-pending`). On a refusal, the tick offers no fresh work and warns
   with the folder and the cause. It does not mark those issues seen, so a later
   tick offers them when workflows can start. Other deliveries stay as they are:
-  the start-up recipe, dependency review, time rules, own claims, and reviews and
-  trusted comments on claimed or held issues.
+  the start-up recipe, dependency review, time rules, the heartbeats of its own
+  claims, and reviews and trusted comments on claimed or held issues.
 - Status runs the check with the saved repository, or else the repository that
   `origin` names, and makes no GitHub call. On a refusal it adds the line
   `Workflows cannot start in this folder: CAUSE NEXT STEP` right after its first line.
