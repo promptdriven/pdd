@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 2214a7aaeaad37454c57af1f9573672a6246644990899971df90a1ead82b8c4b).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: b27c94d69f3abe842d072365f351d6f0af34677c1876554944934e0b3cae5382).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch } from 'node:fs';
@@ -34,6 +34,8 @@ const ACK = '<!-- pdd:autopilot:thanks -->';
 const ACK_TEXT = `thanks, a maintainer will look\n\n${ACK}`;
 const self = fileURLToPath(import.meta.url);
 const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`;
+// The launch line starts in the repository: a `cd` in the person's shell startup file can move a new pane's shell elsewhere.
+const startIn = cwd => ['cd', quote(cwd), '&&'];
 const line = value => String(value).split(/[\r\n]/)[0].replace(/[\x00-\x1f\x7f]/g, ' ');
 const read = (file, fallback = null) => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return fallback; throw e; } };
 function save(file, value) {
@@ -312,7 +314,7 @@ export function autopilotLaunchFingerprint(state) {
   const root = resolve(state.packageRoot ?? dirname(dirname(self)));
   let version = null;
   try { version = read(join(root, 'package.json'))?.version ?? null; } catch { /* An unreadable package has no version. */ }
-  return digest({ version: 'pdd.autopilot-launch.v1', package: { root, version }, kind: state.agent.kind, args: providerArgs(state.agent.kind, state.cwd, '', state.environment?.CODEX_HOME) });
+  return digest({ version: 'pdd.autopilot-launch.v1', package: { root, version }, kind: state.agent.kind, start: startIn(state.cwd), args: providerArgs(state.agent.kind, state.cwd, '', state.environment?.CODEX_HOME) });
 }
 function ownerLaunchMatches(state, p) {
   const launch = state.ownerLaunch;
@@ -366,8 +368,9 @@ async function closeStaleCoordinator(state, agent, p) {
       const current = (await herdr(['agent', 'get', pane], p)).result?.agent;
       if (!current || current.pane_id !== pane) return null;
       // Another terminal has this pane id: the saved chat is gone and the other pane stays open.
+      // The live folder is not compared: a chat that an older launch started without the `cd` is in the shell startup folder.
       if (!otherTerminal(ownerLaunch, current)) {
-        if (current.workspace_id !== workspace || current.agent !== state.agent.kind || !samePath(current.cwd, state.cwd)
+        if (current.workspace_id !== workspace || current.agent !== state.agent.kind
           || (typeof ownerLaunch.terminalId === 'string' && current.terminal_id !== ownerLaunch.terminalId)
           || !['idle', 'done'].includes(current.agent_status) || JSON.stringify(current.agent_session ?? null) !== session) return null;
         try { await herdr(['pane', 'close', pane], p); } catch { /* The pane inventory below decides. */ }
@@ -496,7 +499,8 @@ async function currentRecoveryTargetMatches(state, p, verifyRepository = true, s
     ]);
     if (!savedRoot || !paneRoot || !agentRoot || !samePath(savedRoot, paneRoot) || !samePath(savedRoot, agentRoot)) return false;
     if (verifyRepository) {
-      const result = await p.execute('gh', ['repo', 'view', '--json', 'nameWithOwner,url'], { cwd: pane.cwd });
+      // The saved repository path, never the pane's live folder.
+      const result = await p.execute('gh', ['repo', 'view', '--json', 'nameWithOwner,url'], { cwd: state.cwd });
       if (result.code !== 0) return false;
       const actual = JSON.parse(result.stdout);
       if (typeof actual?.nameWithOwner !== 'string' || actual.nameWithOwner.toLowerCase() !== state.repo.toLowerCase()
@@ -716,7 +720,7 @@ async function wake(state, makeText, p, prepare = async () => {}, explicitStartR
   if (!await p.scanGuard(latest => { latest.ownerLaunch = state.ownerLaunch; latest.launchProfile = state.ownerLaunch.profile; delete latest.relaunchPending; delete latest.relaunchHeld; })) { delete state.ownerLaunch; return false; }
   state.launchProfile = state.ownerLaunch.profile;
   delete state.relaunchPending; delete state.relaunchHeld;
-  try { await p.scanAction(() => herdr(['pane', 'run', state.paneId, ['env', ...unset, ...env, quote(definition.command), ...args].join(' ')], p), 'launch'); }
+  try { await p.scanAction(() => herdr(['pane', 'run', state.paneId, [...startIn(state.cwd), 'env', ...unset, ...env, quote(definition.command), ...args].join(' ')], p), 'launch'); }
   catch (error) { if (error.confirmedRejection || error.code === 'agent_not_found' || error.code === 'pane_not_found') delete state.ownerLaunch; throw error; }
   return deliver(undefined, withinLaunch, () => Math.max(p.now(), state.ownerLaunch.startedAt + Math.max(0, elapsedNow() - began)));
 }
