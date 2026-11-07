@@ -3,9 +3,14 @@ import {execFileSync} from 'node:child_process';
 // A fake Herdr server for session pdd: workspaces, tabs, panes and the agents that pane commands start.
 export function fakeHerdr() {
   // sessions: the native session files that agents started by pane commands wrote ({agent, id, root, at}).
-  const h = { workspaces: [], tabs: [], panes: [], calls: [], next: 1, focus: null, sessions: [], now: () => Date.now() };
+  // realIdentity: true follows the identity rules of real Herdr 0.9.1: a new workspace has no Git identity, and opening
+  // the workspace's own non-linked checkout gives it that identity (already_open) instead of opening another workspace.
+  const h = { workspaces: [], tabs: [], panes: [], calls: [], next: 1, focus: null, sessions: [], now: () => Date.now(), realIdentity: false };
   const id = prefix => `${prefix}${h.next++}`;
   const commonDir = cwd => realpathSync(execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd, encoding: 'utf8' }).trim());
+  const gitOut = (cwd, ...args) => { try { return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return null; } };
+  const workTree = path => { const top = gitOut(path, 'rev-parse', '--show-toplevel'); return top !== null && realpathSync(top) === realpathSync(path); };
+  const linked = path => gitOut(path, 'rev-parse', '--absolute-git-dir') !== gitOut(path, 'rev-parse', '--path-format=absolute', '--git-common-dir');
   const pane = (workspace, tab, cwd) => { const p = { workspace_id: workspace, tab_id: tab, pane_id: id('p'), terminal_id: id('term'), cwd, agent: null }; h.panes.push(p); return p; };
   const fail = code => { throw Object.assign(Error(code), { code }); };
   h.herdr = async args => {
@@ -15,11 +20,21 @@ export function fakeHerdr() {
     if (group === 'status') return { running: true, session: 'pdd', compatible: true };
     if (group === 'workspace' && verb === 'list') return { id: 'cli:workspace:list', result: { type: 'workspace_list', workspaces: h.workspaces } };
     if (group === 'workspace' && verb === 'create') {
-      const cwd = flag('--cwd'), w = { workspace_id: id('w'), label: flag('--label'), worktree: { checkout_path: cwd, repo_key: commonDir(cwd), is_linked_worktree: false } };
+      const cwd = flag('--cwd'), w = { workspace_id: id('w'), label: flag('--label'), ...(!h.realIdentity ? { worktree: { checkout_path: cwd, repo_key: commonDir(cwd), is_linked_worktree: false } } : {}) };
       h.workspaces.push(w); const t = { tab_id: id('t'), workspace_id: w.workspace_id, label: '1' }; h.tabs.push(t); pane(w.workspace_id, t.tab_id, cwd);
       return { id: 'cli:workspace:create', result: { workspace: w, tab:t, root_pane:h.panes.at(-1) } };
     }
     if (group === 'worktree' && verb === 'open') {
+      // Real Herdr 0.9.1: the source must be a repository parent workspace inside Git, and the path a Git work tree.
+      const source = h.workspaces.find(w => w.workspace_id === flag('--workspace')), sourceCwd = h.panes.find(p => p.workspace_id === source?.workspace_id)?.cwd;
+      if (!source) fail('workspace_not_found');
+      if (source.worktree?.is_linked_worktree) throw Object.assign(Error('New and open worktree actions start from the repo parent workspace.'), { code: 'linked_worktree_source' });
+      if (!sourceCwd || gitOut(sourceCwd, 'rev-parse', '--git-dir') === null) throw Object.assign(Error('Herdr worktree actions require a workspace inside a Git work tree'), { code: 'not_git_worktree' });
+      if (!workTree(flag('--path'))) throw Object.assign(Error('worktree cannot be opened'), { code: 'worktree_not_found' });
+      // The source gets its repository identity on its first worktree action; a bare source keeps its own folder.
+      source.worktree ??= { checkout_path: sourceCwd, repo_key: commonDir(sourceCwd), is_linked_worktree: false };
+      if (h.realIdentity && realpathSync(flag('--path')) === realpathSync(sourceCwd) && !linked(sourceCwd))
+        return { id: 'cli:worktree:open', result: { workspace: source, already_open: true } };
       const cwd = flag('--path'), w = { workspace_id: id('w'), label: flag('--label'), worktree: { checkout_path: cwd, repo_key: commonDir(cwd), is_linked_worktree: true } };
       h.workspaces.push(w); const t = { tab_id: id('t'), workspace_id: w.workspace_id, label: '1' }; h.tabs.push(t); const p = pane(w.workspace_id, t.tab_id, cwd);
       return { id: 'cli:worktree:open', result: { workspace: w, tab: t, root_pane: p } };

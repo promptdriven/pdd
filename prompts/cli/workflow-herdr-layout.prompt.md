@@ -21,6 +21,7 @@ flowchart TD
     P -->|Unverifiable| F
     C -->|Checkpoint ID, root and pending intent| A1[Attach verified clone path]
     C -->|Returned parent already verified| AC
+    C -->|Bare parent: root verified, intent stays pending| O
     A1 -->|Live identity and saved root verified| AC[Clear pending intent; checkpoint]
     AC -->|Verified parent ready| O
     A1 -->|Error or lost reply| V[Inspect live identity and saved root]
@@ -30,7 +31,7 @@ flowchart TD
     Z -->|Explicit retry; baseline still matches| C
     Z -->|Yes; expected parent identity verified| AC
     Z -->|Yes; blank or conflicting| F
-    O -->|Created or already_open verified| T
+    O -->|Created or already_open verified; a pending bare parent verified, then intent cleared| T
     O -->|Lost reply or refusal| U([Retain uncertainty; inspect on explicit retry])
     T -->|Unique match| A([Checkpoint actual IDs; return])
     T -->|None| N[Create and checkpoint area tab]
@@ -49,6 +50,8 @@ Before creating a parent, checkpoint a namespaced create intent containing the c
 When PDD creates a parent, retain the actual workspace ID and its returned initial tab, pane, terminal and parent cwd in run custody before the next Herdr effect. Keep the create intent with that ID and root until live non-linked checkout and clone identity are verified, then clear it. The live workspace may have no Git identity after `workspace create`; this does not make its label identity. After verification, the ID and root cannot authorize reattaching a parent whose metadata later changes. Preserve that stale parent and use another verified parent or the normal free-label search; an old metadata-free linked caller cannot block recovery after a failed run-worktree open.
 
 Use `worktree open --workspace <saved-id> --path <verified-parent-root> --no-focus` to attach that already-created parent to the verified clone. Before retrying an interrupted attachment, find that saved ID in live inventory and verify the same original root tab, pane, terminal and cwd. If the saved ID is missing, or a complete saved root is gone or changed, refuse without attaching another workspace. If the same ID already has the exact non-linked checkout_path and repo_key, reuse it and clear the pending intent. When root custody is incomplete but that live identity is independently verified, reuse without attachment. If its Git identity is absent, run the attach command, then verify the resulting live identity and unchanged root before clearing the intent. If the attach command errors or its reply is lost, inspect live inventory in that call; continue only when the saved workspace now has the exact non-linked checkout_path and repo_key and its original root remains unchanged. Otherwise retain custody and refuse without attaching another workspace. A partial create reply with an actual workspace ID must checkpoint that ID before refusing; without enough root custody, do not attach it on retry unless live identity independently verifies the expected parent.
+
+A bare verified parent (lookup `bare: true`: `project.git`, P for a bare repository in `P/.git`, or `P/.bare`) is never attached with that command. Herdr 0.9.1 refuses `worktree open --path` on a bare repository folder with `worktree_not_found`. It accepts the created workspace at that folder as the source of the run worktree open, and only then gives the parent the non-linked checkout_path R and repo_key C. So for a bare parent without Git identity, verify the saved root, keep the create intent pending and open the assigned run worktree from that workspace. Then verify the run match, the parent's exact non-linked checkout_path and repo_key and its unchanged saved root, and only then clear the intent. If the parent identity is then absent or different, refuse with the identity diagnostic and retain custody. On explicit retry with the intent still pending, the same saved ID and unchanged root authorize that open again. A bare parent that has its Git identity is a parent match like any other. Herdr refuses a linked checkout as the source (`linked_worktree_source`) and a workspace outside Git (`not_git_worktree`), so neither the invoking linked checkout nor the run worktree can be the parent.
 
 The saved root proves continuity only while the create intent is pending. After PDD verifies and clears the intent, a later stale parent ID or changed parent metadata cannot supply attachment authority or block safe allocation. Preserve the old workspace, including a metadata-free linked caller, and use another live verified parent or the normal free-label search.
 

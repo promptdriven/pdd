@@ -1,11 +1,11 @@
-// pdd workflow run in every Git layout that Git supports for linked worktrees (#2698, #3050).
+// pdd workflow run in the four supported Git layouts, with real Herdr 0.9.1 identity rules (#2698, #3050).
 // Real temporary Git repositories, a fake gh and a fake Herdr; no network.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fixture, packageRoot } from './helpers/workflow-runner-fixture.mjs';
-import { startRun, runStatus, cancelRun } from '../src/workflow-runner.mjs';
+import { startRun, runStatus, cancelRun, openRun } from '../src/workflow-runner.mjs';
 import { agentDirs, chatCommand } from '../src/workflow-chat.mjs';
 
 const ORIGIN = 'https://github.com/example/project.git';
@@ -42,6 +42,8 @@ function bare(f, common, root, after = () => {}) {
 
 async function layout(t, name) {
   const f = await fixture(t, { agent: 'codex' }), l = LAYOUTS[name](f), healthy = f.ports.herdr;
+  // Real Herdr 0.9.1 identity rules: a new parent has no Git identity, and `worktree open --path` refuses a bare folder.
+  f.herdr.realIdentity = true;
   // Herdr opens a linked worktree only from the repository parent workspace (Git's primary registration).
   f.ports.herdr = async args => {
     if (args[0] === 'worktree' && args[1] === 'open') {
@@ -68,13 +70,16 @@ for (const name of Object.keys(LAYOUTS)) test(`2698: ${name}: run, Herdr parent,
   assert.equal(f.git(run.root, 'rev-parse', '--show-toplevel'), run.root);
   assert.equal(f.git(l.cwd, 'status', '--porcelain=v1'), dirty, 'the invoking checkout is unchanged');
   if (l.bare) assert.equal(f.git(l.common, 'config', '--get', 'core.bare'), coreBare);
-  // Herdr parent: one workspace at Git's primary registration; the run workspace opens from it.
+  // Herdr parent: one workspace at Git's primary registration; the run workspace opens from it. A normal parent is
+  // attached to its own checkout first. A bare parent is never attached: it gets its identity from the run open.
   const creates = f.herdr.calls.filter(a => a[0] === 'workspace' && a[1] === 'create');
   assert.deepEqual(creates.map(a => a[a.indexOf('--cwd') + 1]), [l.root]);
   const parent = f.herdr.workspaces.find(w => w.workspace_id === run.chats[0].repoWorkspaceId);
   assert.deepEqual(parent.worktree, { checkout_path: l.root, repo_key: l.common, is_linked_worktree: false });
   const opened = f.herdr.calls.filter(a => a[0] === 'worktree' && a[1] === 'open');
-  assert.deepEqual(opened.map(a => [a[a.indexOf('--workspace') + 1], a[a.indexOf('--path') + 1]]), [[parent.workspace_id, run.root]]);
+  assert.deepEqual(opened.map(a => [a[a.indexOf('--workspace') + 1], a[a.indexOf('--path') + 1]]),
+    [...l.bare ? [] : [[parent.workspace_id, l.root]], [parent.workspace_id, run.root]]);
+  assert.equal(run.layout.repoCreateIntent, null); assert.equal(run.layout.repoWorkspaceId, parent.workspace_id);
   // Chat start folder: the area pane starts the agent in the run worktree.
   const pane = f.herdr.paneOf(run.chats[0]);
   assert.equal(pane.cwd, run.root); assert.equal(pane.commands.length, 1); assert.match(pane.commands[0], / codex /);
@@ -128,4 +133,44 @@ test('2698: a separate Git directory refuses before any run record, claim, workt
     assert.equal(existsSync(join(separate, path)), false, path);
   assert.equal(f.git(cwd, 'worktree', 'list', '--porcelain'), before);
   assert.deepEqual(f.herdr.calls, []); assert.deepEqual(f.pushes, []); assert.deepEqual(f.prs, []);
+});
+
+for (const name of ['bare repository in P/.git with a linked worktree', 'bare P/.bare named by the P/.git file']) test(`2698: ${name}: a failed run open keeps the bare parent pending; open retries from the same parent`, async t => {
+  const l = await layout(t, name), { f } = l, herdr = f.ports.herdr;
+  let refuse = true;
+  f.ports.herdr = async args => {
+    if (refuse && args[0] === 'worktree' && args[1] === 'open') { refuse = false; f.herdr.calls.push(args); throw Object.assign(Error('reply lost'), { code: 'herdr_failed' }); }
+    return herdr(args);
+  };
+  const started = await l.start();
+  assert.equal(started.exitCode, 1); assert.match(started.message, /plan chat startup was not confirmed/);
+  const saved = l.record().layout, parent = f.herdr.workspaces.find(w => w.workspace_id === saved.repoWorkspaceId);
+  // The parent exists at R without Git identity; its create intent and saved root stay pending.
+  assert.equal(parent.worktree, undefined); assert.equal(saved.repoCreateIntent.parentRoot, l.root);
+  assert.equal(saved.repoRoot.cwd, l.root);
+  const opened = await openRun({ ref: '17', cwd: l.cwd, packageRoot }, f.ports);
+  assert.equal(opened.exitCode, 0, opened.message);
+  const run = l.record();
+  assert.equal(run.layout.repoWorkspaceId, parent.workspace_id); assert.equal(run.layout.repoCreateIntent, null);
+  assert.deepEqual(parent.worktree, { checkout_path: l.root, repo_key: l.common, is_linked_worktree: false });
+  assert.equal(f.herdr.calls.filter(a => a[0] === 'workspace' && a[1] === 'create').length, 1);
+  assert.equal(f.herdr.calls.some(a => a[0] === 'worktree' && a[1] === 'open' && a[a.indexOf('--path') + 1] === l.root), false);
+  assert.equal(f.herdr.paneOf(run.chats.at(-1)).cwd, run.root);
+});
+
+test('2698: a bare parent that opens the run with another repository identity refuses and keeps custody', async t => {
+  const l = await layout(t, 'bare repository in P/.git with a linked worktree'), { f } = l, herdr = f.ports.herdr;
+  f.ports.herdr = async args => {
+    const reply = await herdr(args);
+    if (args[0] === 'worktree' && args[1] === 'open') {
+      const source = f.herdr.workspaces.find(w => w.workspace_id === args[args.indexOf('--workspace') + 1]);
+      source.worktree = { ...source.worktree, repo_key: join(f.base, 'elsewhere.git') };
+    }
+    return reply;
+  };
+  const started = await l.start();
+  assert.equal(started.exitCode, 1); assert.match(started.message, /herdr_layout_identity_changed/);
+  const saved = l.record().layout;
+  assert.equal(saved.repoCreateIntent.parentRoot, l.root); assert.equal(saved.repoRoot.cwd, l.root);
+  assert.equal(f.herdr.panes.some(p => p.commands), false, 'no agent starts');
 });
