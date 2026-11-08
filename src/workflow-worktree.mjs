@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-worktree.prompt.md (sha256: c5ea046d3889b5c341ac39a78e9aa982bd29b4aa850350540ee09dcfc71c8692).
+// Generated from prompts/cli/workflow-worktree.prompt.md (sha256: e652ee62aac5531c229e221f5d9c21b5b41295e66e298df4fdb06dd39592092a).
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';

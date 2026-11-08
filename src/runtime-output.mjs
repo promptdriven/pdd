@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: 9413a21a5c0ecd5a259b95e4b90bc65e2a33f3c64be6c683b13513840237ee66).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: dc304ff83f97a35f085b93c47fbe8b33846b3b5c3672fe0007be479272cc81bd).
 import { hasProgress, outcomeExitCode, outcomeFor, outcomeText, progressText } from './runtime-outcome.mjs';
 export const OPEN_STATES = new Set(['queued', 'running']);
 

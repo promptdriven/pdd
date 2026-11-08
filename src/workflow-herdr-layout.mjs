@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: 7dd1db6b39f2d524d96cb1c9cabac20109f34a19ff891bce0f87812eecd8ee50).
+// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: a55724c0548b6b73754182616bf3f88fc6d7ce63942ba81e274a986e8ae35d94).
 import { mkdir, lstat, realpath } from 'node:fs/promises';
 import { openSync, closeSync, readFileSync, writeFileSync, fsyncSync, unlinkSync, lstatSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';

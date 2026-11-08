@@ -79,7 +79,7 @@ Number settings that a person may choose (for example `COLUMNS`, `LINES`, `HISTS
 
 ```json
 {
-  "status": "draft",
+  "status": "approved",
   "prose_sha256": "ad7081577ca3c3008e1f927a9abe76a5a70a2c99cb2bafa01d38e95856650184",
   "entries": [{
     "operation": "chooseWorkflowAgent",

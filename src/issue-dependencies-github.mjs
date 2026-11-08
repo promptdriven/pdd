@@ -1,4 +1,4 @@
-// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: 260f780d5f448c584ed824b4cc9bbb49453a3b83561e8c22ecceec3b994224b1).
+// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: f2e9a8a186354966d16db8a0fe155a27f18dc1b457282b44b6a03441d04d97bc).
 import { execFile as execCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import * as nativeFs from 'node:fs';
