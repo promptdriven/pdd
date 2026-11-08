@@ -10,7 +10,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: fe7c2d50fc076233843f0548972ffe7d54e495f5c1ba660ee04a2015c2e8f86c).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 4a8194b1b74577bd1357cf88d101fd9fffd443032e270d2b40a9725f5e64232b).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -3444,6 +3444,16 @@ function readDeliveryJournal(run, p) {
     entry.inFlight !== undefined && typeof entry.inFlight !== 'boolean') || new Set(journal.requests.map(entry => entry.id)).size !== journal.requests.length) throw Error('Malformed delivery journal');
   return journal;
 }
+// Queued replies are durable readiness, not permission to reserve a worker slot.
+function parkedReplyEntries(run, p) {
+  if (!run.parking) return [];
+  return readDeliveryJournal(run, p).requests.filter(entry => entry.key?.startsWith(`park-reply:${run.parking.at}:`)
+    && entry.area === run.areas[run.area]?.name && entry.state === 'pending' && !entry.inFlight
+    && equalFact(entry.question, run.question ?? null) && equalFact(entry.gate, run.gate ?? null));
+}
+export function hasParkedReply(run, ports = {}) {
+  try { return parkedReplyEntries(run, ports).length > 0; } catch { return false; }
+}
 const uptakeQuote = value => "'" + value.replaceAll("'", "'\"'\"'") + "'";
 const uptakeCommand = (id, p) => `${p.pdd ?? pddFor(p, PACKAGE_ROOT)} ${PUBLIC_COMMAND_ROUTES.find(route => route.id === 'workflow.request-uptake').prefix.join(' ')} ${uptakeQuote(id)} --summary ${uptakeQuote('what I changed')}`;
 const deliveryTime = (value, p = {}) => typeof value !== 'number' || !Number.isFinite(value) || Math.abs(value) > 8640000000000000 ? 'unknown' : new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', ...(p.timeZone ? { timeZone: p.timeZone } : {}) }).format(new Date(value));
@@ -3571,10 +3581,13 @@ export async function changeRun({ ref, text, cwd, packageRoot = PACKAGE_ROOT }, 
   if (retryRefusal) return fail(retryRefusal);
   if (found.run.parking?.phase === 'releasing') return fail('This parked run is releasing its claim. Wait for release to finish.');
   if (!p.queueOnly && found.run.parking?.phase === 'parked') {
-    const origin = found.run.automaticOrigin;
-    const resumed = await wakeParkedRun({ref, cwd, at: found.run.parking.at, packageRoot,
-      coordinatorId: origin.coordinatorId, machine: origin.machine, text}, p);
-    return resumed;
+    return lockedMutation({ref, cwd}, p, async (input, ports) => {
+      const current = await resolveRun(ref, {cwd}, ports), run = current.run;
+      if (!run || runIdentity(run) !== runIdentity(found.run) || run.parking?.phase !== 'parked'
+        || run.parking.at !== found.run.parking.at) return fail('The parked run changed. Look again before replying.');
+      const key = `park-reply:${run.parking.at}:${createHash('sha256').update(oneLine(text)).digest('hex')}`;
+      return deliverRequest(run, text, {...ports, queueOnly: true, requestKey: key});
+    });
   }
   return deliverRequest(found.run, text, p);
 }
@@ -4760,9 +4773,18 @@ export const wakeParkedRun = saveGuard((args, ports) => lockedMutation(args, por
   if (result.exitCode !== 0) return {...result, recovery: 'skipped'};
   const fresh = readRun(run.runDir), chat = currentChat(fresh);
   if (!chat || chat.startUnconfirmed || !validSessionId(chat.session?.id)) return skipped();
-  const notice = text ?? continueText(fresh, input.packageRoot);
-  const delivered = !text && (fresh.gate || openQuestion(fresh)) ? done('') : await deliverRequest(fresh, notice, {...p, packageRoot: input.packageRoot, requestKey: `park:${input.at}`, deliveryGuard: latest => latest.parking?.at === input.at && latest.parking.phase === 'waking' && sameFact(latest.automaticOrigin, run.automaticOrigin)}, !text);
-  if (delivered.exitCode !== 0) return {...delivered, recovery: 'skipped'};
+  const deliveryPorts = {...p, packageRoot: input.packageRoot, deliveryGuard: latest => latest.parking?.at === input.at && latest.parking.phase === 'waking' && sameFact(latest.automaticOrigin, run.automaticOrigin)};
+  const replies = parkedReplyEntries(fresh, p);
+  if (replies.length) {
+    for (const reply of replies) {
+      const delivered = await deliverRequest(fresh, reply.text, {...deliveryPorts, requestKey: reply.key});
+      if (delivered.exitCode !== 0) return {...delivered, recovery: 'skipped'};
+    }
+  } else {
+    const notice = text ?? continueText(fresh, input.packageRoot);
+    const delivered = !text && (fresh.gate || openQuestion(fresh)) ? done('') : await deliverRequest(fresh, notice, {...deliveryPorts, requestKey: `park:${input.at}`}, !text);
+    if (delivered.exitCode !== 0) return {...delivered, recovery: 'skipped'};
+  }
   commitRun(fresh, p, latest => {if (latest.parking?.at === input.at) delete latest.parking;});
   return {...done('Resumed the saved parked session.'), recovery: 'resumed'};
 }));

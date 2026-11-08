@@ -99,6 +99,8 @@ for (const agent of ['claude', 'codex']) test(`3091 recorded reply reopens the s
   assert.equal(f.record().parking?.phase, 'parked', '3091: reply test requires a resource-free park');
   const result = await changeRun({ref: '17', cwd: f.source, text: 'Use the first case', packageRoot}, f.ports);
   assert.equal(result.exitCode, 0, result.message);
+  assert.equal(launches(f).length, 0);
+  await tick();
   assert.deepEqual(warnings, []);
   assert.equal(launches(f).length, 1);
   assert.equal(f.record().chats.at(-1).session.id, held.chats.at(-1).session.id);
@@ -441,7 +443,9 @@ test('3091 repair explicit person blocker requires a pending question or gate', 
   assert.equal((await parkAutomaticRun({cwd: before.root, reason: 'Need a person to decide', blocker: 'person'}, ports)).exitCode, 0);
   await tick(); assert.equal(f.record().parking?.phase, 'parked');
   await tick(); assert.equal(f.record().parking?.phase, 'parked'); assert.equal(launches(f).length, 0);
-  assert.equal((await changeRun({ref: '17', cwd: f.source, text: 'Use the first case', packageRoot}, f.ports)).recovery, 'resumed');
+  assert.equal((await changeRun({ref: '17', cwd: f.source, text: 'Use the first case', packageRoot}, f.ports)).exitCode, 0);
+  assert.equal(f.record().parking.phase, 'parked'); assert.equal(launches(f).length, 0);
+  await tick(); assert.equal(f.record().parking, undefined); assert.equal(launches(f).length, 1);
 });
 
 test('3091 repair unbound saved person wait cannot clear without a reply', async t => {
@@ -653,4 +657,82 @@ for (const injected of [false, true]) test(`3091 integration first late verdict 
   if (injected) assert.deepEqual(cutoffs, [0, 0]);
   f.tick(); await tick();
   assert.equal(JSON.parse(readFileSync(stateFile)).interpreterPattern.streak, 1);
+});
+
+// AC2/AC3. A reply after backfill must join admission, not launch over capacity.
+for (const competing of [false, true]) test(`3091 integration parked reply respects backfill and oldest ready wait (competing=${competing})`, async t => {
+  const {f, tick, ports, stateFile} = await setup(t);
+  const held = f.record(); held.state = 'waiting'; held.question = {at: f.clock, text: 'Choose the case'}; save(f, held);
+  await tick();
+  let older;
+  if (competing) {
+    older = await anotherRun(f, 19); await tick();
+    // Independent wait is older than the person wait and must win the next free slot.
+    const row = older(); row.parking.at = held.question.at - 1; save(f, row);
+  }
+  const other = await anotherRun(f, 18);
+  const working = other(); delete working.blockedOn; working.state = 'running'; save(f, working);
+  f.herdr.calls.length = 0;
+  const reply = {ref: '17', cwd: f.source, text: 'Use the first case', packageRoot};
+  const result = await changeRun(reply, f.ports);
+  assert.equal(result.exitCode, 0, result.message);
+  assert.equal(launches(f).length, 0, 'a normal reply must not bypass the working cap');
+  assert.equal(deliveries(f).length, 0);
+  assert.equal(f.record().parking.phase, 'parked');
+  assert.deepEqual(f.record().question, held.question);
+  // Retrying the reply before admission is durable and deduplicated.
+  assert.equal((await changeRun(reply, f.ports)).exitCode, 0);
+  if (competing) ports.packageVersion = '99.0.0';
+  await tick();
+  let summary = JSON.parse(readFileSync(stateFile)).parking;
+  assert.equal(summary.working, 1); assert.equal(launches(f).length, 0);
+  assert.deepEqual(summary.wakePending, competing ? [19, 17] : [17]);
+  assert.equal((await runStatus({ref: '17', cwd: f.source, json: true}, f.ports)).exitCode, 0);
+  const pending = JSON.parse((await runStatus({ref: '17', cwd: f.source, json: true}, f.ports)).message).runs[0].pendingRequests;
+  assert.equal(pending.filter(entry => entry.text === reply.text).length, 1);
+  const ended = other(); ended.state = 'completed'; save(f, ended);
+  f.herdr.calls.length = 0; await tick();
+  assert.equal(launches(f).length, 1);
+  if (competing) {
+    assert.equal(older().parking, undefined);
+    assert.equal(f.record().parking.phase, 'parked'); assert.equal(deliveries(f).filter(args => JSON.stringify(args).includes(reply.text)).length, 0);
+    const finished = older(); finished.state = 'completed'; save(f, finished);
+    await tick(); assert.equal(launches(f).length, 2);
+  }
+  assert.equal(f.record().parking, undefined); assert.equal(f.record().question, null);
+  assert.equal(f.record().changes.filter(entry => entry.answer && entry.text === reply.text).length, 1);
+  assert.equal(f.record().chats.at(-1).session.id, held.chats.at(-1).session.id);
+  assert.equal(deliveries(f).filter(args => JSON.stringify(args).includes(reply.text)).length, 1);
+  const count = launches(f).length; await tick();
+  assert.equal(launches(f).length, count);
+  assert.equal(deliveries(f).filter(args => JSON.stringify(args).includes(reply.text)).length, 1);
+});
+
+test('3091 integration parked reply survives an unsent resume and delivers its saved request once', async t => {
+  const {f, tick, ports} = await setup(t);
+  const held = f.record(); held.state = 'waiting'; held.question = {at: f.clock, text: 'Choose the case'}; save(f, held);
+  await tick();
+  const text = 'Use the second case';
+  assert.equal((await changeRun({ref: '17', cwd: f.source, text, packageRoot}, f.ports)).exitCode, 0);
+  assert.equal(launches(f).length, 0);
+  const transport = ports.herdr; let reject = true;
+  ports.herdr = async args => {
+    if (reject && args[0] === 'pane' && args[1] === 'run') {reject = false; throw Object.assign(Error('unsent resume'), {code: 'agent_not_found'});}
+    return transport(args);
+  };
+  await tick();
+  assert.equal(f.record().parking.phase, 'waking');
+  assert.equal(deliveries(f).length, 0);
+  assert.deepEqual(f.record().question, held.question);
+  const journal = JSON.parse(readFileSync(join(held.runDir, 'delivery-journal.json')));
+  const reply = journal.requests.find(entry => entry.text === text);
+  assert.equal(reply.state, 'pending');
+  f.tick(60001); await tick();
+  assert.equal(f.record().parking, undefined);
+  assert.equal(f.record().question, null);
+  assert.equal(f.record().changes.filter(entry => entry.answer && entry.text === text).length, 1);
+  const delivered = JSON.parse(readFileSync(join(held.runDir, 'delivery-journal.json'))).requests.find(entry => entry.id === reply.id);
+  assert.equal(delivered.state, 'delivered');
+  assert.equal(deliveries(f).filter(args => JSON.stringify(args).includes(text)).length, 1);
+  await tick(); assert.equal(deliveries(f).filter(args => JSON.stringify(args).includes(text)).length, 1);
 });

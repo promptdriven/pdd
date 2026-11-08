@@ -1,14 +1,14 @@
 import {reconcileParking, parkingSummary, parkingWords} from './autopilot-parking.mjs';
 import {currentChat} from './workflow-runs.mjs';
 import {chatHealth, chatSession} from './workflow-chat.mjs';
-import {parkBlockedRun, wakeParkedRun, releaseParkedRun, changeRun} from './workflow-runner.mjs';
+import {parkBlockedRun, wakeParkedRun, releaseParkedRun, changeRun, hasParkedReply} from './workflow-runner.mjs';
 import { readMachineResources } from './machine-resources.mjs';
 import { configureCheckCapacity, releaseCheckCapacity, readCheckStatus, readSuiteProgress } from './test-suite-queue.mjs';
 import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
 import { readInterpreterProgress, configureInterpreterTestMode } from './interpreter-queue.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: a9c709dbd10683a1719aee2fcac45cee2bde7aec6e543e9b4194a6ddb6ef1732).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 4121f8c2bae066d1679aaab91c6d5da041723316def40c25632b13a62a628c34).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -404,7 +404,7 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
     blockerCleared: async (run, rule) => {
       const blocker = run.parking.blocker;
       if (['interpreter', 'environment'].includes(blocker.kind)) return Boolean(rule);
-      if (blocker.kind === 'person') return Boolean(run.parking.personWait) && !run.gate && (!run.question || Boolean(run.question.answeredAt));
+      if (blocker.kind === 'person') return Boolean(run.parking.personWait) && (hasParkedReply(run, worker) || !run.gate && (!run.question || Boolean(run.question.answeredAt)));
       if (['account', 'github'].includes(blocker.kind)) return Number.isFinite(Date.parse(blocker.until)) && p.now() >= Date.parse(blocker.until);
       if (blocker.kind === 'pdd') {
         const installed = p.packageVersion ?? read(join(state.packageRoot ?? dirname(dirname(self)), 'package.json'), {}).version;
