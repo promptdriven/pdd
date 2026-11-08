@@ -146,3 +146,26 @@ test('2709 repair: cancellation protects its caller run shell and retries from a
   assert.equal((await runner.cancelRun({ref:'17', cwd:f.source}, f.ports)).exitCode, 0);
   assert.equal(live(f, run), false, 'explicit cancel can close the busy original shell from another terminal');
 });
+
+test('2709 repair: a skipped shell check preserves its last retained reason', async t => {
+  const {f, run, shell} = await completed(t);
+  // Seed the last known shell observation while this finished chat has fresh
+  // open grace. The next sweep cannot recheck the shell until the chat closes.
+  shell.agent = agent('working');
+  run.cleanupKept = [{area:'run shell', reason:'run_shell_busy'}];
+  run.chats[0].openedAt = f.clock;
+  writeFileSync(join(run.runDir, 'status.json'), JSON.stringify(run));
+  await sweep(f);
+  assert.ok(live(f, run));
+  assert.ok(f.record().cleanupKept.some(item => item.area === 'run shell' && item.reason === 'run_shell_busy'),
+    'a skipped shell check must preserve its last observed retention reason');
+  assert.ok(f.record().cleanupKept.some(item => item.area === run.chats[0].area && item.reason === 'grace'));
+  assert.equal(f.herdr.calls.some(args => args[0] === 'agent' && args[1] === 'get' && args[2] === shell.pane_id), false);
+  f.tick(16 * 60_000);
+  await sweep(f);
+  assert.deepEqual(f.record().cleanupKept, [{area:'run shell', reason:'run_shell_busy'}]);
+  shell.agent = null;
+  await sweep(f);
+  assert.equal(f.record().layout.phase, 'closed');
+  assert.deepEqual(f.record().cleanupKept, []);
+});

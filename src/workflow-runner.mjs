@@ -1,7 +1,7 @@
 import { validateSnapshot } from './metrics-store.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
 import { createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 1c3630b575ffad68e5bf71c3b4d5fa12f99f4bf1e62cb40f8f8ddaf2f254604c).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: e24cc2597295698c3b75506f86dd9b358238988bc37d54399f801b0b585e4325).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -2929,7 +2929,9 @@ async function cleanupRunChats(run, p, options = {}) {
     });
   }});
   if (!options.dryRun) {
-    const nextKept = [...(options.onlyChat ? (run.cleanupKept ?? []).filter(item => item.area !== options.onlyChat.area && item.area !== 'run shell') : []), ...result.kept];
+    const shellKept = run.layout?.phase !== 'closed' && !result.kept.some(item => item.area === 'run shell')
+      ? (run.cleanupKept ?? []).filter(item => item.area === 'run shell') : [];
+    const nextKept = [...(options.onlyChat ? (run.cleanupKept ?? []).filter(item => item.area !== options.onlyChat.area && item.area !== 'run shell') : []), ...shellKept, ...result.kept];
     if (!equalFact(run.cleanupKept ?? [],nextKept) || snapshot.chats?.some(chat => chat.endedAt !== run.chats?.find(item => sameChat(item,chat))?.endedAt))
       commitRun(run, p, latest => {
         latest.cleanupKept = nextKept;

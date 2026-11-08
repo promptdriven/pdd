@@ -454,7 +454,10 @@ view perform no Herdr close. `tidyRuns({dryRun=false,cwd}, ports)` returns the
 usual exitCode/message plus `closed` and `kept` counts. Optional native inputs `graceMs`, `need` and `timeBudgetMs` support pressure and bounded tick sweeps; timeBudgetMs limits monotonic elapsed milliseconds between candidates, never interrupts a close already underway. Sweep all machine-indexed
 runs including archived runs, globally oldest finished chat first and stopping budget cleanup as soon as the next allocation fits, taking the existing
 run lock and skipping busy/uncertain owners. Revalidate run/chat identity at each
-checkpoint. Explicit `pdd workflow tidy [--dry-run]` and each Autopilot tick use
+checkpoint. Persist the chat owner's retained shell reason until a fresh shell
+check replaces it or confirmed layout closure clears it. A sweep that skips
+shell cleanup because a chat is retained cannot discard that earlier reason.
+Explicit `pdd workflow tidy [--dry-run]` and each Autopilot tick use
 this sweep. Before new-run Git allocation, check a 3-pane budget and cleanup;
 a capacity refusal leaves the selected run, branch, worktree and folder unchanged.
 Recheck at actual Herdr allocation. Automatic admission reports a `panes` hold,
