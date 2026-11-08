@@ -117,10 +117,10 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     case 'autopilot-start': case 'autopilot-stop': case 'autopilot-status': case 'autopilot-add': {
       try {
         const module = autopilotLauncher ?? await import('./autopilot-launcher.mjs');
-        const result = await module.runAutopilotLauncher({ command: plan.local.slice(10), issues: [...plan.operands], runs: plan.options['--runs'], checks: plan.options['--checks'], resumeCustody: plan.options['--resume-custody'], all: plan.options['--all'] === true, cwd, packageRoot, env }, autopilotLauncherPorts);
+        const result = await module.runAutopilotLauncher({ command: plan.local.slice(10), issues: [...plan.operands], runs: plan.options['--runs'], checks: plan.options['--checks'], resumeCustody: plan.options['--resume-custody'], all: plan.options['--all'] === true, ...(plan.options['--json'] === true ? { json: true } : {}), cwd, packageRoot, env }, autopilotLauncherPorts);
         if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255 || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid Autopilot reply');
         line(result.exitCode === 0 ? stdout : stderr, result.message);
-        if (result.exitCode === 0 && ['autopilot-start', 'autopilot-status'].includes(plan.local) && plan.options['--all'] !== true) {
+        if (result.exitCode === 0 && ['autopilot-start', 'autopilot-status'].includes(plan.local) && plan.options['--all'] !== true && plan.options['--json'] !== true) {
           const warning = await autopilotGithub(autopilotGithubModule, 'checkAutopilotSettings', { cwd }, autopilotGithubPorts);
           if (warning) line(stderr, warning);
         }
@@ -228,6 +228,18 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         line(stderr, `The pdd workflow command failed before it could report. Check pdd workflow status; nothing was retried.${reason(error)}`);
         return 1;
       }
+    }
+    case 'workflow-cost': {
+      let input;
+      if (plan.options['--input'] !== undefined) {
+        if (plan.options['--input'] !== '-') { line(stderr, 'Use --input - for cost JSON on stdin.'); return 2; }
+        try { input = JSON.parse(await readText(stdin)); } catch { line(stderr, 'Invalid cost JSON.'); return 2; }
+      }
+      try {
+        const runner = workflowRunner ?? await import('./workflow-runner.mjs');
+        const result = await runner.runCosts({ ref: plan.operands[0], cwd, input }, { env });
+        line(result.exitCode ? stderr : stdout, result.message); return result.exitCode;
+      } catch { line(stderr, 'Local issue costs are unavailable.'); return 1; }
     }
     case 'workflow-prove': {
       if (!plan.options['--test'] || !plan.options['--expect']) {

@@ -11,6 +11,7 @@ import { chatLifecycle } from './workflow-chat.mjs';
 import { journalRunMutation, drainRunJournal } from './metrics-hooks.mjs';
 import { appendEvents } from './metrics-store.mjs';
 import { recordCaptureGap } from './metrics-gap.mjs';
+import { captureCosts } from './cost-ledger.mjs';
 
 const ordinary = promisify(execFileCallback);
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -50,7 +51,11 @@ export function allRuns({ cancelled = false } = {}, ports = {}) {
   const commonDirs = new Set(readIndex(ports).map(entry => typeof entry.runDir === 'string' ? join(entry.runDir, '..', '..', '..') : null).filter(Boolean));
   const seen = new Set();
   return [...commonDirs].flatMap(commonDir => runsIn(commonDir, { cancelled }))
-    .filter(run => !seen.has(run.runDir) && seen.add(run.runDir));
+    .filter(run => {
+      const attempt = JSON.stringify([run.runDir, run.runId, run.startedAt]);
+      if (seen.has(attempt)) return false;
+      seen.add(attempt); return true;
+    });
 }
 
 function readIndex(ports) {
@@ -206,7 +211,12 @@ export function metricsSource(run, fs = nativeRunFiles, now = Date.now) {
   if (typeof identity.source !== 'string' || !identity.source || !Number.isFinite(Date.parse(identity.captureStartedAt))) throw Error('Invalid installation identity');
   return identity.source;
 }
+function captureRunCosts(before, run, ports, fs) {
+  try { run.cost = captureCosts(before, run, { ...ports, fs }); }
+  catch { if (before?.cost) run.cost = structuredClone(before.cost); if (run.cost) run.cost.coverage = [...new Set([...(run.cost.coverage ?? []), 'capture-failed'])]; }
+}
 function captureMutation(before, run, ports, fs) {
+  captureRunCosts(before, run, ports, fs);
   try {
     const observedAt = new Date((ports.now ?? Date.now)()).toISOString();
     const source = metricsSource(run,fs,ports.now ?? Date.now);
@@ -230,10 +240,13 @@ function deliverMetrics(run, ports) {
   }).catch(() => { metricsWarning(ports,'Metrics journal delivery incomplete; retained events can be retried.'); });
 }
 
-function publishRun(run, ports, fs) {
-  run.journalSeq = (Number.isSafeInteger(run.journalSeq) ? run.journalSeq : 0) + 1;
-  run.updatedAt = (ports.now ?? Date.now)();
-  Object.assign(run, statusView(run));
+function publishRun(run, ports, fs, { costOnly = false } = {}) {
+  if (!costOnly) {
+    run.journalSeq = (Number.isSafeInteger(run.journalSeq) ? run.journalSeq : 0) + 1;
+    run.updatedAt = (ports.now ?? Date.now)();
+    delete run.progressAt;
+    Object.assign(run, statusView(run));
+  }
   const temporary = join(run.runDir, `.status.json.${randomBytes(6).toString('hex')}.tmp`);
   try {
     fs.writeFileSync(temporary, JSON.stringify(run, null, 2) + '\n', { mode: 0o600, flag:'wx' });
@@ -262,6 +275,20 @@ export function updateRun(runDir, update, ports = {}) {
   });
   deliverMetrics(committed,ports);
   return indexed(committed,ports);
+}
+
+// Persist observations without making a polling dashboard count as workflow activity.
+export function updateRunCosts(runDir, update, ports = {}) {
+  return ownedRun(runDir, ports, fs => {
+    const run = JSON.parse(fs.readFileSync(join(runDir, 'status.json'), 'utf8'));
+    if (!object(run) || run.v !== 1 || !Number.isSafeInteger(run.number) || run.runDir !== runDir) throw Error('The existing run record is missing, unreadable or invalid');
+    const result = update(structuredClone(run));
+    if (!object(result) || typeof result.then === 'function' || !sameIdentity(run, result)) throw Error('A cost update must return the same run identity synchronously');
+    const observed = { ...run, cost: result.cost,
+      progressAt: Number.isFinite(run.progressAt) ? run.progressAt : fs.statSync(join(runDir, 'status.json')).mtimeMs };
+    captureRunCosts(run, observed, ports, fs);
+    return publishRun(observed, ports, fs, { costOnly: true });
+  });
 }
 
 export async function runForWorktree(cwd, ports = {}) {

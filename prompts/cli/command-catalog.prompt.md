@@ -15,6 +15,8 @@ Catalog `workflow park` as local `workflow-park`, with required text `--reason`,
 
 Show `pdd workflow park --reason TEXT --step STEP` for an environment failure of a named validation step.
 
+Catalog `pdd autopilot status [--all] [--json]` with both Boolean flags. Catalog `pdd workflow cost ISSUE [--input -]` (local `workflow-cost`, one issue operand, optional text --input). It reads a local cost row or accepts an explicit measurement JSON from stdin.
+
 ## Authoring
 
 Read the full [Prompting guide](../../docs/prompting-guide.md) before authoring prompts or Stories. Follow the [public alpha boundary](public-boundary.prompt.md) for native authoring/generation scope and shared local command policy. These authoring obligations do not add runtime facts: the complete catalog route declarations below own what the pure data module exposes.
@@ -44,7 +46,7 @@ Catalog four local routes before the product routes: `autopilot.start` (`autopil
 
 - `pdd autopilot start [--runs N] [--checks N] [--resume-custody FILE]`: Start this repo in an interactive Herdr agent; check now and every 30 minutes without AI on empty ticks. --runs and --checks override machine-sized run and heavy-check limits; --resume-custody supplies the verified original-owner projection.
 - `pdd autopilot stop`: Stop this machine's timer; let the current agent step finish.
-- `pdd autopilot status [--all]`: Show this machine's repo, folder, agent and next tick; --all lists every repository with Autopilot on this machine, from any folder.
+- `pdd autopilot status [--all] [--json]`: Show this machine's repo, folder, agent and next tick; --all lists every repository with Autopilot on this machine, from any folder.
 - `pdd autopilot add N...`: Mark named old issues with pdd:autopilot so Autopilot may take them.
 
 Catalog two alert routes after `autopilot.add`. [Autopilot alerts](autopilot-alerts.prompt.md) owns their behavior and validation.

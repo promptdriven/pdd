@@ -75,7 +75,7 @@ Run Autopilot commands inside the repo folder. Each repo has its own Autopilot o
 |---|---|
 | `pdd autopilot start [--runs N] [--checks N] [--resume-custody FILE]` | Check sign-ins and the running pdd version, open a dedicated interactive Herdr session and check for work immediately. A user timer checks again every 30 minutes. `--runs` overrides the open-run cap. `--checks` overrides heavy-check slots. Omission uses machine capacity. `--resume-custody` supplies the verified original-owner projection for explicit recovery |
 | `pdd autopilot stop` | Disable this repo's timer on this machine and let the current agent step finish |
-| `pdd autopilot status [--all]` | Show this machine's repo, the folder Autopilot works in, agent, timer, coordinator health and next tick without waking an agent; an idle coordinator is healthy. It reads `pdd.json` on GitHub only to warn when its Autopilot settings differ from this checkout. Another line says when pdd workflows cannot start in this folder, and why. Other lines show a pending or held coordinator relaunch an [alert](#alerts) that was not delivered, and the [GitHub calls](#github-api-budget) of the last hour. `--all` works from any folder and lists every repository with Autopilot on this machine: repository, folder, mode, enabled or disabled, timer and coordinator state. It reads only local files, the timer and Herdr: no GitHub call |
+| `pdd autopilot status [--all] [--json]` | Show this machine's repo, the folder Autopilot works in, agent, timer, coordinator health and next tick without waking an agent; an idle coordinator is healthy. It reads `pdd.json` on GitHub only to warn when its Autopilot settings differ from this checkout. Another line says when pdd workflows cannot start in this folder, and why. Other lines show a pending or held coordinator relaunch an [alert](#alerts) that was not delivered, and the [GitHub calls](#github-api-budget) of the last hour. `--all` works from any folder and lists every repository with Autopilot on this machine: repository, folder, mode, enabled or disabled, timer and coordinator state. It reads only local files, the timer and Herdr: no GitHub call |
 | `pdd autopilot add N...` | Label named issues `pdd:autopilot`. Autopilot does not need this label: it considers every open issue |
 | `pdd autopilot alerts set [--destination autopilot\|infrastructure]` | Read your Discord or Slack incoming webhook URL from stdin and save it for this machine |
 | `pdd autopilot alerts set --discord-channel ID [--token-command CMD] [--destination autopilot\|infrastructure]` | Use a Discord bot in one channel: read its token from stdin, or save CMD and run it at each send to get the token |
@@ -840,3 +840,52 @@ descendant process groups, release capacity in this read. Live or unknown owners
 still blocks. Queue records stay unchanged, and the validation command must still
 use normal suite admission. An environment wake
 is offered by the next regular tick after its due time, as worker room permits.
+
+## Local issue costs
+
+`pdd autopilot status --json` prints `pdd.cost-report.v1`. Use `--all` to include
+indexed repositories. This form reads local files only. Human status includes
+day and week totals, outcomes, account token totals, and nearest-rank P50/P90
+costs per merged issue. Multiple attempts for one repository/issue are combined,
+including archived attempts when a run path is reused. Cost reads keep the last
+workflow progress time, so polling does not delay stalled-run warnings.
+Totals use the time each measurement was observed. Percentiles use cumulative
+costs of issues whose latest outcome was merged in the selected period.
+
+`pdd workflow cost ISSUE [--input -]` reads an issue cost row as JSON. With
+`--input -`, it records an explicit measurement from stdin. For example:
+
+```sh
+printf '%s\n' '{"id":"suite-1","suiteMinutes":2.5,"personMinutes":1}' | pdd workflow cost 17 --input -
+printf '%s\n' '{"id":"result-1","outcome":"reverted"}' | pdd workflow cost 17 --input -
+```
+
+A repeated id with equal values has no effect. Conflicting values are refused.
+The accepted outcomes are merged, reverted, stuck, closed and parked. This changes
+only cost data. It does not approve a prompt or change workflow progress.
+Measure suite elapsed wall time, including failures. `workflow prove` records its
+two native phase durations automatically; other agent-run suites need an explicit
+measurement. Person active minutes are explicit measurements; waiting minutes
+come from questions, answers and gates. Approval counts include every recorded
+approval, including one recorded by an agent on behalf of the person. The recorder
+identity does not prove active person effort. These are separate quantities.
+
+The ledger is saved in each run's local `status.json` as `cost`. Its numeric GitHub
+call journal is `github-cost.jsonl`. Calls made by pdd from that exact run worktree
+are counted, including normal runs. Unallocated coordinator calls and calls made
+by agents outside pdd are excluded. Costs remain after GitHub budget compaction.
+
+Token accounts are hashes of local config profiles, not billing identities. Codex
+usage comes from cumulative rollout counts. Claude usage comes from transcript
+usage, with streaming duplicates removed. Each session read is limited to 256 KiB;
+Claude backlogs are consumed on later captures, including after a chat moves to
+abandoned custody. Saved current, abandoned and replacement chats use their own
+account and session identities; repeated custody does not add usage twice. Missing
+files, backlogs and unknown minutes appear in coverage. No message text, credentials or monetary estimates
+are saved. Cached input and reasoning tokens are subsets, not extra total tokens.
+
+At PR closure, pdd reserves one Actions duration read for the saved PR branch,
+including earlier heads. Without a saved branch, it reads the observed head only
+and marks coverage incomplete. It reads at most 100 workflow runs, without pagination. CI minutes are elapsed
+workflow wall time, not billed job minutes. Incomplete data is marked in coverage;
+a failed or interrupted measurement is not retried. Status never fetches durations.

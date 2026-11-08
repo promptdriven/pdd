@@ -12,6 +12,8 @@ one newline. Preserve other commands and their existing dispatch and effects.
 
 A [removed name](argument-parser.prompt.md#removed-names) is a `CommandInputError`, so pdd prints its one line and runs nothing: no help, PATH probe, skill check, sign-in, file read or interpreter call.
 
+Dispatch `workflow-cost` to workflow runner `runCosts({ref,cwd,input}, ports)`; input is absent without --input, otherwise require --input exactly `-` and read UTF-8 JSON from stdin. Reject malformed JSON with exit 2 before dispatch. Forward `autopilot status --json` as `json:true` to the launcher, and skip settings-on-GitHub warnings for this local JSON route.
+
 ## Authoring
 
 Read the entire [Prompting guide](../../docs/prompting-guide.md) before authoring prompts or Stories. Follow [public alpha boundary](public-boundary.prompt.md) for native authoring/generation scope and shared local command policy. Runtime parsing/forwarding receives no guide input; applicable concrete validation and route facts remain with the required parser/catalog contracts.

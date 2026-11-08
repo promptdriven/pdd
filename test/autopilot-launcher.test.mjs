@@ -1877,3 +1877,34 @@ test('digest runs before rate-limit retry and its failure does not stop the laun
   await f.tick();
   assert.equal(attempts, 2, 'off mode must not send a digest');
 });
+for (const state of ['running', 'waiting']) test(`cost polling cannot postpone the native stalled-run rule for ${state} runs`, async t => {
+  const f = await fixture(t); delete f.ports.readRunProgress; f.ports.skipMetricsDelivery = true;
+  const { updateRun } = await import('../src/workflow-runs.mjs');
+  const changedAt = f.time, commonDir = join(f.cwd, '.git'), runDir = join(commonDir, 'pdd', 'runs', '117');
+  mkdirSync(runDir, { recursive: true });
+  const file = join(runDir, 'status.json');
+  const original = { v: 1, number: 117, repo: 'owner/repo', state, runDir, commonDir, root: f.cwd, sourceRoot: f.cwd,
+    runId: 'cost-polling', startedAt: changedAt, updatedAt: changedAt, journalSeq: 4, areas: [], area: 0, done: {}, chats: [] };
+  writeFileSync(file, JSON.stringify(original)); utimesSync(file, new Date(changedAt), new Date(changedAt));
+  const saved = () => JSON.parse(readFileSync(file, 'utf8'));
+  f.ports.costRuns = async () => [saved()];
+  await f.invoke('start'); f.prompts.length = 0; f.status = 304;
+  for (const minute of [20, 40, 59]) {
+    f.time = changedAt + minute * 60000;
+    assert.equal((await f.invoke('status', { json: true })).exitCode, 0);
+    await f.tick(); assert.equal(f.prompts.length, 0);
+  }
+  f.time = changedAt + hour; await f.tick();
+  assert.equal(f.prompts.length, 1);
+  assert.deepEqual(packet(f).timeRules.map(event => event.number), [117]);
+  assert.equal(saved().updatedAt, original.updatedAt); assert.equal(saved().journalSeq, original.journalSeq);
+  assert.deepEqual(saved().done, original.done); assert.equal(saved().state, state);
+  updateRun(runDir, run => { run.done = { build: { at: f.time, summary: 'completed' } }; return run; }, { ...f.ports, env: { HOME: f.home } });
+  utimesSync(file, new Date(f.time), new Date(f.time));
+  const progressedAt = f.time;
+  assert.equal(saved().progressAt, undefined);
+  f.time = progressedAt + hour - 1;
+  assert.equal((await f.invoke('status', { json: true })).exitCode, 0);
+  await f.tick(); assert.equal(f.prompts.length, 1);
+  f.time++; await f.tick(); assert.equal(f.prompts.length, 2);
+});

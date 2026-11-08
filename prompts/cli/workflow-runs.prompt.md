@@ -74,11 +74,29 @@ An active current-area `chatFailure` takes precedence in `waitingFor`: no approv
 
 C3 view: `stage` (current step, or `approve` at a gate, or `merge` after the last PR), `steps` (each step with area, state done/current/next, times, agent, session and summary), `waitingFor` (`{decisions:['changes'], what: QUESTION}` while a question waits; `{decisions:['approve','changes'], what}` at a gate, with what "Make the code PR now, or stop here and merge PR 1" at the code-or-stop gate, also after PR 1 merged, `{decisions:[], what:'Review and merge the PR on GitHub'}` after the PR, else `{decisions:[], what:null}`), `resumeDecisions`, `waitingDecision`, `herdr`, `stageAgent`, `links:[]`, `controller:null`, `message`.
 
+`updateRunCosts(runDir, update, ports={})` uses the same local ownership,
+latest-record validation, synchronous callback and attempt-identity checks as
+`updateRun`. It commits only the callback's `cost`, refreshed through the cost
+ledger; other callback changes are discarded. Cost capture failure retains prior
+cost data with incomplete coverage. Preserve workflow fields, `updatedAt`,
+`journalSeq`, index and completion journal. Do not deliver metrics on this route.
+Save optional `progressAt` (milliseconds) as the prior status file's mtime on the
+first cost-only publication; later cost publications retain it. Ordinary
+`writeRun` and `updateRun` clear `progressAt`, so the newly published file's mtime
+again marks workflow activity. Read the prior mtime through the injected run
+filesystem. Publish cost data atomically; a failed callback or publication leaves
+the prior record intact. This keeps cost polling from postponing stalled-run
+warnings, including for legacy records.
+
 ## Approval history
 
 Keep legacy decisions and approvalRecord readable. New gates have a nonempty string `id`, stable through save/reload and publication retry and distinct for each new or changed/reopened gate independently of clock, area or kind. Legacy gates without id remain readable. Preserve optional `gate.promptSnapshot` as an ordered array of `{path,proseSha256,reviewSha256?}` rows, including an empty array. Absence means unbound, not an empty selection. The runner owns capture, invalidation and comparison; storage must preserve these distinctions through reload and projection. Each new approval decision and approvalRecord adds nonempty string `gateId` identifying its gate. Each new approval decision retains `gateAt` (the approved gate's original at value) and adds `evidence` with the exact shared [evidence shape](approval-policy.prompt.md#actor-and-evidence), alongside existing stage/decision/via/at/text fields; `approvalRecord` retains its legacy fields and the same evidence. Decisions are the complete gate history, not only the latest approvalRecord. The runner supplies the facts; this storage module never invents actors, words or approval. Preserve every record through atomic write/read and C3 projection; old records lacking evidence stay valid and must not gain invented provenance. The shared prompt journal remains separate from status.json.
 
+Before every publication, capture the local [cost ledger](cost-ledger.prompt.md) from the previous durable run and the current record. Keep its cumulative numeric checkpoints in `cost`. Capture failure retains prior cost data with incomplete coverage and never blocks workflow progress.
+
 ## Dependencies
+
+- [Cost ledger](cost-ledger.prompt.md): required native generation and verification context for local cost capture and reports.
 
 - [Metrics hooks](metrics-hooks.prompt.md): required native generation/verification context for journal construction and retained delivery. [Metrics gaps](metrics-gap.prompt.md) owns fallback coverage events.
 
@@ -90,7 +108,7 @@ Keep legacy decisions and approvalRecord readable. New gates have a nonempty str
 - `runForWorktree(cwd, ports)` returns the run whose `root` is the current worktree.
 - `resolveRun(ref, {cwd}, ports)` returns `{run}` or `{error}`. `N` looks in the current repository, worktrees included. Outside a repository it uses the index; when several repositories have issue N, it asks for `owner/repo#N`. `owner/repo#N` and issue URLs pick that repository. Without ref: the run of the current worktree, else the only run of this repository that waits for a person, else the only active run; otherwise list the choices.
 - `listRuns({cwd}, ports)` returns the runs of the current repository, or all indexed runs outside a repository.
-- `allRuns({cancelled}, ports)` returns every run on this machine. It finds the repositories only from the run index (`<stateDir>/runs.json`), never from a Herdr layout registry, then reads each `<commonDir>/pdd/runs/<N>/status.json`. With `cancelled` it also reads the renamed `<N>-cancelled-<id>` folders. A repository or file that is gone or unreadable is skipped without an error.
+- `allRuns({cancelled}, ports)` returns every run on this machine. It finds the repositories only from the run index (`<stateDir>/runs.json`), never from a Herdr layout registry, then reads each `<commonDir>/pdd/runs/<N>/status.json`. With `cancelled` it also reads the renamed `<N>-cancelled-<id>` folders. Deduplicate by saved run directory, runId and startedAt together; an archived attempt can retain the same runDir as its replacement and must remain distinct. A repository or file that is gone or unreadable is skipped without an error.
 
 Before each atomic run publication, journal retained completion facts with stable installation identity and unique transition identity in the same status record. Initialize installation identity and capture-start time on first capture. On capture failure retain a visible incomplete-coverage warning and preserve ordinary progress. After publication retry delivery of the retained journal; a failure is visible and never gates execution.
 

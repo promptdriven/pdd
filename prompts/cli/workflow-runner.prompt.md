@@ -601,6 +601,16 @@ failed target clears its retry record. A skipped validation does not reset it. O
 
 - [Environment recovery](autopilot-environment.prompt.md): required native generation and verification context for classification, retry records and host admission.
 
+Workflow status sets `skipCostSessions` on its storage updates. Health reads retain their existing 256 KiB tail budget; cost status owns explicit token refresh.
+
+## Issue costs
+
+`runCosts({ref,cwd,input}, ports)` resolves the run locally. Without input, refresh and return its public cost row as JSON. With input, validate and apply an explicit [cost measurement](cost-ledger.prompt.md) through `updateRunCosts` under ordinary run ownership, preserving the workflow progress timestamp and journal, then return the row. This route makes no GitHub, Herdr, model or approval call. At the existing PR refresh boundary, retain observed head SHA and call `captureClosedCi` for closed/merged PRs; it owns the at-most-once duration read.
+
+## Dependencies
+
+- [Cost ledger](cost-ledger.prompt.md): required native generation and verification context for local cost capture and reports.
+
 - [Readable PR descriptions](workflow-pr-body.prompt.md): required authoring/generation/verification/testing context for the readable part, the titles and the Details section of every PR description.
 - [GitHub calls](github-calls.prompt.md): native generation and verification context for counting `gh` calls.
 
