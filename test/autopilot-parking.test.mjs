@@ -2,7 +2,7 @@ import './helpers/test-home.mjs';
 import test from 'node:test';
 import {createHash} from 'node:crypto';
 import assert from 'node:assert/strict';
-import {existsSync, readFileSync, writeFileSync} from 'node:fs';
+import {existsSync, mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {fixture, packageRoot} from './helpers/workflow-runner-fixture.mjs';
 import {healthyMachine} from './helpers/healthy-machine.mjs';
@@ -92,8 +92,69 @@ for (const throughPerson of [true, false])
     assert.deepEqual(warnings, []);
   });
 
-async function setup(t, agent = 'claude') {
-  const f = await fixture(t, {agent});
+// #3091 final review: exercise saved-batch inference through the production reader.
+for (const previous of ['person', 'interpreter'])
+  test(`3091 integration finished check replaces existing ${previous} park with current batch`, async t => {
+    const {f, tick, ports, stateFile, warnings} = await setup(t, 'claude', 'feature');
+    fullTicks(f, stateFile, ports);
+    ports.runtimeHealth = async () => ({state: 'unavailable', detail: 'controlled outage'});
+    const oldBatch = '20261101-120000-abcd', newBatch = '20261102-120000-efgh';
+    const savedBatch = batch => {
+      const folder = join(f.ports.env.HOME, '.pdd/runtime/batches', batch);
+      mkdirSync(folder, {recursive: true});
+      writeFileSync(join(folder, 'batch.json'), JSON.stringify({batch, root: f.record().root,
+        intent: 'check', created_at: new Date(f.clock).toISOString(),
+        rows: [{test: 'tests/value.json', state: 'partial', reason: {code: 'runner-stopped'}}]}));
+    };
+    const held = f.record(); held.area = 1; held.state = 'waiting';
+    for (const chat of held.chats) chat.area = held.areas[held.area].name;
+    if (previous === 'person') held.question = {at: f.clock, text: 'Which product option?'};
+    else {
+      held.gate = {kind: 'approve-pr', area: held.areas[held.area].name, at: f.clock};
+      held.done.check = {at: f.clock};
+    }
+    save(f, held);
+    if (previous === 'interpreter') savedBatch(oldBatch);
+    await tick();
+    assert.equal(f.record().parking.blocker.kind, previous);
+    if (previous === 'interpreter') assert.equal(f.record().parking.interpreterWait.batch, oldBatch);
+    const age = f.record().parking.at;
+    f.tick();
+    const changed = f.record(); delete changed.question;
+    changed.gate = {kind: 'approve-pr', area: changed.areas[changed.area].name, at: f.clock};
+    changed.done.check = {at: f.clock}; changed.updatedAt = f.clock; save(f, changed);
+    savedBatch(newBatch);
+    await tick();
+    const parked = f.record();
+    assert.equal(parked.parking.blocker.kind, 'interpreter');
+    assert.equal(parked.parking.interpreterWait.batch, newBatch);
+    assert.deepEqual(parked.parking.interpreterGate, changed.gate);
+    assert.equal(parked.parking.personWait, undefined);
+    assert.equal(parked.parking.at, age);
+    assert.equal(parked.parking.phase, 'parked');
+    for (const key of ['root', 'branch', 'gate', 'question', 'done', 'decisions', 'automaticOrigin'])
+      assert.deepEqual(parked[key], changed[key]);
+    assert.equal(parked.chats.at(-1).session.id, held.chats.at(-1).session.id);
+    assert.equal(launches(f).length, 0); assert.equal(deliveries(f).length, 0);
+    f.tick(); await tick();
+    assert.deepEqual(f.record().parking.interpreterWait, parked.parking.interpreterWait);
+    assert.deepEqual(f.record().parking.interpreterGate, changed.gate);
+    ports.runtimeHealth = async () => ({state: 'healthy', detail: 'controlled recovery'});
+    await tick();
+    assert.equal(f.record().parking, undefined);
+    assert.deepEqual(f.record().gate, changed.gate);
+    assert.deepEqual(f.record().decisions, changed.decisions);
+    assert.deepEqual(f.record().automaticOrigin, changed.automaticOrigin);
+    assert.equal(f.record().chats.at(-1).session.id, held.chats.at(-1).session.id);
+    assert.equal(launches(f).length, 1); assert.equal(deliveries(f).length, 1);
+    const sent = JSON.stringify(deliveries(f)[0]);
+    assert.ok(sent.includes(`--read ${newBatch}`)); assert.ok(!sent.includes(oldBatch));
+    await tick(); assert.equal(deliveries(f).length, 1);
+    assert.deepEqual(warnings, []);
+  });
+
+async function setup(t, agent = 'claude', name = 'small-change') {
+  const f = await fixture(t, {agent, name});
   assert.equal((await f.run()).exitCode, 0);
   assert.equal((await runStatus({ref: '17', cwd: f.source}, f.ports)).exitCode, 0);
   const run = f.record();

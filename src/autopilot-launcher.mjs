@@ -8,7 +8,7 @@ import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
 import { readInterpreterProgress, configureInterpreterTestMode } from './interpreter-queue.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 4c31ef6c0f85790299607352cec1a3e05feaff621363c4bd2815e271b1c7ec78).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 06e3ab2ebc5f5af6afb66fbdfb68068b628a9d36d18eb24b4b43b4e359cc2d8d).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -388,7 +388,6 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
         || busy((p.readInterpreterProgress ?? readInterpreterProgress)({cwd: run.root, env: p.env}, {now: p.now, ...p.interpreterQueuePorts}));
     },
     observeBlocker: async run => {
-      if (run.parking) return null;
       if (run.state === 'waiting' && run.gate?.kind === 'approve-pr' && !run.question && run.done?.check) {
         let checks;
         try {checks = (p.readRunResults ?? readRunResults)({root: run.root, runDir: run.runDir, runId: run.runId, since: run.startedAt ?? 0}, {env: p.env});}
@@ -397,6 +396,7 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
         if (!check || ['none', 'unknown', 'service'].includes(checkCause(check.states)))
           return {kind: 'interpreter', until: null};
       }
+      if (run.parking) return null;
       if (run.agent === state.agent.kind && state.health?.usage?.state === 'limited')
         return {kind: 'account', until: Number.isFinite(state.health.usage.resetAt) ? new Date(state.health.usage.resetAt).toISOString() : null};
       const chat = currentChat(run);
