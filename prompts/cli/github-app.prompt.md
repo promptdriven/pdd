@@ -60,7 +60,9 @@ Set GH_TOKEN and GITHUB_TOKEN in the child only. For Git, supply a host-scoped
 HTTPS Authorization Basic header (x-access-token plus token) through environment
 config, overriding inherited authorization and credential helpers. The App header
 must win for the actual GitHub URL, including more-specific path or user scopes
-in repository, included, or environment config. Read effective Git config through
+in repository, included, or environment config, and clone's own `-c`/`--config`
+options (which take effect in the destination before its first request).
+Read effective Git config through
 the injected exec port in the command's directory and Git option context; fail
 closed with a safe App error if that read fails. Override each GitHub header scope
 only in the child, retaining its non-Authorization headers and unrelated config.

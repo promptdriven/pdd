@@ -92,7 +92,8 @@ addresses are rewritten to HTTPS for that process. pdd does not edit stored Git
 remotes or credential helpers. An App-only checkout can publish its branches
 without a person's Git credential.
 Repository-specific GitHub authorization headers, including headers from included
-files or inherited Git environment settings, use the App credential in the child.
+files, inherited Git environment settings, or clone's `-c` and `--config` options,
+use the App credential in the child.
 Non-authorization headers and settings for other hosts stay in place. pdd stops
 the command if it cannot read the effective Git configuration.
 

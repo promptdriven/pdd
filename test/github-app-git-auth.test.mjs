@@ -167,3 +167,20 @@ test('App config read failure stops before a Git network command and hides its o
   });
   assert.equal(network, 0);
 });
+
+for (const form of ['-c', '--config', '--config=', '-cattached']) {
+  test(`App overrides clone ${form} URL authorization before its first request`, async t => {
+    const w = await githubAppWorld(t), endpoint = await gitEndpoint(t, w);
+    const assignment = `${scope}=AUTHORIZATION: ${personal}`;
+    const config = form === '--config=' ? [`--config=${assignment}`] : form === '-cattached' ? [`-c${assignment}`] : [form, assignment];
+    const run = nativeGithubCounter(execute, { env: w.env, stateRoot: w.stateRoot, now: () => w.time, appPorts: w.appPorts });
+    const before = readFileSync(join(w.cwd, '.git', 'config'), 'utf8');
+    await assert.rejects(run('git', ['clone', ...config, '-c', 'fetch.prune=true', url, join(w.dir, 'destination')],
+      { cwd: w.cwd, env: endpoint.env, encoding: 'utf8', timeout: 5000 }), error => error.code === 128 && /403/.test(error.stderr));
+    assert.ok(endpoint.requests.length > 0);
+    assert.ok(w.tokens.some(token => endpoint.requests[0].headers.authorization === `basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`),
+      'Clone must send App authorization at the repository URL scope');
+    assert.equal(endpoint.requests[0].authorizationCount, 1);
+    assert.equal(readFileSync(join(w.cwd, '.git', 'config'), 'utf8'), before);
+  });
+}

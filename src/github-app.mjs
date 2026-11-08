@@ -147,9 +147,21 @@ export function githubAppRunner(exec, ports = {}) {
       // config precedence. A host-only override cannot beat a repository URL.
       const headers = new Map([['http.https://github.com/.extraheader', []]]);
       const gitOptions = file === 'git' ? args.slice(0, commandIndex) : [];
+      const cloneConfig = [];
+      if (file === 'git' && command === 'clone') {
+        // Clone applies these to its new repository before starting HTTP. Include
+        // them in the scan without writing config or putting our token in clone -c.
+        for (let at = commandIndex + 1; at < args.length && args[at] !== '--'; at++) {
+          const arg = args[at];
+          if (arg === '--no-config') cloneConfig.length = 0;
+          else if (arg === '-c' || arg === '--config') cloneConfig.push(args[++at]);
+          else if (arg.startsWith('--config=')) cloneConfig.push(arg.slice('--config='.length));
+          else if (arg.startsWith('-c') && arg.length > 2) cloneConfig.push(arg.slice(2));
+        }
+      }
       let config;
       try {
-        config = await exec('git', [...gitOptions, 'config', '--null', '--list'], { cwd: options.cwd, env: plainEnv, encoding: 'utf8' });
+        config = await exec('git', [...gitOptions, ...cloneConfig.flatMap(value => ['-c', value]), 'config', '--null', '--list'], { cwd: options.cwd, env: plainEnv, encoding: 'utf8' });
         if (config.code && config.code !== 0) throw Error();
       } catch { fail('cannot read Git configuration; check the checkout and Git settings.'); }
       for (const entry of String(config.stdout ?? '').split('\0')) {
