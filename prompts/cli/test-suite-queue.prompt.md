@@ -105,8 +105,11 @@ for CPUs rather than share a CPU list. Always replace child `PDD_CHECK_CPUS` wit
 the share. Native execution uses taskset `--cpu-list LIST /bin/bash -c COMMAND`
 when available, else bash with the hint only. Inject the process `spawn` port into
 native execution; the timeout and signal cleanup still own its process group.
-Deterministic tests provide every machine port. A platform-gated integration test
-may inspect allowed CPU IDs and run real taskset in an isolated queue.
+Offline regressions provide every machine port and inject the native execution
+spawner. They must verify the reserved CPU share, taskset arguments, child
+environment and finished ticket without reading host CPU IDs, discovering native
+tools or skipping for host capacity. A separate boundary check refuses native
+machine observations while executing the public affinity regression.
 
 Serialize ticket creation and admission with
 the existing PID/token lock semantics. Preserve submission order among waiting

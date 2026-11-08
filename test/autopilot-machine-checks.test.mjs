@@ -232,25 +232,26 @@ test('repair 1: native Linux classification reserves desktop capacity when virtu
   }
 });
 
-test('repair 1: real Linux desktop child sees its reserved affinity share', {skip:process.platform!=='linux'},async t=>{
-  const {spawnSync}=await import('node:child_process');
-  const allowed=/^Cpus_allowed_list:\s*(.+)$/m.exec(readFileSync('/proc/self/status','utf8'))[1].split(',').flatMap(part=>{
-    const [first,last=first]=part.split('-').map(Number);
-    return Array.from({length:last-first+1},(_,index)=>first+index);
-  });
-  const fake=checkMachine({count:4,battery:false,virtualized:false});
-  fake.ports.taskset=undefined;
-  const taskset=queue.calculateCheckCapacity({},fake.ports).taskset;
-  if(allowed.length<4||!taskset||spawnSync('nproc',[],{stdio:'ignore'}).status!==0) {t.skip('needs four allowed CPUs, taskset and nproc');return;}
+test('repair 1: Linux desktop child receives its reserved affinity share',async t=>{
+  const {EventEmitter}=await import('node:events');
+  const fake=checkMachine({count:4,offset:8,battery:false,virtualized:false});
   const root=mkdtempSync(join(tmpdir(),'pdd-desktop-affinity-'));
   t.after(()=>rmSync(root,{recursive:true,force:true}));
-  const output=join(root,'child.json'),env={...process.env,PDD_SUITE_QUEUE:join(root,'queue')};
-  const ports={...fake.ports,cores:()=>allowed.slice(0,4),say:()=>{}};
-  const script=`const fs=require("node:fs");fs.writeFileSync(${JSON.stringify(output)},JSON.stringify({node:require("node:os").availableParallelism(),nproc:Number(require("node:child_process").execFileSync("nproc",[],{encoding:"utf8"})),hint:Number(process.env.PDD_CHECK_CPUS)}));`;
-  const quote=value=>"'"+value.replaceAll("'","'\\''")+"'";
-  const result=await queue.runTestSuite({cwd:root,env,command:`${quote(process.execPath)} -e ${quote(script)}`},ports);
+  const env={PDD_SUITE_QUEUE:join(root,'queue'),PDD_CHECK_CPUS:'999',FIXTURE:'desktop'},calls=[];
+  const ports={...fake.ports,say:()=>{},spawn:(file,args,options)=>{
+    calls.push({file,args,options});
+    const running=JSON.parse(readFileSync(join(env.PDD_SUITE_QUEUE,'ticket-1.json')));
+    assert.equal(running.state,'running');assert.deepEqual(running.cpuIds,[8,9]);
+    // No native child or kernel affinity probe. Observe the complete spawn boundary.
+    const child=new EventEmitter();setImmediate(()=>child.emit('close',0,null));return child;
+  }};
+  const result=await queue.runTestSuite({cwd:root,env,command:'controlled-build --fixture'},ports);
   assert.equal(result.exitCode,0);
-  assert.deepEqual(JSON.parse(readFileSync(output)),{node:2,nproc:2,hint:2});
+  assert.equal(calls.length,1);
+  assert.equal(calls[0].file,'/fake/taskset');
+  assert.deepEqual(calls[0].args,['--cpu-list','8,9','/bin/bash','-c','controlled-build --fixture']);
+  assert.deepEqual(calls[0].options,{cwd:root,env:{...env,PDD_CHECK_CPUS:'2'},detached:true,stdio:['ignore','inherit','inherit']});
   const ticket=JSON.parse(readFileSync(join(env.PDD_SUITE_QUEUE,'ticket-1.json')));
-  assert.equal(ticket.state,'finished');assert.deepEqual(ticket.cpuIds,allowed.slice(0,2));
+  assert.equal(ticket.state,'finished');assert.deepEqual(ticket.cpuIds,[8,9]);
+  assert.equal(ticket.coresPerCheck,2);assert.equal(ticket.taskset,'/fake/taskset');assert.equal(ticket.reason,null);
 });
