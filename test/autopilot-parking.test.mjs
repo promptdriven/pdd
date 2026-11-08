@@ -620,3 +620,37 @@ for (const laterFailures of [2, 3]) test(`3091 repair2 late native verdict prese
   f.tick(); await tick(); pattern = JSON.parse(readFileSync(stateFile)).interpreterPattern;
   assert.equal(pattern.streak, laterFailures, 'a later tick must not count these failures twice');
 });
+
+// AC4. A scan without a result must not exclude the first late completion.
+for (const injected of [false, true]) test(`3091 integration first late verdict clears test mode (injected=${injected})`, async t => {
+  const {f, tick, stateFile, ports} = await setup(t);
+  const at = f.clock, run = f.record();
+  for (let i = 0; i < 3; i++) {
+    const row = i ? (await anotherRun(f, 17 + i))() : run;
+    delete row.blockedOn;
+    row.state = 'paused'; row.runtimeWait = {at: at + 10 + i, reason: 'no verdict', cause: 'service'}; save(f, row);
+  }
+  fullTicks(f, stateFile, ports);
+  ports.runtimeHealth = async () => ({state: 'unavailable', detail: 'controlled outage'});
+  const {mkdirSync} = await import('node:fs');
+  const {latestCheckVerdict} = await import('../src/workflow-results.mjs');
+  const batch = '20261108-120000-abcd', folder = join(f.ports.env.HOME, '.pdd/runtime/batches', batch);
+  mkdirSync(folder, {recursive: true});
+  const cutoffs = [];
+  if (injected) ports.readInterpreterVerdict = async since => {
+    cutoffs.push(since);
+    return latestCheckVerdict({root: run.root, since}, {env: f.ports.env});
+  };
+  f.tick(100); await tick();
+  let pattern = JSON.parse(readFileSync(stateFile)).interpreterPattern;
+  assert.equal(pattern.streak, 3); assert.equal(pattern.testMode, true);
+  assert.equal(pattern.verdictAt, undefined);
+  writeFileSync(join(folder, 'batch.json'), JSON.stringify({batch, root: run.root, intent: 'check', rows: [{state: 'passed', ended_at: at + 11}]}));
+  assert.equal(latestCheckVerdict({root: run.root, since: 0}, {env: f.ports.env}), at + 11);
+  f.tick(); await tick();
+  pattern = JSON.parse(readFileSync(stateFile)).interpreterPattern;
+  assert.equal(pattern.streak, 1); assert.equal(pattern.testMode, false); assert.equal(pattern.verdictAt, at + 11);
+  if (injected) assert.deepEqual(cutoffs, [0, 0]);
+  f.tick(); await tick();
+  assert.equal(JSON.parse(readFileSync(stateFile)).interpreterPattern.streak, 1);
+});
