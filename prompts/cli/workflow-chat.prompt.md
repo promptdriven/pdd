@@ -315,6 +315,66 @@ once. Preserve uncertain-launch protections.
 
 - [Machine interpreter queue](interpreter-queue.prompt.md): required settings resolver and defaults for chat environment propagation.
 
+## Launch profiles
+
+The [launch profile owner](workflow-launch-profile.prompt.md) owns launch settings.
+Start each area with the run's profile and save a copy on the chat. Use the chat's
+snapshot for ordinary resume, changes, workspace reconstruction and rollback.
+For a fresh replacement, pin the selected profile in the envelope before effects,
+and copy it to the replacement chat. A legacy envelope without a profile acquires
+one from its replacement chat, else original chat, retaining its pinned configDir.
+Validate consistency between envelope and replacement before effects. Preserve
+legacy configDir recovery and all existing custody rules.
+Every native launch or resume passes the snapshot's model as shell-quoted
+`--model M` when present. Only Codex gets the configured invocation-only
+`-c features.multi_agent_v2.max_concurrent_threads_per_session=N`; no account
+configuration is written. Retain full-access, login and environment flags.
+
+After an acknowledged pane launch, inspect the pane through `chatSession` with
+the run and prepared chat snapshot. Bind with `herdr agent rename PANE NAME`
+only after the ownership proof below, including on the first observation. Herdr may
+not have detected the agent yet: `agent_not_found` defers binding. Name failures
+must never turn a successful launch or positive agent observation into absence
+or an unconfirmed launch. Report other failures as a naming warning with the
+Herdr error code; leave native lifecycle and launch acknowledgement intact.
+`chatSession` returns optional `namingError: {code}` when binding fails or cannot
+be verified. The runner shows this warning in detailed/JSON status and open, including the
+post-launch result of resume and fresh replacement. Chat observations retain
+optional `namingError: {code}` until a successful binding clears it; this warning
+never changes native lifecycle or pending replacement identity.
+
+On delayed binding, require the same agent kind and a matching saved UUID when
+present. For Codex also require its own native session lookup (using optional
+`ports.run`, the saved worktree, folder and launch time) to match the observed
+UUID. For a resumed chat with a saved UUID, verify that UUID in the original
+`startedAt` window, including workspace reconstruction: native metadata keeps
+the session's original time. Other sessions started later must not make this
+known session ambiguous. For native session evidence, `ownSession` uses the saved account selection:
+an absent, null or empty `configDir` means `<home>/.codex` for Codex or
+`<home>/.claude` for Claude, where home is `ports.env.HOME` when nonempty,
+else the OS home. Pass this default folder explicitly to the native reader;
+the observing caller's `CODEX_HOME` or `CLAUDE_CONFIG_DIR` must not override it.
+This matches the config-variable removal on native launch and resume, and applies
+to delayed naming, session discovery and workspace reconstruction.
+The latest launch/resume time still owns startup grace
+and fresh-attempt discovery. `ownSession` accepts optional `sessionId` for this
+exact lookup; invalid IDs or results for another ID are unknown evidence.
+Match the Codex UUID in parsed native metadata; do not require it in the filename.
+This proof is required even after another observation saved a UUID, so
+an unrelated occupant never gains naming authority from observation alone.
+Claude's preallocated or resumed UUID proves identity. Gemini and agy have no
+authoritative native-session lookup here; an observed UUID alone cannot prove
+ownership for renaming, so leave their names unbound and show the naming warning.
+Missing or ambiguous evidence defers binding. No name is
+needed to observe lifecycle or send an existing request.
+The stable saved name and pane let tools inspect and interrupt the chat with
+`herdr --session pdd agent get NAME` and
+`herdr --session pdd agent send-keys NAME ctrl-c`.
+
+## Dependencies
+
+- [Launch profiles](workflow-launch-profile.prompt.md): required generation and verification context for profile snapshots, effective launch arguments and Herdr name derivation.
+
 - [Herdr layout](workflow-herdr-layout.prompt.md): required authoring/generation/verification context for workspace ownership, allocation and its existing lock. The runner's replacement protocol is the caller contract above, not a recursively loaded dependency.
 - [Worktree assignment](workflow-worktree.prompt.md): load for closed-workspace recovery verification through `lookupIssueWorktree`, including the saved current branch.
 - [Workflow agents](workflow-agents.prompt.md#login-variables): required context for `LOGIN_VARIABLES`, the one per-kind list of login variables.

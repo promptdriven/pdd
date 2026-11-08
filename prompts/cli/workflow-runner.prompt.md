@@ -764,6 +764,8 @@ observation. Preserve queue path and concurrency settings in launcher environmen
 
 - [Machine interpreter queue](interpreter-queue.prompt.md): required progress and waiting-clock contract.
 
+- [Launch profiles](workflow-launch-profile.prompt.md): required generation and verification context for selecting, validating and saving run and chat launch settings.
+
 - [Readable PR descriptions](workflow-pr-body.prompt.md): required authoring/generation/verification/testing context for the readable part, the titles and the Details section of every PR description.
 - [GitHub calls](github-calls.prompt.md): native generation and verification context for counting `gh` calls.
 
@@ -1083,22 +1085,45 @@ Call the production [PR evidence preparation](workflow-pr-evidence.prompt.md) bo
 
 This is an additive extension; all other runner contracts remain unchanged. An explicit `area` must name an area at or before `run.area` with a recorded chat. Choose its latest saved chat. Unknown, future or unrecorded selectors refuse before persistence or native effects; an unknown-area message lists the workflow's valid area names. Without a selector choose the current area. A fresh `newSession` attempt for an earlier area refuses with advice to select the current area; recovery of an already saved attempt follows its recorded target below; a current area without a saved chat cannot replace one. Historical open delegates to `openChat`, persists only that selected chat's observations (including its same-identity startUnconfirmed flag after a failed resume), and reports its own error without setting/clearing current `chatFailure`, changing run state or invoking current-area recovery. AREA never changes `run.area`, even on failure. This navigation does not enforce read-only historical execution.
 
-For replacement call the module function `restartChat({run,chat,message,pending}, ports)` from [area chats](workflow-chat.prompt.md#explicit-fresh-session). That owner defines native checks and the checkpoint envelope. Build the continuation with `areaMessage` for the same current area plus its completed step names/summaries, remaining steps, open gate and pending question in human-readable words, including what the person must decide; never paste a raw gate object. Explain that already completed steps must not rerun and that prior approval does not approve new work. Preserve the same agent, run/worktree/branch, completed records, question, gate, approvalRecord, decisions and PR records on success and failure; configuration follows the account-selection rule below; replacement never advances or publishes. An eligibility or ownership refusal before intent leaves the entire saved run unchanged, including state and chatFailure. A failure after durable intent retains the pending custody for recovery, without misreporting it as a preflight refusal. After effects begin, record replacement custody, its account commit below and a current-area chat failure when necessary; successful replacement clears that failure but restores running only without a waiting gate/question.
+For replacement call the module function `restartChat({run,chat,message,pending}, ports)` from [area chats](workflow-chat.prompt.md#explicit-fresh-session). That owner defines native checks and the checkpoint envelope. Build the continuation with `areaMessage` for the same current area plus its completed step names/summaries, remaining steps, open gate and pending question in human-readable words, including what the person must decide; never paste a raw gate object. Explain that already completed steps must not rerun and that prior approval does not approve new work. Preserve the same agent, run/worktree/branch, completed records, question, gate, approvalRecord, decisions and PR records on success and failure; configuration follows the launch-profile rule below; replacement never advances or publishes. An eligibility or ownership refusal before intent leaves the entire saved run unchanged, including state and chatFailure. A failure after durable intent retains the pending custody for recovery, without misreporting it as a preflight refusal. After effects begin, record replacement custody, its account commit below and a current-area chat failure when necessary; successful replacement clears that failure but restores running only without a waiting gate/question.
 
 <details>
-<summary>Account selection for an explicit Codex replacement</summary>
+<summary>Launch profile selection</summary>
 
-For module function `openRun`, select the effective replacement profile without changing CLI spelling or ordinary focus/resume behavior:
+The [launch profile owner](workflow-launch-profile.prompt.md) owns the profile shape,
+validation, legacy defaults, name derivation and Codex configuration reads. Save
+`launchProfile` at run start, alongside compatible `agent` and `configDir` fields.
+`startRun` accepts optional `model`, `herdrAgentName`, and `codexThreads` from the CLI.
+New Codex runs default to five threads, with a higher account value preserved by
+the profile owner. Other agents and legacy runs keep their native thread default.
+Validate these and the account folder before any Git, GitHub or Herdr effects.
 
-| Open request | Effective profile |
-| --- | --- |
-| Recover an existing pending replacement with `--new` | The chat owner's saved attempt configuration, regardless of incoming `CODEX_HOME` |
-| A fresh `--new` for the current area of a Codex run, with nonempty incoming `CODEX_HOME` | That explicitly supplied existing folder, overriding a saved null or old folder |
-| Any other request | Existing saved-profile behavior, including empty/unset `CODEX_HOME` and other agents |
+`openRun` accepts the same settings, only with `newSession: true` and the current
+area. For a new attempt, a nonempty caller variable for the saved agent kind
+(`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, or `GEMINI_CLI_HOME`) selects its existing
+folder. Resolve it as at start. Empty or absent variables keep the saved folder.
+The agent kind and agents.json definition stay the same. Ordinary open, historical
+open, changes and approval never select a profile from the caller. They use the
+chat's saved profile for resume and the run's profile for a new area.
 
-Incoming means `ports.env` (default process environment); inherited nonempty `CODEX_HOME` counts as supplied. Do not trim or interpret a folder as shell syntax. Expand `~` and `~/` with the chat owner's `expandHome`, then resolve a relative path from this invocation's `cwd`, as for `startRun`. Preserve spaces and quote characters with the existing shell quoting. Supply this full path as `run.configDir` to `restartChat` without rewriting the original chat. The selection tests directory existence only, never authentication, credentials or quota. A missing path or regular file refuses with exit 1 and `CODEX_HOME is "PATH", but that folder does not exist. Fix CODEX_HOME and run the command again.` before intent, close, allocation or launch; keep saved run and delivery-journal bytes unchanged. A missing old profile must not veto a valid explicitly selected replacement folder. Without this selection, retain the saved-folder refusal. Pending recovery uses its pinned folder for replacement work; original inspection/rollback retains the original profile. Refuse missing folders before a native effect requiring them, keeping pending custody and never falling back to a retry's profile.
+Snapshot the entire selected profile into the replacement envelope at intent.
+An existing pending attempt uses that immutable snapshot, regardless of retry
+options or environment. Keep original chat inspection and rollback on the
+original chat's profile. Commit the selected run profile, and compatible
+`configDir`, atomically with the current area's first `launchRequested` checkpoint,
+before dispatch. Failed writes send nothing. Prelaunch rollback keeps the prior
+run profile. Historical or late checkpoints cannot retarget a newer area.
+Keep existing progress, cancellation, replacement, ownership and refusal guards.
+A valid new folder can replace a missing old folder; do not require access to the
+old native session for a fresh chat. No logout, account reset, credential copy or
+native session migration occurs. A fresh chat on a new account continues the same
+run, with its completed steps, gates and decisions.
 
-The chat owner's immutable attempt `configDir` makes the selection durable at intent. Update the run's inherited `configDir` atomically with installation of the current area's active replacement at `launchRequested`, before dispatch. A failed write sends nothing. A lost launch reply retains that selected run/replacement configuration for recovery and later areas. Prelaunch rollback leaves the run's prior profile intact. Historical recovery, later checkpoints and stale writers cannot replace a newer current-area profile; retain existing run identity, progress and cancellation guards. Subsequent area starts use the committed run profile even from another terminal. Plain open, historical open and `changes` do not select accounts or retarget pending requests. No account reset, profile creation, credential copying, global environment change or native-session migration is part of this route.
+Detailed status shows model, account folder, Codex thread limit and the current
+chat's Herdr name and pane. JSON summaries include `launchProfile` and
+`chat: {herdrAgentName, paneId}` (null without a chat). Include optional
+`chat.namingError: {code}` when live naming cannot be confirmed; detailed status
+and open show that warning without changing the positive native lifecycle fact.
 
 </details>
 
