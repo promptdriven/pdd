@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 6d458f9c212e77a828ba31b44319a394b071a8e7a919d1f309c2580982cc0ae9).
+// Implements prompts/cli/autopilot-launcher.prompt.md.
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -10,7 +10,7 @@ import { loadAgentDefinitions } from './agent-config.mjs';
 import { pathDiagnostic } from './path-diagnostic.mjs';
 import { runAutopilot } from './autopilot.mjs';
 import { checkWorkflowAgents } from './workflow-agents.mjs';
-import { gitContext, metricsSource, allRuns, listRuns } from './workflow-runs.mjs';
+import { gitContext, metricsSource, allRuns, listRuns, updateRun } from './workflow-runs.mjs';
 import { appendEvents } from './metrics-store.mjs';
 import { recordCaptureGap } from './metrics-gap.mjs';
 import * as nativeFiles from 'node:fs';
@@ -26,6 +26,7 @@ import { tomlString } from './toml-string.mjs';
 import { alertStatusLine, runAutopilotAlerts } from './autopilot-alerts.mjs';
 import { countGithubCalls, githubBudget, githubBudgetSettings, githubEtagCache, githubFloorGuard, githubFullLastPage, githubLedger, githubMachineEntries, githubReply, githubStateRoot, githubStatusLine, githubUsage } from './github-calls.mjs';
 import { lookupRepositoryParent, githubOriginRepository } from './workflow-worktree.mjs';
+import { costReport, costStatusLines } from './cost-ledger.mjs';
 
 const INTERVAL = 30 * 60 * 1000;
 const STUCK_AFTER = 60 * 60 * 1000;
@@ -1674,13 +1675,29 @@ async function machineStatus(folder, ports, env, cwd) {
   return ok(rows.length ? [`Autopilot on this machine (${rows.length}):`, ...rows].join('\n') : 'No Autopilot on this machine.');
 }
 
+async function localCosts(input, ports, state = {}) {
+  const options = { ...ports, env: input.env ?? ports.env };
+  const runs = await (ports.costRuns ?? (async () => input.all ? allRuns({ cancelled: true }, options) : listRuns({ cwd: state.cwd ?? input.cwd, cancelled: true }, options)))();
+  const measured = runs.map(run => {
+    try { return updateRun(run.runDir, latest => {
+      if (latest.runId !== run.runId || latest.startedAt !== run.startedAt) throw Error('Cost attempt changed');
+      return latest;
+    }, options); } catch { return run; }
+  });
+  return costReport(measured, (ports.now ?? Date.now)());
+}
 export async function runAutopilotLauncher(input, ports = {}) {
   const { command, packageRoot, runs, resumeCustody, issues = [] } = input;
   let state = { cwd: input.cwd, environment: keepEnv(input.env ?? process.env) };
   let p = portsFor(state, { ...ports, env: input.env });
   let controlLock, releaseAdmission;
   try {
-    if (command === 'status' && input.all) return await machineStatus(stateFolder(ports, p.env), ports, input.env, input.cwd);
+    if (command === 'status' && input.json) return ok(JSON.stringify(await localCosts(input, ports), null, 2));
+    if (command === 'status' && input.all) {
+      const status = await machineStatus(stateFolder(ports, p.env), ports, input.env, input.cwd);
+      try { status.message += '\n' + costStatusLines(await localCosts(input, ports)); } catch {}
+      return status;
+    }
     state.cwd = await gitRoot(p);
     const id = createHash('sha256').update(state.cwd).digest('hex').slice(0, 20);
     const folder = stateFolder(ports, p.env);
@@ -1726,9 +1743,11 @@ export async function runAutopilotLauncher(input, ports = {}) {
           }
         }
       } catch { /* The GitHub line never changes status. */ }
+      let costs = '';
+      try { costs = '\n' + costStatusLines(await localCosts(input, ports, state)); } catch {}
       const readiness = await workflowReadiness(state, p);
       const workflows = readiness.state === 'ready' ? '' : `\nWorkflows cannot start in this folder: ${line(readiness.message)}`;
-      return ok(`Autopilot ${state.enabled ? 'enabled' : 'disabled'}; timer ${timerActive ? 'active' : 'inactive'}; Herdr ${serverRunning ? 'running' : 'unavailable'}; coordinator ${coordinatorState}: ${state.repo ? `${state.repo} in ${state.cwd}` : state.cwd} · ${state.agent?.id ?? 'no agent'} · next tick: ${timerActive && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}${workflows}${relaunch}${alerts ? `\n${alerts}` : ''}${github ? `\n${github}` : ''}`);
+      return ok(`Autopilot ${state.enabled ? 'enabled' : 'disabled'}; timer ${timerActive ? 'active' : 'inactive'}; Herdr ${serverRunning ? 'running' : 'unavailable'}; coordinator ${coordinatorState}: ${state.repo ? `${state.repo} in ${state.cwd}` : state.cwd} · ${state.agent?.id ?? 'no agent'} · next tick: ${timerActive && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}${workflows}${relaunch}${alerts ? `\n${alerts}` : ''}${github ? `\n${github}` : ''}${costs}`);
     }
     if (command === 'stop') {
       if (previous) { state.enabled = false; state.nextTick = null; state.controlRevision = randomUUID(); save(stateFile, state); }

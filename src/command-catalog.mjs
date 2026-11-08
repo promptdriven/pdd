@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 9a560895a7a549c2804467b25aea7747bf1801a66ac09a63eb9d7e46b2d6b282).
+// Implements prompts/cli/command-catalog.prompt.md.
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -25,8 +25,8 @@ const routes = [
     forms: [form('pdd autopilot start [--runs N] [--resume-custody FILE]', 'Start this repo in an interactive Herdr agent; check now and every 30 minutes without AI on empty ticks. --runs optionally caps concurrent runs; --resume-custody supplies the verified original-owner projection.')] },
   { id: 'autopilot.stop', prefix: ['autopilot', 'stop'], local: 'autopilot-stop', operands: [], options: [],
     forms: [form('pdd autopilot stop', "Stop this machine's timer; let the current agent step finish.")] },
-  { id: 'autopilot.status', prefix: ['autopilot', 'status'], local: 'autopilot-status', operands: [], options: [{name:'--all',kind:'flag'}],
-    forms: [form('pdd autopilot status [--all]', "Show this machine's repo, folder, agent and next tick; --all lists every repository with Autopilot on this machine, from any folder.")] },
+  { id: 'autopilot.status', prefix: ['autopilot', 'status'], local: 'autopilot-status', operands: [], options: [{name:'--all',kind:'flag'},{name:'--json',kind:'flag'}],
+    forms: [form('pdd autopilot status [--all] [--json]', "Show this machine's repo, folder, agent and next tick; --all lists every repository with Autopilot on this machine, from any folder.")] },
   { id: 'autopilot.add', prefix: ['autopilot', 'add'], local: 'autopilot-add', operands: [{name:'issue',type:'issue',repeat:true}], options: [],
     forms: [form('pdd autopilot add N...', 'Mark named old issues with pdd:autopilot so Autopilot may take them.')] },
   { id: 'autopilot.alert', prefix: ['autopilot', 'alert'], local: 'autopilot-alert', operands: [],
@@ -60,6 +60,8 @@ const routes = [
   { id: 'workflow.done', prefix: ['workflow', 'done'], local: 'workflow-done',
     operands: [{name:'step',type:'workflow-name'}], options: [{name:'--summary',kind:'text'},{name:'--skipped',kind:'text'}],
     forms: [form('pdd workflow done STEP [--summary TEXT] [--skipped REASON]', `For the agent in a run worktree: record a step with pdd's own latest pdd ${test}, pdd ${lint} and prove results (the summary is an agent note) and print what to do next; --skipped records that the step was skipped, and why.`)] },
+  { id: 'workflow.cost', prefix: ['workflow', 'cost'], local: 'workflow-cost', operands: [{name:'issue',type:'issue'}], options: [{name:'--input',kind:'text'}],
+    forms: [form('pdd workflow cost ISSUE [--input -]', 'Read local issue costs or record measured suite/person minutes and outcome from JSON stdin.')] },
   { id: 'workflow.evidence', prefix: ['workflow', 'evidence'], local: 'workflow-evidence',
     operands: [{name:'issue',type:'issue'}], options: [{name:'--summary',kind:'text'}],
     forms: [form('pdd workflow evidence ISSUE --summary FILE', 'Record source-verified saved check JSON without rerunning steps, gates or publication.')] },

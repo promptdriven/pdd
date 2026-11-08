@@ -1,0 +1,6 @@
+{"type":"user","sessionId":"22222222-2222-4222-8222-222222222222","timestamp":"2026-10-27T17:00:01.000Z","uuid":"user-1","message":{"role":"user","content":"PRIVATE_SYNTHETIC_TEXT"}}
+{"type":"assistant","sessionId":"22222222-2222-4222-8222-222222222222","uuid":"stream-1","message":{"id":"msg-1","role":"assistant","content":[{"type":"thinking","thinking":"PRIVATE_SYNTHETIC_TEXT"}],"usage":{"input_tokens":10,"cache_creation_input_tokens":20,"cache_read_input_tokens":30,"output_tokens":5}}}
+{"type":"assistant","sessionId":"22222222-2222-4222-8222-222222222222","uuid":"stream-2","message":{"id":"msg-1","role":"assistant","usage":{"input_tokens":10,"cache_creation_input_tokens":20,"cache_read_input_tokens":30,"output_tokens":15}}}
+{"type":"assistant","sessionId":"22222222-2222-4222-8222-222222222222","uuid":"reply-2","message":{"id":"msg-2","role":"assistant","usage":{"input_tokens":5,"output_tokens":10}}}
+{"type":"assistant","sessionId":"33333333-3333-4333-8333-333333333333","uuid":"unrelated","message":{"id":"msg-unrelated","usage":{"input_tokens":99999,"output_tokens":99999}}}
+{"type":"assistant","sessionId":"22222222-2222-4222-8222-222222222222","isApiErrorMessage":true,"message":{"id":"error","usage":{"input_tokens":9999,"output_tokens":9999}}}

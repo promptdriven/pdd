@@ -958,7 +958,11 @@ a promise of later handling; the independent 30-minute tick remains fallback.
 Use the existing launcher ports and native defaults, including state, Git, settings,
 reconcile and wake boundaries; injected substitutes reach this same path.
 
+For `status`, include the local [issue cost report](cost-ledger.prompt.md) for normal and automatic runs in the selected repository; `--all` includes indexed repositories. Refresh numeric cost checkpoints using ordinary run ownership only. Before refreshing a selected cost record, verify its runId and startedAt under run ownership. Archived attempts can retain a former runDir now owned by a new attempt: retain their saved cost snapshot and never substitute or update that new attempt. Measurement failure must not fail status. `status --json` returns only the versioned cost report and skips timer, Herdr, settings-on-GitHub and workflow readiness probes. It works without a saved launcher. Human status appends `costStatusLines`; neither status form fetches CI durations.
+
 ## Dependencies
+
+- [Cost ledger](cost-ledger.prompt.md): required native generation and verification context for local cost capture and reports.
 
 - [Metrics store](metrics-store.prompt.md), [run records](workflow-runs.prompt.md) and [metrics gaps](metrics-gap.prompt.md): required native generation/verification context for observational selector/launch storage and identity.
 

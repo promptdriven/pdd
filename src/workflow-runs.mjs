@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runs.prompt.md (sha256: eba280d9608bc395025961ecacc5e128fada4363776983c3ea5a43143c648fb5).
+// Implements prompts/cli/workflow-runs.prompt.md.
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import * as nativeRunFiles from 'node:fs';
@@ -11,6 +11,7 @@ import { chatLifecycle } from './workflow-chat.mjs';
 import { journalRunMutation, drainRunJournal } from './metrics-hooks.mjs';
 import { appendEvents } from './metrics-store.mjs';
 import { recordCaptureGap } from './metrics-gap.mjs';
+import { captureCosts } from './cost-ledger.mjs';
 
 const ordinary = promisify(execFileCallback);
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -207,6 +208,8 @@ export function metricsSource(run, fs = nativeRunFiles, now = Date.now) {
   return identity.source;
 }
 function captureMutation(before, run, ports, fs) {
+  try { run.cost = captureCosts(before, run, { ...ports, fs }); }
+  catch { if (before?.cost) run.cost = structuredClone(before.cost); if (run.cost) run.cost.coverage = [...new Set([...(run.cost.coverage ?? []), 'capture-failed'])]; }
   try {
     const observedAt = new Date((ports.now ?? Date.now)()).toISOString();
     const source = metricsSource(run,fs,ports.now ?? Date.now);

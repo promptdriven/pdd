@@ -78,7 +78,11 @@ C3 view: `stage` (current step, or `approve` at a gate, or `merge` after the las
 
 Keep legacy decisions and approvalRecord readable. New gates have a nonempty string `id`, stable through save/reload and publication retry and distinct for each new or changed/reopened gate independently of clock, area or kind. Legacy gates without id remain readable. Preserve optional `gate.promptSnapshot` as an ordered array of `{path,proseSha256,reviewSha256?}` rows, including an empty array. Absence means unbound, not an empty selection. The runner owns capture, invalidation and comparison; storage must preserve these distinctions through reload and projection. Each new approval decision and approvalRecord adds nonempty string `gateId` identifying its gate. Each new approval decision retains `gateAt` (the approved gate's original at value) and adds `evidence` with the exact shared [evidence shape](approval-policy.prompt.md#actor-and-evidence), alongside existing stage/decision/via/at/text fields; `approvalRecord` retains its legacy fields and the same evidence. Decisions are the complete gate history, not only the latest approvalRecord. The runner supplies the facts; this storage module never invents actors, words or approval. Preserve every record through atomic write/read and C3 projection; old records lacking evidence stay valid and must not gain invented provenance. The shared prompt journal remains separate from status.json.
 
+Before every publication, capture the local [cost ledger](cost-ledger.prompt.md) from the previous durable run and the current record. Keep its cumulative numeric checkpoints in `cost`. Capture failure retains prior cost data with incomplete coverage and never blocks workflow progress.
+
 ## Dependencies
+
+- [Cost ledger](cost-ledger.prompt.md): required native generation and verification context for local cost capture and reports.
 
 - [Metrics hooks](metrics-hooks.prompt.md): required native generation/verification context for journal construction and retained delivery. [Metrics gaps](metrics-gap.prompt.md) owns fallback coverage events.
 

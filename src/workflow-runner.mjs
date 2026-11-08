@@ -33,6 +33,7 @@ import { collectTestInventory } from './workflow-inventory.mjs';
 import {adoptReplayCorpus,REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinReplayVectors,readReplayEvidence,formatReplayEvidence} from './workflow-replay.mjs';
 import { DETAILS_OPEN, TOP_NOTE, balancedDetails, closingInert, detailsOf, pr1Order, prArea, prStatus, readPrFields, readableNextLines, readablePrBody, readablePrTitle, readablePrTop, sameReadableTop, userStory } from './workflow-pr-body.mjs';
 import { nativeGithubCounter } from './github-calls.mjs';
+import { applyCostMeasurement, captureClosedCi, costReport } from './cost-ledger.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const CHANGE_PREFIX = 'The person asks for changes';
@@ -2895,6 +2896,7 @@ async function refreshPr(run, p) {
   // #3042: the read of a PR that pdd published with readable facts also gives its description, head and comments
   // (`view`), so that the refresh below of its readable top needs no other read when nothing changed.
   for(const pr of run.pr){const {view,...fields}=await (p.readPrStatus??readWorkflowPrStatus)({cwd,url:pr.url,...(pr.readable?.facts?{view:true}:{})},p.commandPorts);observations.push({url:pr.url,number:pr.number,stage:pr.stage,fields,view});}
+  await captureClosedCi({ ...run, pr: observations.map(row => ({ ...run.pr.find(pr => pr.url === row.url), ...row.fields, ...(row.view?.head ? { headSha: row.view.head } : {}) })) }, p);
   const refreshTops=async()=>{
     const observed=new Map(observations.map(observation=>[observation.url,{...observation.fields,view:observation.view}]));
     for(const pr of run.pr) if(pr.readable?.facts && observed.get(pr.url)?.state==='open') for(const line of await refreshReadableTop(run,pr,p,{observed,cwd})) p.say(line);
@@ -3426,6 +3428,7 @@ export const askPerson=saveGuard(askPersonCommand);
 export const cancelRun=saveGuard(cancelRunCommand);
 
 export const runStatus=saveGuard(async(options,ports)=>{
+  ports = { ...ports, skipCostSessions: true };
   try{return await runStatusCommand(options,ports);}
   catch(error){
     if(error?.code==='workflow_run_save_failed'&&error.cause?.code==='workflow_run_busy')return runStatusCommand(options,ports,true);
@@ -3468,4 +3471,14 @@ export function readEvidenceEligibility({root,producerRoot,tests,source_sha256,r
     if(capture(root,{tests,appMap:null}).sha256!==source_sha256)return{...result,state:'ineligible',reason:'the exact selected source has changed'};
     return{state:'eligible',reason:null,runId:null,repo:null,producerRoot,tests,stage:'current',sourceAnchor:{root,head:null},source_sha256};
   }catch(error){return{...result,reason:oneLine(error.message??error)};}
+}
+
+// Local cost observations never advance the workflow.
+export async function runCosts({ ref, cwd, input }, ports = {}) {
+  const p = deps(ports), found = await resolveRun(ref, { cwd }, p);
+  if (!found.run) return fail(found.error);
+  try {
+    const run = updateRun(found.run.runDir, latest => input === undefined ? latest : applyCostMeasurement(latest, input, p.now()), p);
+    return done(JSON.stringify(costReport([run], p.now()).runs[0], null, 2));
+  } catch (error) { return { exitCode: 2, message: error.message }; }
 }
