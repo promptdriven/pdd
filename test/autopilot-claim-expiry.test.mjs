@@ -1,3 +1,4 @@
+import { readAutopilotState, saveAutopilotState, autopilotStateFiles } from '../src/autopilot-store.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile as callbackExec, execFileSync } from 'node:child_process';
@@ -36,7 +37,7 @@ function checkout(t) {
     if (file === 'gh' && args[0] === 'repo') return { stdout: JSON.stringify({ nameWithOwner: repo, defaultBranchRef: { name: 'main' }, url: `https://github.com/${repo}` }) };
     throw Error(`unexpected process ${file} ${args.join(' ')}`);
   };
-  const localOwner = coordinatorId => writeFileSync(join(stateRoot, `${sha(realpathSync(cwd)).slice(0, 20)}.json`), JSON.stringify({ repo, cwd: realpathSync(cwd), coordinatorId, enabled: true, activatedAt: 'activation' }));
+  const localOwner = coordinatorId => saveAutopilotState(join(stateRoot, `${sha(realpathSync(cwd)).slice(0, 20)}.json`), { repo, cwd: realpathSync(cwd), coordinatorId, enabled: true, activatedAt: 'activation' });
   return { cwd, stateRoot, execFile, localOwner };
 }
 
@@ -381,8 +382,8 @@ async function tickFixture(t, { mode = 'auto' } = {}) {
   };
   const launcher = await import('../src/autopilot-launcher.mjs');
   f.cwd = cwd;
-  f.stateFile = () => join(f.ports.stateRoot, readdirSync(f.ports.stateRoot).find(x => x.endsWith('.json')));
-  f.state = () => { try { return JSON.parse(readFileSync(f.stateFile(), 'utf8')); } catch { return {}; } };
+  f.stateFile = () => join(f.ports.stateRoot, autopilotStateFiles(f.ports.stateRoot)[0]);
+  f.state = () => { try { return readAutopilotState(f.stateFile()); } catch { return {}; } };
   f.start = () => launcher.runAutopilotLauncher({ command: 'start', cwd, env: { HOME: home, PATH: process.env.PATH }, packageRoot: resolve('.'), issues: [] }, f.ports);
   f.tick = () => launcher.tickAutopilot(f.stateFile(), f.ports);
   f.packet = () => JSON.parse(f.prompts.at(-1).trim().split('\n').at(-1));
@@ -676,8 +677,8 @@ function eraHistory(eras, extra = []) {
 // Three takeovers between different coordinators: era n starts at T0 + 6n hours, its last
 // heartbeat is 1 hour later, and the next coordinator removes and adds the label at once.
 const pingPong = (count, who = n => n) => Array.from({ length: count + 1 }, (_, n) => ({ from: T0 + 6 * n * hour, seen: T0 + (6 * n + 1) * hour, who: who(n), ...(n < count ? { to: T0 + 6 * (n + 1) * hour } : {}) }));
-const localCoordinator = (world, coordinatorId, machine) => writeFileSync(join(world.stateRoot, `${sha(realpathSync(world.cwd)).slice(0, 20)}.json`),
-  JSON.stringify({ repo, cwd: realpathSync(world.cwd), coordinatorId, machine, enabled: true, activatedAt: 'activation' }));
+const localCoordinator = (world, coordinatorId, machine) => saveAutopilotState(join(world.stateRoot, `${sha(realpathSync(world.cwd)).slice(0, 20)}.json`),
+  { repo, cwd: realpathSync(world.cwd), coordinatorId, machine, enabled: true, activatedAt: 'activation' });
 const LIMIT_HOLD = /^Taken over \d+ times/;
 
 test('takeover count: a coordinator that takes back its own expired claim makes no takeover', async t => {

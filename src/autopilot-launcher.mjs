@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 6d458f9c212e77a828ba31b44319a394b071a8e7a919d1f309c2580982cc0ae9).
+// Implements prompts/cli/autopilot-launcher.prompt.md.
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -27,6 +27,8 @@ import { alertStatusLine, runAutopilotAlerts } from './autopilot-alerts.mjs';
 import { countGithubCalls, githubBudget, githubBudgetSettings, githubEtagCache, githubFloorGuard, githubFullLastPage, githubLedger, githubMachineEntries, githubReply, githubStateRoot, githubStatusLine, githubUsage } from './github-calls.mjs';
 import { lookupRepositoryParent, githubOriginRepository } from './workflow-worktree.mjs';
 
+import { readAutopilotState, saveAutopilotState, autopilotStateFiles } from './autopilot-store.mjs';
+
 const INTERVAL = 30 * 60 * 1000;
 const STUCK_AFTER = 60 * 60 * 1000;
 const CLAIM_IDLE_AFTER = 60 * 60 * 1000;
@@ -46,12 +48,7 @@ const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`;
 const startIn = cwd => ['cd', quote(cwd), '&&'];
 const line = value => String(value).split(/[\r\n]/)[0].replace(/[\x00-\x1f\x7f]/g, ' ');
 const read = (file, fallback = null) => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return fallback; throw e; } };
-function save(file, value) {
-  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-  const temp = `${file}.${randomUUID()}.tmp`;
-  try { writeFileSync(temp, JSON.stringify(value), { mode: 0o600 }); renameSync(temp, file); }
-  finally { try { unlinkSync(temp); } catch (e) { if (e.code !== 'ENOENT') throw e; } }
-}
+const save = saveAutopilotState;
 async function settings(state, p) {
   const result = await runAutopilot({ action: 'setup', interactive: false, inRepo: true }, {
     cwd: state.cwd,
@@ -607,7 +604,7 @@ async function closeStaleCoordinator(state, agent, p) {
   let forgotten = null;
   try {
     forgotten = await p.scanAction(async () => {
-      const saved = read(state.stateFile);
+      const saved = readAutopilotState(state.stateFile, null, p);
       if (!saved?.enabled || saved.paneId !== pane || saved.workspaceId !== workspace || JSON.stringify(saved.ownerLaunch) !== launch || saved.deliveryIntent || saved.reconciliationIntent) return null;
       const current = (await herdr(['agent', 'get', pane], p)).result?.agent;
       if (!current || current.pane_id !== pane) return null;
@@ -623,7 +620,7 @@ async function closeStaleCoordinator(state, agent, p) {
         saved.relaunchTargets = [...(saved.relaunchTargets ?? []), fingerprint].slice(-8);
       }
       forgetPane(saved);
-      save(state.stateFile, saved);
+      save(state.stateFile, saved, p);
       return { relaunchTargets: saved.relaunchTargets };
     });
   } catch { forgotten = null; }
@@ -867,7 +864,7 @@ async function wake(state, makeText, p, prepare = async () => {}, explicitStartR
         return reply;
       }, now: readinessClock, elapsedNow: p.elapsedNow, sleep: p.sleep,
       beforeSubmit: async () => {
-        const saved = read(state.stateFile);
+        const saved = readAutopilotState(state.stateFile, null, p);
         const custodyMatches = recovering
           ? recoveryCustodyMatches(saved)
           : (!saved?.deliveryIntent || JSON.stringify(saved.deliveryIntent) === JSON.stringify(submittedIntent)) && !saved?.reconciliationIntent;
@@ -876,7 +873,7 @@ async function wake(state, makeText, p, prepare = async () => {}, explicitStartR
         if (!withinLaunch()) { expired = true; return false; }
         if (!current || !['idle', 'done'].includes(current.agent_status) || !observeIdentity(current)) return false;
         try { await prepare(); if (artifact) await artifact.prepare(); } catch { return false; }
-        const finalState = read(state.stateFile);
+        const finalState = readAutopilotState(state.stateFile, null, p);
         const finalCustodyMatches = recovering
           ? recoveryCustodyMatches(finalState)
           : (!finalState?.deliveryIntent || JSON.stringify(finalState.deliveryIntent) === JSON.stringify(submittedIntent)) && !finalState?.reconciliationIntent;
@@ -909,7 +906,7 @@ async function wake(state, makeText, p, prepare = async () => {}, explicitStartR
     }); } finally { artifact?.close(); }
     if (recovering) {
       if (submittedIntent) {
-        const committed = read(state.stateFile);
+        const committed = readAutopilotState(state.stateFile, null, p);
         state.uncertainDeliveryHistory = committed?.uncertainDeliveryHistory ?? state.uncertainDeliveryHistory;
         delete state.deliveryIntent;
         if (result.uncertain) state.reconciliationIntent = submittedIntent;
@@ -1100,18 +1097,18 @@ export async function tickAutopilot(stateFile, ports = {}) {
 
 async function runTick(stateFile, ports, completion) {
   const outcome = (state, message) => completion ? { state } : ok(message);
-  let state = read(stateFile), p, scanGuard; if (!state?.enabled) return outcome('inactive', 'Autopilot stopped.');
+  let state = readAutopilotState(stateFile, null, ports), p, scanGuard; if (!state?.enabled) return outcome('inactive', 'Autopilot stopped.');
   const lock = stateFile + '.lock';
   if (!claimTickLock(lock)) { ports.tickBusy?.(); return outcome('busy', 'Autopilot tick already running.'); }
   try {
-    state = read(stateFile);
+    state = readAutopilotState(stateFile, null, ports);
     if (!state?.enabled) return outcome('inactive', 'Autopilot stopped.');
     if (ports.expectedStart && !['cwd','repo','coordinatorId','machine','controlRevision'].every(key => state[key] === ports.expectedStart[key])) return outcome('inactive', 'Autopilot start was superseded.');
     p = portsFor(state, { ...ports, githubRoot: dirname(stateFile) });
     if (!state.coordinatorId || !state.machine) {
       const release = await claimAdmission(state, p);
       if (!release) throw Error('Timed out waiting for automatic admission; retry.');
-      try { state = read(stateFile); if (!state?.enabled) return outcome('inactive', 'Autopilot stopped.'); state.coordinatorId ??= randomUUID(); state.machine ??= hostname(); save(stateFile, state); }
+      try { state = readAutopilotState(stateFile, null, ports); if (!state?.enabled) return outcome('inactive', 'Autopilot stopped.'); state.coordinatorId ??= randomUUID(); state.machine ??= hostname(); save(stateFile, state, ports); }
       finally { release(); }
     }
     const config = await settings(state, p);
@@ -1122,11 +1119,11 @@ async function runTick(stateFile, ports, completion) {
       const release = await claimAdmission(state, p);
       if (!release) return false;
       try {
-        const latest = read(stateFile);
+        const latest = readAutopilotState(stateFile, null, ports);
         if (!latest?.enabled || JSON.stringify([latest.controlRevision ?? null, latest.coordinatorId, latest.machine, latest.activatedAt, latest.runs ?? null, profileBinding(latest, p)]) !== accepted) return false;
         const current = await settings(latest, p);
         if (current.mode !== config.mode || current.mode === 'off') return false;
-        if (mutate) { if (mutate(latest) === false) return false; save(stateFile, latest); accepted = JSON.stringify([latest.controlRevision ?? null, latest.coordinatorId, latest.machine, latest.activatedAt, latest.runs ?? null, profileBinding(latest, p)]); }
+        if (mutate) { if (mutate(latest) === false) return false; save(stateFile, latest, ports); accepted = JSON.stringify([latest.controlRevision ?? null, latest.coordinatorId, latest.machine, latest.activatedAt, latest.runs ?? null, profileBinding(latest, p)]); }
         return true;
       } finally { release(); }
     };
@@ -1135,13 +1132,13 @@ async function runTick(stateFile, ports, completion) {
       const release = await claimAdmission(state, p);
       if (!release) throw Object.assign(Error('Autopilot admission unavailable'), {code:'agent_blocked'});
       try {
-        const latest = read(stateFile);
+        const latest = readAutopilotState(stateFile, null, ports);
         const identity = latest && JSON.stringify([latest.controlRevision ?? null, latest.coordinatorId, latest.machine, latest.activatedAt, latest.runs ?? null, profileBinding(latest, p)]);
         const current = latest?.enabled ? await settings(latest, p) : null;
         if (!latest?.enabled || identity !== accepted || current?.mode !== config.mode || current.mode === 'off') {
-          if (cleanup === 'intent' && latest && state.deliveryIntent && JSON.stringify(latest.deliveryIntent) === JSON.stringify(state.deliveryIntent)) { delete latest.deliveryIntent; save(stateFile, latest); }
-          if (cleanup === 'reconciliation' && latest && state.reconciliationIntent && JSON.stringify(latest.reconciliationIntent) === JSON.stringify(state.reconciliationIntent)) { delete latest.reconciliationIntent; save(stateFile, latest); }
-          if (cleanup === 'launch' && latest && state.ownerLaunch && JSON.stringify(latest.ownerLaunch) === JSON.stringify(state.ownerLaunch)) { delete latest.ownerLaunch; save(stateFile, latest); }
+          if (cleanup === 'intent' && latest && state.deliveryIntent && JSON.stringify(latest.deliveryIntent) === JSON.stringify(state.deliveryIntent)) { delete latest.deliveryIntent; save(stateFile, latest, ports); }
+          if (cleanup === 'reconciliation' && latest && state.reconciliationIntent && JSON.stringify(latest.reconciliationIntent) === JSON.stringify(state.reconciliationIntent)) { delete latest.reconciliationIntent; save(stateFile, latest, ports); }
+          if (cleanup === 'launch' && latest && state.ownerLaunch && JSON.stringify(latest.ownerLaunch) === JSON.stringify(state.ownerLaunch)) { delete latest.ownerLaunch; save(stateFile, latest, ports); }
           throw Object.assign(Error('Autopilot control changed'), {code:'agent_blocked'});
         }
         return await action();
@@ -1197,7 +1194,7 @@ async function runTick(stateFile, ports, completion) {
       read: async () => ({ json: JSON.stringify(state.dependencyPending ?? {}) }),
       save: async ({ json }) => { const value = JSON.parse(json); const ok = await scanGuard(latest => { latest.dependencyPending = value; }); if (ok) state.dependencyPending = value; return { ok }; },
       deliver: async ({ requestJson }) => {
-        if (!read(stateFile)?.enabled) return { state: 'busy' };
+        if (!readAutopilotState(stateFile, null, ports)?.enabled) return { state: 'busy' };
         // Intake marks a repeated request in its pending state. It is never sent while an earlier submission has uncertain custody.
         const again = state.dependencyPending?.redelivery ?? null;
         if (again && (state.deliveryIntent || state.reconciliationIntent)) { p.warn('Autopilot dependency review waits: a previous submission has uncertain custody.'); return { state: 'busy' }; }
@@ -1563,7 +1560,7 @@ async function waitStartScan(identity, ports = {}) {
   try {
     for (;;) {
       await wait();
-      const state = read(identity.stateFile);
+      const state = readAutopilotState(identity.stateFile, null, ports);
       if (!state?.enabled || !['cwd','repo','coordinatorId','machine','controlRevision'].every(key => state[key] === identity[key])) return;
       let busy = false;
       await runTick(identity.stateFile, { ...ports, expectedStart:identity, explicitStartReconcile:true, tickBusy:() => { busy = true; } }, false);
@@ -1583,7 +1580,7 @@ async function waitCoordinatorIdle(identity, ports = {}) {
   }));
   try {
     await wait();
-    const state = read(identity.stateFile);
+    const state = readAutopilotState(identity.stateFile, null, ports);
     if (!state?.enabled || !['cwd','repo','paneId','workspaceId','coordinatorId','machine','controlRevision'].every(key => state[key] === identity[key])) return;
     if (!await currentRecoveryTargetMatches(state, portsFor(state, ports), true, identity.session)) return;
     await runTick(identity.stateFile, { ...ports, env:ports.env }, true);
@@ -1629,7 +1626,7 @@ export async function withAutopilotModeLock({ cwd, env }, action, ports = {}) {
     releaseAdmission = await claimAdmission(state, p, wait);
     if (!releaseAdmission) return bad('Timed out waiting for the current Autopilot operation; retry.');
     const result = await action();
-    if (result?.exitCode === 0) { const latest = read(stateFile); if (latest) { latest.controlRevision = randomUUID(); save(stateFile, latest); } }
+    if (result?.exitCode === 0) { const latest = readAutopilotState(stateFile, null, ports); if (latest) { latest.controlRevision = randomUUID(); save(stateFile, latest, ports); } }
     return result;
   } finally { releaseAdmission?.(); }
 }
@@ -1651,7 +1648,7 @@ const GONE = Symbol('gone');
 // Each line is independent. Timer and Herdr reads run from the caller's folder, never from a saved folder.
 async function machineStatus(folder, ports, env, cwd) {
   let names = [];
-  try { names = readdirSync(folder).filter(name => /^[0-9a-f]{20}\.json$/.test(name)).sort(); }
+  try { names = autopilotStateFiles(folder, ports); }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
   const here = isFolder(cwd) ? cwd : env?.HOME || homedir();
   let serverRunning = false;
@@ -1659,7 +1656,7 @@ async function machineStatus(folder, ports, env, cwd) {
   const rows = [];
   for (const name of names) {
     let saved;
-    try { saved = read(join(folder, name), GONE); } catch { saved = null; }
+    try { saved = readAutopilotState(join(folder, name), GONE, ports); } catch { saved = null; }
     if (saved === GONE) continue;
     if (!saved || typeof saved !== 'object' || Array.isArray(saved)) { rows.push(`${name}: saved state unreadable`); continue; }
     const state = { ...saved, id: name.slice(0, -5), stateFile: join(folder, name) };
@@ -1691,10 +1688,10 @@ export async function runAutopilotLauncher(input, ports = {}) {
       releaseAdmission = await claimAdmission(state, p, wait);
       if (!releaseAdmission) return bad('Timed out waiting for the current Autopilot operation; retry.');
     }
-    const previous = read(stateFile);
+    const previous = readAutopilotState(stateFile, null, ports);
     state = { ...state, ...previous, cwd: state.cwd, id, stateFile };
     let initialRevision = previous?.controlRevision ?? null;
-    if (command === 'start' && !previous) { initialRevision = randomUUID(); state.controlRevision = initialRevision; state.enabled = false; state.timerInstalled = false; state.nextTick = null; save(stateFile, state); }
+    if (command === 'start' && !previous) { initialRevision = randomUUID(); state.controlRevision = initialRevision; state.enabled = false; state.timerInstalled = false; state.nextTick = null; save(stateFile, state, ports); }
     p = portsFor(state, { ...ports, env: input.env });
     if (command === 'start') { releaseAdmission(); releaseAdmission = null; }
     if (command === 'status') {
@@ -1731,9 +1728,9 @@ export async function runAutopilotLauncher(input, ports = {}) {
       return ok(`Autopilot ${state.enabled ? 'enabled' : 'disabled'}; timer ${timerActive ? 'active' : 'inactive'}; Herdr ${serverRunning ? 'running' : 'unavailable'}; coordinator ${coordinatorState}: ${state.repo ? `${state.repo} in ${state.cwd}` : state.cwd} · ${state.agent?.id ?? 'no agent'} · next tick: ${timerActive && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}${workflows}${relaunch}${alerts ? `\n${alerts}` : ''}${github ? `\n${github}` : ''}`);
     }
     if (command === 'stop') {
-      if (previous) { state.enabled = false; state.nextTick = null; state.controlRevision = randomUUID(); save(stateFile, state); }
+      if (previous) { state.enabled = false; state.nextTick = null; state.controlRevision = randomUUID(); save(stateFile, state, ports); }
       await timer('stop', state, p);
-      if (previous) { state.timerInstalled = false; save(stateFile, state); }
+      if (previous) { state.timerInstalled = false; save(stateFile, state, ports); }
       return ok('Autopilot stopped on this machine; the current step can finish.');
     }
     if (command === 'start' && runs !== undefined && (!/^[1-9][0-9]*$/.test(runs) || !Number.isSafeInteger(Number(runs)))) return { exitCode: 2, message: 'Use --runs with a positive integer, or omit it for no fixed cap.' };
@@ -1795,7 +1792,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
     if (!pendingCustody && !resumeCustody) await openWorkspace(state, p);
     releaseAdmission = await claimAdmission(state, p);
     if (!releaseAdmission) return bad('Timed out waiting for the current Autopilot operation; retry.');
-    if ((read(stateFile)?.controlRevision ?? null) !== priorRevision) return bad('Autopilot changed while starting; retry.');
+    if ((readAutopilotState(stateFile, null, ports)?.controlRevision ?? null) !== priorRevision) return bad('Autopilot changed while starting; retry.');
     const currentConfig = await settings(state, p);
     if (currentConfig.mode === 'off') return ok(`${line(currentConfig.message)} Choose observe or auto with pdd autopilot observe or pdd autopilot auto.`);
     if (resumeCustody) {
@@ -1808,12 +1805,12 @@ export async function runAutopilotLauncher(input, ports = {}) {
     }
     try { await timer('start', state, p); }
     catch {
-      if (!previous) { state.enabled = false; state.nextTick = null; state.controlRevision = initialRevision; delete state.activatedAt; delete state.runs; save(stateFile, state); }
+      if (!previous) { state.enabled = false; state.nextTick = null; state.controlRevision = initialRevision; delete state.activatedAt; delete state.runs; save(stateFile, state, ports); }
       return bad('Autopilot timer could not start; enable your systemd user session on Linux or launchctl user session on macOS, then retry.');
     }
     if (!previous?.startAction || previous.startAction.repository !== state.repo || previous.startAction.mode !== currentConfig.mode) state.recipeDelivered = false;
     state.startAction = { command: 'pdd autopilot start', repository: state.repo, mode: currentConfig.mode };
-    save(stateFile, state);
+    save(stateFile, state, ports);
     let warning = '';
     if ((p.platform ?? process.platform) === 'linux') {
       let linger = '';

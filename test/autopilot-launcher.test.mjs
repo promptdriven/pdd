@@ -1,3 +1,4 @@
+import { readAutopilotState, saveAutopilotState, autopilotStateFiles } from '../src/autopilot-store.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, utimesSync, existsSync, realpathSync, renameSync, symlinkSync } from 'node:fs';
@@ -61,8 +62,8 @@ async function fixture(t, options = {}) {
   };
   f.module = await import('../src/autopilot-launcher.mjs');
   f.invoke = async (command, extra = {}) => f.module.runAutopilotLauncher({ command, cwd, env: { HOME: home, PATH: process.env.PATH }, packageRoot: root, issues: [], ...extra }, f.ports);
-  f.stateFile = () => join(f.ports.stateRoot, readdirSync(f.ports.stateRoot).find(x => x.endsWith('.json')));
-  f.state = () => JSON.parse(readFileSync(f.stateFile(), 'utf8'));
+  f.stateFile = () => join(f.ports.stateRoot, autopilotStateFiles(f.ports.stateRoot)[0]);
+  f.state = () => readAutopilotState(f.stateFile());
   f.tick = () => f.module.tickAutopilot(f.stateFile(), f.ports);
   return f;
 }
@@ -238,7 +239,7 @@ test('start installs a timer and runs the recipe immediately; unchanged empty ti
   const original=f.state(), replacement=structuredClone(original), history=[{kind:'legacy-uncertain',payloadDigest:'kept'}];
   replacement.enabled=false; replacement.coordinatorId='replacement'; replacement.agent={id:'agy',kind:'agy',command:'agy'}; replacement.uncertainDeliveryHistory=history; replacement.runs=3;
   replacement.ownerLaunch={...replacement.ownerLaunch,coordinator:{...replacement.ownerLaunch.coordinator,coordinatorId:'replacement'},profile:{agent:{id:'agy',kind:'agy'},home:f.home,definitionHome:f.home,configHome:null}};
-  writeFileSync(f.stateFile(),JSON.stringify(replacement));
+  saveAutopilotState(f.stateFile(), replacement);
   const launch=original.ownerLaunch, artifact=join(f.dir,'custody.json');
   writeFileSync(artifact,JSON.stringify({repository:original.repo,sourceRoot:f.cwd,coordinatorId:original.coordinatorId,machine:original.machine,activation:original.activatedAt,paneId:original.paneId,workspaceId:original.workspaceId,agent:launch.profile.agent,home:launch.profile.home,definitionHome:launch.profile.definitionHome,configHome:launch.profile.configHome,launchStartedAt:launch.startedAt}));
   f.ports.selectAgent=async()=>({id:'codex',kind:'codex',command:'codex',env:{}});
@@ -472,7 +473,7 @@ test('native sign-in probes choose each supported interactive provider without a
     };
     assert.equal((await f.invoke('start')).exitCode, 0); assert.equal(f.state().agent.kind, provider);
     assert.ok(probes.every(([, args]) => ['login', 'auth', 'models', '--version'].includes(args[0])));
-    assert.doesNotMatch(readFileSync(f.stateFile(), 'utf8'), /synthetic-test-token/);
+    assert.doesNotMatch(JSON.stringify(readAutopilotState(f.stateFile())), /synthetic-test-token/);
     const launch = f.herdrCalls.find(args => args[0] === 'pane' && args[1] === 'run')[3];
     assert.doesNotMatch(launch, /\bexec\b|--print|\s-p\b/);
   }
@@ -772,12 +773,12 @@ test('status does not call a live Herdr server a running repo coordinator when t
 test('status reports an unrecorded or mismatched coordinator as unavailable', async t => {
   const f = await fixture(t); await f.invoke('start');
   const state = f.state(); delete state.paneId; delete state.workspaceId;
-  writeFileSync(f.stateFile(), JSON.stringify(state));
+  saveAutopilotState(f.stateFile(), state);
   let status = await f.invoke('status');
   assert.match(status.message, /coordinator unavailable \(not recorded\)/i);
   assert.doesNotMatch(status.message, /Autopilot running/);
 
-  state.paneId = 'p1'; state.workspaceId = 'w1'; writeFileSync(f.stateFile(), JSON.stringify(state));
+  state.paneId = 'p1'; state.workspaceId = 'w1'; saveAutopilotState(f.stateFile(), state);
   const herdr = f.ports.herdr;
   f.ports.herdr = async args => {
     if (args[0] === 'agent' && args[1] === 'get') return { result: { type: 'agent_info', agent: {
@@ -1120,7 +1121,7 @@ async function relaunchFixture(t, options = {}) {
   f.live = () => [...panes.values()].filter(pane => pane.agent && !pane.closed).map(pane => pane.pane_id);
   f.packet = (index = -1) => JSON.parse(f.prompts.at(index).trimEnd().split('\n').at(-1));
   f.context = launch => JSON.parse(codexConfigs(launch.argv).set.PDD_AUTOPILOT_CONTEXT);
-  f.saveState = change => { const state = f.state(); change(state); writeFileSync(f.stateFile(), JSON.stringify(state)); };
+  f.saveState = change => { const state = f.state(); change(state); saveAutopilotState(f.stateFile(), state); };
   f.githubWrites = () => f.runs.filter(([command, args]) => command === 'gh' && args.some((value, i) => args[i - 1] === '--method' && value !== 'GET'));
   return f;
 }
@@ -1260,7 +1261,7 @@ const afterClose = {
   },
   'a failed state save': f => {
     // The state file is a folder for the one save after the close, so that save fails.
-    const real = f.ports.herdr, warn = f.ports.warn, file = f.stateFile(), aside = `${file}.aside`; let closed = false, swapped = false;
+    const real = f.ports.herdr, warn = f.ports.warn, file = join(f.ports.stateRoot, 'machine.sqlite'), aside = `${file}.aside`; let closed = false, swapped = false;
     f.ports.herdr = async args => {
       if (closed && args[0] === 'pane' && args[1] === 'get') { closed = false; renameSync(file, aside); mkdirSync(file); swapped = true; }
       const reply = await real(args);
@@ -1276,10 +1277,10 @@ const afterClose = {
     f.ports.herdr = async args => {
       if (snapshot) throw Object.assign(Error('process ended'), { code: 'process_ended' });
       const reply = await real(args);
-      if (args[0] === 'pane' && args[1] === 'close') snapshot = readFileSync(file);
+      if (args[0] === 'pane' && args[1] === 'close') snapshot = readAutopilotState(file);
       return reply;
     };
-    return () => { writeFileSync(file, snapshot); f.ports.herdr = real; };
+    return () => { saveAutopilotState(file, snapshot); f.ports.herdr = real; };
   },
 };
 for (const [failure, inject] of Object.entries(afterClose)) for (const recovery of ['a plain tick', 'stop and start']) {
@@ -1382,11 +1383,11 @@ const afterClear = {
     // Nothing after the clear runs or reaches the disk: the saved state stays as the clear saved it.
     const real = f.ports.herdr, file = f.stateFile(); let snapshot = null;
     f.ports.herdr = async args => {
-      if (!snapshot && f.closed.length && args[0] === 'workspace' && args[1] === 'create') snapshot = readFileSync(file);
+      if (!snapshot && f.closed.length && args[0] === 'workspace' && args[1] === 'create') snapshot = readAutopilotState(file);
       if (snapshot) throw Object.assign(Error('process ended'), { code: 'process_ended' });
       return real(args);
     };
-    return () => { writeFileSync(file, snapshot); f.ports.herdr = real; };
+    return () => { saveAutopilotState(file, snapshot); f.ports.herdr = real; };
   },
   'a person stops Autopilot during the relaunch tick': f => {
     // Stop does not wait for the tick lock, so the tick's next guard sees the disabled state.

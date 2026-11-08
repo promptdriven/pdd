@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runs.prompt.md (sha256: eba280d9608bc395025961ecacc5e128fada4363776983c3ea5a43143c648fb5).
+// Implements prompts/cli/workflow-runs.prompt.md.
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import * as nativeRunFiles from 'node:fs';
@@ -11,6 +11,8 @@ import { chatLifecycle } from './workflow-chat.mjs';
 import { journalRunMutation, drainRunJournal } from './metrics-hooks.mjs';
 import { appendEvents } from './metrics-store.mjs';
 import { recordCaptureGap } from './metrics-gap.mjs';
+
+import { withAutopilotStore } from './autopilot-store.mjs';
 
 const ordinary = promisify(execFileCallback);
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -53,21 +55,32 @@ export function allRuns({ cancelled = false } = {}, ports = {}) {
     .filter(run => !seen.has(run.runDir) && seen.add(run.runDir));
 }
 
-function readIndex(ports) {
-  try {
-    const index = JSON.parse(readFileSync(join(stateDirFor(ports), 'runs.json'), 'utf8'));
-    return Array.isArray(index?.runs) ? index.runs.filter(entry => object(entry) && Number.isSafeInteger(entry.number)) : [];
-  } catch { return []; }
-}
-
-function updateIndex(run, ports) {
+function runIndex(ports, action) {
   const directory = stateDirFor(ports);
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  return withAutopilotStore(join(directory, 'autopilot'), ports, tx => {
+    tx.migrate('runs.json', () => {
+      try { return JSON.parse(readFileSync(join(directory, 'runs.json'), 'utf8')); }
+      catch (error) { if (error.code === 'ENOENT') return undefined; return { runs: [] }; }
+    }, index => {
+      for (const [order, entry] of (Array.isArray(index?.runs) ? index.runs : []).entries())
+        if (object(entry) && Number.isSafeInteger(entry.number)) tx.put('runs', typeof entry.runDir === 'string' ? entry.runDir : `legacy:${order}`, { order, entry });
+    });
+    return action(tx);
+  });
+}
+const indexRows = tx => tx.list('runs').sort((a, b) => a.value.order - b.value.order);
+function readIndex(ports) {
+  if (!ports.store && !nativeRunFiles.existsSync(join(stateDirFor(ports), 'autopilot', 'machine.sqlite')) && !nativeRunFiles.existsSync(join(stateDirFor(ports), 'autopilot', 'machine-state.json')) && !nativeRunFiles.existsSync(join(stateDirFor(ports), 'runs.json'))) return [];
+  try { return runIndex(ports, tx => indexRows(tx).map(row => row.value.entry)); } catch { return []; }
+}
+function updateIndex(run, ports) {
   const entry = { repo: run.repo, number: run.number, workflow: run.workflow, state: run.state, runDir: run.runDir, root: run.root, updatedAt: run.updatedAt };
-  const runs = [...readIndex(ports).filter(item => item.runDir !== run.runDir), entry].slice(-200);
-  const temporary = join(directory, `.runs.json.${randomBytes(6).toString('hex')}.tmp`);
-  writeFileSync(temporary, JSON.stringify({ version: 1, runs }, null, 2) + '\n', { mode: 0o600 });
-  renameSync(temporary, join(directory, 'runs.json'));
+  runIndex(ports, tx => {
+    tx.migrate('runs.json', () => null, () => {});
+    const rows = indexRows(tx), order = (rows.at(-1)?.value.order ?? -1) + 1;
+    tx.put('runs', run.runDir, { order, entry });
+    for (const row of indexRows(tx).slice(0, -200)) tx.remove('runs', row.key);
+  });
 }
 
 // The C3 view (v:1) that phone clients read; it is derived from the saved run fields on every write.

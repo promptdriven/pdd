@@ -234,8 +234,10 @@ themselves, such as `gh pr checks` or `gh run watch`. It also does not count
 other machines or your own work on the same login. All of them use the same
 limit. Their use shows only in the limit that is left on the status line.
 
-The counts stay on this machine, one file for each repository in
-`~/.local/state/pdd/autopilot/github/`. `pdd autopilot status` shows one line
+The counts stay on this machine in
+`~/.local/state/pdd/autopilot/machine.sqlite`. The launcher, pending work,
+snapshots and machine run index use the same transactional store. See
+[machine storage](autopilot-storage.md) for import, recovery and backend details. `pdd autopilot status` shows one line
 when there was a call in the last hour, for example:
 
 ```text

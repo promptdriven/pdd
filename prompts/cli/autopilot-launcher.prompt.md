@@ -960,6 +960,8 @@ reconcile and wake boundaries; injected substitutes reach this same path.
 
 ## Dependencies
 
+- [Autopilot machine storage](autopilot-store.prompt.md): required native generation and verification context for local state and atomic migration.
+
 - [Metrics store](metrics-store.prompt.md), [run records](workflow-runs.prompt.md) and [metrics gaps](metrics-gap.prompt.md): required native generation/verification context for observational selector/launch storage and identity.
 
 - [Workflow runner](workflow-runner.prompt.md#current-autopilot-start-ownership): required native generation and verification context for the existing shared admission lock.
@@ -1008,3 +1010,14 @@ Each measurement callback is independently best effort outside the native delive
 Telemetry repository discovery uses the same injected native process port as the existing launcher; a separate real process must not escape a controlled caller. A metricsContext port may supply the same repository/common-directory observation for controlled verification.
 
 Pass the already observed common directory to the store commonDir port; telemetry must not rediscover it through an un-injected process.
+
+## Machine storage
+
+Use [Autopilot machine storage](autopilot-store.prompt.md) for native machine
+state. Import each existing record once and retain its old file unchanged.
+SQL belongs only to that backend. Keep existing guards, limits, identity and
+failure policy. File paths exposed by adapters remain stable logical locators.
+Read and save launcher control through `readAutopilotState` and
+`saveAutopilotState`; list machine records with `autopilotStateFiles`. Local
+claim observations and budget decisions keep their existing fields. Shared
+claims and dependency reviews still require GitHub checks.

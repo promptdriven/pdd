@@ -16,7 +16,7 @@ explicitly; a legacy missing field means false. A present nonboolean value is
 invalid, never a truthy publication request. Preserve it across ordinary writes,
 reloads and area transitions; storage never infers or changes policy from PR state.
 
-`writeRun(record, ports)` adds the C3 view, increments `journalSeq`, sets `updatedAt`, and writes the file atomically (temporary file, then rename). It also updates the index of known runs in `<stateDir>/runs.json` (default `~/.local/state/pdd`). An index failure is ignored. `readRun(runDir)` returns the record or null.
+`writeRun(record, ports)` adds the C3 view, increments `journalSeq`, sets `updatedAt`, and writes the file atomically (temporary file, then rename). It also updates the index of known runs in the machine store under `<stateDir>/autopilot` (default `~/.local/state/pdd/autopilot`). An index failure is ignored. `readRun(runDir)` returns the record or null.
 
 ## Concurrent record updates
 
@@ -80,6 +80,8 @@ Keep legacy decisions and approvalRecord readable. New gates have a nonempty str
 
 ## Dependencies
 
+- [Autopilot machine storage](autopilot-store.prompt.md): required native generation and verification context for local state and atomic migration.
+
 - [Metrics hooks](metrics-hooks.prompt.md): required native generation/verification context for journal construction and retained delivery. [Metrics gaps](metrics-gap.prompt.md) owns fallback coverage events.
 
 - [Approval policy and journal](approval-policy.prompt.md): required authoring/generation/native-production/verification/testing context for the evidence value schema; no reverse dependency on runner.
@@ -90,10 +92,20 @@ Keep legacy decisions and approvalRecord readable. New gates have a nonempty str
 - `runForWorktree(cwd, ports)` returns the run whose `root` is the current worktree.
 - `resolveRun(ref, {cwd}, ports)` returns `{run}` or `{error}`. `N` looks in the current repository, worktrees included. Outside a repository it uses the index; when several repositories have issue N, it asks for `owner/repo#N`. `owner/repo#N` and issue URLs pick that repository. Without ref: the run of the current worktree, else the only run of this repository that waits for a person, else the only active run; otherwise list the choices.
 - `listRuns({cwd}, ports)` returns the runs of the current repository, or all indexed runs outside a repository.
-- `allRuns({cancelled}, ports)` returns every run on this machine. It finds the repositories only from the run index (`<stateDir>/runs.json`), never from a Herdr layout registry, then reads each `<commonDir>/pdd/runs/<N>/status.json`. With `cancelled` it also reads the renamed `<N>-cancelled-<id>` folders. A repository or file that is gone or unreadable is skipped without an error.
+- `allRuns({cancelled}, ports)` returns every run on this machine. It finds the repositories only from the machine run index, never from a Herdr layout registry, then reads each `<commonDir>/pdd/runs/<N>/status.json`. With `cancelled` it also reads the renamed `<N>-cancelled-<id>` folders. A repository or file that is gone or unreadable is skipped without an error.
 
 Before each atomic run publication, journal retained completion facts with stable installation identity and unique transition identity in the same status record. Initialize installation identity and capture-start time on first capture. On capture failure retain a visible incomplete-coverage warning and preserve ordinary progress. After publication retry delivery of the retained journal; a failure is visible and never gates execution.
 
 Capture journal construction consumes pending observations only on success; preserve them and a coverage gap for later retry on failure. Optional metrics syncing never gates the original atomic status publication.
 
 Retain the ordinary injected pathname-write and atomic-rename publication behavior. Capture, delivery, coverage-gap and warning callbacks are best effort; even a throwing warning must not stop ordinary progress or turn a committed rename into failure. Asynchronous drain rejection must be contained. Native status write and rename failures retain their ordinary errors. Optional identity and gap storage use injected filesystem ports for controlled failure verification.
+
+## Machine storage
+
+Use [Autopilot machine storage](autopilot-store.prompt.md) for native machine
+state. Import each existing record once and retain its old file unchanged.
+SQL belongs only to that backend. Keep existing guards, limits, identity and
+failure policy. File paths exposed by adapters remain stable logical locators.
+Import `<stateDir>/runs.json` once. Update and retain the last 200 run index
+entries inside one transaction. Full workflow records remain in Git common
+state and remain the authority. Use `ports.store` for an injected backend.

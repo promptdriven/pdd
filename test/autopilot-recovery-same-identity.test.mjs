@@ -1,3 +1,4 @@
+import { readAutopilotState, saveAutopilotState } from '../src/autopilot-store.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
@@ -193,10 +194,10 @@ test('public start recovers v2 with real intake', async t => {
  const reconciled=await reconcileDependencyIntake({cwd:f.source,repository,trigger:'tick',mode:'auto'},intakePorts);
  assert.deepEqual(reconciled.queued,[]); assert.equal(reconciled.eligible.includes(h.oldIssue.html_url),true);
  const initial=await runAutopilotLauncher(h.input,h.ports); assert.equal(initial.exitCode,0,initial.message);
- const state=JSON.parse(readFileSync(h.stateFile));
+ const state=readAutopilotState(h.stateFile);
  const old={version:2,paneId:state.paneId,workspaceId:state.workspaceId,at:1,fingerprint:'older-distinct-semantic-identity',payloadDigest:'old-payload'};
  const history={kind:'legacy-uncertain',paneId:state.paneId,workspaceId:state.workspaceId,at:0,payloadDigest:'historical-payload'};
- state.reconciliationIntent=old;state.uncertainDeliveryHistory=[history];writeFileSync(h.stateFile,JSON.stringify(state));
+ state.reconciliationIntent=old;state.uncertainDeliveryHistory=[history];saveAutopilotState(h.stateFile, state);
  const external=makeIssue(900,{html_url:'https://github.com/example/other/issues/900'});
  const built=await readDependencySnapshot({cwd:f.source,repository},graphPorts({issues:[h.oldIssue,external],brokenPages:[{kind:'comments',issue:900}]}));
  h.graph=built.snapshot; h.graph.coverage.scope=true; const local=h.graph.issues[0]; h.graph.issues.push({...local,key:external.html_url,nodeId:'900',title:'Unrelated external'}); h.graph.coverage.issues.push({...h.graph.coverage.issues[0],key:external.html_url,comments:false,missing:['comments']}); h.graph.warnings=['Unrelated external comments unavailable'];h.issueRows=[{...h.oldIssue,assignees:[],author_association:'OWNER'}];
@@ -204,23 +205,23 @@ test('public start recovers v2 with real intake', async t => {
  let atSend; const originalRun=h.ports.run,originalHerdr=h.ports.herdr;
  h.ports.run=async (cmd,args)=>cmd==='gh'&&args[0]==='repo'?{code:0,stdout:JSON.stringify({nameWithOwner:repository,url:`https://github.com/${repository}`}),stderr:''}:originalRun(cmd,args);
  const live={pane_id:state.paneId,workspace_id:state.workspaceId,cwd:h.cwd,foreground_cwd:h.cwd,tab_id:'tab',terminal_id:'terminal',agent:state.agent.kind,agent_status:'idle',agent_session:{kind:'id',value:'offline-session-1'}};
- h.ports.herdr=async args=>{if(args[0]==='agent'&&args[1]==='prompt') atSend=JSON.parse(readFileSync(h.stateFile)); return args[0]==='agent'&&args[1]==='get'?{result:{type:'agent_info',agent:live}}:args[0]==='pane'&&args[1]==='get'?{result:{type:'pane_info',pane:live}}:args[0]==='workspace'&&args[1]==='get'?{result:{type:'workspace_info',workspace:{workspace_id:state.workspaceId}}}:originalHerdr(args)};
+ h.ports.herdr=async args=>{if(args[0]==='agent'&&args[1]==='prompt') atSend=readAutopilotState(h.stateFile); return args[0]==='agent'&&args[1]==='get'?{result:{type:'agent_info',agent:live}}:args[0]==='pane'&&args[1]==='get'?{result:{type:'pane_info',pane:live}}:args[0]==='workspace'&&args[1]==='get'?{result:{type:'workspace_info',workspace:{workspace_id:state.workspaceId}}}:originalHerdr(args)};
  const origIntake=h.ports.reconcileDependencyIntake; h.ports.reconcileDependencyIntake=async (...args)=>{const result=await origIntake(...args);console.log('REAL INTAKE RESULT',JSON.stringify(result));return result};
- const before=h.packets.length;const result=await runAutopilotLauncher(h.input,h.ports); const after=JSON.parse(readFileSync(h.stateFile));
+ const before=h.packets.length;const result=await runAutopilotLauncher(h.input,h.ports); const after=readAutopilotState(h.stateFile);
  console.log('RESULT',JSON.stringify({result,packetsBefore:before,packetsAfter:h.packets.length,prompts:h.prompts.length,old,history,afterIntent:after.reconciliationIntent,afterHistory:after.uncertainDeliveryHistory}));
  assert.ok(h.packets.length>before,'fresh coordinator artifact delivered by public start');
  // Simulate an uncertain recovery of the same current semantic request.
- const pending=JSON.parse(readFileSync(h.stateFile)); pending.reconciliationIntent={...atSend.reconciliationIntent,payloadDigest:'unknown-earlier-payload'}; pending.dependencyPending.delivered=null; writeFileSync(h.stateFile,JSON.stringify(pending));
+ const pending=readAutopilotState(h.stateFile); pending.reconciliationIntent={...atSend.reconciliationIntent,payloadDigest:'unknown-earlier-payload'}; pending.dependencyPending.delivered=null; saveAutopilotState(h.stateFile, pending);
  const priorPrompts=h.prompts.length, priorQueries=h.queryCalls.length; atSend=undefined;
  await runAutopilotLauncher(h.input,h.ports);
  assert.ok(h.queryCalls.length>priorQueries,'fresh scan rereads current issues');
  assert.equal(h.prompts.length,priorPrompts+1,'same semantic identity receives a freshly built packet');
  assert.equal(atSend.reconciliationIntent.fingerprint,pending.reconciliationIntent.fingerprint); assert.notEqual(atSend.reconciliationIntent.payloadDigest,old.payloadDigest); assert.match(h.prompts.at(-1),/fresh current-state reconciliation/);
  assert.ok(atSend.uncertainDeliveryHistory.some(x=>x.payloadDigest==='unknown-earlier-payload' && x.kind==='fresh-reconciliation'));
- const ordinary=JSON.parse(readFileSync(h.stateFile)); ordinary.deliveryIntent={...atSend.reconciliationIntent,payloadDigest:'ordinary-unknown'}; delete ordinary.reconciliationIntent; ordinary.dependencyPending.delivered=null; writeFileSync(h.stateFile,JSON.stringify(ordinary));
+ const ordinary=readAutopilotState(h.stateFile); ordinary.deliveryIntent={...atSend.reconciliationIntent,payloadDigest:'ordinary-unknown'}; delete ordinary.reconciliationIntent; ordinary.dependencyPending.delivered=null; saveAutopilotState(h.stateFile, ordinary);
  let reject=true; const priorHerdr=h.ports.herdr; h.ports.herdr=async args=>{if(reject && args[0]==='agent' && args[1]==='prompt') {reject=false; throw Object.assign(Error('confirmed rejection'),{code:'agent_blocked'});} return priorHerdr(args);};
  await runAutopilotLauncher(h.input,h.ports);
- const rejected=JSON.parse(readFileSync(h.stateFile));
+ const rejected=readAutopilotState(h.stateFile);
  assert.ok(rejected.uncertainDeliveryHistory.some(x=>x.payloadDigest==='ordinary-unknown' && x.kind==='ordinary-delivery'));
  assert.equal(rejected.reconciliationIntent,undefined,'confirmed rejection clears the new intent');
  const beforeRetry=h.prompts.length; await runAutopilotLauncher(h.input,h.ports);
@@ -233,7 +234,7 @@ test('public start recovers v2 with real intake', async t => {
 test('explicit start rearms a current resumed automatic worker from saved activity', async t => {
  const f=await fixture(t,{name:'bug',agent:'codex'}), h=await launcherHarness(f);
  assert.equal((await runAutopilotLauncher(h.input,h.ports)).exitCode,0);
- const state=JSON.parse(readFileSync(h.stateFile,'utf8'));
+ const state=readAutopilotState(h.stateFile);
  assert.equal((await f.run()).exitCode,0);
  const run=f.record(), chat=run.chats.at(-1), anchor=chat.startedAt+100;
  run.automaticOrigin={repository,coordinatorId:state.coordinatorId,machine:state.machine,claim:{commentId:'11',labelEventId:'12'}};

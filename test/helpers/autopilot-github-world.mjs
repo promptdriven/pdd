@@ -1,3 +1,4 @@
+import { readAutopilotState, autopilotStateFiles } from '../../src/autopilot-store.mjs';
 // An Autopilot world for GitHub call counts: a real Git checkout, the real launcher tick, the real dependency intake
 // and `pdd dependencies complete`, a fake Herdr coordinator and the counting fake GitHub of github-repo-fake.mjs.
 // `src` selects the source tree, so the same world measures another version of the code.
@@ -57,8 +58,8 @@ export async function autopilotGithubWorld({ src = fileURLToPath(new URL('../../
   };
   w.commandPorts = (extra = {}) => ({ execFile: calls.nativeGithubCounter(commandExec, { stateRoot, now: () => w.time }), autopilotStateRoot: stateRoot, now: () => w.time, env, ...extra });
   w.invoke = command => launcher.runAutopilotLauncher({ command, cwd, env, packageRoot: resolve(src, '..'), issues: [] }, w.ports);
-  w.stateFile = () => join(stateRoot, readdirSync(stateRoot).find(name => /^[0-9a-f]{20}\.json$/.test(name)));
-  w.state = () => JSON.parse(readFileSync(w.stateFile(), 'utf8'));
+  w.stateFile = () => join(stateRoot, autopilotStateFiles(stateRoot)[0]);
+  w.state = () => readAutopilotState(w.stateFile());
   w.tick = () => launcher.tickAutopilot(w.stateFile(), w.ports);
   // The coordinator runs `pdd dependencies complete`; the CLI then asks the launcher for its completion tick.
   w.complete = async (request, analysis = analysisFor(request), ports = w.commandPorts()) => {
