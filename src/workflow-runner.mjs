@@ -1833,6 +1833,13 @@ async function publishAreaPr(run, area, p, lines, retry, automatic = null) {
   if(changedAdoption)return fail(changedAdoption);
   if (automatic) { const refused = await automatic.prepare(); if (refused) return refused; }
   const codePr = label !== 'PR 1';
+  // Keep ownership separate from the immutable run start and the bounded display.
+  // The current merge-base excludes main's integrations before this publication.
+  let sourcePaths;
+  if (!codePr) {
+    const base = await git(p,run.root,'merge-base','HEAD',`refs/remotes/origin/${run.baseBranch}`);
+    sourcePaths = [...new Set([...(existing?.sourcePaths ?? []), ...(await rawGit(p,run.root,'diff','--name-only','-z',base,'HEAD')).split('\0').filter(Boolean)])].sort();
+  }
   // Publication custody must survive an unavailable informational inventory.
   const candidateHead = codePr ? await git(p,run.root,'rev-parse','--verify','HEAD^{commit}') : null;
   const unsafeCandidate = await promptGuard(candidateHead);
@@ -1900,7 +1907,7 @@ async function publishAreaPr(run, area, p, lines, retry, automatic = null) {
   const bodyIdentity = () => createHash('sha256').update(prBody({...run,testInventory:null},area,p.env,bodyDrafts,bodyTests,prepared)).digest('hex');
   const rememberPublication = (pr, observed) => {
     if (codePr) { pr.publishedHeadSha = run.testInventory.headSha; pr.publicationBodySha256 = bodyIdentity(); }
-    else if (commitSha(observed?.headSha)) pr.publishedHeadSha = observed.headSha;
+    else if (commitSha(observed?.headSha)) { pr.publishedHeadSha = observed.headSha; pr.sourcePaths = sourcePaths; }
   };
   if (existing) {
     if (automatic) { const refused = await automatic.authorize(); if (refused) return refused; }
@@ -1959,7 +1966,7 @@ async function publishAreaPr(run, area, p, lines, retry, automatic = null) {
       if (finalFacts && commitSha(existing.publishedHeadSha)) existing.readable = savedReadable(finalFacts, existing.publishedHeadSha);
     }
     const applyPublication=publicationUpdate(run,codePr?['testInventory']:[]);
-    const metadata=Object.fromEntries(['publishedHeadSha','publicationBodySha256','readable'].filter(key=>Object.hasOwn(existing,key)).map(key=>[key,existing[key]]));
+    const metadata=Object.fromEntries(['publishedHeadSha','publicationBodySha256','readable','sourcePaths'].filter(key=>Object.hasOwn(existing,key)).map(key=>[key,existing[key]]));
     commitRun(run,p,latest=>{applyPublication(latest);const pr=latest.pr.find(pr=>pr.url===existing.url&&pr.stage===existing.stage);if(pr)Object.assign(pr,metadata);});
     if (area.then === 'ask-code') await refreshReplayBaseline(run,p);
     lines.push(`Pushed the new commits to ${label}.`);
@@ -2617,7 +2624,8 @@ async function codeBranch(run, area, p, acceptSource) {
     // The saved base also carries other runs. Compare byte changes only for
     // PR 1's paths and anchored scenarios; the contract check below still
     // covers all saved approved Story paths, including deletions.
-    const publishedPaths = new Set((await rawGit(p,run.root,'diff','--name-only','-z',run.baseSha,localHead)).split('\0').filter(Boolean));
+    const publishedPaths = new Set(Array.isArray(pr1.sourcePaths) ? pr1.sourcePaths
+      : (await rawGit(p,run.root,'diff','--name-only','-z',run.baseSha,localHead)).split('\0').filter(Boolean));
     for (const vector of run.replayBaseline?.vectors ?? []) publishedPaths.add(vector.path);
     sourceEdits = sourceEdits.filter(path=>publishedPaths.has(path));
   }

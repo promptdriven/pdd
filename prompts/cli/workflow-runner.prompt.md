@@ -332,8 +332,8 @@ reply, terminal confirmation and normal Story-card choice routes. Validate the
 fetched source itself, including Stories and scenario bytes, against the last
 approved contract and published replay anchor before a code decision is saved.
 After PR 1 merges, scope prompt and scenario byte comparisons to PR 1's
-published paths and the saved replay anchor. Unrelated prompts and scenarios
-added on the saved base do not invalidate this run's checks or gate. When its
+published paths and the saved replay anchor. Save the full run-owned publication path set as `sourcePaths` on each PR 1 record, independently of the bounded readable diff. Select it against the current base merge-base at publication, retain prior owned paths across updates, and never replace the immutable run base SHA. For older records without this set, keep the conservative original-base comparison until PR 1 is republished. Unrelated prompts and scenarios
+added or subsequently edited on the saved base do not invalidate this run's checks or gate. When its
 approved contract and published bytes are unchanged, initial code entry starts
 from the pinned merged base, including that unrelated work. Changes to owned
 specifications and unsafe code merges still refuse entry.
