@@ -685,3 +685,32 @@ for(const reopened of [false,true]) test(`2962 integration confirmation: ${reope
   assert.equal(readFileSync(join(f.run.root,PROMPT),'utf8'),prompt);
   assert.equal(f.record().area,before.area);
 });
+
+test('2962 integration completeness: a missing approved Story test blocks until both Stories have current checks', async t=>{
+  const f=await storyGate(t),second='user_stories/refund-order.md';
+  writeFileSync(join(f.run.root,second),readFileSync(join(harbor,STORY),'utf8').replace('# Place a coffee order','# Refund an order'));
+  f.git(f.run.root,'add',second);f.git(f.run.root,'commit','-qm','Second Story without a test');
+  await f.done('prompt-story');await approveStory(f);
+  const fake=await fakeRuntime(t,(entry,runtime)=>{
+    if(entry.command==='lint')return {status:200,json:runtime.lint(entry.request.requestId)};
+    const id=entry.request?.requestId??entry.url.split('/').at(-1);
+    return {status:200,json:runtime.check(id,'passed',['AC1','AC2','AC3'].map(criterion_id=>({criterion_id,target:'result',path:'/totalCents',op:'equals',expected:900,actual:900,passed:true})))};
+  });
+  const check=async()=>{
+    const made=portsFor({...f.ports.env,PDD_RUNTIME_URL:fake.origin});made.clock.now=f.clock;
+    const code=await runCheck({cwd:f.run.root,words:[],options:{'--json':true}},made.ports);
+    assert.equal(code,0,made.ports.stderr.text);
+    return JSON.parse(made.ports.stdout.text);
+  };
+  assert.equal((await check()).rows.length,1);
+  const out=await f.done('check');
+  assert.equal(f.prs.length,0);assert.ok(out.message.includes(second));
+  assert.ok(!f.record().decisions.some(d=>d.via==='automatic-check-pass'));
+  const scenario=JSON.parse(readFileSync(join(f.run.root,TEST)));
+  writeFileSync(join(f.run.root,'tests/refund-order.json'),JSON.stringify({...scenario,story_path:second}));
+  f.git(f.run.root,'add','.');f.git(f.run.root,'commit','-qm','Complete the second Story test');
+  assert.equal((await check()).rows.length,2);
+  await f.done('check');await approveStory(f);
+  assert.equal(f.prs.length,1);
+  assert.equal(f.record().decisions.at(-1).via,'automatic-check-pass');
+});

@@ -477,6 +477,8 @@ Without a `<time>`, the usage-limit words have no ` until <time>`, and "After th
 
 For a first code-space replay read, select the base anchor before classifying removed or renamed JSON paths. Known base scenarios use the saved-value reader and its advisory warnings. Unclassifiable JSON outside that anchor still blocks inventory. Prompt-space removals and renames still block.
 
+When judging a full check for a normal run, supply each approved Story with numbered criteria to the full-pass owner as a required Story path.
+
 For initial and reopened normal Story gates, revalidate the displayed Story/test fingerprint after terminal confirmation and before recording an approval or changing any prompt approval. Refuse a changed fingerprint and require a new card and later answer. Save the exact validated fingerprint as the Story approval; do not recapture unseen bytes for it.
 
 ## Dependencies

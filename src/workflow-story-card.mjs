@@ -223,7 +223,7 @@ function readJson(path) { try { return JSON.parse(readFileSync(path, 'utf8')); }
 const real = path => { try { return realpathSync(path); } catch { return resolve(path); } };
 const NO_VERDICT_STATES = new Set(['refused', 'not_run', 'unknown', 'queued', 'running']);
 // pdd's own saved check results decide whether the prompt check passed in full on the current files.
-export function fullCheckPass({ root, since = 0, tests = [], prompts = [] } = {}, ports = {}) {
+export function fullCheckPass({ root, since = 0, tests = [], prompts = [], stories = [] } = {}, ports = {}) {
   const env = ports.env ?? process.env, capture = ports.capture ?? captureSource;
   const directory = join(resolve(env.PDD_STATE_DIR || join(env.HOME || homedir(), '.pdd', 'runtime')), 'batches');
   const problems = [], judged = [], wanted = real(root), latest = new Map();
@@ -241,10 +241,13 @@ export function fullCheckPass({ root, since = 0, tests = [], prompts = [] } = {}
       if (!prior || at > prior.at || at === prior.at && name > prior.name) latest.set(row.test, { name, at, batch, summary });
     }
   }
-  let discovered = [];
-  try { discovered = (ports.findTests ?? findTests)({ root, excludeFixtureProjects: true }).tests.map(test => test.path); }
+  let discovered = [], untested = [];
+  try { const found=(ports.findTests ?? findTests)({root,excludeFixtureProjects:true}); discovered=found.tests.map(test=>test.path); untested=(found.untested??[]).map(item=>item.storyPath); }
   catch (error) { problems.push({ kind: 'unavailable', path: '.', detail: `cannot discover the project tests (${clip(error.message, 120)})` }); }
   const selected = [...new Set([...tests, ...discovered, ...[...latest.keys()].filter(path => existsSync(join(root, path)))])].sort();
+  const associated=new Set(selected.map(path=>readScenario(root,path).doc?.story_path).filter(path=>typeof path==='string'));
+  for(const path of [...new Set([...untested,...stories])].sort()) if(!associated.has(path))
+    problems.push({kind:'missing',path,detail:'Story has no scenario test for its criteria'});
   const captures = new Map(), covered = new Set();
   const captured = list => {
     const key = JSON.stringify([...list].sort());

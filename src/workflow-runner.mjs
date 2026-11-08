@@ -1983,7 +1983,7 @@ async function normalCodeReview(run, area, p) {
     if (!pending && !untracked) return null;
   }
   const contents = await worktreeContents(run, p);
-  const check = fullCheckPass({ root: run.root, since: run.startedAt ?? 0, tests: contents.tests, prompts: snapshot.map(row => row.path) }, p);
+  const check = fullCheckPass({ root: run.root, since: run.startedAt ?? 0, tests: contents.tests, stories: (run.storyApproval?.fingerprint.stories??[]).filter(story=>story.criteria.length).map(story=>story.path), prompts: snapshot.map(row => row.path) }, p);
   if (!check.pass) return fail(['The prompt check did not pass in full on the current files. No code approval was recorded or source synchronized.',
     ...check.problems.slice(0, 20).map(problem => `Not passed (${problem.kind}): ${problem.path}: ${problem.detail}`),
     'Repair and check again, then run pdd workflow done check.'].join('\n'));
@@ -1994,7 +1994,7 @@ async function normalPromptGate(run, area, step, p, lines, contents, packageRoot
   const changed = await changedStoryGate(run, area, step, p, lines);
   if (changed) return changed;
   const paths = run.gate.promptSnapshot.map(row => row.path);
-  const check = fullCheckPass({ root: run.root, since: run.startedAt ?? 0, tests: contents.tests, prompts: paths }, p);
+  const check = fullCheckPass({ root: run.root, since: run.startedAt ?? 0, tests: contents.tests, stories: (run.storyApproval?.fingerprint.stories??[]).filter(story=>story.criteria.length).map(story=>story.path), prompts: paths }, p);
   if (check.pass) return automaticPr1(run, area, step, p, lines, check, packageRoot);
   // A typed summary cannot replace pdd's saved check results.
   if (!check.tests.length) lines.push('pdd has no saved check result of its own for this run. Run the check; do not ask the person to approve.');
