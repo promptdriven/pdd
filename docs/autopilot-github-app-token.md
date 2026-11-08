@@ -96,6 +96,8 @@ files, inherited Git environment settings, or clone's `-c` and `--config` option
 use the App credential in the child.
 Non-authorization headers and settings for other hosts stay in place. pdd stops
 the command if it cannot read the effective Git configuration.
+Clone keeps source checkout headers out of its requests, including headers in
+global includes that apply only inside that source checkout.
 
 To check this transport locally, use Node.js 22.16 or newer, Git and OpenSSL:
 

@@ -62,6 +62,8 @@ config, overriding inherited authorization and credential helpers. The App heade
 must win for the actual GitHub URL, including more-specific path or user scopes
 in repository, included, or environment config, and clone's own `-c`/`--config`
 options (which take effect in the destination before its first request).
+Clone must not acquire headers from the invoking checkout's local config or
+includes selected by that checkout; clone does not inherit those settings.
 Read effective Git config through
 the injected exec port in the command's directory and Git option context; fail
 closed with a safe App error if that read fails. Override each GitHub header scope

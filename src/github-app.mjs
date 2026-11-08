@@ -3,7 +3,7 @@ import * as nativeFs from 'node:fs';
 import { createHash, createPrivateKey, randomUUID, sign } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { homedir } from 'node:os';
+import { devNull, homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { githubOriginRepository } from './workflow-worktree.mjs';
@@ -161,7 +161,11 @@ export function githubAppRunner(exec, ports = {}) {
       }
       let config;
       try {
-        config = await exec('git', [...gitOptions, ...cloneConfig.flatMap(value => ['-c', value]), 'config', '--null', '--list'], { cwd: options.cwd, env: plainEnv, encoding: 'utf8' });
+        // Clone does not read the invoking checkout's local config. A non-repo
+        // explicit git-dir also excludes includes conditional on that checkout,
+        // while retaining system/global config and inherited command settings.
+        const context = file === 'git' && command === 'clone' ? [`--git-dir=${devNull}`] : [];
+        config = await exec('git', [...gitOptions, ...context, ...cloneConfig.flatMap(value => ['-c', value]), 'config', '--null', '--list'], { cwd: options.cwd, env: plainEnv, encoding: 'utf8' });
         if (config.code && config.code !== 0) throw Error();
       } catch { fail('cannot read Git configuration; check the checkout and Git settings.'); }
       for (const entry of String(config.stdout ?? '').split('\0')) {

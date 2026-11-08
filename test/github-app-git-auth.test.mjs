@@ -184,3 +184,28 @@ for (const form of ['-c', '--config', '--config=', '-cattached']) {
     assert.equal(readFileSync(join(w.cwd, '.git', 'config'), 'utf8'), before);
   });
 }
+
+test('clone excludes source-only headers while retaining inherited and clone headers', async t => {
+  const w = await githubAppWorld(t), endpoint = await gitEndpoint(t, w);
+  execFileSync('git', ['config', '--add', scope, 'X-Private-Checkout: synthetic-secret'], { cwd: w.cwd });
+  // This is global config, but applies only inside the invoking checkout.
+  const include = join(w.dir, 'source.conf'), global = join(w.dir, 'global.conf');
+  writeFileSync(include, '[http "https://github.com/acme/widgets.git"]\nextraheader = X-Private-Include: synthetic-secret\n');
+  writeFileSync(global, `[includeIf "gitdir:${w.cwd}/.git"]\npath = ${include}\n`);
+  const env = { ...endpoint.env, GIT_CONFIG_GLOBAL: global, GIT_CONFIG_COUNT: '2',
+    GIT_CONFIG_KEY_0: scope, GIT_CONFIG_VALUE_0: 'X-Inherited: retained',
+    GIT_CONFIG_KEY_1: scope, GIT_CONFIG_VALUE_1: `AUTHORIZATION: ${personal}` };
+  const run = nativeGithubCounter(execute, { env: w.env, stateRoot: w.stateRoot, now: () => w.time, appPorts: w.appPorts });
+  const source = readFileSync(join(w.cwd, '.git', 'config'), 'utf8');
+  await assert.rejects(run('git', ['clone', '-c', `${scope}=X-Clone: retained`, url, join(w.dir, 'destination')],
+    { cwd: w.cwd, env, encoding: 'utf8', timeout: 5000 }), error => error.code === 128 && /403/.test(error.stderr));
+  assert.equal(endpoint.requests.length, 1);
+  const request = endpoint.requests[0];
+  assert.equal(request.headers['x-private-checkout'], undefined);
+  assert.equal(request.headers['x-private-include'], undefined);
+  assert.equal(request.headers['x-inherited'], 'retained');
+  assert.equal(request.headers['x-clone'], 'retained');
+  assert.ok(w.tokens.some(token => request.headers.authorization === `basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`));
+  assert.equal(request.authorizationCount, 1);
+  assert.equal(readFileSync(join(w.cwd, '.git', 'config'), 'utf8'), source);
+});
