@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 57dcbf10ffa071a39133af7d26486d288d54569440a3321d09f993ba071b419f).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 52e6e5a4a18991476c9d3dd7cf70e662383394c3ce9279c42ad619a30dc95a86).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -39,7 +39,11 @@ function savedAutopilot(root) {
 const skillCount = folders => `${folders.length} PDD skill${folders.length === 1 ? '' : 's'}`;
 const skillNames = folders => folders.map(folder => basename(folder)).join(', ');
 // npx skills update changes only what npx skills add recorded (0.1.8 tester); add replaces any copy.
-const staleLine = ({ found, stale }, version, cwd) => `PDD skills in ${found} ${stale === 'older' ? `are older than pdd ${version}` : `differ from the skills of pdd ${version}`}. To update them, run: npx skills add promptdriven/pdd${[join(cwd, '.agents/skills'), join(cwd, '.claude/skills')].includes(found) ? '' : ' -g'} -a codex -a claude-code -y`;
+const staleLine = ({ found, stale, staleSkills = [] }, version, cwd) => {
+  const details = staleSkills.map(({ name, version, state }) => state === 'older'
+    ? `${name} is ${version ?? 'unknown'}` : `${name} differs (version ${version ?? 'unknown'})`).join(', ');
+  return `PDD skills in ${found} ${stale === 'older' ? `are older than pdd ${version}` : `differ from the skills of pdd ${version}`}.${details ? ` ${details}.` : ''} For copies installed by pdd in user folders, run: pdd setup. For other copies, run: npx skills add promptdriven/pdd${[join(cwd, '.agents/skills'), join(cwd, '.claude/skills')].includes(found) ? '' : ' -g'} -a codex -a claude-code -y`;
+};
 const RUNNER_ROUTES = {
   'workflow-request-uptake': plan => ['acknowledgeRequest', { requestId: plan.operands[0], summary: plan.options['--summary'] }],
   'workflow-run': plan => ['startRun', { name: plan.operands[0], issue: plan.operands[1], agent: plan.options['--agent'] ?? 'codex', ...(plan.options['--base'] !== undefined ? { base: plan.options['--base'] } : {}), ...(plan.options['--adopt-corpus'] !== undefined ? { adoptCorpus: plan.options['--adopt-corpus'] } : {}), ...(plan.options['--draft'] !== undefined ? { draft: plan.options['--draft'] } : {}), ...(plan.options['--origin'] !== undefined ? {origin:plan.options['--origin']} : {}), ...(plan.options['--decision-id'] !== undefined ? {decisionId:plan.options['--decision-id']} : {}), ...(plan.options['--outcome'] !== undefined ? {outcome:plan.options['--outcome']} : {}), ...(plan.options['--through'] !== undefined ? {through:plan.options['--through']} : {}) }],
@@ -154,7 +158,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         line(stdout, metadata.version);
         try {
           for (const result of findSkills({ packageRoot, cwd, home: env.HOME || homedir(), claudeConfigDir: env.CLAUDE_CONFIG_DIR }))
-            if (result.found && result.stale === 'older') line(stderr, staleLine(result, metadata.version, cwd));
+            if (result.found && (result.stale === 'older' || result.staleSkills?.some(({ state }) => state === 'older'))) line(stderr, staleLine(result, metadata.version, cwd));
         } catch { /* The skills check never changes --version. */ }
         return 0;
       } catch { line(stderr, 'This PDD package has no readable version metadata.');return 1; }
