@@ -161,3 +161,15 @@ for(const intent of ['check','lint-only']) test(`2822 integration cleaning: ${in
   assert.deepEqual(results[0].states[0].reason,reason);
   assert.equal(results[0].states[0].state,'refused');
 });
+
+test('named row evidence preserves the passing sibling and rejects a contradictory passing Story line',t=>{
+  const f=folders(t),good='Prompt tests (good): ✓ 1 of 1 criterion',bad='Prompt tests (bad): ✓ 1 of 1 criterion';
+  f.batch('20261103-120000-aaaa',{intent:'check',created_at:'2026-11-03T12:00:00Z',rows:[
+    {test:'tests/good.json',story:'user_stories/good.md',state:'passed'},
+    {test:'tests/bad.json',story:'user_stories/bad.md',state:'not run',unsent:true,refusals:[{code:'pdd-no-story'}]}
+  ]},{summary_line:'Prompt tests: ✓ 2 of 2 criteria',rows:[{summary_line:good},{summary_line:bad},{test:'tests/good.json',story:'bad',summary_line:bad}]});
+  const [result]=readRunResults({root:f.root},{env:f.env});
+  assert.ok(result.stories.includes(good));assert.ok(!result.stories.includes(bad));
+  assert.ok(!result.summary.includes('✓'));
+  assert.deepEqual(result.states.map(row=>row.state),['passed','not run']);
+});

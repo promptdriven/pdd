@@ -1,5 +1,6 @@
 // Generated from prompts/cli/workflow-results.prompt.md (sha256: 32e417452d6eb409a98504e28e4cdc3840694463790ae9b06685c809fa9364ca).
 import { outcomeText, resultOutcome } from './runtime-outcome.mjs';
+import { PROMPT_TESTS_WORDS } from './runtime-output.mjs';
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -109,7 +110,16 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
     const incomplete = states.some(row => row.state !== 'passed');
     const recorded = text(summary?.summary_line);
     const safeSummary = incomplete && /✓/.test(recorded) ? 'Prompt tests: no full pass' : recorded;
-    const stories = Array.isArray(summary?.rows) ? [...new Set(summary.rows.map(row => text(row?.summary_line)).filter(value => value && (!incomplete || !value.includes('✓'))))] : [];
+    const storyName=value=>typeof value==='string'?value.split('/').at(-1).replace(/\.md$/,''):null;
+    const storyLabel=new RegExp(`^${PROMPT_TESTS_WORDS}\\s*\\(([^)]+)\\)`);
+    const summaryRows=Array.isArray(summary?.rows)?summary.rows:[];
+    const stories=[...new Set(summaryRows.filter(row=>{
+      const line=text(row?.summary_line);
+      if(!line || !incomplete || !line.includes('✓'))return !!line;
+      const story=storyName(row?.story??storyLabel.exec(line)?.[1]);
+      const owners=batch.rows.filter(saved=>story && storyName(saved.story)===story && (!row?.test || saved.test===row.test));
+      return owners.length>0 && owners.every(saved=>resultOutcome(saved).state==='passed'&&!saved.not_checked?.length);
+    }).map(row=>text(row.summary_line)))];
     results.push({ kind: 'pdd test', batch: check.name, at: check.at, source, sourceSha256: sha256, tests, requests: requestsOf(batch.rows), reports: reportsOf(batch.rows),
       ...(check.association?.runId?{producerRoot:batch.root,association:{runId:check.association.runId,repo:check.association.repo,
         workspaceRoot:check.association.producerRoot,tests:check.association.tests,source_sha256:check.association.source_sha256,
