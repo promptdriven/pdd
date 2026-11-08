@@ -153,7 +153,7 @@ test('AC3/4: a failed idle delivery consumes no review', async t => {
 
 test('AC2/3/4: unavailable authority defers a submission until write access is confirmed', async t => {
   const f = await fixture(t);
-  f.permissions.writer = reply({ message: 'Resource not accessible' }, 403, { 'x-ratelimit-remaining': 499 });
+  f.permissions.writer = reply({ message: 'Resource not accessible' }, 403, { 'x-ratelimit-remaining': 1499 });
   f.addReview(review({ user: { login: 'writer' } })); await f.tick();
   assert.equal(f.prompts.length, 0); assert.equal(f.warnings.length, 1); assert.equal(f.state().retryAt, undefined);
   f.permissions.writer = 'write'; await f.tick(); assert.equal(f.prompts.length, 1);
@@ -213,7 +213,7 @@ test('a new submission after a full last page of 100 reviews wakes once', async 
 test('AC3/4: an ordinary review lookup failure defers its issue while unrelated work proceeds', async t => {
   const f = await fixture(t);
   f.rows.push(issue(71)); f.issueVersion++; await f.tick(); f.prompts.length = 0;
-  f.addReview(); f.reviewFailure = reply({ message: 'Resource not accessible' }, 403, { 'x-ratelimit-remaining': 499 });
+  f.addReview(); f.reviewFailure = reply({ message: 'Resource not accessible' }, 403, { 'x-ratelimit-remaining': 1499 });
   f.rows[2].body = 'Independent owner instruction'; f.issueVersion++; await f.tick();
   assert.equal(f.prompts.length, 1); assert.deepEqual(packet(f).issues.map(row => row.number), [71]);
   assert.equal(f.state().retryAt, undefined); assert.equal(f.warnings.length, 1);
