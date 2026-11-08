@@ -1,3 +1,4 @@
+import './test-home.mjs';
 // An Autopilot world for GitHub call counts: a real Git checkout, the real launcher tick, the real dependency intake
 // and `pdd dependencies complete`, a fake Herdr coordinator and the counting fake GitHub of github-repo-fake.mjs.
 // `src` selects the source tree, so the same world measures another version of the code.

@@ -36,7 +36,7 @@ test('2903: every chat line starts the agent in the worktree although the shell 
   }
   // Without the worktree the agent does not start at all, so it never works in the wrong folder.
   const missing = spawnSync('/bin/sh', ['-c', `cd '${elsewhere}'; ${chatCommand({ agent: 'claude', cwd: join(root, 'gone'), messageFile, sessionId: id })}`],
-    { cwd: root, env: { PATH: `${bin}:/usr/bin:/bin` }, encoding: 'utf8' });
+    { cwd: root, env: { HOME: root, PATH: `${bin}:/usr/bin:/bin` }, encoding: 'utf8' });
   assert.notEqual(missing.status, 0); assert.equal(missing.stdout, '', 'no agent ran');
 });
 

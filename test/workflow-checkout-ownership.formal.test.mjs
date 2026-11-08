@@ -1,3 +1,4 @@
+import './helpers/test-home.mjs';
 // Oracle: approved retry-with-live-herdr-layout.md, Rules to check and AC2–5.
 // Registry contents have no authority; parent adoption does not confer close custody.
 import test from 'node:test';

@@ -1,3 +1,4 @@
+import './test-home.mjs';
 import * as fs from 'node:fs';
 import {join,dirname,resolve} from 'node:path';
 import {tmpdir} from 'node:os';
@@ -20,7 +21,8 @@ export function fixture(t,{bounded=true}={}){
   const doc={schema_version:'prompt-runtime.program-scenario.v1',story_path:story,criteria:[{id:'AC1',text:'Keep value.'}],initial_world:{count:0},simulation:{},context:[],steps:[{step_id:'prior',entry_path:prompt,operation:'order',input:{},checks:[{criterion_id:'AC1',target:'result',path:'',op:'equals',value:7},{criterion_id:'AC1',target:'world',path:'',op:'equals',value:{count:0}}]}]};
   json(root,test,doc);json(root,second,doc);write(root,'private/ordinary.md','PRIVATE-MARKER');
   if(bounded)json(root,'pdd-workspace.json',{allowed_paths:['simulation/']});
-  const env={...process.env,PDD_STATE_DIR:join(temporary,'state')};
+  const home=join(parent,'home');fs.mkdirSync(home);
+  const env={...process.env,HOME:home,PDD_STATE_DIR:join(temporary,'state')};
   const saved=(id='case-A',extra={})=>({id,name:id,story_path:story,original_path:second,world_before:{count:0},test:{...doc,steps:[{step_id:id,entry_path:prompt,operation:'order',input:{},checks:[{criterion_id:'AC1',target:'result',path:'',op:'equals',value:9},{criterion_id:'AC1',target:'world',path:'',op:'equals',value:{count:0}}]}]},...extra});
   return{parent,lexicalParent:temporary,root,state,env,story,prompt,test,second,doc,saved};
 }

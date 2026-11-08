@@ -1,3 +1,4 @@
+import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile as callbackExec, execFileSync } from 'node:child_process';

@@ -1,3 +1,4 @@
+import './test-home.mjs';
 // Adapted from workflow-runner.test.mjs; pane commands are recorded, never executed.
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, realpathSync } from 'node:fs';

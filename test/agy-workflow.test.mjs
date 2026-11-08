@@ -61,7 +61,7 @@ test('agy shell launch: full access, pdd run and worktree folders in its workspa
   const dirs = chat.agentDirs(run);
   assert.deepEqual(dirs, [join(root, 'clone/.git/pdd/runs'), join(root, 'clone.pdd-worktrees')]);
   const messageFile = join(root, "start 'message'.md"), message = 'Use pdd-small-change.\nLiteral $(touch broken) `text`'; writeFileSync(messageFile, message);
-  const launch = command => JSON.parse(execFileSync('/bin/sh', ['-c', command], { cwd: root, env: { PATH: `${bin}:/usr/bin:/bin` }, encoding: 'utf8' }));
+  const launch = command => JSON.parse(execFileSync('/bin/sh', ['-c', command], { cwd: root, env: { HOME: root, PATH: `${bin}:/usr/bin:/bin` }, encoding: 'utf8' }));
   assert.deepEqual(launch(chatCommand({ agent: 'agy', cwd: run.root, messageFile, addDirs: dirs, configDir: '/ignored' })),
     { args: ['--dangerously-skip-permissions', '--settings', JSON.stringify({ trustedWorkspaces: [run.root] }), '--add-dir', dirs[0], '--add-dir', dirs[1], '--prompt-interactive', message], marker: '1', codex: null });
   const id = '11111111-1111-4111-8111-111111111111';

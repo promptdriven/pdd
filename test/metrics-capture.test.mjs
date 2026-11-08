@@ -1,3 +1,4 @@
+import './helpers/test-home.mjs';
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { captureObservation, backfillRun, recordObservation } from '../src/metrics-capture.mjs';

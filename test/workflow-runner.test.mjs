@@ -1,3 +1,4 @@
+import './helpers/test-home.mjs';
 import test from 'node:test';
 import { detailsOf } from '../src/workflow-pr-body.mjs';
 import assert from 'node:assert/strict';

@@ -1,3 +1,4 @@
+import './helpers/test-home.mjs';
 import test from 'node:test';
 import { replayRunPddVectors } from './helpers/run-pdd-vectors.mjs';
 
