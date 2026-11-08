@@ -2,10 +2,11 @@ import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import * as files from 'node:fs';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { calculateCheckCapacity, executeSuite, runTestSuite } from '../src/test-suite-queue.mjs';
+import { calculateCheckCapacity, executeSuite, readCheckStatus, runTestSuite } from '../src/test-suite-queue.mjs';
 import { checkMachine, withCheckLifetime } from './helpers/check-machine.mjs';
 
 const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
@@ -88,10 +89,13 @@ for (const outcome of ['nonzero', 'timeout', 'error']) test(`private suite envir
   const f = fixture(t), env = {PATH:process.env.PATH, HOME:f.caller, PDD_SUITE_QUEUE:f.queue};
   const before = {...env}; let paths, allocated;
   const result = await runTestSuite({cwd:f.root, command:outcome === 'timeout' ? 'exec sleep 30' : 'exit 7', env}, {
-    ...f.ports, say:() => {}, execute:async (command, options) => {
+    ...f.ports, say:() => {}, alive:pid => pid !== -12345, execute:async (command, options) => {
       paths = ['HOME','PDD_STATE_DIR','XDG_CONFIG_HOME','TMPDIR'].map(key => options.env[key]);
       allocated = paths.every(path => typeof path === 'string' && existsSync(path));
-      if (outcome === 'error') throw Error('synthetic-execution-error');
+      if (outcome === 'error') {
+        options.onChild(12345);
+        throw Error('synthetic-execution-error');
+      }
       return executeSuite(command, {...options, timeoutMs:50});
     },
   });
@@ -99,5 +103,80 @@ for (const outcome of ['nonzero', 'timeout', 'error']) test(`private suite envir
   assert.equal(allocated, true, 'suite execution must receive four private directories');
   assert.ok(paths.every(path => !existsSync(path)));
   assert.deepEqual(env, before); assert.equal(readFileSync(join(f.caller, 'keep'), 'utf8'), 'caller-owned');
-  assert.equal(receipts(f.queue)[0].environmentPolicy, 'clean-v1');
+  const row = receipts(f.queue)[0];
+  assert.equal(row.environmentPolicy, 'clean-v1');
+  assert.equal(row.state, 'finished');
+  assert.equal(typeof row.finishedAt, 'number');
+  assert.equal(typeof row.reason, 'string');
+  assert.equal(readCheckStatus({env}, f.ports).busyChecks, 0);
+  if (outcome === 'error') for (const ownership of ['live-child', 'unknown-child']) {
+    const uncertain = fixture(t), uncertainEnv = {...env, PDD_SUITE_QUEUE:uncertain.queue};
+    let executions = 0;
+    const ports = {...uncertain.ports, say:() => {}, alive:() => true, execute:async (_command, options) => {
+      executions++;
+      if (ownership === 'live-child') options.onChild(12345);
+      throw Object.assign(Error('synthetic-execution-error'), {code:'EIO'});
+    }};
+    const result = await runTestSuite({cwd:uncertain.root, command:'uncertain-execution', env:uncertainEnv}, ports);
+    assert.equal(result.exitCode, 1); assert.equal(executions, 1);
+    const receipt = receipts(uncertain.queue)[0];
+    assert.equal(receipt.state, 'running', ownership); assert.equal(receipt.finishedAt, null);
+    assert.equal(receipt.childPid, ownership === 'live-child' ? 12345 : null);
+    assert.equal(readCheckStatus({env:uncertainEnv}, ports).busyChecks, 1);
+    assert.equal(readdirSync(uncertain.queue).some(name => name.startsWith('suite-env-')), false);
+  }
 });
+
+for (const boundary of ['mkdtemp', 'home', 'state', 'config', 'tmp']) {
+  test(`private environment allocation failure at ${boundary} releases admission for the next suite`, async t => {
+    const f = fixture(t), env = {PATH:process.env.PATH, HOME:f.caller, PDD_SUITE_QUEUE:f.queue};
+    const machine = checkMachine();
+    const capacity = calculateCheckCapacity({checks:1}, machine.ports);
+    writeFileSync(join(f.queue, 'capacity.json'), JSON.stringify(withCheckLifetime(capacity)));
+    let allocatedRoot, failures = 0, executions = 0;
+    const denied = () => { failures++; throw Object.assign(Error('synthetic-allocation-denied'), {code:'EACCES'}); };
+    const ports = {...machine.ports, say:() => {}, fs:{...files,
+      mkdtempSync(prefix, options) {
+        if (boundary === 'mkdtemp' && failures === 0) denied();
+        allocatedRoot = files.mkdtempSync(prefix, options);
+        return allocatedRoot;
+      },
+      mkdirSync(path, options) {
+        if (allocatedRoot && path === join(allocatedRoot, boundary) && failures === 0) denied();
+        return files.mkdirSync(path, options);
+      },
+    }, execute:async (_command, options) => {
+      executions++;
+      assert.deepEqual(options.cpuIds, capacity.cpuIds);
+      assert.equal(options.env.PDD_CHECK_CPUS, String(capacity.coresPerCheck));
+      return {exitCode:0};
+    }};
+    const failed = await runTestSuite({cwd:f.root, command:'unused-on-failure', env}, ports);
+    assert.equal(failed.exitCode, 1); assert.match(failed.message, /EACCES/);
+    assert.equal(failures, 1); assert.equal(executions, 0);
+    assert.equal(readdirSync(f.queue).some(name => name.startsWith('suite-env-')), false);
+    assert.equal(readFileSync(join(f.caller, 'keep'), 'utf8'), 'caller-owned');
+    const row = receipts(f.queue)[0];
+    assert.equal(row.state, 'finished', 'setup failure must finish the admitted ticket');
+    assert.equal(row.childPid, null);
+    assert.deepEqual(row.cpuIds, capacity.cpuIds);
+    assert.equal(typeof row.startedAt, 'number');
+    assert.equal(typeof row.finishedAt, 'number');
+    assert.ok(row.finishedAt >= row.startedAt);
+    assert.match(row.reason, /EACCES/);
+    assert.equal(row.environmentPolicy, 'clean-v1');
+    const status = readCheckStatus({env}, ports);
+    assert.equal(status.busyChecks, 0); assert.equal(status.waitingChecks, 0);
+
+    const next = await runTestSuite({cwd:f.root, command:'next-suite', env}, {...ports,
+      sleep:async () => assert.fail('the next suite must not wait for the failed setup'),
+    });
+    assert.equal(next.exitCode, 0); assert.equal(executions, 1);
+    const completed = receipts(f.queue);
+    assert.deepEqual(completed.map(ticket => ticket.state), ['finished', 'finished']);
+    assert.deepEqual(completed[1].cpuIds, row.cpuIds);
+    assert.equal(completed[1].reason, null);
+    assert.equal(readCheckStatus({env}, ports).busyChecks, 0);
+    assert.equal(readdirSync(f.queue).some(name => name.startsWith('suite-env-')), false);
+  });
+}

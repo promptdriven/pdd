@@ -162,7 +162,7 @@ export function suiteStatusWords(suite) {
 export async function runTestSuite({ cwd, command, timeout = 30, env = process.env }, ports = {}) {
   if (typeof command !== 'string' || !command.trim() || !Number.isInteger(timeout) || timeout < 1 || timeout > 120)
     return { exitCode: 2, message: 'Supply a suite command and a timeout of 1 to 120 minutes.' };
-  let p, row, environmentRoot;
+  let p, row, environmentRoot, executionStarted = false;
   try {
     p = portsFor(env, ports);
     p.fs.mkdirSync(p.root, { recursive: true, mode: 0o700 });
@@ -205,15 +205,16 @@ export async function runTestSuite({ cwd, command, timeout = 30, env = process.e
       for (const name of names) childEnv[name] = path;
     }
     childEnv.PDD_CHECK_CPUS = String(row.coresPerCheck);
+    executionStarted = true;
     const result = await p.execute(command, { cwd, env:childEnv, cpuIds:row.cpuIds, taskset:row.taskset, timeoutMs: Number(timeout) * 60_000,
       onChild: pid => { row.childPid = pid; save(p, row); } });
     row.state = 'finished'; row.finishedAt = p.now(); row.reason = result.reason ?? (result.exitCode ? `Test suite exited with status ${result.exitCode}.` : null);
     save(p, row);
     return { exitCode: result.exitCode, message: row.reason ?? 'Full test suite finished.' };
   } catch (error) {
-    // An execution port must stop descendants before rejecting. A native child is
-    // never released on an uncertain save or execution failure.
-    if (p && row && (row.state === 'waiting' || row.childPid && !p.alive(-row.childPid))) {
+    // Setup cannot have a child. Once execution starts, keep the reservation
+    // unless the reported child group is confirmed dead.
+    if (p && row && (!executionStarted || row.state === 'waiting' || row.childPid && !p.alive(-row.childPid))) {
       row.state = 'finished'; row.finishedAt = p.now(); row.reason = `Test suite failed: ${error.code ?? error.message}`;
       try { save(p, row); } catch {}
     }

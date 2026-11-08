@@ -53,6 +53,14 @@ and `TEMP` to tmp. Remove this directory after execution settles, including a
 nonzero exit, timeout or execution error. Native execution settles only after
 its child group is stopped. Never remove the caller's folders.
 
+If setup fails before calling the execution port, no child can own the admitted
+slot. Mark that ticket finished with `finishedAt` and a failure `reason`, return
+exit code 1, release its capacity and remove any allocated private directories.
+This includes failure to create the temporary root or any private subdirectory.
+Once execution has been called, a rejection releases the slot only when a
+reported child group is confirmed dead. A missing child PID after that call is
+uncertain ownership and must retain the reservation.
+
 Build the child environment from an allowlist: caller `PATH` (fallback
 `/usr/bin:/bin`), `LANG`, `LANGUAGE`, `LC_*`, `TZ`, `TERM`, `CI`, `SystemRoot`
 and `WINDIR` when supplied. Set `POCKET_BROWSER_BIN` to the caller's value or

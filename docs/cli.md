@@ -816,6 +816,8 @@ Agent settings, credentials, session variables, shell hooks and Node/npm overrid
 are absent. Set extra variables explicitly in COMMAND when the suite needs them.
 Queue admission still uses the caller's queue selectors. Each ticket records
 `environmentPolicy: "clean-v1"`, without environment values.
+If private folder setup fails before execution starts, the ticket finishes with
+the failure reason and releases its slot. Any allocated private folders are removed.
 
 Full suites and full builds share machine capacity across repositories and
 worktrees. Run a full build through the same command. Additional
