@@ -192,8 +192,10 @@ server-confirmed edit is at least two hours old, without an AI call; that edit i
 `"lastSeen": ""`. A claim record with a top-level `lastSeen` and no GitHub edit
 for 4 hours (counted from its creation until the first heartbeat) is expired. A
 claim record without `lastSeen`, as older pdd writes it, a claim without a claim
-record, or a bare label is expired after 24 hours with no issue activity. For an
-expired claim, `pdd graph` shows "Expired claim, last seen" and another
+record, or a bare label is expired after 24 hours with no issue activity. A live
+legacy claim can receive its first identity-checked heartbeat after its owner
+upgrades. Its issue-activity time does not trigger the four-hour heartbeat cutoff.
+For an expired claim, `pdd graph` shows "Expired claim, last seen" and another
 coordinator may take it over. The last-seen time is only the claim comment's GitHub edit or creation
 time; the recorded `lastSeen` value never extends a claim. In `off` mode a tick
 does nothing on this machine: it releases no claim and writes no `lastSeen`, so the claims expire after 4 hours, as
@@ -334,7 +336,9 @@ At the limit, the operation reports its next retry time and keeps progress.
 It sends no write until enough reservations expire. A secondary-limit response
 with Retry-After shares that delay with other local processes, including when
 the response came from a REST read or a GraphQL query. Reads use no content
-reservation. No usage reset
+reservation. Only the actual HTTP response or a gh failure diagnostic can
+establish a throttle. Successful issue and comment text about rate limits does
+not start a cooldown. No usage reset
 is requested. `pdd autopilot status` and `status --all` show the local identity
 counts, limits, observed machine count and deferred state. Status makes no
 GitHub request. Write records stay in the state root's `github-writes/` folder.

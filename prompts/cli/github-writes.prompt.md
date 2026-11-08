@@ -22,6 +22,16 @@ local guard, not a distributed lock or permission to write.
   native defaults use node:fs, Date.now and hostname. Identity is a login or App
   identity supplied by the caller; case is ignored. Unknown identities use one
   shared conservative bucket. No token is stored or printed.
+- `githubWriteThrottle(outcome)` returns `{retryAfter}` for a secondary throttle,
+  else `null`. `retryAfter` is the Retry-After header text, or `undefined`.
+  An HTTP status line at the start of stdout selects the actual response status;
+  only 403/429 with a Retry-After header or a secondary/abuse limit report qualify.
+  Read Retry-After only from that response's headers. Without response headers,
+  require an HTTP 403/429 gh diagnostic in stderr and secondary/abuse wording
+  or Retry-After guidance there. An explicit successful exit never qualifies.
+  Successful REST and GraphQL payloads, including
+  issue and comment text about limits, never establish a throttle. This one
+  classification governs both budget observation and the counter's lazy resolver.
 - `reserve(count)` returns the current usage after reserving before dispatch.
   Zero makes no reservation. Failed and uncertain attempts consume their full
   reservation. Concurrent processes serialize read/check/save with an atomic

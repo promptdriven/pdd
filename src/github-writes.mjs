@@ -15,6 +15,27 @@ const option = (args, ...names) => {
 };
 const fail = (usage, retryAt = Date.now() + MINUTE) => Object.assign(Error(`GitHub writes deferred until ${new Date(retryAt).toISOString()}.`), { code: 'github_write_budget', retryAt, usage });
 
+// Successful content can discuss limits. Only a response status or gh's failure
+// diagnostic establishes a throttle; payload lines cannot supply HTTP headers.
+export function githubWriteThrottle(outcome) {
+  if (outcome?.code === 0) return null;
+  const stdout = String(outcome?.stdout ?? ''), stderr = String(outcome?.stderr ?? '');
+  const status = Number(/^HTTP\/\S+\s+([0-9]{3})\b/.exec(stdout)?.[1]);
+  let head, report;
+  if (status) {
+    if (status !== 403 && status !== 429) return null;
+    const boundary = stdout.search(/\r?\n\r?\n/);
+    head = boundary < 0 ? stdout : stdout.slice(0, boundary);
+    report = `${stdout}\n${stderr}`;
+  } else {
+    if (!/\bHTTP (?:403|429)\b/.test(stderr)) return null;
+    head = stderr;
+    report = stderr;
+  }
+  const retryAfter = /^retry-after:[ \t]*(.*?)[ \t]*\r?$/im.exec(head)?.[1];
+  return retryAfter !== undefined || /secondary|abuse/i.test(report) ? { retryAfter } : null;
+}
+
 // Keep only GraphQL code. A # inside a quoted or block string is data, not
 // a comment; it must never hide a later mutation operation from admission.
 function graphqlCode(source) {
@@ -230,9 +251,9 @@ export function githubWriteBudget({ root, identity = 'unknown', host = 'github.c
         .map(c => ({ machine: c.machine, seen: Date.parse(c.lastSeen) })).filter(c => Number.isFinite(c.seen)); });
     },
     observe(outcome) {
-      const text = `${outcome?.stdout ?? ''}\n${outcome?.stderr ?? ''}`;
-      if (!/\b(?:403|429)\b/.test(text) || !/retry-after\s*:|secondary|abuse/i.test(text)) return;
-      const retry = /^retry-after:\s*(.+?)\s*\r?$/im.exec(text)?.[1];
+      const throttle = githubWriteThrottle(outcome);
+      if (!throttle) return;
+      const retry = throttle.retryAfter;
       const delay = retry && /^\d+$/.test(retry) ? now() + Number(retry) * 1000 : Date.parse(retry);
       const retryAt = Number.isFinite(delay) && delay > now() ? delay : now() + MINUTE;
       // Immutable observations cannot overwrite a longer concurrent deadline,

@@ -580,7 +580,12 @@ Each tick keeps claims current without an AI call. Use the `claims` that the
 dependency intake returns; add no other GitHub read for them. For each active
 claim of this coordinator and machine, call the GitHub reader's
 [`refreshClaimHeartbeat`](issue-dependencies-github.prompt.md#claims-heartbeat-and-expiry)
-with the current clock time, under the scan's admission guard. The tick, not the
+with the current clock time, under the scan's admission guard. Follow that
+reader's distinction between legacy activity and heartbeat time,
+including for cached claims below the read floor. A saved legacy observation
+expires under the reader's 24-hour rule. After its first successful heartbeat,
+remove its legacy marker from the saved observation so later ticks use heartbeat
+timing and do not renew it early. The tick, not the
 AI, writes the `lastSeen` time: the first heartbeat sets the existing value (the
 `"lastSeen": ""` marker of a new claim record), or adds the member when it is
 missing. A failed

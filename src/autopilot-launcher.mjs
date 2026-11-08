@@ -1169,12 +1169,16 @@ async function runTick(stateFile, ports, completion) {
       for (const claim of claims) {
         // After 4 hours stuck the owner stops refreshing, so the claim expires unless the issue leaves pdd:stuck.
         if (stuckFor(claim) >= STUCK_CLAIM_AFTER) continue;
-        if (saved && !(Date.parse(claim.lastSeen) + STUCK_CLAIM_AFTER > p.now())) continue;
-        if (p.now() - Date.parse(claim.lastSeen) < 2 * 60 * 60 * 1000) continue;
+        const lifetime = claim.legacy === true ? 24 * 60 * 60 * 1000 : STUCK_CLAIM_AFTER;
+        if (saved && !(Date.parse(claim.lastSeen) + lifetime > p.now())) continue;
+        if (claim.legacy !== true && p.now() - Date.parse(claim.lastSeen) < 2 * 60 * 60 * 1000) continue;
         try {
           const beat = await (p.refreshClaimHeartbeat ?? refreshClaimHeartbeat)({ cwd: state.cwd, repository: state.repo, claim, coordinatorId: state.coordinatorId, machine: state.machine, at: new Date(p.now()).toISOString() },
             { execFile: async (file, args, options) => p.execute(file, args, { purpose: 'claims', ...options }), admitMutation: action => p.scanAction(action) });
-          if (beat?.state === 'refreshed' && typeof beat.lastSeen === 'string') claim.lastSeen = beat.lastSeen;
+          if (beat?.state === 'refreshed' && typeof beat.lastSeen === 'string') {
+            claim.lastSeen = beat.lastSeen;
+            delete claim.legacy;
+          }
         } catch (error) { p.warn(`Claim heartbeat deferred for ${claim.issue}: ${line(error.message)}`); }
       }
     };

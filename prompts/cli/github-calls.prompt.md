@@ -42,7 +42,9 @@ Observe every gh outcome, including free REST reads and GraphQL queries, through
 the shared budget so a secondary-limit reply delays later writes from other
 runners. Resolve a free read's budget only after a throttle outcome; ordinary
 reads require no identity lookup or content reservation. Preserve the original
-read result or error if cooldown observation fails.
+read result or error if cooldown observation fails. Use the shared budget's
+`githubWriteThrottle` classification before resolving a free read's budget;
+successful payload text must not start a cooldown or an identity lookup.
 
 `githubCall` reads only the argument list. For `gh api`, the endpoint is the
 first word that is not an option and not the value of an option. These options

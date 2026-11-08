@@ -956,7 +956,8 @@ async function winningClaim(repository, key, github, authority, now = NaN, safet
       ...timeline.map(e => time(e.created_at))].filter(Number.isFinite).reduce((latest, at) => Math.max(latest, at), -Infinity);
     const expired = Number.isFinite(now) && Number.isFinite(seen) && now - seen >= (heartbeat ? CLAIM_EXPIRES_AFTER : LEGACY_CLAIM_EXPIRES_AFTER);
     const stuckSince = labels.includes('pdd:stuck') ? time(stuck?.created_at) : NaN;
-    return { ...claim, active: !expired, ...(Number.isFinite(seen) ? { lastSeen: iso(seen) } : {}), ...(expired ? { expired: true } : {}),
+    return { ...claim, active: !expired, ...(!heartbeat ? { legacy: true } : {}),
+      ...(Number.isFinite(seen) ? { lastSeen: iso(seen) } : {}), ...(expired ? { expired: true } : {}),
       ...(Number.isFinite(stuckSince) ? { stuckSince: iso(stuckSince) } : {}), ...(Number.isFinite(claimedAt) ? { claimedAt: iso(claimedAt) } : {}),
       ...(takeovers ? { takeovers } : {}),
       ...(takeovers && previous ? { previousOwner: { coordinatorId: previous.record.metadata.coordinatorId, machine: previous.record.metadata.machine } } : {}),
@@ -997,7 +998,8 @@ async function setOwnClaimTime(name, { cwd = '', repository, claim, coordinatorI
 // of its own winning claim comment.
 export async function refreshClaimHeartbeat(args, ports = {}) {
   const seen = time(args.claim?.lastSeen), at = time(args.at);
-  if (Number.isFinite(seen) && (at - seen < 2 * 60 * 60 * 1000 || at - seen >= 4 * 60 * 60 * 1000)) return { state: 'skipped' };
+  if (Number.isFinite(seen) && (args.claim?.legacy === true ? at - seen >= LEGACY_CLAIM_EXPIRES_AFTER
+    : at - seen < 2 * 60 * 60 * 1000 || at - seen >= CLAIM_EXPIRES_AFTER)) return { state: 'skipped' };
   const lastSeen = await setOwnClaimTime('lastSeen', args, ports);
   return lastSeen === null ? { state: 'skipped' } : { state: 'refreshed', lastSeen };
 }

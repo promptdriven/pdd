@@ -13,6 +13,7 @@ import { runIssueGraph } from '../src/issue-dependency-graph.mjs';
 import { startRun, stepDone, approveRun } from '../src/workflow-runner.mjs';
 import { writeRun } from '../src/workflow-runs.mjs';
 import { fixture as runnerFixture, packageRoot } from './helpers/workflow-runner-fixture.mjs';
+import { githubLedger } from '../src/github-calls.mjs';
 
 // Issue #3032: claims carry a heartbeat, expire, and a lost claim stops work.
 const repo = 'owner/repo', hour = 60 * 60 * 1000, minute = 60 * 1000;
@@ -420,6 +421,42 @@ test('tick: a fresh server-timed claim skips early heartbeats without an AI call
     assert.equal(f.claimComments.get('901').updated_at, at(NOW + minute));
   }
   assert.equal(f.prompts.length, 0, 'a heartbeat is neither an AI call nor new work');
+});
+
+for (const age of [hour, 23 * hour]) test(`tick: a live legacy claim at ${age / hour} hours gets its first heartbeat`, async t => {
+  const f = await tickFixture(t);
+  assert.equal((await f.start()).exitCode, 0);
+  const comment = f.ownComment(at(NOW - age));
+  f.issues = [tickIssue(7, { comments: 1, updated_at: comment.updated_at })];
+  f.issueComments = { 7: [comment] };
+  f.claims = state => [ownClaim({ owner: state.coordinatorId, coordinatorId: state.coordinatorId,
+    machine: state.machine, legacy: true, lastSeen: comment.updated_at })];
+  await f.tick();
+  assert.equal(f.patches.length, 1);
+  assert.equal(recordOf(f.claimComments.get('901').body).lastSeen, at(NOW));
+  assert.equal(f.state().githubIntake.claims[0].legacy, undefined);
+});
+
+test('tick: cached legacy claims use the 24-hour cutoff below the read floor', async t => {
+  for (const age of [23 * hour, 25 * hour]) {
+    const f = await tickFixture(t);
+    assert.equal((await f.start()).exitCode, 0);
+    f.ownComment(at(NOW - age));
+    const state = f.state();
+    state.githubIntake = { claims: [ownClaim({ owner: state.coordinatorId, coordinatorId: state.coordinatorId,
+      machine: state.machine, legacy: true, lastSeen: at(NOW - age) })] };
+    writeFileSync(f.stateFile(), JSON.stringify(state));
+    githubLedger({ root: f.ports.stateRoot, repository: repo }).record({ at: NOW, api: 'rest', purpose: 'claims',
+      status: 200, resource: 'core', remaining: 500, limit: 5000, resetAt: NOW + 3 * hour });
+    await f.tick();
+    assert.equal(f.patches.length, age < 24 * hour ? 1 : 0);
+    if (age < 24 * hour) {
+      assert.equal(f.state().githubIntake.claims[0].legacy, undefined);
+      f.time += hour;
+      await f.tick();
+      assert.equal(f.patches.length, 1);
+    }
+  }
 });
 
 // GitHub moves the issue updated_at to the edit time of a comment (measured on

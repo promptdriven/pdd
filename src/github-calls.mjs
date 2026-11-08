@@ -3,7 +3,7 @@ import * as nativeFs from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { githubWriteCost } from './github-writes.mjs';
+import { githubWriteCost, githubWriteThrottle } from './github-writes.mjs';
 import { githubWriteRunner, githubOriginalExecutable } from './github-write-proxy.mjs';
 
 export const GITHUB_PURPOSES = ['dependencies', 'claims', 'issues', 'pulls', 'writes', 'setup', 'other'];
@@ -157,8 +157,7 @@ export function countGithubCalls(exec, { ledger, purpose, now = Date.now, writes
     if (writes) {
       try {
         const outcome = failed ? failure : result;
-        const text = `${outcome?.stdout ?? ''}\n${outcome?.stderr ?? ''}`;
-        if (!budget && /\b(?:403|429)\b/.test(text) && /retry-after\s*:|secondary|abuse/i.test(text)) budget = await writes(args, rest);
+        if (!budget && githubWriteThrottle(outcome)) budget = await writes(args, rest);
         budget?.observe(outcome);
       } catch { /* Preserve the original outcome when observation fails. */ }
     }
