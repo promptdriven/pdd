@@ -51,7 +51,7 @@ async function fixture(t, initialReviews = [[]]) {
       if (command === 'herdr' && args[0] === '--version') return { code: 0, stdout: '1.0', stderr: '' };
       if (command === 'loginctl') return { code: 0, stdout: 'yes\n', stderr: '' };
       if (command === 'gh' && args[0] === 'auth') return { code: 0, stdout: '', stderr: '' };
-      if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: '{"nameWithOwner":"owner/repo","url":"https://github.com/owner/repo"}', stderr: '' };
+      if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: '{"nameWithOwner":"owner/repo","defaultBranchRef":{"name":"main"},"url":"https://github.com/owner/repo"}', stderr: '' };
       assert.ok(command === 'gh' && args[0] === 'api' && args.includes('GET'), `Unexpected process: ${command} ${args.join(' ')}`);
       const endpoint = args[args.indexOf('GET') + 1], request = { endpoint, args: [...args] };
       f.requests.push(request);

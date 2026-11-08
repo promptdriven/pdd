@@ -42,7 +42,7 @@ async function tickWorld(t, { github } = {}) {
       if (command === 'herdr') return { code: 0, stdout: '1.0', stderr: '' };
       if (command !== 'gh') throw Error(`unexpected process ${command}`);
       w.gh.push(args);
-      if (args[0] === 'repo') return { code: 0, stdout: JSON.stringify({ nameWithOwner: repo, url: `https://github.com/${repo}` }), stderr: '' };
+      if (args[0] === 'repo') return { code: 0, stdout: JSON.stringify({ nameWithOwner: repo, defaultBranchRef: { name: 'main' }, url: `https://github.com/${repo}` }), stderr: '' };
       if (args[0] === 'auth') return { code: 0, stdout: '', stderr: '' };
       const endpoint = endpointOf(args), sent = args.find(word => /^If-None-Match: /.test(word))?.slice(15), method = args[args.indexOf('--method') + 1];
       const answer = (status, body, extra) => ({ code: status === 304 ? 1 : 0, stdout: reply(status, body, { remaining: status === 304 ? w.remaining : --w.remaining, ...extra }), stderr: status === 304 ? 'gh: HTTP 304\n' : '' });

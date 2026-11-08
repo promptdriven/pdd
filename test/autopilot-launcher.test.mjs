@@ -11,6 +11,7 @@ import { runPdd } from '../src/pdd-cli.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
 import { loadAgentDefinitions } from '../src/agent-config.mjs';
 import { codexConfigs, tomlBasicString } from './helpers/codex-config-args.mjs';
+import { automaticFixture } from './helpers/autopilot-run-base-fixture.mjs';
 
 const root = resolve('.');
 const capture = () => ({ text: '', write(s) { this.text += s; } });
@@ -32,7 +33,7 @@ async function fixture(t, options = {}) {
     run: async (command, args) => {
       f.runs.push([command, args]);
       if (command === 'git') return { code: 0, stdout: (args.includes('--git-common-dir') ? join(cwd, '.git') : cwd) + '\n', stderr: '' };
-      if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: '{"nameWithOwner":"owner/repo","url":"https://github.com/owner/repo"}', stderr: '' };
+      if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: '{"nameWithOwner":"owner/repo","defaultBranchRef":{"name":"trunk"},"url":"https://github.com/owner/repo"}', stderr: '' };
       if (command === 'gh' && args[0] === 'auth') return { code: 0, stdout: '', stderr: '' };
       if (command === 'gh' && args[0] === 'api') { if (args.some(x => String(x).includes('/reviews?'))) return { code: 0, stdout: 'HTTP/2.0 200 OK\r\n\r\n[]', stderr: '' }; if (args.some(x => String(x).includes('/permission'))) return { code: 0, stdout: 'HTTP/2.0 200 OK\r\n\r\n{"permission":"none"}', stderr: '' }; f.ack.push(args); return { code: 0, stdout: '{}', stderr: '' }; }
       if (command === 'herdr') return { code: 0, stdout: '1.0', stderr: '' };
@@ -274,7 +275,7 @@ test('a GitHub owner spelled with capitals matches the canonical lowercase eligi
   const f = await fixture(t);
   const run = f.ports.run;
   f.ports.run = async (command, args, opts) => command === 'gh' && args[0] === 'repo'
-    ? { code: 0, stdout: '{"nameWithOwner":"Serhan-Asad/PDD-Sandbox","url":"https://github.com/Serhan-Asad/PDD-Sandbox"}', stderr: '' }
+    ? { code: 0, stdout: '{"nameWithOwner":"Serhan-Asad/PDD-Sandbox","defaultBranchRef":{"name":"main"},"url":"https://github.com/Serhan-Asad/PDD-Sandbox"}', stderr: '' }
     : run(command, args, opts);
   // GitHub spells html_url with the owner's capitals; the dependency graph stores canonical lowercase keys.
   const mixed = number => issue(number, { user: { login: 'Serhan-Asad' }, html_url: `https://github.com/Serhan-Asad/PDD-Sandbox/issues/${number}` });
@@ -1968,4 +1969,117 @@ test('status shows saved group size, cause and umbrella without GitHub reads', a
   assert.ok(result.message.includes(group.rootCause));
   assert.ok(result.message.includes(group.umbrella));
   assert.equal(f.runs.filter(([file]) => file === 'gh').length, before);
+});
+
+for (const configured of [undefined, 'develop/topic']) test(`3071 launcher selects and caches base ${configured ?? 'default'}`, async t => {
+  const f = await fixture(t);
+  writeFileSync(join(f.cwd, 'pdd.json'), JSON.stringify({autopilot:{mode:'auto', ...(configured ? {base:configured} : {})}}));
+  writeFileSync(join(f.cwd, 'CONTRIBUTING.md'), 'Use alpha for all PRs.');
+  const expected = configured ?? 'trunk';
+  const start = await f.invoke('start');
+  assert.equal(start.exitCode, 0, start.message);
+  assert.equal(f.state().baseBranch, expected);
+  assert.equal(f.state().defaultBranch, 'trunk');
+  assert.ok(start.message.includes(expected));
+  const packet = JSON.parse(f.prompts[0].trimEnd().split('\n').at(-1));
+  assert.equal(packet.baseBranch, expected); assert.equal(packet.workflow.baseBranch, expected);
+  const reads = () => f.runs.filter(([command,args]) => command === 'gh' && args[0] === 'repo').length;
+  assert.equal(reads(), 1);
+  f.status = 304;
+  await f.tick(); await f.tick();
+  const status = await f.invoke('status');
+  assert.equal(status.exitCode, 0); assert.ok(status.message.includes(expected)); assert.equal(reads(), 1);
+  const all = await f.invoke('status', {all:true}); assert.ok(all.message.includes(expected)); assert.equal(reads(),1);
+  writeFileSync(join(f.cwd, 'pdd.json'), JSON.stringify({autopilot:{mode:'auto',base:'integration'}}));
+  await f.tick();
+  assert.equal(f.state().baseBranch, 'integration'); assert.equal(reads(),1);
+  const updated = JSON.parse(f.prompts.at(-1).trimEnd().split('\n').at(-1));
+  assert.equal(updated.baseBranch, 'integration');
+});
+
+test('3071 old launcher state reads default metadata once on tick', async t => {
+  const f = await fixture(t); assert.equal((await f.invoke('start')).exitCode,0);
+  const state=f.state(); delete state.defaultBranch; delete state.baseBranch;
+  writeFileSync(f.stateFile(),JSON.stringify(state));
+  f.status=304;
+  await f.tick(); await f.tick();
+  assert.equal(f.state().baseBranch,'trunk');
+  assert.equal(f.runs.filter(([cmd,args])=>cmd==='gh' && args[0]==='repo').length,2);
+});
+
+for (const stop of [false, true]) for (const configured of [undefined, 'integration/topic']) {
+  test(`3071 repair start refreshes default with stop=${stop}, base=${configured ?? 'default'}`, async t => {
+    const f = await fixture(t);
+    writeFileSync(join(f.cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', ...(configured ? { base: configured } : {}) } }));
+    assert.equal((await f.invoke('start')).exitCode, 0);
+    const original = f.ports.run;
+    let metadataReads = 0;
+    f.ports.run = async (command, args, options) => {
+      if (command === 'gh' && args[0] === 'repo') {
+        metadataReads++;
+        return { code: 0, stdout: JSON.stringify({ nameWithOwner: 'owner/repo', defaultBranchRef: { name: 'new-default' } }), stderr: '' };
+      }
+      return original(command, args, options);
+    };
+    f.status = 304;
+    const packetsBefore = f.prompts.length;
+    if (stop) assert.equal((await f.invoke('stop')).exitCode, 0);
+    const started = await f.invoke('start');
+    assert.equal(started.exitCode, 0, started.message);
+    assert.equal(f.state().defaultBranch, 'new-default');
+    const expected = configured ?? 'new-default';
+    assert.equal(f.state().baseBranch, expected);
+    assert.ok(started.message.includes(expected));
+    if (!configured) assert.equal(f.prompts.length, packetsBefore + 1, 'changed base reaches the coordinator with unchanged issues');
+    const packet = JSON.parse(f.prompts.at(-1).trimEnd().split('\n').at(-1));
+    assert.equal(packet.baseBranch, expected);
+    assert.equal(packet.workflow.baseBranch, expected);
+    await f.tick(); await f.tick();
+    for (const all of [false, true]) {
+      const status = await f.invoke('status', { all });
+      assert.equal(status.exitCode, 0, status.message);
+      assert.ok(status.message.includes(expected));
+    }
+    assert.equal(metadataReads, 1, 'one refresh per explicit start; ticks and status reuse it');
+  });
+}
+
+test('3071 repair failed default refresh refuses restart without using saved metadata', async t => {
+  const f = await fixture(t);
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  assert.equal((await f.invoke('stop')).exitCode, 0);
+  const saved = f.state(), packets = f.prompts.length, starts = f.timers.filter(([action]) => action === 'start').length;
+  const original = f.ports.run;
+  f.ports.run = (command, args, options) => command === 'gh' && args[0] === 'repo'
+    ? Promise.resolve({ code: 1, stdout: '', stderr: 'synthetic metadata failure' })
+    : original(command, args, options);
+  assert.equal((await f.invoke('start')).exitCode, 1);
+  assert.deepEqual(f.state(), saved);
+  assert.equal(f.prompts.length, packets);
+  assert.equal(f.timers.filter(([action]) => action === 'start').length, starts);
+});
+
+test('3071 repair refreshed packet base agrees with automatic workflow startup', async t => {
+  const f = await fixture(t), workflow = await automaticFixture(t);
+  const original = f.ports.run;
+  let defaultBranch = 'main';
+  f.ports.run = (command, args, options) => command === 'gh' && args[0] === 'repo'
+    ? Promise.resolve({ code: 0, stdout: JSON.stringify({ nameWithOwner: 'example/project', defaultBranchRef: { name: defaultBranch } }), stderr: '' })
+    : original(command, args, options);
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  assert.equal((await f.invoke('stop')).exitCode, 0);
+  defaultBranch = 'new-default'; f.status = 304;
+  workflow.git(workflow.source, 'update-ref', 'refs/remotes/origin/new-default', workflow.git(workflow.source, 'rev-parse', 'HEAD'));
+  const workflowExec = workflow.automaticPorts.execFile;
+  workflow.automaticPorts.execFile = (file, args, options) => file === 'gh' && args[0] === 'repo'
+    ? Promise.resolve({ stdout: JSON.stringify({ nameWithOwner: 'example/project', defaultBranchRef: { name: defaultBranch }, url: 'https://github.com/example/project' }) })
+    : workflowExec(file, args, options);
+  const restarted = await f.invoke('start');
+  assert.equal(restarted.exitCode, 0, restarted.message);
+  const packet = JSON.parse(f.prompts.at(-1).trimEnd().split('\n').at(-1));
+  const started = await workflow.begin({ base: packet.workflow.baseBranch });
+  assert.equal(started.exitCode, 0, started.message);
+  assert.equal(workflow.record().baseBranch, 'new-default');
+  assert.equal(packet.baseBranch, workflow.record().baseBranch);
+  assert.equal(workflow.record().baseSha, workflow.git(workflow.source, 'rev-parse', 'refs/remotes/origin/new-default'));
 });

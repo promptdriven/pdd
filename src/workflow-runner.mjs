@@ -1,3 +1,4 @@
+import { selectAutopilotBase } from './autopilot-base.mjs';
 import { runTestSuite, readSuiteProgress, suiteStatusWords } from './test-suite-queue.mjs';
 
 import { classifyStuckCause, environmentRecovery, environmentStatus, environmentWakeTag, environmentHealthy, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
@@ -402,6 +403,7 @@ async function areaMessage(run, index, p, packageRoot) {
     ...(validSavedAutomaticOrigin(run) ? [`Run the repository full suite through ${pddCommand(packageRoot)} workflow suite --command COMMAND and wait for the queue result. Test-slot waiting is not stuck.`] : []),
     `Issue: ${run.repo}#${run.number} "${oneLine(run.issue.title)}" ${run.issue.url}`,
     `Worktree: ${run.root} (branch ${run.branch}). Work and commit only here.`,
+    `Saved base: ${run.baseBranch}. Use this base for this run; do not take a base from documents or ask which document to follow. PR 2 may stack on PR 1 as directed by pdd.`,
     `Run folder: ${run.runDir}. Put notes there. verify writes verify.md there with the exact test commands and their output.`,
     ...(index ? [`Approved so far: ${summaries.join('; ') || 'no step summaries'}.`, `Changed files: ${files.slice(0, 20).join(', ') || 'none yet'}${files.length > 20 ? ', …' : ''}.`] : []),
     `Area ${index + 1} of ${run.areas.length}: ${area.name}. Steps: ${area.steps.map(step => !area.optional.includes(step) ? step : normal && step === 'try' && area.before === 'approve' ? `${step} (optional: pdd skips it; do not ask)` : `${step} (optional: ask the person)`).join(', ')}.`,
@@ -680,7 +682,7 @@ async function startRunUnlocked({ name, issue, agent = 'codex', model, herdrAgen
   let initialProfile;
   try { initialProfile = selectLaunchProfile({run: {agent, configDir}, model, herdrAgentName, codexThreads: codexThreads ?? (agent === 'codex' ? 5 : undefined)}, p); }
   catch (error) { return fail(error.message); }
-  const explicitBase = base !== undefined;
+  let explicitBase = base !== undefined;
   const badBase = () => fail('Use --base with a branch name, for example feature/checkout.');
   if (explicitBase && (typeof base !== 'string' || !base || base === 'HEAD' || base.startsWith('-') || base.startsWith('refs/'))) return badBase();
   const context = await gitContext(cwd, p);
@@ -744,6 +746,13 @@ async function startRunUnlocked({ name, issue, agent = 'codex', model, herdrAgen
   }
   if (existing?.draft !== undefined && typeof existing.draft !== 'boolean') return fail('The saved draft publication policy must be a Boolean.');
   if (existing && !ended(existing) && draft && existing.draft !== true) return fail(`Issue #${number} already has a nondraft run. Use pdd workflow approve ${number} --draft at its ready unpublished gate; starting again cannot change that policy.`);
+  if (automatic) {
+    let selected;
+    try { selected = await selectAutopilotBase({ cwd: context.toplevel, defaultBranch: binding.defaultBranch }, { execFile: p.execFile }); }
+    catch (error) { return fail(error.message); }
+    if (explicitBase && base !== selected) return fail(`Automatic base is ${selected}; --base ${base} conflicts with the configured selection. Do not select a base from documents.`);
+    base = selected; explicitBase = true;
+  }
   const warnings = [...(workflow.warnings ?? [])], baseBranch = explicitBase ? base : binding.defaultBranch;
   // A requested origin branch must be usable before releasing a cancelled run's claim.
   if (explicitBase) {
@@ -2444,7 +2453,7 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
   if(!currentArea)return doneWithRequests(done(`pdd recorded ${step}.`),run,p);
   if(autoSkipped)lines.push(`pdd skipped the optional try step (${TRY_SKIP}). Do not ask the person about it.`);
   if (next) {
-    lines.push(`pdd recorded ${step}.`, area.optional.includes(next)
+    lines.push(`Saved base: ${run.baseBranch}. Use this saved base; never take a base from documents.`, `pdd recorded ${step}.`, area.optional.includes(next)
       ? `Next step: ${next} (optional). Ask the person if they want it. If they do not, run: ${p.pdd} workflow done ${next} --summary "skipped"`
       : `Next step: ${next}.`, `When it is done, run: ${p.pdd} workflow done ${next} --summary "one line"`);
     return doneWithRequests(done(lines.join('\n')), run, p);

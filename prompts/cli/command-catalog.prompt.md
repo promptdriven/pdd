@@ -301,3 +301,5 @@ Preserve every unrelated help form.
 The metrics routes are `pdd metrics [--json] [--date YYYY-MM-DD | --snapshot ID] [--timezone IANA] [--at UTC] [--expected-source ID...]`, `pdd metrics export FILE [--timezone IANA]`, `pdd metrics import FILE`, and `pdd metrics record FILE`. The metrics owner validates option combinations and values.
 
 For `workflow.run`, also accept optional `--origin` (manual, autopilot or unknown), `--decision-id` (text) and `--outcome` (code or prompt-only) as observational metadata. The runner verifies the decision against the actual repository and issue. Keep the draft, base and approved-corpus options and existing help form.
+
+Catalog `autopilot.check-base` with prefix `autopilot check-base`, local `autopilot-check-base`, required text operands RUN and PR, and no options. Form: `pdd autopilot check-base RUN PR`. Description: Check the saved automatic base, PR target, current default branch and newest release before a merge or after it. This command reads only.

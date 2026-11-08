@@ -116,7 +116,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         (result.exitCode ? stderr : stdout).write(result.message); return result.exitCode;
       } catch(error) { line(stderr, `Dependency intake failed.${reason(error)}`); return 1; }
     }
-    case 'autopilot-start': case 'autopilot-stop': case 'autopilot-status': case 'autopilot-add': {
+    case 'autopilot-check-base': case 'autopilot-start': case 'autopilot-stop': case 'autopilot-status': case 'autopilot-add': {
       try {
         const module = autopilotLauncher ?? await import('./autopilot-launcher.mjs');
         const result = await module.runAutopilotLauncher({ command: plan.local.slice(10), issues: [...plan.operands], runs: plan.options['--runs'], checks: plan.options['--checks'], resumeCustody: plan.options['--resume-custody'], all: plan.options['--all'] === true, ...(plan.options['--json'] === true ? { json: true } : {}), cwd, packageRoot, env }, autopilotLauncherPorts);

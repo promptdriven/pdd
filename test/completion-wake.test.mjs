@@ -39,7 +39,7 @@ test('default launcher reads current state and reconciles completion under its e
   let calls=[]; const ports={...healthyMachine, checkCapacityPorts:isolatedCheckCapacity(cwd),stateRoot,allocationCheck:async()=>({state:'ready',message:''}),run:async(cmd)=>cmd==='git'?{code:0,stdout:cwd+'\n'}:{code:0,stdout:''},queryIssues:async()=>({status:304}),reconcileDependencyIntake:async input=>{calls.push(input);return {queued:[],eligible:[],skipped:[],pending:false};}};
   const {requestAutopilotCompletion}=await import('../src/autopilot-launcher.mjs');
   assert.deepEqual(await requestAutopilotCompletion({cwd,env:{HOME:home}},ports),{state:'inactive'});
-  writeFileSync(file,JSON.stringify({enabled:true,cwd,repo:'example/project',stateFile:file,coordinatorId:'c',machine:'m',agent:{id:'codex',kind:'codex',command:'codex'},recipeDelivered:true,environment:{HOME:home}}));
+  writeFileSync(file,JSON.stringify({enabled:true,defaultBranch:'main',baseBranch:'main',cwd,repo:'example/project',stateFile:file,coordinatorId:'c',machine:'m',agent:{id:'codex',kind:'codex',command:'codex'},recipeDelivered:true,environment:{HOME:home}}));
   const stdout=capture(), stderr=capture();
   assert.equal(await runPdd(['dependencies','complete','--input','-'], {cwd,env:{HOME:home},stdin:'{}',stdout,stderr,dependencyIntake:{runDependencyIntake:async()=>({exitCode:0,message:'accepted\n'})},autopilotLauncherPorts:ports}),0);
   assert.equal(stdout.text,'accepted\n'); assert.equal(stderr.text,'');
@@ -49,7 +49,7 @@ test('default launcher reads current state and reconciles completion under its e
   writeFileSync(file,JSON.stringify({...saved,activatedAt:activation,paneId:'p',workspaceId:'w',ownerLaunch:{paneId:'p',startedAt:1,coordinator,profile:{agent:{id:'codex',kind:'codex'},home,definitionHome:home,configHome:null},fingerprint:autopilotLaunchFingerprint({cwd,agent:{kind:"codex"}})}}));
   let idle=false, resume, sent=[];
   const row={number:7,state:'open',title:'Issue',body:'Work',user:{login:'example'},created_at:activation,updated_at:activation,comments:0,labels:[],html_url:'https://github.com/example/project/issues/7'};
-  const activePorts={...ports,run:async cmd=>cmd==='git'?{code:0,stdout:cwd+'\n'}:{code:0,stdout:JSON.stringify({nameWithOwner:'example/project',url:'https://github.com/example/project'})},now:()=>Date.parse('2026-01-02T00:00:00Z'),warn:()=>{},queryIssues:async()=>({status:200,issues:[row]}),reconcileDependencyIntake:async()=>({queued:[],eligible:[row.html_url],skipped:[],pending:false}),wait:async()=>{idle=true;},armCoordinatorIdle:(_identity,options)=>{resume=options.resume;},herdr:async args=>{
+  const activePorts={...ports,run:async cmd=>cmd==='git'?{code:0,stdout:cwd+'\n'}:{code:0,stdout:JSON.stringify({nameWithOwner:'example/project', defaultBranchRef: { name: 'main' },url:'https://github.com/example/project'})},now:()=>Date.parse('2026-01-02T00:00:00Z'),warn:()=>{},queryIssues:async()=>({status:200,issues:[row]}),reconcileDependencyIntake:async()=>({queued:[],eligible:[row.html_url],skipped:[],pending:false}),wait:async()=>{idle=true;},armCoordinatorIdle:(_identity,options)=>{resume=options.resume;},herdr:async args=>{
     const live={pane_id:'p',workspace_id:'w',cwd,foreground_cwd:cwd,tab_id:'t',terminal_id:'term',agent:'codex',agent_status:idle?'idle':'working',agent_session:'session'};
     if(args[0]==='agent'&&args[1]==='get') return {result:{type:'agent_info',agent:live}};
     if(args[0]==='pane'&&args[1]==='get') return {result:{type:'pane_info',pane:live}};
