@@ -35,7 +35,7 @@ import { appendFileSync, fstatSync, mkdirSync, readFileSync, readdirSync, writeF
 import { basename, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 const name = basename(process.argv[1]), args = process.argv.slice(2);
-const scenario = JSON.parse(readFileSync(process.env.FAKE_DIR + '/scenario.json', 'utf8'));
+const scenario = JSON.parse(readFileSync(${JSON.stringify(join(dir, 'scenario.json'))}, 'utf8'));
 const event = { name, args, cwd: process.cwd(), home: process.env.HOME, state: process.env.PDD_STATE_DIR, locale: process.env.LC_ALL };
 if (name === 'node' && args.includes('--test')) {
   event.homeFiles = readdirSync(process.env.HOME);
@@ -45,7 +45,7 @@ if ((name === 'node' && args.includes('--test')) || name === 'npm') {
   event.browser = process.env.POCKET_BROWSER_BIN;
   event.stdinIsDevNull = fstatSync(0).isCharacterDevice();
 }
-appendFileSync(process.env.FAKE_DIR + '/events', JSON.stringify(event) + '\\n');
+appendFileSync(${JSON.stringify(join(dir, 'events'))}, JSON.stringify(event) + '\\n');
 if (name === 'git') {
   if (scenario.failCommand === args[0]) process.exit(9);
   if (args[0] === 'init') {
@@ -77,7 +77,7 @@ if (name === 'git') {
     ...process.env, SUITE: undefined, PDD_VM_SUITE_LOCK: undefined, PDD_SUITE_QUEUE: join(dir, 'suite-queue'),
     // C is available on Linux and macOS, unlike an inherited C.UTF-8 locale.
     LC_ALL: 'C',
-    HOME: home, TMPDIR: dir, FAKE_DIR: dir, PATH: `${bin}:${process.env.PATH}`, ...options.env,
+    HOME: home, TMPDIR: dir, PATH: `${bin}:${process.env.PATH}`, ...options.env,
   };
   const events = () => {
     try { return readFileSync(join(dir, 'events'), 'utf8').trim().split('\n').map(JSON.parse); } catch { return []; }

@@ -809,6 +809,16 @@ While a run waits for the interpreter, or an outage or an interpreter access pro
 suite through one machine queue. Use the actual repository command, for example
 `pdd workflow suite --command "npm test"`. Focused tests can run normally.
 
+Each suite uses fresh temporary HOME, PDD_STATE_DIR, XDG_CONFIG_HOME and TMPDIR
+folders. The runner removes them after execution. It passes PATH, locale, time
+zone, terminal and CI settings, the browser path and its assigned PDD_CHECK_CPUS.
+Agent settings, credentials, session variables, shell hooks and Node/npm overrides
+are absent. Set extra variables explicitly in COMMAND when the suite needs them.
+Queue admission still uses the caller's queue selectors. Each ticket records
+`environmentPolicy: "clean-v1"`, without environment values.
+If private folder setup fails before execution starts, the ticket finishes with
+the failure reason and releases its slot. Any allocated private folders are removed.
+
 Full suites and full builds share machine capacity across repositories and
 worktrees. Run a full build through the same command. Additional
 runs show "waiting for a check slot (position N)". Workflow status also shows the

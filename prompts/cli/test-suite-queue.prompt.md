@@ -42,6 +42,43 @@ log lines and history file at `PDD_VM_SUITE_LOCK.history`, else
 `HOME/.local/state/pdd/vm-suite/fullsuite.lock.history`. An explicit legacy lock
 path still needs an existing writable parent; the default log parent is created. No GitHub writes, private paths or live agent calls.
 
+## Clean suite environment
+
+Admission uses the caller's queue selectors and machine ports. Execution must
+not inherit the agent session or its configuration. After admission, allocate
+one private temporary directory under the queue root, with separate empty
+`home`, `state`, `config` and `tmp` directories. Set `HOME` and `USERPROFILE` to
+home, `PDD_STATE_DIR` to state, `XDG_CONFIG_HOME` to config and `TMPDIR`, `TMP`
+and `TEMP` to tmp. Remove this directory after execution settles, including a
+nonzero exit, timeout or execution error. Native execution settles only after
+its child group is stopped. Never remove the caller's folders.
+
+If setup fails before calling the execution port, no child can own the admitted
+slot. Mark that ticket finished with `finishedAt` and a failure `reason`, return
+exit code 1, release its capacity and remove any allocated private directories.
+This includes failure to create the temporary root or any private subdirectory.
+Once execution has been called, a rejection releases the slot only when a
+reported child group is confirmed dead. A missing child PID after that call is
+uncertain ownership and must retain the reservation.
+
+Build the child environment from an allowlist: caller `PATH` (fallback
+`/usr/bin:/bin`), `LANG`, `LANGUAGE`, `LC_*`, `TZ`, `TERM`, `CI`, `SystemRoot`
+and `WINDIR` when supplied. Set `POCKET_BROWSER_BIN` to the caller's value or
+`/usr/bin/google-chrome`, as for the VM suite. Include the assigned
+`PDD_CHECK_CPUS`. All other inherited variables are absent, including
+`CODEX_HOME`, `PDD_AUTOPILOT_CONTEXT`, `HERDR_*`, agent credentials, session and
+config variables, interpreter queue overrides, `NODE_OPTIONS`, `BASH_ENV` and
+npm configuration. A command can explicitly set its own needed variables.
+Preserve the supplied command, cwd, output, status, timeout and CPU affinity.
+Do not change the parent environment.
+
+Store `environmentPolicy: "clean-v1"` on each new ticket, including its finished
+receipt. This identifies this rule without recording environment values, private
+directory names or secrets. Older tickets without the field remain readable.
+The compatibility entrypoint uses the same policy, so the same synthetic suite
+has the same result from a clean caller and an agent caller. Offline proof uses
+real CLI children, a controlled suite and fake machine capacity; no live agents.
+
 ## Machine capacity
 
 Own the capacity rule for full suites and full builds. Preserve queue ordering,
@@ -115,8 +152,8 @@ Serialize ticket creation and admission with
 the existing PID/token lock semantics. Preserve submission order among waiting
 tickets, including equal clock times; every waiter ahead contributes to position.
 Do not hold admission ownership during a suite or a wait. All test commands,
-including custom full suites, run in the supplied cwd with the supplied env and
-closed stdin. Preserve child stdout, stderr and nonzero status. A running suite
+including custom full suites, run in the supplied cwd with closed stdin and the
+clean environment below. Preserve child stdout, stderr and nonzero status. A running suite
 has a bounded timeout; terminate its process group before releasing its slot.
 Timeout returns 124 with a suite-specific reason. On SIGINT/SIGTERM, terminate
 running descendants and release only after termination. Dead waiters do not block
@@ -127,7 +164,7 @@ queue ownership fails closed; it cannot admit extra suites.
 
 Persist waiting, running and completed records atomically outside the checkout.
 Record only ticket, owner PID, child PID when known, cwd, state, timestamps,
-failure reason, assigned CPU IDs (`cpuIds`), share (`coresPerCheck`) and taskset path, never the command, environment or output. Report changed queue
+failure reason, assigned CPU IDs (`cpuIds`), share (`coresPerCheck`), taskset path and `environmentPolicy`, never the command, environment values or output. Report changed queue
 positions as `waiting for a check slot (position N)`, including full builds
 and waits on a busy machine. Autopilot reports the shared
 work as check slots. Retain completed intervals
