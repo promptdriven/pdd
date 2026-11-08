@@ -50,7 +50,8 @@ test('2903: with a shell startup cd, start, open, the next area, a fresh session
   assert.equal(rootShell.cwd, elsewhere, 'precondition: the run\'s own shell tab moved out of the worktree');
   const inWorktree = chat => {
     const pane = f.herdr.paneOf(chat);
-    assert.ok(pane.commands.at(-1).startsWith(`cd '${run.root}' && env PDD_AGENT_SESSION=1 `), pane.commands.at(-1));
+    assert.ok(pane.commands.at(-1).startsWith(`cd '${run.root}' && env -u ANTHROPIC_API_KEY `), pane.commands.at(-1));
+    assert.ok(pane.commands.at(-1).includes(' PDD_AGENT_SESSION=1 '));
     assert.equal(pane.cwd, run.root, `the ${chat.area} agent runs in the worktree`);
     assert.equal(f.herdr.sessions.find(s => s.id === pane.agent.agent_session.value).root, run.root, `the ${chat.area} session belongs to the worktree`);
   };

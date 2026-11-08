@@ -31,7 +31,7 @@ export function fakeHerdr() {
     }
     if (group === 'worktree' && verb === 'open') {
       // Real Herdr 0.9.1: the source must be a repository parent workspace inside Git, and the path a Git work tree.
-      const source = h.workspaces.find(w => w.workspace_id === flag('--workspace')), sourceCwd = h.panes.find(p => p.workspace_id === source?.workspace_id)?.cwd;
+      const source = h.workspaces.find(w => w.workspace_id === flag('--workspace')), sourceCwd = source?.worktree?.checkout_path ?? h.panes.find(p => p.workspace_id === source?.workspace_id)?.cwd;
       if (!source) fail('workspace_not_found');
       // A linked source refuses, also a new workspace at a linked checkout that has no Git identity yet.
       if (source.worktree ? source.worktree.is_linked_worktree : sourceCwd && linked(sourceCwd)) throw Object.assign(Error('New and open worktree actions start from the repo parent workspace.'), { code: 'linked_worktree_source' });
