@@ -109,3 +109,9 @@ failure policy. File paths exposed by adapters remain stable logical locators.
 Import `<stateDir>/runs.json` once. Update and retain the last 200 run index
 entries inside one transaction. Full workflow records remain in Git common
 state and remain the authority. Use `ports.store` for an injected backend.
+An absent legacy index stays eligible for later import. Malformed JSON follows
+empty-index recovery. Other read failures leave the import uncommitted so a
+later read can retry the retained file. Machine-wide discovery returns an empty
+result for that failed read. A run publication during the failure still saves
+its authoritative status record, but cannot consume the unreadable index or
+its import marker through the best-effort index update.

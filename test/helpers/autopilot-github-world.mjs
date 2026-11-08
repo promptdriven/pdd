@@ -1,9 +1,8 @@
-import { readAutopilotState, autopilotStateFiles } from '../../src/autopilot-store.mjs';
 // An Autopilot world for GitHub call counts: a real Git checkout, the real launcher tick, the real dependency intake
 // and `pdd dependencies complete`, a fake Herdr coordinator and the counting fake GitHub of github-repo-fake.mjs.
 // `src` selects the source tree, so the same world measures another version of the code.
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -50,6 +49,10 @@ export async function autopilotGithubWorld({ src = fileURLToPath(new URL('../../
   const launcher = await import(pathToFileURL(join(src, 'autopilot-launcher.mjs')).href);
   const intake = await import(pathToFileURL(join(src, 'issue-dependencies-intake.mjs')).href);
   const calls = await import(pathToFileURL(join(src, 'github-calls.mjs')).href);
+  const storage = existsSync(join(src, 'autopilot-store.mjs'))
+    ? await import(pathToFileURL(join(src, 'autopilot-store.mjs')).href)
+    : { autopilotStateFiles: root => readdirSync(root).filter(name => /^[0-9a-f]{20}\.json$/.test(name)),
+        readAutopilotState: file => JSON.parse(readFileSync(file, 'utf8')) };
   // A pdd command's runner, as the CLI has it: gh calls count into the Autopilot ledger of the repository.
   const commandExec = async (file, args, options = {}) => {
     if (file === 'git') { const r = runGit(args, options.cwd); if (r.code !== 0) throw Object.assign(Error('git failed'), r); return r; }
@@ -58,8 +61,8 @@ export async function autopilotGithubWorld({ src = fileURLToPath(new URL('../../
   };
   w.commandPorts = (extra = {}) => ({ execFile: calls.nativeGithubCounter(commandExec, { stateRoot, now: () => w.time }), autopilotStateRoot: stateRoot, now: () => w.time, env, ...extra });
   w.invoke = command => launcher.runAutopilotLauncher({ command, cwd, env, packageRoot: resolve(src, '..'), issues: [] }, w.ports);
-  w.stateFile = () => join(stateRoot, autopilotStateFiles(stateRoot)[0]);
-  w.state = () => readAutopilotState(w.stateFile());
+  w.stateFile = () => join(stateRoot, storage.autopilotStateFiles(stateRoot)[0]);
+  w.state = () => storage.readAutopilotState(w.stateFile());
   w.tick = () => launcher.tickAutopilot(w.stateFile(), w.ports);
   // The coordinator runs `pdd dependencies complete`; the CLI then asks the launcher for its completion tick.
   w.complete = async (request, analysis = analysisFor(request), ports = w.commandPorts()) => {

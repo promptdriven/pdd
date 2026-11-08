@@ -60,7 +60,11 @@ function runIndex(ports, action) {
   return withAutopilotStore(join(directory, 'autopilot'), ports, tx => {
     tx.migrate('runs.json', () => {
       try { return JSON.parse(readFileSync(join(directory, 'runs.json'), 'utf8')); }
-      catch (error) { if (error.code === 'ENOENT') return undefined; return { runs: [] }; }
+      catch (error) {
+        if (error.code === 'ENOENT') return undefined;
+        if (error instanceof SyntaxError) return { runs: [] };
+        throw error;
+      }
     }, index => {
       for (const [order, entry] of (Array.isArray(index?.runs) ? index.runs : []).entries())
         if (object(entry) && Number.isSafeInteger(entry.number)) tx.put('runs', typeof entry.runDir === 'string' ? entry.runDir : `legacy:${order}`, { order, entry });

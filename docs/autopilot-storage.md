@@ -39,6 +39,10 @@ database never switches back to old state files.
 Machine budget reads skip an unreadable legacy ledger and keep healthy and
 already committed observations. The failed ledger remains eligible for import
 on a later read.
+Run-index imports also retry after a file read failure. Discovery returns no
+runs for that failed read. Restore access to the retained `runs.json` file and
+read again. Malformed run-index JSON keeps its empty-index recovery policy.
+An index failure never undoes a saved workflow status record.
 
 Use one storage version for the processes that share a state folder. A binary
 that reads only the retained JSON files cannot see later database writes. Stop
@@ -65,6 +69,7 @@ Run the bounded native checks from the repository root:
 ```sh
 node --test test/autopilot-store.test.mjs test/autopilot-store-regression.test.mjs
 node --test test/autopilot-store-repair.test.mjs
+node --test test/workflow-run-index-retry.test.mjs test/autopilot-github-world-source.test.mjs
 node --test test/github-calls.test.mjs test/github-dependency-snapshot.test.mjs test/github-dependency-snapshot-repair.test.mjs
 ```
 
