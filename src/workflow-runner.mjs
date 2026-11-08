@@ -1,7 +1,7 @@
 import { validateSnapshot } from './metrics-store.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
 import { createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 7184006842c6211e73d7d43362a462ac9a540d0428720e77d2b5093b07233c2f).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 8abddf59d0b2fef4078d7521e8c01725687e754482e07b8c8f48f2cbe5998c7d).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -3202,7 +3202,13 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
       || run.automaticOrigin.machine !== automaticResume.machine || !samePath(run.sourceRoot, cwd)) return skipped();
     if (run.state === 'stuck' && run.chatResumeLimit) return {...done(run.parkReason), recovery: 'stuck', area: run.chatResumeLimit.area};
     if (run.state !== 'running' || run.gate || openQuestion(run) || !chat || chat.startUnconfirmed
+      || !validSessionId(chat.session?.id)
       || run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase)) return skipped();
+    const selectedChat = structuredClone(chat);
+    const stillEligible = fresh => fresh && fresh.runId === run.runId && fresh.state === 'running'
+      && fresh.area === selected && !fresh.gate && !openQuestion(fresh)
+      && sameFact(lastChat(fresh, selectedChat.area), selectedChat) && sameFact(fresh.done, run.done)
+      && sameFact(fresh.automaticOrigin, run.automaticOrigin) && sameFact(fresh.chatReplacement, run.chatReplacement);
     const live = await chatSession(chat, p);
     if (live.alive || !['agent_not_found', 'pane_not_found', 'server_not_running'].includes(live.code)) return skipped();
     const observed = observeLifecycle(chat, live.code === 'pane_not_found' ? {...live, code: 'agent_not_found'} : live, p.now(), chat.agent ?? run.agent);
@@ -3212,8 +3218,8 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
     const attempts = (run.chatResumes?.[name] ?? []).filter(time => Number.isFinite(time) && time > at - 3600000);
     if (attempts.length >= 3) {
       const reason = `The ${name} chat stopped after 3 automatic resume attempts in one hour. Inspect the chat before resuming this run.`;
-      commitRun(run, p, fresh => { fresh.state = 'stuck'; fresh.parkReason = reason; fresh.chatResumeLimit = {area: name, at}; });
-      return {...done(reason), recovery: 'stuck', area: name};
+      const saved = conditionalCommit(run, p, stillEligible, fresh => {fresh.state = 'stuck'; fresh.parkReason = reason; fresh.chatResumeLimit = {area: name, at};});
+      return saved ? {...done(reason), recovery: 'stuck', area: name} : skipped();
     }
     beforeLaunch = async () => {
       const saved = conditionalCommit(run, p, fresh => fresh && fresh.runId === run.runId && fresh.state === 'running'
@@ -3364,7 +3370,8 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
 }
 
 const openRunCommand = (args, ports) => lockedMutation(args, ports, openRunLocked);
-export const resumeStoppedRun = saveGuard(async ({coordinatorId, machine, ...args}, ports) => {
+export const resumeStoppedRun = saveGuard(async ({ref, cwd, packageRoot, coordinatorId, machine}, ports) => {
+  const args = {ref, cwd, packageRoot};
   const result = await lockedMutation(args, ports, (input, p) => openRunLocked({...input, automaticResume: {coordinatorId, machine}}, p));
   return result.recovery ? result : {...result, recovery: result.exitCode === 0 ? 'resumed' : 'skipped'};
 });

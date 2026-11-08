@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {tickAutopilot} from '../src/autopilot-launcher.mjs';
-import {acknowledgeRequest, changeRun, openRun, runStatus} from '../src/workflow-runner.mjs';
+import {acknowledgeRequest, askPerson, cancelRun, changeRun, openRun, runStatus, stepDone} from '../src/workflow-runner.mjs';
 import {fixture, packageRoot} from './helpers/workflow-runner-fixture.mjs';
 
 const origin = {repository: 'example/project', coordinatorId: 'coordinator-a', machine: 'machine-a', claim: {commentId: '11', labelEventId: '12'}};
@@ -236,4 +236,39 @@ test('3068: a confirmed missing pane and tab resume through the ordinary tab rec
   assert.notEqual(next.tabId, chat.tabId);
   assert.equal(next.workspaceId, chat.workspaceId);
   assert.equal(next.session.id, chat.session.id);
+});
+
+test('3068: stopped previously running chat without saved session waits for manual recovery', async t => {
+  const {f, run, tick} = await setup(t);
+  const chat = run.chats.at(-1); chat.session = null; save(f, run);
+  await f.herdr.herdr(['workspace', 'close', chat.workspaceId]); f.herdr.calls.length = 0;
+  await tick();
+  assert.equal(launches(f).length, 0);
+  assert.equal(f.record().chatResumes, undefined);
+});
+
+for (const action of ['question', 'cancel', 'step']) test(`3068: concurrent ${action} wins over stale exhausted-limit inspection`, async t => {
+  const {f, run, tick, stop, ports, alerts} = await setup(t);
+  const name = run.chats.at(-1).area; run.chatResumes = {[name]: [f.clock, f.clock, f.clock]}; save(f, run); stop();
+  const herdr = ports.herdr; let changed = false, concurrent;
+  ports.herdr = async args => {
+    try {return await herdr(args);}
+    finally {
+      if (!changed && args[0] === 'agent' && args[1] === 'get') {
+        changed = true;
+        const result = action === 'question' ? await askPerson({text: 'Choose how to continue.', cwd: run.root}, f.ports)
+          : action === 'cancel' ? await cancelRun({ref: '17', cwd: f.source}, f.ports)
+            : await stepDone({step: run.areas[run.area].steps[0], summary: 'Prepared the change.', cwd: run.root}, f.agentPorts());
+        assert.equal(result.exitCode, 0, result.message);
+        concurrent = f.record();
+      }
+    }
+  };
+  await tick();
+  assert.ok(changed); assert.ok(concurrent);
+  const after = f.record();
+  for (const key of ['state', 'area', 'gate', 'question', 'done']) assert.deepEqual(after[key], concurrent[key], key);
+  assert.equal(after.chatResumeLimit, undefined);
+  assert.equal(alerts.length, 0);
+  assert.equal(launches(f).length, 0);
 });
