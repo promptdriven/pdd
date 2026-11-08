@@ -153,6 +153,21 @@ area and issue has its own count. The 5 is a constant, not a setting. Manual and
 legacy runs save no count and no fingerprint and are never refused; their
 skill's 2-repair rule applies.
 
+## Automatic attention projection
+
+Export `automaticAttention({repo, machine}, ports = {})`, a synchronous, read-only
+projection of all saved runs on this machine from workflow-runs `allRuns`, or
+injected `ports.readRuns()`. Pass `ports.env`/`stateDir` to the native reader.
+Include only runs whose `automaticOrigin.machine` matches machine and whose repo
+matches ignoring case. Exclude ended runs except completed runs still at an
+`ask-code` gate. Emit `{number, category, cause}` rows: `stuck` with the existing
+stuck reason for stuck runs; otherwise `parked` with runtimeWait.reason or
+parkReason for paused runs; otherwise `decision` with the current open question
+or gate kind for a question or gate. One row per run, sorted by issue number.
+Ignore manual runs, other machines and repositories. Do not probe chats, wake,
+approve, mutate, or infer a stop. This supplies the launcher's repository digest
+across parallel runs, without changing run state or ownership.
+
 ## Record an automatic stopped run
 
 Native module function `parkAutomaticRun({reason,runtime,cwd},ports)` records an actual automatic stop from that run's existing worktree. Its current automatic worker or authorized coordinator can invoke `pdd workflow park --reason TEXT`; no worker needs to be resumed. Resolve the current run, require its existing automatic origin and current continuation ownership, and preserve current run identity, area, gate, history, chat, claim, worktree and progress under the existing saved-run update. Require a nonblank actual reason. On a non-ended run, record state `stuck` and its reason; an ended or replaced run is not revived. A repeated identical park is harmless. Status and list output show the saved stuck reason and do not describe the agent as working. This records a stop only: do not close or wake a chat, release a claim or allocation, invoke yield or infer native completion. Existing STOP, current ownership and revision rules remain in force. Current native done or positively ended evidence is still required by the existing capacity handoff.

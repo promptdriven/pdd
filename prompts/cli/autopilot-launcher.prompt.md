@@ -625,7 +625,8 @@ machine.
 An own claim whose issue has had `pdd:stuck` for 4 hours (`stuckSince`) is not
 refreshed again, so it expires 4 hours later unless the issue leaves `pdd:stuck`.
 For it, offer one `stuck-claim` time rule, once per stuck time, that asks the
-skill to retry with a changed approach or ask in the configured alert channel.
+skill to retry with a changed approach or ask in the configured alert channel,
+without another alert when the cause and required decision are unchanged.
 After a ceiling (the claim is `takeoverLimited`, or this checkout's run of the
 issue is `stuck` with a saved `repairLimit`), the rule instead says which limit
 was reached and asks for no retry, no removal of `pdd:stuck` and no new comment:
@@ -1093,6 +1094,20 @@ When the existing GitHub budget permits reads, a tick also invokes
 `cleanupWorktrees` with the repository and cwd, defaulting to the cleanup
 dependency. GitHub deferrals skip cleanup, never health. Cleanup failure cannot
 skip health or heartbeats.
+
+## Native attention digest
+
+On each enabled, non-off tick, before GitHub budget and retry early exits, read
+`automaticAttention({repo: state.repo, machine: state.machine}, {env: p.env})`
+from the workflow runner (injectable `readAttention(state, p)`). Call
+`runAutopilotAlerts` with action `digest`, `cwd`, `env`, and these `attention`
+rows, using this launcher's state root, stable machine, repository, clock and
+`alertPorts`. A `sendDigest(input, ports)` port can replace the call. This is
+native work: no AI wake, GitHub read or write, approval, workflow park or claim
+change. The alerts module owns cadence, aggregation and delivery. A digest read,
+send or save failure never stops the tick. Repeated 4-hour stuck rules explicitly
+say to send nothing when the cause and required decision are unchanged; elapsed
+time and another review are not new facts. Preserve retry and claim expiry rules.
 
 ## Dependencies
 

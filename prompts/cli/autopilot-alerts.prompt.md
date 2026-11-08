@@ -9,7 +9,7 @@ on the GitHub issue, so it stays with the original run.
 
 Export module functions `runAutopilotAlerts(input, ports)` and
 `alertStatusLine(input, ports)`. `runAutopilotAlerts` takes `action` `set`,
-`test`, `clear` or `alert` and returns `{exitCode, message}` with a one-line
+`test`, `clear`, `alert` or native-only `digest` and returns `{exitCode, message}` with a one-line
 message. The [CLI](pdd-cli.prompt.md) owns streams and reads stdin into
 `input.text`. The [launcher](autopilot-launcher.prompt.md) shows the status line.
 This is a new public interface.
@@ -194,7 +194,7 @@ flowchart TD
     K{Kind is recovered?} -->|No| O{Open incident for this call?}
     O -->|No| N[Open it with this issue and send the alert]
     O -->|Yes| J[Add this issue to its issues]
-    J --> U{"--update, and the fields changed or an issue is not in the last sent message?"}
+    J --> U{"--update, and cause or need changed or an issue is not in the last sent message?"}
     U -->|Yes| S[Save the fields and send an update]
     U -->|No| R{Latest result failed or not-configured, and a destination is set?}
     R -->|Yes| A[Send the alert again]
@@ -204,7 +204,12 @@ flowchart TD
     C -->|Yes| E[Close all of them and send one recovery]
 ```
 
-Compare fields after trim. A repeat keeps the fields of the last send. A repeat
+Compare `cause` and `need` after trim, plus the affected issue list. These are
+the incident's state. A change only to `tried`, an elapsed review time or routine
+review bookkeeping is not a material change and must not send a new message,
+even with `--update`. Callers keep cause and need unchanged while no new fact or
+decision exists; this module does not infer semantic equivalence of free text.
+A repeat keeps the fields of the last send. A repeat
 that adds an issue says so, sends nothing and names `--update`. Each send sets
 the latest result of its incident and the issues that its message named.
 
@@ -245,6 +250,64 @@ incident per repository, issue and kind. Its cause names the suite failure,
 timeout or interruption. Ordinary test-slot waiting creates no alert. A suite
 failure uses this kind instead of `stuck`; existing retry and readback rules apply.
 
+## Separate infrastructure destination
+
+Destination actions accept optional `destination: "autopilot"|"infrastructure"`
+(default `autopilot`), exposed as `--destination`. Validate it before any effect;
+unknown values exit 2. Infrastructure uses a separate private file
+`autopilot-infrastructure-alerts.json` beside `autopilot-alerts.json`, with the
+same secret, path, validation and permissions rules. Set, test and clear affect
+only the selected file. Their success and failure hints retain the selected
+`--destination infrastructure`, so the next command addresses the same route. A delivered test clears only older send failures on its selected route;
+open undelivered incidents still count. Log its route (`destination` is
+`infrastructure`; absent means `autopilot` for legacy records). Alert and digest callers cannot choose a destination.
+
+Route machine kinds (`usage-limit`, `resource`, `interpreter`,
+`interpreter-access`) to the infrastructure destination when set, otherwise the
+ordinary destination for compatibility. Route issue kinds and digests only to
+Autopilot. Split a recovery that closes both classes into one message per
+selected destination; never leak an infrastructure recovery into the issue
+channel when an infrastructure destination is configured. PDD does not manage
+external credential-maintenance or machine-health programs; configure their
+senders separately. Status tests and hints must identify the failing route. Save `destination:
+"infrastructure"` on an incident and log row delivered through that route;
+absence means `autopilot`. Evaluate latest send failures independently per
+route, so testing one cannot hide failures of the other. A digest has no issue;
+show its kind without an issue number. A delivered destination test also takes
+the shared record lock for each record update.
+
+## Quiet digest and concurrent runs
+
+The native `digest` action takes `cwd`, `env`, and `attention`, an array of
+`{number, category, cause}` from the workflow runner's automatic attention
+projection. Categories are `stuck`, `parked`, `decision`. Resolve repo and stable
+machine as for an alert. Combine this projection with this machine's open issue
+incidents (use their cause and need); omit machine incidents. Keep distinct
+categories per issue, deduplicate matching issue/category rows, sort by issue
+then category and show issue links and causes. Include at most 10 complete rows,
+with fields clipped to 120 characters. Budget the heading, rows and omission
+footer together within 1900 characters. Keep rows in sorted order and stop before
+the next row would exceed the budget; never cut an issue link. When any items are
+left out by either limit, the footer counts every item not shown.
+The heading identifies a digest, repository and machine. No open item means no
+send and no change to the last digest time. There is at most one digest attempt
+per repository and machine in 6 hours, including failed, unconfirmed and
+not-configured attempts. Save each attempt's `at`, `result`, optional `detail`
+in `digests[HOST]` and a log row with kind/action `digest`, no issue. This survives
+restarts and is independent of per-incident sends and recoveries. Digest delivery
+uses the existing service safety and readback rules and never blocks other work.
+Legacy records with no `digests` remain readable. New incidents save `host`;
+legacy incidents without it belong to the local machine for the digest.
+
+Serialize every alert/digest record read, decision, send and save with a
+repository record lock shared across processes and checkouts. Bounded lock
+contention may fail with no send; it must never read stale state and double-post
+or discard another run's incidents. Use the workflow runner's `acquireRunLock`
+with a distinct alert filename and its dead-owner recovery. Wait at most 30
+seconds (20 ms between attempts); an injected `sleep(ms)` can control waiting.
+Retain atomic private writes. A send interrupted before saving remains an
+unproved external outcome; this is not an exactly-once transport guarantee.
+
 ## Status line
 
 `alertStatusLine({repo, env}, ports)` reads only local files: no network and no
@@ -271,7 +334,9 @@ again.
 - [CLI](pdd-cli.prompt.md): generation and testing of dispatch, stdin and streams.
 - [Autopilot launcher](autopilot-launcher.prompt.md): status calls
   `alertStatusLine` with its saved repository and state root.
-- Native runtime: Node `fs`, `crypto`, `os` and `fetch`.
+- [Workflow runner](workflow-runner.prompt.md): required native context for
+  `automaticAttention` rows and `acquireRunLock` for shared record custody.
+- Native runtime: Node `fs`, `crypto`, `os`, timers and `fetch`.
 - Input `env` (default: the process environment) gives HOME and
   XDG_CONFIG_HOME; a relative or empty value is ignored, as
   [above](#an-absolute-home-folder).
@@ -282,4 +347,6 @@ again.
   optional numeric `exitCode`; the default runs `/bin/sh -c`;
   `repository({cwd})` returns `{nameWithOwner}`; `now()`; `hostname()`;
   `userInfo()` returns `{homedir}` or throws (default `os.userInfo`);
-  `stateRoot`. Tests inject `http`; no test sends a real webhook request.
+  `stateRoot`; `recordLock(directory, filename)` returns a release callback or
+  throws `run_busy` (default: workflow runner `acquireRunLock`); `sleep(ms)`
+  waits between lock attempts (default: native timer). Tests inject `http`; no test sends a real webhook request.

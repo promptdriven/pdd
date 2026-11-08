@@ -77,10 +77,10 @@ Run Autopilot commands inside the repo folder. Each repo has its own Autopilot o
 | `pdd autopilot stop` | Disable this repo's timer on this machine and let the current agent step finish |
 | `pdd autopilot status [--all]` | Show this machine's repo, the folder Autopilot works in, agent, timer, coordinator health and next tick without waking an agent; an idle coordinator is healthy. It reads `pdd.json` on GitHub only to warn when its Autopilot settings differ from this checkout. Another line says when pdd workflows cannot start in this folder, and why. Other lines show a pending or held coordinator relaunch an [alert](#alerts) that was not delivered, and the [GitHub calls](#github-api-budget) of the last hour. `--all` works from any folder and lists every repository with Autopilot on this machine: repository, folder, mode, enabled or disabled, timer and coordinator state. It reads only local files, the timer and Herdr: no GitHub call |
 | `pdd autopilot add N...` | Label named issues `pdd:autopilot`. Autopilot does not need this label: it considers every open issue |
-| `pdd autopilot alerts set` | Read your Discord or Slack incoming webhook URL from stdin and save it for this machine |
-| `pdd autopilot alerts set --discord-channel ID [--token-command CMD]` | Use a Discord bot in one channel: read its token from stdin, or save CMD and run it at each send to get the token |
-| `pdd autopilot alerts test` | Send one test message and confirm that it was posted; for a bot, first check and show the bot name and channel name |
-| `pdd autopilot alerts clear` | Remove the alert destination from this machine |
+| `pdd autopilot alerts set [--destination autopilot\|infrastructure]` | Read your Discord or Slack incoming webhook URL from stdin and save it for this machine |
+| `pdd autopilot alerts set --discord-channel ID [--token-command CMD] [--destination autopilot\|infrastructure]` | Use a Discord bot in one channel: read its token from stdin, or save CMD and run it at each send to get the token |
+| `pdd autopilot alerts test [--destination autopilot\|infrastructure]` | Send one test message and confirm that it was posted; for a bot, first check and show the bot name and channel name |
+| `pdd autopilot alerts clear [--destination autopilot\|infrastructure]` | Remove the alert destination from this machine |
 | `pdd autopilot alert --issue N --kind usage-limit\|resource\|interpreter\|interpreter-access\|access\|decision\|stuck\|test-suite\|long-running\|recovered --input - [--update]` | For the coordinator: record one alert and send it to this machine's destination |
 
 Outside a Git repository, `start`, `stop`, `status`, `add`, `off`, `observe`,
@@ -406,8 +406,10 @@ the name that Autopilot saved at its first start (this checkout's start first),
 else the host name, so a host rename does not open a new incident. An access or spending decision, a product
 decision, a stuck issue or a long-running issue is one incident per issue. A repeat call sends
 nothing for a delivered or unconfirmed alert, and sends again an alert that
-failed or had no destination. `--update` sends a material change or the new
-issue list. `--kind recovered` sends one recovery and closes the matching
+failed or had no destination. `--update` sends a new cause, a changed decision needed or the new
+issue list. Changing only what was tried sends nothing. Keep cause and need
+stable during a review with no new facts. A 4-hour stuck review alone sends no
+new message. `--kind recovered` sends one recovery and closes the matching
 alerts; give `"kind"` in the JSON to close only that incident. Every call and
 its delivery result are recorded in
 `~/.local/state/pdd/autopilot/alerts/`. Without a destination, the alert stays in
@@ -415,6 +417,35 @@ that record. `pdd autopilot status` adds one line when an alert was not delivere
 Work continues in both cases. A delivered `pdd autopilot alerts test` ends that
 line for an older failed send, such as a failed recovery. An open alert that was
 not delivered stays in the line until a later call sends it.
+
+The native tick sends one short digest per repository and machine at most every
+6 hours, only while open work exists. It lists stuck issues and their causes,
+parked automatic runs, and decisions waiting for a person. It reads saved runs
+across parallel worktrees. It does not wake an agent or approve work. The last
+digest attempt is saved across restarts. Failed or unconfirmed digest attempts
+also wait 6 hours, so a delivery problem cannot cause a burst of digests. Other
+work continues when delivery fails. Each repository's alert record has a shared
+lock, so parallel runs cannot overwrite incidents or send concurrent digests.
+
+To send infrastructure incidents to another channel, set a second destination:
+
+```sh
+pdd autopilot alerts set --destination infrastructure
+pdd autopilot alerts test --destination infrastructure
+pdd autopilot alerts clear --destination infrastructure
+```
+
+The bot options also accept `--destination infrastructure`. Its secret is saved
+in `autopilot-infrastructure-alerts.json` beside the ordinary destination with
+the same private permissions. Set, test and clear affect only the selected
+destination. The default is `--destination autopilot`. Machine incidents
+(`usage-limit`, `resource`, `interpreter`, `interpreter-access`) and their
+recoveries use the infrastructure destination when it is set. Without it they
+use the ordinary destination. Issue decisions, stuck alerts and digests use the
+Autopilot destination. Status identifies the failing destination; a test clears
+only that route's older delivery failure. An open undelivered incident still
+needs attention. Configure external credential-maintenance and machine-health
+senders at their own source; PDD does not change those programs.
 
 ## Runs on a GitHub issue
 

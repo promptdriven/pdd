@@ -3,8 +3,10 @@ import * as nativeFs from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { hostname as osHostname, userInfo } from 'node:os';
-import { dirname, isAbsolute, join } from 'node:path';
+import { basename, dirname, isAbsolute, join } from 'node:path';
 import { promisify } from 'node:util';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { acquireRunLock } from './workflow-runner.mjs';
 
 const execute = promisify(execFile);
 export const ALERT_KINDS = Object.freeze(['usage-limit', 'resource', 'interpreter', 'interpreter-access', 'access', 'decision', 'stuck', 'test-suite', 'long-running', 'recovered']);
@@ -39,10 +41,11 @@ function homeFolder(env, ports) {
   catch { return null; }
 }
 const noHome = what => done(1, `Autopilot alerts need an absolute home folder; set HOME to an absolute path. ${what}`);
-const configFile = (env, ports) => {
-  if (isAbsolute(env.XDG_CONFIG_HOME ?? '')) return join(env.XDG_CONFIG_HOME, 'pdd', 'autopilot-alerts.json');
+const configFile = (env, ports, destination = 'autopilot') => {
+  const name = destination === 'infrastructure' ? 'autopilot-infrastructure-alerts.json' : 'autopilot-alerts.json';
+  if (isAbsolute(env.XDG_CONFIG_HOME ?? '')) return join(env.XDG_CONFIG_HOME, 'pdd', name);
   const home = homeFolder(env, ports);
-  return home ? join(home, '.config', 'pdd', 'autopilot-alerts.json') : null;
+  return home ? join(home, '.config', 'pdd', name) : null;
 };
 const stateRoot = (env, ports) => ports.stateRoot ?? (home => home && join(home, '.local', 'state', 'pdd', 'autopilot'))(homeFolder(env, ports));
 const recordFile = (repo, env, ports) => {
@@ -87,8 +90,8 @@ function webhook(text) {
 }
 
 // A missing, unreadable or invalid file counts as no destination; alerts are then recorded locally.
-function readDestination(fs, env, ports) {
-  const file = configFile(env, ports);
+function readDestination(fs, env, ports, destination = 'autopilot') {
+  const file = configFile(env, ports, destination);
   if (!file) return null;
   try {
     const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -233,6 +236,25 @@ function outcomeMessage(what, label, outcome, confirmer) {
   return `${what} recorded for ${label}; delivery ${outcome.result} (${outcome.detail}).${again} pdd autopilot status shows it. Continue other work.`;
 }
 
+// Hold custody through delivery and the final atomic write. All checkouts share this repository lock.
+async function withRecord(repo, env, ports, fs, action) {
+  const file = recordFile(repo, env, ports);
+  fs.mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+  let release;
+  for (let attempt = 0; attempt <= 1500; attempt++) {
+    try { release = (ports.recordLock ?? acquireRunLock)(dirname(file), `${basename(file)}.lock`); break; }
+    catch (error) {
+      if (error.code !== 'run_busy' || attempt === 1500) return done(1, 'Autopilot alert record is busy or unavailable; nothing sent.');
+      await (ports.sleep ?? sleep)(20);
+    }
+  }
+  try { return await action(file, readRecord(fs, file) ?? { v: 1, repo, incidents: {}, log: [] }); }
+  finally { release(); }
+}
+const destinationFor = (fs, env, ports, kind) => MACHINE_KINDS.includes(kind)
+  ? readDestination(fs, env, ports, 'infrastructure') ?? readDestination(fs, env, ports)
+  : readDestination(fs, env, ports);
+
 async function sendAlert(input, ports, env, fs) {
   const issue = String(input.issue ?? '');
   if (!/^[1-9][0-9]{0,9}$/.test(issue)) return done(2, 'Use pdd autopilot alert --issue N with a positive issue number.');
@@ -251,59 +273,119 @@ async function sendAlert(input, ports, env, fs) {
   let repo;
   try { repo = (await (ports.repository ?? nativeRepository)({ cwd: input.cwd }))?.nameWithOwner; } catch { /* Checked below. */ }
   if (!repoName(repo)) return done(1, 'Autopilot alerts need a GitHub repository; run pdd autopilot alert in its checkout.');
-  const file = recordFile(repo, env, ports), record = readRecord(fs, file) ?? { v: 1, repo, incidents: {}, log: [] };
-  const at = new Date((ports.now ?? Date.now)()).toISOString(), host = machineName(fs, stateRoot(env, ports), repo, ports, input.cwd);
-  const destination = readDestination(fs, env, ports), number = Number(issue);
-  const confirmer = destination?.service === 'discord-bot' ? 'the Discord bot readback' : 'the webhook';
-  const send = text => destination ? deliver(destination, text, ports, input.cwd) : { result: 'not-configured' };
-  const log = (kind, action, outcome) => {
-    record.log = [...record.log, { at, issue: number, kind, action, result: outcome.result, ...(outcome.detail ? { detail: outcome.detail } : {}) }].slice(-LOG_LIMIT);
-  };
-  const save = () => { try { writePrivate(fs, file, record); return true; } catch { return false; } };
-  const unsaved = done(1, 'Cannot save the Autopilot alert record on this machine.');
-  const machineKey = kind => `${kind}@${host}`;
-  if (recovery) {
-    // A machine incident of this host matches when it lists the issue, or when the recovery names its kind.
-    const matches = (key, item) => object(item) && (target === undefined || item.kind === target) && (MACHINE_KINDS.includes(item.kind)
-      ? key === machineKey(item.kind) && (target !== undefined || issuesOf(item).includes(number))
-      : key === `${issue}:${item.kind}`);
-    const keys = Object.keys(record.incidents).filter(key => matches(key, record.incidents[key]));
-    if (!keys.length) {
-      log(target ?? 'recovered', 'recovered', { result: 'not-sent' });
-      return save() ? done(0, `No open alert ${target ? `of kind ${target} ` : ''}for #${issue}; nothing sent.`) : unsaved;
+  return withRecord(repo, env, ports, fs, async (file, record) => {
+    const at = new Date((ports.now ?? Date.now)()).toISOString(), host = machineName(fs, stateRoot(env, ports), repo, ports, input.cwd);
+    const destination = destinationFor(fs, env, ports, input.kind), number = Number(issue);
+    const confirmer = destination?.service === 'discord-bot' ? 'the Discord bot readback' : 'the webhook';
+    const send = text => destination ? deliver(destination, text, ports, input.cwd) : { result: 'not-configured' };
+    const route = MACHINE_KINDS.includes(input.kind) && readDestination(fs, env, ports, 'infrastructure') ? { destination: 'infrastructure' } : {};
+    const log = (kind, action, outcome, routeInfo = route) => {
+      record.log = [...record.log, { at, issue: number, kind, action, ...routeInfo, result: outcome.result, ...(outcome.detail ? { detail: outcome.detail } : {}) }].slice(-LOG_LIMIT);
+    };
+    const save = () => { try { writePrivate(fs, file, record); return true; } catch { return false; } };
+    const unsaved = done(1, 'Cannot save the Autopilot alert record on this machine.');
+    const machineKey = kind => `${kind}@${host}`;
+    if (recovery) {
+      // A machine incident of this host matches when it lists the issue, or when the recovery names its kind.
+      const matches = (key, item) => object(item) && (target === undefined || item.kind === target) && (MACHINE_KINDS.includes(item.kind)
+        ? key === machineKey(item.kind) && (target !== undefined || issuesOf(item).includes(number))
+        : key === `${issue}:${item.kind}`);
+      const keys = Object.keys(record.incidents).filter(key => matches(key, record.incidents[key]));
+      if (!keys.length) {
+        log(target ?? 'recovered', 'recovered', { result: 'not-sent' });
+        return save() ? done(0, `No open alert ${target ? `of kind ${target} ` : ''}for #${issue}; nothing sent.`) : unsaved;
+      }
+      const infrastructure = readDestination(fs, env, ports, 'infrastructure');
+      const groups = infrastructure ? [keys.filter(key => !MACHINE_KINDS.includes(record.incidents[key].kind)),
+        keys.filter(key => MACHINE_KINDS.includes(record.incidents[key].kind))] : [keys];
+      const messages = [];
+      for (const group of groups.filter(group => group.length)) {
+        const kinds = group.map(key => record.incidents[key].kind);
+        const issues = [...new Set(group.flatMap(key => issuesOf(record.incidents[key])))].sort((a, b) => a - b);
+        const route = destinationFor(fs, env, ports, kinds[0]);
+        const outcome = route ? await deliver(route, alertText('recovered', { kinds, host, repo, issues: issues.length ? issues : [number], fields: clean }), ports, input.cwd)
+          : { result: 'not-configured' };
+        for (const key of group) delete record.incidents[key];
+        log(kinds.join(','), 'recovered', outcome, infrastructure && MACHINE_KINDS.includes(kinds[0]) ? { destination: 'infrastructure' } : {});
+        messages.push(outcomeMessage('Recovery', `${kinds.join(', ')} (${issueTags(issues.length ? issues : [number])})`, outcome,
+          route?.service === 'discord-bot' ? 'the Discord bot readback' : 'the webhook'));
+      }
+      return save() ? done(0, messages.join(' ')) : unsaved;
     }
-    const kinds = keys.map(key => record.incidents[key].kind);
-    const issues = [...new Set(keys.flatMap(key => issuesOf(record.incidents[key])))].sort((a, b) => a - b);
-    const outcome = await send(alertText('recovered', { kinds, host, repo, issues: issues.length ? issues : [number], fields: clean }));
-    for (const key of keys) delete record.incidents[key];
-    log(kinds.join(','), 'recovered', outcome);
-    return save() ? done(0, outcomeMessage('Recovery', `${kinds.join(', ')} (${issueTags(issues.length ? issues : [number])})`, outcome, confirmer)) : unsaved;
-  }
-  const machine = MACHINE_KINDS.includes(input.kind), key = machine ? machineKey(input.kind) : `${issue}:${input.kind}`;
-  const open = object(record.incidents[key]) ? record.incidents[key] : null;
-  const known = issuesOf(open), issues = [...new Set([...known, number])].sort((a, b) => a - b), listed = Array.isArray(open?.listed) ? open.listed : [];
-  // A material change is new field text or an affected issue that no sent message has named yet.
-  const changed = open && (names.some(name => open.fields?.[name] !== clean[name]) || issues.some(item => !listed.includes(item)));
-  const action = !open ? 'alert' : input.update && changed ? 'update' : ['failed', 'not-configured'].includes(open.result) && destination ? 'retry' : 'repeat';
-  const label = `${issueTags(issues)} ${input.kind}`;
-  if (action === 'repeat') {
-    const joined = !known.includes(number);
-    if (joined) record.incidents[key] = { ...open, issues, updatedAt: at };
-    log(input.kind, 'repeat', { result: 'not-sent' });
-    if (!save()) return unsaved;
-    return done(0, joined ? `Added #${issue} to the open ${input.kind} alert on this machine; nothing sent. Use --update to send the new issue list.`
-      : `Alert for ${label} is already open; nothing sent. Use --update only for a material change.`);
-  }
-  const outcome = await send(alertText(action === 'update' ? 'update' : 'alert', { kinds: [input.kind], host, repo, issues, fields: clean }));
-  record.incidents[key] = { kind: input.kind, issues, listed: issues, fields: clean, openedAt: open?.openedAt ?? at, updatedAt: at,
-    result: outcome.result, ...(outcome.detail ? { detail: outcome.detail } : {}) };
-  log(input.kind, action, outcome);
-  return save() ? done(0, outcomeMessage(action === 'update' ? 'Update' : 'Alert', label, outcome, confirmer)) : unsaved;
+    const machine = MACHINE_KINDS.includes(input.kind), key = machine ? machineKey(input.kind) : `${issue}:${input.kind}`;
+    const open = object(record.incidents[key]) ? record.incidents[key] : null;
+    const known = issuesOf(open), issues = [...new Set([...known, number])].sort((a, b) => a - b), listed = Array.isArray(open?.listed) ? open.listed : [];
+    // A material change is new field text or an affected issue that no sent message has named yet.
+    const changed = open && (['cause', 'need'].some(name => open.fields?.[name] !== clean[name]) || issues.some(item => !listed.includes(item)));
+    const action = !open ? 'alert' : input.update && changed ? 'update' : ['failed', 'not-configured'].includes(open.result) && destination ? 'retry' : 'repeat';
+    const label = `${issueTags(issues)} ${input.kind}`;
+    if (action === 'repeat') {
+      const joined = !known.includes(number);
+      if (joined) record.incidents[key] = { ...open, issues, updatedAt: at };
+      log(input.kind, 'repeat', { result: 'not-sent' });
+      if (!save()) return unsaved;
+      return done(0, joined ? `Added #${issue} to the open ${input.kind} alert on this machine; nothing sent. Use --update to send the new issue list.`
+        : `Alert for ${label} is already open; nothing sent. Use --update only for a material change.`);
+    }
+    const outcome = await send(alertText(action === 'update' ? 'update' : 'alert', { kinds: [input.kind], host, repo, issues, fields: clean }));
+    record.incidents[key] = { kind: input.kind, host, ...route, issues, listed: issues, fields: clean, openedAt: open?.openedAt ?? at, updatedAt: at,
+      result: outcome.result, ...(outcome.detail ? { detail: outcome.detail } : {}) };
+    log(input.kind, action, outcome);
+    return save() ? done(0, outcomeMessage(action === 'update' ? 'Update' : 'Alert', label, outcome, confirmer)) : unsaved;
+  });
+}
+
+async function sendDigest(input, ports, env, fs) {
+  if (!ports.stateRoot && !homeFolder(env, ports)) return noHome('Nothing was recorded or sent. Continue other work.');
+  let repo;
+  try { repo = (await (ports.repository ?? nativeRepository)({ cwd: input.cwd }))?.nameWithOwner; } catch { /* No repository. */ }
+  if (!repoName(repo)) return done(1, 'Autopilot digest needs a GitHub repository.');
+  return withRecord(repo, env, ports, fs, async (file, record) => {
+    const host = machineName(fs, stateRoot(env, ports), repo, ports, input.cwd), now = (ports.now ?? Date.now)();
+    const last = record.digests?.[host];
+    if (last && now - Date.parse(last.at) < 6 * 60 * 60 * 1000) return done(0, 'Autopilot digest is not due; nothing sent.');
+    const rows = new Map();
+    for (const item of Array.isArray(input.attention) ? input.attention : []) {
+      if (Number.isSafeInteger(item?.number) && item.number > 0 && ['stuck', 'parked', 'decision'].includes(item.category) && typeof item.cause === 'string')
+        rows.set(`${item.number}:${item.category}`, { number: item.number, category: item.category, cause: item.cause });
+    }
+    for (const item of Object.values(record.incidents)) {
+      if (!object(item) || MACHINE_KINDS.includes(item.kind) || item.host && item.host !== host) continue;
+      for (const number of issuesOf(item)) rows.set(`${number}:${item.kind}`, { number, category: item.kind,
+        cause: `${item.fields?.cause ?? ''}; ${item.fields?.need ?? ''}` });
+    }
+    const items = [...rows.values()].sort((a, b) => a.number - b.number || a.category.localeCompare(b.category));
+    if (!items.length) return done(0, 'No open Autopilot work; nothing sent.');
+    const footer = count => count ? `\n${count} more open items.` : '';
+    const heading = clip(`PDD Autopilot digest (${host})\nRepository: ${repo}`, TEXT_LIMIT - footer(items.length).length);
+    const lines = [heading];
+    let included = 0;
+    for (const item of items.slice(0, ISSUE_LIMIT)) {
+      const row = `${item.category}: https://github.com/${repo}/issues/${item.number} — ${clip(oneLine(item.cause), 120)}`;
+      // Reserve the footer before adding a complete row, so neither limit hides an item.
+      if ([...lines, row].join('\n').length + footer(items.length - included - 1).length > TEXT_LIMIT) break;
+      lines.push(row);
+      included++;
+    }
+    const text = lines.join('\n') + footer(items.length - included);
+    const destination = readDestination(fs, env, ports);
+    const outcome = destination ? await deliver(destination, text, ports, input.cwd) : { result: 'not-configured' };
+    const at = new Date(now).toISOString();
+    record.digests = { ...record.digests, [host]: { at, ...outcome } };
+    record.log = [...record.log, { at, host, kind: 'digest', action: 'digest', ...outcome }].slice(-LOG_LIMIT);
+    try { writePrivate(fs, file, record); } catch { return done(1, 'Cannot save the Autopilot digest record.'); }
+    return done(0, outcomeMessage('Digest', repo, outcome, destination?.service === 'discord-bot' ? 'the Discord bot readback' : 'the webhook'));
+  });
 }
 
 export async function runAutopilotAlerts(input = {}, ports = {}) {
   const env = input.env ?? process.env, fs = ports.fs ?? nativeFs;
+  const suffix = input.destination === 'infrastructure' ? ' --destination infrastructure' : '';
+  const testHint = `pdd autopilot alerts test${suffix}`, setHint = `pdd autopilot alerts set${suffix}`;
   try {
+    if (input.destination !== undefined && (!['set', 'test', 'clear'].includes(input.action) || !['autopilot', 'infrastructure'].includes(input.destination)))
+      return done(2, 'Use --destination autopilot|infrastructure with alerts set, test or clear.');
+    if (input.action === 'digest') return await sendDigest(input, ports, env, fs);
     if (input.action === 'alert') return await sendAlert(input, ports, env, fs);
     if (input.action === 'set' && (input.discordChannel !== undefined || input.tokenCommand !== undefined)) {
       const channel = String(input.discordChannel ?? ''), command = input.tokenCommand;
@@ -311,36 +393,36 @@ export async function runAutopilotAlerts(input = {}, ports = {}) {
       if (command !== undefined && (typeof command !== 'string' || !command.trim() || command.length > 2000)) return done(2, 'Give --token-command one nonblank command. Nothing was saved.');
       const token = command === undefined ? String(input.text ?? '').trim() : undefined;
       if (command === undefined && !BOT_TOKEN.test(token)) return done(2, 'Give the Discord bot token on stdin, or use --token-command. Nothing was saved.');
-      const file = configFile(env, ports);
+      const file = configFile(env, ports, input.destination);
       if (!file) return noHome('Nothing was saved.');
       try { writePrivate(fs, file, { v: 1, service: 'discord-bot', channel, ...(command === undefined ? { token } : { tokenCommand: command }) }); }
       catch { return done(1, 'Cannot save the alert destination; nothing was changed.'); }
       return done(0, command === undefined
-        ? `Saved a Discord bot for channel ${channel} on this machine; the token is readable only by you. Run pdd autopilot alerts test.`
-        : `Saved a Discord bot for channel ${channel} on this machine; pdd runs your token command at each send and stores no token. Run pdd autopilot alerts test.`);
+        ? `Saved a Discord bot for channel ${channel} on this machine; the token is readable only by you. Run ${testHint}.`
+        : `Saved a Discord bot for channel ${channel} on this machine; pdd runs your token command at each send and stores no token. Run ${testHint}.`);
     }
     if (input.action === 'set') {
       const parsed = webhook(input.text);
       if (!parsed) return done(2, 'Give one Discord or Slack incoming webhook URL (https) on stdin. Nothing was saved.');
-      const file = configFile(env, ports);
+      const file = configFile(env, ports, input.destination);
       if (!file) return noHome('Nothing was saved.');
       try { writePrivate(fs, file, { v: 1, service: parsed.service, url: parsed.url }); }
       catch { return done(1, 'Cannot save the alert destination; nothing was changed.'); }
-      return done(0, `Saved a ${SERVICE[parsed.service]} webhook for Autopilot alerts on this machine. Run pdd autopilot alerts test to send a test message.`);
+      return done(0, `Saved a ${SERVICE[parsed.service]} webhook for Autopilot alerts on this machine. Run ${testHint} to send a test message.`);
     }
     if (input.action === 'test') {
-      if (!configFile(env, ports)) return noHome('Nothing was sent.');
-      const destination = readDestination(fs, env, ports);
-      if (!destination) return done(1, 'No alert destination is set on this machine. Run pdd autopilot alerts set.');
-      const text = `PDD Autopilot test alert (${hostName(ports)}).`, delivered = () => recordTest(fs, env, ports);
+      if (!configFile(env, ports, input.destination)) return noHome('Nothing was sent.');
+      const destination = readDestination(fs, env, ports, input.destination);
+      if (!destination) return done(1, `No alert destination is set on this machine. Run ${setHint}.`);
+      const text = `PDD Autopilot test alert (${hostName(ports)}).`, delivered = () => recordTest(fs, env, ports, input.destination);
       if (destination.service === 'discord-bot') return await testBot(destination, text, input, ports, delivered);
       const outcome = await deliver(destination, text, ports, input.cwd), service = SERVICE[destination.service];
-      if (outcome.result === 'delivered') { delivered(); return done(0, `Test alert delivered; ${service} confirmed the message.`); }
-      if (outcome.result === 'failed') return done(1, `Test alert failed (${outcome.detail}). Check the ${service} webhook, then run pdd autopilot alerts set again.`);
+      if (outcome.result === 'delivered') { await delivered(); return done(0, `Test alert delivered; ${service} confirmed the message.`); }
+      if (outcome.result === 'failed') return done(1, `Test alert failed (${outcome.detail}). Check the ${service} webhook, then run ${setHint} again.`);
       return done(1, `Test alert unconfirmed (${outcome.detail}). Look in the ${service} channel before you test again.`);
     }
     if (input.action === 'clear') {
-      const file = configFile(env, ports);
+      const file = configFile(env, ports, input.destination);
       if (!file) return noHome('Nothing was removed.');
       try { fs.unlinkSync(file); }
       catch (error) {
@@ -354,16 +436,21 @@ export async function runAutopilotAlerts(input = {}, ports = {}) {
 }
 
 // A delivered test is the newest send of each existing record, so status drops an older failed send (such as a closed recovery).
-function recordTest(fs, env, ports) {
+async function recordTest(fs, env, ports, destination) {
   const root = stateRoot(env, ports), at = new Date((ports.now ?? Date.now)()).toISOString();
   if (!root) return;
   let names = [];
   try { names = fs.readdirSync(join(root, 'alerts')).filter(name => STATE_FILE.test(name)); } catch { return; }
   for (const name of names) {
     const file = join(root, 'alerts', name), record = readRecord(fs, file);
-    if (!record) continue;
-    record.log = [...record.log, { at, kind: 'test', action: 'test', result: 'delivered' }].slice(-LOG_LIMIT);
-    try { writePrivate(fs, file, record); } catch { /* The test message was still delivered. */ }
+    if (!record || !repoName(record.repo)) continue;
+    try {
+      await withRecord(record.repo, env, ports, fs, async (file, latest) => {
+        latest.log = [...latest.log, { at, kind: 'test', action: 'test', result: 'delivered',
+          ...(destination === 'infrastructure' ? { destination } : {}) }].slice(-LOG_LIMIT);
+        writePrivate(fs, file, latest);
+      });
+    } catch { /* The test message was still delivered. */ }
   }
 }
 
@@ -378,7 +465,7 @@ async function testBot(destination, text, input, ports, delivered) {
   if (!channel.value) return done(1, `Discord bot ${bot} cannot read channel ${destination.channel} (${channel.detail}). Nothing was sent.`);
   const where = `Discord bot ${bot} in #${clip(oneLine(channel.value.name ?? destination.channel), 100)}`;
   const outcome = await botSend(destination, auth.token, text, ports);
-  if (outcome.result === 'delivered') { delivered(); return done(0, `Test alert delivered; ${where} posted it and the readback matched.`); }
+  if (outcome.result === 'delivered') { await delivered(); return done(0, `Test alert delivered; ${where} posted it and the readback matched.`); }
   return done(1, `Test alert ${outcome.result} (${outcome.detail}) for ${where}.`);
 }
 
@@ -389,13 +476,18 @@ export function alertStatusLine({ repo, env = process.env } = {}, ports = {}) {
     const fs = ports.fs ?? nativeFs, file = recordFile(repo, env, ports), record = file && readRecord(fs, file);
     if (!record) return '';
     const open = Object.values(record.incidents).filter(item => object(item) && item.result !== 'delivered');
-    const last = [...record.log].reverse().find(row => SENDS.includes(row?.result));
-    const failed = last && last.result !== 'delivered' ? last : null;
-    if (!open.length && !failed) return '';
+    const failed = ['autopilot', 'infrastructure'].map(destination => [...record.log].reverse()
+      .find(row => SENDS.includes(row?.result) && (row.destination ?? 'autopilot') === destination))
+      .filter(row => row && row.result !== 'delivered');
+    if (!open.length && !failed.length) return '';
     const parts = [];
     if (open.length) parts.push(`${open.length} open alert${open.length === 1 ? '' : 's'} not delivered`);
-    if (failed) parts.push(`last delivery ${failed.result}${failed.detail ? ` (${failed.detail})` : ''} for #${failed.issue} ${failed.kind} at ${failed.at}`);
-    const hint = readDestination(fs, env, ports) ? 'check with pdd autopilot alerts test' : 'set one with pdd autopilot alerts set';
-    return scrub(oneLine(`Alerts: ${parts.join('; ')}; ${hint}.`));
+    for (const row of failed) parts.push(`last delivery ${row.result}${row.detail ? ` (${row.detail})` : ''} for ${row.issue ? `#${row.issue} ` : ''}${row.kind} at ${row.at}`);
+    const destinations = new Set([...open, ...failed].map(row => row.destination ?? 'autopilot'));
+    const hints = [...destinations].map(destination => {
+      const suffix = destination === 'infrastructure' ? ' --destination infrastructure' : '';
+      return readDestination(fs, env, ports, destination) ? `check with pdd autopilot alerts test${suffix}` : `set one with pdd autopilot alerts set${suffix}`;
+    });
+    return scrub(oneLine(`Alerts: ${parts.join('; ')}; ${hints.join('; ')}.`));
   } catch { return ''; }
 }
