@@ -5,8 +5,16 @@ Preserve existing workflow gates, claims, run capacity and CI behavior.
 
 Export `ownerAreas(labels)`: accept GitHub label strings or `{name}` objects.
 Return unique, sorted, lowercase nonempty `area:NAME` labels. If absent return
-`["repository"]`. A PR's own area labels win; otherwise use the union of the
-area labels of its closing issues. Unlabeled work shares the repository area.
+`["repository"]`. A PR's own area labels win; otherwise use the current labels
+of its source issue from `<!-- pdd:autopilot-issue:N -->` in the body. This
+repository-local positive safe integer is emitted by workflow publication for
+both spec and stacked code PRs; do not depend on GitHub closing links for them.
+Read that issue's labels through GraphQL `sourceIssue: issue(number:$number)`
+in the same repository, once per distinct source issue per queue read. A missing
+issue, invalid or conflicting source markers, GraphQL error, or incomplete label
+connection makes the whole observation unavailable. Without a source marker,
+use the union of the area labels of closing issues for compatibility.
+Unlabeled work shares the repository area.
 A PR spanning areas counts once in each. Areas are repository-local, not authors
 or coordinator identities. Labels supply routing data, never execution authority.
 

@@ -114,6 +114,12 @@ export function createGithubRepoFake({ repository = 'acme/widgets', owner = 'acm
   }
   function graphql(input) {
     const { query, variables } = JSON.parse(input), data = {};
+    if (query.includes('sourceIssue: issue(')) {
+      const issue = f.issues.get(variables.number);
+      return { data: { repository: { sourceIssue: !issue || issue.deleted || issue.movedTo ? null : {
+        number: issue.number, labels: { totalCount: issue.labels.length, nodes: issue.labels.map(name => ({ name })) },
+      } } } };
+    }
     if (query.includes('pullRequests(')) {
       const all = live().filter(issue => issue.pull_request && issue.state === 'open');
       const offset = variables.cursor ? Number(variables.cursor) : 0;

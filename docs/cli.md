@@ -187,7 +187,10 @@ PRs waiting only for CI do not count. GitHub's current required-review decision,
 changes requested and pending review requests determine which PRs wait.
 
 Use `area:NAME` labels on issues and PRs for owner areas. Names match without
-case. A PR's own areas take priority; otherwise it uses its closing issues' areas.
+case. A PR's own areas take priority. Automatic publication records its source
+issue in `<!-- pdd:autopilot-issue:N -->`. When the PR has no area labels, it uses
+that issue's current areas. This works for spec PRs and code PRs stacked on an
+unmerged spec branch. PRs without this marker use their closing issues' areas.
 A PR with several areas counts once in each area. Unlabeled work shares one
 repository area. An Autopilot PR has the `pdd:autopilot` label, the
 `<!-- pdd:autopilot-pr -->` marker, or a PDD workflow marker and

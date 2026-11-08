@@ -26,7 +26,19 @@ const query = `query($owner:String!,$name:String!,$cursor:String) {
     }
   }
 }`;
+const sourceQuery = `query($owner:String!,$name:String!,$number:Int!) {
+  repository(owner:$owner,name:$name) {
+    sourceIssue: issue(number:$number) { number labels(first:100) { totalCount nodes { name } } }
+  }
+}`;
 const unavailable = () => { throw Error('PR review observations unavailable; retry next tick.'); };
+function sourceNumber(body) {
+  const markers = body.match(/^<!-- pdd:autopilot-issue:.*$/gm) ?? [];
+  if (!markers.length) return null;
+  const numbers = markers.map(marker => Number(/^<!-- pdd:autopilot-issue:([1-9][0-9]*) -->$/.exec(marker)?.[1]));
+  if (numbers.some(number => !Number.isSafeInteger(number)) || new Set(numbers).size !== 1) unavailable();
+  return numbers[0];
+}
 function complete(connection) {
   if (!connection || !Array.isArray(connection.nodes) || !Number.isSafeInteger(connection.totalCount)
     || connection.totalCount !== connection.nodes.length || connection.nodes.some(node => !node || typeof node !== 'object')) unavailable();
@@ -35,7 +47,7 @@ function complete(connection) {
 export async function readReviewQueue({ repository, rows }, { request }) {
   if (!Array.isArray(rows)) unavailable();
   if (!rows.some(row => row.pull_request && isAutomatic(row.body, row.labels ?? []))) return {};
-  const [owner, name] = repository.split('/'), counts = {}, seen = new Set(), cursors = new Set();
+  const [owner, name] = repository.split('/'), counts = {}, seen = new Set(), cursors = new Set(), sources = new Map();
   let cursor = null;
   do {
     const reply = await request(query, { owner, name, cursor });
@@ -54,7 +66,17 @@ export async function readReviewQueue({ repository, rows }, { request }) {
       if (!['REVIEW_REQUIRED', 'CHANGES_REQUESTED'].includes(pr.reviewDecision) && pr.reviewRequests.totalCount === 0) continue;
       let areas = ownerAreas(labels);
       if (areas[0] === 'repository') {
-        const linked = complete(pr.closingIssuesReferences).flatMap(issue => complete(issue.labels));
+        const number = sourceNumber(pr.body);
+        let linked;
+        if (number !== null) {
+          if (!sources.has(number)) {
+            const source = await request(sourceQuery, { owner, name, number });
+            const issue = source?.data?.repository?.sourceIssue;
+            if (source?.errors?.length || issue?.number !== number) unavailable();
+            sources.set(number, complete(issue.labels));
+          }
+          linked = sources.get(number);
+        } else linked = complete(pr.closingIssuesReferences).flatMap(issue => complete(issue.labels));
         if (linked.some(label => typeof label.name !== 'string')) unavailable();
         areas = ownerAreas(linked);
       }

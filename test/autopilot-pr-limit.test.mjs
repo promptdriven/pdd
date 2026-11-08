@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { autopilotGithubWorld } from './helpers/autopilot-github-world.mjs';
 import { fixture, packageRoot } from './helpers/workflow-runner-fixture.mjs';
-import { startRun, stepDone } from '../src/workflow-runner.mjs';
+import { startRun, stepDone, approveRun } from '../src/workflow-runner.mjs';
 import { checkDependencyStart } from '../src/issue-dependencies-intake.mjs';
 
 const packet = w => w.prompts.map(text => {
@@ -15,8 +15,8 @@ const automaticBody = '<!-- pdd-workflow:run-1:code -->\nAutopilot `auto` mode';
 function pull(w, number, labels = ['area:cli'], extra = {}) {
   return w.github.add(number, { pull_request: {}, body: automaticBody, labels, reviewDecision: 'REVIEW_REQUIRED', ...extra });
 }
-async function world(t, limit, issues = 2) {
-  const w = await autopilotGithubWorld({ issues });
+async function world(t, limit, issues = 2, options = {}) {
+  const w = await autopilotGithubWorld({ issues, ...options });
   t.after(w.cleanup);
   const herdr = w.ports.herdr;
   w.ports.herdr = async args => {
@@ -170,14 +170,25 @@ test('a truncated owner-area connection cannot admit fresh work', async t => {
 
 test('full review backlog keeps claimed work and review delivery active', async t => {
   const w = await world(t, 1);
+  const reviews = [];
+  w.ports.pullRequest = async () => ({ state: 'open', head: { sha: 'synthetic-head' } });
+  const gh = w.github.gh;
+  w.github.gh = async (args, options) => args.some(arg => /^repos\/.*\/pulls\/11\/reviews\?/.test(arg))
+    ? { code: 0, stdout: `HTTP/2.0 200 OK\r\n\r\n${JSON.stringify(reviews)}`, stderr: '' } : gh(args, options);
   await w.invoke('start');
   w.github.claim(1);
-  pull(w, 11);
+  pull(w, 11, ['area:cli'], { body: `${automaticBody}\nFixes #1` });
+  reviews.push({ id: 71, user: { login: 'acme' }, author_association: 'OWNER', state: 'CHANGES_REQUESTED',
+    body: 'Cover the boundary value.', submitted_at: new Date(w.time).toISOString(), commit_id: 'synthetic-head' });
   w.prompts.length = 0; w.time += 60_000;
   await w.tick();
   assert.ok(offered(w).includes(1));
   assert.ok(offered(w).includes(2));
   assert.equal(packet(w).issues.find(issue => issue.number === 1).claimed, true);
+  assert.deepEqual(packet(w).issues.find(issue => issue.number === 1).pullRequests[0].reviews, [{
+    id: 71, author: 'acme', submittedAt: reviews[0].submitted_at, state: 'CHANGES_REQUESTED',
+    body: reviews[0].body, commit: 'synthetic-head',
+  }]);
   const status = await w.invoke('status');
   assert.match(status.message, /area:cli.*waiting:.*1.*review/i);
 });
@@ -245,5 +256,120 @@ test('workflow publication marks automatic PRs independently of mode and draft p
     assert.equal(result.exitCode, 0, result.message);
     assert.equal(f.prs.length, 1);
     assert.equal(f.prs[0].body.includes('<!-- pdd:autopilot-pr -->'), automatic);
+    assert.equal(f.prs[0].body.includes('<!-- pdd:autopilot-issue:17 -->'), automatic);
   }
+});
+
+async function publishStack(t) {
+  const f = await fixture(t, { name: 'quota-stack' });
+  const execFile = f.ports.execFile;
+  f.ports.execFile = async (file, args, options) => {
+    const result = await execFile(file, args, options);
+    if (file === 'gh' && args[0] === 'api' && args[1] === 'repos/example/project/issues/17') {
+      return { ...result, stdout: JSON.stringify({ ...JSON.parse(result.stdout), labels: [{ name: 'area:cli' }] }) };
+    }
+    return result;
+  };
+  const skill = join(f.ports.env.HOME, '.agents', 'skills', 'pdd-quota-stack');
+  mkdirSync(skill, { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# Synthetic spec and code fixture\n');
+  writeFileSync(join(skill, 'workflow.json'), JSON.stringify({ version: 2, areas: [
+    { name: 'prompt-pr', steps: ['spec'], optional: [], gate: 'pr', then: 'ask-code' },
+    { name: 'code', steps: ['build'], optional: [], gate: 'pr' },
+  ] }));
+  const start = await startRun({ name: 'quota-stack', issue: '17', agent: 'claude', cwd: f.source, packageRoot }, f.ports);
+  assert.equal(start.exitCode, 0, start.message);
+  const run = f.record();
+  run.automaticOrigin = { repository: run.repo, coordinatorId: 'synthetic-owner', machine: 'synthetic-machine', claim: { commentId: '1', labelEventId: '2' } };
+  f.ports.owners = { read: async () => ({ json: JSON.stringify({ localOwner: 'synthetic-owner', claims: [{
+    issue: run.issue.url, active: true, owner: 'synthetic-owner', coordinatorId: 'synthetic-owner', machine: 'synthetic-machine', commentId: '1', labelEventId: '2',
+  }] }) }) };
+  writeFileSync(join(run.runDir, 'status.json'), JSON.stringify(run));
+  writeFileSync(join(f.source, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'observe' } }));
+  writeFileSync(join(run.root, 'spec.md'), 'Synthetic specification.\n');
+  f.git(run.root, 'add', 'spec.md'); f.git(run.root, 'commit', '-qm', 'Synthetic spec');
+  const spec = await stepDone({ step: 'spec', summary: 'Specification ready', cwd: run.root }, f.agentPorts());
+  assert.equal(spec.exitCode, 0, spec.message);
+  // This synthetic workflow has no prompt files. This terminal fake only takes the code-choice gate.
+  const code = await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  assert.equal(code.exitCode, 0, code.message);
+  writeFileSync(join(run.root, 'value.mjs'), 'export const value = 2;\n');
+  f.git(run.root, 'commit', '-qam', 'Synthetic code');
+  const built = await stepDone({ step: 'build', summary: 'Value changed', cwd: run.root }, f.agentPorts());
+  assert.equal(built.exitCode, 0, built.message);
+  assert.equal(f.prs.length, 2);
+  assert.equal(f.prs[0].baseRefName, 'main');
+  assert.equal(f.prs[1].baseRefName, f.prs[0].headRefName);
+  assert.match(f.prs[0].body, /^Part of #17$/m);
+  assert.match(f.prs[1].body, /^Closes #17$/m);
+  return f.prs;
+}
+
+for (const [index, kind] of ['spec', 'stacked-code'].entries()) test(`published ${kind} PR holds its source issue area without a closing link`, async t => {
+  const prs = await publishStack(t);
+  const w = await world(t, 1, 2, { repository: 'example/project' });
+  w.github.add(17, { labels: ['AREA:CLI', 'area:docs'] });
+  // GitHub supplies no closing link for "Part of", or for a non-default target branch.
+  for (const pr of index === 0 ? [prs[0]] : prs) {
+    pull(w, pr.number, [], { body: pr.body, closingIssuesReferences: { totalCount: 0, nodes: [] } });
+  }
+  w.ports.pullRequest = async () => ({ state: 'open', head: { sha: prs[index].headRefOid } });
+  const gh = w.github.gh;
+  w.github.gh = async (args, options) => args.some(arg => /\/pulls\/\d+\/reviews\?/.test(arg))
+    ? { code: 0, stdout: 'HTTP/2.0 200 OK\r\n\r\n[]', stderr: '' } : gh(args, options);
+  await w.invoke('start');
+  assert.equal(offered(w).includes(1), false, 'fresh CLI work waits for its published source-area PR');
+  assert.equal(offered(w).includes(2), false, 'each source area consumes one slot');
+  const count = index === 0 ? 1 : 2;
+  assert.deepEqual(w.state().reviewQueue, { 'area:cli': count, 'area:docs': count });
+  // Current issue labels govern later reads, even if the PR has not changed.
+  w.github.unlabel(17, 'AREA:CLI'); w.prompts.length = 0; w.time += 60_000;
+  await w.tick();
+  assert.ok(offered(w).includes(1));
+  assert.deepEqual(w.state().reviewQueue, { 'area:docs': count });
+});
+
+test('source lookup includes closed issues, is shared by a stack, and preserves PR area overrides', async t => {
+  const w = await world(t, 2);
+  w.github.add(17, { state: 'closed', labels: ['area:cli'] });
+  const body = '<!-- pdd:autopilot-pr -->\n<!-- pdd:autopilot-issue:17 -->';
+  pull(w, 21, [], { body }); pull(w, 22, [], { body });
+  pull(w, 23, ['area:docs'], { body });
+  let sourceReads = 0;
+  const gh = w.github.gh;
+  w.github.gh = async (args, options) => {
+    if (args.includes('graphql') && options?.input?.includes('sourceIssue: issue(')) sourceReads++;
+    return gh(args, options);
+  };
+  await w.invoke('start');
+  assert.deepEqual(offered(w), [2]);
+  assert.deepEqual(w.state().reviewQueue, { 'area:cli': 2, 'area:docs': 1 });
+  assert.equal(sourceReads, 1);
+});
+
+for (const failure of ['missing', 'graphql-error', 'truncated', 'invalid-marker', 'conflicting-markers']) test(`source association ${failure} holds fresh work until repaired`, async t => {
+  const w = await world(t, 1, 1);
+  w.github.add(17, { labels: ['area:cli'] });
+  let faulty = true;
+  const body = '<!-- pdd:autopilot-pr -->\n<!-- pdd:autopilot-issue:17 -->';
+  const pr = pull(w, 21, [], { body: failure === 'invalid-marker' ? body.replace('issue:17', 'issue:0')
+    : failure === 'conflicting-markers' ? `${body}\n<!-- pdd:autopilot-issue:18 -->` : body });
+  const gh = w.github.gh;
+  w.github.gh = async (args, options) => {
+    if (faulty && args.includes('graphql') && options?.input?.includes('sourceIssue: issue(')) {
+      const result = failure === 'missing' ? { data: { repository: { sourceIssue: null } } }
+        : failure === 'graphql-error' ? { errors: [{ type: 'FORBIDDEN' }] }
+        : { data: { repository: { sourceIssue: { number: 17, labels: { totalCount: 101, nodes: [] } } } } };
+      return { code: 0, stdout: JSON.stringify(result), stderr: '' };
+    }
+    return gh(args, options);
+  };
+  await w.invoke('start');
+  assert.deepEqual(offered(w), []);
+  assert.equal(w.state().reviewQueueUnknown, true);
+  faulty = false; pr.body = body; w.prompts.length = 0; w.time += 60_000;
+  await w.tick();
+  assert.equal(w.state().reviewQueueUnknown, undefined);
+  assert.deepEqual(w.state().reviewQueue, { 'area:cli': 1 });
+  assert.deepEqual(offered(w), []);
 });
