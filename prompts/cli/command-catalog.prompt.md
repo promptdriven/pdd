@@ -280,6 +280,10 @@ In PDD, prompts are the source. Code follows the prompts.
 
 Include public local route `workflow.tidy`, prefix `workflow tidy`, no operands, optional flag `--dry-run`, and help form `pdd workflow tidy [--dry-run]`. It closes safely finished chats or reports eligible tabs without changes.
 
+## Lost-verdict resend route (#3097)
+
+Add workflow.resend, prefix workflow resend, local workflow-resend, required repeated issue operands, optional text --said. Help form: `pdd workflow resend ISSUE... [--said WORDS]`. Description: Record one person decision and resend each lost check once; --said - reads exact words from stdin; strict mode requires a person terminal. Preserve all other routes.
+
 ## Dependencies
 
 [Workflow scope](workflow-scope.prompt.md) is required authoring, generation, runtime, verification and testing context for the scope route meanings.

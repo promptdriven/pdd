@@ -10,7 +10,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 486a7cb6538de96a60f17d5f21c305f6d9bfc268fb76d5536a866ef1aab3e5f3).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 7d3125c9441414683e81f6969bd425c00ce99bdb60eee2b90871ec6156c74283).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -38,7 +38,7 @@ import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
 import { causeText } from './runtime-output.mjs';
 import { approvalRecords, preparePrEvidence } from './workflow-pr-evidence.mjs';
 import { validateProofRecord } from './workflow-prove.mjs';
-import { readRunResults, resultLines, usableResult, noResultLine, NO_VERDICT, prepareNativeEvidence, savedCheckCause } from './workflow-results.mjs';
+import { readRunResults, resultLines, usableResult, noResultLine, NO_VERDICT, prepareNativeEvidence, savedCheckCause, savedLostCheck } from './workflow-results.mjs';
 import { collectTestInventory } from './workflow-inventory.mjs';
 import {adoptReplayCorpus,REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinReplayVectors,pinRunAnchor,readReplayEvidence,readFormalEvidence,formatFormalEvidence,formatReplayEvidence} from './workflow-replay.mjs';
 import { DETAILS_OPEN, TOP_NOTE, balancedDetails, closingInert, detailsOf, pr1Order, prArea, prStatus, readPrFields, readableNextLines, readablePrBody, readablePrTitle, readablePrTop, sameReadableTop, userStory } from './workflow-pr-body.mjs';
@@ -4921,6 +4921,79 @@ export const recordEvidence=saveGuard(recordEvidenceCommand);
 export const associateEvidenceWorkspace=saveGuard(associateEvidenceWorkspaceCommand);
 
 export const stepDone=saveGuard(stepDoneCommand);
+
+// The run locks cover authorization and dispatch. An interrupted send is consumed, never replayed.
+export const resendChecks = saveGuard(async ({refs, cwd, said, packageRoot = PACKAGE_ROOT}, ports = {}) => {
+  const p = deps(ports), releases = [], selected = [];
+  try {
+    if (!Array.isArray(refs) || !refs.length || new Set(refs.map(String)).size !== refs.length) return fail('Select distinct run numbers.');
+    for (const ref of refs) {
+      const found = await resolveRun(ref, {cwd}, p);
+      if (found.error) return fail(found.error);
+      selected.push(found.run);
+    }
+    for (const run of [...selected].sort((a,b) => a.runDir.localeCompare(b.runDir))) releases.push(acquireRunLock(run.runDir));
+    const checks = [];
+    for (const run of selected) {
+      Object.assign(run, readRun(run.runDir));
+      if (!['paused','waiting','stuck'].includes(run.state)) return fail(`Run #${run.number} is not stopped. Nothing was resent.`);
+      const progress = (p.readInterpreterProgress ?? readInterpreterProgress)({cwd:run.root,env:p.env}, {now:p.now});
+      if (['running','waiting','unavailable'].includes(progress?.state)) return fail(`Run #${run.number} has active or uncertain check custody. Nothing was resent.`);
+      const check = readOwnResults(run,p).find(row => row.kind === 'pdd test');
+      const lost = check && savedLostCheck(check.batch, {env:p.env, root:run.root});
+      if (!lost) return fail(`Run #${run.number} has no stopped lost-verdict check with valid call caps. Nothing was resent.`);
+      if ((run.checkResends ?? []).some(row => row.oldBatch === lost.batch && row.state !== 'authorized'))
+        return fail(`Run #${run.number}, batch ${lost.batch}, already consumed its resend decision. Nothing was resent.`);
+      const saved = JSON.parse(readFileSync(join(p.env.PDD_STATE_DIR || join(p.env.HOME || homedir(), '.pdd','runtime'), 'batches',lost.batch,'batch.json'),'utf8'));
+      const capture = (p.captureSource ?? captureSource)(run.root, {tests:[...new Set(saved.rows.filter(row=>!row.unsent).map(row=>row.test))],appMap:null,excludeFixtureProjects:saved.exclude_fixture_projects === true});
+      if (capture.sha256 !== lost.sourceSha256) return fail(`Run #${run.number}: source changed. Nothing was resent.`);
+      const strict = readApprovalPolicy({root:run.sourceRoot},p).strictApprovals;
+      if (strict && (said !== undefined || !p.isTTY || isAgentSession(p.env))) return fail(`Run #${run.number} requires a person terminal for resend.`);
+      checks.push({run,lost,saved});
+    }
+    const listing = checks.map(({run,lost}) => `#${run.number}: batch ${lost.batch}; earlier AI calls: ${lost.cost.calls ?? `unknown (at least ${lost.cost.knownCalls})`}`).join('\n');
+    p.say(listing);
+    let words = null;
+    if (said !== undefined) words = await readSaidWords(said,p);
+    else if (!p.isTTY || isAgentSession(p.env)) return fail(`${listing}\nA person must decide: use pdd workflow resend ${refs.join(' ')} --said - with their nonblank words.`);
+    else if (!await confirm(p, `${listing}\nResend these lost checks once? [y/N] `)) return done('Nothing was resent.');
+    const unchanged = ({run,lost,saved}) => {
+      const latest=readOwnResults(run,p).find(row=>row.kind==='pdd test');
+      const source=(p.captureSource ?? captureSource)(run.root,{tests:[...new Set(saved.rows.filter(row=>!row.unsent).map(row=>row.test))],appMap:null,excludeFixtureProjects:saved.exclude_fixture_projects === true});
+      return latest?.batch===lost.batch && source.sha256===lost.sourceSha256;
+    };
+    if (!checks.every(unchanged)) return fail('The saved batch or source changed during the decision. Nothing was resent.');
+    const id = p.randomUUID(), at = p.now();
+    for (const {run,lost} of checks) commitRun(run,p,latest => {
+      (latest.checkResends ??= []).push({id,at,actor:approvalActor(p.env),route:said === undefined?'terminal':'said',words,
+        oldBatch:lost.batch,oldCost:lost.cost,tests:lost.tests,maxCalls:lost.maxCalls,state:'authorized',newBatch:null});
+    });
+    const lines = [listing];
+    let exitCode = 0;
+    for (const item of checks) {
+      const {run,lost}=item;
+      if (!unchanged(item)) return fail('The saved batch or source changed. No further checks were sent.');
+      const update = fields => commitRun(run,p,latest=>Object.assign(latest.checkResends.find(row=>row.id===id),fields));
+      update({state:'sending'});
+      let output;
+      try { output = await p.execFile(process.execPath,[join(packageRoot,'bin','pdd.mjs'),'test',...lost.tests,'--json','--max-calls',String(lost.maxCalls),'--cache-clear'],{cwd:run.root,env:p.env}); }
+      catch (error) { output = error; }
+      let report;
+      try { report = JSON.parse(output.stdout); } catch { /* An uncertain reply never allows a second send. */ }
+      const newer = readOwnResults(run,p).find(row=>row.kind==='pdd test' && row.batch!==lost.batch && row.at>=at);
+      const newBatch = newer?.batch ?? null;
+      const valid = report?.batch === newBatch && newBatch !== null && Array.isArray(report.rows) && report.rows.length
+        && lost.tests.every(path=>report.rows.some(row=>row.test===path));
+      const verdict = valid && report.rows.every(row=>['passed','failed'].includes(row.state));
+      update({newBatch,state:verdict?'verdict':valid?'no-verdict':'uncertain',finishedAt:p.now()});
+      lines.push(`#${run.number}: ${newBatch ? `batch ${newBatch}` : 'new batch unknown'}; ${verdict?'verdict saved':'no verdict; stop and give this receipt to the interpreter owner'}.`);
+      if (!verdict) return {exitCode:1,message:lines.join('\n')};
+      if (report.rows.some(row=>row.state==='failed')) exitCode = 1;
+    }
+    return {exitCode,message:lines.join('\n')};
+  } catch (error) { return fail(`Resend stopped: ${failureReason(error)}. No automatic retry.`); }
+  finally { for (const release of releases.reverse()) release(); }
+});
 
 export const approveRun=saveGuard(approveRunCommand);
 

@@ -8,7 +8,7 @@ import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
 import { readInterpreterProgress, configureInterpreterTestMode } from './interpreter-queue.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 754a05669cb6e19b662453bb8cd43684da73b879873aa2cd77b02a89c15a3a65).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: e5fd7e4d3ee8365a5b59c769509b1d3a16bb6bc5a26c3b375d4dcd2a8be020f0).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -31,7 +31,7 @@ import { issueKey } from './issue-dependencies.mjs';
 import { createDependencyReadPorts, dependencySnapshotStore, issueRowVersion, recordLongRunningAlert, releaseParkedClaim, recoverCoordinatorClaim, refreshClaimHeartbeat, takeoverLimited, withoutClaimHeartbeat } from './issue-dependencies-github.mjs';
 import { sendToChat, START_GRACE_MS } from './workflow-chat.mjs';
 import { acquireRunLock, runtimeWakeTag, isRetryRequest, automaticAttention, resumeStoppedRun, nudgeIdleRun } from './workflow-runner.mjs';
-import { checkCause, readRunResults, checkVerdictSince, latestCheckVerdict } from './workflow-results.mjs';
+import { checkCause, readRunResults, checkVerdictSince, latestCheckVerdict, savedLostCheck, savedCheckCause } from './workflow-results.mjs';
 import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
 import { samePath } from './workflow-herdr-layout.mjs';
 import { tomlString } from './toml-string.mjs';
@@ -576,7 +576,20 @@ async function readRuntimeWaits(state, p) {
       if (run?.v === 1 && run.number === Number(name) && run.repo?.toLowerCase() === state.repo.toLowerCase()
         && (run.runtimeWait || run.automaticOrigin?.coordinatorId === state.coordinatorId && run.automaticOrigin?.machine === state.machine)
         && blockerFor(run)?.kind === 'interpreter' && Number.isFinite(wait?.at))
-        waits.push({ number: run.number, at: wait.at, batch: typeof wait.batch === 'string' ? wait.batch : null, cause: wait.cause ?? 'unknown', mark: `${run.area}:${Object.keys(run.done ?? {}).length}` });
+        {
+          let batch = typeof wait.batch === 'string' ? wait.batch : null, resend = null, held = false;
+          const seen = new Set();
+          while (batch) {
+            const next = (run.checkResends ?? []).findLast(row=>row.oldBatch===batch && row.state!=='authorized');
+            if (!next) break;
+            if (seen.has(batch) || !next.newBatch) {held=true;break;}
+            seen.add(batch);resend=next;batch=next.newBatch;
+          }
+          // The retained park belongs to the old attempt; follow its recorded replacement receipts.
+          if (held) continue;
+          const cause = resend ? resend.state==='verdict' && ['passed','issue'].includes(savedCheckCause(batch,{env:p.env})) ? 'verdict' : 'unknown' : wait.cause ?? 'unknown';
+          waits.push({number:run.number,at:wait.at,batch,cause,cost:savedLostCheck(batch,{env:p.env,root:run.root})?.cost ?? null,mark:`${run.area}:${Object.keys(run.done ?? {}).length}`});
+        }
     } catch { /* Missing or unreadable records supply no wait. */ }
   }
   return waits;
@@ -698,6 +711,7 @@ function runtimeWake(wait, kind) {
     : 'The interpreter is back.';
   // pdd test --retry resends only the checks that pdd names it for (busy or held); a fresh check of the Story sends the others.
   const again = 'check that Story once again with pdd test STORY --max-calls N';
+  if (wait.cause === 'verdict') return `Run #${wait.number} has its person-authorized resend verdict. When a worker slot is free (oldest first), wake it with pdd workflow changes ${wait.number} and this text: "${runtimeWakeTag(wait.at)} First run ${read} once. Continue from that saved verdict. Send no new check."`;
   const resend = wait.cause === 'unknown' ? `Its last check has an unknown outcome: never send it again blind. If the read now shows not run (nothing was sent), ${again}; if it is still unknown, follow the stuck rule.`
     : wait.cause === 'none' ? 'No check result was saved, so no check ran: send the check again once.'
     : `Resend only a check that surely gave no verdict: pdd test --retry ${wait.batch ?? 'BATCH'} only when pdd names it (busy or held checks); for another not run check or an AI-service refusal, ${again}. Never resend a failed (✗) check.`;
@@ -707,8 +721,11 @@ function runtimeWake(wait, kind) {
 // interpreter access problem is open. Every run resends its check at most once per wait, and every path ends in a
 // wake or in the stuck rule.
 async function runtimeTick(state, p, completion, timeRules, pendingTimes, stateRoot) {
-  const waits = (await (p.readRuntimeWaits ?? readRuntimeWaits)(state, p)).sort((a, b) => a.at - b.at || a.number - b.number);
+  const allWaits = (await (p.readRuntimeWaits ?? readRuntimeWaits)(state, p)).sort((a, b) => a.at - b.at || a.number - b.number);
+  const lostWaits = allWaits.filter(wait=>wait.cause === 'unknown');
+  const waits = allWaits.filter(wait=>wait.cause !== 'unknown');
   const saved = state.runtime ?? {}, now = p.now();
+  let lostDecision = lostWaits.length ? saved.lostDecision : null;
   const pattern = state.interpreterPattern ?? {streak: 0, seen: {}};
   const hadTestMode = Boolean(pattern.testMode);
   let verdictAt = null;
@@ -731,7 +748,7 @@ async function runtimeTick(state, p, completion, timeRules, pendingTimes, stateR
     pattern.streak = Object.keys(pattern.seen).filter(key => Number(key.slice(key.lastIndexOf(':') + 1)) > verdictAt).length;
     pattern.testMode = pattern.streak >= 3;
   }
-  for (const wait of waits) {
+  for (const wait of allWaits) {
     const key = `${wait.number}:${wait.at}`;
     if (wait.at <= (pattern.verdictAt ?? -Infinity)) continue;
     if (!pattern.seen[key] && !(saved.retried?.[wait.number]?.mark === wait.mark && saved.retried[wait.number].at < wait.at) && ['service', 'none', 'unknown'].includes(wait.cause)) {pattern.seen[key] = now; pattern.streak++;}
@@ -744,17 +761,30 @@ async function runtimeTick(state, p, completion, timeRules, pendingTimes, stateR
   const retried = Object.fromEntries(Object.entries(saved.retried ?? {}).filter(([, value]) => now - value.at < RUNTIME_KEEP));
   let outage = saved.outage ? structuredClone(saved.outage) : null, access = saved.access ? structuredClone(saved.access) : null;
   const keep = () => {
-    state.runtime = { ...(outage ? { outage } : {}), ...(access ? { access } : {}), ...(Object.keys(retried).length ? { retried } : {}) };
+    state.runtime = { ...(lostDecision ? {lostDecision} : {}), ...(outage ? { outage } : {}), ...(access ? { access } : {}), ...(Object.keys(retried).length ? { retried } : {}) };
     if (!Object.keys(state.runtime).length) delete state.runtime;
   };
-  if (!waits.length && !outage && !access) return keep();
+  if (!allWaits.length && !outage && !access) return keep();
   const health = await (p.runtimeHealth ?? (async input => (await import('./runtime-client.mjs')).checkRuntimeHealth(input)))({ env: p.env });
   const send = p.sendAlert ?? (input => runAutopilotAlerts({ action: 'alert', cwd: state.cwd, env: p.env, ...input },
     { ...p.alertPorts, repository: async () => ({ nameWithOwner: state.repo }), stateRoot, now: p.now }));
   const alert = async (number, kind, fields) => { try { await send({ issue: String(number), kind, text: JSON.stringify(fields) }); } catch { /* The alert record is best effort; work goes on. */ } };
+  if (health.state === 'healthy' && lostWaits.length) {
+    const identity = JSON.stringify(lostWaits.map(w=>[w.number,w.batch]).sort((a,b)=>a[0]-b[0]));
+    if (lostDecision !== identity) {
+      const details = lostWaits.map(w=>`#${w.number}: ${w.batch ?? 'batch unknown'}; AI calls: ${w.cost?.calls ?? `unknown (at least ${w.cost?.knownCalls ?? 0})`}`).join('; ');
+      try {
+        const result = await send({issue:String(lostWaits[0].number),kind:'decision',update:true,text:JSON.stringify({
+          cause:`The interpreter answers again. Lost check verdicts: ${details}.`,
+          tried:'The saved receipts are retained. No lost check was resent.',
+          need:`One person decision for all listed runs: pdd workflow resend ${lostWaits.map(w=>w.number).join(' ')} --said - with the person's words. Each decision permits one resend; another no-verdict stops immediately.`})});
+        if (result?.exitCode === 0) lostDecision = identity;
+      } catch { /* A failed alert can be retried. It grants no send authority. */ }
+    }
+  }
   // The first call opens the one incident of this repository and machine; later calls join it or resend a failed alert.
   const incident = async (record, kind, fields) => {
-    for (const number of [record.first, ...waits.map(w => w.number).filter(n => n !== record.first && !record.issues.includes(n))]) {
+    for (const number of [record.first, ...allWaits.map(w => w.number).filter(n => n !== record.first && !record.issues.includes(n))]) {
       await alert(number, kind, fields);
       if (!record.issues.includes(number)) record.issues.push(number);
     }
@@ -776,10 +806,10 @@ async function runtimeTick(state, p, completion, timeRules, pendingTimes, stateR
     if (access.first) await alert(access.first, 'recovered', { cause: `The free interpreter health check answers again (${health.detail}).`, kind: 'interpreter-access' });
     access = null;
   }
-  if (pattern.testMode && !outage && waits.length) outage = {since: now, first: waits[0].number, issues: [], probed: [], detail: 'Three consecutive checks gave no verdict.'};
+  if (pattern.testMode && !outage && allWaits.length) outage = {since: now, first: allWaits[0].number, issues: [], probed: [], detail: 'Three consecutive checks gave no verdict.'};
   // Only a failed health check opens an outage. Waits of several issues while the interpreter is healthy are not one.
-  if (health.state === 'unavailable' && !outage && waits.length)
-    outage = { since: now, first: waits[0].number, issues: [], probed: [], detail: `The free interpreter health check failed (${health.detail}).` };
+  if (health.state === 'unavailable' && !outage && allWaits.length)
+    outage = { since: now, first: allWaits[0].number, issues: [], probed: [], detail: `The free interpreter health check failed (${health.detail}).` };
   if (outage) await incident(outage, 'interpreter', { cause: outage.detail, tried: RUNTIME_TRIED, need: RUNTIME_NEED });
   // A wait first seen while the interpreter is down began in the outage; a wait already found used while healthy stays used.
   if (outage && health.state === 'unavailable') outage.down = { ...outage.down, ...Object.fromEntries(waits.filter(w => retried[w.number]?.again !== w.at).map(w => [w.number, w.at])) };

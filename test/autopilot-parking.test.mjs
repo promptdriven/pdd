@@ -55,6 +55,7 @@ for (const throughPerson of [true, false])
   test(`3091 repair 2 replacement interpreter wait reads current batch through person ${throughPerson}`, async t => {
     const {f, tick, ports, stateFile, warnings} = await setup(t);
     fullTicks(f, stateFile, ports);
+    const alerts=[]; ports.sendAlert=async input=>{alerts.push(input);return {exitCode:0};};
     ports.runtimeHealth = async () => ({state: 'unavailable', detail: 'controlled outage'});
     const oldBatch = '20261101-120000-abcd', newBatch = '20261102-120000-efgh';
     const held = f.record(); held.state = 'stuck';
@@ -82,14 +83,14 @@ for (const throughPerson of [true, false])
     f.tick(); await tick(); assert.deepEqual(f.record().parking.interpreterWait, wait);
     ports.runtimeHealth = async () => ({state: 'healthy', detail: 'controlled recovery'});
     await tick();
-    assert.equal(f.record().parking, undefined);
+    assert.equal(f.record().parking.phase, 'parked', 'lost verdict waits for a recorded person decision');
     assert.deepEqual(f.record().gate, changed.gate);
     assert.deepEqual(f.record().decisions, changed.decisions);
     assert.equal(f.record().chats.at(-1).session.id, held.chats.at(-1).session.id);
-    assert.equal(launches(f).length, 1); assert.equal(deliveries(f).length, 1);
-    const sent = JSON.stringify(deliveries(f)[0]);
-    assert.ok(sent.includes(`--read ${newBatch}`)); assert.ok(!sent.includes(oldBatch));
-    await tick(); assert.equal(deliveries(f).length, 1);
+    assert.equal(launches(f).length, 0); assert.equal(deliveries(f).length, 0);
+    const decision=alerts.find(row=>row.kind==='decision');assert.ok(decision);
+    assert.ok(decision.text.includes(newBatch));assert.ok(!decision.text.includes(oldBatch));
+    await tick(); assert.equal(deliveries(f).length, 0);
     assert.deepEqual(warnings, []);
   });
 
@@ -98,6 +99,7 @@ for (const previous of ['person', 'interpreter'])
   test(`3091 integration finished check replaces existing ${previous} park with current batch`, async t => {
     const {f, tick, ports, stateFile, warnings} = await setup(t, 'claude', 'feature');
     fullTicks(f, stateFile, ports);
+    const alerts=[]; ports.sendAlert=async input=>{alerts.push(input);return {exitCode:0};};
     ports.runtimeHealth = async () => ({state: 'unavailable', detail: 'controlled outage'});
     const oldBatch = '20261101-120000-abcd', newBatch = '20261102-120000-efgh';
     const savedBatch = batch => {
@@ -154,15 +156,15 @@ for (const previous of ['person', 'interpreter'])
     assert.deepEqual(f.record().parking.interpreterGate, changed.gate);
     ports.runtimeHealth = async () => ({state: 'healthy', detail: 'controlled recovery'});
     await tick();
-    assert.equal(f.record().parking, undefined);
+    assert.equal(f.record().parking.phase, 'parked', 'lost verdict waits for a recorded person decision');
     assert.deepEqual(f.record().gate, changed.gate);
     assert.deepEqual(f.record().decisions, changed.decisions);
     assert.deepEqual(f.record().automaticOrigin, changed.automaticOrigin);
     assert.equal(f.record().chats.at(-1).session.id, held.chats.at(-1).session.id);
-    assert.equal(launches(f).length, 1); assert.equal(deliveries(f).length, 1);
-    const sent = JSON.stringify(deliveries(f)[0]);
-    assert.ok(sent.includes(`--read ${newBatch}`)); assert.ok(!sent.includes(oldBatch));
-    await tick(); assert.equal(deliveries(f).length, 1);
+    assert.equal(launches(f).length, 0); assert.equal(deliveries(f).length, 0);
+    const decision=alerts.find(row=>row.kind==='decision');assert.ok(decision);
+    assert.ok(decision.text.includes(newBatch));assert.ok(!decision.text.includes(oldBatch));
+    await tick(); assert.equal(deliveries(f).length, 0);
     assert.deepEqual(warnings, []);
   });
 
@@ -171,6 +173,7 @@ for (const change of ['batch', 'check', 'result', 'verdict'])
   test(`3091 batch refresh ${change} evidence at an inferred interpreter park`, async t => {
     const {f, tick, ports, stateFile, warnings} = await setup(t, 'claude', 'feature');
     fullTicks(f, stateFile, ports);
+    const alerts=[]; ports.sendAlert=async input=>{alerts.push(input);return {exitCode:0};};
     ports.runtimeHealth = async () => ({state: 'unavailable', detail: 'controlled outage'});
     const oldBatch = '20261101-120000-abcd', newBatch = '20261102-120000-efgh';
     const held = f.record(); held.area = 1; held.state = 'waiting';
@@ -248,14 +251,14 @@ for (const change of ['batch', 'check', 'result', 'verdict'])
       }
       ports.runtimeHealth = async () => ({state: 'healthy', detail: 'controlled recovery'});
       await tick();
-      assert.equal(f.record().parking, undefined);
+      assert.equal(f.record().parking.phase, 'parked', 'lost verdict waits for a recorded person decision');
       for (const key of ['gate', 'decisions', 'automaticOrigin']) assert.deepEqual(f.record()[key], changed[key]);
       assert.equal(f.record().chats.at(-1).session.id, held.chats.at(-1).session.id);
-      assert.equal(launches(f).length, 1); assert.equal(deliveries(f).length, 1);
-      const sent = JSON.stringify(deliveries(f)[0]);
-      assert.ok(sent.includes(`--read ${batch}`));
-      if (change === 'batch') assert.ok(!sent.includes(oldBatch));
-      await tick(); assert.equal(deliveries(f).length, 1);
+      assert.equal(launches(f).length, 0); assert.equal(deliveries(f).length, 0);
+      const decision=alerts.find(row=>row.kind==='decision');assert.ok(decision);
+      assert.ok(decision.text.includes(batch));
+      if (change === 'batch') assert.ok(!decision.text.includes(oldBatch));
+      await tick(); assert.equal(deliveries(f).length, 0);
     }
     assert.deepEqual(warnings, []);
   });
@@ -1029,30 +1032,29 @@ for (const wait of ['stop', 'question']) test(`3091 backfill missing PR1 route $
   await tick(); assert.equal(launches(f).length, 1); assert.equal(deliveries(f).length, 1);
 });
 
-test('3091 backfill finished PR1 check without verdict parks and reads first without approval', async t => {
+test('3091 backfill finished PR1 lost check stays parked for a person decision without approval', async t => {
   const {f, tick, ports, stateFile, warnings} = await setup(t);
   fullTicks(f, stateFile, ports);
+  const alerts=[];ports.sendAlert=async input=>{alerts.push(input);return {exitCode:0};};
   ports.runtimeHealth = async () => ({state: 'unavailable', detail: 'controlled outage'});
   const held = f.record(); held.state = 'waiting'; held.gate = {kind: 'approve-pr', area: held.areas[held.area].name};
   held.done.check = {at: f.clock}; save(f, held);
   ports.readRunResults = () => [{kind: 'pdd test', batch: '20261101-120000-abcd', states: [{state: 'partial', reason: {code: 'runner-stopped'}}]}];
   await tick();
-  assert.equal(f.record().parking?.blocker.kind, 'interpreter', 'no-verdict PR1 gate is an interpreter wait');
-  assert.equal(f.record().parking.interpreterWait.batch, '20261101-120000-abcd');
+  assert.equal(f.record().parking?.blocker.kind, 'interpreter');
   ports.runtimeHealth = async () => ({state: 'healthy', detail: 'controlled recovery'});
   await tick();
-  assert.deepEqual(warnings, []);
-  assert.equal(f.record().parking, undefined);
-  assert.deepEqual(f.record().gate, held.gate, 'read-first wake never grants prompt approval');
-  assert.equal(deliveries(f).length, 1);
-  const text = JSON.stringify(deliveries(f)[0]);
-  assert.match(text, /--read 20261101-120000-abcd/); assert.match(text, /unknown/);
-  await tick(); assert.equal(deliveries(f).length, 1);
+  assert.deepEqual(warnings, []);assert.equal(f.record().parking.phase,'parked');
+  assert.deepEqual(f.record().gate, held.gate);assert.equal(deliveries(f).length,0);
+  const decisions=()=>alerts.filter(row=>row.kind==='decision');
+  assert.equal(decisions().length,1);assert.ok(decisions()[0].text.includes('20261101-120000-abcd'));
+  await tick();assert.equal(decisions().length,1);assert.equal(deliveries(f).length,0);
 });
 
-test('3091 backfill three legacy interpreter stops enter test mode and admit only one saved session', async t => {
+test('3091 backfill three lost legacy verdicts enter test mode and wait for one grouped decision', async t => {
   const {f, tick, ports, stateFile} = await setup(t);
   fullTicks(f, stateFile, ports);
+  const alerts=[];ports.sendAlert=async input=>{alerts.push(input);return {exitCode:0};};
   const second = await anotherRun(f, 18), third = await anotherRun(f, 19);
   for (const [i, get] of [f.record, second, third].entries()) {
     const run = get(); delete run.blockedOn; run.state = 'stuck';
@@ -1060,24 +1062,19 @@ test('3091 backfill three legacy interpreter stops enter test mode and admit onl
   }
   writeFileSync(join(f.source, 'pdd.json'), JSON.stringify({autopilot: {mode: 'auto', trust: [], parking: {maxParked: 10}}}));
   ports.runtimeHealth = async () => ({state: 'unavailable', detail: 'controlled outage'});
-  f.herdr.calls.length = 0;
-  await tick();
-  let state = JSON.parse(readFileSync(stateFile));
-  assert.equal(state.parking.parked, 3, 'all legacy interpreter stops must park');
-  assert.equal(state.interpreterPattern.streak, 3); assert.equal(state.interpreterPattern.testMode, true);
-  ports.runtimeHealth = async () => ({state: 'healthy', detail: 'controlled recovery'});
-  await tick();
+  f.herdr.calls.length = 0;await tick();
+  let state = JSON.parse(readFileSync(stateFile));assert.equal(state.parking.parked,3);
+  assert.equal(state.interpreterPattern.streak,3);assert.equal(state.interpreterPattern.testMode,true);
+  ports.runtimeHealth = async () => ({state: 'healthy', detail: 'controlled recovery'});await tick();
   state = JSON.parse(readFileSync(stateFile));
-  assert.equal(launches(f).length, 1); assert.equal(deliveries(f).length, 1);
-  assert.equal(state.runtime.outage.probe.number, 17);
-  assert.deepEqual([state.parking.working, state.parking.parked], [1, 2]);
-  await tick(); assert.equal(launches(f).length, 1);
-  ports.readInterpreterVerdict = async () => f.clock;
-  const completed = f.record(); completed.state = 'completed'; save(f, completed);
-  ports.readRuntimeProbe = async () => 'verdict';
-  await tick(); state = JSON.parse(readFileSync(stateFile));
-  assert.equal(state.interpreterPattern.testMode, false);
-  assert.equal(launches(f).filter(args => args.at(-1).includes('--resume')).length, 2, 'a verdict permits the next retained interpreter session');
+  assert.equal(launches(f).length,0);assert.equal(deliveries(f).length,0);
+  assert.equal(state.runtime.outage.probe,undefined);assert.deepEqual([state.parking.working,state.parking.parked],[0,3]);
+  const decisions=()=>alerts.filter(row=>row.kind==='decision');assert.equal(decisions().length,1);
+  assert.match(decisions()[0].text,/resend 17 18 19 --said/);
+  await tick();assert.equal(decisions().length,1);
+  ports.readInterpreterVerdict=async()=>f.clock;await tick();
+  state=JSON.parse(readFileSync(stateFile));assert.equal(state.interpreterPattern.testMode,false);
+  assert.equal(launches(f).length,0,'another verdict does not authorize these lost checks');
 });
 
 test('3091 backfill unknown stopped cause closes resources and alerts once across ticks', async t => {
@@ -1164,7 +1161,7 @@ test('3091 backfill a queued legacy interpreter probe stays pending until worker
   const second = await anotherRun(f, 18), third = await anotherRun(f, 19), worker = await anotherRun(f, 20);
   for (const [i, get] of [f.record, second, third].entries()) {
     const run = get(); delete run.blockedOn; run.state = 'stuck';
-    run.parkReason = 'Interpreter read has an unknown result (runner-stopped).'; run.updatedAt = f.clock - 3000 + i * 1000; save(f, run);
+    run.parkReason = 'Interpreter outage before the check was sent.'; run.updatedAt = f.clock - 3000 + i * 1000; save(f, run);
   }
   const active = worker(); delete active.blockedOn; active.state = 'running'; save(f, active);
   writeFileSync(join(f.source, 'pdd.json'), JSON.stringify({autopilot: {mode: 'auto', trust: [], parking: {maxParked: 10}}}));
@@ -1197,7 +1194,7 @@ for (const cause of ['pdd', 'interpreter reason', 'stuckCause', 'interpreter rea
     else {
       fullTicks(f, stateFile, ports);
       ports.runtimeHealth = async () => ({state: 'unavailable', detail: 'controlled outage'});
-      if (cause.includes('reason')) held.parkReason = 'Interpreter saved read is unknown (runner-stopped).';
+      if (cause.includes('reason')) held.parkReason = 'Interpreter outage before the check was sent.';
       if (cause.includes('stuckCause')) held.stuckCause = 'interpreter';
     }
     save(f, held);
