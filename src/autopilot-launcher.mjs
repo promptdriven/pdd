@@ -1,14 +1,14 @@
-import {reconcileParking, parkingSummary, parkingWords} from './autopilot-parking.mjs';
+import {blockerFor, interpreterWaitFor, reconcileParking, parkingSummary, parkingWords} from './autopilot-parking.mjs';
 import {currentChat} from './workflow-runs.mjs';
 import {chatHealth, chatSession} from './workflow-chat.mjs';
-import {parkBlockedRun, wakeParkedRun, releaseParkedRun, changeRun, hasParkedReply} from './workflow-runner.mjs';
+import {WORKFLOW_CAPABILITIES, parkBlockedRun, wakeParkedRun, releaseParkedRun, changeRun, hasParkedReply} from './workflow-runner.mjs';
 import { readMachineResources } from './machine-resources.mjs';
 import { configureCheckCapacity, releaseCheckCapacity, readCheckStatus, readSuiteProgress } from './test-suite-queue.mjs';
 import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
 import { readInterpreterProgress, configureInterpreterTestMode } from './interpreter-queue.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 75f2ea2f10d6b518042f5abe926faabc499193e65ed140d5eedd1524d453ac6a).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 4c31ef6c0f85790299607352cec1a3e05feaff621363c4bd2815e271b1c7ec78).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -31,7 +31,7 @@ import { issueKey } from './issue-dependencies.mjs';
 import { createDependencyReadPorts, dependencySnapshotStore, issueRowVersion, recordLongRunningAlert, releaseParkedClaim, recoverCoordinatorClaim, refreshClaimHeartbeat, takeoverLimited, withoutClaimHeartbeat } from './issue-dependencies-github.mjs';
 import { sendToChat, START_GRACE_MS } from './workflow-chat.mjs';
 import { acquireRunLock, runtimeWakeTag, isRetryRequest, automaticAttention, resumeStoppedRun, nudgeIdleRun } from './workflow-runner.mjs';
-import { checkVerdictSince, latestCheckVerdict } from './workflow-results.mjs';
+import { checkCause, readRunResults, checkVerdictSince, latestCheckVerdict } from './workflow-results.mjs';
 import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
 import { samePath } from './workflow-herdr-layout.mjs';
 import { tomlString } from './toml-string.mjs';
@@ -389,6 +389,14 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
     },
     observeBlocker: async run => {
       if (run.parking) return null;
+      if (run.state === 'waiting' && run.gate?.kind === 'approve-pr' && !run.question && run.done?.check) {
+        let checks;
+        try {checks = (p.readRunResults ?? readRunResults)({root: run.root, runDir: run.runDir, runId: run.runId, since: run.startedAt ?? 0}, {env: p.env});}
+        catch {return {kind: 'interpreter', until: null};}
+        const check = checks.find(row => row.kind === 'pdd test');
+        if (!check || ['none', 'unknown', 'service'].includes(checkCause(check.states)))
+          return {kind: 'interpreter', until: null};
+      }
       if (run.agent === state.agent.kind && state.health?.usage?.state === 'limited')
         return {kind: 'account', until: Number.isFinite(state.health.usage.resetAt) ? new Date(state.health.usage.resetAt).toISOString() : null};
       const chat = currentChat(run);
@@ -397,9 +405,17 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
       const reset = health?.until ?? health?.resetsAt;
       return health?.kind === 'usage-limit' ? {kind: 'account', until: Number.isFinite(reset) ? new Date(reset).toISOString() : null} : null;
     },
-    park: (run, blocker) => p.scanAction(() => parkBlockedRun({...args(run), blocker, expected: run}, worker)),
+    park: async (run, blocker) => {
+      let interpreterBatch = null;
+      if (blocker.kind === 'interpreter' && !interpreterWaitFor(run)) {
+        try {interpreterBatch = (p.readRunResults ?? readRunResults)({root: run.root, runDir: run.runDir, runId: run.runId, since: run.startedAt ?? 0}, {env: p.env}).find(row => row.kind === 'pdd test')?.batch ?? null;}
+        catch { /* Unknown saved reads must never cause a blind resend. */ }
+      }
+      return p.scanAction(() => parkBlockedRun({...args(run), blocker, expected: run, interpreterBatch}, worker));
+    },
     wake: (run, rule) => p.scanAction(() => wakeParkedRun({...args(run), at: run.parking.at,
-      text: rule?.text, expectedBlocker: run.parking.blocker},
+      text: rule?.text ?? (run.parking.blocker.kind === 'pdd'
+        ? `The installed PDD contains ${run.parking.blocker.until}. ${run.parking.blocker.until === '#2897' ? 'The PR 1 re-entry and current-main integration route now exists.' : 'The required fix is available.'} Continue this saved run from its retained work. Preserve approval gates and independent questions.` : undefined), expectedBlocker: run.parking.blocker},
       {...worker, parkingBlockerCleared: fresh => parking.blockerCleared(fresh, rule)})),
     blockerCleared: async (run, rule) => {
       const blocker = run.parking.blocker;
@@ -407,12 +423,16 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
       if (blocker.kind === 'person') return Boolean(run.parking.personWait) && (hasParkedReply(run, worker) || !run.gate && (!run.question || Boolean(run.question.answeredAt)));
       if (['account', 'github'].includes(blocker.kind)) return Number.isFinite(Date.parse(blocker.until)) && p.now() >= Date.parse(blocker.until);
       if (blocker.kind === 'pdd') {
-        const installed = p.packageVersion ?? read(join(state.packageRoot ?? dirname(dirname(self)), 'package.json'), {}).version;
-        const parts = value => /^(\d+)\.(\d+)\.(\d+)$/.exec(value ?? '')?.slice(1).map(Number);
-        const a = parts(installed), b = parts(blocker.until);
-        if (!a || !b) return installed === blocker.until;
-        for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i];
-        return true;
+        const required = blocker.until === '#2897' ? 'capability:prompt-reentry' : /^#[1-9][0-9]*$/.test(blocker.until) ? `capability:issue-${blocker.until.slice(1)}` : blocker.until;
+        if (typeof required !== 'string') return false;
+        if (required.startsWith('capability:')) return (p.installedPddCapabilities ?? WORKFLOW_CAPABILITIES).includes(required.slice(11));
+        if (/^commit:[a-f0-9]{7,40}$/.test(required)) {
+          try {
+            const result = await p.execute('git', ['merge-base', '--is-ancestor', required.slice(7), 'HEAD'], {cwd: dirname(dirname(self))});
+            return result.code === 0;
+          } catch {return false;}
+        }
+        return false;
       }
       if (localOnly) return false;
       if (p.blockerCleared) return await p.blockerCleared(run, blocker) === true;
@@ -442,6 +462,13 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
       }
       return false;
     },
+    alertUnknown: async run => {
+      const send = p.sendAlert ?? (input => runAutopilotAlerts({action: 'alert', cwd: state.cwd, env: p.env, ...input},
+        {...p.alertPorts, repository: async () => ({nameWithOwner: state.repo}), stateRoot: dirname(state.stateFile), now: p.now}));
+      try {return (await send({issue: String(run.number), kind: 'stuck', text: JSON.stringify({
+        cause: run.parkReason ?? 'No named blocker is saved.', tried: 'Kept the run, claim and saved work.', need: 'Identify the blocker before continuing.'})}))?.exitCode === 0;}
+      catch {return false;}
+    },
     release: async run => p.scanAction(async () => {
       const result = await releaseParkedRun({...args(run), runId: run.runId, at: run.parking.at}, {
         ...worker, releaseParkedClaim: fresh => {
@@ -461,7 +488,7 @@ async function parkingTick(state, p, config, options = {}) {
     const ports = parkingPorts(state, p, options);
     state.parking = await reconcileParking(state, ports, {...options, policy: config.parking, release: !options.localOnly});
     state.parkedNumbers = (await ports.list()).filter(run => run.parking && !['completed', 'cancelled'].includes(run.state)).map(run => run.number);
-    await p.scanGuard(latest => {latest.parking = state.parking; latest.parkedNumbers = state.parkedNumbers;});
+    await p.scanGuard(latest => {latest.parking = state.parking; latest.parkedNumbers = state.parkedNumbers; latest.parkingAlerts = state.parkingAlerts;});
   } catch (error) { p.warn(`Parking reconciliation held: ${line(error.message)}`); }
 }
 
@@ -540,8 +567,10 @@ async function readRuntimeWaits(state, p) {
   for (const name of names) {
     if (!/^[1-9][0-9]*$/.test(name)) continue;
     try {
-      const run = read(join(folder, name, 'status.json')), wait = run?.runtimeWait;
-      if (run?.v === 1 && run.number === Number(name) && run.repo?.toLowerCase() === state.repo.toLowerCase() && run.state === 'paused' && Number.isFinite(wait?.at))
+      const run = read(join(folder, name, 'status.json')), wait = run && interpreterWaitFor(run);
+      if (run?.v === 1 && run.number === Number(name) && run.repo?.toLowerCase() === state.repo.toLowerCase()
+        && (run.runtimeWait || run.automaticOrigin?.coordinatorId === state.coordinatorId && run.automaticOrigin?.machine === state.machine)
+        && blockerFor(run)?.kind === 'interpreter' && Number.isFinite(wait?.at))
         waits.push({ number: run.number, at: wait.at, batch: typeof wait.batch === 'string' ? wait.batch : null, cause: wait.cause ?? 'unknown', mark: `${run.area}:${Object.keys(run.done ?? {}).length}` });
     } catch { /* Missing or unreadable records supply no wait. */ }
   }
@@ -650,6 +679,7 @@ async function readRuntimeProbe(state, p, probe) {
   if (run?.v !== 1 || run.number !== probe.number || run.repo?.toLowerCase() !== state.repo.toLowerCase()) return 'pending';
   if (typeof run.root === 'string' && checkVerdictSince({ root: run.root, since: probe.offeredAt }, { env: p.env })) return 'verdict';
   if (run.state === 'paused' && run.runtimeWait?.at > probe.at) return 'failed';
+  if (run.parking?.blocker.kind === 'interpreter' && interpreterWaitFor(run)?.at === probe.at) return 'pending';
   return ['running', 'waiting', 'paused'].includes(run.state) ? 'pending' : 'failed';
 }
 const RUNTIME_KEEP = 24 * 60 * 60 * 1000, RUNTIME_ACCESS_LIMIT = 4 * 60 * 60 * 1000, RUNTIME_PROBE_LIMIT = 60 * 60 * 1000;
@@ -2180,7 +2210,10 @@ export async function runAutopilotLauncher(input, ports = {}) {
       let costs = '';
       try { costs = '\n' + costStatusLines(await localCosts(input, ports, state)); } catch {}
       const readiness = await workflowReadiness(state, p);
-      const capacityLine = checkCapacityWords(state, p) + '\n' + parkingWords(parkingSummary((await listRuns({cwd: state.cwd}, {...p, execFile: p.execFile ?? (async (file, args, options) => p.execute(file, args, options))})).filter(run => run.automaticOrigin?.coordinatorId === state.coordinatorId), state.runs ?? state.checkCapacity?.runs ?? 1), state.interpreterPattern);
+      const local = parkingPorts(state, p);
+      const runs = (await local.list()).filter(run => run.automaticOrigin?.coordinatorId === state.coordinatorId);
+      const observed = await Promise.all(runs.map(async run => ({...run, checkHeld: await local.checkProgress(run)})));
+      const capacityLine = checkCapacityWords(state, p) + '\n' + parkingWords(parkingSummary(observed, state.runs ?? state.checkCapacity?.runs ?? 1), state.interpreterPattern);
       const workflows = readiness.state === 'ready' ? '' : `\nWorkflows cannot start in this folder: ${line(readiness.message)}`;
       return ok(`Autopilot ${state.enabled ? 'enabled' : 'disabled'}; timer ${timerActive ? 'active' : 'inactive'}; Herdr ${serverRunning ? 'running' : 'unavailable'}; coordinator ${coordinatorState}: ${state.repo ? `${state.repo} in ${state.cwd}` : state.cwd} · base ${line(state.baseBranch ?? 'unavailable (start Autopilot)')} · ${state.agent?.id ?? 'no agent'} · next tick: ${timerActive && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}${workflows}\n${capacityLine}${relaunch}\n${healthLine(state.health)}${alerts ? `\n${alerts}` : ''}${github ? `\n${github}` : ''}${costs}${groups ? `\n${groups}` : ''}`);
     }

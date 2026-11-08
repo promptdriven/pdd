@@ -1,5 +1,6 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
+import {createHash} from 'node:crypto';
 import assert from 'node:assert/strict';
 import {existsSync, readFileSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
@@ -39,7 +40,7 @@ for (const agent of ['claude', 'codex']) for (const kind of ['interpreter', 'per
     const held = f.record();
     if (kind === 'interpreter') {held.state = 'paused'; held.runtimeWait = {at: f.clock, reason: 'no verdict', cause: 'service', batch: null};}
     if (kind === 'person') {held.state = 'waiting'; held.question = {at: f.clock, text: 'Choose the case'};}
-    if (kind === 'pdd') {held.state = 'paused'; held.blockedOn = {kind: 'pdd', until: '99.0.0'};}
+    if (kind === 'pdd') {held.state = 'paused'; held.blockedOn = {kind: 'pdd', until: 'capability:fixture-fix'};}
     save(f, held);
     await tick();
     assert.deepEqual(warnings, []);
@@ -111,7 +112,7 @@ for (const agent of ['claude', 'codex']) test(`3091 recorded reply reopens the s
 
 test('3091 explicit installed-release and reset blockers are stored with clearing evidence', async t => {
   const {f} = await setup(t);
-  for (const [blocker, until] of [['pdd', '99.0.0'], ['dependency', '2897'], ['account', '2026-11-10T12:00:00Z']]) {
+  for (const [blocker, until] of [['pdd', 'capability:fixture-fix'], ['dependency', '2897'], ['account', '2026-11-10T12:00:00Z']]) {
     const result = await parkAutomaticRun({cwd: f.record().root, reason: 'Controlled external wait', blocker, until}, {...f.ports, owners: {read: async () => ({json: JSON.stringify({localOwner: 'park-owner', runsKnown: true, runs: [], claims: [{issue: f.record().issue.url, active: true, owner: 'park-owner', coordinatorId: 'park-owner', machine: 'park-machine', commentId: '11', labelEventId: '12'}]})})}});
     assert.equal(result.exitCode, 0, result.message);
     assert.deepEqual(f.record().blockedOn, {kind: blocker, until}, '3091: preserve the explicit clearing condition');
@@ -129,18 +130,18 @@ async function anotherRun(f, number) {
   assert.equal((await runStatus({ref: String(number), cwd: f.source}, f.ports)).exitCode, 0);
   const path = join(f.record().commonDir, 'pdd', 'runs', String(number), 'status.json');
   const run = JSON.parse(readFileSync(path)); run.automaticOrigin = f.record().automaticOrigin;
-  run.state = 'paused'; run.blockedOn = {kind: 'pdd', until: '99.0.0'};
+  run.state = 'paused'; run.blockedOn = {kind: 'pdd', until: 'capability:fixture-fix'};
   save(f, run);
   return () => JSON.parse(readFileSync(path));
 }
 
 test('3091 installed release wakes oldest first and holds other ready wakes for the working cap', async t => {
   const {f, tick, ports, stateFile, warnings} = await setup(t);
-  const run = f.record(); run.state = 'paused'; run.blockedOn = {kind: 'pdd', until: '99.0.0'}; save(f, run);
+  const run = f.record(); run.state = 'paused'; run.blockedOn = {kind: 'pdd', until: 'capability:fixture-fix'}; save(f, run);
   await tick(); assert.equal(f.record().parking?.phase, 'parked');
   const other = await anotherRun(f, 18); f.tick(1000); await tick();
   assert.equal(other().parking?.phase, 'parked');
-  f.herdr.calls.length = 0; ports.packageVersion = '99.0.0'; await tick();
+  f.herdr.calls.length = 0; ports.installedPddCapabilities = ['fixture-fix']; await tick();
   assert.equal(launches(f).length, 1);
   assert.equal(f.record().parking, undefined, 'oldest run must resume first');
   assert.equal(other().parking.phase, 'parked');
@@ -151,11 +152,11 @@ test('3091 installed release wakes oldest first and holds other ready wakes for 
 
 test('3091 failed resume reserves capacity and retries the same saved session', async t => {
   const {f, tick, ports, stateFile, warnings} = await setup(t);
-  const run = f.record(); run.state = 'paused'; run.blockedOn = {kind: 'pdd', until: '99.0.0'}; save(f, run);
+  const run = f.record(); run.state = 'paused'; run.blockedOn = {kind: 'pdd', until: 'capability:fixture-fix'}; save(f, run);
   await tick(); assert.equal(f.record().parking?.phase, 'parked');
   const herdr = ports.herdr; let fail = true;
   ports.herdr = async args => {if (fail && args[0] === 'pane' && args[1] === 'run') {fail = false; throw Object.assign(Error('unsent fixture resume'), {code: 'agent_not_found'});} return herdr(args);};
-  ports.packageVersion = '99.0.0'; await tick();
+  ports.installedPddCapabilities = ['fixture-fix']; await tick();
   assert.equal(f.record().parking?.phase, 'waking');
   assert.equal(JSON.parse(readFileSync(stateFile)).parking.working, 1);
   f.tick(60001); await tick();
@@ -165,9 +166,9 @@ test('3091 failed resume reserves capacity and retries the same saved session', 
 
 test('3091 health pause keeps ready parked sessions closed', async t => {
   const {f, tick, ports} = await setup(t);
-  const run = f.record(); run.state = 'paused'; run.blockedOn = {kind: 'pdd', until: '99.0.0'}; save(f, run);
+  const run = f.record(); run.state = 'paused'; run.blockedOn = {kind: 'pdd', until: 'capability:fixture-fix'}; save(f, run);
   await tick(); assert.equal(f.record().parking?.phase, 'parked');
-  ports.packageVersion = '99.0.0'; ports.machineHealth = async () => ({healthy: false, causes: ['controlled memory pressure'], resources: null});
+  ports.installedPddCapabilities = ['fixture-fix']; ports.machineHealth = async () => ({healthy: false, causes: ['controlled memory pressure'], resources: null});
   await tick();
   assert.equal(f.record().parking.phase, 'parked'); assert.equal(launches(f).length, 0);
 });
@@ -193,7 +194,7 @@ function fullTicks(f, stateFile, ports) {
 
 test('3091 park timeout releases once, keeps branch and returns local allocation to the existing queue', async t => {
   const {f, tick, stateFile, ports, warnings} = await setup(t);
-  const run = f.record(); run.state = 'paused'; run.blockedOn = {kind: 'pdd', until: '99.0.0'}; save(f, run);
+  const run = f.record(); run.state = 'paused'; run.blockedOn = {kind: 'pdd', until: 'capability:fixture-fix'}; save(f, run);
   await tick(); assert.equal(f.record().parking?.phase, 'parked');
   fullTicks(f, stateFile, ports);
   let releases = 0; ports.releaseParkedClaim = async input => {releases++; assert.equal(input.branch, run.branch); return {state: 'released'};};
@@ -207,7 +208,7 @@ test('3091 park timeout releases once, keeps branch and returns local allocation
 
 test('3091 parked-count limit releases the oldest surplus run', async t => {
   const {f, tick, stateFile, ports} = await setup(t);
-  const run = f.record(); run.state = 'paused'; run.blockedOn = {kind: 'pdd', until: '99.0.0'}; save(f, run);
+  const run = f.record(); run.state = 'paused'; run.blockedOn = {kind: 'pdd', until: 'capability:fixture-fix'}; save(f, run);
   await tick(); assert.equal(f.record().parking?.phase, 'parked');
   const other = await anotherRun(f, 18); f.tick(); await tick(); assert.equal(other().parking?.phase, 'parked');
   writeFileSync(join(f.source, 'pdd.json'), JSON.stringify({autopilot: {mode: 'auto', trust: [], parking: {maxParked: 1}}}));
@@ -218,7 +219,7 @@ test('3091 parked-count limit releases the oldest surplus run', async t => {
 
 test('3091 same-group intake joins the existing journal without restoring a blocked chat', async t => {
   const {f, tick, stateFile, ports, warnings} = await setup(t);
-  const run = f.record(); run.state = 'paused'; run.blockedOn = {kind: 'pdd', until: '99.0.0'}; save(f, run);
+  const run = f.record(); run.state = 'paused'; run.blockedOn = {kind: 'pdd', until: 'capability:fixture-fix'}; save(f, run);
   await tick(); assert.equal(f.record().parking?.phase, 'parked');
   fullTicks(f, stateFile, ports);
   const issue = {number: 18, html_url: 'https://github.com/example/project/issues/18', title: 'Same cause', body: 'Same problem', state: 'open', labels: ['pdd:autopilot'], user: {login: 'example'}, comments: 0, updated_at: new Date(f.clock).toISOString()};
@@ -230,7 +231,7 @@ test('3091 same-group intake joins the existing journal without restoring a bloc
   assert.equal(JSON.parse(readFileSync(journal)).requests.length, 1);
   assert.equal(f.record().parking.phase, 'parked'); assert.equal(launches(f).length, 0);
   await tick(); assert.equal(JSON.parse(readFileSync(journal)).requests.length, 1, 'one join across intake ticks');
-  ports.packageVersion = '99.0.0'; await tick();
+  ports.installedPddCapabilities = ['fixture-fix']; await tick();
   assert.equal(f.record().parking, undefined);
   assert.ok(readFileSync(join(run.runDir, `${run.chats.at(-1).area}-resume.md`), 'utf8').includes(issue.html_url), 'saved group request reaches canonical resume input');
 });
@@ -274,7 +275,7 @@ test('3091 account health parks a failed chat until its actual reset', async t =
 
 test('3091 native release is idempotent after a lost comment reply and preserves a newer claim', async t => {
   const {f, tick} = await setup(t);
-  const run = f.record(); run.state = 'paused'; run.blockedOn = {kind: 'pdd', until: '99.0.0'}; save(f, run);
+  const run = f.record(); run.state = 'paused'; run.blockedOn = {kind: 'pdd', until: 'capability:fixture-fix'}; save(f, run);
   await tick(); assert.equal(f.record().parking?.phase, 'parked');
   const {createGithubRepoFake} = await import('./helpers/github-repo-fake.mjs');
   const {releaseParkedClaim} = await import('../src/issue-dependencies-github.mjs');
@@ -382,7 +383,7 @@ for (const kind of ['ci', 'review']) test(`3091 ${kind} wake needs a completed r
 // Repair 1: AC3/AC6. A release and a reply must not both acquire the run.
 test('3091 repair release serializes a reply during remote claim removal', async t => {
   const {f, tick, stateFile, ports} = await setup(t);
-  const run = f.record(); run.state = 'paused'; run.blockedOn = {kind: 'pdd', until: '99.0.0'}; save(f, run);
+  const run = f.record(); run.state = 'paused'; run.blockedOn = {kind: 'pdd', until: 'capability:fixture-fix'}; save(f, run);
   await tick(); assert.equal(f.record().parking?.phase, 'parked');
   fullTicks(f, stateFile, ports);
   let reply;
@@ -399,7 +400,7 @@ test('3091 repair release serializes a reply during remote claim removal', async
 
 test('3091 repair unknown release retains custody and retries after restart', async t => {
   const {f, tick, stateFile, ports} = await setup(t);
-  const run = f.record(); run.state = 'paused'; run.blockedOn = {kind: 'pdd', until: '99.0.0'}; save(f, run);
+  const run = f.record(); run.state = 'paused'; run.blockedOn = {kind: 'pdd', until: 'capability:fixture-fix'}; save(f, run);
   await tick(); fullTicks(f, stateFile, ports);
   let attempts = 0;
   ports.releaseParkedClaim = async () => (++attempts === 1 ? {state: 'unavailable'} : {state: 'released'});
@@ -424,7 +425,7 @@ for (const budgetDeferred of [false, true]) test(`3091 repair oldest ready inter
     const state = JSON.parse(readFileSync(stateFile)); state.retryAt = f.clock + 3600000; writeFileSync(stateFile, JSON.stringify(state));
     ports.queryIssues = async () => assert.fail('GitHub reads must remain deferred');
   }
-  f.herdr.calls.length = 0; ports.packageVersion = '99.0.0'; await tick();
+  f.herdr.calls.length = 0; ports.installedPddCapabilities = ['fixture-fix']; await tick();
   assert.equal(f.record().parking, undefined, 'oldest ready park must own the last slot across blocker kinds');
   assert.equal(other().parking.phase, 'parked');
   assert.equal(launches(f).length, 1);
@@ -486,7 +487,7 @@ for (const hadTestMode of [false, true]) for (const laterFailures of [0, 2, 3]) 
 
 for (const changed of ['runId', 'at', 'phase']) test(`3091 repair release revalidates ${changed} after remote effects`, async t => {
   const {f, tick, stateFile, ports} = await setup(t);
-  const run = f.record(); run.state = 'paused'; run.blockedOn = {kind: 'pdd', until: '99.0.0'}; save(f, run);
+  const run = f.record(); run.state = 'paused'; run.blockedOn = {kind: 'pdd', until: 'capability:fixture-fix'}; save(f, run);
   await tick(); fullTicks(f, stateFile, ports);
   let released = false;
   ports.releaseParkedClaim = async () => {
@@ -508,7 +509,7 @@ for (const changed of ['runId', 'at', 'phase']) test(`3091 repair release revali
 // Repair 2: AC2/AC6. Check admission can occur after chat shutdown.
 for (const custody of ['native-running', 'suite-waiting', 'interpreter-unavailable']) test(`3091 repair2 post-park ${custody} retains occupancy through timeout`, async t => {
   const {f, tick, stateFile, ports} = await setup(t);
-  const run = f.record(); run.state = 'paused'; run.blockedOn = {kind: 'pdd', until: '99.0.0'}; save(f, run);
+  const run = f.record(); run.state = 'paused'; run.blockedOn = {kind: 'pdd', until: 'capability:fixture-fix'}; save(f, run);
   await tick(); assert.equal(f.record().parking?.phase, 'parked');
   fullTicks(f, stateFile, ports);
   let settle;
@@ -542,7 +543,7 @@ for (const custody of ['native-running', 'suite-waiting', 'interpreter-unavailab
 // The release boundary must protect itself even without a prior reconciliation.
 test('3091 repair2 release rechecks native check custody under the run lock', async t => {
   const {f, tick} = await setup(t);
-  const run = f.record(); run.state = 'paused'; run.blockedOn = {kind: 'pdd', until: '99.0.0'}; save(f, run);
+  const run = f.record(); run.state = 'paused'; run.blockedOn = {kind: 'pdd', until: 'capability:fixture-fix'}; save(f, run);
   await tick();
   const {acquireInterpreterSlot, observeInterpreterRequest} = await import('../src/interpreter-queue.mjs');
   const request = {cwd: run.root, origin: 'https://controlled.invalid', requestId: 'release-check', kind: 'check', env: f.ports.env};
@@ -565,11 +566,11 @@ const parkCommandPorts = f => ({...f.ports, owners: {read: async () => ({json: J
 // AC1/AC3. Replacing the wait must replace its clearing condition.
 test('3091 repair2 park command replaces the blocker without losing session or age', async t => {
   const {f, tick, stateFile, ports} = await setup(t);
-  const run = f.record(); run.state = 'paused'; run.blockedOn = {kind: 'pdd', until: '99.0.0'}; save(f, run);
+  const run = f.record(); run.state = 'paused'; run.blockedOn = {kind: 'pdd', until: 'capability:fixture-fix'}; save(f, run);
   await tick(); const parked = f.record();
   const result = await parkAutomaticRun({cwd: run.root, reason: 'Wait for the dependency', blocker: 'dependency', until: '2897'}, parkCommandPorts(f));
   assert.equal(result.exitCode, 0);
-  ports.packageVersion = '99.0.0'; await tick();
+  ports.installedPddCapabilities = ['fixture-fix']; await tick();
   assert.equal(f.record().parking?.phase, 'parked', 'the old installed release cannot clear a replacement dependency');
   assert.deepEqual(f.record().parking.blocker, {kind: 'dependency', until: '2897'});
   assert.equal(f.record().parking.at, parked.parking.at);
@@ -682,7 +683,7 @@ for (const competing of [false, true]) test(`3091 integration parked reply respe
   assert.deepEqual(f.record().question, held.question);
   // Retrying the reply before admission is durable and deduplicated.
   assert.equal((await changeRun(reply, f.ports)).exitCode, 0);
-  if (competing) ports.packageVersion = '99.0.0';
+  if (competing) ports.installedPddCapabilities = ['fixture-fix'];
   await tick();
   let summary = JSON.parse(readFileSync(stateFile)).parking;
   assert.equal(summary.working, 1); assert.equal(launches(f).length, 0);
@@ -735,4 +736,210 @@ test('3091 integration parked reply survives an unsent resume and delivers its s
   assert.equal(delivered.state, 'delivered');
   assert.equal(deliveries(f).filter(args => JSON.stringify(args).includes(text)).length, 1);
   await tick(); assert.equal(deliveries(f).filter(args => JSON.stringify(args).includes(text)).length, 1);
+});
+
+// #3091 gap: these records were stopped before the installed coordinator knew parking.
+for (const reason of [
+  'pdd:no-verdict',
+  'Saved batch read is unknown (runner-stopped).',
+  'Interpreter check returned no verdict.',
+  'Interpreter saved read 20261101-120000-abcd is unknown (runner-stopped).',
+  'Interpreter recovery read still reports UNKNOWN. No check was resent.',
+]) test(`3091 backfill legacy interpreter stop: ${reason}`, async t => {
+  const {f, tick, stateFile} = await setup(t);
+  const held = f.record(); held.state = 'stuck'; held.parkReason = reason; save(f, held);
+  await tick();
+  const parked = f.record();
+  assert.equal(parked.parking?.phase, 'parked', 'legacy interpreter stop must close without a migration');
+  assert.equal(parked.parking.blocker.kind, 'interpreter');
+  assert.equal(f.herdr.panes.filter(pane => pane.workspace_id === held.layout.workspaceId).length, 0);
+  assert.equal(parked.chats.at(-1).session.id, held.chats.at(-1).session.id);
+  assert.deepEqual(parked.automaticOrigin, held.automaticOrigin);
+  assert.deepEqual(JSON.parse(readFileSync(stateFile)).parking.blockers, {interpreter: 1});
+  assert.equal(JSON.parse(readFileSync(stateFile)).parking.working, 0);
+  const at = parked.parking.interpreterWait.at;
+  f.tick(); await tick(); assert.equal(f.record().parking.interpreterWait.at, at);
+});
+
+for (const wait of ['stop', 'question']) test(`3091 backfill missing PR1 route ${wait} wakes on installed capability once`, async t => {
+  const {f, tick, ports, stateFile, warnings} = await setup(t);
+  ports.installedPddCapabilities = [];
+  const held = f.record();
+  if (wait === 'stop') {held.state = 'stuck'; held.parkReason = 'Installed PDD has no supported PR1 current-main integration route.';}
+  else {held.state = 'waiting'; held.question = {at: f.clock, text: 'Which supported native recovery returns this run to PR 1 prompt approval and integrates main?'};}
+  save(f, held); await tick();
+  assert.equal(f.record().parking?.phase, 'parked', 'missing route must be a named park');
+  assert.deepEqual(f.record().parking.blocker, {kind: 'pdd', until: '#2897'});
+  ports.packageVersion = '999.0.0'; await tick();
+  assert.equal(launches(f).length, 0, 'a newer version alone cannot prove the route exists');
+  ports.installedPddCapabilities = ['prompt-reentry']; await tick();
+  assert.deepEqual(warnings, []);
+  assert.equal(f.record().parking, undefined, 'installed re-entry capability must clear the legacy wait');
+  assert.equal(launches(f).length, 1); assert.equal(deliveries(f).length, 1);
+  const text = JSON.stringify(deliveries(f)[0]);
+  assert.match(text, /#2897/); assert.match(text, /re-entry/);
+  assert.equal(f.record().chats.at(-1).session.id, held.chats.at(-1).session.id);
+  assert.deepEqual(f.record().question, held.question, 'fix notice must not record a person answer');
+  assert.equal(JSON.parse(readFileSync(stateFile)).parking.working, 1);
+  await tick(); assert.equal(launches(f).length, 1); assert.equal(deliveries(f).length, 1);
+});
+
+test('3091 backfill finished PR1 check without verdict parks and reads first without approval', async t => {
+  const {f, tick, ports, stateFile, warnings} = await setup(t);
+  fullTicks(f, stateFile, ports);
+  ports.runtimeHealth = async () => ({state: 'unavailable', detail: 'controlled outage'});
+  const held = f.record(); held.state = 'waiting'; held.gate = {kind: 'approve-pr', area: held.areas[held.area].name};
+  held.done.check = {at: f.clock}; save(f, held);
+  ports.readRunResults = () => [{kind: 'pdd test', batch: '20261101-120000-abcd', states: [{state: 'partial', reason: {code: 'runner-stopped'}}]}];
+  await tick();
+  assert.equal(f.record().parking?.blocker.kind, 'interpreter', 'no-verdict PR1 gate is an interpreter wait');
+  assert.equal(f.record().parking.interpreterWait.batch, '20261101-120000-abcd');
+  ports.runtimeHealth = async () => ({state: 'healthy', detail: 'controlled recovery'});
+  await tick();
+  assert.deepEqual(warnings, []);
+  assert.equal(f.record().parking, undefined);
+  assert.deepEqual(f.record().gate, held.gate, 'read-first wake never grants prompt approval');
+  assert.equal(deliveries(f).length, 1);
+  const text = JSON.stringify(deliveries(f)[0]);
+  assert.match(text, /--read 20261101-120000-abcd/); assert.match(text, /unknown/);
+  await tick(); assert.equal(deliveries(f).length, 1);
+});
+
+test('3091 backfill three legacy interpreter stops enter test mode and admit only one saved session', async t => {
+  const {f, tick, ports, stateFile} = await setup(t);
+  fullTicks(f, stateFile, ports);
+  const second = await anotherRun(f, 18), third = await anotherRun(f, 19);
+  for (const [i, get] of [f.record, second, third].entries()) {
+    const run = get(); delete run.blockedOn; run.state = 'stuck';
+    run.parkReason = 'Interpreter saved read is unknown (runner-stopped).'; run.updatedAt = f.clock - 3000 + i * 1000; save(f, run);
+  }
+  writeFileSync(join(f.source, 'pdd.json'), JSON.stringify({autopilot: {mode: 'auto', trust: [], parking: {maxParked: 10}}}));
+  ports.runtimeHealth = async () => ({state: 'unavailable', detail: 'controlled outage'});
+  f.herdr.calls.length = 0;
+  await tick();
+  let state = JSON.parse(readFileSync(stateFile));
+  assert.equal(state.parking.parked, 3, 'all legacy interpreter stops must park');
+  assert.equal(state.interpreterPattern.streak, 3); assert.equal(state.interpreterPattern.testMode, true);
+  ports.runtimeHealth = async () => ({state: 'healthy', detail: 'controlled recovery'});
+  await tick();
+  state = JSON.parse(readFileSync(stateFile));
+  assert.equal(launches(f).length, 1); assert.equal(deliveries(f).length, 1);
+  assert.equal(state.runtime.outage.probe.number, 17);
+  assert.deepEqual([state.parking.working, state.parking.parked], [1, 2]);
+  await tick(); assert.equal(launches(f).length, 1);
+  ports.readInterpreterVerdict = async () => f.clock;
+  const completed = f.record(); completed.state = 'completed'; save(f, completed);
+  ports.readRuntimeProbe = async () => 'verdict';
+  await tick(); state = JSON.parse(readFileSync(stateFile));
+  assert.equal(state.interpreterPattern.testMode, false);
+  assert.equal(launches(f).filter(args => args.at(-1).includes('--resume')).length, 2, 'a verdict permits the next retained interpreter session');
+});
+
+test('3091 backfill unknown stopped cause closes resources and alerts once across ticks', async t => {
+  const {f, tick, ports, stateFile} = await setup(t);
+  const held = f.record(); held.state = 'stuck'; held.parkReason = 'A local condition has no saved classification.'; save(f, held);
+  const alerts = []; ports.sendAlert = async input => {alerts.push(input); return {exitCode: 0};};
+  await tick(); await tick();
+  assert.equal(f.record().state, 'stuck');
+  assert.equal(f.record().parking?.phase, 'parked', 'unknown stopped work must not use a worker process');
+  assert.equal(alerts.filter(row => row.kind === 'stuck').length, 1);
+  assert.deepEqual(JSON.parse(readFileSync(stateFile)).parking.blockers, {unknown: 1});
+  assert.equal(JSON.parse(readFileSync(stateFile)).parking.working, 0);
+  assert.equal(launches(f).length, 0);
+});
+
+for (const [reason, kind, until] of [
+  ['Waiting for issue #321 to merge.', 'dependency', '321'],
+  ['Account usage-limit until 2026-11-10T12:00:00Z.', 'account', '2026-11-10T12:00:00Z'],
+  ['GitHub rate limit has no saved reset.', 'github', null],
+  ['Waiting for CI result.', 'ci', null],
+  ['Waiting for the review lease.', 'review', null],
+]) test(`3091 backfill legacy ${kind} cause names its blocker`, async t => {
+  const {f, tick} = await setup(t);
+  const held = f.record(); held.state = 'stuck'; held.parkReason = reason; save(f, held);
+  await tick();
+  assert.equal(f.record().parking?.phase, 'parked', 'saved external stop must close its panes');
+  assert.deepEqual(f.record().parking.blocker, {kind, until});
+});
+
+test('3091 backfill legacy release number never substitutes for installed fix evidence', async t => {
+  const {f, tick, ports} = await setup(t);
+  const held = f.record(); held.state = 'paused'; held.blockedOn = {kind: 'pdd', until: '1.2.3'}; save(f, held);
+  await tick();
+  ports.packageVersion = '999.0.0'; await tick();
+  assert.equal(f.record().parking?.phase, 'parked', 'release number alone must not wake a saved PDD fix wait');
+  assert.equal(launches(f).length, 0);
+});
+
+test('3091 backfill installed workflow capability clears a saved route stop without a version override', async t => {
+  const {f, tick} = await setup(t);
+  const held = f.record(); held.state = 'stuck'; held.parkReason = 'Waiting for missing PDD feature #2897.'; save(f, held);
+  await tick();
+  assert.equal(f.record().state, 'running', 'the invoked workflow module contains the re-entry route');
+  assert.equal(f.record().parking, undefined);
+  assert.equal(launches(f).length, 1); assert.equal(deliveries(f).length, 1);
+  assert.match(JSON.stringify(deliveries(f)[0]), /re-entry/);
+});
+
+test('3091 backfill installed commit evidence uses the package checkout instead of the run checkout', async t => {
+  const {f, tick, ports} = await setup(t);
+  const held = f.record(); held.state = 'paused'; held.blockedOn = {kind: 'pdd', until: 'commit:' + 'f'.repeat(40)}; save(f, held);
+  await tick(); assert.equal(f.record().parking?.phase, 'parked');
+  const head = f.git(packageRoot, 'rev-parse', 'HEAD');
+  const result = await parkAutomaticRun({cwd: held.root, reason: 'Wait for the installed fix', blocker: 'pdd', until: `commit:${head}`}, parkCommandPorts(f));
+  assert.equal(result.exitCode, 0, 'commit evidence must be accepted through the park boundary');
+  await tick();
+  assert.equal(f.record().parking, undefined, 'installed ancestor commit must clear its blocker');
+  assert.equal(launches(f).length, 1);
+});
+
+test('3091 backfill status excludes idle stopped work and shows parked blockers after tick', async t => {
+  const {f, tick, ports, stateFile} = await setup(t);
+  const held = f.record(); held.state = 'stuck'; held.parkReason = 'Interpreter saved read is unknown (runner-stopped).'; save(f, held);
+  const statusPath = join(f.state, createHash('sha256').update(f.source).digest('hex').slice(0, 20) + '.json');
+  const status = async () => {
+    writeFileSync(statusPath, readFileSync(stateFile));
+    return runAutopilotLauncher({command: 'status', cwd: f.source, env: f.ports.env, packageRoot},
+      {...ports, stateRoot: f.state, timer: async () => false, allocationCheck: async () => ({state: 'ready'}), alertStatusLine: () => ''});
+  };
+  const before = await status(); assert.equal(before.exitCode, 0, before.message);
+  assert.match(before.message, /working 0 of 1/);
+  ports.readSuiteProgress = () => ({state: 'running'});
+  const active = await status(); assert.equal(active.exitCode, 0, active.message);
+  assert.match(active.message, /working 1 of 1/, 'an active check is real working capacity');
+  delete ports.readSuiteProgress;
+  await tick();
+  const parked = await status(); assert.equal(parked.exitCode, 0, parked.message);
+  assert.match(parked.message, /working 0 of 1/); assert.match(parked.message, /parked 1 \(interpreter 1\)/);
+});
+
+test('3091 backfill a queued legacy interpreter probe stays pending until worker room exists', async t => {
+  const {f, tick, ports, stateFile} = await setup(t);
+  fullTicks(f, stateFile, ports);
+  const second = await anotherRun(f, 18), third = await anotherRun(f, 19), worker = await anotherRun(f, 20);
+  for (const [i, get] of [f.record, second, third].entries()) {
+    const run = get(); delete run.blockedOn; run.state = 'stuck';
+    run.parkReason = 'Interpreter read has an unknown result (runner-stopped).'; run.updatedAt = f.clock - 3000 + i * 1000; save(f, run);
+  }
+  const active = worker(); delete active.blockedOn; active.state = 'running'; save(f, active);
+  writeFileSync(join(f.source, 'pdd.json'), JSON.stringify({autopilot: {mode: 'auto', trust: [], parking: {maxParked: 10}}}));
+  f.herdr.calls.length = 0;
+  await tick();
+  assert.equal(JSON.parse(readFileSync(stateFile)).parking.parked, 3, 'legacy interpreter waits must park behind the active worker');
+  const probe = JSON.parse(readFileSync(stateFile)).runtime.outage.probe;
+  assert.equal(probe.number, 17);
+  await tick();
+  assert.deepEqual(JSON.parse(readFileSync(stateFile)).runtime.outage.probe, probe);
+  assert.equal(launches(f).filter(args => args.at(-1).includes('--resume')).length, 0);
+});
+
+test('3091 backfill an independent question replaces an inferred interpreter wait', async t => {
+  const {f, tick} = await setup(t);
+  const held = f.record(); held.state = 'stuck'; held.parkReason = 'Interpreter saved read is unknown (runner-stopped).'; save(f, held);
+  await tick(); assert.equal(f.record().parking?.blocker.kind, 'interpreter', 'legacy interpreter evidence must first park');
+  const question = f.record(); question.question = {at: f.clock, text: 'Which independent product option should this run use?'}; save(f, question);
+  await tick();
+  assert.equal(f.record().parking.blocker.kind, 'person');
+  assert.deepEqual(f.record().parking.personWait.question, question.question);
+  assert.equal(launches(f).length, 0);
 });
