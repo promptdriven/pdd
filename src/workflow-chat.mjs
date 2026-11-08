@@ -1,5 +1,5 @@
 import { launchProfile, chatAgentName, validLaunchProfile } from './workflow-launch-profile.mjs';
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 3777ff8889d4eae5ed3d6f7dbfba47874c088c3a7b647c10e70e4ae5c89df364).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: f501e64c8fdce9658172307e6d5abce431b4a922ff52490cfecabdd4e2635246).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, lstatSync, readdirSync, writeFileSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
@@ -641,6 +641,10 @@ export async function rebuildClosedChat({ run, chat, message, resumeMessage }, p
     if (!recovered.workspaceClosed && await present()) {
       const pane = recovered.panes.find(p => p.tab_id === chat.tabId && p.pane_id === chat.paneId);
       if (pane && pane.terminal_id !== chat.terminalId) {
+        let absent = false;
+        try { await herdr(['agent', 'get', chat.paneId]); }
+        catch (error) { if (error.code === 'agent_not_found') absent = true; else throw error; }
+        if (!absent) throw problem('chat_identity_changed', 'The changed terminal still has a live agent. Inspect its saved chat custody.');
         chat.terminalId = pane.terminal_id;
         await ports.checkpoint(chat, null);
       }

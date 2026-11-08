@@ -207,3 +207,14 @@ for (const failure of ['area-allocation', 'changed-layout-close']) test(`3084: i
   assert.equal(launches(f).length, 1);
   assert.equal(launches(f)[0][2], chat.paneId);
 });
+
+for(const newSession of [false,true]) test(`3084 changed terminal with a live agent refuses custody refresh (${newSession})`,async t=>{
+ const {f,run}=await started(t),chat=run.chats.at(-1);
+ f.herdr.paneOf(chat).terminal_id+='-foreign';
+ f.herdr.calls.length=0;
+ const result=await open(f,{newSession});
+ assert.equal(result.exitCode,1,result.message);
+ assert.deepEqual(f.record().chats,run.chats);
+ assert.deepEqual(f.record().layout,run.layout);
+ assert.equal(effects(f).length,0);
+});
