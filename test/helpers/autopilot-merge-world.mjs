@@ -13,6 +13,7 @@ export function mergeWorld({queue=false} = {}) {
   w.ports = {github:{
     pull:async () => { w.reads++; if (w.onRead) await w.onRead(); return structuredClone(w.pull); },
     config:async () => structuredClone(w.config),
+    authority:async () => structuredClone(w.authority ?? w.config),
     trusted:async () => w.trusted,
     ci:async () => structuredClone(w.ci),
     comment:async (pr,body) => {
@@ -27,7 +28,7 @@ export function mergeWorld({queue=false} = {}) {
 }
 
 // Exercise the native adapter through the same gh fake used by repository tests.
-// The wrapper supplies merge-queue GraphQL fields and immutable config reads.
+// The wrapper supplies merge-queue fields, base policy and default-branch controls.
 export function nativeMergeWorld(options) {
   const w=mergeWorld(options);w.commands=[];w.configRefs=[];w.queueBranches=[];
   w.ports={execFile:async(file,args,opts)=>{
@@ -53,12 +54,16 @@ export function nativeMergeWorld(options) {
         mergeCommit:p.mergeCommit?{oid:p.mergeCommit}:null,mergeQueueEntry:p.entry}}}});
     }
     if(args[0]==='api' && args[1].includes('/contents/pdd.json?ref=')){
-      w.configRefs.push(decodeURIComponent(args[1].split('?ref=')[1]));
-      return json({encoding:'base64',content:Buffer.from(JSON.stringify(w.config)).toString('base64')});
+      const ref=decodeURIComponent(args[1].split('?ref=')[1]);w.configRefs.push(ref);
+      const current=ref==='main';
+      if(current && w.authorityError)throw Object.assign(Error('authority unavailable'),{code:1,stderr:'HTTP 503'});
+      if(current && w.authorityMissing)throw Object.assign(Error('authority missing'),{code:1,stderr:'(HTTP 404)'});
+      return json({encoding:'base64',content:Buffer.from(JSON.stringify(current?(w.authority ?? w.config):w.config)).toString('base64')});
     }
     if(args[0]==='pr' && args[1]==='checks'){
       const rows=(args.includes('--required')?w.ci.required.map(name=>w.ci.checks.find(c=>c.name===name)??{name,passed:false}):w.ci.checks)
-        .map(c=>({name:c.name,bucket:c.passed?'pass':'pending'}));
+        .map(c=>({name:c.name,bucket:c.bucket ?? (c.passed?'pass':'pending')}));
+      if(w.checkExit){throw Object.assign(Error('checks not green'),{code:w.checkExit,stdout:JSON.stringify(rows)});}
       if(w.checkError){throw Object.assign(Error('checks pending'),{code:8,stdout:JSON.stringify(rows)});}
       return json(rows);
     }

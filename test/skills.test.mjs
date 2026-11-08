@@ -777,8 +777,7 @@ test('AUTOPILOT7: explicit operator choice or standing delegation authorizes cov
   const rule = "An agent may merge only after the person's explicit chat request";
   assert.ok(readFileSync(join(root, 'RUNBOOK.md'), 'utf8').split('\n')[65].includes(rule), 'RUNBOOK.md:66');
   has('pdd-merge/SKILL.md', 'An operator’s explicit auto setup and start, or an applicable standing delegation, supplies it for eligible work; a configuration read alone does not.',
-    'A checker PASS is separate evidence, never approval words.', '`pdd workflow approve N --said -`', 'Strict mode requires the person terminal; never bypass it or edit approval fields.',
-    'Post one PR comment identifying the person’s actual explicit merge authorization without fabricating a quotation.');
+    'A checker PASS is separate evidence, never approval words.', '`pdd workflow approve N --said -`', 'Strict mode requires the person terminal; never bypass it or edit approval fields.');
   has('pdd-autopilot/steps/handoff.md', 'The person’s explicit choice of auto and start establishes the chosen automatic work',
     'commands and attribution, without presenting a coordinator summary as a quotation.');
 });

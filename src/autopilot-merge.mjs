@@ -36,10 +36,10 @@ export function evaluateMergeRules({config, evidence:e = {}, pull:p = {}, ci, tr
     return refusal('fresh_review','fresh agreeing review with no must-fix required');
   if (e.fullSuite?.head !== p.head || e.fullSuite?.passed !== true || e.fullSuite?.noNewSkips !== true) return refusal('full_suite','green full suite required on exact head');
   if (ci?.head !== p.head || ci?.complete !== true || !Array.isArray(ci.checks) || !ci.checks.length
-    || ci.checks.some(v => !object(v) || !named(v.name) || typeof v.passed !== 'boolean')
+    || ci.checks.some(v => !object(v) || !named(v.name) || v.passed !== true)
     || !Array.isArray(ci.required) || ci.required.some(name => !named(name)
       || !ci.checks.some(v => v.name === name) || ci.checks.some(v => v.name === name && v.passed !== true))
-    || !['CLEAN','HAS_HOOKS','BEHIND','UNSTABLE'].includes(p.mergeStateStatus)) return refusal('required_ci','required checks missing, pending, failed or unknown');
+    || !['CLEAN','HAS_HOOKS','BEHIND'].includes(p.mergeStateStatus)) return refusal('required_ci','required checks missing, pending, failed or unknown');
   if (![null,'APPROVED'].includes(p.reviewDecision) || p.pendingReviews !== 0) return refusal('human_review','required or requested review not satisfied');
   if (!count(e.repairs) || e.repairs > r.max_repairs) return refusal('repairs','repair allowance exceeded or unknown');
   if (e.questionOpen !== false) return refusal('question','open question or unknown question status');
@@ -51,9 +51,19 @@ const execute = nativeGithubCounter(promisify(callback), {purpose:'pulls'});
 function nativePorts(cwd, p) {
   const exec = p.execFile ?? execute;
   let repo;
-  const repository = async () => repo ??= (await resolveWorkflowRepository({cwd},{execFile:exec})).repository;
+  const repositoryInfo = async () => repo ??= await resolveWorkflowRepository({cwd},{execFile:exec});
+  const repository = async () => (await repositoryInfo()).repository;
   const gh = async args => (await exec('gh',args,{cwd,encoding:'utf8',timeout:30000,maxBuffer:8*1024*1024})).stdout;
   const api = async path => JSON.parse(await gh(['api',path]));
+  const readConfig = async ref => {
+    try {
+      const row = await api(`repos/${await repository()}/contents/pdd.json?ref=${encodeURIComponent(ref)}`);
+      if (row.encoding !== 'base64' || typeof row.content !== 'string') throw Error('Config unavailable');
+      const config = JSON.parse(Buffer.from(row.content,'base64').toString('utf8'));
+      if (!object(config)) throw Error('Invalid config');
+      return config;
+    } catch (error) { if (/\(HTTP 404\)/.test(error.stderr ?? '')) return {}; throw error; }
+  };
   const graphql = async (query, variables) => {
     const args = ['api','graphql','-f',`query=${query}`];
     for (const [key,value] of Object.entries(variables)) args.push(typeof value === 'number' ? '-F' : '-f',`${key}=${value}`);
@@ -73,14 +83,11 @@ function nativePorts(cwd, p) {
         state:row.state,draft:row.isDraft,reviewDecision:row.reviewDecision,pendingReviews:row.reviewRequests?.totalCount,mergeStateStatus:row.mergeStateStatus,
         mergeCommit:row.mergeCommit?.oid ?? null,queue:queueData.repository.mergeQueue !== null,entry:row.mergeQueueEntry};
     },
-    async config(pull) {
-      try {
-        const row = await api(`repos/${await repository()}/contents/pdd.json?ref=${encodeURIComponent(pull.baseOid)}`);
-        if (row.encoding !== 'base64' || typeof row.content !== 'string') throw Error('Config unavailable');
-        const config = JSON.parse(Buffer.from(row.content,'base64').toString('utf8'));
-        if (!object(config)) throw Error('Invalid config');
-        return config;
-      } catch (error) { if (/\(HTTP 404\)/.test(error.stderr ?? '')) return {}; throw error; }
+    config:pull => readConfig(pull.baseOid),
+    async authority() {
+      const {defaultBranch} = await repositoryInfo();
+      if (!named(defaultBranch)) throw Error('Default branch unavailable');
+      return readConfig(defaultBranch);
     },
     async trusted(issue,config) {
       const repositoryName = await repository();
@@ -94,16 +101,17 @@ function nativePorts(cwd, p) {
     async ci(pr,head) {
       const args = ['pr','checks',String(pr),'--repo',await repository(),'--json','name,bucket'];
       const read = async extra => {
-        try { return JSON.parse(await gh([...args,...extra])); }
+        try { return {rows:JSON.parse(await gh([...args,...extra])),complete:true}; }
         catch (error) {
-          if ([1,8].includes(error.code) && error.stdout?.trim().startsWith('[')) return JSON.parse(error.stdout);
-          if (extra.length && /no required checks reported/i.test(error.stderr ?? '')) return [];
+          if ([1,8].includes(error.code) && error.stdout?.trim().startsWith('[')) return {rows:JSON.parse(error.stdout),complete:false};
+          if (extra.length && /no required checks reported/i.test(error.stderr ?? '')) return {rows:[],complete:true};
           throw error;
         }
       };
       const checks = await read([]), required = await read(['--required']);
-      if (!Array.isArray(checks) || !Array.isArray(required)) throw Error('Checks unknown');
-      return {head,complete:true,checks:checks.map(v => ({name:v.name,passed:v.bucket === 'pass'})),required:required.map(v => v.name)};
+      if (!Array.isArray(checks.rows) || !Array.isArray(required.rows)) throw Error('Checks unknown');
+      return {head,complete:checks.complete && required.complete,
+        checks:checks.rows.map(v => ({name:v.name,passed:v.bucket === 'pass'})),required:required.rows.map(v => v.name)};
     },
     async comment(pr,body) {
       // gh owns JSON encoding; body is an argv value, never shell text.
@@ -163,9 +171,15 @@ export async function runAutopilotMerge({pr,cwd=process.cwd(),stdin,observe=fals
   if (observe) return result(1,'queue_failed','merge_queue','PR has no queue entry and is not merged');
   if (p.state !== 'OPEN' || p.draft !== false) return result(1,'refused','pull_state','open ready PR required');
   if (typeof p.queue !== 'boolean') return result(1,'refused','merge_queue','queue status unknown');
-  let config, trusted, ci;
-  try { config = await github.config(p); } catch { return result(1,'refused','policy','base configuration unavailable'); }
-  try { trusted = await github.trusted(e.issue,config); } catch { return result(1,'refused','autonomy','issue author trust unknown'); }
+  let baseConfig, config, trusted, ci;
+  try { baseConfig = await github.config(p); } catch { return result(1,'refused','policy','base configuration unavailable'); }
+  const refreshAuthority = async () => {
+    const authority = await github.authority();
+    if (!object(authority)) throw Error('Authority unavailable');
+    config = {...authority,autopilot:{...authority.autopilot,merge:baseConfig?.autopilot?.merge}};
+    trusted = await github.trusted(e.issue,config);
+  };
+  try { await refreshAuthority(); } catch { return result(1,'refused','autonomy','current repository authority or issue trust unavailable'); }
   try { ci = await github.ci(pr,p.head); } catch { return result(1,'refused','required_ci','checks unavailable'); }
   const equivalent = {};
   for (const review of Array.isArray(e.reviews) ? e.reviews : []) {
@@ -187,8 +201,10 @@ export async function runAutopilotMerge({pr,cwd=process.cwd(),stdin,observe=fals
   if (typeof current.queue !== 'boolean') return result(1,'refused','merge_queue','queue status unknown');
   if (current.entry) return reconcile(current);
   try { ci = await github.ci(pr,p.head); } catch { return result(1,'refused','required_ci','final checks unavailable'); }
+  try { await refreshAuthority(); } catch { return result(1,'refused','autonomy','final repository authority or issue trust unavailable'); }
   decision = evaluate(current);
   if (!decision.allowed) return result(1,'refused',decision.rule,decision.message.slice(decision.rule.length+2));
+  if (decision.action === 'observe') return result(0,'would_merge',null,'Would merge.');
   let writeFailed = false;
   try {
     if (current.queue) await github.enqueue(current.id,p.head);

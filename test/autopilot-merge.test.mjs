@@ -136,7 +136,7 @@ for(const queue of [false,true])test(`native gh adapter ${queue?'queue':'direct'
   const w=nativeMergeWorld({queue});const result=await invoke(w);
   assert.equal(result.outcome,queue?'queued':'merged_pending_audit');assert.equal(w.writes.length,1);
   assert.equal(w.writes[0].head,w.evidence.head);assert.equal(w.writes[0].kind,queue?'queue':'direct');
-  assert.deepEqual(w.configRefs,[w.pull.baseOid]);assert.ok(w.queueBranches.every(b=>b==='autopilot-next'));
+  assert.deepEqual(w.configRefs,[w.pull.baseOid,'main','main']);assert.ok(w.queueBranches.every(b=>b==='autopilot-next'));
   assert.equal(w.comments.length,1);
   const mergeCommands=w.commands.filter(c=>c.file==='gh'&&c.args[0]==='pr'&&c.args[1]==='merge');
   assert.equal(mergeCommands.length,queue?0:1);
@@ -159,8 +159,8 @@ test('native untrusted issue author cannot merge',async()=>{
   const w=nativeMergeWorld();w.repo.issues.get(1).user='outsider';
   assert.equal((await invoke(w)).rule,'autonomy');assert.equal(w.writes.length,0);
 });
-test('native base explicit trust permits issue author with no write permission',async()=>{
-  const w=nativeMergeWorld();w.repo.issues.get(1).user='helper';w.config.autopilot.trust=['Helper'];
+test('native current explicit trust permits issue author with no write permission',async()=>{
+  const w=nativeMergeWorld();w.repo.issues.get(1).user='helper';w.authority={autopilot:{mode:'auto',trust:['Helper']}};
   assert.equal((await invoke(w)).outcome,'merged_pending_audit');assert.equal(w.writes.length,1);
 });
 
@@ -179,5 +179,60 @@ for(const check of [null,{}, {name:'tests',passed:null}])test(`malformed CI ${JS
 
 test('a passing check with a duplicate name cannot hide a required failure',async()=>{
   const w=mergeWorld();w.ci.checks.push({name:'tests',passed:false});
+  assert.equal((await invoke(w)).rule,'required_ci');assert.equal(w.writes.length,0);
+});
+
+// Repair 1 replays the reviewed defects through the CLI and the native gh adapter.
+for(const queue of [false,true]){
+  for(const timing of ['initial','before submission']){
+    for(const change of ['off','observe','untrust'])test(`native ${queue?'queue':'direct'} honors current ${change} ${timing}`,async()=>{
+      const w=nativeMergeWorld({queue});w.repo.issues.get(1).user='helper';
+      w.config.autopilot.trust=['helper'];
+      w.authority={autopilot:{mode:'auto',trust:['helper']}};
+      const revoke=()=>{if(change==='untrust')w.authority.autopilot.trust=[];else w.authority.autopilot.mode=change;};
+      if(timing==='initial')revoke();else w.afterComment=revoke;
+      const result=await invoke(w);
+      assert.equal(result.outcome,change==='observe'?'would_merge':'refused');
+      assert.equal(result.rule,change==='observe'?null:'autonomy');
+      assert.equal(w.writes.length,0);
+      assert.equal(w.comments.length,change==='observe'||timing==='before submission'?1:0);
+    });
+    for(const fault of ['unavailable','malformed','missing'])test(`native ${queue?'queue':'direct'} fails closed on ${fault} authority ${timing}`,async()=>{
+      const w=nativeMergeWorld({queue});
+      const breakAuthority=()=>{if(fault==='malformed')w.authority=[];else if(fault==='missing')w.authorityMissing=true;else w.authorityError=true;};
+      if(timing==='initial')breakAuthority();else w.afterComment=breakAuthority;
+      const result=await invoke(w);
+      assert.equal(result.outcome,'refused');assert.equal(result.rule,'autonomy');assert.equal(w.writes.length,0);
+    });
+  }
+  test(`native ${queue?'queue':'direct'} uses base merge limit instead of default-branch policy`,async()=>{
+    const w=nativeMergeWorld({queue});w.config.autopilot.merge={max_repairs:0};
+    w.config.autopilot.mode='off';w.authority={autopilot:{mode:'auto',merge:{max_repairs:2}}};w.evidence.repairs=1;
+    const result=await invoke(w);assert.equal(result.outcome,'refused');assert.equal(result.rule,'repairs');assert.equal(w.writes.length,0);
+  });
+  for(const [bucket,exit] of [['fail',1],['pending',8]]){
+    for(const state of ['CLEAN','UNSTABLE'])for(const additional of [false,true])test(`native ${queue?'queue':'direct'} blocks ${bucket} CI ${additional?'beside required pass':'without required names'} in ${state}`,async()=>{
+      const w=nativeMergeWorld({queue});w.pull.mergeStateStatus=state;
+      w.ci.checks=additional?[{name:'tests',passed:true},{name:'extra',passed:false,bucket}]:[{name:'tests',passed:false,bucket}];
+      w.ci.required=additional?['tests']:[];w.checkExit=exit;
+      const result=await invoke(w);assert.equal(result.outcome,'refused');assert.equal(result.rule,'required_ci');assert.equal(w.writes.length,0);assert.equal(w.comments.length,0);
+    });
+    test(`native ${queue?'queue':'direct'} retains checks exit ${exit} even with passing JSON`,async()=>{
+      const w=nativeMergeWorld({queue});w.ci.required=[];w.checkExit=exit;
+      const result=await invoke(w);assert.equal(result.rule,'required_ci');assert.equal(result.outcome,'refused');assert.equal(w.writes.length,0);
+    });
+    test(`native ${queue?'queue':'direct'} blocks final ${bucket} CI without required names`,async()=>{
+      const w=nativeMergeWorld({queue});w.ci.required=[];
+      w.afterComment=()=>{w.ci.checks=[{name:'tests',passed:false,bucket}];w.checkExit=exit;};
+      const result=await invoke(w);assert.equal(result.outcome,'refused');assert.equal(result.rule,'required_ci');assert.equal(w.writes.length,0);assert.equal(w.comments.length,1);
+    });
+  }
+}
+for(const required of [[],['tests']])test(`all checks must pass with required names ${JSON.stringify(required)}`,async()=>{
+  const w=mergeWorld();w.ci.required=required;w.ci.checks.push({name:'extra',passed:false});
+  const result=await invoke(w);assert.equal(result.rule,'required_ci');assert.equal(w.writes.length,0);
+});
+test('UNSTABLE merge state refuses even when the check observation reports passes',async()=>{
+  const w=nativeMergeWorld();w.pull.mergeStateStatus='UNSTABLE';
   assert.equal((await invoke(w)).rule,'required_ci');assert.equal(w.writes.length,0);
 });

@@ -13,7 +13,7 @@ The machine-readable defaults live in `DEFAULT_MERGE_RULES` in
 branch's `pdd.json`, for example:
 
 ```json
-{"autopilot":{"mode":"auto","merge":{"max_repairs":1,"areas":{"payments":"manual","docs":"observe"}}}}
+{"autopilot":{"merge":{"max_repairs":1,"areas":{"payments":"manual","docs":"observe"}}}}
 ```
 
 The four required guards (`fresh_review`, `full_suite`, `required_ci`,
@@ -21,8 +21,13 @@ The four required guards (`fresh_review`, `full_suite`, `required_ci`,
 to 2 and accepts 0 through 2. `autonomy` defaults to `merge`; it and each `areas`
 override accept `manual`, `observe` or `merge`. Unknown or invalid rules refuse
 with `policy`. The PR cannot change its own policy: the command reads the config
-at the live base commit. The repository mode, issue trust, existing strict
-approval gates and required human reviews still apply.
+at the live base commit. Repository mode and explicit issue-author trust come
+from the current default branch, where the Autopilot settings commands write.
+The command reads these controls again before submission. An unavailable control
+read refuses the merge. Existing strict approval gates and required human reviews
+still apply. At least one CI check must exist. Every reported check must pass,
+even when no check names are required. Failed or pending check-process results
+block submission.
 
 Pass evidence with a quoted heredoc. Replace the synthetic values with actual
 records. Do not use a checker verdict as authorization or approval words.

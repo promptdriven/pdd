@@ -22,10 +22,10 @@ Do not ask again. A checker PASS is separate evidence, never approval words.
 Without applicable authority, wait for actual approval. Strict mode requires the person terminal; never bypass it or edit approval fields. Continue other work.
 
 
-Post one PR comment identifying the person’s actual explicit merge authorization without fabricating a quotation. It gives the verdict, the head and the checker. It lists the new words that users see (command names, help text, error messages) and each screen change, with its screenshot path and one line on what changed, so a person can look at them before a release. These do not stop the merge. A failed comment stops. If PR 1 has a PASS but no runtime verdict, it merges; add the `pdd:no-verdict` label to the PR.
+Prepare one PR comment payload identifying the person’s actual explicit merge authorization without fabricating a quotation. It gives the verdict, the head and the checker. It lists the new words that users see (command names, help text, error messages) and each screen change, with its screenshot path and one line on what changed, so a person can look at them before a release. These do not stop the merge. If PR 1 has a PASS but no runtime verdict, it merges; add the `pdd:no-verdict` label to the PR.
 
-Check the head again. Follow [submit and audit](../../docs/cli.md#autopilot-merge)
-with `pdd autopilot merge PR --input -`. It posts the comment.
+Follow [submit and audit](../../docs/cli.md#autopilot-merge):
+`pdd autopilot merge PR --input -` posts `comment` once. A failed comment stops.
 Without a queue its adapter uses `gh pr merge PR --merge --match-head-commit <sha>`.
 Never use `--auto`. A changed head stops. Read the merged state back.
 `queued` waits for GitHub; use `--observe` on a later wake, never direct fallback
