@@ -1,0 +1,2155 @@
+{
+  "schema_version": "pdd.autopilot-compare.v1",
+  "synthetic": true,
+  "completeIndependent": true,
+  "frames": [
+    {
+      "name": "initial",
+      "at": 1794052800000,
+      "snapshot": {
+        "v": 1,
+        "repository": "acme/widgets",
+        "refreshedAt": 1794052800000,
+        "list": {
+          "rows": {
+            "1": {
+              "id": 5000001,
+              "number": 1,
+              "html_url": "https://github.com/acme/widgets/issues/1",
+              "title": "Synthetic task 1",
+              "body": "Change independent part 1.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "2": {
+              "id": 5000002,
+              "number": 2,
+              "html_url": "https://github.com/acme/widgets/issues/2",
+              "title": "Synthetic task 2",
+              "body": "Change independent part 2.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "3": {
+              "id": 5000003,
+              "number": 3,
+              "html_url": "https://github.com/acme/widgets/issues/3",
+              "title": "Synthetic task 3",
+              "body": "Change independent part 3.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "4": {
+              "id": 5000004,
+              "number": 4,
+              "html_url": "https://github.com/acme/widgets/issues/4",
+              "title": "Synthetic task 4",
+              "body": "Change independent part 4.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "5": {
+              "id": 5000005,
+              "number": 5,
+              "html_url": "https://github.com/acme/widgets/issues/5",
+              "title": "Synthetic task 5",
+              "body": "Change independent part 5.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "6": {
+              "id": 5000006,
+              "number": 6,
+              "html_url": "https://github.com/acme/widgets/issues/6",
+              "title": "Synthetic task 6",
+              "body": "Change independent part 6.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "7": {
+              "id": 5000007,
+              "number": 7,
+              "html_url": "https://github.com/acme/widgets/issues/7",
+              "title": "Synthetic task 7",
+              "body": "Change independent part 7.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "8": {
+              "id": 5000008,
+              "number": 8,
+              "html_url": "https://github.com/acme/widgets/issues/8",
+              "title": "Synthetic task 8",
+              "body": "Change independent part 8.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "visitor"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            }
+          },
+          "since": "2026-11-07T11:55:00Z",
+          "readAt": 1794052800000
+        },
+        "issues": {
+          "1": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "2": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "3": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "4": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "5": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "6": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "7": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "8": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          }
+        },
+        "invalid": {}
+      }
+    },
+    {
+      "name": "quiet",
+      "at": 1794052860000,
+      "snapshot": {
+        "v": 1,
+        "repository": "acme/widgets",
+        "refreshedAt": 1794052800000,
+        "list": {
+          "rows": {
+            "1": {
+              "id": 5000001,
+              "number": 1,
+              "html_url": "https://github.com/acme/widgets/issues/1",
+              "title": "Synthetic task 1",
+              "body": "Change independent part 1.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "2": {
+              "id": 5000002,
+              "number": 2,
+              "html_url": "https://github.com/acme/widgets/issues/2",
+              "title": "Synthetic task 2",
+              "body": "Change independent part 2.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "3": {
+              "id": 5000003,
+              "number": 3,
+              "html_url": "https://github.com/acme/widgets/issues/3",
+              "title": "Synthetic task 3",
+              "body": "Change independent part 3.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "4": {
+              "id": 5000004,
+              "number": 4,
+              "html_url": "https://github.com/acme/widgets/issues/4",
+              "title": "Synthetic task 4",
+              "body": "Change independent part 4.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "5": {
+              "id": 5000005,
+              "number": 5,
+              "html_url": "https://github.com/acme/widgets/issues/5",
+              "title": "Synthetic task 5",
+              "body": "Change independent part 5.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "6": {
+              "id": 5000006,
+              "number": 6,
+              "html_url": "https://github.com/acme/widgets/issues/6",
+              "title": "Synthetic task 6",
+              "body": "Change independent part 6.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "7": {
+              "id": 5000007,
+              "number": 7,
+              "html_url": "https://github.com/acme/widgets/issues/7",
+              "title": "Synthetic task 7",
+              "body": "Change independent part 7.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "8": {
+              "id": 5000008,
+              "number": 8,
+              "html_url": "https://github.com/acme/widgets/issues/8",
+              "title": "Synthetic task 8",
+              "body": "Change independent part 8.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "visitor"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            }
+          },
+          "since": "2026-11-07T11:56:00Z",
+          "readAt": 1794052860000
+        },
+        "issues": {
+          "1": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "2": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "3": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "4": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "5": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "6": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "7": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "8": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          }
+        },
+        "invalid": {}
+      }
+    },
+    {
+      "name": "trusted-edit",
+      "at": 1794052920000,
+      "snapshot": {
+        "v": 1,
+        "repository": "acme/widgets",
+        "refreshedAt": 1794052800000,
+        "list": {
+          "rows": {
+            "1": {
+              "id": 5000001,
+              "number": 1,
+              "html_url": "https://github.com/acme/widgets/issues/1",
+              "title": "Synthetic task 1",
+              "body": "Keep the independent change within src/widget.mjs.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T12:02:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "2": {
+              "id": 5000002,
+              "number": 2,
+              "html_url": "https://github.com/acme/widgets/issues/2",
+              "title": "Synthetic task 2",
+              "body": "Change independent part 2.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "3": {
+              "id": 5000003,
+              "number": 3,
+              "html_url": "https://github.com/acme/widgets/issues/3",
+              "title": "Synthetic task 3",
+              "body": "Change independent part 3.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "4": {
+              "id": 5000004,
+              "number": 4,
+              "html_url": "https://github.com/acme/widgets/issues/4",
+              "title": "Synthetic task 4",
+              "body": "Change independent part 4.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "5": {
+              "id": 5000005,
+              "number": 5,
+              "html_url": "https://github.com/acme/widgets/issues/5",
+              "title": "Synthetic task 5",
+              "body": "Change independent part 5.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "6": {
+              "id": 5000006,
+              "number": 6,
+              "html_url": "https://github.com/acme/widgets/issues/6",
+              "title": "Synthetic task 6",
+              "body": "Change independent part 6.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "7": {
+              "id": 5000007,
+              "number": 7,
+              "html_url": "https://github.com/acme/widgets/issues/7",
+              "title": "Synthetic task 7",
+              "body": "Change independent part 7.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "8": {
+              "id": 5000008,
+              "number": 8,
+              "html_url": "https://github.com/acme/widgets/issues/8",
+              "title": "Synthetic task 8",
+              "body": "Change independent part 8.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "visitor"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            }
+          },
+          "since": "2026-11-07T11:57:00Z",
+          "readAt": 1794052920000
+        },
+        "issues": {
+          "1": {
+            "version": "[\"2026-11-07T12:02:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "2": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "3": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "4": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "5": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "6": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "7": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "8": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          }
+        },
+        "invalid": {}
+      }
+    },
+    {
+      "name": "trusted-comment",
+      "at": 1794052980000,
+      "snapshot": {
+        "v": 1,
+        "repository": "acme/widgets",
+        "refreshedAt": 1794052800000,
+        "list": {
+          "rows": {
+            "1": {
+              "id": 5000001,
+              "number": 1,
+              "html_url": "https://github.com/acme/widgets/issues/1",
+              "title": "Synthetic task 1",
+              "body": "Keep the independent change within src/widget.mjs.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 1,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T12:03:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "2": {
+              "id": 5000002,
+              "number": 2,
+              "html_url": "https://github.com/acme/widgets/issues/2",
+              "title": "Synthetic task 2",
+              "body": "Change independent part 2.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "3": {
+              "id": 5000003,
+              "number": 3,
+              "html_url": "https://github.com/acme/widgets/issues/3",
+              "title": "Synthetic task 3",
+              "body": "Change independent part 3.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "4": {
+              "id": 5000004,
+              "number": 4,
+              "html_url": "https://github.com/acme/widgets/issues/4",
+              "title": "Synthetic task 4",
+              "body": "Change independent part 4.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "5": {
+              "id": 5000005,
+              "number": 5,
+              "html_url": "https://github.com/acme/widgets/issues/5",
+              "title": "Synthetic task 5",
+              "body": "Change independent part 5.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "6": {
+              "id": 5000006,
+              "number": 6,
+              "html_url": "https://github.com/acme/widgets/issues/6",
+              "title": "Synthetic task 6",
+              "body": "Change independent part 6.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "7": {
+              "id": 5000007,
+              "number": 7,
+              "html_url": "https://github.com/acme/widgets/issues/7",
+              "title": "Synthetic task 7",
+              "body": "Change independent part 7.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "8": {
+              "id": 5000008,
+              "number": 8,
+              "html_url": "https://github.com/acme/widgets/issues/8",
+              "title": "Synthetic task 8",
+              "body": "Change independent part 8.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "visitor"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            }
+          },
+          "since": "2026-11-07T11:58:00Z",
+          "readAt": 1794052980000
+        },
+        "issues": {
+          "1": {
+            "version": "[\"2026-11-07T12:03:00Z\",1,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [
+                {
+                  "id": 1001,
+                  "body": "Also keep the public export stable.",
+                  "user": {
+                    "login": "acme"
+                  },
+                  "created_at": "2026-11-07T12:03:00Z",
+                  "updated_at": "2026-11-07T12:03:00Z"
+                }
+              ],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "2": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "3": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "4": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "5": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "6": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "7": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "8": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          }
+        },
+        "invalid": {}
+      }
+    },
+    {
+      "name": "other-machine-claim",
+      "at": 1794053040000,
+      "snapshot": {
+        "v": 1,
+        "repository": "acme/widgets",
+        "refreshedAt": 1794052800000,
+        "list": {
+          "rows": {
+            "1": {
+              "id": 5000001,
+              "number": 1,
+              "html_url": "https://github.com/acme/widgets/issues/1",
+              "title": "Synthetic task 1",
+              "body": "Keep the independent change within src/widget.mjs.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 1,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T12:03:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "2": {
+              "id": 5000002,
+              "number": 2,
+              "html_url": "https://github.com/acme/widgets/issues/2",
+              "title": "Synthetic task 2",
+              "body": "Change independent part 2.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "3": {
+              "id": 5000003,
+              "number": 3,
+              "html_url": "https://github.com/acme/widgets/issues/3",
+              "title": "Synthetic task 3",
+              "body": "Change independent part 3.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "4": {
+              "id": 5000004,
+              "number": 4,
+              "html_url": "https://github.com/acme/widgets/issues/4",
+              "title": "Synthetic task 4",
+              "body": "Change independent part 4.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "5": {
+              "id": 5000005,
+              "number": 5,
+              "html_url": "https://github.com/acme/widgets/issues/5",
+              "title": "Synthetic task 5",
+              "body": "Change independent part 5.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [
+                {
+                  "name": "pdd:working"
+                }
+              ],
+              "assignees": [],
+              "assignee": null,
+              "comments": 1,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T12:04:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "6": {
+              "id": 5000006,
+              "number": 6,
+              "html_url": "https://github.com/acme/widgets/issues/6",
+              "title": "Synthetic task 6",
+              "body": "Change independent part 6.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "7": {
+              "id": 5000007,
+              "number": 7,
+              "html_url": "https://github.com/acme/widgets/issues/7",
+              "title": "Synthetic task 7",
+              "body": "Change independent part 7.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "8": {
+              "id": 5000008,
+              "number": 8,
+              "html_url": "https://github.com/acme/widgets/issues/8",
+              "title": "Synthetic task 8",
+              "body": "Change independent part 8.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "visitor"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            }
+          },
+          "since": "2026-11-07T11:59:00Z",
+          "readAt": 1794053040000
+        },
+        "issues": {
+          "1": {
+            "version": "[\"2026-11-07T12:03:00Z\",1,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [
+                {
+                  "id": 1001,
+                  "body": "Also keep the public export stable.",
+                  "user": {
+                    "login": "acme"
+                  },
+                  "created_at": "2026-11-07T12:03:00Z",
+                  "updated_at": "2026-11-07T12:03:00Z"
+                }
+              ],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "2": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "3": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "4": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "5": {
+            "version": "[\"2026-11-07T12:04:00Z\",1,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [
+                {
+                  "id": 1005,
+                  "body": "Autopilot claim.\n\n```json\n{\"repository\": \"acme/widgets\", \"coordinatorId\": \"other-coordinator\", \"machine\": \"other-machine\", \"labelEventId\": \"2005\", \"lastSeen\": \"2026-11-07T12:04:00Z\"}\n```",
+                  "user": {
+                    "login": "acme"
+                  },
+                  "created_at": "2026-11-07T12:04:00Z",
+                  "updated_at": "2026-11-07T12:04:00Z"
+                }
+              ],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": [
+                {
+                  "id": 2005,
+                  "event": "labeled",
+                  "actor": {
+                    "login": "acme"
+                  },
+                  "label": {
+                    "name": "pdd:working"
+                  },
+                  "created_at": "2026-11-07T12:04:00Z"
+                }
+              ]
+            }
+          },
+          "6": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "7": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "8": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          }
+        },
+        "invalid": {}
+      }
+    },
+    {
+      "name": "issue-closed",
+      "at": 1794053100000,
+      "snapshot": {
+        "v": 1,
+        "repository": "acme/widgets",
+        "refreshedAt": 1794052800000,
+        "list": {
+          "rows": {
+            "1": {
+              "id": 5000001,
+              "number": 1,
+              "html_url": "https://github.com/acme/widgets/issues/1",
+              "title": "Synthetic task 1",
+              "body": "Keep the independent change within src/widget.mjs.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 1,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T12:03:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "2": {
+              "id": 5000002,
+              "number": 2,
+              "html_url": "https://github.com/acme/widgets/issues/2",
+              "title": "Synthetic task 2",
+              "body": "Change independent part 2.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "3": {
+              "id": 5000003,
+              "number": 3,
+              "html_url": "https://github.com/acme/widgets/issues/3",
+              "title": "Synthetic task 3",
+              "body": "Change independent part 3.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "4": {
+              "id": 5000004,
+              "number": 4,
+              "html_url": "https://github.com/acme/widgets/issues/4",
+              "title": "Synthetic task 4",
+              "body": "Change independent part 4.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "5": {
+              "id": 5000005,
+              "number": 5,
+              "html_url": "https://github.com/acme/widgets/issues/5",
+              "title": "Synthetic task 5",
+              "body": "Change independent part 5.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [
+                {
+                  "name": "pdd:working"
+                }
+              ],
+              "assignees": [],
+              "assignee": null,
+              "comments": 1,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T12:04:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "7": {
+              "id": 5000007,
+              "number": 7,
+              "html_url": "https://github.com/acme/widgets/issues/7",
+              "title": "Synthetic task 7",
+              "body": "Change independent part 7.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "8": {
+              "id": 5000008,
+              "number": 8,
+              "html_url": "https://github.com/acme/widgets/issues/8",
+              "title": "Synthetic task 8",
+              "body": "Change independent part 8.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "visitor"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            }
+          },
+          "since": "2026-11-07T12:00:00Z",
+          "readAt": 1794053100000
+        },
+        "issues": {
+          "1": {
+            "version": "[\"2026-11-07T12:03:00Z\",1,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [
+                {
+                  "id": 1001,
+                  "body": "Also keep the public export stable.",
+                  "user": {
+                    "login": "acme"
+                  },
+                  "created_at": "2026-11-07T12:03:00Z",
+                  "updated_at": "2026-11-07T12:03:00Z"
+                }
+              ],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "2": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "3": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "4": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "5": {
+            "version": "[\"2026-11-07T12:04:00Z\",1,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [
+                {
+                  "id": 1005,
+                  "body": "Autopilot claim.\n\n```json\n{\"repository\": \"acme/widgets\", \"coordinatorId\": \"other-coordinator\", \"machine\": \"other-machine\", \"labelEventId\": \"2005\", \"lastSeen\": \"2026-11-07T12:04:00Z\"}\n```",
+                  "user": {
+                    "login": "acme"
+                  },
+                  "created_at": "2026-11-07T12:04:00Z",
+                  "updated_at": "2026-11-07T12:04:00Z"
+                }
+              ],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": [
+                {
+                  "id": 2005,
+                  "event": "labeled",
+                  "actor": {
+                    "login": "acme"
+                  },
+                  "label": {
+                    "name": "pdd:working"
+                  },
+                  "created_at": "2026-11-07T12:04:00Z"
+                }
+              ]
+            }
+          },
+          "6": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            },
+            "raw": {
+              "id": 5000006,
+              "number": 6,
+              "html_url": "https://github.com/acme/widgets/issues/6",
+              "title": "Synthetic task 6",
+              "body": "Change independent part 6.",
+              "state": "closed",
+              "state_reason": "completed",
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T12:05:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            }
+          },
+          "7": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "8": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          }
+        },
+        "invalid": {}
+      }
+    },
+    {
+      "name": "quiet-after-changes",
+      "at": 1794053160000,
+      "snapshot": {
+        "v": 1,
+        "repository": "acme/widgets",
+        "refreshedAt": 1794052800000,
+        "list": {
+          "rows": {
+            "1": {
+              "id": 5000001,
+              "number": 1,
+              "html_url": "https://github.com/acme/widgets/issues/1",
+              "title": "Synthetic task 1",
+              "body": "Keep the independent change within src/widget.mjs.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 1,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T12:03:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "2": {
+              "id": 5000002,
+              "number": 2,
+              "html_url": "https://github.com/acme/widgets/issues/2",
+              "title": "Synthetic task 2",
+              "body": "Change independent part 2.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "3": {
+              "id": 5000003,
+              "number": 3,
+              "html_url": "https://github.com/acme/widgets/issues/3",
+              "title": "Synthetic task 3",
+              "body": "Change independent part 3.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "4": {
+              "id": 5000004,
+              "number": 4,
+              "html_url": "https://github.com/acme/widgets/issues/4",
+              "title": "Synthetic task 4",
+              "body": "Change independent part 4.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "5": {
+              "id": 5000005,
+              "number": 5,
+              "html_url": "https://github.com/acme/widgets/issues/5",
+              "title": "Synthetic task 5",
+              "body": "Change independent part 5.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [
+                {
+                  "name": "pdd:working"
+                }
+              ],
+              "assignees": [],
+              "assignee": null,
+              "comments": 1,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T12:04:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "7": {
+              "id": 5000007,
+              "number": 7,
+              "html_url": "https://github.com/acme/widgets/issues/7",
+              "title": "Synthetic task 7",
+              "body": "Change independent part 7.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            },
+            "8": {
+              "id": 5000008,
+              "number": 8,
+              "html_url": "https://github.com/acme/widgets/issues/8",
+              "title": "Synthetic task 8",
+              "body": "Change independent part 8.",
+              "state": "open",
+              "state_reason": null,
+              "user": {
+                "login": "visitor"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T10:00:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            }
+          },
+          "since": "2026-11-07T12:01:00Z",
+          "readAt": 1794053160000
+        },
+        "issues": {
+          "1": {
+            "version": "[\"2026-11-07T12:03:00Z\",1,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [
+                {
+                  "id": 1001,
+                  "body": "Also keep the public export stable.",
+                  "user": {
+                    "login": "acme"
+                  },
+                  "created_at": "2026-11-07T12:03:00Z",
+                  "updated_at": "2026-11-07T12:03:00Z"
+                }
+              ],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "2": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "3": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "4": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "5": {
+            "version": "[\"2026-11-07T12:04:00Z\",1,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [
+                {
+                  "id": 1005,
+                  "body": "Autopilot claim.\n\n```json\n{\"repository\": \"acme/widgets\", \"coordinatorId\": \"other-coordinator\", \"machine\": \"other-machine\", \"labelEventId\": \"2005\", \"lastSeen\": \"2026-11-07T12:04:00Z\"}\n```",
+                  "user": {
+                    "login": "acme"
+                  },
+                  "created_at": "2026-11-07T12:04:00Z",
+                  "updated_at": "2026-11-07T12:04:00Z"
+                }
+              ],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": [
+                {
+                  "id": 2005,
+                  "event": "labeled",
+                  "actor": {
+                    "login": "acme"
+                  },
+                  "label": {
+                    "name": "pdd:working"
+                  },
+                  "created_at": "2026-11-07T12:04:00Z"
+                }
+              ]
+            }
+          },
+          "6": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            },
+            "raw": {
+              "id": 5000006,
+              "number": 6,
+              "html_url": "https://github.com/acme/widgets/issues/6",
+              "title": "Synthetic task 6",
+              "body": "Change independent part 6.",
+              "state": "closed",
+              "state_reason": "completed",
+              "user": {
+                "login": "acme"
+              },
+              "labels": [],
+              "assignees": [],
+              "assignee": null,
+              "comments": 0,
+              "created_at": "2026-11-07T10:00:00Z",
+              "updated_at": "2026-11-07T12:05:00Z",
+              "issue_dependencies_summary": {
+                "blocked_by": 0,
+                "total_blocked_by": 0,
+                "blocking": 0,
+                "total_blocking": 0
+              }
+            }
+          },
+          "7": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          },
+          "8": {
+            "version": "[\"2026-11-07T10:00:00Z\",0,\"open\",{\"blocked_by\":0,\"total_blocked_by\":0,\"blocking\":0,\"total_blocking\":0}]",
+            "observedAt": 1794052800000,
+            "kinds": {
+              "comments": [],
+              "blockedBy": [],
+              "blocking": [],
+              "timeline": []
+            }
+          }
+        },
+        "invalid": {}
+      }
+    }
+  ]
+}

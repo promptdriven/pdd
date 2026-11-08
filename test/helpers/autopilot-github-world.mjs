@@ -8,19 +8,21 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createGithubRepoFake } from './github-repo-fake.mjs';
 
-export async function autopilotGithubWorld({ src = fileURLToPath(new URL('../../src', import.meta.url)), issues = 200, repository = 'acme/widgets', github, sharedGithub, machine, start = Date.parse('2026-11-07T12:00:00Z') } = {}) {
+export async function autopilotGithubWorld({ src = fileURLToPath(new URL('../../src', import.meta.url)), issues = 200, repository = 'acme/widgets', github, sharedGithub, machine, environment, start = Date.parse('2026-11-07T12:00:00Z') } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'pdd-github-world-'));
+  try {
   const home = join(dir, 'home'), stateRoot = join(home, 'state'), checkout = join(dir, 'repo');
   mkdirSync(checkout); mkdirSync(home);
-  const git = (...args) => execFileSync('git', args, { cwd: checkout, encoding: 'utf8' });
+  const env = { ...environment, HOME: home, PATH: process.env.PATH };
+  const git = (...args) => execFileSync('git', args, { cwd: checkout, encoding: 'utf8', ...(environment ? { env } : {}) });
   git('init', '-q'); git('remote', 'add', 'origin', `https://github.com/${repository}.git`);
   writeFileSync(join(checkout, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: [], ...(github ? { github } : {}) } }));
   mkdirSync(join(checkout, 'src')); writeFileSync(join(checkout, 'src', 'widget.mjs'), 'export const widget = 1;\n');
   git('add', '.'); git('-c', 'user.email=test@example.com', '-c', 'user.name=test', 'commit', '-qm', 'init');
-  const cwd = realpathSync(checkout), env = { HOME: home, PATH: process.env.PATH };
+  const cwd = realpathSync(checkout);
   const w = { dir, cwd, home, stateRoot, repository, time: start, agent: 'idle', agentStarted: false, prompts: [], requests: [], resume: null, warnings: [] };
   w.github = sharedGithub ?? createGithubRepoFake({ repository, owner: repository.split('/')[0], issues, now: () => w.time });
-  const runGit = (args, at) => { try { return { code: 0, stdout: execFileSync('git', args, { cwd: at ?? cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }), stderr: '' }; } catch (error) { return { code: error.status ?? 1, stdout: String(error.stdout ?? ''), stderr: String(error.stderr ?? '') }; } };
+  const runGit = (args, at) => { try { return { code: 0, stdout: execFileSync('git', args, { cwd: at ?? cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...(environment ? { env } : {}) }), stderr: '' }; } catch (error) { return { code: error.status ?? 1, stdout: String(error.stdout ?? ''), stderr: String(error.stderr ?? '') }; } };
   const run = async (command, args, options = {}) => {
     if (command === 'git') return runGit(args, options.cwd);
     if (command === 'gh') return w.github.gh(args, options);
@@ -75,6 +77,7 @@ export async function autopilotGithubWorld({ src = fileURLToPath(new URL('../../
   w.idle = async () => { w.agent = 'idle'; const resume = w.resume; w.resume = null; if (resume) await resume(); };
   w.cleanup = () => rmSync(dir, { recursive: true, force: true });
   return w;
+  } catch (error) { rmSync(dir, { recursive: true, force: true }); throw error; }
 }
 
 // The coordinator's answer: each subject needs no other issue first. It copies the base heads, candidates and
