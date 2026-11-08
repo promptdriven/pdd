@@ -19,6 +19,13 @@ never select one. Different owners across examined paths wait. Without an
 explicit map or a matching CODEOWNERS entry, one area named default belongs to Autopilot, regardless of the coordinator's area hint.
 An external repository with no owner rule waits.
 
+Path rules support `*`, `**`, `**/` and `?`. Other regular-expression special
+characters are literal. Escape every regular-expression metacharacter, including
+backslashes, when encoding literal pattern segments. Patterns containing a
+backslash, brackets or `!` remain unsupported and cannot select an owner in
+either explicit maps or CODEOWNERS. Leading `/` anchors a rule; a trailing `/`
+includes descendants. Unanchored basenames can match in nested folders.
+
 `draftAreas({codeowners,folders,labels,assignees})` returns a proposed areas list
 and the supplied signals. Use CODEOWNERS and top folders as suggestions; labels
 and past assignees are evidence for a person, never automatic authority. The skill
@@ -33,6 +40,6 @@ None. All inputs are values. Files are read by issue-sort-github.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"fa06eb6c993e888d0c4ebcca63039ab990073d255f104b0a9ac73b6b6b6daac1","entries":[{"operation":"resolveArea","input_schema":{"type":"object","properties":{"areas":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"owner":{"type":"string"},"match":{"type":"object","properties":{"paths":{"type":"array","items":{"type":"string"}},"keywords":{"type":"array","items":{"type":"string"}},"labels":{"type":"array","items":{"type":"string"}},"repositories":{"type":"array","items":{"type":"string"}}},"required":[],"additionalProperties":false},"mixed":{"type":"string","enum":["whole","split"]}},"required":["name","owner","match"],"additionalProperties":false}},"codeowners":{"type":"string"},"evidence":{"type":"object","properties":{"paths":{"type":"array","items":{"type":"string"}},"keywords":{"type":"array","items":{"type":"string"}},"labels":{"type":"array","items":{"type":"string"}},"repository":{"type":"string"},"area":{"type":"string"}},"required":[],"additionalProperties":false}},"required":[],"additionalProperties":false},"result_schema":{"type":"object","properties":{"state":{"type":"string","enum":["resolved","unsure"]},"area":{"type":"string"},"owner":{"type":"string"},"source":{"type":"string","enum":["config","codeowners","evidence","default"]}},"required":["state","area","owner","source"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":2},"conventions":[]}
+{"status":"draft","prose_sha256":"09f7ec1473601f0a593d4121d0b7c53619ea5965321ca735c7a965a92e0796ae","entries":[{"operation":"resolveArea","input_schema":{"type":"object","properties":{"areas":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"owner":{"type":"string"},"match":{"type":"object","properties":{"paths":{"type":"array","items":{"type":"string"}},"keywords":{"type":"array","items":{"type":"string"}},"labels":{"type":"array","items":{"type":"string"}},"repositories":{"type":"array","items":{"type":"string"}}},"required":[],"additionalProperties":false},"mixed":{"type":"string","enum":["whole","split"]}},"required":["name","owner","match"],"additionalProperties":false}},"codeowners":{"type":"string"},"evidence":{"type":"object","properties":{"paths":{"type":"array","items":{"type":"string"}},"keywords":{"type":"array","items":{"type":"string"}},"labels":{"type":"array","items":{"type":"string"}},"repository":{"type":"string"},"area":{"type":"string"}},"required":[],"additionalProperties":false}},"required":[],"additionalProperties":false},"result_schema":{"type":"object","properties":{"state":{"type":"string","enum":["resolved","unsure"]},"area":{"type":"string"},"owner":{"type":"string"},"source":{"type":"string","enum":["config","codeowners","evidence","default"]}},"required":["state","area","owner","source"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":2},"conventions":[]}
 ```
 </details>

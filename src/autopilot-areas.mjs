@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-areas.prompt.md (sha256: 9cc1f6c186ca5a805928ddc88662053bc41cf82c334f886a7918d16445d3fcff).
+// Generated from prompts/cli/autopilot-areas.prompt.md (sha256: a75b560167e14f7e5a17f67952c646617248f373e2d70b2b3a678381efea5a21).
 const login = x => typeof x === 'string' && /^[a-z\d](?:[a-z\d-]{0,38})$/i.test(x);
 const repo = x => typeof x === 'string' && /^[\w.-]+\/[\w.-]+$/.test(x);
 const owner = x => x === 'autopilot' || login(x) || typeof x === 'string' && x.startsWith('repo:') && repo(x.slice(5));
@@ -9,7 +9,7 @@ function glob(pattern, path) {
   let value = pattern.replace(/^\//, '');
   if (value.endsWith('/')) value += '**';
   const anchored = pattern.startsWith('/') || value.includes('/');
-  const expression = value.split(/(\*\*\/|\*\*|\*|\?)/).map(x => x === '**/' ? '(?:.*/)?' : x === '**' ? '.*' : x === '*' ? '[^/]*' : x === '?' ? '[^/]' : x.replace(/[.+^${}()|]/g, '\\$&')).join('');
+  const expression = value.split(/(\*\*\/|\*\*|\*|\?)/).map(x => x === '**/' ? '(?:.*/)?' : x === '**' ? '.*' : x === '*' ? '[^/]*' : x === '?' ? '[^/]' : x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('');
   return new RegExp(`${anchored ? '^' : '(?:^|/)'}${expression}(?:/.*)?$`).test(path);
 }
 export function parseCodeowners(text = '') {
