@@ -660,3 +660,28 @@ test('#2962 repair 2: terminal code confirmation cannot approve a Story changed 
   assert.equal(f.record().gate.kind, 'approve-pr', out.message);
   assert.equal(f.record().areas[f.record().area].name, 'prompt-pr');
 });
+
+for(const reopened of [false,true]) test(`2962 integration confirmation: ${reopened?'reopened':'initial'} Story gate refuses a change during terminal confirmation`, async t=>{
+  const f=await storyGate(t);
+  let scenario;
+  if(reopened) {
+    await approveStory(f);
+    scenario=JSON.parse(readFileSync(join(f.run.root,TEST)));
+    scenario.steps[0].checks.find(c=>c.path==='/totalCents').value=950;
+    writeFileSync(join(f.run.root,TEST),JSON.stringify(scenario));saveCheck(f);await f.done('check');
+    assert.ok(f.record().gate.storyChanges.length);
+  }
+  const before=f.record(),prompt=readFileSync(join(f.run.root,PROMPT),'utf8');
+  const out=await approveRun({ref:'17',cwd:f.source},{...f.ports,confirm:async()=>{
+    if(reopened) {
+      scenario.steps[0].checks.find(c=>c.path==='/totalCents').value=975;
+      writeFileSync(join(f.run.root,TEST),JSON.stringify(scenario));saveCheck(f);
+    } else writeFileSync(join(f.run.root,STORY),readFileSync(join(f.run.root,STORY),'utf8').replace('900 cents','950 cents'));
+    return true;
+  }});
+  assert.equal(out.exitCode,1);
+  assert.equal(f.prs.length,0);assert.deepEqual(f.record().decisions,before.decisions);
+  assert.deepEqual(f.record().storyApproval,before.storyApproval);
+  assert.equal(readFileSync(join(f.run.root,PROMPT),'utf8'),prompt);
+  assert.equal(f.record().area,before.area);
+});

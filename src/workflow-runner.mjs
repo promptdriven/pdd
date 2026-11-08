@@ -2743,6 +2743,12 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
     const review = await normalCodeReview(run, area, p);
     if (review) return review;
   }
+  let reviewedStory = null;
+  if (normal && run.gate?.storySnapshot && (storyGate || beforePr)) {
+    reviewedStory = storyFingerprint({root:run.root,changed:await changedFiles(run,p)});
+    if (fingerprintChanges(run.gate.storySnapshot,reviewedStory).length)
+      return fail('The Story or its expected cases changed during approval. Show the new card with done and ask again.');
+  }
   let saved;
   try { if (run.gate || beforePr || !askCode) saved = await saveGateApproval(run, area, record, edits, p, approvalSnapshot); }
   catch (error) { return fail(`Approval failed: ${error.message}`); }
@@ -2766,7 +2772,7 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
   if (beforePr) {
     // Try before PR 1 (#13): the approval opens the area's PR; the code question comes after it.
     const refreshed = normal && run.storyApproval && storyGateIndex(run) >= 0 ? { gateId: saved?.gateId ?? selectedGate?.id ?? null, evidenceId: saved?.evidence?.id ?? null, at: invocationAt,
-      fingerprint: storyFingerprint({ root: run.root, changed: await changedFiles(run, p) }), prompts: (approvalSnapshot ?? []).map(row => row.path) } : null;
+      fingerprint: reviewedStory ?? storyFingerprint({ root: run.root, changed: await changedFiles(run, p) }), prompts: (approvalSnapshot ?? []).map(row => row.path) } : null;
     if (refreshed) {
       commitRun(run, p, latest => {
         latest.storyApproval = refreshed;
@@ -2827,7 +2833,7 @@ ${approvalGuide(run)}`, p, true);
   if (askCode && approvalWords === undefined && beforePr) carried.push(...await draftDescription(run, prOf(run, area.name), await pr1Drafts(run, p), p));
   const now = invocationAt;
   const storyRecord = normal && storyGate ? { gateId: saved?.gateId ?? selectedGate?.id ?? null, evidenceId: saved?.evidence?.id ?? null, at: invocationAt,
-    fingerprint: storyFingerprint({ root: run.root, changed: await changedFiles(run, p) }), prompts: (approvalSnapshot ?? []).map(row => row.path) } : null;
+    fingerprint: reviewedStory ?? storyFingerprint({ root: run.root, changed: await changedFiles(run, p) }), prompts: (approvalSnapshot ?? []).map(row => row.path) } : null;
   const branch=run.branch,prBase=run.prBase,observedQuestion=selectedQuestion,areaIndex=selectedArea;
   commitRun(run,p,latest=>{
     if(storyRecord&&latest.area===areaIndex){latest.storyApproval=storyRecord;if(through!==undefined)latest.through=through;}
