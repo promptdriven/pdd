@@ -1,4 +1,4 @@
-// Implements prompts/cli/issue-dependencies-github.prompt.md.
+// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: 260f780d5f448c584ed824b4cc9bbb49453a3b83561e8c22ecceec3b994224b1).
 import { execFile as execCallback } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
@@ -792,7 +792,7 @@ export async function readDependencySnapshot({ cwd = '', repository, inputs = []
         if (limited) issue.holds.push(`Taken over ${limited.takeovers} times; take the stuck path, not another takeover`);
         const runs = observation.runs.filter(r => canonical(r.issue) === issue.key);
         if (observation.runsKnown) issue.runIds = runs.map(r => r.runId).filter(Boolean);
-        if (runs.some(r => r.waiting === 'runtime') && !issue.holds.includes('Waiting for Runtime')) issue.holds.push('Waiting for Runtime');
+        if (runs.some(r => r.waiting === 'runtime') && !issue.holds.includes('Waiting for the interpreter')) issue.holds.push('Waiting for the interpreter');
         if (claims.length === 1 && claims[0].coordinatorId && claims[0].commentId && claims[0].labelEventId) {
           const { coordinatorId, commentId, labelEventId } = claims[0];
           issue.executionClaim = { coordinatorId, commentId, labelEventId };

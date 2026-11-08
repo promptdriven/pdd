@@ -354,7 +354,7 @@ test('SF6 the description says to a person who edits it that pdd owns it; reader
   const body = readablePrBody(top(pr1Auto6()), 'Part of #1');
   assert.ok(body.includes(`${DETAILS_OPEN}\n\n${TOP_NOTE}\n\nPart of #1`));
   // One HTML comment on one line: it opens once, closes only at its end, and has no line break.
-  assert.ok(TOP_NOTE.startsWith('<!-- ') && TOP_NOTE.endsWith(' -->') && TOP_NOTE.indexOf('-->') === TOP_NOTE.length - 3 && !/[\r\n]/.test(TOP_NOTE), TOP_NOTE);
+  assert.ok(TOP_NOTE.startsWith('<!-- ') && TOP_NOTE.endsWith(' -->') && !TOP_NOTE.slice(0, -3).includes('-->') && !/[\r\n]/.test(TOP_NOTE), TOP_NOTE);
   assert.doesNotMatch(TOP_NOTE, /pdd-workflow:/);
   assert.equal(detailsOf(body).details, 'Part of #1', 'Details are pdd\'s text without the note.');
 });

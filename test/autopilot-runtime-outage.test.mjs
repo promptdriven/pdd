@@ -15,6 +15,8 @@ import { fakeRuntime, harbor, portsFor } from './runtime-fake.mjs';
 import { runAutopilotAlerts } from '../src/autopilot-alerts.mjs';
 import { createDependencyReadPorts, readDependencySnapshot } from '../src/issue-dependencies-github.mjs';
 import { projectIssueGraph } from '../src/issue-dependencies.mjs';
+import { runIssueGraph } from '../src/issue-dependency-graph.mjs';
+import { renderIssueGraph } from '../src/issue-dependency-graph-view.mjs';
 import { fixture as runFixture, packageRoot } from './helpers/workflow-runner-fixture.mjs';
 
 const BATCH = '20261027-170500-abcd';
@@ -158,9 +160,19 @@ test('pdd graph shows the interpreter wait as a hold of its own issue only', asy
     clock: { now: async () => ({ iso: '2026-11-05T20:00:00.000Z' }) },
   };
   const { snapshot } = await readDependencySnapshot({ cwd: '', repository: 'example/project' }, ports);
-  const nodes = projectIssueGraph({ snapshot }).nodes;
-  assert.ok(nodes.find(node => node.key === key(17)).reasons.includes('Waiting for Runtime'));
-  assert.ok(!nodes.find(node => node.key === key(18)).reasons.includes('Waiting for Runtime'));
+  const graph = projectIssueGraph({ snapshot });
+  const { html } = renderIssueGraph({ graph, repository: 'example/project', selected: key(17) });
+  assert.match(html, /<li>Waiting for the interpreter<\/li>/);
+  assert.doesNotMatch(html, /Waiting for Runtime/);
+  const command = await runIssueGraph({ cwd: '', repository: 'example/project' }, {
+    cache: { read: async () => ({ json: '' }), write: async () => ({ ok: true }) },
+    snapshots: { read: async () => ({ snapshot }) },
+  });
+  assert.equal(command.exitCode, 0);
+  assert.match(command.message, /\n  Waiting for the interpreter\n/);
+  assert.doesNotMatch(command.message, /Waiting for Runtime/);
+  assert.ok(graph.nodes.find(node => node.key === key(17)).reasons.includes('Waiting for the interpreter'));
+  assert.ok(!graph.nodes.find(node => node.key === key(18)).reasons.includes('Waiting for the interpreter'));
 });
 
 test('checkCause tells this issue from the service from its saved rows', () => {
