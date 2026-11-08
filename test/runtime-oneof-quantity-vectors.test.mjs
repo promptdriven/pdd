@@ -41,7 +41,7 @@ test('ONEOF2500 CLI: check accepts exclusive patterns and refuses concrete overl
   const run = () => {
     writeFileSync(path, original.replace(block[1], JSON.stringify(contract, null, 2)));
     return spawnSync(process.execPath, [join(root, 'bin/pdd.mjs'), 'test', 'user_stories/place-order.md', '--json'], {
-      cwd: repo, encoding: 'utf8', env: { ...process.env, HOME: home, PATH: `${tools}:${process.env.PATH}`, PDD_RUNTIME_URL: 'http://127.0.0.1:9' },
+      cwd: repo, encoding: 'utf8', env: { ...process.env, HOME: home, PDD_INTERPRETER_QUEUE: join(home, 'interpreter-queue'), PATH: `${tools}:${process.env.PATH}`, PDD_RUNTIME_URL: 'http://127.0.0.1:9' },
     });
   };
   const exclusive = run();

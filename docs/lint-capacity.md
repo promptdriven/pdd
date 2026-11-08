@@ -46,8 +46,12 @@ profiles must use the same absolute `PDD_INTERPRETER_QUEUE` when overriding the
 default `/tmp/pdd-interpreter-UID` directory. Waiting status shows the position;
 Autopilot pauses its stuck clock during that wait. Each queue ticket is also a
 request ledger row with timestamps, outcome and active request counts. Busy
-feedback temporarily lowers the cap. An uncertain dispatch keeps its slot until
-a same-ID terminal read confirms completion. It is never blindly resent.
+feedback temporarily lowers the cap. An uncertain dispatch with a live owner keeps its slot until
+a same-ID terminal read confirms completion. Admission releases waiting and
+running tickets whose owners are confirmed dead. The ledger records
+`releaseReason: "owner-dead"`. A dispatched ticket keeps its observed outcome, or
+`unknown` if no outcome was received. Local slot release does not prove remote
+completion and never authorizes a resend.
 
 The optional profile cap for checks, remote lint and new simulation setup has no
 default limit. Set `PDD_MAX_JOBS` to a

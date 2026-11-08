@@ -47,7 +47,7 @@ export async function launcher(t) {
     // The real alerts module with a saved Discord webhook and a fake HTTP port.
     alertPorts: { http: async ({ body }) => { f.sent.push(body.content); return { status: 200, text: JSON.stringify({ id: String(f.sent.length), content: body.content }) }; } },
   };
-  const env = { HOME: home, PATH: process.env.PATH, XDG_CONFIG_HOME: join(home, '.config') };
+  const env = { HOME: home, PDD_INTERPRETER_QUEUE: join(dir, 'interpreter-queue'), PATH: process.env.PATH, XDG_CONFIG_HOME: join(home, '.config') };
   f.env = env;
   mkdirSync(join(home, '.config', 'pdd'), { recursive: true });
   writeFileSync(join(home, '.config', 'pdd', 'autopilot-alerts.json'), JSON.stringify({ v: 1, service: 'discord', url: 'https://discord.com/api/webhooks/1/abc' }));

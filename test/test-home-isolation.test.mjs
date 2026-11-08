@@ -20,6 +20,8 @@ function caller(t) {
   for (const path of ['.local/state/pdd', '.config/herdr', '.agents/skills', '.claude/skills', '.codex/skills', '.pdd/runtime']) {
     mkdirSync(join(home, path), { recursive: true }); writeFileSync(join(home, path, 'keep'), path);
   }
+  env.PDD_INTERPRETER_QUEUE = join(home, 'interpreter-queue');
+  mkdirSync(env.PDD_INTERPRETER_QUEUE); writeFileSync(join(env.PDD_INTERPRETER_QUEUE, 'keep'), 'caller-queue');
   writeFileSync(join(home, '.local/state/pdd/runs.json'), JSON.stringify({ version: 1, runs: [] }));
   return { dir, home, env };
 }
@@ -46,6 +48,9 @@ test('default state, skills, homedir fallback and children use a disposable home
     import { setupSkills } from ${JSON.stringify(pathToFileURL(join(root, 'src/skills-install.mjs')).href)};
     assert.notEqual(process.env.HOME, ${JSON.stringify(f.home)});
     assert.equal(homedir(), process.env.HOME);
+    assert.equal(process.env.PDD_INTERPRETER_QUEUE, join(homedir(), 'interpreter-queue'));
+    execFileSync(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(`import {acquireInterpreterSlot} from ${JSON.stringify(pathToFileURL(join(root, 'src/interpreter-queue.mjs')).href)}; await acquireInterpreterSlot({cwd:process.cwd(),origin:'http://127.0.0.1:1',requestId:'child',kind:'lint'});`)}]);
+    assert.equal(existsSync(join(process.env.PDD_INTERPRETER_QUEUE, 'ticket-1.json')), true);
     for (const key of ${JSON.stringify(redirects)}) assert.equal(process.env[key], undefined, key);
     const state = join(homedir(), '.local/state/pdd');
     assert.equal(stateDirFor({ env: {} }), state);
@@ -155,6 +160,7 @@ test('npm test isolates a new file that omits the helper import', t => {
     import { writeRun } from ${JSON.stringify(pathToFileURL(join(root, 'src/workflow-runs.mjs')).href)};
     writeFileSync(${JSON.stringify(record)}, process.env.HOME);
     test('default write', () => {
+      assert.equal(process.env.PDD_INTERPRETER_QUEUE, join(process.env.HOME, 'interpreter-queue'));
       writeRun({ v: 1, number: 1, repo: 'example/new', runDir: join(process.env.HOME, 'repo/.git/pdd/runs/1'), root: process.env.HOME, state: 'running', areas: [], done: {}, chats: [] }, { skipMetricsDelivery: true });
       assert.equal(existsSync(join(process.env.HOME, '.local/state/pdd/runs.json')), true);
     });
@@ -188,4 +194,52 @@ for (const caught of [false, true]) test(`OS account-home lookup is blocked even
   assert.notEqual(home, f.home);
   assert.equal(existsSync(home), false);
   assert.deepEqual(snapshot(f.home), before, 'caller-home-leak');
+});
+
+for (const [port, method] of [['sync', 'mkdirSync'], ['sync', 'readFileSync'],
+  ['sync', 'renameSync'], ['callback', 'writeFile'], ['promise', 'readFile'], ['promise', 'rename'],
+  ['sync', 'truncateSync'], ['sync', 'opendirSync'], ['sync', 'realpathSync'],
+  ['promise', 'truncate'], ['promise', 'opendir'], ['promise', 'realpath']]) {
+  test(`machine interpreter queue guard rejects caught ${port} ${method} before I/O`, t => {
+    const f = caller(t), before = snapshot(f.home);
+    // Stub the underlying operation before loading the guard. Even the old-code
+    // control cannot read or write the machine queue.
+    const script = `
+      import fs from 'node:fs';
+      import promises from 'node:fs/promises';
+      import {syncBuiltinESMExports} from 'node:module';
+      const port=${JSON.stringify(port)} === 'promise' ? promises : fs;
+      let io=0;
+      const original=port[${JSON.stringify(method)}];
+      const machine='/tmp/pdd-interpreter-'+(process.getuid?.() ?? 'user');
+      port[${JSON.stringify(method)}]=(...args)=>{
+        if(args.some(value=>typeof value==='string'&&(value===machine||value.startsWith(machine+'/')))) {
+          io++;throw Object.assign(Error('synthetic I/O'),{code:'SYNTHETIC_IO'});
+        }
+        return original(...args);
+      };
+      syncBuiltinESMExports();
+      await import(${JSON.stringify(bootstrap)});
+      const path='/tmp/pdd-interpreter-'+(process.getuid?.() ?? 'user')+'/ticket-1.json';
+      let code;
+      try {
+        await port[${JSON.stringify(method)}](...(${JSON.stringify(method)}.startsWith('rename') ? ['/synthetic-source',path] : [path,()=>{}]));
+      } catch(error) { code=error.code; }
+      console.log(JSON.stringify({code,io}));
+    `;
+    const result = child(['--input-type=module', '-e', script], f.env);
+    assert.equal(result.status, 1, 'machine-queue-guard');
+    assert.match(result.stderr, /PDD_TEST_INTERPRETER_QUEUE/);
+    assert.deepEqual(JSON.parse(result.stdout), {code:'PDD_TEST_INTERPRETER_QUEUE',io:0});
+    assert.deepEqual(snapshot(f.home), before, 'caller-queue-leak');
+  });
+}
+
+test('focused public checks leave an inherited caller interpreter queue unchanged', t => {
+  const f = caller(t), before = snapshot(f.home);
+  const result = child(['--test', '--test-name-pattern=^a public check gets a slot',
+    join(root, 'test/interpreter-queue-runtime.test.mjs')], f.env);
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  assert.match(result.stdout, /# pass 1\b/);
+  assert.deepEqual(snapshot(f.home), before, 'caller-queue-leak');
 });

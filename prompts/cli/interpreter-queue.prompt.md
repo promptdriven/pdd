@@ -37,10 +37,19 @@ Register a waiting ticket, then admit the oldest live waiter when active count i
 below capacity and the shared busy pause has ended. Position counts waiting tickets
 including this one, from 1. Report changed positions as
 `waiting for an interpreter slot (position N)`. End and retain unsent waiters on
-cancellation. Dead waiting owners and dead admitted owners with `dispatched:false` are safe
-to finish. Running requests that may have dispatched without a
-terminal receipt retain capacity, including after owner death or interruption.
-Never resend or infer a verdict from owner death or elapsed time.
+cancellation. At every admission attempt, under the admission lock, check PID
+liveness for all waiting and running tickets. Finish and persist tickets with a
+confirmed dead owner, including dispatched holders, before counting capacity or
+FIFO position. Set `releaseReason: "owner-dead"`, `endedAt` to the cleanup time,
+and `activeAtEnd` to the running count before that release. Keep ticket identity,
+dispatch evidence, start measurements and any observed outcome. Without an
+observed outcome, use `unknown` for dispatched tickets and `not_sent` for unsent
+tickets. PID permission errors or uncertain liveness do not prove death.
+A live dispatched request without a terminal receipt retains capacity after
+interruption. Releasing a dead owner's local capacity never authorizes a resend
+or infers a verdict. Duplicate request identities remain refused. Later terminal
+same-ID evidence may replace a reclaimed dispatched ticket's unknown outcome once, without releasing
+capacity again or replacing its release reason and measurements.
 
 Export `observeInterpreterRequest({env,origin,requestId,outcome,terminal,busy,waitMs}, ports)`.
 Outcomes are `verdict`, `unknown`, `refused`, `busy`, or `not_sent`. Record each
@@ -59,7 +68,8 @@ Persist one request ledger row per ticket. Fields are `ticket` (positive sequenc
 (waiting/running/finished), `queuedAt`, `startedAt`, `endedAt` (epoch milliseconds;
 start/end null until observed), `outcome` (above or null), `activeAtStart`,
 `activeAtEnd` (nonnegative request counts, start includes this request; end counts
-before releasing it), and `dispatched` (whether POST may have started). Expose
+before releasing it), and `dispatched` (whether POST may have started). An optional `releaseReason`
+is `owner-dead` only when admission reclaimed a dead owner; older rows omit it. Expose
 `markInterpreterDispatch({root,ticket}, ports)` before POST. A failed mark forbids
 POST. Preserve unknown observations and permit later confirmed completion to
 replace them. Admission and all terminal ledger writes are serialized. An error

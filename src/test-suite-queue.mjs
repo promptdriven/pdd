@@ -1,4 +1,4 @@
-// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: b6ea3f9cec91a346c2d1fd83220c964930433416dcc8788088fb5101a25ceb5e).
+// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: d218bd1d290385f0bcc87c5d2959cbfe2fc55da9931bbea5a3489ccf3d80bc18).
 import * as files from 'node:fs';
 import { join, isAbsolute, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -199,6 +199,7 @@ export async function runTestSuite({ cwd, command, timeout = 30, env = process.e
     for (const [folder, names] of [
       ['home', ['HOME', 'USERPROFILE']], ['state', ['PDD_STATE_DIR']],
       ['config', ['XDG_CONFIG_HOME']], ['tmp', ['TMPDIR', 'TMP', 'TEMP']],
+      ['interpreter-queue', ['PDD_INTERPRETER_QUEUE']],
     ]) {
       const path = join(environmentRoot, folder);
       p.fs.mkdirSync(path, {mode:0o700});

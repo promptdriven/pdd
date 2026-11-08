@@ -40,7 +40,7 @@ test('ALPHA4: actual packed package runs every advertised local command without 
   for (const p of [home, consumer, project]) mkdirSync(p);
   const emptyConfig = join(sandbox, 'empty-user-npmrc'), globalConfig = join(sandbox, 'empty-global-npmrc');
   writeFileSync(emptyConfig, ''); writeFileSync(globalConfig, '');
-  const env = { PATH: process.env.PATH, HOME: home, TMPDIR: sandbox,
+  const env = { PATH: process.env.PATH, HOME: home, PDD_INTERPRETER_QUEUE: join(sandbox, 'interpreter-queue'), TMPDIR: sandbox,
     npm_config_cache: join(sandbox, 'cache'), npm_config_userconfig: emptyConfig, npm_config_globalconfig: globalConfig,
     npm_config_offline: 'true', npm_config_audit: 'false', npm_config_fund: 'false' };
   const pack = JSON.parse(execFileSync('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', sandbox],

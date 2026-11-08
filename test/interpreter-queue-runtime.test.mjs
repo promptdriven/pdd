@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { runCheck } from '../src/runtime-client.mjs';
 import { readInterpreterProgress } from '../src/interpreter-queue.mjs';
 import { fakeRuntime, harbor, portsFor, temp } from './runtime-fake.mjs';
@@ -114,4 +115,30 @@ test('a batch polls its dispatched requests while another Story waits for a mach
   const rows = requestRows(queue);
   assert.equal(rows.length, 4, 'each lint and check must have machine ledger evidence');
   assert.ok(rows.every(row => row.activeAtStart <= 2 && row.state === 'finished'));
+});
+
+// Synthetic native replay of the queue conditions in #3098. No captured tickets.
+test('a public check gets a slot after native holder death without resending the dead requests', async t => {
+  const setup = harbor(t), queue = temp(t);
+  const env = { ...process.env, PDD_INTERPRETER_QUEUE: queue, PDD_INTERPRETER_CONCURRENCY: '2' };
+  const url = new URL('../src/interpreter-queue.mjs', import.meta.url).href;
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import {acquireInterpreterSlot,markInterpreterDispatch} from ${JSON.stringify(url)};
+    const input={cwd:process.cwd(),origin:'http://127.0.0.1:1',kind:'check'};
+    const paid=await acquireInterpreterSlot({...input,requestId:'dead-paid'});
+    await markInterpreterDispatch(paid);
+    await acquireInterpreterSlot({...input,requestId:'dead-unsent'});
+  `], { env, encoding: 'utf8', timeout: 5000 });
+  assert.equal(child.status, 0, child.stderr);
+  const fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
+  const { ports } = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state,
+    PDD_RUNTIME_URL: fake.origin, PDD_INTERPRETER_QUEUE: queue, PDD_INTERPRETER_CONCURRENCY: '1' });
+  assert.equal(await check(setup, ports, { '--json': true, '--timeout': '1' }), 0, 'dead-holder-public-check');
+  const rows = requestRows(queue).sort((a, b) => a.ticket - b.ticket);
+  assert.equal(rows.length, 4);
+  assert.deepEqual(rows.slice(0, 2).map(row => [row.state, row.outcome, row.releaseReason]),
+    [['finished', 'unknown', 'owner-dead'], ['finished', 'not_sent', 'owner-dead']]);
+  assert.ok(rows.slice(2).every(row => row.state === 'finished' && row.outcome === 'verdict' && row.activeAtStart === 1));
+  assert.deepEqual(fake.posts.map(row => row.command), ['lint', 'check']);
+  assert.ok(fake.posts.every(row => !['dead-paid', 'dead-unsent'].includes(row.request.requestId)));
 });

@@ -111,7 +111,7 @@ test('jobs: real CLI outside Git, no auth or runtime calls; errors never look em
   const sandbox = temp(t), stateDir = join(sandbox, 'state'), gh = join(sandbox, 'gh');
   writeFileSync(gh, `#!/bin/sh\necho forbidden >&2\nexit 77\n`); chmodSync(gh, 0o700);
   const fake = await fakeRuntime(t, () => { assert.fail('jobs contacted runtime'); });
-  const env = { HOME: sandbox, PATH: sandbox, PDD_STATE_DIR: stateDir, PDD_RUNTIME_URL: fake.origin };
+  const env = { HOME: sandbox, PDD_INTERPRETER_QUEUE: join(sandbox, 'interpreter-queue'), PATH: sandbox, PDD_STATE_DIR: stateDir, PDD_RUNTIME_URL: fake.origin };
   const guard = join(sandbox, 'no-effects.mjs');
   writeFileSync(guard, `import http from 'node:http'; import https from 'node:https'; import net from 'node:net'; import child from 'node:child_process'; import {syncBuiltinESMExports} from 'node:module';
 const stop=()=>{throw Error('Forbidden jobs side effect');}; globalThis.fetch=stop; process.kill=stop;
