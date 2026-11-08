@@ -130,8 +130,15 @@ test('2907 HOME fallback uses the existing home expansion policy', () => {
 test('2907 full replacement expands tilde with OS home when HOME is absent', async t => {
   const f = await started(t);
   delete f.ports.env.HOME; f.ports.env.CODEX_HOME = '~';
+  // Test expansion and shell quoting without opening the host's account config.
+  const configReads = [];
+  f.ports.profileFs = {readFileSync(path) {
+    configReads.push(path);
+    throw Object.assign(Error('No synthetic account config'), {code:'ENOENT'});
+  }};
   const result = await open(f, { newSession: true });
   assert.equal(result.exitCode, 0, result.message);
+  assert.deepEqual(configReads, [join(homedir(), 'config.toml')]);
   assert.equal(f.record().configDir, homedir());
   assert.equal(f.record().chatReplacement.configDir, homedir());
   assert.equal(f.record().chats.at(-1).configDir, homedir());

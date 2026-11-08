@@ -1,5 +1,5 @@
 import { launchProfile, chatAgentName, validLaunchProfile } from './workflow-launch-profile.mjs';
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 734f28fdf2a21cf1703b2c2ccb66c032ff7f2021fee24f03b6203f48b33c05ec).
+// Source: prompts/cli/workflow-chat.prompt.md.
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, lstatSync, readdirSync, writeFileSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
@@ -74,12 +74,14 @@ export function sessionEvidenceDue(chat, live, at) {
   return !live.alive && ABSENT.has(live.code) && !chat.startUnconfirmed && !['ended', 'failed', 'running'].includes(state)
     && anchor !== null && at >= anchor + START_GRACE_MS;
 }
-// The native session of one chat or attempt: Claude by its saved id, Codex by the worktree and the window since the latest
-// launch or resume request. An unreadable, ambiguous or unrelated result is never evidence and never authorizes a launch.
-export async function ownSession({ run, chat, since, ports = {} }) {
+// The native session of one chat or attempt: Claude by its saved id, Codex by worktree and caller's time window.
+// Naming a known resumed UUID uses its original window and an exact sessionId. Discovery keeps the latest launch window.
+// An unreadable, ambiguous or unrelated result is never evidence and never authorizes a launch.
+export async function ownSession({ run, chat, since, sessionId, ports = {} }) {
   const env = ports.env ?? process.env, kind = chat.agent ?? run.agent, folder = expandHome(chat.configDir, env);
   if (kind === 'gemini' || kind === 'agy') return { kind: 'unknown' };
-  const saved = kind === 'claude' && validSessionId(chat.session?.id) ? chat.session.id : null;
+  if (sessionId !== undefined && !validSessionId(sessionId)) return { kind: 'unknown' };
+  const saved = sessionId ?? (kind === 'claude' && validSessionId(chat.session?.id) ? chat.session.id : null);
   let sessions;
   try {
     sessions = await (ports.findNativeSessions ?? findNativeSessions)({ agent: kind, root: run.root, startedAt: since, endedAt: (ports.now ?? Date.now)(), ...(saved ? { sessionId: saved } : {}) },
@@ -87,7 +89,7 @@ export async function ownSession({ run, chat, since, ports = {} }) {
   } catch { return { kind: 'unknown' }; }
   if (!Array.isArray(sessions)) return { kind: 'unknown' };
   if (!sessions.length) return { kind: 'none' };
-  if (sessions.length !== 1 || !validSessionId(sessions[0]?.id) || kind === 'claude' && sessions[0].id !== saved) return { kind: 'unknown' };
+  if (sessions.length !== 1 || !validSessionId(sessions[0]?.id) || (kind === 'claude' || saved) && sessions[0].id !== saved) return { kind: 'unknown' };
   return { kind: 'match', id: sessions[0].id };
 }
 export function applyLifecycle(chat, observed) {
@@ -562,7 +564,11 @@ export async function chatSession(chat, ports = {}) {
     if (agent && chat.herdrAgentName && agent.name !== chat.herdrAgentName) {
       let verified = agent.agent === chat.agent && validSessionId(value) && (!validSessionId(chat.session?.id) || value === chat.session.id);
       if (verified && chat.agent === 'codex') {
-        const own = ports.run ? await ownSession({run:ports.run, chat, since:launchAnchor(chat), ports}) : null;
+        // Resume retains the original native metadata. Keep the latest launch time for grace/discovery,
+        // but prove this known resumed UUID against its original identity in the saved account.
+        const resumed = Number.isFinite(chat.resumedAt) && validSessionId(chat.session?.id);
+        const own = ports.run ? await ownSession({run:ports.run, chat,
+          since:resumed ? chat.startedAt : launchAnchor(chat), ...(resumed ? {sessionId:chat.session.id} : {}), ports}) : null;
         verified = own?.kind === 'match' && own.id === value;
       } else if (verified) verified = chat.agent === 'claude' && validSessionId(chat.session?.id) && value === chat.session.id;
       if (verified) {
