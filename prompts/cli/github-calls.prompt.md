@@ -37,6 +37,13 @@ milliseconds (native `Date.now`).
 
 ## One call
 
+When a write-budget resolver is supplied, reserve content cost only for writes.
+Observe every gh outcome, including free REST reads and GraphQL queries, through
+the shared budget so a secondary-limit reply delays later writes from other
+runners. Resolve a free read's budget only after a throttle outcome; ordinary
+reads require no identity lookup or content reservation. Preserve the original
+read result or error if cooldown observation fails.
+
 `githubCall` reads only the argument list. For `gh api`, the endpoint is the
 first word that is not an option and not the value of an option. These options
 take a value: `-X --method -H --header -f --raw-field -F --field --input -q --jq

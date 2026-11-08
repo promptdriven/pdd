@@ -5,8 +5,9 @@ import { constants as osConstants } from 'node:os';
 import { createHash } from 'node:crypto';
 import { join, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { setTimeout as delay } from 'node:timers/promises';
 import { countGithubCalls, githubCall, githubLedger, githubReply, githubRepository, githubStateRoot } from './github-calls.mjs';
-import { githubWriteBudget } from './github-writes.mjs';
+import { githubWriteBudget, githubWriteLock } from './github-writes.mjs';
 
 const self = fileURLToPath(import.meta.url), STATUS = '<!-- pdd:autopilot:status -->';
 const hash = text => createHash('sha256').update(text).digest('hex').slice(0, 20);
@@ -98,17 +99,30 @@ export function githubWriteRunner(exec, { root, env = process.env, fs = nativeFs
     if (call.method === 'POST' && args.includes('--include') && !args.some(x => ['--jq','-q','--template','-t'].includes(x) || /^--(?:jq|template)=/.test(x)) && /^repos\/[^/]+\/[^/]+\/issues\/\d+\/comments$/.test(call.endpoint) && typeof body === 'string' && body.includes(STATUS)) {
       const budget = await resolveBudget(args, options), login = budget.usage().identity;
       if (login === 'unknown') throw Object.assign(Error('GitHub status comment needs a known identity'), { code: 'github_identity_unknown' });
-      let next = `${call.endpoint}?per_page=100`, found;
-      while (next) {
-        const result = await api('GET', next, undefined, transportOptions), rows = valueOf(result);
-        if (!Array.isArray(rows)) throw Error('GitHub comments unavailable');
-        found ??= rows.find(row => row.user?.login?.toLowerCase() === login && row.body?.includes(STATUS));
-        const link = githubReply(result.stdout)?.link;
-        const target = /<([^>]+)>;\s*rel="next"/.exec(link ?? '')?.[1];
-        if (target) { const url = new URL(target); if (url.hostname !== (host === 'github.com' ? 'api.github.com' : host)) throw Error('Invalid GitHub pagination host'); next = url.pathname.slice(1) + url.search; } else next = null;
+      const statusPath = call.endpoint.toLowerCase().replace(/\/0*(\d+)\/comments$/, '/$1/comments');
+      const directory = join(root, 'github-writes', `status-${hash(`${host.toLowerCase()}/${login}/${statusPath}`)}.lock`);
+      const deadline = Date.now() + 1000;
+      let release;
+      while (!release) {
+        try { release = githubWriteLock({ directory, fs }); }
+        catch (error) {
+          if (error.code !== 'github_write_lock_busy' || Date.now() >= deadline) throw Object.assign(Error('GitHub status reconciliation deferred'), { code: 'github_write_budget', retryAt: now() + 60_000 });
+          await delay(10);
+        }
       }
-      if (found?.body === body) return { code: 0, stdout: `HTTP/2.0 200 OK\r\n\r\n${JSON.stringify(found)}`, stderr: '' };
-      return api(found ? 'PATCH' : 'POST', found ? `repos/${repository}/issues/comments/${found.id}` : call.endpoint, { body }, transportOptions);
+      try {
+        let next = `${call.endpoint}?per_page=100`, found;
+        while (next) {
+          const result = await api('GET', next, undefined, transportOptions), rows = valueOf(result);
+          if (!Array.isArray(rows)) throw Error('GitHub comments unavailable');
+          found ??= rows.find(row => row.user?.login?.toLowerCase() === login && row.body?.includes(STATUS));
+          const link = githubReply(result.stdout)?.link;
+          const target = /<([^>]+)>;\s*rel="next"/.exec(link ?? '')?.[1];
+          if (target) { const url = new URL(target); if (url.hostname !== (host === 'github.com' ? 'api.github.com' : host)) throw Error('Invalid GitHub pagination host'); next = url.pathname.slice(1) + url.search; } else next = null;
+        }
+        if (found?.body === body) return { code: 0, stdout: `HTTP/2.0 200 OK\r\n\r\n${JSON.stringify(found)}`, stderr: '' };
+        return await api(found ? 'PATCH' : 'POST', found ? `repos/${repository}/issues/comments/${found.id}` : call.endpoint, { body }, transportOptions);
+      } finally { release(); }
     }
     // Combine label edits with atomic add/remove operations, preserving other writers. A claim
     // remove/add of the same label must retain its two separate era events.

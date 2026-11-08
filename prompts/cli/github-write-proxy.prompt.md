@@ -43,6 +43,15 @@ checker verdicts and merge evidence keep their existing append behavior. An
 uncertain POST is reconciled by a fresh listing on retry. Unknown identity may
 not create a marked status comment because safe ownership is unavailable.
 
+Serialize local status reconciliation across runners and processes for the
+same canonical host, identity, repository and issue. Hold the lock from before
+the fresh listing until the write result is known. A waiting caller lists again
+after it acquires the lock. Lock contention may wait briefly (at most one second)
+and then defer with `github_write_budget`; no request may bypass the lock.
+Process death must not leave a permanent lock. Different issues and identities
+have separate locks. This is local serialization; claim ownership and claim-era
+checks still govern work across machines and are unchanged by comment reuse.
+
 For labels-only `gh issue edit N --repo O/R --add-label A --remove-label B`,
 read current labels and repository label IDs. Send one GraphQL request with
 atomic addLabelsToLabelable and removeLabelsFromLabelable mutations for the

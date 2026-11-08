@@ -332,16 +332,24 @@ allocation service. It does not measure people or programs outside this route.
 
 At the limit, the operation reports its next retry time and keeps progress.
 It sends no write until enough reservations expire. A secondary-limit response
-with Retry-After shares that delay with other local processes. No usage reset
+with Retry-After shares that delay with other local processes, including when
+the response came from a REST read or a GraphQL query. Reads use no content
+reservation. No usage reset
 is requested. `pdd autopilot status` and `status --all` show the local identity
 counts, limits, observed machine count and deferred state. Status makes no
 GitHub request. Write records stay in the state root's `github-writes/` folder.
 Tokens are never stored there.
+An occupied host lock reports usage as unavailable and deferred. Dead write
+owners and dead recovery attempts are recoverable without a time-based lease.
 
 For routine progress, use one owned status comment. Include
 `<!-- pdd:autopilot:status -->` in its body and send it through
 `gh api --include --method POST repos/OWNER/REPO/issues/N/comments --input -`.
 The wrapper finds its comment, updates it in place, and skips unchanged text.
+Local chats serialize this listing and update for each host, identity,
+repository and issue. A waiting chat lists again before it creates a comment.
+Contention can wait up to one second, then reports a deferred write. This local
+lock does not replace claim ownership checks across machines.
 Claim comments, dependency reviews, checker verdicts and merge evidence keep
 their own records. For labels that change together, use one labels-only
 `gh issue edit N --repo OWNER/REPO --add-label A,B --remove-label C`.

@@ -145,8 +145,8 @@ export function countGithubCalls(exec, { ledger, purpose, now = Date.now, writes
     const { purpose: named, repository, ...rest } = options ?? {};
     if (file !== 'gh' || !Array.isArray(args)) return exec(file, args, rest);
     const cost = githubWriteCost(args, rest);
-    const budget = writes && cost ? await writes(args, rest) : null;
-    budget?.reserve(cost);
+    let budget = writes && cost ? await writes(args, rest) : null;
+    if (cost) budget?.reserve(cost);
     if (writes) rest.env = { ...(rest.env ?? env), PDD_GITHUB_COUNTED: '1' };
     let result, failure, failed = false;
     try { result = await exec(file, args, rest); } catch (error) { failure = error; failed = true; }
@@ -154,7 +154,14 @@ export function countGithubCalls(exec, { ledger, purpose, now = Date.now, writes
       const target = typeof ledger === 'function' ? ledger(args, repository) : ledger;
       target?.record(githubEntry(args, failed ? failure : result, named ?? purpose, now()));
     } catch { /* best effort */ }
-    if (budget) { try { budget.observe(failed ? failure : result); } catch { /* Original outcome wins; future writes fail closed on bad state. */ } }
+    if (writes) {
+      try {
+        const outcome = failed ? failure : result;
+        const text = `${outcome?.stdout ?? ''}\n${outcome?.stderr ?? ''}`;
+        if (!budget && /\b(?:403|429)\b/.test(text) && /retry-after\s*:|secondary|abuse/i.test(text)) budget = await writes(args, rest);
+        budget?.observe(outcome);
+      } catch { /* Preserve the original outcome when observation fails. */ }
+    }
     if (failed) throw failure;
     return result;
   };

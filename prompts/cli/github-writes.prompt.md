@@ -29,10 +29,16 @@ local guard, not a distributed lock or permission to write.
 known identity on that host; a known identity also counts unknown reservations.
 Both admission paths use the same lock so an identity lookup failure cannot
 create a fresh allowance. A dead owner is reclaimable; a live or unreadable lock defers.
+  Recovery must itself survive process death, including death before an owner
+  record is complete. Competing recoverers must not remove a live replacement
+  lock. Recovery records belong to unique attempts; discard only records whose
+  process is dead. No unowned recovery sentinel may block later admission.
   Unreadable state and save failures stop writes. Never drop events on a race.
 - `usage()` returns `{identity,host,minute,hour,minuteLimit,hourLimit,machines,
   retryAt,state}`, plus `unavailable:true` when state cannot be read. That
-  status reports usage as unavailable rather than claiming zero use. Counts use rolling windows `now-window < at <= now`.
+  status reports usage as unavailable rather than claiming zero use. An existing
+  host lock also reports unavailable and deferred until admission recovers it
+  or its owner releases it. Counts use rolling windows `now-window < at <= now`.
   Defaults are 60/minute and 350/hour, leaving 20/minute and 150/hour for people
   against the stated 80/500 limits. Divide both defaults by the active machine
   count, rounding down, with a minimum of one. Each distinct active machine in
@@ -53,6 +59,12 @@ create a fresh allowance. A dead owner is reclaimable; a live or unreadable lock
   never retry an uncertain write automatically.
 - `githubWriteStatus(usage)` returns one plain status line with identity, rolling
   minute/hour counts, limits, machine count, state, and retry time when deferred.
+- `githubWriteLock({directory,fs})` acquires a local process lock for a caller's
+  named directory. Return a release function that removes only this attempt's
+  record. Concurrent live owners exclude each other. A busy lock throws with
+  `code='github_write_lock_busy'`; file faults propagate. Dead attempts cannot
+  block acquisition or remove live attempts. No elapsed-time lease can evict a
+  live owner. Use the injected file port and native process-liveness checks.
 
 ## Dependencies
 
