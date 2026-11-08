@@ -25,7 +25,7 @@ Return one result per agent, Codex first: `{agent, root, found, stale, staleSkil
 
 ## The version line
 
-Every bundled `SKILL.md` frontmatter must be valid YAML, with top-level keys `name`, `description` and `metadata`. Keep description words when quoting YAML scalars; a plain scalar must not contain `: ` or begin with a YAML indicator.
+Every bundled `SKILL.md` frontmatter must be valid YAML, with top-level keys `name`, `description` and `metadata`. Keep description words when quoting YAML scalars; a plain scalar must not contain a colon followed by whitespace or the end of the scalar, or begin with a YAML indicator.
 
 Each packaged `SKILL.md` names its version in its frontmatter, under `metadata:` (the Agent Skills field for extra keys, so Codex and Claude Code still load the skill): `  pdd-skills: VERSION`, the package version. A person or an agent can read it in the installed copy. Copies from before 0.1.9 have no such line, so a missing line counts as older. Read it with a line match inside the frontmatter; any read error means no line.
 

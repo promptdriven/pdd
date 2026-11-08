@@ -16,7 +16,7 @@ function scalar(value) {
     return value.slice(1, -1).replaceAll("''", "'");
   }
   assert.doesNotMatch(value, /^[-?:,[\]{}#&*!|>"'%@`]/, 'plain YAML scalar starts with an indicator');
-  assert.doesNotMatch(value, /:\s|\s#|[\t\r\n]/, 'plain YAML scalar contains a mapping, comment or control character');
+  assert.doesNotMatch(value, /:(?:\s|$)|\s#|[\t\r\n]/, 'plain YAML scalar contains a mapping, comment or control character');
   return value;
 }
 
@@ -56,11 +56,19 @@ for (const entry of readdirSync(skills, { withFileTypes: true }).filter(entry =>
 }
 
 test('YAML scalar check rejects ambiguous plain values and preserves quoted words', () => {
-  for (const value of ['repo: pick', ...'-?:,[]{}#&*!|>%@`'.split('').map(char => `${char}value`)]) {
+  for (const value of ['repo: pick', 'Use Autopilot:', ...'-?:,[]{}#&*!|>%@`'.split('').map(char => `${char}value`)]) {
     assert.throws(() => scalar(value), { name: 'AssertionError' }, value);
   }
-  for (const value of ['repo: pick', 'a "quote"', "a person's skill"]) {
+  for (const value of ['repo: pick', 'Use Autopilot:', 'a "quote"', "a person's skill"]) {
     assert.equal(scalar(JSON.stringify(value)), value);
     assert.equal(scalar(`'${value.replaceAll("'", "''")}'`), value);
   }
+  assert.equal(scalar('Use Autopilot:ready'), 'Use Autopilot:ready');
 });
+
+for (const suffix of ['', ' ', '\t']) {
+  test(`YAML frontmatter rejects a terminal mapping colon with suffix ${JSON.stringify(suffix)}`, () => {
+    const header = `---\nname: pdd-autopilot\ndescription: Use Autopilot:${suffix}\nmetadata:\n  pdd-skills: 0.1.23\n---\n`;
+    assert.throws(() => frontmatter(header), { name: 'AssertionError' });
+  });
+}
