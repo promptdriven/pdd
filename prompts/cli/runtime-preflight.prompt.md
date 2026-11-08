@@ -349,7 +349,7 @@ A behavior prompt must have one Runtime interface block. `kind` is `full`, `part
 
 Missing blocks produce `interface-missing` and the exact command `pdd interface draft <PROMPT>` (quote a path with spaces). Expose the same finding in local and server lint, including repositories with no Stories. The draft command owns unresolved draft gaps; such gaps are refusals, never a clean lint result.
 
-During preflight, a selected test that reaches a valid native-only entry or called prompt is not run. Keep the reason and the path. Do not require an executable operation for this declaration. Never send that scenario to the Runtime or show it as passed. Validate every reached declaration before choosing not run, so malformed declarations still refuse. Do not change criterion rules here.
+During preflight, a selected test that reaches a valid native-only entry or called prompt is not run. Keep the reason and the path. Do not require an executable operation for this declaration. Never send that scenario to the Runtime or show it as passed. Validate every reached declaration before choosing not run, so malformed declarations still refuse. Discover reachable declarations from all authored step entry paths and declared calls before scenario validation can return early, including stale declarations. A native-only declaration always excludes the scenario from upload. Retain local criterion/check and declaration refusals with the native-only path and reason; an invalid scenario is refused, never passed. Do not change criterion rules here.
 
 ## Dependencies
 

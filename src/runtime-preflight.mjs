@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 266341dd9da7a3658533810a7049b16fc6bba50a0e77f7b0ad685114208d2422).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 5f0685410ec648631242ad4c7952c8380f502ef65a99348a004a1e985887c357).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
@@ -820,6 +820,15 @@ export function preflight({ root, found, selected,workspace=found.workspace??loa
   const reviews = numericReviews(root, found, warnings);
   const rows = selected.map(test => {
     const prompts = new Map();
+    // Discover identity independently of validation: an early criterion error or
+    // stale caller must not make a reachable native-only declaration executable.
+    const visit = path => {
+      if (typeof path !== 'string' || prompts.has(path)) return;
+      const prompt = readPrompt(root, found.visible, path, workspace);
+      prompts.set(path, prompt);
+      for (const call of Array.isArray(prompt.interface?.calls) ? prompt.interface.calls : []) visit(call?.target);
+    };
+    for (const step of Array.isArray(test.doc?.steps) ? test.doc.steps : []) visit(step?.entry_path);
     const refused = checkTest(root, found, test, prompts);
     const row = { test: test.path, story: test.story, title: test.title, refusals: refused ? [refused].flat() : [], warnings: numberWarnings(test.doc, { testPath: test.path, testSha: reviews.length ? sha256(readFileSync(join(root,test.path))) : null, reviews }),
       max_calls: defaultMaxCalls(test.doc), steps: Array.isArray(test.doc?.steps) ? test.doc.steps : [],

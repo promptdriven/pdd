@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: 2f1d476e92fd0c6f405fdb5248cea9c7eab300e45e53258a696dc7dcd9d0a4ba).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: 4e469fadf0c61d7cb053cff959b894c54b96e6213aa30ce2d5c3c67d65a19749).
 import { hasProgress, outcomeExitCode, outcomeFor, outcomeText, progressText } from './runtime-outcome.mjs';
 export const OPEN_STATES = new Set(['queued', 'running']);
 
@@ -410,6 +410,7 @@ export function renderText({ batch, rows, coverage, warnings = [], details = fal
     lines.push(`  Report: ${row.report_url ?? 'none'}`); out.push(...lines);
   }
   out.push(...localRefusals(rows, secrets));
+  for (const row of rows.filter(row => row.state === 'refused' && row.native_only?.length)) out.push(`  Native-only: ${cleanText(row.note?.message, secrets)}`);
   for (const row of rows.filter(row => row.state === 'refused' && sentRow(row))) {
     out.push(`REFUSED  ${row.title} (${row.test})`, ...row.refusals.flatMap(item => refusalLines(item, !!row.next_step)), ...serverAdvice(row, secrets), ...(row.report_url ? [`  Report: ${row.report_url}`] : []));
   }

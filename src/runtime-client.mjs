@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 8561239cfbaee628a941fa78786bba994a93ef4d0dc5602cf3090f96cf803467).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: aae8a02de20ae45d36a5773e9e7ae07ecd3345b8c8f2f013a94057a6c5674a94).
 import { interfaceFindings } from './interface-draft.mjs';
 import {readEvidenceEligibility} from './workflow-runner.mjs';
 import {allRuns} from './workflow-runs.mjs';
@@ -1180,15 +1180,38 @@ function costLine(rows, root, visible) {
   return `Checking all ${rows.length} ${rows.length === 1 ? 'story' : 'stories'}: about ${about} AI call${about === 1 ? '' : 's'} (at most ${most}).`;
 }
 
+function nativeSourceIdentity(context, rows) {
+  const tests = rows.filter(row => row.native_only?.length).map(row => row.test);
+  if (!tests.length) return null;
+  try { return {tests,sha256:context.ports.captureSource(context.root,{tests,appMap:null,excludeFixtureProjects:context.excludeFixtureProjects === true}).sha256}; }
+  catch { return {tests,sha256:null}; }
+}
+
+// Local omissions are evidence too; recording them needs no owner token or job.
+function saveLocalNativeResult(context, rows, intent) {
+  const startedAt = context.ports.now(), batch = batchId(startedAt, context.ports.randomUUID);
+  for (const row of rows) row.unsent = true;
+  context.sourceSelection = {tests:[],exclude_fixture_projects:context.excludeFixtureProjects === true};
+  context.nativeSource = nativeSourceIdentity(context, rows);
+  const capture = context.ports.captureSource(context.root,{tests:[],appMap:null,excludeFixtureProjects:context.excludeFixtureProjects === true});
+  Object.assign(context,{localOnly:true,startedAt,batch,intent,capture,rows,identity:{login:null,userId:null},lint:{state:'not_run',request_ids:[]}});
+  context.folder = context.store.folder('batches',batch);
+  saveBatch(context);
+  context.store.saveRepo(context.root,{...context.store.repo(context.root),last_batch:batch});
+}
+
 function batchRecord(context) {
   const { batch, origin, root, identity, capture, rows, lint, warnings } = context;
   return { version: 1, batch, origin, root, head: context.head, login: identity.login, user_id: identity.userId,
     source_sha256: capture.sha256, files: capture.files.map(file => file.path), bytes: capture.bytes, timeout_min: context.timeoutMin,
+    source_selection: context.sourceSelection ?? {tests:sentTests(rows),exclude_fixture_projects:context.excludeFixtureProjects === true},
+    native_source: context.nativeSource ?? null,
+    ...(context.localOnly ? {local_only:true} : {}),
     exclude_fixture_projects: context.excludeFixtureProjects === true,
     created_at: new Date(context.startedAt).toISOString(), intent: context.intent, lint, warnings, coverage: context.coverage,
     contract_snapshots: capture.stories,
     test_cache: context.testCache ? { tokens: [...context.testCache.tokens] } : context.savedTestCache,
-    rows: rows.map(row => ({ test: row.test, story: row.story, story_path: row.story_path, title: row.title, request_ids: row.request_ids, state: row.state,
+    rows: rows.map(row => ({ test: row.test, native_only: row.native_only ?? [], story: row.story, story_path: row.story_path, title: row.title, request_ids: row.request_ids, state: row.state,
       ...(!row.request_ids.length && Object.hasOwn(row, 'calls') ? { calls: row.calls } : {}),
       ...(row.unsent ? { unsent: true } : {}), progress: row.progress, ahead: row.ahead, phase: row.phase, post_verdict: row.post_verdict ?? null, compatibility: row.compatibility, client_advice: row.client_advice, report_url: row.report_url, refusals: row.refusals, note: row.note ?? null, why: row.why ?? null, next_step: row.next_step ?? null,
       sent_at: row.sent_at ?? null, ended_at: row.ended_at ?? null, max_calls: row.max_calls, warnings: row.warnings, steps: row.steps, criteria_total: row.criteria_total,
@@ -1683,9 +1706,9 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   const nativeRows = new Map(preflight({root,found,selected}).rows.filter(row => row.native_only?.length).map(row => [row.test,row]));
   for (const row of rows) {
     const native = nativeRows.get(row.test);
-    if (native && !native.refusals.length) Object.assign(row,{state:'not_run',phase:'local',native_only:native.native_only,unsent:true,note:{code:'native-only',message:native.native_only.map(item => `${item.path}: ${item.reason}`).join('; ')}});
+    if (native) Object.assign(row,{state:native.refusals.length ? 'refused' : 'not_run',refusals:native.refusals,phase:'local',native_only:native.native_only,unsent:true,note:{code:'native-only',message:native.native_only.map(item => `${item.path}: ${item.reason}`).join('; ')}});
   }
-  if (rows.every(row => row.native_only?.length)) return printResult(context,rows);
+  if (rows.every(row => row.native_only?.length)) { saveLocalNativeResult(context, rows, 'lint-only'); return printLintResult(context,rows,[]); }
   const local = row => row.phase === 'local';
   const {readPrompt,interfaceSchemaProblems} = await import('./runtime-preflight.mjs');
   const prompts = new Map();
@@ -1708,7 +1731,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   });
   const limited = limitRows.some(row => !local(row) && row.refusals.length);
   if (limited || rows.every(local)) {
-    const refusedRows = limitRows.map(row => ({story:row.story,title:row.title,test:row.test,state:row.refusals.length ? 'refused' : 'not_run',refusals:row.refusals,note:row.note}));
+    const refusedRows = limitRows.map(row => ({...row,state:row.refusals.length ? 'refused' : 'not_run'}));
     const problems = [];
     for (const problem of refusedRows.flatMap(row => row.refusals)) {
       if (!problems.some(item => item.code === problem.code && item.path === problem.path && item.section === problem.section)) problems.push(problem);
@@ -1727,7 +1750,9 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
     }
     return 4;
   }
-  const capture = ports.captureSource(root, { tests: selected.filter((test, index) => !local(rows[index])).map(test => test.path), appMap: null, excludeFixtureProjects: words.length === 0 });
+  context.sourceSelection = {tests:selected.filter((test,index) => !local(rows[index])).map(test => test.path),exclude_fixture_projects:words.length === 0};
+  context.nativeSource = nativeSourceIdentity(context, rows);
+  const capture = ports.captureSource(root, { tests:context.sourceSelection.tests, appMap: null, excludeFixtureProjects: words.length === 0 });
   const svgWarnings = lintSvgLayouts({ root, files: [...found.visible], promptPaths: capture.files.map(file => file.path).filter(path => path.endsWith('.prompt.md')) });
   const drift=[];
   try {
@@ -1825,7 +1850,7 @@ function printLintResult(context, rows, problems, warnings = [], answer = null) 
     out.push('Lint problems (from the PDD interpreter):');
     for (const item of problems) out.push(`  ${[item.code, item.path, item.section, item.message].filter(Boolean).join('  ')}`, ...(item.hint ? [`    ${item.hint}`] : []));
   }
-  for (const row of rows) out.push(`  ${row.test}  ${row.state === 'passed' ? 'passes lint' : row.state === 'refused' ? `refused: ${row.refusals.map(item => item.code).join(', ')}`
+  for (const row of rows) out.push(`  ${row.test}  ${row.state === 'passed' ? 'passes lint' : row.state === 'refused' ? `refused: ${row.refusals.map(item => item.code).join(', ')}${row.native_only?.length ? `; ${row.note?.message}` : ''}`
     : `${outcomeText(row)}${row.note ? `: ${row.note.message}` : ''}`}`);
   for (const row of rows.filter(row => row.compatibility)) out.push(`Compatibility (${cleanText(row.story, context.secrets)} / ${cleanText(row.test, context.secrets)}): ${JSON.stringify(row.compatibility, null, 2)}`,
     `  Client advice: ${JSON.stringify(row.client_advice)}`);
@@ -1986,10 +2011,15 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
   const saved = store.read(join(context.folder, 'batch.json'));
   if (!saved) throw new Stop(2, `No saved batch ${name}.`);
   if (saved.root !== root) throw new Stop(2, 'This saved batch belongs to a different repository.');
+  if (saved.local_only === true && saved.rows.length && saved.rows.every(row => row.unsent && ['refused','not_run'].includes(row.state) && !row.request_ids?.length)) {
+    Object.assign(context,{localOnly:true,batch:name,intent:saved.intent,coverage:saved.coverage,rows:saved.rows,warnings:saved.warnings ?? [],
+      capture:{sha256:saved.source_sha256},startedAt:Date.parse(saved.created_at),lint:saved.lint});
+    return saved.intent === 'lint-only' ? printLintResult(context,saved.rows,[]) : printResult(context,saved.rows);
+  }
   if(loadRuntimeWorkspace({root}).configured)ports.captureSource(root,{tests:saved.rows.filter(row=>!row.unsent).map(row=>row.test),appMap:null,excludeFixtureProjects:saved.exclude_fixture_projects === true});
   const identity = signIn(ports.gh, context.store);
   if (identity.login !== saved.login) throw new Stop(5, `These runs belong to ${saved.login}. Run: gh auth switch -u ${saved.login}`);
-  Object.assign(context, { excludeFixtureProjects: saved.exclude_fixture_projects === true, batch: name, origin: saved.origin, coverage: saved.coverage, identity, intent: saved.intent, secrets: [identity.token], warnings: saved.warnings ?? [],
+  Object.assign(context, { excludeFixtureProjects: saved.exclude_fixture_projects === true, batch: name, origin: saved.origin, sourceSelection:saved.source_selection, nativeSource:saved.native_source, coverage: saved.coverage, identity, intent: saved.intent, secrets: [identity.token], warnings: saved.warnings ?? [],
     capture: { sha256: saved.source_sha256, files: saved.files.map(path => ({ path })), bytes: saved.bytes, stories:saved.contract_snapshots }, lint: saved.lint, head: saved.head, startedAt: Date.parse(saved.created_at) });
   runtimeOrigin({ PDD_RUNTIME_URL: saved.origin });
   context.runtime = new Runtime({ origin: saved.origin, token: identity.token, ports, signal: context.signal });
@@ -2886,9 +2916,11 @@ async function runBatch(context, cwd, words, options, setRelease) {
   context.warnings.push(...found.warnings, ...checked.warnings, ...sharedSourceFiles(root, found.discoveryVisible ?? found.visible));
   context.unmatched = unmatchedLines(found);
   if (cache) await beginTestAttempts(cache, rows.filter(row => row.state !== 'ready'), null, options, origin);
-  if (!rows.some(row => row.state === 'ready')) return printResult(context, rows);
+  if (!rows.some(row => row.state === 'ready')) { if (rows.some(row => row.native_only?.length)) saveLocalNativeResult(context, rows, 'check'); return printResult(context, rows); }
+  context.sourceSelection = {tests:sentTests(rows),exclude_fixture_projects:words.length === 0};
+  context.nativeSource = nativeSourceIdentity(context, rows);
   let capture;
-  try { capture = ports.captureSource(root, { tests: sentTests(rows), appMap: null, excludeFixtureProjects: words.length === 0 }); }
+  try { capture = ports.captureSource(root, { tests: context.sourceSelection.tests, appMap: null, excludeFixtureProjects: words.length === 0 }); }
   catch (error) { if (cache) await beginTestAttempts(cache, rows, null, options, origin); throw error; }
   context.warnings.push(...(capture.warnings ?? []));
   if (cache) await beginTestAttempts(cache, rows, capture, options, origin);

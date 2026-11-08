@@ -467,7 +467,7 @@ Native-only requires a reason that names an effect the bound ports cannot fake
 (RUNBOOK §21). A checker reviews the reason. Approval records it. Checks show
 `not run: <reason>`, with no passing result. Other selected tests can run.
 
-Test output includes `Runtime coverage: N of M prompts checkable, K native-only`.
+Test output, workflow status and saved PR evidence include `Runtime coverage: N of M prompts checkable, K native-only`. Native-only rows retain their paths and reasons, including all-local selections. Invalid native-only scenarios stay refused and are never uploaded.
 M includes missing, stale and invalid blocks. Checkable means a valid current full
 or partial declaration; it does not mean that all module behavior has passed.
 
