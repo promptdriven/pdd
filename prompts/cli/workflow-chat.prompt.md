@@ -24,6 +24,17 @@ Herdr transport reads complete stdout/stderr before interpreting JSON or a nonze
 Full-access flags stay. Do not pin tool versions. No workflow or native-session lifetime timeouts; the message-readiness deadline below is the local exception. Shell-quote every path and the resume id in the shell line. A native session id (from Herdr, a session file or the run record) is stored or used only when it is a UUID; `chatCommand` refuses any other resume id.
 
 <a id="explicit-fresh-session"></a>
+## App shell identity
+
+When a run's sourceRoot has App settings, or its caller is App-bound, route the
+worker chat's Git network and gh commands through [GitHub App identity](github-app.prompt.md).
+`chatLaunch` returns an additional non-secret `githubEnv` only in this mode;
+`chatCommand` accepts it (default empty), places its PATH and
+PDD_GITHUB_APP_ROOT in the process environment and, for Codex, in
+shell_environment_policy.set. Read the source checkout settings even for a
+later area opened by another terminal. Preserve provider login file handling.
+Never pass an installation token to the chat or its launch file.
+
 ## Closed workspace recovery
 
 Export `rebuildClosedChat({run, chat, message}, ports)`, returning false when the saved workspace is present and true after rebuilding a closed workspace. The runner calls it before ordinary open or `--new`. This recovery restores the saved conversation for either command; a later `--new` on the live workspace keeps the normal fresh-session behavior. A pending replacement keeps its existing recovery protocol.
@@ -211,6 +222,8 @@ Limits: the screen is a fallback. A Claude error that comes after a tool call in
 
 ## Dependencies
 
+- [GitHub App identity](github-app.prompt.md): required native generation and verification context for the non-secret shell environment.
+
 - [Herdr layout](workflow-herdr-layout.prompt.md): required authoring/generation/verification context for workspace ownership, allocation and its existing lock. The runner's replacement protocol is the caller contract above, not a recursively loaded dependency.
 - [Worktree assignment](workflow-worktree.prompt.md): load for closed-workspace recovery verification through `lookupIssueWorktree`, including the saved current branch.
 - [Workflow agents](workflow-agents.prompt.md#login-variables): required context for `LOGIN_VARIABLES`, the one per-kind list of login variables.
@@ -220,7 +233,7 @@ Limits: the screen is a fallback. A Claude error that comes after a tool call in
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"1ee6e379d9a9787f5f8e93f554975c26267bd45138c41678b0a8186f3ed65d2f","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+{"status":"draft","prose_sha256":"1ee6e379d9a9787f5f8e93f554975c26267bd45138c41678b0a8186f3ed65d2f","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
 ```
 </details>
 

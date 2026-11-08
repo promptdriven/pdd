@@ -297,13 +297,14 @@ missing or invalid value uses the default.
   after the reset saves the remaining reviews without a new analysis. Reviews
   that were already saved are never saved twice.
 
-The coordinator and worker chats go on, and their own `gh` calls are not counted.
+The coordinator and worker chats go on. The App shell wrapper counts their `gh`
+calls. With personal login, their own shell calls are not counted.
 Safety reads, including workflow start's live subject and claim checks, trust,
 permissions and write readbacks, can use the reserve. Writes can use it too.
 Other `pdd` operations are counted but do not wait for this floor. The budget
 does not keep 70% of the limit for you. The floor makes the tick and native
 dependency observations read less. To
-give Autopilot a limit of its own, see the design note
+give Autopilot a limit of its own, see
 [A GitHub App token for Autopilot](autopilot-github-app-token.md).
 
 The dependency snapshot is saved beside the repository's GitHub call ledger as

@@ -1,5 +1,6 @@
 // Implements prompts/cli/github-calls.prompt.md.
 import * as nativeFs from 'node:fs';
+import { githubAppRunner } from './github-app.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -129,10 +130,10 @@ export function githubLedger({ root, repository, fs = nativeFs }) {
 }
 
 // Every ledger on this machine, for the budget and the newest observed limit.
-export function githubMachineEntries({ root, fs = nativeFs }) {
+export function githubMachineEntries({ root, fs = nativeFs, identity = null }) {
   let names = [];
   try { names = fs.readdirSync(ledgerFolder(root)).filter(name => /^[0-9a-f]{20}\.jsonl$/.test(name)); } catch { return []; }
-  return names.flatMap(name => readLines(fs, join(ledgerFolder(root), name)));
+  return names.flatMap(name => readLines(fs, join(ledgerFolder(root), name))).filter(entry => (entry.identity ?? null) === identity);
 }
 
 // A gh runner that records each gh call in a ledger. options.purpose names the purpose of one call and
@@ -146,7 +147,8 @@ export function countGithubCalls(exec, { ledger, purpose, now = Date.now } = {})
     try { result = await exec(file, args, rest); } catch (error) { failure = error; failed = true; }
     try {
       const target = typeof ledger === 'function' ? ledger(args, repository) : ledger;
-      target?.record(githubEntry(args, failed ? failure : result, named ?? purpose, now()));
+      const outcome = failed ? failure : result;
+      target?.record({ ...githubEntry(args, outcome, named ?? purpose, now()), ...(outcome?.githubIdentity ? { identity: outcome.githubIdentity } : {}) });
     } catch { /* best effort */ }
     if (failed) throw failure;
     return result;
@@ -156,8 +158,8 @@ export function countGithubCalls(exec, { ledger, purpose, now = Date.now } = {})
 // A counter for a pdd command outside the tick: the ledger of the repository that each call names, only when
 // Autopilot already keeps a ledger for it on this machine. Other repositories, and test doubles of gh, write nothing.
 // The folder is found at each call, so a later HOME applies.
-export function nativeGithubCounter(exec, { env = process.env, stateRoot, purpose, fs = nativeFs, now = Date.now } = {}) {
-  return countGithubCalls(exec, { purpose, now, ledger: (args, named) => {
+export function nativeGithubCounter(exec, { env = process.env, stateRoot, purpose, fs = nativeFs, now = Date.now, appPorts = {} } = {}) {
+  return countGithubCalls(githubAppRunner(exec, { env, fs, now, ...appPorts }), { purpose, now, ledger: (args, named) => {
     const repository = githubRepository(args) ?? (typeof named === 'string' && REPOSITORY.test(named) ? named.toLowerCase() : null);
     if (!repository) return null;
     const ledger = githubLedger({ root: githubStateRoot(env, stateRoot), repository, fs });
@@ -166,7 +168,8 @@ export function nativeGithubCounter(exec, { env = process.env, stateRoot, purpos
 }
 
 // Calls in the last hour, by purpose, and the newest limit that GitHub reported for each resource.
-export function githubUsage(entries, now) {
+export function githubUsage(entries, now, identity = null) {
+  entries = entries.filter(entry => (entry.identity ?? null) === identity);
   const recent = entries.filter(entry => entry.at > now - HOUR && entry.at <= now);
   const byPurpose = {}; let rest = 0, graphql = 0, counted = 0, conditional = 0, notModified = 0;
   for (const entry of recent) {
@@ -217,8 +220,8 @@ export function githubStatusLine({ usage, machine = usage, budget }) {
 // Saved ETags and bodies of GET replies, for conditional requests on the next read. A save merges with the file as
 // it is then, so the tick and the pdd commands keep each other's entries: an entry stays while it was used in the
 // last day, and the newest used entries stay within the count and size bounds.
-export function githubEtagCache({ root, repository, fs = nativeFs, now = Date.now }) {
-  const file = join(ledgerFolder(root), `${hash(String(repository).toLowerCase())}.etags.json`);
+export function githubEtagCache({ root, repository, fs = nativeFs, now = Date.now, identity = null }) {
+  const file = join(ledgerFolder(root), `${hash(String(repository).toLowerCase() + (identity ? `:${identity}` : ''))}.etags.json`);
   let saved, used = new Map();
   const readFile = () => {
     try { const value = JSON.parse(fs.readFileSync(file, 'utf8')); return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; } catch { return {}; }

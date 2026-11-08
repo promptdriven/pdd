@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-github.prompt.md (sha256: baf589cc7861bba0f250337310433876145627f5bf804ee4d0f1ad1f3300d492).
+// Implements prompts/cli/autopilot-github.prompt.md.
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -31,8 +31,8 @@ const valid = ({ action, mode, names }) => action === 'mode' ? MODES.includes(mo
 class Stop extends Error {}
 const RACE = Symbol('race');
 
-const execute = (file, args, { cwd, input }) => new Promise((resolve, reject) => {
-  const child = execFile(file, args, { cwd, encoding: 'utf8', shell: false, timeout: 15000, maxBuffer: 8 * 1024 * 1024 }, (error, stdout, stderr) => {
+const execute = (file, args, { cwd, input, env }) => new Promise((resolve, reject) => {
+  const child = execFile(file, args, { cwd, env, encoding: 'utf8', shell: false, timeout: 15000, maxBuffer: 8 * 1024 * 1024 }, (error, stdout, stderr) => {
     if (error) { error.stdout = stdout; error.stderr = stderr; reject(error); }
     else resolve({ stdout, stderr });
   });

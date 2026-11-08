@@ -2,6 +2,17 @@
 
 Own `src/runtime-client.mjs`. Export `runCheck({words, options, cwd, cache=false}, ports)` and `runTry({words, options, cwd}, ports)`. Each returns an exit code. These commands and the Try MCP tools call the PDD interpreter with the person's `gh` login. Lines that pdd writes itself follow the [word rule](public-boundary.prompt.md#pdd-interpreter), except the plain busy-check messages owned below.
 
+## Preserve personal interpreter authentication
+
+Hosted checks and capacity probes keep the person's gh identity when Autopilot
+uses an App for repository work. The native auth executable selector skips the
+bundled App transport, identified by `PDD GitHub App transport v1` in its first
+64 bytes, as it already skips the Try launcher. This also applies to a preferred
+ghPath. It selects the normal gh executable behind those wrappers. Do not mint,
+print or send an App installation token to the interpreter. Personal interpreter
+access remains a separate prerequisite; App mode adds no hosted authentication
+route. Preserve injected gh ports and all other runtime behavior.
+
 ## Native lint selection and display (draft)
 
 For explicit `pdd lint STORY` (including existing path/directory and multiple

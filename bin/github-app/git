@@ -1,0 +1,3 @@
+#!/usr/bin/env node
+// Git uses the same credential transport as gh.
+import './gh';

@@ -1,0 +1,17 @@
+#!/usr/bin/env node
+// PDD GitHub App transport v1
+import { basename } from 'node:path';
+import { spawn } from 'node:child_process';
+import { nativeGithubCounter } from '../../src/github-calls.mjs';
+const execute = (file, args, options) => new Promise((resolve, reject) => {
+  const child = spawn(file, args, { cwd: options.cwd, env: options.env, stdio: ['inherit', 'pipe', 'pipe'] });
+  let stdout = '', stderr = '';
+  child.stdout.on('data', value => { stdout += value; });
+  child.stderr.on('data', value => { stderr += value; });
+  child.on('error', reject);
+  child.on('close', code => resolve({ code: code ?? 1, stdout, stderr }));
+});
+try {
+  const answer = await nativeGithubCounter(execute)(basename(process.argv[1]), process.argv.slice(2), { cwd: process.cwd(), env: process.env });
+  process.stdout.write(answer.stdout ?? ''); process.stderr.write(answer.stderr ?? ''); process.exitCode = answer.code ?? 0;
+} catch (error) { process.stderr.write(`${error.code === 'github_app_invalid' ? error.message : 'GitHub App command failed.'}\n`); process.exitCode = 1; }

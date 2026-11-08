@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 7545c2e8cd819510317352e5108f757883d178f91ac9dc66aef4674dd56756ef).
+// Implements prompts/cli/runtime-client.prompt.md.
 import {readEvidenceEligibility} from './workflow-runner.mjs';
 import {allRuns} from './workflow-runs.mjs';
 import {assessNativeEvidence, resultLines, usableResult} from './workflow-results.mjs';
@@ -59,7 +59,8 @@ function authExecutable(env, preferred) {
     try {
       const stat = lstatSync(path);
       if (!stat.isFile() && !stat.isSymbolicLink()) continue;
-      if (readFileSync(path).subarray(0, 64).toString().includes('PDD Try launcher v1')) continue;
+      const marker = readFileSync(path).subarray(0, 64).toString();
+      if (marker.includes('PDD Try launcher v1') || marker.includes('PDD GitHub App transport v1')) continue;
       return realpathSync(path);
     } catch { /* try the next PATH directory */ }
   }

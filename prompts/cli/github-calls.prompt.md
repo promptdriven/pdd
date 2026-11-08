@@ -1,13 +1,9 @@
 # GitHub calls: count, budget and conditional reads
 
-Own `src/github-calls.mjs`. Autopilot uses the person's own `gh` sign-in. Its
-REST limit (5,000 calls each hour for a person) is also the limit of the
-person's own work. Several coordinators on one login used the whole limit. This
-module counts each `gh` call that pdd makes, keeps a small local ledger for each
-repository on this machine, tells the tick when to read less, and keeps ETags
-and bodies for conditional reads. It makes no GitHub call itself and adds no
-credentials. It counts only the calls that pdd runs: the `gh` calls that the
-coordinator and worker chats make themselves are not counted.
+Own `src/github-calls.mjs`. Count pdd GitHub calls, budget from the active
+identity's observed limit, and keep conditional read caches. Personal gh login
+is the default. The [App adapter](github-app.prompt.md) authenticates native
+calls when configured; this module never records credentials.
 
 ## Exports
 
@@ -144,7 +140,7 @@ native dependency observations for Autopilot repositories:
   including `pdd dependencies prepare`, `complete`, direct snapshot reads and
   automatic start. Safety reads and writes go on. Other `pdd` operations are
   counted but do not wait for this floor. The coordinator and worker chats never
-  wait for the budget, and their own `gh` calls are not counted.
+  wait for the budget. The App shell wrapper counts their own `gh` calls; personal shell calls are not counted.
 
 `githubBudgetSettings(value)` reads `share` (an integer from 1 to
 100) and `floor` (an integer, 0 or more) from the object `autopilot.github` in
@@ -237,3 +233,19 @@ counts its calls, applies the budget, shows the status line and reads review
 pages with the full-last-page rule; the
 [dependency GitHub reader](issue-dependencies-github.prompt.md#conditional-reads)
 uses the ETag cache, the full-last-page rule and the floor guard.
+
+## App accounting
+
+`countGithubCalls` records a non-secret `identity` from outcome.githubIdentity
+when present. Personal entries omit it. `githubMachineEntries({root,fs,identity})`
+and `githubUsage(entries,now,identity)` select only that identity; omitted
+identity means personal entries. App installations therefore share their local
+quota across repositories but do not borrow a personal or another installation's
+limit. `githubEtagCache` accepts identity and uses a different cache filename for
+each identity. Native counters use `githubAppRunner` before execution, accept
+`appPorts` for its injected ports, and retain existing counting policy.
+
+## Dependencies
+
+- [GitHub App identity](github-app.prompt.md): required native generation and
+  verification context for authenticating native gh calls and Git network commands and the bundled wrappers.
