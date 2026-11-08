@@ -1325,15 +1325,23 @@ const safeStoryPath = path => typeof path === 'string' && isStoryPath(path) && !
 function namedStories(run, extra = '') {
   const summaries = [...run.areas.flatMap(item => item.steps).filter(step => run.done[step]).map(step => String(run.done[step]?.summary ?? '')), String(extra)];
   let paths; try { paths = gitFiles(run.root).filter(safeStoryPath); } catch { return []; }
-  // Match actual repository names, not an ASCII approximation or a relative suffix of an unsafe reference.
-  return paths.filter(path => summaries.some(summary => {
-    for (let at = summary.indexOf(path); at !== -1; at = summary.indexOf(path, at + 1)) {
-      const start = summary.slice(Math.max(0, at - 2), at) === './' ? at - 2 : at;
-      const before = summary[start - 1] ?? '', after = summary.slice(at + path.length);
-      if (!/[\p{L}\p{N}_./\\-]/u.test(before) && !/^[\p{L}\p{N}_/\\-]|^\.[\p{L}\p{N}_]/u.test(after)) return true;
+  // Resolve longer repository filenames first, so a complete reference owns its whole span.
+  const selected = new Set();
+  for (const summary of summaries) {
+    const spans = [];
+    for (const path of [...paths].sort((a, b) => b.length - a.length)) {
+      for (let at = summary.indexOf(path); at !== -1; at = summary.indexOf(path, at + 1)) {
+        const start = summary.slice(Math.max(0, at - 2), at) === './' ? at - 2 : at;
+        const end = at + path.length;
+        const before = summary[start - 1] ?? '', after = summary.slice(end);
+        if (!/[\p{L}\p{N}_./\\-]/u.test(before) && !/^[\p{L}\p{N}_/\\-]|^\.[\p{L}\p{N}_]/u.test(after)
+          && !spans.some(([left, right]) => start >= left && end <= right)) {
+          selected.add(path); spans.push([start, end]);
+        }
+      }
     }
-    return false;
-  }));
+  }
+  return paths.filter(path => selected.has(path));
 }
 // The Story files of a run: each changed user_stories/*.md (not PLAN.md or README.md) and each one that a step summary names.
 function runStoryPaths(run, files) {

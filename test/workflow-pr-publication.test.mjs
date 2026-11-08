@@ -620,10 +620,11 @@ test('FORMAL-REAL6: done formal sees a Story that only its own summary names', t
 // #3029 M3: resolve pre-existing named Stories through stepDone and the real publication path.
 // Git pushes stay in the fixture's local bare repository; gh is the fixture's local command fake.
 const NAMED_NOT_RUN = { result: 'not_run', scope: 'Named Story rules', reason: 'No formal execution', control_outcome: 'not_run' };
-function namedStoryPublication(t, { story, rules, reference = story, vectors = false, invalid = false }) {
+function namedStoryPublication(t, { story, rules, reference = story, vectors = false, invalid = false, prefixRules = false }) {
   const f = fixture(t, { opted: true });
   mkdirSync(join(f.root, dirname(story)), { recursive: true });
   writeFileSync(join(f.root, story), VALUE_STORY.replace('two,', '3029,') + (rules ? '\n## Rules to check\n\nWrong: a value other than two.\n' : ''));
+  if (prefixRules) writeFileSync(join(f.root, 'user_stories/value.md'), VALUE_STORY + '\n## Rules to check\n\nWrong: another value.\n');
   // Neither named Story is in the changed-file list or the scenario anchor.
   if (vectors) writeFileSync(join(f.root, 'user_stories/first.md'), VALUE_STORY);
   const unsafe = ['user_stories/absolute.md', 'user_stories/traversal.md', 'user_stories/control\u0001.md'];
@@ -1083,4 +1084,14 @@ test('CALLS: a status refresh reads each PR once (with its description, head and
   assert.deepEqual(views(same), [`pr view ${url(22)} --json state,mergedAt,statusCheckRollup,baseRefName`, `pr view ${url(23)} --json state,mergedAt,statusCheckRollup,baseRefName,body,headRefOid,comments`], same.join('\n'));
   assert.deepEqual(same.filter(call => !call.startsWith('pr view')), [], 'No change: no other GitHub call (no comments read, no second view, no edit).');
   assert.deepEqual(changed.filter(call => !views(same).includes(call)), [`pr view ${url(23)} --json body,headRefOid`, `pr edit ${url(23)} --body-file -`], changed.join('\n'));
+});
+
+ test('FORMAL-PREFIX: a complete filename does not select an unrelated prefix Story', t => {
+  const { facts, replay } = namedStoryPublication(t, { story: 'user_stories/value.md extra.md', rules: false, prefixRules: true, vectors: true });
+  assert.equal(facts.records.rulesToCheck, false);
+  assert.equal(replay.outcome, 'pass');
+  facts.records.ci = 'passing';
+  assert.match(prStatus(facts), /^✅/);
+  facts.mode = 'auto'; facts.records.checker = { verdict: 'PASS' };
+  assert.match(prStatus(facts), /^✅/);
 });
