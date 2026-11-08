@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: aae8a02de20ae45d36a5773e9e7ae07ecd3345b8c8f2f013a94057a6c5674a94).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 6836a6271daeb4730ebddb27e224b979f51d6285c05857700e1ef36c8e38f965).
 import { interfaceFindings } from './interface-draft.mjs';
 import {readEvidenceEligibility} from './workflow-runner.mjs';
 import {allRuns} from './workflow-runs.mjs';
@@ -1736,6 +1736,11 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
     for (const problem of refusedRows.flatMap(row => row.refusals)) {
       if (!problems.some(item => item.code === problem.code && item.path === problem.path && item.section === problem.section)) problems.push(problem);
     }
+    if (refusedRows.some(row => row.native_only?.length)) {
+      context.warnings = found.warnings;
+      saveLocalNativeResult(context, refusedRows, 'lint-only');
+      return printLintResult(context, refusedRows, problems);
+    }
     const summary = limited ? 'Lint refused local Runtime limits. 0 AI calls. No files were sent.' : 'Lint refused every selected test before sending. 0 AI calls. No files were sent.';
     if (context.json) line(ports.stdout, JSON.stringify({batch:null,repo:root,exit_code:4,lint_state:'refused',summary_line:summary,
       coverage:context.coverage,problems,rows:refusedRows,warnings:found.warnings}));
@@ -1834,7 +1839,9 @@ function printLintResult(context, rows, problems, warnings = [], answer = null) 
     if (problem.code === 'lint-refused' && !problem.path) continue;
     if (!problems.some(item => item.code === problem.code && (item.path ?? null) === (problem.path ?? null))) problems.push({ ...problem, path: problem.path ?? null, section: null });
   }
-  const passing = rows.filter(row => row.state === 'passed').length, lintState = outcomeOverall(rows), exitCode = exitCodeFor(rows);
+  const localRefusal = context.localOnly && rows.some(row => row.state === 'refused');
+  const passing = rows.filter(row => row.state === 'passed').length, lintState = localRefusal ? 'refused' : outcomeOverall(rows);
+  const exitCode = localRefusal ? 4 : exitCodeFor(rows);
   const summary = `Lint: ${passing} of ${rows.length} tests pass. 0 AI calls. No checks were sent.`;
   const reportedCoverage = answer?.result?.capabilities_complete ?? answer?.result?.report?.lint?.capabilities_complete;
   const capabilityCoverage = typeof reportedCoverage === 'boolean' ? reportedCoverage : null;
@@ -1882,7 +1889,7 @@ async function readUnsentLint(context, rows) {
   const lint = context.lint, id = lint?.request_ids?.at(-1);
   if (!id) return;
   const unresolved = lint.pending || lint.unknown || [null, undefined, 'queued', 'running'].includes(lint.state);
-  const held = rows.filter(row => !row.request_ids?.length && row.state === 'not_run' && (unresolved
+  const held = rows.filter(row => runtimeLintRow(row) && !row.request_ids?.length && row.state === 'not_run' && (unresolved
     || ['lint-pending', 'lint-finished'].includes(row.note?.code) || /lint result is unknown/i.test(row.note?.message ?? '')));
   if (!held.length) return;
   let answer = context.store.read(join(context.folder, `${id}.json`));
@@ -1936,8 +1943,9 @@ async function readUnsentLint(context, rows) {
   }
 }
 
+const runtimeLintRow = row => row.phase !== 'local' && !row.native_only?.length;
 function heldForLint(row) {
-  return !row.request_ids?.length && row.state === 'not_run' && !row.busy && !row.can_retry
+  return runtimeLintRow(row) && !row.request_ids?.length && row.state === 'not_run' && !row.busy && !row.can_retry
     && (row.note?.code === 'lint-pending'
       || /lint result is unknown.*sent no checks/i.test(row.note?.message ?? '')
       || row.phase === 'lint' && row.note?.code === 'lint-finished');
@@ -1966,7 +1974,7 @@ function validSavedCheck(row) {
 async function continueHeld(context, candidates, saved) {
   if (!candidates.length || context.interrupted || context.ports.now() >= context.deadline) return;
   if (saved.intent === 'lint-only') return;
-  candidates = candidates.filter(row => !row.request_ids.length && !row.dispatchIncomplete);
+  candidates = candidates.filter(row => runtimeLintRow(row) && !row.request_ids.length && !row.dispatchIncomplete);
   if (!candidates.length) return;
   if (saved.version !== 1 || (saved.intent !== undefined && saved.intent !== 'check')
     || !candidates.every(validSavedCallCeiling)

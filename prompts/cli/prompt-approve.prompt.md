@@ -1,6 +1,6 @@
 # Prompt approve
 
-Own `src/prompt-approve.mjs`. Export `runApprove({words, cwd, said}, ports)` (returns an exit code) and `approvePromptText(text)` (returns the approved text or null). `pdd approve PROMPT` is the one way pdd sets `"status": "draft"`. It records a person's decision through terminal y/N or, in easy mode, an agent-supplied `--said` value after the person approves in chat. Preserve existing exports, including `presentAndApprove`, and the Simulator callback behavior; this command adds no Simulator approval route.
+Own `src/prompt-approve.mjs`. Export `runApprove({words, cwd, said}, ports)` (returns an exit code) and `approvePromptText(text)` (returns the approved text or null). `pdd approve PROMPT` is the one way pdd sets `"status": "approved"`. It records a person's decision through terminal y/N or, in easy mode, an agent-supplied `--said` value after the person approves in chat. Preserve existing exports, including `presentAndApprove`, and the Simulator callback behavior; this command adds no Simulator approval route.
 
 ## Steps
 
