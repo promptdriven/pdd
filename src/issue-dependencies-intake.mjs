@@ -119,13 +119,14 @@ export async function checkDependencyStart({ cwd = '', repository, issue, coordi
     if (settings.activation !== coordinator.activation || settings.runs !== coordinator.runs) return { allowed: false, reason: 'stale' };
     if (owners.runsKnown !== true || !Array.isArray(owners.runs)) return { allowed: false, reason: 'runs' };
     const occupied = owners.runs.filter(run => !(['waiting', 'paused', 'stuck', 'question'].includes(run.state) && run.occupied === false));
-    if (settings.runs !== undefined) {
-      if (!Number.isSafeInteger(settings.runs) || settings.runs < 1) return { allowed: false, reason: 'runs' };
+    const runCap = settings.runs ?? settings.capacityRuns;
+    if (runCap !== undefined) {
+      if (!Number.isSafeInteger(runCap) || runCap < 1) return { allowed: false, reason: 'runs' };
       const slots = new Map();
       for (const run of occupied) {
         slots.set(run.runId || run.issue, run);
       }
-      if (slots.size + ([...slots.values()].some(x => selected && issueKey(x.issue) === selected) ? 0 : 1) > settings.runs) return { allowed: false, reason: 'runs' };
+      if (slots.size + ([...slots.values()].some(x => selected && issueKey(x.issue) === selected) ? 0 : 1) > runCap) return { allowed: false, reason: 'runs' };
     }
     if (occupied.some(run => selected && issueKey(run.issue) === selected)) return { allowed: false, reason: 'dependency' };
     const copy = structuredClone(snapshot); const subject = copy.issues.find(x => selected && issueKey(x.key) === selected);

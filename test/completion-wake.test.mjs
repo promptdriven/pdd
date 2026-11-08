@@ -1,3 +1,4 @@
+import { isolatedCheckCapacity } from './helpers/check-machine.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
@@ -34,7 +35,7 @@ test('default launcher reads current state and reconciles completion under its e
   const cwd=join(dir,'repo'),home=join(dir,'home'),stateRoot=join(dir,'state'); mkdirSync(cwd); mkdirSync(home); mkdirSync(stateRoot);
   const id=createHash('sha256').update(cwd).digest('hex').slice(0,20),file=join(stateRoot,id+'.json');
   writeFileSync(join(cwd,'pdd.json'),JSON.stringify({autopilot:{mode:'auto',trust:[]}}));
-  let calls=[]; const ports={stateRoot,allocationCheck:async()=>({state:'ready',message:''}),run:async(cmd)=>cmd==='git'?{code:0,stdout:cwd+'\n'}:{code:0,stdout:''},queryIssues:async()=>({status:304}),reconcileDependencyIntake:async input=>{calls.push(input);return {queued:[],eligible:[],skipped:[],pending:false};}};
+  let calls=[]; const ports={checkCapacityPorts:isolatedCheckCapacity(cwd),stateRoot,allocationCheck:async()=>({state:'ready',message:''}),run:async(cmd)=>cmd==='git'?{code:0,stdout:cwd+'\n'}:{code:0,stdout:''},queryIssues:async()=>({status:304}),reconcileDependencyIntake:async input=>{calls.push(input);return {queued:[],eligible:[],skipped:[],pending:false};}};
   const {requestAutopilotCompletion}=await import('../src/autopilot-launcher.mjs');
   assert.deepEqual(await requestAutopilotCompletion({cwd,env:{HOME:home}},ports),{state:'inactive'});
   writeFileSync(file,JSON.stringify({enabled:true,cwd,repo:'example/project',stateFile:file,coordinatorId:'c',machine:'m',agent:{id:'codex',kind:'codex',command:'codex'},recipeDelivered:true,environment:{HOME:home}}));

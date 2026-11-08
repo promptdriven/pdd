@@ -1,3 +1,4 @@
+import { isolatedCheckCapacity } from './helpers/check-machine.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, utimesSync, existsSync, realpathSync, renameSync, symlinkSync } from 'node:fs';
@@ -20,7 +21,7 @@ async function fixture(t, options = {}) {
   writeFileSync(join(cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: options.mode ?? 'auto', trust: ['helper'] } }));
   const f = { dir, cwd, home, time: Date.parse('2026-11-04T00:00:00Z'), polls: [], prompts: [], runs: [], timers: [], comments: [], ack: [], issues: [], etag: '"one"', active: false };
   f.ports = {
-    stateRoot: join(home, 'state'), now: () => f.time,
+    checkCapacityPorts: isolatedCheckCapacity(dir), stateRoot: join(home, 'state'), now: () => f.time,
     // These fakes stand for a checkout where pdd workflows can start (#3050).
     allocationCheck: async () => ({ state: 'ready', message: '' }),
     readRunProgress: async () => f.runProgress ?? [],
@@ -1749,4 +1750,68 @@ test('native timer definitions retain both exported shared suite selectors', asy
       assert.ok(definition.includes(value),`${platform} timer records the selected path`);
     }
   }
+});
+
+// #3067: capacity reads use the same fake machine on start, tick and status.
+test('machine capacity follows resize on an empty tick without an AI wake', async t => {
+  const f=await fixture(t), {checkMachine}=await import('./helpers/check-machine.mjs');
+  const fake=checkMachine({count:64});
+  f.ports.checkCapacityPorts={...fake.ports,queueRoot:join(f.dir,'machine-checks')};
+  assert.equal((await f.invoke('start')).exitCode,0);
+  assert.deepEqual([f.state().checkCapacity.checks,f.state().checkCapacity.runs],[5,10]);
+  const owner=f.state().ownerLaunch, prompts=f.prompts.length;
+  fake.machine.count=8;f.status=304;
+  assert.equal((await f.tick()).exitCode,0);
+  assert.deepEqual([f.state().checkCapacity.checks,f.state().checkCapacity.runs],[1,2]);
+  assert.deepEqual(f.state().ownerLaunch,owner,'capacity does not change coordinator custody');
+  assert.equal(f.prompts.length,prompts,'an empty resize tick makes no AI call');
+  const status=await f.invoke('status');
+  assert.match(status.message,/check slots:\s*0 busy of 1, 0 waiting, cores per check 8/);
+  assert.match(status.message,/checks:\s*calculated 1, chosen 1; runs:\s*calculated 2, chosen 2/);
+});
+
+test('start saves check and run overrides and CLI forwards checks', async t => {
+  const f=await fixture(t);
+  for(const value of ['0','-1','1.2','9007199254740992','Infinity']) assert.equal((await f.invoke('start',{checks:value})).exitCode,2);
+  assert.equal((await f.invoke('start',{checks:'2',runs:'9'})).exitCode,0);
+  assert.deepEqual([f.state().checks,f.state().runs,f.state().checkCapacity.checks,f.state().checkCapacity.runs],[2,9,2,9]);
+  f.status=304;await f.tick();
+  assert.deepEqual([f.state().checkCapacity.checks,f.state().checkCapacity.runs],[2,9]);
+  const status=await f.invoke('status');assert.match(status.message,/checks:\s*calculated 3, chosen 2; runs:\s*calculated 4, chosen 9/);
+  let received;
+  const code=await runPdd(['autopilot','start','--checks','4','--runs','11'],{cwd:f.cwd,stdout:capture(),stderr:capture(),
+    autopilotLauncher:{runAutopilotLauncher:async input=>{received=input;return {exitCode:0,message:'started'};}},
+    autopilotGithub:{checkAutopilotSettings:async()=>({warning:''})}});
+  assert.equal(code,0);assert.deepEqual([received.checks,received.runs],['4','11']);
+  assert.equal((await f.invoke('start')).exitCode,0);
+  assert.equal(f.state().checks,undefined);assert.equal(f.state().runs,undefined);
+  assert.deepEqual([f.state().checkCapacity.checks,f.state().checkCapacity.runs],[3,6]);
+});
+
+test('stopping a launcher removes its shared capacity while leaving check tickets alone',async t=>{
+  const f=await fixture(t);
+  assert.equal((await f.invoke('start',{checks:'1'})).exitCode,0);
+  const capacityFile=join(f.ports.checkCapacityPorts.queueRoot,'capacity.json');
+  assert.equal(JSON.parse(readFileSync(capacityFile)).owner,f.stateFile());
+  const ticketFile=join(f.ports.checkCapacityPorts.queueRoot,'ticket-1.json');
+  const ticket={ticket:1,pid:process.pid,childPid:process.pid,cwd:f.cwd,state:'running',queuedAt:f.time,startedAt:f.time,finishedAt:null,reason:null,cpuIds:[0]};
+  writeFileSync(ticketFile,JSON.stringify(ticket));
+  assert.equal((await f.invoke('stop')).exitCode,0);
+  assert.equal(existsSync(capacityFile),false);assert.deepEqual(JSON.parse(readFileSync(ticketFile)),ticket);
+});
+
+
+test('repair 1: repository status displays the latest shared owner limits',async t=>{
+  const a=await fixture(t), b=await fixture(t), {checkMachine}=await import('./helpers/check-machine.mjs');
+  const shared={...checkMachine({count:64}).ports,queueRoot:join(a.dir,'shared-checks')};
+  a.ports.checkCapacityPorts=shared;b.ports.checkCapacityPorts=shared;
+  assert.equal((await a.invoke('start',{checks:'1',runs:'7'})).exitCode,0);
+  assert.equal((await b.invoke('start',{checks:'3',runs:'19'})).exitCode,0);
+  const before=readFileSync(join(shared.queueRoot,'capacity.json'));
+  const status=await a.invoke('status');assert.equal(status.exitCode,0);
+  const numbers=/check slots:\s*(\d+) busy of (\d+), (\d+) waiting, cores per check (\d+)/.exec(status.message);
+  assert.ok(numbers);assert.deepEqual(numbers.slice(1).map(Number),[0,3,0,21]);
+  assert.match(status.message,/checks:\s*calculated 5, chosen 3; runs:\s*calculated 6, chosen 19/);
+  assert.match(status.message,/repository overrides: checks 1, runs 7/);
+  assert.deepEqual(readFileSync(join(shared.queueRoot,'capacity.json')),before);
 });

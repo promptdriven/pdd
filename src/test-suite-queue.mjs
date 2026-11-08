@@ -2,9 +2,109 @@
 import * as files from 'node:fs';
 import { join, isAbsolute, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { availableParallelism, freemem, loadavg } from 'node:os';
 
-const CAPACITY = 3;
+function nativeCores() {
+  if (process.platform === 'linux') {
+    let list;
+    try { list = /^Cpus_allowed_list:\s*(.+)$/m.exec(files.readFileSync('/proc/self/status', 'utf8'))?.[1]; } catch { /* Use available parallelism without procfs. */ }
+    if (list) return list.split(',').flatMap(part => {
+      const [first, last = first] = part.split('-').map(Number);
+      return Array.from({length:last - first + 1}, (_, index) => first + index);
+    });
+  }
+  return Array.from({length:availableParallelism()}, (_, index) => index);
+}
+function nativeBattery() {
+  if (process.platform !== 'linux') return false;
+  let names;
+  try { names = files.readdirSync('/sys/class/power_supply'); } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+  return names.some(name => files.readFileSync(join('/sys/class/power_supply', name, 'type'), 'utf8').trim() === 'Battery');
+}
+function nativeVirtualized(run = spawnSync) {
+  // Unknown detection reserves the person's CPU budget.
+  const result = run('systemd-detect-virt', ['--quiet'], {timeout:1000,stdio:'ignore'});
+  return result.status === 0;
+}
+function nativeTaskset(env) {
+  if (process.platform !== 'linux') return null;
+  for (const folder of (env.PATH ?? '').split(':').filter(isAbsolute)) {
+    const path = join(folder, 'taskset');
+    try { files.accessSync(path, files.constants.X_OK); if (files.statSync(path).isFile()) return path; } catch {}
+  }
+  return null;
+}
+export function calculateCheckCapacity({checks, runs} = {}, ports = {}) {
+  const cpuIds = (ports.cores ?? nativeCores)(), freeMemory = (ports.memory ?? freemem)(),
+    load = (ports.load ?? (() => loadavg()[0]))(), platform = ports.platform ?? process.platform;
+  const battery = platform === 'linux' ? (ports.battery ?? nativeBattery)() : false;
+  const virtualized = platform === 'linux' ? (ports.virtualized ?? (() => nativeVirtualized(ports.spawnSync ?? spawnSync)))() : false;
+  const personal = platform === 'darwin' || platform === 'linux' && (battery || !virtualized);
+  const taskset = platform === 'linux' ? (ports.taskset ?? (() => nativeTaskset(ports.env ?? process.env)))() : null;
+  if (typeof platform !== 'string' || typeof battery !== 'boolean' || typeof virtualized !== 'boolean' || !Array.isArray(cpuIds) || !cpuIds.length || cpuIds.some(id => !Number.isSafeInteger(id) || id < 0)
+    || new Set(cpuIds).size !== cpuIds.length || !Number.isFinite(freeMemory) || freeMemory < 0
+    || !Number.isFinite(load) || load < 0 || taskset !== null && (typeof taskset !== 'string' || !isAbsolute(taskset))
+    || [checks,runs].some(value => value !== undefined && (!Number.isSafeInteger(value) || value < 1))) throw Error('Machine check capacity is unavailable or invalid.');
+  const usable = cpuIds.slice(0, personal ? Math.max(1, Math.floor(cpuIds.length / 2)) : cpuIds.length);
+  const affinity = platform === 'linux' && taskset !== null;
+  const calculatedChecks = Math.max(1, Math.min(Math.floor(usable.length / 12), Math.floor(freeMemory / (4 * 1024 ** 3)), affinity ? Infinity : 1));
+  const selected = checks ?? calculatedChecks, calculatedRuns = Math.min(Number.MAX_SAFE_INTEGER, selected * 2);
+  return {cores:cpuIds.length, usableCores:usable.length, cpuIds:usable, freeMemory, load, personal, affinity, taskset,
+    calculatedChecks, checks:selected, calculatedRuns, runs:runs ?? calculatedRuns,
+    coresPerCheck:Math.max(1, Math.floor(usable.length / selected)), busy:load > usable.length};
+}
+const CAPACITY_LIFETIME = 31 * 60_000;
+export async function configureCheckCapacity({env = process.env, checks, runs, owner = null}, ports = {}) {
+  const p = portsFor(env, ports), observedAt = p.now();
+  if (owner !== null && (typeof owner !== 'string' || !owner)) throw Error('Invalid check capacity owner.');
+  const capacity = {...calculateCheckCapacity({checks,runs}, {...p,env}), owner, observedAt, expiresAt:observedAt + CAPACITY_LIFETIME};
+  p.fs.mkdirSync(p.root, {recursive:true,mode:0o700});
+  await underLock(p, () => {
+    const path = join(p.root, 'capacity.json'), temp = `${path}.${p.uuid()}.tmp`;
+    try { p.fs.writeFileSync(temp, JSON.stringify(capacity), {mode:0o600}); p.fs.renameSync(temp,path); }
+    finally { try { p.fs.unlinkSync(temp); } catch {} }
+  });
+  return capacity;
+}
+export async function releaseCheckCapacity({env = process.env, owner}, ports = {}) {
+  if (typeof owner !== 'string' || !owner) throw Error('Invalid check capacity owner.');
+  const p = portsFor(env, ports), path = join(p.root,'capacity.json');
+  try { p.fs.accessSync(path); } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+  return underLock(p, () => {
+    let value;
+    try { value = JSON.parse(p.fs.readFileSync(path,'utf8')); } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+    if (value.owner !== owner) return false;
+    p.fs.unlinkSync(path); return true;
+  });
+}
+function admissionCapacity(p, env) {
+  let value;
+  try { value = JSON.parse(p.fs.readFileSync(join(p.root,'capacity.json'),'utf8')); }
+  catch (error) { if (error.code === 'ENOENT') return calculateCheckCapacity({}, {...p,env}); throw error; }
+  if (!value || typeof value.personal !== 'boolean' || typeof value.affinity !== 'boolean'
+    || value.owner !== null && (typeof value.owner !== 'string' || !value.owner)
+    || !Number.isFinite(value.observedAt) || value.expiresAt !== value.observedAt + CAPACITY_LIFETIME
+    || typeof value.busy !== 'boolean' || !Number.isSafeInteger(value.cores) || value.cores < 1
+    || !Number.isSafeInteger(value.checks) || value.checks < 1 || !Number.isSafeInteger(value.runs) || value.runs < 1
+    || value.usableCores !== (value.personal ? Math.max(1,Math.floor(value.cores/2)) : value.cores)
+    || value.affinity !== (typeof value.taskset === 'string' && isAbsolute(value.taskset))
+    || !value.affinity && value.taskset !== null) throw Error('Invalid saved machine check capacity.');
+  // Revalidate saved observations, including the derived values, before using them.
+  const result = calculateCheckCapacity({checks:value.checks,runs:value.runs}, {
+    cores:()=>value.cpuIds, memory:()=>value.freeMemory, load:()=>value.load, platform:value.affinity?'linux':'other',
+    battery:()=>false, virtualized:()=>true, taskset:()=>value.taskset,
+  });
+  if (result.usableCores !== value.usableCores || result.coresPerCheck !== value.coresPerCheck
+    || result.busy !== value.busy || result.calculatedChecks !== value.calculatedChecks
+    || result.calculatedRuns !== value.calculatedRuns) throw Error('Invalid saved machine check capacity.');
+  if (p.now() >= value.expiresAt) return calculateCheckCapacity({}, {...p,env});
+  return {...result, cores:value.cores, personal:value.personal, affinity:value.affinity, taskset:value.taskset};
+}
+export function readCheckStatus({env = process.env, checks, runs}, ports = {}) {
+  const p = portsFor(env, ports), capacity = admissionCapacity(p, env), all = records(p);
+  return {...capacity, busyChecks:all.filter(row=>row.state==='running').length, waitingChecks:all.filter(row=>row.state==='waiting').length};
+}
 const delay = ms => new Promise(done => setTimeout(done, ms));
 const alive = pid => {
   try { process.kill(pid, 0); return true; }
@@ -17,7 +117,7 @@ export function suiteQueueRoot(env = process.env) {
 }
 function portsFor(env, ports) {
   return { fs: files, now: Date.now, sleep: delay, alive, pid: process.pid, say: text => process.stdout.write(`${text}\n`),
-    execute: executeSuite, uuid: randomUUID, ...ports, root: ports.queueRoot ?? suiteQueueRoot(env) };
+    execute: (command, options) => executeSuite(command, options, ports), uuid: randomUUID, ...ports, root: ports.queueRoot ?? suiteQueueRoot(env) };
 }
 function save(p, record) {
   const target = join(p.root, `ticket-${record.ticket}.json`), temp = `${target}.${p.uuid()}.tmp`;
@@ -31,6 +131,7 @@ function records(p) {
     const row = JSON.parse(p.fs.readFileSync(join(p.root, name), 'utf8'));
     if (!Number.isSafeInteger(row.ticket) || !Number.isSafeInteger(row.pid) || row.pid <= 0 || typeof row.cwd !== 'string'
       || !['waiting', 'running', 'finished'].includes(row.state) || !Number.isFinite(row.queuedAt)
+      || row.cpuIds !== undefined && (!Array.isArray(row.cpuIds) || row.cpuIds.some(id=>!Number.isSafeInteger(id) || id<0) || new Set(row.cpuIds).size !== row.cpuIds.length)
       || row.startedAt !== null && !Number.isFinite(row.startedAt) || row.finishedAt !== null && !Number.isFinite(row.finishedAt)) {
       throw Error('Unreadable shared suite queue ownership.');
     }
@@ -76,7 +177,7 @@ export function readSuiteProgress({ cwd, since = 0, env = process.env }, ports =
 export function suiteStatusWords(suite) {
   return suite.state === 'unavailable' ? `full test suite queue unavailable: ${suite.reason}`
     : suite.reason ? `full test suite failed: ${suite.reason}`
-    : suite.state === 'waiting' ? `waiting for a test slot (position ${suite.position})`
+    : suite.state === 'waiting' ? `waiting for a check slot (position ${suite.position})`
     : suite.state === 'running' ? 'running the full test suite'
     : 'full test suite finished';
 }
@@ -95,18 +196,24 @@ export async function runTestSuite({ cwd, command, timeout = 30, env = process.e
     let lastPosition;
     for (;;) {
       const position = await underLock(p, () => {
-        const all = records(p), place = positionOf(all, row);
-        if (place === 1 && all.filter(other => other.state === 'running').length < CAPACITY) {
+        const all = records(p), place = positionOf(all, row), capacity = admissionCapacity(p, env);
+        const running = all.filter(other => other.state === 'running');
+        const occupied = new Set(running.flatMap(other => other.cpuIds ?? []));
+        const available = capacity.cpuIds.filter(id => !occupied.has(id));
+        if (place === 1 && !capacity.busy && running.length < capacity.checks
+          && (!capacity.affinity || running.every(other=>Array.isArray(other.cpuIds) && other.cpuIds.length) && available.length >= capacity.coresPerCheck)) {
+          row.cpuIds = capacity.affinity ? available.slice(0, capacity.coresPerCheck) : [];
+          row.coresPerCheck = capacity.coresPerCheck; row.taskset = capacity.affinity ? capacity.taskset : null;
           row.state = 'running'; row.startedAt = p.now(); save(p, row); return 0;
         }
         return place;
       });
       if (!position) break;
-      if (position !== lastPosition) { p.say(`waiting for a test slot (position ${position})`); lastPosition = position; }
+      if (position !== lastPosition) { p.say(`waiting for a check slot (position ${position})`); lastPosition = position; }
       await p.sleep(250);
     }
     p.say('running the full test suite');
-    const result = await p.execute(command, { cwd, env, timeoutMs: Number(timeout) * 60_000,
+    const result = await p.execute(command, { cwd, env:{...env,PDD_CHECK_CPUS:String(row.coresPerCheck)}, cpuIds:row.cpuIds, taskset:row.taskset, timeoutMs: Number(timeout) * 60_000,
       onChild: pid => { row.childPid = pid; save(p, row); } });
     row.state = 'finished'; row.finishedAt = p.now(); row.reason = result.reason ?? (result.exitCode ? `Test suite exited with status ${result.exitCode}.` : null);
     save(p, row);
@@ -121,9 +228,9 @@ export async function runTestSuite({ cwd, command, timeout = 30, env = process.e
     return { exitCode: 1, message: `Shared test suite queue failed: ${error.code ?? error.message}` };
   }
 }
-export async function executeSuite(command, { cwd, env, timeoutMs, onChild }) {
+export async function executeSuite(command, { cwd, env, timeoutMs, onChild, cpuIds = [], taskset = null }, ports = {}) {
   return new Promise(done => {
-    const child = spawn('/bin/bash', ['-c', command], { cwd, env, detached: true, stdio: ['ignore', 'inherit', 'inherit'] });
+    const child = (ports.spawn ?? spawn)(taskset ?? '/bin/bash', taskset ? ['--cpu-list',cpuIds.join(','),'/bin/bash','-c',command] : ['-c', command], { cwd, env, detached: true, stdio: ['ignore', 'inherit', 'inherit'] });
     let reason = null, forcedCode = null, escalation;
     const killGroup = signal => { if (child.pid) { try { process.kill(-child.pid, signal); } catch (error) { if (error.code !== 'ESRCH') throw error; } } };
     const stop = (code, why) => {

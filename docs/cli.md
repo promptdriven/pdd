@@ -73,7 +73,7 @@ Run Autopilot commands inside the repo folder. Each repo has its own Autopilot o
 
 | Command | What it does |
 |---|---|
-| `pdd autopilot start [--runs N] [--resume-custody FILE]` | Check sign-ins and the running pdd version, open a dedicated interactive Herdr session and check for work immediately. A user timer checks again every 30 minutes. `--runs` sets an optional concurrent-run cap; omission has no fixed cap. `--resume-custody` supplies the verified original-owner projection for explicit recovery |
+| `pdd autopilot start [--runs N] [--checks N] [--resume-custody FILE]` | Check sign-ins and the running pdd version, open a dedicated interactive Herdr session and check for work immediately. A user timer checks again every 30 minutes. `--runs` overrides the open-run cap. `--checks` overrides heavy-check slots. Omission uses machine capacity. `--resume-custody` supplies the verified original-owner projection for explicit recovery |
 | `pdd autopilot stop` | Disable this repo's timer on this machine and let the current agent step finish |
 | `pdd autopilot status [--all]` | Show this machine's repo, the folder Autopilot works in, agent, timer, coordinator health and next tick without waking an agent; an idle coordinator is healthy. It reads `pdd.json` on GitHub only to warn when its Autopilot settings differ from this checkout. Another line says when pdd workflows cannot start in this folder, and why. Other lines show a pending or held coordinator relaunch an [alert](#alerts) that was not delivered, and the [GitHub calls](#github-api-budget) of the last hour. `--all` works from any folder and lists every repository with Autopilot on this machine: repository, folder, mode, enabled or disabled, timer and coordinator state. It reads only local files, the timer and Herdr: no GitHub call |
 | `pdd autopilot add N...` | Label named issues `pdd:autopilot`. Autopilot does not need this label: it considers every open issue |
@@ -675,8 +675,9 @@ While a run waits for the interpreter, or an outage or an interpreter access pro
 suite through one machine queue. Use the actual repository command, for example
 `pdd workflow suite --command "npm test"`. Focused tests can run normally.
 
-Three suites can execute at once across repositories and worktrees. Additional
-runs show "waiting for a test slot (position N)". Workflow status also shows the
+Full suites and full builds share machine capacity across repositories and
+worktrees. Run a full build through the same command. Additional
+runs show "waiting for a check slot (position N)". Workflow status also shows the
 queue position. Queue waiting and suite execution pause Autopilot's stuck clock.
 A suite failure, interruption or execution timeout has its own reason and the
 `test-suite` alert kind. It does not mark the issue stuck.
@@ -685,6 +686,53 @@ The execution timeout defaults to 30 minutes. `--timeout` accepts 1 to 120
 minutes. Waiting does not use that time. Output and exit status come from the
 suite; timeout returns 124. The runner stops the suite process group before
 releasing its slot.
+
+Autopilot samples usable CPU IDs, free memory and one-minute load at each active
+tick. macOS and personal Linux machines use the first half of available
+cores (round down, minimum one). Linux desktops without batteries are included.
+Linux uses all available cores only when virtualization is detected and no battery
+is present. Detection uses `systemd-detect-virt --quiet` with a one-second timeout.
+If detection is unavailable or uncertain, Linux uses the personal-machine budget.
+With U usable cores and M free bytes, calculated check slots are
+`max(1, min(floor(U / 12), floor(M / 4294967296)))`.
+Without Linux taskset, calculated slots are capped at one. With enough memory,
+Linux VMs with taskset and 4, 8, 16, 32, 64 and 96 cores get 1, 1, 1, 2, 5
+and 8 slots. A 96-core machine with 8 GiB free gets two slots.
+
+`--checks N` replaces the calculated slots. Default open runs are twice the chosen
+slots, capped at the largest safe integer. `--runs N` replaces that open-run limit. Both options require positive safe
+integers and are saved for timer ticks. A start without an option selects its
+machine default, except while an uncertain delivery retains saved options.
+Native workflow admission enforces the current open-run cap. A resize changes
+that cap without changing the coordinator identity or cancelling existing runs.
+
+Each check gets `max(1, floor(U / chosen slots))` cores. Linux taskset gives each
+check a distinct CPU list from the parent's allowed CPUs, so tools such as
+`nproc` and Node `os.availableParallelism()` see that share. Every child receives
+`PDD_CHECK_CPUS` with the share. macOS and Linux without taskset use that hint;
+custom test or build tools must read it to set their worker count. Manual slot
+overrides can permit several hint-only checks. If affinity slots outnumber CPUs,
+extra checks wait for a distinct CPU share.
+
+A tick with load above U holds new checks in the queue. The next active tick
+refreshes the shared snapshot, including busy-machine state. Running checks keep
+their CPU lists when the machine shrinks; queued checks wait for free CPUs.
+A standalone queue without a saved snapshot reads its machine ports on admission.
+The latest active tick supplies the machine-wide snapshot and any check override,
+including when several repositories use the same queue. Stopping its owner
+removes that snapshot, while running checks keep their tickets. A snapshot
+expires after 31 minutes without a refresh. Standalone checks then probe current
+machine capacity with default limits. Another active repository's snapshot is
+retained when a different repository stops.
+
+`pdd autopilot status` reports calculated and chosen checks and runs, and
+`check slots: B busy of S, W waiting, cores per check C`. These are the shared
+admission limits, including another repository's active override. Status uses
+current machine defaults only when the shared snapshot is absent or expired.
+It labels this repository's saved options separately as repository overrides.
+It reads shared tickets without changing queue or workflow state. An unavailable
+observation reports its cause. Machine-caused check retries are separate from
+capacity admission.
 
 The default queue directory is `/tmp/pdd-full-suite-UID`, where UID is the local
 user ID. It is independent of repository, HOME and agent profile. All launchers

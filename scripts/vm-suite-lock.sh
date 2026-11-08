@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared full-suite queue: at most 3 run at a time, first come first served.
+# Shared full-suite queue: machine-sized check slots, first come first served.
 # Usage: cd <clone> && <pdd checkout>/scripts/vm-suite-lock.sh > <log> 2>&1
 # SUITE is the command to run. Without SUITE, it runs the plain suite: npm test with Chrome.
 # PDD_VM_SUITE_LOCK is the lock file that the jobs on the VM share. It must be an absolute path

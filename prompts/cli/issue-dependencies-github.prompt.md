@@ -21,6 +21,9 @@ existing Autopilot trust owner.
 Its native settings port reads current launcher state for automatic admission:
 `enabled: false` maps to mode `off`; missing or malformed state or enabled flag
 is unavailable and fails closed. For `enabled: true`, preserve the current configured mode, activation and cap;
+Expose `capacityRuns` from saved `checkCapacity.runs` when that snapshot exists;
+retain explicit `runs` separately. Malformed snapshots fail closed. The
+launcher owns calculation and refresh; the intake owns occupancy enforcement.
 configured off remains off. Manual workflows without
 automatic context remain usable while stopped.
 

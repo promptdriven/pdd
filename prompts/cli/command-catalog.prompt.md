@@ -38,9 +38,9 @@ Help forms and completion name only the `NAMES` words.
 
 ## Autopilot routes
 
-Catalog four local routes before the product routes: `autopilot.start` (`autopilot start`, local `autopilot-start`, no operands, optional text --runs and --resume-custody); `autopilot.stop` (matching prefix/disposition, no operands/options); `autopilot.status` (matching prefix/disposition, no operands, optional flag --all); `autopilot.add` (`autopilot add`, local `autopilot-add`, required repeated issue operands). Forms and descriptions:
+Catalog four local routes before the product routes: `autopilot.start` (`autopilot start`, local `autopilot-start`, no operands, optional text --runs, --checks and --resume-custody); `autopilot.stop` (matching prefix/disposition, no operands/options); `autopilot.status` (matching prefix/disposition, no operands, optional flag --all); `autopilot.add` (`autopilot add`, local `autopilot-add`, required repeated issue operands). Forms and descriptions:
 
-- `pdd autopilot start [--runs N] [--resume-custody FILE]`: Start this repo in an interactive Herdr agent; check now and every 30 minutes without AI on empty ticks. --runs optionally caps concurrent runs; --resume-custody supplies the verified original-owner projection.
+- `pdd autopilot start [--runs N] [--checks N] [--resume-custody FILE]`: Start this repo in an interactive Herdr agent; check now and every 30 minutes without AI on empty ticks. --runs and --checks override machine-sized run and heavy-check limits; --resume-custody supplies the verified original-owner projection.
 - `pdd autopilot stop`: Stop this machine's timer; let the current agent step finish.
 - `pdd autopilot status [--all]`: Show this machine's repo, folder, agent and next tick; --all lists every repository with Autopilot on this machine, from any folder.
 - `pdd autopilot add N...`: Mark named old issues with pdd:autopilot so Autopilot may take them.
@@ -50,7 +50,7 @@ Catalog two alert routes after `autopilot.add`. [Autopilot alerts](autopilot-ale
 - `autopilot.alert` (`autopilot alert`, local `autopilot-alert`, no operands; text `--issue`, value `--kind` with usage-limit, resource, interpreter, interpreter-access, access, decision, stuck, test-suite, long-running and recovered, text `--input`, flag `--update`). Form `pdd autopilot alert --issue N --kind usage-limit|resource|interpreter|interpreter-access|access|decision|stuck|test-suite|long-running|recovered --input - [--update]`. Help says it is for the coordinator; it records one alert for a real human need or incident and sends it to this machine's destination; it reads `{"cause","tried","need"}` JSON from stdin; usage-limit, resource, interpreter and interpreter-access are one alert per repository and machine for all blocked issues; access, decision, stuck, test-suite and long-running are one alert per issue; a repeat sends nothing unless the last send failed; `--update` sends a material change; recovered sends one recovery and closes the matching alerts.
 - `autopilot.alerts` (`autopilot alerts`, local `autopilot-alerts`, one operand of choice set, test or clear, text options `--discord-channel` and `--token-command`). Four forms: `pdd autopilot alerts set` reads a Discord or Slack incoming webhook URL from stdin and saves it for this machine outside every repository, readable only by the user, and never prints it; `pdd autopilot alerts set --discord-channel ID [--token-command CMD]` uses a Discord bot instead, reading its token from stdin and saving it readable only by the user, or saving CMD and running it at each send so the token is never written to disk, and never prints the token or the command output; `pdd autopilot alerts test` sends one test message and confirms the posted message, and for a bot first shows the bot name and channel name; `pdd autopilot alerts clear` removes the destination. No form takes the URL as an argument. The operand keeps the prefix at two words, so `pdd autopilot alerts --help` works through the existing parser.
 
-The [launcher](autopilot-launcher.prompt.md) owns behavior and --runs numeric interpretation. No fixed run cap, headless flag or additional setup question. Include routes in help and completion. Preserve all unrelated forms and ordering.
+The [launcher](autopilot-launcher.prompt.md) owns behavior and numeric interpretation. Include routes in help and completion. Preserve all unrelated forms and ordering.
 
 ## Public routes
 
@@ -66,7 +66,7 @@ For `workflow.run`, accept optional `--adopt-corpus FILE`, a nonempty text path 
 - workflow.suite `workflow suite --command COMMAND [--timeout MIN]` (local
   `workflow-suite`): no operands, required nonblank command text enforced by
   dispatch, optional integer timeout 1 to 120 minutes. Help describes the shared
-  machine queue, three slots and the 30-minute execution timeout. The required
+  machine queue, machine-sized check slots and the 30-minute execution timeout. The required
   [queue contract](test-suite-queue.prompt.md) owns execution and status.
 
 - workflow.done `workflow done STEP [--summary TEXT] [--skipped REASON]`: STEP is a safe step name; the summary and the reason are free text. Help says it records the step with pdd's own latest `pdd <NAMES.test>`, `pdd <NAMES.lint>` and prove results (the summary is an agent note), and that --skipped records that the step was skipped, and why. Build the two command words from `NAMES`, like every other form, so a rename changes this help too.

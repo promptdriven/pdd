@@ -8,7 +8,8 @@ approval, merge, quota-reset or headless execution route. Preserve existing
 setup, workflow and interpreter behavior.
 
 `runAutopilotLauncher` accepts command start, stop, status or add, cwd, packageRoot, env,
-issues (argv issue references), and optional runs text. Return `{exitCode,message}`.
+issues (argv issue references), and optional runs and checks text. Tests may inject `checkCapacityPorts` for the
+shared queue machine/filesystem ports independently of the launcher process port. Return `{exitCode,message}`.
 The CLI owns streams. Outside programs, timer installation, clock and state I/O
 are injectable ports; native defaults implement these on macOS and Linux.
 
@@ -118,7 +119,7 @@ starting a timer or agent. Off starts neither; retain its invalid-setting notice
 in the actionable off message. Both active modes use the same launcher; the
 [Autopilot skill](../../skills/pdd-autopilot/SKILL.md) owns later gates.
 
-For `start --resume-custody FILE`, read a bounded original-owner projection `{repository,sourceRoot,coordinatorId,machine,activation,paneId,workspaceId,agent:{id,kind},home,definitionHome,configHome,launchStartedAt}` from the operator's file. The current invocation's `--runs` controls capacity; omission is uncapped. The projection is not a whole-state import.
+For `start --resume-custody FILE`, read a bounded original-owner projection `{repository,sourceRoot,coordinatorId,machine,activation,paneId,workspaceId,agent:{id,kind},home,definitionHome,configHome,launchStartedAt}` from the operator's file. The current invocation's `--runs` controls capacity; omission uses the machine default. The projection is not a whole-state import.
 
 For this explicit operator recovery, check the source checkout and repository and use the existing admission boundary. Recheck the original pane/workspace/agent and repository with existing native target and repository observations, and verify the saved profile through the existing readiness path. The owner-verified bounded projection supplies the original launch/profile evidence. Do not add a native process-inspection system, require `PDD_AUTOPILOT_CONTEXT`, a PID or a missing native session UUID. A missing or mismatched target, profile readiness, or required current claim for an involved run leaves recovery blocked without effects.
 
@@ -133,8 +134,25 @@ Start persists a repo/machine state outside the checkout, installs a 30-minute
 user timer and runs the first tick immediately. Repeated start reuses the timer
 and saved activation time. An explicit start rearms the existing one-shot worker completion bridge for saved current automatic chats belonging to this repository and coordinator; timer ticks do not recreate listeners, except for the fresh pane after a [coordinator relaunch](#coordinator-relaunch) or a [gone coordinator pane](#gone-coordinator-pane). Yield retains its current claim and ownership checks. If observation is unavailable, report the manual completion-evidence and yield fallback. In auto mode, on every fresh reconciliation, including ordinary timer ticks, explicit start, completion and capacity refill, reconsider currently graph-eligible, open, unassigned and unclaimed work even when an earlier packet was acknowledged and its trusted content is unchanged. Delivery alone is not worker admission; preserve trust, ownership, custody and waiting checks and make a fresh selection observation. In observe mode retain unchanged notification deduplication; in all modes keep it for work that is not currently ready and for empty scans. Each reconciliation considers all open eligible
 backlog, regardless of creation or activation time.
-Optional --runs is a positive safe integer with no product maximum. Omission
-means no fixed cap. Persist only the selected launcher identity/config-folder
+Optional --runs and --checks are positive safe integers with no product maximum.
+Save explicit `runs` and `checks` like other start options; omission selects the
+machine default on a new start, retaining options with uncertain pending custody.
+At every active tick, use the shared queue's machine capacity contract to refresh
+`checkCapacity` before selecting work, without an AI call. Bind its shared snapshot
+owner to this launcher state file. On stop, after disabling the timer, release only
+this owner’s shared snapshot; preserve running tickets and other repositories’
+snapshots. Shared snapshot expiry covers lost timers. Persist the snapshot
+under the existing current-control guard. Default open-run admission uses its
+`runs`; retain explicit `runs` as the stable coordinator identity. Thus machine
+resize changes capacity without changing coordinator custody. Packet `runs` is
+the effective cap and `checkCapacity` is the snapshot. Instruct the coordinator
+to claim new issues only within that cap; the native start check enforces it.
+Status reads the active shared admission capacity read-only and shows its
+calculated and chosen check and run counts, plus `check slots: B busy of S, W waiting, cores per check C`.
+Show this repository's saved check and run overrides separately, labelled as
+repository overrides (automatic when omitted). They do not replace the shared
+status limits. If capacity is unavailable, show its cause and do not admit work at that tick.
+Persist only the selected launcher identity/config-folder
 paths, including the HOME used to load local launcher definitions, not credentials or the whole environment. A named user timer runs the
 Node script with absolute paths and the launcher's PATH and agent config paths.
 Linux uses a systemd user timer whose oneshot service sets `KillMode=process`,
@@ -547,7 +565,8 @@ invocation-only `shell_environment_policy.set` overrides, so workflow launches
 inherit them even when the profile restricts environment inheritance. Include
 these overrides in the launch fingerprint. Do not depend on the Herdr server's
 environment for queue selection: unset missing selectors in the native child.
-The queue limits validation, not the number of issue workers.
+Use the same queue command for full builds. The queue limits heavy validation;
+the capacity-derived open-run cap bounds issue workers separately.
 
 Elapsed time can also offer work without a GitHub change or an AI call in the
 tick. Use the clock and local run-progress reader as injectable ports. Read this
