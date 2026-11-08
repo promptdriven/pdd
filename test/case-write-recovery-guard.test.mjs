@@ -21,31 +21,46 @@ async function abandonedOwner(t){
   return{...f,area,lock,guard:lock+'.recover'};
 }
 
-function acquireInChild(f,{cancel=false}={}){
+function acquireInChild(f,{cancel=false,maxWaitMs=cancel?5000:35,settleWithinMs=1000,disappearingGuard=false}={}){
   const request={root:f.root,testPath:f.second,handoff:closed(f.second)};
   // Isolate the public native boundary: a synchronous retry bug cannot block
   // the test runner's own timeout or cleanup. Liveness uses the native adapter.
   const code=String.raw`
+    import * as fs from 'node:fs';
     import {acquireCaseWriteOwnership} from ${JSON.stringify(pathToFileURL(implementation).href)};
     const controller=new AbortController(),started=Date.now();
+    let collisions=0;
+    const guard=${JSON.stringify(f.guard)};
+    const files=${disappearingGuard}?{
+      lstat:fs.lstatSync,read:fs.readFileSync,open:fs.openSync,write:fs.writeFileSync,
+      close:fs.closeSync,sync:fs.fsyncSync,stat:fs.fstatSync,mkdir:fs.mkdirSync,
+      list:fs.readdirSync,rename:fs.renameSync,unlink:fs.unlinkSync,realpath:fs.realpathSync,
+      link(from,to){
+        if(to!==guard)return fs.linkSync(from,to);
+        // Order a real peer collision, then remove its guard before inspection.
+        fs.writeFileSync(guard,'peer recovery guard');
+        try{return fs.linkSync(from,to);}
+        catch(error){if(error.code==='EEXIST'){collisions++;fs.unlinkSync(guard);}throw error;}
+      }
+    }:undefined;
     const timer=${cancel}?setTimeout(()=>controller.abort(),35):undefined;
     process.stdout.write(JSON.stringify({entered:true})+'\n');
     try{
       const lease=await acquireCaseWriteOwnership({...${JSON.stringify(request)},signal:controller.signal},
-        {env:process.env,maxWaitMs:${cancel?5000:35}});
+        {env:process.env,files,maxWaitMs:${maxWaitMs}});
       lease.release();
-      process.stdout.write(JSON.stringify({outcome:'acquired',elapsed:Date.now()-started})+'\n');
+      process.stdout.write(JSON.stringify({outcome:'acquired',collisions,elapsed:Date.now()-started})+'\n');
     }catch(error){
-      process.stdout.write(JSON.stringify({outcome:'refused',message:error.message,aborted:controller.signal.aborted,elapsed:Date.now()-started})+'\n');
+      process.stdout.write(JSON.stringify({outcome:'refused',message:error.message,aborted:controller.signal.aborted,collisions,elapsed:Date.now()-started})+'\n');
     }finally{clearTimeout(timer);}
   `;
-  const result=spawnSync(process.execPath,['--input-type=module','-e',code],{env:f.env,encoding:'utf8',timeout:1500});
+  const result=spawnSync(process.execPath,['--input-type=module','-e',code],{env:f.env,encoding:'utf8',timeout:settleWithinMs+500});
   const lines=result.stdout.trim().split('\n');
   assert.deepEqual(JSON.parse(lines[0]),{entered:true},result.stderr);
   assert.equal(result.error?.code,undefined,'recovery acquisition must settle within the child timeout');
   assert.equal(result.status,0,result.stderr);
   const answer=JSON.parse(lines[1]);
-  assert.ok(answer.elapsed<1000,'the local wait or cancellation must bound acquisition');
+  assert.ok(answer.elapsed<settleWithinMs,'the local wait or cancellation must bound acquisition');
   return answer;
 }
 
@@ -87,9 +102,27 @@ for(const stop of ['deadline','cancel']){
   });
 }
 
+for(const stop of ['deadline','cancel']){
+  test(`recovery guard disappearing after native link collision honors ${stop}`,async t=>{
+    const f=await abandonedOwner(t);
+    const before=read(f.root,f.second),otherBefore=read(f.root,f.test),lockBefore=fs.readFileSync(f.lock,'utf8');
+    const answer=acquireInChild(f,{cancel:stop==='cancel',disappearingGuard:true});
+    assert.equal(answer.outcome,'refused');
+    assert.equal(answer.aborted,stop==='cancel');
+    assert.match(answer.message,stop==='cancel'?/cancelled/:/another saver or editor/);
+    assert.ok(answer.collisions>=1,'acquisition must encounter a native recovery-guard collision');
+    assert.equal(read(f.root,f.second),before);
+    assert.equal(read(f.root,f.test),otherBefore);
+    assert.equal(fs.readFileSync(f.lock,'utf8'),lockBefore);
+    assert.throws(()=>fs.lstatSync(f.guard),{code:'ENOENT'});
+    assert.equal(fs.readdirSync(f.area).some(name=>name.endsWith('.tmp')),false);
+  });
+}
+
 test('an ended owner without a recovery guard can still hand over ownership',async t=>{
   const f=await abandonedOwner(t),before=read(f.root,f.second);
-  assert.equal(acquireInChild(f).outcome,'acquired');
+  const answer=acquireInChild(f,{maxWaitMs:5000,settleWithinMs:6000});
+  assert.equal(answer.outcome,'acquired',JSON.stringify(answer));
   assert.equal(read(f.root,f.second),before);
   assert.throws(()=>fs.lstatSync(f.lock),{code:'ENOENT'});
   assert.throws(()=>fs.lstatSync(f.guard),{code:'ENOENT'});
