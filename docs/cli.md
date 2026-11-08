@@ -108,6 +108,16 @@ for a later tick. It still delivers the start-up recipe, dependency review, time
 rules, the work of existing claims, and reviews and trusted comments on claimed
 and held issues.
 
+Starting Autopilot again keeps this machine's repository claim owner when it
+replaces the coordinator chat. Open runs keep their heartbeats after a crash or
+machine restart. A tick can also recover an unfinished local run whose claim
+still names an earlier coordinator. The run folder, checkout, machine, claim
+comment and label event must match. Another machine's claim always wins.
+A claim that expired after a coordinator change can recover once. The tick
+updates the run's custody, posts one short issue comment and resumes heartbeats.
+Then `pdd workflow done` can publish finished work under its usual ownership
+checks. Recovery makes no AI call and does not approve a prompt or a gate.
+
 In `status --all`, each line is independent. A saved folder that is gone still
 shows its real timer and coordinator state, with `mode unknown (folder missing)`.
 A saved folder that is not a Git repository shows `mode unknown (not a Git
