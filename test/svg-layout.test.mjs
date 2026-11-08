@@ -81,10 +81,9 @@ test('public local lint includes no-interface/no-test Git-visible prompts, no au
   const setup = harbor(t, repo => { mkdirSync(join(repo, 'views')); cpSync(join(fixtures, 'game.ui.svg'), join(repo, 'views/game.ui.svg')); writeFileSync(join(repo, 'views/game.prompt.md'), '![Layout](game.ui.svg)'); });
   const stdout = sink(), stderr = sink();
   const env = { HOME: setup.home, PDD_RUNTIME_URL: 'invalid', PDD_STATE_DIR: setup.repo };
-  assert.equal(await runPdd(['lint', '--local', '--json'], { cwd: setup.repo, env, stdout, stderr }), 4, stderr.text);
+  assert.equal(await runPdd(['lint', '--local', '--json'], { cwd: setup.repo, env, stdout, stderr }), 0, stderr.text);
   const result = JSON.parse(stdout.text);
-  assert.equal(result.exit_code, 4);
-  assert.ok(result.problems.some(problem => problem.code === 'interface-missing' && problem.path === 'views/game.prompt.md')); assert.ok(result.warnings.some(warning => warning.includes('views/game.prompt.md'))); assert.match(result.summary_line, /0 AI calls/);
+  assert.equal(result.exit_code, 0); assert.ok(result.warnings.some(warning => warning.includes('views/game.prompt.md'))); assert.match(result.summary_line, /0 AI calls/);
   const p = portsFor(env, { gh: () => assert.fail('No auth'), fetch: () => assert.fail('No network') }).ports;
   assert.equal(await runCheck({ cwd: setup.repo, words: ['no-such-story'], options: { '--lint': true, '--local': true } }, p), 2);
   assert.match(p.stderr.text, /Unknown story/);

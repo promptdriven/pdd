@@ -130,9 +130,7 @@ test('named states: a partial saved lint is visible but cannot provide workflow 
   assert.equal(result.states[0].reason.code, 'local-only');
   const evidence = resultLines([result]).join('\n');
   assert.match(evidence, /partial/); assert.match(evidence, /local-only/);
-  assert.doesNotMatch(evidence, /✓/);
-  assert.doesNotMatch(result.summary, /1 of 1/);
-  assert.deepEqual(result.coverage.runtime,{checkable:1,total:1,native_only:0});
+  assert.doesNotMatch(evidence, /✓|1 of 1/);
 });
 
 test('named states: native CLI local lint returns a partial JSON result', async t => {

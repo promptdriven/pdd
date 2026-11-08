@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: ac90b0713bef29826529511170fdad5f6e57103b2b897619ceabc14fcdd390b1).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: 8c6971aafd83a650abb1b9738aa916653af80d555d83baf84d3c6c88c3942394).
 import { hasProgress, outcomeExitCode, outcomeFor, outcomeText, progressText, resultOutcome, PROVIDER_TEXT } from './runtime-outcome.mjs';
 export const OPEN_STATES = new Set(['queued', 'running', 'sent']);
 
@@ -206,7 +206,7 @@ function criterionCoverage(row) {
 
 export function jsonRow(row) {
   const publicChecks = checks => (checks ?? []).map(({ normal_result, ...check }) => check);
-  return { story: row.story, title: row.title, test: row.test, ...(row.native_only?.length ? {native_only:row.native_only} : {}), ...resultOutcome(row), ...(row.unsent ? {unsent:true} : {}), ...(row.not_checked?.length ? {not_checked:row.not_checked} : {}), ...(row.compatibility ? { compatibility: row.compatibility, client_advice: row.client_advice } : {}), criterion_coverage: criterionCoverage(row), ...(row.progress ? { progress: row.progress } : {}), ...(row.ahead !== undefined && row.ahead !== null ? { ahead: row.ahead } : {}), checks: row.checks ?? null, criteria: row.criteria ?? null,
+  return { story: row.story, title: row.title, test: row.test, ...resultOutcome(row), ...(row.unsent ? {unsent:true} : {}), ...(row.not_checked?.length ? {not_checked:row.not_checked} : {}), ...(row.compatibility ? { compatibility: row.compatibility, client_advice: row.client_advice } : {}), criterion_coverage: criterionCoverage(row), ...(row.progress ? { progress: row.progress } : {}), ...(row.ahead !== undefined && row.ahead !== null ? { ahead: row.ahead } : {}), checks: row.checks ?? null, criteria: row.criteria ?? null,
     failed_checks: publicChecks(row.failed_checks), refusals: (row.refusals ?? []).map(item => ({ code: item.code, ...(item.path ? { path: item.path } : {}), field: item.field ?? null, section: item.section ?? null,
       message: item.message ?? null, engine_message: item.engine_message ?? null, hint: item.hint ?? null, reason: item.reason ?? null, fix: item.fix ?? null,
       where: item.where ?? null, cause: item.cause ?? null })), calls: sentRow(row) ? row.calls ?? 'unknown' : 0,
@@ -414,7 +414,6 @@ export function renderText({ batch, rows, coverage, warnings = [], details = fal
     lines.push(`  Report: ${row.report_url ?? 'none'}`); out.push(...lines);
   }
   out.push(...localRefusals(rows.filter(row=>!row.unsent), secrets));
-  for (const row of rows.filter(row => row.state === 'refused' && row.native_only?.length)) out.push(`  Native-only: ${cleanText(row.note?.message, secrets)}`);
   for (const row of rows.filter(row => row.state === 'refused' && sentRow(row))) {
     out.push(`REFUSED  ${row.title} (${row.test})`, ...row.refusals.flatMap(item => refusalLines(item, !!row.next_step)), ...serverAdvice(row, secrets), ...(row.report_url ? [`  Report: ${row.report_url}`] : []));
   }
@@ -488,8 +487,6 @@ export function tryUsageHeaders(usage) {
 }
 
 export function coverageText(coverage) {
-  const runtime = coverage?.runtime;
-  const promptLine = runtime ? `Runtime coverage: ${runtime.checkable} of ${runtime.total} prompts checkable, ${runtime.native_only} native-only\n` : '';
-  if (!coverage?.available) return promptLine + 'Module binding coverage unavailable: no pdd-bindings.json.';
-  return promptLine + [`${coverage.bound} of ${coverage.total} modules bound`, ...coverage.modules.filter(m => m.state === 'unbound').map(m => `  ${m.path}: ${m.reason} Port attempted: ${m.port_attempt}`)].join('\n');
+  if (!coverage?.available) return 'Module binding coverage unavailable: no pdd-bindings.json.';
+  return [`${coverage.bound} of ${coverage.total} modules bound`, ...coverage.modules.filter(m => m.state === 'unbound').map(m => `  ${m.path}: ${m.reason} Port attempted: ${m.port_attempt}`)].join('\n');
 }

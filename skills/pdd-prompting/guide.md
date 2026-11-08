@@ -294,18 +294,3 @@ whether those boundaries remain stable across the error envelope and names any
 permitted variation in decisions.
 
 </details>
-
-## Runtime interface declarations
-
-A behavior prompt ends with one Runtime interface block. Declare `kind: full` for
-its checkable contract, or `kind: partial` for a declared subset. A block without
-kind means full. Use `kind: native-only` only with a nonblank `reason` that names
-the effect that bound ports cannot fake (RUNBOOK §21). A checker confirms the
-reason. Approval records it; checks show not run and preserve the reason.
-
-`pdd interface draft PROMPT` drafts a missing block locally from explicit contract
-schemas. `pdd interface draft --all` drafts the repository and lints each result.
-Unresolved types remain draft gaps. A clean local lint is not a Runtime check.
-The automatic-check-pass approval route needs unchanged committed behavior, passing
-existing native tests and a full prompt check on current source. New behavior and
-strict approval mode require a person.

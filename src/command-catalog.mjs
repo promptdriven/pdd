@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: be52afb533de4cefc88ee50189ce128a5b983404a1ac27e86d1b5ac5303b7e14).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 78d578cd1c7b2368db3c3cc21d20b5477b063d919a027e5ada80ecb0dc71e84a).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -8,7 +8,7 @@ export const PUBLIC_HELP_TEXT = Object.freeze({
   heading: "PDD: prompt-driven development for your coding agent.",
   closingLines: Object.freeze(["Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex, /pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting).", `workflow ${run} opens the first area chat in Herdr session pdd and exits. Manual workflows follow RUNBOOK §2 and its person gates; pdd opens a real PR.`, "The CLI has no merge command. Auto agents use pdd-merge after repository review and tests, with required human approvals."]),
   learnLines: Object.freeze(["Learn PDD: run pdd help prompting, or read the Prompting guide and the RUNBOOK.", "Prompting guide: PACKAGE_ROOT/docs/prompting-guide.md", "RUNBOOK: PACKAGE_ROOT/RUNBOOK.md"]),
-  promptingLines: Object.freeze(["In PDD, prompts are the source. Code follows the prompts.", "1. Prompt: prompts/NAME.prompt.md. Write what the program does in plain English, then ## Dependencies, then one Runtime interface block.", "2. Story: user_stories/STORY.md. Write one thing that a person can do, then a numbered ## Acceptance criteria list.", "3. Test: tests/STORY.json. When the repo keeps its own tests in tests/ or test/, use tests/runtime/ or test/runtime/. Write steps with an exact check for each criterion.", `4. Check: run pdd ${test} --fill-hash, then pdd ${lint} (0 AI calls), then pdd ${test} STORY on the PDD interpreter.`, "5. Approve: a person reads each prompt and runs pdd approve PROMPT. New behavior needs a person. An unchanged complete draft can use --automatic with passing existing tests and a full prompt check."])
+  promptingLines: Object.freeze(["In PDD, prompts are the source. Code follows the prompts.", "1. Prompt: prompts/NAME.prompt.md. Write what the program does in plain English, then ## Dependencies, then one Runtime interface block.", "2. Story: user_stories/STORY.md. Write one thing that a person can do, then a numbered ## Acceptance criteria list.", "3. Test: tests/STORY.json. When the repo keeps its own tests in tests/ or test/, use tests/runtime/ or test/runtime/. Write steps with an exact check for each criterion.", `4. Check: run pdd ${test} --fill-hash, then pdd ${lint} (0 AI calls), then pdd ${test} STORY on the PDD interpreter.`, "5. Approve: a person reads each prompt and runs pdd approve PROMPT. An agent never approves."])
 });
 const approvalHelp = command => `Use the person's words after showing the gate or prompt. Ask the person in any chat, then relay their nonblank words without grading. Ask the person, then relay their words with --said. Without --said, use a separate person terminal. Chat alone never approves. Use this quoted heredoc by default:
 ${command} --said - <<'PDD_SAID'
@@ -16,8 +16,6 @@ ${command} --said - <<'PDD_SAID'
 PDD_SAID
 Choose a delimiter absent as a whole line from the words. Keep the delimiter quoted. --said - reads all UTF-8 stdin, including trailing newlines. Simple words may use --said WORDS. Without --said, a person can use terminal y/N. Root pdd.json strict_approvals true requires a person terminal.`;
 const routes = [
-  { id:'interface.draft', prefix:['interface','draft'], local:'interface-draft', operands:[{name:'prompt',type:'text',optional:true,repeat:true}], options:[{name:'--all',kind:'flag'},{name:'--json',kind:'flag'}],
-    forms:[form('pdd interface draft [PROMPT...] [--all] [--json]', 'Draft missing Runtime interfaces from explicit contracts and lint locally; no AI or network calls. Unresolved types remain draft gaps.')] },
   { id: 'metrics', prefix: ['metrics'], local: 'metrics', operands: [], options: [{name:'--json',kind:'flag'},{name:'--date',kind:'text'},{name:'--snapshot',kind:'text'},{name:'--timezone',kind:'text'},{name:'--at',kind:'text'},{name:'--expected-source',kind:'text-list'}],
     forms: [form('pdd metrics [--json] [--date YYYY-MM-DD | --snapshot ID] [--timezone IANA] [--at UTC] [--expected-source ID...]', 'Show metrics for this repository.')] },
   { id: 'metrics.export', prefix: ['metrics', 'export'], local: 'metrics', operands: [{name:'file',type:'text'}], options: [{name:'--timezone',kind:'text'}], forms: [form('pdd metrics export FILE [--timezone IANA]', 'Export metrics for sharing.')] },
@@ -131,8 +129,8 @@ const routes = [
       form(`pdd ${lint} --local [STORY...] [--json]`, 'Check linked SVG layout parts locally with warning diagnostics and 0 AI/network calls.')] },
   { id: 'files', prefix: ['files'], local: 'project-files', operands: [], options: [{ name: '--json', kind: 'flag' }],
     forms: [form('pdd files [--json]', 'List prompts, Runtime interfaces, Stories, tests and refusal reasons; no network calls.')] },
-  { id: 'approve', prefix: ['approve'], local: 'prompt-approve', operands: [{ name: 'prompt', type: 'text' }], options: [{name:'--said',kind:'text'},{name:'--automatic',kind:'flag'},{name:'--tests',kind:'text'}],
-    forms: [form('pdd approve PROMPT --automatic --tests COMMAND', 'Approve only a complete drafted interface for unchanged committed behavior, after existing native tests and a full current prompt check. Strict mode requires a person.'), form('pdd approve PROMPT [--said WORDS]', "Show one prompt's runtime interface and text changes since its last approval. Approve only that prompt. Easy mode accepts the person's nonblank words without grading them. " + approvalHelp('pdd approve PATH'))] },
+  { id: 'approve', prefix: ['approve'], local: 'prompt-approve', operands: [{ name: 'prompt', type: 'text' }], options: [{name:'--said',kind:'text'}],
+    forms: [form('pdd approve PROMPT [--said WORDS]', "Show one prompt's runtime interface and text changes since its last approval. Approve only that prompt. Easy mode accepts the person's nonblank words without grading them. " + approvalHelp('pdd approve PATH'))] },
   // A quiet word (`sim`) parses like the prefix, with nothing added; help names `sim` once, completion never.
   { id: 'try', prefix: [simulate], local: 'runtime-try', quiet: ['sim'], removed: ['try'], operands: [{ name: 'story', type: 'text', optional: true }],
     options: [{ name: '--agent', kind: 'text' }, { name: '--tab', kind: 'value', choices: ['call', 'screen', 'terminal', 'world'] }, { name: '--new', kind: 'flag' },
