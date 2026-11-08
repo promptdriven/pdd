@@ -832,6 +832,8 @@ for all running rows with server progress, then the known calls of the other row
 step 5 above), or `AI calls unknown` when there is neither; never an invented zero. A row that a
 read turns into a lost, unknown row drops its old `progress`.
 
+The GET-only `--request UUID` route reads known criterion coverage from an owning batch matched by repository, runtime, login, account id and request id. Retain unchecked reasons and the full Story total before projecting an answer. This route writes no receipt, batch, summary or test cache and never reposts.
+
 ## Dependencies
 
 - [Native results](workflow-results.prompt.md#native-profile-and-criterion-assessment-draft):

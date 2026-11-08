@@ -2251,16 +2251,35 @@ async function runRetry(context, name, options) {
   return () => printResult(context, rows);
 }
 
-async function runRequest(context, id) {
+async function runRequest(context, id, cwd) {
+  try { context.root=repoRoot(cwd); context.store=stateFor(context.ports.env,context.root); } catch { /* An outside-repository request read has no owning local batch. */ }
   if (!UUID.test(id)) throw new Stop(2, 'The request ID must be a UUID.');
   const { ports } = context, identity = signIn(ports.gh, context.store), origin = runtimeOrigin(ports.env);
   Object.assign(context, { origin, secrets: [identity.token] });
   const runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
   const row = { test: '-', story: '-', title: '-', phase: 'server', request_ids: [id], state: 'unknown', refusals: [], warnings: [] };
   const read = judgeGet(await runtime.get(id), id, 'check');
-  if (read.kind === 'state') applyAnswer(row, read.answer, context);
+  if (read.kind === 'state') {
+    const owner=owningCheckBatch(context,identity,origin,id);
+    if(owner?.not_checked?.length) Object.assign(row,{not_checked:owner.not_checked,criteria_total:owner.criteria_total,criterion_texts:owner.criterion_texts,steps:owner.steps});
+    applyAnswer(row, read.answer, context);
+  }
   else row.why = read.unreachable ?? read.why ?? (read.kind === 'auth' ? AUTH_TEXT : 'pdd could not read this run.');
   return printResult(context, [row], { recovery: `pdd test --request '${id}'` });
+}
+
+// A read-only lookup for the hidden request route. Never refresh receipts or caches here.
+function owningCheckBatch({root,store},identity,origin,id) {
+  if(!root || !store)return null;
+  const batches=join(store.dir,'batches');let names;
+  try {names=readdirSync(batches);}catch{return null;}
+  for(const name of names.filter(name=>BATCH.test(name)).sort().reverse()) {
+    const saved=store.read(join(batches,name,'batch.json'));
+    if(saved?.batch!==name || saved.root!==root || saved.origin!==origin || saved.login!==identity.login || String(saved.user_id)!==String(identity.userId) || !Array.isArray(saved.rows))continue;
+    const row=saved.rows.find(row=>Array.isArray(row?.request_ids)&&row.request_ids.includes(id));
+    if(row)return row;
+  }
+  return null;
 }
 
 // Refresh only caches owned by this exact repository, runtime and signed-in account.
@@ -2461,7 +2480,7 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
     const others = Object.keys(options).filter(name => !modes.includes(name) && !(modes[0] === '--fill-hash' && name === '--compact') && !(modes[0] === '--retry' && ['--json', '--details', '--timeout'].includes(name)) && !(name === '--json' && ['--read', '--request', '--lint', '--files'].includes(modes[0])) && !(name === '--timeout' && ['--read', '--lint'].includes(modes[0])) && !(name === '--app-map' && modes[0] === '--files'));
     if (modes.length > 1 || (modes.length && others.length) || (['--fill-hash', '--request', '--retry'].includes(modes[0]) && words.length)
       || (modes[0] === '--read' && words.length > 1) || (!modes.length && options['--app-map'] !== undefined)) throw new Stop(2, 'This mix of options does not work together. Run pdd test --help.');
-    if (modes[0] === '--request') { release = interruptible(context); return await runRequest(context, options['--request']); }
+    if (modes[0] === '--request') { release = interruptible(context); return await runRequest(context, options['--request'], cwd); }
     const root = repoRoot(cwd);
     if (modes[0] === '--fill-hash') return runFillHash(root, ports, options['--compact'] === true);
     if (modes[0] === '--files') return runFiles(cwd, words, options, ports);
