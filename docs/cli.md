@@ -851,7 +851,23 @@ Workflow approval reads `pdd.json` from the main checkout (`sourceRoot`), outsid
 
 `pdd graph` reads the saved dependency graph; `pdd graph --open` opens its viewer. Use `pdd graph --issue N` to select an issue, or `pdd graph --open --issue N --repo OWNER/REPO` to select a repository explicitly.
 
-`pdd dependencies prepare [--issue N]` prepares a coordinator packet. `pdd dependencies complete --input -` reads a structured completion from stdin. `pdd workflow yield N` hands off automatic capacity after the current worker has stopped.
+`pdd dependencies prepare [--issue N]` prepares a coordinator packet. PDD saves
+the backlog sort and dependency records once. It queues only new or changed
+issues. Each packet includes up to 20 likely neighbours per subject, using saved
+area, cause, file and word matches. Explicit issue links and native prerequisites
+are always included. Packets also retain issue observations used by saved subject
+reviews and incoming PDD link history, including removed links. Neighbours carry
+short summaries. Required sort work and saved sort records name only queued
+subjects. A packet that cannot fit
+its required context in 2 MiB fails with `review-packet-too-large`.
+
+Issue text, links, trusted comments and named files make a review stale.
+Background source edits do not. Saved sort paths remain relevant to routing.
+New sort records retain their release evidence across unrelated release changes;
+legacy release-sensitive records can need one fresh sort. A weekly local check
+records group and link inconsistencies in the pending store. It makes no AI call.
+
+`pdd dependencies complete --input -` reads a structured completion from stdin. `pdd workflow yield N` hands off automatic capacity after the current worker has stopped.
 
 `pdd workflow park --reason TEXT` records an automatic stop from its existing run worktree without releasing its claim or treating the worker as done.
 
@@ -866,3 +882,88 @@ While a run waits for the interpreter, or an outage or an interpreter access pro
 - interpreter healthy and no outage open: waiting runs, from one issue or from many, are a problem of their own issues. Autopilot wakes each run once to retry. If the same step waits for the interpreter again, the coordinator follows the stuck rule.
 - the interpreter back after an outage: Autopilot first wakes one waiting run as a test, the oldest. Only when that run saves a new `pdd test` result that passed or failed does Autopilot send one recovery and wake the others, oldest first, within the worker cap. A test run that waits again or goes stuck is no proof, and neither is a test with no verdict within 60 minutes of its wake, also a wake that was never delivered. Each run is the test at most once in an outage.
 - A woken worker first runs `pdd test --read BATCH`. It resends only a check that surely gave no verdict: `pdd test --retry BATCH` only when pdd names it (busy or held checks), and else the Story's check once with `pdd test STORY --max-calls N`, for another check that did not run or an AI-service refusal. It never resends an unknown outcome or a failed check; when the read of an unknown outcome now shows that nothing was sent, it checks the Story once. Each wake reaches the run at most once for each park. `--max-calls`, strict mode and the merge rules do not change.
+
+## Autopilot issue sorting and areas
+
+Before new issue work, the coordinator sorts the issue on the current release.
+It supplies `analysis.sorts` in the same dependency completion. PDD validates and
+saves the records. It makes no model call for sorting. The record schema and agent
+steps are in [sort and route](../skills/pdd-autopilot/steps/sort.md).
+
+Set owners in root `pdd.json`, for example:
+
+```json
+{
+  "autopilot": {
+    "mode": "observe",
+    "areas": [
+      {"name": "cli", "match": {"paths": ["src/**", "skills/**", "docs/**"]}, "owner": "autopilot"},
+      {"name": "runtime", "match": {"repositories": ["promptdriven/prompt-runtime"], "keywords": ["hosted interpreter"], "labels": ["runtime"]}, "owner": "agarwal-ishaan", "mixed": "whole"}
+    ]
+  }
+}
+```
+
+Match rules accept paths, keywords, labels and repositories. Explicit areas win
+over local CODEOWNERS. Ambiguous matches need a person. Without a rule, the repo
+has one Autopilot area. On the first visit without an explicit map, the coordinator
+shows a draft from CODEOWNERS, folders, labels and known assignees. A person edits
+and saves it once. A repository owner can use `repo:OWNER/NAME` to route work to
+another repository with a link note.
+
+Auto closes fixed, duplicate and old-code issues with evidence and a reopen hint.
+Observe labels them `pdd:close-proposed` and proposes the close. Another login gets
+one assignment note. An unknown owner gets `pdd:needs-owner` and one question.
+Each area's optional `mixed` is `whole` or `split`. For promptdriven/pdd,
+Runtime defaults to `whole`: its owner receives the complete issue, including
+CLI work, with one note naming all parts. Autopilot does not start it.
+`pdd:owner-whole` and `pdd:owner-split` labels from a trusted person override
+comments and defaults. A trusted comment can use either directive or
+`mixed: whole` / `mixed: split`. Conflicting labels or unknown label authority
+need one owner question.
+
+The sort record includes `touchedAreas`, with an `{area,evidence}` row for
+every area. Split also needs `splitOrder:{first,evidence}`. Auto creates one
+issue for each of the two parts, titled `<area> part of #N`, links them as
+sub-issues, assigns the external part and adds native blocked-by links in the
+required order. Autopilot works the local part. Each part closes independently;
+the original tracker closes only after both complete. Observe retains the split
+proposal. Missing area evidence, policy or work order gets `pdd:needs-owner`
+and one question. More complex owner or order choices also need a person.
+Person assignees and live claims prevent sort and routing writes. The shared
+reviewer can still update dependency reviews. Writes are
+guarded inside native admission. Closing a split tracker checks its ownership,
+state and inputs again after reading both child completions. Missing split links
+check both endpoints after evidence reads. Child claims are read before child
+assignees, then parent ownership is checked again. An interrupted split recovers
+the same completed, unassigned and unclaimed child, confirms missing links and
+saves the split note without assigning completed work. Person assignments and
+live claims hold recovery until released. Malformed sort
+records cannot abort the snapshot read. Invalid trusted heads hold selection;
+outsider records do not block it. Writes are
+serial and wait at least one second between effects. Each invocation routes at
+most 10 unfinished issues. Record saves, group effects and routing share a limit
+of 20 write attempts. A low or reserve GitHub budget stops further effects. The
+next tick resumes the remaining work. Existing route notes and labels prevent
+repeat effects from holding later issues.
+
+Grouping is continuous. New and changed sorts are compared with all open saved
+sorts and groups. Equal causes join or form a group. A changed cause leaves it.
+At three members, or across locally owned areas, auto creates one
+`Global fix: <cause>` issue with the member links, cause and one fix statement.
+Observe keeps the group proposal. Claimed issues and open-PR work finish before
+they can join. A running umbrella gets one note when membership changes.
+
+The global fix PR references its members. After that PR merges, every member
+needs a fresh sort against the fix. Only members confirmed fixed close with
+evidence; the others stay open. `pdd autopilot status` and the graph issue list
+show group size, cause and umbrella. Umbrella creation uses a shared GitHub
+reservation for each cause. This requires repository Contents write access. The
+reservation is a temporary `pdd/issue-groups/` branch. While holding it, PDD checks
+the current open issue index for an existing trusted umbrella. Separate machines
+therefore recover the same issue. This does not claim the members or start work.
+An uncertain create keeps the reservation and holds another create. A visible
+trusted umbrella can still be recovered on a later tick. Without such evidence,
+a person must inspect the cause before removing a retained reservation. PDD never
+expires it by age. Local group state is kept in machine storage. Existing group files in the
+checkout's Git common directory are imported once and retained for recovery. Existing dependencies, claims, trust and merge rules apply.

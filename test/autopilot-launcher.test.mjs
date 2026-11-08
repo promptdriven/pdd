@@ -1627,3 +1627,19 @@ test('2903: the relaunch close compares the folder when no terminal id is saved,
   f.status = 304; f.time += 60 * 1000; await f.tick();
   assert.deepEqual(f.closed, ['w1:p1']); assert.equal(f.state().paneId, 'w2:p1');
 });
+
+test('status shows saved group size, cause and umbrella without GitHub reads', async t => {
+  const f = await fixture(t);
+  f.ports.repositoryView = async () => ({ reviewer: null, machines: [], sharedLogins: [] });
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  const group = { area: 'cli', rootCause: 'shared-context', umbrella: 'https://github.com/owner/repo/issues/100', members: ['https://github.com/owner/repo/issues/1','https://github.com/owner/repo/issues/2','https://github.com/owner/repo/issues/3'] };
+  f.ports.reconcileDependencyIntake = async () => ({ eligible: [], queued: [], skipped: [], groups: [group] });
+  await f.tick();
+  const before = f.runs.filter(([file]) => file === 'gh').length;
+  const result = await f.invoke('status');
+  assert.equal(result.exitCode, 0);
+  assert.ok(result.message.includes('3 issues'));
+  assert.ok(result.message.includes(group.rootCause));
+  assert.ok(result.message.includes(group.umbrella));
+  assert.equal(f.runs.filter(([file]) => file === 'gh').length, before);
+});

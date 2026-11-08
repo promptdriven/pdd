@@ -1288,7 +1288,7 @@ async function runTick(stateFile, ports, completion) {
     if (deferIntake) {
       const lease = await reviewerLease({ repository: state.repo, identity: { ...state, login: state.reviewerLogin ?? state.githubBot ?? '' }, acquire: true }, { cwd: state.cwd, now: p.now, githubFloor, execFile: (file, args, options) => p.execute(file, args, { purpose: 'claims', ...options }), admitMutation: action => p.scanAction(action) });
       state.reviewer = lease.lease; if (lease.held) state.reviewerLogin = lease.lease.login;
-      intake = { eligible: savedIntake.eligible, claims: savedIntake.claims, queued: [], skipped: [] };
+      intake = { eligible: savedIntake.eligible, claims: savedIntake.claims, groups: savedIntake.groups ?? [], queued: [], skipped: [] };
       p.warn(`GitHub budget low: Autopilot on this machine used ${budget.used} of ${budget.allowed} calls (${budget.share}%) in the last hour; the dependency re-sync waits until ${new Date(savedIntake.at + LOW_BUDGET_INTAKE_EVERY).toISOString()}.`);
     } else {
       // The saved dependency snapshot of this repository and the floor guard go to the intake with the ETag cache.
@@ -1296,7 +1296,7 @@ async function runTick(stateFile, ports, completion) {
       try {
         intake = await (ports.reconcileDependencyIntake ?? reconcileDependencyIntake)(
           { cwd: state.cwd, repository: state.repo, trigger: completion ? 'completion' : 'tick', mode: config.mode },
-          { ...ports, reviewerCoordinator: { machine: state.machine, coordinatorId: state.coordinatorId, login: state.reviewerLogin ?? state.githubBot ?? '' }, onReviewer: result => { state.reviewer = result.lease; if (result.held) state.reviewerLogin = result.lease.login; }, env: p.env, now: p.now, execFile: async (file, args, options) => p.execute(file, args, { purpose: 'dependencies', ...options }), githubCache: etags, snapshotStore, ...(githubFloor ? { githubFloor } : {}), clock: ports.clock ?? { now: async () => ({ iso: new Date(p.now()).toISOString() }) }, pending: dependencyPending, admitEffect: scanGuard, admitMutation: action => p.scanAction(action) });
+          { ...ports, autopilotStateRoot: p.githubRoot, reviewerCoordinator: { machine: state.machine, coordinatorId: state.coordinatorId, login: state.reviewerLogin ?? state.githubBot ?? '' }, onReviewer: result => { state.reviewer = result.lease; if (result.held) state.reviewerLogin = result.lease.login; }, env: p.env, now: p.now, execFile: async (file, args, options) => p.execute(file, args, { purpose: 'dependencies', ...options }), githubCache: etags, snapshotStore, ...(githubFloor ? { githubFloor } : {}), clock: ports.clock ?? { now: async () => ({ iso: new Date(p.now()).toISOString() }) }, pending: dependencyPending, admitEffect: scanGuard, sortBudget: async () => githubBudget({ usage: githubUsage(githubMachineEntries({ root: p.githubRoot, identity: state.githubIdentity ?? null }), p.now(), state.githubIdentity ?? null), ...githubBudgetSettings(config.github) }).state === 'normal', admitMutation: action => p.scanAction(action) });
       } finally { etags.save(); }
       try { p.dependencySnapshot = snapshotStore.load(); } catch { p.dependencySnapshot = null; }
       if (githubFloor?.blocked('core') || githubFloor?.blocked('graphql')) {
@@ -1304,7 +1304,7 @@ async function runTick(stateFile, ports, completion) {
         await sendHeartbeats(claims, true);
         return outcome('unknown', 'GitHub limit is below the floor; dependency progress is saved until reset.');
       }
-      if (Array.isArray(intake.eligible)) state.githubIntake = { at: p.now(), eligible: intake.eligible, claims: Array.isArray(intake.claims) ? intake.claims : [] };
+      if (Array.isArray(intake.eligible)) state.githubIntake = { at: p.now(), eligible: intake.eligible, claims: Array.isArray(intake.claims) ? intake.claims : [], groups: Array.isArray(intake.groups) ? intake.groups : [] };
       else delete state.githubIntake;
     }
     // Claims observed by the intake: refresh this coordinator's own live claims
@@ -1819,6 +1819,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
           }
         }
       } catch { /* The GitHub line never changes status. */ }
+      const groups = (state.githubIntake?.groups ?? []).map(g => `Group: ${g.members.length} issues; ${g.rootCause}; umbrella ${g.umbrella || 'pending'}`).join('\n');
       let fleet;
       try { const view = await (p.repositoryView ?? repositoryView)(state, p); fleet = repositoryMachineLines(view); if (!state.sharedLoginWarned && view.sharedLogins.length) fleet += '\n' + sharedLoginWarning(view); }
       catch { fleet = 'Repository machines: unavailable (GitHub claims or reviewer lease could not be read).'; }
@@ -1827,7 +1828,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
       const readiness = await workflowReadiness(state, p);
       const reviewQueue = reviewQueueStatus(state).map(text => `\n${text}`).join('');
       const workflows = readiness.state === 'ready' ? '' : `\nWorkflows cannot start in this folder: ${line(readiness.message)}`;
-      return ok(`Autopilot ${state.enabled ? 'enabled' : 'disabled'}; timer ${timerActive ? 'active' : 'inactive'}; Herdr ${serverRunning ? 'running' : 'unavailable'}; coordinator ${coordinatorState}: ${state.repo ? `${state.repo} in ${state.cwd}` : state.cwd} · ${state.agent?.id ?? 'no agent'}${state.githubBot ? ` · GitHub ${state.githubBot} (${state.githubIdentity})` : ''} · next tick: ${timerActive && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}${workflows}${reviewQueue}${relaunch}${alerts ? `\n${alerts}` : ''}${github ? `\n${github}` : ''}\n${fleet}`);
+      return ok(`Autopilot ${state.enabled ? 'enabled' : 'disabled'}; timer ${timerActive ? 'active' : 'inactive'}; Herdr ${serverRunning ? 'running' : 'unavailable'}; coordinator ${coordinatorState}: ${state.repo ? `${state.repo} in ${state.cwd}` : state.cwd} · ${state.agent?.id ?? 'no agent'}${state.githubBot ? ` · GitHub ${state.githubBot} (${state.githubIdentity})` : ''} · next tick: ${timerActive && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}${workflows}${reviewQueue}${relaunch}${alerts ? `\n${alerts}` : ''}${github ? `\n${github}` : ''}${groups ? `\n${groups}` : ''}\n${fleet}`);
     }
     if (command === 'stop') {
       if (previous) { state.enabled = false; state.nextTick = null; state.controlRevision = randomUUID(); save(stateFile, state, ports); }

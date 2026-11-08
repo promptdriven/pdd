@@ -59,7 +59,7 @@ export async function autopilotGithubWorld({ src = fileURLToPath(new URL('../../
     if (file === 'gh') return w.github.gh(args, options);
     throw Error(`no ${file} in this world`);
   };
-  w.commandPorts = (extra = {}) => ({ execFile: calls.nativeGithubCounter(commandExec, { stateRoot, now: () => w.time }), autopilotStateRoot: stateRoot, now: () => w.time, env, ...extra });
+  w.commandPorts = (extra = {}) => ({ execFile: calls.nativeGithubCounter(commandExec, { stateRoot, now: () => w.time }), autopilotStateRoot: stateRoot, now: () => w.time, env, wait: { sleep: async ({ ms }) => { w.time += ms; } }, ...extra });
   w.invoke = command => launcher.runAutopilotLauncher({ command, cwd, env, packageRoot: resolve(src, '..'), issues: [] }, w.ports);
   w.stateFile = () => join(stateRoot, storage.autopilotStateFiles(stateRoot)[0]);
   w.state = () => storage.readAutopilotState(w.stateFile());
@@ -91,5 +91,19 @@ export function analysisFor(request) {
     return { analysis: `Checked ${issue}: it needs no other open issue first.`, base, continuation: '', issue, inputs: [...inputs].map(([key, revision]) => ({ key, revision })),
       candidates, outcome: 'complete', dependencies: [], questions: [], effects: 'none' };
   });
-  return { reviews, impactJson: '' };
+  const sorts = context.sort ? request.issues.map(issue => {
+    const saved = context.sort.records.find(record => record.issue === issue);
+    if (saved) return saved;
+    const subject = snapshot.issues.find(row => row.key === issue);
+    const records = subject.sorts ?? [];
+    return { schema_version: 'pdd.issue-sort.v1', issue,
+      base: records.filter(row => !records.some(other => other.record?.base.includes(row.id))).map(row => row.id),
+      inputs: [{ key: issue, revision: rows.get(issue) }, ...snapshot.inputs.filter(row => row.key === context.sort.key
+        || row.key.startsWith(`${issue}#`) || subject.namedSources?.includes(row.key))],
+      belongs: { kind: 'area', area: 'cli', repository: '' },
+      status: { state: 'still-happens', release: context.sort.release, fix: '', evidence: [issue] },
+      genuine: { kind: 'bug', duplicateOf: '', reason: '' }, paths: [],
+      rootCause: `subject-${issue.split('/').pop()}`, severity: 'medium', question: '' };
+  }) : undefined;
+  return { reviews, impactJson: '', ...(sorts ? { sorts } : {}) };
 }

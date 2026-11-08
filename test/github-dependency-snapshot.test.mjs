@@ -72,7 +72,7 @@ test('one review batch of 10 subjects makes fewer than 300 REST calls on a 200-i
   assert.ok(used.rest < 300, `REST requests of one batch: ${used.rest}`);
   assert.ok(used.counted < 300, `counted REST calls of one batch: ${used.counted}`);
   const individual = w.github.since(mark).calls.filter(call => call.method === 'GET' && /\/issues\/comments\/\d+$/.test(call.endpoint));
-  const savedIds = request.issues.flatMap(issue => w.github.reviewComments(Number(issue.split('/').pop())).map(comment => comment.id));
+  const savedIds = request.issues.flatMap(issue => w.github.issues.get(Number(issue.split('/').pop())).comments.filter(comment => /pdd-(?:dependency-review|issue-sort):v1/.test(comment.body)).map(comment => comment.id));
   assert.ok(individual.every(call => savedIds.includes(call.endpoint.split('/').pop())), 'individual comment GETs only read back newly saved records');
   t.diagnostic(`one batch (complete, completion tick, idle wake): ${JSON.stringify(used)}`);
   assert.equal(w.requests.length, 2, 'the completion or idle wake delivers the next request');

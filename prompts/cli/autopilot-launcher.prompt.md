@@ -1067,6 +1067,7 @@ reconcile and wake boundaries; injected substitutes reach this same path.
 - [GitHub App identity](github-app.prompt.md): required native generation and verification context for authentication, preflight and shell routing.
 
 - [Write guard](github-writes.prompt.md) and [private gh transport](github-write-proxy.prompt.md): required native generation and verification context for shared write admission, chat routing and status.
+- [Sort integration](issue-sort-github.prompt.md): required native generation and verification context for the group lifecycle. Recompute the current machine GitHub budget at each intake effect boundary; low or reserve defers the remaining sort stream. Save group summaries from intake and display size, cause and umbrella in status without a GitHub read.
 
 - [Metrics store](metrics-store.prompt.md), [run records](workflow-runs.prompt.md) and [metrics gaps](metrics-gap.prompt.md): required native generation/verification context for observational selector/launch storage and identity.
 
