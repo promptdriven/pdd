@@ -39,7 +39,10 @@ JavaScript block and line comments between dependency tokens, arguments and
 specifiers must preserve local dependencies, computed-consumer selection and
 external-import full fallback. Ignore comment markers inside string literals.
 When dependency syntax inside a template interpolation cannot be classified
-safely, require full fallback for its reachable consumer.
+safely, require full fallback for its reachable consumer. The scanner does not
+parse interpolation expressions: any reachable interpolated template requires
+full fallback before masking, including nested templates, braces, comments and
+computed dependencies. Uncertainty must select more tests, never fewer.
 An unclassified slash outside a string or comment can start a regex literal or
 division expression. Require full fallback for its reachable consumer before
 quotes or comment markers in that syntax can hide later dependencies.

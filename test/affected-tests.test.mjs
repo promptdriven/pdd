@@ -256,10 +256,10 @@ test('unclassified regex syntax cannot hide external imports after quotes or com
 
 // Replay each reported dependency break through real Git and Node. Full-mode
 // execution uses a fixture queue port, never the VM's shared queue or full suite.
-function brokenRequireConsumer(t, { prefix = '', ref = './target', target, candidates }) {
+function brokenRequireConsumer(t, { prefix = '', ref = './target', target, candidates, adapterSource }) {
   const r = repo(t);
   for (const [path, text] of Object.entries(candidates)) r.put(path, text);
-  r.put('src/adapter.cjs', `${prefix}\nconst { value } = require('${ref}');\nmodule.exports = { value };`);
+  r.put('src/adapter.cjs', adapterSource ?? `${prefix}\nconst { value } = require('${ref}');\nmodule.exports = { value };`);
   r.put('test/consumer.test.mjs', [
     "import test from 'node:test';",
     "import assert from 'node:assert/strict';",
@@ -330,5 +330,19 @@ test('native directory package entries cannot be replaced by an unused index', t
       'src/target/entry.js': 'module.exports = { value: 1 };',
       'src/target/index.js': 'module.exports = { value: 999 };',
     },
+  });
+});
+
+for (const expression of [
+  "Number(`${`` + require('./target').value}`)",
+  "Number(`${`${''}` + require('./target').value}`)",
+  "Number(`${`` + ({value: require('./target').value}).value}`)",
+  "Number(`${ /* boundary */ `` + require('./target').value}`)",
+  "Number(`${`` + require('./target' + '').value}`)",
+]) test(`native nested template preserves broken reverse consumer: ${expression}`, t => {
+  brokenRequireConsumer(t, {
+    target: 'src/target.js',
+    candidates: { 'src/target.js': 'module.exports = { value: 1 };' },
+    adapterSource: `const value = ${expression}; module.exports = { value };`,
   });
 });

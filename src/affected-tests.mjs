@@ -37,7 +37,9 @@ function codeMask(text) {
     const interpolationImport = char === '`' && span.includes('${') && /\b(?:import|require)\s*(?:\(|\/[/*])/.test(span);
     // Interpolation bodies are not parsed here. Comment-bearing dependency
     // syntax in them must not evade external-import fallback.
-    uncertainTemplate ||= interpolationImport && /\b(?:import|require)\s*(?:\(\s*)?\/[/*]/.test(span);
+    // The first span ends at a nested backtick, so it cannot classify the
+    // remainder of an interpolation. Fall back before masking any such span.
+    uncertainTemplate ||= char === '`' && span.includes('${');
     mask.fill(interpolationImport ? 2 : 0, start, Math.min(i+1, text.length));
     // Keep offsets and newlines, and leave literal contents intact. Dependency
     // matching then treats real comments exactly like whitespace.
