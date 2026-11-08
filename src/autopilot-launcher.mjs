@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 6d458f9c212e77a828ba31b44319a394b071a8e7a919d1f309c2580982cc0ae9).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 79723563095f05b0dd764296b0a290497d6f5af88854a6c1b0b2f308b8071266).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -18,7 +18,7 @@ import { reconcileDependencyIntake } from './issue-dependencies-intake.mjs';
 import { issueKey } from './issue-dependencies.mjs';
 import { createDependencyReadPorts, dependencySnapshotStore, issueRowVersion, recordLongRunningAlert, refreshClaimHeartbeat, takeoverLimited, withoutClaimHeartbeat } from './issue-dependencies-github.mjs';
 import { sendToChat, START_GRACE_MS } from './workflow-chat.mjs';
-import { acquireRunLock, runtimeWakeTag } from './workflow-runner.mjs';
+import { acquireRunLock, runtimeWakeTag, resumeStoppedRun } from './workflow-runner.mjs';
 import { checkVerdictSince } from './workflow-results.mjs';
 import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
 import { samePath } from './workflow-herdr-layout.mjs';
@@ -338,6 +338,32 @@ async function trusted(row, state, config, p) {
 // A trusted claim comment that carries a lastSeen heartbeat.
 const heartbeat = row => typeof row?.body === 'string' && withoutClaimHeartbeat(row.body) !== row.body;
 const latestTime = values => values.map(value => Date.parse(value)).filter(Number.isFinite).reduce((last, at) => Math.max(last, at), -Infinity);
+async function resumeStoppedWorkers(state, p) {
+  const execFile = p.execFile ?? (async (file, args, options) => {
+    const result = await p.execute(file, args, options);
+    if (result.code !== 0) throw Object.assign(Error(`${file} failed`), result);
+    return result;
+  });
+  const workerPorts = {...p, execFile, isTTY: false};
+  let runs;
+  try { runs = await listRuns({cwd: state.cwd}, workerPorts); }
+  catch (error) { p.warn(`Stopped-chat inspection unavailable: ${line(error.message)}`); return; }
+  for (const run of runs) {
+    if (run.repo?.toLowerCase() !== state.repo.toLowerCase() || !samePath(run.sourceRoot, state.cwd)
+      || run.automaticOrigin?.coordinatorId !== state.coordinatorId || run.automaticOrigin?.machine !== state.machine) continue;
+    try {
+      const result = await p.scanAction(() => resumeStoppedRun({ref: String(run.number), cwd: state.cwd,
+        packageRoot: state.packageRoot, coordinatorId: state.coordinatorId, machine: state.machine}, workerPorts));
+      if (result.recovery === 'stuck') {
+        const send = p.sendAlert ?? (input => runAutopilotAlerts({action: 'alert', cwd: state.cwd, env: p.env, ...input},
+          {...p.alertPorts, repository: async () => ({nameWithOwner: state.repo}), stateRoot: dirname(state.stateFile), now: p.now}));
+        await send({issue: String(run.number), kind: 'stuck', text: JSON.stringify({cause: result.message,
+          tried: 'Three automatic resumes through workflow open in one hour.', need: 'Inspect the stopped chat and resume the run manually.'})});
+      } else if (result.exitCode !== 0) p.warn(`Stopped-chat recovery held for #${run.number}: ${line(result.message)}`);
+    } catch (error) { p.warn(`Stopped-chat recovery held for #${run.number}: ${line(error.message)}`); }
+  }
+}
+
 async function readRunProgress(state, p) {
   const commonDir = (await p.checked('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim();
   const folder = join(commonDir, 'pdd', 'runs');
@@ -1148,6 +1174,7 @@ async function runTick(stateFile, ports, completion) {
       } finally { release(); }
     };
     p.scanTransport = action => p.scanAction(action, state.reconciliationIntent ? 'reconciliation' : 'intent');
+    if (config.mode === 'auto') await resumeStoppedWorkers(state, p);
     if (state.retryAt > p.now()) return outcome('unknown', `GitHub rate limited; next attempt after ${new Date(state.retryAt).toISOString()}.`);
     // The GitHub budget of the tick on this machine, from the local ledgers and the newest limit that GitHub reported.
     let budget = { state: 'normal' }, restLeft;

@@ -12,6 +12,23 @@ issues (argv issue references), and optional runs text. Return `{exitCode,messag
 The CLI owns streams. Outside programs, timer installation, clock and state I/O
 are injectable ports; native defaults implement these on macOS and Linux.
 
+## Stopped workflow chats
+
+In auto mode, every tick and completion reconciliation inspects this checkout's saved
+runs before GitHub budget waits. Use the existing `listRuns` reader and the runner's
+`resumeStoppedRun({ref,cwd,packageRoot,coordinatorId,machine}, ports)` boundary.
+Only this repository, source checkout and saved automatic coordinator/machine qualify.
+Observe and off modes never resume workers. A failed observation holds that run;
+other runs and tick work continue. Forward injected Herdr, clock and process ports;
+when only the launcher's process port exists, adapt it to the runner's execFile port.
+This native reconciliation makes no model or interpreter call.
+
+The runner owns eligibility, recovery, request visibility and the per-area limit.
+On its `stuck` result, send a `stuck` alert through the existing alert service with
+issue number, cause, tried and need fields. Its incident deduplication owns one alert
+for this stop, including repeated ticks. Keep the stopped reason in workflow status.
+Never acquire a second claim, start another run or approve a gate to recover a chat.
+
 ## Native Codex startup
 
 For a selected Codex launcher, apply invocation-only config overrides that trust
@@ -962,7 +979,7 @@ reconcile and wake boundaries; injected substitutes reach this same path.
 
 - [Metrics store](metrics-store.prompt.md), [run records](workflow-runs.prompt.md) and [metrics gaps](metrics-gap.prompt.md): required native generation/verification context for observational selector/launch storage and identity.
 
-- [Workflow runner](workflow-runner.prompt.md#current-autopilot-start-ownership): required native generation and verification context for the existing shared admission lock.
+- [Workflow runner](workflow-runner.prompt.md): required native generation and verification context for the existing shared admission lock and stopped-chat recovery boundary.
 - [Dependency intake](issue-dependencies-intake.prompt.md): required generation, runtime and verification context for reconciliation and structured coordinator context. The [pure model](issue-dependencies.prompt.md) owns review and readiness, and its `issueKey` is the canonical issue identity for matching `eligible` keys.
 
 - [Autopilot settings](autopilot.prompt.md): required native generation and
