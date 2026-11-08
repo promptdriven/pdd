@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 9a560895a7a549c2804467b25aea7747bf1801a66ac09a63eb9d7e46b2d6b282).
+// Generated from prompts/cli/command-catalog.prompt.md.
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -6,7 +6,7 @@ const { test, lint, simulate, run, requestUptake } = NAMES;
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change', 'product']);
 export const PUBLIC_HELP_TEXT = Object.freeze({
   heading: "PDD: prompt-driven development for your coding agent.",
-  closingLines: Object.freeze(["Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex, /pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting).", `workflow ${run} opens the first area chat in Herdr session pdd and exits. Manual workflows follow RUNBOOK §2 and its person gates; pdd opens a real PR.`, "The CLI has no merge command. Auto agents use pdd-merge after repository review and tests, with required human approvals."]),
+  closingLines: Object.freeze(["Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex, /pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting).", `workflow ${run} opens the first area chat in Herdr session pdd and exits. Manual workflows follow RUNBOOK §2 and its person gates; pdd opens a real PR.`, "Auto agents use pdd-merge and pdd autopilot merge after repository review and tests, with required human approvals."]),
   learnLines: Object.freeze(["Learn PDD: run pdd help prompting, or read the Prompting guide and the RUNBOOK.", "Prompting guide: PACKAGE_ROOT/docs/prompting-guide.md", "RUNBOOK: PACKAGE_ROOT/RUNBOOK.md"]),
   promptingLines: Object.freeze(["In PDD, prompts are the source. Code follows the prompts.", "1. Prompt: prompts/NAME.prompt.md. Write what the program does in plain English, then ## Dependencies, then one Runtime interface block.", "2. Story: user_stories/STORY.md. Write one thing that a person can do, then a numbered ## Acceptance criteria list.", "3. Test: tests/STORY.json. When the repo keeps its own tests in tests/ or test/, use tests/runtime/ or test/runtime/. Write steps with an exact check for each criterion.", `4. Check: run pdd ${test} --fill-hash, then pdd ${lint} (0 AI calls), then pdd ${test} STORY on the PDD interpreter.`, "5. Approve: a person reads each prompt and runs pdd approve PROMPT. An agent never approves."])
 });
@@ -16,6 +16,8 @@ ${command} --said - <<'PDD_SAID'
 PDD_SAID
 Choose a delimiter absent as a whole line from the words. Keep the delimiter quoted. --said - reads all UTF-8 stdin, including trailing newlines. Simple words may use --said WORDS. Without --said, a person can use terminal y/N. Root pdd.json strict_approvals true requires a person terminal.`;
 const routes = [
+  { id: 'autopilot.merge', prefix: ['autopilot', 'merge'], local: 'autopilot-merge', operands: [{name:'pr',type:'issue'}], options: [{name:'--input',kind:'text'},{name:'--observe',kind:'flag'}],
+    forms: [form('pdd autopilot merge PR --input - [--observe]', 'Check merge rules and submit to the base branch queue or merge the exact head. Read evidence JSON from stdin. --observe reads the result and audit without a write.')] },
   { id: 'metrics', prefix: ['metrics'], local: 'metrics', operands: [], options: [{name:'--json',kind:'flag'},{name:'--date',kind:'text'},{name:'--snapshot',kind:'text'},{name:'--timezone',kind:'text'},{name:'--at',kind:'text'},{name:'--expected-source',kind:'text-list'}],
     forms: [form('pdd metrics [--json] [--date YYYY-MM-DD | --snapshot ID] [--timezone IANA] [--at UTC] [--expected-source ID...]', 'Show metrics for this repository.')] },
   { id: 'metrics.export', prefix: ['metrics', 'export'], local: 'metrics', operands: [{name:'file',type:'text'}], options: [{name:'--timezone',kind:'text'}], forms: [form('pdd metrics export FILE [--timezone IANA]', 'Export metrics for sharing.')] },

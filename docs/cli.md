@@ -1,5 +1,82 @@
 # CLI reference
 
+## Autopilot merge
+
+`pdd autopilot merge PR --input - [--observe]` is the guarded Autopilot merge
+route. It reads one JSON object from stdin and prints one JSON result. It does
+not grant merge authority or approve prompts. The operator supplies attributed
+review, local full-suite and approval-gate evidence. GitHub supplies the live PR,
+base policy, issue author trust, required CI and repository review status.
+
+The machine-readable defaults live in `DEFAULT_MERGE_RULES` in
+`src/autopilot-merge.mjs`. To tighten them, edit `autopilot.merge` in the base
+branch's `pdd.json`, for example:
+
+```json
+{"autopilot":{"mode":"auto","merge":{"max_repairs":1,"areas":{"payments":"manual","docs":"observe"}}}}
+```
+
+The four required guards (`fresh_review`, `full_suite`, `required_ci`,
+`post_merge_audit`) default to true and cannot be disabled. `max_repairs` defaults
+to 2 and accepts 0 through 2. `autonomy` defaults to `merge`; it and each `areas`
+override accept `manual`, `observe` or `merge`. Unknown or invalid rules refuse
+with `policy`. The PR cannot change its own policy: the command reads the config
+at the live base commit. The repository mode, issue trust, existing strict
+approval gates and required human reviews still apply.
+
+Pass evidence with a quoted heredoc. Replace the synthetic values with actual
+records. Do not use a checker verdict as authorization or approval words.
+
+```sh
+pdd autopilot merge 123 --input - <<'PDD_MERGE'
+{
+  "issue": 120,
+  "head": "CURRENT_PR_SHA",
+  "base": "autopilot-next",
+  "area": "docs",
+  "authorization": "Attributed operator action or applicable delegation",
+  "gatesSatisfied": true,
+  "reviews": [{"head":"CURRENT_PR_SHA","verdict":"PASS","fresh":true,"mustFix":0,"session":"independent-review-1","risk":2}],
+  "fullSuite": {"head":"CURRENT_PR_SHA","passed":true,"noNewSkips":true},
+  "repairs": 0,
+  "splitVerdict": false,
+  "sensitive": false,
+  "questionOpen": false,
+  "audit": {"planned":true},
+  "comment": "Merge authorization, checker, head and evidence references"
+}
+PDD_MERGE
+```
+
+Supply explicit Boolean `sensitive` and `splitVerdict` fields. Use `sensitive: true` for changes to check, merge or approval code, and
+`splitVerdict: true` after a split verdict. These and review risk 4 or 5 require
+two fresh agreeing sessions. Older review heads require local equal Git patch
+IDs; the full suite still must be green on the exact current head. Evidence is
+an attributed operator record. The command cannot prove that an external review,
+suite or approval occurred from a Boolean assertion.
+
+When the actual base branch has a GitHub merge queue, the command enqueues with
+the expected head. Otherwise it uses an exact-head direct merge. Unknown queue
+status refuses; it never falls back to a direct merge. Configure required GitHub
+Actions checks for `merge_group`; the bundled CI workflow includes this event.
+See [GitHub merge queue configuration](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue).
+
+The result contains `exitCode`, `outcome`, `rule`, `message`, `head` and
+`mergeCommit`. `refused` names a guard. `would_merge` means observe mode made no
+merge write. `queued` is pending, not success. On a later wake, use `--observe`
+with the same evidence to read the result without writing. Removal, failed queue
+checks or closure without merge returns `queue_failed`. A lost write reply is
+read back once; an unresolved result is `unknown`, never an automatic retry.
+
+A confirmed merge returns `merged_pending_audit`. Run an independent audit on
+the returned `mergeCommit`, then send `--observe` with `audit.head` set to that
+commit, `audit.passed: true`, `audit.independent: true`, and nonblank
+`audit.evidence`. Only this returns `audited`. Failed/missing audits remain
+pending; keep the issue and claim for recovery. A calling skill reopens an issue
+that a GitHub closing keyword closed before a failed audit.
+Exit 0 means would_merge or audited, 3 means pending/unknown, 1 means refused or
+queue_failed, and 2 means invalid input. No queue polling loop runs in the CLI.
+
 This page lists every command of pdd 0.1.22, as `pdd --help` shows it. A test (`test/docs-commands.test.mjs`) checks that each command form of the help is on this page.
 
 You need the pdd command only for runs with PRs, for `pdd test`, `pdd lint`, `pdd simulate` and `pdd approve`. Install the skills with `npx skills add promptdriven/pdd` (add `-g` for all your projects), and set up a repo with the `pdd-setup` skill in your agent. For simulations that your agent drives, use the Try tools in `pdd mcp`. Then use a PDD skill: `pdd-feature`, `pdd-bug`, `pdd-small-change` or `pdd-prompting`. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name). See [Install](USAGE.md#2-install).
@@ -28,6 +105,7 @@ Setup also reports the running pdd executable and version, the `pdd` paths in or
 | `pdd autopilot observe` | Save mode `observe` |
 | `pdd autopilot auto` | Save mode `auto` |
 | `pdd autopilot trust NAME...` | Add one or more explicitly trusted GitHub names |
+| `pdd autopilot merge PR --input - [--observe]` | Check merge rules; enqueue or merge the exact head. Read JSON evidence from stdin. `--observe` reads queue and audit results without a write |
 | `pdd autopilot untrust NAME` | Remove one explicitly trusted GitHub name |
 
 Settings live in the repository's `pdd.json`, for example `{"autopilot":{"mode":"off","trust":[]}}`. Other settings are preserved. Autopilot workers start from the default branch on GitHub and read `pdd.json` there, not your local copy. So `pdd autopilot off`, `observe`, `auto`, `trust` and `untrust` also update `pdd.json` on the default branch, through the GitHub API with your `gh` sign-in. Each command makes only its own change on GitHub: a mode command sets `autopilot.mode`, `trust` adds its names to `autopilot.trust`, and `untrust` removes its name. All other keys and fields keep the GitHub values, also when your checkout is behind. The commit message says what changed, and the commit changes only those bytes of `pdd.json`: the indent and the key order of the file stay. They do not touch your current branch or your uncommitted work. More lines tell the result:
@@ -419,7 +497,7 @@ The fresh replacement keeps the run, worktree, progress, gates and approvals, an
 - The first message of each chat gives the full path of this pdd. The agent uses it, so another `pdd` on its PATH does not matter.
 - A Codex chat also gets `-c shell_environment_policy.set.PDD_BIN=…` and `-c shell_environment_policy.set.PDD_AGENT_SESSION="1"` for this launch only, so its commands keep both values when the Codex profile sets `inherit = "core"` or `"none"`. pdd does not change Codex settings. Limit: a `shell_environment_policy.include_only` list that leaves out a name still removes it.
 - No command has a time limit. You can close the terminal at any time.
-The pdd CLI has no merge command. In manual workflows, ask your agent to merge under [RUNBOOK §2](../RUNBOOK.md#2-the-files). In Autopilot `auto` mode, pdd-merge handles eligible merges after repository review and test rules pass; required human approvals still apply.
+In manual workflows, ask your agent to merge under [RUNBOOK §2](../RUNBOOK.md#2-the-files). In Autopilot `auto` mode, pdd-merge submits eligible merges through `pdd autopilot merge` after repository review and test rules pass; required human approvals still apply.
 
 `pdd workflow run bug 2544 --draft` saves draft PR publication before starting the
 chat. The saved Boolean applies to PR 1 and the separately approved code PR, or

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 244ad71a97035f2bd20b94b73810ad601f6e97c66628f36ca6a5392bc5d1cb2c).
+// Generated from prompts/cli/pdd-cli.prompt.md.
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -67,7 +67,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
   cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, workflowRunner, workflowAreas,
   stdin = process.stdin, confirm, mcpServer, runtimeSlots, contracts, product, productPorts, gitContext, workflowProve, provePorts,
   issueGraph, issueGraphPorts = {}, dependencyIntake, dependencyIntakePorts = {}, autopilotLauncher, autopilotLauncherPorts = {}, workflowAgents = { checkWorkflowAgents }, workflowAgentPorts = {}, setupSkills = defaultSetupSkills,
-  setupProject = defaultSetupProject, setupAgentMcp, autopilot, autopilotPorts = {}, autopilotAlerts, autopilotAlertsPorts = {}, autopilotGithub: autopilotGithubModule, autopilotGithubPorts = {}, pathDiagnostic = defaultPathDiagnostic } = {}) {
+  setupProject = defaultSetupProject, setupAgentMcp, autopilot, autopilotPorts = {}, autopilotMerge, autopilotMergePorts = {}, autopilotAlerts, autopilotAlertsPorts = {}, autopilotGithub: autopilotGithubModule, autopilotGithubPorts = {}, pathDiagnostic = defaultPathDiagnostic } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
@@ -81,6 +81,19 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     } catch { /* An optional PATH diagnostic never prevents the requested command. */ }
   }
   switch (plan.local) {
+    case 'autopilot-merge': {
+      if (plan.options['--input'] !== '-') { line(stderr, 'Use pdd autopilot merge PR --input -.'); return 2; }
+      try {
+        const module = autopilotMerge ?? await import('./autopilot-merge.mjs');
+        let payload = stdin;
+        if (typeof stdin !== 'string' && stdin?.[Symbol.asyncIterator]) {
+          const chunks = []; for await (const chunk of stdin) chunks.push(Buffer.from(chunk));
+          payload = Buffer.concat(chunks).toString('utf8');
+        }
+        const result = await module.runAutopilotMerge({pr:plan.operands[0],cwd,stdin:payload,observe:plan.options['--observe'] === true},autopilotMergePorts);
+        line(stdout,JSON.stringify(result)); return result.exitCode;
+      } catch { line(stderr,'Merge failed before a confirmed result. Read the PR before any retry.'); return 1; }
+    }
     case 'issue-dependency-graph': {
       try { const module = issueGraph ?? await import('./issue-dependency-graph.mjs');
         const result = await module.runIssueGraph({cwd, repository:plan.options['--repo'], issue:plan.options['--issue'], open:!!plan.options['--open']}, issueGraphPorts);
