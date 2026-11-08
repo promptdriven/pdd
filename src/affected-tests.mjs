@@ -28,7 +28,7 @@ function codeMask(text) {
       while (i < text.length) { if (text[i] === '\\') i += 2; else if (text[i] === char) break; else i++; }
     } else continue;
     const span = text.slice(start, i+1);
-    const interpolationImport = char === '`' && span.includes('${') && /\b(?:import|require)\b/.test(span);
+    const interpolationImport = char === '`' && span.includes('${') && /\b(?:import|require)\s*(?:\(|\/[/*])/.test(span);
     // Interpolation bodies are not parsed here. Comment-bearing dependency
     // syntax in them must not evade external-import fallback.
     uncertainTemplate ||= interpolationImport && /\b(?:import|require)\s*(?:\(\s*)?\/[/*]/.test(span);
