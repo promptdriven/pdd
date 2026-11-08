@@ -13,6 +13,7 @@ import { fixture, packageRoot } from './helpers/workflow-runner-fixture.mjs';
 import { cancelRun, openRun, runStatus, startRun } from '../src/workflow-runner.mjs';
 import { checkWorkflowAgents, LOGIN_VARIABLES } from '../src/workflow-agents.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
+import { chatLaunch, chatCommand } from '../src/workflow-chat.mjs';
 
 const quote = value => `'${String(value).replace(/'/g, `'\\''`)}'`;
 const SEEN = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'CLAUDE_CONFIG_DIR', 'ACCOUNT_MARK'];
@@ -334,4 +335,18 @@ test('2901: stale login files go at the next status, launch and cancel of the ru
   assert.ok(!names().includes(fresh), 'cancel removes every login file, also a new one');
   for (const name of [...others, link, folder]) assert.ok(names().includes(name), `cancel keeps ${name}`);
   assert.equal(readFileSync(outside, 'utf8'), 'keep', 'the symlink target is untouched');
+});
+
+for (const supplied of [false, true]) test(`automatic login keeps a usable ${supplied ? 'explicit' : 'default'} caller PATH with its transport`, async t => {
+  const f = await accounts(t), runDir = join(f.base, 'launch');
+  mkdirSync(runDir);
+  const env = { ...f.ports.env, ...(supplied ? { PATH: '/usr/bin:/bin' } : {}) };
+  const launch = chatLaunch({ run: { root: f.source, sourceRoot: f.source, runDir, automaticOrigin: true,
+    agentDefinition: { name: f.entries[1].name, kind: 'claude', command: f.entries[1].command } }, agent: 'claude', env });
+  const expected = supplied ? env.PATH : process.env.PATH;
+  assert.ok(launch.githubEnv.PATH.endsWith(':' + expected));
+  const seen = f.execute(chatCommand({ agent: 'claude', cwd: f.source, sessionId: randomUUID(), ...launch }));
+  assert.equal(seen.program, 'claude-account-b');
+  assert.equal(seen.env.ACCOUNT_MARK, 'b');
+  assert.equal(existsSync(launch.loginFile), false);
 });

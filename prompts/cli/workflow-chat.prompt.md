@@ -235,7 +235,7 @@ Limits: the screen is a fallback. A Claude error that comes after a tool call in
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"8f88d5f706d401f97f79fca4c8efbda1f771ee7b3721a538dd8f43516c051c4a","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+{"status":"draft","prose_sha256":"7884dc5b2c28e7e8c56f3070aa14a93e9673b9c18313a868d3460403611985c0","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
 ```
 </details>
 
@@ -247,4 +247,7 @@ For a workflow launched from an Autopilot context or an Autopilot-origin run,
 prepare the [private gh transport](github-write-proxy.prompt.md) in the caller's
 PDD_GITHUB_ROOT, else its normal Autopilot state root. Pass its PATH and
 PDD_GITHUB_ROOT in the child environment and in Codex's invocation-only
-shell_environment_policy.set. Manual runs retain their launch environment.
+shell_environment_policy.set. When the injected caller environment omits PATH,
+use the spawning process PATH before adding transport directories, so the login
+shell and ordinary commands remain available. An explicit caller PATH is kept;
+an agents.json entry PATH takes precedence. Manual runs retain their launch environment.

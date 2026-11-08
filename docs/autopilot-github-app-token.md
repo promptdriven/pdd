@@ -132,6 +132,9 @@ expire in at most one hour. To revoke access at once, suspend the installation
 or revoke its tokens on GitHub; deleting a signing key alone does not revoke an
 issued installation token. Keep the cache out of shared backups and logs.
 
+Chat transport wrappers keep the caller PATH. When a launch port omits PATH,
+they use the spawning process PATH. An agents.json entry can still override it.
+
 Tokens reach only the child transport environment. Git receives its authorization
 header through environment config; gh receives GH_TOKEN. pdd does not print them, put them
 in arguments, save them in workflow records or send them to chats. Transport

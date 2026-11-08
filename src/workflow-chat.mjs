@@ -186,9 +186,10 @@ export function chatLaunch({ run, agent, configDir, env = process.env }) {
   for (const [name, value] of Object.entries(entry?.env ?? {})) if (name !== home && ENV_NAME.test(name)) values[name] = value;
   const unset = [...names.filter(name => !Object.hasOwn(values, name)), ...(home && !configDir ? [home] : [])];
   const settings = githubAppSettings({ cwd: run.sourceRoot ?? run.root, env });
-  const appEnv = settings ? githubAppEnvironment({ root: settings.root, env: { ...env, ...entry?.env } }) : null;
+  const transportEnv = { ...env, PATH: env.PATH ?? process.env.PATH, ...entry?.env };
+  const appEnv = settings ? githubAppEnvironment({ root: settings.root, env: transportEnv }) : null;
   const automatic = env.PDD_AUTOPILOT_CONTEXT || env.PDD_GITHUB_ROOT || run.metricsOrigin?.origin === 'autopilot' || run.automaticOrigin;
-  const githubEnv = automatic ? githubWriteEnvironment({ root: env.PDD_GITHUB_ROOT || githubStateRoot(env), env: { ...env, ...entry?.env, ...appEnv } }) : appEnv;
+  const githubEnv = automatic ? githubWriteEnvironment({ root: env.PDD_GITHUB_ROOT || githubStateRoot(env), env: { ...transportEnv, ...appEnv } }) : appEnv;
   if (automatic && appEnv) Object.assign(githubEnv, { PDD_GITHUB_APP_ROOT: appEnv.PDD_GITHUB_APP_ROOT });
   if (automatic && Object.hasOwn(values, 'PATH')) values.PATH = githubEnv.PATH;
   let loginFile = null;
