@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 051e416a9b915e33ad429d4d61531cda73cbe1e39f4c9d5d93044b4961402585).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 7545c2e8cd819510317352e5108f757883d178f91ac9dc66aef4674dd56756ef).
 import {readEvidenceEligibility} from './workflow-runner.mjs';
 import {allRuns} from './workflow-runs.mjs';
 import {assessNativeEvidence, resultLines, usableResult} from './workflow-results.mjs';
@@ -3501,7 +3501,16 @@ export async function acquireCaseWriteOwnership({root,testPath,handoff,signal},p
       }
       if(!disappeared&&other.host===p.host&&Number.isSafeInteger(other.pid)&&p.isAlive(other.pid)===false){
         // A separate exclusive recovery guard serializes abandoned-owner removal.
-        const guard=path+'.recover';let owned=false;try{caseWrite(p,guard,JSON.stringify(owner),{exclusive:true});owned=true;const now=caseStat(p,path);if(now&&now.ino===before?.ino&&now.dev===before?.dev&&caseRead(p,path)===JSON.stringify(other))p.files.unlink(path);}catch(recovery){if(recovery.code!=='EEXIST')throw recovery;}finally{if(owned)p.files.unlink(guard);}continue;
+        const guard=path+'.recover';let owned=false;
+        try{caseWrite(p,guard,JSON.stringify(owner),{exclusive:true});owned=true;const now=caseStat(p,path);if(now&&now.ino===before?.ino&&now.dev===before?.dev&&caseRead(p,path)===JSON.stringify(other))p.files.unlink(path);}
+        catch(recovery){
+          if(recovery.code!=='EEXIST')throw recovery;
+          caseSafe(p,dirname(guard),{directory:true});
+          const present=caseStat(p,guard);
+          if(present&&(present.isSymbolicLink()||!present.isFile()))throw Error('unsafe or missing local path');
+        }finally{if(owned)p.files.unlink(guard);}
+        // Recovery contention must reach the same deadline and cancellable wait
+        // as a live owner, even if the guard disappeared after the collision.
       }
       if(p.now()-started>=maxWait)throw Error('another saver or editor owns this file; keep pending');
       await p.sleep(Math.min(25,maxWait),signal);

@@ -386,6 +386,8 @@ For extra files, add `pdd-source.json` at the repository root:
 
 `include` is the only key. Entries are exact repository-relative file paths, not folders or patterns, and Git must show them. The same safety and size limits apply. Included prompts and Markdown files bring their declared dependencies too. The config is local selection metadata and is sent only when explicitly included. A simulation keeps the original test paths: Save as test appends cases to the authored test file that launched the simulation, even when a Story has several test files. Reopening that simulation keeps the same target. If that test disappears or changes Story, pdd reports the conflict and leaves the other files alone.
 
+Case saving recovers an abandoned ownership lock only after confirming that its owner ended. A symlink or non-regular recovery guard refuses the save and leaves the guard, lock and authored test unchanged. Contention with another recovery attempt uses the same finite wait and cancellation limits as other ownership waits; an unresolved save stays pending.
+
 ```sh
 pdd test --fill-hash          # fill the hash of draft interfaces; sends nothing
 pdd test --files              # exact upload manifest and byte sizes for all Stories; offline

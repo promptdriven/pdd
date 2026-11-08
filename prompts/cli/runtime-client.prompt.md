@@ -152,6 +152,8 @@ Add native `acquireCaseWriteOwnership({root,testPath,handoff,signal},ports={})`,
 
 Normal supported-owner release can remove the lock at any point before a contender's exclusive publication, including between existence and safety checks. With safe no-link ancestors, an absent lock permits another exclusive acquisition within the existing wait and cancellation bounds. Exclusive publication must never overwrite an existing file, symlink or directory. A present unsafe or unreadable lock, or unsafe ancestor, still refuses ownership; disappearance alone is not proof that a present owner ended.
 
+Abandoned-owner recovery uses the same no-link safety rules for `<target-lock>.recover`. A collision with a present symlink or non-regular recovery guard refuses ownership without changing the guard, original lock or authored target. A regular guard belongs to another recovery attempt and must remain untouched. Recovery retries, including guard contention or a guard that disappears after collision, honor the existing ownership wait limit and yield so live cancellation can interrupt them. Successful recovery still permits acquisition of the abandoned target.
+
 An observed non-cooperating edit causes conflict with received payload and observed authored versions retained. For uncoordinated editors with no handoff, stage the received case and leave authored bytes unchanged. Exact byte/inode comparison and atomic rename alone cannot guarantee protection from an arbitrary editor; do not claim universal compare-and-swap or safely append through a known uncoordinated edit.
 
 ### Local retained-case application
