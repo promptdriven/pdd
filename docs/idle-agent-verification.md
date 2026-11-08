@@ -3,8 +3,8 @@
 Run from the package checkout with Node.js 22.16.0 or newer:
 
 ```sh
-node --test test/autopilot-idle-agents.test.mjs test/autopilot-stopped-chats.test.mjs test/workflow-chat-health.test.mjs
-node --test test/workflow-change-delivery.test.mjs test/workflow-change-delivery.vectors.test.mjs
+node --test --test-concurrency=8 test/autopilot-idle-agents.test.mjs test/autopilot-stopped-chats.test.mjs test/workflow-chat-health.test.mjs
+node --test --test-concurrency=8 test/workflow-change-delivery.test.mjs test/workflow-change-delivery.vectors.test.mjs
 ```
 
 These tests call `openRun`, `runStatus` and `tickAutopilot` through the package's
@@ -20,6 +20,11 @@ They also restore and attach sessions held at approval gates, open questions and
 paused interpreter waits without reserving or sending a continue notice. Controlled
 holds during native resume or journal custody prevent notice creation. Holds at final submission
 prevent sending and keep the journal request pending.
+Interpreter and suite queue observations also hold continue notices while waiting,
+running or unavailable. The queue cases check the initial decision, journal custody
+and final submission. Pending and confirmed PDD close marks remain holds.
+Machine health, account limits and check capacity use the repository fakes.
+Idle-alert cases inject the independent digest sender and keep real incident custody.
 They check first observation,
 10-minute boundaries, three attempts per area, recorded progress, working and
 held agents, pending and uncertain delivery, concurrent changes and one stuck

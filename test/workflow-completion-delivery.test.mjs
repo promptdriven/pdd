@@ -1,3 +1,5 @@
+import {healthyMachine} from './helpers/healthy-machine.mjs';
+import {isolatedCheckCapacity} from './helpers/check-machine.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
@@ -106,6 +108,7 @@ async function launcherHarness(f) {
   let coordinatorSnapshot = graph.snapshot;
   const ownerPorts = {read: async () => reply({localOwner: 'launcher-coordinator', claims: [], runs: [], runsKnown: true})};
   const ports = {
+    ...healthyMachine, checkCapacityPorts: isolatedCheckCapacity(dir),
     env: {HOME: home, PATH: process.env.PATH},
     stateRoot,
     now: () => now,

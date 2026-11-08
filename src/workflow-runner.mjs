@@ -9,7 +9,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 59c9e69a8baa36da443a8928bfe76a429da4de135a9af7be8862522bf1a12604).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: d7158f92b73b610e9af7a67efacab9dbd08cb1906cef2375e2a4039d108127e3).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -4099,10 +4099,16 @@ function continueText(run, packageRoot) {
 }
 const deliverContinue = (run, text, p) => p.deliverContinue ? p.deliverContinue(run, text, p) : deliverRequest(run, text, p, true);
 
+function continuationCheckHeld(run, p) {
+  const held = progress => progress && ['waiting', 'running', 'unavailable'].includes(progress.state);
+  return held(interpreterFacts(run, p).interpreter)
+    || held((p.readSuiteProgress ?? readSuiteProgress)({cwd: run.root, env: p.env}, p));
+}
+
 async function continueResumedChat(run, chat, p, packageRoot) {
   const anchor = chat.resumedAt, latest = readRun(run.runDir);
   const sameTarget = fresh => fresh && runIdentity(fresh) === runIdentity(run)
-    && fresh.state === 'running' && !fresh.gate && !openQuestion(fresh)
+    && fresh.state === 'running' && !fresh.gate && !openQuestion(fresh) && !continuationCheckHeld(fresh, p)
     && fresh.area === run.area && !layoutClosing(fresh) && !currentChat(fresh)?.closed
     && currentChat(fresh)?.paneId === chat.paneId && currentChat(fresh)?.session?.id === chat.session?.id
     && currentChat(fresh)?.resumedAt === anchor;
@@ -4130,6 +4136,7 @@ export const nudgeIdleRun = saveGuard((args, ports) => lockedMutation(args, port
   if (run.state === 'stuck' && run.chatIdleLimit)
     return {...done(run.parkReason), recovery: 'stuck', area: run.chatIdleLimit.area};
   const eligible = fresh => owned(fresh) && fresh.state === 'running' && !fresh.gate && !openQuestion(fresh) && !activeChatFailure(fresh)
+    && !continuationCheckHeld(fresh, p)
     && !layoutClosing(fresh) && !currentChat(fresh)?.closed && fresh.area === run.area
     && (!fresh.chatReplacement || ['launched', 'rolledBack', 'ended'].includes(fresh.chatReplacement.phase))
     && currentChat(fresh) && !currentChat(fresh).startUnconfirmed && validSessionId(currentChat(fresh).session?.id)

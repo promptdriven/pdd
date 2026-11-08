@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {join} from 'node:path';
+import {healthyMachine} from './helpers/healthy-machine.mjs';
+import {isolatedCheckCapacity} from './helpers/check-machine.mjs';
 import {tickAutopilot} from '../src/autopilot-launcher.mjs';
 import {nudgeIdleRun, openRun, runStatus} from '../src/workflow-runner.mjs';
 import {fixture, packageRoot} from './helpers/workflow-runner-fixture.mjs';
@@ -61,11 +63,11 @@ async function setup(t, agent = 'claude', name = 'small-change') {
   save(f, run);
   writeFileSync(join(f.source, 'pdd.json'), JSON.stringify({autopilot: {mode: 'auto', trust: []}}));
   const stateFile = join(f.state, 'launcher.json');
-  writeFileSync(stateFile, JSON.stringify({enabled: true, stateFile, cwd: f.source, repo: run.repo, packageRoot,
+  writeFileSync(stateFile, JSON.stringify({enabled: true, defaultBranch: 'main', baseBranch: 'main', stateFile, cwd: f.source, repo: run.repo, packageRoot,
     coordinatorId: 'idle-owner', machine: 'idle-machine', activatedAt: 1,
     agent: {id: agent, kind: agent, command: agent}, environment: f.ports.env, retryAt: f.clock + 86400000}));
   const alerts = [], warnings = [];
-  const ports = {...f.ports, run: async (file, args, options) => ({code: 0, ...await f.ports.execFile(file, args, options)}),
+  const ports = {...healthyMachine, ...f.ports, sendDigest: async () => ({exitCode: 0}), checkCapacityPorts: isolatedCheckCapacity(f.base), run: async (file, args, options) => ({code: 0, ...await f.ports.execFile(file, args, options)}),
     warn: text => warnings.push(text), sendAlert: async input => {alerts.push(input); return {exitCode: 0};}};
   const tick = () => tickAutopilot(stateFile, ports);
   const pane = () => f.herdr.paneOf(f.record().chats.at(-1));
@@ -251,15 +253,17 @@ test('3072 repair 1: a fresh tick process hands off a saved idle stop once', asy
     import {readFileSync} from 'node:fs';
     import {execFile} from 'node:child_process';
     import {promisify} from 'node:util';
+    import {healthyMachine} from './test/helpers/healthy-machine.mjs';
+    import {isolatedCheckCapacity} from './test/helpers/check-machine.mjs';
     import {tickAutopilot} from './src/autopilot-launcher.mjs';
     import {fakeHerdr} from './test/helpers/fake-herdr.mjs';
     const input = JSON.parse(readFileSync(0, 'utf8')), h = fakeHerdr(), exec = promisify(execFile);
     const requests = [], warnings = [];
     const execute = async (file, args, options) => {
-      if (file !== 'git' || !['rev-parse', 'config', 'status', 'show-ref', 'symbolic-ref', 'remote', 'worktree', 'for-each-ref', 'merge-base'].includes(args[0])) throw Error('Unexpected external command: ' + file + ' ' + args[0]);
+      if (file !== 'git' || !['rev-parse', 'config', 'status', 'show-ref', 'symbolic-ref', 'remote', 'worktree', 'for-each-ref', 'merge-base', 'check-ref-format'].includes(args[0])) throw Error('Unexpected external command: ' + file + ' ' + args[0]);
       return {code: 0, ...await exec(file, args, options)};
     };
-    const ports = {stateDir: input.stateDir, env: input.env, layoutDirectory: input.layoutDirectory,
+    const ports = {...healthyMachine, sendDigest: async () => ({exitCode: 0}), checkCapacityPorts: isolatedCheckCapacity(input.stateDir), stateDir: input.stateDir, env: input.env, layoutDirectory: input.layoutDirectory,
       now: () => input.now, herdr: h.herdr, findNativeSessions: async () => [], run: execute, execFile: execute,
       warn: value => warnings.push(value), alertPorts: {hostname: () => 'idle-machine',
         http: async request => {requests.push(request); return {status: 200,
@@ -492,3 +496,55 @@ test('3072 manual run resume continues once and starts a fresh idle interval', a
   assert.ok(f.record().chats.at(-1).idleSince > firstIdle);
   assert.equal(f.record().chats.at(-1).idleSince, f.clock);
 });
+
+for (const queue of ['interpreter', 'suite']) for (const state of ['waiting', 'running', 'unavailable']) for (const mode of ['idle', 'resume']) {
+  test(`3072 integration: ${queue} ${state} holds ${mode} notices`, async t => {
+    const {f, ports, idle, pane} = await setup(t);
+    const read = queue === 'interpreter' ? 'readInterpreterProgress' : 'readSuiteProgress';
+    ports[read] = () => ({state, position: 1});
+    if (mode === 'idle') {
+      const args = {ref: '17', cwd: f.source, packageRoot, coordinatorId: 'idle-owner', machine: 'idle-machine'};
+      idle(); await nudgeIdleRun(args, ports); f.tick(WAIT);
+      await nudgeIdleRun(args, ports);
+      assert.equal(f.record().chatIdleNudges, undefined);
+    } else {
+      pane().agent = null; f.tick(60001);
+      const opened = await openRun({ref: '17', cwd: f.source, packageRoot}, ports);
+      assert.equal(opened.exitCode, 0, opened.message);
+      assert.equal(launches(f).length, 1);
+      assert.equal(f.record().chats.at(-1).continueAnchor, undefined);
+    }
+    assert.equal(prompts(f).length, 0);
+    assert.equal(existsSync(join(f.record().runDir, 'delivery-journal.json')), false);
+  });
+}
+
+for (const queue of ['interpreter', 'suite']) for (const phase of ['journal', 'submission']) {
+  test(`3072 integration: ${queue} wait arriving during ${phase} prevents idle delivery`, async t => {
+    const {f, ports, idle} = await setup(t);
+    const args = {ref: '17', cwd: f.source, packageRoot, coordinatorId: 'idle-owner', machine: 'idle-machine'};
+    let held = false;
+    ports[queue === 'interpreter' ? 'readInterpreterProgress' : 'readSuiteProgress'] = () => held ? {state: 'waiting', position: 1} : null;
+    idle(); await nudgeIdleRun(args, ports); f.tick(WAIT);
+    if (phase === 'journal') ports.deliveryFiles = {mkdirSync: (path, options) => {
+      if (path.endsWith('/.delivery-journal.lock')) held = true;
+      return mkdirSync(path, options);
+    }};
+    else {
+      const herdr = ports.herdr;
+      ports.herdr = async args => {
+        if (args[0] === 'pane' && args[1] === 'read' && existsSync(join(f.record().runDir, 'delivery-journal.json'))) held = true;
+        return herdr(args);
+      };
+    }
+    await nudgeIdleRun(args, ports);
+    assert.ok(held);
+    assert.equal(prompts(f).length, 0);
+    if (phase === 'journal') assert.equal(existsSync(join(f.record().runDir, 'delivery-journal.json')), false);
+    else {
+      const journal = JSON.parse(readFileSync(join(f.record().runDir, 'delivery-journal.json'), 'utf8'));
+      assert.equal(journal.requests[0].state, 'pending');
+      assert.equal(journal.requests[0].inFlight, undefined);
+    }
+  });
+}

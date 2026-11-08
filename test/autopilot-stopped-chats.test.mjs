@@ -21,7 +21,7 @@ async function setup(t, agent = 'claude', {observe = true} = {}) {
   const run = f.record(); run.automaticOrigin = structuredClone(origin); save(f, run);
   writeFileSync(join(f.source, 'pdd.json'), JSON.stringify({autopilot: {mode: 'auto', trust: []}}));
   const stateFile = join(f.state, 'launcher.json');
-  writeFileSync(stateFile, JSON.stringify({enabled: true, stateFile, cwd: f.source, repo: run.repo, packageRoot,
+  writeFileSync(stateFile, JSON.stringify({enabled: true, defaultBranch: 'main', baseBranch: 'main', stateFile, cwd: f.source, repo: run.repo, packageRoot,
     coordinatorId: origin.coordinatorId, machine: origin.machine, activatedAt: 1,
     agent: {id: agent, kind: agent, command: agent}, environment: f.ports.env,
     retryAt: f.clock + 86400000}));
@@ -471,7 +471,7 @@ for (const confirmed of [false, true]) test(`3068 repair 2: ${confirmed ? 'confi
     const input = JSON.parse(readFileSync(0, 'utf8')), h = fakeHerdr(), exec = promisify(execFile);
     const alerts = [], warnings = [];
     const execute = async (file, args, options) => {
-      if (file !== 'git' || !['rev-parse', 'config', 'status', 'show-ref', 'symbolic-ref', 'remote', 'worktree', 'for-each-ref', 'merge-base'].includes(args[0])) throw Error('Unexpected external command: ' + file + ' ' + args[0]);
+      if (file !== 'git' || !['rev-parse', 'config', 'status', 'show-ref', 'symbolic-ref', 'remote', 'worktree', 'for-each-ref', 'merge-base', 'check-ref-format'].includes(args[0])) throw Error('Unexpected external command: ' + file + ' ' + args[0]);
       return {code: 0, ...await exec(file, args, options)};
     };
     await tickAutopilot(input.stateFile, {stateDir: input.stateDir, env: input.env,
