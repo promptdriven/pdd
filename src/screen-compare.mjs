@@ -1,4 +1,4 @@
-// Generated from prompts/cli/screen-compare.prompt.md (sha256: d1a7f03e22aee25b1f979a16ddc096b706689056ee2e4a60fd29cfac3857001d).
+// Generated from prompts/cli/screen-compare.prompt.md (sha256: dc3d1502e355353433c26a7e809ab77b3a536a75a286f12acab55ab553252ef0).
 import { spawn } from 'node:child_process';
 import { accessSync, constants, lstatSync, mkdtempSync, readFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
@@ -198,6 +198,14 @@ function snapshot(reference) {
       }
     }
     if (degenerate && !(parseFloat(style.strokeWidth) > 0 && painted(style.stroke, style.strokeOpacity))) return false;
+    // A collapsed inset on an HTML box clips its own paint and all descendants.
+    // Restrict this proof to the exact computed shape; other effects still need
+    // their own visibility analysis and must remain errors.
+    if (!reference && effects.length && effects.every(parent => {
+      const effect = getComputedStyle(parent);
+      return parent.namespaceURI === 'http://www.w3.org/1999/xhtml' && effect.clipPath === 'inset(50%)'
+        && ['auto', 'rect(auto, auto, auto, auto)'].includes(effect.clip) && effect.maskImage === 'none' && effect.filter === 'none';
+    })) return false;
     if (effects.length) { unsupported = 'Unsupported applied clip-path, clip, mask or filter; visible parts cannot be established.'; return false; }
     if ((kind === 'text' || ['text', 'tspan', 'textPath'].includes(el.localName)) && !textPaint(style)) return false;
     if (svg) {
