@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import * as nodeFs from 'node:fs';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { chatHealth } from '../src/workflow-chat.mjs';
 import { runStatus, stepDone } from '../src/workflow-runner.mjs';
 import { fixture } from './helpers/workflow-runner-fixture.mjs';
 
@@ -441,4 +442,26 @@ test('codex: a healthy chat that quotes an error line in its reply keeps its sta
   const shown = await statusAll(f);
   assert.equal(stateLine(shown.detail), 'State: the agent works on scope');
   assert.equal(paneReads(f, before), 0, 'the session file decided');
+});
+
+for (const [words, now, expected] of [
+  ['Nov 1, 2026 at 2:30am', '2026-11-01T10:00:00Z', '2026-11-01T10:30:00Z'],
+  ['Mar 8, 2026 at 3:30am', '2026-03-08T10:45:00Z', '2026-03-08T10:30:00Z'],
+  ['Nov 2, 2026 at 2:30am', '2026-11-02T10:00:00Z', '2026-11-02T10:30:00Z'],
+  ['Nov 1, 2026 at 1:30am', '2026-11-01T10:00:00Z', null],
+  ['Mar 8, 2026 at 2:30am', '2026-03-08T10:45:00Z', null],
+]) test(`reset local time round trip: ${words}`, async t => {
+  const { f, run, chat, pane } = await claudeChat(t);
+  f.clock = Date.parse(now);
+  pane.screen = `> Continue\n  ⎿  You've hit your weekly limit · resets ${words} (America/Los_Angeles)\n\n> \n`;
+  const health = await chatHealth({ run, chat, live: { alive: true, status: 'idle' } }, f.ports);
+  assert.equal(health?.kind, 'usage-limit');
+  assert.equal(health.resetsAt, expected === null ? null : Date.parse(expected));
+  const shown = await statusAll(f);
+  assert.equal(shown.json.group, 'waiting');
+  if (expected !== null) {
+    const state = stateLine(shown.detail);
+    assert.equal(/limit reset at/i.test(state), Date.parse(expected) < f.clock);
+    assert.equal(/until/i.test(state), Date.parse(expected) > f.clock);
+  }
 });

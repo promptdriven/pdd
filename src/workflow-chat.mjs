@@ -363,8 +363,18 @@ const zoneParts = (ms, timeZone) => Object.fromEntries(new Intl.DateTimeFormat('
   .formatToParts(ms).filter(part => part.type !== 'literal').map(part => [part.type, Number(part.value)]));
 // The epoch ms of a wall-clock time in a time zone (the local zone when none is given).
 function wallTime(year, month, day, hour, minute, timeZone) {
-  const guess = Date.UTC(year, month, day, hour, minute), shown = zoneParts(guess, timeZone);
-  return guess - (Date.UTC(shown.year, shown.month - 1, shown.day, shown.hour, shown.minute) - guess);
+  const wall = Date.UTC(year, month, day, hour, minute), offsets = new Set();
+  // Sample both sides of a nearby clock change. Validate every candidate at its actual instant;
+  // a repeated local time has two candidates and a skipped local time has none.
+  for (const days of [-2, -1, 0, 1, 2]) {
+    const probe = wall + days * DAY, shown = zoneParts(probe, timeZone);
+    offsets.add(Date.UTC(shown.year, shown.month - 1, shown.day, shown.hour, shown.minute) - probe);
+  }
+  const candidates = [...offsets].map(offset => wall - offset).filter(at => {
+    const shown = zoneParts(at, timeZone);
+    return shown.year === year && shown.month === month + 1 && shown.day === day && shown.hour === hour && shown.minute === minute;
+  });
+  return candidates.length === 1 ? candidates[0] : null;
 }
 // resetsAt: the reset words as one exact time, else null. Claude names its zone; Codex writes the local time of its own
 // process, and leaves out the date only for a reset on the day of the failed turn (turnAt, known only from its file).
