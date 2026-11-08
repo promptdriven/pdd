@@ -3,7 +3,7 @@
 Use this file only when `autopilot.mode` in the root `pdd.json` is `observe` or `auto` and pdd-autopilot started the run. With `off` or no value, SKILL.md applies as written.
 
 It changes these rules of SKILL.md and RUNBOOK §2, §4, §11, §12 and §14:
-- Gates (§2): read the existing owner handoff/run notes, then follow the scoped standing delegation and native approval route in [$pdd-merge](../../pdd-merge/SKILL.md), including its precedence over generic ask-and-stop instructions for covered ordinary non-strict gates. A fresh pdd-check checks each PR at its head; its PASS is checker evidence, not approval.
+- Gates (§2): read the owner notes. Follow [$pdd-merge](../../pdd-merge/SKILL.md) for scoped delegation and native approvals, overriding generic ask-and-stop rules. A fresh pdd-check checks the head; its PASS is checker evidence, not approval.
 - Optional steps: do not ask. Skip try (§12): pdd-check runs the changed path. Never put a Simulator link in a PR, issue or file.
 - Story gate: put the verdict line (§14) and the full Story paths in the PR 1 body.
 - Code PR: start it as soon as PR 1 is open, stacked on PR 1; do not wait for PR 1 to merge. In `auto`, do this in every repo. In `observe`, a repo with a release does it too; a new product waits for a person's "code now".
@@ -15,16 +15,11 @@ It changes these rules of SKILL.md and RUNBOOK §2, §4, §11, §12 and §14:
 
 Still in force: product calls the issue does not settle, actions that cannot be undone, `--max-calls`, strict mode, and never sending a failed check again.
 
-After a failed check, find its real cause and change the repair before another permitted check; two failed rounds alone do not block the issue. Keep repairing while a useful correction is available, preserving behavior expectations and required validation, for at most 5 repair rounds in one area (a round is a return to an earlier step that clears later steps; a retry of the same step is not one); pdd refuses a 6th. Then, or if a real blocker remains, record its cause and next action in the run and take the stuck path: `pdd:stuck`, one comment with the cause, one `stuck` alert. Keep its claim and progress; the coordinator continues other eligible work. Never repeat an external action with an unknown outcome.
+After failure, find the cause and change the repair. Two failed rounds alone do not block work. Keep repairing while a useful correction is available, preserving expectations and checks, for at most 5 repair rounds in one area (a round is a return to an earlier step that clears later steps; a retry of the same step is not one); pdd refuses a 6th. Then, or on a real blocker, record cause and next action and take the stuck path: `pdd:stuck`, one comment with the cause, one `stuck` alert. Keep its claim and progress; continue other work. Never repeat an uncertain external action.
 
 A prompt that a test, command or prompt runs needs an interface block: draft it through pdd from the prompt text and save it; one that nothing runs needs none. No prompt covers the code: use the verdict "no prompt covers this yet".
 
-During native work and repairs, use the repository-declared safe affected-test
-selector plus its fixed smoke set. For PDD use `node scripts/affected-tests.mjs
---base BASE --run --report REPORT`, with the run base and an external run-folder
-report. If selection is unavailable or unsafe, run the full suite through the
-shared suite queue (`pdd workflow suite --command "npm test"` when installed,
-else the repository queue adapter). Put working test files, commands, counts and
-fallback causes in verify.md and the PR. The merge owner obtains one queued full
-suite on the exact clean PR head, reuses a green result on that head, and shows
-its head/result separately in the PR. An affected pass cannot satisfy that gate.
+Native work: `node scripts/affected-tests.mjs --base BASE --run --report REPORT`
+uses the run base and an external report. Use its smoke set or queued full fallback.
+Report files, commands, counts and fallback causes in verify.md and the PR.
+Follow pdd-check's suite gate and reuse.

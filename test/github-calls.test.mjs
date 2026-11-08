@@ -115,7 +115,7 @@ test('measure: the tick records each GitHub call with its purpose and the remain
   const line = status.find(text => text.startsWith('GitHub calls in the last hour:'));
   assert.ok(line, status.join('\n'));
   const total = entries.filter(entry => entry.at > w.time - hour).length;
-  assert.match(line, new RegExp(`^GitHub calls in the last hour: ${total} \\(dependencies 2, claims 4, issues \\d+, setup 1\\);`));
+  assert.match(line, new RegExp(`^GitHub calls in the last hour: ${total} \\(dependencies 2, claims 2, issues \\d+, setup 1\\);`));
   assert.match(line, new RegExp(`REST limit ${remainingBeforeStatus} of 5000 left until 13:00Z`));
   assert.match(line, /budget normal: Autopilot on this machine used \d+ of 1500 \(30%\)/);
 });

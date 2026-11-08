@@ -446,7 +446,7 @@ test('tick: cached legacy claims use the 24-hour cutoff below the read floor', a
     const state = f.state();
     state.githubIntake = { claims: [ownClaim({ owner: state.coordinatorId, coordinatorId: state.coordinatorId,
       machine: state.machine, legacy: true, lastSeen: at(NOW - age) })] };
-    writeFileSync(f.stateFile(), JSON.stringify(state));
+    saveAutopilotState(f.stateFile(), state);
     githubLedger({ root: f.ports.stateRoot, repository: repo }).record({ at: NOW, api: 'rest', purpose: 'claims',
       status: 200, resource: 'core', remaining: 500, limit: 5000, resetAt: NOW + 3 * hour });
     await f.tick();

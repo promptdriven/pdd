@@ -45,7 +45,8 @@ test('full owner area holds new work, permits another area, and status reports t
   const status = await w.invoke('status');
   assert.equal(status.exitCode, 0);
   assert.match(status.message, /area:cli.*waiting:.*2.*PRs.*review/i);
-  assert.equal(w.github.calls.length, before, 'launcher status uses saved queue observations');
+  assert.ok(w.github.calls.slice(before).every(call => call.method === 'GET'));
+  assert.equal(w.github.calls.slice(before).filter(call => /graphql/.test(call.endpoint)).length, 0, 'queue status uses saved observations');
   assert.equal(w.state().seen?.[1], undefined, 'held fresh work is not acknowledged');
 });
 

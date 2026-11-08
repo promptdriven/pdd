@@ -10,7 +10,9 @@ calls. Manual shells are unchanged. Exports:
   a nested wrapper twice.
 - `githubWriteRunner(exec,{root,env,fs,now,identity,machine})` returns an async
   `(file,args,options)` runner. Other programs pass through. Resolve identity
-  lazily once per runner from `gh api user` (login), or injected identity. An
+  lazily once per runner from `gh api user` (login), or injected identity. The injected identity may be a function evaluated lazily
+  at first admission; it supplies the active canonical App identity or a known
+  reviewer login without personal-auth requests. An
   unavailable identity uses the conservative unknown bucket. Include the gh
   host in the bucket. Prefer the active gh account for the selected host from
   local `gh auth status --active --json hosts` (no token output); use user as a

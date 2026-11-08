@@ -254,6 +254,9 @@ a new entry changes its body, or GitHub serves the saved next page.
 
 ## Dependencies
 
+- [GitHub App identity](github-app.prompt.md): required native generation and
+  verification context for authenticating native gh calls and Git network commands and the bundled wrappers.
+
 - [Native counter transport](github-write-proxy.prompt.md#native-counter-transport):
   required generation and verification context for nativeGithubCounter's use of
   githubWriteRunner and githubOriginalExecutable. Load that export selection;
@@ -298,6 +301,3 @@ quota across repositories but do not borrow a personal or another installation's
 limit. `githubEtagCache` accepts identity and uses a different cache filename for
 each identity. Native counters use `githubAppRunner` before execution, accept
 `appPorts` for its injected ports, and retain existing counting policy.
-
-- [GitHub App identity](github-app.prompt.md): required native generation and
-  verification context for authenticating native gh calls and Git network commands and the bundled wrappers.

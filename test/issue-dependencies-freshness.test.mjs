@@ -1,3 +1,4 @@
+import { readAutopilotState, saveAutopilotState } from '../src/autopilot-store.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -888,7 +889,7 @@ test('the launcher names a repeated request and its reason, and does not send it
   let now = start;
   const prompts = [], warnings = [];
   const live = { pane_id: 'p', workspace_id: 'w', cwd, foreground_cwd: cwd, tab_id: 't', terminal_id: 'term', agent: 'codex', agent_status: 'idle', agent_session: 'session' };
-  const ports = { stateRoot, now: () => now, warn: text => warnings.push(text), queryIssues: async () => ({ status: 304 }),
+  const ports = { stateRoot, reviewerIdentity: async () => null, now: () => now, warn: text => warnings.push(text), queryIssues: async () => ({ status: 304 }),
     run: async command => command === 'git' ? { code: 0, stdout: `${cwd}\n` } : { code: 0, stdout: JSON.stringify({ nameWithOwner: repository, url: `https://github.com/${repository}` }) },
     reconcileDependencyIntake: (args, intakePorts) => reconcileDependencyIntake(args, { ...intakePorts, ...observed, reviewerCoordinator: undefined, reviewerIdentity: async () => null }),
     herdr: async args => {
@@ -912,15 +913,15 @@ test('the launcher names a repeated request and its reason, and does not send it
 
   // 31 minutes later an earlier submission has uncertain custody: nothing is sent.
   now += 31 * 60000;
-  const saved = JSON.parse(readFileSync(file, 'utf8'));
-  writeFileSync(file, JSON.stringify({ ...saved, deliveryIntent: { version: 2, paneId: 'p', workspaceId: 'w', at: now - 1000, fingerprint: 'earlier', payloadDigest: 'earlier' } }));
+  const saved = readAutopilotState(file);
+  saveAutopilotState(file, { ...saved, deliveryIntent: { version: 2, paneId: 'p', workspaceId: 'w', at: now - 1000, fingerprint: 'earlier', payloadDigest: 'earlier' } });
   await tickAutopilot(file, ports);
   assert.equal(prompts.length, 1, 'no repeated request while custody is uncertain');
   assert.ok(warnings.some(text => /dependency review waits: a previous submission has uncertain custody/.test(text)));
-  assert.equal(JSON.parse(readFileSync(file, 'utf8')).dependencyPending.redelivered, 0, 'a refused send is not counted');
+  assert.equal(readAutopilotState(file).dependencyPending.redelivered, 0, 'a refused send is not counted');
 
   // Custody is known again: the next tick sends the fresh request once, with the reason.
-  const known = JSON.parse(readFileSync(file, 'utf8')); delete known.deliveryIntent; writeFileSync(file, JSON.stringify(known));
+  const known = readAutopilotState(file); delete known.deliveryIntent; saveAutopilotState(file, known);
   now += 60000;
   await tickAutopilot(file, ports);
   assert.equal(prompts.length, 2);

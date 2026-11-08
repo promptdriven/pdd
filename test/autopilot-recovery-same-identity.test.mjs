@@ -109,6 +109,7 @@ async function launcherHarness(f) {
   const ports = {
     env: {HOME: home, PATH: process.env.PATH},
     stateRoot,
+    reviewerIdentity: async () => null,
     now: () => now,
     elapsedNow: () => 10,
     sleep: async () => {},
@@ -118,7 +119,7 @@ async function launcherHarness(f) {
     readRunProgress: async () => [],
     allocationCheck: async () => ({ state: 'ready', message: '' }),
     reconcileDependencyIntake: (args, intakePorts) => reconcileDependencyIntake(args, {
-      ...intakePorts,
+      ...intakePorts, reviewerCoordinator: undefined, reviewerIdentity: async () => null,
       snapshots: {read: async () => ({snapshot: coordinatorSnapshot})},
       owners: ownerPorts, evidence: {read: async () => reply({source:[],requirements:[]})},
     }),

@@ -4,7 +4,7 @@ import * as fs from 'node:fs';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
-import { githubWriteEnvironment } from '../src/github-write-proxy.mjs';
+import { githubWriteEnvironment, githubWriteUsages } from '../src/github-write-proxy.mjs';
 
 import { tmpdir } from 'node:os';
 const report = tmpdir();
@@ -44,4 +44,8 @@ import('node:fs').then(async fs => {
   const effectAfterCancellation = fs.existsSync(effect);
   t.diagnostic(JSON.stringify({ wrapped, effectAfterCancellation }));
   assert.equal(effectAfterCancellation, false, 'terminating gh must stop its pending write');
+  if (wrapped) {
+    assert.throws(() => process.kill(Number(fs.readFileSync(started, 'utf8')), 0), { code: 'ESRCH' });
+    assert.equal(githubWriteUsages({ root, env: base }).reduce((n, usage) => n + usage.hour, 0), 1);
+  }
 });

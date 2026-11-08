@@ -28,10 +28,15 @@ mutation guard applies to acquisition and renewal. Stopped or Off launchers do n
 
 Dependency delivery carries the request's exact reviewer generation, machine and
 coordinator to the final prompt transport. After readiness and admission waits,
-read the current shared lease without acquiring or renewing it. Submit only if
-that exact authority is still held and both its request expiry and observed expiry
+revalidate the request against the exact shared lease acquired or renewed by
+this reconciliation. A different generation cannot be taken over before expiry,
+so this boundary needs no redundant lease read. Submit only if that exact
+authority matches and both its request expiry and observed expiry
 are strictly later than the current time. An unavailable or changed lease leaves
-the request pending under the existing delivery custody rules.
+the request pending under the existing delivery custody rules. A request without
+reviewer authority may use the unmanaged manual route only when a fresh local
+identity read confirms the checkout is unmanaged; absence from the request alone
+never grants that route.
 
 Repository status reads current GitHub claims and the lease and shows all live
 machine/coordinator pairs, their held issues, last seen times and the reviewer.

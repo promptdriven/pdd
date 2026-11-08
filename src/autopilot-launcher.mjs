@@ -1,5 +1,5 @@
 // Implements prompts/cli/autopilot-launcher.prompt.md.
-import { reviewerLease, repositoryMachines, repositoryMachineLines } from './autopilot-reviewer.mjs';
+import { reviewerLease, reviewerIdentity, repositoryMachines, repositoryMachineLines } from './autopilot-reviewer.mjs';
 import { readReviewQueue, reviewWait, maxOpenPrs } from './autopilot-pr-limit.mjs';
 
 import { spawn } from 'node:child_process';
@@ -77,7 +77,7 @@ function portsFor(state, ports) {
   const githubRoot = ports.githubRoot ?? (typeof state?.stateFile === 'string' ? dirname(state.stateFile) : githubStateRoot(env, ports.stateRoot)), ledgers = new Map();
   const ledger = () => { const repo = state?.repo; if (typeof repo !== 'string' || !repo) return null; if (!ledgers.has(repo)) ledgers.set(repo, githubLedger({ root: githubRoot, repository: repo })); return ledgers.get(repo); };
   const authenticated = githubAppRunner(async (command, args, options = {}) => run(command, args, { cwd: state.cwd, env, timeoutMs: 10000, maxBytes: 8 * 1024 * 1024, ...options }), { env, now, ...ports.githubApp });
-  const execute = githubWriteRunner((command, args, options = {}) => authenticated(command, args, { cwd: state.cwd, env, ...options }), { root: githubRoot, env, ledger, now });
+  const execute = githubWriteRunner((command, args, options = {}) => authenticated(command, args, { cwd: state.cwd, env, ...options }), { root: githubRoot, env, ledger, now, identity: () => state.githubIdentity ?? state.reviewerLogin });
   const checked = async (command, args, options) => { const result = await execute(command, args, options); if (result.code !== 0) throw Error(`${command} failed; check its sign-in and retry.`); return result.stdout; };
   return { ...ports, env, run, execute, checked, githubRoot, warn: ports.warn ?? (text => process.stderr.write(`${text}\n`)), now };
 }
@@ -578,9 +578,8 @@ function profileBinding(state, p) {
 function providerArgs(kind, cwd, context, codexHome, githubEnv = {}) {
   if (kind === 'codex') return ['--no-daemon', '--dangerously-bypass-approvals-and-sandbox',
     '-c', quote(`projects={${tomlString(cwd)}={trust_level="trusted"}}`), '-c', quote('check_for_update_on_startup=false'),
-    ...Object.entries(githubEnv).flatMap(([name, value]) => ['-c', quote(`shell_environment_policy.set.${name}=${tomlString(value)}`)]),
     '-c', quote(`shell_environment_policy.set.PDD_AUTOPILOT_CONTEXT=${tomlString(context)}`),
-    ...Object.entries(githubEnv).flatMap(([key, value]) => ['-c', quote(`shell_environment_policy.set.${key}=${tomlString(value)}`)]),
+    ...Object.entries(githubEnv).flatMap(([name, value]) => ['-c', quote(`shell_environment_policy.set.${name}=${tomlString(value)}`)]),
     ...(codexHome ? ['-c', quote(`shell_environment_policy.set.CODEX_HOME=${tomlString(codexHome)}`)] : [])];
   return [kind === 'gemini' ? '--yolo' : '--dangerously-skip-permissions'];
 }
@@ -1255,13 +1254,11 @@ async function runTick(stateFile, ports, completion) {
         try {
           const expected = JSON.parse(JSON.parse(requestJson).contextJson).reviewer;
           const canSubmit = async () => {
-            if (!expected) return false;
-            const current = await reviewerLease({ repository: state.repo, identity: state }, {
-              cwd: state.cwd, now: p.now,
-              execFile: (file, args, options) => p.execute(file, args, { purpose: 'dependencies', ...options }),
-            });
-            return current.held && ['generation', 'machine', 'coordinatorId'].every(key => current.lease?.[key] === expected[key])
-              && Date.parse(expected.expiresAt) > p.now() && Date.parse(current.lease.expiresAt) > p.now();
+            if (!expected) return !await reviewerIdentity({ cwd: state.cwd, repository: state.repo }, { ...p, autopilotStateRoot: p.stateRoot });
+            const current = state.reviewer;
+            return current && current.machine === state.machine && current.coordinatorId === state.coordinatorId
+              && ['generation', 'machine', 'coordinatorId'].every(key => current[key] === expected[key])
+              && Date.parse(expected.expiresAt) > p.now() && Date.parse(current.expiresAt) > p.now();
           };
           const delivered = await wake(state, () => instruction, p, artifact.prepare, false, state.dependencyPending?.requested ? { kind: 'dependency', requested: state.dependencyPending.requested, ...(again ? { again: again.attempt } : {}) } : null, undefined, canSubmit);
           if (delivered && !state.recipeDelivered && await scanGuard(latest => { latest.recipeDelivered = true; })) state.recipeDelivered = true;
@@ -1289,7 +1286,7 @@ async function runTick(stateFile, ports, completion) {
       && Array.isArray(savedIntake.eligible) && Array.isArray(savedIntake.claims);
     let intake;
     if (deferIntake) {
-      const lease = await reviewerLease({ repository: state.repo, identity: { ...state, login: state.reviewerLogin ?? '' }, acquire: true }, { cwd: state.cwd, now: p.now, githubFloor, execFile: (file, args, options) => p.execute(file, args, { purpose: 'claims', ...options }), admitMutation: action => p.scanAction(action) });
+      const lease = await reviewerLease({ repository: state.repo, identity: { ...state, login: state.reviewerLogin ?? state.githubBot ?? '' }, acquire: true }, { cwd: state.cwd, now: p.now, githubFloor, execFile: (file, args, options) => p.execute(file, args, { purpose: 'claims', ...options }), admitMutation: action => p.scanAction(action) });
       state.reviewer = lease.lease; if (lease.held) state.reviewerLogin = lease.lease.login;
       intake = { eligible: savedIntake.eligible, claims: savedIntake.claims, queued: [], skipped: [] };
       p.warn(`GitHub budget low: Autopilot on this machine used ${budget.used} of ${budget.allowed} calls (${budget.share}%) in the last hour; the dependency re-sync waits until ${new Date(savedIntake.at + LOW_BUDGET_INTAKE_EVERY).toISOString()}.`);
@@ -1299,7 +1296,7 @@ async function runTick(stateFile, ports, completion) {
       try {
         intake = await (ports.reconcileDependencyIntake ?? reconcileDependencyIntake)(
           { cwd: state.cwd, repository: state.repo, trigger: completion ? 'completion' : 'tick', mode: config.mode },
-          { ...ports, reviewerCoordinator: { machine: state.machine, coordinatorId: state.coordinatorId, login: state.reviewerLogin ?? '' }, onReviewer: result => { state.reviewer = result.lease; if (result.held) state.reviewerLogin = result.lease.login; }, env: p.env, now: p.now, execFile: async (file, args, options) => p.execute(file, args, { purpose: 'dependencies', ...options }), githubCache: etags, snapshotStore, ...(githubFloor ? { githubFloor } : {}), clock: ports.clock ?? { now: async () => ({ iso: new Date(p.now()).toISOString() }) }, pending: dependencyPending, admitEffect: scanGuard, admitMutation: action => p.scanAction(action) });
+          { ...ports, reviewerCoordinator: { machine: state.machine, coordinatorId: state.coordinatorId, login: state.reviewerLogin ?? state.githubBot ?? '' }, onReviewer: result => { state.reviewer = result.lease; if (result.held) state.reviewerLogin = result.lease.login; }, env: p.env, now: p.now, execFile: async (file, args, options) => p.execute(file, args, { purpose: 'dependencies', ...options }), githubCache: etags, snapshotStore, ...(githubFloor ? { githubFloor } : {}), clock: ports.clock ?? { now: async () => ({ iso: new Date(p.now()).toISOString() }) }, pending: dependencyPending, admitEffect: scanGuard, admitMutation: action => p.scanAction(action) });
       } finally { etags.save(); }
       try { p.dependencySnapshot = snapshotStore.load(); } catch { p.dependencySnapshot = null; }
       if (githubFloor?.blocked('core') || githubFloor?.blocked('graphql')) {

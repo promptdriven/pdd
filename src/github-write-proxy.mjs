@@ -75,7 +75,7 @@ export function githubWriteRunner(exec, { root, env = process.env, fs = nativeFs
   const resolveBudget = async (args, options) => {
     const host = targetHost(args,options,env).toLowerCase();
     if (!identities.has(host)) identities.set(host, (async () => {
-      let login = identity;
+      let login = typeof identity === 'function' ? await identity() : identity;
       if (!login) {
         try {
           const result = await exec('gh', ['auth', 'status', '--active', '--json', 'hosts'], { ...options, env: { ...(options?.env ?? env), PDD_GITHUB_COUNTED: '1' } });

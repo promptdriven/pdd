@@ -71,6 +71,9 @@ API guarantee.
 Native reviewer identity reads and enumerates launcher state through machine
 storage, including migrated SQLite records and legacy imports. A managed launcher
 must retain its identity after migration and must not fall through to manual authority.
+A missing state for an unmanaged checkout returns null. A carried managed
+identity with no matching state fails closed, including absent records in a
+partly migrated inventory.
 
 ## Dependencies
 

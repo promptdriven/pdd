@@ -36,9 +36,9 @@ export async function reviewerIdentity({ cwd, repository }, ports = {}) {
     const folder = ports.autopilotStateRoot ?? join(stateDirFor(ports), 'autopilot');
     for (const name of autopilotStateFiles(folder, ports)) {
       const state = readAutopilotState(join(folder, name), null, ports);
-      if (!state) return null;
-  if (state.repo?.toLowerCase() === repository.toLowerCase() && pair(state, owner) && state.activatedAt === owner.activation)
-        return { machine: state.machine, coordinatorId: state.coordinatorId, login: state.reviewerLogin ?? '', enabled: state.enabled === true };
+      if (!state) continue;
+      if (state.repo?.toLowerCase() === repository.toLowerCase() && pair(state, owner) && state.activatedAt === owner.activation)
+        return { machine: state.machine, coordinatorId: state.coordinatorId, login: state.reviewerLogin ?? state.githubBot ?? '', enabled: state.enabled === true };
     }
     throw Error('Reviewer identity unavailable');
   }
@@ -49,9 +49,10 @@ export async function reviewerIdentity({ cwd, repository }, ports = {}) {
   let state;
   try { state = readAutopilotState(join(folder, `${hash}.json`), null, ports); }
   catch (error) { if (error.code === 'ENOENT') return null; throw Error('Reviewer identity unavailable'); }
+  if (!state) return null;
   if (state.repo?.toLowerCase() !== repository.toLowerCase() || state.cwd !== context.toplevel || !validIdentity(state)) throw Error('Reviewer identity unavailable');
   // A stopped coordinator is still managed. It must not fall through to manual authority.
-  return { machine: state.machine, coordinatorId: state.coordinatorId, login: state.reviewerLogin ?? '', enabled: state.enabled === true };
+  return { machine: state.machine, coordinatorId: state.coordinatorId, login: state.reviewerLogin ?? state.githubBot ?? '', enabled: state.enabled === true };
 }
 
 export async function reviewerLease({ repository, identity, acquire = false }, ports = {}) {
