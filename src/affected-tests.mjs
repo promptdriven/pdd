@@ -1,6 +1,7 @@
 // Owned by prompts/cli/affected-tests.prompt.md. Pure, conservative selection.
 import { posix } from 'node:path';
 import { builtinModules } from 'node:module';
+import { Script } from 'node:vm';
 const builtins = new Set(builtinModules);
 
 export const SMOKE_TESTS = ['test/cli-node-version.test.mjs', 'test/command-catalog.test.mjs'];
@@ -11,6 +12,74 @@ const unique = values => [...new Set(values)].sort();
 const shared = path => /(?:^|\/)(?:package(?:-lock)?\.json|npm-shrinkwrap\.json|pdd\.json|\.npmrc)$/.test(path)
   || /^(?:scripts|\.github)\//.test(path) || /(?:^|\/)(?:helpers|fixtures)\//.test(path)
   || /^(?:test|tests)\//.test(path) && !entry(path) && !/^test\/runtime\/[^/]+\.json$/.test(path);
+
+// Positive proof, not a list of loader spellings. Only a completely consumed
+// declaration subset can establish omission. All other JavaScript is opaque.
+// Strings are single tokens: comments/semicolons inside them stay literal.
+function staticDependencies(text) {
+  const token = /\s+|\/\/[^\r\n\u2028\u2029]*|\/\*[\s\S]*?\*\/|'[^'\\\r\n]*'|"[^"\\\r\n]*"|[A-Za-z_$][\w$]*|\d+(?:\.\d+)?|[{}*,;=+-]/y;
+  const statements = [[]];
+  for (let offset = 0; offset < text.length;) {
+    token.lastIndex = offset;
+    const match = token.exec(text);
+    if (!match) return null;
+    const value = match[0];
+    offset = token.lastIndex;
+    if (/^(?:\s|\/)/.test(value)) continue;
+    if (/^(?:require|createRequire|eval|Function|await)$/.test(value)) return null;
+    if (value === ';') statements.push([]);
+    else statements.at(-1).push(value);
+  }
+  const id = '[A-Za-z_$][\\w$]*';
+  const named = `${id}(?:\\s+as\\s+${id})?`;
+  const names = `\\{\\s*(?:${named}(?:\\s*,\\s*${named})*\\s*,?)?\\s*\\}`;
+  const star = `\\*\\s+as\\s+${id}`;
+  const clause = `(?:${id}(?:\\s*,\\s*(?:${star}|${names}))?|${star}|${names})`;
+  const literal = "(?:'[^'\\\\\\r\\n]*'|\"[^\"\\\\\\r\\n]*\")";
+  const scalar = `(?:${literal}|[+-]?\\s*\\d+(?:\\.\\d+)?|true|false|null)`;
+  const imports = new RegExp(`^import\\s+(?:(${clause})\\s+from\\s+)?(${literal})$`);
+  const reexports = new RegExp(`^export\\s+(\\*(?:\\s+as\\s+${id})?|${names})\\s+from\\s+(${literal})$`);
+  const declaration = new RegExp(`^(export\\s+)?((?:const|let|var)\\s+(${id})\\s*=\\s*${scalar})$`);
+  const defaultExport = new RegExp(`^export\\s+default\\s+(${scalar})$`);
+  const refs = [], body = [], exported = new Set();
+  const addExport = name => {
+    if (exported.has(name)) return false;
+    exported.add(name);
+    return true;
+  };
+  const bindings = value => {
+    const locals = [];
+    const first = value.match(new RegExp(`^(${id})(?:\\s*,\\s*|$)`));
+    if (first) { locals.push(first[1]); value = value.slice(first[0].length); }
+    if (value.startsWith('*')) locals.push(value.split(/\s+/).at(-1));
+    else if (value) for (const name of value.slice(1, -1).split(',').filter(name => name.trim())) locals.push(name.trim().split(/\s+as\s+/).at(-1));
+    return locals;
+  };
+  for (const tokens of statements) {
+    if (!tokens.length) continue;
+    const source = tokens.join(' ');
+    let match;
+    if ((match = imports.exec(source))) {
+      refs.push(match[2].slice(1, -1));
+      if (match[1]) for (const local of bindings(match[1])) body.push(`const ${local} = undefined;`);
+    } else if ((match = reexports.exec(source))) {
+      refs.push(match[2].slice(1, -1));
+      const spec = match[1];
+      const names = spec.startsWith('{') ? bindings(spec) : spec === '*' ? [] : [spec.split(/\s+/).at(-1)];
+      if (!names.every(addExport)) return null;
+    } else if ((match = declaration.exec(source))) {
+      if (match[1] && !addExport(match[3])) return null;
+      body.push(`${match[2]};`);
+    } else if ((match = defaultExport.exec(source))) {
+      if (!addExport('default')) return null;
+      body.push(`void ${match[1]};`);
+    } else return null;
+  }
+  // Validate reserved words, duplicate bindings and literal syntax. This only
+  // compiles the proven subset; it never runs repository code or a loader.
+  try { new Script(`"use strict";\n${body.join('\n')}`); } catch { return null; }
+  return refs;
+}
 
 // Mark literal/comment spans so fixture program text does not become a live
 // import. Template interpolation with import/require is handled as opaque below.
@@ -81,6 +150,17 @@ export function selectAffectedTests({ files, changed, smoke = SMOKE_TESTS }) {
   for (const path of paths) {
     const text = inventory[path], edges = deps.get(path);
     if (code(path)) {
+      const proven = path.endsWith('.mjs') ? staticDependencies(text) : null;
+      if (proven === null) opaque.add(path);
+      else for (const ref of proven) {
+        const target = posix.normalize(posix.join(posix.dirname(path), ref));
+        // Node builtins, extension guesses, URL decoding and non-JS loaders do
+        // not prove a closed relative ESM graph. Conservative edges below may
+        // add consumers, but cannot turn these into a proof.
+        if (!/^(?:\.\/|\.\.\/)/.test(ref) || /[\u0000-\u0020\u007f?#%]/.test(ref)
+          || !/\.(?:mjs|js)$/.test(target) || !Object.hasOwn(inventory, target)) opaque.add(path);
+        else edges.add(target);
+      }
       const { mask, source, uncertainTemplate, uncertainSlash } = codeMask(text);
       if (uncertainTemplate) errors.push(`unsupported-template-dependency:${path}`);
       if (uncertainSlash) errors.push(`unsupported-slash-syntax:${path}`);
@@ -106,7 +186,7 @@ export function selectAffectedTests({ files, changed, smoke = SMOKE_TESTS }) {
             errors.push(`unsupported-directory-dependency:${path}`);
         } else if (!ref.startsWith('node:') && !builtins.has(ref)) errors.push(`external:${path}:${ref}`);
       }
-    }
+    } else opaque.add(path);
     // Literal references cover new URL(), scenario entry_path/story_path and
     // Markdown links. Basename lookup deliberately includes ambiguous matches.
     for (const match of text.matchAll(/[\w@.+/-]+\.(?:mjs|cjs|js|prompt\.md|md|json|svg)\b/g)) {
@@ -124,7 +204,7 @@ export function selectAffectedTests({ files, changed, smoke = SMOKE_TESTS }) {
     for (const dep of deps.get(path) ?? []) visit(dep);
   };
   tests.forEach(visit);
-  const relevantErrors = errors.filter(error => [...reachable].some(path => (!opaque.has(path) && error.startsWith(`unresolved:${path}:`)) || error.startsWith(`external:${path}:`) || error === `unsupported-template-dependency:${path}` || error === `unsupported-slash-syntax:${path}` || error === `unsupported-directory-dependency:${path}`));
+  const relevantErrors = errors.filter(error => [...reachable].some(path => error.startsWith(`unresolved:${path}:`) || error.startsWith(`external:${path}:`) || error === `unsupported-template-dependency:${path}` || error === `unsupported-slash-syntax:${path}` || error === `unsupported-directory-dependency:${path}`));
   if (relevantErrors.length) return full(relevantErrors);
 
   const impacted = new Set(changed);
@@ -139,7 +219,7 @@ export function selectAffectedTests({ files, changed, smoke = SMOKE_TESTS }) {
     const stem = posix.basename(path).replace(/\.(?:prompt\.md|mjs|cjs|js|md|json|svg)$/, '');
     tests.filter(test => posix.basename(test).startsWith(`${stem}.`)).forEach(test => impacted.add(test));
   }
-  if (changed.length) opaque.forEach(path => impacted.add(path));
+  opaque.forEach(path => impacted.add(path));
   let grew = true;
   while (grew) {
     grew = false;

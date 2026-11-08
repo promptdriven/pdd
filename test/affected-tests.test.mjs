@@ -20,10 +20,10 @@ const files = {
 const select = (changed, extra = {}) => selectAffectedTests({ files: { ...files, ...extra }, changed, smoke });
 
 test('module and prompt changes include transitive consumers, scenarios, replay and smoke', () => {
-  assert.deepEqual(select(['src/leaf.mjs']).tests, ['test/leaf.test.mjs','test/smoke.test.mjs']);
+  assert.deepEqual(select(['src/leaf.mjs']).tests, ['test/leaf-story.vectors.test.mjs','test/leaf.test.mjs','test/smoke.test.mjs']);
   assert.deepEqual(select(['prompts/cli/leaf.prompt.md']).tests, ['test/leaf-story.vectors.test.mjs','test/leaf.test.mjs','test/smoke.test.mjs']);
-  assert.deepEqual(select(['test/unrelated.test.mjs']).tests, ['test/smoke.test.mjs','test/unrelated.test.mjs']);
-  assert.deepEqual(select([]).tests, smoke);
+  assert.deepEqual(select(['test/unrelated.test.mjs']).tests, ['test/leaf-story.vectors.test.mjs','test/smoke.test.mjs','test/unrelated.test.mjs']);
+  assert.deepEqual(select([]).tests, ['test/leaf-story.vectors.test.mjs', ...smoke]);
 });
 
 test('literal dynamic imports, require, cycles, and computed helper consumers cannot lose tests', () => {
@@ -130,11 +130,11 @@ test('the real native runner executes selected tests and preserves their asserti
   r.git('add','.'); r.git('commit','-qm','native smoke');
   const execute=(command,args,options)=>{ const env={...options.env}; delete env.NODE_TEST_CONTEXT; return spawnSync(command,args,{...options,env}); };
   const pass=runAffected({root:r.root,base:'HEAD',run:true},{execute});
-  assert.equal(pass.exitCode,0,JSON.stringify(pass)); assert.equal(pass.evidence.counts.pass,2);
+  assert.equal(pass.exitCode,0,JSON.stringify(pass)); assert.equal(pass.evidence.counts.pass,3);
   r.put('test/failure.test.mjs', "import test from 'node:test'; import assert from 'node:assert/strict'; test('failure',()=>assert.equal(1,2));");
   const fail=runAffected({root:r.root,base:'HEAD',run:true},{execute});
   assert.equal(fail.exitCode,1); assert.equal(fail.evidence.counts.fail,1);
-  assert.equal(fail.evidence.counts.pass,2); assert.equal(fail.evidence.stale,false);
+  assert.equal(fail.evidence.counts.pass,3); assert.equal(fail.evidence.stale,false);
 });
 
 
@@ -228,6 +228,11 @@ test('the native runner catches a broken consumer behind a commented computed im
   r.git('add', '.'); r.git('commit', '-qm', 'commented consumer');
   const execute = (command, args, options) => {
     const env = { ...options.env }; delete env.NODE_TEST_CONTEXT;
+    if (command === 'bash') {
+      assert.deepEqual(args, [join(r.root, 'scripts/vm-suite-lock.sh')]);
+      assert.equal(options.env.SUITE, 'npm test');
+      return spawnSync(process.execPath, ['--test', ...affectedPlan({ root: r.root, base: 'HEAD' }).tests], { ...options, env });
+    }
     return spawnSync(command, args, { ...options, env });
   };
   // Prove the real consumer passes before changing only its dependency.
@@ -305,12 +310,88 @@ for (const [name, adapterSource] of [
   ['aliased require', "const load = require; module.exports = load('./target');"],
   ['escaped require', String.raw`module.exports = requ\u0069re('./target');`],
   ['escaped loader alias', String.raw`const load = requ\u{69}re; module.exports = load('./target');`],
+  ['computed require property', "module.exports = module['require']('./target');"],
+  ['computed concatenated loader', "module.exports = module['re' + 'quire']('./target');"],
 ]) test(`native indirect CommonJS loader preserves broken reverse consumer: ${name}`, t => {
   brokenRequireConsumer(t, {
     target: 'src/target.js',
     candidates: { 'src/target.js': 'module.exports = { value: 1 };' },
     adapterSource,
   });
+});
+
+test('generated loader variants never lose a test at any reverse graph depth', () => {
+  const variants = [
+    "module.exports = require('./target');",
+    "const load = require; module.exports = load('./target');",
+    String.raw`module.exports = requ\u0069re('./target');`,
+    "import('./target');", "import(`./target`);", "import('./' + 'target');",
+    "const { createRequire } = await import('node:module'); createRequire(import.meta.url)('./target');",
+    "eval(\"module['re' + 'quire']('./target')\");",
+    "Function(\"return module['re' + 'quire']('./target')\")();",
+  ];
+  for (const receiver of ['module', '(module)', 'module.constructor.prototype']) {
+    for (const property of ["'require'", '"require"', "'re' + 'quire'", "['re', 'quire'].join('')", '`require`', "String.fromCharCode(114,101,113,117,105,114,101)"]) {
+      for (const gap of ['', ' /* loader */ ', '\n']) {
+        const loader = `${receiver}${gap}[${property}]`;
+        variants.push(`module.exports = ${loader}('./target');`);
+        variants.push(`const load = ${loader}; module.exports = load('./target');`);
+      }
+    }
+  }
+  const missing = [];
+  for (const statement of variants) for (const depth of [0, 1, 2, 3]) {
+    const inventory = {
+      'src/change.mjs': 'export const value = 2;',
+      'test/smoke.test.mjs': '',
+      'test/unrelated.test.mjs': '',
+      'test/consumer.test.mjs': depth ? "import '../src/bridge0.mjs';" : statement,
+    };
+    for (let index = 0; index < depth; index++) {
+      inventory[`src/bridge${index}.mjs`] = index + 1 === depth
+        ? statement : `export * from './bridge${index + 1}.mjs';`;
+    }
+    // Include a cycle on the longest path. Proof must cover its unsafe member.
+    if (depth === 3) inventory['src/bridge2.mjs'] += "\nimport './bridge0.mjs';";
+    const result = selectAffectedTests({ files: inventory, changed: ['src/change.mjs'], smoke });
+    if (!result.tests.includes('test/consumer.test.mjs')) missing.push({ statement, depth });
+  }
+  assert.deepEqual(missing, []);
+});
+
+test('unproved syntax and non-JavaScript graphs always keep their reverse consumers', () => {
+  const uncertain = [
+    ['src/adapter.mjs', "import 'node:path';"],
+    ['src/adapter.mjs', "export const value = ;"],
+    ['src/adapter.mjs', 'export const value = 1; /* unterminated'],
+    ['src/adapter.mjs', "export const value = 'unterminated"],
+    ['src/adapter.mjs', 'export const value = 1; export const value = 2;'],
+    ['src/adapter.mjs', 'export const await = 1;'],
+    ['src/adapter.mjs', "import value from './target.mjs'; const value = 1;"],
+    ['src/adapter.mjs', "export { x as value, y as value } from './target.mjs';"],
+    ['src/adapter.mjs', 'export const value = 01;'],
+    ['src/adapter.mjs', "import './absent';"],
+    ['src/adapter.mjs', "import './data.json' with { type: 'json' };"],
+    ['src/adapter.mjs', "import './addon.node';"],
+    ['src/adapter.mjs', "import './asset.svg';"],
+    ['src/adapter.mjs', "import './target';"],
+    ['src/adapter.mjs', "import './tar\tget.mjs';"],
+    ['src/adapter.cjs', 'module.exports = 1;'],
+    ['src/adapter.js', 'export const value = 1;'],
+  ];
+  const missing = [];
+  for (const [path, source] of uncertain) for (const changed of [[], ['src/change.mjs']]) {
+    const inventory = {
+      'src/change.mjs': '', 'src/data.json': '{}', 'src/addon.node': '',
+      'src/asset.svg': '<svg/>', 'src/target.mjs': '', 'src/tar\tget.mjs': '',
+      'src/package.json': '{"type":"commonjs"}',
+      'test/smoke.test.mjs': '', 'test/consumer.test.mjs': "import '../src/bridge.mjs';",
+      'src/bridge.mjs': `export * from './${path.split('/').at(-1)}';`, [path]: source,
+    };
+    const result = selectAffectedTests({ files: inventory, changed, smoke });
+    if (!result.tests.includes('test/consumer.test.mjs')) missing.push({ path, source, changed });
+  }
+  assert.deepEqual(missing, []);
 });
 
 test('native extensionless require keeps its loaded file among ESM and directory candidates', t => {

@@ -14,10 +14,8 @@ unique list of affected paths or fallback causes; tests is a sorted unique list
 of existing top-level `test/*.test.mjs` entries; total is the full entry count.
 Missing smoke entries, invalid inventory/paths, an empty test inventory, unknown
 changed paths, shared test helpers/fixtures, package/configuration files, test
-runner scripts, external imports other than Node builtins, and unsupported code
-or unresolved local imports require `full`. An unresolved import in a consumer
-already treated as depending on every changed path can retain that conservative
-selection instead; the consumer and its reverse consumers must always run. Full means every discovered entry;
+runner scripts, external imports other than Node builtins, and recognized
+unresolved local imports require `full`. Full means every discovered entry;
 a fallback is explicit, never an empty successful selection.
 
 For supported repository files, include changed tests and smoke. Follow reverse
@@ -29,31 +27,32 @@ Markdown dependency links, including fragments, as file dependencies. A changed
 prompt without a source owner or scenario mapping requires full. Deleted and
 renamed modules retain their old dependency edges from the base inventory.
 
-Dependency discovery must overselect rather than miss computed access: JavaScript
-with computed imports, filesystem reads/traversal or child process execution can
-depend on any repository file. Treat such a consumer as depending on every changed
-path, then follow its reverse consumers too. Literal matching may overselect;
-source text or a comment can add tests but cannot remove them. A graph alone cannot
-prove semantic equivalence; keep the full gate. No test result is used as an oracle.
-JavaScript block and line comments between dependency tokens, arguments and
-specifiers must preserve local dependencies, computed-consumer selection and
-external-import full fallback. Ignore comment markers inside string literals.
-When dependency syntax inside a template interpolation cannot be classified
-safely, require full fallback for its reachable consumer. The scanner does not
-parse interpolation expressions: any reachable interpolated template requires
-full fallback before masking, including nested templates, braces, comments and
-computed dependencies. Uncertainty must select more tests, never fewer.
-Executable references to `require` outside a direct call can alias the loader.
-Unclassified Unicode escapes in executable identifiers can also hide loaders.
-Treat either consumer as depending on every changed path and include its reverse
-consumers, or require full fallback; never discard them for lacking a literal edge.
-An unclassified slash outside a string or comment can start a regex literal or
-division expression. Require full fallback for its reachable consumer before
-quotes or comment markers in that syntax can hide later dependencies.
-For extensionless references, retain every existing plausible file and directory
-index target, including CommonJS `.js` and JSON targets. An ESM candidate cannot
-exclude the target loaded by CommonJS. Directory package entry points require
-full fallback when their loader rules are not modeled.
+A test may be omitted only when static analysis proves its whole transitive
+import graph, including the test itself. Every dependency must be a static ESM
+import or reexport with a literal relative specifier resolved to an existing
+JavaScript file. Cycles must not hide an unproved module. Any unproved module
+always selects itself and all reverse consumers, even with no changed paths.
+This includes dynamic `import()` (even with a literal), `require` in any form,
+aliases, `createRequire`, computed loader members such as `module['re' + 'quire']`,
+`eval`/`Function`, template or computed specifiers, unresolved or nonrelative
+specifiers (including Node builtins), non-JavaScript loaders and parse errors.
+Never infer safety from the absence of recognized unsafe spellings.
+
+The proof may support a conservative subset of JavaScript. Unclassified syntax
+must always select the module's test consumers. In particular, the native proof
+supports static ESM declarations and scalar variable/export declarations in
+explicit `.mjs` modules. It does not prove the package loader scope of `.js`
+files or arbitrary executable expressions. It must consume the entire
+source and validate syntax without executing it. Filesystem/process operations,
+regex or division syntax, templates, identifier escapes and unsupported syntax
+therefore cannot establish omission. Comments between tokens preserve dependency
+meaning; comment markers within strings remain literal. Reachable interpolated
+templates, unclassified slash syntax, external packages and directory package
+entry points retain full fallback. Literal matching can add dependency edges and
+tests, but cannot establish proof or remove a test. Keep all plausible
+extensionless file/index targets, including CommonJS and JSON candidates, when
+adding such conservative edges. No test result supplies the proof. The separate
+full-suite gate still applies; a static graph cannot prove semantic equivalence.
 
 The adapter accepts `--base REF`, optional `--run`, and optional `--report PATH`.
 With no run, print the JSON plan only and execute no test. Resolve base to a commit
@@ -93,4 +92,6 @@ Existing repository-required checks and human reviews still apply.
   from #3056. This module does not own admission or queue state.
 - Native Git, filesystem, clock and child-process operations belong to the adapter;
   the exported selector is pure. Node builtin path and crypto facilities supply
-  normalized local paths and SHA-256. No runtime interpreter calls are introduced.
+  normalized local paths and SHA-256. Node's native VM syntax compiler validates
+  the supported declaration subset without executing source. No runtime
+  interpreter calls are introduced.

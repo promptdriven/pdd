@@ -49,12 +49,17 @@ changes and unavailable inventories select the full suite. Full fallbacks use
 `scripts/vm-suite-lock.sh`, the shared suite queue adapter. Do not omit a selected
 test to make a run pass.
 
-The selector retains all plausible extensionless file and index targets. It uses
-full fallback for reachable directory package entry points and unclassified slash
-syntax, including regex and division expressions. These fallbacks protect test
-coverage when the scanner cannot determine the loaded dependencies.
-Loader aliases and unclassified Unicode escapes in executable identifiers select
-their consumers and all reverse consumers conservatively.
+The selector can omit a test only after proving its whole import graph. All
+dependencies must be static ESM imports or reexports with literal relative
+specifiers resolved to existing JavaScript files. Dynamic imports, CommonJS
+loaders in any form, computed loader access, non-JavaScript loaders, unresolved
+specifiers and parse errors always select their test consumers. Node builtin
+imports also keep a test selected. The proof supports declarations with scalar
+values in explicit `.mjs` modules. The package loader scope of `.js` files and
+arbitrary executable syntax stay unproved. Unsupported syntax cannot
+establish omission. Conservative file references can add tests. They cannot
+prove a graph. Check the plan's actual selected and total counts before claiming
+a reduction in test work.
 
 Record the working files, command, mode, fallback cause, counts and `suiteMinutes`
 in the PR. Keep these results separate from the merge result. The merge owner
