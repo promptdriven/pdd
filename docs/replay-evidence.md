@@ -60,8 +60,9 @@ as not replayed, never success; counts must reflect that. Unsupported versions a
   A crash, empty failure list, unknown assertion, survived control or not-run control is never detection.
   For not_run, command and exit_code may be null and a nonblank reason is required; never invent an exit.
 - formal: {result:proved_bounded|proved_solver|failed|not_run|not_applicable,scope:nonblank,reason:nonblank,
-  control_outcome:assertion_failure|crash|survived|not_run,counterexample?}. failed requires a counterexample;
-  proved results require assertion_failure control. Not-run/not-applicable remain explicit scoped results.
+  control_outcome:assertion_failure|crash|survived|not_run,control_command?:nonblank,control_exit_code?:integer0..255,
+  counterexample?}. failed requires a counterexample; proved results require assertion_failure control (see
+  [The formal result](#the-formal-result)). Not-run/not-applicable remain explicit scoped results.
 
 All identifier/reason/command strings are bounded (at most1000characters); collections stay within the limits
 above. Reject wrong types and unsupported versions; never coerce truthy flags or counts. SHA256 comparison
@@ -102,6 +103,56 @@ actual recorded data. A copied example is not execution evidence.
   }
 }
 ```
+
+## The formal result
+
+pdd reads the `formal` block on its own, also when the prompt area has no scenario vectors or the scenario
+replay stops early. The code replay status does not change: NOT REPLAYED or BLOCKED never becomes a pass.
+The "Formal check" line of the replay section and the Formal check row of the code PR's Proof table show
+one formal status, with the same words:
+
+| Status | Meaning | Repair step |
+|---|---|---|
+| recorded | pdd accepted the block. The line shows its result, scope, reason and control. | none |
+| missing | There is no `replay-evidence.json`, or the file has no `formal` key. | Write the formal block. |
+| malformed (FIELD) | FIELD is wrong: the file, its JSON, `schema_version`, `run_id`, `source`, a `formal.*` field or `mutation`. | Correct FIELD. |
+| stale (source changed) | `source.sha256` is not the current source fingerprint. | Run the formal check on the current source and write a new block. |
+
+After the repair, run `pdd workflow done formal` again. A line that is not recorded always gives the reason
+and the repair step. When the file holds a block that pdd did not accept, the line says what the block
+claims and why pdd did not accept it.
+
+A proved result needs `control_outcome: "assertion_failure"`: the planted mistake (in a bug run, the old
+code) fails the formal check by an assertion, not by a crash. With scenario vectors, the semantic mutation
+control must also detect the mistake. With no scenario vectors, the formal block holds its own control,
+the control command and its nonzero exit code:
+
+```json
+"formal": {
+  "result": "proved_bounded", "scope": "All 5 rules of the Story over 5192 bounded inputs",
+  "reason": "Every input passes the oracle written from the Story", "control_outcome": "assertion_failure",
+  "control_command": "node --test test/price.formal.test.mjs (on the old code)", "control_exit_code": 1
+}
+```
+
+Named Story paths can contain Unicode and spaces. Name the complete repository-relative path in a step summary, bare, quoted, in a code span or in a Markdown link. pdd resolves it against Git-visible Story files and checks every resolved Story. Absolute paths, `..` components and control characters are refused.
+
+When a Story of the run has `## Rules to check`, the code PR is not ready to merge until the formal status
+is recorded with Proved (bounded), Proved (solver) or Not applicable. A Failed result stays publishable with
+its failure line and is not ready to merge.
+
+With scenario vectors, the code replay needs a typed formal block of any result, also when no Story has
+`## Rules to check`. So the line and the row then always give the formal status, the reason and the repair step.
+A missing, malformed or stale block holds the PR. A recorded Not run does not hold it when no Story has
+`## Rules to check`.
+
+The line says "Formal check: not needed (no Rules to check in the Story)" only when pdd read the Stories of the
+run, none has `## Rules to check`, and the prompt area has no scenario vectors. Then the formal check does not
+hold the PR, except a Failed result. pdd finds the Stories of the run in the changed files and in the step
+summaries (`user_stories/**/NAME.md`), and in the `story_path` of each anchored scenario. When pdd finds no
+Story file, it cannot tell, so the formal check counts as needed. The line then adds: "pdd found no Story file
+of this run, so the formal check counts as needed. When the Story has no Rules to check, name its path
+(user_stories/NAME.md) in the formal step summary."
 
 ## Reading the PR status
 
