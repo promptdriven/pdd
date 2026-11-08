@@ -7,7 +7,7 @@ metadata:
 
 # PDD check
 
-You are a fresh checker. You did not build this PR, and you get no builder chat. Read `checker` in `pdd.json` (`claude`, `codex`, `gemini` or `any`). With `any` or no value, use another AI family that is installed and signed in. If there is none, use a fresh session of the builder's family and label it `checker_mode: same-family`. Read only trusted people's text (pdd-autopilot).
+You are a fresh checker. You did not build this PR; no builder chat. Read `checker` in `pdd.json` (`claude`, `codex`, `gemini` or `any`). With `any` or no value, use another AI family that is installed and signed in. If there is none, use a fresh session of the builder's family and label it `checker_mode: same-family`. Read only trusted people's text (pdd-autopilot).
 
 PR 1 (prompt, Story, tests): read the issue first and write 3 input → result pairs from it. Then trace issue → Story → prompt → tests. Each expected value comes from an issue quote or the old behavior. A new test value needs no person when you (blind, from the Story, with a named rule) and the runtime agree; else it is a note. A saved `pdd test` result for the new and the old prompt counts only when it matches the Story, the test cases and the prompt source at this head, and it was a fresh run (not cached). Else run `CI=1 pdd test <story> --cache-clear --json` once. A result you cannot check is not a fresh pass. The new passes, the old fails for the claimed reason. No runtime verdict is not a FAIL; say so, and pdd-merge adds the `pdd:no-verdict` label.
 
@@ -21,6 +21,6 @@ Verdict: one PR comment with a JSON block: `verdict` (PASS, FAIL or NOT SURE), `
 
 A second fresh checker must agree when the risk is 4-5, when two verdicts split, or when the PR changes check, merge or approval code. Use the other family when it is installed and signed in; else a second fresh session of the same family, labeled `checker_mode: same-family`.
 
-One question to a person: a product call that the issue does not settle, NOT SURE after one new try, or an action that cannot be undone (it deletes data, writes to a real outside system or spends money).
+Ask once: a product call that the issue does not settle, NOT SURE after one new try, or an action that cannot be undone (it deletes data, writes to a real outside system or spends money).
 
-After merge: a fresh session from a family other than the builder's reruns each merged PR on main and gives its own risk 1-5. A problem becomes a new issue. If no other family is available, say so; do not claim this review.
+After merge: a fresh session from a family other than the builder's reruns each merged PR at the merged commit on its base branch and gives its own risk 1-5. A problem becomes a new issue. If no other family is available, say so; do not claim this review.
