@@ -1,4 +1,4 @@
-// Implements prompts/cli/issue-mixed.prompt.md.
+// Generated from prompts/cli/issue-mixed.prompt.md (sha256: 36b91ead020b4975014b269c1e6b3d311637ec913dd5c031f19b2baf2151fd59).
 import { resolveAreas } from './autopilot-areas.mjs';
 import { currentSortIssue } from './issue-sort-github.mjs';
 const parse = x => typeof x === 'string' ? JSON.parse(x) : x;

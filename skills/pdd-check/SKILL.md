@@ -2,7 +2,7 @@
 name: pdd-check
 description: Use when Autopilot needs a fresh checker verdict (PASS, FAIL or NOT SURE) on a PDD pull request at its head, before pdd-merge.
 metadata:
-  pdd-skills: 0.1.24
+  pdd-skills: 0.1.25
 ---
 
 # PDD check
@@ -14,8 +14,6 @@ PR 1 (prompt, Story, tests): read the issue first and write 3 input → result p
 PR 2 (code): read the issue, the PR 1 Story (open or merged) and the diff. Build the head and run the changed path with the repo's start-up recipe, with the Story as the script. Follow `verification-setup.md` in the pdd-prompting skill to repeat the real action from a fresh checkout and report setup, behavior and dependency scope separately. For a screen change, take before and after screenshots and write one line on what changed.
 
 Read pdd-prompting/review.md.
-
-Run full-suite validation through the current invoked pdd CLI `workflow suite --command COMMAND`, with the repository's actual command. Wait for the shared queue result. Slot waiting is not stuck; a suite failure or timeout needs its own cause and `test-suite` alert.
 
 Both PRs: the full suite is green on the head, with no new skip or only. One exception: new native tests in PR 1 may be red only for the missing behavior. Say so in the verdict; then PR 1 merges only together with its code PR.
 

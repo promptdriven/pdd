@@ -1,4 +1,4 @@
-// Generated from prompts/cli/issue-dependency-graph-view.prompt.md.
+// Generated from prompts/cli/issue-dependency-graph-view.prompt.md (sha256: 1c5db4dd9b620773b094e435f9557dbdc3ff59c9dca315e9182a1558f9583f5d).
 // This file also runs in the bundled browser. Domain decisions belong to the model.
 const escape = value => String(value ?? '').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, '\ufffd')
   .replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);

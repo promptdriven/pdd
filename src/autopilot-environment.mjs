@@ -1,4 +1,4 @@
-// Owned by prompts/cli/autopilot-environment.prompt.md.
+// Generated from prompts/cli/autopilot-environment.prompt.md (sha256: 152fc557875398e43a125994b297551965324c47147a8b3b21c72233a6893085).
 import { readFileSync, readdirSync, accessSync, constants } from 'node:fs';
 import { readMachineResources } from './machine-resources.mjs';
 import { join, isAbsolute } from 'node:path';

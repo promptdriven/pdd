@@ -1,6 +1,6 @@
 import { readOwnerChoice, readSplitComment, partIdentity } from './issue-mixed.mjs';
 import { readSortGroups, sortPastAssignees, sortBookkeeping, readSortComment, addSortContext } from './issue-sort-github.mjs';
-// Implements prompts/cli/issue-dependencies-github.prompt.md.
+// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: 208eb38552328662b99611c6a82d3138a7d929495514dc2c98b7fa9a704d183b).
 import { execFile as execCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import * as nativeFs from 'node:fs';
@@ -705,6 +705,7 @@ function readSession(storeFor, now) {
 function sessionGithub(raw, session) {
   const numberOf = value => Number(value);
   const github = {
+    ...raw,
     page: async args => {
       const { repository, kind, issue, cursor, purpose } = args;
       if (cursor || kind === 'issues' || !session.stored(repository)) return raw.page(args);
@@ -726,6 +727,8 @@ function sessionGithub(raw, session) {
       return reply;
     },
     appendComment: async args => { session.invalidate(args.repository, numberOf(args.issue)); try { return await raw.appendComment(args); } finally { session.invalidate(args.repository, numberOf(args.issue)); } },
+    sortUpdate: async args => { session.invalidate(args.repository, numberOf(args.issue)); try { return await raw.sortUpdate(args); } finally { session.invalidate(args.repository, numberOf(args.issue)); } },
+    ensureSortLink: async args => { session.invalidate(args.repository, numberOf(args.issue)); try { return await raw.ensureSortLink(args); } finally { session.invalidate(args.repository, numberOf(args.issue)); } },
     addBlocker: async args => { session.invalidate(args.repository, numberOf(args.issue)); try { return await raw.addBlocker(args); } finally { session.invalidate(args.repository, numberOf(args.issue)); } },
   };
   Object.defineProperty(github, NATIVE_GITHUB, { value: true });
@@ -1249,10 +1252,10 @@ function normalizedRecord(comment, issue, authority) {
 
 export async function readDependencySnapshot(input = {}, supplied = {}) {
   const scope = nativeReadScope(), ports = createDependencyReadPorts({ cwd: input?.cwd ?? '' }, supplied, scope);
-  try { return await observeSnapshot(input ?? {}, ports, scope); } finally { flushCache(ports); }
+  try { return await observeSnapshot(input ?? {}, ports, scope, Boolean(supplied.sortContext || !supplied.github || supplied.github[NATIVE_GITHUB])); } finally { flushCache(ports); }
 }
 
-async function observeSnapshot({ cwd = '', repository, inputs = [] }, ports, scope) {
+async function observeSnapshot({ cwd = '', repository, inputs = [] }, ports, scope, sorting) {
   const reads = ports.dependencyReads;
   // The claim scan of one snapshot reads through the snapshot's own reads; the default owners port stays live.
   if (ports.owners[NATIVE_OWNERS]) ports.owners = nativeOwners(cwd, ports, { live: false });
@@ -1293,7 +1296,6 @@ async function observeSnapshot({ cwd = '', repository, inputs = [] }, ports, sco
     rootIndex.set(key, raw);
   }
   if (invalidIndex) warn('Open issue index is incomplete');
-  const sorting = supplied.sortContext || !supplied.github || supplied.github[NATIVE_GITHUB];
   const sortGroups = sorting ? await readSortGroups({ cwd, repository }, ports) : [];
   const queue = [...rootIndex.keys(), ...sortGroups.map(x => x.umbrella).filter(Boolean)];
   // Supplied GitHub ports retain the exact existing contract and call behavior.

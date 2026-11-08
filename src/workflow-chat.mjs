@@ -1,5 +1,5 @@
 import { launchProfile, chatAgentName, validLaunchProfile } from './workflow-launch-profile.mjs';
-// Source: prompts/cli/workflow-chat.prompt.md.
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: a7a6cdc982da6bc1ad172fd13e722d322f8fd7fcfb20115aed1f7a0b15af1342).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, lstatSync, readdirSync, writeFileSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
@@ -751,7 +751,7 @@ export async function openChat({ run, chat, resumeMessage }, ports = {}) {
     savedAgentEntry(run, run.agent, env);
     // Herdr sees the agent only after it starts; the shared grace counts from this resume request.
     chat.resumedAt = now(); applyLifecycle(chat, { state: 'starting' });
-    try { await launchInPane(herdr, chat.paneId, { commonDir: run.commonDir, sourceRoot: run.sourceRoot, agent: run.agent, cwd: run.root, addDirs: agentDirs(run), resumeId: id, configDir, ...launchSettings(run, chat), ...resumeInput(run, chat, resumeMessage) }, { run, env, beforeLaunch: ports.beforeLaunch }); }
+    try { await launchInPane(herdr, chat.paneId, { commonDir: run.commonDir, sourceRoot: run.sourceRoot, agent: run.agent, cwd: run.root, addDirs: agentDirs(run), resumeId: id, configDir, ...launchSettings(run, chat), ...resumeInput(run, chat, resumeMessage) }, { run, env, ports, beforeLaunch: ports.beforeLaunch }); }
     catch (error) { chat.startUnconfirmed = true; throw error; }
     resumed = true;
   }

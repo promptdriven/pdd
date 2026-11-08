@@ -1,4 +1,4 @@
-// Owned by prompts/cli/autopilot-cleanup.prompt.md.
+// Generated from prompts/cli/autopilot-cleanup.prompt.md (sha256: 12ab36c1555fdebfccb7b6c2de5af4e02721b4553154fe421ad1bdb777642b6d).
 import { resolve } from 'node:path';
 import { listRuns, readRun } from './workflow-runs.mjs';
 import { lookupIssueWorktree } from './workflow-worktree.mjs';

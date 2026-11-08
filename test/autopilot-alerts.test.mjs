@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runPdd } from '../src/pdd-cli.mjs';
+import {isolatedCheckCapacity} from './helpers/check-machine.mjs';
 import { alertStatusLine, runAutopilotAlerts } from '../src/autopilot-alerts.mjs';
 
 // Synthetic webhook addresses. The fake HTTP port records requests; no test sends a real request.
@@ -56,13 +57,14 @@ function setup(t) {
     writeFileSync(join(f.ports.stateRoot, `${id}.json`), JSON.stringify({ repo: 'owner/repo', enabled: true, agent: { id: 'codex' } }));
     const stdout = capture(), stderr = capture();
     const exitCode = await runPdd(['autopilot', 'status'], { cwd, env: f.env, stdout, stderr, autopilotLauncherPorts: {
-      stateRoot: f.ports.stateRoot, timer: async () => false, herdr: async () => ({ running: false }), allocationCheck: async () => ({ state: 'ready', message: '' }),
+      checkCapacityPorts:isolatedCheckCapacity(dir), stateRoot: f.ports.stateRoot, timer: async () => false, herdr: async () => ({ running: false }), allocationCheck: async () => ({ state: 'ready', message: '' }),
       run: async command => { assert.equal(command, 'git', 'status runs only local git'); return { code: 0, stdout: `${cwd}\n`, stderr: '' }; },
     } });
     f.outputs.push(stdout.text, stderr.text);
     assert.equal(exitCode, 0, stderr.text);
     // Health has separate status coverage; keep these assertions scoped to alert delivery.
-    return stdout.text.trimEnd().split('\n').filter(line => !line.startsWith('Health:'));
+    const lines = stdout.text.trimEnd().split('\n');
+    return [lines[0], ...lines.slice(1).filter(line => line.startsWith('Alerts:'))];
   };
   // The secret never reaches any output or local file other than the private destination (or no file at all for a token command).
   f.noSecret = ({ config = false } = {}) => {

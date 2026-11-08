@@ -31,7 +31,7 @@ for (const stop of ['timeout', 'interrupt']) test(`machine queue ${stop} leaves 
   assert.equal(await runCheck({ cwd: setup.repo, words: [], options: { '--json': true, '--timeout': '1' } }, first.ports), 3);
   const saved = JSON.parse(first.ports.stdout.text);
   assert.equal(sent.size, 1);
-  const unsent = saved.rows.find(row => row.state === 'not_run');
+  const unsent = saved.rows.find(row => row.state === 'not run');
   assert.equal(unsent?.calls, 0);
   const batch = JSON.parse(readFileSync(join(setup.state, 'batches', saved.batch, 'batch.json')));
   assert.deepEqual(batch.rows.find(row => row.test === unsent.test).request_ids, [], 'local waits must not create permanent dispatch claims');

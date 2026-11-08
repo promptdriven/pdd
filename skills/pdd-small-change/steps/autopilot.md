@@ -3,7 +3,7 @@
 Use this file only when `autopilot.mode` in the root `pdd.json` is `observe` or `auto` and pdd-autopilot started the run. With `off` or no value, SKILL.md applies as written.
 
 It changes these rules of SKILL.md and RUNBOOK §2, §4, §11 and §12:
-- Gates (§2): read the existing owner handoff/run notes, then follow the scoped standing delegation and native approval route in [$pdd-merge](../../pdd-merge/SKILL.md), including its precedence over generic ask-and-stop instructions for covered ordinary non-strict gates. A fresh pdd-check checks the PR at its head; its PASS is checker evidence, not approval.
+- Gates (§2): read the owner handoff/run notes. Follow the scoped delegation and native approval route in [$pdd-merge](../../pdd-merge/SKILL.md), ahead of generic ask-and-stop rules for covered non-strict gates. A fresh pdd-check checks the PR at its head; its PASS is checker evidence, not approval.
 - Optional steps: do not ask. Skip them (§12): pdd-check runs the changed path. Never put a Simulator link in a PR, issue or file.
 - Plan gate: put the scope and the checker's verdict line in the PR body.
 - Expected values (§4): take each one from an issue quote or from the old behavior. A new test value needs no person when the runtime and the checker (blind, from the Story, with a named rule) agree. Else it is a note on the PR. Never change a test to make it pass.
@@ -18,6 +18,4 @@ After repeated failed validation, inspect the actual failure, identify its cause
 
 Something runs a prompt (a test, a command or another prompt) that has no interface block: draft the block from the prompt text through pdd and save it. A prompt that nothing runs needs none.
 
-## Full-suite validation
-
-Use the current invoked pdd CLI: `pdd workflow suite --command "REPOSITORY FULL-SUITE COMMAND"`. Select the actual command from the repository. The shared machine queue admits three suites. Wait for its result; do not start a direct copy or mark slot waiting as stuck. Report a running suite failure or timeout with its specific cause and the `test-suite` alert kind. Focused checks keep their normal route. See `pdd workflow suite --help`.
+Full suites/builds follow the [shared queue rule](../../pdd-autopilot/steps/handoff.md).

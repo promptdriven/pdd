@@ -1,4 +1,4 @@
-// Owned by prompts/cli/interpreter-queue.prompt.md.
+// Generated from prompts/cli/interpreter-queue.prompt.md (sha256: ef7206e3d86babe317e73bc46f6ef6d9090181c9409c6ca4081446e3e8e1ea99).
 import * as files from 'node:fs';
 import { join, isAbsolute, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';

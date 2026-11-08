@@ -1141,19 +1141,9 @@ A chat with the durable chat-owner `closed` mark was intentionally stopped:
 automatic stopped-chat recovery must never resume it. Explicit open is the only
 route that can remove the mark after success.
 
-## Dependencies
-
-- [Shared full-suite queue](test-suite-queue.prompt.md): required execution, status and paused inactivity contract.
-
-- [Codex limits](codex-limits.prompt.md) and [worktree cleanup](autopilot-cleanup.prompt.md): required native generation and verification context for read-only usage and safe ended-run removal.
-
-- [Environment recovery](autopilot-environment.prompt.md): required native generation and verification context for classification, retry records and host admission.
-
 For `status`, include the local [issue cost report](cost-ledger.prompt.md) for normal and automatic runs in the selected repository; `--all` includes indexed repositories. Refresh numeric cost checkpoints through `updateRunCosts`, preserving the workflow progress timestamp, sequence and completion journal. Before refreshing a selected cost record, verify its runId and startedAt under run ownership. Archived attempts can retain a former runDir now owned by a new attempt: retain their saved cost snapshot and never substitute or update that new attempt. Measurement failure must not fail status. `status --json` returns only the versioned cost report and skips timer, Herdr, settings-on-GitHub and workflow readiness probes. It works without a saved launcher. Human status appends `costStatusLines`; neither status form fetches CI durations.
 
-## Dependencies
 
-- [Cost ledger](cost-ledger.prompt.md): required native generation and verification context for local cost capture and reports.
 
 ## Machine interpreter waiting
 
@@ -1165,7 +1155,33 @@ wait or unavailable queue cannot establish a stuck run. Completed waiting time
 remains excluded after restart. Do not wake a chat or mutate queue records during
 observation. Preserve queue path and concurrency settings in launcher environments.
 
+This module has native Node integration tests against the settings module and
+bundled skill. Timer services, real sign-ins and cross-machine skill execution
+need live verification; syntax-only checks do not prove those effects.
+
+Give each offered issue a durable decision token tied to its repository and issue, and include it in the trusted work packet for explicit workflow invocation. Delivery is an offer, never a confirmed start. Do not alter selection or custody rules.
+
+Save a complete selector snapshot of observed open issues with known scope and reasons, and unknown readiness where unavailable. Atomically publish the full snapshot after its decision records are durable. Offers do not establish worker launch. If capture or delivery fails, retain retry facts and a durable coverage-gap observation where storage permits, without changing wake or custody behavior.
+
+Record each actual wake delivery attempt and its confirmed delivery, uncertain or failed result against each offered decision ID. An offer or coordinator tick is not a worker start. Save the selection snapshot even when its membership is empty. Metrics capture must not change delivery or custody behavior.
+
+Classify known trusted unblocked selector facts as ready even on unchanged ticks; unavailable facts remain unknown. Retain each actual launch attempt and outcome in the existing decision outbox before best-effort delivery, using stable identities for idempotent replay. A busy agent or failed setup before delivery is not an attempt.
+
+Each measurement callback is independently best effort outside the native delivery try/catch. A failed attempted callback cannot suppress delivery; a failed confirmed callback cannot change a successful send into an uncertain result. Throwing warning callbacks must not escape telemetry. Preserve timeRules in messages and time-only wakes, pendingTimes/timeSeen, idle-claim processing and review-inclusive source digests. Decision IDs from an incomplete snapshot cannot establish verified origin. Metrics filesystem and append/gap operations admit controlled injected ports; defaults remain native.
+
+Telemetry repository discovery uses the same injected native process port as the existing launcher; a separate real process must not escape a controlled caller. A metricsContext port may supply the same repository/common-directory observation for controlled verification.
+
+Pass the already observed common directory to the store commonDir port; telemetry must not rediscover it through an un-injected process.
+
 ## Dependencies
+
+- [Shared full-suite queue](test-suite-queue.prompt.md): required execution, status and paused inactivity contract.
+
+- [Codex limits](codex-limits.prompt.md) and [worktree cleanup](autopilot-cleanup.prompt.md): required native generation and verification context for read-only usage and safe ended-run removal.
+
+- [Environment recovery](autopilot-environment.prompt.md): required native generation and verification context for classification, retry records and host admission.
+
+- [Cost ledger](cost-ledger.prompt.md): required native generation and verification context for local cost capture and reports.
 
 - [Machine interpreter queue](interpreter-queue.prompt.md): required progress and waiting-clock contract.
 
@@ -1201,21 +1217,3 @@ observation. Preserve queue path and concurrency settings in launcher environmen
   generation and verification context for status. When `alertStatusLine` with the
   saved repository and state root returns a line, status adds it on a second line.
   It reads local files only; an error adds nothing.
-
-This module has native Node integration tests against the settings module and
-bundled skill. Timer services, real sign-ins and cross-machine skill execution
-need live verification; syntax-only checks do not prove those effects.
-
-Give each offered issue a durable decision token tied to its repository and issue, and include it in the trusted work packet for explicit workflow invocation. Delivery is an offer, never a confirmed start. Do not alter selection or custody rules.
-
-Save a complete selector snapshot of observed open issues with known scope and reasons, and unknown readiness where unavailable. Atomically publish the full snapshot after its decision records are durable. Offers do not establish worker launch. If capture or delivery fails, retain retry facts and a durable coverage-gap observation where storage permits, without changing wake or custody behavior.
-
-Record each actual wake delivery attempt and its confirmed delivery, uncertain or failed result against each offered decision ID. An offer or coordinator tick is not a worker start. Save the selection snapshot even when its membership is empty. Metrics capture must not change delivery or custody behavior.
-
-Classify known trusted unblocked selector facts as ready even on unchanged ticks; unavailable facts remain unknown. Retain each actual launch attempt and outcome in the existing decision outbox before best-effort delivery, using stable identities for idempotent replay. A busy agent or failed setup before delivery is not an attempt.
-
-Each measurement callback is independently best effort outside the native delivery try/catch. A failed attempted callback cannot suppress delivery; a failed confirmed callback cannot change a successful send into an uncertain result. Throwing warning callbacks must not escape telemetry. Preserve timeRules in messages and time-only wakes, pendingTimes/timeSeen, idle-claim processing and review-inclusive source digests. Decision IDs from an incomplete snapshot cannot establish verified origin. Metrics filesystem and append/gap operations admit controlled injected ports; defaults remain native.
-
-Telemetry repository discovery uses the same injected native process port as the existing launcher; a separate real process must not escape a controlled caller. A metricsContext port may supply the same repository/common-directory observation for controlled verification.
-
-Pass the already observed common directory to the store commonDir port; telemetry must not rediscover it through an un-injected process.

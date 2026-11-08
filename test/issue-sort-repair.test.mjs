@@ -102,11 +102,11 @@ test('native retries do not attach a label which is already present', async () =
 });
 
 const owners = ['autopilot-areas','issue-sort','issue-sort-github','issue-dependencies','issue-dependencies-github','issue-dependencies-intake','workflow-runner'];
-for (const owner of owners) test(`the ${owner} contract admits native use as a current draft`, () => {
+for (const owner of owners) test(`the ${owner} contract admits native use as a current approved contract`, () => {
   const path = `prompts/cli/${owner}.prompt.md`, source = readFileSync(path, 'utf8');
   const iface = JSON.parse(interfaceBlocks(source)[0][1]);
   assert.equal(promptRefusal({ path, interface: iface, prose: proseSha256(source) }, 'repair'), null);
-  assert.equal(iface.status, 'draft');
+  assert.equal(iface.status, 'approved');
 });
 
 test('the public unconfirmed sort result conforms to its Runtime schema', async () => {

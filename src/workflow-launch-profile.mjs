@@ -1,4 +1,4 @@
-// Source: prompts/cli/workflow-launch-profile.prompt.md.
+// Generated from prompts/cli/workflow-launch-profile.prompt.md (sha256: 368bc6927360a539c3737887f3b69ebdbdf0b99213233e6508453cfd7cca7b05).
 import * as nodeFs from 'node:fs';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';

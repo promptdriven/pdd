@@ -1,4 +1,4 @@
-// Owned by prompts/cli/machine-resources.prompt.md.
+// Generated from prompts/cli/machine-resources.prompt.md (sha256: 217d7b0ad19c8eca8ae2160d572e17e3f912823526d070df16aeadbb8136095e).
 import * as files from 'node:fs';
 import { readFileSync, statfsSync } from 'node:fs';
 import { join, isAbsolute } from 'node:path';

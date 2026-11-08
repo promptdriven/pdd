@@ -14,7 +14,7 @@ const stateLine = message => message.split('\n').find(line => line.startsWith('S
 const nextLine = message => message.split('\n').find(line => line.startsWith('Next: ')) ?? '';
 const iso = ms => new Date(ms).toISOString();
 // Status may read the chat (agent get, pane read); it never types, pastes, answers or launches.
-const READ_ONLY = new Set(['agent get', 'pane read']);
+const READ_ONLY = new Set(['agent get', 'pane read', 'pane list']);
 function assertOnlyReads(f, from) {
   const calls = f.herdr.calls.slice(from).map(([group, verb]) => `${group} ${verb}`);
   assert.ok(calls.length > 0, 'status inspected the chat');

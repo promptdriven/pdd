@@ -309,11 +309,7 @@ panes; the layout owner reserves the complete missing layout before its first
 create. Closed chats count as positively ended on explicit open and resume at
 once. Preserve uncertain-launch protections.
 
-## Dependencies
 
-- [Shared suite queue](test-suite-queue.prompt.md): required selector context for launch and resume environments.
-
-- [Machine interpreter queue](interpreter-queue.prompt.md): required settings resolver and defaults for chat environment propagation.
 
 ## Launch profiles
 
@@ -373,6 +369,10 @@ The stable saved name and pane let tools inspect and interrupt the chat with
 
 ## Dependencies
 
+- [Shared suite queue](test-suite-queue.prompt.md): required selector context for launch and resume environments.
+
+- [Machine interpreter queue](interpreter-queue.prompt.md): required settings resolver and defaults for chat environment propagation.
+
 - [Launch profiles](workflow-launch-profile.prompt.md): required generation and verification context for profile snapshots, effective launch arguments and Herdr name derivation.
 
 - [Herdr layout](workflow-herdr-layout.prompt.md): required authoring/generation/verification context for workspace ownership, allocation and its existing lock. The runner's replacement protocol is the caller contract above, not a recursively loaded dependency.
@@ -384,7 +384,7 @@ The stable saved name and pane let tools inspect and interrupt the chat with
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"draft","prose_sha256":"1ee6e379d9a9787f5f8e93f554975c26267bd45138c41678b0a8186f3ed65d2f","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+{"status":"approved","prose_sha256":"a2320e91bd72be3ba94d6df4843f156ec2df2ebece11b4ec39288c068ebda60b","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
 ```
 </details>
 

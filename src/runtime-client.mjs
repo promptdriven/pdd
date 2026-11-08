@@ -1,5 +1,5 @@
 import { acquireInterpreterSlot, markInterpreterDispatch, observeInterpreterRequest } from './interpreter-queue.mjs';
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 7545c2e8cd819510317352e5108f757883d178f91ac9dc66aef4674dd56756ef).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: cddb84d11a00e822a0e0a93ffdf6b262f5b89e968cd480bcb29b471ce5317ab9).
 import {readEvidenceEligibility} from './workflow-runner.mjs';
 import {allRuns} from './workflow-runs.mjs';
 import {assessNativeEvidence, resultLines, usableResult} from './workflow-results.mjs';

@@ -386,7 +386,7 @@ test('status --all lists every repository with Autopilot on this machine from an
 
   assert.equal(exitCode, 0, stderr.text);
   assert.equal(stderr.text, '');
-  const lines = stdout.text.trimEnd().split('\n');
+  const lines = stdout.text.trimEnd().split('\n').filter(line => line.startsWith('Autopilot on ') || line.includes(' · mode ') || line.endsWith('saved state unreadable'));
   assert.equal(lines[0], 'Autopilot on this machine (2):');
   const row = repo => lines.find(text => text.startsWith(`${repo} in `)).split(' · Health:')[0];
   assert.equal(lines.slice(1).every(line => /Health:.*unknown/.test(line)), true);
@@ -399,7 +399,8 @@ test('status --all lists every repository with Autopilot on this machine from an
 
   const empty = capture();
   assert.equal(await runPdd(['autopilot', 'status', '--all'], { cwd: outside, env: { HOME: join(dir, 'nobody'), PATH: process.env.PATH }, stdout: empty, stderr: capture(), autopilotLauncherPorts: { ...ports, stateRoot: join(dir, 'nobody', 'state') } }), 0);
-  assert.equal(empty.text, 'No Autopilot on this machine.\n');
+  assert.equal(empty.text.split('\n')[0], 'No Autopilot on this machine.');
+  assert.ok(empty.text.includes('Issue costs (local measured usage):'));
   assert.equal(dirname(outside), dir);
 });
 
@@ -458,7 +459,7 @@ test('status --all keeps each line independent when a saved folder is gone or a 
     ['e'.repeat(20)]: `${'e'.repeat(20)}.json: saved state unreadable`,
     ['f'.repeat(20)]: `${'f'.repeat(20)}.json: saved state unreadable`,
   };
-  const lines = stdout.text.trimEnd().split('\n').map(line => line.split(' · Health:')[0]);
+  const lines = stdout.text.trimEnd().split('\n').filter(line => line.startsWith('Autopilot on ') || line.includes(' · mode ') || line.endsWith('saved state unreadable')).map(line => line.split(' · Health:')[0]);
   assert.equal(lines[0], 'Autopilot on this machine (6):');
   assert.equal(lines[1], expected[goneId], 'the missing folder sorts first');
   assert.deepEqual(lines.slice(1), Object.keys(expected).sort().map(name => expected[name]));

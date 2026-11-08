@@ -1,3 +1,4 @@
+// Generated from prompts/cli/issue-dependencies-intake.prompt.md (sha256: ed8ec3fb4a14583c22eca59635186aaa076e287aba0036ab44ad4f376a091c94).
 import { syncMixedParts } from './issue-mixed.mjs';
 import { sortRequestFingerprint, sortSubjects, prepareSortContext, validateSortBatch, saveSortBatch, routeSortIssues, syncSortGroups, pacedSortWrites } from './issue-sort-github.mjs';
 import { sortPlan } from './issue-sort.mjs';

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 52e6e5a4a18991476c9d3dd7cf70e662383394c3ce9279c42ad619a30dc95a86).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: a18c5a3dd084a465ae6c764930841dfcaa6be3e4246ed20bf6c288be438a782a).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -44,6 +44,7 @@ const staleLine = ({ found, stale, staleSkills = [] }, version, cwd) => {
     ? `${name} is ${version ?? 'unknown'}` : `${name} differs (version ${version ?? 'unknown'})`).join(', ');
   return `PDD skills in ${found} ${stale === 'older' ? `are older than pdd ${version}` : `differ from the skills of pdd ${version}`}.${details ? ` ${details}.` : ''} For copies installed by pdd in user folders, run: pdd setup. For other copies, run: npx skills add promptdriven/pdd${[join(cwd, '.agents/skills'), join(cwd, '.claude/skills')].includes(found) ? '' : ' -g'} -a codex -a claude-code -y`;
 };
+const profileOptions = plan => Object.fromEntries([['--model','model'],['--herdr-agent-name','herdrAgentName'],['--codex-threads','codexThreads']].filter(([flag]) => plan.options[flag] !== undefined).map(([flag,key]) => [key,plan.options[flag]]));
 const RUNNER_ROUTES = {
   'workflow-suite': plan => ['runSuite', {command:plan.options['--command'], ...(plan.options['--timeout'] ? {timeout:Number(plan.options['--timeout'])} : {})}],
   'workflow-request-uptake': plan => ['acknowledgeRequest', { requestId: plan.operands[0], summary: plan.options['--summary'] }],

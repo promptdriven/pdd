@@ -34,7 +34,8 @@ test('exhaustion keeps the run stuck and sends one cause-specific alert over rep
   f.environmentWaits = [retry(f, { attempts: 3, nextAt: null })];
   for (let i = 0; i < 4; i++) { f.time += 30 * minute; await f.tick(); }
   assert.equal(f.prompts.length, 0, 'no retry offered at the limit');
-  assert.equal(f.sent.length, 1, 'one alert after retry exhaustion');
+  assert.equal(f.sent.filter(text => !/digest/i.test(text)).length, 1, 'one alert after retry exhaustion');
+  assert.ok(f.sent.filter(text => /digest/i.test(text)).length <= 1);
   assert.match(f.sent[0], /filesystem journal I\/O/); assert.match(f.sent[0], /3.*verify/s);
   assert.equal(f.environmentWaits[0].attempts, 3);
 });

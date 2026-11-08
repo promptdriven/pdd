@@ -1,4 +1,4 @@
-// Owned by prompts/cli/codex-limits.prompt.md.
+// Generated from prompts/cli/codex-limits.prompt.md (sha256: 3a8dad8a541231a1194ff690fd67ae7441ec938f142232362a0c0f5c1739c294).
 import { spawn } from 'node:child_process';
 const unknown = () => ({ state: 'unknown', resetAt: null, usedPercent: null });
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);

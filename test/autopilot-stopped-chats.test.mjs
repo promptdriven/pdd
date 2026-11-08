@@ -247,7 +247,7 @@ test('3068: three attempts in rolling hour then stuck; later ticks do not launch
   assert.equal(launches(f).length, 0);
   const run = f.record(); assert.equal(run.state, 'stuck'); assert.equal(run.chatResumes[run.chats.at(-1).area].length, 3);
   assert.match(run.parkReason, /3.*hour/); assert.equal(alerts.length, 1); assert.match(alerts[0].body.content, /stuck/);
-  await tick(); assert.equal(launches(f).length, 0); assert.equal(alerts.length, 1, 'repeat ticks send one incident alert');
+  await tick(); assert.equal(launches(f).length, 0); assert.equal(alerts.filter(row => !/digest/i.test(row.body.content)).length, 1, 'repeat ticks send one incident alert');
 });
 
 test('3068: the hour boundary and each area have independent allowances; manual open spends none', async t => {
@@ -304,7 +304,7 @@ for (const failure of ['config-folder', 'workspace-inventory', 'request-journal'
   const {f, run, tick, stop, ports} = await setup(t); stop();
   const herdr = ports.herdr;
   if (failure === 'config-folder') {
-    const changed = f.record(); changed.configDir = join(f.base, 'missing-profile'); changed.chats.at(-1).configDir = changed.configDir; save(f, changed);
+    const changed = f.record(); changed.configDir = join(f.base, 'missing-profile'); changed.chats.at(-1).configDir = changed.configDir; changed.launchProfile.configDir = changed.configDir; changed.chats.at(-1).launchProfile.configDir = changed.configDir; save(f, changed);
   }
   if (failure === 'workspace-inventory') ports.herdr = async args => {
     if (args[0] === 'workspace' && args[1] === 'list') throw Object.assign(Error('unavailable'), {code: 'server_unavailable'});
@@ -315,7 +315,7 @@ for (const failure of ['config-folder', 'workspace-inventory', 'request-journal'
   assert.equal(launches(f).length, 0);
   assert.equal(f.record().chatResumes, undefined, 'no native dispatch means no automatic attempt');
   assert.equal(f.record().state, 'running');
-  if (failure === 'config-folder') {const changed = f.record(); changed.configDir = run.configDir; changed.chats.at(-1).configDir = run.chats.at(-1).configDir; save(f, changed);}
+  if (failure === 'config-folder') {const changed = f.record(); changed.configDir = run.configDir; changed.chats.at(-1).configDir = run.chats.at(-1).configDir; changed.launchProfile = run.launchProfile; changed.chats.at(-1).launchProfile = run.chats.at(-1).launchProfile; save(f, changed);}
   if (failure === 'workspace-inventory') ports.herdr = herdr;
   if (failure === 'request-journal') writeFileSync(join(run.runDir, 'delivery-journal.json'), JSON.stringify({requests: []}));
   await tick(); assert.equal(launches(f).length, 1);
