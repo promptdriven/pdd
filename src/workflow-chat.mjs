@@ -2,6 +2,7 @@
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, lstatSync, readdirSync, writeFileSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
+import * as nodeFs from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -344,6 +345,178 @@ export async function sendToChat(chat, text, ports = {}) {
       return { ok: false, code, ...(code === 'agent_blocked' ? { reason: dialogReason() } : { uncertain: true }) };
     }
   }
+}
+
+// Chat health: an alive agent whose turns fail on its login or its usage limit. It only reads the end of the agent's own
+// session file and the bottom of its screen; it never sends anything to the chat and never throws.
+const TAIL_BYTES = 256 * 1024, SCREEN_LINES = 15, DAY = 86_400_000, MAX_DAYS = 31;
+const LIMIT_TEXT = /\byou(?:'|’)?ve (?:hit|reached) your\b[^.]*\blimit\b|\byou have (?:hit|reached) your\b[^.]*\blimit\b|\busage limit\b|\bout of (?:usage|credits)\b/i;
+const LOGIN_TEXT = /ANTHROPIC_(?:API_KEY|AUTH_TOKEN)|\bAPI key\b|\/login\b|\bnot logged in\b|\b(?:log|sign) ?in again\b|\bauthenticat|\bOAuth\b|\b401\b|\bunauthori[sz]ed\b|\baccess token\b|\brefresh[_ ]token\b|disabled organization|organization has disabled/i;
+const CLAUDE_MENU = /^(?:❯\s*)?\d\.\s+(?:Stop and wait for (?:the )?limit to reset|Wait here,? then continue automatically)\b/i;
+const REPLY_LINE = /^[⏺●•](?:\s|$)/;
+const flat = text => String(text ?? '').replace(/\s+/g, ' ').trim(), oneLine = text => flat(text).slice(0, 160);
+// Reset words: an optional date, a clock time and an optional time zone. Never the words after them (offers, hints).
+const RESET_TIME = String.raw`(?:(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.? (\d{1,2})(?:st|nd|rd|th)?(?:,? (\d{4}))?,? (?:at )?)?(\d{1,2})(?::(\d{2}))? ?([ap])m\b(?: \(([\w+\-/]{1,40})\))?`;
+const RESET_WORDS = new RegExp(String.raw`\b(?:resets(?: at)?|try again at) (${RESET_TIME})`, 'i'), RESET_ONLY = new RegExp(`^${RESET_TIME}$`, 'i');
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+const zoneParts = (ms, timeZone) => Object.fromEntries(new Intl.DateTimeFormat('en-US', { hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', ...(timeZone ? { timeZone } : {}) })
+  .formatToParts(ms).filter(part => part.type !== 'literal').map(part => [part.type, Number(part.value)]));
+// The epoch ms of a wall-clock time in a time zone (the local zone when none is given).
+function wallTime(year, month, day, hour, minute, timeZone) {
+  const guess = Date.UTC(year, month, day, hour, minute), shown = zoneParts(guess, timeZone);
+  return guess - (Date.UTC(shown.year, shown.month - 1, shown.day, shown.hour, shown.minute) - guess);
+}
+// resetsAt: the reset words as one exact time, else null. Claude names its zone; Codex writes the local time of its own
+// process, and leaves out the date only for a reset on the day of the failed turn (turnAt, known only from its file).
+function resetTime(words, agent, { now, timeZone, turnAt } = {}) {
+  const match = words ? RESET_ONLY.exec(words) : null;
+  if (!match || !Number.isFinite(now)) return null;
+  const [, month, day, year, hour, minute = '0', half, zone] = match, h = Number(hour), m = Number(minute);
+  if (h < 1 || h > 12 || m > 59 || day !== undefined && !(Number(day) >= 1 && Number(day) <= 31) || (agent === 'claude') !== (zone !== undefined)) return null;
+  const tz = zone ?? timeZone, clock = [h % 12 + (half.toLowerCase() === 'p' ? 12 : 0), m];
+  try {
+    if (month) {
+      const at = y => wallTime(y, MONTHS.indexOf(month.slice(0, 3).toLowerCase()), Number(day), ...clock, tz), thisYear = zoneParts(now, tz).year;
+      if (year) return at(Number(year));
+      return at(thisYear) > now + 32 * DAY ? at(thisYear - 1) : at(thisYear);
+    }
+    if (agent !== 'codex' || !Number.isFinite(turnAt)) return null;
+    const date = zoneParts(turnAt, tz);
+    return wallTime(date.year, date.month - 1, date.day, ...clock, tz);
+  } catch { return null; }
+}
+// A usage-limit text goes on with the agent's plan and account offers, and Claude draws more lines of its limit block
+// under its error line. So the message keeps only the limit sentence (to ". ", " · ", a slash command or the end of the
+// first line) and the reset words right after it.
+function limitWords(text) {
+  const all = flat(text), first = flat(String(text ?? '').split('\n')[0]), end = /[.!?](?=\s|$)|\s·\s|\s\/\w/.exec(first);
+  let message = end ? first.slice(0, end.index + (/^[.!?]/.test(end[0]) ? 1 : 0)) : first;
+  const reset = RESET_WORDS.exec(all);
+  if (reset && /^\s*(?:·\s*)?$/.test(all.slice(message.length, reset.index))) message = all.slice(0, reset.index + reset[0].length);
+  return { message: oneLine(message), resets: reset?.[1] ?? null };
+}
+const epochMs = value => Number.isFinite(value) && value > 0 ? (value < 1e12 ? value * 1000 : value) : null;
+const textKind = text => LIMIT_TEXT.test(text) ? 'usage-limit' : LOGIN_TEXT.test(text) ? 'login' : null;
+function problemOf(kind, agent, text, context = {}, until = null) {
+  if (kind !== 'usage-limit') return { kind, agent, until, resets: null, resetsAt: null, message: oneLine(text) };
+  const { message, resets } = limitWords(text);
+  return { kind, agent, until, resets, resetsAt: until === null ? resetTime(resets, agent, context) : null, message };
+}
+
+// The complete JSON rows in the last TAIL_BYTES of a file, or null when it cannot be read.
+function tailRows(fs, path) {
+  let fd;
+  try {
+    fd = fs.openSync(path, 'r');
+    const size = fs.fstatSync(fd).size, start = Math.max(0, size - TAIL_BYTES), buffer = Buffer.alloc(size - start);
+    let read = 0;
+    while (read < buffer.length) { const n = fs.readSync(fd, buffer, read, buffer.length - read, start + read); if (!n) break; read += n; }
+    const lines = buffer.subarray(0, read).toString('utf8').split('\n');
+    if (start > 0) lines.shift();
+    lines.pop(); // A row without its newline is still being written.
+    return lines.flatMap(line => { try { const row = JSON.parse(line); return row && typeof row === 'object' && !Array.isArray(row) ? [row] : []; } catch { return []; } });
+  } catch { return null; }
+  finally { if (fd !== undefined) try { fs.closeSync(fd); } catch { /* Already closed. */ } }
+}
+const blockText = content => typeof content === 'string' ? content : Array.isArray(content) ? content.filter(block => block?.type === 'text').map(block => block.text).join(' ') : '';
+// A file verdict: undefined (the file does not decide), null (no problem) or a problem.
+function claudeVerdict(rows, context) {
+  const last = rows.findLast(row => ['user', 'assistant'].includes(row.type) && !row.isMeta && !row.isSidechain);
+  if (!last) return undefined;
+  if (last.type !== 'assistant' || last.isApiErrorMessage !== true) return null;
+  const text = blockText(last.message?.content);
+  if (last.error === 'rate_limit' || last.apiError === 'usage_limit_reached')
+    return problemOf('usage-limit', 'claude', text, context, epochMs(last.apiErrorParams?.rate_limit_info?.resetsAt) ?? epochMs(last.quotaLimits?.resetsAt));
+  if (['authentication_failed', 'oauth_org_not_allowed'].includes(last.error) || LOGIN_TEXT.test(text)) return problemOf('login', 'claude', text);
+  return null;
+}
+// Codex marks each turn with an event_msg row: task_started, then task_complete or turn_aborted. A failed turn keeps its
+// error in its task_complete row ({message, codex_error_info}). The newest of these rows decides, so a later turn that
+// worked clears an older error.
+const CODEX_TURN = new Set(['task_started', 'task_complete', 'turn_aborted']);
+function codexVerdict(rows, context) {
+  const row = rows.findLast(item => item.type === 'event_msg' && CODEX_TURN.has(item.payload?.type)), turn = row?.payload;
+  if (!turn || turn.type === 'task_started') return undefined;
+  const error = turn.type === 'task_complete' && turn.error && typeof turn.error === 'object' ? turn.error : null;
+  if (!error) return null;
+  const text = String(error.message ?? ''), info = error.codex_error_info;
+  const unauthorized = info && typeof info === 'object' && Object.values(info).some(value => value?.http_status_code === 401);
+  const kind = info === 'usage_limit_exceeded' ? 'usage-limit' : unauthorized ? 'login' : textKind(text);
+  return kind ? problemOf(kind, 'codex', text, { ...context, turnAt: Date.parse(row.timestamp) || epochMs(turn.completed_at) }) : null;
+}
+// The Codex session file of this id: only the day folders around the session's start, never the whole tree.
+function codexSessionFile(fs, home, id, chat, now) {
+  // A UUIDv7 thread id holds its session start in its first 48 bits.
+  const v7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7/i.test(id) ? parseInt(id.replace(/-/g, '').slice(0, 12), 16) : NaN;
+  const first = Math.min(now, ...[chat.startedAt, v7].filter(Number.isFinite));
+  const day = new Date(Math.max(now - MAX_DAYS * DAY, first - DAY)), last = new Date(now + DAY), pad = n => String(n).padStart(2, '0');
+  day.setHours(0, 0, 0, 0);
+  const found = [];
+  for (; day <= last; day.setDate(day.getDate() + 1)) {
+    const dir = join(home, 'sessions', String(day.getFullYear()), pad(day.getMonth() + 1), pad(day.getDate()));
+    let names;
+    try { names = fs.readdirSync(dir); } catch { continue; }
+    for (const name of names) {
+      if (!name.startsWith('rollout-') || !name.endsWith(`-${id}.jsonl`)) continue;
+      try { found.push({ path: join(dir, name), at: fs.statSync(join(dir, name)).mtimeMs }); } catch { /* The file went away. */ }
+    }
+  }
+  return found.sort((a, b) => b.at - a.at)[0]?.path ?? null;
+}
+// Is screen line i an error line in the place where the agent itself draws one? Codex draws "■ " at column 0; its replies,
+// tool output and prompts continue at an indent. Claude draws "  ⎿  ", like its tool results and indented reply lines, so
+// its error line counts only right under the user's prompt line of the turn. Elsewhere the marker is quoted text.
+function ownErrorLine(lines, i, agent) {
+  if (agent === 'codex') return /^■\s/.test(lines[i]);
+  if (!/^ {2}⎿ {2}/.test(lines[i])) return false;
+  for (let j = i - 1; j >= 0; j--) if (lines[j].trim() && !/^\s/.test(lines[j])) return INPUT_LINE.test(lines[j].replace(EDGES, ''));
+  return false;
+}
+// The bottom of the screen: the newest error line of the last turn, or the Claude limit menu.
+function screenProblem(screen, agent, context) {
+  const lines = String(screen).split(/\r?\n/), clean = line => line.replace(EDGES, '');
+  let seen = 0, inputs = 0, menu = false;
+  for (let i = lines.length - 1; i >= 0 && seen < SCREEN_LINES; i--) {
+    const text = clean(lines[i]);
+    if (!text) continue;
+    seen++;
+    // The limit menu takes the place of the input box: menu words above an input line are quoted text.
+    if (agent === 'claude' && CLAUDE_MENU.test(text)) { menu ||= !inputs; continue; }
+    if (REPLY_LINE.test(text)) break;
+    if (INPUT_LINE.test(text)) { if (++inputs > 1) break; continue; }
+    if (!ownErrorLine(lines, i, agent)) continue;
+    // Claude draws more lines of its limit block under its error line, so its lines stay apart; Codex wraps one paragraph.
+    let body = text.slice(1);
+    for (let j = i + 1; j < lines.length && /^\s+\S/.test(lines[j]) && !/^[⎿■⏺●•›>❯]/.test(clean(lines[j])); j++) body += `${agent === 'claude' ? '\n' : ' '}${clean(lines[j])}`;
+    const kind = textKind(flat(body));
+    if (kind) return problemOf(kind, agent, body, context);
+  }
+  return menu ? problemOf('usage-limit', agent, 'The chat shows its usage-limit menu.', context) : null;
+}
+export async function chatHealth({ run, chat, live }, ports = {}) {
+  const agent = chat?.agent ?? run?.agent;
+  if (!live?.alive || !['claude', 'codex'].includes(agent)) return null;
+  try {
+    const env = ports.env ?? process.env, now = (ports.now ?? Date.now)(), fs = ports.sessionFs ?? nodeFs, context = { now, timeZone: ports.timeZone };
+    const home = env.HOME || homedir(), id = validSessionId(live.sessionId) ? live.sessionId : validSessionId(chat.session?.id) ? chat.session.id : null;
+    let verdict;
+    if (id && typeof run.root === 'string') {
+      if (agent === 'claude') {
+        const config = expandHome(chat.configDir, env) ?? expandHome(env.CLAUDE_CONFIG_DIR, env) ?? join(home, '.claude');
+        const rows = tailRows(fs, join(config, 'projects', run.root.replace(/[^a-zA-Z0-9]/g, '-'), `${id}.jsonl`));
+        verdict = rows ? claudeVerdict(rows, context) : undefined;
+      } else {
+        const file = codexSessionFile(fs, expandHome(chat.configDir, env) ?? expandHome(env.CODEX_HOME, env) ?? join(home, '.codex'), id, chat, now);
+        const rows = file ? tailRows(fs, file) : null;
+        verdict = rows ? codexVerdict(rows, context) : undefined;
+      }
+    }
+    if (verdict !== undefined) return verdict;
+    // A working agent shows its work; its screen is no evidence that it cannot work.
+    if (live.status === 'working') return null;
+    const screen = await herdrCommand(ports)(['pane', 'read', chat.paneId, '--source', 'detection']);
+    return typeof screen === 'string' ? screenProblem(screen, agent, context) : null;
+  } catch { return null; }
 }
 
 export async function chatSession(chat, ports = {}) {
