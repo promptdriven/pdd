@@ -23,3 +23,13 @@ Final-fetch deletion cases remove either the Story or scenario from the peer bra
 Merged-base cases publish PR 1, add an unrelated prompt or scenario on main in a peer clone, then merge PR 1 there. After status completes the run at PR 1, terminal and explicit-reply approval must enter code from that pinned merged commit. Both legacy and Story-card gates must keep the run's approved files and replay anchor unchanged. The concurrent base file must remain present on the new code branch.
 
 The tests remove their temporary projects after each case. TAP output is native evidence. It is not prompt-interpreter evidence or a live GitHub or Herdr integration result. For an old-code control, put the same tests and fixtures into a temporary copy of the base source. Keep the failed assertions. A setup failure does not detect the defect.
+
+Completed guidance runs use the same validated code-entry route. Run
+`test/recover-guidance-code-review.vectors.test.mjs` and
+`test/recover-guidance-code-review.formal.test.mjs` with the reentry tests.
+Review-only recovery must preserve the complete PR record and cause no
+publication. A later scoped approval must preserve PR identity, publication head,
+owned paths and earlier decisions. It refreshes PR 1's description and saved
+readable approval facts only after the new code decision is durable. The native
+replay checks the saved facts, remote description and decision present at the
+fake publication boundary. Refused approvals retain their zero-effect checks.
