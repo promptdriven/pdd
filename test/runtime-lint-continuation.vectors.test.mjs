@@ -522,12 +522,12 @@ test('CONTINUATION preservation: concurrent proved capacity retries adopt claims
 
 for (const legacy of [false, true]) test(`CONTINUATION: ${legacy ? 'legacy' : 'current'} batch local refusal does not block valid held row`, async t => {
   const r = await setup(t, { timeout: 1, multiple: 'mixed' }); const { batch } = await r.first(); r.state.lint = 'passed';
-  assert.equal(saved(r, batch).doc.rows.find(row => row.test === 'tests/second-1.json').state, 'refused');
+  assert.equal(saved(r, batch).doc.rows.find(row => row.test === 'tests/second-1.json').state, 'not run');
   if (legacy) { const s = saved(r, batch); delete s.doc.intent; writeFileSync(s.path, JSON.stringify(s.doc)); }
   const next = await recovery(r, batch);
   assert.equal(next.code, 4); assert.equal(next.json.rows.length, 2);
   assert.equal(paid(r).length, 1); assert.equal(paid(r)[0].request.scenario, 'tests/place-order.json');
-  assert.equal(next.json.rows.find(row => row.test === 'tests/second-1.json').state, 'refused');
+  assert.equal(next.json.rows.find(row => row.test === 'tests/second-1.json').state, 'not run');
 });
 
 for (const legacy of [false, true]) test(`CONTINUATION H: refused ${legacy ? 'legacy' : 'current'} held proof does not stop independent busy retry`, async t => {

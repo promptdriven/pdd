@@ -34,6 +34,8 @@ async function baseRun(t,{areas=[CODE],files=BASE}={}) {
   const f=await fixture(t,{name:'replay',agent:'codex'});
   put(f.source,'.agents/skills/pdd-replay/workflow.json',JSON.stringify({version:2,areas}));
   for(const [path,text] of Object.entries(files))put(f.source,path,text);
+  // These custom prompt-space cases exercise the manual gate, independent of Story-card automatic publication.
+  if(areas.some(area=>area.before==='approve'))put(f.source,'pdd.json',JSON.stringify({strict_approvals:true}));
   f.git(f.source,'add','.');f.git(f.source,'commit','-qm','Approved corpus on main');
   const base=f.git(f.source,'rev-parse','HEAD');f.git(f.source,'update-ref','refs/remotes/origin/main',base);
   const out=await startRun({name:'replay',issue:'17',agent:'codex',cwd:f.source,packageRoot},f.ports);

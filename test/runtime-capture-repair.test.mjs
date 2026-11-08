@@ -72,7 +72,7 @@ for(const [variant,edit] of Object.entries(variants))for(const mode of ['test','
       const latest=evidence.find(r=>r.kind==='pdd test');
       assert.ok(latest);
       const storyLine=latest.stories.find(line=>line.includes('(place-order)'));
-      assert.ok(storyLine);assert.match(storyLine,/refused/);assert.ok(!storyLine.includes('✓'));
+      assert.ok(storyLine);assert.match(storyLine,/not run \(broken-test\)/);assert.ok(!storyLine.includes('✓'));
     }
   });
 }

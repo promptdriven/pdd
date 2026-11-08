@@ -71,6 +71,13 @@ async function storyGate(t, { through, start = {}, existingStory = false, existi
   f.run = run;
   return f;
 }
+// Keep synthetic Story text and its scenario criteria consistent while testing gate changes.
+function reviseStory(f,before,after) {
+  writeFileSync(join(f.run.root,STORY),readFileSync(join(f.run.root,STORY),'utf8').replace(before,after));
+  const doc=JSON.parse(readFileSync(join(f.run.root,TEST)));
+  doc.criteria=doc.criteria.map(item=>({...item,text:item.text.replace(before.replace(/^\d+\.\s*/,''),after.replace(/^\d+\.\s*/,''))}));
+  writeFileSync(join(f.run.root,TEST),JSON.stringify(doc));
+}
 // pdd's own saved check batch for the current files, as pdd test writes it.
 let batches = 0;
 function saveCheck(f, { state = 'passed', criteria = { passed: 3, total: 3 }, tests = [TEST] } = {}) {
@@ -199,7 +206,7 @@ test('#2962 a changed expected value reopens the Story gate; the person approval
 test('#2962 a changed Story reopens the Story gate', async t => {
   const f = await storyGate(t);
   await approveStory(f);
-  writeFileSync(join(f.run.root, STORY), readFileSync(join(f.run.root, STORY), 'utf8').replace('1. An order', '1. Any order'));
+  reviseStory(f, '1. An order', '1. Any order');
   saveCheck(f);
   await f.done('check');
   assert.equal(f.prs.length, 0); assert.ok(f.record().gate?.storyChanges?.some(line => line.includes(STORY)));
@@ -224,7 +231,7 @@ test('#2962 a prompt-only repair that passes the check keeps the Story approval'
 
 test('#2962 the approval covers the card that was shown: a later Story edit needs a new card', async t => {
   const f = await storyGate(t), before = f.record();
-  writeFileSync(join(f.run.root, STORY), readFileSync(join(f.run.root, STORY), 'utf8').replace('900 cents', '901 cents'));
+  reviseStory(f, '900 cents', '901 cents');
   f.tick();
   const refused = await approveRun({ ref: '17', cwd: f.run.root, said: '-' }, said(f, 'Approved.'));
   assert.equal(refused.exitCode, 1);
@@ -333,7 +340,7 @@ test('#2962 a Story named by a changed test is in the card and its approval', as
   assert.ok(f.gate.message.includes(join(f.run.root, STORY)));
   await approveStory(f);
   assert.equal(f.record().storyApproval.fingerprint.stories[0].path, STORY);
-  writeFileSync(join(f.run.root, STORY), readFileSync(join(f.run.root, STORY), 'utf8').replace('900 cents', '950 cents'));
+  reviseStory(f, '900 cents', '950 cents');
   saveCheck(f);
   const out = await f.done('check');
   assert.equal(f.prs.length, 0);
@@ -397,7 +404,7 @@ test('#2962 typed results cannot replace a missing check, and status does not re
 test('#2962 approving a changed Story with a failed check keeps the new approval and waits for a pass', async t => {
   const f = await storyGate(t);
   await approveStory(f);
-  writeFileSync(join(f.run.root, STORY), readFileSync(join(f.run.root, STORY), 'utf8').replace('900 cents', '950 cents'));
+  reviseStory(f, '900 cents', '950 cents');
   saveCheck(f, { state: 'failed', criteria: { passed: 2, total: 3 } });
   await f.done('check');
   assert.ok(f.record().gate?.storyChanges?.length, 'changed Story must reopen the gate');
@@ -425,7 +432,7 @@ test('#2962 a Story change after failed publication records the new person appro
   assert.equal(f.prs.length, 0);
   const automatic = f.record().decisions.at(-1);
   assert.equal(automatic.via, 'automatic-check-pass');
-  writeFileSync(join(f.run.root, STORY), readFileSync(join(f.run.root, STORY), 'utf8').replace('900 cents', '950 cents'));
+  reviseStory(f, '900 cents', '950 cents');
   f.git(f.run.root, 'add', STORY); f.git(f.run.root, 'commit', '-qm', 'Revised Story');
   f.tick(); saveCheck(f);
   await f.done('check');
@@ -479,7 +486,7 @@ for (const kind of ['Story', 'expected']) test(`#2962 repair 1: open PR 1 waits 
   const pushes = f.pushes.length, edits = f.edits.length, approval = f.record().storyApproval;
   // A saved code choice must not bypass the revised Story gate.
   const record = f.record(); record.through = 'code'; writeRun(record);
-  if (kind === 'Story') writeFileSync(join(f.run.root, STORY), readFileSync(join(f.run.root, STORY), 'utf8').replace('900 cents', '950 cents'));
+  if (kind === 'Story') reviseStory(f, '900 cents', '950 cents');
   else {
     const doc = JSON.parse(readFileSync(join(f.run.root, TEST), 'utf8'));
     doc.steps[0].checks.find(check => check.path === '/totalCents').value = 950;
@@ -589,7 +596,7 @@ test('#2962 repair 1: a saved code choice after merged PR 1 cannot bypass a revi
   f.merged = true; f.mergedNumbers = [f.prs[0].number];
   await runStatus({ ref: '17', cwd: f.source }, f.ports);
   assert.equal(f.record().doneAt, 'PR 1');
-  writeFileSync(join(f.run.root, STORY), readFileSync(join(f.run.root, STORY), 'utf8').replace('900 cents', '950 cents'));
+  reviseStory(f, '900 cents', '950 cents');
   const pushes = f.pushes.length, edits = f.edits.length;
   await f.done('check');
   assert.equal(f.record().areas[f.record().area].name, 'prompt-pr', 'a revised Story must block saved code entry');
@@ -620,7 +627,7 @@ for (const route of ['said', 'terminal']) for (const merged of [false, true]) {
     const f = await storyGate(t); await approveStory(f); saveCheck(f); await f.done('check');
     if (merged) { f.merged = true; await runStatus({ ref: '17', cwd: f.source }, f.ports); assert.equal(f.record().state, 'completed'); }
     const pushes = f.pushes.length, edits = f.edits.length, decisions = f.record().decisions.length, questions = f.prompts.length;
-    writeFileSync(join(f.run.root, STORY), readFileSync(join(f.run.root, STORY), 'utf8').replace('900 cents', '950 cents'));
+    reviseStory(f, '900 cents', '950 cents');
     f.git(f.run.root, 'add', STORY); f.git(f.run.root, 'commit', '-qm', 'Unapproved Story revision');
     const out = route === 'said' ? await approveStory(f, 'Make the code PR now.') : await approveRun({ ref: '17', cwd: f.source }, f.ports);
     assert.equal(f.pushes.length, pushes, 'a code request cannot publish an unseen Story');
@@ -651,7 +658,7 @@ test('#2962 repair 2: terminal code confirmation cannot approve a Story changed 
   const f = await storyGate(t); await approveStory(f); saveCheck(f); await f.done('check');
   const pushes = f.pushes.length, decisions = f.record().decisions.length;
   const out = await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async () => {
-    writeFileSync(join(f.run.root, STORY), readFileSync(join(f.run.root, STORY), 'utf8').replace('900 cents', '950 cents'));
+    reviseStory(f, '900 cents', '950 cents');
     f.git(f.run.root, 'add', STORY); f.git(f.run.root, 'commit', '-qm', 'Story changed while answering');
     return true;
   } });

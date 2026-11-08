@@ -171,7 +171,7 @@ test('2862 partial coverage preserves other local refusals and authored invalid 
   writeFileSync(join(repo,'pdd-source.json'),'{');
   const sent=fake.posts.length;
   assert.equal(await check({cwd:repo,words:['place-order'],options:{'--json':true}},ports),4);
-  assert.equal(JSON.parse(ports.stdout.text).rows[0].state,'not_run');assert.equal(fake.posts.length,sent);
+  assert.equal(JSON.parse(ports.stdout.text).rows[0].state,'not run');assert.equal(fake.posts.length,sent);
   put(repo,'pdd-source.json',{include:[]});
   writeFileSync(join(repo,'tests/z-broken.json'),'{');
   const promptPath=join(repo,'prompts/place_order.prompt.md');
@@ -204,7 +204,7 @@ for(const mode of ['test','lint'])for(const json of [false,true])test(`2838 ${mo
   if(json){
     const result=JSON.parse(ports.stdout.text);assert.equal(result.exit_code,code);
     assert.equal(result.rows[0].test,'tests/z-broken.json');assert.equal(result.rows[0].unsent,true);
-    assert.equal(result.rows.find(row=>row.test==='tests/place-order.json').state,'not_run');
+    assert.equal(result.rows.find(row=>row.test==='tests/place-order.json').state,'not run');
   }else assert.ok(ports.stdout.text.indexOf('tests/z-broken.json')<ports.stdout.text.indexOf('tests/place-order.json'));
 });
 
