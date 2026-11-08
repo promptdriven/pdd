@@ -9,7 +9,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 3d45cd32d85653376ac2c1624a5fad0f93955dec2994f963890b7b8831cd5dad).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 19c11a47d2daf25aa4cab321c08426863d98bf2719437709cb449cc57ae154d1).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -295,13 +295,14 @@ async function adoptionFailure(run,p) {
   return null;
 }
 const unavailableInventory = () => ({schema_version:'pdd.replay-vectors.v1',vectors:[],outcome:'blocked',reason:'The changed scenario inventory is unavailable; repair unreadable or malformed JSON candidates and Git listing failures.'});
-async function refreshReplayBaseline(run,p,enteringCode=false) {
+async function refreshReplayBaseline(run,p,enteringCode=false,sourcePaths=null) {
   if (!replayEnabled(run) || run.replayAdoption) return;
   try {
     await rawGit(p,run.root,'fetch','origin',`refs/heads/${run.baseBranch}:refs/remotes/origin/${run.baseBranch}`);
     if (enteringCode) {const failure=await codeEntryFailure(run,p);if(failure)return failure;}
     const comparison = await git(p,run.root,'merge-base','HEAD',`refs/remotes/origin/${run.baseBranch}`);
-    const changed = await changedFiles({...run,baseSha:comparison},p,true), paths = await scenarioInventory(run,p,changed);
+    const owned = sourcePaths ?? prOf(run,askArea(run)?.name)?.sourcePaths ?? [];
+    const changed = [...new Set([...await changedFiles({...run,baseSha:comparison},p,true), ...owned])], paths = await scenarioInventory(run,p,changed);
     run.replayBaseline = pinRunAnchor(run.root,{paths,commit:run.baseSha,changed,scenarios:paths});
   }
   catch { run.replayBaseline = unavailableInventory(); }
@@ -1970,7 +1971,7 @@ async function publishAreaPr(run, area, p, lines, retry, automatic = null) {
     const applyPublication=publicationUpdate(run,codePr?['testInventory']:[]);
     const metadata=Object.fromEntries(['publishedHeadSha','publicationBodySha256','readable','sourcePaths'].filter(key=>Object.hasOwn(existing,key)).map(key=>[key,existing[key]]));
     commitRun(run,p,latest=>{applyPublication(latest);const pr=latest.pr.find(pr=>pr.url===existing.url&&pr.stage===existing.stage);if(pr)Object.assign(pr,metadata);});
-    if (area.then === 'ask-code') await refreshReplayBaseline(run,p);
+    if (area.then === 'ask-code') await refreshReplayBaseline(run,p,false,sourcePaths);
     lines.push(`Pushed the new commits to ${label}.`);
     return null;
   }
@@ -2012,7 +2013,7 @@ async function publishAreaPr(run, area, p, lines, retry, automatic = null) {
   // GitHub's refusal and a too-long body are certain: their message names the fix. Only a real doubt says "unconfirmed".
   if (!['open', 'merged'].includes(outcome.state) || !outcome.pr) return fail([...lines, `${label[0].toUpperCase()}${label.slice(1)} did not open: ${/ then try again\.$/.test(outcome.message)
     ? outcome.message.replace(/ then try again\.$/, ` then ${retry}.`) : `${outcome.message} ${retry[0].toUpperCase()}${retry.slice(1)} to retry.`}`].join('\n'));
-  if (area.then === 'ask-code') await refreshReplayBaseline(run,p);
+  if (area.then === 'ask-code') await refreshReplayBaseline(run,p,false,sourcePaths);
   const published = { stage: area.name, number: outcome.pr.number, url: outcome.pr.url, branch: run.branch, base };
   rememberPublication(published,outcome.pr);
   if (commitSha(published.publishedHeadSha)) published.readable = savedReadable(readable.facts, published.publishedHeadSha);
