@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { symlinkSync, existsSync, chmodSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { nativeGithubCounter, githubLedger, githubMachineEntries, githubUsage, githubBudget, githubEtagCache, githubReply } from '../src/github-calls.mjs';
 import { chatLaunch, chatCommand } from '../src/workflow-chat.mjs';
 import { commandGithubFloor } from '../src/issue-dependencies-github.mjs';
@@ -309,4 +310,49 @@ else process.exitCode = 1;
   assert.deepEqual(JSON.parse(readFileSync(callsFile, 'utf8')), ['auth', 'token']);
   assert.equal(w.tokens.length, 0);
   assert.ok(!JSON.stringify(result).includes('personal-runtime-fake-token'));
+});
+
+test('manual repair chat binds malformed config to a refusing transport; automatic and bound starts refuse', async t => {
+  const w = await githubAppWorld(t), runDir = join(w.dir, 'repair-run'), fakeBin = join(w.dir, 'personal-bin');
+  mkdirSync(runDir); mkdirSync(fakeBin);
+  const called = join(w.dir, 'personal-called');
+  writeFileSync(join(fakeBin, 'gh'), `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(called)}, 'called');\n`, {mode:0o755});
+  writeFileSync(join(w.cwd, 'pdd.json'), '{"replay":');
+  const env = { ...w.env, PATH: fakeBin + ':' + w.env.PATH };
+  const run = { sourceRoot: w.cwd, root: w.cwd, runDir };
+  const launch = chatLaunch({run, agent:'codex', env});
+  assert.equal(launch.githubEnv.PDD_GITHUB_APP_ROOT, w.cwd);
+  const result = spawnSync(join(launch.githubEnv.PATH.split(':')[0], 'gh'), ['api', 'repos/acme/widgets'], {cwd:w.cwd, env:{...env,...launch.githubEnv},encoding:'utf8'});
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /pdd\.json/);
+  assert.equal(existsSync(called), false);
+  assert.equal(w.http.length, 0);
+  assert.throws(() => chatLaunch({run:{...run,automaticOrigin:true},agent:'codex',env}), {code:'github_app_invalid'});
+  assert.throws(() => chatLaunch({run,agent:'codex',env:{...env,PDD_GITHUB_APP_ROOT:w.cwd}}), {code:'github_app_invalid'});
+  writeFileSync(join(w.cwd, 'pdd.json'), JSON.stringify({autopilot:{github:{app:{id:0}}}}));
+  assert.throws(() => chatLaunch({run,agent:'codex',env}), {code:'github_app_invalid'});
+});
+
+test('manual repair chat keeps bound transport after sourcing an agents.json PATH', async t => {
+  const w = await githubAppWorld(t), runDir = join(w.dir, 'entry-repair-run'), fakeBin = join(w.dir, 'entry-personal-bin');
+  mkdirSync(runDir); mkdirSync(fakeBin);
+  const called = join(w.dir, 'entry-personal-called'), agent = join(fakeBin, 'fake-codex');
+  symlinkSync(process.execPath, join(fakeBin, 'node')); // The bundled transport uses env node.
+  writeFileSync(join(fakeBin, 'gh'), `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(called)}, 'called');\n`, {mode:0o755});
+  writeFileSync(agent, `#!${process.execPath}\nconst result = require('node:child_process').spawnSync('gh', ['api', 'repos/acme/widgets'], {encoding:'utf8'}); process.stdout.write(JSON.stringify({status:result.status, stderr:result.stderr}));\n`, {mode:0o755});
+  const config = join(w.home, '.config'); mkdirSync(join(config,'pdd'),{recursive:true});
+  const definition = {name:'repair-entry',kind:'codex',command:agent,env:{PATH:fakeBin+':/usr/bin:/bin'}};
+  writeFileSync(join(config,'pdd','agents.json'),JSON.stringify({agents:[definition]}));
+  writeFileSync(join(w.cwd, 'pdd.json'), '{"replay":');
+  const env = {...w.env, XDG_CONFIG_HOME:config};
+  const run = {sourceRoot:w.cwd,root:w.cwd,runDir,agentDefinition:{name:definition.name,kind:definition.kind,command:agent}};
+  const launch = chatLaunch({run,agent:'codex',env});
+  const result = spawnSync('/bin/sh',['-c',chatCommand({agent:'codex',cwd:w.cwd,...launch})],{cwd:w.cwd,env,encoding:'utf8'});
+  assert.equal(result.status,0,result.stderr);
+  const seen = JSON.parse(result.stdout);
+  assert.equal(seen.status,1);
+  assert.match(seen.stderr,/pdd\.json/);
+  assert.equal(existsSync(called),false);
+  assert.equal(existsSync(launch.loginFile),false);
+  assert.equal(w.http.length,0);
 });

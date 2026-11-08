@@ -33,7 +33,21 @@ worker chat's Git network and gh commands through [GitHub App identity](github-a
 PDD_GITHUB_APP_ROOT in the process environment and, for Codex, in
 shell_environment_policy.set. Read the source checkout settings even for a
 later area opened by another terminal. Preserve provider login file handling.
-Never pass an installation token to the chat or its launch file.
+Never pass an installation token to the chat or its launch file. If an
+agents.json entry supplies PATH, its private login file retains the combined
+wrapper PATH in App mode as well as automatic mode; sourcing provider login
+values cannot remove the GitHub transport.
+
+An unbound manual run may start a repair chat when source configuration has a
+JSON syntax error, including an oversized broken base configuration whose replay
+owner must block publication. Bind that chat to the configurationRoot supplied by
+the settings refusal and install the App wrappers. Until configuration is repaired,
+its GitHub transport refuses every network call; never fall back to personal gh.
+If repair leaves no App settings, the person starts a fresh chat from an unbound
+terminal to select personal mode; a running bound chat cannot switch identities.
+An automatic run, an already App-bound caller, an explicit invalid App setting or
+a file-access error still refuses startup. This exception changes no replay or
+publication gate.
 
 ## Closed workspace recovery
 
@@ -235,7 +249,7 @@ Limits: the screen is a fallback. A Claude error that comes after a tool call in
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"draft","prose_sha256":"7884dc5b2c28e7e8c56f3070aa14a93e9673b9c18313a868d3460403611985c0","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+{"status":"draft","prose_sha256":"55f1684fc65184ec33b41cc9db440698aa76178311b37158b4af30d06c79aa1f","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
 ```
 </details>
 

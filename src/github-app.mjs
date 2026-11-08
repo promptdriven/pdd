@@ -11,7 +11,7 @@ import { githubOriginRepository } from './workflow-worktree.mjs';
 const nativeExec = promisify(execFile);
 const wrapper = fileURLToPath(new URL('../bin/github-app', import.meta.url));
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
-const fail = reason => { throw Object.assign(Error(`GitHub App: ${reason}`), { code: 'github_app_invalid' }); };
+const fail = (reason, details = {}) => { throw Object.assign(Error(`GitHub App: ${reason}`), { code: 'github_app_invalid', ...details }); };
 const digest = value => createHash('sha256').update(value).digest('hex');
 const required = { issues: 'write', pull_requests: 'write', contents: 'write', metadata: 'read', checks: 'read', statuses: 'read', actions: 'read' };
 const permissions = value => Object.entries(required).every(([key, level]) => value?.[key] === level || level === 'read' && value?.[key] === 'write');
@@ -28,7 +28,7 @@ export function githubAppSettings({ cwd = process.cwd(), env = process.env, fs =
   for (;;) {
     try { config = JSON.parse(fs.readFileSync(join(root, 'pdd.json'), 'utf8')); break; }
     catch (error) {
-      if (error.code !== 'ENOENT') fail('cannot read pdd.json; fix its JSON and file access.');
+      if (error.code !== 'ENOENT') fail('cannot read pdd.json; fix its JSON and file access.', error instanceof SyntaxError ? { configurationRoot: root } : {});
       if (env.PDD_GITHUB_APP_ROOT || dirname(root) === root) break;
       root = dirname(root);
     }

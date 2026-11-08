@@ -22,6 +22,10 @@ numeric App `id` (integer or decimal string) and an absolute `privateKeyFile`.
 The key must resolve to a regular RSA private key outside the checkout. Reject
 unreadable files and malformed settings without displaying their contents.
 A bound chat whose App setting disappears fails rather than changing identity.
+A JSON syntax refusal also carries `configurationRoot`, the absolute directory of
+the unreadable JSON configuration, without its contents. This permits a manual
+repair chat to bind the refusing transport while retaining the same error code;
+it does not permit a native GitHub call or automatic startup to bypass validation.
 
 `createGithubApp(settings, ports)` returns `{credentials(),preflight()}`.
 Ports are `fs` (node:fs), `fetch` (global fetch), `now` (Date.now), `env`

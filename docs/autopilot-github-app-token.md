@@ -142,6 +142,15 @@ output and errors redact the active token. Credential-printing and login-changin
 `gh auth` commands are refused in App mode. Removing App settings from a bound
 chat stops its `gh` route rather than silently switching to a person.
 
+A manual workflow can open a repair chat when `pdd.json` has broken JSON. That
+chat gets a bound transport that refuses GitHub calls while the JSON is broken.
+If the repaired file has no App settings, start a fresh chat from an unbound
+terminal to select personal mode.
+An agents.json PATH cannot remove that transport when the login file is read.
+Automatic starts and already bound callers still stop at this error. Invalid
+App settings and unreadable files stop all starts. Replay checks still block
+publication when the selected base configuration cannot be read.
+
 App transport disables inherited Git tracing and curl verbosity. It also disables
 trace2 targets set in Git configuration and forces HTTP trace redaction. This
 applies to native commands, worker wrappers and Git started by gh. Git trace files
