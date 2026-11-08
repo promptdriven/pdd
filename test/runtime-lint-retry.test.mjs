@@ -47,7 +47,7 @@ for(const mode of ['check','lint','try']) test(`LINT-RETRY: ${mode} waits throug
   assert.match(r.ports.stderr.text+r.ports.stdout.text,/server.*busy/i);
   assert.match(r.ports.stderr.text+r.ports.stdout.text,/same.*command.*later/i);
   assert.doesNotMatch(r.ports.stderr.text+r.ports.stdout.text,/lint result is unknown|"state":"unknown"|Fix the prompt/i);
-  assert.ok(r.clock.now-Date.parse('2026-10-27T16:27:47Z')<=(mode === 'check' ? 60_000 : mode === 'try' ? 300_000 : 90_000));
+  assert.ok(r.clock.now-Date.parse('2026-10-27T16:27:47Z')<=(mode === 'try' ? 300_000 : 90_000));
 });
 
 test('LINT-RETRY: queued GET and a lost POST retry only after that same ID confirms safe capacity',async t=>{
@@ -67,7 +67,7 @@ test('LINT-RETRY: literal opt-in required; unrelated or uncertain replies never 
   }
   const r=await invoke(t,'check',(e,f)=>e.method==='POST'?{destroy:true}:{status:404,json:{state:'refused',job_created:false,error:{code:'lint-queue-timeout',details:{retryable:true}}}}, {}, { '--timeout': 1 });
   assert.equal(r.code,3);assert.equal(r.fake.posts.length,1);
-  assert.ok(r.clock.now-Date.parse('2026-10-27T16:27:47Z')<=60_000);
+  assert.ok(r.clock.now-Date.parse('2026-10-27T16:27:47Z')<=90_000);
 });
 
 test('LINT-RETRY: direct lint queue full is busy, and interrupting backoff sends nothing else',async t=>{

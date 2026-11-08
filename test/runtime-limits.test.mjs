@@ -93,7 +93,7 @@ test('2676 mixed lint selection reports other rows not run, never passed or uplo
  const code=await runCheck({cwd:setup.repo,options:{'--lint':true,'--json':true}},ports);
  assert.equal(code,4);assert.equal(clock.uuids,0);
  const result=JSON.parse(ports.stdout.text);assert.equal(result.rows.length,2);
- assert.equal(result.rows.find(row=>row.test==='tests/place-order.json').state,'not_run');assert.equal(result.rows.find(row=>row.test==='tests/unknown-item.json').state,'refused');
+ assert.equal(result.rows.find(row=>row.test==='tests/place-order.json').state,'not run');assert.equal(result.rows.find(row=>row.test==='tests/unknown-item.json').state,'refused');
 });
 test('2676 valid limits keep explicit lint server-owned for unrelated schema errors',async t=>{
  const setup=harbor(t);harborLimit(setup,'{"max_steps":1,"max_model_calls":1}');
@@ -164,7 +164,7 @@ for(const json of [true,false])test(`2676 lint shared invalid prompt deduplicate
    const lines=ports.stderr.text.split('\n').filter(line=>line.includes('invalid-limits')&&line.includes('/limits/'+field));
    assert.equal(lines.length,1,ports.stderr.text);
   }
-  for(const path of ['tests/place-order.json','tests/unknown-item.json'])assert.ok(ports.stdout.text.split('\n').some(line=>line.includes(path)&&/refused:.*invalid-limits/.test(line)),ports.stdout.text);
+  for(const path of ['tests/place-order.json','tests/unknown-item.json'])assert.ok(ports.stdout.text.split('\n').some(line=>line.includes(path)&&/refused \(invalid-limits\)/.test(line)),ports.stdout.text);
  }
 });
 test('2676 lint invalid limits precede source capture and gh',async t=>{
@@ -200,5 +200,5 @@ test('2676 mixed lint text preserves refused and not run selected rows',async t=
  assert.equal(await runCheck({cwd:setup.repo,options:{'--lint':true}},ports),4);
  const lines=ports.stdout.text.split('\n');
  assert.ok(lines.some(line=>line.includes('tests/place-order.json')&&/not run/.test(line)),ports.stdout.text);
- assert.ok(lines.some(line=>line.includes('tests/unknown-item.json')&&/refused:.*invalid-limits/.test(line)),ports.stdout.text);
+ assert.ok(lines.some(line=>line.includes('tests/unknown-item.json')&&/refused \(invalid-limits\)/.test(line)),ports.stdout.text);
 });

@@ -34,7 +34,7 @@ for (const [seconds, duration] of [[600, '10 minutes'], [60, '1 minute'], [90, '
     assert.match(text, /https:\/\/runtime.example\/r\/receipt/);
     assert.equal(exitCodeFor([row]), 5);
     const json = renderJson({ repo: 'repo', rows: [row], exitCode: 5 }).rows[0];
-    assert.equal(json.reason.code, 'login-queue-timeout');
+    assert.equal(json.reason.code, 'server-busy');
     assert.equal(json.reason.message, 'No model login in the account pool.');
     assert.equal(json.why, 'The model login pool stayed busy.');
     assert.equal(json.next_step, 'Repair the account login.');
@@ -118,7 +118,7 @@ test('BUSY immediate, batch read and bare request read agree without new POSTs o
   const first = await command(h, f, { '--json': true });
   const json = JSON.parse(first.out), row = json.rows[0], batch = json.batch;
   assert.equal(first.code, 5);
-  assert.equal(row.reason.code, 'login-queue-timeout');
+  assert.equal(row.reason.code, 'server-busy');
   const saved = JSON.parse(readFileSync(join(h.state, 'batches', batch, `${row.request_id}.json`), 'utf8'));
   assert.deepEqual(saved, receipt);
   const read = await command(h, f, { '--read': true }, [batch]);

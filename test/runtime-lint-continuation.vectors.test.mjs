@@ -67,7 +67,7 @@ async function recovery(r, batch, retry = false, extra = {}, extraOptions = {}) 
 const paid = r => r.f.posts.filter(e => e.command === 'check');
 
 for (const [name, config, expect, elapsed] of [
-  ['explicit wait', { timeout: 4 }, 0, 150000],
+  ['explicit wait', { timeout: 4 }, 3, 90000],
   ['agent default', {}, 0, 150000],
   ['interactive', { interactive: true }, 0, 150000],
   ['lint-only wait', { mode: 'lint', timeout: 4 }, 0, 150000],
@@ -217,7 +217,7 @@ test('CONTINUATION native table: posted completed/running/lost/unknown IDs remai
   const s = saved(r, batch);
   const states = ['passed', 'running', 'unknown', 'sending'];
   const ids = states.map((_, i) => `22222222-2222-4222-8222-22222222222${i}`);
-  for (let i = 0; i < states.length; i++) Object.assign(s.doc.rows[i + 1], { state: states[i], phase: 'server', request_ids: [ids[i]], note: null });
+  for (let i = 0; i < states.length; i++) Object.assign(s.doc.rows[i + 1], { state: states[i], recovery_state: states[i], phase: 'server', request_ids: [ids[i]], note: null });
   writeFileSync(s.path, JSON.stringify(s.doc));
   writeFileSync(join(r.h.state, 'batches', batch, ids[0] + '.json'), JSON.stringify(r.f.check(ids[0])));
   const next = await recovery(r, batch);
@@ -233,16 +233,16 @@ async function budgetFixture(t, { unknown = false, terminalLint = false, openChe
   const r = await setup(t, { timeout: 1, multiple: openCheck ? 3 : true }), { batch } = await r.first();
   const s = saved(r, batch), folder = join(r.h.state, 'batches', batch);
   const id = '44444444-4444-4444-8444-444444444444', receipt = r.f.check(id);
-  Object.assign(s.doc.rows[1], { request_ids: [id], state: 'passed', phase: 'server', note: null });
+  Object.assign(s.doc.rows[1], { request_ids: [id], state: 'passed', recovery_state: 'passed', phase: 'server', note: null });
   writeFileSync(join(folder, id + '.json'), JSON.stringify(receipt));
   const lintId = s.doc.lint.request_ids.at(-1);
   if (unknown) {
-    Object.assign(s.doc.lint, { state: 'unknown', pending: false, unknown: true });
+    Object.assign(s.doc.lint, { state: 'partial', recovery_state: 'unknown', pending: false, unknown: true });
     s.doc.rows[0].note = { code: null, message: 'The lint result is unknown, so pdd sent no checks.' };
   }
   if (terminalLint) writeFileSync(join(folder, lintId + '.json'), JSON.stringify(r.f.lint(lintId)));
   const openId = '55555555-5555-4555-8555-555555555555';
-  if (openCheck) Object.assign(s.doc.rows[2], { request_ids: [openId], state: 'unknown', phase: 'server', note: null,
+  if (openCheck) Object.assign(s.doc.rows[2], { request_ids: [openId], state: 'partial', recovery_state: 'unknown', phase: 'server', note: null,
     lost: true, read_until: START + 300000 });
   writeFileSync(s.path, JSON.stringify(s.doc));
   return { r, batch, s, folder, id, receipt, lintId, openId, files: readdirSync(folder).sort() };
@@ -315,7 +315,7 @@ for (const retry of [false, true]) for (const openCheck of [false, true]) test(`
   assert.equal(saved(b.r, b.batch).doc.lint[openCheck ? 'pending' : 'unknown'], true);
   if (openCheck) {
     const row = next.json.rows.find(row => row.test === b.s.doc.rows[2].test);
-    assert.equal(row.request_id, b.openId); assert.equal(row.state, 'unknown'); assert.equal(row.calls, 'unknown');
+    assert.equal(row.request_id, b.openId); assert.equal(row.state, 'partial'); assert.equal(row.calls, 'unknown');
   }
 });
 
@@ -332,9 +332,16 @@ for (const retry of [false, true]) for (const authMs of [60000, 61000]) for (con
     assert.equal(next.clock.now - START, authMs); assert.equal(next.code, 3);
     assertBudgetPreserved(b, next, next.json);
     const retained = saved(b.r, b.batch).doc;
-    assert.deepEqual(retained.lint, b.s.doc.lint, 'keep pending/unknown lint evidence when refresh is unavailable');
-    assert.deepEqual(retained.rows[0], b.s.doc.rows[0], 'keep the held row evidence');
-    assert.equal(next.json.rows[0].state, 'not_run');
+    const {note:oldNote,reason:oldReason,...oldLint}=b.s.doc.lint;
+    const {note,reason,...retainedLint}=retained.lint;
+    assert.deepEqual(retainedLint,oldLint,'keep pending/unknown lint receipt identity and recovery evidence');
+    if(unknown) {assert.deepEqual(note,oldNote);assert.deepEqual(reason,oldReason);}
+    else {assert.equal(note.code,'timeout-flag');assert.match(note.message,/--timeout/);assert.deepEqual(reason,note);}
+    const {note:priorNote,reason:priorReason,...priorRow}=b.s.doc.rows[0];
+    const {note:rowNote,reason:rowReason,...retainedRow}=retained.rows[0];
+    assert.deepEqual(retainedRow,priorRow,'keep the held row identity, usage and recovery evidence');
+    assert.equal(rowNote.code,'timeout-flag');assert.match(rowNote.message,/--timeout/);assert.deepEqual(rowReason,rowNote);
+    assert.equal(next.json.rows[0].state, 'not run');
   });
 }
 
@@ -349,7 +356,8 @@ for (const retry of [false, true]) test(`CONTINUATION repair2: cached terminal l
   assertBudgetPreserved(b, next, next.json);
   const retained = saved(b.r, b.batch).doc;
   assert.equal(retained.lint.state, 'passed'); assert.equal(retained.lint.pending, false); assert.equal(retained.lint.unknown, false);
-  assert.equal(retained.rows[0].note.code, 'lint-finished', 'cached terminal lint was consumed despite expiry');
+  assert.equal(retained.rows[0].note.code, 'timeout-flag', 'caller deadline still explains why the held check did not run');
+  assert.equal(retained.lint.recovery_state,'passed','cached terminal lint was consumed despite expiry');
   assert.deepEqual(JSON.parse(readFileSync(join(b.folder, b.lintId + '.json'))), b.r.f.lint(b.lintId));
 });
 
@@ -369,7 +377,7 @@ for (const retry of [false, true]) test(`CONTINUATION repair2: interrupted ${ret
 for (const retry of [false, true]) test(`CONTINUATION repair1: completed receipt survives slow held ${retry ? 'retry' : 'read'}`, async t => {
   const r = await setup(t, { timeout: 1, multiple: true }); const { batch } = await r.first();
   const s = saved(r, batch), completed = s.doc.rows[1], id = '22222222-2222-4222-8222-222222222222';
-  Object.assign(completed, { request_ids: [id], state: 'passed', phase: 'server', note: null });
+  Object.assign(completed, { request_ids: [id], state: 'passed', recovery_state: 'passed', phase: 'server', note: null });
   const receipt = r.f.check(id), folder = join(r.h.state, 'batches', batch);
   writeFileSync(join(folder, id + '.json'), JSON.stringify(receipt));
   writeFileSync(s.path, JSON.stringify(s.doc));
@@ -412,7 +420,7 @@ for (const legacy of [false, true]) for (const retry of [false, true]) {
       assert.match(next.ports.stderr.text, /No checks were sent for the lint-held rows:.*(?:intent|proof|ceilings)/);
       assert.equal(next.json.batch, batch); assert.equal(next.json.rows.length, 1);
       assert.equal(next.json.rows[0].request_id, null); assert.equal(next.json.rows[0].calls, 0);
-      assert.equal(next.json.rows[0].state, 'not_run');
+      assert.equal(next.json.rows[0].state, 'not run');
       assert.ok(!readdirSync(folder).some(name => name.endsWith('.dispatch.json')), 'refuse before a claim');
       const retained = saved(r, batch).doc;
       assert.equal(retained.intent, legacy ? undefined : 'check');
@@ -442,7 +450,7 @@ for (const legacy of [false, true]) test(`CONTINUATION repair1: missing ${legacy
   const s = saved(r, batch), [held, busy] = s.doc.rows;
   if (legacy) delete s.doc.intent;
   delete held.max_calls;
-  Object.assign(busy, { state: 'not_run', phase: 'local', calls: 0, busy: true, can_retry: true, eligible: true,
+  Object.assign(busy, { state: 'not run', recovery_state: 'not_run', phase: 'local', calls: 0, busy: true, can_retry: true, eligible: true,
     retry_at: null, note: { code: 'check-busy', message: 'Held locally; this check was not sent. Retry this batch later.' } });
   writeFileSync(s.path, JSON.stringify(s.doc));
   const next = await recovery(r, batch, true);
@@ -479,8 +487,8 @@ test('CONTINUATION accounting: concurrent retry fails closed for an unproven leg
   const r = await setup(t, { timeout: 1 }); const { batch } = await r.first();
   const s = saved(r, batch), oldId = '33333333-3333-4333-8333-333333333333';
   const folder = join(r.h.state, 'batches', batch), lintId = s.doc.lint.request_ids.at(-1);
-  Object.assign(s.doc.lint, { state: 'passed', pending: false, unknown: false });
-  Object.assign(s.doc.rows[0], { request_ids: [oldId], state: 'not_run', phase: 'server', busy: true, can_retry: true, eligible: true, note: { code: 'check-busy' } });
+  Object.assign(s.doc.lint, { state: 'passed', recovery_state: 'passed', pending: false, unknown: false });
+  Object.assign(s.doc.rows[0], { request_ids: [oldId], state: 'not run', recovery_state: 'not_run', phase: 'server', busy: true, can_retry: true, eligible: true, note: { code: 'check-busy' } });
   writeFileSync(s.path, JSON.stringify(s.doc));
   writeFileSync(join(folder, lintId + '.json'), JSON.stringify(r.f.lint(lintId)));
   writeFileSync(join(folder, oldId + '.admission.json'), JSON.stringify({ dispatch: 'not_started', error: { code: 'check-queue-full', details: { retryable: true, retry_after: 1 } } }));
@@ -489,7 +497,7 @@ test('CONTINUATION accounting: concurrent retry fails closed for an unproven leg
   assert.ok(replies.every(reply => reply.clock.uuids === 0), 'fail closed before allocating replacement IDs');
   const final = saved(r, batch).doc.rows[0];
   assert.deepEqual(final.request_ids, [oldId]);
-  assert.equal(final.state, 'unknown'); assert.equal(final.unknown_calls, 1); assert.equal(final.accounting_complete, false);
+  assert.equal(final.state, 'partial'); assert.equal(final.recovery_state, 'unknown'); assert.equal(final.unknown_calls, 1); assert.equal(final.accounting_complete, false);
   assert.equal(final.capacity_uncertain, true); assert.equal(final.can_retry, false);
 });
 
@@ -497,8 +505,8 @@ test('CONTINUATION preservation: concurrent proved capacity retries adopt claims
   const r = await setup(t, { timeout: 1 }); const { batch } = await r.first();
   const s = saved(r, batch), oldId = '44444444-4444-4444-8444-444444444444';
   const folder = join(r.h.state, 'batches', batch), lintId = s.doc.lint.request_ids.at(-1);
-  Object.assign(s.doc.lint, { state: 'passed', pending: false, unknown: false });
-  Object.assign(s.doc.rows[0], { request_ids: [oldId], state: 'not_run', phase: 'server', busy: true, can_retry: true, eligible: true, note: { code: 'check-busy' } });
+  Object.assign(s.doc.lint, { state: 'passed', recovery_state: 'passed', pending: false, unknown: false });
+  Object.assign(s.doc.rows[0], { request_ids: [oldId], state: 'not run', recovery_state: 'not_run', phase: 'server', busy: true, can_retry: true, eligible: true, note: { code: 'check-busy' } });
   writeFileSync(s.path, JSON.stringify(s.doc));
   writeFileSync(join(folder, lintId + '.json'), JSON.stringify(r.f.lint(lintId)));
   writeFileSync(join(folder, oldId + '.admission.json'), JSON.stringify({
@@ -514,12 +522,12 @@ test('CONTINUATION preservation: concurrent proved capacity retries adopt claims
 
 for (const legacy of [false, true]) test(`CONTINUATION: ${legacy ? 'legacy' : 'current'} batch local refusal does not block valid held row`, async t => {
   const r = await setup(t, { timeout: 1, multiple: 'mixed' }); const { batch } = await r.first(); r.state.lint = 'passed';
-  assert.equal(saved(r, batch).doc.rows.find(row => row.test === 'tests/second-1.json').state, 'refused');
+  assert.equal(saved(r, batch).doc.rows.find(row => row.test === 'tests/second-1.json').state, 'not run');
   if (legacy) { const s = saved(r, batch); delete s.doc.intent; writeFileSync(s.path, JSON.stringify(s.doc)); }
   const next = await recovery(r, batch);
   assert.equal(next.code, 4); assert.equal(next.json.rows.length, 2);
   assert.equal(paid(r).length, 1); assert.equal(paid(r)[0].request.scenario, 'tests/place-order.json');
-  assert.equal(next.json.rows.find(row => row.test === 'tests/second-1.json').state, 'refused');
+  assert.equal(next.json.rows.find(row => row.test === 'tests/second-1.json').state, 'not run');
 });
 
 for (const legacy of [false, true]) test(`CONTINUATION H: refused ${legacy ? 'legacy' : 'current'} held proof does not stop independent busy retry`, async t => {
@@ -529,7 +537,7 @@ for (const legacy of [false, true]) test(`CONTINUATION H: refused ${legacy ? 'le
   const s = saved(r, batch), [held, busy] = s.doc.rows;
   if (legacy) delete s.doc.intent;
   held.calls = 'unknown';
-  Object.assign(busy, { state: 'not_run', phase: 'local', calls: 0, busy: true, can_retry: true, eligible: true,
+  Object.assign(busy, { state: 'not run', recovery_state: 'not_run', phase: 'local', calls: 0, busy: true, can_retry: true, eligible: true,
     retry_at: null, note: { code: 'check-busy', message: 'Held locally; this check was not sent. Retry this batch later.' } });
   writeFileSync(s.path, JSON.stringify(s.doc));
 
@@ -547,7 +555,7 @@ for (const legacy of [false, true]) test(`CONTINUATION H: refused ${legacy ? 'le
   assert.equal(next.json.rows.find(row => row.test === busy.test).state, 'passed');
   assert.equal(next.json.rows.find(row => row.test === busy.test).request_id, id);
   const visibleHeld = next.json.rows.find(row => row.test === held.test);
-  assert.equal(visibleHeld.state, 'not_run'); assert.equal(visibleHeld.request_id, null); assert.equal(visibleHeld.calls, 0);
+  assert.equal(visibleHeld.state, 'not run'); assert.equal(visibleHeld.request_id, null); assert.equal(visibleHeld.calls, 0);
   assert.match(visibleHeld.reason.message, /This check was not sent/);
   for (const retry of [true, false]) {
     const again = await recovery(r, batch, retry);
@@ -599,7 +607,7 @@ test('CONTINUATION: deleting a selected test preserves saved rows and refuses be
   unlinkSync(join(r.h.repo, 'tests/place-order.json'));
   for (let i = 0; i < 2; i++) {
     const next = await recovery(r, batch);
-    assert.equal(next.code, 5); assert.equal(next.json.rows.length, 1); assert.equal(next.json.rows[0].state, 'not_run');
+    assert.equal(next.code, 5); assert.equal(next.json.rows.length, 1); assert.equal(next.json.rows[0].state, 'not run');
     assert.equal(next.clock.uuids, 0); assert.equal(paid(r).length, 0);
     assert.match(next.ports.stderr.text, /No checks were sent.*saved source cannot be verified/);
   }

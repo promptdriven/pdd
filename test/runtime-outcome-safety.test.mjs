@@ -69,5 +69,5 @@ test('OUTCOME safety: each selected test passes its own lint gate', async t => {
   assert.deepEqual(result.json.rows.map(row => [row.test, row.state]), [['tests/place-order.json', 'passed'], ['tests/unknown-item.json', 'refused']]);
   assert.equal(result.json.rows[1].calls, 0);
   assert.equal(result.code, 4);
-  assert.match(result.err, /Lint refused 1 of 2 tests\. Sent 1 check/);
+  assert.match(result.err, /Lint refused 1 of 2 tests\.[\s\S]*Sent 1 check/);
 });

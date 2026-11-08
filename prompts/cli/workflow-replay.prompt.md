@@ -5,7 +5,8 @@ retaining approved prompt-space vectors for comparison. Validate structure and i
 prove equivalence, approve a prompt, or infer success from prose. Preserve existing runtime source fingerprints.
 
 Export REPLAY_POLICY (`pdd.replay-evidence.v1`), sourceFingerprint(root), pinReplayVectors(root, paths),
-readReplayEvidence(run, paths?), formatReplayEvidence(result, options?), and adoptReplayCorpus(root, declarationPath, ports). The runner owns policy opt-in and publication.
+pinRunAnchor(root, options), readReplayEvidence(run, paths?), readFormalEvidence(run), formalStatusText(formal), formatReplayEvidence(result, options?),
+and adoptReplayCorpus(root, declarationPath, ports). The runner owns policy opt-in and publication.
 
 ## Original identities
 
@@ -22,6 +23,54 @@ steps/checks. Each scenario uses prompt-runtime.program-scenario.v1, unique none
 operation, and nonempty checks. A check identity is vector path, step_id and zero-based check_index, plus the
 original entry_path, operation, criterion_id, target, JSON path and assertion op. Supported targets are result,
 error, world and calls. Preserve every original identity; do not substitute generated fixtures or expected values.
+
+## Approved scenarios on the base
+
+pinRunAnchor(root, {paths, commit, changed, scenarios, codeSpace}) builds a run's anchor without a declaration.
+`paths` are the run's changed scenario files, pinned as pinReplayVectors pins them. `commit` is the run's full
+base commit, `changed` the run's changed paths against it, and `scenarios` the current changed scenario files.
+A file on the base branch counts as approved. Also anchor each base scenario that belongs to the run's changed
+area. Read the base with local Git only: one `git grep -F` for the schema name in `*.json`, one `ls-tree`, one
+`git cat-file --batch`; never gh, a model or the worktree copy of a base file. Ignore user Git color
+settings when parsing Git output; the scenario search must emit no color codes.
+
+A base scenario is a regular `.json` blob of at most 10 MiB, found by that search, whose parsed schema_version is
+prompt-runtime.program-scenario.v1; skip other and unparsable JSON. Search matches over 10 MiB are not read;
+report each path, byte size and limit in the base note and the PR Anchor line, even when other files are
+selected. Never silently omit them. Its links are its story_path, every step
+entry_path and its entry_paths. The changed area is every changed path, the links of each changed scenario
+(current file and base blob), the `stories` and `prompt` of each changed path that the base commit's
+`pdd-bindings.json` (pdd.bindings.v1) declares as a `module`, and each header prompt. A base scenario belongs when
+one of its links is in the changed area. Use no other link: no folder, name, prose or AI guess. A malformed
+pdd-bindings.json adds no links.
+
+A header prompt is the prompt that a changed file names in its PDD header, in its base blob or its current file.
+The header is one of the first 10 lines: an optional comment opener (`//`, `#`, `--`, `;`, `/*`, `*`, `<!--`,
+`"""` or `'''`), then `Generated from PATH`, then optionally ` (sha256: HEX)`, then optionally `.` and a closer
+(`*/`, `-->`, `"""` or `'''`). PATH is a canonical repository-relative path that ends in `.prompt.md`. Other
+text, such as `Generated from the canonical m1_policy prompt`, is no header. Skip header lines longer than
+1,100 characters before parsing them. The Stories of a header prompt or a changed prompt file (the
+story_path of each base scenario that links to it) are also in the changed area.
+
+The base commit's root `pdd.json` selects the base scenarios with `replay.base_scenarios`: `linked` (the rule
+above) or `all` (every base scenario belongs). A missing file, `replay` or `base_scenarios` means `linked`. A
+pdd.json that is not valid JSON or not a JSON object, a `replay` that is not an object, an unknown key inside
+`replay`, or another value blocks. The reason names pdd.json on the base and the unknown key or invalid
+value setting. Read pdd.json in the same `ls-tree` and `cat-file` calls.
+
+Without codeSpace, skip base files in `changed`; the changed route pins their current bytes. A linked base
+scenario removed or renamed by PR 1 blocks the anchor, like any unreadable changed scenario; never retain
+its old path as an unchanged base vector. With codeSpace
+(a run with no prompt area before code), ignore `paths` and also select changed base files, always with their
+base bytes, so code space cannot change approved values. Each base vector keeps path, raw SHA256, snapshot,
+steps, checks and `base` (the full commit). The anchor keeps `base:{commit,note,select}` (select is `linked` or
+`all`); the note says plainly why no base file was added, says when no changed file has a header, and names an
+absent or malformed pdd-bindings.json. Order changed vectors first, then base vectors by path. Apply the
+original limits to the whole anchor, also with `all`. A refusal states the count and the limit, for example
+`250 scenario files (3 changed + 247 linked approved on base 6b58b76); the limit is 200` or
+`201 scenario files (0 changed + all 201 approved on base 6b58b76); the limit is 200`. A selected base
+scenario that fails original validation blocks with its path. No vectors is not_replayed with the note; with
+codeSpace it is blocked, because no anchor exists. Git failure blocks. Never throw.
 
 ## Corpus adoption
 
@@ -144,6 +193,60 @@ A saved anchor outcome may only be blocked or not_replayed and remains that outc
 paths are supplied; still collect comparable saved-value warnings before returning it. Any other saved
 outcome is malformed and blocked. A report with zero checks never displays PASS.
 
+### The formal result on its own
+
+The formal step proves the Story's `## Rules to check` with its own tests, also when the approved prompt area
+has no scenario vectors. So pdd reads the `formal` block on its own (#3029). readFormalEvidence(run) reads the
+same bounded manifest file for its formal status only. readReplayEvidence always attaches this status as
+`formal`, on every return: no anchor, a saved not_replayed or blocked anchor, no current vectors, a missing,
+stale or malformed manifest, and a full replay. In a full replay it validates the bytes that the replay read.
+The scenario replay outcome and reason stay exactly as the rules above say: a formal result never turns
+NOT REPLAYED or BLOCKED into a pass, and an invalid formal block still blocks a full replay as before.
+
+| Status | When | Repair step |
+|---|---|---|
+| recorded | every check below passes | none |
+| missing | no replay-evidence.json, or the file has no `formal` key | write the formal block per docs/replay-evidence.md |
+| malformed (FIELD) | the first failed check names FIELD: `file`, `JSON`, `schema_version`, `run_id`, `source`, `formal`, a `formal.*` field or `mutation` | correct FIELD per docs/replay-evidence.md (`file`: write replay-evidence.json as one regular file in the run folder; `JSON`: write it as valid UTF-8 JSON) |
+| stale (source changed) | `source.sha256` is not the current sourceFingerprint(run.root), or the current source cannot be read | run the formal check on the current source and write its formal block with the current fingerprint |
+
+Each repair step ends with "then run pdd workflow done formal again". Check order decides the status, and the
+first failed check wins: read the file (absent is missing; unsafe or unreadable is malformed `file`), UTF-8 JSON,
+schema_version, run_id, the `formal` key (absent is missing), the source shape, the current fingerprint (stale),
+then the typed formal fields, the counterexample of a failed result and the control below. Causes are pdd's own
+finite sentences: never a parser message, a file snippet or a local path.
+
+Control for a proved result (`proved_bounded`, `proved_solver`) always needs `control_outcome: assertion_failure`
+(else malformed `formal.control_outcome`): the planted mistake (in a bug run, the old code) fails the formal check
+by assertion, not crash. Present `control_command` and `control_exit_code` values are always typed as below.
+- With scenario vectors (the saved anchor, or the current full replay, has original checks): the manifest's
+  semantic mutation control must detect, by the mutation rule below, with failed checks that name known original
+  assertions. Otherwise malformed `mutation`.
+- With no scenario vectors: the formal block carries its own control, `control_command` (nonblank) and
+  `control_exit_code` (integer 1..255). Otherwise malformed `formal.control_command` or `formal.control_exit_code`.
+`failed` needs its counterexample; `not_run` and `not_applicable` need only their typed scope and reason.
+
+With scenario vectors (the same test as for the control), the full code replay needs a typed formal block of any
+result. So every status then has `required: true`: a block that is missing, malformed or stale holds the code
+replay, and the formal line always gives its status, reason and repair step, never "not needed".
+
+The status object has `status` and, with scenario vectors, `required: true`; recorded adds `result`, `scope`, `reason`, `control_outcome`, the optional
+control command and exit code, and `source`; every other status adds `cause`, `field` for malformed, and
+`reported` (the block's result word when it is a known one, so the text can say what pdd did not accept).
+When pdd read the bytes, `manifest_sha256` is their hash. readReplayEvidence fills its own empty
+`manifest_sha256` from it, and its empty `source` only from a recorded status, which confirmed the fingerprint.
+
+formalStatusText(formal, rules?) gives `{status, words, detail, repair, cause, notNeeded, note}` for the
+[readable PR owner](workflow-pr-body.prompt.md) and this report (status is the normalized status word below). `rules` is
+the runner's `rulesToCheck`: true, false, or null (unknown: pdd found no Story file of the run). `notNeeded` is true
+only when the status is not recorded, `rules` is false and the status is not `required`. `note` is
+"pdd found no Story file of this run, so the formal check counts as needed. When the Story has no Rules to check, name
+its path (user_stories/NAME.md) in the formal step summary." when the status is not recorded and `rules` is null, else empty. Words are `recorded`, `missing`, `malformed (FIELD)` or `stale (source changed)`. For missing
+the detail is "evidence not recorded: CAUSE"; for malformed and stale it is "evidence not accepted: CAUSE",
+with "the record says RESULT, but " before CAUSE when `reported` is set. A saved status without `status` but
+with a known `result` is recorded (an older saved record); an absent status is missing, cause "pdd has not read
+the formal result for this record".
+
 ### Saved-value changes: show, do not lock
 
 Keep the original anchor for comparison; never replace it or approve changed expectations.
@@ -204,8 +307,10 @@ prompt-space adoption still require exact scenario bytes. Never change the sourc
   A crash, empty failure list, unknown assertion, survived control or not-run control is never detection.
   For not_run, command and exit_code may be null and a nonblank reason is required; never invent an exit.
 - formal: {result:proved_bounded|proved_solver|failed|not_run|not_applicable,scope:nonblank,reason:nonblank,
-  control_outcome:assertion_failure|crash|survived|not_run,counterexample?}. failed requires a counterexample;
-  proved results require assertion_failure control. Not-run/not-applicable remain explicit scoped results.
+  control_outcome:assertion_failure|crash|survived|not_run,control_command?:nonblank,control_exit_code?:integer0..255,
+  counterexample?}. failed requires a counterexample; proved results require assertion_failure control, bound to
+  the semantic mutation with vectors, else to the block's own command and nonzero exit (see
+  [the formal result on its own](#the-formal-result-on-its-own)). Not-run/not-applicable remain explicit scoped results.
 
 All identifier/reason/command strings are bounded (at most1000characters); collections stay within the limits
 above. Reject wrong types and unsupported versions; never coerce truthy flags or counts. SHA256 comparison
@@ -228,21 +333,40 @@ flowchart TD
     F -->|No| P[pass]
 ```
 
-An invalid proved formal control is blocked. Record exact derived counts, public operation totals/executed,
+An invalid proved formal control blocks a full replay; the formal status says why. Record exact derived counts, public operation totals/executed,
 mutation outcome and formal type/scope/reason. Retain explicit assertion/formal failure lines even alongside
 blocked/not_replayed; real failures do not prevent publication. Hash the bounded manifest bytes for provenance.
 For adopted runs, retain structured adoption provenance even when replay is blocked.
 The PR replay section displays "Anchor adopted from REPO@COMMIT; approval reference R
 by A; external-assertion-unverified", using cleaned recorded values.
+When the saved anchor has `base` and either vectors or a note, the result has `anchor`
+{commit, select, changed, changed_checks, files, checks, note}, counted from the saved vectors, and the section
+counts files and checks by source: `Anchor: 3 changed scenarios (40 checks) + 18 linked approved on base 6b58b76
+(1,722 checks).`, `Anchor: 0 changed scenarios (0 checks) + all 18 approved on base 6b58b76 (1,722 checks;
+pdd.json sets replay.base_scenarios to "all").`, or `+ 0 linked approved on base 6b58b76 (NOTE).` Base approval
+never gives PASS by itself.
 formatReplayEvidence emits a compact PR section with prominent Code replay PASS/FAIL/BLOCKED/NOT REPLAYED,
 exact counts, source and manifest hashes, current vector hashes labeled "Current vector", public execution totals, semantic control and typed
-formal result. Include: `Agents execute the tests and supply this record. pdd validates structure and identity;
+formal result. The formal line uses formalStatusText:
+- recorded: `Formal check (agent reported): recorded — RESULT; scope: S; reason: R; control: C.`, where RESULT is
+  Proved (bounded), Proved (solver), Failed + counterexample, Not run or Not applicable, and C is the control
+  outcome in words (assertion failure, crash, survived, not run) with ` (exit N)` when the block has its exit code.
+- not recorded: `Formal check (agent reported): WORDS — DETAIL. Repair: STEP.`, then ` NOTE` when the note is not
+  empty. Never a bare "not recorded", and never "has no formal result" when the file holds a formal block that pdd
+  did not accept.
+- not recorded and `notNeeded` (option `rules` is false: the runner read the run's Stories and none has
+  `## Rules to check`; and no scenario vectors need the block): `Formal check: not needed (no Rules to check in the
+  Story).`; for malformed or stale it adds ` The formal block is not accepted: WORDS — CAUSE.` Any other case shows
+  the not-recorded line. So one PR never says "not needed" while its code replay is blocked for the formal block.
+Include: `Agents execute the tests and supply this record. pdd validates structure and identity;
 it does not independently prove execution or prompt/code equivalence.` Keep details bounded and sanitize
 control characters, private local paths and Try capabilities. Escape HTML and Markdown in displayed metadata
 so JSON errors, vector paths, scopes or reasons cannot open comments/details or hide the report/trust boundary.
 Escape only when rendering, retaining the original structured values without double escaping.
 Full evidence stays in the run folder. Never
 let an agent's free-form PASS summary replace this status.
+
+A present base `pdd.json` must be a regular readable blob within the 10 MiB read limit. An oversized or nonregular config (including a directory at that path) blocks the anchor with a reason naming base `pdd.json`; only an absent config defaults to linked.
 
 ## Dependencies
 
@@ -255,7 +379,7 @@ let an agent's free-form PASS summary replace this status.
 ```json
 {
   "status": "approved",
-  "prose_sha256": "852ac6e549fe5bba8ea3e9a94f4b1ee265bb704df3986015522e812838df5446",
+  "prose_sha256": "6abd04cc8cef206144a4e8994f4fc4cf3e8d6f63e1ccb8a4cb69c019a8c52c83",
   "entries": [
     {
       "operation": "adoptReplayCorpus",

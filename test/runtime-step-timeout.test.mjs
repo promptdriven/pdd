@@ -33,7 +33,7 @@ test('STEP-TIME1: check names the timed-out authored step, reports minutes and s
 test('STEP-TIME2: a server failed label for time remains inconclusive and explicit ten-minute limit wins over total elapsed', async t => {
   const r = await check(t, { '--json': true }, { seconds: 600, state: 'failed' });
   assert.equal(r.code, 3); const row = JSON.parse(r.ports.stdout.text).rows[0];
-  assert.equal(row.state, 'unknown'); assert.equal(row.time_limit.minutes, 10);
+  assert.equal(row.state, 'partial'); assert.equal(row.time_limit.minutes, 10);
   assert.match(row.reason.message, /10 minutes/); assert.equal(row.failed_checks.length, 0);
 });
 

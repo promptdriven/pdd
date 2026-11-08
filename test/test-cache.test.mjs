@@ -186,7 +186,7 @@ for (const vector of vectors.cases) test(`TEST-CACHE ${vector.id} (${vector.crit
     const path = join(ctx.repo, 'tests/place-order.json'), doc = read(path); doc.initial_world.changed = true; write(path, doc);
     ctx.mode(id === 'old-pass-invalidated' ? 'unknown' : id);
     const attempt = await ctx.invoke(['place-order']); assert.notEqual(attempt.code, 0);
-    assert.equal(attempt.json.rows[0].state, id === 'old-pass-invalidated' ? 'unknown' : id);
+    assert.equal(attempt.json.rows[0].state, ['unknown','old-pass-invalidated'].includes(id) ? 'partial' : id === 'not_run' ? 'not run' : id);
     if (id === 'old-pass-invalidated') { delete doc.initial_world.changed; write(path, doc); }
     ctx.mode('passed'); assert.equal((await ctx.invoke(['place-order'])).sent, 1, 'nonpass invalidates older pass'); return;
   }

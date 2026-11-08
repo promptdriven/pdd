@@ -2,10 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync, chmodSync, cpSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import {pinReplayVectors} from '../src/workflow-replay.mjs';
-import { DETAILS_OPEN, detailsOf } from '../src/workflow-pr-body.mjs';
+import {pinReplayVectors,sourceFingerprint} from '../src/workflow-replay.mjs';
+import { DETAILS_OPEN, detailsOf, prStatus } from '../src/workflow-pr-body.mjs';
 
 // #3042: pdd's own body (evidence, steps, approvals, Verify) now sits in the closed Details section under the readable
 // part. Checks that start at the first line of pdd's body read that section.
@@ -536,6 +536,167 @@ test('READABLE-CODE: the code PR proof table reads the old-code proof and review
   assert.match(detailsOf(pr.body).details, /^Old-code proof: ✓ /m, 'The machine proof line stays in Details.');
 });
 
+// #3029: the formal status of a real code PR whose prompt area has no scenario vectors (PR 1 changed no scenario file,
+// as in prompt-runtime PRs #670 and #686). The code replay stays NOT REPLAYED; the formal block is read on its own.
+const VALUE_STORY = '# Value\n\nAs a maintainer, I want the value to be two,\nso that the report adds up.\n\n## Acceptance criteria\n\n1. The value is two.\n';
+// `story` is the Story path (null: the run has no Story file); `before` commits it before the run's base, so the run does not change it.
+function formalPublication(t, { rules, formal = null, story = 'user_stories/value.md', before = false, prepare = () => {}, summary = 'Review: no must-fix' }) {
+  const f = fixture(t, { opted: true });
+  if (story) {
+    mkdirSync(join(f.root, dirname(story)), { recursive: true });
+    writeFileSync(join(f.root, story), VALUE_STORY + (rules ? '\n## Rules to check\n\nWrong: any value other than two.\n' : ''));
+    f.git('add', '.'); f.git('commit', '-qm', 'story');
+    if (before) f.run.baseSha = f.git('rev-parse', 'HEAD');
+  }
+  f.machine(f.git('rev-parse', 'HEAD')); prepare(f);
+  // The anchor that pdd saves when PR 1 changes no scenario file: not_replayed, "no original scenario vectors".
+  f.run.replayBaseline = pinReplayVectors(f.root, []); f.save();
+  if (formal) writeFileSync(join(f.runDir, 'replay-evidence.json'), JSON.stringify({ schema_version: 'pdd.replay-evidence.v1', run_id: f.run.runId,
+    source: { kind: 'git-content-v1', sha256: sourceFingerprint(f.root) }, vectors: [], checks: [], operations: [],
+    counts: { total: 0, pass: 0, fail: 0, blocked: 0, not_replayed: 0 }, formal }));
+  const out = f.invoke(summary); assert.equal(out.exitCode, 0, out.message);
+  const done = out.message.split('\n').find(line => line.startsWith('Formal check'));
+  if (!f.data().prs.length) return { out, done };
+  const body = f.data().prs[0].body, [visible] = body.split(DETAILS_OPEN), lines = visible.split('\n');
+  const details = detailsOf(body).details.replace(/\\([\\`*_[\]()|])/g, '$1');
+  return { status: lines[0].replace(/ · Updated .*$/, ''), row: lines.find(line => line.startsWith('| Formal check')), header: details.split('\n').find(line => line.startsWith('Formal check')), details, out, done };
+}
+const PROVED_532 = { result: 'proved_bounded', scope: 'All rules of the value Story over 5192 bounded inputs', reason: 'FORMAL_CHECK_PASSED: total=5192',
+  control_outcome: 'assertion_failure', control_command: 'node --test test/value.formal.test.mjs (old code)', control_exit_code: 1 };
+
+test('FORMAL-REAL1: a Story with Rules to check and no replay-evidence.json: the PR names the missing formal result and is not ready', t => {
+  const pr = formalPublication(t, { rules: true });
+  assert.equal(pr.status, '⛔ Blocked: replay evidence is incomplete; formal check missing');
+  assert.equal(pr.row, '| Formal check | missing — evidence not recorded: replay-evidence.json is missing in the run folder. Repair: write the formal block per docs/replay-evidence.md, then run pdd workflow done formal again. | — |');
+  assert.equal(pr.header, 'Formal check (agent reported): missing — evidence not recorded: replay-evidence.json is missing in the run folder. Repair: write the formal block per docs/replay-evidence.md, then run pdd workflow done formal again.');
+  assert.match(pr.details, /^Code replay: NOT REPLAYED — /m);
+  assert.doesNotMatch(pr.details, /Formal check \(agent reported\): not recorded\./);
+});
+
+test('FORMAL-REAL2: no scenario vectors and a proved formal block with its own control: the PR shows Proved, the replay stays NOT REPLAYED', t => {
+  const pr = formalPublication(t, { rules: true, formal: PROVED_532 });
+  assert.equal(pr.row, '| Formal check (All rules of the value Story over 5192 bounded inputs) | Proved (bounded) | ✗ fails (as expected) |');
+  assert.equal(pr.status, '⛔ Blocked: replay evidence is incomplete', 'Only the scenario replay holds the PR, not the formal result.');
+  assert.equal(pr.header, 'Formal check (agent reported): recorded — Proved (bounded); scope: All rules of the value Story over 5192 bounded inputs; reason: FORMAL_CHECK_PASSED: total=5192; control: assertion failure (exit 1).');
+  assert.match(pr.details, /^Code replay: NOT REPLAYED — The approved prompt area has no original scenario vectors\./m);
+  assert.doesNotMatch(pr.details, /Code replay: PASS|Manifest SHA256: unavailable/);
+});
+
+test('FORMAL-REAL3: a Story without Rules to check: the formal check is "not needed" and does not hold the PR', t => {
+  const pr = formalPublication(t, { rules: false });
+  assert.equal(pr.row, '| Formal check | not needed (no Rules to check in the Story) | — |');
+  assert.equal(pr.status, '⛔ Blocked: replay evidence is incomplete');
+  assert.equal(pr.header, 'Formal check: not needed (no Rules to check in the Story).');
+});
+
+const MISSING_FORMAL = 'missing — evidence not recorded: replay-evidence.json is missing in the run folder. Repair: write the formal block per docs/replay-evidence.md, then run pdd workflow done formal again.';
+const UNKNOWN_RULES = 'pdd found no Story file of this run, so the formal check counts as needed. When the Story has no Rules to check, name its path (user_stories/NAME.md) in the formal step summary.';
+test('FORMAL-REAL4: a Story in a subfolder of user_stories counts: with Rules to check it holds the PR, without them it is "not needed"', t => {
+  let pr = formalPublication(t, { rules: true, story: 'user_stories/journeys/value.md' });
+  assert.equal(pr.row, `| Formal check | ${MISSING_FORMAL} | — |`, 'pdd read the Story, so the row has no "no Story file" note.');
+  assert.equal(pr.status, '⛔ Blocked: replay evidence is incomplete; formal check missing');
+  pr = formalPublication(t, { rules: false, story: 'user_stories/journeys/value.md' });
+  assert.equal(pr.row, '| Formal check | not needed (no Rules to check in the Story) | — |');
+  assert.equal(pr.status, '⛔ Blocked: replay evidence is incomplete');
+});
+
+test('FORMAL-REAL5: a run with no Story file: Rules to check are unknown, so the formal check counts as needed and the row says why', t => {
+  const pr = formalPublication(t, { rules: false, story: null });
+  assert.equal(pr.row, `| Formal check | ${MISSING_FORMAL} ${UNKNOWN_RULES} | — |`);
+  assert.equal(pr.header, `Formal check (agent reported): ${MISSING_FORMAL} ${UNKNOWN_RULES}`);
+  assert.equal(pr.status, '⛔ Blocked: replay evidence is incomplete; formal check missing');
+  assert.doesNotMatch(pr.details, /not needed/);
+});
+
+test('FORMAL-REAL6: done formal sees a Story that only its own summary names', t => {
+  const early = f => { delete f.run.done.review; };
+  // The Story with Rules to check was committed before the run's base, so the run does not change it.
+  let pr = formalPublication(t, { rules: true, before: true, prepare: early, summary: 'Formal: proved the rules of user_stories/value.md' });
+  assert.equal(pr.done, `Formal check (agent reported): ${MISSING_FORMAL}`, pr.out.message);
+  pr = formalPublication(t, { rules: true, before: true, prepare: early, summary: 'Formal: proved the rules' });
+  assert.equal(pr.done, `Formal check (agent reported): ${MISSING_FORMAL} ${UNKNOWN_RULES}`, 'No Story named and none changed: unknown.');
+});
+
+// #3029 M3: resolve pre-existing named Stories through stepDone and the real publication path.
+// Git pushes stay in the fixture's local bare repository; gh is the fixture's local command fake.
+const NAMED_NOT_RUN = { result: 'not_run', scope: 'Named Story rules', reason: 'No formal execution', control_outcome: 'not_run' };
+function namedStoryPublication(t, { story, rules, reference = story, vectors = false, invalid = false, prefixRules = false }) {
+  const f = fixture(t, { opted: true });
+  mkdirSync(join(f.root, dirname(story)), { recursive: true });
+  writeFileSync(join(f.root, story), VALUE_STORY.replace('two,', '3029,') + (rules ? '\n## Rules to check\n\nWrong: a value other than two.\n' : ''));
+  if (prefixRules) writeFileSync(join(f.root, 'user_stories/value.md'), VALUE_STORY + '\n## Rules to check\n\nWrong: another value.\n');
+  // Neither named Story is in the changed-file list or the scenario anchor.
+  if (vectors) writeFileSync(join(f.root, 'user_stories/first.md'), VALUE_STORY);
+  const unsafe = ['user_stories/absolute.md', 'user_stories/traversal.md', 'user_stories/control\u0001.md'];
+  if (invalid) for (const path of unsafe) writeFileSync(join(f.root, path), VALUE_STORY.replace('two,', '9999,') + '\n## Rules to check\n\nWrong: any other value.\n');
+  f.git('add', '.'); f.git('commit', '-qm', 'Existing named Stories'); f.run.baseSha = f.git('rev-parse', 'HEAD');
+  let path, vector;
+  if (vectors) {
+    mkdirSync(join(f.root, 'tests'));
+    writeFileSync(join(f.root, 'user_stories/current.md'), VALUE_STORY);
+    path = 'tests/current.json';
+    vector = { schema_version: 'prompt-runtime.program-scenario.v1', story_path: 'user_stories/current.md',
+      steps: [{ step_id: 'value', entry_path: 'prompts/value.prompt.md', operation: 'value',
+        checks: [{ criterion_id: 'AC1', target: 'result', path: '/value', op: 'equals', value: 2 }] }] };
+    writeFileSync(join(f.root, path), JSON.stringify(vector)); f.git('add', '.'); f.git('commit', '-qm', 'Current Story and vectors');
+  }
+  f.machine(f.git('rev-parse', 'HEAD'));
+  f.run.replayBaseline = pinReplayVectors(f.root, vectors ? [path] : []); f.save();
+  const manifest = { schema_version: 'pdd.replay-evidence.v1', run_id: f.run.runId,
+    source: { kind: 'git-content-v1', sha256: sourceFingerprint(f.root) }, vectors: [], checks: [], operations: [],
+    counts: { total: 0, pass: 0, fail: 0, blocked: 0, not_replayed: 0 }, formal: NAMED_NOT_RUN };
+  if (vectors) Object.assign(manifest, {
+    vectors: [{ path, sha256: f.run.replayBaseline.vectors[0].sha256 }],
+    checks: [{ vector: path, step_id: 'value', check_index: 0, entry_path: 'prompts/value.prompt.md', operation: 'value', criterion_id: 'AC1', target: 'result', path: '/value', op: 'equals', outcome: 'pass' }],
+    operations: [{ vector: path, step_id: 'value', entry_path: 'prompts/value.prompt.md', operation: 'value', executed: true, outcome: 'returned', boundary: { kind: 'function', name: 'value' }, command: 'node --test test/value.test.mjs', exit_code: 0 }],
+    counts: { total: 1, pass: 1, fail: 0, blocked: 0, not_replayed: 0 },
+    mutation: { kind: 'semantic', description: 'Return a wrong value', command: 'node --test test/value.test.mjs --mutant', exit_code: 1, outcome: 'assertion_failure', failed_checks: [{ vector: path, step_id: 'value', check_index: 0 }] }
+  });
+  writeFileSync(join(f.runDir, 'replay-evidence.json'), JSON.stringify(manifest));
+  const badReferences = invalid ? `; /tmp/${unsafe[0]}; ../${unsafe[1]}; ${unsafe[2]}` : '';
+  const out = f.invoke(`Review: no must-fix; ${vectors ? 'Story: user_stories/first.md; ' : ''}Story: ${reference}${badReferences}`);
+  assert.equal(out.exitCode, 0, out.message);
+  const saved = JSON.parse(readFileSync(join(f.runDir, 'status.json')));
+  return { facts: saved.pr.find(pr => pr.stage === 'code').readable.facts, replay: saved.replayEvidence,
+    visible: f.data().prs[0].body.split(DETAILS_OPEN)[0] };
+}
+
+for (const [story, reference] of [
+  ['user_stories/règle.md', 'user_stories/règle.md'],
+  ['user_stories/dot règle.md', './user_stories/dot règle.md'],
+  ['user_stories/a name.md', '`user_stories/a name.md`'],
+  ['user_stories/café.md', '[Story](user_stories/café.md)']
+]) {
+  test(`FORMAL-NAMED: Rules in ${story} block publication even with passing replay`, t => {
+    const { facts, replay, visible } = namedStoryPublication(t, { story, reference, rules: true, vectors: true });
+    assert.ok(facts.stories.some(text => text.includes('3029')), 'The named Story must be resolved before publication.');
+    assert.equal(facts.records.rulesToCheck, true);
+    assert.equal(replay.outcome, 'pass');
+    assert.equal(replay.formal.result, 'not_run');
+    assert.match(visible.split('\n')[0], /^⛔/);
+    // Supply green facts locally to test both merge routes; no real CI or checker run is claimed.
+    facts.records.ci = 'passing';
+    assert.match(prStatus(facts), /^⛔/);
+    facts.mode = 'auto'; facts.records.checker = { verdict: 'PASS' };
+    assert.match(prStatus(facts), /^⛔/);
+  });
+  test(`FORMAL-NAMED: no Rules in ${story} avoids a false formal block and rejects unsafe references`, t => {
+    const { facts, replay } = namedStoryPublication(t, { story, reference: `"${story}"`, rules: false });
+    assert.ok(facts.stories.some(text => text.includes('3029')), 'The named Story must be resolved before publication.');
+    assert.ok(facts.stories.every(text => !text.includes('9999')), 'Unsafe references must not select their relative suffix.');
+    assert.equal(facts.records.rulesToCheck, false);
+    assert.equal(replay.outcome, 'not_replayed');
+    assert.equal(replay.formal.result, 'not_run');
+    facts.records.ci = 'passing';
+    const withFormal = prStatus(facts);
+    facts.records.formalStep = false;
+    assert.equal(withFormal, prStatus(facts), 'The formal step must add no block for resolved no-Rules Stories.');
+    const unsafe = namedStoryPublication(t, { story, reference, rules: false, invalid: true });
+    assert.ok(unsafe.facts.stories.every(text => !text.includes('9999')));
+    assert.equal(unsafe.facts.records.rulesToCheck, false, 'Unsafe references must not add Rules.');
+  });
+}
+
 test('READABLE-CHECKS: an existing code PR update reads CI and the checker verdict for the pushed head', t => {
   const verdict = (head, word = 'PASS', author = 'OWNER') => ({ author_association: author, html_url: 'https://github.com/example/project/pull/23#issuecomment-1', created_at: '2026-11-06T12:00:00Z', body: `Checked.\n\n\`\`\`json\n${JSON.stringify({ verdict: word, head, risk: 2 })}\n\`\`\`` });
   for (const trusted of [false, true]) {
@@ -923,4 +1084,14 @@ test('CALLS: a status refresh reads each PR once (with its description, head and
   assert.deepEqual(views(same), [`pr view ${url(22)} --json state,mergedAt,statusCheckRollup,baseRefName`, `pr view ${url(23)} --json state,mergedAt,statusCheckRollup,baseRefName,body,headRefOid,comments`], same.join('\n'));
   assert.deepEqual(same.filter(call => !call.startsWith('pr view')), [], 'No change: no other GitHub call (no comments read, no second view, no edit).');
   assert.deepEqual(changed.filter(call => !views(same).includes(call)), [`pr view ${url(23)} --json body,headRefOid`, `pr edit ${url(23)} --body-file -`], changed.join('\n'));
+});
+
+ test('FORMAL-PREFIX: a complete filename does not select an unrelated prefix Story', t => {
+  const { facts, replay } = namedStoryPublication(t, { story: 'user_stories/value.md extra.md', rules: false, prefixRules: true, vectors: true });
+  assert.equal(facts.records.rulesToCheck, false);
+  assert.equal(replay.outcome, 'pass');
+  facts.records.ci = 'passing';
+  assert.match(prStatus(facts), /^✅/);
+  facts.mode = 'auto'; facts.records.checker = { verdict: 'PASS' };
+  assert.match(prStatus(facts), /^✅/);
 });
