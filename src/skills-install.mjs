@@ -1,4 +1,4 @@
-// Generated from prompts/cli/skills-install.prompt.md (sha256: 7e6aca3cc57392dd87507384620bfe2bb6cb47c9b47130bcc312b7c3637b61ab).
+// Generated from prompts/cli/skills-install.prompt.md (sha256: 439031a55c120366117a94eef39e6a64abcf003c491bfa9b05348433a28babf5).
 import { createHash } from 'node:crypto';
 import { cpSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
@@ -51,9 +51,8 @@ function skillVersion(dir) {
   catch { return null; }
 }
 
-// How a found skill folder compares with the package: 'older' (its pdd marker or version line is older, or it has no
-// version line), 'differs' (other files of the same version, or a marker of the same version with another digest), or null
-// (the same files, newer, or pdd cannot read it).
+// A noncurrent skill's state and installed version, or null for current, newer or unreadable copies.
+// Missing version lines count as older; same-version file changes and invalid markers count as differs.
 function foundState(dir, version, sum) {
   let text;
   try { text = readFileSync(join(dir, MARKER), 'utf8'); }
@@ -62,13 +61,14 @@ function foundState(dir, version, sum) {
     try {
       if (digest(dir) === sum) return null;
       const line = skillVersion(dir), order = line ? compareVersions(line, version) : -1;
-      return order < 0 ? 'older' : order === 0 ? 'differs' : null;
+      return order <= 0 ? { state: order < 0 ? 'older' : 'differs', version: line } : null;
     } catch { return null; }
   }
   let marker;
-  try { marker = JSON.parse(text); } catch { return 'differs'; }
+  try { marker = JSON.parse(text); } catch { return { state: 'differs', version: null }; }
   const order = compareVersions(marker?.version, version);
-  return order < 0 ? 'older' : order === 0 && marker.digest !== sum ? 'differs' : null;
+  const state = order < 0 ? 'older' : order === 0 && marker.digest !== sum ? 'differs' : null;
+  return state ? { state, version: typeof marker?.version === 'string' ? marker.version : null } : null;
 }
 
 const hasSkill = (folder, name) => { try { return statSync(join(folder, name, 'SKILL.md')).isFile(); } catch { return false; } };
@@ -77,12 +77,15 @@ const hasSkill = (folder, name) => { try { return statSync(join(folder, name, 'S
 function findIn(read, skills, version) {
   const found = read.find(folder => skills.every(({ name }) => hasSkill(folder, name))) ?? null;
   // Found skills that are not this package's: setup never touches them, but says so (0.1.6 tester).
-  const states = found ? skills.map(({ name, digest: sum }) => foundState(join(found, name), version, sum)).filter(Boolean) : [];
-  return { found, stale: !states.length ? null : states.every(state => state === 'older') ? 'older' : 'differs' };
+  const staleSkills = found ? skills.flatMap(({ name, digest: sum }) => {
+    const status = foundState(join(found, name), version, sum);
+    return status ? [{ name, ...status }] : [];
+  }) : [];
+  return { found, stale: !staleSkills.length ? null : staleSkills.every(({ state }) => state === 'older') ? 'older' : 'differs', staleSkills };
 }
 
 function setupAgent({ agent, read, root }, skills, version) {
-  const result = { agent, root, found: null, stale: null, installed: [], updated: [] };
+  const result = { agent, root, found: null, stale: null, staleSkills: [], installed: [], updated: [] };
   try {
     for (const { name, source, digest: sum } of skills)
       if (copyState(join(root, name), version, sum) === 'update') result.updated.push(copySkill(source, root, name, version, sum));

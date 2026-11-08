@@ -1,3 +1,4 @@
+import { legacyManualGates } from './helpers/legacy-manual-gates.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as nativeFs from 'node:fs';
@@ -43,7 +44,7 @@ async function world(t, {name='bug'}={}) {
   };
   f.start=extra=>startRun({name,issue:'17',agent:'codex',cwd:f.source,packageRoot,...extra},f.ports);
   f.done=async(step)=>{f.tick();const out=await stepDone({step,summary:`Synthetic ${step}`,cwd:f.record().root},f.agentPorts());ok(out);return out;};
-  f.approve=extra=>approveRun({ref:'17',cwd:f.source,said:words,...extra},f.agentPorts());
+  f.approve=async extra=>{const before=f.record(),out=await approveRun({ref:'17',cwd:f.source,said:words,...extra},f.agentPorts());if(out.exitCode===0&&before.gate?.kind==='approve'&&f.record().area>before.area)legacyManualGates(f);return out;};
   f.commit=()=>{const r=f.record();writeFileSync(join(r.root,'value.mjs'),`export const value = ${f.clock};\n`);f.git(r.root,'add','.');f.git(r.root,'commit','-qm','Synthetic change');};
   f.story=async()=>{await f.done('reproduce');f.commit();await f.done('prompt-story');};
   f.prePr=async()=>{await f.story();ok(await f.approve());await f.done('check');await f.done('try');};

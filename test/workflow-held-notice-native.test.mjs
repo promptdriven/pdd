@@ -7,6 +7,7 @@ import { stepDone, approveRun, changeRun, runStatus } from '../src/workflow-runn
 
 async function held(t) {
   const f = await fixture(t, { name: 'feature', agent: 'codex' });
+  writeFileSync(join(f.source, 'pdd.json'), JSON.stringify({strict_approvals:true}));
   const skill = join(f.source, '.agents/skills/pdd-feature'); mkdirSync(skill, { recursive: true });
   writeFileSync(join(skill, 'workflow.json'), JSON.stringify({ version: 2, areas: [
     { name: 'story', steps: ['understand', 'prompt-story'], optional: [], gate: 'approve' },

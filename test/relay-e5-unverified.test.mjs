@@ -24,6 +24,6 @@ for (const damage of ['wrong-id', 'wrong-command', 'unknown', 'verified']) test(
   const p = portsFor(env, { onInterrupt: handler => { handler(); return () => {}; } });
   await runCheck({ cwd: h.repo, words: [batch], options: { '--read': true, '--json': true } }, p.ports);
   const row = JSON.parse(p.ports.stdout.text).rows[0];
-  assert.equal(row.state, damage === 'verified' ? 'running' : 'unknown');
+  assert.equal(row.state, damage === 'verified' ? 'sent' : 'partial');
   if (damage === 'unknown') assert.notEqual(row.why, 'STALE UNKNOWN CACHE', 'non-open cached receipt is not projected at interruption');
 });

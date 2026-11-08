@@ -18,7 +18,7 @@ test('issue 13: pending lint has zero calls, but saved unknown usage refuses con
     const id=entry.url.split('/').at(-1);return {status:200,json:ready?f.lint(id):f.job(id,'lint','running')};
   });
   const first=await run(setup,fake,{'--timeout':'1'});
-  assert.equal(first.code,3);assert.equal(first.json.rows[0].state,'not_run');
+  assert.equal(first.code,3);assert.equal(first.json.rows[0].state,'not run');
   assert.equal(first.json.rows[0].request_id,null);assert.equal(first.json.rows[0].calls,0);
   assert.doesNotMatch(first.json.summary_line,/\+ \d+ unknown/);
   assert.deepEqual(fake.posts.map(p=>p.command),['lint']);

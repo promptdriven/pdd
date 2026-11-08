@@ -11,6 +11,9 @@ every request ID. Check and saved-batch reads have no default wait limit in any 
 sets an explicit limit. Standalone remote lint retains its 90-second agent default
 and unlimited interactive wait, with `--timeout` override. `pdd simulate` follows the
 [Try lint deadline policy](../prompts/cli/runtime-client.prompt.md#retry-confirmed-lint-capacity-refusals).
+For a new Check with `--timeout MIN`, preliminary lint has its own MIN-minute
+wait, capped at 90 seconds in an agent shell. The paid Check clock starts after
+lint returns. With no explicit timeout, preliminary lint has no default limit.
 Waiting, retries and lint stay within their applicable deadline.
 
 If the server stays busy, pdd says that no checks ran and asks you to run the same

@@ -17,6 +17,49 @@ const MARKER = '.pdd-skill.json';
 // npx skills update changes only skills that npx skills add recorded; this command replaces any copy (0.1.8 tester).
 const UPDATE = 'npx skills add promptdriven/pdd -g -a codex -a claude-code -y';
 
+for (const local of [false, true]) test(`INSTALL10: stale skill names and versions reach version and setup (${local ? 'project' : 'user'} copies)`, t => {
+  const { pkg, home, project, run } = packageCopy(t);
+  const folder = join(local ? project : home, '.agents/skills');
+  for (const name of PDD_SKILL_NAMES) cpSync(join(pkg, 'skills', name), join(folder, name), { recursive: true });
+  const autopilot = join(folder, 'pdd-autopilot/SKILL.md');
+  const old = readFileSync(autopilot, 'utf8').replace(/^(  pdd-skills:).*$/m, '$1 0.1.20');
+  writeFileSync(autopilot, old);
+  for (const args of [['--version'], ['setup']]) {
+    const result = run(args);
+    assert.equal(result.status, 0, result.stderr);
+    if (args[0] === '--version') assert.equal(result.stdout, `${version()}\n`);
+    const warning = (args[0] === '--version' ? result.stderr : result.stdout).split('\n').find(line => line.startsWith(`PDD skills in ${folder} `));
+    assert.ok(warning, result.stdout + result.stderr);
+    assert.match(warning, /pdd-autopilot is 0\.1\.20/);
+    assert.doesNotMatch(warning, /pdd-bug|pdd-feature/);
+    assert.ok(warning.includes(local ? UPDATE.replace(' -g', '') : UPDATE), warning);
+    assert.match(warning, /pdd setup/);
+    assert.equal(readFileSync(autopilot, 'utf8'), old);
+  }
+  // An unrelated local edit must not hide the older Autopilot copy.
+  const bug = join(folder, 'pdd-bug/SKILL.md');
+  writeFileSync(bug, readFileSync(bug, 'utf8') + '\nLocal edit.\n');
+  const mixed = run(['--version']);
+  assert.equal(mixed.status, 0, mixed.stderr);
+  assert.match(mixed.stderr, /pdd-autopilot is 0\.1\.20/);
+});
+
+test('INSTALL11: version names an older pdd-owned skill and setup repairs it', t => {
+  const { home, run } = packageCopy(t);
+  assert.equal(run(['setup']).status, 0);
+  const marker = join(home, '.agents/skills/pdd-autopilot', MARKER);
+  writeFileSync(marker, JSON.stringify({ ...JSON.parse(readFileSync(marker, 'utf8')), version: '0.1.20' }));
+  const before = run(['--version']);
+  assert.equal(before.status, 0, before.stderr);
+  assert.match(before.stderr, /pdd-autopilot is 0\.1\.20/);
+  assert.match(before.stderr, /pdd setup/);
+  assert.equal(JSON.parse(readFileSync(marker, 'utf8')).version, '0.1.20');
+  const repair = run(['setup']);
+  assert.equal(repair.status, 0, repair.stderr);
+  assert.equal(JSON.parse(readFileSync(marker, 'utf8')).version, version());
+  assert.doesNotMatch(run(['--version']).stderr, /pdd-autopilot/);
+});
+
 // A copied package in a quoted path, so install never depends on the source checkout.
 function packageCopy(t) {
   const sandbox = temp(t), pkg = join(sandbox, 'installed "pkg"');
@@ -177,7 +220,12 @@ test('INSTALL8: when the skills that setup finds are older than this pdd, it say
   writeFileSync(join(home, '.agents/skills/pdd-feature/SKILL.md'), 'an older feature skill\n');
   const result = run(['setup']);
   assert.equal(result.status, 0, result.stderr);
-  for (const skillRoot of ROOTS) assert.ok(result.stdout.includes(`PDD skills in ${join(home, skillRoot)} are older than pdd ${version()}. To update them, run: ${UPDATE}\n`), result.stdout);
+  for (const skillRoot of ROOTS) {
+    const warning = result.stdout.split('\n').find(line => line.startsWith(`PDD skills in ${join(home, skillRoot)} `));
+    assert.ok(warning?.includes(`older than pdd ${version()}`), result.stdout);
+    assert.match(warning, /pdd-feature is unknown/);
+    assert.ok(warning.includes(UPDATE), warning);
+  }
   assert.doesNotMatch(result.stdout, /found|Installed|Updated/);
   assert.equal(readFileSync(join(home, '.agents/skills/pdd-feature/SKILL.md'), 'utf8'), 'an older feature skill\n');
   assert.equal(existsSync(join(home, '.agents/skills/pdd-feature', MARKER)), false);
@@ -188,7 +236,11 @@ test('INSTALL8: when the skills that setup finds are older than this pdd, it say
   }
   const local = run(['setup']);
   assert.equal(local.status, 0, local.stderr);
-  assert.ok(local.stdout.includes(`PDD skills in ${join(project, '.agents/skills')} are older than pdd ${version()}. To update them, run: ${UPDATE.replace(' -g', '')}\n`), local.stdout);
+  const warning = local.stdout.split('\n').find(line => line.startsWith(`PDD skills in ${join(project, '.agents/skills')} `));
+  assert.ok(warning?.includes(`older than pdd ${version()}`), local.stdout);
+  for (const name of PDD_SKILL_NAMES) assert.ok(warning.includes(`${name} is 0.0.1`), warning);
+  assert.ok(warning.includes(UPDATE.replace(' -g', '')), warning);
+  assert.doesNotMatch(warning, / -g/);
 });
 
 // Wrong (0.1.8 tester): the skills had no version line, so no one could tell that the installed skills were older than pdd.
@@ -209,7 +261,9 @@ test('INSTALL9: the SKILL.md version line decides older or different, and pdd --
   writeFileSync(feature, withLine(source, '0.1.8'));
   const older = run(['--version']);
   assert.equal(older.status, 0); assert.equal(older.stdout, `${version()}\n`);
-  assert.ok(older.stderr.includes(`PDD skills in ${join(home, '.agents/skills')} are older than pdd ${version()}. To update them, run: ${UPDATE}\n`), older.stderr);
+  assert.ok(older.stderr.includes(`PDD skills in ${join(home, '.agents/skills')} are older than pdd ${version()}`), older.stderr);
+  assert.match(older.stderr, /pdd-feature is 0\.1\.8/);
+  assert.ok(older.stderr.includes(UPDATE), older.stderr);
   // A newer version line is not older.
   writeFileSync(feature, withLine(source, '99.0.0'));
   assert.deepEqual(stderrOf(), []);

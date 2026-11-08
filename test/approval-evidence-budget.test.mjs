@@ -1,3 +1,4 @@
+import { legacyManualGates } from './helpers/legacy-manual-gates.mjs';
 import test from 'node:test';
 import { detailsOf } from '../src/workflow-pr-body.mjs';
 import assert from 'node:assert/strict';
@@ -30,6 +31,7 @@ async function ready(t, storyWords = 'reviewed story') {
   success(await f.run(), 'start feature');
   await finish(f);
   success(await approveRun({ ref: '17', cwd: f.source, said: storyWords }, saidPorts(f)), 'approve story');
+  legacyManualGates(f);
   writeFileSync(join(f.record().root, 'value.mjs'), 'export const value = 2;\n');
   await finish(f);
   assert.equal(f.record().gate?.kind, 'approve-pr', 'PR1 is ready for explicit approval');

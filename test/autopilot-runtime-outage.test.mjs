@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, realpathSync } from 'node:fs';
+import { cpSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createServer } from 'node:http';
@@ -582,4 +582,38 @@ test('the interpreter alert kind is one incident per repository and machine', as
   assert.equal(sent.length, 1);
   assert.match((await call('15', 'recovered', { cause: 'The interpreter is back', kind: 'interpreter' })).message, /Recovery sent/);
   assert.equal(sent.length, 2); assert.match(sent[1], /recovered: interpreter/); assert.match(sent[1], /issues\/12, https:\/\/github.com\/owner\/repo\/issues\/15/);
+});
+
+test('release: native mixed broken-test batch cannot park as an interpreter outage', async t => {
+  const { f, ports, root } = await automaticRun(t);
+  const template = join(packageRoot, 'test', 'fixtures', 'harbor');
+  for (const dir of ['user_stories', 'tests', 'prompts']) cpSync(join(template, dir), join(root, dir), { recursive: true });
+  const bad = JSON.parse(readFileSync(join(root, 'tests/place-order.json'), 'utf8'));
+  bad.story_path = 'user_stories/bad-order.md'; bad.steps[0].input.items[0].quantity = 0;
+  cpSync(join(root, 'user_stories/place-order.md'), join(root, bad.story_path));
+  writeFileSync(join(root, 'tests/bad-order.json'), JSON.stringify(bad));
+  const fake = await fakeRuntime(t, (entry, runtime) => runtime.normal(entry));
+  const made = portsFor({ HOME: f.ports.env.HOME, PDD_RUNTIME_URL: fake.origin }); made.clock.now = f.clock;
+  assert.equal(await runCheck({ cwd: root, words: [], options: { '--json': true } }, made.ports), 4);
+  const result = JSON.parse(made.ports.stdout.text), broken = result.rows.find(row => row.test === 'tests/bad-order.json');
+  assert.equal(broken.state, 'not run'); assert.equal(broken.refusals[0].code, 'invalid-input');
+  assert.equal(result.rows.some(row => row.state === 'passed'), true);
+  const cause = savedCheckCause(result.batch, { env: { HOME: f.ports.env.HOME } });
+  const out = await parkAutomaticRun({ reason: 'last check did not pass', runtime: true, cwd: root }, ports());
+  assert.equal(out.exitCode, 1); assert.equal(cause, 'issue'); assert.equal(f.record().state, 'running');
+});
+for (const state of ['not run', 'partial']) test(`release: named ${state} retains access and uncertain dispatch routes`, () => {
+  assert.equal(checkCause([{ state, reason: { code: 'auth-required' } }]), 'access');
+  assert.equal(checkCause([{ state, reason: { code: 'broken-test' } }]), 'issue');
+  assert.equal(checkCause([{ state: 'partial', reason: { code: 'dispatch-uncertain' } }]), 'unknown');
+  assert.equal(checkCause([{ state: 'partial', reason: { code: 'graph-provider-failure' } }]), 'service');
+});
+
+test('release: saved legacy and public state spellings retain the same access cause', async t => {
+  const { f } = await automaticRun(t);
+  savedCheck(f, [{ state: 'not run', reason: { code: 'auth-required' } }]);
+  const path = join(f.ports.env.HOME, '.pdd', 'runtime', 'batches', BATCH, 'batch.json');
+  const batch = JSON.parse(readFileSync(path, 'utf8')); batch.rows[0].state = 'not_run';
+  writeFileSync(path, JSON.stringify(batch));
+  assert.equal(savedCheckCause(BATCH, { env: f.ports.env }), 'access');
 });
