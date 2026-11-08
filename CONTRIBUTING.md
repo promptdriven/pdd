@@ -49,6 +49,9 @@ also preloads it. The owning process removes its temporary home on exit. OS acco
 requires an injected `userInfo` fake; an un-injected lookup fails the process
 with `PDD_TEST_ACCOUNT_HOME`, even if the caller catches the error.
 
+The runtime workspace fixture uses `f.env.HOME` for its private home. It leaves
+`<parent>/home` available for tests that need a separate consumer home.
+
 Run a focused file with `node --test test/<file>.test.mjs`. To preload the same
 isolation for a new test, use
 `node --import ./test/helpers/test-home.mjs --test test/<file>.test.mjs`.

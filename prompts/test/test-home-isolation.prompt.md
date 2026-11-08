@@ -32,7 +32,12 @@ synthetic state/config/skill directories. Those caller directories must keep the
 same entries and bytes. Exercise the metrics selector/composition and the outage
 fixture environment replacement paths using their existing external fakes.
 A consumer of the shared workspace fixture must also keep default workflow
-state out of the caller HOME. A control using the old leaking fixture must fail the unchanged caller-home
+state out of the caller HOME. The fixture's private home must leave `<parent>/home`
+available for consumers to create their own home. Both the fixture environment
+and a consumer's HOME override must select default state within their respective
+homes. Preserve the MCP pending, owned and aborted ownership cases and their
+supplied-state selection checks.
+A control using the old leaking fixture must fail the unchanged caller-home
 expectation. Also exercise default state and skill writes, a child process and a
 missing injected HOME inside the isolated process. Run the actual npm test script in a synthetic
 checkout with a new test that omits the import, and check the same caller-home boundary. Cleanup must leave

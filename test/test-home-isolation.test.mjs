@@ -83,6 +83,33 @@ test('shared workspace fixture keeps a default run-index write out of caller HOM
   assert.deepEqual(snapshot(f.home), before, 'caller-home-leak');
 });
 
+test('shared workspace fixture leaves room for a consumer-owned home', t => {
+  const f = caller(t), before = snapshot(f.home);
+  const target = process.env.PDD_TEST_HOME_ROOT ?? root;
+  const script = `
+    import { fixture } from ${JSON.stringify(pathToFileURL(join(target, 'test/helpers/runtime-workspace-fixture.mjs')).href)};
+    import { writeRun } from ${JSON.stringify(pathToFileURL(join(target, 'src/workflow-runs.mjs')).href)};
+    import assert from 'node:assert/strict';
+    import { mkdirSync, readFileSync } from 'node:fs';
+    import { join } from 'node:path';
+    const cleanup = [], f = fixture({ after(fn) { cleanup.push(fn); } });
+    try {
+      const consumerHome = join(f.parent, 'home');
+      assert.doesNotThrow(() => mkdirSync(consumerHome), 'consumer-home-collision');
+      for (const [number, env] of [[1, f.env], [2, { ...f.env, HOME: consumerHome }]]) {
+        writeRun({ v: 1, number, repo: 'example/fixture', runDir: join(f.root, '.git/pdd/runs', String(number)), root: f.root, state: 'running', areas: [], done: {}, chats: [] }, { env, skipMetricsDelivery: true });
+      }
+      for (const [number, home] of [[1, f.env.HOME], [2, consumerHome]]) {
+        const index = JSON.parse(readFileSync(join(home, '.local/state/pdd/runs.json'), 'utf8'));
+        assert.deepEqual(index.runs.map(run => run.number), [number]);
+      }
+    } finally { for (const fn of cleanup.reverse()) fn(); }
+  `;
+  const result = child(['--input-type=module', '-e', script], f.env, target);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(snapshot(f.home), before, 'caller-home-leak');
+});
+
 test('home cleanup also runs after a failed native test', t => {
   const f = caller(t), before = snapshot(f.home), file = join(f.dir, 'failing.test.mjs'), record = join(f.dir, 'owned-home');
   writeFileSync(file, `import ${JSON.stringify(bootstrap)};\nimport test from 'node:test';\nimport { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(record)}, process.env.HOME);\ntest('intentional failure', () => { throw Error('intentional failure'); });\n`);
