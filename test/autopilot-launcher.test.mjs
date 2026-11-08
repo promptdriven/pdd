@@ -23,9 +23,7 @@ async function fixture(t, options = {}) {
   writeFileSync(join(cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: options.mode ?? 'auto', trust: ['helper'] } }));
   const f = { dir, cwd, home, time: Date.parse('2026-11-04T00:00:00Z'), polls: [], prompts: [], runs: [], timers: [], comments: [], ack: [], issues: [], etag: '"one"', active: false };
   f.ports = {
-    ...healthyMachine, checkCapacityPorts: isolatedCheckCapacity(dir),
-    env: {HOME: home, XDG_CONFIG_HOME: join(home, '.config'), PDD_SUITE_QUEUE: join(dir, 'suite-queue'), PDD_INTERPRETER_QUEUE: join(dir, 'interpreter-queue')},
-    stateRoot: join(home, 'state'), now: () => f.time,
+    ...healthyMachine, checkCapacityPorts: isolatedCheckCapacity(dir), stateRoot: join(home, 'state'), now: () => f.time,
     // These fakes stand for a checkout where pdd workflows can start (#3050).
     allocationCheck: async () => ({ state: 'ready', message: '' }),
     readRunProgress: async () => f.runProgress ?? [],
@@ -65,7 +63,7 @@ async function fixture(t, options = {}) {
     },
   };
   f.module = await import('../src/autopilot-launcher.mjs');
-  f.invoke = async (command, extra = {}) => f.module.runAutopilotLauncher({ command, cwd, env: { ...f.ports.env, PATH: process.env.PATH }, packageRoot: root, issues: [], ...extra }, f.ports);
+  f.invoke = async (command, extra = {}) => f.module.runAutopilotLauncher({ command, cwd, env: { HOME: home, PATH: process.env.PATH }, packageRoot: root, issues: [], ...extra }, f.ports);
   f.stateFile = () => join(f.ports.stateRoot, readdirSync(f.ports.stateRoot).find(x => x.endsWith('.json')));
   f.state = () => JSON.parse(readFileSync(f.stateFile(), 'utf8'));
   f.tick = () => f.module.tickAutopilot(f.stateFile(), f.ports);
@@ -82,7 +80,7 @@ async function nativeStartup(t, { kind = 'codex', custom = false, cwdName, body 
   const record = join(f.dir, 'native.jsonl');
   const script = `#!${process.execPath}\nconst fs = require('node:fs'); fs.appendFileSync(${JSON.stringify(record)}, JSON.stringify({command:process.argv[1],argv:process.argv.slice(2),cwd:process.cwd(),env:{CODEX_HOME:process.env.CODEX_HOME,CLAUDE_CONFIG_DIR:process.env.CLAUDE_CONFIG_DIR,STARTUP_TEST_VALUE:process.env.STARTUP_TEST_VALUE,PDD_AUTOPILOT_CONTEXT:process.env.PDD_AUTOPILOT_CONTEXT}})+'\\n');\n`;
   for (const name of ['codex', 'fake-provider', 'chosen codex wrapper']) writeFileSync(join(bin, name), script, { mode: 0o755 });
-  const env = { HOME: f.home, PATH: `${bin}:/usr/bin:/bin`, CODEX_HOME: profile, XDG_CONFIG_HOME: join(f.home, '.config') };
+  const env = { PDD_SUITE_QUEUE: undefined, PDD_VM_SUITE_LOCK: undefined, HOME: f.home, PATH: `${bin}:/usr/bin:/bin`, CODEX_HOME: profile, XDG_CONFIG_HOME: join(f.home, '.config') };
   if (!codexHome) delete env.CODEX_HOME;
   const value = 'a b\'c"d\\e$HOME';
   env.CLAUDE_CONFIG_DIR = join(f.home, value);
@@ -1030,6 +1028,9 @@ test('time rule revalidates trust on a cached due claim without forwarding stran
 
 test('time rules read active status file modification times from the Git common directory', async t => {
   const f = await fixture(t); delete f.ports.readRunProgress;
+  f.ports.env = {HOME: f.home, PDD_SUITE_QUEUE: join(f.dir, 'suite-queue'), PDD_INTERPRETER_QUEUE: join(f.dir, 'interpreter-queue')};
+  const invoke = f.invoke;
+  f.invoke = (command, extra = {}) => invoke(command, {env: f.ports.env, ...extra});
   const changedAt = f.time;
   // A foreign finished ticket must not hide this checkout's progress.
   mkdirSync(f.ports.env.PDD_SUITE_QUEUE, { recursive: true });
@@ -1697,7 +1698,7 @@ for (const selector of ['PDD_SUITE_QUEUE', 'PDD_VM_SUITE_LOCK']) test(`shared su
     if (args[0] === 'pane' && args[1] === 'run') execFileSync('/bin/sh',['-c',args[3]],{cwd:f.cwd,env:{HOME:f.home,PATH:`${bin}:/usr/bin:/bin`,PDD_SUITE_QUEUE:'/stale-server-queue',PDD_VM_SUITE_LOCK:'/stale-server-lock'},timeout:10000});
     return result;
   };
-  const result = await f.invoke('start',{env:{HOME:f.home,PATH:`${bin}:/usr/bin:/bin`,[selector]:selected}});
+  const result = await f.invoke('start',{env:{HOME:f.home,PATH:`${bin}:/usr/bin:/bin`,PDD_SUITE_QUEUE:undefined,PDD_VM_SUITE_LOCK:undefined,[selector]:selected}});
   assert.equal(result.exitCode,0,result.message);
   const actual = JSON.parse(readFileSync(output,'utf8'));
   assert.equal(actual[selector === 'PDD_SUITE_QUEUE' ? 'queue' : 'legacy'],selected,'native coordinator inherits the exported queue selector');
@@ -1713,7 +1714,8 @@ for (const selector of ['PDD_SUITE_QUEUE', 'PDD_VM_SUITE_LOCK']) test(`shared su
   utimesSync(statusFile,new Date(changedAt),new Date(changedAt));
   writeFileSync(join(queue,'ticket-1.json'),JSON.stringify({ticket:1,pid:process.pid,childPid:null,cwd:worktree,state:'waiting',queuedAt:changedAt,startedAt:null,finishedAt:null,reason:null}));
   delete f.ports.readRunProgress; f.prompts.length=0;
-  // No selector is supplied to this tick. Only saved startup state can select it.
+  // Only saved startup state selects the queue. Mask the unrelated ambient selector.
+  f.ports.env = {[selector === 'PDD_SUITE_QUEUE' ? 'PDD_VM_SUITE_LOCK' : 'PDD_SUITE_QUEUE']: undefined};
   await f.tick();
   const rules=f.prompts.flatMap(text=>JSON.parse(text.trim().split('\n').at(-1)).timeRules??[]);
   assert.equal(rules.some(rule=>rule.number===101&&['stuck-run','idle-claim'].includes(rule.kind)),false,'later tick observes the configured queue');
@@ -1887,7 +1889,10 @@ test('digest runs before rate-limit retry and its failure does not stop the laun
   assert.equal(attempts, 2, 'off mode must not send a digest');
 });
 for (const state of ['running', 'waiting']) test(`cost polling cannot postpone the native stalled-run rule for ${state} runs`, async t => {
-  const f = await fixture(t); delete f.ports.readRunProgress; f.ports.skipMetricsDelivery = true;
+  const f = await fixture(t); delete f.ports.readRunProgress;
+  f.ports.env = {HOME: f.home, PDD_SUITE_QUEUE: join(f.dir, 'suite-queue'), PDD_INTERPRETER_QUEUE: join(f.dir, 'interpreter-queue')};
+  const invoke = f.invoke;
+  f.invoke = (command, extra = {}) => invoke(command, {env: f.ports.env, ...extra}); f.ports.skipMetricsDelivery = true;
   const { updateRun } = await import('../src/workflow-runs.mjs');
   const changedAt = f.time, commonDir = join(f.cwd, '.git'), runDir = join(commonDir, 'pdd', 'runs', '117');
   mkdirSync(runDir, { recursive: true });
@@ -1933,6 +1938,9 @@ test('interpreter queue waiting and unavailable ownership cannot trigger the stu
 
 test('native run progress subtracts saved interpreter waiting after a launcher restart', async t => {
   const f = await fixture(t); delete f.ports.readRunProgress;
+  f.ports.env = {HOME: f.home, PDD_SUITE_QUEUE: join(f.dir, 'suite-queue'), PDD_INTERPRETER_QUEUE: join(f.dir, 'interpreter-queue')};
+  const invoke = f.invoke;
+  f.invoke = (command, extra = {}) => invoke(command, {env: f.ports.env, ...extra});
   const changedAt = f.time, folder = join(f.cwd, '.git', 'pdd', 'runs', '3066'); mkdirSync(folder, { recursive: true });
   const file = join(folder, 'status.json');
   writeFileSync(file, JSON.stringify({ v: 1, number: 3066, repo: 'owner/repo', state: 'running', root: f.cwd }));

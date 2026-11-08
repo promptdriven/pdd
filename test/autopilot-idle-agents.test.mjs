@@ -221,7 +221,7 @@ for (const failure of ['failed', 'unconfirmed', 'not-configured']) test(`3072 re
   ports.sendAlert = async () => {throw Error('Controlled failure before alert custody');};
   await tick(); assert.equal(f.record().state, 'stuck'); assert.equal(requests.length, 0);
   delete ports.sendAlert;
-  if (failure === 'not-configured') writeFileSync(join(f.ports.env.HOME, '.config', 'pdd', 'autopilot-alerts.json'), '{}');
+  if (failure === 'not-configured') writeFileSync(join(f.ports.env.XDG_CONFIG_HOME, 'pdd', 'autopilot-alerts.json'), '{}');
   else ports.alertPorts.http = async request => {
     requests.push(request);
     throw Object.assign(Error('Controlled alert transport failure'), {code: failure === 'failed' ? 'unreached' : 'unknown'});
