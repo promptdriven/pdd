@@ -178,6 +178,25 @@ open issue list has more than one page, the tick reads it in full every 6 hours.
 Between, it reads only the issues and PRs that changed since that full read
 (`since=`), so an unchanged list costs no counted call.
 
+Set `autopilot.maxOpenPrs` in `pdd.json` to limit open Autopilot PRs waiting
+for review in each owner area. The default is 5; use a positive safe integer.
+Invalid values use 5 and stay unchanged in the file. This limit is separate from
+`--runs`. At the limit, new issue work in that area waits. Claimed work continues.
+A merged, closed or approved PR with no pending review request frees a slot.
+PRs waiting only for CI do not count. GitHub's current required-review decision,
+changes requested and pending review requests determine which PRs wait.
+
+Use `area:NAME` labels on issues and PRs for owner areas. Names match without
+case. A PR's own areas take priority; otherwise it uses its closing issues' areas.
+A PR with several areas counts once in each area. Unlabeled work shares one
+repository area. An Autopilot PR has the `pdd:autopilot` label, the
+`<!-- pdd:autopilot-pr -->` marker, or a PDD workflow marker and
+the automatic Autopilot mode text in its body. Manual PDD PRs do not count.
+Status shows the last complete observation, for example
+`area:cli: waiting: 5 PRs wait for review`. An unavailable or truncated review
+observation holds fresh work until a later complete read. Status itself does not
+refresh this queue. Use the next tick or an explicit start to refresh it.
+
 Every open issue can enter the queue, old or new, with or without `pdd:autopilot`.
 Autopilot starts fresh work only on an issue that the current dependency review
 lists as eligible. That review checks dependencies, trust, the GitHub Assignees

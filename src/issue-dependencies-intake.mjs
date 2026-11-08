@@ -1,3 +1,4 @@
+import { reviewWait, maxOpenPrs } from './autopilot-pr-limit.mjs';
 import { randomUUID } from 'node:crypto';
 import { execFile as nodeExecFile } from 'node:child_process';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -128,6 +129,13 @@ export async function checkDependencyStart({ cwd = '', repository, issue, coordi
       if (slots.size + ([...slots.values()].some(x => selected && issueKey(x.issue) === selected) ? 0 : 1) > settings.runs) return { allowed: false, reason: 'runs' };
     }
     if (occupied.some(run => selected && issueKey(run.issue) === selected)) return { allowed: false, reason: 'dependency' };
+    const counts = json((await ports.reviewQueue.read({ repository })).json);
+    if (!counts || typeof counts !== 'object' || Array.isArray(counts) || Object.values(counts).some(count => !Number.isSafeInteger(count) || count < 0)) return { allowed: false, reason: 'unknown' };
+    if (Object.values(counts).some(count => count >= maxOpenPrs(settings.maxOpenPrs))) {
+      const current = json((await ports.github.issue({ repository, issue: subjectNumber })).json);
+      if (!Array.isArray(current.labels)) return { allowed: false, reason: 'unknown' };
+      if (reviewWait(current.labels, counts, settings.maxOpenPrs)) return { allowed: false, reason: 'pr-review-limit' };
+    }
     const copy = structuredClone(snapshot); const subject = copy.issues.find(x => selected && issueKey(x.key) === selected);
     if (subject && subject.executionClaim?.coordinatorId === claim.coordinatorId && subject.executionClaim?.commentId === claim.commentId && subject.executionClaim?.labelEventId === claim.labelEventId) {
       subject.execution = 'idle'; subject.holds = subject.holds.filter(x => !/^(running|claim|claimed)$/i.test(x));

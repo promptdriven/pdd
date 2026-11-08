@@ -1,10 +1,11 @@
-// Generated from prompts/cli/autopilot.prompt.md (sha256: 41ad074fdf9d7f706de205e5e3550230b9ce2e45f1d798ada40d8a2c3e92ccaf).
+// Generated from prompts/cli/autopilot.prompt.md (sha256: 5ef0ae0c98ac449a2b6d3f88c517259f8357acd7aab037e049435b79a1ca9bb4).
 import * as nativeFs from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createInterface } from 'node:readline/promises';
+import { maxOpenPrs as effectiveMaxOpenPrs } from './autopilot-pr-limit.mjs';
 import { githubBudgetSettings } from './github-calls.mjs';
 
 const execute = promisify(execFile);
@@ -101,8 +102,8 @@ function nativeGithub(root, exec) {
 }
 
 export async function runAutopilot(input, ports = {}) {
-  let mode = 'off', trust = [], warnings = [], github;
-  const result = (exitCode, message, trusted = false) => ({ mode, trust, ...(github ? { github } : {}), trusted, message: [...warnings, message].filter(Boolean).join('\n'), exitCode });
+  let mode = 'off', trust = [], warnings = [], github, maxOpenPrs;
+  const result = (exitCode, message, trusted = false) => ({ mode, trust, ...(maxOpenPrs === undefined ? {} : { maxOpenPrs }), ...(github ? { github } : {}), trusted, message: [...warnings, message].filter(Boolean).join('\n'), exitCode });
   const { action, names, author } = input;
   if (!['setup', 'mode', 'trust', 'untrust', 'isTrusted'].includes(action)
     || action === 'mode' && !modes.includes(input.mode)
@@ -128,6 +129,7 @@ export async function runAutopilot(input, ports = {}) {
     mode = modes.includes(setting.mode) ? setting.mode : 'off';
     trust = unique(Array.isArray(setting.trust) ? setting.trust : []);
     if (Object.hasOwn(setting, 'github')) github = githubBudgetSettings(setting.github);
+    if (Object.hasOwn(setting, 'maxOpenPrs')) maxOpenPrs = effectiveMaxOpenPrs(setting.maxOpenPrs);
     const invalid = raw !== null && (!object(saved) || Object.hasOwn(setting, 'mode') && !modes.includes(setting.mode));
     if (invalid) warnings.push(`Saved Autopilot mode ${JSON.stringify(object(saved) ? setting.mode : saved)} is invalid; ${action === 'mode' ? 'treating it as off.' : 'using off and leaving it unchanged.'}`);
     if (['trust', 'untrust'].includes(action) && raw !== null && !object(saved)) {

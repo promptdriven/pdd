@@ -30,7 +30,7 @@ export function createGithubRepoFake({ repository = 'acme/widgets', owner = 'acm
   const row = issue => ({ id: Number(issue.id), node_id: `I_${issue.id}`, number: issue.number, html_url: issue.movedTo ? `https://github.com/${issue.movedTo}/issues/${issue.number}` : url(issue.number),
     title: issue.title, body: issue.body, state: issue.state, state_reason: issue.state_reason, user: { login: issue.user }, labels: issue.labels.map(name => ({ name })),
     assignees: [], assignee: null, comments: issue.comments.length, created_at: iso(issue.created), updated_at: iso(issue.updated), closed_at: null,
-    author_association: 'OWNER', issue_dependencies_summary: summary(issue) });
+    author_association: 'OWNER', issue_dependencies_summary: summary(issue), ...(issue.pull_request ? { pull_request: {} } : {}) });
   const comment = (issue, c) => ({ id: Number(c.id), html_url: `${url(issue.number)}#issuecomment-${c.id}`, body: c.body, user: { login: c.user }, created_at: iso(c.created), updated_at: iso(c.updated), author_association: 'OWNER' });
   const events = issue => [...issue.timeline.map(e => ({ id: Number(e.id), event: e.event, actor: { login: e.actor }, created_at: iso(e.created), ...(e.label ? { label: { name: e.label } } : {}) })),
     ...issue.comments.map(c => ({ id: Number(c.id), event: 'commented', actor: { login: c.user }, created_at: iso(c.created), updated_at: iso(c.updated), body: c.body }))]
@@ -113,7 +113,22 @@ export function createGithubRepoFake({ repository = 'acme/widgets', owner = 'acm
     return { status: 404, body: { message: 'Not Found' } };
   }
   function graphql(input) {
-    const { variables } = JSON.parse(input), data = {};
+    const { query, variables } = JSON.parse(input), data = {};
+    if (query.includes('pullRequests(')) {
+      const all = live().filter(issue => issue.pull_request && issue.state === 'open');
+      const offset = variables.cursor ? Number(variables.cursor) : 0;
+      const size = Number(query.match(/pullRequests\(states:OPEN,first:(\d+)/)?.[1] ?? 100);
+      const nodes = all.slice(offset, offset + size).map(issue => ({
+        number: issue.number, state: 'OPEN', body: issue.body,
+        labels: { nodes: issue.labels.map(name => ({ name })), totalCount: issue.labels.length },
+        reviewDecision: issue.reviewDecision ?? null,
+        reviewRequests: { totalCount: issue.reviewRequests ?? 0 },
+        closingIssuesReferences: issue.closingIssuesReferences ?? { totalCount: 0, nodes: [] },
+      }));
+      return { data: { repository: { pullRequests: { nodes, pageInfo: {
+        hasNextPage: offset + size < all.length, endCursor: String(offset + size),
+      } } } } };
+    }
     for (const [name, value] of Object.entries(variables)) {
       const m = /^n([0-9]+)$/.exec(name); if (!m) continue;
       const issue = f.issues.get(value);
