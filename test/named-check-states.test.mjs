@@ -163,7 +163,9 @@ test('named states: lint exception JSON uses a named state and reason', async t 
   assert.equal(await runCheck({ cwd: h.repo, words: ['place-order'], options: { '--lint': true, '--json': true } }, p.ports), 4);
   const r = JSON.parse(p.ports.stdout.text);
   assert.equal(r.lint_state, 'not run'); assert.equal(r.state, 'not run');
-  assert.equal(r.reason.code, 'no-server-verdict');
+  assert.equal(r.reason.code, 'broken-test');
+  assert.equal(r.rows[0].reason.code,'broken-test');
+  assert.equal(r.rows[0].unsent,true);
 });
 
 test('named states: a retryable not-started receipt cannot print Sent with a failed job label', async t => {
