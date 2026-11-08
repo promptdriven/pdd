@@ -4,7 +4,7 @@ import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
 import { readInterpreterProgress } from './interpreter-queue.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: b0bb77196413dd6fc7f742c3e859a2d51d1908197387d7c7b531b46836357c74).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: ecd6fe6a7b2df13cb812191c39cdbe6ccf0dd929c003fb7952da80cc43bb3ce0).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';

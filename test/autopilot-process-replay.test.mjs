@@ -6,6 +6,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSyn
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { runAutopilotLauncher } from '../src/autopilot-launcher.mjs';
 import { writeRun, runDirFor } from '../src/workflow-runs.mjs';
 
@@ -34,23 +35,18 @@ test('generated timer process coalesces review and elapsed run and claim, then s
   const calls=()=>readFileSync(log,'utf8').trim().split('\n').map(JSON.parse);
   const prompts=()=>calls().filter(x=>x.name==='herdr'&&x.a[2]==='agent'&&x.a[3]==='prompt');
   const baseline=prompts().length;
-  // Keep the generated timer's executable, module and state target. Invoke its
-  // public tick in a separate process so machine/account reads use the same
-  // injected ports as startup. The CLI entry guard is outside this replay.
-  const tickScript = `
-    import {readFileSync} from 'node:fs';
-    import {pathToFileURL} from 'node:url';
-    import {healthyMachine} from ${JSON.stringify(new URL('./helpers/healthy-machine.mjs', import.meta.url).href)};
-    import {isolatedCheckCapacity} from ${JSON.stringify(new URL('./helpers/check-machine.mjs', import.meta.url).href)};
-    const {entry,dir} = JSON.parse(readFileSync(0,'utf8'));
-    const {tickAutopilot} = await import(pathToFileURL(entry[1]).href);
-    await tickAutopilot(entry[2], {...healthyMachine, checkCapacityPorts:isolatedCheckCapacity(dir), env:process.env});
-  `;
-  const tick=()=>execFileSync(entry[0],['--input-type=module','-e',tickScript],
-    {cwd,env,input:JSON.stringify({entry,dir}),encoding:'utf8',timeout:15000});
+  // Execute the generated command, including its executable entry guard.
+  // A child-only loader supplies observations; native dispatch is unchanged.
+  const preload=fileURLToPath(new URL('./helpers/autopilot-timer-preload.mjs',import.meta.url));
+  const tick=()=>execFileSync(entry[0],entry.slice(1),
+    {cwd,env:{...env,NODE_OPTIONS:`--import=${JSON.stringify(preload)}`},encoding:'utf8',timeout:15000});
   save({issues:[row(78,{labels:[{name:'pdd:working'}]}),row(92,{body:'Fixes #78',pull_request:{}})],reviews:[{id:1,state:'CHANGES_REQUESTED',body:'Please revise',user:{login:'owner'},submitted_at:new Date(now).toISOString()}]});
   tick();
   assert.equal(prompts().length,baseline+1);
+  const health=JSON.parse(readFileSync(entry[2],'utf8')).health;
+  assert.equal(health.paused,false);
+  assert.equal(health.resource.resources.cpuCount,40);
+  assert.equal(health.usage.usedPercent,25);
   const instruction=prompts().at(-1).a.at(-1), match=/Artifact path: (.+)/.exec(instruction);
   const packetText=match?readFileSync(JSON.parse(match[1]),'utf8'):instruction;
   const packet=JSON.parse(packetText.trim().split('\n').at(-1));

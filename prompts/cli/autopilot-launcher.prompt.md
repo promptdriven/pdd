@@ -192,6 +192,15 @@ cannot be checked, warn how `loginctl enable-linger` keeps the timer after logou
 or polling loop remains running between ticks. Timer failure is actionable and
 does not leave status claiming it is running.
 
+Executing this module with the ordinary timer state-file operand dispatches
+`tickAutopilot` for that file. A rejected tick writes one plain `Autopilot:` error
+line to stderr and sets exit code 1. Offline process replays execute the generated
+Node/module/state command itself, with a child preload supplying controlled
+machine and account dependency observations. Preserve packet coalescing and
+restart deduplication; importing and calling the tick export alone does not
+verify timer dispatch. Do not add a production test mode or read live resources
+for this coverage.
+
 On explicit start with a changed invoked package root, leave prior custody intact and schedule a fresh current-state wake to deliver the new package instruction even when no work is eligible; use the existing guarded recovery and do not replay unknown payloads. Dependency analysis instructions also begin with this binding. On a successful explicit `pdd autopilot start`, persist the actual operator action, repository and current active mode for subsequent coordinator work and dependency packets. When the current mode matches that recorded action, identify it as an operator command, not a person’s quoted reply or checker approval. In auto mode explain that it authorizes ordinary eligible work and automatic merge under the repository’s review, testing, strict approval and other rules; observe mode retains its own limits. A timer or configuration read alone must not invent a start action. If a saved installation lacks this context, the next explicit start requests the existing guarded fresh current-state wake even without eligible work; retain unknown custody and do not replay it. Retain the actual start action across mode changes; apply it only when its repository and mode match the current active context. Observe and off do not authorize automatic merge. Record actual operator action through existing supported approval routes where applicable; never manufacture a later person reply.
 
 The coordinator instruction must first explicitly read and follow the absolute `skills/pdd-autopilot/SKILL.md` in the invoked package, including its relative supporting files; do not use a name-only invocation that can select an older installed copy.
