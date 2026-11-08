@@ -42,7 +42,7 @@ The block of Harbor Coffee's `place_order` (schemas cut):
 ```
 - Every schema follows section 3. List every error that the prose can return in `errors`.
 - Do not write `prose_sha256`: `pdd test --fill-hash` fills it.
-- Show the gate. Judge the person's later reply in any chat. A question, change request or earlier message is not approval. No exact phrase is needed. Never invent a decision or edit approval fields. See [Record a chat approval](https://github.com/promptdriven/pdd/blob/main/docs/cli.md#record-a-chat-approval).
+- Show the gate. Judge the person's later reply in any chat. A question, change request or earlier message is not approval. No exact phrase is needed. Never invent a decision or edit approval fields. See [Record a chat approval](https://github.com/promptdriven/pdd/blob/main/docs/cli.md#record-a-chat-approval). In a normal workflow run (not strict mode, not Autopilot), the Story gate shows pdd's Story card: show it as printed, then ask, never a bare "approve?". The person approves each Story with that context. With the approval they may choose the code PR after PR 1 (`--through code`); without it, pdd stops after PR 1. For several runs, show the cards one after another and record one answer for each card.
 - After actual approval, record the exact words for the ready gate and all its drafts:
 
 ```sh
@@ -60,9 +60,9 @@ PDD_SAID
 ```
 
 Choose a delimiter absent as a whole line from the payload. Keep it quoted. Never interpolate the words into shell code or shell quotes. `--said -` records stdin exactly, including newlines. Blank input is refused; pdd does not grade nonblank words.
-- The gate saves selected prompt paths and prose hashes when shown. If a prompt changes, show the gate again before approval. Output lists the paths and hashes.
-- Without --said, a person at a normal terminal can answer y/N once for the listed gate and all its drafts. `pdd approve PATH` approves one prompt. For a caller outside a normal terminal, `pdd workflow approve` instructs the agent to ask the person, then run with --said and their words; `pdd approve PATH` instructs the person to run that command. Native Herdr area-chat evidence may record history but never authorizes approval. Only an explicit approve call passes an approval gate; steps, `workflow done` and chat messages never do. Warn, without blocking, when a workflow has no approve gate before code.
-- Workflow approval reads `pdd.json` from the main checkout (`sourceRoot`), outside the agent's run worktree. Standalone `pdd approve PATH` reads it from the Git root of the current checkout. Root `pdd.json` with `"strict_approvals": true` permits only a person terminal; absent/false is easy mode. Strict mode refuses --said. Prompt approval records the invoking actor, time, route, exact words and path/hash; PR evidence shows matching approvals safely quoted in code spans. Gate approval does not approve the later code-or-stop gate. A person decides expected values; never change them on your own.
+- The gate saves selected prompt paths and prose hashes when shown. If a prompt changes, show the gate again before approval. Output lists the paths and hashes. In a normal workflow run, a prompt-only repair after the Story approval needs no new approval: when pdd verifies a full check pass on the current prompts (every criterion passes and its saved results match the current files), `pdd workflow done check --summary "Prompt tests line"` opens PR 1 itself and records the route `automatic-check-pass`. It skips the optional try step and asks nothing. A change to a Story, the plan or an expected value shows the Story card again for the person. An AI-service failure is no verdict: it asks no one to approve.
+- Without --said, a person at a normal terminal can answer y/N once for the listed gate and all its drafts. `pdd approve PATH` approves one prompt. For a caller outside a normal terminal, `pdd workflow approve` instructs the agent to ask the person, then run with --said and their words; `pdd approve PATH` instructs the person to run that command. Native Herdr area-chat evidence may record history but never authorizes approval. Only an explicit approve call passes an approval gate; steps, `workflow done` and chat messages never do. The one exception is the full-pass route of a normal run above: `workflow done` opens PR 1, and nothing else. Warn, without blocking, when a workflow has no approve gate before code.
+- Workflow approval reads `pdd.json` from the main checkout (`sourceRoot`), outside the agent's run worktree. Standalone `pdd approve PATH` reads it from the Git root of the current checkout. Root `pdd.json` with `"strict_approvals": true` permits only a person terminal; absent/false is easy mode. Strict mode refuses --said. Prompt approval records the invoking actor, time, route, exact words and path/hash; PR evidence shows matching approvals safely quoted in code spans. Gate approval does not approve the later code-or-stop gate, except the choice that the person gives with a normal run's Story approval. A person decides expected values; never change them on your own.
 - pdd never merges and has no merge command. An agent may merge only after the person's explicit chat request. Resolve the PR's exact current head and require at least one check and all required checks green for that head; missing, failed or pending checks stop. First post a PR comment beginning `Merge requested by the person: "…"`, preserving the exact request safely in a Markdown code span (use a fence longer than any backtick run; JSON-quote controls/newlines). Use a body file, never interpolate the words into shell code. A failed comment stops. Recheck head/checks, then run `gh pr merge PR --merge --match-head-commit <head>` with that same head. A changed head stops; obtain green checks for its current head before retrying.
 - To change an approved prompt (prose or interface), set `"status": "draft"`, run `pdd test --fill-hash` and ask the
   person to approve again through these routes.
@@ -363,7 +363,7 @@ failed, the real reason and what to do next: pass that line on as it is.
 | The prompt is wrong | The Story and the step input give the expected value; the prompt does something else | Fix the prompt. Check that Story once. |
 | The program needs a tool | Only a hash, a digest or exact math shows the right answer | Declare a `compute` resource (section 21, "Hash exact bytes"). Check once. |
 | The test path is wrong | `got {"missing": true}` on `result` or `world` (section 8) | Fix only the path. |
-| The expected value may be wrong | The Story does not give this value, or gives another one | Stop. Ask the person: keep the value (you fix the prompt) or change the test. Give an example. |
+| The expected value may be wrong | The Story does not give this value, or gives another one | Stop. Ask the person: keep the value (you fix the prompt) or change the test. Give an example. In a normal run, write the proposed value and run `pdd workflow done check --summary "Prompt tests line"` again: pdd shows the change on the Story card for the person. |
 | The Story is unclear | Two answers fit the Story | Stop. Ask the person to decide the rule in the Story. |
 | The answer changes between runs | `Rerun: failed 1 of 3 (unstable)` | Make the rule in the prompt firmer. Do not fit the prompt to one answer. |
 | No verdict | `no verdict ·` with an AI-service or limit cause, or `busy ·` when the remaining checks are busy. Exit 3, 4 or 5 can also hide a failed Story: read each Story line | Tell the person, with pdd's next step. Change no file. Never send it again on your own. In Autopilot, do not tell the person: follow pdd-autopilot `steps/handoff.md` "Interpreter outage" (`pdd workflow park --interpreter`). |
@@ -381,7 +381,7 @@ failed, the real reason and what to do next: pass that line on as it is.
 | `invalid-input` | A step input breaks the input schema: `"7pm"`, or a tax rate as a number | Fix the input. pdd shows the field and the rule. |
 | `story-criterion-mismatch` | A test criterion is not the story text: often curly quotes | Copy the story line exactly. |
 | `unchecked-criteria` | A criterion has no exact check | Add a check for it. |
-| `interface-stale` | The prose changed after the hash | Draft: run `--fill-hash`. Approved: set draft, fill the hash, ask again. |
+| `interface-stale` | The prose changed after the hash | Draft: run `--fill-hash`. Approved: set draft and fill the hash. In a normal run, a full check pass re-approves it at PR 1 (section 2); else ask again. |
 | `repository-graph-catalog-error` | Too few AI calls left for a step | Run again with a higher `--max-calls`. |
 | `graph-result-failure` | Often the prose calls a prompt more than `max_calls` | Make the prose and `max_calls` agree. |
 | `run-admission-failed` | Nothing ran (0 AI calls). Often one step's worst case is bigger than `--max-calls` (section 10). Other causes give the same code with no reason | Raise `--max-calls` (at most 1000), or lower `max_calls` in the prompt's `calls`. The interface `limits` do not help. If it stays, tell the person. |
@@ -701,7 +701,8 @@ In verify after the last commit, run one `pdd workflow prove <run> --test "<comm
 - Use a solver (Z3, or CrossHair for Python) only when the range is too big to loop. Replay each counterexample
   and 2 witnesses on the real code.
 - Control: the planted mistake must fail the formal check too. If it does not, write "Not run: the check cannot
-  see the mistake". A crash is not assertion detection.
+  see the mistake". A crash is not assertion detection. With no scenario vectors, put the control in the formal
+  block: `control_command` and its nonzero `control_exit_code`.
 - Commit the replay test and the formal test as normal tests. Do not commit raw logs.
 
 **Structured record for a workflow run.**
@@ -711,7 +712,10 @@ For ordinary runs, after each prompt-space publication or push, pdd refreshes th
 hashes and step/check identities in `status.json` as `replayBaseline`, including empty or blocked selections.
 This continues through the final approval publication before code space. Final approval refuses unpublished
 scenario edits; publish approved edits in prompt space first. On entry into code space the published anchor
-freezes; a code-space retry cannot replace it. No selected vectors means not replayed. Adopted runs instead keep their frozen declared scenario inventory, bytes and authority through prompt publication, code entry and every retry; publication never refreshes that adopted anchor.
+freezes; a code-space retry cannot replace it. No selected vectors means not replayed. The anchor also holds the approved scenario files on the base branch that link to the changed files (`story_path`, step `entry_path`, `pdd-bindings.json`, or a changed file's `Generated from PATH.prompt.md` header); pdd reads them from the base commit. With `{"replay":{"base_scenarios":"all"}}` in the base `pdd.json`, it holds all of them. Expect to write a replay test for each; pdd does not write or run these tests itself. A run without a prompt area builds this part in code space. The PR line counts files and checks by source, for example `Anchor: 3 changed scenarios (40 checks) + 18 linked approved on base 6b58b76 (1,722 checks).` They give no pass by themselves: replay every anchored check. Adopted runs instead keep their frozen declared scenario inventory, bytes and authority through prompt publication, code entry and every retry; publication never refreshes that adopted anchor.
+pdd reads the formal block on its own, also with no selected vectors. The PR shows its status: recorded,
+missing, malformed (FIELD) or stale (source changed), with the reason and one repair step. When a Story has
+`## Rules to check`, the code PR is not ready to merge until the formal status is recorded with Proved or Not applicable.
 
 Before completing each code-space step, the agent writes `<run-folder>/replay-evidence.json`; update it
 with the formal result after that step. Use the versioned contract in the package's `docs/replay-evidence.md`.

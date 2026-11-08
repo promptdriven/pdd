@@ -78,7 +78,7 @@ for (const noVerdict of ['auth', 'unknown', 'refused', 'incomplete', 'interrupt'
     assert.equal(attempt.sent, noVerdict === 'auth' ? 0 : 1, 'exercise declared no-verdict attempt');
     if (noVerdict === 'auth') assert.equal(attempt.code, 5);
     if (['interrupt', 'timeout'].includes(noVerdict)) assert.equal(attempt.code, 3);
-    if (['unknown', 'refused'].includes(noVerdict)) assert.equal(attempt.json.rows[0].state, noVerdict);
+    if (['unknown', 'refused'].includes(noVerdict)) assert.equal(attempt.json.rows[0].state, noVerdict === 'unknown' ? 'partial' : noVerdict);
     if (noVerdict === 'incomplete') assert.equal(attempt.json.rows[0].calls, 'unknown');
     ctx.incomplete(false); ctx.mode('failed');
     const remains = await ctx.invoke({ options: { '--lf': true } });
@@ -127,7 +127,7 @@ for (const prior of ['passed', 'failed', 'refused', 'unknown']) for (const chang
     const path = join(ctx.repo, 'tests/place-order.json'), original = readFileSync(path, 'utf8');
     change(ctx); ctx.mode(prior);
     const established = await ctx.invoke();
-    assert.equal(established.sent, 1); assert.equal(established.json.rows[0].state, prior);
+    assert.equal(established.sent, 1); assert.equal(established.json.rows[0].state, prior === 'unknown' ? 'partial' : prior);
     if (changed) writeFileSync(path, original);
     ctx.mode('passed');
     const got = await ctx.invoke({ options: { '--lf': lf, '--cache-clear': clear } });

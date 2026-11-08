@@ -89,7 +89,7 @@ test('REVIEW server why preserves specific advice and drops legacy generic even 
     const first = await run(setup, fake), folder = `${setup.state}/batches/${first.json.batch}`;
     const path = `${folder}/batch.json`, saved = JSON.parse(readFileSync(path));
     const id = saved.rows[0].request_ids.at(-1);
-    Object.assign(saved.rows[0], { state, why, lost: source === 'transport', phase: source === 'local' ? 'local' : 'server' });
+    Object.assign(saved.rows[0], { state, recovery_state: state, why, lost: source === 'transport', phase: source === 'local' ? 'local' : 'server' });
     if (source === 'local') {
       saved.rows[0].request_ids = [];
       // Model local recovery evidence by removing the receipt and matching claim.
@@ -115,8 +115,8 @@ test('REVIEW server why preserves specific advice and drops legacy generic even 
     const read = await readSaved({ '--json': true, '--read': first.json.batch });
     const expected = state === 'failed' || why !== 'Checks failed.' ? why : source === 'transport' ? 'pdd could not read this run yet.' : null;
     assert.equal(read.json.rows[0].why, expected);
-    assert.equal(read.json.rows[0].state, state);
-    if (state === 'failed') assert.equal(read.json.rows[0].reason, null);
+    assert.equal(read.json.rows[0].state, state === 'unknown' ? 'partial' : state === 'not_run' ? 'not run' : state);
+    if (state === 'failed') assert.equal(read.json.rows[0].reason.code, 'service');
     else {
       assert.notEqual(read.json.rows[0].reason?.message, 'Checks failed.');
       if (source === 'transport') assert.equal(read.json.rows[0].reason.message, expected);

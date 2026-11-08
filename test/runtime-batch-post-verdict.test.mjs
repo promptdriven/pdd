@@ -18,8 +18,8 @@ function runner(setup, fake) {
 // it from an allocated ID whose server result is still unknown after a crash.
 for (const [status, error, state, verdict, exit] of [
   [422, 'invalid-input', 'refused', 'refused', 4],
-  [503, 'pool-low-room', 'not_run', 'not_run', 5],
-  [429, 'rate-limited', 'not_run', 'not_run', 5],
+  [503, 'pool-low-room', 'not run', 'not_run', 5],
+  [429, 'rate-limited', 'not run', 'not_run', 5],
 ]) test(`2655 new batch: ${status} ${error} retains final POST provenance on read and retry`, async t => {
   const setup = harbor(t);
   let beforePost;
@@ -37,7 +37,7 @@ for (const [status, error, state, verdict, exit] of [
   const file = join(setup.state, 'batches', first.json.batch, 'batch.json');
   const id = first.json.rows[0].request_id;
   assert.equal(beforePost.post_verdict, 'uncertain', 'provenance must be durable before POST');
-  assert.equal(beforePost.state, 'sending');
+  assert.equal(beforePost.state, 'partial');
   assert.deepEqual(beforePost.request_ids, [id]);
   assert.equal(first.code, exit);
   assert.equal(first.json.rows[0].state, state);
@@ -80,7 +80,7 @@ test('2655 legacy stale busy ID without POST provenance remains unknown and cann
   const posts = fake.posts.length, gets = fake.gets.length;
   const result = await run({ '--retry': first.json.batch, '--timeout': '0.01' });
   assert.equal(result.code, 3);
-  assert.equal(result.json.rows[0].state, 'unknown');
+  assert.equal(result.json.rows[0].state, 'partial');
   assert.equal(result.json.rows[0].calls, 'unknown');
   assert.equal(result.json.rows[0].request_id, id);
   assert.equal(read(file).rows[0].can_retry, false);
@@ -114,7 +114,7 @@ for (const scenario of ['terminal cache', 'unrelated batch']) test(`2655 UUID re
   running = true;
   const posts = fake.posts.length, result = await run({ '--read': true }, [id]);
   assert.equal(result.code, 3);
-  assert.equal(result.json.rows[0].state, 'running');
+  assert.equal(result.json.rows[0].state, 'sent');
   assert.equal(result.json.rows[0].request_id, id);
   if (scenario === 'terminal cache') assert.deepEqual(readFileSync(raw), terminal, 'verified terminal receipt must survive a later running response');
   else assert.equal(existsSync(unrelated), false, 'same owner/root/origin without row membership must not receive a stray receipt');

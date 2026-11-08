@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 6d458f9c212e77a828ba31b44319a394b071a8e7a919d1f309c2580982cc0ae9).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: aa9bdb84af82ac797e8051a4318eb0f06771dc4e9602e2d0d4062a97eff82fb9).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -10,13 +10,13 @@ import { loadAgentDefinitions } from './agent-config.mjs';
 import { pathDiagnostic } from './path-diagnostic.mjs';
 import { runAutopilot } from './autopilot.mjs';
 import { checkWorkflowAgents } from './workflow-agents.mjs';
-import { gitContext, metricsSource, allRuns, listRuns } from './workflow-runs.mjs';
+import { gitContext, metricsSource, allRuns, listRuns, readRun, updateRun } from './workflow-runs.mjs';
 import { appendEvents } from './metrics-store.mjs';
 import { recordCaptureGap } from './metrics-gap.mjs';
 import * as nativeFiles from 'node:fs';
 import { reconcileDependencyIntake } from './issue-dependencies-intake.mjs';
 import { issueKey } from './issue-dependencies.mjs';
-import { createDependencyReadPorts, dependencySnapshotStore, issueRowVersion, recordLongRunningAlert, refreshClaimHeartbeat, takeoverLimited, withoutClaimHeartbeat } from './issue-dependencies-github.mjs';
+import { createDependencyReadPorts, dependencySnapshotStore, issueRowVersion, recordLongRunningAlert, recoverCoordinatorClaim, refreshClaimHeartbeat, takeoverLimited, withoutClaimHeartbeat } from './issue-dependencies-github.mjs';
 import { sendToChat, START_GRACE_MS } from './workflow-chat.mjs';
 import { acquireRunLock, runtimeWakeTag } from './workflow-runner.mjs';
 import { checkVerdictSince } from './workflow-results.mjs';
@@ -802,13 +802,10 @@ async function wake(state, makeText, p, prepare = async () => {}, explicitStartR
   }
   if (!recovering && agent && !ownerLaunchMatches(state, p)) {
     const oldPane = state.paneId;
-    const nextId = randomUUID();
     if (!await p.scanGuard(latest => {
-      latest.coordinatorId = nextId;
       delete latest.paneId; delete latest.workspaceId; delete latest.ownerLaunch;
       delete latest.contextPane; delete latest.contextBinding;
     })) return false;
-    state.coordinatorId = nextId;
     delete state.paneId; delete state.workspaceId; delete state.ownerLaunch;
     delete state.contextPane; delete state.contextBinding;
     await openWorkspace(state, p);
@@ -1254,11 +1251,43 @@ async function runTick(stateFile, ports, completion) {
     // Claims observed by the intake: refresh this coordinator's own live claims
     // (no AI call) and let expired claims of any owner become selectable work.
     const observedClaims = (Array.isArray(intake.claims) ? intake.claims : []).filter(claim => claim && typeof claim.issue === 'string');
+    // Adopt only admitted claims backed by this checkout's unfinished local runs.
+    // Remote proof permits retry if the process died before the local custody write.
+    for (const candidate of await (p.listRuns ?? listRuns)({ cwd: state.cwd }, { ...p, execFile: async (file, args, options) => p.execute(file, args, options) })) {
+      const origin = candidate.automaticOrigin;
+      if (!origin || ['completed', 'cancelled'].includes(candidate.state) || origin.machine !== state.machine
+        || origin.coordinatorId === state.coordinatorId || origin.repository?.toLowerCase() !== state.repo.toLowerCase()
+        || candidate.repo?.toLowerCase() !== state.repo.toLowerCase() || !samePath(candidate.sourceRoot, state.cwd)
+        || !candidate.runDir || !candidate.root || !existsSync(candidate.runDir) || !existsSync(candidate.root)) continue;
+      const index = observedClaims.findIndex(claim => claim.issue === candidate.issue?.url && claim.machine === state.machine
+        && claim.commentId === origin.claim?.commentId && claim.labelEventId === origin.claim?.labelEventId);
+      if (index < 0) continue;
+      try {
+        await p.scanAction(async () => {
+          const release = acquireRunLock(candidate.runDir);
+          try {
+            const run = readRun(candidate.runDir);
+            if (!run || ['completed', 'cancelled'].includes(run.state) || JSON.stringify(run.automaticOrigin) !== JSON.stringify(origin)) return;
+            const recovery = await (p.recoverCoordinatorClaim ?? recoverCoordinatorClaim)({ cwd: state.cwd, repository: state.repo,
+              claim: { ...observedClaims[index], coordinatorId: origin.coordinatorId, machine: origin.machine }, coordinatorId: state.coordinatorId, machine: state.machine, at: new Date(p.now()).toISOString() },
+              { ...ports, now: p.now, env: p.env, execFile: async (file, args, options) => p.execute(file, args, { ...options, purpose: 'claims' }) });
+            if (recovery.state !== 'recovered') return;
+            updateRun(run.runDir, latest => {
+              if (['completed', 'cancelled'].includes(latest.state) || JSON.stringify(latest.automaticOrigin) !== JSON.stringify(origin)) throw Error('Run custody changed during claim recovery');
+              latest.automaticOrigin = { ...latest.automaticOrigin, coordinatorId: state.coordinatorId };
+              return latest;
+            }, p);
+            observedClaims[index] = recovery.claim;
+          } finally { release(); }
+        });
+      } catch (error) { p.warn(`Claim recovery deferred for ${candidate.issue?.url}: ${line(error.message)}`); }
+    }
     // After 3 takeovers an expired claim is not offered for a 4th: it stays a hold (#3041).
     // Taking back this coordinator's own expired claim is a re-claim, not a takeover.
     const self = { coordinatorId: state.coordinatorId, machine: state.machine }, limitedFor = claim => takeoverLimited(claim, self);
     const limitedClaims = new Map(observedClaims.filter(limitedFor).map(claim => [claim.issue.toLowerCase(), claim]));
     const expiredClaims = new Map(observedClaims.filter(claim => claim.expired === true && claim.active === false && !limitedFor(claim)).map(claim => [claim.issue.toLowerCase(), claim]));
+    if (state.githubIntake) state.githubIntake.claims = observedClaims;
     const ownClaims = ownClaimsOf(observedClaims);
     await sendHeartbeats(ownClaims, deferIntake);
 
@@ -1786,7 +1815,6 @@ export async function runAutopilotLauncher(input, ports = {}) {
       state.environment = keepEnv({ ...p.env, ...agent.env });
     }
     state.activatedAt ??= new Date(p.now()).toISOString();
-    if (!pendingCustody && previousProfile && JSON.stringify(previousProfile) !== JSON.stringify(profileBinding(state, p))) state.coordinatorId = randomUUID();
     state.coordinatorId ??= randomUUID(); state.machine ??= hostname();
     state.enabled = true; state.timerInstalled = true; state.nextTick = p.now() + INTERVAL;
     state.controlRevision = randomUUID();

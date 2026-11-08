@@ -152,6 +152,7 @@ const DRAFT_PROMPT = ['# Value', '', 'Return two.', '', '<details><summary>Runti
   JSON.stringify({ status: 'draft', prose_sha256: '', entries: [], limits: { max_steps: 1, max_model_calls: 1 } }), '```', '</details>', ''].join('\n');
 async function featureAtTryGate(t, prompt) {
   const f = await fixture(t, { name: 'feature', agent: 'codex' });
+  writeFileSync(join(f.source, 'pdd.json'), JSON.stringify({strict_approvals:true}));
   const skill = join(f.source, '.agents', 'skills', 'pdd-feature');
   mkdirSync(skill, { recursive: true });
   writeFileSync(join(skill, 'workflow.json'), JSON.stringify({ version: 2, areas: [
