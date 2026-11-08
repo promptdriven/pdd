@@ -1,10 +1,11 @@
-// Generated from prompts/cli/autopilot.prompt.md (sha256: 6dce639945fb8645d79768449211043aa6bd207a8a8a50d974e7b273e0f44fe1).
+// Generated from prompts/cli/autopilot.prompt.md (sha256: 41ad074fdf9d7f706de205e5e3550230b9ce2e45f1d798ada40d8a2c3e92ccaf).
 import * as nativeFs from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createInterface } from 'node:readline/promises';
+import { githubBudgetSettings } from './github-calls.mjs';
 
 const execute = promisify(execFile);
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -100,8 +101,8 @@ function nativeGithub(root, exec) {
 }
 
 export async function runAutopilot(input, ports = {}) {
-  let mode = 'off', trust = [], warnings = [];
-  const result = (exitCode, message, trusted = false) => ({ mode, trust, trusted, message: [...warnings, message].filter(Boolean).join('\n'), exitCode });
+  let mode = 'off', trust = [], warnings = [], github;
+  const result = (exitCode, message, trusted = false) => ({ mode, trust, ...(github ? { github } : {}), trusted, message: [...warnings, message].filter(Boolean).join('\n'), exitCode });
   const { action, names, author } = input;
   if (!['setup', 'mode', 'trust', 'untrust', 'isTrusted'].includes(action)
     || action === 'mode' && !modes.includes(input.mode)
@@ -112,14 +113,21 @@ export async function runAutopilot(input, ports = {}) {
     const cwd = ports.cwd ?? process.cwd(), exec = ports.execFile ?? execute;
     let root = cwd;
     if (!ports.config) {
-      try { root = String((await exec('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8' })).stdout).trim(); }
-      catch { return action === 'setup' ? result(0, '') : result(1, 'Autopilot settings need a Git repository.'); }
+      // Git translates its messages; read the "not a git repository" text in the C locale.
+      try { root = String((await exec('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8', env: { ...process.env, LC_ALL: 'C', LANG: 'C' } })).stdout).trim(); }
+      catch (error) {
+        if (action === 'setup') return result(0, '');
+        return result(1, /not a git repository/i.test(String(error?.stderr ?? ''))
+          ? 'This folder is not a Git repository. cd into the repo you want Autopilot to work on, then run the command again.'
+          : 'Autopilot settings could not read the Git repository; retry.');
+      }
     }
     const config = ports.config ?? nativeConfig(root, ports.fs ?? nativeFs);
     const { raw } = await config.read({ key: 'autopilot' });
     const saved = raw === null ? undefined : JSON.parse(raw), setting = object(saved) ? saved : {};
     mode = modes.includes(setting.mode) ? setting.mode : 'off';
     trust = unique(Array.isArray(setting.trust) ? setting.trust : []);
+    if (Object.hasOwn(setting, 'github')) github = githubBudgetSettings(setting.github);
     const invalid = raw !== null && (!object(saved) || Object.hasOwn(setting, 'mode') && !modes.includes(setting.mode));
     if (invalid) warnings.push(`Saved Autopilot mode ${JSON.stringify(object(saved) ? setting.mode : saved)} is invalid; ${action === 'mode' ? 'treating it as off.' : 'using off and leaving it unchanged.'}`);
     if (['trust', 'untrust'].includes(action) && raw !== null && !object(saved)) {

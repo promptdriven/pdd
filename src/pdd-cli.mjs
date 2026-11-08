@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: d3d97b6856b6f5aa6ad3434a2846fecdaa6f16afc177cfdd11aed6d8fce4d18f).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 244ad71a97035f2bd20b94b73810ad601f6e97c66628f36ca6a5392bc5d1cb2c).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -111,10 +111,10 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     case 'autopilot-start': case 'autopilot-stop': case 'autopilot-status': case 'autopilot-add': {
       try {
         const module = autopilotLauncher ?? await import('./autopilot-launcher.mjs');
-        const result = await module.runAutopilotLauncher({ command: plan.local.slice(10), issues: [...plan.operands], runs: plan.options['--runs'], resumeCustody: plan.options['--resume-custody'], cwd, packageRoot, env }, autopilotLauncherPorts);
+        const result = await module.runAutopilotLauncher({ command: plan.local.slice(10), issues: [...plan.operands], runs: plan.options['--runs'], resumeCustody: plan.options['--resume-custody'], all: plan.options['--all'] === true, cwd, packageRoot, env }, autopilotLauncherPorts);
         if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255 || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid Autopilot reply');
         line(result.exitCode === 0 ? stdout : stderr, result.message);
-        if (result.exitCode === 0 && ['autopilot-start', 'autopilot-status'].includes(plan.local)) {
+        if (result.exitCode === 0 && ['autopilot-start', 'autopilot-status'].includes(plan.local) && plan.options['--all'] !== true) {
           const warning = await autopilotGithub(autopilotGithubModule, 'checkAutopilotSettings', { cwd }, autopilotGithubPorts);
           if (warning) line(stderr, warning);
         }
@@ -206,7 +206,8 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         catch { line(stderr, 'Agent sign-in could not be checked. Run codex login status or claude auth status.'); return 1; }
         if (!selected?.ok) { line(stderr, selected?.message || 'Agent sign-in could not be checked. Run codex login status or claude auth status.'); return 1; }
         if (typeof selected.hint === 'string' && selected.hint) line(stderr, selected.hint);
-        input.agent = selected.agent;
+        // A named agents.json entry goes to the runner by name; the runner resolves it again and saves it.
+        input.agent = typeof selected.name === 'string' ? selected.name : selected.agent;
       }
       try {
         const runner = workflowRunner ?? await import('./workflow-runner.mjs');
@@ -311,6 +312,10 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         line(stderr, `pdd stopped with an internal error. If it sent checks, read them with pdd test --read. Do not send them again.${reason(error)}`);
         return 3;
       }
+    case 'project-files': {
+      const { runProjectFiles } = await import('./project-files.mjs');
+      return runProjectFiles({ cwd, json: !!plan.options['--json'] }, { stdout, stderr });
+    }
     case 'prompt-approve': {
       const { runApprove } = await import('./prompt-approve.mjs');
       return runApprove({ words: [...plan.operands], cwd, said: plan.options['--said'] }, { stdout, stderr, stdin, env });

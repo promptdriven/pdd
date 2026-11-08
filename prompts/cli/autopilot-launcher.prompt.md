@@ -45,6 +45,14 @@ that omits one of these names still removes it, because Codex applies
 ## Start and stop
 
 Resolve the Git root, repository identity and package version before starting.
+Outside a Git repository, start, stop, status and add return exit code 1 with
+exactly `This folder is not a Git repository. cd into the repo you want Autopilot
+to work on, then run the command again.` and change nothing. Report another Git
+failure as a Git read failure; a sign-in message is only for a real sign-in failure.
+Git translates its messages. So run each Git call whose error text pdd reads (this
+Git root lookup and the one in `withAutopilotModeLock`) with `LC_ALL=C` and
+`LANG=C`, and keep the rest of the environment. Then a Git that prints German or
+another language gives the same result.
 Check gh sign-in, Herdr availability and installed agent sign-ins, without making
 an AI request. Prefer the current agent family when signed in, then Codex,
 Claude, agy and Gemini. Use configured local launchers from agent-config for the
@@ -55,6 +63,51 @@ agent agy and the selected launcher environment. Its non-model `agy models`
 probe establishes sign-in; a generic agent listing does not.
 Missing dependencies produce a single actionable line; no question or installer.
 Check the pdd version from the invoked package and warn about PATH shadowing.
+
+### Workflow readiness
+
+A coordinator can only start issue work if `pdd workflow run` can make an issue
+worktree in this checkout. So check this first, read-only. Call the
+[worktree allocator](workflow-worktree.prompt.md#verified-repository-parent)
+export `lookupRepositoryParent({cwd,repository,commonDir})` with the checkout,
+its canonical Git common directory and the Autopilot repository, through the
+launcher's process port. That export alone decides: it applies the allocator's
+own identity checks, and the allocator owns which Git layouts and origins it
+supports. The launcher has no origin or layout rule of its own, so a checkout
+that the allocator accepts is never refused. Ready means workflows can start
+here. The check makes no AI call, no GitHub call, no allocation record, no issue
+claim and no worktree. An `allocationCheck({cwd,repository})` port can replace it
+and returns `{state:"ready"|"refused",message}`.
+
+Only after a refusal, name the cause from local Git reads, in this order: Git
+could not be read (for example a timeout), with the next step to retry; no
+`origin` remote; an `origin` that is not a GitHub repository address; an `origin`
+that names another repository than the Autopilot repository; else a Git layout
+that pdd cannot verify. Read the origin's repository with the
+[allocator's](workflow-worktree.prompt.md) `githubOriginRepository`, so both
+accept the same origins. Never print the origin URL. Except for a Git read
+failure, end with the next step: run Autopilot from a normal clone of the
+repository.
+
+- Start runs the check after it knows the repository and before it checks
+  sign-ins, opens a workspace, launches an agent or changes the timer. A refusal
+  returns exit code 1 with one line that names the folder, the cause and the next
+  step. It enables nothing, claims nothing and leaves every timer as it was,
+  including the timers of other checkouts.
+- A tick runs the check only when it is about to offer fresh work: an eligible
+  issue without a live claim and without a hold label (`pdd:stuck`,
+  `pdd:code-pending`). On a refusal, the tick offers no fresh work and warns
+  with the folder and the cause. It does not mark those issues seen, so a later
+  tick offers them when workflows can start. Other deliveries stay as they are:
+  the start-up recipe, dependency review, time rules, the heartbeats of its own
+  claims, and reviews and trusted comments on claimed or held issues.
+- Status runs the check with the saved repository, or else the repository that
+  `origin` names, and makes no GitHub call. On a refusal it adds the line
+  `Workflows cannot start in this folder: CAUSE NEXT STEP` right after its first line.
+
+A successful start prints `Autopilot started for OWNER/NAME in FOLDER.`, where
+FOLDER is the Git root that Autopilot works in, then the agent, package version,
+next tick and the Herdr attach command.
 
 Read settings through [Autopilot settings](autopilot.prompt.md), calling its
 module function `runAutopilot({action: "setup", interactive: false, inRepo: true},
@@ -99,6 +152,21 @@ Use a dedicated Herdr session `pdd-autopilot`, isolated from the default session
 Open its repo workspace at start; launch the interactive agent only for work.
 Persist the owned pane and native launch intent. Inject `PDD_AUTOPILOT_CONTEXT`
 into that exact empty native command along with the saved profile environment.
+
+<a id="start-in-the-repository"></a>**Start in the repository.** The native launch line starts with
+`cd <shell-quoted repository Git root> && `, then the `env` command. A new Herdr pane runs the person's
+shell startup files, and a `cd` there (for example in `~/.zshrc`) can move the shell to another folder
+before the launcher types the line. The `cd` makes the agent start in the repository anyway, as in the
+[area chat](workflow-chat.prompt.md). If the `cd` fails, the shell does not start the agent, and the work
+stays pending. No check reads the pane's live folder (Herdr `cwd` and `foreground_cwd`) before that
+launch. After it, Herdr shows the repository as the live folder of the pane and of its agent. So status
+and uncertain-send recovery still compare that folder with the saved repository path: a workspace that
+`workspace create` made has no Herdr Git identity, and the folder ties the pane to this repository. The
+[relaunch close](#coordinator-relaunch) does not compare it when the owner launch saved a `terminal_id`,
+because it can meet a chat that an older launch started in the shell startup folder. Without a saved
+`terminal_id`, the relaunch close compares the folder too. Run each `gh repo view` repository check in the saved
+repository path, never in the pane's live folder.
+
 Reuse the pane only when its owner launch binding matches the current coordinator
 envelope, including optional runs, and the selected agent identity, saved HOME,
 launcher-definition HOME and selected family config-folder path that determine
@@ -137,7 +205,12 @@ timer definition, leaving the current step to
 finish. Stop checks and removes the owned timer even if saved installation state
 is absent or false, including after a failed start. Repeated stop is harmless. Status reads local state and timer activity;
 show enabled/disabled, timer activity, Herdr availability, coordinator state,
-repo, agent, and next tick (or none), without waking AI or querying GitHub.
+repo, the folder Autopilot works in, agent, and next tick (or none), without waking AI or querying GitHub.
+When the [GitHub call ledgers](#github-budget) on this machine have a call in the
+last hour, status adds one line, after any alert line: `githubStatusLine` of
+[GitHub calls](github-calls.prompt.md#status-line) with this repository's usage,
+the machine usage and the budget with the settings' `github` value. It reads the
+local ledgers only; an error adds nothing.
 Whenever Herdr is available, inspect the saved coordinator with the existing
 `agent get` operation, including when the timer is inactive. Confirm that its pane,
 workspace, repository path, provider and any saved terminal identity match saved local state. Report a missing,
@@ -150,6 +223,24 @@ with `Coordinator relaunch pending after upgrade`. While a
 launch, add one line that starts with `Coordinator relaunch held`.
 Status never repairs, replaces or wakes a coordinator. Report unavailable Herdr
 separately instead of claiming healthy running state when its server is absent.
+
+`status --all` works from any folder, also outside a Git repository. It reads
+each saved launcher state on this machine and prints one line for each:
+repository, folder, mode from that folder's settings, enabled or disabled, timer
+active or inactive, and coordinator state as above. Without saved state it prints
+`No Autopilot on this machine.` It reads local files, timer status and Herdr
+only: no Git root of the caller, no GitHub call, no AI and no change.
+
+Each line is independent: a missing or broken folder or state changes no other
+line. The timer, Herdr server and coordinator reads run from the caller's folder,
+never from a saved folder, so a deleted folder still shows its true timer and
+coordinator. Read the mode only when the saved folder exists and is its Git root;
+else show `unknown` with a short reason: `unknown (no folder saved)`,
+`unknown (folder missing)`, `unknown (not a Git repository)` or
+`unknown (settings unreadable)`. A timer that
+cannot be read shows `timer unknown`. A state file that is not a JSON object
+prints `FILE: saved state unreadable`, and it counts as a line.
+
 Concurrent ticks for one local state serialize with a local
 lock; independent machines have separate state. A lock blocks only for a valid
 live owner. Empty, malformed and dead-owner locks are reclaimed. Publish the
@@ -182,7 +273,8 @@ acquired, await the actual save and timer effects and report their result.
 A running chat keeps the launch settings that it started with. A later package
 or launch argument does not reach it. So record a launch fingerprint in the
 owner launch at each native launch: the SHA-256 of the resolved invoked package
-root, its `package.json` version, the provider family and the provider arguments
+root, its `package.json` version, the provider family, the `cd` that
+[starts the launch line](#start-in-the-repository) and the provider arguments
 that this package builds, exactly as the launch builds them: the TOML project key
 and, when the saved state has an explicit `CODEX_HOME`, its `set` override. Put a
 fixed placeholder for the coordinator context value in those arguments; the
@@ -210,9 +302,15 @@ new work. The fresh chat gets the start-up recipe first.
   coordinator pane only. Hold admission for the close. In that hold, first
   recheck that the saved state is enabled with the same pane, workspace and
   owner launch and no intent, and that Herdr reports the same pane, workspace,
-  provider, repository path, saved `terminal_id` and `agent_session` as `idle`
-  or `done`. If Herdr reports another `terminal_id`, the saved pane
-  [is gone](#gone-coordinator-pane): close nothing and forget it in the same
+  provider, saved `terminal_id` and `agent_session` as `idle` or `done`. When
+  the owner launch saved a `terminal_id`, that match is the proof of the chat:
+  do not compare the chat's live folder, because a chat that an older launch
+  started without the `cd` runs in the shell startup folder, and this relaunch
+  replaces it. When the owner launch saved no `terminal_id`, Herdr must also
+  report the saved repository path as the chat's folder (`cwd`): then only the
+  folder ties the pane to this repository in the shared session, and a pane of
+  another repository stays open. If
+  Herdr reports another `terminal_id`, the saved pane [is gone](#gone-coordinator-pane): close nothing and forget it in the same
   hold. After the close, `pane get` must report `pane_not_found`. Then, in the
   same hold, add the current fingerprint to the relaunch record below, remove
   the saved pane, workspace, owner launch and the pending and held marks, and
@@ -278,6 +376,72 @@ after a stop on the next start. If the pane has
 the saved terminal but no chat, keep the work pending without a second launch:
 the launched chat may still be starting.
 
+<a id="github-budget"></a>
+## GitHub budget
+
+Autopilot uses the person's own `gh` sign-in, so its GitHub calls use the
+person's limit. Each `gh` call of the launcher goes through `countGithubCalls` of
+[GitHub calls](github-calls.prompt.md) into this repository's ledger on this
+machine, once the repository is known. `ROOT` is the folder of the launcher state
+file (the state root), so the ledgers sit in `ROOT/github/` beside the state.
+The tick names the purpose: the dependency intake `dependencies` (its claim
+checks name `claims`), heartbeats `claims`, the issue list `issues`; other calls
+take the purpose of their arguments. The intake also gets the ETag cache of this
+repository as its `githubCache` port, saved after the intake ([conditional
+reads](issue-dependencies-github.prompt.md#conditional-reads)), the
+[saved dependency snapshot](issue-dependencies-github.prompt.md#saved-dependency-snapshot)
+of this repository in `ROOT` as `snapshotStore`, the tick clock as `now`, and a
+[floor guard](github-calls.prompt.md#floor-guard) as `githubFloor`, with the
+settings' floor and the ledgers of this machine. The tick's own comment, PR and
+permission reads use the same ETag cache (a full last page is read without its
+ETag), saved again at the end of the tick. At the end of each tick, after the
+state save, `compact` keeps the ledger to its last 2 hours.
+
+The floor guard also covers the launcher's non-safety comment, PR and review
+reads after intake, and every issue-index page, including the first page after
+heartbeats. If admission stops pagination, retain the previous complete index,
+pages and refresh watermark; return unknown and wait without publishing a partial
+index as complete. Every reply updates the guard. Hold-label index reads and
+permission checks stay live. Crossing the floor during intake does not permit
+new work delivery from an incomplete observation.
+
+After the settings read and the existing rate-limit wait, and before the
+intake, the tick computes `githubBudget` from the entries of all ledgers on this
+machine and the settings' `github` value:
+
+- `reserve`: the tick sends only the heartbeats of its own live claims and
+  returns `unknown` with `GitHub limit low: R REST calls left, below the floor of F;
+  Autopilot waits until ISO, except the heartbeats of this machine's claims.`
+  (`GraphQL points` for the GraphQL resource). It makes no other GitHub call: no
+  intake, no issue list, no wake. It does not save a rate-limit wait (`retryAt`),
+  so each tick until `resetAt` computes the budget again and sends the
+  heartbeats again. The claims are the saved `claims` of the last intake, with
+  the filters of the `low` case below. A heartbeat is 2 REST calls (a read and an
+  edit); when the newest `core` remaining is known and less than 2 for each of
+  these claims, the tick sends none. Why: one reserve window ends at the reset,
+  within 1 hour, but reserve can come back after each reset when other use on
+  the same login empties the limit. Without heartbeats a claim would then expire
+  after 4 hours while its chat still works.
+- `low`: when the last intake result was saved less than 60 minutes ago, the
+  tick does not run the intake. It uses the saved `eligible` list and `claims`
+  and warns once per tick with the used and allowed calls and the time of the next
+  re-sync. Heartbeats of own live claims keep their priority; a saved claim whose
+  `lastSeen` is 4 hours old or more gets no heartbeat, because expiry is final.
+  After 60 minutes the intake runs once again. The issue list and the trusted
+  work selection stay as usual.
+- `normal`: as before.
+
+After each intake the tick saves `{at, eligible, claims}` (when `eligible` is a
+list), and a successful heartbeat updates the saved claim's `lastSeen`. These
+are local facts for the next tick; they are not a GitHub observation. The
+60-minute interval is a constant. The floor default is 1,000. Only the tick uses
+the share. Native dependency observations outside the tick follow the shared
+[floor guard](github-calls.prompt.md#floor-guard), including prepare, complete
+and automatic start. A stopped completion is kept for the next tick after the
+reset. Safety reads, including the workflow start's live subject and claim
+checks, continue below the floor. The coordinator and worker chats never wait
+for this budget.
+
 ## Tick and the skill boundary
 
 All providers use a user timer that checks for work before waking the agent.
@@ -297,9 +461,27 @@ flowchart TD
 Each tick makes one conditional issues-list query with its saved ETag, following
 pagination only when GitHub supplies another page (never truncate a queue). Cache
 and revalidate each page separately, so a close on a later page is seen even
-when the first page is unchanged.
+when the first page is unchanged. A full read lists the open issues
+(`state=open&sort=updated&direction=desc&per_page=100`). An update moves an issue
+to the first page of this order, so every page of a long list changes. So when
+the last full read had more than one page, and for 6 hours after it, the tick
+reads only what changed: `state=all&sort=updated&direction=desc&since=T&per_page=100`,
+where `T` is the newest `updated_at` of that full read. It applies each row to the
+cached open list: an open row replaces or adds its issue or PR, any other row
+leaves the list. The list stays in update order, newest first. `T` stays the
+same until the next full read, so the same URL with its ETag gets a 304 when
+nothing changed since the last tick. With one page, without a saved `T` or
+cached list, or after 6 hours, the tick makes a full read. A deleted or moved
+issue leaves the list at the next full read. The issue list needs no
+[full-last-page](github-calls.prompt.md#full-last-page) rule: in update order,
+newest first, a new or changed issue changes the first page, and a changed page
+gives a fresh next page.
 HTTP 304 reuses metadata, not a model turn. On changed candidates only, fetch
-comments needed to identify trusted consent and filter their text. HTTP 429 is
+comments needed to identify trusted consent and filter their text. When the
+saved dependency snapshot (as the intake of this tick left it) has a read of the
+issue with the same change facts (`issueRowVersion`) as the tick's row and the
+same comment count, its comments are the current answer: the intake read them in
+this tick, or a completion read them just before. HTTP 429 is
 a rate limit; HTTP 403 counts only when the remaining allowance is zero or its
 body says rate limit. Save its reset time; intervening timer firings do not retry.
 An ordinary forbidden response has no rate-limit cooldown. Candidate-specific
@@ -518,7 +700,10 @@ forward untrusted PR text. Cache details so unchanged ticks need no PR-detail qu
 Check submitted reviews for known related PRs on each tick, including when the
 issues list returns HTTP 304 and the issue and PR head are unchanged. Use
 conditional requests and revalidate each review page, following GitHub's next
-page links without truncation. A new trusted submission, identified by PR number
+page links without truncation. A saved
+[full last page](github-calls.prompt.md#full-last-page) (100 reviews and no next
+page) is read without its ETag: reviews come in ascending order, so that page
+keeps its ETag when review 101 arrives on a new page. A new trusted submission, identified by PR number
 and GitHub review ID, is unseen work and wakes the idle agent once. Include its
 identity, trusted author, submission metadata, state and body in the packet and
 fingerprint; unchanged repeats stay quiet. Reviews use the same trust and pending
@@ -590,7 +775,7 @@ The intent's pane and workspace must match the current saved target. The saved o
 
 Inspect only that saved target. With an uncertain intent, this rule overrides normal missing-pane recovery. If its saved pane or workspace is absent or mismatched, retain the original identifiers and send nothing. Never create, replace, focus, close or interrupt a target for recovery.
 
-Before recovery, inspect the live workspace, pane and agent. Their IDs, repository path and provider must match the saved target and selected launcher. If the owner launch saved a `terminal_id`, Herdr must report the same `terminal_id` for the saved pane; another terminal sends nothing. Check the GitHub repository from that path against the saved repository before delivery. Perform live identity, repository and readiness reads outside admission, immediately before the final guard. Under the guard recheck current saved control and submit one prompt. Remote identity can change after observation; do not claim atomic remote attestation. A missing or mismatched current identity sends nothing.
+Before recovery, inspect the live workspace, pane and agent. Their IDs, repository path and provider must match the saved target and selected launcher. If the owner launch saved a `terminal_id`, Herdr must report the same `terminal_id` for the saved pane; another terminal sends nothing. Check the GitHub repository against the saved repository before delivery, with `gh repo view` in the saved repository path. Perform live identity, repository and readiness reads outside admission, immediately before the final guard. Under the guard recheck current saved control and submit one prompt. Remote identity can change after observation; do not claim atomic remote attestation. A missing or mismatched current identity sends nothing.
 
 Herdr must report the owned agent as `idle` or `done`. A `working`, `blocked`, `unknown` or missing status, an absent agent, or any failed or unreadable inspection sends nothing. If Herdr reports an `agent_session`, it must stay unchanged through the final guard; a changed or unreadable target sends nothing. Herdr may omit the session ID for a saved, finished agent. In that case, do not refuse on absence alone when the live workspace, pane, repo path and provider still match. `done` permits only a new packet. It does not acknowledge the old submission.
 
@@ -672,7 +857,7 @@ artifact's existing proof and retention rules.
 
 ## Dependency review and automatic-start context
 
-After an actual dependency completion, if its fresh reconciliation has current work to deliver but the matching coordinator is busy, arm one detached native wait for that coordinator pane to become idle or done. After the wait, verify the saved enabled coordinator, repository, pane, workspace and control identity and run the existing fresh completion reconciliation outside its locks. It must not replay a saved payload or arm on a tick-lock conflict; mode, trust, custody and stop guards still apply. A failed or unavailable wait leaves reconciliation pending.
+After an actual dependency completion, if its fresh reconciliation has current work to deliver but the matching coordinator is busy, arm one detached native wait for that coordinator pane to become idle or done. The completion tick, the tick after that wait and the tick after a worker yield are `completion` reconciliations: within 10 minutes of the last full observation they deliver the next request from the saved dependency snapshot and read no dependency issue list ([one reconciliation path](issue-dependencies-intake.prompt.md#one-reconciliation-path)). After the wait, verify the saved enabled coordinator, repository, pane, workspace and control identity and run the existing fresh completion reconciliation outside its locks. It must not replay a saved payload or arm on a tick-lock conflict; mode, trust, custody and stop guards still apply. A failed or unavailable wait leaves reconciliation pending.
 
 A first semantic request may combine the startup readiness instruction and current dependency artifact in one guarded wake. Require bounded readiness before analysis and mark the recipe delivered only after confirmed delivery; busy or uncertain delivery remains pending. For a semantic `pending.deliver({repository,requestJson})` wake, preserve the
 exact UTF-8 bytes of `requestJson` in a private local request artifact. Do not
@@ -787,6 +972,7 @@ reconcile and wake boundaries; injected substitutes reach this same path.
   bundled package path for recipe, room, claim and stuck-run behavior. Its
   references to pdd-check and pdd-merge own their downstream work.
 
+- [Worktree allocator](workflow-worktree.prompt.md): required native generation and verification context for workflow readiness: `lookupRepositoryParent` decides, and `githubOriginRepository` reads the origin's repository for a refusal cause.
 - [Herdr workspace identity](workflow-herdr-layout.prompt.md): required native generation and verification context for comparing the saved checkout and live pane paths.
 - [Area-chat delivery](workflow-chat.prompt.md#message-delivery): required authoring, native generation and verification context for shared readiness and ordered submission.
 - [Agent configuration](agent-config.prompt.md): required native generation and
@@ -797,6 +983,9 @@ reconcile and wake boundaries; injected substitutes reach this same path.
   verification context for non-model process execution and auth-status parsing.
 - [PATH diagnostics](path-diagnostic.prompt.md): required native generation and
   verification context for the optional version shadowing warning.
+- [GitHub calls](github-calls.prompt.md): required native generation and
+  verification context for the call ledger, the budget, the status line and the
+  ETag cache.
 - [Autopilot alerts](autopilot-alerts.prompt.md#status-line): required native
   generation and verification context for status. When `alertStatusLine` with the
   saved repository and state root returns a line, status adds it on a second line.

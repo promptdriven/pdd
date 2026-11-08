@@ -123,6 +123,36 @@ test('2859: retries refuse a changed original root or foreign checkout identity'
  }
 });
 
+test('2903: a changed repository workspace refusal names its own first tab, not the run tab',async t=>{
+ const f=await fixture(t);await createWithoutWorktreeMetadata(f);
+ let saved,interrupt=true;f.ports.checkpoint=async custody=>{saved=structuredClone(custody);if(interrupt&&custody.repoWorkspaceId&&custody.repoRoot){interrupt=false;throw Error('stop after parent custody');}};
+ await assert.rejects(openWithOwner(f),/stop after parent custody/);
+ const row=f.workspaces.find(w=>w.workspace_id===saved.repoWorkspaceId);
+ f.herdr.panes.push({...f.herdr.panes.find(p=>p.workspace_id===row.workspace_id),pane_id:'extra-pane'});
+ const error=await openWithOwner(f,{runId:f.input.runId,layout:saved,chats:[]}).catch(e=>e);
+ assert.equal(error.code,'herdr_layout_identity_changed');assert.equal(error.field,'parent_root');
+ const lines=error.message.split('\n'),expected=lines.find(line=>line.startsWith('Expected parent_root: ')),found=lines.find(line=>line.startsWith('Found parent_root: '));
+ assert.ok(found&&found.includes('paneCount 2')&&!/\bcwd\b/.test(found),error.message);
+ // The saved tab is compared by its Herdr IDs only, so its folder is on neither line.
+ assert.ok(expected&&expected.includes(JSON.stringify(saved.repoRoot.terminalId))&&!/\bcwd\b/.test(expected),error.message);
+});
+
+test('2903: a saved repository first tab that names another folder is refused as parent custody, with the folder on both lines',async t=>{
+ const f=await fixture(t);await createWithoutWorktreeMetadata(f);
+ let saved,interrupt=true;f.ports.checkpoint=async custody=>{saved=structuredClone(custody);if(interrupt&&custody.repoWorkspaceId&&custody.repoRoot){interrupt=false;throw Error('stop after parent custody');}};
+ await assert.rejects(openWithOwner(f),/stop after parent custody/);
+ // Herdr now shows the created parent with its worktree, but pdd's saved record of its first tab names another folder.
+ const row=f.workspaces.find(w=>w.workspace_id===saved.repoWorkspaceId);
+ row.worktree={checkout_path:f.input.sourceRoot,repo_key:f.input.commonDir,is_linked_worktree:false};
+ const other=join(f.root,'other');await mkdir(other);
+ const error=await openWithOwner(f,{runId:f.input.runId,layout:{...saved,repoRoot:{...saved.repoRoot,cwd:other}},chats:[]}).catch(e=>e);
+ assert.equal(error.code,'herdr_layout_identity_changed',error.message);assert.equal(error.field,'parent_custody',error.message);
+ const lines=error.message.split('\n'),expected=lines.find(line=>line.startsWith('Expected parent_custody: ')),found=lines.find(line=>line.startsWith('Found parent_custody: '));
+ assert.ok(expected&&/\bcwd\b/.test(expected),error.message);
+ assert.ok(found&&found.includes(`cwd ${JSON.stringify(other)}`),error.message);
+ assert.equal(f.calls.filter(args=>args[0]==='worktree'&&args[1]==='open').length,0);
+});
+
 test('2859: a missing pending parent refuses, while verified live identity can recover a partial root',async t=>{
  {
   const f=await fixture(t);await createWithoutWorktreeMetadata(f);

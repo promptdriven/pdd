@@ -1,4 +1,4 @@
-// Generated from prompts/cli/product.prompt.md (sha256: fc5127717989e3995a3b1b02784f73754fb002d3bd503aac72b9d358356a4360).
+// Generated from prompts/cli/product.prompt.md (sha256: 4f832288d8993d036c63aaff1af3615644d5edf36f3e67c16b3a9bdca3ba797c).
 import { execFile as execute } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, existsSync, fstatSync, lstatSync, openSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -7,10 +7,12 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { listRuns } from './workflow-runs.mjs';
+import { workflowAgentEntry } from './workflow-agents.mjs';
 import { recordedRuntimeLines, storyEvidence, startRun } from './workflow-runner.mjs';
 import { resolveWorkflowRepository } from './workflow-github.mjs';
 import { causeText } from './runtime-output.mjs';
 import { createSavedStoryEvidenceReader } from './runtime-client.mjs';
+import { nativeGithubCounter } from './github-calls.mjs';
 
 const ordinary = promisify(execute);
 const invalid = message => { throw Object.assign(Error(message), { code: 'invalid-product' }); };
@@ -47,7 +49,8 @@ const rows = (text, section, file) => {
 };
 const duplicate = (items, key, file) => { const seen = new Set(); for (const item of items) { if (!item[key] || seen.has(item[key])) invalid(`${file}: duplicate or empty ${key} ${item[key]}.`); seen.add(item[key]); } };
 const portsFor = given => {
-  const execFile = given.execFile ?? ((file, args, options) => ordinary(file, args, { ...options, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 }));
+  // The native runner records each gh call in the GitHub call ledger of its repository.
+  const execFile = given.execFile ?? nativeGithubCounter((file, args, options) => ordinary(file, args, { ...options, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 }));
   const p = { readFile: path => readFile(path, 'utf8'), listRuns: input => listRuns(input, { execFile }),
     storyEvidence, savedStoryEvidence: createSavedStoryEvidenceReader(), startRun, resolveRepository: input => resolveWorkflowRepository(input, { execFile }),
     ...given, execFile };
@@ -562,7 +565,8 @@ export async function productStart({ cwd, run, noRun = false, agent = 'codex', p
   try {
     const p = portsFor(given), { product, boundaries } = await documents({ cwd }, p), planned = product.runs.find(row => row.run === run);
     if (!planned) invalid(`Unknown planned run ${run}.`);
-    if (!['codex', 'claude', 'gemini', 'agy'].includes(agent)) invalid(`Unknown agent ${agent}.`);
+    const chosen = workflowAgentEntry(agent, { cwd, env: given.env ?? process.env });
+    if (!chosen.ok) invalid(chosen.message);
     const state = await progress({ cwd }, given, run), { repo, localRuns } = state;
     const selected = state.details.find(detail => detail.run.run === run);
     issue = selected.issue;

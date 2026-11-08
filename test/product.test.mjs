@@ -64,7 +64,22 @@ test('product workflow parses without changing runner phases; catalog exposes co
   assert.deepEqual(areas.map(area => [area.name, area.gate]), [['map', 'approve'], ['plan', 'pr']]);
   assert.equal(parseArgv(['product', 'status', '--json']).local, 'product-status');
   assert.equal(parseArgv(['product', 'start', 'phone-1', '--no-run', '--agent', 'claude']).options['--no-run'], true);
-  assert.throws(() => parseArgv(['product', 'start', 'phone-1', '--agent', 'other']));
+  // 2901: --agent also takes an agents.json entry name; the workflow agents owner refuses an unknown one, not the parser.
+  assert.equal(parseArgv(['product', 'start', 'phone-1', '--agent', 'Claude (account-a)']).options['--agent'], 'Claude (account-a)');
+});
+
+test('2901: product start refuses an unknown agent name before any GitHub call, and passes an agents.json entry name to the run', async t => {
+  const f = fixture(t), home = join(f.cwd, '.test-home');
+  mkdirSync(join(home, '.config', 'pdd'), { recursive: true });
+  writeFileSync(join(home, '.config', 'pdd', 'agents.json'), JSON.stringify({ agents: [{ name: 'Claude (account-a)', kind: 'claude', command: '/usr/bin/true' }] }));
+  const ports = { ...f.ports, env: { HOME: home } };
+  const refused = await productStart({ cwd: f.cwd, run: 'phone-1', agent: 'other' }, ports);
+  assert.equal(refused.exitCode, 1);
+  assert.equal(refused.message, 'Unknown agent "other". Choose --agent codex, --agent claude, --agent gemini or --agent agy, or a name from ~/.config/pdd/agents.json: "Claude (account-a)".');
+  assert.deepEqual(f.state.commands, []); assert.equal(f.state.issues.length, 0); assert.equal(f.state.starts.length, 0);
+  const started = await productStart({ cwd: f.cwd, run: 'phone-1', agent: 'Claude (account-a)' }, ports);
+  assert.equal(started.exitCode, 0, started.message);
+  assert.equal(f.state.starts[0].agent, 'Claude (account-a)');
 });
 
 test('coffee example provides three parts, twelve core Stories and four planned runs', async t => {

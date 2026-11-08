@@ -1,7 +1,8 @@
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: f12c54bd6876e5d96bb9f4db3ca4fe1d117dd63ad142a7a1fec0b6bc061c42d9).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 734f28fdf2a21cf1703b2c2ccb66c032ff7f2021fee24f03b6203f48b33c05ec).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { statSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
+import { statSync, lstatSync, readdirSync, writeFileSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
+import * as nodeFs from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +11,9 @@ import { promisify } from 'node:util';
 import { PDD_HERDR_SESSION, withHerdrLayoutLock, openHerdrRunLayout, closeHerdrRunLayout, closeHerdrRepoLayoutIfIdle, samePath } from './workflow-herdr-layout.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
 import { tomlString } from './toml-string.mjs';
+import { lookupIssueWorktree } from './workflow-worktree.mjs';
+import { LOGIN_VARIABLES, reservedEnvMessage } from './workflow-agents.mjs';
+import { loadAgentDefinitions } from './agent-config.mjs';
 
 // The one shared startup grace: Herdr sees a new agent only after it starts.
 export const START_GRACE_MS = 30_000;
@@ -25,9 +29,10 @@ const AGENT_MARKER = /^(?:CLAUDECODE|CLAUDE_CODE_(?:CHILD_SESSION|SESSION_ID|SES
 // The variable that names the agent's config folder (the run keeps its value as configDir).
 // Antigravity CLI has no config-folder variable: it uses the person's home, so its runs keep no configDir.
 export const homeVariable = agent => agent === 'claude' ? 'CLAUDE_CONFIG_DIR' : agent === 'gemini' ? 'GEMINI_CLI_HOME' : agent === 'agy' ? null : 'CODEX_HOME';
-// The folders outside the run worktree that an Antigravity chat reads with its file tools: pdd's runs folder
-// (`<clone>/.git/pdd/runs`) and the worktrees folder (`<clone>.pdd-worktrees`).
-export const agentDirs = run => run?.commonDir && run?.sourceRoot ? [join(run.commonDir, 'pdd/runs'), `${run.sourceRoot}.pdd-worktrees`] : [];
+// The folders outside the run worktree that an Antigravity or Gemini chat reads with its file tools: pdd's runs
+// folder (`<clone>/.git/pdd/runs`) and the folder that holds the run worktree (`<clone>.pdd-worktrees`). A run from
+// a linked checkout has its worktree beside the primary repository, not beside that checkout.
+export const agentDirs = run => run?.commonDir && run?.root ? [join(run.commonDir, 'pdd/runs'), dirname(run.root)] : [];
 // A leading "~" or "~/" is the home folder: zsh leaves "~" as text in "env CODEX_HOME=~/x pdd …" (0.1.6 tester), and the
 // agent then refuses the folder.
 export function expandHome(dir, env = process.env) {
@@ -111,22 +116,84 @@ export function herdrCommand(ports = {}) {
   };
 }
 
-export function chatCommand({ agent, cwd, messageFile, sessionId, resumeId, configDir, commonDir, sourceRoot, addDirs = [] }) {
+// `unset`, `loginFile` and `program` come from chatLaunch: the caller's login and the run's agents.json command.
+export function chatCommand({ agent, cwd, messageFile, sessionId, resumeId, configDir, commonDir, sourceRoot, addDirs = [], unset = [], loginFile = null, program = null }) {
   if (resumeId !== undefined && !validSessionId(resumeId)) throw problem('invalid_session_id', 'The saved native session id is not a UUID, so pdd will not resume it.');
+  if (typeof cwd !== 'string' || !cwd) throw problem('invalid_worktree', 'The chat has no worktree folder, so pdd will not start it.');
   if (resumeId !== undefined) resumeId = quote(resumeId);
+  if (unset.some(name => !ENV_NAME.test(name))) throw problem('invalid_login_variable', 'A login variable name is not a plain name, so pdd will not start the chat.');
   // Gemini asks a hidden "trust this folder?" question in a new worktree; trust the run worktree for this session.
-  const env = ['env', 'PDD_AGENT_SESSION=1', `PDD_BIN=${quote(PACKAGE_BIN)}`, ...(configDir && homeVariable(agent) ? [`${homeVariable(agent)}=${quote(configDir)}`] : []), ...(agent === 'gemini' ? ['GEMINI_CLI_TRUST_WORKSPACE=true'] : [])];
+  const env = ['cd', quote(cwd), '&&', 'env', ...unset.flatMap(name => ['-u', name]), 'PDD_AGENT_SESSION=1', `PDD_BIN=${quote(PACKAGE_BIN)}`, ...(configDir && homeVariable(agent) ? [`${homeVariable(agent)}=${quote(configDir)}`] : []), ...(agent === 'gemini' ? ['GEMINI_CLI_TRUST_WORKSPACE=true'] : [])];
   const message = messageFile ? [`"$(cat ${quote(messageFile)})"`] : [];
+  // A child sh opens the private login file, deletes it, then reads the values and becomes the agent: no login value is
+  // in this line, and no value from the file can keep the file. Any failed step stops the sh before the agent starts.
+  const start = [...(loginFile ? ['sh', '-c', quote(LOGIN_SCRIPT), quote(loginFile)] : []), program ? quote(program) : agent];
   // agy asks "Do you trust the contents of this project?" in a new worktree; --settings trusts it for this session only.
-  if (agent === 'agy') return [...env, 'agy', '--dangerously-skip-permissions', '--settings', quote(JSON.stringify({ trustedWorkspaces: [cwd] })),
+  if (agent === 'agy') return [...env, ...start, '--dangerously-skip-permissions', '--settings', quote(JSON.stringify({ trustedWorkspaces: [cwd] })),
     ...[...new Set(addDirs)].flatMap(dir => ['--add-dir', quote(dir)]),
     ...(resumeId ? ['--conversation', resumeId] : []), ...(messageFile ? ['--prompt-interactive', ...message] : [])].join(' ');
-  if (agent === 'gemini') return [...env, 'gemini', '--yolo', ...(commonDir && sourceRoot ? ['--include-directories', quote(join(commonDir, 'pdd/runs')), '--include-directories', quote(`${sourceRoot}.pdd-worktrees`)] : []), ...(resumeId ? ['--resume', resumeId] : []), ...(messageFile ? ['--prompt-interactive', ...message] : [])].join(' ');
-  if (agent === 'claude') return [...env, 'claude', '--dangerously-skip-permissions', ...(resumeId ? ['--resume', resumeId] : ['--session-id', sessionId]), ...message].join(' ');
+  const included = addDirs.length ? [...new Set(addDirs)] : commonDir && sourceRoot ? [join(commonDir, 'pdd/runs'), `${sourceRoot}.pdd-worktrees`] : [];
+  if (agent === 'gemini') return [...env, ...start, '--yolo', ...included.flatMap(dir => ['--include-directories', quote(dir)]), ...(resumeId ? ['--resume', resumeId] : []), ...(messageFile ? ['--prompt-interactive', ...message] : [])].join(' ');
+  if (agent === 'claude') return [...env, ...start, '--dangerously-skip-permissions', ...(resumeId ? ['--resume', resumeId] : ['--session-id', sessionId]), ...message].join(' ');
   // Codex builds each command's environment from shell_environment_policy; `set` applies after `inherit`.
-  return [...env, 'codex', ...(resumeId ? ['resume', resumeId] : []), '--no-daemon', '--dangerously-bypass-approvals-and-sandbox',
+  return [...env, ...start, ...(resumeId ? ['resume', resumeId] : []), '--no-daemon', '--dangerously-bypass-approvals-and-sandbox',
     '-c', quote(`projects={${tomlString(cwd)}={trust_level="trusted"}}`),
     '-c', quote(`shell_environment_policy.set.PDD_BIN=${tomlString(PACKAGE_BIN)}`), '-c', quote(`shell_environment_policy.set.PDD_AGENT_SESSION=${tomlString('1')}`), ...message].join(' ');
+}
+
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+// `command -p` finds rm whatever PATH is; plain rm (the pane's PATH, before any value is set) serves a shell whose
+// `command -p` does not work (ksh93). Disable shell tracing before reading values. The agent does not get descriptor 3.
+const LOGIN_SCRIPT = 'set +xv && exec 3<"$0" && { command -p rm -f -- "$0" 2>/dev/null || rm -f -- "$0"; } && . /dev/fd/3 && exec "$@" 3<&-';
+const LOGIN_FILE = /^login-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.env$/;
+// Far longer than a pane needs to run a line: an older login file belongs to a launch that never ran.
+export const LOGIN_FILE_MAX_AGE_MS = 5 * 60_000;
+// Delete the run folder's login files that are maxAgeMs or more old (0: all of them): only `login-<uuid>.env` regular
+// files directly in the folder, at most 100 per call. It never throws.
+export function removeStaleLoginFiles(runDir, { maxAgeMs = LOGIN_FILE_MAX_AGE_MS } = {}) {
+  let names;
+  try { names = readdirSync(runDir).filter(name => LOGIN_FILE.test(name)).slice(0, 100); } catch { return; }
+  for (const name of names) {
+    try {
+      const path = join(runDir, name), stat = lstatSync(path);
+      if (stat.isFile() && (maxAgeMs <= 0 || Date.now() - stat.mtimeMs >= maxAgeMs)) rmSync(path, { force: true });
+    } catch { /* already gone or not removable: skip */ }
+  }
+}
+// The run's saved agents.json entry for this agent kind, with its env values read again from agents.json now: the run
+// record keeps only the entry's name, kind, command and env names. Null for a built-in agent.
+export function savedAgentEntry(run, agent, env = process.env) {
+  const saved = run?.agentDefinition;
+  if (!saved || saved.kind !== agent) return null;
+  let found;
+  try { found = loadAgentDefinitions({ cwd: run.root, env }).find(item => item.name === saved.name); }
+  catch (error) { throw problem('agent_definition_unavailable', `${error.message} The run uses the agents.json entry ${JSON.stringify(saved.name)}. Fix ~/.config/pdd/agents.json, then retry.`); }
+  if (!found || found.kind !== saved.kind) throw problem('agent_definition_unavailable', `This run uses the agents.json entry ${JSON.stringify(saved.name)} (${saved.kind}), but ~/.config/pdd/agents.json has no such ${saved.kind} entry now. Add it again, then retry.`);
+  const reserved = reservedEnvMessage(found);
+  if (reserved) throw problem('agent_definition_unavailable', reserved);
+  return { command: saved.command, env: found.env };
+}
+// The login of one launch: the caller's own login variables for this agent kind, then the entry's env (the entry wins).
+// Each listed name that gets no value is unset, and so is the config-folder variable when the run saves none, so the
+// Herdr server's old environment never decides the login. Values go only in a new private file that the chat reads once.
+export function chatLaunch({ run, agent, configDir, env = process.env }) {
+  const entry = savedAgentEntry(run, agent, env), names = LOGIN_VARIABLES[agent] ?? [], home = homeVariable(agent), values = {};
+  for (const name of names) if (typeof env[name] === 'string' && env[name] !== '') values[name] = env[name];
+  for (const [name, value] of Object.entries(entry?.env ?? {})) if (name !== home && ENV_NAME.test(name)) values[name] = value;
+  const unset = [...names.filter(name => !Object.hasOwn(values, name)), ...(home && !configDir ? [home] : [])];
+  let loginFile = null;
+  if (Object.keys(values).length) {
+    loginFile = join(run.runDir, `login-${randomUUID()}.env`);
+    writeFileSync(loginFile, Object.entries(values).map(([name, value]) => `export ${name}=${quote(value)}\n`).join(''), { mode: 0o600, flag: 'wx' });
+  }
+  return { unset, loginFile, program: entry?.command ?? null };
+}
+// One native launch or resume in a pane with the caller's login; a failed request deletes the login file at once.
+async function launchInPane(herdr, paneId, options, { run, env }) {
+  removeStaleLoginFiles(run.runDir);
+  const launch = chatLaunch({ run, agent: options.agent, configDir: options.configDir, env });
+  try { return await herdr(['pane', 'run', paneId, chatCommand({ ...options, ...launch })]); }
+  catch (error) { if (launch.loginFile) rmSync(launch.loginFile, { force: true }); throw error; }
 }
 
 function spawnServer(env) {
@@ -153,6 +220,8 @@ async function ensureServer(herdr, ports) {
 
 export async function startChat({ run, area, message }, ports = {}) {
   const herdr = herdrCommand(ports), now = ports.now ?? Date.now, env = ports.env ?? process.env;
+  // A missing agents.json entry refuses before any Herdr effect.
+  savedAgentEntry(run, run.agent, env);
   await ensureServer(herdr, ports);
   const messageFile = join(run.runDir, `${area}-start.md`);
   const sessionId = run.agent === 'claude' ? randomUUID() : null;
@@ -180,7 +249,7 @@ export async function startChat({ run, area, message }, ports = {}) {
     await checkpoint(layout);
     return {layout, chat};
   }, { directory: ports.layoutDirectory });
-  try { await herdr(['pane', 'run', layout.paneId, chatCommand({ commonDir: run.commonDir, sourceRoot: run.sourceRoot, agent: run.agent, cwd: run.root, addDirs: agentDirs(run), messageFile, sessionId, configDir })]); }
+  try { await launchInPane(herdr, layout.paneId, { commonDir: run.commonDir, sourceRoot: run.sourceRoot, agent: run.agent, cwd: run.root, addDirs: agentDirs(run), messageFile, sessionId, configDir }, { run, env }); }
   catch (error) {
     const failed = problem(error.code ?? 'herdr_failed', error.message);
     failed.chat = { ...chat, startUnconfirmed: true };
@@ -278,12 +347,265 @@ export async function sendToChat(chat, text, ports = {}) {
   }
 }
 
+// Chat health: an alive agent whose turns fail on its login or its usage limit. It only reads the end of the agent's own
+// session file and the bottom of its screen; it never sends anything to the chat and never throws.
+const TAIL_BYTES = 256 * 1024, SCREEN_LINES = 15, DAY = 86_400_000, MAX_DAYS = 31;
+const LIMIT_TEXT = /\byou(?:'|’)?ve (?:hit|reached) your\b[^.]*\blimit\b|\byou have (?:hit|reached) your\b[^.]*\blimit\b|\busage limit\b|\bout of (?:usage|credits)\b/i;
+const LOGIN_TEXT = /ANTHROPIC_(?:API_KEY|AUTH_TOKEN)|\bAPI key\b|\/login\b|\bnot logged in\b|\b(?:log|sign) ?in again\b|\bauthenticat|\bOAuth\b|\b401\b|\bunauthori[sz]ed\b|\baccess token\b|\brefresh[_ ]token\b|disabled organization|organization has disabled/i;
+const CLAUDE_MENU = /^(?:❯\s*)?\d\.\s+(?:Stop and wait for (?:the )?limit to reset|Wait here,? then continue automatically)\b/i;
+const REPLY_LINE = /^[⏺●•](?:\s|$)/;
+const flat = text => String(text ?? '').replace(/\s+/g, ' ').trim(), oneLine = text => flat(text).slice(0, 160);
+// Reset words: an optional date, a clock time and an optional time zone. Never the words after them (offers, hints).
+const RESET_TIME = String.raw`(?:(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.? (\d{1,2})(?:st|nd|rd|th)?(?:,? (\d{4}))?,? (?:at )?)?(\d{1,2})(?::(\d{2}))? ?([ap])m\b(?: \(([\w+\-/]{1,40})\))?`;
+const RESET_WORDS = new RegExp(String.raw`\b(?:resets(?: at)?|try again at) (${RESET_TIME})`, 'i'), RESET_ONLY = new RegExp(`^${RESET_TIME}$`, 'i');
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+const zoneParts = (ms, timeZone) => Object.fromEntries(new Intl.DateTimeFormat('en-US', { hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', ...(timeZone ? { timeZone } : {}) })
+  .formatToParts(ms).filter(part => part.type !== 'literal').map(part => [part.type, Number(part.value)]));
+// The epoch ms of a wall-clock time in a time zone (the local zone when none is given).
+function wallTime(year, month, day, hour, minute, timeZone) {
+  const wall = Date.UTC(year, month, day, hour, minute), offsets = new Set();
+  // Sample both sides of a nearby clock change. Validate every candidate at its actual instant;
+  // a repeated local time has two candidates and a skipped local time has none.
+  for (const days of [-2, -1, 0, 1, 2]) {
+    const probe = wall + days * DAY, shown = zoneParts(probe, timeZone);
+    offsets.add(Date.UTC(shown.year, shown.month - 1, shown.day, shown.hour, shown.minute) - probe);
+  }
+  const candidates = [...offsets].map(offset => wall - offset).filter(at => {
+    const shown = zoneParts(at, timeZone);
+    return shown.year === year && shown.month === month + 1 && shown.day === day && shown.hour === hour && shown.minute === minute;
+  });
+  return candidates.length === 1 ? candidates[0] : null;
+}
+// resetsAt: the reset words as one exact time, else null. Claude names its zone; Codex writes the local time of its own
+// process, and leaves out the date only for a reset on the day of the failed turn (turnAt, known only from its file).
+function resetTime(words, agent, { now, timeZone, turnAt } = {}) {
+  const match = words ? RESET_ONLY.exec(words) : null;
+  if (!match || !Number.isFinite(now)) return null;
+  const [, month, day, year, hour, minute = '0', half, zone] = match, h = Number(hour), m = Number(minute);
+  if (h < 1 || h > 12 || m > 59 || day !== undefined && !(Number(day) >= 1 && Number(day) <= 31) || (agent === 'claude') !== (zone !== undefined)) return null;
+  const tz = zone ?? timeZone, clock = [h % 12 + (half.toLowerCase() === 'p' ? 12 : 0), m];
+  try {
+    if (month) {
+      const at = y => wallTime(y, MONTHS.indexOf(month.slice(0, 3).toLowerCase()), Number(day), ...clock, tz), thisYear = zoneParts(now, tz).year;
+      if (year) return at(Number(year));
+      return at(thisYear) > now + 32 * DAY ? at(thisYear - 1) : at(thisYear);
+    }
+    if (agent !== 'codex' || !Number.isFinite(turnAt)) return null;
+    const date = zoneParts(turnAt, tz);
+    return wallTime(date.year, date.month - 1, date.day, ...clock, tz);
+  } catch { return null; }
+}
+// A usage-limit text goes on with the agent's plan and account offers, and Claude draws more lines of its limit block
+// under its error line. So the message keeps only the limit sentence (to ". ", " · ", a slash command or the end of the
+// first line) and the reset words right after it.
+function limitWords(text) {
+  const all = flat(text), first = flat(String(text ?? '').split('\n')[0]), end = /[.!?](?=\s|$)|\s·\s|\s\/\w/.exec(first);
+  let message = end ? first.slice(0, end.index + (/^[.!?]/.test(end[0]) ? 1 : 0)) : first;
+  const reset = RESET_WORDS.exec(all);
+  if (reset && /^\s*(?:·\s*)?$/.test(all.slice(message.length, reset.index))) message = all.slice(0, reset.index + reset[0].length);
+  return { message: oneLine(message), resets: reset?.[1] ?? null };
+}
+const epochMs = value => Number.isFinite(value) && value > 0 ? (value < 1e12 ? value * 1000 : value) : null;
+const textKind = text => LIMIT_TEXT.test(text) ? 'usage-limit' : LOGIN_TEXT.test(text) ? 'login' : null;
+function problemOf(kind, agent, text, context = {}, until = null) {
+  if (kind !== 'usage-limit') return { kind, agent, until, resets: null, resetsAt: null, message: oneLine(text) };
+  const { message, resets } = limitWords(text);
+  return { kind, agent, until, resets, resetsAt: until === null ? resetTime(resets, agent, context) : null, message };
+}
+
+// The complete JSON rows in the last TAIL_BYTES of a file, or null when it cannot be read.
+function tailRows(fs, path) {
+  let fd;
+  try {
+    fd = fs.openSync(path, 'r');
+    const size = fs.fstatSync(fd).size, start = Math.max(0, size - TAIL_BYTES), buffer = Buffer.alloc(size - start);
+    let read = 0;
+    while (read < buffer.length) { const n = fs.readSync(fd, buffer, read, buffer.length - read, start + read); if (!n) break; read += n; }
+    const lines = buffer.subarray(0, read).toString('utf8').split('\n');
+    if (start > 0) lines.shift();
+    lines.pop(); // A row without its newline is still being written.
+    return lines.flatMap(line => { try { const row = JSON.parse(line); return row && typeof row === 'object' && !Array.isArray(row) ? [row] : []; } catch { return []; } });
+  } catch { return null; }
+  finally { if (fd !== undefined) try { fs.closeSync(fd); } catch { /* Already closed. */ } }
+}
+const blockText = content => typeof content === 'string' ? content : Array.isArray(content) ? content.filter(block => block?.type === 'text').map(block => block.text).join(' ') : '';
+// A file verdict: undefined (the file does not decide), null (no problem) or a problem.
+function claudeVerdict(rows, context) {
+  const last = rows.findLast(row => ['user', 'assistant'].includes(row.type) && !row.isMeta && !row.isSidechain);
+  if (!last) return undefined;
+  if (last.type !== 'assistant' || last.isApiErrorMessage !== true) return null;
+  const text = blockText(last.message?.content);
+  if (last.error === 'rate_limit' || last.apiError === 'usage_limit_reached')
+    return problemOf('usage-limit', 'claude', text, context, epochMs(last.apiErrorParams?.rate_limit_info?.resetsAt) ?? epochMs(last.quotaLimits?.resetsAt));
+  if (['authentication_failed', 'oauth_org_not_allowed'].includes(last.error) || LOGIN_TEXT.test(text)) return problemOf('login', 'claude', text);
+  return null;
+}
+// Codex marks each turn with an event_msg row: task_started, then task_complete or turn_aborted. A failed turn keeps its
+// error in its task_complete row ({message, codex_error_info}). The newest of these rows decides, so a later turn that
+// worked clears an older error.
+const CODEX_TURN = new Set(['task_started', 'task_complete', 'turn_aborted']);
+function codexVerdict(rows, context) {
+  const row = rows.findLast(item => item.type === 'event_msg' && CODEX_TURN.has(item.payload?.type)), turn = row?.payload;
+  if (!turn || turn.type === 'task_started') return undefined;
+  const error = turn.type === 'task_complete' && turn.error && typeof turn.error === 'object' ? turn.error : null;
+  if (!error) return null;
+  const text = String(error.message ?? ''), info = error.codex_error_info;
+  const unauthorized = info && typeof info === 'object' && Object.values(info).some(value => value?.http_status_code === 401);
+  const kind = info === 'usage_limit_exceeded' ? 'usage-limit' : unauthorized ? 'login' : textKind(text);
+  return kind ? problemOf(kind, 'codex', text, { ...context, turnAt: Date.parse(row.timestamp) || epochMs(turn.completed_at) }) : null;
+}
+// The Codex session file of this id: only the day folders around the session's start, never the whole tree.
+function codexSessionFile(fs, home, id, chat, now) {
+  // A UUIDv7 thread id holds its session start in its first 48 bits.
+  const v7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7/i.test(id) ? parseInt(id.replace(/-/g, '').slice(0, 12), 16) : NaN;
+  const first = Math.min(now, ...[chat.startedAt, v7].filter(Number.isFinite));
+  const day = new Date(Math.max(now - MAX_DAYS * DAY, first - DAY)), last = new Date(now + DAY), pad = n => String(n).padStart(2, '0');
+  day.setHours(0, 0, 0, 0);
+  const found = [];
+  for (; day <= last; day.setDate(day.getDate() + 1)) {
+    const dir = join(home, 'sessions', String(day.getFullYear()), pad(day.getMonth() + 1), pad(day.getDate()));
+    let names;
+    try { names = fs.readdirSync(dir); } catch { continue; }
+    for (const name of names) {
+      if (!name.startsWith('rollout-') || !name.endsWith(`-${id}.jsonl`)) continue;
+      try { found.push({ path: join(dir, name), at: fs.statSync(join(dir, name)).mtimeMs }); } catch { /* The file went away. */ }
+    }
+  }
+  return found.sort((a, b) => b.at - a.at)[0]?.path ?? null;
+}
+// Is screen line i an error line in the place where the agent itself draws one? Codex draws "■ " at column 0; its replies,
+// tool output and prompts continue at an indent. Claude draws "  ⎿  ", like its tool results and indented reply lines, so
+// its error line counts only right under the user's prompt line of the turn. Elsewhere the marker is quoted text.
+function ownErrorLine(lines, i, agent) {
+  if (agent === 'codex') return /^■\s/.test(lines[i]);
+  if (!/^ {2}⎿ {2}/.test(lines[i])) return false;
+  for (let j = i - 1; j >= 0; j--) if (lines[j].trim() && !/^\s/.test(lines[j])) return INPUT_LINE.test(lines[j].replace(EDGES, ''));
+  return false;
+}
+// The bottom of the screen: the newest error line of the last turn, or the Claude limit menu.
+function screenProblem(screen, agent, context) {
+  const lines = String(screen).split(/\r?\n/), clean = line => line.replace(EDGES, '');
+  let seen = 0, inputs = 0, menu = false;
+  for (let i = lines.length - 1; i >= 0 && seen < SCREEN_LINES; i--) {
+    const text = clean(lines[i]);
+    if (!text) continue;
+    seen++;
+    // The limit menu takes the place of the input box: menu words above an input line are quoted text.
+    if (agent === 'claude' && CLAUDE_MENU.test(text)) { menu ||= !inputs; continue; }
+    if (REPLY_LINE.test(text)) break;
+    if (INPUT_LINE.test(text)) { if (++inputs > 1) break; continue; }
+    if (!ownErrorLine(lines, i, agent)) continue;
+    // Claude draws more lines of its limit block under its error line, so its lines stay apart; Codex wraps one paragraph.
+    let body = text.slice(1);
+    for (let j = i + 1; j < lines.length && /^\s+\S/.test(lines[j]) && !/^[⎿■⏺●•›>❯]/.test(clean(lines[j])); j++) body += `${agent === 'claude' ? '\n' : ' '}${clean(lines[j])}`;
+    const kind = textKind(flat(body));
+    if (kind) return problemOf(kind, agent, body, context);
+  }
+  return menu ? problemOf('usage-limit', agent, 'The chat shows its usage-limit menu.', context) : null;
+}
+export async function chatHealth({ run, chat, live }, ports = {}) {
+  const agent = chat?.agent ?? run?.agent;
+  if (!live?.alive || !['claude', 'codex'].includes(agent)) return null;
+  try {
+    const env = ports.env ?? process.env, now = (ports.now ?? Date.now)(), fs = ports.sessionFs ?? nodeFs, context = { now, timeZone: ports.timeZone };
+    const home = env.HOME || homedir(), id = validSessionId(live.sessionId) ? live.sessionId : validSessionId(chat.session?.id) ? chat.session.id : null;
+    let verdict;
+    if (id && typeof run.root === 'string') {
+      if (agent === 'claude') {
+        const config = expandHome(chat.configDir, env) ?? expandHome(env.CLAUDE_CONFIG_DIR, env) ?? join(home, '.claude');
+        const rows = tailRows(fs, join(config, 'projects', run.root.replace(/[^a-zA-Z0-9]/g, '-'), `${id}.jsonl`));
+        verdict = rows ? claudeVerdict(rows, context) : undefined;
+      } else {
+        const file = codexSessionFile(fs, expandHome(chat.configDir, env) ?? expandHome(env.CODEX_HOME, env) ?? join(home, '.codex'), id, chat, now);
+        const rows = file ? tailRows(fs, file) : null;
+        verdict = rows ? codexVerdict(rows, context) : undefined;
+      }
+    }
+    if (verdict !== undefined) return verdict;
+    // A working agent shows its work; its screen is no evidence that it cannot work.
+    if (live.status === 'working') return null;
+    const screen = await herdrCommand(ports)(['pane', 'read', chat.paneId, '--source', 'detection']);
+    return typeof screen === 'string' ? screenProblem(screen, agent, context) : null;
+  } catch { return null; }
+}
+
 export async function chatSession(chat, ports = {}) {
   try {
     const agent = (await herdrCommand(ports)(['agent', 'get', chat.paneId])).result?.agent;
     const value = agent?.agent_session?.kind === 'id' ? agent.agent_session.value : null;
     return { alive: Boolean(agent), status: agent?.agent_status ?? null, sessionId: validSessionId(value) ? value : null };
-  } catch (error) { return { alive: false, status: null, sessionId: null, code: error.code ?? 'herdr_failed', message: error.message }; }
+  } catch (error) {
+    const missing = { alive: false, status: null, sessionId: null, code: error.code ?? 'herdr_failed', message: error.message };
+    if (['agent_not_found', 'pane_not_found'].includes(error.code) && chat.workspaceId) {
+      try { if (!(await workspaceInventory(herdrCommand(ports))).some(row => row.workspace_id === chat.workspaceId)) missing.workspaceClosed = true; }
+      catch { /* Unavailable inventory cannot prove closure. */ }
+    }
+    return missing;
+  }
+}
+
+async function workspaceInventory(herdr) {
+  const reply = await herdr(['workspace', 'list']), rows = reply?.result?.workspaces;
+  if (reply?.result?.type !== 'workspace_list' || !Array.isArray(rows)
+    || rows.some(row => typeof row?.workspace_id !== 'string' || !row.workspace_id)
+    || new Set(rows.map(row => row.workspace_id)).size !== rows.length) throw problem('invalid_workspace_inventory');
+  return rows;
+}
+
+export async function rebuildClosedChat({ run, chat, message }, ports = {}) {
+  const herdr = herdrCommand(ports), now = ports.now ?? Date.now, env = ports.env ?? process.env;
+  await ensureServer(herdr, ports);
+  const present = async () => {
+    const workspace = (await workspaceInventory(herdr)).find(row => row.workspace_id === chat.workspaceId);
+    if (workspace) {
+      if (!samePath(workspace.worktree?.checkout_path, run.root) || !samePath(workspace.worktree?.repo_key, run.commonDir)
+        || workspace.worktree?.is_linked_worktree !== true) throw problem('chat_identity_changed', 'The saved workspace belongs to another checkout or repository. Inspect it in Herdr.');
+    }
+    return Boolean(workspace);
+  };
+  if (await present()) return false;
+  return withHerdrLayoutLock(async () => {
+    if (await present()) return false;
+    if (typeof ports.checkpoint !== 'function') throw problem('checkpoint_required');
+    if (!isFolder(run.root)) throw problem('invalid_worktree', `The saved worktree folder "${run.root}" is missing. Restore that folder before running pdd workflow open ${run.number}.`);
+    const verified = await lookupIssueWorktree({cwd: run.sourceRoot, runId: run.runId, branch: run.branch}, ports);
+    const a = verified.assignment;
+    if (verified.state !== 'ready' || !samePath(a?.worktreePath, run.root) || !samePath(a?.commonDir, run.commonDir)
+      || a?.repository?.toLowerCase() !== run.repo.toLowerCase() || a?.runId !== run.runId)
+      throw problem('invalid_worktree', 'The saved worktree assignment cannot be verified. Inspect this run before reopening it.');
+    const agent = chat.agent ?? run.agent, configDir = expandHome(chat.configDir, ports.env ?? process.env);
+    let resumeId = validSessionId(chat.session?.id) ? chat.session.id : null;
+    if (chat.startUnconfirmed) {
+      const own = await ownSession({run, chat, since: launchAnchor(chat), ports});
+      if (own.kind !== 'match' || resumeId && own.id !== resumeId) throw problem('chat_start_unconfirmed', 'Inspect the saved unconfirmed session before rebuilding its workspace.');
+      resumeId = own.id;
+    }
+    const custody = layout => layout.root ? {repoWorkspaceId: layout.repoWorkspaceId,
+      ...(Object.hasOwn(layout, 'repoRoot') ? {repoRoot: layout.repoRoot} : {}),
+      ...(Object.hasOwn(layout, 'repoCreateIntent') ? {repoCreateIntent: layout.repoCreateIntent} : {}), workspaceId: layout.workspaceId, ...layout.root} : layout;
+    const layout = await openHerdrRunLayout({repository: run.repo, issueNumber: run.number, runId: run.runId,
+      workflowName: run.workflow, stageId: chat.area, sourceRoot: run.sourceRoot, cwd: run.root, commonDir: run.commonDir, run},
+    {command: herdr, directory: ports.layoutDirectory, execFile: ports.execFile,
+      checkpoint: async value => ports.checkpoint(null, custody(value))});
+    const live = await chatSession({...chat, paneId: layout.paneId, workspaceId: layout.workspaceId}, ports);
+    if (live.alive || live.code !== 'agent_not_found') throw problem('chat_identity_changed', 'The rebuilt area pane is occupied or cannot be inspected. No chat was started.');
+    Object.assign(chat, {workspaceId: layout.workspaceId, repoWorkspaceId: layout.repoWorkspaceId,
+      tabId: layout.tabId, paneId: layout.paneId, terminalId: layout.terminalId, state: 'starting', startUnconfirmed: true});
+    delete chat.evidence; delete chat.code;
+    if (resumeId) { chat.session = {agent, id: resumeId}; chat.resumedAt = now(); }
+    else {
+      chat.startedAt = now(); delete chat.resumedAt;
+      chat.session = agent === 'claude' ? {agent, id: (ports.randomUUID ?? randomUUID)()} : null;
+      chat.messageFile = join(run.runDir, `${chat.area}-start.md`);
+      writeFileSync(chat.messageFile, message);
+    }
+    await ports.checkpoint(chat, custody(layout));
+    await launchInPane(herdr, chat.paneId, {commonDir: run.commonDir, sourceRoot: run.sourceRoot,
+      agent, cwd: run.root, addDirs: agentDirs(run), configDir, ...(resumeId ? {resumeId} : {messageFile: chat.messageFile, sessionId: chat.session?.id})}, {run, env});
+    delete chat.startUnconfirmed;
+    await ports.checkpoint(chat, custody(layout));
+    return true;
+  }, {directory: ports.layoutDirectory});
 }
 
 function attachSession() {
@@ -352,9 +674,11 @@ export async function openChat({ run, chat }, ports = {}) {
       if (found.length !== 1 || !validSessionId(found[0].id)) throw problem('native_session_unknown', `The ${chat.area} chat ended and pdd cannot tell which ${run.agent} session it was. Start ${run.agent} in the tab yourself.`);
       id = found[0].id; chat.session = { agent: run.agent, id };
     }
+    // A missing agents.json entry refuses before the resume request.
+    savedAgentEntry(run, run.agent, env);
     // Herdr sees the agent only after it starts; the shared grace counts from this resume request.
     chat.resumedAt = now(); applyLifecycle(chat, { state: 'starting' });
-    try { await herdr(['pane', 'run', chat.paneId, chatCommand({ commonDir: run.commonDir, sourceRoot: run.sourceRoot, agent: run.agent, cwd: run.root, addDirs: agentDirs(run), resumeId: id, configDir })]); }
+    try { await launchInPane(herdr, chat.paneId, { commonDir: run.commonDir, sourceRoot: run.sourceRoot, agent: run.agent, cwd: run.root, addDirs: agentDirs(run), resumeId: id, configDir }, { run, env }); }
     catch (error) { chat.startUnconfirmed = true; throw error; }
     resumed = true;
   }
@@ -365,6 +689,11 @@ export async function openChat({ run, chat }, ports = {}) {
   return { resumed, attached: attach };
 }
 
+// A cleanup failure as its code, or `code: first message line` with the code once (a layout identity refusal says what changed).
+const warningReason = error => {
+  const code = error?.code ?? 'error', text = String(error?.message ?? '').split('\n')[0].trim(), rest = text.startsWith(`${code}: `) ? text.slice(code.length + 2) : text;
+  return !rest || rest === code ? code : `${code}: ${rest}`;
+};
 export async function closeChats(run, ports = {}) {
   const herdr = herdrCommand(ports), warnings = [];
   const chats = run.chats ?? [];
@@ -380,13 +709,21 @@ export async function closeChats(run, ports = {}) {
       await withHerdrLayoutLock(async () => {
         await closeHerdrRunLayout({ runId: run.runId, cwd: run.root, commonDir: run.commonDir, layout: custody }, layoutPorts);
         try { await closeHerdrRepoLayoutIfIdle({ repository: run.repo, commonDir: run.commonDir }, layoutPorts); }
-        catch (error) { warnings.push(`warning: the empty "${run.repo.split('/')[1]}" workspace stays open in Herdr (${error.code ?? 'error'}).`); }
+        catch (error) { warnings.push(`warning: the empty "${run.repo.split('/')[1]}" workspace stays open in Herdr (${warningReason(error)}).`); }
       }, { directory: ports.layoutDirectory });
-    } catch (error) { warnings.push(`warning: the run workspace "${run.repo.split('/')[1]}#${run.number} ${run.workflow}" stays open in Herdr (${error.code ?? 'error'}).`); }
+    } catch (error) { warnings.push(`warning: the run workspace "${run.repo.split('/')[1]}#${run.number} ${run.workflow}" stays open in Herdr (${warningReason(error)}).`); }
   }
   return { warnings };
 }
 
+
+export function assertRestartCaller({chat, pending}, ports = {}) {
+  const env = ports.env ?? process.env;
+  const session = /[\\/]sessions[\\/]([^\\/]+)[\\/][^\\/]+$/.exec(String(env.HERDR_SOCKET_PATH ?? ''))?.[1];
+  if (env.PDD_AGENT_SESSION) throw problem('agent_caller', 'Use another terminal outside the agent session to replace this chat.');
+  if ((env.HERDR_ENV === '1' || env.HERDR_SOCKET_PATH) && (!session || !env.HERDR_PANE_ID)) throw problem('caller_pane_unknown', 'Use another terminal with a known Herdr session and pane.');
+  if (session === PDD_HERDR_SESSION && [chat.paneId,pending?.original?.paneId,pending?.replacement?.paneId].includes(env.HERDR_PANE_ID)) throw problem('own_chat', 'Use another terminal to replace this chat.');
+}
 
 // Replacement effects are authorized only by durable, awaited caller checkpoints.
 export async function restartChat({ run, chat, message, pending }, ports = {}) {
@@ -403,10 +740,9 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
     if (kind !== 'workspace' && rows.some(row => typeof row.workspace_id !== 'string' || !row.workspace_id || kind === 'pane' && ['tab_id', 'terminal_id', 'cwd'].some(key => typeof row[key] !== 'string' || !row[key]))) throw invalid();
     return rows;
   };
-  const session = /[\\/]sessions[\\/]([^\\/]+)[\\/][^\\/]+$/.exec(String(env.HERDR_SOCKET_PATH ?? ''))?.[1];
-  if (env.PDD_AGENT_SESSION) throw problem('agent_caller', 'Use another terminal outside the agent session to replace this chat.');
-  if ((env.HERDR_ENV === '1' || env.HERDR_SOCKET_PATH) && (!session || !env.HERDR_PANE_ID)) throw problem('caller_pane_unknown', 'Use another terminal with a known Herdr session and pane.');
-  if (session === PDD_HERDR_SESSION && [chat.paneId,pending?.original?.paneId,pending?.replacement?.paneId].includes(env.HERDR_PANE_ID)) throw problem('own_chat', 'Use another terminal to replace this chat.');
+  assertRestartCaller({chat, pending}, ports);
+  // A missing agents.json entry refuses before intent or any Herdr effect.
+  savedAgentEntry(run, pending?.original?.agent ?? chat.agent ?? run.agent, env);
   let record = pending ? JSON.parse(JSON.stringify(pending)) : undefined;
   const savedConfig = original => expandHome(run.configDir !== undefined ? run.configDir : original.configDir, env);
   const validConfig = value => value === null || typeof value === 'string' && value.length > 0;
@@ -435,7 +771,7 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
     const owned = target => {
       const tab = tabs.find(row => row.tab_id === target.tabId), rows = panes.filter(row => row.tab_id === target.tabId);
       if (!tab && !rows.length) return false;
-      if (!tab || tab.workspace_id !== target.workspaceId || rows.length !== 1 || rows[0].pane_id !== target.paneId || rows[0].workspace_id !== target.workspaceId || !samePath(rows[0].cwd, run.root) || target.terminalId && rows[0].terminal_id !== target.terminalId) throw invalid();
+      if (!tab || tab.workspace_id !== target.workspaceId || rows.length !== 1 || rows[0].pane_id !== target.paneId || rows[0].workspace_id !== target.workspaceId || target.terminalId && rows[0].terminal_id !== target.terminalId) throw invalid();
       return true;
     };
     const observe = async target => {
@@ -479,7 +815,7 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
         if(peers.length!==1) return true;
         const peer=peers[0],rows=panes.filter(row=>row.tab_id===tab.tab_id);
         return peer.workspaceId!==original.workspaceId || tab.workspace_id!==peer.workspaceId || rows.length!==1 ||
-          rows[0].workspace_id!==peer.workspaceId || rows[0].pane_id!==peer.paneId || !samePath(rows[0].cwd,run.root) ||
+          rows[0].workspace_id!==peer.workspaceId || rows[0].pane_id!==peer.paneId ||
           peer.terminalId && rows[0].terminal_id!==peer.terminalId;
       });
     };
@@ -506,7 +842,7 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
         if(unexplained.length) {
           if(unexplained.length!==1 || unexplained[0].label!==record.recovery.allocationLabel)throw uncertain();
           const rows=panes.filter(row=>row.tab_id===unexplained[0].tab_id);
-          if(rows.length!==1 || !samePath(rows[0].cwd,run.root) || rows[0].workspace_id!==original.workspaceId)throw invalid();
+          if(rows.length!==1 || rows[0].workspace_id!==original.workspaceId)throw invalid();
           const native=await observe({...original,tabId:unexplained[0].tab_id,paneId:rows[0].pane_id,session:null});
           if(native)throw uncertain();
         }
@@ -570,7 +906,7 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
           requireHome(original);
           record.recovery={...record.recovery,resumeRequested:true};
           await save(record.phase);await reconcileHistorical();
-          await herdr(['pane','run',original.paneId,chatCommand({commonDir:run.commonDir,sourceRoot:run.sourceRoot,agent:original.agent??run.agent,cwd:run.root,addDirs:agentDirs(run),resumeId:original.session.id,configDir:expandHome(original.configDir,env)})]);
+          await launchInPane(herdr,original.paneId,{commonDir:run.commonDir,sourceRoot:run.sourceRoot,agent:original.agent??run.agent,cwd:run.root,addDirs:agentDirs(run),resumeId:original.session.id,configDir:expandHome(original.configDir,env)},{run,env});
         }
         await save('rolledBack');return {...original,messageFile:original.originalMessageFile};
       }
@@ -606,7 +942,7 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
         const matching=unexplained.filter(row=>row.label===record.recovery.allocationLabel);
         if(unexplained.length!==1 || matching.length!==1) throw uncertain();
         const rows=panes.filter(row=>row.tab_id===matching[0].tab_id);
-        if(rows.length!==1||!samePath(rows[0].cwd,run.root)||rows[0].workspace_id!==original.workspaceId) throw invalid();
+        if(rows.length!==1||rows[0].workspace_id!==original.workspaceId) throw invalid();
         record.replacement={area:record.area,agent,tabId:matching[0].tab_id,paneId:rows[0].pane_id,terminalId:rows[0].terminal_id,workspaceId:original.workspaceId,repoWorkspaceId:original.repoWorkspaceId,label:original.label,startedAt:now(),session:agent==='claude'?{agent,id:uuid()}:null,configDir,messageFile:join(run.runDir,`${record.area}-restart-${record.id}-start.md`),state:'starting'};
       }
       await save('prepared');
@@ -633,7 +969,7 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
           requestIntent();
           requireHome(target);
           await save('launchRequested');await reconcileHistorical();
-          try {await herdr(['pane','run',target.paneId,chatCommand({commonDir:run.commonDir,sourceRoot:run.sourceRoot,agent,cwd:run.root,addDirs:agentDirs(run),messageFile:target.messageFile,sessionId:target.session?.id,configDir})]);}
+          try {await launchInPane(herdr,target.paneId,{commonDir:run.commonDir,sourceRoot:run.sourceRoot,agent,cwd:run.root,addDirs:agentDirs(run),messageFile:target.messageFile,sessionId:target.session?.id,configDir},{run,env});}
           catch(error){error.chat={...target};throw error;}
           delete record.replacement.startUnconfirmed;await save('launched');return record.replacement;
         }
@@ -645,7 +981,7 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
         requireHome(record.replacement);
         record.replacement.resumedAt=now();
         await save('launchRequested');await reconcileHistorical();
-        try { await herdr(['pane','run',record.replacement.paneId,chatCommand({commonDir:run.commonDir,sourceRoot:run.sourceRoot,agent,cwd:run.root,addDirs:agentDirs(run),resumeId:found.id,configDir})]); }
+        try { await launchInPane(herdr,record.replacement.paneId,{commonDir:run.commonDir,sourceRoot:run.sourceRoot,agent,cwd:run.root,addDirs:agentDirs(run),resumeId:found.id,configDir},{run,env}); }
         catch(error) {error.chat={...record.replacement};throw error;}
       }
       if(native?.agent_session?.value) record.replacement.session={agent,id:native.agent_session.value};
@@ -658,7 +994,7 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
     // The checkpoint rereads cancellation. Legacy cancel may still arrive after that check.
     requireHome(record.replacement);
     record.replacement.startUnconfirmed=true;requestIntent();await save('launchRequested');await reconcileHistorical(true);
-    try {await herdr(['pane','run',record.replacement.paneId,chatCommand({commonDir:run.commonDir,sourceRoot:run.sourceRoot,agent,cwd:run.root,addDirs:agentDirs(run),messageFile:record.replacement.messageFile,sessionId:record.replacement.session?.id,configDir})]);}
+    try {await launchInPane(herdr,record.replacement.paneId,{commonDir:run.commonDir,sourceRoot:run.sourceRoot,agent,cwd:run.root,addDirs:agentDirs(run),messageFile:record.replacement.messageFile,sessionId:record.replacement.session?.id,configDir},{run,env});}
     catch(error){error.chat={...record.replacement};throw error;}
     delete record.replacement.startUnconfirmed;await save('launched');return record.replacement;
   },{directory:ports.layoutDirectory});

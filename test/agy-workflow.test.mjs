@@ -56,6 +56,7 @@ test('agy shell launch: full access, pdd run and worktree folders in its workspa
   const bin = join(root, 'bin'); mkdirSync(bin);
   writeFileSync(join(bin, 'agy'), `#!${process.execPath}\nconsole.log(JSON.stringify({args:process.argv.slice(2),marker:process.env.PDD_AGENT_SESSION,codex:process.env.CODEX_HOME??null}));`, { mode: 0o755 });
   const run = { commonDir: join(root, 'clone/.git'), sourceRoot: join(root, 'clone'), runDir: join(root, 'clone/.git/pdd/runs/17'), root: join(root, 'clone.pdd-worktrees/17-fix') };
+  mkdirSync(run.root, { recursive: true }); // The chat line starts with cd to the worktree, so the worktree exists.
   assert.equal(typeof chat.agentDirs, 'function');
   const dirs = chat.agentDirs(run);
   assert.deepEqual(dirs, [join(root, 'clone/.git/pdd/runs'), join(root, 'clone.pdd-worktrees')]);
@@ -84,7 +85,7 @@ test('agy run starts and reopens the same Herdr chat with its folders; recorded 
   let run = f.record(); assert.equal(run.agent, 'agy'); assert.equal(run.configDir, null);
   const launches = () => f.herdr.calls.filter(a => a[0] === 'pane' && a[1] === 'run');
   const line = launches()[0][3];
-  assert.ok(line.replace(/ PDD_BIN='[^']*'/, '').startsWith(`env PDD_AGENT_SESSION=1 agy --dangerously-skip-permissions --settings '{"trustedWorkspaces":[${JSON.stringify(run.root)}]}' --add-dir `), line);
+  assert.ok(line.replace(/ PDD_BIN='[^']*'/, '').startsWith(`cd '${run.root}' && env PDD_AGENT_SESSION=1 agy --dangerously-skip-permissions --settings '{"trustedWorkspaces":[${JSON.stringify(run.root)}]}' --add-dir `), line);
   for (const dir of [join(run.commonDir, 'pdd/runs'), `${run.sourceRoot}.pdd-worktrees`]) assert.ok(line.includes(`--add-dir '${dir}'`), line);
   assert.match(line, /PDD_BIN='/);
   assert.ok(run.chats[0].messageFile.startsWith(dirname(run.runDir)));

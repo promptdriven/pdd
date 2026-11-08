@@ -1,12 +1,22 @@
-import {realpathSync} from 'node:fs';
+import {realpathSync, statSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 // A fake Herdr server for session pdd: workspaces, tabs, panes and the agents that pane commands start.
 export function fakeHerdr() {
   // sessions: the native session files that agents started by pane commands wrote ({agent, id, root, at}).
-  const h = { workspaces: [], tabs: [], panes: [], calls: [], next: 1, focus: null, sessions: [], now: () => Date.now() };
+  // realIdentity: true follows the identity rules of real Herdr 0.9.1: a new workspace has no Git identity, and opening
+  // the workspace's own non-linked checkout gives it that identity (already_open) instead of opening another workspace.
+  const h = { workspaces: [], tabs: [], panes: [], calls: [], next: 1, focus: null, sessions: [], now: () => Date.now(), realIdentity: false, shellStartFolder: null };
   const id = prefix => `${prefix}${h.next++}`;
   const commonDir = cwd => realpathSync(execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd, encoding: 'utf8' }).trim());
-  const pane = (workspace, tab, cwd) => { const p = { workspace_id: workspace, tab_id: tab, pane_id: id('p'), terminal_id: id('term'), cwd, agent: null }; h.panes.push(p); return p; };
+  const gitOut = (cwd, ...args) => { try { return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return null; } };
+  const workTree = path => { const top = gitOut(path, 'rev-parse', '--show-toplevel'); return top !== null && realpathSync(top) === realpathSync(path); };
+  const linked = path => gitOut(path, 'rev-parse', '--absolute-git-dir') !== gitOut(path, 'rev-parse', '--path-format=absolute', '--git-common-dir');
+  const pane = (workspace, tab, cwd) => {
+    const p = { workspace_id: workspace, tab_id: tab, pane_id: id('p'), terminal_id: id('term'), cwd, agent: null }; h.panes.push(p);
+    if (!h.shellStartFolder) return p;
+    const reply = { ...p }; p.cwd = h.shellStartFolder; return reply;
+  };
+  const folder = path => { try { return statSync(path).isDirectory(); } catch { return false; } };
   const fail = code => { throw Object.assign(Error(code), { code }); };
   h.herdr = async args => {
     h.calls.push(args);
@@ -15,21 +25,35 @@ export function fakeHerdr() {
     if (group === 'status') return { running: true, session: 'pdd', compatible: true };
     if (group === 'workspace' && verb === 'list') return { id: 'cli:workspace:list', result: { type: 'workspace_list', workspaces: h.workspaces } };
     if (group === 'workspace' && verb === 'create') {
-      const cwd = flag('--cwd'), w = { workspace_id: id('w'), label: flag('--label'), worktree: { checkout_path: cwd, repo_key: commonDir(cwd), is_linked_worktree: false } };
-      h.workspaces.push(w); const t = { tab_id: id('t'), workspace_id: w.workspace_id, label: '1' }; h.tabs.push(t); pane(w.workspace_id, t.tab_id, cwd);
-      return { id: 'cli:workspace:create', result: { workspace: w, tab:t, root_pane:h.panes.at(-1) } };
+      const cwd = flag('--cwd'), w = { workspace_id: id('w'), label: flag('--label'), ...(!h.realIdentity ? { worktree: { checkout_path: cwd, repo_key: commonDir(cwd), is_linked_worktree: false } } : {}) };
+      h.workspaces.push(w); const t = { tab_id: id('t'), workspace_id: w.workspace_id, label: '1' }; h.tabs.push(t); const p = pane(w.workspace_id, t.tab_id, cwd);
+      return { id: 'cli:workspace:create', result: { workspace: w, tab:t, root_pane:p } };
     }
     if (group === 'worktree' && verb === 'open') {
+      // Real Herdr 0.9.1: the source must be a repository parent workspace inside Git, and the path a Git work tree.
+      const source = h.workspaces.find(w => w.workspace_id === flag('--workspace')), sourceCwd = source?.worktree?.checkout_path ?? h.panes.find(p => p.workspace_id === source?.workspace_id)?.cwd;
+      if (!source) fail('workspace_not_found');
+      // A linked source refuses, also a new workspace at a linked checkout that has no Git identity yet.
+      if (source.worktree ? source.worktree.is_linked_worktree : sourceCwd && linked(sourceCwd)) throw Object.assign(Error('New and open worktree actions start from the repo parent workspace.'), { code: 'linked_worktree_source' });
+      if (!sourceCwd || gitOut(sourceCwd, 'rev-parse', '--git-dir') === null) throw Object.assign(Error('Herdr worktree actions require a workspace inside a Git work tree'), { code: 'not_git_worktree' });
+      if (!workTree(flag('--path'))) throw Object.assign(Error('worktree cannot be opened'), { code: 'worktree_not_found' });
+      // A work tree of another repository (another common Git directory) refuses, and the source gets no identity.
+      if (commonDir(flag('--path')) !== commonDir(sourceCwd)) throw Object.assign(Error('worktree path not found'), { code: 'worktree_not_found' });
+      // The source gets its repository identity on its first worktree action; a bare source keeps its own folder.
+      source.worktree ??= { checkout_path: sourceCwd, repo_key: commonDir(sourceCwd), is_linked_worktree: false };
+      if (h.realIdentity && realpathSync(flag('--path')) === realpathSync(sourceCwd) && !linked(sourceCwd))
+        return { id: 'cli:worktree:open', result: { workspace: source, already_open: true } };
       const cwd = flag('--path'), w = { workspace_id: id('w'), label: flag('--label'), worktree: { checkout_path: cwd, repo_key: commonDir(cwd), is_linked_worktree: true } };
       h.workspaces.push(w); const t = { tab_id: id('t'), workspace_id: w.workspace_id, label: '1' }; h.tabs.push(t); const p = pane(w.workspace_id, t.tab_id, cwd);
       return { id: 'cli:worktree:open', result: { workspace: w, tab: t, root_pane: p } };
     }
     if (group === 'workspace' && verb === 'close') {
-      h.workspaces = h.workspaces.filter(w => w.workspace_id !== rest[0]); h.tabs = h.tabs.filter(t => t.workspace_id !== rest[0]);
+      h.workspaces = h.workspaces.filter(w => w.workspace_id !== rest[0]); h.tabs = h.tabs.filter(t => t.workspace_id !== rest[0]); h.panes = h.panes.filter(p => p.workspace_id !== rest[0]);
       return { id: 'cli:workspace:close', result: { type: 'ok' } };
     }
     if (group === 'pane' && verb === 'list') return { id: 'cli:pane:list', result: { type: 'pane_list', panes: h.panes.filter(p => p.workspace_id === flag('--workspace') && h.tabs.some(t => t.tab_id === p.tab_id)) } };
     if (group === 'tab' && verb === 'create') {
+      if (!h.workspaces.some(w => w.workspace_id === flag('--workspace'))) fail('workspace_not_found');
       const t = { tab_id: id('t'), workspace_id: flag('--workspace'), label: flag('--label') }; h.tabs.push(t);
       return { id: 'cli:tab:create', result: { tab: t, root_pane: pane(t.workspace_id, t.tab_id, flag('--cwd')) } };
     }
@@ -39,8 +63,13 @@ export function fakeHerdr() {
     if (group === 'tab' && verb === 'close') { h.panes = h.panes.filter(p => p.tab_id !== rest[0]); h.tabs = h.tabs.filter(t => t.tab_id !== rest[0]); return { id: 'cli:tab:close', result: { type: 'ok' } }; }
     if (group === 'pane' && verb === 'run') {
       const p = h.panes.find(p => p.pane_id === rest[0]) ?? fail('pane_not_found');
-      const command = rest[1], kind = / claude /.test(command) ? 'claude' : / codex /.test(command) ? 'codex' : null;
-      const session = command.match(/--(?:session-id|resume) ([0-9a-f-]{36})/)?.[1] ?? command.match(/ resume ([0-9a-f-]{36})/)?.[1] ?? '00000000-0000-4000-8000-000000000017';
+      const command = rest[1];
+      // The shell runs a leading `cd '<folder>' && …` first; when that cd fails, nothing after it runs.
+      const cd = /^cd ('(?:[^']|'\\'')*') && /.exec(command), target = cd?.[1].slice(1, -1).replace(/'\\''/g, "'");
+      if (cd && !folder(target)) { p.commands = [...(p.commands ?? []), command]; return {}; }
+      if (cd) p.cwd = target;
+      const kind = / claude /.test(command) ? 'claude' : / codex /.test(command) ? 'codex' : / gemini /.test(command) ? 'gemini' : / agy /.test(command) ? 'agy' : null;
+      const session = command.match(/--(?:session-id|resume) '?([0-9a-f-]{36})/)?.[1] ?? command.match(/ resume '?([0-9a-f-]{36})/)?.[1] ?? '00000000-0000-4000-8000-000000000017';
       p.commands = [...(p.commands ?? []), command];
       if (kind) {
         p.agent = { agent: kind, agent_status: 'working', agent_session: { agent: kind, kind: 'id', value: session }, prompts: [] };

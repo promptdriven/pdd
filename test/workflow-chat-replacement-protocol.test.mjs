@@ -333,7 +333,8 @@ for (const lostResume of [false, true]) {
 }
 
 // Interrupted before allocation: later public progress may create an unrelated area tab.
-for (const variant of ['saved-peer', 'unknown', 'relabelled-allocation', 'wrong-pane', 'wrong-terminal', 'wrong-cwd', 'malformed-peer', 'stale-peer']) {
+// moved-shell: the saved peer's shell is in another folder; a pane's live folder is not identity (2903), so the peer still explains its tab.
+for (const variant of ['saved-peer', 'unknown', 'relabelled-allocation', 'wrong-pane', 'wrong-terminal', 'moved-shell', 'malformed-peer', 'stale-peer']) {
   test(`2627 preallocation recovery with ${variant} preserves allocation custody`, async t => {
     const f = await started(t);
     await assert.rejects(() => restart(f, { checkpoint: async record => {
@@ -355,13 +356,13 @@ for (const variant of ['saved-peer', 'unknown', 'relabelled-allocation', 'wrong-
     }
     if (variant === 'wrong-pane') peer.paneId = 'unverified-pane';
     if (variant === 'wrong-terminal') peer.terminalId = 'unverified-terminal';
-    if (variant === 'wrong-cwd') f.herdr.paneOf(peer).cwd = f.source;
+    if (variant === 'moved-shell') f.herdr.paneOf(peer).cwd = f.source;
     if (variant === 'malformed-peer') delete peer.area;
     if (variant === 'stale-peer') saved.chats.push({ ...peer, tabId: 'newer-peer-tab', paneId: 'newer-peer-pane' });
     writeFileSync(join(saved.runDir, 'status.json'), JSON.stringify(saved));
     f.herdr.calls.length = 0;
     const result = await open(f);
-    if (variant === 'saved-peer') {
+    if (variant === 'saved-peer' || variant === 'moved-shell') {
       assert.equal(result.exitCode, 0, result.message);
       const after = f.record();
       assert.equal(after.chatReplacement.id, pending.id);

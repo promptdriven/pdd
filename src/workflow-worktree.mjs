@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-worktree.prompt.md (sha256: dd41895645f1630512b3b7eff559ac94eff77bea82e6d2306d80df880ba2fad3).
+// Generated from prompts/cli/workflow-worktree.prompt.md (sha256: 56e7ee0aa71325c00a8536fb88e1832a4396450950b34bde28d01a810928b5df).
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
@@ -17,7 +17,11 @@ const result = (state, message, assignment = null) => ({ state, assignment, mess
 const fail = () => { throw new Error('workflow_worktree_identity_unavailable'); };
 const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
-class BareInDotGitError extends Error {}
+// A layout fact that disagrees. Its message names the fact, both values and the next step.
+class LayoutError extends Error {}
+const disagree = message => { throw new LayoutError(message); };
+const shown = value => JSON.stringify(value);
+const REPAIR = 'Inspect "git worktree list" in this checkout, repair the registration, then run the workflow again.';
 
 function commands(ports) {
   const run = ports.execFile ?? ((file, args, { cwd }) => execute(file, args,
@@ -39,6 +43,11 @@ function commands(ports) {
   } };
 }
 
+// Shared with callers that must accept the same origins as the allocator. Reads nothing; never throws.
+export function githubOriginRepository(remote) {
+  try { return originRepo(String(remote ?? '').trim()); } catch { return null; }
+}
+
 function originRepo(value) {
   if (value.startsWith('git@github.com:')) value = 'https://github.com/' + value.slice(15);
   let url;
@@ -50,6 +59,16 @@ function originRepo(value) {
   return repository;
 }
 
+async function originOf(cwd, c, where) {
+  const response = await c.raw(cwd, ['remote', 'get-url', 'origin']);
+  try { if (response.code !== 0) fail(); return originRepo(response.stdout.trim()); }
+  catch { disagree(`The origin of ${where} is missing or is not an ordinary GitHub HTTPS or SSH URL. Set origin to the GitHub repository, then run the workflow again.`); }
+}
+
+function sameOrigin(actual, ctx, where) {
+  if (!sameRepo(actual, ctx.repository)) disagree(`The origin of ${where} names ${actual}, but the origin of this checkout names ${ctx.repository}. Make both origins name the same GitHub repository, then run the workflow again.`);
+}
+
 async function canonicalDirectory(path) {
   if (!isAbsolute(path) || await realpath(path) !== path || !(await lstat(path)).isDirectory()) fail();
   return path;
@@ -59,7 +78,7 @@ async function context(cwd, c) {
   if (!plain(cwd)) fail();
   const sourceRoot = await realpath((await c.git(cwd, ['rev-parse', '--show-toplevel'])).trim());
   const commonDir = await realpath((await c.git(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim());
-  const repository = originRepo((await c.git(cwd, ['remote', 'get-url', 'origin'])).trim());
+  const repository = await originOf(cwd, c, `the checkout at ${shown(sourceRoot)}`);
   await canonicalDirectory(sourceRoot); await canonicalDirectory(commonDir);
   return { sourceRoot, commonDir, repository };
 }
@@ -111,8 +130,8 @@ async function assignmentShape(a, ctx, runId, c) {
   if (!UUID.test(id) || a.gitDir !== join(commonDir, 'worktrees', id)
     || a.branch !== branchName(a.workflowName, a.issueNumber, id)) fail();
   if (a.worktreePath !== join(commonDir, 'pdd', 'worktrees', id)) {
-    const parent = await externalWorktrees(ctx, c);
-    if (a.worktreePath !== join(parent, id)) fail();
+    const parent = dirname(a.worktreePath);
+    if (!(await verifiedPrimary(ctx, c)).accepted.includes(parent) || a.worktreePath !== join(parent, id)) fail();
     await canonicalDirectory(parent);
   }
   return a;
@@ -149,46 +168,67 @@ function registrations(output) {
   return records;
 }
 
+const besideFolder = path => join(dirname(path), basename(path) + '.pdd-worktrees');
+
+// Identify the repository from what Git reports: the common directory C, Git's primary registration R,
+// core.bare for a bare R, and every origin. Git commands that need a work tree run only in a work tree.
 async function verifiedPrimary(ctx, c) {
-  const primary = registrations(await c.git(ctx.sourceRoot, ['worktree', 'list', '--porcelain', '-z']))[0];
-  if (!primary?.worktree) fail();
-  let anchor;
-  if (primary.bare) {
-    anchor = await canonicalDirectory(primary.worktree);
-    const bare = (await c.git(anchor, ['rev-parse', '--is-bare-repository'])).trim();
-    const gitDir = (await c.git(anchor, ['rev-parse', '--absolute-git-dir'])).trim();
-    const commonDir = (await c.git(anchor, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim();
-    const repository = originRepo((await c.git(anchor, ['remote', 'get-url', 'origin'])).trim());
-    if (primary.bare === true && bare === 'true' && gitDir === join(anchor, '.git')
-      && commonDir === gitDir && commonDir === ctx.commonDir && sameRepo(repository, ctx.repository)
-      && (await c.git(anchor, ['config', '--bool', '--get', 'core.bare'])).trim() === 'true') throw new BareInDotGitError();
-    if (bare !== 'true' || gitDir !== anchor || commonDir !== anchor || anchor !== ctx.commonDir
-      || !sameRepo(repository, ctx.repository)) fail();
-  } else {
-    const original = await context(primary.worktree, c);
-    if (original.sourceRoot !== primary.worktree || original.commonDir !== ctx.commonDir
-      || !sameRepo(original.repository, ctx.repository)) fail();
-    anchor = original.sourceRoot;
+  const C = ctx.commonDir, primary = registrations(await c.git(ctx.sourceRoot, ['worktree', 'list', '--porcelain', '-z']))[0];
+  if (!primary?.worktree) disagree(`Git lists no primary worktree registration for this repository. ${REPAIR}`);
+  const R = primary.worktree;
+  // Refuse before any folder or record exists: a control character would only fail after the claim is saved.
+  if (!plain(R)) disagree(`Git registers the primary repository at ${shown(R)}, but that path has a control character, so pdd cannot use it safely. Move the repository to a path without control characters, run "git worktree repair", then run the workflow again.`);
+  try { await canonicalDirectory(R); }
+  catch { disagree(`Git registers the primary repository at ${shown(R)}, but that folder is missing or is not a canonical folder. ${REPAIR}`); }
+  const primaryBare = primary.bare === undefined
+    ? (await c.git(R, ['rev-parse', '--is-bare-repository'])).trim() === 'true' : primary.bare;
+  if (primaryBare === false) {
+    const top = await c.raw(R, ['rev-parse', '--show-toplevel']);
+    if (top.code !== 0) disagree(`Git registers the primary checkout at ${shown(R)}, but Git finds no work tree there, so pdd cannot find the primary checkout (for example after "git clone --separate-git-dir"). Run the workflow from a normal clone or from a linked worktree of a bare repository.`);
+    const sourceRoot = await realpath(top.stdout.trim());
+    const commonDir = await realpath((await c.git(R, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim());
+    if (sourceRoot !== R || commonDir !== C) disagree(`Git registers the primary checkout at ${shown(R)}, but Git there reports checkout ${shown(sourceRoot)} with common Git directory ${shown(commonDir)}, and this checkout uses ${shown(C)}. ${REPAIR}`);
+    sameOrigin(await originOf(R, c, `the primary checkout at ${shown(R)}`), ctx, `the primary checkout at ${shown(R)}`);
+    return { root: R, bare: false, worktrees: besideFolder(R), accepted: [besideFolder(R)] };
   }
-  return {root:anchor,bare:Boolean(primary.bare)};
+  if (primaryBare !== true || R !== C && join(R, '.git') !== C)
+    disagree(`Git registers the bare primary repository at ${shown(R)}, but this checkout's common Git directory is ${shown(C)}. ${REPAIR}`);
+  // Only reads that need no work tree run in a bare R.
+  const bare = (await c.git(R, ['rev-parse', '--is-bare-repository'])).trim();
+  const configured = await c.raw(R, ['config', '--bool', '--get', 'core.bare']);
+  if (bare !== 'true' || configured.code !== 0 || configured.stdout.trim() !== 'true')
+    disagree(`Git registers ${shown(R)} as a bare primary repository, but Git there does not report a bare repository. Inspect the Git configuration of this repository; pdd does not change it.`);
+  const gitDir = await realpath((await c.git(R, ['rev-parse', '--absolute-git-dir'])).trim());
+  const commonDir = await realpath((await c.git(R, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim());
+  if (gitDir !== C || commonDir !== C) disagree(`Git in the bare primary repository ${shown(R)} reports Git directory ${shown(gitDir)}, but this checkout's common Git directory is ${shown(C)}. ${REPAIR}`);
+  sameOrigin(await originOf(R, c, `the bare primary repository at ${shown(R)}`), ctx, `the bare primary repository at ${shown(R)}`);
+  // A project folder P holds C as P/.git or names it in a P/.git file: run worktrees go beside P, outside it.
+  const holder = dirname(C);
+  let project = C;
+  if (await exists(join(holder, '.git'))) {
+    const found = await c.raw(holder, ['rev-parse', '--absolute-git-dir']);
+    try { if (found.code === 0 && await realpath(found.stdout.trim()) === C) project = holder; } catch { /* Not a project folder of C. */ }
+  }
+  return { root: R, bare: true, worktrees: besideFolder(project), accepted: [...new Set([besideFolder(project), besideFolder(R)])] };
 }
 
 export async function lookupRepositoryParent(input, ports = {}) {
   try {
     const {cwd,repository,commonDir}=structuredClone(input??{}), c=commands(ports), ctx=await context(cwd,c);
     if(!repoName(repository)||!sameRepo(ctx.repository,repository)||ctx.commonDir!==commonDir)fail();
-    return {state:'ready',...await verifiedPrimary(ctx,c)};
+    const {root,bare}=await verifiedPrimary(ctx,c);
+    return {state:'ready',root,bare};
   } catch {return {state:'recovery_required',root:null,bare:null};}
 }
 
 async function externalWorktrees(ctx,c) {
-  const {root:anchor}=await verifiedPrimary(ctx,c);
-  const path = join(dirname(anchor), basename(anchor) + '.pdd-worktrees');
-  if (path.split(sep).some(part => part.toLowerCase() === '.git')) fail();
+  const {worktrees:path}=await verifiedPrimary(ctx,c);
+  if (!plain(path) || path.split(sep).some(part => part.toLowerCase() === '.git')) fail();
   return path;
 }
 
-async function reconcile(ctx, a, c) {
+async function reconcile(ctx, a, c, expectedBranch = a.branch) {
+  if (expectedBranch !== a.branch && expectedBranch !== `${a.branch}-code`) fail();
   await canonicalDirectory(a.sourceRoot);
   const original = await context(a.sourceRoot, c);
   if (original.commonDir !== a.commonDir || !sameRepo(original.repository, a.repository)) fail();
@@ -201,11 +241,11 @@ async function reconcile(ctx, a, c) {
   const branch = (await c.git(a.worktreePath, ['symbolic-ref', '--quiet', '--short', 'HEAD'])).trim();
   const head = (await c.git(a.worktreePath, ['rev-parse', '--verify', 'HEAD'])).trim();
   if (actual.sourceRoot !== a.worktreePath || actual.commonDir !== a.commonDir || actualGitDir !== a.gitDir
-    || branch !== a.branch || !SHA.test(head) || !sameRepo(actual.repository, a.repository)) fail();
+    || branch !== expectedBranch || !SHA.test(head) || !sameRepo(actual.repository, a.repository)) fail();
   await c.git(a.worktreePath, ['merge-base', '--is-ancestor', a.baseSha, head]);
   const listed = registrations(await c.git(ctx.sourceRoot, ['worktree', 'list', '--porcelain', '-z']));
-  const matching = listed.filter(r => r.worktree === a.worktreePath || r.branch === 'refs/heads/' + a.branch);
-  if (matching.length !== 1 || matching[0].worktree !== a.worktreePath || matching[0].branch !== 'refs/heads/' + a.branch
+  const matching = listed.filter(r => r.worktree === a.worktreePath || r.branch === 'refs/heads/' + expectedBranch);
+  if (matching.length !== 1 || matching[0].worktree !== a.worktreePath || matching[0].branch !== 'refs/heads/' + expectedBranch
     || matching[0].locked === 'initializing' || matching[0].HEAD !== head || matching[0].bare || matching[0].detached || matching[0].prunable) fail();
   // Re-read immutable custody after all awaited Git reads.
   if (!equal(await ownedRecord(ctx, a.runId, c), a)) fail();
@@ -214,10 +254,10 @@ async function reconcile(ctx, a, c) {
 
 export async function lookupIssueWorktree(input, ports = {}) {
   try {
-    const { cwd, runId } = structuredClone(input ?? {});
+    const { cwd, runId, branch } = structuredClone(input ?? {});
     if (!safe(runId)) fail();
     const c = commands(ports), ctx = await context(cwd, c);
-    return await reconcile(ctx, await ownedRecord(ctx, runId, c), c);
+    return await reconcile(ctx, await ownedRecord(ctx, runId, c), c, branch);
   } catch { return result('recovery_required', 'The original worktree assignment is absent, incomplete or changed. Inspect this same run; do not allocate again.'); }
 }
 
@@ -268,9 +308,7 @@ export async function allocateIssueWorktree(input, ports = {}) {
   } catch (error) {
     return result('recovery_required', saved
       ? 'Allocation is unconfirmed. Preserve the saved run and inspect its exact intended path; never repeat add or delete work.'
-      : error instanceof BareInDotGitError
-        ? 'pdd does not support a bare repository stored in .git with linked worktrees. Make an independent normal clone and run the workflow there. No allocation record or issue claim was saved. No new worktree is confirmed.'
-      : 'Cannot establish repository or allocation metadata identity. No allocation record or issue claim was saved. No new worktree is confirmed.');
+      : `Cannot establish repository or allocation metadata identity. ${error instanceof LayoutError ? error.message + ' ' : ''}No allocation record or issue claim was saved. No new worktree is confirmed.`);
   }
 }
 

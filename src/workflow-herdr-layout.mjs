@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: 584afdb67c309723339c57e51a379de74e94d550b95704b080c6c715f0bcda64).
+// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: a55724c0548b6b73754182616bf3f88fc6d7ce63942ba81e274a986e8ae35d94).
 import { mkdir, lstat, realpath } from 'node:fs/promises';
 import { openSync, closeSync, readFileSync, writeFileSync, fsyncSync, unlinkSync, lstatSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -18,11 +18,43 @@ export function samePath(a, b) {
 }
 // A readable value: quotes, controls and invisible or direction characters are escaped.
 const shown = value => JSON.stringify(value ?? null).replace(/[\u0080-\u009f\u00ad\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/g, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
-// The run expected one value and live Herdr shows another. Name both; repair never closes or deletes anything.
-function identityChanged(workspaceId, field, expected, found) {
-  // The message starts with the code, as every other layout error does (callers and tests match on it).
-  return Object.assign(new Error(`herdr_layout_identity_changed: Herdr session ${PDD_HERDR_SESSION} workspace ${shown(workspaceId)} has ${field} ${shown(found)}, but the run expects ${shown(expected)}. Inspect that workspace in Herdr, restore it, then retry.`),
-    { code: 'herdr_layout_identity_changed', field, expected, found });
+// What changed, in plain words, for each failed identity field.
+const ROOT_CHANGED = 'its first tab (the run\'s own shell tab) is gone or has other Herdr IDs';
+const CHANGES = {
+  worktree: 'it does not show the expected Git worktree', checkout_path: 'it shows another checkout folder',
+  repo_key: 'it shows another Git clone', is_linked_worktree: 'it is not a linked Git worktree',
+  workspace_create: 'a new workspace appeared, but pdd cannot prove that it is the repository workspace',
+  pane_list: 'Herdr gave a pane list that pdd cannot read', tab_list: 'Herdr gave a tab list that pdd cannot read',
+  root_pane: ROOT_CHANGED, tab_id: ROOT_CHANGED, pane_id: ROOT_CHANGED, terminal_id: ROOT_CHANGED,
+  parent_root: 'its first shell tab is gone or has other Herdr IDs, or it has other tabs or panes',
+  root_tab: 'pdd has no saved first tab for this run, and the workspace does not have exactly one shell tab',
+  parent_custody: 'pdd has no complete saved first tab for this repository workspace, or that saved tab names another folder',
+  root_panes: 'it has other panes besides its first shell pane', area_panes: 'an area tab does not have exactly one pane',
+  area_tab: 'more than one tab has this area name', pane: 'an area tab pane has no complete Herdr IDs',
+  area_pane: 'the new area tab does not show the pane that Herdr made'};
+// Herdr screen fields that say nothing about identity. Pane rows also leave out the shell's folder (`cwd`):
+// it is not identity, so neither the Expected nor the Found line may suggest that it caused the refusal.
+const NOISE = new Set(['agent_status', 'focused', 'revision', 'scroll', 'foreground_cwd']);
+const LIVE_NOISE = new Set([...NOISE, 'cwd']);
+// A value as readable `name value` pairs: no JSON dump, but every string stays escaped.
+function readable(value, prefix = '', noise = NOISE) {
+  if (value === null || value === undefined) return prefix ? [] : ['nothing'];
+  if (Array.isArray(value)) return value.length ? [value.map(item => readable(item, '', noise).join(', ')).join('; ')] : ['nothing'];
+  if (typeof value !== 'object') return [prefix ? `${prefix} ${shown(value)}` : shown(value)];
+  return Object.entries(value).filter(([key]) => !noise.has(key)).flatMap(([key, item]) => item !== null && typeof item === 'object' && !Array.isArray(item)
+    ? readable(item, `${prefix}${key}.`, noise) : item === null || item === undefined ? [`${prefix}${key} nothing`] : [`${prefix}${key} ${readable(item, '', noise).join('')}`]);
+}
+const detail = (name, value, noise) => { const text = `${name}: ${readable(value, '', noise).join(', ') || 'nothing'}`; return text.length > 500 ? `${text.slice(0, 499)}…` : text; };
+// The run expected one value and live Herdr shows another. The first line says what changed and what to do;
+// the escaped values follow on later lines. Repair never closes or deletes anything.
+// Both lines leave out the same fields; only a refusal of pdd's saved folder (`parent_custody`) passes NOISE to show it.
+function identityChanged(workspaceId, field, expected, found, noise = LIVE_NOISE) {
+  const what = field === 'workspace_id' ? (Array.isArray(found) || workspaceId === null ? 'more than one workspace shows this run worktree' : 'the saved workspace is gone')
+    : CHANGES[field] ?? `its ${field} changed`;
+  const where = id(workspaceId) ? `Herdr session ${PDD_HERDR_SESSION}, workspace ${shown(workspaceId)}` : `Herdr session ${PDD_HERDR_SESSION}`;
+  // The message starts with the code, as every other layout error does (callers show it once; tests match on it).
+  return Object.assign(new Error([`herdr_layout_identity_changed: ${where}: ${what}. Look at ${id(workspaceId) ? 'that workspace' : 'its workspaces'} in Herdr, undo the change, then try again.`,
+    detail(`Expected ${field}`, expected, noise), detail(`Found ${field}`, found, noise)].join('\n')), { code: 'herdr_layout_identity_changed', field, expected, found });
 }
 async function ensureDirectory(directory) {
   await mkdir(directory, {recursive:true,mode:0o700});
@@ -73,14 +105,15 @@ async function paneRows(command, workspaceId) {
 }
 async function assertRunRoot(command, run, closing = false) {
   const panes=await paneRows(command,run.workspaceId);
-  const expected={workspace_id:run.workspaceId,tab_id:run.rootTabId,pane_id:run.rootPaneId,terminal_id:run.rootTerminalId,cwd:run.cwd};
-  const differs=(p,key)=>key==='cwd'?!samePath(p.cwd,run.cwd):p[key]!==expected[key];
+  // Herdr IDs only: the root shell's live folder is not identity (a shell startup file can move it).
+  const expected={workspace_id:run.workspaceId,tab_id:run.rootTabId,pane_id:run.rootPaneId,terminal_id:run.rootTerminalId};
+  const differs=(p,key)=>p[key]!==expected[key];
   if(!panes.some(p=>Object.keys(expected).every(key=>!differs(p,key)))) {
     const near=panes.find(p=>p.pane_id===run.rootPaneId),field=near?Object.keys(expected).find(key=>differs(near,key)):'pane_id';
     throw identityChanged(run.workspaceId,field,expected[field],near?near[field]:null);
   }
   if(closing) {
-    if(panes.length!==1)throw problem('herdr_layout_identity_changed');
+    if(panes.length!==1)throw identityChanged(run.workspaceId,'root_panes',1,panes.length);
     const tabs = await tabsFor(command, run.workspaceId);
     if (tabs.length !== 1 || tabs[0].tab_id !== run.rootTabId) throw problem('run_has_open_tabs');
   }
@@ -101,9 +134,16 @@ async function assertParentRoot(command, workspaceId, root, cwd) {
   const tabs = await tabsFor(command, workspaceId), panes = await paneRows(command, workspaceId);
   const pane = panes.find(p => p.tab_id === root?.tabId && p.pane_id === root?.paneId && p.terminal_id === root?.terminalId);
   const tab = tabs.find(t => t.tab_id === root?.tabId);
-  if (!completeParentRoot(root, cwd) || tabs.length !== 1 || panes.length !== 1 || !tab || !pane || !samePath(pane.cwd, root.cwd))
-    throw identityChanged(workspaceId, 'root_pane', root, {tabCount: tabs.length, paneCount: panes.length, pane: pane ?? null});
+  // pdd's saved record of the first tab must name the repository root; then only the Herdr IDs are compared.
+  if (!completeParentRoot(root, cwd)) throw identityChanged(workspaceId, 'parent_custody', {cwd}, root ?? null, NOISE);
+  if (tabs.length !== 1 || panes.length !== 1 || !tab || !pane)
+    throw identityChanged(workspaceId, 'parent_root', root, {tabCount: tabs.length, paneCount: panes.length, pane: pane ?? null});
   return {tab, pane};
+}
+// A create intent for this parent and clone, with the checked pre-create inventory.
+function validCreateIntent(intent, parentRoot, commonDir) {
+  return id(intent.label) && samePath(intent.parentRoot, parentRoot) && samePath(intent.commonDir, commonDir) && Array.isArray(intent.workspaceIdsBefore)
+    && intent.workspaceIdsBefore.every(id) && new Set(intent.workspaceIdsBefore).size === intent.workspaceIdsBefore.length;
 }
 function parentIdentity(row, parentRoot, commonDir) {
   return row?.worktree?.is_linked_worktree === false
@@ -122,7 +162,7 @@ async function attachCreatedParent(command, workspaceId, parentRoot, commonDir, 
   await assertParentRoot(command, workspaceId, root, parentRoot);
   return row;
 }
-async function runRoot(command, workspaceId, cwd, owner, opened, stageId) {
+async function runRoot(command, workspaceId, owner, opened, stageId) {
   const panes = await paneRows(command, workspaceId), tabs = await tabsFor(command, workspaceId);
   const saved = owner?.layout?.workspaceId === workspaceId ? owner.layout : null;
   const root = saved ?? (opened?.tab && opened?.root_pane ? {tabId: opened.tab.tab_id, paneId: opened.root_pane.pane_id, terminalId: opened.root_pane.terminal_id} : null);
@@ -134,8 +174,9 @@ async function runRoot(command, workspaceId, cwd, owner, opened, stageId) {
     const roots = panes.filter(p => !chatTabs.has(p.tab_id) && tabs.some(t => t.tab_id === p.tab_id && t.label !== stageId));
     if (roots.length === 1) pane = roots[0];
   }
-  if (!pane || ![pane.tab_id, pane.pane_id, pane.terminal_id].every(id) || !samePath(pane.cwd, cwd))
-    throw identityChanged(workspaceId, 'root_pane', root ?? {cwd}, pane ?? null);
+  if (!pane || ![pane.tab_id, pane.pane_id, pane.terminal_id].every(id))
+    throw identityChanged(workspaceId, root ? 'root_pane' : 'root_tab', root ? {tabId: root.tabId, paneId: root.paneId, terminalId: root.terminalId} : 'one shell tab',
+      pane ?? panes.find(p => p.pane_id === root?.paneId) ?? null);
   return rootFields(pane);
 }
 
@@ -161,7 +202,7 @@ export async function openHerdrRunLayout(input, ports) {
   const conflict = rows.find(row => samePath(row.worktree?.checkout_path, cwd) && !runWorkspace(row, cwd, commonDir));
   if (conflict) throw identityChanged(conflict.workspace_id, 'worktree', {checkout_path: cwd, repo_key: commonDir, is_linked_worktree: true}, conflict.worktree);
   const hint = owner?.layout?.workspaceId ?? owner?.chats?.at(-1)?.workspaceId;
-  if (!matches.length && id(hint) && rows.some(w => w.workspace_id === hint))
+  if (id(hint) && rows.some(w => w.workspace_id === hint))
     ownedWorkspace(rows, {workspaceId: hint, commonDir, runId: input.runId}, cwd);
   let workspace = matches[0], opened;
   let custody = {};
@@ -173,13 +214,9 @@ export async function openHerdrRunLayout(input, ports) {
   const createIntent = owner?.layout?.repoCreateIntent;
   let repo = parents.find(w => w.workspace_id === parentHint) ?? parents[0];
   if (!workspace) {
-    if (id(hint)) throw identityChanged(hint, 'workspace_id', hint, null);
     let pendingParent;
     if (createIntent) {
-      const validIntent = id(createIntent.label) && samePath(createIntent.parentRoot, parent.root)
-        && samePath(createIntent.commonDir, commonDir) && Array.isArray(createIntent.workspaceIdsBefore)
-        && createIntent.workspaceIdsBefore.every(id) && new Set(createIntent.workspaceIdsBefore).size === createIntent.workspaceIdsBefore.length;
-      if (!validIntent) throw problem('repository_parent_unverified');
+      if (!validCreateIntent(createIntent, parent.root, commonDir)) throw problem('repository_parent_unverified');
       const before = new Set(createIntent.workspaceIdsBefore), appeared = rows.filter(row => !before.has(row.workspace_id));
       pendingParent = appeared.find(row => row.workspace_id === parentHint);
       if (id(parentHint) && !before.has(parentHint) && !rows.some(row => row.workspace_id === parentHint))
@@ -189,21 +226,26 @@ export async function openHerdrRunLayout(input, ports) {
     }
     if (pendingParent) {
       if (parents.some(w => w.workspace_id === pendingParent.workspace_id)) {
-        if (savedRepoRoot && [savedRepoRoot.tabId, savedRepoRoot.paneId, savedRepoRoot.terminalId, savedRepoRoot.cwd].every(id))
+        if (parent.bare && !completeParentRoot(savedRepoRoot, parent.root))
+        throw identityChanged(parentHint, 'root', 'complete saved parent root', savedRepoRoot ?? null);
+      if (savedRepoRoot && [savedRepoRoot.tabId, savedRepoRoot.paneId, savedRepoRoot.terminalId, savedRepoRoot.cwd].every(id))
           await assertParentRoot(command, parentHint, savedRepoRoot, parent.root);
         repo = pendingParent;
       } else {
         if (!savedRepoRoot || !completeParentRoot(savedRepoRoot, parent.root))
-          throw identityChanged(parentHint, 'root_pane', {cwd: parent.root}, savedRepoRoot ?? null);
+          throw identityChanged(parentHint, 'parent_custody', {cwd: parent.root}, savedRepoRoot ?? null, NOISE);
         await assertParentRoot(command, parentHint, savedRepoRoot, parent.root);
         if (pendingParent.worktree)
           throw identityChanged(parentHint, 'worktree', {checkout_path: parent.root, repo_key: commonDir, is_linked_worktree: false}, pendingParent.worktree);
         custody = {repoWorkspaceId: parentHint, repoRoot: savedRepoRoot, repoCreateIntent: createIntent};
         await save();
-        repo = await attachCreatedParent(command, parentHint, parent.root, commonDir, savedRepoRoot);
-        rows = await inventory(command);
-        custody = {repoWorkspaceId: repo.workspace_id, repoRoot: savedRepoRoot, repoCreateIntent: null};
-        await save();
+        if (parent.bare) repo = pendingParent;
+        else {
+          repo = await attachCreatedParent(command, parentHint, parent.root, commonDir, savedRepoRoot);
+          rows = await inventory(command);
+          custody = {repoWorkspaceId: repo.workspace_id, repoRoot: savedRepoRoot, repoCreateIntent: null};
+          await save();
+        }
       }
     }
     if (!repo) {
@@ -236,17 +278,21 @@ export async function openHerdrRunLayout(input, ports) {
       if (repo.worktree) {
         if (!parentIdentity(repo, parent.root, commonDir))
           throw identityChanged(repoId, 'worktree', {checkout_path: parent.root, repo_key: commonDir, is_linked_worktree: false}, repo.worktree);
-      } else {
+      } else if (!parent.bare) {
         repo = await attachCreatedParent(command, repoId, parent.root, commonDir, repoRoot);
         rows = await inventory(command);
       }
-      custody = {repoWorkspaceId: repoId, repoRoot, repoCreateIntent: null};
+      custody = {repoWorkspaceId: repoId, repoRoot, repoCreateIntent: repo.worktree ? null : intent};
       await save();
     }
+    // Herdr refuses `worktree open --path` on a bare repository folder. A bare parent gets its identity when it
+    // opens the run worktree, so its create intent and saved root stay pending until then.
+    const pendingBare = !repo.worktree;
     const repoRoot = (completeParentRoot(custody.repoRoot, parent.root) ? custody.repoRoot : undefined)
       ?? (owner?.layout?.repoWorkspaceId === repo.workspace_id && completeParentRoot(owner.layout.repoRoot, parent.root) ? owner.layout.repoRoot : undefined);
+    if (pendingBare && (!parent.bare || !repoRoot)) throw identityChanged(repo.workspace_id, 'worktree', {checkout_path: parent.root, repo_key: commonDir, is_linked_worktree: false}, null);
     custody = {repoWorkspaceId: repo.workspace_id, ...(repoRoot ? {repoRoot} : {}),
-      ...(Object.hasOwn(custody, 'repoCreateIntent') || createIntent ? {repoCreateIntent: null} : {})};
+      ...(Object.hasOwn(custody, 'repoCreateIntent') || createIntent ? {repoCreateIntent: pendingBare ? custody.repoCreateIntent ?? createIntent : null} : {})};
     await save();
     opened = await command(['worktree', 'open', '--workspace', repo.workspace_id, '--path', cwd, '--label', `${input.repository.split('/')[1]}#${input.issueNumber} ${input.workflowName}`, '--no-focus']);
     if (opened.id !== 'cli:worktree:open' || !id(opened.result?.workspace?.workspace_id)) throw problem('invalid_worktree_reply');
@@ -255,18 +301,43 @@ export async function openHerdrRunLayout(input, ports) {
     if (matches.length !== 1 || matches[0].workspace_id !== opened.result.workspace.workspace_id)
       throw identityChanged(opened.result.workspace.workspace_id, 'worktree', {checkout_path: cwd, repo_key: commonDir}, matches.map(w => w.worktree));
     workspace = matches[0];
+    if (pendingBare) {
+      const row = rows.find(w => w.workspace_id === repo.workspace_id);
+      if (!parentIdentity(row, parent.root, commonDir))
+        throw identityChanged(repo.workspace_id, 'worktree', {checkout_path: parent.root, repo_key: commonDir, is_linked_worktree: false}, row?.worktree ?? null);
+      await assertParentRoot(command, repo.workspace_id, repoRoot, parent.root);
+      repo = row; custody = {...custody, repoCreateIntent: null};
+      await save();
+    }
+  } else if (createIntent) {
+    // The run workspace exists, but the parent that opened it is still pending (a refused parent check or a lost
+    // run-open reply). Check that live parent again on every open; clear the intent only when identity and root pass.
+    if (!validCreateIntent(createIntent, parent.root, commonDir)) throw problem('repository_parent_unverified');
+    const pending = rows.find(row => row.workspace_id === parentHint && !createIntent.workspaceIdsBefore.includes(row.workspace_id));
+    if (pending) {
+      if (!parentIdentity(pending, parent.root, commonDir))
+        throw identityChanged(parentHint, 'worktree', {checkout_path: parent.root, repo_key: commonDir, is_linked_worktree: false}, pending.worktree ?? null);
+      if (parent.bare && !completeParentRoot(savedRepoRoot, parent.root))
+        throw identityChanged(parentHint, 'root', 'complete saved parent root', savedRepoRoot ?? null);
+      if (savedRepoRoot && [savedRepoRoot.tabId, savedRepoRoot.paneId, savedRepoRoot.terminalId, savedRepoRoot.cwd].every(id))
+        await assertParentRoot(command, parentHint, savedRepoRoot, parent.root);
+      repo = pending;
+      custody = {repoWorkspaceId: parentHint, ...(savedRepoRoot ? {repoRoot: savedRepoRoot} : {}), repoCreateIntent: null};
+      await save();
+    }
   }
   const workspaceId = workspace.workspace_id;
-  const root = await runRoot(command, workspaceId, cwd, owner, opened?.result, input.stageId);
+  const root = await runRoot(command, workspaceId, owner, opened?.result, input.stageId);
   custody = {repoWorkspaceId: repo?.workspace_id ?? null, ...(custody.repoRoot ? {repoRoot: custody.repoRoot} : {}),
     ...(Object.hasOwn(custody, 'repoCreateIntent') ? {repoCreateIntent: custody.repoCreateIntent} : {}), workspaceId, root};
   await save();
   const tabs = await tabsFor(command, workspaceId), panes = await paneRows(command, workspaceId);
-  const candidates = tabs.filter(t => t.label === input.stageId).filter(t => {
+  // Inside the verified run workspace the label selects the area tab; its pane's live folder takes no part.
+  const candidates = tabs.filter(t => t.label === input.stageId);
+  for (const t of candidates) {
     const group = panes.filter(p => p.tab_id === t.tab_id);
     if (group.length !== 1) throw identityChanged(workspaceId, 'area_panes', 1, group.length);
-    return group.length === 1 && samePath(group[0].cwd, cwd);
-  });
+  }
   if (candidates.length > 1) throw identityChanged(workspaceId, 'area_tab', input.stageId, candidates.map(t => t.tab_id));
   const owned = {repoWorkspaceId: repo?.workspace_id ?? null, ...(custody.repoRoot ? {repoRoot: custody.repoRoot} : {}),
     ...(Object.hasOwn(custody, 'repoCreateIntent') ? {repoCreateIntent: custody.repoCreateIntent} : {}), workspaceId, root};
@@ -281,7 +352,7 @@ export async function openHerdrRunLayout(input, ports) {
   const pane = created.result?.root_pane, tabId = created.result?.tab?.tab_id;
   if (created.id !== 'cli:tab:create' || ![tabId, pane?.pane_id, pane?.terminal_id].every(id)) throw problem('invalid_tab_reply');
   const actual = (await paneRows(command, workspaceId)).filter(p => p.tab_id === tabId);
-  if (actual.length !== 1 || actual[0].pane_id !== pane.pane_id || actual[0].terminal_id !== pane.terminal_id || !samePath(actual[0].cwd, cwd))
+  if (actual.length !== 1 || actual[0].pane_id !== pane.pane_id || actual[0].terminal_id !== pane.terminal_id)
     throw identityChanged(workspaceId, 'area_pane', pane, actual);
   custody = {...owned, tabId, paneId: pane.pane_id, terminalId: pane.terminal_id};
   await save();

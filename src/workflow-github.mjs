@@ -1,7 +1,8 @@
-// Generated from prompts/cli/workflow-github.prompt.md (sha256: 8de64711277b42ab0b2c9038f75a490bbce4c280e0445c31bfa1e7515c22e1c5).
+// Generated from prompts/cli/workflow-github.prompt.md (sha256: 8102daf832ac8efa77608fb6723ea9355d60b5a79e61d2f5509b6b2fc5e97188).
 import { execFile } from 'node:child_process';
 import { isAbsolute } from 'node:path';
 import { causeText } from './runtime-output.mjs';
+import { nativeGithubCounter } from './github-calls.mjs';
 
 const execute = (file, args, options) => new Promise((resolve, reject) => {
   const { input, ...execOptions } = options;
@@ -42,9 +43,11 @@ function refusal(stderr) {
     : `GitHub refused to open the PR: ${reason.replace(/\.$/, '')}. The branch is pushed; no PR was opened. Fix what GitHub names, then try again.`;
 }
 
+// The native runner records each gh call in the GitHub call ledger of its repository.
+const counted = nativeGithubCounter((file, args, { cwd, input }) => execute(file, args,
+  { cwd, input, encoding: 'utf8', shell: false, maxBuffer: 8 * 1024 * 1024 }));
 function dependencies(ports = {}) {
-  const run = ports.execFile ?? ((file, args, { cwd, input }) => execute(file, args,
-    { cwd, input, encoding: 'utf8', shell: false, maxBuffer: 8 * 1024 * 1024 }));
+  const run = ports.execFile ?? counted;
   async function raw(cwd, file, args, input) {
     let result;
     try { result = await run(file, args, { cwd, ...(input === undefined ? {} : { input }) }); }

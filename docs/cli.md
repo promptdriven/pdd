@@ -1,6 +1,6 @@
 # CLI reference
 
-This page lists every command of pdd 0.1.21, as `pdd --help` shows it. A test (`test/docs-commands.test.mjs`) checks that each command form of the help is on this page.
+This page lists every command of pdd 0.1.22, as `pdd --help` shows it. A test (`test/docs-commands.test.mjs`) checks that each command form of the help is on this page.
 
 You need the pdd command only for runs with PRs, for `pdd test`, `pdd lint`, `pdd simulate` and `pdd approve`. Install the skills with `npx skills add promptdriven/pdd` (add `-g` for all your projects), and set up a repo with the `pdd-setup` skill in your agent. For simulations that your agent drives, use the Try tools in `pdd mcp`. Then use a PDD skill: `pdd-feature`, `pdd-bug`, `pdd-small-change` or `pdd-prompting`. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name). See [Install](USAGE.md#2-install).
 
@@ -41,19 +41,79 @@ When another change of `pdd.json` on GitHub comes between pdd's read and its wri
 
 These commands store settings and determine trust. Selecting a mode starts no run and makes no interpreter call. Approval policy, including `strict_approvals`, stays independent.
 
+## Inspect authored files
+
+`pdd files [--json]` lists prompts, Runtime interfaces, Stories, tests and refusal
+reasons. It reads working files only. It does not sign in, call the interpreter,
+fill hashes or approve prompts. It works from any folder in a Git repository.
+
+The reader expands `$contract` references and preserves numeric JSON tokens for
+lint, test and approval. Approval shows resolved fields and constraints. It keeps
+the references in the authored file when it records a person's approval.
+
+The JSON result has `schema_version: "pdd.files.v1"` and arrays `prompts`,
+`stories`, `tests`, `orphans`, `refusals` and `warnings`. Paths are relative to the
+repository root. Prompt rows include `has_interface`, resolved `references`,
+paired `stories` and `tests`, and `refusals`. `has_interface` is null when a
+source/reference failure prevents reading the interface. Story rows list their tests. Test
+rows list every conflict member in `files`, their name-matched `stories`, reached
+`prompts` and preflight `refusals`. Each refusal gives `path`, `code`, `section`
+and `message`, plus a fix `hint` when available. No interface kind is inferred.
+
+The list uses the same workspace limits, fixture exclusions and Story/test name
+rule as an all-Story check. Missing tests and orphan JSON files are visible.
+Inspection returns exit 0 when it can produce the list, including when files
+have refusals. Exit 0 is not a lint or test pass. Root/configuration failures
+return an error. `pdd test --files` remains the exact upload-file preview for a
+selected check.
+
 ## Autopilot on this machine
+
+Run Autopilot commands inside the repo folder. Each repo has its own Autopilot on each machine.
 
 | Command | What it does |
 |---|---|
 | `pdd autopilot start [--runs N] [--resume-custody FILE]` | Check sign-ins and the running pdd version, open a dedicated interactive Herdr session and check for work immediately. A user timer checks again every 30 minutes. `--runs` sets an optional concurrent-run cap; omission has no fixed cap. `--resume-custody` supplies the verified original-owner projection for explicit recovery |
 | `pdd autopilot stop` | Disable this repo's timer on this machine and let the current agent step finish |
-| `pdd autopilot status` | Show this machine's repo, agent, timer, coordinator health and next tick without waking an agent; an idle coordinator is healthy. It reads `pdd.json` on GitHub only to warn when its Autopilot settings differ from this checkout. Another line shows a pending or held coordinator relaunch, and one line an [alert](#alerts) that was not delivered |
+| `pdd autopilot status [--all]` | Show this machine's repo, the folder Autopilot works in, agent, timer, coordinator health and next tick without waking an agent; an idle coordinator is healthy. It reads `pdd.json` on GitHub only to warn when its Autopilot settings differ from this checkout. Another line says when pdd workflows cannot start in this folder, and why. Other lines show a pending or held coordinator relaunch an [alert](#alerts) that was not delivered, and the [GitHub calls](#github-api-budget) of the last hour. `--all` works from any folder and lists every repository with Autopilot on this machine: repository, folder, mode, enabled or disabled, timer and coordinator state. It reads only local files, the timer and Herdr: no GitHub call |
 | `pdd autopilot add N...` | Label named issues `pdd:autopilot`. Autopilot does not need this label: it considers every open issue |
 | `pdd autopilot alerts set` | Read your Discord or Slack incoming webhook URL from stdin and save it for this machine |
 | `pdd autopilot alerts set --discord-channel ID [--token-command CMD]` | Use a Discord bot in one channel: read its token from stdin, or save CMD and run it at each send to get the token |
 | `pdd autopilot alerts test` | Send one test message and confirm that it was posted; for a bot, first check and show the bot name and channel name |
 | `pdd autopilot alerts clear` | Remove the alert destination from this machine |
 | `pdd autopilot alert --issue N --kind usage-limit\|resource\|interpreter\|interpreter-access\|access\|decision\|stuck\|long-running\|recovered --input - [--update]` | For the coordinator: record one alert and send it to this machine's destination |
+
+Outside a Git repository, `start`, `stop`, `status`, `add`, `off`, `observe`,
+`auto`, `trust` and `untrust` stop with exit code 1 and say: `This folder is not a
+Git repository. cd into the repo you want Autopilot to work on, then run the
+command again.` A successful start says which repository and folder it works
+in, for example `Autopilot started for OWNER/NAME in /path/to/checkout.`
+
+Before start turns on the timer or opens a chat, it checks that `pdd workflow
+run` can make an issue worktree in this checkout. The workflow worktree allocator
+makes this decision, so Autopilot accepts the same Git layouts and the same
+`origin` forms as `pdd workflow run`. The check reads Git only: no AI, no GitHub
+call, no claim and no worktree. When the checkout cannot make issue worktrees, for
+example because its `origin` remote names another repository or Git keeps its
+files in a separate Git directory, start stops with exit code 1. The message names
+the folder, the cause and the next step: run Autopilot from a normal clone of the
+repository. When Git could not be read, the message says so and tells you to try
+again. Start then changes no timer, also not the timers of other checkouts, and
+claims no issue.
+
+A tick makes the same check before it offers new issue work. Issues with
+`pdd:stuck` or `pdd:code-pending` are not new work. While the check fails, the
+tick offers no new issue, writes a warning to the timer log and keeps those issues
+for a later tick. It still delivers the start-up recipe, dependency review, time
+rules, the work of existing claims, and reviews and trusted comments on claimed
+and held issues.
+
+In `status --all`, each line is independent. A saved folder that is gone still
+shows its real timer and coordinator state, with `mode unknown (folder missing)`.
+A saved folder that is not a Git repository shows `mode unknown (not a Git
+repository)`. A timer that cannot be read shows `timer unknown`, and a broken
+state file shows `FILE: saved state unreadable`. One bad line changes no other
+line.
 
 The launcher uses the repository settings module to read root `pdd.json`. An
 active mode is `observe` or `auto`; missing or invalid settings count as `off`. It uses an
@@ -62,7 +122,9 @@ get one actionable line. Linux uses a systemd user timer; macOS uses a
 LaunchAgent. On Linux, start warns when user-session lingering is off or
 unavailable: `loginctl enable-linger` keeps the timer after logout. The tick
 service preserves a Herdr server it starts when the tick exits. See the chat with
-`herdr session attach pdd-autopilot`.
+`herdr session attach pdd-autopilot`. The coordinator chat starts with a `cd` to the
+repository, so a `cd` in your shell startup file (for example `~/.zshrc`) does not
+change where the agent works.
 
 A Codex coordinator also gets
 `-c shell_environment_policy.set.PDD_AUTOPILOT_CONTEXT=…` for this launch only, so
@@ -111,7 +173,10 @@ receive no tick prompt; pending changes are coalesced until they are idle.
 Empty ticks use no AI. This applies to Claude
 Code too: the user timer keeps empty ticks out of the conversation. Paginated
 queues revalidate every cached page; changed candidates may require comment and
-write-permission lookups. GitHub rate limits wait until the reset time.
+write-permission lookups. GitHub rate limits wait until the reset time. When the
+open issue list has more than one page, the tick reads it in full every 6 hours.
+Between, it reads only the issues and PRs that changed since that full read
+(`since=`), so an unchanged list costs no counted call.
 
 Every open issue can enter the queue, old or new, with or without `pdd:autopilot`.
 Autopilot starts fresh work only on an issue that the current dependency review
@@ -146,6 +211,108 @@ the middle of a step. Older pdd sends no heartbeat, so its claims follow the
 without a claim check and removes `pdd:working` when its run ends. A stopped
 launcher or `off` mode lets its claims expire after 4 hours. The heartbeat moves
 claimed issues to the top of "recently updated" every 30 minutes.
+
+### GitHub API budget
+
+Autopilot uses your own `gh` sign-in, so its GitHub calls use your hourly limit
+(5,000 REST calls for a person). pdd counts each `gh` call of the Autopilot tick,
+and of `pdd` commands in a repository where Autopilot runs on this machine, with
+its purpose and the limit that GitHub reports in the reply headers:
+
+| Purpose | Calls |
+|---|---|
+| `dependencies` | The dependency re-sync: open issues, comments, links, history |
+| `claims` | Claim checks and the `lastSeen` heartbeat |
+| `issues` | The tick's issue list, comments and permission lookups |
+| `pulls` | PR, review and check reads |
+| `writes` | Other writes, such as a PR or a reply |
+| `setup` | Sign-in, repository and settings calls |
+| `other` | Everything else, such as `pdd metrics` |
+
+pdd does not count the `gh` calls that the coordinator and worker chats make
+themselves, such as `gh pr checks` or `gh run watch`. It also does not count
+other machines or your own work on the same login. All of them use the same
+limit. Their use shows only in the limit that is left on the status line.
+
+The counts stay on this machine, one file for each repository in
+`~/.local/state/pdd/autopilot/github/`. `pdd autopilot status` shows one line
+when there was a call in the last hour, for example:
+
+```text
+GitHub calls in the last hour: 212 (dependencies 120, claims 14, issues 60, pulls 18); 150 of 190 conditional reads were 304 (79%); REST limit 4210 of 5000 left until 17:05Z; budget normal: Autopilot on this machine used 61 of 1500 (30%).
+```
+
+"Autopilot on this machine used 61" is the counted calls of this machine: the
+tick and the counted `pdd` commands, not the chats.
+
+A conditional read sends the ETag of the last reply. A `304` reply means that
+nothing changed, and GitHub does not count it against the limit. The tick, the
+dependency re-sync, `pdd dependencies prepare` and `complete` and the workflow
+claim checks use conditional reads for an Autopilot repository. They share one
+file of ETags and reply bodies in the same folder. A full page (100 items) that
+has no next page is read without its ETag: a `304` reply does not show that a
+next page came.
+
+Autopilot keeps one saved dependency snapshot for each repository in the same
+folder (`*.snapshot.json`, private to you). The tick, `pdd dependencies complete`
+and the claim scan use it. A read asks GitHub only for the issues that changed
+since the last read (`since`, in update order), and reads the comments, links and
+history of an issue again when its update time, comment count or link identities
+changed. It checks the open index with conditional requests and compares native
+link identities in batches. Equal link counts can still mean different blockers.
+Incomplete batch connections fall back to complete REST link pages. Once a day
+it rebuilds the open list, so a deleted or moved issue leaves it. Safety reads always ask GitHub (a `304` is fine): the claim
+checks before a start, a push and a merge, heartbeats, trust, and the readback
+after each write. A quiet tick then makes a few calls instead of hundreds, and
+a batch reuses the same observations. After `pdd dependencies complete`, the next
+request comes from the saved snapshot: the completion tick and the idle wake
+reuse the dependency issue list for 10 minutes after its last complete read.
+
+The budget acts on the tick, and its floor on the dependency commands too. It
+has two settings in `pdd.json`, a share (default 30%) and a floor (default 1,000
+calls):
+
+```json
+{"autopilot":{"mode":"auto","trust":[],"github":{"share":30,"floor":1000}}}
+```
+
+`share` is a whole percent from 1 to 100; `floor` is a whole number of calls. A
+missing or invalid value uses the default.
+
+- **Low.** The counted REST calls of all Autopilot repositories on this machine
+  in the last hour reach the share. A 304 reply does not count. Then the tick
+  runs the dependency re-sync at most once an hour and uses its last result
+  between. All other calls of the tick go on: the issue list, comment, review
+  and PR reads, heartbeats and wakes.
+- **Reserve.** GitHub reports fewer calls left than the floor, for REST or
+  GraphQL. Then the tick makes no GitHub call until the reset time, except the
+  heartbeat of each live claim of this machine (2 REST calls each). So a claim
+  does not expire while its chat works. With fewer REST calls left than these
+  heartbeats need, it sends none. The tick also wakes no chat with new work
+  until the reset. Native dependency observations for an Autopilot repository
+  also stop non-safety reads. This includes `pdd dependencies prepare`,
+  `complete`, direct snapshot reads and automatic workflow start. A reply that
+  shows fewer calls than the floor stops the reads
+  after it. A stopped `complete` keeps its request and analysis; the first tick
+  after the reset saves the remaining reviews without a new analysis. Reviews
+  that were already saved are never saved twice.
+
+The coordinator and worker chats go on, and their own `gh` calls are not counted.
+Safety reads, including workflow start's live subject and claim checks, trust,
+permissions and write readbacks, can use the reserve. Writes can use it too.
+Other `pdd` operations are counted but do not wait for this floor. The budget
+does not keep 70% of the limit for you. The floor makes the tick and native
+dependency observations read less. To
+give Autopilot a limit of its own, see the design note
+[A GitHub App token for Autopilot](autopilot-github-app-token.md).
+
+The dependency snapshot is saved beside the repository's GitHub call ledger as
+`github/H.snapshot.json` in the Autopilot state folder. Its temporary lock is
+`github/H.snapshot.json.lock`, with the same repository hash `H` as the ledger.
+If a writer exits while holding this lock, later saves refuse to replace the
+snapshot. To recover, stop local PDD operations for that repository and confirm
+that no snapshot writer is still running. Then remove only that empty lock
+directory. Keep the snapshot and ledger files. The next observation can save again.
 
 ### Alerts
 
@@ -220,9 +387,9 @@ not delivered stays in the line until a later call sends it.
 | Command | What it does |
 |---|---|
 | `pdd workflow prove ISSUE --test COMMAND --expect TEXT [--timeout MIN]` | Fetch the selected base branch and run the supplied command on its merge-base with committed changed test files overlaid, then on committed head, in disposable snapshots. Both quoted text options are required; each phase has a limit of 10 minutes by default (`--timeout MIN` sets 1 to 120 minutes), 2-second termination grace and 1 MiB output cap. Save `old-code-proof.json` in the run folder. A successful comparison exits 0; failed or unavailable evidence exits 1 and never blocks publication. |
-| `pdd workflow run NAME ISSUE [--agent codex\|claude\|gemini\|agy] [--base BRANCH] [--draft]` | Make a branch and a worktree for the issue, open the first chat in Herdr and return at once. `--origin`, `--decision-id` and `--outcome` supply optional metrics metadata. `--base BRANCH` selects an existing branch on origin; omitted means the repository default. An explicit base must fetch successfully before startup. PRs target the saved base, with PR 2 stacked on an open PR 1. Startup saves this terminal's `CODEX_HOME` (Codex), `CLAUDE_CONFIG_DIR` (Claude Code) or `GEMINI_CLI_HOME` (Gemini) for later chats. A leading `~` in it means your home folder. If that folder does not exist, `workflow run` stops before it starts anything |
+| `pdd workflow run NAME ISSUE [--agent codex\|claude\|gemini\|agy\|ENTRY] [--base BRANCH] [--draft]` | Make a branch and a worktree for the issue, open the first chat in Herdr and return at once. `--agent ENTRY` uses an entry name from `~/.config/pdd/agents.json` (quote spaces); see [Many accounts](USAGE.md#many-accounts). `--origin`, `--decision-id` and `--outcome` supply optional metrics metadata. `--base BRANCH` selects an existing branch on origin; omitted means the repository default. An explicit base must fetch successfully before startup. PRs target the saved base, with PR 2 stacked on an open PR 1. Startup saves this terminal's `CODEX_HOME` (Codex), `CLAUDE_CONFIG_DIR` (Claude Code) or `GEMINI_CLI_HOME` (Gemini) for later chats. A leading `~` in it means your home folder. If that folder does not exist, `workflow run` stops before it starts anything |
 | `pdd workflow list [--json]` | List the workflows that pdd finds, with their areas and gates: the PDD ones and [your own](workflows.md#make-your-own-workflow) |
-| `pdd workflow status [ISSUE] [--all] [--cancelled] [--json]` | Show the area, the step, what the run waits for, and the PRs with their CI state. For a run with many Stories, also `Stories: N of M pass`, counted only from pdd's own `pdd test` results that `pdd workflow done` recorded (and `pdd workflow evidence` receipts); with none, `Stories: no pdd result (pdd:no-verdict)`. Without ISSUE, show all runs in this repo. In a run's worktree, show that run. With `--all`, or outside a Git repo, show every run on this machine: waiting for you first, then working, PR open, done. `--cancelled` also shows the hidden cancelled runs. `--json` gives the same list as data. It says "the chat stopped" only with evidence: Herdr sees no agent in the chat's tab, and the agent was seen running there or its own native session exists. Run `pdd workflow open ISSUE` to start it again. While a launch is not confirmed, it says "the chat is starting, not confirmed". Failed or unconfirmed startup/open and unavailable Herdr status show waiting with recovery advice. At a gate it says that the agent writes the gate message until the chat has asked you |
+| `pdd workflow status [ISSUE] [--all] [--cancelled] [--json]` | Show the area, the step, what the run waits for, and the PRs with their CI state. For a run with many Stories, also `Stories: N of M pass`, counted only from pdd's own `pdd test` results that `pdd workflow done` recorded (and `pdd workflow evidence` receipts); with none, `Stories: no pdd result (pdd:no-verdict)`. Without ISSUE, show all runs in this repo. In a run's worktree, show that run. With `--all`, or outside a Git repo, show every run on this machine: waiting for you first, then working, PR open, done. `--cancelled` also shows the hidden cancelled runs. `--json` gives the same list as data. It says "the chat stopped" only with evidence: Herdr sees no agent in the chat's tab, and the agent was seen running there or its own native session exists. Run `pdd workflow open ISSUE` to start it again. When the agent runs but every turn fails on its login or its usage limit, it says "the chat cannot work: the agent's login failed" or "the chat cannot work: usage limit until TIME", says how to start a new chat (`pdd workflow open ISSUE --new`), and lists the run as waiting for you. To find this, pdd reads only the chat screen and the end of the agent's own session file. It never types into the chat. While a launch is not confirmed, it says "the chat is starting, not confirmed". Failed or unconfirmed startup/open and unavailable Herdr status show waiting with recovery advice. At a gate it says that the agent writes the gate message until the chat has asked you |
 | `pdd workflow evidence ISSUE --summary FILE` | Record saved check JSON after verifying its selected source hash. Keeps completed steps, gates, approvals, chats and open PRs unchanged; no tests or external calls |
 | `pdd workflow evidence-associate ISSUE --workspace PATH --stage current\|pr1 --test PATH...` | Register the producer workspace, evidence stage and selected tests for this run. Run it from the owned run worktree. Give one or more test paths after `--test`. Registration runs no checks and changes no workflow progress. See the [association contract](../prompts/cli/workflow-runner.prompt.md#workspace-evidence-association) |
 | `pdd workflow view ISSUE` | Read-only review of the saved state, current gate, recorded approvals, pending decisions, PRs, check reports, Simulator links and current gate files. Never starts or resumes a chat, approves, or refreshes external state |
@@ -231,7 +398,7 @@ not delivered stays in the line until a later call sends it.
 | `pdd workflow changes ISSUE TEXT` | Send the text to the same chat. The chat revises. The gate stays open. Also use it to answer a question that the chat asked. At a gate, a plain approval such as "I approve" is not sent: pdd tells you to run `pdd workflow approve ISSUE` |
 | `pdd workflow cancel ISSUE` | Close the run's chat tabs. Keep the worktree and the branch. A new `pdd workflow run` on the issue then starts fresh |
 
-`pdd workflow open ISSUE` focuses or resumes the current area chat.
+`pdd workflow open ISSUE` focuses or resumes the current area chat. If its Herdr workspace was closed, status says so and gives this command. Both ordinary open and `--new` rebuild that workspace and area tab from the verified saved worktree. A live saved layout workspace ID that belongs to another checkout or repository stops recovery, even when a matching workspace exists. A saved ID absent from live inventory permits recovery. They resume the saved native session when available, or start a fresh chat with the area start message when no saved session can be resumed. A later `--new` on the open workspace starts a fresh session as usual. A missing worktree folder must be restored first. No new Git worktree is made.
 
 Ordinary open and exact-session resume use the chat's saved configuration folder. To select another existing Codex profile for one fresh current-area session, run `CODEX_HOME=/existing/work5 pdd workflow open ISSUE --new` from another terminal outside the agent session. A nonempty `CODEX_HOME`, including an inherited value, overrides the run's saved folder. Empty or unset values keep the saved selection. `~` expands to your home; relative paths resolve from this command's working directory. A missing folder or a regular file refuses before closing the owned chat. PDD selects the folder without checking its login or quota.
 
@@ -246,6 +413,9 @@ The fresh replacement keeps the run, worktree, progress, gates and approvals, an
 - With Claude Code, the first chat can ask once to trust the new worktree. `workflow run` prints a hint when your clone's folder is not trusted yet.
 - In a terminal, `approve` without --said asks y/N and shows the repo, the issue and its title. From an agent chat, `approve` without --said asks the agent to ask the person, then run with --said and their words.
 - Codex is the default agent. The chats start in full-access mode: Codex with `--dangerously-bypass-approvals-and-sandbox`, Claude Code with `--dangerously-skip-permissions`, Gemini with `--yolo`, Antigravity CLI (`--agent agy`) with `--dangerously-skip-permissions` and the run worktree trusted for that session only. An Antigravity chat also gets pdd's runs folder and worktrees folder with `--add-dir`, so it reads its start file with its own file tools. pdd finds a signed-in Antigravity CLI with `agy models`. Gemini CLI needs a paid Gemini API key, Vertex AI or Code Assist; with a free or Google One account, use `--agent agy`. PDD does not choose a model and does not change your agent's settings, sign-in or config.
+- Each chat uses the sign-in of the person who runs the pdd command that starts or resumes it, not the environment of the terminal that first started the Herdr server. pdd gives the chat your own login variables and removes the ones you do not have with `env -u`. Claude Code: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`. Codex: `OPENAI_API_KEY`, `CODEX_API_KEY`, `CODEX_ACCESS_TOKEN`, `OPENAI_FEDERATION_RULE_ID`, `OPENAI_IDENTITY_TOKEN_FILE`, `OPENAI_WORKLOAD_IDENTITY_CONTEXT`, `OPENAI_BASE_URL`. Gemini: `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_GENAI_USE_GCA`, `GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_CLOUD_PROJECT`. The base URLs are in these lists because the address goes with the key. Other variables, such as `AWS_*` for Bedrock, come from the Herdr server as they are.
+- pdd writes the login values to a one-time private file (mode 0600) in the run folder, inside your clone's `.git` folder. The chat deletes that file first, then reads the values and starts the agent. If it cannot delete the file, the agent does not start. So the values never show in the Herdr pane or in the shell history. When a file stays because pdd stopped before the chat ran, a start or status of the run deletes it only when it is at least five minutes old. Cancel deletes all login files, including newer ones.
+- When your environment has no login variable, the chat gets none and uses the login in its config folder. An example is an Autopilot Codex coordinator with `shell_environment_policy.inherit = "core"`. The Gemini start check runs only `gemini --version`, so it does not show whether that login works.
 - The first message of each chat gives the full path of this pdd. The agent uses it, so another `pdd` on its PATH does not matter.
 - A Codex chat also gets `-c shell_environment_policy.set.PDD_BIN=…` and `-c shell_environment_policy.set.PDD_AGENT_SESSION="1"` for this launch only, so its commands keep both values when the Codex profile sets `inherit = "core"` or `"none"`. pdd does not change Codex settings. Limit: a `shell_environment_policy.include_only` list that leaves out a name still removes it.
 - No command has a time limit. You can close the terminal at any time.
@@ -327,7 +497,7 @@ The agent runs these from the run's worktree. pdd finds the run from that folder
 |---|---|
 | `pdd`, `pdd --help`, `pdd -h`, `pdd help` | Show the commands and the full paths of the installed Prompting guide and RUNBOOK |
 | `pdd help prompting` | Show how to write a prompt, a Story and its test, which commands check them, and the full paths of the Prompting guide and RUNBOOK |
-| `pdd --version` | Print the version, `0.1.21`. When the PDD skills that your agent finds are older, also print the update command on stderr |
+| `pdd --version` | Print the version, `0.1.22`. When the PDD skills that your agent finds are older, also print the update command on stderr |
 | `pdd completion bash\|zsh` | Print a shell completion script. It does not change your shell files |
 | `pdd jobs` | List active slots and waiting interpreter jobs on this machine, including kind, PID, age and request IDs. Local and read-only; no repository, authentication or interpreter call |
 
@@ -413,7 +583,7 @@ approved interface set it to draft; review the preview and approve it as usual.
 |---|---|
 | `pdd product status [--json]` | Count Stories by part and slice from current saved checks; identify stale results and remote evidence from PRs. Makes no interpreter calls |
 | `pdd product next` | Show ready planned runs and their start commands; parallel starts are optional |
-| `pdd product start RUN [--no-run] [--agent codex\|claude\|gemini\|agy]` | Find or create the run's issue once, then start a normal feature run; `--no-run` only finds or creates the issue |
+| `pdd product start RUN [--no-run] [--agent codex\|claude\|gemini\|agy\|ENTRY]` | Find or create the run's issue once, then start a normal feature run; `--no-run` only finds or creates the issue. ENTRY is an entry name from `~/.config/pdd/agents.json` |
 
 See [Build a whole product](build-a-whole-product.md).
 

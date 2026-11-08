@@ -6,7 +6,11 @@
 
 This command is native-only for now: no executable Runtime interface is declared. Repository, selector, GitHub, clock, ledger and calculator boundaries need real bindings before a Runtime scenario can establish command behavior. Native tests must exercise the real command and the separate calculator and ledger contracts.
 
+The native gh runner records each `gh` call in the GitHub call ledger of the repository that the call names, through `nativeGithubCounter` of [GitHub calls](github-calls.prompt.md#ledger), with the purpose `other`. Counting never changes a call or its result; an injected `execFile` is not wrapped.
+
 ## Dependencies
+
+- [GitHub calls](github-calls.prompt.md): native generation and verification context for counting `gh` calls.
 
 [Metrics calculator](metrics-model.prompt.md): required for calculation in authoring, generation and native testing. [Metrics ledger](metrics-store.prompt.md): required for record import/export in authoring, generation and native testing.
 

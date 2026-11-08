@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: e8fea2858646b3ef40a9a3ec994004b2a1afba812b878ba7cc9f792f4659925b).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 7545c2e8cd819510317352e5108f757883d178f91ac9dc66aef4674dd56756ef).
 import {readEvidenceEligibility} from './workflow-runner.mjs';
 import {allRuns} from './workflow-runs.mjs';
 import {assessNativeEvidence, resultLines, usableResult} from './workflow-results.mjs';
@@ -1696,22 +1696,17 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
     criterion_texts: Object.fromEntries((Array.isArray(test.doc?.criteria) ? test.doc.criteria : []).filter(isObject).map(item => [item.id, item.text])),
     ...(discoveryRefusal(test) ? { state: 'refused', phase: 'local', refusals: [discoveryRefusal(test)], steps: [] } : {}) }));
   const local = row => row.phase === 'local';
-  const {readPrompt,interfaceSchemaProblems} = await import('./runtime-preflight.mjs');
+  const {promptSchemaRefusals} = await import('./runtime-preflight.mjs');
   const prompts = new Map();
-  const limitsFor = (path, seen) => {
+  const problemsFor = (path, seen) => {
     if (typeof path !== 'string' || seen.has(path)) return [];
-    seen.add(path);
-    if (!prompts.has(path)) prompts.set(path,readPrompt(root,found.visible,path));
-    const prompt = prompts.get(path);
-    if (!prompt.interface) return [];
-    const own = interfaceSchemaProblems(prompt.interface).filter(problem =>
-      ['invalid-limits','invalid-interface'].includes(problem.code) && problem.pointer.startsWith('/limits'))
-      .map(problem => ({code:problem.code,section:problem.pointer,path,message:`${path} ${problem.pointer} ${problem.rule}`,hint:problem.hint}));
-    return [...own,...(Array.isArray(prompt.interface.calls) ? prompt.interface.calls : []).flatMap(call => limitsFor(call?.target,seen))];
+    if (!prompts.has(path)) prompts.set(path, readPrompt(root, found.visible, path, found.workspace));
+    return promptSchemaRefusals(root, found, prompts.get(path), prompts, seen).filter(problem =>
+      ['invalid-limits', 'invalid-interface'].includes(problem.code) && problem.section.startsWith('/limits'));
   };
   const limitRows = rows.map(row => {
     const seen = new Set();
-    return local(row) ? row : {...row,refusals:row.steps.flatMap(step => limitsFor(step.entry_path,seen))};
+    return local(row) ? row : {...row,refusals:row.steps.flatMap(step => problemsFor(step.entry_path,seen))};
   });
   const limited = limitRows.some(row => !local(row) && row.refusals.length);
   if (limited || rows.every(local)) {
@@ -3448,7 +3443,10 @@ function caseSafe(p,path,{directory=false,create=false}={}){
 function caseSyncDir(p,path){const fd=p.files.open(path,constants.O_RDONLY|constants.O_DIRECTORY|constants.O_NOFOLLOW);try{p.files.sync(fd);}finally{p.files.close(fd);}}
 function caseRead(p,path){caseSafe(p,path);const fd=p.files.open(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);try{const st=p.files.stat(fd);if(!st.isFile()||st.size>32*1024*1024)throw Error('unsafe case record');return p.files.read(fd,'utf8');}finally{p.files.close(fd);}}
 function caseWrite(p,path,text,{exclusive=false}={}){
-  caseSafe(p,dirname(path),{directory:true,create:true});if(caseStat(p,path))caseSafe(p,path);
+  caseSafe(p,dirname(path),{directory:true,create:true});
+  // Exclusive link publication refuses every existing destination. A separate
+  // leaf probe races with normal owner release and cannot add write authority.
+  if(!exclusive&&caseStat(p,path))caseSafe(p,path);
   const temp=`${path}.${p.pid}.${p.nonce()}.tmp`;let fd,owned;
   try{fd=p.files.open(temp,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);p.files.write(fd,text);p.files.sync(fd);owned=p.files.stat(fd);p.files.close(fd);fd=undefined;
     if(exclusive)p.files.link(temp,path);else p.files.rename(temp,path);
@@ -3503,7 +3501,16 @@ export async function acquireCaseWriteOwnership({root,testPath,handoff,signal},p
       }
       if(!disappeared&&other.host===p.host&&Number.isSafeInteger(other.pid)&&p.isAlive(other.pid)===false){
         // A separate exclusive recovery guard serializes abandoned-owner removal.
-        const guard=path+'.recover';let owned=false;try{caseWrite(p,guard,JSON.stringify(owner),{exclusive:true});owned=true;const now=caseStat(p,path);if(now&&now.ino===before?.ino&&now.dev===before?.dev&&caseRead(p,path)===JSON.stringify(other))p.files.unlink(path);}catch(recovery){if(recovery.code!=='EEXIST')throw recovery;}finally{if(owned)p.files.unlink(guard);}continue;
+        const guard=path+'.recover';let owned=false;
+        try{caseWrite(p,guard,JSON.stringify(owner),{exclusive:true});owned=true;const now=caseStat(p,path);if(now&&now.ino===before?.ino&&now.dev===before?.dev&&caseRead(p,path)===JSON.stringify(other))p.files.unlink(path);}
+        catch(recovery){
+          if(recovery.code!=='EEXIST')throw recovery;
+          caseSafe(p,dirname(guard),{directory:true});
+          const present=caseStat(p,guard);
+          if(present&&(present.isSymbolicLink()||!present.isFile()))throw Error('unsafe or missing local path');
+        }finally{if(owned)p.files.unlink(guard);}
+        // Recovery contention must reach the same deadline and cancellable wait
+        // as a live owner, even if the guard disappeared after the collision.
       }
       if(p.now()-started>=maxWait)throw Error('another saver or editor owns this file; keep pending');
       await p.sleep(Math.min(25,maxWait),signal);

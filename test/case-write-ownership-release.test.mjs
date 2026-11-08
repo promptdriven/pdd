@@ -10,6 +10,29 @@ const nativeFiles={lstat:fs.lstatSync,read:fs.readFileSync,open:fs.openSync,writ
 const acquire=(f,ports={},signal)=>acquireCaseWriteOwnership({root:f.root,testPath:f.second,handoff:closed(f.second),signal},{env:f.env,...ports});
 const lockPath=f=>join(f.state,'case-import',fs.readdirSync(join(f.state,'case-import')).find(name=>name.endsWith('.lock')));
 
+test('owner release during the exclusive-create probe lets the next saver publish once',async t=>{
+  const f=fixture(t),saved=f.saved(),other=read(f.root,f.test);
+  const id=pendingId(saveDoorCase(f.root,saved,{env:f.env}));assert.ok(id);
+  const first=await acquire(f);t.after(()=>first.release());
+  const path=lockPath(f),receipt=join(f.state,'case-import',id.replace('.', '/')+'.received.json');
+  const receiptBytes=fs.readFileSync(receipt,'utf8');let released=false;
+  const release=()=>{first.release();released=true;};
+  const files={...nativeFiles,
+    lstat(target){const stat=fs.lstatSync(target);if(target===path&&!released)release();return stat;},
+    link(from,to){if(to===path&&!released)release();return fs.linkSync(from,to);}
+  };
+  // A supported release after the leaf snapshot must not turn absence into an
+  // unsafe-path refusal. An atomic creator can instead reach link directly.
+  let second;
+  await assert.doesNotReject(async()=>{second=await acquire(f,{files,maxWaitMs:500});});t.after(()=>second.release());
+  assert.equal(released,true);
+  assert.equal((await applyPendingCase({root:f.root,pendingId:id,writeOwnership:second},{env:f.env})).state,'committed');
+  assert.equal((await applyPendingCase({root:f.root,pendingId:id,writeOwnership:second},{env:f.env})).duplicate,true);
+  assert.equal(get(f.root,f.second).steps.filter(step=>step.step_id==='case-a').length,1);
+  assert.deepEqual(get(f.root,f.second).steps[0],f.doc.steps[0]);
+  assert.equal(read(f.root,f.test),other);assert.equal(fs.readFileSync(receipt,'utf8'),receiptBytes);
+});
+
 // These ports order real native operations. They neither manufacture EEXIST nor
 // remove a lock directly: only the existing owner's supported release does that.
 for(const window of ['after-collision','before-safe-read','before-open']){

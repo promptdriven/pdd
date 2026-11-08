@@ -115,6 +115,7 @@ async function launcherHarness(f) {
     selectAgent: async () => ({id: 'offline-fixture', kind: 'codex', command: 'offline-fixture', env: {}}),
     pathDiagnostic: () => [],
     readRunProgress: async () => [],
+    allocationCheck: async () => ({ state: 'ready', message: '' }),
     reconcileDependencyIntake: (args, intakePorts) => reconcileDependencyIntake(args, {
       ...intakePorts,
       snapshots: {read: async () => ({snapshot: coordinatorSnapshot})},

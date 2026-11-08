@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, utimesSync, existsSync, realpathSync, renameSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, utimesSync, existsSync, realpathSync, renameSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -13,7 +13,7 @@ import { codexConfigs, tomlBasicString } from './helpers/codex-config-args.mjs';
 const root = resolve('.');
 const capture = () => ({ text: '', write(s) { this.text += s; } });
 async function fixture(t, options = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'pdd-autopilot-'));
+  const dir = mkdtempSync(join(tmpdir(), options.tempPrefix ?? 'pdd-autopilot-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const cwd = join(dir, options.cwdName ?? 'repo'), home = join(dir, 'home');
   mkdirSync(cwd); mkdirSync(home);
@@ -21,6 +21,8 @@ async function fixture(t, options = {}) {
   const f = { dir, cwd, home, time: Date.parse('2026-11-04T00:00:00Z'), polls: [], prompts: [], runs: [], timers: [], comments: [], ack: [], issues: [], etag: '"one"', active: false };
   f.ports = {
     stateRoot: join(home, 'state'), now: () => f.time,
+    // These fakes stand for a checkout where pdd workflows can start (#3050).
+    allocationCheck: async () => ({ state: 'ready', message: '' }),
     readRunProgress: async () => f.runProgress ?? [],
     warn: text => { (f.warnings ??= []).push(text); },
     selectAgent: async () => ({ id: 'codex', kind: 'codex', command: 'codex', env: {} }),
@@ -352,7 +354,7 @@ test('two machine launchers offer the same issue to the skill without making a c
 
 test('native Linux and macOS user timers pin Node, script, state and environment without a shell', async t => {
   for (const platform of ['linux', 'darwin']) {
-    const f = await fixture(t); delete f.ports.timer; f.ports.platform = platform; f.ports.uid = 123;
+    const f = await fixture(t, {tempPrefix: 'pdd-autopilot-sh-'}); delete f.ports.timer; f.ports.platform = platform; f.ports.uid = 123;
     // Keep both platform branches independent of the host's XDG paths and user services.
     const env = { HOME: f.home, PATH: '/fixture/bin', XDG_CONFIG_HOME: join(f.home, '.config') };
     const run = f.ports.run, serviceCalls = [];
@@ -374,7 +376,8 @@ test('native Linux and macOS user timers pin Node, script, state and environment
       assert.ok(text.includes(process.execPath)); assert.ok(text.includes('/src/autopilot-launcher.mjs'));
       assert.ok(text.includes(f.stateFile())); assert.match(text, /Environment="PATH=/);
       assert.match(text, /^KillMode=process$/m);
-      assert.doesNotMatch(text, /\/bin\/.*sh|TOKEN|API_KEY/);
+      assert.doesNotMatch(text, /^ExecStart="?(?:[^"\s]*\/)?(?:sh|bash|dash|zsh|ksh|fish)"?(?:\s|$)/m);
+      assert.doesNotMatch(text, /TOKEN|API_KEY/);
       assert.match(readFileSync(join(folder, service.replace('.service', '.timer')), 'utf8'), /OnActiveSec=30min/);
       assert.deepEqual(serviceCalls.filter(([command]) => command === 'systemctl').map(([, args]) => args), [
         ['--user', 'daemon-reload'], ['--user', 'enable', service.replace('.service', '.timer')],
@@ -416,7 +419,8 @@ test('native HTTP tick uses ETags and revalidates cached later pages, including 
     return run(command, args, opts);
   };
   await f.invoke('start'); assert.match(f.prompts[0], /"number":31,/);
-  phase = 1; await f.tick();
+  // Between full reads a tick reads only changed issues (#3046); the full read 6 hours later revalidates every page.
+  phase = 1; f.time += 6 * 60 * 60 * 1000; await f.tick();
   assert.equal(f.prompts.length, 1); assert.equal(f.state().cachedIssues.length, 0);
   assert.ok(queries[2].includes('If-None-Match: "first"'));
   assert.ok(queries[3].includes('If-None-Match: "second"'));
@@ -693,7 +697,7 @@ test('a forbidden permission lookup with remaining quota defers only that issue'
   f.issues = [issue(75, { user: { login: 'writer' } }), issue(76)];
   const run = f.ports.run;
   f.ports.run = async (cmd, args, opts) => args.some(x => String(x).endsWith('/writer/permission'))
-    ? { code: 1, stderr: '', stdout: `HTTP/2.0 403 Forbidden\r\nx-ratelimit-remaining: 499\r\nx-ratelimit-reset: ${f.time / 1000 + 3600}\r\n\r\n{"message":"Resource not accessible"}` } : run(cmd, args, opts);
+    ? { code: 1, stderr: '', stdout: `HTTP/2.0 403 Forbidden\r\nx-ratelimit-remaining: 1499\r\nx-ratelimit-reset: ${f.time / 1000 + 3600}\r\n\r\n{"message":"Resource not accessible"}` } : run(cmd, args, opts);
   const result = await f.tick();
   assert.equal(f.state().retryAt, undefined); assert.match(result.message, /75/); assert.match(f.warnings[0], /75/);
   assert.match(f.prompts.at(-1), /"number":76,/); assert.doesNotMatch(f.prompts.at(-1), /"number":75,/);
@@ -842,7 +846,7 @@ test('a forbidden issue query with quota remaining has no rate-limit cooldown', 
   const f = await fixture(t); await f.invoke('start'); delete f.ports.queryIssues;
   const run = f.ports.run;
   f.ports.run = async (cmd, args, opts) => cmd === 'gh' && args.some(x => String(x).includes('/issues?'))
-    ? { code: 1, stderr: '', stdout: `HTTP/2.0 403 Forbidden\r\nx-ratelimit-remaining: 499\r\nx-ratelimit-reset: ${f.time / 1000 + 3600}\r\n\r\n{"message":"Resource not accessible"}` } : run(cmd, args, opts);
+    ? { code: 1, stderr: '', stdout: `HTTP/2.0 403 Forbidden\r\nx-ratelimit-remaining: 1499\r\nx-ratelimit-reset: ${f.time / 1000 + 3600}\r\n\r\n{"message":"Resource not accessible"}` } : run(cmd, args, opts);
   await assert.rejects(f.tick(), /GitHub issue check failed/);
   assert.equal(f.state().retryAt, undefined);
 });
@@ -1060,11 +1064,16 @@ test('a claim with no readable activity time never invents a due event', async t
 // launcher makes: each workspace holds one pane, and `pane close` ends that pane, as Herdr 0.9.1 does
 // for the only pane of a workspace. `pane run` runs the launch text in /bin/sh with a fake codex
 // that records the arguments it gets. No live Herdr, agent, GitHub or model call.
+// With `shellStartup`, a `cd` in the person's shell startup file (issue 2903) puts each new pane's shell in
+// `f.elsewhere`. Then `pane run` runs the line in that shell's folder, the shell keeps the folder that the line
+// leaves it in, and Herdr reports the shell's folder as `cwd` and the agent's folder as `foreground_cwd`, as Herdr 0.9.1 does.
 async function relaunchFixture(t, options = {}) {
   const f = await fixture(t, options);
-  const bin = join(f.dir, 'bin'), record = join(f.dir, 'codex.jsonl');
+  const bin = join(f.dir, 'bin'), record = join(f.dir, 'codex.jsonl'), folders = join(f.dir, 'codex-cwd.txt');
   mkdirSync(bin);
-  writeFileSync(join(bin, 'codex'), `#!${process.execPath}\nrequire('node:fs').appendFileSync(${JSON.stringify(record)}, JSON.stringify(process.argv.slice(2))+'\\n');\n`, { mode: 0o755 });
+  writeFileSync(join(bin, 'codex'), `#!${process.execPath}\nconst fs = require('node:fs'); fs.appendFileSync(${JSON.stringify(record)}, JSON.stringify(process.argv.slice(2))+'\\n'); fs.appendFileSync(${JSON.stringify(folders)}, process.cwd()+'\\n');\n`, { mode: 0o755 });
+  const lines = file => existsSync(file) ? readFileSync(file, 'utf8').trim().split('\n') : [];
+  if (options.shellStartup) { f.elsewhere = join(f.dir, 'elsewhere'); mkdirSync(f.elsewhere); }
   f.env = { HOME: f.home, PATH: `${bin}:/usr/bin:/bin` };
   f.invoke = async (command, extra = {}) => f.module.runAutopilotLauncher({ command, cwd: f.cwd, env: f.env, packageRoot: root, issues: [], ...extra }, f.ports);
   const panes = new Map(); let workspaces = 0;
@@ -1077,19 +1086,25 @@ async function relaunchFixture(t, options = {}) {
     const [group, action, id] = args;
     if (group === 'status') return { running: true };
     if (group === 'workspace' && action === 'create') {
-      const n = ++workspaces, pane = { pane_id: `w${n}:p1`, workspace_id: `w${n}`, tab_id: `w${n}:t1`, terminal_id: `term${n}`, session: `session-${n}`, agent: false, closed: false };
+      const n = ++workspaces, pane = { pane_id: `w${n}:p1`, workspace_id: `w${n}`, tab_id: `w${n}:t1`, terminal_id: `term${n}`, session: `session-${n}`, agent: false, closed: false, shell: f.elsewhere ?? null, agentCwd: null };
       panes.set(pane.pane_id, pane);
       return { id: 'cli:workspace:create', result: { type: 'workspace_created', workspace: { workspace_id: pane.workspace_id }, root_pane: { pane_id: pane.pane_id } } };
     }
     const pane = panes.get(id);
     if (!pane || pane.closed) throw missing(group === 'agent' ? 'agent_not_found' : 'pane_not_found', id);
-    const live = { pane_id: pane.pane_id, workspace_id: pane.workspace_id, cwd: f.cwd, foreground_cwd: f.cwd, tab_id: pane.tab_id, terminal_id: pane.terminal_id, agent: 'codex', agent_status: f.agentStatus ?? 'idle', agent_session: pane.session };
+    const live = { pane_id: pane.pane_id, workspace_id: pane.workspace_id, cwd: pane.shell ?? f.cwd, foreground_cwd: pane.agentCwd ?? pane.shell ?? f.cwd, tab_id: pane.tab_id, terminal_id: pane.terminal_id, agent: 'codex', agent_status: f.agentStatus ?? 'idle', agent_session: pane.session };
     if (group === 'pane' && action === 'get') return { result: { type: 'pane_info', pane: live } };
     if (group === 'agent' && action === 'get') { if (!pane.agent) throw missing('agent_not_found', id); return { result: { type: 'agent_info', agent: live } }; }
     if (group === 'pane' && action === 'run') {
-      const before = existsSync(record) ? readFileSync(record, 'utf8').trim().split('\n').length : 0;
-      execFileSync('/bin/sh', ['-c', args[3]], { cwd: f.cwd, env: { PATH: '/usr/bin:/bin', HOME: f.home }, timeout: 10000 });
-      pane.agent = true; f.launches.push({ pane: id, argv: JSON.parse(readFileSync(record, 'utf8').trim().split('\n')[before]) });
+      const before = lines(record).length;
+      if (pane.shell) {
+        const pwd = join(f.dir, 'shell-pwd.txt');
+        execFileSync('/bin/sh', ['-c', `${args[3]}\nprintf '%s' "$PWD" > ${JSON.stringify(pwd)}`], { cwd: pane.shell, env: { PATH: '/usr/bin:/bin', HOME: f.home }, timeout: 10000 });
+        pane.shell = readFileSync(pwd, 'utf8');
+        if (lines(record).length === before) return {};
+        pane.agentCwd = lines(folders)[before];
+      } else execFileSync('/bin/sh', ['-c', args[3]], { cwd: f.cwd, env: { PATH: '/usr/bin:/bin', HOME: f.home }, timeout: 10000 });
+      pane.agent = true; f.launches.push({ pane: id, argv: JSON.parse(lines(record)[before]) });
       return {};
     }
     if (group === 'pane' && action === 'close') { pane.closed = true; f.closed.push(id); return { id: 'cli:pane:close', result: { type: 'ok' } }; }
@@ -1531,4 +1546,80 @@ test('relaunch: a second relaunch for the same fingerprint is held; the current 
   assert.equal(f.state().ownerLaunch.fingerprint, f.module.autopilotLaunchFingerprint(f.state()));
   assert.equal(f.state().coordinatorId, original.coordinatorId);
   assert.doesNotMatch((await f.invoke('status')).message, /relaunch (pending|held)/);
+});
+
+// Issue 2903: a `cd` in the person's shell startup file moves each new Herdr pane's shell out of the repository.
+test('2903: with a shell startup cd, the coordinator chat starts in the repository, gets its work and status sees it', async t => {
+  const f = await relaunchFixture(t, { shellStartup: true, cwdName: "my repo 'q' $HOME" });
+  f.issues = [issue(64)];
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  const [launch] = herdrSince(f, 0, 'pane', 'run');
+  assert.match(launch[3], /^cd '.+' && env /, 'the launch line starts with its own cd');
+  assert.equal(f.panes.get('w1:p1').agentCwd, realpathSync(f.cwd), 'the coordinator agent runs in the repository, not in the shell startup folder');
+  assert.equal(f.delivered.at(-1), 'w1:p1'); assert.match(f.prompts.at(-1), /"number":64,/);
+  assert.match((await f.invoke('status')).message, /coordinator idle/);
+});
+
+test('2903: a coordinator chat that an older launch started in the shell startup folder is replaced at an idle moment', async t => {
+  const f = await relaunchFixture(t, { shellStartup: true });
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  const original = f.state();
+  // An older package typed no cd: its chat runs in the shell startup folder, and it saved no launch fingerprint.
+  Object.assign(f.panes.get('w1:p1'), { shell: f.elsewhere, agentCwd: realpathSync(f.elsewhere) });
+  f.saveState(state => { delete state.ownerLaunch.fingerprint; });
+  f.status = 304; f.time += 60 * 1000; await f.tick();
+  assert.deepEqual(f.closed, ['w1:p1'], 'the relaunch closes the saved chat although its folder moved');
+  const after = f.state();
+  assert.equal(after.paneId, 'w2:p1'); assert.equal(after.coordinatorId, original.coordinatorId);
+  assert.equal(f.panes.get('w2:p1').agentCwd, realpathSync(f.cwd), 'the fresh chat runs in the repository');
+  assert.match((await f.invoke('status')).message, /coordinator idle/);
+  // The cd is part of the launch, so its folder is in the fingerprint for every provider.
+  const fingerprint = cwd => f.module.autopilotLaunchFingerprint({ ...after, cwd, agent: { ...after.agent, kind: 'claude' } });
+  assert.notEqual(fingerprint(f.cwd), fingerprint(f.elsewhere));
+});
+
+test('2903: with a shell startup cd, uncertain-send recovery checks the repository in its saved path and prompts the saved chat', async t => {
+  const f = await relaunchFixture(t, { shellStartup: true });
+  const real = f.ports.herdr, run = f.ports.run, repoViews = [];
+  // Recovery also reads the saved workspace.
+  f.ports.herdr = async args => args[0] === 'workspace' && args[1] === 'get' ? { result: { type: 'workspace_info', workspace: { workspace_id: args[2] } } } : real(args);
+  f.ports.run = async (command, args, options) => { if (command === 'gh' && args[0] === 'repo') repoViews.push(options?.cwd); return run(command, args, options); };
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  // Herdr names the repository with another spelling (a symlink): the folder matches, but only the saved path is this repository's path.
+  const link = join(f.dir, 'repo link'); symlinkSync(f.cwd, link);
+  Object.assign(f.panes.get('w1:p1'), { shell: link, agentCwd: link });
+  f.saveState(state => { state.deliveryIntent = { version: 2, paneId: state.paneId, workspaceId: state.workspaceId, at: f.time - 1000, fingerprint: null, payloadDigest: 'earlier' }; });
+  const calls = f.herdrCalls.length, views = repoViews.length;
+  f.issues = [issue(96)]; f.time += 60 * 1000; await f.tick();
+  assert.deepEqual(herdrSince(f, calls, 'agent', 'prompt').map(args => args[2]), ['w1:p1'], f.warnings?.join('\n'));
+  assert.match(f.prompts.at(-1), /fresh current-state reconciliation/);
+  assert.ok(repoViews.length > views && repoViews.slice(views).every(cwd => cwd === f.cwd), `gh repo view runs in the saved path, not in ${link}: ${JSON.stringify(repoViews)}`);
+});
+
+test('2903: the relaunch close compares the folder when no terminal id is saved, and trusts a matching saved terminal id', async t => {
+  // An old chat whose launch saved no terminal id, and the next tick wants to relaunch it.
+  const unproved = async (folder = null) => {
+    const f = await relaunchFixture(t, { shellStartup: true });
+    assert.equal((await f.invoke('start')).exitCode, 0);
+    if (folder) { const path = folder(f); Object.assign(f.panes.get('w1:p1'), { shell: path, agentCwd: path }); }
+    f.saveState(state => { delete state.ownerLaunch.fingerprint; state.ownerLaunch.terminalId = null; });
+    f.status = 304; f.time += 60 * 1000; await f.tick();
+    return f;
+  };
+  // The saved pane id now names an idle chat of another repository in the shared session: it stays open.
+  const other = await unproved(f => { const path = join(f.dir, 'other repository'); mkdirSync(path); return path; });
+  assert.deepEqual(other.closed, [], 'a chat in another repository folder is never closed');
+  assert.equal(other.launches.length, 1, 'no relaunch');
+  assert.equal(other.state().paneId, 'w1:p1');
+  // Control: the same saved state with the chat in this repository is closed and relaunched.
+  const same = await unproved();
+  assert.deepEqual(same.closed, ['w1:p1']); assert.equal(same.state().paneId, 'w2:p1');
+  // A saved terminal id that Herdr still reports proves the chat: it is closed although its shell moved.
+  const f = await relaunchFixture(t, { shellStartup: true });
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  assert.equal(f.state().ownerLaunch.terminalId, 'term1');
+  Object.assign(f.panes.get('w1:p1'), { shell: f.elsewhere, agentCwd: realpathSync(f.elsewhere) });
+  f.saveState(state => { delete state.ownerLaunch.fingerprint; });
+  f.status = 304; f.time += 60 * 1000; await f.tick();
+  assert.deepEqual(f.closed, ['w1:p1']); assert.equal(f.state().paneId, 'w2:p1');
 });

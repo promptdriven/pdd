@@ -1,6 +1,6 @@
 # PDD usage guide
 
-This guide is for people who install pdd 0.1.21 from `promptdriven/pdd`. Each section has commands that you can copy.
+This guide is for people who install pdd 0.1.22 from `promptdriven/pdd`. Each section has commands that you can copy.
 
 > [!WARNING]
 > **Agents run with full access.** PDD starts Codex with `--dangerously-bypass-approvals-and-sandbox` and Claude Code with `--dangerously-skip-permissions`. The agents do not stop to ask for approval. They can read, change and delete files and run commands as your user. Use PDD only in projects and on machines where you accept this.
@@ -76,7 +76,7 @@ You need the pdd command only for runs on GitHub issues ([section 6](#6-run-a-wo
 ```sh
 npm install -g github:promptdriven/pdd
 "$(npm prefix -g)/bin/pdd" setup  # reports PATH selection and keeps other installs
-pdd --version   # prints 0.1.21
+pdd --version   # prints 0.1.22
 which -a pdd    # the first line must be in "$(npm prefix -g)/bin"
 ```
 
@@ -99,7 +99,7 @@ See all of them:
 
 ```sh
 which -a pdd
-pdd --version   # this pdd prints 0.1.21
+pdd --version   # this pdd prints 0.1.22
 ```
 
 If you choose to remove the Python installation, use the tool that installed it:
@@ -158,7 +158,7 @@ Where the skills go:
 
 Each copy that pdd makes has a marker file, `.pdd-skill.json`. After you update the pdd command, `pdd setup` replaces an older copy that has this marker. It never touches a copy without the marker, or a symlink, for example an `npx skills` install.
 
-`npx skills add promptdriven/pdd --skill pdd-prompting` installs one skill. `npx skills list` shows what you have. The `pdd-skills:` line at the top of each `SKILL.md` shows the version of that skill, for example `pdd-skills: 0.1.21`.
+`npx skills add promptdriven/pdd --skill pdd-prompting` installs one skill. `npx skills list` shows what you have. The `pdd-skills:` line at the top of each `SKILL.md` shows the version of that skill, for example `pdd-skills: 0.1.22`.
 
 Do not edit the installed skill folders: an update replaces your edits. To change a workflow, [make your own](#8-make-your-own-workflow).
 
@@ -180,7 +180,7 @@ If you installed the pdd command, `pdd setup` in the top folder of the repo does
 3. They keep all other text. A second run changes nothing. They never paste the guide.
 4. In a Git repo, they add the line `.pdd/` to the root `.gitignore` when no line there ignores that folder. `pdd test` keeps its local cache in `.pdd/`. They only append that line. When a `!` line keeps the folder or a path in it in Git (such as `!.pdd/config.json`), they change nothing and tell you.
 
-To turn on Autopilot for the repo, run `pdd autopilot observe` or `pdd autopilot auto`. Autopilot workers read `pdd.json` on the default branch on GitHub, so these commands also update `pdd.json` there, or open a PR when the branch needs one. Each command changes only its own part of the copy on GitHub. `pdd setup` saves a first mode only in your checkout. See [Repository Autopilot settings](cli.md#repository-autopilot-settings).
+Run Autopilot commands inside the repo folder. Each repo has its own Autopilot on each machine. To turn on Autopilot for the repo, run `pdd autopilot observe` or `pdd autopilot auto`. Autopilot workers read `pdd.json` on the default branch on GitHub, so these commands also update `pdd.json` there, or open a PR when the branch needs one. Each command changes only its own part of the copy on GitHub. `pdd setup` saves a first mode only in your checkout. See [Repository Autopilot settings](cli.md#repository-autopilot-settings).
 
 Then open Codex or Claude Code as usual, in your project, and call a skill. In Codex:
 
@@ -229,7 +229,7 @@ git fetch origin
 pdd workflow run small-change 42
 ```
 
-ISSUE is the issue number (`42`). Add `--agent claude` to use Claude Code for the whole run. NAME is `small-change`, `bug`, `feature` or the name of [your own workflow](#8-make-your-own-workflow).
+ISSUE is the issue number (`42`). Add `--agent claude` to use Claude Code for the whole run, or an entry name such as `--agent "Claude (account-a)"` for one of [your own launchers](#many-accounts). NAME is `small-change`, `bug`, `feature` or the name of [your own workflow](#8-make-your-own-workflow).
 
 To build on an isolated topic branch, put that base on `origin`, then name its branch (without an `origin/` or `refs/` prefix):
 
@@ -243,8 +243,8 @@ The command returns at once. It prints where the run is and the commands to open
 
 ### 6.3 What happens
 
-1. pdd reads the issue with `gh`. It makes a new branch (for example `pdd/small-change-42-1a2b3c4d`) and a new Git worktree in the folder `your-clone.pdd-worktrees/` next to your clone. It makes the run folder `your-clone/.git/pdd/runs/42/`.
-2. pdd opens the first chat in Herdr, in full-access mode. The Herdr session is `pdd`. Each verified common Git directory has its own repository workspace. It uses the free repository name, then `owner/repo`, then a checkout-qualified label when another clone holds those labels. Each run has a workspace with the repo name, the issue and the workflow, for example `my-app#42 small-change`, with one tab per area. pdd does not touch your default Herdr session.
+1. pdd reads the issue with `gh`. It makes a new branch (for example `pdd/small-change-42-1a2b3c4d`) and a new Git worktree in the folder `your-clone.pdd-worktrees/` next to your clone. It makes the run folder `your-clone/.git/pdd/runs/42/`. From a linked worktree or with a bare repository, the worktree folder is beside the primary repository, or beside the project folder that holds a bare repository, and the run folder is in the common Git directory (`git rev-parse --git-common-dir`). [How a run works](workflows.md#how-a-run-works) has the table.
+2. pdd opens the first chat in Herdr, in full-access mode. The Herdr session is `pdd`. Each verified common Git directory has its own repository workspace. It uses the free repository name, then `owner/repo`, then a checkout-qualified label when another clone holds those labels. Each run has a workspace with the repo name, the issue and the workflow, for example `my-app#42 small-change`, with one tab per area. Each chat starts with a `cd` to the run worktree, so a `cd` in your shell startup file (for example `~/.zshrc`) does not change where the agent works. pdd does not touch your default Herdr session.
 3. The chat follows the workflow skill. It gives each step to a fresh subagent. The subagent gets its full brief at once, with file paths, not the chat history.
 4. After each step, the agent tells pdd that the step is done. The step notes go into the run folder.
 5. At a gate, the chat shows you the result and asks you. Then it stops and waits. It waits as long as you need.
@@ -386,6 +386,8 @@ For extra files, add `pdd-source.json` at the repository root:
 
 `include` is the only key. Entries are exact repository-relative file paths, not folders or patterns, and Git must show them. The same safety and size limits apply. Included prompts and Markdown files bring their declared dependencies too. The config is local selection metadata and is sent only when explicitly included. A simulation keeps the original test paths: Save as test appends cases to the authored test file that launched the simulation, even when a Story has several test files. Reopening that simulation keeps the same target. If that test disappears or changes Story, pdd reports the conflict and leaves the other files alone.
 
+Case saving recovers an abandoned ownership lock only after confirming that its owner ended. A symlink or non-regular recovery guard refuses the save and leaves the guard, lock and authored test unchanged. Contention with another recovery attempt uses the same finite wait and cancellation limits as other ownership waits; an unresolved save stays pending.
+
 ```sh
 pdd test --fill-hash          # fill the hash of draft interfaces; sends nothing
 pdd test --files              # exact upload manifest and byte sizes for all Stories; offline
@@ -492,7 +494,7 @@ git worktree remove ../your-clone.pdd-worktrees/FOLDER
 git branch -D pdd/small-change-42-1a2b3c4d          # the run's local branch
 ```
 
-Do not remove a worktree while its run goes on. The run folder stays in `.git/pdd/runs/N` in your clone.
+For a linked worktree or a bare repository, the run worktrees folder is in the table in [How a run works](workflows.md#how-a-run-works). Do not remove a worktree while its run goes on. The run folder stays in `pdd/runs/N` in the common Git directory (`.git/pdd/runs/N` in a normal clone).
 
 All runs share the Herdr session `pdd`. `cancel` closes the tabs of a run. To remove the whole session when no run uses it:
 
@@ -561,7 +563,7 @@ This is a pre-release. These limits are known today:
 
 | You see | What to do |
 |---|---|
-| `pdd --version` does not print `0.1.21` | Another `pdd` comes first. See [section 3](#3-if-you-have-the-old-python-pdd). |
+| `pdd --version` does not print `0.1.22` | Another `pdd` comes first. See [section 3](#3-if-you-have-the-old-python-pdd). |
 | pdd says that `codex` or `claude` is not on PATH | Install the agent and sign in, or use the other one with `--agent`. |
 | A message about `git rev-parse --show-toplevel` | You are not in a Git clone. `cd` into your clone. |
 | A message about `refs/remotes/origin/...` or a missing base | Run `git fetch origin`. |
@@ -572,7 +574,9 @@ This is a pre-release. These limits are known today:
 | `pdd workflow run` prints a hint about Claude Code trust | Run `pdd workflow open N` and answer the trust question in the chat. |
 | `pdd workflow run` says that `CODEX_HOME` or `CLAUDE_CONFIG_DIR` does not exist | Set it to a folder that exists, for example `CODEX_HOME=$HOME/.codex`, and run the command again. |
 | Chat startup/open is not confirmed (`server_unavailable`) | Herdr could not handle the request. PDD keeps the same worktree, base and run and reports waiting. After Herdr is available, use `pdd workflow open N` for that run. A lost launch reply keeps the original tab identity; if no live agent can be confirmed there, inspect that tab before starting another agent. |
+| `herdr_layout_identity_changed` | A tab or pane of the run is not the one pdd saved, for example after you closed or split the run's first tab. The message names the workspace and what changed. The next lines show the saved and the live Herdr IDs. Look at that workspace with `herdr session attach pdd`, undo the change, then run `pdd workflow open N` again. A shell that changes folder at startup does not cause this message. |
 | `status` says "the chat stopped" | The agent ran in the chat, and now Herdr sees no agent there. Run `pdd workflow open N` to start it again. If it stops again at once, read the error in the chat. |
+| `status` says "the chat cannot work" | The agent runs, but its turns fail. "The agent's login failed": sign the agent in again (Claude: `/login` in the chat, or fix its API key; Codex: `codex login` with the run's `CODEX_HOME`), then run `pdd workflow open N --new`. "Usage limit until TIME": after that time, run `pdd workflow open N` and ask the chat to go on, or start a new chat with `pdd workflow open N --new`. When pdd can tell that TIME has passed, status says "the chat stopped at its usage limit" instead. For Codex, `CODEX_HOME=<folder> pdd workflow open N --new` starts it on another account. pdd never answers the limit menu for you. |
 | `open` or `status` says "starting, not confirmed" | pdd started the chat, but Herdr shows no agent in its tab and the launch reply was not confirmed. Look at the tab in Herdr session pdd, then run `pdd workflow open N` again. pdd sends no second launch. |
 | `approve` says that pdd sees an agent environment | Your terminal runs inside Claude Code or Codex. Run `pdd workflow approve N` in a normal terminal, or answer the gate question in the chat. |
 | The agent must ask for your approval | Reply after the agent shows the gate. It records your reply with the [safe stdin form](cli.md#record-a-chat-approval). You can also approve at a normal terminal. |
@@ -624,6 +628,7 @@ pdd simulate my-story
 pdd simulate my-story --agent claude
 ```
 
+<a id="many-accounts"></a>
 Many accounts? List your agents in `~/.config/pdd/agents.json`:
 
 ```json
@@ -637,6 +642,27 @@ Many accounts? List your agents in `~/.config/pdd/agents.json`:
 ```
 
 Use `pdd simulate my-story --agent "Codex (account-b)"`, or choose a name in the picker. Each launcher has its own state, and the choice is remembered for the project. Detected defaults appear after your entries; set `"include_defaults": false` to show only your list. Only your user file supplies custom launchers; repository `.pdd/agents.json` files are ignored. `kind` chooses the read-only Codex, Claude or Gemini adapter. `command` is a program name or path, launched without a shell; leading `~` is expanded in paths and env values. Env overrides apply only to that launcher. Commands and env stay on your computer; only names and states reach the picker. Invalid configuration stops with a plain error.
+
+The same names work for workflow runs:
+
+```sh
+pdd workflow run feature 42 --agent "Claude (account-a)"
+pdd product start phone-1 --agent "Claude (account-a)"
+```
+
+The sign-in check at start runs that entry's command with `auth status` (Codex: `login status`) and the entry's env. Every chat of the run, also `pdd workflow open` and `--new`, starts that command with the normal agent arguments. The run saves the entry's name, kind and command. The run record keeps only the names of the entry's env variables, never their values. At each chat start, pdd reads the values again from `agents.json` and writes them to a one-time private file (mode 0600) in the run folder, inside your clone's `.git` folder. The chat deletes that file before the agent starts. If it cannot delete the file, the agent does not start. If pdd stops before the chat runs, a start or status of the run deletes the file only when it is at least five minutes old. Cancel deletes all login files, including newer ones. Do not set a name in `env` that the shell controls, such as `UID`, `PPID` or `SHLVL`: pdd refuses such an entry and names the variable. If you remove or rename the entry, the run stops with a clear message before it starts a chat; add the entry again. The built-in names `codex`, `claude`, `gemini` and `agy` always mean the built-in agents, so do not give an entry one of these names. An unknown name stops with a list of your entry names.
+
+`command` must be a file that can run, not a shell function or an alias, because pdd starts it without your shell startup files. A small script works. For example, `~/bin/claude-account-a` (run `chmod +x` on it):
+
+```sh
+#!/bin/sh
+unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
+CLAUDE_CODE_OAUTH_TOKEN="$(cat ~/.secrets/claude-account-a.token)"
+export CLAUDE_CODE_OAUTH_TOKEN
+exec claude "$@"
+```
+
+Each chat also gets the login variables of the person who runs the pdd command, not the ones of the terminal that first started the Herdr session `pdd`. See [the CLI reference](cli.md).
 
 The picker shows installation and sign-in state. You can switch agents; pdd remembers the choice for this project. A usage limit or sign-in error is shown in the chat without sending your message to another agent automatically. Codex and Claude use fresh read-only turns with your default model and login. Gemini CLI 0.66.0 uses a verified configuration with tools disabled; other Gemini versions are refused until their safety controls are verified. When its sign-in cannot be checked cheaply, the picker says it will be checked on the first message.
 

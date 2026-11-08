@@ -36,11 +36,11 @@ Help forms and completion name only the `NAMES` words.
 
 ## Autopilot routes
 
-Catalog four local routes before the product routes: `autopilot.start` (`autopilot start`, local `autopilot-start`, no operands, optional text --runs and --resume-custody); `autopilot.stop` and `autopilot.status` (matching prefixes/dispositions, no operands/options); `autopilot.add` (`autopilot add`, local `autopilot-add`, required repeated issue operands). Forms and descriptions:
+Catalog four local routes before the product routes: `autopilot.start` (`autopilot start`, local `autopilot-start`, no operands, optional text --runs and --resume-custody); `autopilot.stop` (matching prefix/disposition, no operands/options); `autopilot.status` (matching prefix/disposition, no operands, optional flag --all); `autopilot.add` (`autopilot add`, local `autopilot-add`, required repeated issue operands). Forms and descriptions:
 
 - `pdd autopilot start [--runs N] [--resume-custody FILE]`: Start this repo in an interactive Herdr agent; check now and every 30 minutes without AI on empty ticks. --runs optionally caps concurrent runs; --resume-custody supplies the verified original-owner projection.
 - `pdd autopilot stop`: Stop this machine's timer; let the current agent step finish.
-- `pdd autopilot status`: Show this machine's repo, agent and next tick.
+- `pdd autopilot status [--all]`: Show this machine's repo, folder, agent and next tick; --all lists every repository with Autopilot on this machine, from any folder.
 - `pdd autopilot add N...`: Mark named old issues with pdd:autopilot so Autopilot may take them.
 
 Catalog two alert routes after `autopilot.add`. [Autopilot alerts](autopilot-alerts.prompt.md) owns their behavior and validation.
@@ -57,7 +57,7 @@ Catalog local routes `autopilot.off`, `autopilot.observe`, and `autopilot.auto` 
 There is no `session` route and no `workflow feature|bug|small-change` chat route: people call the PDD skills in their own chat. No arbitrary path or workflow creation route.
 
 Catalog the area-chat runner routes ([runner](workflow-runner.prompt.md)):
-- workflow.run `workflow run NAME ISSUE [--agent codex|claude|gemini|agy] [--base BRANCH] [--draft]`: NAME is a safe workflow name, ISSUE is a number, `owner/repo#number` or `https://github.com/owner/repo/issues/number`. Default agent codex. `--draft` is a Boolean flag requesting draft PR publication for this run; omission keeps ready publication. `--base` is a text option naming an existing origin branch; omitted means the actual repository default. Help describes that selection.
+- workflow.run `workflow run NAME ISSUE [--agent codex|claude|gemini|agy|ENTRY] [--base BRANCH] [--draft]`: NAME is a safe workflow name, ISSUE is a number, `owner/repo#number` or `https://github.com/owner/repo/issues/number`. Default agent codex. `--agent` is an option of kind `text` that keeps `codex`, `claude`, `gemini` and `agy` as its completion choices; ENTRY is the name of an entry in `~/.config/pdd/agents.json` (quote spaces). The [workflow agents](workflow-agents.prompt.md#named-agentsjson-entries) owner resolves the name and refuses an unknown one; parsing does not read configuration. `--draft` is a Boolean flag requesting draft PR publication for this run; omission keeps ready publication. `--base` is a text option naming an existing origin branch; omitted means the actual repository default. Help describes that selection.
 
 For `workflow.run`, accept optional `--adopt-corpus FILE`, a nonempty text path to an existing-approved-corpus declaration. Its help description says it adopts exact unchanged approved content for a fresh replay-evidence-enabled workflow; keep the existing help form unchanged. Example: `pdd workflow run feature 2640 --adopt-corpus approved-corpus.json`. The runner and replay owner define validation and trust, not the parser.
 
@@ -116,13 +116,22 @@ into its original test. --shell compatibility and mode conflicts belong to runti
 
 Catalog `workflow.evidence-associate` with prefix `workflow evidence-associate`, local disposition `workflow-evidence-associate`, one required issue operand, and options `--workspace` (text), `--stage` (value, choices `current` and `pr1`) and `--test` (text-list). Dispatch requires all three before effects. Its form is `pdd workflow evidence-associate ISSUE --workspace PATH --stage current|pr1 --test PATH...`. Expose it in help and completion immediately after the evidence route. [Workspace evidence association](workflow-runner.prompt.md#workspace-evidence-association) owns registration and source validation; this catalog owns only the route facts.
 
-Try catalogs --agent as nonempty text NAME: accept quoted custom display names as one argument as well as the default codex, claude and gemini names. Agent discovery and unknown-name errors belong to the local agent bridge; parsing does not read configuration or execute a launcher. Workflow --agent keeps its codex|claude|gemini|agy value choices. Completion must not present a fixed provider-only list for Try agent names. Its help says pdd stays running to connect the person’s own agent when stdout is a terminal or --agent is explicit; ordinary non-terminal Try returns after collecting saved cases once. --agent selects a configured name and --no-wait skips the bridge. Runtime-client owns conflicts/lifecycle.
+Try catalogs --agent as nonempty text NAME: accept quoted custom display names as one argument as well as the default codex, claude and gemini names. Agent discovery and unknown-name errors belong to the local agent bridge; parsing does not read configuration or execute a launcher. Workflow and product --agent are text options with the codex|claude|gemini|agy completion choices, so an agents.json ENTRY name also parses. Completion must not present a fixed provider-only list for Try agent names. Its help says pdd stays running to connect the person’s own agent when stdout is a terminal or --agent is explicit; ordinary non-terminal Try returns after collecting saved cases once. --agent selects a configured name and --no-wait skips the bridge. Runtime-client owns conflicts/lifecycle.
 
 Catalog `mcp` (local `mcp`) with the form `pdd mcp`, no operands or options. Help describes a stdio MCP server for the current repository's Try tools. Setup help says "show exact config changes", without a preview-status label, and states that it offers detected Codex, Claude Code and Gemini registrations after showing exact config changes and asking once with y/N.
 
 Remote lint uses --timeout when explicit; otherwise it retains its 90-second agent default and unlimited interactive wait. Preliminary lint uses its owning Check's unlimited default wait. Neither has a separate120second cap. Read help explains that a saved normal Check held for lint may safely continue its original checks; other reads remain GET-only. Runtime-client owns the continuation safeguards: saved-batch reads wait without a default limit in every shell; --timeout sets a limit, while explicit retry retains its finite default.
 
 Catalog `jobs` (stable id `jobs`, local disposition `runtime-jobs`) with the sole form `pdd jobs`, no operands or options. Help says it lists active and waiting interpreter jobs on this machine without contacting the interpreter. Root help and shell completion include jobs. The [slots helper](runtime-slots.prompt.md) owns listing; this route does not authenticate or import the runtime client.
+
+## Files route
+
+Catalog `files` (stable id `files`, local `project-files`) immediately before
+`approve`. Its form is `pdd files [--json]`. It accepts only the optional Boolean
+flag `--json`, with no operands. Help describes a read-only list of prompts,
+Runtime interfaces, Stories, tests and refusal reasons, without network calls.
+Include it in root help and completion. The [files view](files.prompt.md) owns
+its output; do not import the Runtime client for this route.
 
 ## Shared contract routes
 
@@ -139,9 +148,9 @@ in root help and completion; do not import the runtime client for parsing/help.
 Catalog `product.status` (`product status`, local `product-status`, optional flag
 `--json`), `product.next` (`product next`, local `product-next`, no operands or
 options), and `product.start` (`product start`, local `product-start`, required
-text operand RUN, flags `--no-run` and value `--agent` with codex|claude|gemini|agy). Forms:
+text operand RUN, flags `--no-run` and text `--agent` with the same codex|claude|gemini|agy completion choices and agents.json ENTRY name as workflow.run). Forms:
 `pdd product status [--json]`, `pdd product next`, and
-`pdd product start RUN [--no-run] [--agent codex|claude|gemini|agy]`. Help says status counts
+`pdd product start RUN [--no-run] [--agent codex|claude|gemini|agy|ENTRY]`. Help says status counts
 Stories by part and slice, next shows ready runs, and start creates or reuses one
 issue then starts a normal feature run unless `--no-run`. All three make zero
 interpreter calls, and their help says "no interpreter calls". [Product](product.prompt.md) owns their behavior.
@@ -156,8 +165,8 @@ The ordered help-form list consists of the lines below in their displayed order,
 ```text
   pdd product status [--json]  Count Stories by part and slice from the product plan; no interpreter calls.
   pdd product next  Show ready planned runs and their start commands; no interpreter calls.
-  pdd product start RUN [--no-run] [--agent codex|claude|gemini|agy]  Create or reuse the run issue and start a normal feature run; --no-run only prepares the issue. No interpreter calls.
-  pdd workflow run NAME ISSUE [--agent codex|claude|gemini|agy] [--base BRANCH] [--draft]  Start the first area chat for a GitHub issue in Herdr and exit; --base selects an existing origin branch (default: repository default); --adopt-corpus FILE adopts exact unchanged approved content for a fresh replay-evidence-enabled workflow; pdd later pushes the issue branch and opens a real PR; --draft keeps this run's publications draft.
+  pdd product start RUN [--no-run] [--agent codex|claude|gemini|agy|ENTRY]  Create or reuse the run issue and start a normal feature run; --no-run only prepares the issue; ENTRY is a name from ~/.config/pdd/agents.json. No interpreter calls.
+  pdd workflow run NAME ISSUE [--agent codex|claude|gemini|agy|ENTRY] [--base BRANCH] [--draft]  Start the first area chat for a GitHub issue in Herdr and exit; ENTRY is a name from ~/.config/pdd/agents.json; --base selects an existing origin branch (default: repository default); --adopt-corpus FILE adopts exact unchanged approved content for a fresh replay-evidence-enabled workflow; pdd later pushes the issue branch and opens a real PR; --draft keeps this run's publications draft.
   pdd workflow prove ISSUE --test COMMAND --expect TEXT [--timeout MIN]  Run the supplied command on the fetched base branch merge-base and committed head, including when no eligible tests changed, with a limit per phase (default 10 minutes; --timeout sets 1 to 120); save a non-gating report that pull requests show as pdd's own result.
   pdd workflow done STEP [--summary TEXT] [--skipped REASON]  For the agent in a run worktree: record a step with pdd's own latest pdd test, pdd lint and prove results (the summary is an agent note) and print what to do next; --skipped records that the step was skipped, and why.
   pdd workflow evidence ISSUE --summary FILE  Record source-verified saved check JSON without rerunning steps, gates or publication.
@@ -186,6 +195,7 @@ The ordered help-form list consists of the lines below in their displayed order,
   pdd test --screen URL --drawing PATH [--json]  Compare a real page with its drawing at the drawing viewport in installed headless Chrome/Chromium; no AI or interpreter calls.
   pdd lint [STORY...] [--json] [--timeout MIN]  Print local SVG layout warnings, then the PDD interpreter lint (0 AI calls) on selected Stories and their dependencies; sends no checks.
   pdd lint --local [STORY...] [--json]  Check linked SVG layout parts locally with warning diagnostics and 0 AI/network calls.
+  pdd files [--json]  List prompts, Runtime interfaces, Stories, tests and refusal reasons; no network calls.
   pdd approve PROMPT [--said WORDS]  Approve one prompt with the person's chat words in easy mode, or show its interface/text changes and ask terminal y/N; strict mode requires a person terminal.
   pdd simulate [STORY] [--max-calls N] [--tab call|screen|terminal|world] [--app-map PATH] [--new] [--no-open] [--no-wait] [--agent NAME]  Open the Story in the PDD Simulator: make a link on the PDD interpreter with your gh login and open it in your browser; it ends in 24 hours. Short form: pdd sim. A new simulation defaults to 400 calls; --max-calls accepts 1 to 1000. With terminal stdout or explicit --agent, it stays running to connect your own agent; otherwise it reads saved cases once and returns. --agent selects a configured name or a default Codex, Claude or Gemini; --no-wait skips the bridge. In a terminal it adds each test saved in the Simulator to the story's test file.
   pdd simulate [STORY] --cli [--shell] [--max-calls N] [--new]  Run your program in your terminal through a Simulator session; prints a PATH line, or opens a shell with --shell.

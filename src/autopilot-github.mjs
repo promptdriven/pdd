@@ -1,9 +1,10 @@
-// Generated from prompts/cli/autopilot-github.prompt.md (sha256: f4f472d907f4be7da0ad8dd1e67077e06da8b3ccb6e72c1d85152dcf5d5c1e17).
+// Generated from prompts/cli/autopilot-github.prompt.md (sha256: baf589cc7861bba0f250337310433876145627f5bf804ee4d0f1ad1f3300d492).
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { resolveWorkflowRepository } from './workflow-github.mjs';
+import { nativeGithubCounter } from './github-calls.mjs';
 
 const MODES = ['off', 'observe', 'auto'];
 const REFUSED = [403, 409, 422];
@@ -56,8 +57,10 @@ function nativeGithub(root, exec) {
   };
 }
 
+// The native runner records each gh call in the GitHub call ledger of its repository, as setup.
+const counted = nativeGithubCounter(execute, { purpose: 'setup' });
 async function context(cwd, ports) {
-  const exec = ports.execFile ?? execute;
+  const exec = ports.execFile ?? counted;
   const root = String((await exec('git', ['rev-parse', '--show-toplevel'], { cwd })).stdout).trim();
   if (!root) throw Error('no Git root');
   let config = {};
