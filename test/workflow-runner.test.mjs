@@ -142,7 +142,7 @@ test('small-change: run exits at once, done reaches the gate, changes go to the 
   const first = run.chats[0], pane = f.herdr.paneOf(first);
   assert.equal(pane.commands.length, 1);
   // 2901: the caller has no login variables, so each one is unset and the Herdr server's old copy cannot decide the login.
-  assert.match(pane.commands[0], /^cd '[^']+' && env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u CLAUDE_CODE_OAUTH_TOKEN -u ANTHROPIC_BASE_URL -u CLAUDE_CODE_USE_BEDROCK -u CLAUDE_CODE_USE_VERTEX PDD_AGENT_SESSION=1 PDD_BIN=\S+ CLAUDE_CONFIG_DIR=\S+ claude --dangerously-skip-permissions --session-id [0-9a-f-]{36} "\$\(cat '.+plan-start\.md'\)"$/);
+  assert.match(pane.commands[0], /^cd '[^']+' && env -u PDD_SUITE_QUEUE -u PDD_VM_SUITE_LOCK -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u CLAUDE_CODE_OAUTH_TOKEN -u ANTHROPIC_BASE_URL -u CLAUDE_CODE_USE_BEDROCK -u CLAUDE_CODE_USE_VERTEX PDD_AGENT_SESSION=1 PDD_BIN=\S+ PDD_INTERPRETER_QUEUE='[^']+' PDD_INTERPRETER_CONCURRENCY='2' CLAUDE_CONFIG_DIR=\S+ claude --dangerously-skip-permissions --session-id [0-9a-f-]{36} "\$\(cat '.+plan-start\.md'\)"$/);
   assert.ok(pane.commands[0].startsWith(`cd '${run.root}' && `), 'the chat starts in the run worktree (2903)');
   assert.equal(first.session.id, pane.agent.agent_session.value);
   const message = readFileSync(join(run.runDir, 'plan-start.md'), 'utf8');
@@ -282,7 +282,7 @@ for (const name of ['bug', 'feature']) {
     assert.equal((await f.run()).exitCode, 0);
     let run = f.record();
     assert.deepEqual(areas.map(([area]) => area), ['story', 'prompt-pr', 'code']);
-    assert.match(f.herdr.paneOf(run.chats[0]).commands[0], /^cd '[^']+' && env -u OPENAI_API_KEY -u CODEX_API_KEY -u CODEX_ACCESS_TOKEN -u OPENAI_FEDERATION_RULE_ID -u OPENAI_IDENTITY_TOKEN_FILE -u OPENAI_WORKLOAD_IDENTITY_CONTEXT -u OPENAI_BASE_URL -u CODEX_HOME PDD_AGENT_SESSION=1 PDD_BIN=\S+ codex --no-daemon --dangerously-bypass-approvals-and-sandbox -c 'projects=\{".+"=\{trust_level="trusted"\}\}' -c 'shell_environment_policy\.set\.PDD_BIN="[^"]+"' -c 'shell_environment_policy\.set\.PDD_AGENT_SESSION="1"' "\$\(cat '.+story-start\.md'\)"$/);
+    assert.match(f.herdr.paneOf(run.chats[0]).commands[0], /^cd '[^']+' && env -u PDD_SUITE_QUEUE -u PDD_VM_SUITE_LOCK -u OPENAI_API_KEY -u CODEX_API_KEY -u CODEX_ACCESS_TOKEN -u OPENAI_FEDERATION_RULE_ID -u OPENAI_IDENTITY_TOKEN_FILE -u OPENAI_WORKLOAD_IDENTITY_CONTEXT -u OPENAI_BASE_URL -u CODEX_HOME PDD_AGENT_SESSION=1 PDD_BIN=\S+ PDD_INTERPRETER_QUEUE='[^']+' PDD_INTERPRETER_CONCURRENCY='2' codex --no-daemon --dangerously-bypass-approvals-and-sandbox -c 'projects=\{".+"=\{trust_level="trusted"\}\}' -c 'shell_environment_policy\.set\.PDD_BIN="[^"]+"' -c 'shell_environment_policy\.set\.PDD_AGENT_SESSION="1"' -c 'shell_environment_policy\.set\.PDD_INTERPRETER_QUEUE="[^"]+"' -c 'shell_environment_policy\.set\.PDD_INTERPRETER_CONCURRENCY="2"' -c 'features\.multi_agent_v2\.max_concurrent_threads_per_session=5' "\$\(cat '.+story-start\.md'\)"$/);
     for (const [index, [area, steps]] of areas.entries()) {
       // #3042 red pair: PR 1's CI is red when the code PR opens, so PR 2 carries PR 1 and never says "merge it first".
       if (area === 'code') f.ci = [{ conclusion: 'FAILURE' }];
@@ -588,7 +588,7 @@ test('status --all lists every run on this machine across repositories, person-w
   for (const f of [a, b]) f.ports.timeZone = 'UTC';
   // Repository A: run 17 waits for approval. Repository B: run 17 works on reproduce.
   await a.run(); a.tick(); await stepDone({ step: 'scope', summary: 'plan', cwd: a.record().root }, a.agentPorts()); a.herdr.idle();
-  b.clock += 60000; await b.run();
+  b.clock += 60000; await b.run(); a.clock = b.clock;
   // A third run that is cancelled, and a repository that is gone, are not errors.
   const index = JSON.parse(readFileSync(join(a.state, 'runs.json'), 'utf8'));
   index.runs.push({ repo: 'gone/repo', number: 5, runDir: join(a.base, 'gone', '.git', 'pdd', 'runs', '5') });
@@ -600,7 +600,7 @@ test('status --all lists every run on this machine across repositories, person-w
     const [capacity, ...lines] = out.message.split('\n');
     assert.match(capacity, /pdd.*[0-9]+.*56/);
     assert.equal(lines.length, 4, out.message);
-    assert.match(lines[0], /^example\/project#17 · small-change · plan · waiting for you: approve the plan · Oct 27, 17:00$/);
+    assert.match(lines[0], /^example\/project#17 · small-change · plan · waiting for you: approve the plan · Oct 27, 17:01$/);
     assert.match(lines[1], /^example\/project#17 · bug · story · agent working on reproduce · Oct 27, 17:01$/);
     assert.equal(lines[2], 'Review without resuming: pdd workflow view example/project#17');
     assert.equal(lines[3], 'Open one: pdd workflow open example/project#17');
