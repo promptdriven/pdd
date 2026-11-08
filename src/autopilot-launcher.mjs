@@ -26,7 +26,7 @@ import { reconcileDependencyIntake } from './issue-dependencies-intake.mjs';
 import { issueKey } from './issue-dependencies.mjs';
 import { createDependencyReadPorts, dependencySnapshotStore, issueRowVersion, recordLongRunningAlert, refreshClaimHeartbeat, takeoverLimited, withoutClaimHeartbeat } from './issue-dependencies-github.mjs';
 import { sendToChat, START_GRACE_MS } from './workflow-chat.mjs';
-import { acquireRunLock, runtimeWakeTag, isRetryRequest, automaticAttention, resumeStoppedRun } from './workflow-runner.mjs';
+import { acquireRunLock, runtimeWakeTag, isRetryRequest, automaticAttention, resumeStoppedRun, nudgeIdleRun } from './workflow-runner.mjs';
 import { checkVerdictSince } from './workflow-results.mjs';
 import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
 import { samePath } from './workflow-herdr-layout.mjs';
@@ -375,6 +375,14 @@ async function resumeStoppedWorkers(state, p) {
         await send({issue: String(run.number), kind: 'stuck', text: JSON.stringify({cause: result.message,
           tried: 'Three automatic resumes through workflow open in one hour.', need: 'Inspect the stopped chat and resume the run manually.'})});
       } else if (result.exitCode !== 0) p.warn(`Stopped-chat recovery held for #${run.number}: ${line(result.message)}`);
+      const idle = await p.scanAction(() => nudgeIdleRun({ref: String(run.number), cwd: state.cwd,
+        packageRoot: state.packageRoot, coordinatorId: state.coordinatorId, machine: state.machine}, workerPorts));
+      if (idle.recovery === 'stuck') {
+        const send = p.sendAlert ?? (input => runAutopilotAlerts({action: 'alert', cwd: state.cwd, env: p.env, ...input},
+          {...p.alertPorts, repository: async () => ({nameWithOwner: state.repo}), stateRoot: dirname(state.stateFile), now: p.now}));
+        await send({issue: String(run.number), kind: 'stuck', text: JSON.stringify({cause: idle.message,
+          tried: 'Three continue prompts without recorded step progress.', need: 'Inspect the idle agent and continue the run manually.'})});
+      } else if (idle.exitCode !== 0) p.warn(`Idle-agent recovery held for #${run.number}: ${line(idle.message)}`);
     } catch (error) { p.warn(`Stopped-chat recovery held for #${run.number}: ${line(error.message)}`); }
   }
 }

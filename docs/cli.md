@@ -165,10 +165,22 @@ delivers the pending work there. After `pdd autopilot stop`, also during a
 relaunch, the next `pdd autopilot start` does this. A pane that now has the old
 pane ID but another terminal gets no prompt, no close and no launch.
 
-A tick checks GitHub with ETags and wakes the agent only for a repo's first
+In auto mode, each tick checks the saved run agents in Herdr without an AI call.
+A resumed run gets one continue request through the same delivery route as
+`pdd workflow changes`. The request points to its current step brief and STEP.md.
+An unfinished run whose agent stays idle gets a continue request after 10 idle
+minutes. Requests are at least 10 minutes apart. After three attempts in one area
+without recorded step progress, another idle interval marks the run stuck and
+sends one alert. A recorded step change resets that area's allowance. A working
+agent alone does not reset it. Gates, questions, deliberate chat closure, login
+failures and usage limits keep their holds. Observe and off modes send no nudges.
+Workflow status shows `agent idle since HH:MM` for an idle unfinished run, with
+the configured status time zone or UTC. Status reads send no request.
+
+A tick checks GitHub with ETags and wakes the coordinator only for a repo's first
 start-up recipe or an unseen trusted issue, comment or related PR change.
 Already-seen issues stay quiet across unchanged ticks, including stuck,
-code-pending, claimed and observe-mode issues waiting for a person. Busy agents
+code-pending, claimed and observe-mode issues waiting for a person. Busy coordinators
 receive no tick prompt; pending changes are coalesced until they are idle.
 Empty ticks use no AI. This applies to Claude
 Code too: the user timer keeps empty ticks out of the conversation. Paginated

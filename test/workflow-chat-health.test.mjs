@@ -115,11 +115,11 @@ test('claude: without a transcript, the failed turn or the limit menu on the scr
   pane.agent.agent_status = 'idle';
   pane.screen = "> Start the plan area.\n  ⎿  You've hit your session limit · resets 7pm (UTC)\n\n⏺ The limit is over. I go on with the plan.\n\n> \n";
   shown = await statusAll(f);
-  assert.equal(stateLine(shown.detail), 'State: the agent works on scope');
+  assert.match(stateLine(shown.detail), /idle since \d{2}:\d{2}/);
   // An agent reply that quotes such a line is not an error of the chat.
   pane.screen = "⏺ The issue says Claude Code showed:\n  You've hit your weekly limit · resets Nov 6 at 3pm\n\n> \n";
   shown = await statusAll(f);
-  assert.equal(stateLine(shown.detail), 'State: the agent works on scope');
+  assert.match(stateLine(shown.detail), /idle since \d{2}:\d{2}/);
 });
 
 test('claude: without a transcript, status keeps only the limit sentence and the reset time of the limit block, never the lines under it', async t => {
@@ -171,8 +171,8 @@ test('claude: a healthy chat keeps its status words', async t => {
   // The screen still shows the old error line above the later work.
   pane.screen = '> Start the plan area.\n  ⎿  Not logged in · Please run /login\n\n> Please go on.\n\n⏺ I read the issue. Next I write the plan.\n\n> \n';
   let shown = await statusAll(f);
-  assert.equal(stateLine(shown.detail), 'State: the agent works on scope');
-  assert.match(shown.line, / · agent working on scope · /);
+  assert.match(stateLine(shown.detail), /idle since \d{2}:\d{2}/);
+  assert.match(shown.line, / · agent idle since \d{2}:\d{2} · /);
   assert.equal(shown.json.group, 'working');
   assert.equal(shown.json.chatProblem, undefined);
   // The person asked again after a failed turn, and the agent works on it now.
@@ -186,7 +186,7 @@ test('claude: a healthy chat keeps its status words', async t => {
   nodeFs.rmSync(join(f.ports.env.CLAUDE_CONFIG_DIR, 'projects'), { recursive: true, force: true });
   pane.agent.agent_status = 'idle'; pane.screen = '⏺ I wrote the plan.\n\n> \n';
   shown = await statusAll(f);
-  assert.equal(stateLine(shown.detail), 'State: the agent works on scope');
+  assert.match(stateLine(shown.detail), /idle since \d{2}:\d{2}/);
 });
 
 test('claude: a gate keeps its words even when the chat cannot work', async t => {
@@ -210,7 +210,7 @@ test('claude: a healthy chat that quotes an error line or the limit menu keeps i
   for (const [name, screen] of Object.entries(screens)) {
     pane.screen = screen;
     const shown = await statusAll(f);
-    assert.equal(stateLine(shown.detail), 'State: the agent works on scope', name);
+    assert.match(stateLine(shown.detail), /idle since \d{2}:\d{2}/, name);
     assert.equal(shown.json.chatProblem, undefined, name);
   }
   // A tool result with a 401 above a real question dialog: the dialog keeps its words.
@@ -328,7 +328,7 @@ test('codex: its session file says the newest turn failed on the login (a 401, o
   // Another error of the newest turn is no login or limit problem.
   write([rows.start(1, 'Start the build area.', at), rows.end(1, at + 2000, at, { error: CODEX_ERRORS.overloaded })]);
   shown = await statusAll(f);
-  assert.equal(stateLine(shown.detail), 'State: the agent works on scope');
+  assert.match(stateLine(shown.detail), /idle since \d{2}:\d{2}/);
 });
 
 test('codex: after the reset time that Codex names, status says that the limit reset', async t => {
@@ -374,14 +374,14 @@ test('codex: a chat whose newest turn worked keeps its status words, also when t
   pane.screen = codexScreen(`${CODEX_LIMIT}\n\n› Please go on.\n\n• The tests pass now.`);
   const before = f.herdr.calls.length;
   let shown = await statusAll(f);
-  assert.equal(stateLine(shown.detail), 'State: the agent works on scope');
+  assert.match(stateLine(shown.detail), /idle since \d{2}:\d{2}/);
   assert.equal(shown.json.group, 'working');
   assert.equal(shown.json.chatProblem, undefined);
   assert.equal(paneReads(f, before), 0, 'the session file decided');
   // The file says the newest turn worked, so an error line on the screen does not count.
   pane.screen = codexScreen(CODEX_LIMIT);
   shown = await statusAll(f);
-  assert.equal(stateLine(shown.detail), 'State: the agent works on scope');
+  assert.match(stateLine(shown.detail), /idle since \d{2}:\d{2}/);
   // A new turn has started: the file gives no answer. The agent works now, so pdd does not judge it by the screen.
   write([rows.start(1, 'Start the build area.', at), rows.end(1, at + 1900, at, { error: CODEX_ERRORS.limit }), rows.start(2, 'Please go on.', f.clock - 1000)]);
   pane.agent.agent_status = 'working';
@@ -400,7 +400,7 @@ test('codex: without its session file, an old error line above a later prompt ke
     pane.screen = codexScreen(body);
     const before = f.herdr.calls.length;
     const shown = await statusAll(f);
-    assert.equal(stateLine(shown.detail), 'State: the agent works on scope', name);
+    assert.match(stateLine(shown.detail), /idle since \d{2}:\d{2}/, name);
     assert.equal(shown.json.group, 'working', name);
     assert.equal(shown.json.chatProblem, undefined, name);
     assert.ok(paneReads(f, before) > 0, `${name}: the screen decided`);
@@ -416,7 +416,7 @@ test('codex: a turn that the person stopped after a failed turn clears the old e
   pane.screen = codexScreen(`${CODEX_LIMIT}\n\n› Please go on.\n\n■ Conversation interrupted - use /feedback if something went wrong`);
   const before = f.herdr.calls.length;
   const shown = await statusAll(f);
-  assert.equal(stateLine(shown.detail), 'State: the agent works on scope');
+  assert.match(stateLine(shown.detail), /idle since \d{2}:\d{2}/);
   assert.equal(shown.json.chatProblem, undefined);
   assert.equal(paneReads(f, before), 0, 'the session file decided');
 });
@@ -432,7 +432,7 @@ test('codex: a healthy chat that quotes an error line in its reply keeps its sta
   for (const quote of quotes) {
     pane.screen = codexScreen(quote);
     const shown = await statusAll(f);
-    assert.equal(stateLine(shown.detail), 'State: the agent works on scope', quote);
+    assert.match(stateLine(shown.detail), /idle since \d{2}:\d{2}/, quote);
     assert.equal(shown.json.chatProblem, undefined, quote);
   }
   // With its session file, the newest turn that worked decides before the screen.
@@ -440,7 +440,7 @@ test('codex: a healthy chat that quotes an error line in its reply keeps its sta
   write([rows.start(1, 'Start the build area.', at), rows.reply(1, 'I add a check for it now.', at + 5000), rows.end(1, at + 6000, at, { reply: 'I add a check for it now.' })]);
   const before = f.herdr.calls.length;
   const shown = await statusAll(f);
-  assert.equal(stateLine(shown.detail), 'State: the agent works on scope');
+  assert.match(stateLine(shown.detail), /idle since \d{2}:\d{2}/);
   assert.equal(paneReads(f, before), 0, 'the session file decided');
 });
 
