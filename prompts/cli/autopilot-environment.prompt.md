@@ -67,6 +67,10 @@ reclaim records, including records treated as effectively finished. This
 is a preflight only: the actual suite command must still use its normal queue
 admission, since another process can take the slot after this read.
 
+Native tests using synthetic queue tickets must supply `alive` observations.
+Capacity and malformed/unreadable queue cases must not depend on whether their
+synthetic PIDs exist on the host or whether the host permits probing them.
+
 Export async `machineHealth({cwd}, ports={})` for the no-AI tick, returning
 `{healthy, causes, resources}`. `resources` is the shared machine observation;
 `causes` is an ordered string array: memory then disk. Require valid available

@@ -21,7 +21,7 @@ test('a missing tool retries only after that named executable is present', async
 test('shared suite queue permits capacity, blocks waiters/full/malformed/unreadable ownership and needs no installation', async () => {
   let rows = [];
   const readFile = path => path.startsWith('/proc/') ? good.readFile() : JSON.stringify(rows.find(row => path.endsWith(`ticket-${row.ticket}.json`)));
-  const p = { ...good, suiteAvailable: undefined, readFile, readDir: () => rows.map(row => `ticket-${row.ticket}.json`) };
+  const p = { ...good, suiteAvailable: undefined, alive: () => true, readFile, readDir: () => rows.map(row => `ticket-${row.ticket}.json`) };
   const run = env => environmentHealthy({ env: env ?? { PDD_SUITE_QUEUE: '/synthetic/queue' } }, p);
   const row = (ticket, state) => ({ ticket, pid: 100 + ticket, cwd: '/project', state, queuedAt: 1, startedAt: null, finishedAt: null });
   assert.equal(await run(), true);
