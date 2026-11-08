@@ -50,7 +50,7 @@ test('skip an uncoercible saved date before admission and retain a later valid r
  assert.equal(results.length,1);
  assert.equal(results[0].batch,'20261103-120000-bbbb');
  assert.equal(results[0].source,'current');
- assert.equal(results[0].summary,'20261103-120000-bbbb');
+ assert.equal(results[0].summary,'20261103-120000-bbbb; tests/a.json: partial (no-server-verdict)');
  assert.equal(calls.length,1,'malformed dates must not reach workspace admission');
  assert.equal(calls[0].producerRoot,f.root);
 });

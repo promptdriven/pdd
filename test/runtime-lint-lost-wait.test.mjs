@@ -73,7 +73,7 @@ function held(r) {
   assert.equal(r.posts.filter(post => post.command === 'check').length, 0);
   assert.equal(r.code, 3);
   assert.equal(r.json.exit_code, 3);
-  assert.equal(r.json.rows[0].state, 'not_run');
+  assert.equal(r.json.rows[0].state, 'not run');
   assert.equal(r.json.rows[0].calls, 0);
   assert.equal(r.json.rows[0].request_id, null);
   assert.ok(r.err.includes(`pdd test --read ${r.json.batch}`), 'retain the saved recovery command');
@@ -101,10 +101,10 @@ for (const interactive of [false, true]) {
       assert.equal(r.saved.timeout_min, null);
     });
   }
-  test(`LOST-LINT ${shell}: explicit one-minute caller limit wins`, async t => {
+  test(`LOST-LINT ${shell}: paid timeout does not shorten free lint recovery`, async t => {
     const r = await lostLint(t, { interactive, timeout: 1 });
     assert.equal(r.safetyInterrupted, false);
-    assert.equal(r.elapsed, 60000);
+    assert.equal(r.elapsed, interactive ? 300000 : 90000);
     held(r);
     assert.equal(r.saved.timeout_min, 1);
   });
