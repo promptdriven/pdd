@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 3af31259d9685b0fc4b7928f9788f1c0afb79aa0ac8ec16e76d2750b30404929).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 7ab4ae0c7c5f3d0821012209b3f60d9c8e737be34777e1f0ecdc74e696196769).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -1766,8 +1766,9 @@ export async function runAutopilotLauncher(input, ports = {}) {
       if (previous && resolve(previous.packageRoot ?? dirname(dirname(self))) !== resolve(packageRoot)) state.recipeDelivered = false;
       state.packageRoot = packageRoot;
     }
-    if (!state.repo) {
+    if (!state.repo || command === 'start') {
       const metadata = JSON.parse(await p.checked('gh', ['repo', 'view', '--json', 'nameWithOwner,defaultBranchRef']));
+      if (state.repo && state.repo.toLowerCase() !== metadata.nameWithOwner?.toLowerCase()) throw Error('Automatic base repository does not match.');
       state.repo = metadata.nameWithOwner; state.defaultBranch = metadata.defaultBranchRef?.name;
     }
     if (command === 'add') {
@@ -1785,7 +1786,9 @@ export async function runAutopilotLauncher(input, ports = {}) {
     if (command !== 'start') return { exitCode: 2, message: 'Use pdd autopilot start, stop, status or add.' };
     const readiness = await workflowReadiness(state, p);
     if (readiness.state !== 'ready') return bad(`Autopilot did not start: pdd workflows cannot start in ${state.cwd}. ${readiness.message} Nothing was started or claimed, and every timer is unchanged.`);
+    const priorBase = state.baseBranch;
     await automaticBase(state, p);
+    if (priorBase !== state.baseBranch) state.recipeDelivered = false;
     if ((await p.execute('gh', ['auth', 'status'])).code !== 0) return bad('GitHub is not signed in; run gh auth login.');
     try { if ((await p.execute('herdr', ['--version'])).code !== 0) throw Error(); }
     catch { return bad('Herdr is missing or unavailable; install Herdr, then run herdr --help.'); }
