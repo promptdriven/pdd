@@ -23,3 +23,22 @@ test('merge admission obeys all six guards across 576 bounded combinations',()=>
   }
   assert.equal(examined,576);
 });
+
+test('optional skip eligibility obeys required and at-least-one-ran rules across 96 combinations',()=>{
+  let examined=0;
+  // Oracle from Repair 2: only completed optional skips may accompany passing CI.
+  for(const primary of ['pass','skipping','fail','unknown'])
+    for(const extra of ['pass','skipping','fail','pending','cancel','unknown'])
+      for(const required of [[],['tests'],['extra'],['tests','extra']]){
+        const w=mergeWorld();const states={tests:primary,extra};
+        w.ci.checks=Object.entries(states).map(([name,state])=>({name,passed:state==='pass',skipped:state==='skipping'}));
+        w.ci.required=required;
+        const expected=[primary,extra].includes('pass')
+          && [primary,extra].every(state=>['pass','skipping'].includes(state))
+          && required.every(name=>states[name]==='pass');
+        const result=evaluateMergeRules({config:w.config,evidence:w.evidence,pull:w.pull,ci:w.ci,trusted:true});
+        assert.equal(result.allowed,expected,JSON.stringify({primary,extra,required}));
+        assert.equal(result.rule,expected?null:'required_ci');examined++;
+      }
+  assert.equal(examined,96);
+});

@@ -36,7 +36,10 @@ export function evaluateMergeRules({config, evidence:e = {}, pull:p = {}, ci, tr
     return refusal('fresh_review','fresh agreeing review with no must-fix required');
   if (e.fullSuite?.head !== p.head || e.fullSuite?.passed !== true || e.fullSuite?.noNewSkips !== true) return refusal('full_suite','green full suite required on exact head');
   if (ci?.head !== p.head || ci?.complete !== true || !Array.isArray(ci.checks) || !ci.checks.length
-    || ci.checks.some(v => !object(v) || !named(v.name) || v.passed !== true)
+    || ci.checks.some(v => !object(v) || !named(v.name)
+      || (v.skipped !== undefined && typeof v.skipped !== 'boolean')
+      || (v.passed !== true && !(v.passed === false && v.skipped === true)))
+    || !ci.checks.some(v => v.passed === true)
     || !Array.isArray(ci.required) || ci.required.some(name => !named(name)
       || !ci.checks.some(v => v.name === name) || ci.checks.some(v => v.name === name && v.passed !== true))
     || !['CLEAN','HAS_HOOKS','BEHIND'].includes(p.mergeStateStatus)) return refusal('required_ci','required checks missing, pending, failed or unknown');
@@ -111,7 +114,7 @@ function nativePorts(cwd, p) {
       const checks = await read([]), required = await read(['--required']);
       if (!Array.isArray(checks.rows) || !Array.isArray(required.rows)) throw Error('Checks unknown');
       return {head,complete:checks.complete && required.complete,
-        checks:checks.rows.map(v => ({name:v.name,passed:v.bucket === 'pass'})),required:required.rows.map(v => v.name)};
+        checks:checks.rows.map(v => ({name:v.name,passed:v.bucket === 'pass',skipped:v.bucket === 'skipping'})),required:required.rows.map(v => v.name)};
     },
     async comment(pr,body) {
       // gh owns JSON encoding; body is an argv value, never shell text.

@@ -236,3 +236,31 @@ test('UNSTABLE merge state refuses even when the check observation reports passe
   const w=nativeMergeWorld();w.pull.mergeStateStatus='UNSTABLE';
   assert.equal((await invoke(w)).rule,'required_ci');assert.equal(w.writes.length,0);
 });
+
+// Repair 2: an optional completed skip is eligible, at either CI observation.
+for(const queue of [false,true])test(`native ${queue?'queue':'direct'} permits optional skips and preserves CI guards`,async()=>{
+  for(const timing of ['initial','before submission']){
+    const w=nativeMergeWorld({queue});
+    w.ci.checks.push({name:'optional-platform',passed:true});
+    const skip=()=>{w.ci.checks[1]={name:'optional-platform',passed:false,bucket:'skipping'};};
+    if(timing==='initial')skip();else w.afterComment=skip;
+    const result=await invoke(w);
+    assert.equal(result.outcome,queue?'queued':'merged_pending_audit',timing);
+    assert.equal(result.exitCode,3);assert.equal(result.rule,queue?null:'post_merge_audit');
+    assert.deepEqual(w.writes,[queue?{kind:'queue',id:w.pull.id,head:w.evidence.head}:{kind:'direct',pr:17,head:w.evidence.head}]);
+    assert.equal(w.comments.length,1);
+    assert.equal(w.commands.filter(c=>c.file==='gh'&&c.args[0]==='pr'&&c.args[1]==='checks').length,4);
+  }
+  // Even successful gh observations cannot waive these CI guards.
+  for(const fault of ['required skip','only skips','fail','pending','cancel','unknown']){
+    const w=nativeMergeWorld({queue});
+    w.ci.checks.push({name:'optional-platform',passed:false,bucket:'skipping'});
+    if(fault==='required skip')w.ci.required.push('optional-platform');
+    else if(fault==='only skips'){
+      w.ci.required=[];w.ci.checks=[{name:'optional-platform',passed:false,bucket:'skipping'}];
+    }else w.ci.checks[1].bucket=fault;
+    const result=await invoke(w);
+    assert.equal(result.outcome,'refused',fault);assert.equal(result.rule,'required_ci',fault);
+    assert.equal(w.writes.length,0);assert.equal(w.comments.length,0);
+  }
+});

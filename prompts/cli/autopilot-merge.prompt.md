@@ -28,7 +28,7 @@ Evaluate these ordered rules; missing or malformed proof fails closed:
 | autonomy | Repository mode auto/observe; trusted issue author; named area; effective level permits merge or observe; off/manual refuses |
 | fresh_review | Nonempty reviews with fresh true, verdict PASS, mustFix 0, unique nonblank sessions; every head is current or has locally computed equal nonempty patch IDs; risk integer 1..5. splitVerdict and sensitive must both be explicit Booleans. Two reviews when risk >=4, splitVerdict true or sensitive true |
 | full_suite | `fullSuite` has exact head, passed true and noNewSkips true |
-| required_ci | CI complete true on exact head, at least one well-formed check (nonblank name, passed true), every reported check passed, and all required names nonblank and present; an empty required list does not exempt other checks. Missing, pending, failed or unknown checks refuse. Live merge state CLEAN, HAS_HOOKS or BEHIND; UNSTABLE/BLOCKED/UNKNOWN refuse |
+| required_ci | CI complete true on exact head, at least one passing check, and every check has a nonblank name and either passed true or passed false with skipped true. All required names are nonblank, present and passing, including every check with a duplicate required name. A completed optional skip does not block submission; skips alone do not prove that a check ran. An empty required list does not exempt other checks. Missing, pending, failed, cancelled or unknown checks refuse. Live merge state CLEAN, HAS_HOOKS or BEHIND; UNSTABLE/BLOCKED/UNKNOWN refuse |
 | human_review | Live reviewDecision APPROVED or null (no required review), and pendingReviews exactly 0; explicit pending/changes-requested or unknown counts refuse |
 | repairs | repairs is an integer from zero through max_repairs |
 | question | questionOpen is false |
@@ -37,7 +37,9 @@ Evaluate these ordered rules; missing or malformed proof fails closed:
 `pull` supplies `id`, `head`, `base`, `baseOid`, `state`, `draft`,
 `reviewDecision`, `pendingReviews` (live reviewRequests.totalCount), `mergeStateStatus`, `mergeCommit`, `queue` (Boolean or null for
 unknown), `entry` (null or `{id,state}`). Draft/non-open PRs refuse `pull_state`
-before admission. `ci` is `{head,complete,checks:[{name,passed}],required:[name]}`.
+before admission. `ci` is `{head,complete,checks:[{name,passed,skipped?}],required:[name]}`.
+`passed` is Boolean; optional Boolean `skipped: true` identifies a completed
+skipped or neutral check, with `passed: false`. Omitted skipped means false.
 `equivalent` maps an old review head to true only after native git patch-id equality.
 `config` combines current default-branch Autopilot controls with only
 `autopilot.merge` from the immutable PR base. `trusted` comes from the issue
@@ -68,8 +70,10 @@ pdd.json means mode off, not auto.
 Native CI retains nonzero gh pr checks exits 1 (failure) and 8 (pending) as
 complete false, even when their JSON can be read. Both all-check and required-check
 observations must succeed. No required checks reported permits an empty required
-list but never waives the all-check observation or the requirement that every
-reported check pass.
+list but never waives the all-check observation. Map bucket pass to passed true,
+bucket skipping (completed SKIPPED or NEUTRAL) to passed false and skipped true,
+and every other bucket to passed false without skipped. Apply required_ci above
+without treating failed, pending, cancelled or unknown buckets as skips.
 Unknown queue discovery refuses `merge_queue`; never fall back to direct merge.
 
 An `observe` request only reconciles GitHub results, without comments or writes.

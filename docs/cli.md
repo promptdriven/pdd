@@ -25,9 +25,10 @@ at the live base commit. Repository mode and explicit issue-author trust come
 from the current default branch, where the Autopilot settings commands write.
 The command reads these controls again before submission. An unavailable control
 read refuses the merge. Existing strict approval gates and required human reviews
-still apply. At least one CI check must exist. Every reported check must pass,
-even when no check names are required. Failed or pending check-process results
-block submission.
+still apply. At least one CI check must pass. All required checks must pass;
+completed optional skipped or neutral checks may accompany them. Failed, pending,
+cancelled or unknown checks block submission, even when no check names are
+required. Failed or pending check-process results also block submission.
 
 Pass evidence with a quoted heredoc. Replace the synthetic values with actual
 records. Do not use a checker verdict as authorization or approval words.
