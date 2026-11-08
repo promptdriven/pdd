@@ -70,7 +70,29 @@ Checkpoint before effects and checkpoint returned identities before proceeding; 
 
 ## Cleanup
 
-After the caller closes its verified area tabs, close only the saved run workspace with `workspace close`, never worktree remove or group close. Revalidate its checkout/repo identity and saved initial root tab/pane/terminal; require exactly that original tab and pane. Extra tabs, split panes or changed roots prevent closure; a split root tab or a changed root refuses with the identity refusal above, an extra tab with `run_has_open_tabs`. A moved root shell does not prevent closure. Require documented acknowledgement and valid inventory proving absence. A lost close reply is not blindly repeated. Preserve peer/unrelated workspaces and Git checkout; Git removal remains the worktree owner's responsibility.
+After the caller closes its verified area tabs, close only the saved run workspace with `workspace close`, never worktree remove or group close. Revalidate its checkout/repo identity and saved initial root tab/pane/terminal; require exactly that original tab and pane. Extra tabs, split panes or changed roots prevent closure; a split root tab or a changed root refuses with the identity refusal above, an extra tab with `run_has_open_tabs`. A moved root shell does not prevent closure. Preserve peer/unrelated workspaces and Git checkout; Git removal remains the worktree owner's responsibility.
+
+Workspace closure protects every pane it would remove. Never close the caller's
+`HERDR_PANE_ID` from `ports.env` (default process environment), including explicit
+cancellation; refuse with `run_shell_caller`. Automatic cleanup also requires a
+matching `agent get` pane with status idle/done, or confirmed `agent_not_found`
+plus authoritative `pane process-info --pane ID` showing only its shell in the
+foreground: matching pane ID, positive shell PID equal to foreground process
+group ID, and exactly one foreground process with that PID and a recognized
+shell name (bash, zsh, sh, dash, fish, ksh or tcsh). Working/blocked agents or
+other foreground work refuse with `run_shell_busy`; malformed, unavailable or
+unknown occupancy refuses with `run_shell_unknown`. `ports.force:true` permits
+explicit cancellation to bypass occupancy checks only. Check these guards and
+ownership both before saving close intent and again after its awaited checkpoint,
+immediately before the close effect. Failed checkpoints send no close.
+
+Save `layout.phase = "close_intent"` before the request and `"closed"` after
+documented acknowledgement and complete valid inventory proving absence. A
+failed request or lost reply retains intent. On a later call, reconcile that
+intent from fresh inventory: absence confirms closed without another close;
+presence permits retry only with the same verified workspace identity, original
+root and safety guards above. Changed or unknown ownership remains pending and
+untouched. No intent alone authorizes a repeated close.
 
 `closeHerdrRepoLayoutIfIdle` returns true if a safely owned idle parent was closed or is already gone, false when retained. Adoption is not creation ownership: never close a parent merely because it is a non-linked workspace of the clone. A parent may be closed only with durable run-record evidence that PDD created this exact parent/root, no remaining open run uses it, unchanged verified parent identity and exactly its one original tab/pane. Existing run records with workspace IDs alone do not prove parent creation or its initial roots; preserve those parents and return false. Without that evidence preserve it, including legacy or person-opened parents. Never create another durable layout registry to establish cleanup ownership.
 

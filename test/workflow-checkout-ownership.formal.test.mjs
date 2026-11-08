@@ -1,5 +1,7 @@
 // Oracle: approved retry-with-live-herdr-layout.md, Rules to check and AC2–5.
 // Registry contents have no authority; parent adoption does not confer close custody.
+// Cleanup also applies the #2709 repair contract: reconcile a pending close only
+// with verified original ownership and safe shell occupancy.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,writeFile,readFile,rm,realpath,access} from 'node:fs/promises';
@@ -122,7 +124,7 @@ test('bounded live checkout ownership: all 188 seeded worlds',async()=>{
    if(state==='changed-cwd')w.h.workspaces.find(x=>x.workspace_id===id).worktree.checkout_path=clones[1-target].cwd;
    if(state==='changed-clone')w.h.workspaces.find(x=>x.workspace_id===id).worktree.repo_key=clones[1-target].common;
    const close=()=>withHerdrLayoutLock(()=>closeHerdrRunLayout({runId:w.saved.runId,cwd:w.c.cwd,commonDir:w.c.common,layout},w.ports),w.ports);
-   if(state==='idle'){await close();assert.deepEqual(w.mutate(),[['workspace','close',id]]);assert.equal(layout.phase,'closed');}
+   if(state==='idle'||state==='close-intent'){await assert.doesNotReject(close());assert.deepEqual(w.mutate(),[['workspace','close',id]]);assert.equal(layout.phase,'closed');}
    else {await assert.rejects(close());assert.deepEqual(w.mutate(),[],`${state}: destructive cleanup forbidden`);}
    const n=w.mutate().length;
    assert.equal(await closeHerdrRepoLayoutIfIdle({repository,commonDir:w.c.common},w.ports),false,'adopted parent has no creation custody');

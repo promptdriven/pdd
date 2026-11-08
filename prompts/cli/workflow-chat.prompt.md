@@ -244,7 +244,11 @@ identity checks. Missing tabs are ended evidence only with a saved close mark.
 An optional `ports.onlyChat` selects one saved pane/terminal identity from the finished set for globally ordered sweeping. Recheck live identity and agent status after the durable checkpoint, immediately before the close. Return `{closed, kept, warnings}`: closed is the number of tabs confirmed closed,
 kept is an array of `{area, reason}`, warnings is an array of diagnostics. Dry run
 (`ports.dryRun`) reports eligible count but writes no file/record or Herdr effect.
-After all ended-run chat tabs are gone, use the existing verified layout cleanup.
+After all ended-run chat tabs are gone, use the [verified layout cleanup](workflow-herdr-layout.prompt.md#cleanup),
+forwarding the caller environment and explicit cancellation force. A retained
+shell is included in kept as `{area:"run shell", reason:<cleanup error code>}`
+and in warnings, so tidy counts it and status reports why it stays open.
+Remove a stale shell retention reason after successful cleanup.
 Explicit cancellation uses the same routine with `ports.force:true`: it bypasses
 busy/session/grace checks, but retains ownership and caller-pane protection.
 `closeChats` delegates to it. A cancelled/replaced run can be cancelled again.

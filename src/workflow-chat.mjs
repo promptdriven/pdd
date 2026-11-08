@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 43fe9181bbde030db01f07794c48edde85d3b6adcb42b60b85e7180be1c67031).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: b67cd7c041447893c48b2d73752c88f782a2c0addc6a7ba1652a98965445c800).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, lstatSync, readdirSync, writeFileSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
@@ -850,9 +850,13 @@ export async function closeFinishedChats(run, ports = {}) {
     try {
       const custody = {...run.layout};
       await withHerdrLayoutLock(() => closeHerdrRunLayout({runId: run.runId, cwd: run.root, commonDir: run.commonDir, layout: custody},
-        {command: herdr, checkpoint: async () => { if (ports.checkpoint) await ports.checkpoint(null, custody); }, directory: ports.layoutDirectory}),
+        {command: herdr, env: ports.env, force: ports.force, checkpoint: async () => { if (ports.checkpoint) await ports.checkpoint(null, custody); }, directory: ports.layoutDirectory}),
       {directory: ports.layoutDirectory});
-    } catch (error) { warnings.push(`warning: the run workspace stays open (${warningReason(error)}).`); }
+    } catch (error) {
+      if (['workflow_run_save_failed','checkpoint_required','workflow_progress_refused'].includes(error.code)) throw error;
+      kept.push({area:'run shell', reason:error.code ?? 'cleanup-unavailable'});
+      warnings.push(`warning: the run workspace stays open (${warningReason(error)}).`);
+    }
   }
   return {closed, kept, warnings};
 }

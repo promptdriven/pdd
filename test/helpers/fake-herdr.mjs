@@ -80,6 +80,14 @@ export function fakeHerdr() {
     }
     // The plain-text screen of a pane (empty unless a test draws one, for example an agent dialog).
     if (group === 'pane' && verb === 'read') return (h.panes.find(p => p.pane_id === rest[0]) ?? fail('pane_not_found')).screen ?? '';
+    if (group === 'pane' && verb === 'process-info') {
+      const p = h.panes.find(p => p.pane_id === flag('--pane')) ?? fail('pane_not_found');
+      const shellPid = 100;
+      return {result:{type:'pane_process_info', process_info: p.processInfo ?? {
+        pane_id:p.pane_id, shell_pid:shellPid, foreground_process_group_id:p.agent ? 101 : shellPid,
+        foreground_processes:[{pid:p.agent ? 101 : shellPid, name:p.agent?.agent ?? 'bash'}]
+      }}};
+    }
     if (group === 'agent' && verb === 'get') { const p = h.panes.find(p => p.pane_id === rest[0]); if (!p?.agent) fail('agent_not_found'); return { result: { agent: { ...p.agent, pane_id: p.pane_id } } }; }
     if (group === 'agent' && verb === 'prompt') { const p = h.panes.find(p => p.pane_id === rest[0]); if (!p?.agent) fail('agent_not_found'); if (p.agent.agent_status === 'blocked') fail('agent_blocked'); p.agent.prompts.push(rest[1]); return { result: { type: 'agent_prompted' } }; }
     fail(`unexpected herdr ${args.join(' ')}`);

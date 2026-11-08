@@ -305,6 +305,12 @@ a saved native session and an idle agent. The grace period is 15 minutes from
 area/run end and from the last explicit open. Budget pressure can remove the
 grace period. Personal tabs and busy chats remain protected.
 
+After its last chat closes, an ended run can release its original shell workspace.
+Cleanup keeps the shell if it is the caller's pane, has live work, or cannot be
+checked. Tidy counts retained shells and status shows the reason. A failed shell
+close stays pending. The next tidy confirms absence or retries only after it
+checks the same workspace, original shell IDs and occupancy again.
+
 An intentional close saves `chats[].closed = {at, reason, screen, confirmedAt?}` in status.json
 before sending the close request. This is the integration contract for automatic
 stopped-chat recovery (#3068): skip any chat with `closed`, even when a close

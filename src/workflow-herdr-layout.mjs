@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: 5199f75cfdf64aa6dcd0c8d82da3c05d8c1f048cd4055485b2d08908ea5148c8).
+// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: 9646f6f9761b11af5adbe7eadd4d73577d208d540b5a0ad36f3971703fc6a550).
 import { mkdir, lstat, realpath } from 'node:fs/promises';
 import { openSync, closeSync, readFileSync, writeFileSync, fsyncSync, unlinkSync, lstatSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -360,16 +360,55 @@ export async function openHerdrRunLayout(input, ports) {
   await save();
   return custody;
 }
+async function assertRunShell(command, run, ports) {
+  if (run.rootPaneId === (ports.env ?? process.env).HERDR_PANE_ID) throw problem('run_shell_caller');
+  if (ports.force) return;
+  let native;
+  try {
+    native = (await command(['agent', 'get', run.rootPaneId]))?.result?.agent;
+    if (!native || native.pane_id !== run.rootPaneId || !id(native.agent)) throw problem('run_shell_unknown');
+  } catch (error) {
+    if (error.code !== 'agent_not_found') throw problem('run_shell_unknown');
+  }
+  if (native) {
+    if (['idle', 'done'].includes(native.agent_status)) return;
+    throw problem(['working', 'blocked'].includes(native.agent_status) ? 'run_shell_busy' : 'run_shell_unknown');
+  }
+  let reply;
+  try { reply = await command(['pane', 'process-info', '--pane', run.rootPaneId]); }
+  catch { throw problem('run_shell_unknown'); }
+  const info = reply?.result?.process_info, rows = info?.foreground_processes;
+  if (reply?.result?.type !== 'pane_process_info' || info?.pane_id !== run.rootPaneId ||
+      !Number.isSafeInteger(info.shell_pid) || info.shell_pid <= 0 || !Number.isSafeInteger(info.foreground_process_group_id) ||
+      info.foreground_process_group_id <= 0 || !Array.isArray(rows) || !rows.length ||
+      rows.some(row => !Number.isSafeInteger(row?.pid) || row.pid <= 0 || !id(row.name))) throw problem('run_shell_unknown');
+  if (info.foreground_process_group_id !== info.shell_pid || rows.length !== 1 || rows[0].pid !== info.shell_pid)
+    throw problem('run_shell_busy');
+  if (!['bash', 'zsh', 'sh', 'dash', 'fish', 'ksh', 'tcsh'].includes(rows[0].name)) throw problem('run_shell_unknown');
+}
+
 export async function closeHerdrRunLayout({runId, cwd, layout, commonDir}, ports) {
   if (!id(runId) || !layout || ![layout.workspaceId, layout.tabId, layout.paneId, layout.terminalId, commonDir].every(id)) throw problem('layout_cleanup_uncertain');
   if (layout.phase === 'closed') return;
-  if (layout.phase === 'close_intent') throw problem('layout_cleanup_uncertain');
   const {command, checkpoint} = ports, root = layout.root ?? layout;
+  if (![root.tabId, root.paneId, root.terminalId].every(id)) throw problem('layout_cleanup_uncertain');
   const run = {runId, cwd, commonDir, workspaceId: layout.workspaceId, rootTabId: root.tabId, rootPaneId: root.paneId, rootTerminalId: root.terminalId};
-  ownedWorkspace(await inventory(command), run, cwd);
-  await assertRunRoot(command, run, true);
+  const inspect = async () => {
+    const rows = await inventory(command);
+    if (layout.phase === 'close_intent' && !rows.some(w => w.workspace_id === run.workspaceId)) {
+      layout.phase = 'closed';
+      await checkpoint();
+      return false;
+    }
+    ownedWorkspace(rows, run, cwd);
+    await assertRunRoot(command, run, true);
+    await assertRunShell(command, run, ports);
+    return true;
+  };
+  if (!await inspect()) return;
   layout.phase = 'close_intent';
   await checkpoint();
+  if (!await inspect()) return;
   const closed = await command(['workspace', 'close', run.workspaceId]);
   if (closed.id !== 'cli:workspace:close' || closed.result?.type !== 'ok' || (await inventory(command)).some(w => w.workspace_id === run.workspaceId)) throw problem('workspace_close_unconfirmed');
   layout.phase = 'closed';

@@ -2929,7 +2929,7 @@ async function cleanupRunChats(run, p, options = {}) {
     });
   }});
   if (!options.dryRun) {
-    const nextKept = [...(options.onlyChat ? (run.cleanupKept ?? []).filter(item => item.area !== options.onlyChat.area) : []), ...result.kept];
+    const nextKept = [...(options.onlyChat ? (run.cleanupKept ?? []).filter(item => item.area !== options.onlyChat.area && item.area !== 'run shell') : []), ...result.kept];
     if (!equalFact(run.cleanupKept ?? [],nextKept) || snapshot.chats?.some(chat => chat.endedAt !== run.chats?.find(item => sameChat(item,chat))?.endedAt))
       commitRun(run, p, latest => {
         latest.cleanupKept = nextKept;
