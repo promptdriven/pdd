@@ -52,6 +52,18 @@ Links appear once in the readable part: one report link, `#N` references for PRs
 
 `DETAILS_OPEN` is `<details><summary>Details for tools and audits</summary>`. pdd owns the description: it rewrites the part above Details at each `pdd workflow status` and all of it at each push. `TOP_NOTE` says so to a person who edits it, as one HTML comment (readers never see it): `<!-- pdd writes this description. It rewrites the part above Details at each pdd workflow status and all of it at each push. Write your notes in a PR comment. -->`. `readablePrBody(top, details)` returns the readable part, a blank line, `DETAILS_OPEN`, a blank line, `TOP_NOTE`, a blank line, the details text, a blank line and `</details>`. `detailsOf(body)` returns `{details, after}` when the first `<details` line of a description is exactly `DETAILS_OPEN` (the text up to the last `</details>` line without a leading `TOP_NOTE`, and any text after it), else null (a description that an older pdd wrote).
 
+## Typed Runtime adapters
+
+The native object helpers above retain their signatures and results. Runtime uses
+`readablePrTopJson({factsJson, fileLimit?})` for the same renderer: parse `factsJson`
+as a JSON object, pass it and the optional limit to `readablePrTop`, and return
+its `{text, notes}` result. A malformed JSON value, null, array or scalar raises
+an error with code `invalid-facts`. `fileLimit` defaults to 40 as above.
+`readPrFieldsJson(texts)` applies the field-reader rules and returns the full
+result as JSON text, including arbitrary file-path keys in `notes`. These adapters
+preserve unbounded map keys without an open Runtime object schema. They do not
+add a record, verdict, filesystem read or model call.
+
 ## Dependencies
 
 - [Workflow runner](workflow-runner.prompt.md): required authoring/generation/verification/testing context. It gathers the facts, keeps the pdd body inside Details, fits the whole description in its 60,000-character budget and publishes it.
@@ -62,7 +74,141 @@ Links appear once in the readable part: one report link, `#N` references for PRs
 <summary>Runtime interface</summary>
 
 ```json
-{"status":"draft","prose_sha256":"39c2f435cbff80a00b6e030d6715b415c0ddfbf2ff312eac474a6f19b29ac1a3","entries":[{"operation":"readablePrTitle","input_schema":{"type":"object","properties":{"layout":{"enum":["spec","code"]},"workflow":{"type":"string"},"area":{"type":"string"},"statement":{"type":"string"},"number":{"type":"integer","minimum":1},"part":{"type":["integer","null"]}},"required":["layout","workflow","area","statement","number"]},"result_schema":{"type":"string","maxLength":256},"errors":[]},{"operation":"readablePrTop","input_schema":{"type":"object"},"result_schema":{"type":"object","properties":{"text":{"type":"string"},"notes":{"type":"array","items":{"type":"string"}}},"required":["text","notes"]},"errors":[]},{"operation":"readPrFields","input_schema":{"type":"array","items":{"type":"string"}},"result_schema":{"type":"object"},"errors":[]},{"operation":"userStory","input_schema":{"type":"string"},"result_schema":{"type":["string","null"]},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":1,"max_model_calls":0},"conventions":[]}
+{
+  "status": "approved",
+  "prose_sha256": "9cf014084fb1993049961c68962ace7cf3d57d957e30a777660172ddb2e0884f",
+  "entries": [
+    {
+      "operation": "readablePrTitle",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "layout": {
+            "enum": [
+              "spec",
+              "code"
+            ],
+            "type": "string"
+          },
+          "workflow": {
+            "type": "string"
+          },
+          "area": {
+            "type": "string"
+          },
+          "statement": {
+            "type": "string"
+          },
+          "number": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "part": {
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "layout",
+          "workflow",
+          "area",
+          "statement",
+          "number"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "string",
+        "maxLength": 256
+      },
+      "errors": []
+    },
+    {
+      "operation": "readablePrTopJson",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "factsJson": {
+            "type": "string"
+          },
+          "fileLimit": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "factsJson"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "text",
+          "notes"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid-facts"
+      ]
+    },
+    {
+      "operation": "readPrFieldsJson",
+      "input_schema": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "result_schema": {
+        "type": "string"
+      },
+      "errors": []
+    },
+    {
+      "operation": "userStory",
+      "input_schema": {
+        "type": "string"
+      },
+      "result_schema": {
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "errors": []
+    }
+  ],
+  "calls": [],
+  "resources": [],
+  "limits": {
+    "max_steps": 1,
+    "max_model_calls": 1
+  },
+  "conventions": []
+}
 ```
 
 </details>

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-pr-body.prompt.md (sha256: 441cd742e14f1b94eedc21555cf9426cd8eb4c01eb86d7dc2c72e8c1183ce893).
+// Generated from prompts/cli/workflow-pr-body.prompt.md (sha256: 2544e1a9a8bfad496013e9d3acf1cdcb447c7c9e4d867850229d645ccd79ff09).
 // The readable part of a pdd workflow PR (#3042): a status line, the user story, a short summary, a cases table, what
 // changed, a proof table from pdd's own records and one approval/next/merge line. The runner gathers the facts; this
 // module only renders them. Agent words appear only in the title, the summary and the cases table, always as inert text.
@@ -428,4 +428,14 @@ export function detailsOf(body) {
   while (close > open && rows[close] !== '</details>') close--;
   const details = rows.slice(open + 1, close).join('\n').trim();
   return close > open ? { details: details.startsWith(TOP_NOTE) ? details.slice(TOP_NOTE.length).trim() : details, after: rows.slice(close + 1).join('\n').trim() } : null;
+}
+
+// Typed interpreter boundaries retain the native helpers' arbitrary map keys as JSON text.
+export const readPrFieldsJson = texts => JSON.stringify(readPrFields(texts));
+export function readablePrTopJson({ factsJson, fileLimit } = {}) {
+  let facts;
+  try { facts = JSON.parse(factsJson); } catch { /* Report the typed adapter error below. */ }
+  if (!facts || typeof facts !== 'object' || Array.isArray(facts))
+    throw Object.assign(new Error('The renderer needs a JSON facts object.'), { code: 'invalid-facts' });
+  return readablePrTop(facts, { fileLimit });
 }
