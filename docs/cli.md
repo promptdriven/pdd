@@ -1058,7 +1058,8 @@ wait for lint or complete it. Local lint also saves coverage and omission eviden
 when another selected row is refused before upload. These local results can be
 read without authentication. Temporary lint failures retain local paths, reasons,
 refusals and coverage in text and JSON, and return exit 5. Named lint targets
-include only executable scenarios present in the uploaded archive.
+include only executable scenarios present in the uploaded archive. The files
+preview uses that same selection and shows native omissions with their reasons.
 
 M includes missing, stale and invalid blocks. Checkable means a valid current full
 or partial declaration; it does not mean that all module behavior has passed.

@@ -877,6 +877,13 @@ saved read.
 
 ## Native selection and no-verdict lint
 
+The files preview uses the same native omission selection as a check. Exclude
+native-only scenario closures from its upload inventory, retaining each local
+path, reason, refusal and coverage in text/JSON. A valid native omission is not a
+broken test and does not itself fail a files preview; a malformed native scenario
+keeps exit 4. Ordinary preview discovery and per-test capture isolation remain
+unchanged. The preview makes no Runtime request and does not claim execution.
+
 Construct every negotiated named lint request from the exact executable source
 selection used for that upload. Every named test must be present in the archive.
 Exclude local refusals and native-only omissions. Preserve this selection in

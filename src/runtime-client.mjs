@@ -1,5 +1,5 @@
 import { acquireInterpreterSlot, markInterpreterDispatch, observeInterpreterRequest } from './interpreter-queue.mjs';
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 7fc8dd8fed1e4d3c5d6396fda64c6d4b5ca0e3a064053f50ee5cfdc1265b8740).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 8fd52eec7dd4feae322e4aec64700b24429dc35c570f69c03a8c58075164df74).
 import { interfaceFindings } from './interface-draft.mjs';
 import {readEvidenceEligibility} from './workflow-runner.mjs';
 import {allRuns} from './workflow-runs.mjs';
@@ -1875,20 +1875,27 @@ function runFiles(cwd, words, options, ports) {
   const selected = select(found, normalized, root), coverage = bindingCoverage({ root, found, selected });
   const rows = selected.map(test => ({test:test.path,story:test.story,state:'ready',refusals:[],
     ...(discoveryRefusal(test) ? {state:'refused',unsent:true,refusals:[discoveryRefusal(test)]} : {})}));
+  const nativeRows = new Map(preflight({root,found,selected}).rows.filter(row=>row.native_only?.length).map(row=>[row.test,row]));
+  for (const row of rows) {
+    const native = nativeRows.get(row.test);
+    if (native) Object.assign(row,{native_only:native.native_only,unsent:true,state:native.refusals.length ? 'refused' : 'not_run',
+      refusals:native.refusals,note:{code:'native-only',message:native.native_only.map(item=>`${item.path}: ${item.reason}`).join('; ')}});
+  }
   const appMap = options['--app-map'] === undefined ? null : appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
   for (const path of found.excludedFixtureProjects ?? []) line(ports.stderr, `Warning: skipped nested fixture project ${path}.`);
   const capture = captureIndependent(root, rows, ports, {appMap,excludeFixtureProjects:words.length === 0})
     ?? {files:[],reads:[],bytes:0};
-  const broken = rows.filter(row => row.unsent), exitCode = broken.length ? 4 : 0;
+  const broken = rows.filter(row => row.unsent && row.refusals.length), exitCode = broken.length ? 4 : 0;
   const summary = `${capture.files.length} files, ${formatSize(capture.bytes)} (${capture.bytes} bytes). ${otherFiles(capture.files, found).length} of them are not prompt, story or test files.${broken.length ? ` ${broken.length} tests could not run.` : ''}`;
   if (options['--json']) {
-    line(ports.stdout, JSON.stringify({repo:root,exit_code:exitCode,summary_line:summary,rows:[...broken.map(row=>({...row,...resultOutcome(row)})),...rows.filter(row=>!row.unsent)],files:capture.files,coverage}));
+    line(ports.stdout, JSON.stringify({repo:root,exit_code:exitCode,summary_line:summary,rows:[...rows.filter(row=>row.unsent).map(row=>({...row,...resultOutcome(row)})),...rows.filter(row=>!row.unsent)],files:capture.files,coverage}));
     return exitCode;
   }
   for (const row of broken) for (const problem of row.refusals) {
     line(ports.stdout, `${row.test}: ${problem.message}`);
     line(ports.stdout, problem.hint ?? 'Fix the named test file, then run the selection again.');
   }
+  for (const row of rows.filter(row=>row.native_only?.length)) line(ports.stdout, `${row.test}: ${outcomeText(row)}: ${row.note.message}`);
   for (const warning of [...(capture.warnings ?? []), ...unmatchedLines(found)]) line(ports.stderr, warning);
   const width = Math.max(0, ...capture.files.map(file => file.path.length));
   for(const read of capture.reads??[])line(ports.stderr,`Local read (${read.roles.join(', ')}, not uploaded): ${read.path}`);

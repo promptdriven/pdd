@@ -103,3 +103,30 @@ for(const legacy of [false,true]) test(`saved mixed check continues with exact s
   assert.equal(fake.posts.filter(post=>post.command==='check').length,tests.length);
   assert.ok(JSON.parse(next.ports.stdout.text).rows.filter(row=>!row.unsent).every(row=>row.state==='passed'));
 });
+
+for(const allNative of [false,true]) test(`files preview omits native closures (${allNative?'all native':'mixed'})`,async t=>{
+  const setup=harbor(t,repo=>mixed(repo));
+  const words=allNative?['kernel']:['place-order','kernel'];
+  const env={HOME:setup.home,PDD_STATE_DIR:setup.state};
+  const preview=portsFor(env,{gh:()=>assert.fail('files preview must not authenticate')});
+  assert.equal(await runCheck({cwd:setup.repo,words,options:{'--files':true,'--json':true}},preview.ports),0);
+  const result=JSON.parse(preview.ports.stdout.text),files=result.files.map(file=>file.path);
+  assert.ok(!files.includes(nativeTest),'native scenario omitted from preview');
+  assert.ok(!files.includes(nativePath),'native prompt omitted from preview');
+  const row=result.rows.find(row=>row.test===nativeTest);
+  assert.equal(row.state,'not run');assert.equal(row.reason.code,'native-only');
+  assert.deepEqual(row.native_only,[{path:nativePath,reason}]);
+  const text=portsFor(env,{gh:()=>assert.fail('files preview must not authenticate')});
+  assert.equal(await runCheck({cwd:setup.repo,words,options:{'--files':true}},text.ports),0);
+  assert.ok(text.ports.stdout.text.includes(reason));
+  if(allNative) assert.equal(files.length,0);
+  else {
+    const fake=await fakeRuntime(t,(entry,f)=>f.normal(entry));
+    const actual=portsFor({...env,PDD_RUNTIME_URL:fake.origin});
+    assert.equal(await runCheck({cwd:setup.repo,words,options:{'--json':true}},actual.ports),5);
+    const post=fake.posts.find(post=>post.command==='lint');
+    const tar=spawnSync('tar',['-tf','-'],{input:post.tar,encoding:'utf8'});
+    assert.equal(tar.status,0);
+    assert.deepEqual(files,tar.stdout.split('\n').filter(Boolean));
+  }
+});
