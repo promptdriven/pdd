@@ -1,4 +1,4 @@
-// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: f2e9a8a186354966d16db8a0fe155a27f18dc1b457282b44b6a03441d04d97bc).
+// Implements prompts/cli/issue-dependencies-github.prompt.md.
 import { execFile as execCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import * as nativeFs from 'node:fs';
@@ -11,6 +11,8 @@ import { gitContext, currentChat, stateDirFor } from './workflow-runs.mjs';
 import { chatLifecycle, chatSession, observeLifecycle, sessionEvidenceDue, observedSession, ownSession, launchAnchor, validSessionId } from './workflow-chat.mjs';
 import { dependencyLinks, projectIssueGraph, validateDependencyChange } from './issue-dependencies.mjs';
 import { githubBudgetSettings, githubEtagCache, githubFloorGuard, githubFullLastPage, githubLedger, githubMachineEntries, githubReply, nativeGithubCounter } from './github-calls.mjs';
+
+import { machineJson, readAutopilotState } from './autopilot-store.mjs';
 
 const REVIEW = 'pdd-dependency-review:v1', IMPACT = 'pdd-dependency-impact:v1';
 const NATIVE_GITHUB = Symbol('native github'), NATIVE_OWNERS = Symbol('native owners'), LIVE_GITHUB = Symbol('live github');
@@ -323,40 +325,31 @@ async function nativeLinkVersions(repository, rows, api) {
 // One private, versioned, bounded file for each repository: the issue rows of the last list read and the full reads of
 // each issue, keyed by the change facts of its row. A save merges with the file as it is then: the newer list read
 // wins with its watermark, each issue keeps its newer observation, and an issue that a process wrote stays invalid.
-export function dependencySnapshotStore({ root, repository, fs = nativeFs }) {
+export function dependencySnapshotStore({ root, repository, fs = nativeFs, store }) {
   const repo = String(repository).toLowerCase(), file = join(root, 'github', `${short(repo)}.snapshot.json`);
   const valid = data => object(data) && data.v === STORE_VERSION && data.repository === repo && Number.isFinite(data.refreshedAt)
     && object(data.list) && object(data.list.rows) && typeof data.list.since === 'string' && Number.isFinite(data.list.readAt) && object(data.issues);
-  const load = () => { try { const data = JSON.parse(fs.readFileSync(file, 'utf8')); return valid(data) ? data : null; } catch { return null; } };
+  const storage = machineJson({ root, bucket: 'cache', key: `snapshot:${short(repo)}`, file, invalidLegacy: null }, { fs, store });
+  const load = () => { try { const data = storage.read(); return valid(data) ? data : null; } catch { return null; } };
   const completionFile = join(root, 'github', `${short(repo)}.completion.json`);
+  const pending = machineJson({ root, bucket: 'queue', key: `completion:${short(repo)}`, file: completionFile, invalidLegacy: null }, { fs, store });
   const completion = {
     file: completionFile,
-    read: () => { try { const value = JSON.parse(fs.readFileSync(completionFile, 'utf8')); return object(value) && value.v === STORE_VERSION ? value : null; } catch { return null; } },
+    read: () => { try { const value = pending.read(); return object(value) && value.v === STORE_VERSION ? value : null; } catch { return null; } },
     save: value => {
       const text = JSON.stringify({ v: STORE_VERSION, ...value });
       if (Buffer.byteLength(text) > STORE_BYTES) return false;
-      fs.mkdirSync(dirname(completionFile), { recursive: true, mode: 0o700 });
-      const temp = `${completionFile}.${randomUUID()}.tmp`;
-      fs.writeFileSync(temp, text, { mode: 0o600 }); fs.renameSync(temp, completionFile);
+      pending.write(JSON.parse(text));
       return true;
     },
-    clear: () => { try { fs.unlinkSync(completionFile); } catch (error) { if (error.code !== 'ENOENT') throw error; } },
+    clear: () => pending.clear(),
   };
   return {
     file, repository: repo, load, completion,
     save(data) {
-      const lock = `${file}.lock`;
-      let held = false;
       try {
-        fs.mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-        for (let attempt = 0; !held; attempt++) {
-          try { fs.mkdirSync(lock, { mode: 0o700 }); held = true; }
-          catch (error) {
-            if (error.code !== 'EEXIST' || attempt >= 200) return null;
-            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-          }
-        }
-        const current = load(), epoch = Math.max(data.refreshedAt, current?.refreshedAt ?? -Infinity);
+        return storage.update(saved => {
+        const current = valid(saved) ? saved : null, epoch = Math.max(data.refreshedAt, current?.refreshedAt ?? -Infinity);
         const sides = [current, data].filter(side => side && side.refreshedAt === epoch);
         // On a tie the list of this save wins: it was read after the saved one.
         const list = sides.length === 2 && current.list.readAt > data.list.readAt ? current.list : sides.at(-1).list;
@@ -380,14 +373,10 @@ export function dependencySnapshotStore({ root, repository, fs = nativeFs }) {
           for (const [n] of drop) delete issues[n];
           text = JSON.stringify(next);
         }
-        if (Buffer.byteLength(text) > STORE_BYTES) return null;
-        fs.mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-        const temp = `${file}.${randomUUID()}.tmp`;
-        fs.writeFileSync(temp, text, { mode: 0o600 });
-        fs.renameSync(temp, file);
+        if (Buffer.byteLength(text) > STORE_BYTES) throw Error('Snapshot exceeds storage limit');
         return next;
+        });
       } catch { return null; /* A lost save only costs reads. */ }
-      finally { if (held) try { fs.rmdirSync(lock); } catch { /* A leftover lock refuses future saves. */ } }
     },
   };
 }
@@ -395,7 +384,7 @@ export function dependencySnapshotStore({ root, repository, fs = nativeFs }) {
 // The pdd command default: the saved snapshot and the ETag cache of a repository where Autopilot runs on this machine,
 // that is, where its call ledger exists in the state root.
 const autopilotRoot = ports => ports.autopilotStateRoot ?? join(stateDirFor(ports), 'autopilot');
-const autopilotRepository = (root, repository, fs = nativeFs) => { try { return fs.existsSync(githubLedger({ root, repository }).file); } catch { return false; } };
+const autopilotRepository = (root, repository, fs = nativeFs) => { try { return githubLedger({ root, repository, fs }).exists(); } catch { return false; } };
 function defaultStores(ports) {
   if (ports.snapshotStore === null) return () => null;
   if (ports.snapshotStore) return repository => sameRepo(ports.snapshotStore.repository, repository) ? ports.snapshotStore : null;
@@ -801,7 +790,7 @@ async function launcherState(cwd, repository, ports) {
   const root = await selectedCheckout(cwd, repository, ports);
   if (!root) return null;
   const folder = ports.autopilotStateRoot ?? join(stateDirFor(ports), 'autopilot');
-  const state = readJson(join(folder, `${hash(root).slice(0, 20)}.json`));
+  const state = readAutopilotState(join(folder, `${hash(root).slice(0, 20)}.json`), null, ports);
   return state && sameRepo(state.repo, repository) && state.cwd === root ? state : null;
 }
 

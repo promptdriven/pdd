@@ -1,3 +1,4 @@
+import {readIndex as readMachineIndex,writeIndex as writeMachineIndex} from './helpers/autopilot-run-index.mjs';
 import test from 'node:test';
 import { detailsOf } from '../src/workflow-pr-body.mjs';
 import assert from 'node:assert/strict';
@@ -420,9 +421,9 @@ test('selection: no ref inside a run worktree finds that run; outside any reposi
   await f.run(); const run = f.record();
   const shown = await runStatus({ cwd: run.root }, f.ports);
   assert.equal(shown.exitCode, 0); assert.match(shown.message, /#17/);
-  const index = JSON.parse(readFileSync(join(f.state, 'runs.json'), 'utf8'));
+  const index = readMachineIndex(f.state);
   index.runs.push({ ...index.runs[0], repo: 'other/project', runDir: join(f.base, 'missing') });
-  writeFileSync(join(f.state, 'runs.json'), JSON.stringify(index));
+  writeMachineIndex(f.state,index);
   const outside = join(f.base, 'home');
   const ambiguous = await openRun({ ref: '17', cwd: outside }, f.ports);
   assert.equal(ambiguous.exitCode, 1); assert.match(ambiguous.message, /example\/project#17/); assert.match(ambiguous.message, /other\/project#17/);
@@ -590,9 +591,9 @@ test('status --all lists every run on this machine across repositories, person-w
   await a.run(); a.tick(); await stepDone({ step: 'scope', summary: 'plan', cwd: a.record().root }, a.agentPorts()); a.herdr.idle();
   b.clock += 60000; await b.run();
   // A third run that is cancelled, and a repository that is gone, are not errors.
-  const index = JSON.parse(readFileSync(join(a.state, 'runs.json'), 'utf8'));
+  const index = readMachineIndex(a.state);
   index.runs.push({ repo: 'gone/repo', number: 5, runDir: join(a.base, 'gone', '.git', 'pdd', 'runs', '5') });
-  writeFileSync(join(a.state, 'runs.json'), JSON.stringify(index));
+  writeMachineIndex(a.state,index);
   const outside = join(a.base, 'home');
   for (const input of [{ all: true, cwd: a.source }, { cwd: outside }]) {
     const out = await runStatus(input, a.ports);
@@ -625,10 +626,10 @@ test('status --all shows indexed PR states and discovers no repositories when th
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, f.ports);
   writeFileSync(join(run.root, 'value.mjs'), 'export const value = 2;\n'); f.git(run.root, 'commit', '-qam', 'two');
   await stepDone({ step: 'change', summary: 'two', cwd: run.root }, f.agentPorts()); await lastSteps(f, run, await stepDone({ step: 'verify', summary: 'ok', cwd: run.root }, f.agentPorts()));
-  const indexFile=join(f.state,'runs.json'), indexBytes=readFileSync(indexFile);
-  rmSync(indexFile);
+  const indexSnapshot=readMachineIndex(f.state);
+  writeMachineIndex(f.state,{runs:[]});
   assert.match((await runStatus({all:true,cwd:f.source},f.ports)).message,/No pdd runs on this machine/);
-  writeFileSync(indexFile,indexBytes);
+  writeMachineIndex(f.state,indexSnapshot);
   const open = await runStatus({ all: true, cwd: f.source }, f.ports);
   assert.match(open.message, /^example\/project#17 · small-change · build · PR open · PR #23 · /);
   const seq = f.record().journalSeq; f.tick(3600000);

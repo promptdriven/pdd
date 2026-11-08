@@ -4,6 +4,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
+import { machineJson, withAutopilotStore } from './autopilot-store.mjs';
+
 export const GITHUB_PURPOSES = ['dependencies', 'claims', 'issues', 'pulls', 'writes', 'setup', 'other'];
 export const GITHUB_SHARE = 30, GITHUB_FLOOR = 1000;
 const HOUR = 60 * 60 * 1000, KEEP = 2 * HOUR, DEFAULT_LIMIT = 5000;
@@ -91,9 +93,9 @@ export function githubEntry(args, outcome, purpose, at) {
 export const githubStateRoot = (env = process.env, stateRoot) => stateRoot ?? join(env?.HOME || homedir(), '.local', 'state', 'pdd', 'autopilot');
 const ledgerFolder = root => join(root, 'github');
 
-function readLines(fs, file) {
+function readLines(fs, file, strict = false) {
   let text;
-  try { text = fs.readFileSync(file, 'utf8'); } catch { return []; }
+  try { text = fs.readFileSync(file, 'utf8'); } catch (error) { if (strict) throw error; return []; }
   const entries = [];
   for (const line of text.split('\n')) {
     if (!line) continue;
@@ -102,37 +104,54 @@ function readLines(fs, file) {
   return entries;
 }
 
-// The local ledger of one repository on this machine: one JSON line for each call.
-export function githubLedger({ root, repository, fs = nativeFs }) {
-  const repo = String(repository).toLowerCase(), file = join(ledgerFolder(root), `${hash(repo)}.jsonl`);
+// Call rows stay separate so append and compaction cannot replace another writer.
+export function githubLedger({ root, repository, fs = nativeFs, store }) {
+  const repo = String(repository).toLowerCase(), scope = hash(repo), file = join(ledgerFolder(root), `${scope}.jsonl`);
+  const run = action => withAutopilotStore(root, { fs, store }, tx => {
+    tx.migrate(`github:${scope}`, () => {
+      if (!fs.existsSync(file)) return undefined;
+      return readLines(fs, file, true);
+    }, entries => {
+      for (const entry of entries) tx.append('events', scope, entry);
+      tx.put('budgets', scope, { repository: repo });
+    });
+    return action(tx);
+  });
   return {
     file, repository: repo,
-    record(entry) {
-      // Measurement never changes the call: a failed write is lost, the call result stays.
-      try {
-        fs.mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-        fs.appendFileSync(file, `${JSON.stringify({ ...entry, repo })}\n`, { mode: 0o600 });
-      } catch { /* best effort */ }
+    exists() {
+      if (!store && !fs.existsSync(join(root, 'machine.sqlite')) && !fs.existsSync(join(root, 'machine-state.json'))) return fs.existsSync(file);
+      return run(tx => tx.get('budgets', scope) !== undefined);
     },
-    read: () => readLines(fs, file),
-    // Keep the last 2 hours. A call that another process appends during the rewrite can be lost.
+    record(entry) {
+      try { run(tx => { tx.migrate(`github:${scope}`, () => [], () => {}); tx.append('events', scope, { ...entry, repo }); tx.put('budgets', scope, { repository: repo }); }); }
+      catch { /* Measurement never changes the call result. */ }
+    },
+    read() { try { return run(tx => tx.entries('events', scope).map(row => row.value)); } catch { return []; } },
     compact(now) {
-      try {
-        const entries = readLines(fs, file);
-        if (!entries.some(entry => entry.at <= now - KEEP)) return;
-        const temp = `${file}.${randomUUID()}.tmp`;
-        fs.writeFileSync(temp, entries.filter(entry => entry.at > now - KEEP).map(entry => `${JSON.stringify(entry)}\n`).join(''), { mode: 0o600 });
-        fs.renameSync(temp, file);
-      } catch { /* best effort */ }
+      try { run(tx => { for (const row of tx.entries('events', scope)) if (row.value.at <= now - KEEP) tx.removeEntry('events', scope, row.sequence); }); }
+      catch { /* best effort */ }
     },
   };
 }
 
-// Every ledger on this machine, for the budget and the newest observed limit.
-export function githubMachineEntries({ root, fs = nativeFs }) {
+export function githubMachineEntries({ root, fs = nativeFs, store }) {
   let names = [];
-  try { names = fs.readdirSync(ledgerFolder(root)).filter(name => /^[0-9a-f]{20}\.jsonl$/.test(name)); } catch { return []; }
-  return names.flatMap(name => readLines(fs, join(ledgerFolder(root), name)));
+  try { names = fs.readdirSync(ledgerFolder(root)).filter(name => /^[0-9a-f]{20}\.jsonl$/.test(name)); } catch { /* No legacy ledgers. */ }
+  if (!store && !names.length && !fs.existsSync(join(root, 'machine.sqlite')) && !fs.existsSync(join(root, 'machine-state.json'))) return [];
+  try { return withAutopilotStore(root, { fs, store }, tx => {
+    for (const name of names) {
+      const scope = name.slice(0, -6);
+      tx.migrate(`github:${scope}`, () => {
+        try { return readLines(fs, join(ledgerFolder(root), name), true); }
+        catch { return undefined; } // Retry this source later; keep healthy machine evidence.
+      }, entries => {
+        for (const entry of entries) tx.append('events', scope, entry);
+        tx.put('budgets', scope, { repository: entries[0]?.repo ?? null });
+      });
+    }
+    return tx.entries('events').map(row => row.value);
+  }); } catch { return []; }
 }
 
 // A gh runner that records each gh call in a ledger. options.purpose names the purpose of one call and
@@ -156,12 +175,12 @@ export function countGithubCalls(exec, { ledger, purpose, now = Date.now } = {})
 // A counter for a pdd command outside the tick: the ledger of the repository that each call names, only when
 // Autopilot already keeps a ledger for it on this machine. Other repositories, and test doubles of gh, write nothing.
 // The folder is found at each call, so a later HOME applies.
-export function nativeGithubCounter(exec, { env = process.env, stateRoot, purpose, fs = nativeFs, now = Date.now } = {}) {
+export function nativeGithubCounter(exec, { env = process.env, stateRoot, purpose, fs = nativeFs, now = Date.now, store } = {}) {
   return countGithubCalls(exec, { purpose, now, ledger: (args, named) => {
     const repository = githubRepository(args) ?? (typeof named === 'string' && REPOSITORY.test(named) ? named.toLowerCase() : null);
     if (!repository) return null;
-    const ledger = githubLedger({ root: githubStateRoot(env, stateRoot), repository, fs });
-    try { return fs.existsSync(ledger.file) ? ledger : null; } catch { return null; }
+    const ledger = githubLedger({ root: githubStateRoot(env, stateRoot), repository, fs, store });
+    try { return ledger.exists() ? ledger : null; } catch { return null; }
   } });
 }
 
@@ -217,11 +236,12 @@ export function githubStatusLine({ usage, machine = usage, budget }) {
 // Saved ETags and bodies of GET replies, for conditional requests on the next read. A save merges with the file as
 // it is then, so the tick and the pdd commands keep each other's entries: an entry stays while it was used in the
 // last day, and the newest used entries stay within the count and size bounds.
-export function githubEtagCache({ root, repository, fs = nativeFs, now = Date.now }) {
+export function githubEtagCache({ root, repository, fs = nativeFs, now = Date.now, store }) {
   const file = join(ledgerFolder(root), `${hash(String(repository).toLowerCase())}.etags.json`);
+  const storage = machineJson({ root, bucket: 'cache', key: `etags:${hash(String(repository).toLowerCase())}`, file, invalidLegacy: null }, { fs, store });
   let saved, used = new Map();
   const readFile = () => {
-    try { const value = JSON.parse(fs.readFileSync(file, 'utf8')); return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; } catch { return {}; }
+    try { const value = storage.read(); return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; } catch { return {}; }
   };
   const load = () => saved ??= readFile();
   const valid = entry => entry && typeof entry.etag === 'string' && typeof entry.body === 'string';
@@ -237,7 +257,8 @@ export function githubEtagCache({ root, repository, fs = nativeFs, now = Date.no
     save() {
       // A read that used no entry (it failed early) keeps the saved cache.
       if (!used.size) return;
-      const at = now(), merged = Object.entries({ ...readFile(), ...Object.fromEntries(used) })
+      try { storage.update(current => {
+      const at = now(), merged = Object.entries({ ...(current ?? {}), ...Object.fromEntries(used) })
         .filter(([, entry]) => valid(entry) && finite(entry.at) && entry.at > at - ETAG_KEEP).sort((a, b) => b[1].at - a[1].at);
       const kept = {}; let size = 2;
       for (const [endpoint, entry] of merged.slice(0, ETAG_ENTRIES)) {
@@ -245,13 +266,10 @@ export function githubEtagCache({ root, repository, fs = nativeFs, now = Date.no
         if (size > ETAG_BYTES) break;
         kept[endpoint] = entry;
       }
-      try {
-        fs.mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-        const temp = `${file}.${randomUUID()}.tmp`;
-        fs.writeFileSync(temp, JSON.stringify(kept), { mode: 0o600 });
-        fs.renameSync(temp, file);
-      } catch { /* A lost cache only costs counted reads. */ }
-      saved = kept; used = new Map();
+      saved = kept;
+      return kept;
+      }); } catch { /* A lost cache only costs counted reads. */ }
+      used = new Map();
     },
   };
 }

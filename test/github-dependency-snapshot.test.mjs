@@ -1,8 +1,9 @@
+import { machineJson } from '../src/autopilot-store.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, basename, join } from 'node:path';
 import { autopilotGithubWorld } from './helpers/autopilot-github-world.mjs';
 import { GITHUB_FLOOR, githubBudgetSettings, githubLedger } from '../src/github-calls.mjs';
 import { createDependencyReadPorts, readDependencySnapshot } from '../src/issue-dependencies-github.mjs';
@@ -16,7 +17,10 @@ const minute = 60 * 1000, hour = 60 * minute;
 const key = (w, n) => `https://github.com/${w.repository}/issues/${n}`;
 // The saved snapshot and the kept completion beside the ledger: ROOT/github/H.snapshot.json and H.completion.json.
 const fileOf = (w, kind) => join(w.stateRoot, 'github', `${createHash('sha256').update(w.repository.toLowerCase()).digest('hex').slice(0, 20)}.${kind}.json`);
-const readJson = file => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return null; } };
+const readJson = file => {
+  const [, id, kind] = /^([0-9a-f]{20})\.(snapshot|completion)\.json$/.exec(basename(file));
+  return machineJson({ root: dirname(dirname(file)), bucket: kind === 'snapshot' ? 'cache' : 'queue', key: `${kind}:${id}`, file }).read();
+};
 const savedSnapshot = w => { const value = readJson(fileOf(w, 'snapshot')); assert.ok(value?.list?.rows && value.issues, 'a saved dependency snapshot exists'); return value; };
 const kept = w => readJson(fileOf(w, 'completion'));
 const counts = (w, mark) => { const { rest, counted, graphql } = w.github.since(mark); return { rest, counted, graphql }; };
@@ -223,10 +227,10 @@ test('the floor stops non-safety reads at 1,000 calls left, but not the claim ch
   w.time = w.github.resetAt * 1000 + minute;
   await w.tick();
   assert.deepEqual(request.issues.map(issue => reviews(w, Number(issue.split('/').pop()))), Array(10).fill(1));
-  assert.ok(!existsSync(fileOf(w, 'completion')));
-  const saved = readFileSync(fileOf(w, 'snapshot'), 'utf8');
+  assert.equal(kept(w), null);
+  const saved = JSON.stringify(readJson(fileOf(w, 'snapshot')));
   assert.ok(saved.length < 64 * 1024 * 1024 && JSON.parse(saved).v === 1, 'the saved snapshot is versioned and bounded');
-  assert.equal(statSync(fileOf(w, 'snapshot')).mode & 0o777, 0o600, 'the saved snapshot is private');
+  assert.equal(statSync(join(w.stateRoot, 'machine.sqlite')).mode & 0o777, 0o600, 'the saved snapshot is private');
   assert.equal(GITHUB_FLOOR, 1000, 'the default floor');
   assert.deepEqual(githubBudgetSettings({}), { share: 30, floor: 1000 });
 });

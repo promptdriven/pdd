@@ -1,3 +1,4 @@
+import { readAutopilotState } from '../src/autopilot-store.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, existsSync, realpathSync } from 'node:fs';
@@ -87,7 +88,7 @@ function fixture(t, origin = 'https://github.com/owner/repo.git', layout = 'norm
   };
   f.invoke = (command, extra = {}) => runAutopilotLauncher({ command, cwd: f.cwd, env: { HOME: home, PATH: process.env.PATH }, packageRoot, issues: [], ...extra }, f.ports);
   f.stateFile = () => join(f.ports.stateRoot, `${createHash('sha256').update(f.cwd).digest('hex').slice(0, 20)}.json`);
-  f.state = () => existsSync(f.stateFile()) ? JSON.parse(readFileSync(f.stateFile(), 'utf8')) : null;
+  f.state = () => readAutopilotState(f.stateFile());
   f.tick = () => tickAutopilot(f.stateFile(), f.ports);
   f.commonDir = () => realpathSync(git(f.cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir').trim());
   // The allocator keeps its records in the common Git folder and makes worktrees beside the checkout.

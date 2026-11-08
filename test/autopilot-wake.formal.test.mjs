@@ -1,3 +1,4 @@
+import { readAutopilotState, autopilotStateFiles } from '../src/autopilot-store.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -95,8 +96,8 @@ async function fixture(t, initialReviews = [[]]) {
   assert.equal(f.prompts.length, 1, 'The fake Herdr port captures the start-up recipe.');
   assert.deepEqual(f.warnings, []);
   f.prompts.length = 0; f.requests.length = 0; f.attempts = 0;
-  f.stateFile = join(stateRoot, readdirSync(stateRoot).find(name => name.endsWith('.json')));
-  f.state = () => JSON.parse(readFileSync(f.stateFile, 'utf8'));
+  f.stateFile = join(stateRoot, autopilotStateFiles(stateRoot)[0]);
+  f.state = () => readAutopilotState(f.stateFile);
   f.tick = () => tickAutopilot(f.stateFile, f.ports);
   return f;
 }

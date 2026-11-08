@@ -1,3 +1,4 @@
+import { autopilotStateFiles } from '../src/autopilot-store.mjs';
 // #3039: an interpreter outage parks only the runs that need the interpreter, frees their slots, alerts once and recovers by itself.
 // Every the interpreter, health, HTTP, Discord and clock port is injected; no test calls the real the interpreter or a chat service.
 import test from 'node:test';
@@ -280,7 +281,7 @@ async function launcher(t) {
   writeFileSync(join(home, '.config', 'pdd', 'autopilot-alerts.json'), JSON.stringify({ v: 1, service: 'discord', url: 'https://discord.com/api/webhooks/1/abc' }));
   const module = await import('../src/autopilot-launcher.mjs');
   f.start = () => module.runAutopilotLauncher({ command: 'start', cwd, env, packageRoot: resolve('.'), issues: [] }, f.ports);
-  f.stateFile = () => join(f.ports.stateRoot, readdirSync(f.ports.stateRoot).find(x => x.endsWith('.json')));
+  f.stateFile = () => join(f.ports.stateRoot, autopilotStateFiles(f.ports.stateRoot)[0]);
   f.tick = () => module.tickAutopilot(f.stateFile(), f.ports);
   f.packet = () => JSON.parse(f.prompts.at(-1).trim().split('\n').at(-1));
   f.rules = () => f.prompts.length ? f.packet().timeRules ?? [] : [];

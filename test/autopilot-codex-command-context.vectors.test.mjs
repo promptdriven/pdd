@@ -1,3 +1,4 @@
+import { readAutopilotState, autopilotStateFiles } from '../src/autopilot-store.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -88,7 +89,7 @@ async function replayStep(t, step, world, root) {
   for (const path of new Set([...Object.keys(before), ...Object.keys(after)])) {
     if (before[path] !== after[path]) world.config_writes.push({ path: `/${relative(root, path)}`, before: before[path] ?? null, after: after[path] ?? null });
   }
-  const state = JSON.parse(readFileSync(join(stateRoot, readdirSync(stateRoot).find(name => name.endsWith('.json'))), 'utf8'));
+  const state = readAutopilotState(join(stateRoot, autopilotStateFiles(stateRoot)[0]));
   assert.deepEqual(state.agent, saved.agent, 'binding: the saved agent matches the world');
   for (const [key, value] of Object.entries(saved.environment)) assert.equal(state.environment[key], host(value), `binding: saved ${key} matches the world`);
 }

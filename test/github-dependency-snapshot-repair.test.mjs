@@ -101,18 +101,33 @@ test('real-file store saves keep invalidation times across stale and overlapping
   // Pause process A after its merge read. Process B tries to invalidate at that exact boundary.
   // The fs port still uses native files; only the scheduling is controlled.
   const release = join(root, 'release');
-  const a = worker(t, `import * as fs from 'node:fs'; import {dependencySnapshotStore} from ${JSON.stringify(storeModule)};
-    const root=process.argv[1], file=process.argv[2], release=process.argv[3];
-    const port={...fs,readFileSync(path,...args){const bytes=fs.readFileSync(path,...args);if(path===file){process.send('read');while(!fs.existsSync(release))Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10);}return bytes;}};
-    const store=dependencySnapshotStore({root,repository:'acme/widgets',fs:port});store.save(JSON.parse(process.argv[4]));process.disconnect();`, [root, store.file, release, JSON.stringify(initial)]);
-  const aExit = exited(a);
-  await new Promise(resolve => a.once('message', resolve));
-  const b = worker(t, `import * as fs from 'node:fs'; import {dependencySnapshotStore} from ${JSON.stringify(storeModule)};
-    const port={...fs,mkdirSync(path,...args){try{return fs.mkdirSync(path,...args);}catch(error){if(error.code==='EEXIST')process.send('waiting');throw error;}}};
-    const store=dependencySnapshotStore({root:process.argv[1],repository:'acme/widgets',fs:port});
-    store.save(JSON.parse(process.argv[2]));process.send('saved');process.disconnect();`, [root, JSON.stringify({ ...initial, issues: {}, invalid: { 1: 40 } })]);
+  // Open B before A holds the write lock, so the signal below observes save
+  // contention, rather than merely announcing that B is about to open storage.
+  const b = worker(t, `import {DatabaseSync} from 'node:sqlite'; import {dependencySnapshotStore} from ${JSON.stringify(storeModule)};
+    const {openAutopilotStore}=await import(new URL('./autopilot-store.mjs', ${JSON.stringify(storeModule)}));
+    const root=process.argv[1], backend=openAutopilotStore({root});
+    const port={transaction(fn){
+      const probe=new DatabaseSync(root+'/machine.sqlite');probe.exec('PRAGMA busy_timeout=0');
+      try {probe.exec('BEGIN IMMEDIATE');probe.exec('ROLLBACK');throw Error('expected write contention');}
+      catch(error){if((error.errcode & 255)!==5)throw error;process.send('blocked');}
+      finally {probe.close();}
+      return backend.transaction(fn);
+    }};
+    const store=dependencySnapshotStore({root,repository:'acme/widgets',store:port});
+    process.send('ready');process.once('message',()=>{store.save(JSON.parse(process.argv[2]));backend.close();process.disconnect();});`, [root, JSON.stringify({ ...initial, issues: {}, invalid: { 1: 40 } })]);
   const bExit = exited(b);
   await new Promise(resolve => b.once('message', resolve));
+  const a = worker(t, `import * as fs from 'node:fs'; import {dependencySnapshotStore} from ${JSON.stringify(storeModule)};
+    const root=process.argv[1], file=process.argv[2], release=process.argv[3];
+    const {openAutopilotStore}=await import(new URL('./autopilot-store.mjs', ${JSON.stringify(storeModule)}));
+    const backend=openAutopilotStore({root});
+    const port={transaction(fn){return backend.transaction(tx=>fn({...tx,get(bucket,key){const value=tx.get(bucket,key);if(bucket==='cache'){process.send('read');while(!fs.existsSync(release))Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10);}return value;}}));}};
+    const store=dependencySnapshotStore({root,repository:'acme/widgets',store:port});store.save(JSON.parse(process.argv[4]));backend.close();process.disconnect();`, [root, store.file, release, JSON.stringify(initial)]);
+  const aExit = exited(a);
+  await new Promise(resolve => a.once('message', resolve));
+  const blocked = new Promise(resolve => b.once('message', resolve));
+  b.send('save');
+  assert.equal(await blocked, 'blocked');
   fs.writeFileSync(release, 'continue');
   await Promise.all([aExit, bExit]);
   assert.equal(store.load().invalid[1], 40, 'overlapping saves must serialize read, merge and write');

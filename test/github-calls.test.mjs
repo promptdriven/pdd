@@ -1,3 +1,4 @@
+import { readAutopilotState, autopilotStateFiles, machineJson } from '../src/autopilot-store.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -81,8 +82,8 @@ async function tickWorld(t, { github } = {}) {
     },
   };
   const launcher = await import('../src/autopilot-launcher.mjs');
-  w.stateFile = () => join(w.ports.stateRoot, readdirSync(w.ports.stateRoot).find(name => name.endsWith('.json')));
-  w.state = () => { try { return JSON.parse(readFileSync(w.stateFile(), 'utf8')); } catch { return {}; } };
+  w.stateFile = () => join(w.ports.stateRoot, autopilotStateFiles(w.ports.stateRoot)[0]);
+  w.state = () => { try { return readAutopilotState(w.stateFile()); } catch { return {}; } };
   w.invoke = command => launcher.runAutopilotLauncher({ command, cwd, env: { HOME: home, PATH: process.env.PATH }, packageRoot: resolve('.'), issues: [] }, w.ports);
   w.tick = () => launcher.tickAutopilot(w.stateFile(), w.ports);
   w.ledger = () => githubLedger({ root: w.ports.stateRoot, repository: repo });
@@ -239,7 +240,7 @@ test('ETag: a second dependency read sends the saved ETags, reuses the bodies of
   const usage = githubUsage(w.entries.slice(counted), NOW);
   assert.equal(usage.counted, 0, 'no REST call of the second read counts against the limit');
   assert.equal(usage.notModified, again.length);
-  assert.ok(Object.keys(JSON.parse(readFileSync(second.file, 'utf8'))).length >= 6, 'the cache keeps the working set');
+  assert.ok(Object.keys(machineJson({root:dir,bucket:'cache',key:`etags:${createHash('sha256').update(repo).digest('hex').slice(0,20)}`,file:second.file}).read()).length >= 6, 'the cache keeps the working set');
 });
 
 test('one call: purposes, the reply headers of a real 304, the budget states and the status line', () => {

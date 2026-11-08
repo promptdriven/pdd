@@ -1,10 +1,12 @@
-// Generated from prompts/cli/autopilot-alerts.prompt.md (sha256: c354526a532f1fe6a988411af6fec1af727adcacba2f05828e89cd1908096f88).
+// Implements prompts/cli/autopilot-alerts.prompt.md.
 import * as nativeFs from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { hostname as osHostname, userInfo } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 import { promisify } from 'node:util';
+
+import { autopilotStateFiles, readAutopilotState } from './autopilot-store.mjs';
 
 const execute = promisify(execFile);
 export const ALERT_KINDS = Object.freeze(['usage-limit', 'resource', 'interpreter', 'interpreter-access', 'access', 'decision', 'stuck', 'long-running', 'recovered']);
@@ -56,10 +58,10 @@ const hostName = ports => oneLine((ports.hostname ?? osHostname)()) || 'unknown 
 function machineName(fs, root, repo, ports, cwd) {
   try {
     const own = `${createHash('sha256').update(String(cwd)).digest('hex').slice(0, 20)}.json`;
-    const names = fs.readdirSync(root).filter(name => STATE_FILE.test(name)).sort();
+    const names = autopilotStateFiles(root, { fs, store: ports.store });
     for (const name of [...names.filter(name => name === own), ...names.filter(name => name !== own)]) {
       let state;
-      try { state = JSON.parse(fs.readFileSync(join(root, name), 'utf8')); } catch { continue; }
+      try { state = readAutopilotState(join(root, name), null, { fs, store: ports.store }); } catch { continue; }
       const saved = typeof state?.repo === 'string' && state.repo.toLowerCase() === repo.toLowerCase() && typeof state.machine === 'string' ? clip(oneLine(state.machine), 100) : '';
       if (saved) return saved;
     }

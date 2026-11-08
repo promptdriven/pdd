@@ -81,9 +81,10 @@ failed command too.
 
 ## Ledger
 
-The ledger of a repository is `ROOT/github/H.jsonl`, where `H` is the first 20
-hex characters of the SHA-256 of the lowercase `owner/name`. The folder has mode
-0700, the file 0600. Each line is one JSON entry:
+The ledger uses the logical locator `ROOT/github/H.jsonl`, where `H` is the first
+20 hex characters of the SHA-256 of the lowercase `owner/name`. Import that
+legacy file into the machine events journal. Native state is private (folder
+0700, database 0600). Each journal row is one JSON entry:
 
 | Field | Meaning |
 |---|---|
@@ -95,12 +96,10 @@ hex characters of the SHA-256 of the lowercase `owner/name`. The folder has mode
 | `conditional` | `true` only for a conditional request |
 | `resource`, `remaining`, `limit`, `resetAt` | Present when the reply had rate-limit headers |
 
-`record` appends one line. `read` returns the entries of the file; a torn or
-invalid line is skipped. `compact(now)` rewrites the file with only the entries
-of the last 2 hours, through a temporary file and a rename, when an older entry
-exists. Measurement is best effort: a failed write or compact is lost, and it
-never changes or fails the call. A line that another process appends during a
-compact can be lost.
+`record` appends one journal row. `read` returns the retained entries; import
+skips torn or invalid legacy lines. `compact(now)` deletes entries outside the
+last 2 hours in one transaction, when an older entry exists. Measurement is best effort: a failed write or compact is lost, and it
+never changes or fails the call. A concurrent append survives compaction unless it meets the expiry rule.
 
 `countGithubCalls` returns `(file, args, options)` that runs `exec`. For `gh`
 it removes `options.purpose` and `options.repository`, runs the call, then
@@ -111,7 +110,7 @@ nothing. Other programs run unchanged, also without these two options.
 `nativeGithubCounter` uses the ledger of `githubRepository(args)`, else of a valid
 `options.repository` (a GraphQL call names none in its arguments), under
 `githubStateRoot`, so worktrees and the main checkout share it. It appends only
-to a ledger file that already exists: the launcher makes it with its first call,
+to a ledger that already exists in storage or in a legacy file: the launcher makes it with its first call,
 so a pdd command counts its calls for the repositories where Autopilot runs on
 this machine. A call without a repository, or for a repository without a
 ledger, is not recorded; so a test that puts a fake `gh` on PATH adds nothing
@@ -183,16 +182,17 @@ budget part is absent without `budget`. `X` is the rounded percentage.
 
 ## ETag cache
 
-`githubEtagCache` keeps `ROOT/github/H.etags.json` (the same `H`), an object
+`githubEtagCache` uses the logical locator `ROOT/github/H.etags.json` (the same
+`H`), imported once into a cache record. The value is an object
 from endpoint to `{etag, body, next, at}`: the ETag, the exact body text and the
 next page path of a 200 reply, and the time (`now`) when this cache last got or
 set it. `get` returns a saved entry with a string `etag` and `body`, else
 undefined. `set` keeps an entry with a nonempty `etag`. The tick and the `pdd`
-commands of one repository share this file. So `save` merges: it reads the file
-as it is then, puts the entries that this cache got or set over it, and keeps
+commands of one repository share this record. So `save` merges: it reads the record
+inside its transaction, puts the entries that this cache got or set over it, and keeps
 the entries used in the last 24 hours, newest first, at most 5,000 entries and
-32 MiB of bodies. It writes through a temporary file and a rename, mode 0600. A
-cache that got or set no entry (it failed early) keeps the saved file. A read or
+32 MiB of bodies. The merge and replacement commit in one transaction. A
+cache that got or set no entry (it failed early) keeps the saved record. A read or
 write failure gives an empty cache or a lost save; it only costs counted reads.
 
 <a id="floor-guard"></a>
@@ -231,9 +231,28 @@ a new entry changes its body, or GitHub serves the saved next page.
 
 ## Dependencies
 
+- [Autopilot machine storage](autopilot-store.prompt.md): required native generation and verification context for local state and atomic migration.
+
 None: this module uses only the injected file port and clock. Its consumers, for
 navigation only: the [Autopilot launcher](autopilot-launcher.prompt.md#github-budget)
 counts its calls, applies the budget, shows the status line and reads review
 pages with the full-last-page rule; the
 [dependency GitHub reader](issue-dependencies-github.prompt.md#conditional-reads)
 uses the ETag cache, the full-last-page rule and the floor guard.
+
+## Machine storage
+
+Use [Autopilot machine storage](autopilot-store.prompt.md) for native machine
+state. Import each existing record once and retain its old file unchanged.
+SQL belongs only to that backend. Keep existing guards, limits, identity and
+failure policy. File paths exposed by adapters remain stable logical locators.
+Store call rows in the events journal, scoped by the lowercase repository
+hash. Preserve every call, including identical calls. `githubLedger` also
+exposes `exists()` for participation checks. Import JSONL once, then compact
+inside a transaction. ETag merge and replacement use one cache transaction.
+Machine-wide reads isolate each legacy source read failure: keep readable and
+already committed observations from other repositories available for budget
+decisions. Leave a failed source unmarked so a later read can retry it; a failed
+read must not commit any rows from that source. Storage transaction failures
+retain the existing empty-result policy.
+An injected `store` port replaces the backend alongside the existing `fs` port.

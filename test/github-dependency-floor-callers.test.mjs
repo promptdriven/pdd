@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readdirSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename } from 'node:path';
+import { machineJson } from '../src/autopilot-store.mjs';
 import { autopilotGithubWorld } from './helpers/autopilot-github-world.mjs';
-import { createDependencyReadPorts, readDependencySnapshot } from '../src/issue-dependencies-github.mjs';
+import { createDependencyReadPorts, dependencySnapshotStore, readDependencySnapshot } from '../src/issue-dependencies-github.mjs';
 import { checkDependencyStart } from '../src/issue-dependencies-intake.mjs';
 import { githubLedger } from '../src/github-calls.mjs';
 
@@ -21,8 +21,9 @@ for (const caller of ['snapshot', 'start']) for (const cold of [false, true]) {
     const w = await autopilotGithubWorld({ issues: 200 }); t.after(w.cleanup);
     w.github.busy();
     assert.equal((await w.invoke('start')).exitCode, 0);
-    if (cold) for (const file of readdirSync(join(w.stateRoot, 'github'))) {
-      if (file.endsWith('.snapshot.json')) unlinkSync(join(w.stateRoot, 'github', file));
+    if (cold) {
+      const { file } = dependencySnapshotStore({ root: w.stateRoot, repository: w.repository });
+      machineJson({ root: w.stateRoot, bucket: 'cache', key: `snapshot:${basename(file).split('.')[0]}`, file }).clear();
     }
     w.time += 600000;
     w.github.claim(130, { coordinatorId: 'new-owner', machine: 'new-machine' });
