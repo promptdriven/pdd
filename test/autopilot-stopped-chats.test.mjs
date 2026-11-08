@@ -9,10 +9,10 @@ import {fixture, packageRoot} from './helpers/workflow-runner-fixture.mjs';
 const origin = {repository: 'example/project', coordinatorId: 'coordinator-a', machine: 'machine-a', claim: {commentId: '11', labelEventId: '12'}};
 const save = (f, run) => writeFileSync(join(run.runDir, 'status.json'), JSON.stringify(run));
 const launches = f => f.herdr.calls.filter(a => a[0] === 'pane' && a[1] === 'run');
-async function setup(t, agent = 'claude') {
+async function setup(t, agent = 'claude', {observe = true} = {}) {
   const f = await fixture(t, {agent});
   assert.equal((await f.run()).exitCode, 0);
-  assert.equal((await runStatus({ref: '17', cwd: f.source}, f.ports)).exitCode, 0);
+  if (observe) assert.equal((await runStatus({ref: '17', cwd: f.source}, f.ports)).exitCode, 0);
   f.ports.env.XDG_CONFIG_HOME = join(f.ports.env.HOME, '.config');
   const run = f.record(); run.automaticOrigin = structuredClone(origin); save(f, run);
   writeFileSync(join(f.source, 'pdd.json'), JSON.stringify({autopilot: {mode: 'auto', trust: []}}));
@@ -28,6 +28,130 @@ async function setup(t, agent = 'claude') {
   const stop = () => {f.herdr.paneOf(f.record().chats.at(-1)).agent = null; f.herdr.calls.length = 0; f.tick(60001);};
   return {f, run, tick, stop, ports, stateFile, warnings, alerts};
 }
+
+for (const closed of [false, true]) test(`3068 repair 1: native proof recovers an unobserved acknowledged Claude launch (${closed})`, async t => {
+  const {f, run, tick, stop} = await setup(t, 'claude', {observe: false});
+  const chat = run.chats.at(-1);
+  assert.equal(chat.state, 'starting');
+  assert.ok(!chat.startUnconfirmed);
+  assert.equal((await f.herdr.findNativeSessions({agent: 'claude', root: run.root, startedAt: chat.startedAt, endedAt: f.clock, sessionId: chat.session.id})).length, 1);
+  stop();
+  if (closed) await f.herdr.herdr(['workspace', 'close', chat.workspaceId]);
+  await tick();
+  assert.equal(launches(f).length, 1, 'native proof must permit recovery without an earlier status observation');
+  assert.equal(f.record().chats.at(-1).session.id, chat.session.id);
+});
+
+for (const evidence of ['none', 'ambiguous', 'unreadable', 'unrelated', 'unconfirmed', 'grace']) test(`3068 repair 1: ${evidence} is not native proof for an unobserved launch`, async t => {
+  const {f, run, tick, stop, ports} = await setup(t, 'claude', {observe: false});
+  const chat = run.chats.at(-1), session = {id: chat.session.id};
+  if (evidence === 'none') ports.findNativeSessions = async () => [];
+  if (evidence === 'ambiguous') ports.findNativeSessions = async () => [session, session];
+  if (evidence === 'unreadable') ports.findNativeSessions = async () => {throw Error('unreadable fixture');};
+  if (evidence === 'unrelated') ports.findNativeSessions = async () => [{id: '00000000-0000-4000-8000-000000000099'}];
+  if (evidence === 'unconfirmed') {chat.startUnconfirmed = true; save(f, run);}
+  stop();
+  if (evidence === 'grace') f.clock = chat.startedAt + 29999;
+  await tick();
+  assert.equal(launches(f).length, 0);
+  assert.equal(f.record().chatResumes, undefined);
+});
+
+const recoveryWords = /resumed.*stopped/i;
+async function statusViews(f) {
+  const views = [];
+  for (const options of [{ref: '17'}, {}, {all: true}, {ref: '17', json: true}, {json: true}, {all: true, json: true}]) {
+    const result = await runStatus({cwd: f.source, ...options}, f.ports);
+    assert.equal(result.exitCode, 0, result.message);
+    views.push(options.json ? JSON.parse(result.message).runs[0].words : result.message);
+  }
+  return views;
+}
+
+test('3068 repair 1: all status views show the successful automatic recovery attempt and expire at the hour', async t => {
+  const {f, tick, stop} = await setup(t);
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    stop(); await tick();
+    assert.equal(launches(f).length, 1);
+    for (const words of await statusViews(f)) {
+      assert.match(words, recoveryWords);
+      assert.match(words, new RegExp(`\\(${attempt} of 3\\)`));
+    }
+  }
+  f.tick(3599999);
+  for (const words of await statusViews(f)) assert.match(words, recoveryWords);
+  f.tick(1);
+  for (const words of await statusViews(f)) assert.doesNotMatch(words, recoveryWords);
+  stop(); await tick();
+  for (const words of await statusViews(f)) {assert.match(words, recoveryWords); assert.match(words, /\(1 of 3\)/);}
+});
+
+test('3068 repair 1: rebuilt Codex recovery saves successful status with its new pane', async t => {
+  const {f, run, tick, stop} = await setup(t, 'codex');
+  stop(); await f.herdr.herdr(['workspace', 'close', run.chats.at(-1).workspaceId]);
+  await tick();
+  assert.equal(launches(f).length, 1);
+  assert.notEqual(f.record().chats.at(-1).paneId, run.chats.at(-1).paneId);
+  for (const words of await statusViews(f)) {assert.match(words, recoveryWords); assert.match(words, /\(1 of 3\)/);}
+});
+
+for (const phase of ['close_intent', 'closed']) for (const race of ['before-inspection', 'during-inspection', 'before-dispatch']) test(`3068 repair 1: deliberate layout ${phase} ${race} uses no allowance or exhaustion alert`, async t => {
+  const {f, run, tick, stop, ports, alerts} = await setup(t);
+  if (race !== 'before-dispatch') run.chatResumes = {[run.chats.at(-1).area]: [f.clock, f.clock, f.clock]};
+  save(f, run); stop();
+  const close = () => {const fresh = f.record(); fresh.layout.phase = phase; save(f, fresh);};
+  if (race === 'before-inspection') close();
+  const herdr = ports.herdr; let closed = race === 'before-inspection';
+  ports.herdr = async args => {
+    const atBoundary = race === 'during-inspection' ? args[0] === 'agent' && args[1] === 'get'
+      : race === 'before-dispatch' && args[0] === 'tab' && args[1] === 'get';
+    if (!closed && atBoundary) {closed = true; close();}
+    return herdr(args);
+  };
+  await tick();
+  assert.ok(closed, 'the controlled close must reach the intended boundary');
+  assert.equal(launches(f).length, 0);
+  assert.deepEqual(f.record().chatResumes, run.chatResumes);
+  assert.equal(f.record().chatResumeLimit, undefined);
+  assert.equal(f.record().state, 'running');
+  assert.equal(alerts.length, 0);
+});
+
+test('3068 repair 1: failed dispatch counts toward a later successful recovery without reporting success', async t => {
+  const {f, tick, stop, ports} = await setup(t);
+  const herdr = ports.herdr;
+  stop();
+  ports.herdr = async args => {
+    if (args[0] === 'pane' && args[1] === 'run') throw Object.assign(Error('lost reply'), {code: 'transport_lost'});
+    return herdr(args);
+  };
+  await tick();
+  assert.equal(f.record().chatResumes[f.record().chats.at(-1).area].length, 1);
+  for (const words of await statusViews(f)) assert.doesNotMatch(words, recoveryWords);
+  // A subsequent positive observation resolves the uncertain dispatch before a later crash.
+  const chat = f.record().chats.at(-1);
+  f.herdr.paneOf(chat).agent = {agent: 'claude', agent_status: 'working', agent_session: {agent: 'claude', kind: 'id', value: chat.session.id}};
+  await runStatus({ref: '17', cwd: f.source}, f.ports);
+  ports.herdr = herdr;
+  stop(); await tick();
+  for (const words of await statusViews(f)) {assert.match(words, recoveryWords); assert.match(words, /\(2 of 3\)/);}
+});
+
+for (const newer of ['question', 'gate', 'failure', 'stopped', 'blocked', 'manual-resume', 'replacement', 'area']) test(`3068 repair 1: ${newer} supersedes recovery status`, async t => {
+  const {f, tick, stop} = await setup(t);
+  stop(); await tick();
+  for (const words of await statusViews(f)) assert.match(words, recoveryWords);
+  const run = f.record(), chat = run.chats.at(-1);
+  if (newer === 'question') assert.equal((await askPerson({text: 'Choose the next step.', cwd: run.root}, f.ports)).exitCode, 0);
+  if (newer === 'gate') {run.gate = {kind: 'approve', area: chat.area, at: f.clock}; save(f, run);}
+  if (newer === 'failure') {run.chatFailure = {area: chat.area, phase: 'open', code: 'transport_lost', message: 'Unavailable fixture', at: f.clock}; chat.startUnconfirmed = true; save(f, run); stop();}
+  if (newer === 'stopped') stop();
+  if (newer === 'blocked') f.herdr.paneOf(chat).agent.agent_status = 'blocked';
+  if (newer === 'manual-resume') {stop(); assert.equal((await openRun({ref: '17', cwd: f.source, packageRoot}, f.ports)).exitCode, 0);}
+  if (newer === 'replacement') assert.equal((await openRun({ref: '17', cwd: f.source, packageRoot, newSession: true}, f.ports)).exitCode, 0);
+  if (newer === 'area') {run.area++; save(f, run);}
+  for (const words of await statusViews(f)) assert.doesNotMatch(words, recoveryWords);
+});
 
 for (const agent of ['claude', 'codex']) for (const closed of [false, true]) {
   test(`3068: tick resumes ${agent} in ${closed ? 'rebuilt' : 'existing'} workspace with same session`, async t => {

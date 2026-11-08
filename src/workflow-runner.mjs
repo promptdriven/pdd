@@ -1,7 +1,7 @@
 import { validateSnapshot } from './metrics-store.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
 import { createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 8abddf59d0b2fef4078d7521e8c01725687e754482e07b8c8f48f2cbe5998c7d).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 2f52d60ab486642f53834490bdca85aa8957344eccf6e7fff793be1cd0e02a60).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -434,8 +434,17 @@ function clearChatFailure(run) {
 const revising = run => { const last = run.changes?.at(-1); return Boolean(last && !last.answer && last.stage === run.gate.area && last.at >= run.gate.at); };
 // A run stopped at the repair limit keeps that one-line reason, also after a later park (#3041).
 const stuckReason = run => run.repairLimit?.area ? repairLimitReason(run.repairLimit.area) : run.parkReason ?? 'automatic work stopped';
+const layoutClosing = run => ['close_intent', 'closed'].includes(run.layout?.phase);
+function automaticResumeWords(run, now) {
+  const success = run.chatResumeSuccess, chat = currentChat(run);
+  if (!success || !chat || !Number.isFinite(now) || !Number.isFinite(success.at)
+    || success.at > now || success.at <= now - 3600000 || ![1, 2, 3].includes(success.count)
+    || success.area !== chat.area || success.paneId !== chat.paneId
+    || success.sessionId !== chat.session?.id || success.resumedAt !== chat.resumedAt) return null;
+  return `resumed after the chat stopped (${success.count} of 3)`;
+}
 // chat: what Herdr shows (chatState); facts: {drafts, nothing} read by the caller (gateFacts). describe itself makes no calls.
-function describe(run, chat = null, { drafts = [], nothing = false, health = null } = {}) {
+function describe(run, chat = null, { drafts = [], nothing = false, health = null, now = null } = {}) {
   const area = run.areas[run.area], pr1 = askArea(run) && prOf(run, askArea(run).name);
   if (run.state === 'cancelled') return run.cancelled?.state === 'replaced' ? 'replaced' : 'cancelled';
   if (run.state === 'stuck') return `stuck: ${stuckReason(run)}`;
@@ -453,6 +462,8 @@ function describe(run, chat = null, { drafts = [], nothing = false, health = nul
   if (run.gate?.kind === 'ask-code') return `PR 1 open (${pr1?.url}); waiting for you: code PR now, or stop and merge PR 1. ${codeLater(run)}`;
   if (run.gate) return `waiting for you: approve the ${run.gate.area} area or ask for changes`;
   if (prOf(run, area?.name) && area.gate === 'pr') return `waiting for you: review and merge ${prLabel(run, area)} on GitHub`;
+  const recovery = run.state === 'running' && automaticResumeWords(run, now);
+  if (recovery) return recovery;
   const step = area?.steps.find(item => !run.done[item]);
   return step ? `the agent works on ${step}` : 'the agent works';
 }
@@ -3024,7 +3035,7 @@ function detail(run, chat = null, facts = {}) {
 
 // One list line per run, grouped by what it needs: the person, the agent, a PR review, nothing.
 const GROUPS = ['waiting', 'working', 'pr-open', 'done', 'cancelled'];
-function summary(run, timeZone, chat = null, { drafts = [], nothing = false, health = null } = {}) {
+function summary(run, timeZone, chat = null, { drafts = [], nothing = false, health = null, now = null } = {}) {
   const area = run.areas[run.area], ask = askArea(run), running = run.state === 'running';
   const replacementPending = run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase);
   const problem = replacementPending || activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting', 'closed'].includes(chat);
@@ -3049,6 +3060,7 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false, hea
     : run.gate?.kind === 'approve-pr' ? `waiting for you: ${nothing ? '' : 'try it, then '}approve to open ${area.then === 'ask-code' ? 'PR 1' : 'the PR'}`
     : run.gate ? `waiting for you: approve the ${run.gate.area}`
     : group === 'pr-open' ? `${!ask ? 'PR' : area.then === 'ask-code' ? 'PR 1' : 'PR 2'} open`
+    : running && automaticResumeWords(run, now) ? automaticResumeWords(run, now)
     : step ? `agent working on ${step}` : 'agent working';
   const ref = `${run.repo}#${run.number}`;
   const when = Number.isFinite(run.updatedAt) ? new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', ...(timeZone ? { timeZone } : {}) }).format(new Date(run.updatedAt)) : 'unknown time';
@@ -3079,7 +3091,7 @@ async function listStatus(runs, { json, cancelled, scope, snapshotOnly=false }, 
   for (const run of runs) {
     const ordinaryOwnership=readRunOwnership(run.runDir,p);
     const health = {}, chat = ordinaryOwnership||snapshotOnly?null:await chatState(run, p, health);
-    const item = summary(run, p.timeZone, chat, { ...(ended(run)||ordinaryOwnership||snapshotOnly ? {} : await gateFacts(run, p)), ...health });
+    const item = summary(run, p.timeZone, chat, { ...(ended(run)||ordinaryOwnership||snapshotOnly ? {} : await gateFacts(run, p)), ...health, now: p.now() });
     const snapshot = requestSnapshot(run, p);
     all.push({ ...item, steps: savedStepResults(run), ...snapshot, ordinaryOwnership, line: [item.line, ...ownershipLines(ordinaryOwnership), ...requestLines(snapshot, { openOnly: true, ended: ended(run), currentArea: run.areas[run.area]?.name, p })].join('\n') });
   }
@@ -3105,6 +3117,7 @@ async function runStatusCommand({ ref, cwd, all = false, json = false, cancelled
   const ordinaryOwnership=readRunOwnership(found.run.runDir,p);
   if(!ordinaryOwnership&&!snapshotOnly)await refreshPr(found.run, p);
   const run = found.run, facts = ended(run)||ordinaryOwnership||snapshotOnly ? {} : await gateFacts(run, p), chat = ordinaryOwnership||snapshotOnly?null:await chatState(run, p, facts);
+  facts.now = p.now();
   const snapshot = requestSnapshot(run, p);
   const nativeResults=ownResults(run,p).filter(result=>result.kind==='native evidence');
   const steps = savedStepResults(run);
@@ -3158,7 +3171,7 @@ function saveAreaObservations(run, original, observed, p) {
     fresh => copyObservation(lastChat(fresh, original.area), observed));
 }
 // Default open and startup own chat observations, never a stale workflow snapshot.
-function saveChatObservations(run, original, observed, p, { error, phase = 'open', reset = false, checkpoint = false, layout = null, automatic = false } = {}) {
+function saveChatObservations(run, original, observed, p, { error, phase = 'open', reset = false, checkpoint = false, layout = null, automatic = false, resumeSuccess = null } = {}) {
   const area = original?.area ?? observed?.area ?? run.areas[run.area].name;
   // A late reset cannot retire historical custody; a dispatched start retains it.
   return conditionalCommit(run, p, fresh => fresh && fresh.runId === run.runId && !ended(fresh) && sameFact(lastChat(fresh, area), original) && !(reset && fresh.area !== run.area), fresh => {
@@ -3171,6 +3184,8 @@ function saveChatObservations(run, original, observed, p, { error, phase = 'open
     // Verified live custody supersedes stale hints; partial allocation saves retain known fields.
     if (layout) fresh.layout = { ...fresh.layout, ...structuredClone(layout) };
     if (checkpoint) return;
+    if (resumeSuccess && observed && !observed.startUnconfirmed && fresh.state === 'running' && fresh.areas[fresh.area].name === area)
+      fresh.chatResumeSuccess = {...resumeSuccess, area, paneId: observed.paneId, sessionId: observed.session?.id, resumedAt: observed.resumedAt};
     // A late failed open of an area that is no longer current keeps its own record, but never replaces a current failure.
     if (error && phase === 'open' && fresh.areas[fresh.area].name !== area && !activeChatFailure(fresh))
       fresh.chatFailure = { area, phase, code: oneLine(error.code ?? 'error').slice(0, 100), message: firstLine(error.message ?? 'Herdr request failed').slice(0, 500), at: p.now() };
@@ -3195,23 +3210,28 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
   if (ended(run) && !automaticResume) return fail(`The run for ${run.repo}#${run.number} is ${run.state}. Its worktree is ${run.root}.`);
   const selected = area === undefined ? run.area : run.areas.findIndex(item => item.name === area);
   let chat = [...(run.chats ?? [])].reverse().find(item => item.area === run.areas[selected]?.name), started = false, handedOff = false, rebuilt = false;
-  let beforeLaunch;
+  let beforeLaunch, resumeSuccess = null;
   if (automaticResume) {
     const skipped = () => ({...done(''), recovery: 'skipped'});
     if (!validSavedAutomaticOrigin(run) || run.automaticOrigin.coordinatorId !== automaticResume.coordinatorId
       || run.automaticOrigin.machine !== automaticResume.machine || !samePath(run.sourceRoot, cwd)) return skipped();
+    if (layoutClosing(run)) return skipped();
     if (run.state === 'stuck' && run.chatResumeLimit) return {...done(run.parkReason), recovery: 'stuck', area: run.chatResumeLimit.area};
     if (run.state !== 'running' || run.gate || openQuestion(run) || !chat || chat.startUnconfirmed
       || !validSessionId(chat.session?.id)
       || run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase)) return skipped();
     const selectedChat = structuredClone(chat);
     const stillEligible = fresh => fresh && fresh.runId === run.runId && fresh.state === 'running'
+      && !layoutClosing(fresh)
       && fresh.area === selected && !fresh.gate && !openQuestion(fresh)
       && sameFact(lastChat(fresh, selectedChat.area), selectedChat) && sameFact(fresh.done, run.done)
       && sameFact(fresh.automaticOrigin, run.automaticOrigin) && sameFact(fresh.chatReplacement, run.chatReplacement);
     const live = await chatSession(chat, p);
     if (live.alive || !['agent_not_found', 'pane_not_found', 'server_not_running'].includes(live.code)) return skipped();
-    const observed = observeLifecycle(chat, live.code === 'pane_not_found' ? {...live, code: 'agent_not_found'} : live, p.now(), chat.agent ?? run.agent);
+    const absent = live.code === 'pane_not_found' ? {...live, code: 'agent_not_found'} : live;
+    const own = sessionEvidenceDue(chat, absent, p.now()) && !observedSession(chat, chat.agent ?? run.agent)
+      ? await ownSession({run, chat, since: launchAnchor(chat), ports: p}) : null;
+    const observed = observeLifecycle(chat, absent, p.now(), chat.agent ?? run.agent, own?.kind === 'match' ? own.id : null);
     if (observed.state !== 'ended') return skipped();
     if (await chatHealth({run, chat, live}, p)) return skipped();
     const name = run.areas[run.area].name, at = p.now();
@@ -3223,11 +3243,13 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
     }
     beforeLaunch = async () => {
       const saved = conditionalCommit(run, p, fresh => fresh && fresh.runId === run.runId && fresh.state === 'running'
+        && !layoutClosing(fresh)
         && fresh.area === selected && !fresh.gate && !openQuestion(fresh)
         && sameFact(fresh.automaticOrigin, run.automaticOrigin), fresh => {
           const at = p.now(), recent = (fresh.chatResumes?.[name] ?? []).filter(time => Number.isFinite(time) && time > at - 3600000);
           if (recent.length >= 3) throw Object.assign(Error('Automatic resume limit reached.'), {code: 'chat_resume_limit'});
           (fresh.chatResumes ??= {})[name] = [...recent, at];
+          resumeSuccess = {at, count: recent.length + 1};
         });
       if (!saved) throw Object.assign(Error('The run changed before automatic resume.'), {code: 'chat_target_changed'});
     };
@@ -3334,7 +3356,7 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
     const priorResumeAnchor = launchAnchor(chat);
     const opened = await openChat({ run, chat, resumeMessage }, { ...p, background: Boolean(automaticResume), beforeLaunch, beforeAttach: async () => {
       const saved = areaOriginal ? saveAreaObservations(run, areaOriginal, chat, p)
-        : saveChatObservations(run, defaultOriginal, chat, p);
+        : saveChatObservations(run, defaultOriginal, chat, p, {resumeSuccess});
       if (saved && !historical && (rebuilt || Number.isFinite(chat.resumedAt) && launchAnchor(chat) !== priorResumeAnchor)) armCurrentAutomaticChat(run, p);
       handedOff = true;
       p.releaseRunLock?.();
