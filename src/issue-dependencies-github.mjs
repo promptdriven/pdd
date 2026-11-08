@@ -1,3 +1,4 @@
+import { namedReviewSources, tracksReviewInput } from './issue-review-context.mjs';
 import { readOwnerChoice, readSplitComment, partIdentity } from './issue-mixed.mjs';
 import { readSortGroups, sortPastAssignees, sortBookkeeping, readSortComment, addSortContext } from './issue-sort-github.mjs';
 // Implements prompts/cli/issue-dependencies-github.prompt.md.
@@ -421,9 +422,10 @@ function nativeEvidence(cwd, ports) {
         revision: hash(JSON.stringify({ title: raw.title ?? '', body: raw.body ?? '' })), text: `${raw.title ?? ''}\n\n${raw.body ?? ''}`, authority: 'trusted' });
       const comments = await allPages(ports.github, repository, 'comments', i.issue);
       for (const c of comments) {
-        const record = parseRecord(c.body);
-        if (record?.type === 'review') for (const row of nonIssueRows(record.value.inputs)) {
-          const existing = required.get(row.key) ?? new Set(); existing.add(i.key); required.set(row.key, existing);
+        const sorted = readSortComment(c, (await readPorts.authority.read({ repository, author: c.user?.login ?? '' })).authority);
+        if (sorted?.authority === 'trusted' && sorted.intact) for (const path of sorted.record.paths) {
+          const key = `https://github.com/${repository.toLowerCase()}/blob/HEAD/${path.split('/').map(encodeURIComponent).join('/')}`;
+          if (!required.has(key)) required.set(key, new Set());
         }
         if (bookkeeping(c.body)) continue;
         if ((await readPorts.authority.read({ repository, author: c.user?.login ?? '' })).authority === 'trusted') requirements.push({
@@ -433,17 +435,8 @@ function nativeEvidence(cwd, ports) {
     }
     // Explicit source paths in trusted requirements retain subject scope. Other
     // repository files remain optional context for the coordinator to examine.
-    for (const r of requirements) for (const m of r.text.matchAll(/(?:https:\/\/github\.com\/[^/]+\/[^/]+\/blob\/HEAD\/)?\b((?:src|lib|docs|plans?|user_stories|prompts|test|tests)\/[A-Za-z0-9_./% -]+\.[A-Za-z0-9]+)\b/g)) {
-      const path = m[1].trim(), key = `https://github.com/${repository.toLowerCase()}/blob/HEAD/${path.split('/').map(encodeURIComponent).join('/')}`;
+    for (const r of requirements) for (const key of namedReviewSources(repository, r.text)) {
       const targets = required.get(key) ?? new Set(); targets.add(r.issue); required.set(key, targets);
-    }
-    const root = await selectedCheckout(at, repository, readPorts);
-    if (root) {
-      const files = (await service(root, readPorts).run('git', ['ls-files', '-z'])).split('\0').filter(Boolean);
-      for (const path of files) if (/\.(?:[cm]?[jt]sx?|py|md|json|toml|ya?ml|sql|html|css|sh)$/.test(path) && !/(?:^|\/)(?:node_modules|\.git|package-lock\.json)(?:\/|$)/.test(path)) {
-        const key = `https://github.com/${repository.toLowerCase()}/blob/HEAD/${path.split('/').map(encodeURIComponent).join('/')}`;
-        if (!required.has(key)) required.set(key, new Set());
-      }
     }
     for (const [key, targets] of required) try {
       const item = await readLocator({ key }, at, repository, readPorts);
@@ -772,13 +765,22 @@ export async function readDependencySnapshot({ cwd = '', repository, inputs = []
     if (labels.includes('pdd:working')) holds.push('Claimed');
     if (labels.includes('pdd:stuck')) holds.push('Stuck');
     if (labels.includes('pdd:code-pending')) holds.push('Code pending');
-    const issue = { key, sortCompleted: raw.state === 'closed' && raw.state_reason === 'completed', sorts: [], sortRouteNotes: [], labels, sortText: authority.authority === 'trusted' ? raw.body ?? '' : '', nodeId: /^[1-9][0-9]*$/.test(String(raw.id)) ? String(raw.id) : '', title: raw.title ?? '', revision: requirementRevision,
+    const issue = { key, namedSources: namedReviewSources(i.repository, authority.authority === 'trusted' && sameRepo(i.repository, repository) ? `${raw.title ?? ''}\n${raw.body ?? ''}` : ''), namedIssues: [], sortCompleted: raw.state === 'closed' && raw.state_reason === 'completed', sorts: [], sortRouteNotes: [], labels, sortText: authority.authority === 'trusted' ? raw.body ?? '' : '', nodeId: /^[1-9][0-9]*$/.test(String(raw.id)) ? String(raw.id) : '', title: raw.title ?? '', revision: requirementRevision,
       state: !detailKnown ? 'unknown' : raw.state === 'open' ? 'open' : raw.state === 'closed' ? raw.state_reason === 'not_planned' ? 'not_planned' : 'completed' : 'unknown',
       authority: authority.authority === 'trusted' ? 'trusted' : authority.authority === 'outsider' ? 'untrusted' : 'unknown',
       conditions: conditionRows.map(c => c.text ?? c.condition).filter(Boolean), execution: execution?.execution ?? execution?.state ?? (labels.includes('pdd:working') ? 'running' : context.nativeExecution ? 'unknown' : 'idle'), holds: [...new Set(holds)],
       ...(assignees ? { assignees } : {}),
       ...(conditionRows.length ? { conditionSources: conditionRows.filter(c => c.source).map(c => ({ text: c.text ?? c.condition, source: c.source, inputs: c.inputs ?? [{ key, revision: requirementRevision }] })) } : {}),
       ...(execution?.executionClaim ? { executionClaim: execution.executionClaim } : {}), ...(execution?.runIds ? { runIds: execution.runIds } : {}) };
+    const addNamed = text => {
+      const named = [...String(text).matchAll(/https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/[1-9]\d*/g)].map(x => x[0].toLowerCase());
+      const plain = String(text).replace(/https?:\/\/[^\s]+/g, '').replace(/([\w.-]+\/[\w.-]+)#([1-9]\d*)\b/g, (_, repo, number) => {
+        named.push(`https://github.com/${repo.toLowerCase()}/issues/${number}`); return '';
+      });
+      for (const m of plain.matchAll(/(?<![\w#])#([1-9]\d*)\b/g)) named.push(`https://github.com/${i.repository}/issues/${m[1]}`);
+      issue.namedIssues = [...new Set([...issue.namedIssues, ...named])].filter(k => k !== key).sort();
+    };
+    if (authority.authority === 'trusted') addNamed(`${raw.title ?? ''}\n${raw.body ?? ''}`);
     issues.push(issue);
     let ownerComments = [], ownerTimeline = [];
     const splits = [];
@@ -795,7 +797,11 @@ export async function readDependencySnapshot({ cwd = '', repository, inputs = []
         const split = readSplitComment(comment, current.authority);
         if (split) splits.push(split);
         const sort = readSortComment(comment, current.authority);
-        if (sort) { issue.sorts.push(sort); continue; }
+        if (sort) {
+          issue.sorts.push(sort);
+          if (sort.authority === 'trusted' && sort.intact && sort.record.genuine.kind === 'duplicate') queue.push(sort.record.genuine.duplicateOf);
+          continue;
+        }
         const routeNote = /<!-- pdd-issue-route:v1 -->\s*<!-- ([a-f\d]{64}) -->/.exec(comment.body ?? '');
         if (routeNote && current.authority === 'trusted' && comment.created_at && comment.created_at === comment.updated_at) issue.sortRouteNotes.push(routeNote[1]);
         const record = normalizedRecord(comment, key, current.authority);
@@ -804,6 +810,8 @@ export async function readDependencySnapshot({ cwd = '', repository, inputs = []
           else impacts.push(record.value);
         } else if (!bookkeeping(comment.body) && current.authority === 'trusted') {
           context.inputs ??= []; context.inputs.push({ key: `${key}#issuecomment-${comment.id}`, revision: hash(comment.body ?? '') });
+          issue.namedSources = [...new Set([...issue.namedSources, ...(sameRepo(i.repository, repository) ? namedReviewSources(i.repository, comment.body) : [])])].sort();
+          addNamed(comment.body);
         }
       }
       if (kind === 'blockedBy' || kind === 'blocking') for (const linked of items) {
@@ -813,6 +821,7 @@ export async function readDependencySnapshot({ cwd = '', repository, inputs = []
         edges.push(edge); queue.push(other);
       }
     }
+    queue.push(...issue.namedIssues);
     issue.sortOwnerChoice = await readOwnerChoice({ labels, comments: ownerComments, timeline: ownerTimeline }, author => authorityFor(i.repository, author));
     if (splits.length) {
       const split = splits[0];
@@ -845,7 +854,7 @@ export async function readDependencySnapshot({ cwd = '', repository, inputs = []
     } catch { warn('Execution observations are unavailable'); }
     for (const issue of local) if (issue.execution === 'unknown') { const row = coverageByKey.get(issue.key); row.execution = false; row.missing.push('Execution observation unavailable'); }
   }
-  const required = uniqueRows([...inputs, ...reviews.flatMap(r => nonIssueRows(r.inputs)), ...impacts.flatMap(i => nonIssueRows(i.inputs)), ...issues.flatMap(i => (i.sorts ?? []).flatMap(s => s.intact ? nonIssueRows(s.record.inputs).filter(x => !/#(?:autopilot-areas|sort-labels)$/.test(x.key)) : []))]);
+  const required = uniqueRows([...issues.flatMap(i => (i.namedSources ?? []).map(key => ({ key, revision: '' }))), ...inputs, ...reviews.flatMap(r => nonIssueRows(r.inputs).filter(x => tracksReviewInput(issues.find(i => i.key === r.issue), x.key))), ...impacts.flatMap(i => nonIssueRows(i.inputs)), ...issues.flatMap(i => (i.sorts ?? []).flatMap(s => s.intact ? nonIssueRows(s.record.inputs).filter(x => !/#(?:autopilot-areas|sort-labels)$/.test(x.key) && (tracksReviewInput(i, x.key) || s.record.paths.some(path => x.key === `https://github.com/${repository}/blob/HEAD/${path.split('/').map(encodeURIComponent).join('/')}`))) : []))]);
   const observedComments = new Set((context.inputs ?? []).filter(x => /#issuecomment-/.test(x.key)).map(x => x.key));
   const reread = required.filter(x => !observedComments.has(x.key));
   if (reread.length) {
@@ -861,7 +870,8 @@ export async function readDependencySnapshot({ cwd = '', repository, inputs = []
     // revision deficit, then still requires a trusted complete impact record.
     row.reviewImpact = row.issue && row.authority && row.comments;
     if (!row.reviewImpact) row.missing.push('Relevant impact discovery unavailable');
-    const requiredForIssue = (issues.find(issue => issue.key === row.key)?.conditionSources ?? []).flatMap(condition => nonIssueRows(condition.inputs));
+    const subject = issues.find(issue => issue.key === row.key);
+    const requiredForIssue = [...(subject?.conditionSources ?? []).flatMap(condition => nonIssueRows(condition.inputs)), ...(subject?.namedSources ?? []).map(key => ({ key }))];
     if (!contextKnown || requiredForIssue.some(input => !currentInputs.has(input.key))) { row.context = false; row.missing.push('Required context unavailable'); }
     // Execution is observed only for root issues. A linked issue in another
     // repository matters only as a prerequisite, where its native state decides.

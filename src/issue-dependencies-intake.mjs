@@ -1,3 +1,4 @@
+import { reviewPacket, reviewConsistency } from './issue-review-context.mjs';
 import { syncMixedParts } from './issue-mixed.mjs';
 import { sortRequestFingerprint, sortSubjects, prepareSortContext, validateSortBatch, saveSortBatch, routeSortIssues, syncSortGroups, pacedSortWrites } from './issue-sort-github.mjs';
 import { sortPlan } from './issue-sort.mjs';
@@ -158,12 +159,14 @@ export async function prepareDependencyIntake({ cwd = '', repository, issue }, p
   // Small batches: one new issue never waits for a large review.
   const queued = selected.filter(x => !skipped.includes(x.key)).map(x => x.key).slice(0, REVIEW_BATCH);
   let contextJson = queued.length ? (await ports.evidence.read({ cwd, repository, issues: queued })).json : JSON.stringify({ source: [], requirements: [] });
-  contextJson = JSON.stringify({ ...json(contextJson), ...prepareSortContext(snapshot) });
+  contextJson = JSON.stringify({ ...json(contextJson), ...prepareSortContext(reviewPacket(snapshot, queued)) });
   const evidence = json(contextJson);
   if (!Array.isArray(evidence.source) || !Array.isArray(evidence.requirements) || evidence.requirements.some(x => x.authority !== 'trusted')) throw Error('invalid-input');
   const current = rows(snapshot);
   for (const item of evidence.source || []) if (item.key && item.revision) { const prev = current.get(item.key); if (!prev) snapshot.inputs.push({ key: item.key, revision: item.revision }); }
-  return { request: { id: randomUUID(), repository, issues: queued, snapshotJson: JSON.stringify(packetSnapshot(snapshot)), contextJson }, queued, skipped };
+  const request = { id: randomUUID(), repository, issues: queued, snapshotJson: JSON.stringify(packetSnapshot(reviewPacket(snapshot, queued))), contextJson };
+  if (Buffer.byteLength(JSON.stringify(request), 'utf8') > 2 * 1024 * 1024) throw Error('review-packet-too-large');
+  return { request, queued, skipped };
 }
 
 export async function completeDependencyIntake({ cwd = '', request, analysis }, ports = {}) {
@@ -225,7 +228,7 @@ export async function completeDependencyIntake({ cwd = '', request, analysis }, 
   const priorHeads = headIds(prepared), proposed = structuredClone(snapshot);
   for (const review of analysis.reviews) {
     const base = priorHeads.filter(id => prepared.reviews.find(r => r.id === id)?.issue === review.issue);
-    const required = [{ key: review.issue, revision: prior.get(review.issue) }, ...(context.source || []).filter(x => x.issues.includes(review.issue)), ...(context.requirements || []).filter(x => x.issue === review.issue && x.authority === 'trusted')];
+    const required = [{ key: review.issue, revision: prior.get(review.issue) }, ...(prepared.issues.find(i => i.key === review.issue)?.namedSources ?? []).map(key => ({ key, revision: prior.get(key) })), ...(context.source || []).filter(x => x.issues.includes(review.issue)), ...(context.requirements || []).filter(x => x.issue === review.issue && x.authority === 'trusted')];
     // The answer must copy the request's base, candidates and required rows exactly; name each one it missed.
     const given = new Map(review.candidates.map(x => [x.key, x.revision])), inputs = new Map(review.inputs.map(x => [x.key, x.revision]));
     const mismatch = [...(base.length !== review.base.length || !base.every(id => review.base.includes(id)) ? [{ key: `${review.issue}#base`, revision: JSON.stringify(base.slice().sort()) }] : []),
@@ -285,6 +288,13 @@ export async function reconcileDependencyIntake({ cwd = '', repository, trigger,
   let { snapshot } = await snapshotRead(ports, { cwd, repository });
   const pending = (ports.pending ? json((await ports.pending.read({ repository })).json || '{}') : {}) || {};
   if (mode === 'off') return { queued: [], eligible: [], skipped: [], pending: false };
+  if (ports.pending && snapshot.complete) {
+    const now = Date.parse((await ports.clock.now({})).iso);
+    if (Number.isFinite(now) && (!Number.isFinite(pending.consistency?.checkedAt) || now - pending.consistency.checkedAt >= 7 * 24 * 60 * 60 * 1000)) {
+      pending.consistency = { checkedAt: now, issues: reviewConsistency(snapshot) };
+      await ports.pending.save({ repository, json: JSON.stringify(pending) });
+    }
+  }
   // #3053: current records can finish a route without another semantic call.
   if (snapshot.sortContext) {
     try {

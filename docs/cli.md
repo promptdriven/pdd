@@ -526,7 +526,20 @@ Workflow approval reads `pdd.json` from the main checkout (`sourceRoot`), outsid
 
 `pdd graph` reads the saved dependency graph; `pdd graph --open` opens its viewer. Use `pdd graph --issue N` to select an issue, or `pdd graph --open --issue N --repo OWNER/REPO` to select a repository explicitly.
 
-`pdd dependencies prepare [--issue N]` prepares a coordinator packet. `pdd dependencies complete --input -` reads a structured completion from stdin. `pdd workflow yield N` hands off automatic capacity after the current worker has stopped.
+`pdd dependencies prepare [--issue N]` prepares a coordinator packet. PDD saves
+the backlog sort and dependency records once. It queues only new or changed
+issues. Each packet includes up to 20 likely neighbours per subject, using saved
+area, cause, file and word matches. Explicit issue links and native prerequisites
+are always included. Neighbours carry short summaries. A packet that cannot fit
+its required context in 2 MiB fails with `review-packet-too-large`.
+
+Issue text, links, trusted comments and named files make a review stale.
+Background source edits do not. Saved sort paths remain relevant to routing.
+New sort records retain their release evidence across unrelated release changes;
+legacy release-sensitive records can need one fresh sort. A weekly local check
+records group and link inconsistencies in the pending store. It makes no AI call.
+
+ `pdd dependencies complete --input -` reads a structured completion from stdin. `pdd workflow yield N` hands off automatic capacity after the current worker has stopped.
 
 `pdd workflow park --reason TEXT` records an automatic stop from its existing run worktree without releasing its claim or treating the worker as done.
 

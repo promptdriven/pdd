@@ -1,3 +1,4 @@
+import { tracksReviewInput } from './issue-review-context.mjs';
 // Implements prompts/cli/issue-sort.prompt.md.
 import { resolveMixed } from './issue-mixed.mjs';
 import { resolveArea } from './autopilot-areas.mjs';
@@ -9,9 +10,9 @@ const fixLocator = value => /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/(?:pull\/[
   || /\b[a-f\d]{7,64}\b/i.test(value) || /(?:^|[\s(`])(?:[\w.-]+\/)*[\w.-]+\.[a-z\d]+:[1-9]\d*\b/i.test(value);
 export function validSort(record) {
   const r = record;
-  return !!(exact(Object.fromEntries(Object.entries(r ?? {}).filter(([k]) => !['touchedAreas','splitOrder'].includes(k))), 'schema_version,issue,base,inputs,belongs,status,genuine,paths,rootCause,severity,question')
+  return !!(exact(Object.fromEntries(Object.entries(r ?? {}).filter(([k]) => !['touchedAreas','splitOrder','summary'].includes(k))), 'schema_version,issue,base,inputs,belongs,status,genuine,paths,rootCause,severity,question')
     && (r.touchedAreas === undefined || Array.isArray(r.touchedAreas) && r.touchedAreas.length > 0 && r.touchedAreas.every(x => exact(x, 'area,evidence') && text(x.area) && x.area.trim() && list(x.evidence) && x.evidence.length && x.evidence.every(v => v.trim())) && new Set(r.touchedAreas.map(x => x.area)).size === r.touchedAreas.length)
-    && (r.splitOrder === undefined || exact(r.splitOrder, 'first,evidence') && text(r.splitOrder.first) && r.splitOrder.first.trim() && list(r.splitOrder.evidence) && r.splitOrder.evidence.length && r.splitOrder.evidence.every(v => v.trim())) && r.schema_version === 'pdd.issue-sort.v1' && issueURL(r.issue)
+    && (r.splitOrder === undefined || exact(r.splitOrder, 'first,evidence') && text(r.splitOrder.first) && r.splitOrder.first.trim() && list(r.splitOrder.evidence) && r.splitOrder.evidence.length && r.splitOrder.evidence.every(v => v.trim())) && (r.summary === undefined || text(r.summary) && r.summary.length <= 600) && r.schema_version === 'pdd.issue-sort.v1' && issueURL(r.issue)
     && list(r.base) && new Set(r.base).size === r.base.length && Array.isArray(r.inputs) && r.inputs.length && r.inputs.every(x => exact(x, 'key,revision') && text(x.key) && x.key && text(x.revision) && x.revision) && new Set(r.inputs.map(x => x.key)).size === r.inputs.length
     && exact(r.belongs, 'kind,area,repository') && ['area','repository','old-code','unknown'].includes(r.belongs.kind) && text(r.belongs.area) && text(r.belongs.repository)
     && (r.belongs.kind !== 'repository' || /^[\w.-]+\/[\w.-]+$/.test(r.belongs.repository))
@@ -38,9 +39,9 @@ export function selectedSort(snapshot, issue) {
   if (heads.length !== 1) return null;
   const head = heads[0], r = head.record;
   if ((snapshot.sortContext?.groups ?? []).some(g => g.merged && g.recheck?.some(x => x.issue === issue.key && x.heads.includes(head.id)))) return null;
-  if (!head.intact || head.authority !== 'trusted' || !validSort(r) || r.issue !== issue.key || r.status.release !== snapshot.sortContext?.release) return null;
+  if (!head.intact || head.authority !== 'trusted' || !validSort(r) || r.issue !== issue.key || !issue.namedSources && r.status.release !== snapshot.sortContext?.release) return null;
   const current = new Map([...snapshot.issues, ...snapshot.inputs].map(x => [x.key, x.revision]));
-  if (r.paths.some(path => !r.inputs.some(x => x.key === sortSourceKey(snapshot.repository, path))) || r.inputs.some(x => current.get(x.key) !== x.revision) || sortInputs(snapshot, issue).some(x => !r.inputs.some(y => y.key === x.key && y.revision === x.revision))) return null;
+  if (r.paths.some(path => !r.inputs.some(x => x.key === sortSourceKey(snapshot.repository, path))) || r.inputs.some(x => (tracksReviewInput(issue, x.key) || r.paths.some(path => x.key === sortSourceKey(snapshot.repository, path))) && current.get(x.key) !== x.revision && !(x.key === snapshot.sortContext?.key && x.revision === snapshot.sortContext?.legacyRevision && r.status.release === snapshot.sortContext?.release)) || sortInputs(snapshot, issue).some(x => !r.inputs.some(y => y.key === x.key && (y.revision === x.revision || x.key === snapshot.sortContext?.key && y.revision === snapshot.sortContext?.legacyRevision && r.status.release === snapshot.sortContext?.release)))) return null;
   return r;
 }
 export function sortPlan({ snapshot }) {
