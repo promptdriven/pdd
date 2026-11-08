@@ -23,7 +23,9 @@ async function fixture(t, options = {}) {
   writeFileSync(join(cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: options.mode ?? 'auto', trust: ['helper'] } }));
   const f = { dir, cwd, home, time: Date.parse('2026-11-04T00:00:00Z'), polls: [], prompts: [], runs: [], timers: [], comments: [], ack: [], issues: [], etag: '"one"', active: false };
   f.ports = {
-    ...healthyMachine, checkCapacityPorts: isolatedCheckCapacity(dir), stateRoot: join(home, 'state'), now: () => f.time,
+    ...healthyMachine, checkCapacityPorts: isolatedCheckCapacity(dir),
+    env: {HOME: home, XDG_CONFIG_HOME: join(home, '.config'), PDD_SUITE_QUEUE: join(dir, 'suite-queue'), PDD_INTERPRETER_QUEUE: join(dir, 'interpreter-queue')},
+    stateRoot: join(home, 'state'), now: () => f.time,
     // These fakes stand for a checkout where pdd workflows can start (#3050).
     allocationCheck: async () => ({ state: 'ready', message: '' }),
     readRunProgress: async () => f.runProgress ?? [],
@@ -63,7 +65,7 @@ async function fixture(t, options = {}) {
     },
   };
   f.module = await import('../src/autopilot-launcher.mjs');
-  f.invoke = async (command, extra = {}) => f.module.runAutopilotLauncher({ command, cwd, env: { HOME: home, PATH: process.env.PATH }, packageRoot: root, issues: [], ...extra }, f.ports);
+  f.invoke = async (command, extra = {}) => f.module.runAutopilotLauncher({ command, cwd, env: { ...f.ports.env, PATH: process.env.PATH }, packageRoot: root, issues: [], ...extra }, f.ports);
   f.stateFile = () => join(f.ports.stateRoot, readdirSync(f.ports.stateRoot).find(x => x.endsWith('.json')));
   f.state = () => JSON.parse(readFileSync(f.stateFile(), 'utf8'));
   f.tick = () => f.module.tickAutopilot(f.stateFile(), f.ports);
@@ -1029,10 +1031,16 @@ test('time rule revalidates trust on a cached due claim without forwarding stran
 test('time rules read active status file modification times from the Git common directory', async t => {
   const f = await fixture(t); delete f.ports.readRunProgress;
   const changedAt = f.time;
+  // A foreign finished ticket must not hide this checkout's progress.
+  mkdirSync(f.ports.env.PDD_SUITE_QUEUE, { recursive: true });
+  writeFileSync(join(f.ports.env.PDD_SUITE_QUEUE, 'ticket-1.json'), JSON.stringify({
+    ticket: 1, pid: process.pid, cwd: join(f.dir, 'unrelated'), state: 'finished',
+    queuedAt: changedAt - hour, startedAt: changedAt - hour, finishedAt: changedAt - 1, reason: null,
+  }));
   const record = (number, state = 'running', repo = 'owner/repo') => {
     const folder = join(f.cwd, '.git', 'pdd', 'runs', String(number)); mkdirSync(folder, { recursive: true });
     const file = join(folder, 'status.json');
-    writeFileSync(file, JSON.stringify({ v: 1, number, repo, state, updatedAt: changedAt - hour }));
+    writeFileSync(file, JSON.stringify({ v: 1, number, repo, root: join(f.dir, `run-${number}`), state, updatedAt: changedAt - hour }));
     utimesSync(file, new Date(changedAt), new Date(changedAt));
     return file;
   };
