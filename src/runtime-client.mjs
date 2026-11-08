@@ -1778,7 +1778,7 @@ function runFiles(cwd, words, options, ports) {
   const broken = rows.filter(row => row.unsent), exitCode = broken.length ? 4 : 0;
   const summary = `${capture.files.length} files, ${formatSize(capture.bytes)} (${capture.bytes} bytes). ${otherFiles(capture.files, found).length} of them are not prompt, story or test files.${broken.length ? ` ${broken.length} tests could not run.` : ''}`;
   if (options['--json']) {
-    line(ports.stdout, JSON.stringify({repo:root,exit_code:exitCode,summary_line:summary,rows:[...broken,...rows.filter(row=>!row.unsent)],files:capture.files,coverage}));
+    line(ports.stdout, JSON.stringify({repo:root,exit_code:exitCode,summary_line:summary,rows:[...broken.map(row=>({...row,...resultOutcome(row)})),...rows.filter(row=>!row.unsent)],files:capture.files,coverage}));
     return exitCode;
   }
   for (const row of broken) for (const problem of row.refusals) {

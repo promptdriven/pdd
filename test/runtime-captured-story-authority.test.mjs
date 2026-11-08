@@ -30,7 +30,7 @@ test(`captured Story authority: ${variant} in ${mode}`, async t=>{
   };
   const code=await runCheck({cwd:repo,words:['place-order','z-good'],options:{'--json':true,...(mode==='lint'?{'--lint':true}:mode==='files'?{'--files':true}:{})}},ports);
   const result=JSON.parse(ports.stdout.text),row=result.rows.find(r=>r.test==='tests/place-order.json');
-  assert.equal(row.state,'refused'); assert.equal(code,4); assert.equal(row.unsent,true);
+  assert.equal(row.state,'not run'); assert.equal(code,4); assert.equal(row.unsent,true);
   assert.equal(row.refusals[0].code,variant==='wrong'?'pdd-story-mismatch':'pdd-no-story');
   assert.ok(row.refusals[0].hint);
   if(variant==='missing-incomplete' && mode!=='files')assert.equal(row.not_checked.length,1);
@@ -39,7 +39,7 @@ test(`captured Story authority: ${variant} in ${mode}`, async t=>{
   if(mode==='files')assert.ok(!result.files.some(f=>f.path===row.test));
   else {
     const saved=load(state,`batches/${result.batch}/batch.json`).rows.find(r=>r.test===row.test);
-    assert.equal(saved.state,'refused');
+    assert.equal(saved.state,'not run');
     if(variant==='missing-incomplete')assert.equal(saved.not_checked.length,1);
     assert.doesNotMatch(load(state,`batches/${result.batch}/summary.json`).summary_line,/✓/);
     if(mode==='test') {

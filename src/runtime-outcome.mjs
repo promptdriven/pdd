@@ -10,6 +10,7 @@ export function resultOutcome(row = {}) {
   let code = ['check-busy', 'lint-busy'].includes(originalCode) ? 'server-busy' : originalCode === 'lint-pending' ? 'deadline' : originalCode;
   const states = { ready: 'waiting', queued: 'sent', running: 'sent', sending: 'partial', not_run: 'not run', unknown: 'partial' };
   let state = Object.hasOwn(states, row.state) ? states[row.state] : CHECK_STATES.includes(row.state) ? row.state : 'partial';
+  if (row.unsent && row.refusals?.length) { code='broken-test'; state='not run'; }
   if (code === 'broken-test') state = 'not run';
   if (state === 'not run' && (row.retryable === true || row.busy_display) && !['timeout-flag', 'deadline', 'interrupted'].includes(code)) code = 'server-busy';
   if (state === 'passed') return { state, reason: null };

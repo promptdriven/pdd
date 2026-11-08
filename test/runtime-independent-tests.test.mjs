@@ -60,7 +60,7 @@ for(const [mode,options] of Object.entries(modes)) for(const [kind,edit] of Obje
     if(json){
       const result=JSON.parse(out);assert.equal(result.exit_code,code);
       assert.equal(result.rows[0].test,'tests/z-broken.json');assert.equal(result.rows[0].unsent,true);
-      assert.equal(result.rows[0].state,'refused');assert.ok(result.rows[0].refusals[0].message);
+      assert.equal(result.rows[0].state,'not run');assert.ok(result.rows[0].refusals[0].message);
       assert.ok(result.rows[0].refusals[0].hint);
       assert.equal(result.rows.find(row=>row.test==='tests/place-order.json').state,mode==='files'?'ready':'passed');
       if(mode!=='files'){

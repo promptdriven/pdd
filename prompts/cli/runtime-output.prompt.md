@@ -4,7 +4,7 @@ Own `src/runtime-output.mjs`. It turns `pdd test` rows into the terminal table, 
 
 ## Incomplete selected tests and criteria
 
-Rows can carry `unsent:true` and `not_checked:[{criterion_id,text,reason}]` from local validation. JSON retains both. List unsent refused rows first in text and JSON, with their file, reason and fix hint before other results. Count them in each applicable summary as `N tests could not run`. Preserve other summary and exit precedence rules.
+Rows can carry `unsent:true` and `not_checked:[{criterion_id,text,reason}]` from local validation. JSON retains both. List locally broken unsent rows first as `not run (broken-test)` in text and JSON, with their file, reason and fix hint before other results. Count them in each applicable summary as `N tests could not run`. Preserve other summary and exit precedence rules.
 
 For each not-checked criterion print `ID: not checked: <reason>` and its text. It is never a passed criterion. Keep its place in the full Story total, exclude its ID from reported passed counts, and retain other checked results and real usage. A run with any such criterion is not a full Story pass; say so in text and summaries. A server pass becomes `not_run` at the client boundary; failures and other inconclusive states retain their existing meaning. Saved reads render the same facts.
 

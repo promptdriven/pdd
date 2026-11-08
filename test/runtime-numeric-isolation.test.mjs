@@ -46,11 +46,11 @@ for(const mode of ['test','lint'])for(const json of [false,true])for(const revie
     if(json){
       const result=JSON.parse(output),row=result.rows[0];
       assert.equal(result.exit_code,4);assert.equal(row.test,'tests/z-broken.json');
-      assert.equal(row.state,'refused');assert.equal(row.unsent,true);
+      assert.equal(row.state,'not run');assert.equal(row.unsent,true);
       assert.ok(row.refusals[0].message.includes('tests/z-broken.json'));assert.match(row.refusals[0].message,/EACCES/);assert.ok(row.refusals[0].hint);
       assert.equal(result.rows.find(r=>r.test==='tests/place-order.json').state,'passed');
       const saved=read(state,`batches/${result.batch}/batch.json`).rows.find(r=>r.test===row.test);
-      assert.equal(saved.state,'refused');assert.equal(saved.unsent,true);assert.deepEqual(refusalDetails(saved),refusalDetails(row));
+      assert.equal(saved.state,'not run');assert.equal(saved.unsent,true);assert.deepEqual(refusalDetails(saved),refusalDetails(row));
       ports.stdout.text='';const sent=fake.posts.length;
       assert.equal(await runCheck({cwd:repo,words:[result.batch],options:{'--read':true,'--json':true}},ports),4);
       const reread=JSON.parse(ports.stdout.text);

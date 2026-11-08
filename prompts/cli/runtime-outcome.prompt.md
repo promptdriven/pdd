@@ -36,7 +36,7 @@ free lint wait, interruption uses interrupted instead. A saved read can retain
 the producer deadline reason until fresh lint evidence replaces it. A retryable not-run capacity refusal defaults to server-busy in
 public rows; a supplied timeout-flag, deadline or interrupted cause takes precedence
 over that capacity default. Keep the capacity evidence and raw refusal code separately.
-Preserve broken-test as a not-run reason, for a caller that cannot
+A local row marked unsent with refusals is public `not run` with reason code `broken-test`; retain each original refusal code, message and hint separately. Preserve broken-test as a not-run reason, for a caller that cannot
 run a malformed test; this module does not decide which tests to skip. A caller
 stopped by its explicit `--timeout` reports timeout-flag and names `--timeout` in
 the message. An internal or server deadline reports deadline. A known broken-test

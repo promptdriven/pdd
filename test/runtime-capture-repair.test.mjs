@@ -40,7 +40,7 @@ for(const [variant,edit] of Object.entries(variants))for(const mode of ['test','
     const code=await runCheck({cwd:repo,cache:mode==='test',words:['place-order','z-good'],options},ports);
     assert.equal(code,4,'A captured local refusal must prevent a successful selection.');
     const result=JSON.parse(ports.stdout.text), row=result.rows.find(r=>r.test==='tests/place-order.json');
-    assert.equal(row.state,'refused');assert.equal(row.unsent,true);
+    assert.equal(row.state,'not run');assert.equal(row.unsent,true);
     assert.equal(row.refusals[0].code,expected(variant));assert.ok(row.refusals[0].hint);
     assert.equal(result.rows.find(r=>r.test==='tests/z-good.json').state,mode==='files'?'ready':'passed');
     if(coverage(variant)){
@@ -58,12 +58,12 @@ for(const [variant,edit] of Object.entries(variants))for(const mode of ['test','
       assert.ok(!result.files.some(f=>f.path==='tests/place-order.json'));
     }else{
       const saved=read(state,`batches/${result.batch}/batch.json`).rows.find(r=>r.test===row.test);
-      assert.equal(saved.state,'refused');assert.equal(saved.refusals[0].code,expected(variant));
+      assert.equal(saved.state,'not run');assert.equal(saved.refusals[0].code,expected(variant));
       assert.deepEqual(saved.not_checked,row.not_checked);
       ports.stdout.text='';const sent=fake.posts.length;
       assert.equal(await runCheck({cwd:repo,words:[result.batch],options:{'--read':true,'--json':true}},ports),4);
       const reread=JSON.parse(ports.stdout.text).rows.find(r=>r.test===row.test);
-      assert.equal(reread.state,'refused');assert.deepEqual(reread.not_checked,row.not_checked);
+      assert.equal(reread.state,'not run');assert.deepEqual(reread.not_checked,row.not_checked);
       assert.equal(fake.posts.length,sent);
     }
     if(mode==='test'){
@@ -91,7 +91,7 @@ for(const [variant,edit] of Object.entries(variants))test(`capture repair: sole 
   ports.stdout.text='';
   assert.equal(await runCheck({cwd:repo,cache:true,words:['place-order'],options:{'--json':true}},ports),4);
   const row=JSON.parse(ports.stdout.text).rows[0];
-  assert.equal(row.state,'refused');assert.equal(row.refusals[0].code,expected(variant));
+  assert.equal(row.state,'not run');assert.equal(row.refusals[0].code,expected(variant));
   if(coverage(variant))assert.equal(row.not_checked.length,3);
   assert.equal(fake.posts.length,before);
   assert.equal(read(repo,'.pdd/cache/test/stories.json').stories['user_stories/place-order.md'].pass,undefined);
