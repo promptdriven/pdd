@@ -10,7 +10,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 7d3125c9441414683e81f6969bd425c00ce99bdb60eee2b90871ec6156c74283).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 7ad4030cd58c125d8ea5b9b3068d70a6479add34301941ab8e01cc1e2aa9ce33).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -4976,7 +4976,7 @@ export const resendChecks = saveGuard(async ({refs, cwd, said, packageRoot = PAC
       const update = fields => commitRun(run,p,latest=>Object.assign(latest.checkResends.find(row=>row.id===id),fields));
       update({state:'sending'});
       let output;
-      try { output = await p.execFile(process.execPath,[join(packageRoot,'bin','pdd.mjs'),'test',...lost.tests,'--json','--max-calls',String(lost.maxCalls),'--cache-clear'],{cwd:run.root,env:p.env}); }
+      try { output = await p.execFile(process.execPath,[join(packageRoot,'bin','pdd.mjs'),'test',...lost.tests,'--json','--max-calls',String(lost.maxCalls),'--cache-clear'],{cwd:run.root,env:{...p.env,PDD_CHECK_SINGLE_ATTEMPT:'1'}}); }
       catch (error) { output = error; }
       let report;
       try { report = JSON.parse(output.stdout); } catch { /* An uncertain reply never allows a second send. */ }

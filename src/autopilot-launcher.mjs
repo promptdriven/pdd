@@ -8,7 +8,7 @@ import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
 import { readInterpreterProgress, configureInterpreterTestMode } from './interpreter-queue.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: e5fd7e4d3ee8365a5b59c769509b1d3a16bb6bc5a26c3b375d4dcd2a8be020f0).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: a78d4c223909be57dcbcac181947990143ae03811f7ff64566994490df41a90b).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -796,9 +796,10 @@ async function runtimeTick(state, p, completion, timeRules, pendingTimes, stateR
   const offer = (w, kind) => { wake.push([w, kind]); retried[w.number] = { mark: w.mark, at: w.at, kind }; };
   if (health.state === 'access') {
     // Not healthy and not down: a sign-in or setup problem that a person must fix. Wake nothing and resend nothing.
-    access ??= { since: now, first: waits[0]?.number ?? outage?.first, issues: [] };
+    access ??= { since: now, issues: [] };
+    access.first ??= allWaits[0]?.number ?? outage?.first;
     Object.assign(access, { detail: health.detail, fix: health.fix });
-    if (access.first) await incident(access, 'interpreter-access', { cause: `The free interpreter health check cannot be read (${health.detail}). This is a sign-in or setup problem on this machine, not an interpreter outage.`, tried: ACCESS_TRIED, need: `${health.fix} After 4 hours each waiting run follows the stuck rule.` });
+    if (access.first) await incident(access, 'interpreter-access', { cause: `The free interpreter health check cannot be read (${health.detail}). This is a sign-in or setup problem on this machine, not an interpreter outage.`, tried: ACCESS_TRIED, need: `${health.fix} After 4 hours other waiting runs follow the stuck rule; lost-verdict runs stay parked for a person decision.` });
     for (const w of waits) if (now - Math.max(w.at, access.since) >= RUNTIME_ACCESS_LIMIT)
       stuck.push([w, `Run #${w.number} has waited 4 hours for the interpreter, and the free health check still cannot be read (${health.detail}).`]);
   } else if (access && health.state === 'healthy') {

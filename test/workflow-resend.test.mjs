@@ -15,7 +15,7 @@ import { fakeRuntime, portsFor, sink, storyTest } from './runtime-fake.mjs';
 
 const OLD = '20261027-170000-abcd';
 const PATH = 'tests/place-order.json';
-async function setup(t, { outcome = 'passed', mixed = false, native = false, uncertain = false } = {}) {
+async function setup(t, { outcome = 'passed', mixed = false, native = false, uncertain = false, restart = null } = {}) {
   const f = await fixture(t); await f.run();
   const run = f.record(); run.state = 'paused'; run.runtimeWait = {at:f.clock,batch:OLD,cause:'unknown',reason:'runner-stopped'};
   writeRun(run);
@@ -31,11 +31,20 @@ async function setup(t, { outcome = 'passed', mixed = false, native = false, unc
   writeFileSync(join(folder,'batch.json'),JSON.stringify(batch));
   writeFileSync(join(folder,'summary.json'),JSON.stringify({batch:OLD,rows}));
   f.clock += 1000;
+  let restartId;
   const fake = await fakeRuntime(t, entry => {
     if (entry.command==='lint') return {status:200,json:fake.lint(entry.request.requestId)};
-    return {status:200,json:fake.check(entry.request?.requestId ?? entry.url.split('/').at(-1),outcome)};
+    const id = entry.request?.requestId ?? entry.url.split('/').at(-1);
+    if (restart && !restartId) restartId = id;
+    if (restart && id === restartId) {
+      const refusal = {code:'service-restarted'};
+      const result = restart === 'refusals' ? {refusals:[refusal]} : {report:{refusal}};
+      return {status:200,json:fake.job(id,'check','unknown',result,2)};
+    }
+    return {status:200,json:fake.check(id,outcome)};
   });
-  const {ports,clock} = portsFor({...f.ports.env,PDD_RUNTIME_URL:fake.origin}); clock.now=f.clock;
+  f.ports.env={...f.ports.env,PDD_RUNTIME_URL:fake.origin};
+  const {ports,clock} = portsFor(f.ports.env); clock.now=f.clock;
   const sends = [];
   if (native) {
     const bin=join(f.base,'bin');mkdirSync(bin);
@@ -52,7 +61,7 @@ async function setup(t, { outcome = 'passed', mixed = false, native = false, unc
       if (uncertain) throw Error('synthetic lost child reply');
       if (native) return promisify(execFile)(file,args,{...options,encoding:'utf8'});
       ports.stdout=sink(); ports.stderr=sink();
-      const result = await runCheck({cwd:options.cwd,words:inputWords(args),options:{'--json':true,'--max-calls':Number(args[args.indexOf('--max-calls')+1]),'--cache-clear':true}},ports);
+      const result = await runCheck({cwd:options.cwd,words:inputWords(args),options:{'--json':true,'--max-calls':Number(args[args.indexOf('--max-calls')+1]),'--cache-clear':true}},{...ports,env:options.env});
       return {stdout:ports.stdout.text,code:result};
     }
   })};
@@ -67,8 +76,9 @@ function inputWords(args) {return args.slice(2,args.indexOf('--json'));}
 
 test('3097: missing or blank person words send nothing and change no record',async t=>{
   const s=await setup(t),before=s.f.record();
-  assert.notEqual((await s.command()).code,0);
-  assert.notEqual((await s.command(['--said','-'],' \n')).code,0);
+  const missing=await s.command(),blank=await s.command(['--said','-'],' \n');
+  assert.notEqual(missing.code,0);assert.match(missing.out,/person.*decide/i);
+  assert.notEqual(blank.code,0);assert.match(blank.out,/--said.*nonblank/);
   assert.equal(s.sends.length,0);assert.deepEqual(s.f.record(),before);
 });
 
@@ -107,6 +117,9 @@ for(const change of ['changed-source','active','passed','missing-cap','already-c
   if(change==='already-consumed'){const run=s.f.record();run.checkResends=[{oldBatch:OLD,state:'sending'}];writeRun(run);}
   if(change==='strict')writeFileSync(join(s.f.source,'pdd.json'),JSON.stringify({strict_approvals:true}));
   const result=await s.command(['--said','-']);assert.notEqual(result.code,0,result.out);assert.equal(s.sends.length,0);
+  const guard={'changed-source':/source changed/,active:/no stopped lost-verdict/,passed:/no stopped lost-verdict/,
+    'missing-cap':/valid call caps/,'already-consumed':/consumed.*decision/,strict:/person terminal/};
+  assert.match(result.out,guard[change]);
 });
 
 
@@ -149,5 +162,46 @@ test('3097: source changes while reading the decision send nothing',async t=>{
   const code=await runPdd(['workflow','resend','17','--said','-'],{cwd:s.f.source,packageRoot,env:s.f.ports.env,stdout,stderr,
     workflowRunner:{...runner,resendChecks:(input,ports)=>runner.resendChecks(input,{...s.f.ports,...ports,isTTY:false})},
     stdin:(async function*(){writeFileSync(join(s.run.root,'prompts/place_order.prompt.md'),'changed while deciding');yield 'Resend once.';})()});
-  assert.notEqual(code,0);assert.equal(s.sends.length,0);assert.equal(s.f.record().checkResends,undefined);
+  assert.notEqual(code,0);assert.match(stdout.text+stderr.text,/source changed during.*decision/);
+  assert.equal(s.sends.length,0);assert.equal(s.f.record().checkResends,undefined);
+});
+
+
+for (const restart of ['refusals','report']) test(`3097 repair 1: native ${restart} restart stops the group after one paid attempt and later reads stay read-only`,async t=>{
+  const s=await setup(t,{native:true,restart});
+  const original=s.f.record(), secondRoot=join(s.f.base,'second-worktree');
+  s.f.git(s.f.source,'worktree','add','-qb','second-fixture',secondRoot,s.f.git(original.root,'rev-parse','HEAD'));
+  const second={...structuredClone(original),number:18,runId:'second-run',root:secondRoot,runDir:join(original.commonDir,'pdd','runs','18')};
+  mkdirSync(second.runDir,{recursive:true});writeRun(second);
+  const old='20261027-170001-efgh',folder=join(s.f.ports.env.HOME,'.pdd','runtime','batches',old);mkdirSync(folder,{recursive:true});
+  writeFileSync(join(folder,'batch.json'),JSON.stringify({...s.batch,batch:old,root:secondRoot}));
+  writeFileSync(join(folder,'summary.json'),JSON.stringify({batch:old,rows:s.batch.rows}));
+  const result=await s.command(['18','--said','-'],'Resend both once.\n');
+  const posts=s.fake.posts.filter(row=>row.command==='check');
+  assert.equal(posts.length,1,'a structured restart must not spend a second paid attempt');
+  assert.equal(result.code,1,result.out);
+  assert.equal(s.sends.length,1,'the next run must not start after a lost verdict');
+  assert.deepEqual(posts.map(row=>row.request.max_calls),[23]);
+  const record=s.f.record().checkResends.at(-1);
+  assert.equal(record.state,'no-verdict');assert.ok(record.newBatch);assert.notEqual(record.newBatch,OLD);
+  assert.equal(JSON.parse(readFileSync(join(second.runDir,'status.json'))).checkResends.at(-1).state,'authorized');
+  const receiptFolder=join(s.f.ports.env.HOME,'.pdd','runtime','batches',record.newBatch);
+  const receipt=JSON.parse(readFileSync(join(receiptFolder,'batch.json')));
+  const ids=receipt.rows[0].request_ids;
+  assert.deepEqual(ids,[posts[0].request.requestId]);
+  const raw=JSON.parse(readFileSync(join(receiptFolder,`${ids[0]}.json`)));
+  assert.equal(raw.state,'unknown');assert.equal(raw.usage.calls,2);
+  assert.equal((raw.result.refusals?.[0] ?? raw.result.report.refusal).code,'service-restarted');
+  assert.deepEqual(JSON.parse(readFileSync(join(s.folder,'batch.json'))),s.batch);
+  assert.match(result.out,new RegExp(record.newBatch));
+  const env={...s.sends[0].options.env};delete env.PDD_CHECK_SINGLE_ATTEMPT;
+  for(const mode of ['--read','--retry']){
+    let output;
+    try { output=await promisify(execFile)(process.execPath,[join(packageRoot,'bin','pdd.mjs'),'test',mode,record.newBatch,'--json'],{cwd:s.run.root,env,encoding:'utf8'}); }
+    catch(error){output=error;}
+    const report=JSON.parse(output.stdout);
+    assert.notEqual(report.exit_code,0);
+    assert.equal(s.fake.posts.filter(row=>row.command==='check').length,1,`${mode} cannot replace a person-authorized lost attempt`);
+    assert.deepEqual(JSON.parse(readFileSync(join(receiptFolder,'batch.json'))).rows[0].request_ids,ids);
+  }
 });

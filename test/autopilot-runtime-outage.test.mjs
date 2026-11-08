@@ -677,3 +677,30 @@ test('3097: native saved replacement evidence wakes a verdict without another se
   const decisions=f.sent.filter(text=>text.includes('workflow resend'));
   assert.equal(decisions.length,2);assert.match(decisions[1],new RegExp(lost));
 });
+
+
+for(const legacy of [false,true]) test(`3097 repair 1: all-lost waits attach an access incident${legacy?' saved without a first run':''}`,async t=>{
+  const f=await launcher(t);await f.start();f.prompts.length=0;
+  f.waits=[wait(12,f.time,{cause:'unknown'})];
+  f.health={state:'access',detail:'HTTP 401',fix:'gh auth status'};
+  if(legacy){
+    const state=JSON.parse(readFileSync(f.stateFile(),'utf8'));
+    state.runtime={access:{since:f.time,issues:[]}};
+    writeFileSync(f.stateFile(),JSON.stringify(state));
+  }
+  f.time+=minute;await f.tick();
+  assert.equal(f.sent.length,1,'a lost-verdict-only wait still needs an interpreter-access alert');
+  assert.match(f.sent[0],/interpreter-access/);assert.match(f.sent[0],/HTTP 401/);
+  let state=JSON.parse(readFileSync(f.stateFile(),'utf8'));
+  assert.equal(state.runtime.access.first,12);assert.deepEqual(state.runtime.access.issues,[12]);
+  f.waits.push(wait(15,f.time,{cause:'unknown'}));
+  f.time+=minute;await f.tick();f.time+=5*60*minute;await f.tick();
+  state=JSON.parse(readFileSync(f.stateFile(),'utf8'));
+  assert.deepEqual(state.runtime.access.issues,[12,15]);assert.equal(f.sent.length,1);
+  assert.deepEqual(kinds(f),[],'lost verdicts stay parked without retry or stuck wakes');
+  assert.equal(state.runtime.lostDecision,undefined,'access failure must not ask for a resend decision');
+  f.health={state:'healthy',detail:'HTTP 200'};f.time+=minute;await f.tick();
+  assert.equal(f.sent.filter(text=>text.includes('workflow resend')).length,1);
+  assert.equal(f.sent.filter(text=>text.includes('recovered: interpreter-access')).length,1);
+  assert.deepEqual(kinds(f),[],'health recovery cannot wake a lost verdict automatically');
+});
