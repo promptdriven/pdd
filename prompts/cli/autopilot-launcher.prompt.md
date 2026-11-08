@@ -305,7 +305,10 @@ ETag), saved again at the end of the tick. At the end of each tick, after the
 state save, `compact` keeps the ledger to its last 2 hours.
 
 The floor guard also covers the launcher's non-safety comment, PR and review
-reads after intake. Every reply updates the guard. Hold-label index reads and
+reads after intake, and every issue-index page, including the first page after
+heartbeats. If admission stops pagination, retain the previous complete index,
+pages and refresh watermark; return unknown and wait without publishing a partial
+index as complete. Every reply updates the guard. Hold-label index reads and
 permission checks stay live. Crossing the floor during intake does not permit
 new work delivery from an incomplete observation.
 

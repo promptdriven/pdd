@@ -212,6 +212,7 @@ function response(text) {
 async function issuePages(endpoint, state, p) {
   const rows = [], pages = {}; let first = true, etag, changed = false;
   while (endpoint) {
+    if (p.githubFloor?.blocked('core')) return { reserveBlocked: true };
     const old = state.pages?.[endpoint];
     const args = ['api', '--include', '--method', 'GET', endpoint];
     if (old?.etag) args.push('-H', `If-None-Match: ${old.etag}`);
@@ -237,7 +238,7 @@ async function queryIssues(state, p) {
   const fullPages = Object.keys(state.pages ?? {}).filter(key => !key.includes('&since=')).length;
   if (fullPages > 1 && typeof state.issuesSince === 'string' && Array.isArray(state.cachedIssues) && Number.isFinite(state.issuesFullAt) && p.now() - state.issuesFullAt < FULL_ISSUE_LIST_EVERY) {
     const read = await issuePages(`repos/${state.repo}/issues?state=all&sort=updated&direction=desc&since=${encodeURIComponent(state.issuesSince)}&per_page=100`, state, p);
-    if (read.rateLimited) return read;
+    if (read.rateLimited || read.reserveBlocked) return read;
     const pages = { ...Object.fromEntries(Object.entries(state.pages).filter(([key]) => !key.includes('&since='))), ...read.pages };
     if (!read.changed) return { status: 304, pages };
     const byNumber = new Map(state.cachedIssues.map(row => [row.number, row]));
@@ -246,7 +247,7 @@ async function queryIssues(state, p) {
     return { status: 200, etag: state.etag, issues, pages };
   }
   const read = await issuePages(`repos/${state.repo}/issues?state=open&sort=updated&direction=desc&per_page=100`, state, p);
-  if (read.rateLimited) return read;
+  if (read.rateLimited || read.reserveBlocked) return read;
   return { status: 200, etag: read.etag, issues: read.rows, pages: read.pages, since: newestUpdate(read.rows), fullAt: p.now() };
 }
 // A GET of the tick. With an explicit ETag the caller keeps the page. Without one, the tick's ETag cache (p.etags) makes
@@ -1221,6 +1222,7 @@ async function runTick(stateFile, ports, completion) {
     await sendHeartbeats(ownClaims, deferIntake);
 
     const result = p.queryIssues ? await p.queryIssues(state) : await queryIssues(state, p);
+    if (result.reserveBlocked) return outcome('unknown', 'GitHub limit is below the floor; retry after reset.');
     if (result.status === 429 || result.rateLimited) { state.retryAt = result.resetAt || p.now() + INTERVAL; return outcome('unknown', 'GitHub rate limited; waiting until reset.'); }
     if (![200, 304].includes(result.status)) throw Error('GitHub issue check failed; check gh auth status.');
     delete state.retryAt;
