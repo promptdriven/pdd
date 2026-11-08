@@ -24,6 +24,14 @@ selected explicit profile for new chats. Without a packet, use installed pdd and
 profile. These command bindings do not alone prove that a default-home profile
 reaches issue chats in an existing normal PDD server.
 
+A packet item with `retry` is a person's continuation signal: removal of an
+observed `pdd:stuck` label, or a new trusted retry comment. At the next available
+worker slot, pass its exact `retry.text` with `pdd workflow changes N`. Reuse the
+existing run and retry only its failed step with retained evidence and the original
+command. Preserve completed work, gates, questions, branch and claim. Do not start
+another run or bypass a repair ceiling. Worker delivery resumes the run; the tick
+only offers the signal and makes no AI call.
+
 After an automatic PDD run reaches `waiting`, `paused`, `stuck`, `question`,
 `completed` or `cancelled`, and its current worker turn is positively confirmed
 complete, the coordinator may run `pdd workflow yield ISSUE`. A native Herdr
@@ -59,7 +67,9 @@ PDD_ALERT
 7. Lost claim: when the winning claim of your issue is expired or belongs to another coordinator, pdd refuses start, approve, park, open, yield and the `done` that pushes or opens the PR with "claim ownership". A `done` of a middle step is not checked. Stop work on that issue and do not push to it. Do not remove `pdd:working`, also when your run ends: it belongs to the current claim and its owner. Keep the local work as history.
 Full-suite validation uses the shared machine queue: run the repository's full-suite command through the current invoked CLI `workflow suite --command COMMAND`. Queue waiting and execution pause the stuck clock. Wait for the result; never launch a direct duplicate. A suite failure or timeout is a `test-suite` incident with its own cause, not a stuck issue.
 
-8. Stuck: no progress (commit, push, comment or PR event) for 60 minutes, or 30M tokens in one PR stage: add the `pdd:stuck` label, write one comment with the cause, and take the next issue. Send one `stuck` alert. After 4 hours stuck, the tick sends a `stuck-claim` rule: try again with a changed approach and remove `pdd:stuck`, or ask in the configured alert channel as above. After the repair or takeover limit, the rule says so: do not retry, do not remove `pdd:stuck`, write no new comment and send no second alert. Only a person lets Autopilot try again. After the repair limit, they remove `pdd:stuck` and `pdd:working`, then run `pdd workflow cancel N` in the checkout that holds the stuck run; the next tick starts a new run with a fresh repair count. While the issue keeps `pdd:stuck`, the tick sends no more `lastSeen` updates, so the claim expires 4 hours later and the issue is not claimed forever.
+8. Stuck causes: classify environment, interpreter or work before the ordinary stuck path. For a native infrastructure stall, timeout, killed process, disk/memory pressure, full suite queue or named missing tool, use `pdd workflow park --reason TEXT --step STEP` for the failed check, verify or formal validation. Keep the claim and evidence. Ask no person and send no per-issue stuck alert yet. The tick offers environment-ready only after 15 minutes, 1 hour and 4 hours and healthy host/queue checks. Deliver its exact tagged text with `pdd workflow changes N` as worker room allows, oldest first. Rerun only the named failed validation with the original command; never restart completed work. Classify a fresh failure again. Native delivery spends the attempt once. At three failed retries the tick sends the one environment-cause stuck alert; do not send another or apply the generic four-hour retry. Interpreter no-verdict/unknown outcomes keep the interpreter rule below. Real failing tests, must-fix reviews, unresolved assertions and decisions keep the work path, including mixed reasons that mention resource pressure.
+
+   Work stuck: no progress (commit, push, comment or PR event) for 60 minutes, or 30M tokens in one PR stage: add the `pdd:stuck` label, write one comment with the cause, and take the next issue. Send one `stuck` alert. After 4 hours stuck, the tick sends a `stuck-claim` rule: try again with a changed approach and remove `pdd:stuck`, or ask in the configured alert channel as above. After the repair or takeover limit, the rule says so: do not retry, do not remove `pdd:stuck`, write no new comment and send no second alert. Only a person lets Autopilot try again. After the repair limit, they remove `pdd:stuck` and `pdd:working`, then run `pdd workflow cancel N` in the checkout that holds the stuck run; the next tick starts a new run with a fresh repair count. While the issue keeps `pdd:stuck`, the tick sends no more `lastSeen` updates, so the claim expires 4 hours later and the issue is not claimed forever.
 9. Long-running: 24 hours after the claim with no merge, the tick sends one `long-running` rule. Send one informational alert for that issue and keep working; it is not a stop. Use `--kind long-running`. The tick records it in your claim comment, so a later owner of the issue does not send it again.
 
 ## Interpreter outage

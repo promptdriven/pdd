@@ -44,7 +44,7 @@ nonblank command before importing execution. Pass workflow ports plus a `say`
 port for live queue status to stdout; use normal result stream and exit handling.
 The required [queue contract](test-suite-queue.prompt.md) owns execution.
 
-Dispatch `workflow-park` to the native workflow runner `parkAutomaticRun` with reason, runtime (true only for `--interpreter`) and cwd, using existing workflow ports and result handling.
+Dispatch `workflow-park` to the native workflow runner `parkAutomaticRun` with reason, step (from `--step`), runtime (true only for `--interpreter`) and cwd, using existing workflow ports and result handling.
 
 Dispatch `workflow-yield` to workflow runner module function `yieldAutomaticCapacity` with the supplied run reference and cwd, using the existing workflow runner ports and result handling.
 

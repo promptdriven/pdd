@@ -510,6 +510,81 @@ For initial and reopened normal Story gates, revalidate the displayed Story/test
 - [Shared full-suite queue](test-suite-queue.prompt.md): required execution, status and paused inactivity contract.
 
 
+## Environment stops
+
+Plain park classifies the cause through [environment recovery](autopilot-environment.prompt.md).
+Store `stuckCause` for every successful park (`environment`, `interpreter`, `work`).
+`parkAutomaticRun` also accepts optional `step` from `--step STEP`: a failed
+validation step in this current area's check/verify/formal steps. Invalid explicit
+steps refuse without saving. Environment parks require explicit `step`; absence refuses without saving. A
+previously completed step is allowed only as an explicitly named failed rerun.
+Environment parks save `environmentRetry` using the
+shared recovery shape, retaining the same-target delivered budget. Repeating an
+identical park while stuck preserves its time and budget. Runtime parks keep their
+existing authority and refusal rules. Work parks keep current repair/stuck rules.
+No environment park asks a person or sends an alert before retry exhaustion.
+Status and list use the shared environment status before ordinary stuck words;
+these waits group as working until exhaustion. At exhaustion the next action says
+that retries are exhausted and directs inspection of the environment alert, never
+promising another automatic retry. Other stuck states expose their cause class on a separate `Cause:` status line.
+
+`changeRun` recognizes the shared environment wake tag. Deliver only for the
+current environment park, after its nextAt, below its limit, with current host
+health, existing automatic continuation ownership and STOP rules. A stale or
+repeated tag sends nothing. Under journal ownership, a definitely-unsent pending
+obsolete environment wake becomes `superseded` (retained history, never sent);
+never retire in-flight or uncertain custody. A current but temporarily unhealthy
+pending wake stays pending and is deferred so later ordinary requests can pass.
+FIFO admission skips only those deferred environment wakes. Recheck wake identity
+against the latest run under transport admission after health observation. Repeat this check at transport admission to prevent
+stale queued requests from waking a replacement park. Preserve gate identity,
+completed steps, branch, claim and area. An environment wake is a change, never an
+answer to an open question; it preserves that question and stays waiting for it. Only confirmed delivery increments
+attempts, records the attempt time and returns to running (or waiting for an
+existing gate/question); failed or uncertain delivery consumes no retry and
+retains existing journal protection. The wake instructs the worker to rerun only
+the named validation step, using its original evidence and command; do not replay
+build, approvals, publication or an unknown external operation. Ordinary change
+requests retain their existing delivery behavior. They do not consume the automatic
+retry budget. An explicit person retry can resume a stuck run: export pure
+`isRetryRequest(text)` for a direct imperative retry, resume, or try-again request,
+optionally prefixed by please or can/could/would you (please), or following a
+sentence/clause about the repaired machine. Admit a leading command that stands
+alone or names the failed validation, step, run, work, check, test, build, verify
+or formal target, including now, from retained evidence, using its original
+command or after the machine repair. A retry word followed by a status or policy
+description is a diagnostic, not an imperative. Reported or quoted commands and
+commands embedded in other diagnostic text do not authorize continuation. An
+explicit negative continuation instruction anywhere in the text wins over a
+positive command. This includes a forbidden or disabled continuation status and
+an instruction to stop, hold or wait, including before resuming. Unrecognized
+wording keeps ordinary change delivery behavior;
+it grants no person retry override. This is a conservative lexical decision,
+without an AI call.
+The launcher uses this same predicate only after its existing trust filter.
+
+For a stuck automatic run, such a request is a change, never a question answer.
+Recognize the request before ordinary one-line text normalization, and retain that
+intent in pending journal custody so a multiline request still resumes after a
+blocked delivery. Recheck the saved text with the same predicate before granting
+the override; a saved retry flag alone is not authorization. Repaired-machine
+requests remain recognizable when ordinary one-line normalization removes their
+line break.
+Apply STOP, current claim ownership and repair-ceiling checks before accepting
+and again before worker submission. Confirmed delivery resumes running, or waiting
+for an existing gate/question. Keep the original gate identity, question, completed
+steps, area, branch, claim and automatic retry budget; clear the old park reason.
+The worker receives the saved failed validation target when present, or instructions
+to locate the failed step in retained evidence, and retries only that step with its
+original command. A person retry need not wait for automatic backoff or remaining
+automatic attempts. Failed or uncertain delivery resumes nothing and uses existing
+journal custody without blind resend. Other ordinary requests do not unpark a stop. An unskipped successful `stepDone` for the
+failed target clears its retry record. A skipped validation does not reset it. Other progress does not reset its budget.
+
+## Dependencies
+
+- [Environment recovery](autopilot-environment.prompt.md): required native generation and verification context for classification, retry records and host admission.
+
 - [Readable PR descriptions](workflow-pr-body.prompt.md): required authoring/generation/verification/testing context for the readable part, the titles and the Details section of every PR description.
 - [GitHub calls](github-calls.prompt.md): native generation and verification context for counting `gh` calls.
 

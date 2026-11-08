@@ -655,6 +655,12 @@ Workflow approval reads `pdd.json` from the main checkout (`sourceRoot`), outsid
 
 `pdd dependencies prepare [--issue N]` prepares a coordinator packet. `pdd dependencies complete --input -` reads a structured completion from stdin. `pdd workflow yield N` hands off automatic capacity after the current worker has stopped.
 
+`pdd workflow park --reason TEXT --step STEP` records an environment failure of
+check, verify or formal in the current area. Environment parks require `--step`;
+pdd does not guess the failed target from unfinished steps in an older run. Autopilot retries only that validation
+after 15 minutes, 1 hour and 4 hours. It keeps the run and completed work. After
+three failed retries, it stays stuck and sends one alert naming the cause.
+
 `pdd workflow park --reason TEXT` records an automatic stop from its existing run worktree without releasing its claim or treating the worker as done.
 
 `pdd workflow park --interpreter --reason TEXT` records that an automatic run waits for the PDD interpreter, the hosted service behind `pdd test`. pdd first reads the run's latest `pdd test` result. Only a check with no verdict from the AI service, a busy or not-run check, or an unknown outcome may wait. A failed check, a refusal that names a file rule or a step that took longer than the server time limit is the issue's own work (make the step smaller). A sign-in, access or interpreter address problem needs a person, and waiting does not fix it. For these, the command exits 1, names the fix and parks nothing. If pdd cannot read the result, the outcome counts as unknown. A waiting run asks no person. `pdd workflow status` shows `waiting for the interpreter: REASON`, and `pdd graph` shows the hold `Waiting for the interpreter`. The run keeps its claim, branch, worktree and progress, and the coordinator can yield its worker slot with `pdd workflow yield N`.
@@ -744,3 +750,28 @@ and worker launches. Workflow status reports an unavailable queue with its cause
 While queue activity is unknown, Autopilot withholds inactivity rules for the run
 and retries the read on later ticks.
 Queue records stay outside the repository and contain no commands or test output.
+
+Environment validation stops show the next attempt and UTC time in workflow status.
+A person can request another try by removing the observed `pdd:stuck` label or
+posting a trusted retry comment, such as `Please retry the failed validation.`
+Diagnostic mentions and negative continuation instructions do not request a retry.
+The next tick offers the signal through the existing coordinator packet. The
+coordinator passes its exact retry text with `pdd workflow changes N`. Confirmed
+worker delivery resumes only the failed step and keeps completed work, gates,
+questions, branch, claim and the automatic retry count. This person request does
+not wait for the automatic backoff. STOP, current ownership and repair ceilings
+still apply. A failed or uncertain delivery does not resume the run.
+
+Autopilot classifies causes as environment, interpreter or work. Real failing
+assertions, review must-fixes and decisions follow the work rules. Unknown
+interpreter outcomes retain saved-batch reconciliation. Mixed causes with real
+work failures do not retry automatically. Missing-tool stops must name the
+executable (for example `missing tool: node`); the retry checks PATH first.
+The host preflight requires one-minute load per CPU below 1, at least 10% available
+memory, and Linux I/O and memory PSI avg10 below 10%. Unknown host or queue facts
+block retry. The optional shared suite queue is observed without changing it;
+only confirmed-dead waiting owners, or dead running owners with confirmed-dead
+descendant process groups, release capacity in this read. Live or unknown ownership
+still blocks. Queue records stay unchanged, and the validation command must still
+use normal suite admission. An environment wake
+is offered by the next regular tick after its due time, as worker room permits.
