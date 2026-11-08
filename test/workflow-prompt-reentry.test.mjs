@@ -1,16 +1,29 @@
 // Real temporary Git. The repo fixture fakes GitHub, Herdr and native launches.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {existsSync,mkdirSync,readFileSync,writeFileSync} from 'node:fs';
+import {existsSync,mkdirSync,readFileSync,unlinkSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {openRun,stepDone,approveRun,runStatus} from '../src/workflow-runner.mjs';
 import {fixture,packageRoot} from './helpers/workflow-runner-fixture.mjs';
 
 const vector = value => ({schema_version:'prompt-runtime.program-scenario.v1',steps:[{step_id:'value',entry_path:'value.prompt.md',operation:'value',checks:[{criterion_id:'AC1',target:'result',path:'/value',op:'equals',value}]}]});
 const save=(f,run)=>writeFileSync(join(run.runDir,'status.json'),JSON.stringify(run));
-async function prepared(t,{code=true}={}) {
+async function prepared(t,{code=true,nested=false,realRemote=false,publishCode=true}={}) {
   const f=await fixture(t,{name:'bug',agent:'codex'});
   f.ports.skipMetricsDelivery=true;
+  if(realRemote) {
+    const {execFile}=await import('node:child_process');
+    const {promisify}=await import('node:util'), actual=promisify(execFile);
+    f.remote=join(f.base,'remote.git');f.git(f.source,'clone','--bare',f.source,f.remote);
+    const fake=f.ports.execFile;
+    f.ports.execFile=async(file,args,options)=>{
+      if(file==='git' && ['fetch','push','ls-remote'].includes(args[0])) {
+        if(args[0]==='push')f.pushes.push(args);
+        return actual(file,['-c',`url.${f.remote}.insteadOf=https://github.com/example/project.git`,...args],{...options,encoding:'utf8'});
+      }
+      return fake(file,args,options);
+    };
+  }
   const execute=f.ports.execFile;
   f.ports.execFile=async(file,args,options)=>{
     const result=await execute(file,args,options);
@@ -33,12 +46,18 @@ async function prepared(t,{code=true}={}) {
   writeFileSync(join(run.root,'value.prompt.md'),'# Value\nReturn the selected value.\n');
   writeFileSync(join(run.root,'user_stories/value.md'),'I can select a value.\n');
   writeFileSync(join(run.root,'tests/value.json'),JSON.stringify(vector(2)));
+  if(nested) {
+    mkdirSync(join(run.root,'packages/widget/user_stories'),{recursive:true});
+    writeFileSync(join(run.root,'packages/widget/user_stories/value.md'),'I can select a nested value.\n');
+  }
   await f.done('prompt-story');await f.approve();await f.done('check');
   if(!code)return f;
   await f.approve();
   assert.equal(f.record().area,2);
   writeFileSync(join(run.root,'value.mjs'),'export const value = 2;\n');
-  await f.done('build');await f.done('verify');
+  await f.done('build');
+  if(!publishCode)return f;
+  await f.done('verify');
   assert.equal(f.prs.length,2);
   return f;
 }
@@ -292,3 +311,100 @@ test('2897 repair: owning draft prompt passes local interpreter freshness admiss
   assert.equal(iface.status,'draft');
   assert.equal(promptRefusal({path,interface:iface,prose:proseSha256(text)},'Runtime interface'),null);
 });
+
+// Repair 2: the review requires immutable publication and fresh code-entry coverage.
+for(const published of [false,true])for(const boundary of (published?['status','staging','commit','preparation']:['status','staging','commit']))
+ test(`2897 repair 2: real remote refuses a prompt race during ${boundary}, existing PR 2=${published}`,async t=>{
+  const f=await prepared(t,{realRemote:true,publishCode:published}),run=f.record(),pr1=run.pr[0];
+  const head=f.git(run.root,'rev-parse','HEAD'),remote=published?f.git(f.remote,'rev-parse',run.branch):'',pushes=f.pushes.length;
+  writeFileSync(join(run.root,'value.mjs'),'export const value = 4;\n');
+  const execute=f.ports.execFile;let compared=false,changed=false;
+  f.ports.execFile=async(file,args,options)=>{
+    if(file==='git' && args[0]==='diff' && args[1]==='--quiet' && args.at(-1)==='*.prompt.md')compared=true;
+    const target=boundary==='status'?file==='git' && args[0]==='status'
+      :boundary==='staging'?file==='git' && args[0]==='add'
+      :boundary==='commit'?file==='git' && args[0]==='commit'
+      :file==='gh' && args[0]==='pr' && args[1]==='edit';
+    if(compared && !changed && target) {
+      changed=true;writeFileSync(join(run.root,'value.prompt.md'),'# Concurrent prompt correction\n');
+      // Simulate another writer staging and committing while publication prepares.
+      if(['commit','preparation'].includes(boundary)) {
+        f.git(run.root,'add','value.prompt.md');
+        if(boundary==='preparation')f.git(run.root,'commit','-qm','Concurrent prompt edit');
+      }
+    }
+    return execute(file,args,options);
+  };
+  const out=await stepDone({step:'verify',summary:'reviewed',cwd:run.root},f.agentPorts());
+  assert.equal(changed,true,'the race must run after the first prompt comparison');
+  if(published) {
+    assert.equal(f.git(f.remote,'rev-parse',run.branch),remote,'unsafe source must never reach the remote');
+    assert.equal(f.git(run.root,'diff',`origin/${pr1.branch}`,`origin/${run.branch}`,'--','*.prompt.md'),'');
+  } else {
+    assert.equal(f.git(f.remote,'for-each-ref',`refs/heads/${run.branch}`),'','the unsafe code branch must not be pushed');
+    assert.equal(f.prs.length,1);
+  }
+  assert.notEqual(out.exitCode,0);assert.match(out.message,/prompt-pr/);
+  assert.equal(f.pushes.length,pushes);
+  assert.equal(readFileSync(join(run.root,'value.prompt.md'),'utf8'),'# Concurrent prompt correction\n');
+  if(['status','staging'].includes(boundary))assert.equal(f.git(run.root,'rev-parse','HEAD'),head);
+ });
+
+for(const route of ['terminal','reply','sync','fetch','first-publication'])for(const kind of ['contract','bytes'])
+ test(`2897 repair 2: ${kind} edit during ${route} code entry stays in prompt space`,async t=>{
+  const f=await prepared(t,{code:route!=='first-publication'}),run=f.record(),root=run.root;
+  if(route!=='first-publication') {
+    assert.equal((await reopen(f)).exitCode,0);
+    writeFileSync(join(root,'value.prompt.md'),'# Value\nA corrected prompt.\n');await f.done('check');
+  }
+  const before=f.record(),branch=f.git(root,'branch','--show-current');let changed=false;
+  const change=()=>{changed=true;writeFileSync(join(root,'tests/value.json'),kind==='contract'?JSON.stringify(vector(8)):JSON.stringify(vector(2),null,2)+'\n');};
+  if(route==='terminal' || route==='first-publication')f.ports.confirm=async()=>{if(route==='terminal' || f.prs.length===1)change();return true;};
+  if(route==='reply') {
+    let replied=false;
+    f.ports.stdin=(async function*(){replied=true;yield 'Start code from the approved contract.';})();
+    const execute=f.ports.execFile;
+    f.ports.execFile=async(file,args,options)=>{
+      if(replied && !changed && file==='git' && args[0]==='diff' && args.some(arg=>arg.includes('...')))change();
+      return execute(file,args,options);
+    };
+  }
+  if(['sync','fetch'].includes(route)) {
+    const execute=f.ports.execFile;let statusReads=0;
+    f.ports.execFile=async(file,args,options)=>{
+      // Explicit-reply synchronization follows the prompt snapshot checks.
+      if(route==='sync' && file==='gh' && args[0]==='pr' && args[1]==='view' && args.at(-1)?.includes('state'))statusReads++;
+      if(!changed && (route==='sync'?statusReads===2:file==='git' && args[0]==='fetch' && args[2]?.startsWith('refs/heads/')))change();
+      return execute(file,args,options);
+    };
+  }
+  const out=await approveRun({ref:'17',cwd:f.source,packageRoot,...(['reply','sync','fetch'].includes(route)?{said:route==='reply'?'-':'Start code from the approved contract.'}:{})},f.ports);
+  if(out.exitCode!==0)t.diagnostic(JSON.stringify({route,kind,message:out.message,area:f.record().area}));
+  assert.equal(changed,true,'the edit must occur at the selected boundary');
+  assert.notEqual(out.exitCode,0);assert.equal(f.record().area,kind==='contract'?0:1);
+  assert.equal(f.git(root,'branch','--show-current'),branch);
+  const decisions=f.record().decisions;
+  assert.deepEqual(decisions.slice(0,before.decisions.length),before.decisions);
+  if(route==='first-publication') {
+    assert.equal(decisions.length,before.decisions.length+1,'only the separate PR 1 approval may be recorded');
+    assert.notEqual(decisions.at(-1).gateId,f.record().gate?.id);
+  } else assert.deepEqual(decisions,before.decisions,'a changed code contract cannot record code approval');
+  assert.equal(f.record().replayBaseline.vectors[0].snapshot.steps[0].checks[0].value,2);
+ });
+
+for(const boundary of ['return','gate'])for(const edit of ['add','edit','delete'])
+ test(`2897 repair 2: nested Story ${edit} at ${boundary} needs fresh coverage`,async t=>{
+  const f=await prepared(t,{nested:edit!=='add'}),root=f.record().root;
+  assert.equal((await reopen(f,boundary==='gate'?'story':'prompt-pr')).exitCode,0);
+  if(boundary==='gate')await f.done('prompt-story');
+  const before=f.record(),pushes=f.pushes.length,path=join(root,'packages/widget/user_stories/value.md');
+  if(edit==='delete')unlinkSync(path);
+  else {mkdirSync(join(root,'packages/widget/user_stories'),{recursive:true});writeFileSync(path,'I can select a different nested value.\n');}
+  if(boundary==='return')await f.done('check');
+  else {
+    const out=await approveRun({ref:'17',cwd:f.source,packageRoot,said:'I approve the displayed Story.'},f.ports);
+    assert.notEqual(out.exitCode,0);
+  }
+  assert.equal(f.record().area,0);assert.equal(f.pushes.length,pushes);
+  assert.deepEqual(f.record().decisions,before.decisions);
+ });
