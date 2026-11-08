@@ -104,7 +104,7 @@ test('2704 S2: one immutable source Blob serves lint and all selected check uplo
   };
   t.after(() => { globalThis.FormData = OriginalFormData; });
   const fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
-  const made = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin });
+  const made = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin, PDD_INTERPRETER_CONCURRENCY: '8' });
   assert.equal(await runCheck({ cwd: setup.repo, words: [], options: { '--json': true } }, made.ports), 0);
   assert.equal(fake.posts.length, 8); assert.equal(sources.length, 8);
   assert.equal(new Set(sources).size, 1, 'multipart uploads must share the immutable packed source rather than copy it per request');
@@ -133,7 +133,7 @@ test('2704 S3: uncapped busy drops dispatch to one while accepted work runs', as
     if (entry.method === 'GET') { polls++; return { status: 200, json: f.check(entry.url.split('/').at(-1), 'running') }; }
     return f.normal(entry);
   });
-  made = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin }); made.ports.pollMs = 10000;
+  made = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin, PDD_INTERPRETER_CONCURRENCY: '8' }); made.ports.pollMs = 10000;
   assert.equal(await runCheck({ cwd: setup.repo, words: [], options: { '--json': true, '--timeout': 1 } }, made.ports), 3);
   assert.equal(first.size, 3); assert.equal(busyAt.length, 2); assert.ok(polls > 0);
   assert.deepEqual(retries, [], 'window one must hold every busy retry behind still-running accepted work');
