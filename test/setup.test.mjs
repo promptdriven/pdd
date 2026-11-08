@@ -95,5 +95,5 @@ test('SETUP5: pdd help says how to call a PDD skill in Codex and in Claude Code'
   // --help writes nothing to HOME, so the real environment is safe here.
   const help = spawnSync(process.execPath, [join(root, 'bin/pdd.mjs'), '--help'], { encoding: 'utf8' });
   assert.equal(help.status, 0, help.stderr);
-  assert.ok(help.stdout.includes('Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex, /pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting).'), help.stdout);
+  assert.ok(help.stdout.includes('Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex, /pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting, pdd-product).'), help.stdout);
 });
