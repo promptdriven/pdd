@@ -65,8 +65,16 @@ test('2753 every ordinary writer family retains unrelated progress and its own e
    else if(variant==='change')out=await runner.changeRun({ref:'17',text:'Own requested change',cwd:f.source},ports);
    else out=await runner.runStatus({ref:variant==='status-detail'||variant==='status-recovery'?'17':undefined,cwd:variant==='status-list'?f.source:run.root,all:variant==='status-all'},ports);
   }
-  const saved=f.record(),expectedFailure=['start-failure','open-failure','open-lost-resume','open-lost-resume-advanced','open-reset'].includes(variant);
+  const saved=f.record(),expectedFailure=['start-failure','open-failure','open-lost-resume','open-lost-resume-advanced'].includes(variant);
   const checks={injected:()=>assert.equal(injected,true),outcome:()=>assert.equal(out.exitCode,expectedFailure?1:0,out.message),done:()=>assert.deepEqual(saved.done.independent,retained?.done.independent),decisions:()=>assert.ok(saved.decisions.some(d=>d.at===2000)),evidence:()=>assert.ok(saved.evidence?.some(e=>e.summary==='Other evidence')),resumeBoundary:()=>{if(variant.startsWith('open-lost-resume'))assert.equal(f.herdr.paneOf(saved.chats[0]).commands.length,2);},chatResume:()=>{if(variant.startsWith('open-lost-resume'))assert.equal(saved.chats[0].startUnconfirmed,true);},failureArea:()=>{if(variant.startsWith('open-lost-resume'))assert.equal(saved.chatFailure.area,'story');},newArea:()=>{if(variant==='open-lost-resume-advanced')assert.equal(saved.area,retained.area);},newGate:()=>{if(variant==='open-lost-resume-advanced')assert.deepEqual(saved.gate,retained.gate);},newState:()=>{if(variant==='open-lost-resume-advanced')assert.equal(saved.state,retained.state);},newQuestion:()=>{if(variant==='open-lost-resume-advanced')assert.deepEqual(saved.question,retained.question);},own:()=>{
+   // #3084 safely rebuilds a missing idle layout instead of refusing every reset.
+   if(variant==='open-reset'){
+    assert.notEqual(saved.chats.at(-1).workspaceId,initial.chats.at(-1).workspaceId);
+    if(initial.chats.at(-1).session?.id)assert.equal(saved.chats.at(-1).session?.id,initial.chats.at(-1).session.id);
+    else assert.ok(f.herdr.panes.flatMap(p=>p.commands??[]).every(command=>!command.includes(' resume ')));
+    assert.equal(f.herdr.panes.flatMap(p=>p.commands??[]).length,1);
+    assert.equal(saved.runId,initial.runId);
+   }
    if(variant.startsWith('done-'))assert.equal(saved.done.finish.summary,'Own step finished');
    if(variant==='cancel')assert.equal(saved.state,'cancelled');
    if(variant==='evidence')assert.equal(saved.evidence.at(-1).receipt.rows.length,2);
