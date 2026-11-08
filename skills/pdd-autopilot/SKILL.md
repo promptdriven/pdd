@@ -1,6 +1,6 @@
 ---
 name: pdd-autopilot
-description: Use when a person asks to start or use Autopilot, or it is on for a repo: pick ready issues, claim them and run each to an outcome.
+description: "Use when a person asks to start or use Autopilot, or it is on for a repo: pick ready issues, claim them and run each to an outcome."
 metadata:
   pdd-skills: 0.1.23
 ---
