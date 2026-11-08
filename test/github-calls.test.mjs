@@ -101,9 +101,9 @@ test('measure: the tick records each GitHub call with its purpose and the remain
   const entries = w.ledger().read(), count = purpose => entries.filter(entry => entry.purpose === purpose).length;
   assert.equal(count('setup'), 1, 'gh auth status at start; the first gh repo view comes before the repository is known');
   assert.equal(count('dependencies'), 2, 'the bulk GraphQL read of each intake');
-  assert.equal(count('claims'), 4, 'one claim check in each intake, and the heartbeat GET and PATCH');
+  assert.equal(count('claims'), 2, 'one claim check in each intake; the fresh heartbeat needs no read');
   assert.ok(count('issues') >= 2, 'the issue list of each tick');
-  assert.equal(w.patches.length, 1, 'the heartbeat was sent');
+  assert.equal(w.patches.length, 0, 'the claim is fresh');
   const graphql = entries.find(entry => entry.api === 'graphql' && entry.purpose === 'dependencies');
   assert.equal(graphql.resource, 'graphql');
   const newest = entries.filter(entry => entry.resource === 'core').at(-1);
@@ -112,7 +112,7 @@ test('measure: the tick records each GitHub call with its purpose and the remain
   const line = status.find(text => text.startsWith('GitHub calls in the last hour:'));
   assert.ok(line, status.join('\n'));
   const total = entries.filter(entry => entry.at > w.time - hour).length;
-  assert.match(line, new RegExp(`^GitHub calls in the last hour: ${total} \\(dependencies 2, claims 4, issues \\d+, setup 1\\);`));
+  assert.match(line, new RegExp(`^GitHub calls in the last hour: ${total} \\(dependencies 2, claims 2, issues \\d+, setup 1\\);`));
   assert.match(line, new RegExp(`REST limit ${w.remaining} of 5000 left until 13:00Z`));
   assert.match(line, /budget normal: Autopilot on this machine used \d+ of 1500 \(30%\)/);
 });
@@ -133,22 +133,24 @@ test('budget: over its share the tick defers the dependency re-sync for an hour 
   w.issues = [w.issue(7, { labels: [{ name: 'pdd:working' }] })];
   assert.equal((await w.invoke('start')).exitCode, 0);
   w.ownClaim(); w.time += 30 * minute; await w.tick();
-  assert.equal(w.intakes, 2); assert.equal(w.patches.length, 1);
+  assert.equal(w.intakes, 2); assert.equal(w.patches.length, 0);
   w.seed(60); // 1% of 5000 is 50 calls; Autopilot on this machine used more.
   w.time += 10 * minute; await w.tick();
   assert.equal(w.intakes, 2, 'the dependency re-sync of unchanged issues waits');
-  assert.equal(w.patches.length, 2, 'the heartbeat of the live claim is still sent');
+  assert.equal(w.patches.length, 0, 'the live claim is fresh');
   assert.match(w.warnings.at(-1), /GitHub budget low: Autopilot on this machine used \d+ of 50 calls \(1%\)/);
   const status = (await w.invoke('status')).message;
   assert.match(status, /budget low: Autopilot on this machine used \d+ of 50 \(1%\)/);
   w.time += 20 * minute; w.seed(60); await w.tick();
   assert.equal(w.intakes, 2, '30 minutes after the last re-sync it still waits');
-  assert.equal(w.patches.length, 3);
+  assert.equal(w.patches.length, 0);
   w.time += 30 * minute; await w.tick();
   assert.equal(w.intakes, 3, 'one hour after the last re-sync it runs once, also with the budget still low');
   w.time += 10 * minute; await w.tick();
   assert.equal(w.intakes, 3);
-  assert.equal(w.patches.length, 5, 'a heartbeat at every tick');
+  assert.equal(w.patches.length, 0, 'no heartbeat before two hours');
+  w.time += 20 * minute; await w.tick();
+  assert.equal(w.patches.length, 1, 'a due heartbeat keeps priority even with the read share low');
 });
 
 test('budget: below the floor the tick makes no GitHub call until the reset, then works again', async t => {
@@ -166,7 +168,7 @@ test('budget: below the floor the tick makes no GitHub call until the reset, the
   assert.equal(w.gh.length, calls, 'still waiting before the reset');
   w.time += 10 * minute; await w.tick();
   assert.ok(w.gh.length > calls, 'after the reset the tick reads GitHub again');
-  assert.equal(w.patches.length, 1, 'and sends the heartbeat');
+  assert.equal(w.patches.length, 0, 'the fresh heartbeat needs no write');
 });
 
 test('since: between full reads of a list of two pages the tick reads only changed issues, a close leaves the list, and an unchanged list is a 304', async t => {
@@ -289,10 +291,11 @@ test('native counter: a pdd command records each gh call in the ledger of its re
   assert.equal((await counted('git', ['status'], { cwd: dir, purpose: 'claims' })).stdout, 'x');
   assert.deepEqual(seen[0], ['git', { cwd: dir }], 'the purpose option never reaches the program');
   assert.match((await counted('gh', ['api', '--include', 'repos/Owner/Repo/issues/7'], { cwd: dir })).stdout, /^HTTP\/2.0 200/);
-  await counted('gh', ['api', '--include', '--method', 'POST', 'graphql', '--input', '-'], { input: '{}', repository: 'Owner/Repo' });
+  await counted('gh', ['api', '--include', '--method', 'POST', 'graphql', '--input', '-'], { input: JSON.stringify({query:'query { viewer { login } }'}), repository: 'Owner/Repo' });
   await assert.rejects(counted('gh', ['api', 'repos/owner/repo/issues/8', 'fail']), /gh failed/);
   await counted('gh', ['api', 'user']);
-  assert.deepEqual(seen.slice(1).map(([, options]) => options), [{ cwd: dir }, { input: '{}' }, {}, {}]);
+  assert.deepEqual(seen.slice(1).map(([, {env, ...options}]) => options), [{ cwd: dir }, { input: JSON.stringify({query:'query { viewer { login } }'}) }, {}, {}]);
+  assert.ok(seen.slice(1, 4).every(([, options]) => options.env?.PDD_GITHUB_COUNTED === '1'));
   const entries = githubLedger({ root: dir, repository: 'owner/repo' }).read();
   assert.deepEqual(entries.map(entry => [entry.api, entry.purpose, entry.status, entry.repo]),
     [['rest', 'dependencies', 200, 'owner/repo'], ['graphql', 'dependencies', 200, 'owner/repo'], ['rest', 'dependencies', 404, 'owner/repo']]);
@@ -393,12 +396,12 @@ test('ETag: a repeated record append through the cache finds its own comment aft
   assert.equal(w.posts, 1, 'no second copy of the record');
 });
 
-test('budget: below the floor the tick still sends the heartbeat of its own live claim at each tick, and nothing else', async t => {
+test('budget: below the floor the tick skips fresh heartbeats and sends only a due heartbeat', async t => {
   const w = await tickWorld(t);
   w.issues = [w.issue(7, { labels: [{ name: 'pdd:working' }] })];
   assert.equal((await w.invoke('start')).exitCode, 0);
   w.ownClaim(); w.time += 30 * minute; await w.tick();
-  assert.equal(w.patches.length, 1, 'the intake saw the own claim and the tick sent its heartbeat');
+  assert.equal(w.patches.length, 0, 'the intake saw a fresh own claim');
   // Other use on this login leaves 120 calls until the reset at 13:00.
   w.remaining = 120; w.seed(1, { resource: 'core', remaining: 120, limit: 5000, resetAt: reset() * 1000 });
   for (const step of [15, 10]) {
@@ -407,10 +410,9 @@ test('budget: below the floor the tick still sends the heartbeat of its own live
     assert.match(result.message, /GitHub limit low: \d+ REST calls left, below the floor of 1000; Autopilot waits until 2026-11-06T13:00:00.000Z/);
     assert.equal(w.intakes, intakes, 'no dependency re-sync');
     assert.deepEqual(w.gh.slice(calls).map(args => [args[args.indexOf('--method') + 1], endpointOf(args)]),
-      [['GET', `repos/${repo}/issues/comments/901`], ['PATCH', `repos/${repo}/issues/comments/901`]], 'only the heartbeat: 2 REST calls');
+      [], 'the heartbeat is fresh, so there are no requests');
   }
-  assert.equal(w.patches.length, 3, 'a heartbeat at each tick in reserve');
-  assert.match(w.patches.at(-1), new RegExp(`"lastSeen":"${at(w.time)}"`));
+  assert.equal(w.patches.length, 0, 'no heartbeat for a fresh claim in reserve');
   // With fewer REST calls left than the heartbeats need, the tick sends none.
   w.seed(1, { resource: 'core', remaining: 1, limit: 5000, resetAt: reset() * 1000 });
   w.time += 3 * minute;
@@ -418,6 +420,10 @@ test('budget: below the floor the tick still sends the heartbeat of its own live
   assert.equal(w.gh.length, calls, 'no GitHub call with 1 REST call left');
   w.time += 10 * minute; await w.tick();
   assert.equal(w.intakes, 3, 'after the reset the tick works as usual');
+  w.time = NOW + 2 * hour;
+  w.seed(1, {resource:'core',remaining:120,limit:5000,resetAt:w.time + hour});
+  await w.tick();
+  assert.equal(w.patches.length, 1, 'the due heartbeat runs in reserve');
 });
 
 test('status line: in reserve the budget part names the calls left and the floor', () => {

@@ -211,6 +211,8 @@ Limits: the screen is a fallback. A Claude error that comes after a tool call in
 
 ## Dependencies
 
+- [Private gh transport](github-write-proxy.prompt.md): required native generation and verification context for Autopilot write routing.
+
 - [Herdr layout](workflow-herdr-layout.prompt.md): required authoring/generation/verification context for workspace ownership, allocation and its existing lock. The runner's replacement protocol is the caller contract above, not a recursively loaded dependency.
 - [Worktree assignment](workflow-worktree.prompt.md): load for closed-workspace recovery verification through `lookupIssueWorktree`, including the saved current branch.
 - [Workflow agents](workflow-agents.prompt.md#login-variables): required context for `LOGIN_VARIABLES`, the one per-kind list of login variables.
@@ -220,10 +222,16 @@ Limits: the screen is a fallback. A Claude error that comes after a tool call in
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"1ee6e379d9a9787f5f8e93f554975c26267bd45138c41678b0a8186f3ed65d2f","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+{"status":"draft","prose_sha256":"9f4f3216ad44e4f81216f9627806cacad8e3400d2b4ba63f3ee1d149650b813c","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
 ```
 </details>
 
 For workflow chats, set `PDD_BIN` to this running package’s executable so the short `"$PDD_BIN"` invocation works despite PATH shadowing. For every Gemini launch and resume, including replacement and recovery, pass exactly two separately shell-quoted `--include-directories` arguments: the two folders of `agentDirs(run)`. When a caller gives no `addDirs`, they are `commonDir/pdd/runs` and `sourceRoot + ".pdd-worktrees"`. agy chats get the same `PDD_BIN` and use the same short `"$PDD_BIN"` hints, never a long absolute path. Preserve all other agent behavior.
 
 The commands that a Codex chat runs must receive `PDD_BIN` and `PDD_AGENT_SESSION` under any Codex `shell_environment_policy`. Codex builds each command environment from that policy, and `inherit = "core"` or `"none"` removes the process values. So every Codex launch and resume, including replacement and recovery, keeps `PDD_AGENT_SESSION=1 PDD_BIN=…` in its `env` prefix and also passes two invocation-only overrides directly after the `projects` override: `-c shell_environment_policy.set.PDD_BIN=<the same path>` and `-c shell_environment_policy.set.PDD_AGENT_SESSION="1"`. Each value, and the worktree path in the `projects` key, is one TOML basic string from the shared encoder `tomlString` (`src/toml-string.mjs`, also used by the Autopilot launcher), so a control character such as DEL stays valid, and each argument is shell-quoted like the others. `codex resume <id>` accepts `-c` after the id, so both forms use the same place. Codex applies `set` after `inherit`; the profile's other policy keys and `set` entries stay in effect. Do not change the profile. Limit: a profile `include_only` list that omits a name still removes it, because Codex applies `include_only` last. Claude, Gemini and agy launches do not change.
+
+For a workflow launched from an Autopilot context or an Autopilot-origin run,
+prepare the [private gh transport](github-write-proxy.prompt.md) in the caller's
+PDD_GITHUB_ROOT, else its normal Autopilot state root. Pass its PATH and
+PDD_GITHUB_ROOT in the child environment and in Codex's invocation-only
+shell_environment_policy.set. Manual runs retain their launch environment.

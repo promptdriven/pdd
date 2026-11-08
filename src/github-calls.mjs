@@ -3,6 +3,8 @@ import * as nativeFs from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { githubWriteCost } from './github-writes.mjs';
+import { githubWriteRunner, githubOriginalExecutable } from './github-write-proxy.mjs';
 
 export const GITHUB_PURPOSES = ['dependencies', 'claims', 'issues', 'pulls', 'writes', 'setup', 'other'];
 export const GITHUB_SHARE = 30, GITHUB_FLOOR = 1000;
@@ -138,16 +140,21 @@ export function githubMachineEntries({ root, fs = nativeFs }) {
 // A gh runner that records each gh call in a ledger. options.purpose names the purpose of one call and
 // options.repository its repository when the arguments do not name one; both are removed before the call runs.
 // Other programs run unchanged.
-export function countGithubCalls(exec, { ledger, purpose, now = Date.now } = {}) {
+export function countGithubCalls(exec, { ledger, purpose, now = Date.now, writes, env = process.env } = {}) {
   return async (file, args, options = {}) => {
     const { purpose: named, repository, ...rest } = options ?? {};
     if (file !== 'gh' || !Array.isArray(args)) return exec(file, args, rest);
+    const cost = githubWriteCost(args, rest);
+    const budget = writes && cost ? await writes(args, rest) : null;
+    budget?.reserve(cost);
+    if (writes) rest.env = { ...(rest.env ?? env), PDD_GITHUB_COUNTED: '1' };
     let result, failure, failed = false;
     try { result = await exec(file, args, rest); } catch (error) { failure = error; failed = true; }
     try {
       const target = typeof ledger === 'function' ? ledger(args, repository) : ledger;
       target?.record(githubEntry(args, failed ? failure : result, named ?? purpose, now()));
     } catch { /* best effort */ }
+    if (budget) { try { budget.observe(failed ? failure : result); } catch { /* Original outcome wins; future writes fail closed on bad state. */ } }
     if (failed) throw failure;
     return result;
   };
@@ -157,12 +164,21 @@ export function countGithubCalls(exec, { ledger, purpose, now = Date.now } = {})
 // Autopilot already keeps a ledger for it on this machine. Other repositories, and test doubles of gh, write nothing.
 // The folder is found at each call, so a later HOME applies.
 export function nativeGithubCounter(exec, { env = process.env, stateRoot, purpose, fs = nativeFs, now = Date.now } = {}) {
-  return countGithubCalls(exec, { purpose, now, ledger: (args, named) => {
-    const repository = githubRepository(args) ?? (typeof named === 'string' && REPOSITORY.test(named) ? named.toLowerCase() : null);
-    if (!repository) return null;
-    const ledger = githubLedger({ root: githubStateRoot(env, stateRoot), repository, fs });
-    try { return fs.existsSync(ledger.file) ? ledger : null; } catch { return null; }
-  } });
+  const runners = new Map();
+  return async (file, args, options = {}) => {
+    const repository = githubRepository(args) ?? (typeof options.repository === 'string' && REPOSITORY.test(options.repository) ? options.repository.toLowerCase() : null);
+    const root = env.PDD_GITHUB_ROOT || githubStateRoot(env, stateRoot);
+    const ledger = repository ? githubLedger({ root, repository, fs }) : null;
+    if (!ledger || !fs.existsSync(ledger.file)) return countGithubCalls(exec, { purpose, now })(file, args, options);
+    const key = `${root}/${repository}`;
+    if (!runners.has(key)) {
+      const original = env.PDD_GITHUB_ROOT && (env.PATH??'').includes('/github-bin/') ? githubOriginalExecutable({env,fs}) : null;
+      const dispatch = original ? (file,args,options) => exec(file==='gh'?original:file,args,options) : exec;
+      runners.set(key, githubWriteRunner(dispatch, { root, env, fs, now, ledger }));
+    }
+    const runner = runners.get(key);
+    return runner(file, args, { ...options, purpose: options.purpose ?? purpose });
+  };
 }
 
 // Calls in the last hour, by purpose, and the newest limit that GitHub reported for each resource.

@@ -996,6 +996,8 @@ async function setOwnClaimTime(name, { cwd = '', repository, claim, coordinatorI
 // Heartbeat: the owning coordinator writes the current time as the top-level lastSeen
 // of its own winning claim comment.
 export async function refreshClaimHeartbeat(args, ports = {}) {
+  const seen = time(args.claim?.lastSeen), at = time(args.at);
+  if (Number.isFinite(seen) && (at - seen < 2 * 60 * 60 * 1000 || at - seen >= 4 * 60 * 60 * 1000)) return { state: 'skipped' };
   const lastSeen = await setOwnClaimTime('lastSeen', args, ports);
   return lastSeen === null ? { state: 'skipped' } : { state: 'refreshed', lastSeen };
 }

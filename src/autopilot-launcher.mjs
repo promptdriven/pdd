@@ -24,7 +24,9 @@ import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
 import { samePath } from './workflow-herdr-layout.mjs';
 import { tomlString } from './toml-string.mjs';
 import { alertStatusLine, runAutopilotAlerts } from './autopilot-alerts.mjs';
-import { countGithubCalls, githubBudget, githubBudgetSettings, githubEtagCache, githubFloorGuard, githubFullLastPage, githubLedger, githubMachineEntries, githubReply, githubStateRoot, githubStatusLine, githubUsage } from './github-calls.mjs';
+import { githubBudget, githubBudgetSettings, githubEtagCache, githubFloorGuard, githubFullLastPage, githubLedger, githubMachineEntries, githubReply, githubStateRoot, githubStatusLine, githubUsage } from './github-calls.mjs';
+import { githubWriteRunner, githubWriteEnvironment, githubWriteUsages, observeGithubWriteClaims } from './github-write-proxy.mjs';
+import { githubWriteStatus } from './github-writes.mjs';
 import { lookupRepositoryParent, githubOriginRepository } from './workflow-worktree.mjs';
 
 const INTERVAL = 30 * 60 * 1000;
@@ -69,11 +71,11 @@ function portsFor(state, ports) {
   // The ledgers sit beside the launcher state files.
   const githubRoot = ports.githubRoot ?? (typeof state?.stateFile === 'string' ? dirname(state.stateFile) : githubStateRoot(env, ports.stateRoot)), ledgers = new Map();
   const ledger = () => { const repo = state?.repo; if (typeof repo !== 'string' || !repo) return null; if (!ledgers.has(repo)) ledgers.set(repo, githubLedger({ root: githubRoot, repository: repo })); return ledgers.get(repo); };
-  const execute = countGithubCalls(async (command, args, options = {}) => run(command, args, { cwd: state.cwd, env, timeoutMs: 10000, maxBytes: 8 * 1024 * 1024, ...options }), { ledger, now });
+  const execute = githubWriteRunner(async (command, args, options = {}) => run(command, args, { cwd: state.cwd, env, timeoutMs: 10000, maxBytes: 8 * 1024 * 1024, ...options }), { root: githubRoot, env, ledger, now });
   const checked = async (command, args, options) => { const result = await execute(command, args, options); if (result.code !== 0) throw Error(`${command} failed; check its sign-in and retry.`); return result.stdout; };
   return { ...ports, env, run, execute, checked, githubRoot, warn: ports.warn ?? (text => process.stderr.write(`${text}\n`)), now };
 }
-const keepEnv = env => Object.fromEntries(['HOME', 'PATH', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME', 'XDG_CONFIG_HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS'].filter(k => typeof env[k] === 'string').map(k => [k, env[k]]));
+const keepEnv = env => Object.fromEntries(['HOME', 'PATH', 'PDD_GITHUB_ROOT', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME', 'XDG_CONFIG_HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS'].filter(k => typeof env[k] === 'string').map(k => [k, env[k]]));
 const NOT_GIT = 'This folder is not a Git repository. cd into the repo you want Autopilot to work on, then run the command again.';
 // Git translates its messages; pdd reads the "not a git repository" text only in the C locale.
 const gitRootIn = p => p.execute('git', ['rev-parse', '--show-toplevel'], { env: { ...p.env, LC_ALL: 'C', LANG: 'C' } });
@@ -539,10 +541,11 @@ function profileBinding(state, p) {
 }
 // Codex builds each chat command's environment from shell_environment_policy; `set` applies after `inherit`.
 // An explicit saved CODEX_HOME also reaches the commands, so a pdd workflow run from the chat keeps the profile.
-function providerArgs(kind, cwd, context, codexHome) {
+function providerArgs(kind, cwd, context, codexHome, githubEnv = {}) {
   if (kind === 'codex') return ['--no-daemon', '--dangerously-bypass-approvals-and-sandbox',
     '-c', quote(`projects={${tomlString(cwd)}={trust_level="trusted"}}`), '-c', quote('check_for_update_on_startup=false'),
     '-c', quote(`shell_environment_policy.set.PDD_AUTOPILOT_CONTEXT=${tomlString(context)}`),
+    ...Object.entries(githubEnv).flatMap(([key, value]) => ['-c', quote(`shell_environment_policy.set.${key}=${tomlString(value)}`)]),
     ...(codexHome ? ['-c', quote(`shell_environment_policy.set.CODEX_HOME=${tomlString(codexHome)}`)] : [])];
   return [kind === 'gemini' ? '--yolo' : '--dangerously-skip-permissions'];
 }
@@ -949,8 +952,9 @@ async function wake(state, makeText, p, prepare = async () => {}, explicitStartR
   const definition = launchDefinition(state, p);
   if (definition.kind !== state.agent.kind) { p.warn('Run pdd autopilot start to select the changed agent profile.'); return false; }
   const context = JSON.stringify(envelope());
-  const args = providerArgs(definition.kind, state.cwd, context, state.environment?.CODEX_HOME);
-  const childEnv = { ...keepEnv(p.env), ...definition.env, HOME: state.environment?.HOME ?? p.env.HOME, PDD_AUTOPILOT_CONTEXT: context };
+  const githubEnv = githubWriteEnvironment({ root: p.githubRoot, env: { ...p.env, ...definition.env } });
+  const args = providerArgs(definition.kind, state.cwd, context, state.environment?.CODEX_HOME, githubEnv);
+  const childEnv = { ...keepEnv(p.env), ...definition.env, HOME: state.environment?.HOME ?? p.env.HOME, PDD_AUTOPILOT_CONTEXT: context, ...githubEnv };
   for (const variable of ['CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME']) {
     if (state.environment?.[variable]) childEnv[variable] = state.environment?.[variable]; else delete childEnv[variable];
   }
@@ -1166,6 +1170,7 @@ async function runTick(stateFile, ports, completion) {
         // After 4 hours stuck the owner stops refreshing, so the claim expires unless the issue leaves pdd:stuck.
         if (stuckFor(claim) >= STUCK_CLAIM_AFTER) continue;
         if (saved && !(Date.parse(claim.lastSeen) + STUCK_CLAIM_AFTER > p.now())) continue;
+        if (p.now() - Date.parse(claim.lastSeen) < 2 * 60 * 60 * 1000) continue;
         try {
           const beat = await (p.refreshClaimHeartbeat ?? refreshClaimHeartbeat)({ cwd: state.cwd, repository: state.repo, claim, coordinatorId: state.coordinatorId, machine: state.machine, at: new Date(p.now()).toISOString() },
             { execFile: async (file, args, options) => p.execute(file, args, { purpose: 'claims', ...options }), admitMutation: action => p.scanAction(action) });
@@ -1254,6 +1259,7 @@ async function runTick(stateFile, ports, completion) {
     // Claims observed by the intake: refresh this coordinator's own live claims
     // (no AI call) and let expired claims of any owner become selectable work.
     const observedClaims = (Array.isArray(intake.claims) ? intake.claims : []).filter(claim => claim && typeof claim.issue === 'string');
+    observeGithubWriteClaims({ root: p.githubRoot, env: p.env, now: p.now, machine: state.machine, repository: state.repo, claims: observedClaims });
     // After 3 takeovers an expired claim is not offered for a 4th: it stays a hold (#3041).
     // Taking back this coordinator's own expired claim is a re-claim, not a takeover.
     const self = { coordinatorId: state.coordinatorId, machine: state.machine }, limitedFor = claim => takeoverLimited(claim, self);
@@ -1669,7 +1675,8 @@ async function machineStatus(folder, ports, env, cwd) {
     try { timerState = await timer('status', state, p) ? 'active' : 'inactive'; } catch { /* Report unknown. */ }
     let coordinator = { state: 'unavailable', reason: 'Herdr is not running' };
     if (serverRunning) { try { coordinator = await coordinatorHealth(state, p); } catch { coordinator = { state: 'unavailable', reason: 'status unreadable' }; } }
-    rows.push(`${typeof state.repo === 'string' ? line(state.repo) : 'repository unknown'} in ${typeof state.cwd === 'string' ? line(state.cwd) : 'an unknown folder'} · mode ${mode} · Autopilot ${state.enabled ? 'enabled' : 'disabled'} · timer ${timerState} · coordinator ${coordinator.state === 'unavailable' ? `unavailable (${coordinator.reason})` : coordinator.state}`);
+    const writes = githubWriteUsages({ root: folder, env: p.env, now: p.now, machine: state.machine }).map(githubWriteStatus).join(' ');
+    rows.push(`${typeof state.repo === 'string' ? line(state.repo) : 'repository unknown'} in ${typeof state.cwd === 'string' ? line(state.cwd) : 'an unknown folder'} · mode ${mode} · Autopilot ${state.enabled ? 'enabled' : 'disabled'} · timer ${timerState} · coordinator ${coordinator.state === 'unavailable' ? `unavailable (${coordinator.reason})` : coordinator.state} · ${writes}`);
   }
   return ok(rows.length ? [`Autopilot on this machine (${rows.length}):`, ...rows].join('\n') : 'No Autopilot on this machine.');
 }
@@ -1726,6 +1733,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
           }
         }
       } catch { /* The GitHub line never changes status. */ }
+      github += `${github ? '\n' : ''}${githubWriteUsages({ root: p.githubRoot, env: p.env, now: p.now, machine: state.machine }).map(githubWriteStatus).join('\n')}`;
       const readiness = await workflowReadiness(state, p);
       const workflows = readiness.state === 'ready' ? '' : `\nWorkflows cannot start in this folder: ${line(readiness.message)}`;
       return ok(`Autopilot ${state.enabled ? 'enabled' : 'disabled'}; timer ${timerActive ? 'active' : 'inactive'}; Herdr ${serverRunning ? 'running' : 'unavailable'}; coordinator ${coordinatorState}: ${state.repo ? `${state.repo} in ${state.cwd}` : state.cwd} · ${state.agent?.id ?? 'no agent'} · next tick: ${timerActive && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}${workflows}${relaunch}${alerts ? `\n${alerts}` : ''}${github ? `\n${github}` : ''}`);

@@ -187,8 +187,8 @@ The agent receives only trusted people's text, including comments. Owners, peopl
 names count as trusted. The `pdd-autopilot` skill owns the start-up recipe,
 `pdd:working` claim and one comment across machines, capacity and progress
 tracking. Only Autopilot uses `pdd:working`; a person or a manual session assigns
-a person instead. Each tick writes a `lastSeen` time into its own claim comments
-without an AI call; that edit is the heartbeat. A new claim record has
+a person instead. A tick writes a `lastSeen` time into its own claim comments when the last
+server-confirmed edit is at least two hours old, without an AI call; that edit is the heartbeat. A new claim record has
 `"lastSeen": ""`. A claim record with a top-level `lastSeen` and no GitHub edit
 for 4 hours (counted from its creation until the first heartbeat) is expired. A
 claim record without `lastSeen`, as older pdd writes it, a claim without a claim
@@ -210,7 +210,7 @@ the middle of a step. Older pdd sends no heartbeat, so its claims follow the
 24-hour rule until their owner upgrades. It still pushes at its last `done`
 without a claim check and removes `pdd:working` when its run ends. A stopped
 launcher or `off` mode lets its claims expire after 4 hours. The heartbeat moves
-claimed issues to the top of "recently updated" every 30 minutes.
+claimed issues to the top of "recently updated" when a heartbeat is due.
 
 ### GitHub API budget
 
@@ -229,9 +229,10 @@ its purpose and the limit that GitHub reports in the reply headers:
 | `setup` | Sign-in, repository and settings calls |
 | `other` | Everything else, such as `pdd metrics` |
 
-pdd does not count the `gh` calls that the coordinator and worker chats make
-themselves, such as `gh pr checks` or `gh run watch`. It also does not count
-other machines or your own work on the same login. All of them use the same
+Autopilot coordinator and worker chats use a private `gh` wrapper. Their calls
+use the same local counter and write guard as native pdd calls. Manual shells
+keep their normal `gh`. pdd does not count calls from other machines or your own
+work on the same login. All of them use the same
 limit. Their use shows only in the limit that is left on the status line.
 
 The counts stay on this machine, one file for each repository in
@@ -286,7 +287,7 @@ missing or invalid value uses the default.
   and PR reads, heartbeats and wakes.
 - **Reserve.** GitHub reports fewer calls left than the floor, for REST or
   GraphQL. Then the tick makes no GitHub call until the reset time, except the
-  heartbeat of each live claim of this machine (2 REST calls each). So a claim
+  due heartbeat of each live claim of this machine (2 REST calls each). So a claim
   does not expire while its chat works. With fewer REST calls left than these
   heartbeats need, it sends none. The tick also wakes no chat with new work
   until the reset. Native dependency observations for an Autopilot repository
@@ -297,7 +298,8 @@ missing or invalid value uses the default.
   after the reset saves the remaining reviews without a new analysis. Reviews
   that were already saved are never saved twice.
 
-The coordinator and worker chats go on, and their own `gh` calls are not counted.
+The coordinator and worker chats go on. Their writes use the shared write
+budget below.
 Safety reads, including workflow start's live subject and claim checks, trust,
 permissions and write readbacks, can use the reserve. Writes can use it too.
 Other `pdd` operations are counted but do not wait for this floor. The budget
@@ -305,6 +307,47 @@ does not keep 70% of the limit for you. The floor makes the tick and native
 dependency observations read less. To
 give Autopilot a limit of its own, see the design note
 [A GitHub App token for Autopilot](autopilot-github-app-token.md).
+
+### Shared GitHub write budget
+
+Content writes have a separate limit from REST reads. All Autopilots under one
+local state root share a rolling budget for each GitHub host and identity:
+60 writes per minute and 350 per hour. These operating limits leave a reserve of
+20 per minute and 150 per hour below the stated 80/500 content limits. Failed
+and uncertain attempts also use the budget. Native API writes reserve one
+request each. High-level `gh` commands reserve a conservative count because
+one command can send several requests. This is an admission count, not a server
+request trace. GraphQL queries do not use the content budget.
+
+Each machine divides both operating limits by the number of distinct active
+machines it sees in claims, including itself. Two observed machines get 30 per
+minute and 175 per hour each. Claims from all repositories observed on this
+machine contribute. Claims expire from this count after four hours without a
+server-confirmed edit. An unknown identity shares a conservative bucket.
+Machines on unseen repositories cannot be discovered through these claims.
+Use one shared state root for all Autopilots on the same OS account; the
+private wrapper passes it as `PDD_GITHUB_ROOT`, including to workers with a
+separate agent home. This rule is a conservative local share, not a global
+allocation service. It does not measure people or programs outside this route.
+
+At the limit, the operation reports its next retry time and keeps progress.
+It sends no write until enough reservations expire. A secondary-limit response
+with Retry-After shares that delay with other local processes. No usage reset
+is requested. `pdd autopilot status` and `status --all` show the local identity
+counts, limits, observed machine count and deferred state. Status makes no
+GitHub request. Write records stay in the state root's `github-writes/` folder.
+Tokens are never stored there.
+
+For routine progress, use one owned status comment. Include
+`<!-- pdd:autopilot:status -->` in its body and send it through
+`gh api --include --method POST repos/OWNER/REPO/issues/N/comments --input -`.
+The wrapper finds its comment, updates it in place, and skips unchanged text.
+Claim comments, dependency reviews, checker verdicts and merge evidence keep
+their own records. For labels that change together, use one labels-only
+`gh issue edit N --repo OWNER/REPO --add-label A,B --remove-label C`.
+The wrapper reads current labels and sends atomic additions and removals in one
+GraphQL request. Concurrent unrelated label changes stay intact. A claim
+takeover still removes and adds `pdd:working` separately to preserve its era.
 
 The dependency snapshot is saved beside the repository's GitHub call ledger as
 `github/H.snapshot.json` in the Autopilot state folder. Its temporary lock is
