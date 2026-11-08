@@ -117,7 +117,7 @@ with external effects is invoked; no runtime resource is called for that path.
 
 ## Setup and workflow admission
 
-`runPdd` is the public module function owning when admission occurs. For valid `setup`, call existing `setupWithWorkflowAgent({cwd,env}, ports)` with stderr, the optional injected status-process port and one setup callback containing the existing skills/project/MCP sequence. Follow the adapter's outcome unchanged. For valid `workflow-run`, call existing `checkWorkflowAgents({cwd,env,requested}, ports)` once, supplying `requested` only for explicit `--agent`. On refusal, print its safe message to stderr and exit 1, with empty stdout and no runner import, allocation or launch. On success, print its optional one-line `hint` to stderr before the runner starts. Unexpected readiness failure uses the setup adapter's safe status-command recovery line and exit 1; never expose raw authentication output or retry. Other routes do not call either admission function. PATH diagnostics retain their existing position and failure policy.
+`runPdd` is the public module function owning when admission occurs. For valid `setup`, call existing `setupWithWorkflowAgent({cwd,env}, ports)` with stderr, the optional injected status-process port and one setup callback containing the existing skills/project/MCP sequence. Follow the adapter's outcome unchanged. For valid `workflow-run`, call existing `checkWorkflowAgents({cwd,env,requested}, ports)` once, supplying `requested` only for explicit `--agent`. On refusal, print its nonempty safe message unchanged to stderr, or the setup adapter’s recovery line when empty, and exit 1, with empty stdout and no runner import, allocation or launch. On success, print its optional one-line `hint` to stderr before the runner starts. Unexpected readiness failure uses the setup adapter's safe status-command recovery line and exit 1; never expose raw authentication output or retry. Other routes do not call either admission function. PATH diagnostics retain their existing position and failure policy.
 
 ```mermaid
 flowchart TD
@@ -152,7 +152,7 @@ finite local cause and returns 5. Catalog owns all syntax.
 ```json
 {
   "status": "approved",
-  "prose_sha256": "d740ad78a1586c7ec7b2742e0bebab423daa91c451d079de00eb863794303f6b",
+  "prose_sha256": "95fc55ce79f1e00cbd3c642a579773d5b585e52b2c891f0a1bf660fefd39cd10",
   "entries": [{"operation": "runPdd","input_schema": {"type": "object","properties": {"argv": {"type": "array","items": {"type": "string"}},"cwd": {"type": "string"},"env": {"type": "object","properties": {"HOME": {"type": "string"},"PATH": {"type": "string"},"CODEX_HOME": {"type": "string"},"CLAUDE_CONFIG_DIR": {"type": "string"}},"required": [],"additionalProperties": false},"packageRoot": {"type": "string"}},"required": ["argv"],"additionalProperties": false},"result_schema": {"type": "object","properties": {"exit_code": {"type": "integer"},"stdout": {"type": "string"},"stderr": {"type": "string"}},"required": ["exit_code","stdout","stderr"],"additionalProperties": false},"errors": []}],
   "calls": [],
   "resources": [

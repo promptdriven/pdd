@@ -139,3 +139,29 @@ test('root help keeps its first line, every form line and its closing lines; com
     assert.doesNotMatch(text, pattern); assert.doesNotMatch(rest.join('\n'), pattern);
   }
 });
+
+test('help describes current gates, readiness, approval and product defaults', async () => {
+  const rootHelp = (await pdd(['--help'])).stdout;
+  assert.match(rootHelp, /pdd-product/);
+  assert.match(rootHelp, /person approves approval gates; pdd pushes the branch and opens PRs at PR gates/);
+  assert.match(rootHelp, /pdd never merges/);
+
+  const setup = (await pdd(['setup', '--help'])).stdout;
+  assert.match(setup, /available supported agent to pass its readiness probe before setup actions/);
+  for (const agent of ['Codex', 'Claude', 'Gemini', 'agy']) assert.ok(setup.includes(agent));
+  assert.match(setup, /Gemini readiness uses gemini --version, which does not verify sign-in/);
+  assert.match(setup, /agy uses agy models/);
+
+  const prompting = (await pdd(['help', 'prompting'])).stdout;
+  assert.match(prompting, /person reads each prompt and decides/);
+  assert.match(prompting, /agent may relay the person's words with pdd approve PROMPT --said/);
+  assert.match(prompting, /Strict approvals require a person terminal/);
+
+  const product = (await pdd(['product', 'start', '--help'])).stdout;
+  assert.match(product, /feature run with Codex by default/);
+  assert.match(product, /--no-run only prepares the issue/);
+  assert.doesNotMatch(product, /first.ready|sign.in/i);
+
+  const workflow = (await pdd(['workflow', 'run', '--help'])).stdout;
+  assert.match(workflow, /pdd workflow run NAME ISSUE \[--agent codex\|claude\|gemini\|agy\] \[--base BRANCH\] \[--adopt-corpus FILE\]/);
+});

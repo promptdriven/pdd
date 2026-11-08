@@ -67,3 +67,22 @@ test('2451 API-key-configured Codex admits setup when Claude is missing',async()
  },stderr:{write:s=>assert.fail('no private status output: '+s)},setup:async({agent})=>{assert.equal(agent,'codex');calls++;return 0;}});
  assert.equal(code,0);assert.equal(calls,1);
 });
+
+const recovery = 'Agent readiness could not be checked. Run codex login status, claude auth status, gemini --version or agy models. gemini --version does not verify sign-in.\n';
+for (const mode of ['exception', 'empty', 'message']) test(`setup admission preserves safe recovery: ${mode}`, async () => {
+ let actions = 0;
+ const out = [];
+ const message = 'Specific safe refusal.';
+ const code = await setupWithWorkflowAgent({}, {
+  stderr: { write: text => out.push(text) },
+  checkWorkflowAgents: async () => {
+   if (mode === 'exception') throw new Error('private-secret');
+   return { ok: false, message: mode === 'empty' ? '' : message };
+  },
+  setup: async () => { actions++; return 0; }
+ });
+ assert.equal(code, 1);
+ assert.equal(actions, 0);
+ assert.equal(out.join(''), mode === 'message' ? `${message}\n` : recovery);
+ assert.doesNotMatch(out.join(''), /private-secret/);
+});

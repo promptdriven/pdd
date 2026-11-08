@@ -194,3 +194,25 @@ test('2640 CLI parses and forwards --adopt-corpus exactly and retains startup ex
   for(const option of [[],[''],['a','--adopt-corpus','b']])assert.throws(()=>parseArgv(['workflow','run','replay','17','--adopt-corpus',...option]),CommandInputError);
   for(const shell of ['bash','zsh'])assert.match(renderCompletion(shell),/--adopt-corpus/);
 });
+
+test('workflow admission uses safe recovery for exceptions and empty refusals', async () => {
+ const recovery = 'Agent readiness could not be checked. Run codex login status, claude auth status, gemini --version or agy models. gemini --version does not verify sign-in.\n';
+ for (const mode of ['exception', 'empty', 'message']) {
+  const stdout = { text: '', write(s) { this.text += s; } };
+  const stderr = { text: '', write(s) { this.text += s; } };
+  let starts = 0;
+  const code = await runPdd(['workflow', 'run', 'small-change', 'owner/repo#1'], {
+   stdout, stderr, pathDiagnostic: () => [],
+   workflowAgents: { checkWorkflowAgents: async () => {
+    if (mode === 'exception') throw new Error('private-secret');
+    return { ok: false, message: mode === 'empty' ? '' : 'Specific safe refusal.' };
+   } },
+   workflowRunner: { startRun: async () => { starts++; return { exitCode: 0, message: '' }; } }
+  });
+  assert.equal(code, 1, mode);
+  assert.equal(stdout.text, '', mode);
+  assert.equal(stderr.text, mode === 'message' ? 'Specific safe refusal.\n' : recovery, mode);
+  assert.equal(starts, 0, mode);
+  assert.doesNotMatch(stderr.text, /private-secret/, mode);
+ }
+});
