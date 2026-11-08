@@ -50,7 +50,7 @@ test('PR 1 links PR 2 once it exists; a manual run shows the person\'s words on 
 test('PR 2 has the user story, a four-part summary, before/after, git changes and a proof table from records', () => {
   const text = top(pr2Fix6());
   assert.deepEqual(headings(text), ['## User story', '## Summary', '## Before / after', '## What changed (+9 −1, 3 files)', '## Proof']);
-  assert.match(text, /- \*\*Problem:\*\* [^\n]+\n- \*\*Cause:\*\* the cents are padded on the right \(`padEnd`\) instead of the left\.\n- \*\*Fix\u200b:\*\* [^\n]+\n- \*\*Result:\*\* all 6 approved cases pass on the real code\./);
+  assert.match(text, /- \*\*Problem:\*\* [^\n]+\n- \*\*Cause:\*\* the cents are padded on the right \(`padEnd`\) instead of the left\.\n- \*\*Fix\u200b:\*\* [^\n]+\n- \*\*Result:\*\* Approved cases[^\n]+✓ 6 of 6/);
   assert.match(text, /\| Input \| Before \| After \| Expected \|\n\|---\|---\|---\|---\|\n\| 1205 \| \$12\.50 \| \$12\.05 \| \$12\.05 ✓ \|/);
   assert.match(text, /- `test\/format-price\.vectors\.test\.js` \(\+2 −0\)/);
   assert.match(text, /\| Check \| New code \| Old code \|/);
@@ -126,7 +126,7 @@ test('a feature PR uses feat and a Planted mistake column; a small change uses P
   assert.equal(readablePrTitle({ layout: 'code', workflow: 'feature', area: 'shelf', statement: 'readers can filter books by author', number: 9, part: 2 }), 'feat(shelf): readers can filter books by author (#9 · part 2: feat)');
   const small = readablePrTop(smallChange());
   assert.deepEqual(headings(small.text), ['## Summary', '## What changed (+1 −1, 1 file)', '## Proof']);
-  assert.match(small.text, /- \*\*Problem:\*\* The help text says "recieve"\.\n- \*\*Change:\*\* fix\u200b the spelling in `src\/help\.js`\.\n- \*\*Result:\*\* the help text says "receive"\./);
+  assert.match(small.text, /- \*\*Problem:\*\* The help text says "recieve"\.\n- \*\*Change:\*\* fix\u200b the spelling in `src\/help\.js`\.\n- \*\*Result:\*\* Formal check:[^\n]+Regression tests[^\n]+✓ pass/);
   assert.ok(small.text.endsWith('**Merge:** waiting for a person to merge. Closes #12.'));
   assert.doesNotMatch(small.text, /PR 1|\*\*Approval:\*\*|## User story/);
   assert.deepEqual(small.notes, ['User story: this run changes no Story file, so this PR has no User story section.']);
@@ -357,4 +357,41 @@ test('SF6 the description says to a person who edits it that pdd owns it; reader
   assert.ok(TOP_NOTE.startsWith('<!-- ') && TOP_NOTE.endsWith(' -->') && !TOP_NOTE.slice(0, -3).includes('-->') && !/[\r\n]/.test(TOP_NOTE), TOP_NOTE);
   assert.doesNotMatch(TOP_NOTE, /pdd-workflow:/);
   assert.equal(detailsOf(body).details, 'Part of #1', 'Details are pdd\'s text without the note.');
+});
+
+// #3088: recorded coverage validation must not claim a defect proof or block only because old code passes.
+test('3088 renderer keeps coverage separate from defect proof and preserves other gates', () => {
+  const facts = smallChange();
+  facts.records.proof = { kind: 'coverage', status: 'old-passes', passed: 3, total: 3 };
+  facts.records.ci = 'passing';
+  facts.fields.result = 'Formal check: Proved (solver); checker PASS';
+  const shown = top(facts), proof = shown.slice(shown.indexOf('## Proof'));
+  assert.match(prStatus(facts), /^✅/);
+  assert.match(proof, /\| Coverage validation[^\n]+✓ pass[^\n]+✓ pass/);
+  assert.doesNotMatch(shown, /Proved \(solver\)|checker PASS|should fail/);
+  assert.match(shown, /not a defect proof/i);
+  for (const status of ['stale', 'head-fails', 'wrong-reason', 'unavailable']) {
+    const changed = structuredClone(facts); changed.records.proof.status = status;
+    assert.doesNotMatch(prStatus(changed), /^✅/, status);
+  }
+  const defect = structuredClone(facts); defect.records.proof.kind = 'defect';
+  assert.match(prStatus(defect), /^⛔/);
+  const ci = structuredClone(facts); ci.records.ci = 'failing';
+  assert.match(prStatus(ci), /^⛔/);
+  const checker = structuredClone(facts); checker.mode = 'auto'; checker.records.checker = { verdict: 'FAIL' };
+  assert.match(prStatus(checker), /^⛔/);
+});
+
+test('3088 standalone formal result owns the readable narrative and Proof row', () => {
+  const facts = smallChange(); facts.records.ci = 'passing';
+  facts.records.formal = { status: 'recorded', result: 'not_run', scope: 'bounded value domain', reason: 'CONTROL_UNAVAILABLE', control_outcome: 'not_run' };
+  facts.fields.result = 'Formal check: Proved (bounded)';
+  const shown = top(facts);
+  assert.match(shown, /\| Formal check \(bounded value domain\)[^\n]+Not run: CONTROL_UNAVAILABLE/);
+  assert.match(shown.split('## Proof')[0], /CONTROL_UNAVAILABLE/);
+  assert.doesNotMatch(shown, /Proved \(bounded\)/);
+  facts.records.formal = { status: 'recorded', result: 'failed', scope: 'value', reason: 'COUNTEREXAMPLE', control_outcome: 'assertion_failure' };
+  facts.records.counterexample = '3088';
+  assert.match(prStatus(facts), /^⛔/);
+  assert.match(top(facts), /Failed at `3088`/);
 });

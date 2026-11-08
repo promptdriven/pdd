@@ -30,7 +30,7 @@ import { approvalRecords, preparePrEvidence } from './workflow-pr-evidence.mjs';
 import { validateProofRecord } from './workflow-prove.mjs';
 import { readRunResults, resultLines, usableResult, noResultLine, NO_VERDICT, prepareNativeEvidence, savedCheckCause } from './workflow-results.mjs';
 import { collectTestInventory } from './workflow-inventory.mjs';
-import {adoptReplayCorpus,REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinReplayVectors,pinRunAnchor,readReplayEvidence,formatReplayEvidence} from './workflow-replay.mjs';
+import {adoptReplayCorpus,REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinReplayVectors,pinRunAnchor,readReplayEvidence,readFormalEvidence,formatFormalEvidence,formatReplayEvidence} from './workflow-replay.mjs';
 import { DETAILS_OPEN, TOP_NOTE, balancedDetails, closingInert, detailsOf, pr1Order, prArea, prStatus, readPrFields, readableNextLines, readablePrBody, readablePrTitle, readablePrTop, sameReadableTop, userStory } from './workflow-pr-body.mjs';
 import { nativeGithubCounter } from './github-calls.mjs';
 import { storyCard, storyFingerprint, fingerprintChanges, fullCheckPass } from './workflow-story-card.mjs';
@@ -1338,6 +1338,13 @@ async function diffStat(run, p, base, head) {
     return { added: files.reduce((sum, file) => sum + file.added, 0), removed: files.reduce((sum, file) => sum + file.removed, 0), files };
   } catch { return null; }
 }
+// Coverage is a scope fact, never an agent's claim. Classify before savedReadable bounds the file list.
+function coverageOnlyDiff(diff) {
+  if (!diff?.files?.length || (diff.count !== undefined && diff.count !== diff.files.length)) return false;
+  const entry = path => /\.(?:test|spec)\.(?:[cm]?js|jsx|tsx?)$|(?:^|\/)test_[^/]*\.py$|_test\.(?:py|go)$/.test(path);
+  const testPath = path => /^(?:tests?|__tests__)\//.test(path) || entry(path);
+  return diff.files.every(file => testPath(file.path)) && diff.files.some(file => entry(file.path) && file.added > 0);
+}
 // Autopilot's mode for an automatic run (auto, observe or off), read like its handoff; a manual run has none.
 function automaticFacts(run, p) {
   if (!validSavedAutomaticOrigin(run)) return null;
@@ -1462,6 +1469,9 @@ async function readableFacts(run, area, p, evidence, { drafts = [], pending = fa
   const native = /(\d+)\/(\d+) passed/.exec(evidence.nativeLine ?? '');
   const automatic = automaticFacts(run, p), mode = !automatic || automatic.mode === 'off' ? 'manual' : automatic.mode;
   const approvals = evidence.approvals ?? [];
+  const proofDiff = (base ?? run.prBase ?? run.baseBranch) === run.baseBranch ? diff : await diffStat(run, p, run.baseBranch, head);
+  const proofKind = run.workflow === 'small-change' && label === 'the PR' && evidence.proofStatus === 'old-passes' && coverageOnlyDiff(proofDiff) ? 'coverage' : 'defect';
+  const formal = layout === 'code' && area.steps.includes('formal') && !replay ? readFormalEvidence(run) : null;
   const paths = (diff?.files ?? []).map(file => file.path);
   const prompts = paths.filter(path => path.endsWith('.prompt.md')), storyFiles = paths.filter(path => /(?:^|\/)user_stories\/[^/]+\.md$/.test(path));
   const rest = paths.filter(path => !prompts.includes(path) && !storyFiles.includes(path));
@@ -1484,7 +1494,8 @@ async function readableFacts(run, area, p, evidence, { drafts = [], pending = fa
       promptTests: test ? { result: testResult, pass: /✗/.test(testResult) ? false : /✓/.test(testResult) ? true : null, report: test.reports?.[0] ?? null, current: test.source === 'current' } : null,
       lint: lint ? { result: lintCount ? `${lintCount[1]} of ${lintCount[2]} tests pass` : resultText(lint.summary), pass: lintCount ? Number(lintCount[2]) > 0 && lintCount[1] === lintCount[2] : null } : null,
       replay: replay ? { ...replay, ...(replay.formal?.result === 'failed' ? { counterexample: formalCounterexample(run) } : {}) } : null,
-      proof: layout === 'code' ? { status: pending ? 'pending' : evidence.proofStatus, ...(native ? { passed: Number(native[1]), total: Number(native[2]) } : {}) } : null,
+      formal, ...(formal?.result === 'failed' ? { counterexample: formalCounterexample(run) } : {}),
+      proof: layout === 'code' ? { kind: proofKind, status: pending ? 'pending' : evidence.proofStatus, ...(native ? { passed: Number(native[1]), total: Number(native[2]) } : {}) } : null,
       review: layout === 'code' ? reviewVerdict(run, area) : null, formalStep: area.steps.includes('formal'), formalDone: Boolean(run.done.formal && !run.done.formal.skipped),
       rulesToCheck: storyRulesToCheck(run, files),
       ci: published?.ci ?? null, checker: published?.checker ?? null, drafts: layout === 'spec' ? drafts : [] },
@@ -1551,7 +1562,8 @@ function prBody(run, area, env, drafts = [], tests = true, evidence, readable = 
   const noted = runtime.some(line => hasReportLink(line, env)) || change && hasReportLink(change, env);
   const replayResult = area.replay_evidence === REPLAY_POLICY ? run.replayEvidence ?? readReplayEvidence(run) : null;
   const rules = readable?.facts?.records?.rulesToCheck;
-  const replay = replayResult ? [formatReplayEvidence(replayResult,{maxCharacters:0,rules}), ''] : [];
+  const formal = readable?.facts?.records?.formal ?? (label !== 'PR 1' && area.steps.includes('formal') && !replayResult ? readFormalEvidence(run) : null);
+  const replay = replayResult ? [formatReplayEvidence(replayResult,{maxCharacters:0,rules}), ''] : formal ? [formatFormalEvidence(formal, rules), ''] : [];
   const prefix = [...failing, ...replay];
   const top = [...ownLines(run, evidence), ...(verdict ? [`${AGENT_NOTE}: ${closingInert(verdict)}`] : []), ...(change ? [`${AGENT_NOTE}: ${closingInert(change)}${hasReportLink(change, env) ? ' (report links expire after 7 days)' : ''}`] : []), ...runtime];
   if (evidence.lines.some(line => line.includes('pdd-workflow:'))) throw Error('Remove supplied workflow ownership markers from the report; pdd preserves its own marker.');

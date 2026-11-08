@@ -345,6 +345,8 @@ counts files and checks by source: `Anchor: 3 changed scenarios (40 checks) + 18
 (1,722 checks).`, `Anchor: 0 changed scenarios (0 checks) + all 18 approved on base 6b58b76 (1,722 checks;
 pdd.json sets replay.base_scenarios to "all").`, or `+ 0 linked approved on base 6b58b76 (NOTE).` Base approval
 never gives PASS by itself.
+`formatFormalEvidence(formal, rules?)` returns the formal line specified below on its own. It is the same formatter used by the replay section and by PRs without scenario replay; it reads no files and supplies no evidence of its own.
+
 formatReplayEvidence emits a compact PR section with prominent Code replay PASS/FAIL/BLOCKED/NOT REPLAYED,
 exact counts, source and manifest hashes, current vector hashes labeled "Current vector", public execution totals, semantic control and typed
 formal result. The formal line uses formalStatusText:
@@ -378,7 +380,7 @@ A present base `pdd.json` must be a regular readable blob within the 10 MiB read
 
 ```json
 {
-  "status": "approved",
+  "status": "draft",
   "prose_sha256": "6abd04cc8cef206144a4e8994f4fc4cf3e8d6f63e1ccb8a4cb69c019a8c52c83",
   "entries": [
     {
