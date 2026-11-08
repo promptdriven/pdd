@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-alerts.prompt.md (sha256: cdf77d67905774ca1597c0f4ad52ccdaec0d379ef648c14bc49d3de33a0ef7d1).
+// Generated from prompts/cli/autopilot-alerts.prompt.md (sha256: 384d7bb3d60e24c129a9b18b7b0d5a2f73e7c27fb712587ab6ca4ef8d0ff5799).
 import * as nativeFs from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
@@ -356,11 +356,18 @@ async function sendDigest(input, ports, env, fs) {
     }
     const items = [...rows.values()].sort((a, b) => a.number - b.number || a.category.localeCompare(b.category));
     if (!items.length) return done(0, 'No open Autopilot work; nothing sent.');
-    const lines = [`PDD Autopilot digest (${host})`, `Repository: ${repo}`,
-      ...items.slice(0, ISSUE_LIMIT).map(item => `${item.category}: https://github.com/${repo}/issues/${item.number} — ${clip(oneLine(item.cause), 120)}`)];
-    // Keep the omitted count visible even when long repository names exhaust the message budget.
-    const omitted = items.length > ISSUE_LIMIT ? `\n${items.length - ISSUE_LIMIT} more open items.` : '';
-    const text = clip(lines.join('\n'), TEXT_LIMIT - omitted.length) + omitted;
+    const footer = count => count ? `\n${count} more open items.` : '';
+    const heading = clip(`PDD Autopilot digest (${host})\nRepository: ${repo}`, TEXT_LIMIT - footer(items.length).length);
+    const lines = [heading];
+    let included = 0;
+    for (const item of items.slice(0, ISSUE_LIMIT)) {
+      const row = `${item.category}: https://github.com/${repo}/issues/${item.number} — ${clip(oneLine(item.cause), 120)}`;
+      // Reserve the footer before adding a complete row, so neither limit hides an item.
+      if ([...lines, row].join('\n').length + footer(items.length - included - 1).length > TEXT_LIMIT) break;
+      lines.push(row);
+      included++;
+    }
+    const text = lines.join('\n') + footer(items.length - included);
     const destination = readDestination(fs, env, ports);
     const outcome = destination ? await deliver(destination, text, ports, input.cwd) : { result: 'not-configured' };
     const at = new Date(now).toISOString();

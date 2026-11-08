@@ -279,8 +279,11 @@ projection. Categories are `stuck`, `parked`, `decision`. Resolve repo and stabl
 machine as for an alert. Combine this projection with this machine's open issue
 incidents (use their cause and need); omit machine incidents. Keep distinct
 categories per issue, deduplicate matching issue/category rows, sort by issue
-then category and show issue links and causes. Include at most 10 rows, fields
-clipped to 120 characters and the message to 1900, with an omitted count.
+then category and show issue links and causes. Include at most 10 complete rows,
+with fields clipped to 120 characters. Budget the heading, rows and omission
+footer together within 1900 characters. Keep rows in sorted order and stop before
+the next row would exceed the budget; never cut an issue link. When any items are
+left out by either limit, the footer counts every item not shown.
 The heading identifies a digest, repository and machine. No open item means no
 send and no change to the last digest time. There is at most one digest attempt
 per repository and machine in 6 hours, including failed, unconfirmed and

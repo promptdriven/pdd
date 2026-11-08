@@ -686,9 +686,10 @@ test('stuck reviews with new attempt notes do not post; new causes, decisions an
     assert.equal((await f.alert(41, 'stuck', { ...stuck, tried: `Review ${review}: still blocked` }, '--update')).exitCode, 0);
     assert.equal(f.requests.length, 1, 'unchanged stuck cause and decision must not post at a four-hour review');
   }
-  assert.equal((await f.alert(41, 'stuck', { ...stuck, need: 'Choose another required check' }, '--update')).exitCode, 0);
+  const changedDecision = { ...stuck, need: 'Choose another required check' };
+  assert.equal((await f.alert(41, 'stuck', changedDecision, '--update')).exitCode, 0);
   assert.equal(f.requests.length, 2, 'a new decision must post');
-  assert.equal((await f.alert(41, 'stuck', { ...stuck, cause: 'Check credentials expired' }, '--update')).exitCode, 0);
+  assert.equal((await f.alert(41, 'stuck', { ...changedDecision, cause: 'Check credentials expired' }, '--update')).exitCode, 0);
   assert.equal(f.requests.length, 3, 'a new cause must post');
   assert.equal((await f.alert(41, 'recovered', { cause: 'Check restored', kind: 'stuck' })).exitCode, 0);
   assert.equal(f.requests.length, 4);
@@ -758,6 +759,33 @@ test('digest attempts are bounded after failure and scoped to repository and mac
   await runAutopilotAlerts(input, { ...f.ports, repository: async () => ({ nameWithOwner: 'elsewhere/project' }) });
   assert.equal(f.requests.length, 3);
 });
+
+for (const count of [10, 15]) {
+  test(`digest accounts for all omitted rows within the character budget with ${count} long-repository items`, async t => {
+    const f = setup(t);
+    const repo = `${'o'.repeat(39)}/${'r'.repeat(100)}`;
+    f.ports.repository = async () => ({ nameWithOwner: repo });
+    assert.equal((await f.pdd(['autopilot', 'alerts', 'set'], DISCORD)).exitCode, 0);
+    f.replies.push(echo);
+    const attention = Array.from({ length: count }, (_, i) => ({ number: i + 1, category: 'parked', cause: 'x'.repeat(120) }));
+    const result = await runAutopilotAlerts({ action: 'digest', cwd: f.cwd, env: f.env, attention }, f.ports);
+    assert.equal(result.exitCode, 0);
+    assert.equal(f.requests.length, 1, 'one digest request');
+    const text = f.requests[0].body.content;
+    assert.ok(text.length <= 1900, 'the complete message fits the character budget');
+    const lines = text.split('\n');
+    assert.ok(lines[0].includes('test-host'));
+    assert.ok(lines[1].includes(repo));
+    const omitted = lines.at(-1).match(/^(\d+)\b/);
+    assert.ok(omitted, 'the footer counts rows omitted by the character budget');
+    const rows = lines.slice(2, -1);
+    assert.ok(rows.length > 0 && rows.length < 10, 'the character budget limits the displayed rows');
+    assert.equal(Number(omitted[1]), count - rows.length, 'the footer counts every item not shown');
+    assert.deepEqual(rows, attention.slice(0, rows.length).map(item =>
+      `${item.category}: https://github.com/${repo}/issues/${item.number} — ${item.cause}`), 'displayed rows and issue links are complete and ordered');
+    f.noSecret();
+  });
+}
 
 test('infrastructure set, send, recovery, test and clear use a separate destination', async t => {
   const f = setup(t);
