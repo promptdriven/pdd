@@ -10,7 +10,7 @@ import { loadAgentDefinitions } from './agent-config.mjs';
 import { pathDiagnostic } from './path-diagnostic.mjs';
 import { runAutopilot } from './autopilot.mjs';
 import { checkWorkflowAgents } from './workflow-agents.mjs';
-import { gitContext, metricsSource, allRuns, listRuns, updateRun } from './workflow-runs.mjs';
+import { gitContext, metricsSource, allRuns, updateRunCosts, listRuns, updateRun } from './workflow-runs.mjs';
 import { appendEvents } from './metrics-store.mjs';
 import { recordCaptureGap } from './metrics-gap.mjs';
 import * as nativeFiles from 'node:fs';
@@ -350,7 +350,7 @@ async function readRunProgress(state, p) {
     try {
       const file = join(folder, name, 'status.json'), run = read(file);
       if (run?.v === 1 && run.number === Number(name) && run.repo?.toLowerCase() === state.repo.toLowerCase() && ['running', 'waiting'].includes(run.state)) {
-        progress.push({ number: run.number, changedAt: statSync(file).mtimeMs });
+        progress.push({ number: run.number, changedAt: Number.isFinite(run.progressAt) ? run.progressAt : statSync(file).mtimeMs });
       }
     } catch { /* Missing or unreadable records supply no progress fact. */ }
   }
@@ -1679,7 +1679,7 @@ async function localCosts(input, ports, state = {}) {
   const options = { ...ports, env: input.env ?? ports.env };
   const runs = await (ports.costRuns ?? (async () => input.all ? allRuns({ cancelled: true }, options) : listRuns({ cwd: state.cwd ?? input.cwd, cancelled: true }, options)))();
   const measured = runs.map(run => {
-    try { return updateRun(run.runDir, latest => {
+    try { return updateRunCosts(run.runDir, latest => {
       if (latest.runId !== run.runId || latest.startedAt !== run.startedAt) throw Error('Cost attempt changed');
       return latest;
     }, options); } catch { return run; }

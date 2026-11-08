@@ -449,7 +449,7 @@ Workflow status sets `skipCostSessions` on its storage updates. Health reads ret
 
 ## Issue costs
 
-`runCosts({ref,cwd,input}, ports)` resolves the run locally. Without input, refresh and return its public cost row as JSON. With input, validate and apply an explicit [cost measurement](cost-ledger.prompt.md) under ordinary run ownership, then return the row. This route makes no GitHub, Herdr, model or approval call. At the existing PR refresh boundary, retain observed head SHA and call `captureClosedCi` for closed/merged PRs; it owns the at-most-once duration read.
+`runCosts({ref,cwd,input}, ports)` resolves the run locally. Without input, refresh and return its public cost row as JSON. With input, validate and apply an explicit [cost measurement](cost-ledger.prompt.md) through `updateRunCosts` under ordinary run ownership, preserving the workflow progress timestamp and journal, then return the row. This route makes no GitHub, Herdr, model or approval call. At the existing PR refresh boundary, retain observed head SHA and call `captureClosedCi` for closed/merged PRs; it owns the at-most-once duration read.
 
 ## Dependencies
 

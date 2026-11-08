@@ -647,7 +647,9 @@ While a run waits for the interpreter, or an outage or an interpreter access pro
 `pdd autopilot status --json` prints `pdd.cost-report.v1`. Use `--all` to include
 indexed repositories. This form reads local files only. Human status includes
 day and week totals, outcomes, account token totals, and nearest-rank P50/P90
-costs per merged issue. Multiple attempts for one repository/issue are combined.
+costs per merged issue. Multiple attempts for one repository/issue are combined,
+including archived attempts when a run path is reused. Cost reads keep the last
+workflow progress time, so polling does not delay stalled-run warnings.
 Totals use the time each measurement was observed. Percentiles use cumulative
 costs of issues whose latest outcome was merged in the selected period.
 
@@ -677,8 +679,10 @@ by agents outside pdd are excluded. Costs remain after GitHub budget compaction.
 Token accounts are hashes of local config profiles, not billing identities. Codex
 usage comes from cumulative rollout counts. Claude usage comes from transcript
 usage, with streaming duplicates removed. Each session read is limited to 256 KiB;
-Claude backlogs are consumed on later captures. Missing files, backlogs and unknown
-minutes appear in coverage. No message text, credentials or monetary estimates
+Claude backlogs are consumed on later captures, including after a chat moves to
+abandoned custody. Saved current, abandoned and replacement chats use their own
+account and session identities; repeated custody does not add usage twice. Missing
+files, backlogs and unknown minutes appear in coverage. No message text, credentials or monetary estimates
 are saved. Cached input and reasoning tokens are subsets, not extra total tokens.
 
 At PR closure, pdd reserves one Actions duration read for the saved PR branch,

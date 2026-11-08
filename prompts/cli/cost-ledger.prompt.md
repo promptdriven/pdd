@@ -26,7 +26,7 @@ Events have `at`, `metric`, `value`, and optional `account` and `agent`; metric 
 `ciMinutes`, `githubCalls`, `questions`, `answers`, `approvals`, `waitingMinutes`,
 or `activeMinutes`. Zero measurements also create events so measured zero differs from unknown. Keep no message text, paths or environment values in cost data.
 
-Read every saved chat and replacement-original session once by kind/config/id, including chats removed by the current mutation.
+Read every saved current chat, abandoned chat and replacement-original or replacement session once by kind/config/id, including custody from before and after the current mutation. Use each chat's saved agent, config directory and session id. Moving a chat into abandoned custody or replacing the replacement envelope must preserve its deduplication identity and forward-read checkpoint, so bounded transcript backlogs can finish on later captures.
 Deduplicate resumed sessions. Resolve only the saved valid UUID, in the saved
 config directory (else the environment default). Codex searches the date folders
 within 31 days, as chat health does; consume the newest cumulative `token_count`

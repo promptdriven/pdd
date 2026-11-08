@@ -64,9 +64,10 @@ function tokenValues(usage, agent) {
       (usage.input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.output_tokens ?? 0)];
   return fields.every(number) ? Object.fromEntries(keys.map((key, i) => [key, fields[i]])) : null;
 }
-function captureTokens(cost, run, ports, at) {
+const savedChats = run => [...(run?.chats ?? []), ...(run?.abandonedChats ?? []),
+  ...[run?.chatReplacement?.original, run?.chatReplacement?.replacement].filter(Boolean)];
+function captureTokens(cost, run, chats, ports, at) {
   const fs = ports.sessionFs ?? ports.fs ?? nativeFs, env = ports.env ?? process.env, home = env.HOME || homedir();
-  const chats = [...(run.chats ?? []), ...[run.chatReplacement?.original, run.chatReplacement?.replacement].filter(Boolean)];
   const visited = new Set();
   for (const chat of chats) {
     const agent = chat.agent ?? run.agent, id = chat.session?.id;
@@ -159,8 +160,10 @@ export function captureCosts(before, run, ports = {}) {
   const at = (ports.now ?? Date.now)(), fs = ports.fs ?? nativeFs;
   const cost = structuredClone(run.cost?.schema === 'pdd.cost.v1' ? run.cost : before?.cost?.schema === 'pdd.cost.v1' ? before.cost : initial(run, at));
   cost.coverage = [];
+  const chats = [...savedChats(before), ...savedChats(run)];
   if (ports.skipCostSessions) cost.coverage.push('session-capture-deferred');
-  else captureTokens(cost, { ...run, chats: [...(before?.chats ?? []), ...(run.chats ?? [])] }, ports, at); capturePerson(cost, before, run, at);
+  else captureTokens(cost, run, chats, ports, at);
+  capturePerson(cost, before, run, at);
   const next = outcome({ ...run, cost });
   if (next !== cost.outcome) { cost.outcome = next; cost.outcomeAt = at; }
   const calls = (() => { try { return fs.readFileSync(join(run.runDir, 'github-cost.jsonl'), 'utf8').split('\n').filter(line => { try { return number(JSON.parse(line).at); } catch { return false; } }).length; } catch { return 0; } })();
@@ -174,7 +177,7 @@ export function captureCosts(before, run, ports = {}) {
   if (known) { if (cost.ciMinutes === null || minutes > cost.ciMinutes) event(cost, at, 'ciMinutes', Math.max(0, minutes - (cost.ciMinutes ?? 0))); cost.ciMinutes = minutes; }
   if (cost.suiteMinutes === null) cost.coverage.push('suite-unavailable');
   if (cost.person.activeMinutes === null) cost.coverage.push('person-active-unavailable');
-  if (!run.chats?.length) cost.coverage.push('session-unavailable');
+  if (!chats.length) cost.coverage.push('session-unavailable');
   cost.coverage.push('github-unattributed-excluded');
   cost.coverage = [...new Set(cost.coverage)].sort(); cost.capturedAt = at;
   return cost;

@@ -528,7 +528,7 @@ issues marked `claimed: true`, never present them as unclaimed.
 Elapsed time can also offer work without a GitHub change or an AI call in the
 tick. Use the clock and local run-progress reader as injectable ports. Read this
 repository's active PDD run records in the Git common directory's
-`pdd/runs/*/status.json`; the file's last modification time is its last change.
+`pdd/runs/*/status.json`; use finite saved `progressAt` when present, otherwise the file's last modification time. The run storage contract owns preservation of that progress timestamp during cost observations.
 At 60 minutes without a change, offer one line naming the run number and asking
 the skill to follow its `pdd:stuck` rule. Completed and cancelled runs are over;
 missing or unreadable records supply no progress fact.
@@ -958,7 +958,7 @@ a promise of later handling; the independent 30-minute tick remains fallback.
 Use the existing launcher ports and native defaults, including state, Git, settings,
 reconcile and wake boundaries; injected substitutes reach this same path.
 
-For `status`, include the local [issue cost report](cost-ledger.prompt.md) for normal and automatic runs in the selected repository; `--all` includes indexed repositories. Refresh numeric cost checkpoints using ordinary run ownership only. Before refreshing a selected cost record, verify its runId and startedAt under run ownership. Archived attempts can retain a former runDir now owned by a new attempt: retain their saved cost snapshot and never substitute or update that new attempt. Measurement failure must not fail status. `status --json` returns only the versioned cost report and skips timer, Herdr, settings-on-GitHub and workflow readiness probes. It works without a saved launcher. Human status appends `costStatusLines`; neither status form fetches CI durations.
+For `status`, include the local [issue cost report](cost-ledger.prompt.md) for normal and automatic runs in the selected repository; `--all` includes indexed repositories. Refresh numeric cost checkpoints through `updateRunCosts`, preserving the workflow progress timestamp, sequence and completion journal. Before refreshing a selected cost record, verify its runId and startedAt under run ownership. Archived attempts can retain a former runDir now owned by a new attempt: retain their saved cost snapshot and never substitute or update that new attempt. Measurement failure must not fail status. `status --json` returns only the versioned cost report and skips timer, Herdr, settings-on-GitHub and workflow readiness probes. It works without a saved launcher. Human status appends `costStatusLines`; neither status form fetches CI durations.
 
 ## Dependencies
 

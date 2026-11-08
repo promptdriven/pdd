@@ -18,7 +18,7 @@ import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 import { readWorkflowAreas } from './workflow-areas.mjs';
 import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, reconcileWorkflowPr, readWorkflowPrChecker, readWorkflowPrStatus } from './workflow-github.mjs';
 import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mjs';
-import { allRuns, currentChat, gitContext, listRuns, readRun, readRunOwnership, resolveRun, runDirFor, runForWorktree, updateRun, writeRun } from './workflow-runs.mjs';
+import { allRuns, currentChat, gitContext, listRuns, readRun, readRunOwnership, resolveRun, runDirFor, runForWorktree, updateRun, updateRunCosts, writeRun } from './workflow-runs.mjs';
 import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
 import { startChat, sendToChat, herdrCommand, chatSession, chatHealth, openChat, rebuildClosedChat, assertRestartCaller, restartChat, validSessionId, closeChats, expandHome, homeVariable, isFolder, observeLifecycle, applyLifecycle, launchAnchor, sessionEvidenceDue, ownSession, observedSession, START_GRACE_MS, removeStaleLoginFiles } from './workflow-chat.mjs';
 import { workflowAgentEntry } from './workflow-agents.mjs';
@@ -3478,7 +3478,7 @@ export async function runCosts({ ref, cwd, input }, ports = {}) {
   const p = deps(ports), found = await resolveRun(ref, { cwd }, p);
   if (!found.run) return fail(found.error);
   try {
-    const run = updateRun(found.run.runDir, latest => input === undefined ? latest : applyCostMeasurement(latest, input, p.now()), p);
+    const run = updateRunCosts(found.run.runDir, latest => input === undefined ? latest : applyCostMeasurement(latest, input, p.now()), p);
     return done(JSON.stringify(costReport([run], p.now()).runs[0], null, 2));
   } catch (error) { return { exitCode: 2, message: error.message }; }
 }
