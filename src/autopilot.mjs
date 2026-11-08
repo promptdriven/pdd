@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot.prompt.md (sha256: 6dce639945fb8645d79768449211043aa6bd207a8a8a50d974e7b273e0f44fe1).
+// Generated from prompts/cli/autopilot.prompt.md (sha256: bb35ea905a8eaf2490d580b696039fa41730a1fb7c4188a2ca24debc355e6a5e).
 import * as nativeFs from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -113,8 +113,14 @@ export async function runAutopilot(input, ports = {}) {
     const cwd = ports.cwd ?? process.cwd(), exec = ports.execFile ?? execute;
     let root = cwd;
     if (!ports.config) {
-      try { root = String((await exec('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8' })).stdout).trim(); }
-      catch { return action === 'setup' ? result(0, '') : result(1, 'Autopilot settings need a Git repository.'); }
+      // Git translates its messages; read the "not a git repository" text in the C locale.
+      try { root = String((await exec('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8', env: { ...process.env, LC_ALL: 'C', LANG: 'C' } })).stdout).trim(); }
+      catch (error) {
+        if (action === 'setup') return result(0, '');
+        return result(1, /not a git repository/i.test(String(error?.stderr ?? ''))
+          ? 'This folder is not a Git repository. cd into the repo you want Autopilot to work on, then run the command again.'
+          : 'Autopilot settings could not read the Git repository; retry.');
+      }
     }
     const config = ports.config ?? nativeConfig(root, ports.fs ?? nativeFs);
     const { raw } = await config.read({ key: 'autopilot' });

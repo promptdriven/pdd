@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-worktree.prompt.md (sha256: dd41895645f1630512b3b7eff559ac94eff77bea82e6d2306d80df880ba2fad3).
+// Generated from prompts/cli/workflow-worktree.prompt.md (sha256: c5ea046d3889b5c341ac39a78e9aa982bd29b4aa850350540ee09dcfc71c8692).
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
@@ -37,6 +37,11 @@ function commands(ports) {
     if (response.code !== 0) fail();
     return response.stdout;
   } };
+}
+
+// Shared with callers that must accept the same origins as the allocator. Reads nothing; never throws.
+export function githubOriginRepository(remote) {
+  try { return originRepo(String(remote ?? '').trim()); } catch { return null; }
 }
 
 function originRepo(value) {
