@@ -2963,3 +2963,18 @@ test('2921: product counts nothing from a generated PR body whose only Prompt te
     assert.equal(status.runs.find(row => row.run === 'phone-1').fromPr, 61, 'the pdd result line still names the PR as the evidence source');
   }
 });
+
+test('interpreter queue position is visible in detailed and JSON workflow status', async t => {
+  const f = await fixture(t); await f.run();
+  const before = f.record();
+  f.ports.readInterpreterProgress = ({ cwd }) => {
+    assert.equal(cwd, before.root);
+    return { state: 'waiting', position: 3, pausedMs: 120000, requests: [] };
+  };
+  const detail = await runStatus({ ref: '17', cwd: f.source }, f.ports);
+  assert.match(detail.message, /State:.*interpreter slot.*position 3/);
+  const json = await runStatus({ ref: '17', cwd: f.source, json: true }, f.ports);
+  assert.match(JSON.parse(json.message).runs[0].words, /interpreter slot.*position 3/);
+  assert.equal(f.record().state, before.state, 'status must not advance workflow state');
+  assert.equal(f.record().updatedAt, before.updatedAt);
+});

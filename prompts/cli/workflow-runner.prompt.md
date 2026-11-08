@@ -29,6 +29,17 @@ invoked CLI `workflow suite --command COMMAND` and wait for its result. Focused
 tests retain their normal route. The queue contract is required context for this
 execution and status behavior.
 
+## Native admission lock
+
+Native module function `acquireRunLock(runDir, filename = 'chat-replacement.lock')`
+uses the existing PID and token lock format and returns an own-token release
+callback. A live or uncertain owner or an acquisition failure gives `run_busy`;
+if initial lock creation fails for a reason other than an existing lock, retain
+the original I/O error as its `cause`, so consumers can distinguish unavailable
+storage from contention. Reclaim only a proven-dead owner. This native interface
+selection has no required context outside this section. The queue loads only
+this selection, so it does not depend on the runner's execution policy.
+
 ## Current Autopilot start ownership
 
 Ordinary module function `startRun` consumes optional structured `coordinator` from
@@ -611,6 +622,20 @@ Workflow status sets `skipCostSessions` on its storage updates. Health reads ret
 
 - [Cost ledger](cost-ledger.prompt.md): required native generation and verification context for local cost capture and reports.
 
+## Machine interpreter waiting
+
+Read [machine interpreter progress](interpreter-queue.prompt.md) for the run's
+worktree using the same machine queue environment. Keep workflow state separate
+from queue state. Show waiting with its position in workflow status. Exclude the
+union of persisted queue waiting intervals from the no-progress clock. An active
+wait or unavailable queue cannot establish a stuck run. Completed waiting time
+remains excluded after restart. Do not wake a chat or mutate queue records during
+observation. Preserve queue path and concurrency settings in launcher environments.
+
+## Dependencies
+
+- [Machine interpreter queue](interpreter-queue.prompt.md): required progress and waiting-clock contract.
+
 - [Readable PR descriptions](workflow-pr-body.prompt.md): required authoring/generation/verification/testing context for the readable part, the titles and the Details section of every PR description.
 - [GitHub calls](github-calls.prompt.md): native generation and verification context for counting `gh` calls.
 
@@ -1027,7 +1052,5 @@ Workflow run accepts explicit origin, decision token and required outcome metada
 Candidate identity is a deterministic SHA-256 digest over installed runtime bytes and selected skill bytes, without exporting paths or contents; unavailable bytes yield unknown. When the explicit code-choice transition advances into code, record required outcome code; do not derive authority from approval text. Record candidate readiness only after the final native code area (named `code`, or reached after an `ask-code` area), or the final area of a `small-change` workflow, completes and a matching published PR head exists. Caller-supplied required outcome is observational metadata and cannot establish a code area or readiness. Missing structured assistance capture is incomplete coverage, not evidence of no recovery.
 
 Metrics readiness records the published PR and exact head only when the terminal code-area step is explicitly completed in that publication invocation. Republishing or refreshing an existing PR does not establish readiness for a new head. Attach this observation to the existing post-publication waiting transition, with the same concurrency checks and duplicate protection. Measurement-only saves elsewhere must not block native responses: if such a save fails, retain the existing incomplete-coverage fact where possible and retry the observation on a later call; native state-write failures retain their ordinary errors. This observation adds no workflow gate.
-
-Module function `acquireRunLock(runDir, filename = 'chat-replacement.lock')` exposes the existing run lock and its release function; preserve its lock identity and behavior.
 
 For a bridge completion, validate its run, current area, pane and launch anchor under the existing run lock before changing the run. Refuse a mismatch. Release that lock before invoking the Autopilot completion hook.

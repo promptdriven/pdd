@@ -838,6 +838,29 @@ The GET-only `--request UUID` route reads known criterion coverage from an ownin
 
 Explicit lint JSON uses the deciding selected row for its aggregate public state, reason and lint_state, including a locally broken capture. Local broken tests keep internal refusal recovery and exit 4, but all public and saved projections use `not run` with `broken-test` and retain their original refusal details. Apply the same projection in files preview.
 
+## Machine interpreter admission
+
+Every lint and check POST also uses [machine admission](interpreter-queue.prompt.md),
+after ordinary profile admission and before immutable dispatch evidence, including
+the permanent Check claim and restart fuse. Expired or interrupted machine waits
+leave no Check claim or sent request ID, so a new process can retry that unsent
+work from the saved batch with zero charged calls. Waiting
+must not send a request or poll its unsent ID. Already dispatched checks keep
+being read while another check waits for the machine queue. Register the allocated ID, mark possible dispatch before
+POST and hold the machine ticket until a matching terminal receipt or confirmed
+unsent refusal. A lost reply, command return or interruption records unknown and
+keeps capacity; same-ID reads can later release it. Use existing capacity proof
+rules for retry authority. Machine busy feedback never grants retry permission,
+including when a capacity reply has uncertain accounting. Feed successful verdicts,
+busy, unknown and refused outcomes from POST and subsequent same-ID reads into
+the request ledger, including the documented `pdd test --request ID` read. A
+matching terminal request read releases retained machine capacity without sending
+a new POST or granting replay authority. Incomplete accounting stays unknown. Never record a request
+as not sent after its POST may have started. Private queue file identities do not allocate interpreter request IDs; saved reads
+keep the existing zero-new-request-ID promise. Ledger/queue failures stop new sends
+with a local-state-unavailable error; recovery advice remains read-only. Retain
+existing per-profile cap defaults and Simulator setup policy.
+
 ## Dependencies
 
 - Load [runtime outcome](runtime-outcome.prompt.md) for the public result projection, reason codes and pass boundary used by this module.
@@ -860,6 +883,7 @@ Explicit lint JSON uses the deciding selected row for its aggregate public state
 - [References](contract-refs.prompt.md): required generation and verification
   context for canonical provenance and explicit-lint copy comparison.
 
+- [Machine interpreter queue](interpreter-queue.prompt.md): required context for machine admission, waiting progress and request ledger.
 - [Runtime slots](runtime-slots.prompt.md): required generation and verification context for shared local admission and jobs. Runtime listing binds its own files port; native process exclusion remains a native verification obligation.
 
 - [Local bindings](runtime-bindings.prompt.md): required generation/runtime context for the local inventory helper.

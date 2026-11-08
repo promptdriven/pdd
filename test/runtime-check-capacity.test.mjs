@@ -706,7 +706,7 @@ test('CAPACITY2: 17 tests use four configured active slots, adapt to a one-worke
   });
   const start = Date.parse('2026-10-27T16:27:47Z');
   const result = await run(setup, fake, [], { '--json': true, '--timeout': '15' }, {
-    env: { HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state, PDD_MAX_JOBS: '4' },
+    env: { HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state, PDD_MAX_JOBS: '4', PDD_INTERPRETER_CONCURRENCY: '4' },
     now: () => start + now, sleep: async ms => { now += ms; }
   });
   assert.equal(result.code, 0, result.err + result.out); assert.equal(result.json.rows.length, 17);
@@ -819,9 +819,10 @@ test('CAPACITY9: explicit recovery preserves a running job and a completed job w
     if (e.method === 'GET' && runningIds.has(e.url.split('/').at(-1))) return { status: 200, json: f.check(e.url.split('/').at(-1), 'running') };
     return f.normal(e);
   });
-  const first = await run(setup, fake, [], { '--json': true, '--timeout': 1 }); assert.equal(first.code, 3);
+  const extra = { env: { HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state, PDD_INTERPRETER_CONCURRENCY: '4' } };
+  const first = await run(setup, fake, [], { '--json': true, '--timeout': 1 }, extra); assert.equal(first.code, 3);
   const original = saved(setup, first.json.batch), posts = fake.posts.length; recover = true;
-  const retry = await run(setup, fake, [], { '--retry': first.json.batch, '--json': true });
+  const retry = await run(setup, fake, [], { '--retry': first.json.batch, '--json': true }, extra);
   assert.equal(retry.code, 3); assert.equal(fake.posts.length, posts + 1);
   for (const path of ['tests/running.json', 'tests/unknown-item.json']) assert.deepEqual(saved(setup, first.json.batch).rows.find(r => r.test === path).request_ids,
     original.rows.find(r => r.test === path).request_ids);
@@ -833,7 +834,7 @@ test('CAPACITY10: unknown dispatched jobs still occupy four configured slots; he
   });
   const fake = await fakeRuntime(t, (e, f) => e.method === 'GET' ? { status: 200, json: { ...f.check(e.url.split('/').at(-1)), requestId: 'wrong' } } : f.normal(e));
   const result = await run(setup, fake, [], undefined, {
-    env: { HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state, PDD_MAX_JOBS: '4' }
+    env: { HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state, PDD_MAX_JOBS: '4', PDD_INTERPRETER_CONCURRENCY: '4' }
   });
   assert.equal(result.code, 3); assert.equal(checkPosts(fake).length, 4);
   assert.equal(result.json.rows.filter(r => r.state === 'partial').length, 4);

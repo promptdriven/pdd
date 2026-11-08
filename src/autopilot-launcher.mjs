@@ -2,6 +2,7 @@ import { configureCheckCapacity, releaseCheckCapacity, readCheckStatus, readSuit
 import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
+import { readInterpreterProgress } from './interpreter-queue.mjs';
 // Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 6d458f9c212e77a828ba31b44319a394b071a8e7a919d1f309c2580982cc0ae9).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -78,7 +79,7 @@ function portsFor(state, ports) {
   const checked = async (command, args, options) => { const result = await execute(command, args, options); if (result.code !== 0) throw Error(`${command} failed; check its sign-in and retry.`); return result.stdout; };
   return { ...ports, env, run, execute, checked, githubRoot, warn: ports.warn ?? (text => process.stderr.write(`${text}\n`)), now };
 }
-const keepEnv = env => Object.fromEntries(['HOME', 'PATH', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME', 'XDG_CONFIG_HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'PDD_SUITE_QUEUE', 'PDD_VM_SUITE_LOCK'].filter(k => typeof env[k] === 'string').map(k => [k, env[k]]));
+const keepEnv = env => Object.fromEntries(['HOME', 'PATH', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME', 'XDG_CONFIG_HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'PDD_SUITE_QUEUE', 'PDD_VM_SUITE_LOCK', 'PDD_INTERPRETER_QUEUE', 'PDD_INTERPRETER_CONCURRENCY'].filter(k => typeof env[k] === 'string').map(k => [k, env[k]]));
 function checkCapacityWords(state, p) {
   try {
     const c = readCheckStatus({env:p.env}, p.checkCapacityPorts ?? p);
@@ -363,7 +364,8 @@ async function readRunProgress(state, p) {
         const changedAt = Number.isFinite(run.progressAt) ? run.progressAt : statSync(file).mtimeMs;
         const suite = (p.readSuiteProgress ?? readSuiteProgress)({cwd:run.root, since:changedAt, env:p.env}, p);
         if (suite?.state === 'unavailable') p.warn(`Run #${run.number} full test suite queue unavailable: ${suite.reason}`);
-        progress.push({ number: run.number, changedAt: changedAt + (suite?.pausedMs ?? 0), ...(suite ? {suite} : {}) });
+        const interpreter = typeof run.root === 'string' ? (p.readInterpreterProgress ?? readInterpreterProgress)({ cwd: run.root, since: changedAt, env: p.env }, { now: p.now, ...p.interpreterQueuePorts }) : null;
+        progress.push({ number: run.number, changedAt: changedAt + (suite?.pausedMs ?? 0) + (interpreter?.pausedMs ?? 0), ...(suite ? {suite} : {}), ...(interpreter ? {interpreter} : {}) });
       }
     } catch { /* Missing or unreadable records supply no progress fact. */ }
   }
@@ -1448,7 +1450,7 @@ async function runTick(stateFile, ports, completion) {
     }
     const runProgress = await (p.readRunProgress ?? readRunProgress)(state, p);
     const suiteByNumber = new Map(runProgress.filter(row => row.suite).map(row => [row.number, row.suite]));
-    for (const { number, changedAt, suite } of runProgress) {
+    for (const { number, changedAt, suite, interpreter } of runProgress) {
       if (suite?.state === 'unavailable') continue;
       if (suite && (suite.state !== 'finished' || suite.reason)) {
         const key = `suite:${number}:${suite.ticket ?? suite.queuedAt}`;
@@ -1458,6 +1460,7 @@ async function runTick(stateFile, ports, completion) {
         }
         continue;
       }
+      if (['waiting', 'unavailable'].includes(interpreter?.state)) continue;
       const key = `run:${number}`;
       if (!environmentNumbers.has(number) && p.now() - changedAt >= STUCK_AFTER && state.timeSeen[key] !== changedAt) {
         timeRules.push({ kind: 'stuck-run', number, reason: `Run #${number} has had no progress for 60 minutes; follow the pdd:stuck rule.` });

@@ -1123,6 +1123,20 @@ For `status`, include the local [issue cost report](cost-ledger.prompt.md) for n
 
 - [Cost ledger](cost-ledger.prompt.md): required native generation and verification context for local cost capture and reports.
 
+## Machine interpreter waiting
+
+Read [machine interpreter progress](interpreter-queue.prompt.md) for the run's
+worktree using the same machine queue environment. Keep workflow state separate
+from queue state. Show waiting with its position in workflow status. Exclude the
+union of persisted queue waiting intervals from the no-progress clock. An active
+wait or unavailable queue cannot establish a stuck run. Completed waiting time
+remains excluded after restart. Do not wake a chat or mutate queue records during
+observation. Preserve queue path and concurrency settings in launcher environments.
+
+## Dependencies
+
+- [Machine interpreter queue](interpreter-queue.prompt.md): required progress and waiting-clock contract.
+
 - [Metrics store](metrics-store.prompt.md), [run records](workflow-runs.prompt.md) and [metrics gaps](metrics-gap.prompt.md): required native generation/verification context for observational selector/launch storage and identity.
 
 - [Workflow runner](workflow-runner.prompt.md#current-autopilot-start-ownership): required native generation and verification context for the existing shared admission lock.

@@ -14,6 +14,7 @@ import { tomlString } from './toml-string.mjs';
 import { lookupIssueWorktree } from './workflow-worktree.mjs';
 import { LOGIN_VARIABLES, reservedEnvMessage } from './workflow-agents.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
+import { interpreterQueueEnvironment } from './interpreter-queue.mjs';
 
 // The one shared startup grace: Herdr sees a new agent only after it starts.
 export const START_GRACE_MS = 30_000;
@@ -123,7 +124,7 @@ export function chatCommand({ agent, cwd, messageFile, sessionId, resumeId, conf
   if (resumeId !== undefined) resumeId = quote(resumeId);
   if (unset.some(name => !ENV_NAME.test(name))) throw problem('invalid_login_variable', 'A login variable name is not a plain name, so pdd will not start the chat.');
   // Gemini asks a hidden "trust this folder?" question in a new worktree; trust the run worktree for this session.
-  const env = ['cd', quote(cwd), '&&', 'env', ...unset.flatMap(name => ['-u', name]), 'PDD_AGENT_SESSION=1', `PDD_BIN=${quote(PACKAGE_BIN)}`, ...(configDir && homeVariable(agent) ? [`${homeVariable(agent)}=${quote(configDir)}`] : []), ...(agent === 'gemini' ? ['GEMINI_CLI_TRUST_WORKSPACE=true'] : [])];
+  const env = ['cd', quote(cwd), '&&', 'env', ...unset.flatMap(name => ['-u', name]), 'PDD_AGENT_SESSION=1', `PDD_BIN=${quote(PACKAGE_BIN)}`, ...Object.entries(queueEnv).map(([name, value]) => `${name}=${quote(value)}`), ...(configDir && homeVariable(agent) ? [`${homeVariable(agent)}=${quote(configDir)}`] : []), ...(agent === 'gemini' ? ['GEMINI_CLI_TRUST_WORKSPACE=true'] : [])];
   const message = messageFile ? [`"$(cat ${quote(messageFile)})"`] : [];
   // A child sh opens the private login file, deletes it, then reads the values and becomes the agent: no login value is
   // in this line, and no value from the file can keep the file. Any failed step stops the sh before the agent starts.
@@ -178,12 +179,13 @@ export function savedAgentEntry(run, agent, env = process.env) {
 // Each listed name that gets no value is unset, and so is the config-folder variable when the run saves none, so the
 // Herdr server's old environment never decides the login. Values go only in a new private file that the chat reads once.
 export function chatLaunch({ run, agent, configDir, env = process.env }) {
+  const queueEnv = interpreterQueueEnvironment(env);
   const entry = savedAgentEntry(run, agent, env), names = LOGIN_VARIABLES[agent] ?? [], home = homeVariable(agent), values = {};
   for (const name of names) if (typeof env[name] === 'string' && env[name] !== '') values[name] = env[name];
   for (const [name, value] of Object.entries(entry?.env ?? {})) if (name !== home && ENV_NAME.test(name)) values[name] = value;
   const queueNames = ['PDD_SUITE_QUEUE', 'PDD_VM_SUITE_LOCK'];
   for (const name of queueNames) if (!Object.hasOwn(values, name) && typeof env[name] === 'string') values[name] = env[name];
-  const queueEnv = Object.fromEntries(queueNames.filter(name => Object.hasOwn(values, name)).map(name => [name, values[name]]));
+  Object.assign(queueEnv, Object.fromEntries(queueNames.filter(name => Object.hasOwn(values, name)).map(name => [name, values[name]])));
   const unset = [...queueNames.filter(name => !Object.hasOwn(values, name)), ...names.filter(name => !Object.hasOwn(values, name)), ...(home && !configDir ? [home] : [])];
   let loginFile = null;
   if (Object.keys(values).length) {

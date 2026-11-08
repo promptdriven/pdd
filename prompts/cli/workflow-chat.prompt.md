@@ -147,6 +147,18 @@ Gemini uses the same user/workspace `.agents/skills` discovery paths as Codex; t
 
 Antigravity CLI (`agy`) follows the same rules as Gemini: the first message names the selected skill file, approvals use recorded `--said` words, and native session lookup is unavailable. Its file tools read only its workspace, so every agy launch (start, resume and replacement) passes `--add-dir` once for each folder of module function `agentDirs(run)`: the same two folders Gemini gets with `--include-directories`, the run metadata's `commonDir/pdd/runs` (`<clone>/.git/pdd/runs`) and the folder that holds the run worktree, the parent folder of the run's `root` (`<clone>.pdd-worktrees`, or the run worktrees folder of the [Git layout](workflow-worktree.prompt.md#supported-git-layouts) when the run starts from a linked checkout), each shell-quoted; without `commonDir` and `root` it passes none. The start file, the run record and other runs' worktrees are then inside its workspace, so the chat never needs a shell command to read them. `chatCommand` accepts these folders as optional `addDirs`; other agents ignore them. `--dangerously-skip-permissions` gives agy the same full access as Codex and Claude. In a new worktree agy first asks "Do you trust the contents of this project?"; the `--settings` value trusts the run worktree for this session only (agy never saves it and keeps the person's other settings), on start, resume and replacement.
 
+## Machine queue environment
+
+Every start, resume, replacement and rollback launch uses the caller's effective
+machine queue settings from `ports.env`, including defaults when unset. Carry
+`PDD_INTERPRETER_QUEUE` and `PDD_INTERPRETER_CONCURRENCY` into the child agent,
+overriding missing or stale daemon settings and conflicting agents.json values.
+Use the queue owner's exported settings resolver. Shell-quote each value.
+Codex command environments also receive these values through invocation-only
+`shell_environment_policy.set` overrides, with the same existing `include_only`
+limitation. Status readers use the same caller settings. Do not alter the daemon
+or a saved agent profile.
+
 <a id="chat-login"></a>
 ## Chat login and agents.json commands
 
@@ -226,6 +238,9 @@ selector precedence and admission.
 ## Dependencies
 
 - [Shared suite queue](test-suite-queue.prompt.md): required selector context for launch and resume environments.
+
+- [Machine interpreter queue](interpreter-queue.prompt.md): required settings resolver and defaults for chat environment propagation.
+
 - [Herdr layout](workflow-herdr-layout.prompt.md): required authoring/generation/verification context for workspace ownership, allocation and its existing lock. The runner's replacement protocol is the caller contract above, not a recursively loaded dependency.
 - [Worktree assignment](workflow-worktree.prompt.md): load for closed-workspace recovery verification through `lookupIssueWorktree`, including the saved current branch.
 - [Workflow agents](workflow-agents.prompt.md#login-variables): required context for `LOGIN_VARIABLES`, the one per-kind list of login variables.

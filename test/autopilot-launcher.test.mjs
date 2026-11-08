@@ -1908,3 +1908,33 @@ for (const state of ['running', 'waiting']) test(`cost polling cannot postpone t
   await f.tick(); assert.equal(f.prompts.length, 1);
   f.time++; await f.tick(); assert.equal(f.prompts.length, 2);
 });
+test('interpreter queue waiting and unavailable ownership cannot trigger the stuck rule', async t => {
+  const f = await fixture(t), changedAt = f.time;
+  f.runProgress = [{ number: 3066, changedAt, interpreter: { state: 'waiting', position: 2, pausedMs: 0 } }];
+  await f.invoke('start'); f.prompts.length = 0; f.status = 304;
+  f.time += 2 * hour; await f.tick();
+  assert.equal(f.prompts.length, 0, 'machine queue waiting must pause the stuck rule');
+  f.runProgress[0].interpreter.state = 'unavailable'; await f.tick();
+  assert.equal(f.prompts.length, 0, 'unreadable queue ownership cannot prove no progress');
+  f.runProgress[0] = { number: 3066, changedAt: f.time - hour / 2, interpreter: { state: 'finished', pausedMs: 1.5 * hour } };
+  await f.tick(); assert.equal(f.prompts.length, 0);
+  f.time += hour / 2; await f.tick();
+  assert.deepEqual(packet(f).timeRules.filter(row => row.kind === 'stuck-run').map(row => row.number), [3066]);
+});
+
+test('native run progress subtracts saved interpreter waiting after a launcher restart', async t => {
+  const f = await fixture(t); delete f.ports.readRunProgress;
+  const changedAt = f.time, folder = join(f.cwd, '.git', 'pdd', 'runs', '3066'); mkdirSync(folder, { recursive: true });
+  const file = join(folder, 'status.json');
+  writeFileSync(file, JSON.stringify({ v: 1, number: 3066, repo: 'owner/repo', state: 'running', root: f.cwd }));
+  utimesSync(file, new Date(changedAt), new Date(changedAt));
+  f.ports.readInterpreterProgress = ({ cwd, since }) => {
+    assert.equal(cwd, f.cwd); assert.equal(since, changedAt);
+    return { state: 'finished', position: null, pausedMs: hour };
+  };
+  await f.invoke('start'); f.prompts.length = 0; f.status = 304;
+  f.time += hour; await f.tick();
+  assert.equal(f.prompts.length, 0, 'saved interpreter wait must be excluded after restart');
+  f.time += hour; await f.tick();
+  assert.deepEqual(packet(f).timeRules.filter(row => row.kind === 'stuck-run').map(row => row.number), [3066]);
+});
