@@ -45,7 +45,7 @@ export async function autopilotGithubWorld({ src = fileURLToPath(new URL('../../
     }
     return {};
   };
-  w.ports = { stateRoot, machine, now: () => w.time, sleep: async () => {}, readRunProgress: async () => [], warn: text => w.warnings.push(text),
+  w.ports = { stateRoot, machine, ...(environment ? { env } : {}), now: () => w.time, sleep: async () => {}, readRunProgress: async () => [], warn: text => w.warnings.push(text),
     selectAgent: async () => ({ id: 'codex', kind: 'codex', command: 'codex', env: {} }), pathDiagnostic: () => [], timer: async () => true,
     run, herdr, wait: async () => {}, armCoordinatorIdle: (_identity, options) => { w.resume = options.resume; } };
   const launcher = await import(pathToFileURL(join(src, 'autopilot-launcher.mjs')).href);

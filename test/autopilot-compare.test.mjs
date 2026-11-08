@@ -94,6 +94,58 @@ test('external replay leaves AI requests pending without fabricating answers', a
     'only the untrusted-author acknowledgment is written; no dependency review answers');
 });
 
+test('selected source command ports stay isolated through ticks, completion and idle callbacks', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'pdd-compare-environment-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const keys = ['CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GH_CONFIG_DIR', 'GH_HOST', 'GH_TOKEN', 'GITHUB_TOKEN'];
+  const saved = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  t.after(() => {
+    for (const key of keys) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+  });
+  for (const key of keys) process.env[key] = join(dir, `harmless-${key}`);
+  const src = join(dir, 'src'); mkdirSync(src);
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ type: 'module', version: 'environment-probe' }));
+  for (const name of ['issue-dependencies-intake', 'github-calls', 'autopilot-store']) {
+    writeFileSync(join(src, `${name}.mjs`), `export * from ${JSON.stringify(pathToFileURL(resolve('src', `${name}.mjs`)).href)};\n`);
+  }
+  const native = JSON.stringify(pathToFileURL(resolve('src/autopilot-launcher.mjs')).href);
+  const launcher = join(src, 'autopilot-launcher.mjs');
+  writeFileSync(launcher, `
+    export * from ${native};
+    import * as native from ${native};
+    export const observations = [];
+    let idle = false;
+    function observe(ports, phase) {
+      return {...ports,
+        run: async (command, args, options) => {
+          observations.push({phase: idle ? 'idle' : phase, command,
+            inherited: ${JSON.stringify(keys)}.filter(key => options?.env?.[key] === process.env[key]),
+            home: options?.env?.HOME, path: options?.env?.PATH});
+          return ports.run(command, args, options);
+        },
+        armCoordinatorIdle: (identity, options) => ports.armCoordinatorIdle(identity, {...options,
+          resume: async () => { idle = true; try { return await options.resume(); } finally { idle = false; } }
+        })
+      };
+    }
+    export const runAutopilotLauncher = (input, ports) => native.runAutopilotLauncher(input, observe(ports, 'start'));
+    export const tickAutopilot = (file, ports) => native.tickAutopilot(file, observe(ports, 'tick'));
+    export const requestAutopilotCompletion = (input, ports) => native.requestAutopilotCompletion(input, observe(ports, 'completion'));
+  `);
+  const report = await compareAutopilot({ oldRoot: root, newRoot: dir, replay: fixture() });
+  const { observations } = await import(pathToFileURL(launcher).href);
+  for (const phase of ['start', 'tick', 'completion', 'idle']) {
+    const commands = observations.filter(o => o.phase === phase);
+    assert.ok(commands.length > 0, phase);
+    assert.deepEqual(commands.filter(o => o.inherited.length > 0).map(o => ({ command: o.command, inherited: o.inherited })), [], phase);
+    assert.ok(commands.every(o => o.home && o.home !== process.env.HOME && o.path), phase);
+  }
+  assert.ok(report.comparison.every(f => f.decisionsEqual && f.callsEqual && f.writesEqual));
+});
+
 test('malformed recordings fail before either source is loaded', async () => {
   const variants = [
     r => { r.frames[1].at = r.frames[0].at; },

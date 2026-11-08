@@ -34,3 +34,23 @@ for (const adapter of [false, true]) test(`GitHub world reads ${adapter ? 'the s
   assert.equal((await world.invoke('stop')).exitCode, 0);
   assert.equal(world.state().enabled, false);
 });
+
+test('GitHub world without an environment option keeps inherited tick settings', async t => {
+  const key = 'PDD_TEST_WORLD_INHERITED';
+  const saved = process.env[key];
+  process.env[key] = 'harmless-sentinel';
+  t.after(() => { if (saved === undefined) delete process.env[key]; else process.env[key] = saved; });
+  const world = await autopilotGithubWorld({ issues: 1 });
+  t.after(world.cleanup);
+  assert.equal(Object.hasOwn(world.ports, 'env'), false);
+  const run = world.ports.run, observed = [];
+  world.ports.run = (command, args, options) => {
+    observed.push(options?.env?.[key]);
+    return run(command, args, options);
+  };
+  assert.equal((await world.invoke('start')).exitCode, 0);
+  observed.length = 0;
+  assert.equal((await world.tick()).exitCode, 0);
+  assert.ok(observed.length > 0);
+  assert.ok(observed.every(value => value === 'harmless-sentinel'));
+});

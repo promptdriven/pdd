@@ -28,6 +28,13 @@ dependency answers say that each issue is independent. No agent produces them.
 The first frame includes fake launcher setup. Each later frame calls the selected
 version's real tick. Each temporary world is removed after the run.
 
+Each world clears parent environment settings and keeps its own HOME and the
+executable search path. The same cleared environment reaches startup, later
+ticks, completion and idle callbacks. Parent config paths, identity settings
+and credentials do not reach command ports. The test world's optional
+`environment` input supplies this behavior; callers that omit it keep the
+helper's inherited-environment behavior.
+
 To supply sanitized external observations, pass `--replay FILE`. The JSON envelope
 has `schema_version: "pdd.autopilot-compare.v1"`, `synthetic`, and `frames`.
 Each frame has a unique safe `name`, an increasing millisecond `at`, and a native

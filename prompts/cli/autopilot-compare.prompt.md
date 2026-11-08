@@ -2,8 +2,11 @@
 
 Own `scripts/autopilot-compare.mjs` and the optional `environment` input of the
 existing GitHub test world. That input overlays the world's environment before
-local Git setup and is passed to its Git subprocesses. Omitted input preserves
-existing helper behavior. Failed helper construction also cleans its directory.
+local Git setup and is passed to its Git subprocesses and launcher ports for
+startup, every tick, completion and idle callbacks. Keep explicit undefined
+entries in those ports: saved state omits them and cannot mask parent values.
+Omitted input preserves existing helper behavior, including absent `ports.env`.
+Failed helper construction also cleans its directory.
 Issue #3063 authorizes a development
 harness and a comparison plan. Preserve production Autopilot behavior, approval
 rules, existing tests and merge gates. This harness supplies local evidence only.
@@ -13,6 +16,9 @@ Run two selected local source trees through their actual launcher and tick
 exports. Give each an isolated repository, HOME, state, fake clock, fake GitHub,
 fake Herdr and fake timer. Clear inherited environment values in the harness;
 retain only the local executable search path and the world's isolated HOME.
+Keep the cleared environment on every later tick, completion and idle path.
+Inherited config paths, GitHub identity settings and credentials must remain
+absent at command ports after startup as well as during startup.
 Only local Git commands may execute. Reuse the
 repository's counting GitHub world. Never run an agent, timer service, real gh,
 network request or interpreter. Always remove each temporary world, including on
