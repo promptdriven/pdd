@@ -72,7 +72,7 @@ no interpreter operation and makes no model or live service calls.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"draft","prose_sha256":"66aa5f2392603c3432c73419f5cfba109f80030cb9471277468cf95c20efe14c","entries":[],"calls":[],"resources":[],"limits":{"max_steps":1,"max_model_calls":1},"conventions":[]}
+{"status":"approved","prose_sha256":"7e6e1b1dd1aac4858035050524779758309bee3256eff61f399df452202f3aa6","entries":[],"calls":[],"resources":[],"limits":{"max_steps":1,"max_model_calls":1},"conventions":[]}
 ```
 
 </details>
