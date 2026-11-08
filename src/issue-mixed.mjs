@@ -54,16 +54,18 @@ async function pages(ports, repository, issue, kind) {
   } while (cursor);
   return items;
 }
+async function unownedParent({ repository, snapshot, route }, ports) {
+  const subject = snapshot.issues.find(x => x.key === route.issue);
+  const owners = parse((await ports.owners.read({ repository, issues: [route.issue] })).json);
+  const raw = parse((await ports.github.issue({ repository, issue: Number(route.issue.split('/').pop()) })).json);
+  const labels = Array.isArray(raw.labels) ? raw.labels.map(x => typeof x === 'string' ? x : x.name) : null;
+  if (raw.state !== 'open' || !Array.isArray(raw.assignees) || raw.assignees.length || !Array.isArray(owners.claims) || owners.claims.some(x => x.issue === route.issue && x.active) || !labels || labels.includes('pdd:working')) return null;
+  if (raw.title !== subject.title || raw.body !== subject.sortText || JSON.stringify(labels.slice().sort()) !== JSON.stringify(subject.labels.slice().sort())) return null;
+  return raw;
+}
 export async function currentSplitParent({ repository, snapshot, route }, ports, complete = false) {
   const subject = snapshot.issues.find(x => x.key === route.issue);
-  const currentParent = async () => {
-    const owners = parse((await ports.owners.read({ repository, issues: [route.issue] })).json);
-    const raw = parse((await ports.github.issue({ repository, issue: Number(route.issue.split('/').pop()) })).json);
-    const labels = Array.isArray(raw.labels) ? raw.labels.map(x => typeof x === 'string' ? x : x.name) : null;
-    if (raw.state !== 'open' || !Array.isArray(raw.assignees) || raw.assignees.length || !Array.isArray(owners.claims) || owners.claims.some(x => x.issue === route.issue && x.active) || !labels || labels.includes('pdd:working')) return null;
-    if (raw.title !== subject.title || raw.body !== subject.sortText || JSON.stringify(labels.slice().sort()) !== JSON.stringify(subject.labels.slice().sort())) return null;
-    return raw;
-  };
+  const currentParent = () => unownedParent({ repository, snapshot, route }, ports);
   const raw = await currentParent();
   if (!raw) return false;
   const labels = raw.labels?.map(x => typeof x === 'string' ? x : x.name);
@@ -124,30 +126,45 @@ export async function syncMixedParts({ cwd = '', repository, snapshot, mode }, p
       if (!raw.html_url?.startsWith(`https://github.com/${repository}/issues/`) || !/^[1-9]\d*$/.test(String(raw.id)) || !Number.isSafeInteger(raw.number) || raw.html_url !== `https://github.com/${repository}/issues/${raw.number}`) throw Error('sort-write-pending');
       children.push({ raw, area: part.area, owner: part.owner });
     }
-    const childGuard = async child => {
+    const childGuard = async (endpoints, state = 'link') => {
       if (!await guard()) return false;
-      const raw = parse((await ports.github.issue({ repository, issue: child.raw.number })).json);
-      const owners = parse((await ports.owners.read({ repository, issues: [child.raw.html_url] })).json);
-      // An owned child is never mutated.
-      return raw.state === 'open' && Array.isArray(raw.assignees) && raw.assignees.length === 0 && Array.isArray(owners.claims) && !owners.claims.some(x => x.issue === child.raw.html_url && x.active) && !(raw.labels ?? []).some(x => (x.name ?? x) === 'pdd:working');
+      // Evidence and every child claim read precede final issue observations.
+      // Ordering links must observe both children as one admission decision.
+      for (const child of endpoints) {
+        const owners = parse((await ports.owners.read({ repository, issues: [child.raw.html_url] })).json);
+        if (!Array.isArray(owners.claims) || owners.claims.some(x => x.issue === child.raw.html_url && x.active)) return false;
+      }
+      for (const child of endpoints) {
+        const raw = parse((await ports.github.issue({ repository, issue: child.raw.number })).json);
+        const completed = raw.state === 'closed' && raw.state_reason === 'completed';
+        const allowedState = state === 'completed' ? completed : raw.state === 'open' || state === 'link' && completed;
+        if (!allowedState || !Array.isArray(raw.assignees) || raw.assignees.length || !Array.isArray(raw.labels) || raw.labels.some(x => (x.name ?? x) === 'pdd:working')) return false;
+      }
+      // Child observations may introduce parent ownership. Do not reread slow
+      // sort evidence here; check the parent directly after the child reads.
+      return !!await unownedParent({ repository, snapshot, route }, ports);
     };
     const link = async (issue, childId, kind, checkOwnership) => {
       const result = await effect(() => ports.github.ensureSortLink({ repository, issue, childId: String(childId), kind, checkOwnership }));
       if (result.ok !== true) throw Error('sort-write-pending');
     };
     for (const child of children) {
-      const parentGuard = () => childGuard(child);
+      const parentGuard = () => childGuard([child]);
       await link(parent, child.raw.id, 'sub', parentGuard);
       await link(parent, child.raw.id, 'blocker', parentGuard);
     }
     const first = children.find(x => x.area === route.record.splitOrder.first), later = children.find(x => x !== first);
-    await link(later.raw.number, first.raw.id, 'blocker', async () => await childGuard(later) && await childGuard(first));
+    await link(later.raw.number, first.raw.id, 'blocker', () => childGuard([later, first]));
     for (const child of children.filter(x => x.owner !== 'autopilot')) {
       const raw = parse((await ports.github.issue({ repository, issue: child.raw.number })).json);
       if (raw.assignees?.length === 1 && raw.assignees[0].login === child.owner) continue;
+      if (raw.state === 'closed' && raw.state_reason === 'completed') {
+        if (!await childGuard([child], 'completed')) throw Error('sort-owner-changed');
+        continue;
+      }
       const result = await effect(async () => {
-        if (!await childGuard(child)) throw Error('sort-owner-changed');
-        return ports.github.sortUpdate({ repository, issue: child.raw.number, assignee: child.owner, checkOwnership: () => childGuard(child) });
+        if (!await childGuard([child], 'open')) throw Error('sort-owner-changed');
+        return ports.github.sortUpdate({ repository, issue: child.raw.number, assignee: child.owner, checkOwnership: () => childGuard([child], 'open') });
       });
       if (result.ok !== true) throw Error('sort-write-pending');
     }

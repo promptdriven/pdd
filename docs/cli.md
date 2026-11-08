@@ -580,7 +580,12 @@ proposal. Missing area evidence, policy or work order gets `pdd:needs-owner`
 and one question. More complex owner or order choices also need a person.
 Person assignees and live claims prevent all issue writes. Writes are
 guarded inside native admission. Closing a split tracker checks its ownership,
-state and inputs again after reading both child completions. Malformed sort
+state and inputs again after reading both child completions. Missing split links
+check both endpoints after evidence reads. Child claims are read before child
+assignees, then parent ownership is checked again. An interrupted split recovers
+the same completed, unassigned and unclaimed child, confirms missing links and
+saves the split note without assigning completed work. Person assignments and
+live claims hold recovery until released. Malformed sort
 records cannot abort the snapshot read. Invalid trusted heads hold selection;
 outsider records do not block it. Writes are
 serial and wait at least one second between effects. Each invocation routes at

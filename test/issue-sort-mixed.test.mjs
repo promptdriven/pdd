@@ -447,3 +447,156 @@ for (const authority of ['outsider', 'owner']) test(`malformed mixed elements fr
     assert.equal(sortPlan({ snapshot }).queued.includes(key(1)), authority === 'owner');
   }
 });
+
+// Keep native admission, request construction and readback. Only transport is fake.
+function nativeSplitWrites(w) {
+  let phase = '', insideAdmission = false;
+  const effects = [];
+  const native = createDependencyReadPorts({}, {
+    admitMutation: async action => {
+      insideAdmission = true;
+      try { return await action(); } finally { insideAdmission = false; }
+    },
+    execFile: async (_file, args, options) => {
+      const method = args[args.indexOf('--method') + 1];
+      const endpoint = args[args.indexOf('--method') + 2].split('?')[0];
+      const match = /\/issues\/(\d+)(?:\/(sub_issues|dependencies\/blocked_by))?$/.exec(endpoint);
+      assert.ok(match, 'use the native issue or relationship endpoint');
+      const issue = Number(match[1]), target = w.issues.find(x => x.number === issue);
+      if (method === 'POST' || method === 'PATCH') {
+        const input = JSON.parse(options.input);
+        effects.push({ phase, method, issue, input, assignees: structuredClone(target.assignees), claims: structuredClone(w.claims) });
+        if (method === 'POST') w.links.push({ issue, childId: String(input.sub_issue_id ?? input.issue_id), kind: match[2] === 'sub_issues' ? 'sub' : 'blocker' });
+        else {
+          if (input.assignees) target.assignees = input.assignees.map(login => ({ login }));
+          if (input.state) target.state = input.state;
+        }
+      }
+      const value = match[2] ? w.links.filter(x => x.issue === issue && x.kind === (match[2] === 'sub_issues' ? 'sub' : 'blocker')).map(x => ({ id: Number(x.childId) })) : target;
+      return { code: 0, stdout: JSON.stringify(value) };
+    },
+  });
+  w.ports.github.ensureSortLink = args => {
+    phase = args.issue !== 1 ? 'order' : args.kind === 'sub' ? 'sub' : 'parent-blocker';
+    return native.github.ensureSortLink(args);
+  };
+  w.ports.github.sortUpdate = args => {
+    phase = args.assignee ? 'assignment' : 'close';
+    return native.github.sortUpdate(args);
+  };
+  return { effects, get admission() { return insideAdmission ? phase : ''; } };
+}
+
+for (const phase of ['sub', 'parent-blocker', 'order', 'assignment']) {
+  for (const change of ['parent-person', 'parent-claim', 'child-person']) test(`${phase} rejects ${change} arriving in native child claim validation`, async () => {
+    const w = mixedFixture('split'); await w.seed();
+    const native = nativeSplitWrites(w), owners = w.ports.owners.read;
+    let injected = false;
+    w.ports.owners.read = async args => {
+      const lastChild = phase !== 'order' || args.issues[0] === w.issues.find(x => x.title.startsWith('runtime part'))?.html_url;
+      if (!injected && native.admission === phase && args.issues[0] !== key(1) && lastChild) {
+        injected = true;
+        const target = change.startsWith('parent') ? w.issues[0] : w.issues.find(x => x.html_url === args.issues[0]);
+        if (change.endsWith('person')) target.assignees = [{ login: 'person' }];
+        else w.claims.push({ issue: target.html_url, active: true, owner: 'worker' });
+      }
+      return owners(args);
+    };
+    await tick(w);
+    assert.equal(injected, true, 'reach child claim validation inside native admission');
+    assert.equal(native.effects.filter(x => x.phase === phase).length, 0, 'owned endpoints must stop native transport');
+    assert.equal(w.writes.filter(x => x.kind === 'comment').length, 0);
+    assert.equal(w.issues.length, 3);
+    if (change.endsWith('person')) assert.ok(w.issues.some(x => x.assignees.some(a => a.login === 'person')));
+  });
+}
+
+test('ordering admission checks both child issues after the last child claim read', async () => {
+  const w = mixedFixture('split'); await w.seed();
+  const native = nativeSplitWrites(w), owners = w.ports.owners.read;
+  let injected = false;
+  w.ports.owners.read = async args => {
+    const first = w.issues.find(x => x.title.startsWith('runtime part'));
+    if (!injected && native.admission === 'order' && args.issues[0] === first?.html_url) {
+      injected = true;
+      w.issues.find(x => x.title.startsWith('cli part')).assignees = [{ login: 'person' }];
+    }
+    return owners(args);
+  };
+  await tick(w);
+  assert.equal(injected, true);
+  assert.equal(native.effects.filter(x => x.phase === 'order').length, 0, 'both relationship endpoints need current assignees');
+});
+
+test('split resumes a completed unassigned part before its first link and permits local completion', async () => {
+  const w = mixedFixture('split'); await w.seed();
+  w.ports.github.ensureSortLink = async () => { throw Error('controlled interruption before first relationship'); };
+  await tick(w);
+  assert.equal(w.issues.length, 3);
+  assert.equal(w.links.length, 0);
+  const remote = w.issues.find(x => x.title.startsWith('runtime part')), cli = w.issues.find(x => x.title.startsWith('cli part'));
+  remote.state = 'closed'; remote.state_reason = 'completed';
+  const native = nativeSplitWrites(w);
+  await tick(w); await tick(w);
+  assert.equal(w.writes.filter(x => x.kind === 'part').length, 2, 'recover completed children without replacement');
+  assert.equal(w.links.length, 5, 'confirm all missing relationships for the completed child');
+  assert.equal(native.effects.filter(x => x.phase === 'assignment').length, 0, 'do not assign completed work');
+  assert.deepEqual(remote.assignees, []);
+  assert.equal(w.writes.filter(x => x.kind === 'comment').length, 1);
+  assert.equal((await read(w)).issues[0].sortSplit.parts.length, 2);
+  assert.equal(w.issues[0].state, 'open');
+  w.save(w.record(cli.number, { touchedAreas: [{ area: 'cli', evidence: ['src/cli.mjs:12'] }], rootCause: '' })); w.review(cli.number);
+  assert.ok((await tick(w)).eligible.includes(cli.html_url), 'local child can start after completed remote work');
+  cli.state = 'closed'; cli.state_reason = 'completed';
+  await tick(w); await tick(w);
+  assert.equal(w.issues[0].state, 'closed');
+  assert.equal(native.effects.filter(x => x.phase === 'close').length, 1);
+  assert.equal(w.writes.filter(x => x.kind === 'comment' && x.body.includes('pdd-issue-split:v1')).length, 1);
+  assert.equal(w.links.length, 5);
+  assert.equal(w.issues.length, 3);
+});
+
+for (const ownership of ['person', 'claim']) test(`completed child held by ${ownership} can resume missing links when released`, async () => {
+  const w = mixedFixture('split'); await w.seed();
+  w.ports.github.ensureSortLink = async () => { throw Error('controlled interruption before links'); };
+  await tick(w);
+  const remote = w.issues.find(x => x.title.startsWith('runtime part'));
+  remote.state = 'closed'; remote.state_reason = 'completed';
+  if (ownership === 'person') remote.assignees = [{ login: 'person' }];
+  else w.claims.push({ issue: remote.html_url, active: true, owner: 'worker' });
+  const native = nativeSplitWrites(w);
+  await tick(w); await tick(w);
+  assert.equal(w.issues.length, 3);
+  assert.equal(w.links.filter(x => x.childId === String(remote.id)).length, 0);
+  assert.equal(native.effects.filter(x => x.phase === 'assignment').length, 0);
+  assert.equal(w.writes.filter(x => x.kind === 'comment').length, 0);
+  if (ownership === 'person') assert.deepEqual(remote.assignees, [{ login: 'person' }]);
+  remote.assignees = []; w.claims.length = 0;
+  await tick(w); await tick(w);
+  assert.equal(w.links.length, 5, 'release must permit the same completed child to finish its split');
+  assert.equal((await read(w)).issues[0].sortSplit.parts.length, 2);
+  assert.equal(w.issues.length, 3);
+  assert.equal(native.effects.filter(x => x.phase === 'assignment').length, 0);
+});
+
+test('completion during native assignment admission holds transport and resumes without assignment', async () => {
+  const w = mixedFixture('split'); await w.seed();
+  const native = nativeSplitWrites(w), owners = w.ports.owners.read;
+  let injected = false;
+  w.ports.owners.read = async args => {
+    if (!injected && native.admission === 'assignment' && args.issues[0] !== key(1)) {
+      injected = true;
+      const child = w.issues.find(x => x.html_url === args.issues[0]);
+      child.state = 'closed'; child.state_reason = 'completed';
+    }
+    return owners(args);
+  };
+  await tick(w);
+  assert.equal(injected, true);
+  assert.equal(native.effects.filter(x => x.phase === 'assignment').length, 0, 'completed work must not receive an assignment PATCH');
+  await tick(w); await tick(w);
+  assert.equal(native.effects.filter(x => x.phase === 'assignment').length, 0);
+  assert.equal((await read(w)).issues[0].sortSplit.parts.length, 2);
+  assert.equal(w.links.length, 5);
+  assert.equal(w.issues.length, 3);
+});
