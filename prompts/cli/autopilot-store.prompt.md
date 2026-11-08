@@ -71,7 +71,9 @@ scans ignore unrelated files. File I/O uses `ports.fs` with native defaults.
 `autopilotStateFiles(root,ports={})` returns sorted unique logical filenames
 matching twenty lowercase hex digits plus `.json`, from the database and retained
 legacy files. Timer arguments, locks and artifact paths still use that logical
-path; the launcher payload is read and written through storage. Per-repository
+path; the launcher payload is read and written through storage. Completion callbacks
+and composed delivery observations use these adapters too: the retained legacy
+JSON is neither current-state evidence nor a way to change an imported state. Per-repository
 workflow status and durable metrics evidence stay under their existing Git
 common directory owners during this incremental migration.
 

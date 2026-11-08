@@ -1,3 +1,4 @@
+import { readAutopilotState } from './autopilot-store.mjs';
 import { validateSnapshot } from './metrics-store.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
 import { createDependencyReadPorts } from './issue-dependencies-github.mjs';
@@ -327,7 +328,7 @@ function automaticHandoff(run, p, packageRoot = PACKAGE_ROOT) {
     const root = realpathSync(run.sourceRoot), config = JSON.parse(readFileSync(join(root, 'pdd.json'), 'utf8'));
     const mode = config?.autopilot?.mode, id = createHash('sha256').update(root).digest('hex').slice(0, 20);
     const folder = p.autopilotStateRoot ?? join(p.env.HOME || homedir(), '.local', 'state', 'pdd', 'autopilot');
-    const saved = JSON.parse(readFileSync(join(folder, `${id}.json`), 'utf8'));
+    const saved = readAutopilotState(join(folder, `${id}.json`));
     const action = saved.startAction, overlay = resolve(run.skillDir ?? join(packageRoot, 'skills', run.skill), 'steps', 'autopilot.md');
     if (!['auto','observe'].includes(mode) || !saved.enabled || saved.repo?.toLowerCase() !== run.repo.toLowerCase() || saved.coordinatorId !== run.automaticOrigin.coordinatorId || saved.machine !== run.automaticOrigin.machine || action?.command !== 'pdd autopilot start' || action.repository?.toLowerCase() !== run.repo.toLowerCase() || action.mode !== mode || !existsSync(overlay)) return null;
     return `Automatic run: the operator invoked ${action.command} for ${run.repo} in ${mode} mode. Read ${JSON.stringify(overlay)} and the actual owner handoff and run notes in ${JSON.stringify(run.runDir)}. Follow their scoped delegation for covered ordinary non-strict gates through the supported approval route; preserve strict approval and all repository, product, Try, code and merge restrictions. This action is not a quoted later person reply or checker approval. Current package CLI: ${pddCommand(packageRoot)}.`;
@@ -562,7 +563,7 @@ function explicitlyStopped(run, ports) {
     const root = realpathSync(run.sourceRoot);
     const id = createHash('sha256').update(root).digest('hex').slice(0, 20);
     const folder = ports.autopilotStateRoot ?? join(ports.env.HOME || homedir(), '.local', 'state', 'pdd', 'autopilot');
-    return JSON.parse(readFileSync(join(folder, `${id}.json`), 'utf8'))?.enabled === false;
+    return readAutopilotState(join(folder, `${id}.json`))?.enabled === false;
   } catch { return false; }
 }
 async function continuationOwnership(run, cwd, ports) {
@@ -1353,7 +1354,7 @@ function automaticFacts(run, p) {
   try {
     const root = realpathSync(run.sourceRoot), id = createHash('sha256').update(root).digest('hex').slice(0, 20);
     const folder = p.autopilotStateRoot ?? join(p.env.HOME || homedir(), '.local', 'state', 'pdd', 'autopilot');
-    const saved = JSON.parse(readFileSync(join(folder, `${id}.json`), 'utf8'));
+    const saved = readAutopilotState(join(folder, `${id}.json`));
     if (mode !== 'off' && ['auto', 'observe'].includes(saved?.startAction?.mode)) mode = saved.startAction.mode;
     activatedAt = Date.parse(saved?.activatedAt);
   } catch { /* No saved Autopilot state: the run's own start date stands in. */ }
@@ -2568,7 +2569,7 @@ function armCurrentAutomaticChat(run, p) {
   try {
     const id = createHash('sha256').update(realpathSync(run.sourceRoot)).digest('hex').slice(0, 20);
     const folder = p.autopilotStateRoot ?? join(p.env.HOME || homedir(), '.local', 'state', 'pdd', 'autopilot');
-    const state = JSON.parse(readFileSync(join(folder, `${id}.json`), 'utf8'));
+    const state = readAutopilotState(join(folder, `${id}.json`));
     if (state.enabled) coordinatorPaneId = state.paneId;
   } catch {}
   if (!coordinatorPaneId && /[\\/]sessions[\\/]pdd-autopilot[\\/]/.test(String(p.env.HERDR_SOCKET_PATH ?? ''))) coordinatorPaneId = p.env.HERDR_PANE_ID;

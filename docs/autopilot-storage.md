@@ -23,7 +23,10 @@ The current GitHub call ledger uses the events journal. Cost producers can use
 the costs journal; the store does not infer model use or spending.
 
 The launcher, native dependency commands, worker completion and alert machine
-identity all read the same control records. Dependency snapshots and ETags use
+identity all read the same control records. Worker registration, stop checks,
+operator handoffs and native-log feedback also read current control through
+this interface. A retained JSON file cannot override imported control.
+Dependency snapshots and ETags use
 cache records. Kept dependency completions use queue records. The machine run
 index uses run records and retains its existing 200-entry bound. Full workflow
 status and metrics evidence stay in the Git common state directory. Alert

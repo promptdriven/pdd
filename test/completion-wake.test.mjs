@@ -1,3 +1,4 @@
+import { readAutopilotState, saveAutopilotState } from '../src/autopilot-store.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
@@ -37,14 +38,14 @@ test('default launcher reads current state and reconciles completion under its e
   let calls=[]; const ports={stateRoot,allocationCheck:async()=>({state:'ready',message:''}),run:async(cmd)=>cmd==='git'?{code:0,stdout:cwd+'\n'}:{code:0,stdout:''},queryIssues:async()=>({status:304}),reconcileDependencyIntake:async input=>{calls.push(input);return {queued:[],eligible:[],skipped:[],pending:false};}};
   const {requestAutopilotCompletion}=await import('../src/autopilot-launcher.mjs');
   assert.deepEqual(await requestAutopilotCompletion({cwd,env:{HOME:home}},ports),{state:'inactive'});
-  writeFileSync(file,JSON.stringify({enabled:true,cwd,repo:'example/project',stateFile:file,coordinatorId:'c',machine:'m',agent:{id:'codex',kind:'codex',command:'codex'},recipeDelivered:true,environment:{HOME:home}}));
+  saveAutopilotState(file,{enabled:true,cwd,repo:'example/project',stateFile:file,coordinatorId:'c',machine:'m',agent:{id:'codex',kind:'codex',command:'codex'},recipeDelivered:true,environment:{HOME:home}});
   const stdout=capture(), stderr=capture();
   assert.equal(await runPdd(['dependencies','complete','--input','-'], {cwd,env:{HOME:home},stdin:'{}',stdout,stderr,dependencyIntake:{runDependencyIntake:async()=>({exitCode:0,message:'accepted\n'})},autopilotLauncherPorts:ports}),0);
   assert.equal(stdout.text,'accepted\n'); assert.equal(stderr.text,'');
   assert.equal(calls.length,1); assert.equal(calls[0].trigger,'completion'); assert.equal(calls[0].mode,'auto');
   const activation='2026-01-01T00:00:00Z', coordinator={version:'pdd.autopilot-coordinator.v1',repository:'example/project',coordinatorId:'c',machine:'m',activation};
-  const saved=JSON.parse(readFileSync(file,'utf8'));
-  writeFileSync(file,JSON.stringify({...saved,activatedAt:activation,paneId:'p',workspaceId:'w',ownerLaunch:{paneId:'p',startedAt:1,coordinator,profile:{agent:{id:'codex',kind:'codex'},home,definitionHome:home,configHome:null},fingerprint:autopilotLaunchFingerprint({cwd,agent:{kind:"codex"}})}}));
+  const saved=readAutopilotState(file);
+  saveAutopilotState(file,{...saved,activatedAt:activation,paneId:'p',workspaceId:'w',ownerLaunch:{paneId:'p',startedAt:1,coordinator,profile:{agent:{id:'codex',kind:'codex'},home,definitionHome:home,configHome:null},fingerprint:autopilotLaunchFingerprint({cwd,agent:{kind:"codex"}})}});
   let idle=false, resume, sent=[];
   const row={number:7,state:'open',title:'Issue',body:'Work',user:{login:'example'},created_at:activation,updated_at:activation,comments:0,labels:[],html_url:'https://github.com/example/project/issues/7'};
   const activePorts={...ports,run:async cmd=>cmd==='git'?{code:0,stdout:cwd+'\n'}:{code:0,stdout:JSON.stringify({nameWithOwner:'example/project',url:'https://github.com/example/project'})},now:()=>Date.parse('2026-01-02T00:00:00Z'),warn:()=>{},queryIssues:async()=>({status:200,issues:[row]}),reconcileDependencyIntake:async()=>({queued:[],eligible:[row.html_url],skipped:[],pending:false}),wait:async()=>{idle=true;},armCoordinatorIdle:(_identity,options)=>{resume=options.resume;},herdr:async args=>{
@@ -61,16 +62,16 @@ test('default launcher reads current state and reconciles completion under its e
   assert.equal(sent.length,1); assert.match(sent[0], /"number":7,/);
   assert.deepEqual(await requestAutopilotCompletion({cwd,env:{HOME:home}},activePorts),{state:'reconciled'});
   assert.equal(sent.length,2); assert.match(sent[1], /\"number\":7,/);
-  writeFileSync(file,JSON.stringify(saved));
+  saveAutopilotState(file,saved);
   writeFileSync(file+'.lock',String(process.pid));
   assert.deepEqual(await requestAutopilotCompletion({cwd,env:{HOME:home}},ports),{state:'busy'}); assert.equal(calls.length,1);
   rmSync(file+'.lock');
-  const state=JSON.parse((await import('node:fs')).readFileSync(file,'utf8'));
-  writeFileSync(file,JSON.stringify({...state,retryAt:Date.now()+60000}));
+  const state=readAutopilotState(file);
+  saveAutopilotState(file,{...state,retryAt:Date.now()+60000});
   assert.deepEqual(await requestAutopilotCompletion({cwd,env:{HOME:home}},ports),{state:'unknown'}); assert.equal(calls.length,1);
-  writeFileSync(file,JSON.stringify({...state,enabled:false}));
+  saveAutopilotState(file,{...state,enabled:false});
   assert.deepEqual(await requestAutopilotCompletion({cwd,env:{HOME:home}},ports),{state:'inactive'});
-  writeFileSync(file,JSON.stringify(state));
+  saveAutopilotState(file,state);
   writeFileSync(join(cwd,'pdd.json'),JSON.stringify({autopilot:{mode:'off',trust:[]}}));
   assert.deepEqual(await requestAutopilotCompletion({cwd,env:{HOME:home}},ports),{state:'inactive'}); assert.equal(calls.length,1);
 });
