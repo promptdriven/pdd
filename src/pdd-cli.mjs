@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 2f3b140027bd4da31f5f8280833c3f54d8162a6b7c15049ef6a3e6e76e2a0917).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 47ebc40f6416344e74fcad526d458c6ceb7214757508a508e209c1ccf7c4b0e5).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -298,6 +298,28 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         }
       } catch (error) { line(stderr, `pdd setup: ${error.message}`); code = 1; }
       try {
+        if(context?.toplevel) {
+          const {missingInterfaces,runInterfaceDraft}=await import('./interface-draft.mjs');
+          const missing=missingInterfaces(context.toplevel);
+          if(missing.length) {
+            line(stdout,`${missing.length} prompts have no Runtime interface. Run pdd interface draft --all.`);
+            if(confirm || stdin.isTTY && stdout.isTTY) {
+              const question='Draft missing Runtime interfaces now? [y/N] ';
+              let answer;
+              stdout.write(question);
+              if(confirm) answer=await confirm(question);
+              else {
+                const {lineReader}=await import('./prompt-approve.mjs');
+                const reader=lineReader(stdin);
+                try {answer=await reader.ask();} finally {reader.close();}
+              }
+              if(typeof answer==='string' && /^(y|yes)$/i.test(answer.trim()))
+                if(await runInterfaceDraft({cwd:context.toplevel,all:true},{stdout,stderr})) code=1;
+            }
+          }
+        }
+      } catch(error) {line(stderr,`Interface drafts: ${error.message}`);code=1;}
+      try {
         const action = setupAgentMcp ?? (await import('./agent-mcp-setup.mjs')).setupAgentMcp;
         if (await action({ env, packageRoot }, { stdin, stdout, stderr, confirm })) code = 1;
       } catch (error) { line(stderr, `pdd setup: MCP registration failed.${reason(error)}`); code = 1; }
@@ -337,9 +359,13 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       const { runProjectFiles } = await import('./project-files.mjs');
       return runProjectFiles({ cwd, json: !!plan.options['--json'] }, { stdout, stderr });
     }
+    case 'interface-draft': {
+      const {runInterfaceDraft}=await import('./interface-draft.mjs');
+      return runInterfaceDraft({cwd,words:[...plan.operands],all:!!plan.options['--all'],json:!!plan.options['--json']},{stdout,stderr});
+    }
     case 'prompt-approve': {
       const { runApprove } = await import('./prompt-approve.mjs');
-      return runApprove({ words: [...plan.operands], cwd, said: plan.options['--said'] }, { stdout, stderr, stdin, env });
+      return runApprove({ words: [...plan.operands], cwd, said: plan.options['--said'],automatic:!!plan.options['--automatic'],tests:plan.options['--tests'] }, { stdout, stderr, stdin, env });
     }
     case 'completion': stdout.write(renderCompletion(plan.operands[0]));return 0;
     case 'workflow-list':

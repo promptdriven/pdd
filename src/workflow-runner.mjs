@@ -9,7 +9,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 2f90854d6a42741e7d0501ebadac08c9873f5dfa42150788e5d846a0e93eee10).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 977edfd0fcaf7fdc3cadacedb995553d4f57d3c8c7b28b2dc99957b993da1c3b).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -996,7 +996,11 @@ export function matchesSource(record, root, fingerprint, capture = captureSource
   if (!source?.sha256) return false;
   if (source.kind === 'git-content-v1') return fingerprint !== null && fingerprint === source.sha256;
   if (source.kind === 'runtime-capture-v1') {
-    try { return capture(root, { tests: source.tests, appMap: null }).sha256 === source.sha256; } catch { return false; }
+    const selection = {tests:source.tests,appMap:null,...(Object.hasOwn(source,'excludeFixtureProjects') ? {excludeFixtureProjects:source.excludeFixtureProjects} : {})};
+    try {
+      if (capture(root, selection).sha256 !== source.sha256) return false;
+      return !source.nativeSource || !!source.nativeSource.sha256 && capture(root,{...selection,tests:source.nativeSource.tests}).sha256 === source.nativeSource.sha256;
+    } catch { return false; }
   }
   return false;
 }
@@ -1156,7 +1160,7 @@ function ownStoryRecords(run) {
     if (result?.kind === 'pdd test' && result.sourceSha256 && Array.isArray(result.tests) && !batches.has(result.batch)) batches.set(result.batch, result);
   return [...batches.values()].map(result => ({ at: result.at, summary: (result.stories?.length ? result.stories : [result.summary]).join('\n'),
     ...(result.association?{association:result.association,receipt:{repo:result.producerRoot}}:{}),
-    source: { kind: 'runtime-capture-v1', sha256: result.sourceSha256, tests: result.tests } }));
+    source: { kind: 'runtime-capture-v1', sha256: result.sourceSha256, tests: result.sourceTests ?? result.tests, ...(Object.hasOwn(result,'excludeFixtureProjects') ? {excludeFixtureProjects:result.excludeFixtureProjects} : {}), ...(result.nativeSource ? {nativeSource:result.nativeSource} : {}) } }));
 }
 // null when the run has no check claim at all; { none: true } when it has a check or typed lines but no pdd result.
 export function ownStoryCount(run, ports = {}) {
@@ -3946,6 +3950,18 @@ function detail(run, chat = null, facts = {}) {
 
 // One list line per run, grouped by what it needs: the person, the agent, a PR review, nothing.
 const GROUPS = ['waiting', 'working', 'pr-open', 'done', 'cancelled'];
+function savedRuntimeEvidence(run, results = []) {
+  const latest = [...(run.pddHistory ?? []), ...Object.values(run.done ?? {}).flatMap(record => record?.pddResults ?? []), ...results]
+    .filter(result => ['pdd test','pdd lint'].includes(result?.kind) && result.coverage?.runtime)
+    .sort((a,b) => (b.at ?? 0) - (a.at ?? 0))[0];
+  return latest ? {runtimeCoverage:latest.coverage.runtime,nativeOnly:latest.nativeOnly ?? []} : {};
+}
+function runtimeStatusLines(evidence) {
+  const value = evidence.runtimeCoverage;
+  return value ? [`Runtime coverage: ${value.checkable} of ${value.total} prompts checkable, ${value.native_only} native-only`,
+    ...(evidence.nativeOnly ?? []).flatMap(row => (row.prompts ?? []).map(prompt => `${row.test} ${row.state}: ${prompt.path}: ${oneLine(prompt.reason)}`))] : [];
+}
+
 function summary(run, timeZone, chat = null, { drafts = [], nothing = false, health = null, normal = false, suite = null, interpreter = null, now = null, namingError = null } = {}) {
   const area = run.areas[run.area], ask = askArea(run), running = run.state === 'running';
   const cardRun = normal && Boolean(run.storyApproval);
@@ -3983,7 +3999,7 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false, hea
   const ref = `${run.repo}#${run.number}`;
   const when = Number.isFinite(run.updatedAt) ? new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', ...(timeZone ? { timeZone } : {}) }).format(new Date(run.updatedAt)) : 'unknown time';
   const prs = (run.pr ?? []).map(pr => ({ number: pr.number, url: pr.url, state: pr.state ?? 'open' })), stories = ownStoryCount(run);
-  return { ...(suite ? { suite } : {}), ref, repo: run.repo, number: run.number, workflow: run.workflow, area: area?.name ?? null, group, words, prs, stories, waitingForStory: normal && atStoryGate(run),
+  return { ...savedRuntimeEvidence(run), ...(suite ? { suite } : {}), ref, repo: run.repo, number: run.number, workflow: run.workflow, area: area?.name ?? null, group, words, prs, stories, waitingForStory: normal && atStoryGate(run),
     launchProfile: launchProfile(run), chat: lastChat(run, area?.name) ? {herdrAgentName: lastChat(run, area?.name).herdrAgentName ?? null, paneId: lastChat(run, area?.name).paneId, ...(namingError ? {namingError} : {})} : null,
     ...(cannotWork ? { chatProblem: { kind: cannotWork.kind, agent: cannotWork.agent, until: cannotWork.until !== null ? new Date(cannotWork.until).toISOString() : null, message: cannotWork.message } } : {}),
     ...((run.evidence??[]).some(e=>e.association?.stage==='pr1')?{pr1Stories:ownStoryCount(run,{stage:'pr1'})}:{}),
@@ -4030,7 +4046,7 @@ async function listStatus(runs, { json, cancelled, scope, snapshotOnly=false }, 
   if (json) return done(JSON.stringify({ herdr, runs: shown.map(({ line, ...item }) => item) }, null, 2));
   if (!shown.length) return done([`No pdd runs ${scope}.${hidden ? ` ${hidden} cancelled run${hidden > 1 ? 's' : ''} hidden; add --cancelled to see ${hidden > 1 ? 'them' : 'it'}.` : ''}`, 'Start one with: pdd workflow run NAME ISSUE'].join('\n'));
   const cards = shown.filter(item => item.waitingForStory).map(item => item.ref);
-  return done([...(herdr ? [`Herdr session pdd: ${herdr.panes} of ${herdr.budget} panes. ${herdr.finishedOpen} eligible finished chats.${herdr.finishedOpen ? ' Run pdd workflow tidy.' : ''} ${p.describePaneOwners(inventory)}`] : []), ...shown.map(item => item.line),
+  return done([...(herdr ? [`Herdr session pdd: ${herdr.panes} of ${herdr.budget} panes. ${herdr.finishedOpen} eligible finished chats.${herdr.finishedOpen ? ' Run pdd workflow tidy.' : ''} ${p.describePaneOwners(inventory)}`] : []), ...shown.map(item => [item.line,...runtimeStatusLines(item)].join('\n')),
     ...(cards.length ? [`Waiting for Story approval: ${cards.join(', ')}. Show each card: pdd workflow card N.`] : []),
     ...(hidden ? [`${hidden} cancelled run${hidden > 1 ? 's' : ''} hidden; add --cancelled to see ${hidden > 1 ? 'them' : 'it'}.`] : []),
     `Review without resuming: pdd workflow view ${shown[0].ref}`, `Open one: pdd workflow open ${shown[0].ref}`].join('\n'));
@@ -4063,10 +4079,11 @@ async function runStatusCommand({ ref, cwd, all = false, json = false, cancelled
   facts.suite = readSuiteProgress({cwd:run.root, since:run.updatedAt ?? 0, env:p.env}, p);
   facts.now = p.now();
   const snapshot = requestSnapshot(run, p);
-  const nativeResults=ownResults(run,p).filter(result=>result.kind==='native evidence');
+  const currentResults=ownResults(run,p), nativeResults=currentResults.filter(result=>result.kind==='native evidence');
+  const runtimeEvidence=savedRuntimeEvidence(run,currentResults);
   const steps = savedStepResults(run);
-  if (json) { const { line, ...item } = summary(run, p.timeZone, chat, facts); return done(JSON.stringify({ runs: [{ ...item, chats: run.chats ?? [], steps, ...snapshot, ordinaryOwnership, nativeResults }] }, null, 2)); }
-  return done([detail(run, chat, facts), ...steps.flatMap(({ step, area, pddResults }) =>
+  if (json) { const { line, ...item } = summary(run, p.timeZone, chat, facts); return done(JSON.stringify({ runs: [{ ...item, ...runtimeEvidence, chats: run.chats ?? [], steps, ...snapshot, ordinaryOwnership, nativeResults }] }, null, 2)); }
+  return done([detail(run, chat, facts), ...runtimeStatusLines(runtimeEvidence), ...steps.flatMap(({ step, area, pddResults }) =>
     [`Step: ${area ?? 'unknown'} / ${step}`, ...resultLines(pddResults).map(line => `  ${line}`)]),
     ...(nativeResults.length?resultLines(nativeResults):[]), ...ownershipLines(ordinaryOwnership), ...requestLines(snapshot, { ended: ended(run), currentArea: run.areas[run.area]?.name, p })].join('\n'));
 }

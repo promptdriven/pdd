@@ -594,6 +594,8 @@ Changed criterion text and other malformed test rules still refuse the test.
 | `pdd lint [STORY...] [--json] [--timeout MIN]` | Print local SVG layout warnings, then the server checks the format of the prompts, Stories and tests only, with 0 AI calls, and requests complete diagnostics and prints the problems the server reports. Requires network access; use it before a real check |
 | `pdd lint --local [STORY...] [--json]` | Compare linked `.ui.svg` parts and labels with prompt prose locally; warning advice only, 0 AI calls and no network/authentication. Without Story names, inspect all Git-visible prompts, even with no PDD tests |
 | `pdd test --screen URL --drawing PATH [--json]` | Compare the real page with its `.ui.svg` layout spec in installed headless Chrome/Chromium at the SVG viewport. No AI or interpreter call; missing/hidden parts, order or region differences fail |
+| `pdd interface draft [PROMPT...] [--all] [--json]` | Draft missing Runtime blocks and lint locally, without AI or network calls. Uncertain schemas stay draft gaps. |
+| `pdd approve PROMPT --automatic --tests COMMAND` | Approve a complete draft of unchanged committed behavior after existing native tests and a complete current prompt check. Strict mode requires a person. |
 | `pdd approve PROMPT [--said WORDS]` | Approve one prompt with your chat words, or terminal y/N without --said; strict mode requires a person terminal. |
 | `pdd simulate [STORY] [--max-calls N] [--tab call\|screen\|terminal\|world] [--app-map PATH] [--new] [--no-open] [--no-wait] [--agent NAME]` | Open the Story in the PDD Simulator: make a Simulator link and open it in your browser. It ends in 24 hours. Short form: `pdd sim`. `--agent NAME` chooses a configured display name (quote spaces), or codex, claude or gemini. With terminal stdout or explicit `--agent`, it connects your agent and waits. Without either, it reads saved cases once and returns. `--no-wait` skips the connection. In a terminal, it adds each case saved in the Simulator to the Story's test file, and asks y/n when you click Approve on the page |
 | `pdd simulate --stop [STORY]` | Stop the open Simulator link of a Story |
@@ -617,7 +619,7 @@ Reuse includes reached call targets, exact authored bytes, interpreter origin, c
 - A GitHub login that is not invited gets one line: `Your GitHub login NAME is not on the PDD interpreter invite list yet. Ask the PDD team to add you.` A GitHub account without PDD Cloud access gets the server's sign-up line (sign up at https://promptdriven.ai/login). When PDD Cloud cannot check the account, pdd says at once `PDD Cloud could not confirm your access. Try again in a minute.` A pdd that is too old gets `Please update pdd: …`. All of these exit with code 5.
 - The interpreter address is set in one place in pdd. You do not need to set it.
 
-Linked `.ui.svg` drawings specify the screen's parts, words, spatial order, ids and named state. Local lint reports unmatched controls, labels and unspecified layout regions; a generic data-field mention does not describe a score box or status bar. Its warnings do not change exit 0 and do not certify semantic or visual agreement. `--local` belongs to `pdd lint`; it mixes only with Story names and `--json`.
+Linked `.ui.svg` drawings specify the screen's parts, words, spatial order, ids and named state. Local lint reports unmatched controls, labels and unspecified layout regions; a generic data-field mention does not describe a score box or status bar. SVG warnings do not change the exit code. Runtime interface findings exit 4 and name the draft command. A native-only declaration needs a reason. These local checks do not certify semantic or visual agreement. `--local` belongs to `pdd lint`; it mixes only with Story names and `--json`.
 
 An explicitly selected Story with a `Native validation` owner link is assessed from its saved native evidence by `pdd lint STORY`, including `pdd lint --local STORY`. This reads no hosted service and creates no association. Missing native proof exits 1; complete current whole-Story proof exits 0. It is separate from the SVG-only advisory for Runtime Stories.
 
@@ -1041,3 +1043,37 @@ Git common directory. Existing dependencies, claims, trust and merge rules apply
 `pdd workflow approve [ISSUE] [--said WORDS] [--draft]` records the ready approval gate. A normal Story-card choice can also use `--through prompt-pr|code`.
 
 Automatic runs use `autopilot.base` in `pdd.json` when set; otherwise they use the repository default branch. Start and status show the selection. Each explicit start refreshes the cached default branch from one repository read, including after stop. A changed selection reaches the coordinator even when issues are unchanged. Ordinary ticks and status use the cached value. Each run saves its base at start and keeps it for its area briefs and PRs. Repository documents do not select the automatic base. A manual workflow still accepts `--base`.
+
+## Runtime interface kinds and coverage
+
+A block declares `kind: full`, `partial` or `native-only`. An absent kind means full.
+Native-only requires a reason that names an effect the bound ports cannot fake
+(RUNBOOK §21). A checker reviews the reason. Approval records it. Checks show
+`not run: <reason>`, with no passing result. Other selected tests can run.
+
+Test output, workflow status and saved PR evidence include `Runtime coverage: N of M prompts checkable, K native-only`. Native-only rows retain their paths and reasons, including all-local selections. Invalid native-only scenarios retain refusal details as `not run (broken-test)` and are never uploaded.
+
+Saved reads preserve native-only outcomes and reasons while other selected rows
+wait for lint or complete it. Local lint also saves coverage and omission evidence
+when another selected row is refused before upload. These local results can be
+read without authentication. Temporary lint failures retain local paths, reasons,
+refusals and coverage in text and JSON, and return exit 5. Named lint targets
+include only executable scenarios present in the uploaded archive.
+
+M includes missing, stale and invalid blocks. Checkable means a valid current full
+or partial declaration; it does not mean that all module behavior has passed.
+
+`pdd interface draft --all` selects workspace prompts and excludes nested fixture
+projects. Existing blocks stay unchanged. Each result includes local lint findings.
+A clean local lint is not a server lint or a prompt check. Setup offers this command
+when it finds missing blocks. It never approves them.
+
+The automatic approval route requires a complete draft from this command,
+unchanged committed prose, code and tests, passing existing native tests, and full
+prompt-check results on current source. It records `automatic-check-pass` with the
+command, results and source hashes. New behavior requires a person.
+
+Automatic native-test commands use `node --test TEST...`, `npm test` or
+`npm run test:NAME`. Node files must be committed test files. The command must
+finish with a TAP report, at least one test, all tests passed, and no failures.
+Build scripts and commands without test results do not qualify.

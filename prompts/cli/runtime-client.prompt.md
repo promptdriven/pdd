@@ -861,7 +861,41 @@ keep the existing zero-new-request-ID promise. Ledger/queue failures stop new se
 with a local-state-unavailable error; recovery advice remains read-only. Retain
 existing per-profile cap defaults and Simulator setup policy.
 
+## Missing and native-only interfaces
+
+Use the preflight owner's missing-block, kind, native-reason and draft-gap findings in local lint, even without Stories. Preserve server ownership of other schema/hash diagnostics in explicit lint, and retain the existing local limits gate, its hints and selected rows. Keep SVG advice separate. Server lint reports these local findings before authentication or upload. Checks and lint omit native-only scenarios from uploads even when criteria, checks or reached declarations are invalid. Preserve local refusals and native-only paths/reasons; internal recovery keeps invalid rows refused and valid rows not_run, including called prompts. Public output uses the outcome owner state and reason. Mixed selections still run the other scenarios. Save the exact source selection as source_selection {tests, exclude_fixture_projects}, and separately save native_source {tests, sha256} for omitted native-only scenarios. Neither the native capture nor its scenarios enter uploads. Preserve native_only [{path, reason}] in batch rows. Saved reads retain both source identities. A selection with only native-only scenarios still saves local check/lint evidence, coverage, refusals and reasons without authentication or Runtime requests; mark that batch local_only true and every row unsent, and allow its saved read without authentication or Runtime requests. This also applies when other selected rows are refused locally and no row is ready. An unavailable native capture keeps sha256 null and freshness unknown. Native-only is never a pass and does not silently turn a partial result into success. Each test summary shows repository Runtime coverage: N of M prompts checkable, K native-only. Count valid current full/partial blocks as checkable, valid current native-only declarations separately, and include missing/invalid/stale prompts in M. Keep this separate from module binding coverage.
+
+Saved lint refresh and check continuation apply only to rows prepared for Runtime
+lint. Exclude local rows and rows with native_only declarations from every
+pending, unknown and completed lint mutation and continuation. Preserve their
+state, refusals, native paths and reasons across saved reads. When local lint
+stops a mixed selection before upload, save its native-only omissions and local
+refusals through the shared local-result path. Text, JSON, saved reads and
+workflow evidence retain coverage and reasons. Preserve the public lint state/reason projection and
+exit 4 for a local lint refusal beside a native-only omission, including its
+saved read.
+
+## Native selection and no-verdict lint
+
+Construct every negotiated named lint request from the exact executable source
+selection used for that upload. Every named test must be present in the archive.
+Exclude local refusals and native-only omissions. Preserve this selection in
+saved batches and reconstruct it from saved eligible rows for continuation and
+recovery when older records lack selection metadata. Never replace a native-only
+row with a server verdict or continuation state.
+
+Render immediate lint no-verdict responses with the shared lint result formatter.
+Retain native-only paths, reasons, local refusals and Runtime coverage in text and
+JSON, alongside the server error. A temporary service refusal sends no checks,
+returns exit 5, and leaves locally omitted rows not run. Unknown service results
+do not hide local evidence or turn it into a pass. All-local lint with a refused
+row returns exit 4; a valid native omission alone returns exit 5. Public results
+use the outcome owner vocabulary, including `not run` and `broken-test` for local
+refusals. Saved recovery states remain separate from public states.
+
 ## Dependencies
+
+- [Local interface inventory](interface-draft.prompt.md#inventory-results): required generation and verification context for `interfaceFindings` and Runtime coverage. This selection owns the local inventory APIs; automatic approval is a caller of this module and supplies no admission policy here.
 
 - Load [runtime outcome](runtime-outcome.prompt.md) for the public result projection, reason codes and pass boundary used by this module.
 

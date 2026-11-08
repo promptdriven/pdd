@@ -60,5 +60,5 @@ test('bindings: an unreferenced prompt cannot claim a selected module is bound',
 test('bindings: absent inventory is unavailable, not a claim of complete coverage', async t => {
   const run = await check(t, project(t), { '--lint': true, '--json': true });
   assert.equal(run.code, 0, run.err);
-  assert.deepEqual(JSON.parse(run.out).coverage, { available: false, bound: null, total: null, modules: [] });
+  assert.deepEqual(JSON.parse(run.out).coverage, { available: false, bound: null, total: null, modules: [], runtime:{checkable:1,total:1,native_only:0} });
 });
