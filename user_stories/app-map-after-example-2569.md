@@ -6,7 +6,7 @@ As a person adding a second operation after a tap, I can find a complete valid a
 
 - The app-map guide shows a complete example with an `after` entry whose `handler` contains `prompt_path` and `operation`, with `input` and `bind`. It explains that the bound result goes into app state.
 - An `invalid-after-step` refusal gives field-level guidance for the nested `handler` shape while retaining a more specific server reason, server fix and reported location.
-- The guide explains the scope of ordinary Story lint and identifies the supported route for validating a selected app map without presenting a file-selection preview as validation.
+- The guide explains the scope of ordinary Story lint and explains that a new simulation with a selected app map reaches full-engine admission and execution, with its cost, and that the file-selection preview is not validation. It does not invent a dedicated validation command.
 - Existing app-map behavior, other refusal explanations and server-owned validation do not change.
 
 ## Rules to check
