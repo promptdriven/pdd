@@ -115,3 +115,13 @@ test('2897 current main: a base merge conflict retains prompt progress and both 
   assert.equal(f.git(old.root,'rev-parse',old.branch),code);
   assert.equal(f.record().done.verify,undefined);assert.equal(f.prs.length,2);
 });
+
+test('2897 current main: an explicit Story return keeps its selected area after base integration',async t=>{
+  const f=await prepared(t,{realRemote:true}),old=f.record(),other=peer(f);
+  const head=pushPeer(f,other,'main','upstream.md','Base context.\n');
+  const out=await reopen(f,'story');assert.equal(out.exitCode,0,out.message);
+  assert.equal(f.record().area,0);assert.equal(f.record().branch,old.pr[0].branch);
+  assert.equal(f.git(old.root,'merge-base','HEAD',head),head);
+  assert.equal(f.record().done['prompt-story'],undefined);
+  await f.done('prompt-story');assert.equal(f.record().gate.kind,'approve');
+});

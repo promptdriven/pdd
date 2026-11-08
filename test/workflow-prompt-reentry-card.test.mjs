@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {mkdirSync,readFileSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
-import {openRun} from '../src/workflow-runner.mjs';
+import {openRun,approveRun} from '../src/workflow-runner.mjs';
 import {fillHashes} from '../src/runtime-preflight.mjs';
 import {writeRun} from '../src/workflow-runs.mjs';
 import {preparedCard,PROMPT,TEST,STORY} from './helpers/workflow-prompt-reentry-card-fixture.mjs';
@@ -116,4 +116,14 @@ test('2897 automatic: a changed expected contract still needs its Story gate',as
   writeFileSync(path,JSON.stringify(doc));const count=f.pushes.length;
   await f.done('check');assert.equal(f.record().area,0);assert.equal(f.pushes.length,count);
   await f.done('prompt-story');assert.equal(f.record().gate.kind,'approve');
+});
+
+test('2897 automatic: a later Story decision replaces old coverage before checked code continuation',async t=>{
+  const f=await preparedCard(t),old=f.record();delegate(f);await open(f);
+  const path=join(old.root,STORY);writeFileSync(path,readFileSync(path,'utf8')+'\n## What must not change\n\nThe order stays visible.\n');
+  await f.done('check');assert.equal(f.record().area,0);await f.done('prompt-story');
+  f.tick();const approval=await approveRun({ref:'17',cwd:f.source,said:'The revised Story is right.'},f.agentPorts());
+  assert.equal(approval.exitCode,0,approval.message);assert.equal(f.record().area,1);
+  await f.check();const out=await f.done('check');assert.equal(f.record().area,2,out.message);
+  assert.equal(f.record().pr[1].url,old.pr[1].url);
 });

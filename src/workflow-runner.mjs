@@ -371,7 +371,9 @@ function normalRun(run, p) {
 // A return can reuse the code scope only under the same current operator
 // delegation. Configuration alone is not a new approval.
 function storyCoverage(run) {
-  return run.storyApproval ?? (Object.hasOwn(run,'automaticOrigin') ? [...run.decisions].reverse().find(decision=>decision.storyCoverage)?.storyCoverage : null);
+  return Object.hasOwn(run,'automaticOrigin')
+    ? [...run.decisions].reverse().find(decision=>decision.storyCoverage)?.storyCoverage ?? run.storyApproval
+    : run.storyApproval;
 }
 function automaticPromptReturn(run,p) {
   if (!run.promptReturn || !storyCoverage(run)?.fingerprint || !run.promptReturn.codeApprovalId) return false;
@@ -383,6 +385,7 @@ function automaticPromptReturn(run,p) {
 const storyGateIndex = run => run.areas.some(area => area.before === 'approve') ? run.areas.findIndex(area => area.gate === 'approve') : -1;
 const atStoryGate = run => Boolean(run.gate) && !ended(run) && (run.gate.kind === 'approve' && run.area >= 0 && run.area === storyGateIndex(run)
   || run.gate.kind === 'approve-pr' && Boolean(run.gate.storyChanges?.length));
+const storyApprovalGate = (run,area) => area?.gate==='approve' || Boolean(run.gate?.storyChanges?.length);
 // Lines changed in each changed prompt against the run base; an untracked prompt counts all its lines as added.
 async function promptLineCounts(run, p, changed) {
   const counts = new Map();
@@ -2126,11 +2129,12 @@ async function changedStoryGate(run, area, step, p, lines, snapshot = run.gate?.
   const current = storyFingerprint({ root: run.root, changed: await changedFiles(run, p) });
   const changes = [...fingerprintChanges(approval.fingerprint, current), ...promptPathChanges(approval.prompts, paths)];
   if (changes.length) {
+    const contract=await storyContract(run,p),paths=await storyContractPaths(run,p);
     const gateId = run.gate.id;
     commitRun(run, p, latest => { if (latest.gate?.id === gateId) {
       if (!latest.gate.storyChanges?.length || fingerprintChanges(latest.gate.storySnapshot, current).length) latest.gate.id = p.randomUUID();
       latest.state = 'waiting'; latest.doneAt = null; latest.gate.kind = 'approve-pr';
-      latest.gate.storyChanges = changes; latest.gate.storySnapshot = current; latest.gate.promptSnapshot = snapshot;
+      latest.gate.storyChanges = changes; latest.gate.storySnapshot = current; latest.gate.promptSnapshot = snapshot; latest.gate.storyContract=contract; latest.gate.storyPaths=paths;
     } });
     return done([...lines, `pdd recorded ${step}. The Story, an expected value or the prompt list changed after the person approved the Story, so the Story gate is open again. pdd does not open ${prLabel(run, area)} until the person approves the change.`,
       await cardText(run, p, { changes, results: pddTestLines(run, p) }), cardGate, approvalGuide(run, p.pdd),
@@ -2867,7 +2871,7 @@ async function showGate(run, p) {
   const observedGate=structuredClone(run.gate);
   try {
     const snapshot=await gatePromptSnapshot(run,p);
-    const contract=run.areas[run.area]?.gate==='approve' ? await storyContract(run,p) : null;
+    const contract=storyApprovalGate(run,run.areas[run.area]) ? await storyContract(run,p) : null;
     const storyPaths=contract!==null ? await storyContractPaths(run,p) : null;
     const storySnapshot=contract!==null ? storyFingerprint({root:run.root,changed:await changedFiles(run,p)}) : null;
     let applied=false;
@@ -2924,7 +2928,7 @@ async function saveGateApproval(run, area, record, edits, p, snapshot = run.gate
   if (run.gate && !run.gate.id) { const id=p.randomUUID(); commitRun(run,p,latest=>{if(latest.gate)latest.gate.id??=id;}); }
   const gateId = run.gate?.id ?? p.randomUUID(), gateAt = run.gate?.at;
   const existing = [...run.decisions].reverse().find(decision => decision.gateId === gateId && decision.evidence);
-  if (existing && !edits.length && (!record.basis?.headSha || existing.evidence?.basis?.headSha === record.basis.headSha) && (area.gate!=='approve' || existing.storyContract===run.gate?.storyContract)) { run.approvalRecord = { ...(run.approvalRecord?.gateId === gateId ? run.approvalRecord : {}), gateId, kind: existing.via, area: area.name, at: existing.at, evidence: existing.evidence }; return deferDecision ? {decision:existing,approvalRecord:run.approvalRecord,alreadySaved:true} : existing; }
+  if (existing && !edits.length && (!record.basis?.headSha || existing.evidence?.basis?.headSha === record.basis.headSha) && (!storyApprovalGate(run,area) || existing.storyContract===run.gate?.storyContract)) { run.approvalRecord = { ...(run.approvalRecord?.gateId === gateId ? run.approvalRecord : {}), gateId, kind: existing.via, area: area.name, at: existing.at, evidence: existing.evidence }; return deferDecision ? {decision:existing,approvalRecord:run.approvalRecord,alreadySaved:true} : existing; }
   const at = p.now(), evidence = { id: p.randomUUID(), route: record.via, actor: approvalActor(p.env), at, words: record.text ?? null,
     prompts: (snapshot ?? edits).map(({path,proseSha256}) => ({path,proseSha256})), ...(record.basis ? { basis: record.basis } : {}) };
   p.inspectProgress?.();
@@ -2937,11 +2941,12 @@ async function saveGateApproval(run, area, record, edits, p, snapshot = run.gate
     for (const edit of changed.reverse()) { try { fs.writeFileSync(join(run.root, edit.path), edit.text); } catch { left.push(edit.path); } }
     throw Error(`${error.message}${left.length ? ` Rollback failed for: ${left.join(', ')}.` : ''}`);
   }
+  if (storyApprovalGate(run,area) && await storyContract(run,p)!==run.gate?.storyContract) throw Error('The Story contract changed before its decision. Show the Story gate again.');
   if (area.then==='ask-code' && run.gate?.kind==='ask-code') {
     const changed=await codeEntryFailure(run,p);
     if (changed) throw Error(changed);
   }
-  const decision = { gateId, stage: area.name, decision: 'approve', via: record.via, at, gateAt, ...(record.text !== undefined ? {text: record.text} : {}), ...(area.gate==='approve' ? {storyContract:run.gate?.storyContract,storyPaths:run.gate?.storyPaths,storyCoverage:{fingerprint:run.gate?.storySnapshot,prompts:(snapshot??[]).map(row=>row.path),evidenceId:evidence.id}} : {}), evidence };
+  const decision = { gateId, stage: area.name, decision: 'approve', via: record.via, at, gateAt, ...(record.text !== undefined ? {text: record.text} : {}), ...(storyApprovalGate(run,area) ? {storyContract:run.gate?.storyContract,storyPaths:run.gate?.storyPaths,storyCoverage:{fingerprint:run.gate?.storySnapshot,prompts:(snapshot??[]).map(row=>row.path),evidenceId:evidence.id}} : {}), evidence };
   const approvalRecord = { gateId, kind: record.via, area: area.name, at, ...(record.via === 'chat' ? { userMessage: record.text, userMessageAt: record.at, sessionId: record.sessionId } : {}), evidence };
   if (deferDecision) return {decision,approvalRecord};
   await p.validateCodeSource?.();
@@ -4104,8 +4109,7 @@ async function storyContract(run,p,reference) {
   return createHash('sha256').update(JSON.stringify(facts)).digest('hex');
 }
 function approvedStoryContract(run) {
-  const story=run.areas.find(item=>item.gate==='approve');
-  return [...run.decisions].reverse().find(item=>item.stage===story?.name && item.decision==='approve')?.storyContract;
+  return [...run.decisions].reverse().find(item=>item.decision==='approve' && typeof item.storyContract==='string')?.storyContract;
 }
 async function reopenChangedStory(run,p,entryContract,observedContract) {
   if(ended(run) || (!run.promptReturn && !entryContract) || run.areas[run.area]?.then!=='ask-code')return false;
@@ -4121,10 +4125,10 @@ async function reopenChangedStory(run,p,entryContract,observedContract) {
   return true;
 }
 function resetPromptChecks(run,p) {
-  const prompt=run.areas.findIndex(item=>item.then==='ask-code');
+  const prompt=run.areas.findIndex(item=>item.then==='ask-code'),selected=Math.min(run.area,prompt);
   commitRun(run,p,latest=>{
-    for(const area of latest.areas.slice(prompt))for(const step of area.steps)delete latest.done[step];
-    latest.area=prompt;latest.gate=null;latest.question=null;latest.state='running';
+    for(const area of latest.areas.slice(selected))for(const step of area.steps)delete latest.done[step];
+    latest.area=selected;latest.gate=null;latest.question=null;latest.state='running';
   });
 }
 async function integratePromptBase(run,p) {
