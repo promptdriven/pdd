@@ -77,7 +77,7 @@ function portsFor(state, ports) {
 async function repositoryView(state, p) {
   const execFile = async (file, args, options) => p.execute(file, args, { purpose: 'claims', ...options });
   const ports = createDependencyReadPorts({ cwd: state.cwd }, { execFile, env: p.env, autopilotStateRoot: p.stateRoot, now: p.now });
-  const issues = []; let cursor = '';
+  const issues = []; let cursor = `repos/${state.repo}/issues?state=open&labels=pdd%3Aworking&per_page=100`;
   do {
     const page = JSON.parse((await ports.github.page({ repository: state.repo, kind: 'issues', issue: '', cursor, purpose: 'claims', safety: true })).json);
     if (!Array.isArray(page.items)) throw Error('Claims unavailable');
@@ -1249,7 +1249,7 @@ async function runTick(stateFile, ports, completion) {
       && Array.isArray(savedIntake.eligible) && Array.isArray(savedIntake.claims);
     let intake;
     if (deferIntake) {
-      const lease = await reviewerLease({ repository: state.repo, identity: { ...state, login: state.reviewerLogin ?? '' }, acquire: true }, { cwd: state.cwd, now: p.now, execFile: (file, args, options) => p.execute(file, args, { purpose: 'claims', ...options }), admitMutation: action => p.scanAction(action) });
+      const lease = await reviewerLease({ repository: state.repo, identity: { ...state, login: state.reviewerLogin ?? '' }, acquire: true }, { cwd: state.cwd, now: p.now, githubFloor, execFile: (file, args, options) => p.execute(file, args, { purpose: 'claims', ...options }), admitMutation: action => p.scanAction(action) });
       state.reviewer = lease.lease; if (lease.held) state.reviewerLogin = lease.lease.login;
       intake = { eligible: savedIntake.eligible, claims: savedIntake.claims, queued: [], skipped: [] };
       p.warn(`GitHub budget low: Autopilot on this machine used ${budget.used} of ${budget.allowed} calls (${budget.share}%) in the last hour; the dependency re-sync waits until ${new Date(savedIntake.at + LOW_BUDGET_INTAKE_EVERY).toISOString()}.`);
@@ -1719,6 +1719,10 @@ export async function runAutopilotLauncher(input, ports = {}) {
     p = portsFor(state, { ...ports, env: input.env });
     if (command === 'start') { releaseAdmission(); releaseAdmission = null; }
     if (command === 'status') {
+      if (!state.repo) {
+        try { state.repo = githubOriginRepository(await p.checked('git', ['remote', 'get-url', 'origin'])); }
+        catch { /* The repository view reports unavailable below. */ }
+      }
       const timerActive = Boolean(await timer('status', state, p));
       let serverRunning = false;
       try { serverRunning = (await herdr(['status', 'server', '--json'], p)).running === true; } catch { /* Report unavailable below. */ }

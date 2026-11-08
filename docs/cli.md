@@ -225,10 +225,14 @@ resolve races. It needs write access to that branch. It renews after 30 minutes
 and expires after 90 minutes without renewal. A stopped or Off coordinator stops
 renewing. Another machine can then take over. Keep machine clocks synchronized.
 An unreadable or refused lease stops review work until it can be read again.
+Acquisition and renewal stop at the GitHub reserve floor, including when an earlier
+read crosses it. The existing claim heartbeat exception still applies.
 Existing issue claims expire under their own four-hour rule.
 
 `pdd autopilot status` reads live GitHub claims and the lease. It shows each
 machine and coordinator, their held issues, last seen times, and the reviewer.
+This view also works before local Autopilot startup. It resolves the repository
+from the checkout's origin and reads claim details for open `pdd:working` issues.
 A failed read shows that the repository view is unavailable. `status --all` shows
 only this machine's saved coordinators. The tick warns once when several live
 coordinators share one GitHub login. Their API allowance is shared, and the login

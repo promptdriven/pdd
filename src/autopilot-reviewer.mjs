@@ -71,6 +71,13 @@ export async function reviewerLease({ repository, identity, acquire = false }, p
       return { state: held ? 'held' : 'other', held, lease, sha: r.value.sha };
     };
     const clean = ({ sha, ...result }) => result;
+    const mutate = action => {
+      const guarded = () => {
+        if (ports.githubFloor?.blocked('core')) throw Error('Reviewer reserve blocked');
+        return action();
+      };
+      return ports.admitMutation ? ports.admitMutation(guarded) : guarded();
+    };
     const observed = await observe();
     if (!acquire || !validIdentity(identity) || identity.enabled === false || observed.state === 'unknown') return clean(observed);
     if (observed.lease && Date.parse(observed.lease.expiresAt) > now && (!observed.held || now - Date.parse(observed.lease.lastSeen) < RENEW)) return clean(observed);
@@ -82,7 +89,7 @@ export async function reviewerLease({ repository, identity, acquire = false }, p
         const head = await api(`repos/${repository}/git/ref/heads/${encodeURIComponent(repo.value.default_branch)}`, 'GET', null, ports);
         if (head.status !== 200 || !head.value.object?.sha) return unknown();
         const createBranch = () => api(`repos/${repository}/git/refs`, 'POST', { ref: `refs/heads/${BRANCH}`, sha: head.value.object.sha }, ports);
-        const made = await (ports.admitMutation ? ports.admitMutation(createBranch) : createBranch());
+        const made = await mutate(createBranch);
         if (![201, 422, 409].includes(made.status)) return unknown();
       } else if (ref.status !== 200) return unknown();
     }
@@ -91,9 +98,9 @@ export async function reviewerLease({ repository, identity, acquire = false }, p
     const lease = { repository, machine: identity.machine, coordinatorId: identity.coordinatorId, login,
       generation: observed.held ? observed.lease.generation : (ports.uuid ?? randomUUID)(),
       lastSeen: new Date(now).toISOString(), expiresAt: new Date(now + LIFE).toISOString() };
-    const mutate = () => api(endpoint, 'PUT', { branch: BRANCH, message: 'Renew Autopilot reviewer lease',
+    const writeLease = () => api(endpoint, 'PUT', { branch: BRANCH, message: 'Renew Autopilot reviewer lease',
       content: Buffer.from(JSON.stringify(lease)).toString('base64'), ...(observed.sha ? { sha: observed.sha } : {}) }, ports);
-    const written = await (ports.admitMutation ? ports.admitMutation(mutate) : mutate());
+    const written = await mutate(writeLease);
     if (written.status === 409 || written.status === 422) return clean(await observe());
     if (![200, 201].includes(written.status) || typeof written.value?.content?.sha !== 'string') return unknown();
     if (!(Date.parse(lease.expiresAt) > (ports.now ?? Date.now)())) return { state: 'other', held: false, lease };

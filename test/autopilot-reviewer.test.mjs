@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { reviewerLease, repositoryMachines } from '../src/autopilot-reviewer.mjs';
 import { createGithubRepoFake } from './helpers/github-repo-fake.mjs';
+import { githubFloorGuard } from '../src/github-calls.mjs';
 const repository = 'acme/widgets', minute = 60000;
 function fixture() {
   const f = { time: Date.parse('2026-11-07T12:00:00Z') };
@@ -78,4 +79,23 @@ test('fleet identity is machine plus coordinator; expired evidence and duplicate
   assert.deepEqual(view.machines[1].issues, [own.issue]);
   assert.deepEqual(view.sharedLogins, ['acme']);
   assert.equal(repositoryMachines({ lease, claims: [] }, f.time + 90 * minute).reviewer, null);
+});
+
+for (const renew of [false, true]) test(`reserve is rechecked inside mutation admission for ${renew ? 'renewal' : 'branch creation'}`, async () => {
+  const f = fixture();
+  if (renew) { await f.acquire(0); f.time += 30 * minute; }
+  const guard = githubFloorGuard({ now: () => f.time });
+  let admissions = 0;
+  f.ports.githubFloor = guard;
+  f.ports.admitMutation = async action => {
+    admissions++;
+    // Another response arrives while mutation admission waits.
+    guard.observe({ rate: { resource: 'core', remaining: 999, resetAt: f.time + 60 * minute } });
+    return action();
+  };
+  const mark = f.github.mark();
+  const result = await f.acquire(0);
+  assert.equal(admissions, 1);
+  assert.equal(f.github.since(mark).calls.filter(c => c.method !== 'GET').length, 0, 'admission wait cannot bypass reserve');
+  assert.equal(result.state, 'unknown');
 });

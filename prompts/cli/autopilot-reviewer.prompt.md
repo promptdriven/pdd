@@ -32,7 +32,12 @@ lease response; a slow read or write must not return expired authority. A future
 record, unavailable clock, permission failure or unknown read grants no authority.
 
 Acquire or renew with the Contents API, supplying the exact current blob SHA;
-create supplies no SHA. A conflict never grants ownership. Reread the winner once
+create supplies no SHA. Immediately before branch creation or a lease write,
+inside any `admitMutation` admission callback, check the supplied `githubFloor`
+guard for the REST core resource. A blocked guard returns unknown without that
+mutation. This uses the current guard after earlier responses and admission waits;
+the GitHub call ledger owns the reserve threshold and heartbeat exception.
+A conflict never grants ownership. Reread the winner once
 and do not loop. A successful update with a returned content SHA confirms the written lease
 without another read. An uncertain write result grants no authority for that call.
 Each effect checks a current unexpired exact generation; stale requests remain

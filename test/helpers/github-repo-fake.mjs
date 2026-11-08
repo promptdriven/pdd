@@ -100,6 +100,7 @@ export function createGithubRepoFake({ repository = 'acme/widgets', owner = 'acm
     if (route === '/issues' && method === 'GET') {
       let list = live();
       if (params.get('state') !== 'all') list = list.filter(issue => issue.state === 'open');
+      if (params.get('labels')) list = list.filter(issue => params.get('labels').split(',').every(label => issue.labels.includes(label)));
       if (params.get('since')) list = list.filter(issue => issue.updated >= Date.parse(params.get('since')));
       list = params.get('sort') === 'updated' ? list.sort((a, b) => b.updated - a.updated || b.number - a.number) : list.sort((a, b) => b.number - a.number);
       return { status: 200, ...page(endpoint, list.map(row)) };

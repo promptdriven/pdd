@@ -23,10 +23,14 @@ as `reviewer` in coordinator packets; a null or foreign reviewer allows issue wo
 under existing claims, but no sorting, grouping or dependency analysis. Renew the
 lease on ordinary ticks, including ticks that defer intake for a low budget. At
 the reserve floor, preserve claim heartbeats and let the reviewer lease expire;
-no lease write may bypass the floor. Stopped or Off launchers do not renew.
+pass the current reserve guard to the lease on both intake routes. The lease's
+mutation guard applies to acquisition and renewal. Stopped or Off launchers do not renew.
 
 Repository status reads current GitHub claims and the lease and shows all live
 machine/coordinator pairs, their held issues, last seen times and the reviewer.
+Without a saved repository identity, resolve the current checkout's GitHub origin
+for this read, without starting or saving a launcher. Select open `pdd:working`
+issues before reading their claim details; unclaimed issues need no detail read.
 A failed observation shows an unavailable repository view, never an empty fleet.
 `status --all` remains the local machine-only view. From live claims plus the
 lease, warn once per saved launcher when multiple coordinators share a GitHub

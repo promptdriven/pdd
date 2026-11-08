@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
+import { existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { autopilotGithubWorld, analysisFor } from './helpers/autopilot-github-world.mjs';
 import { createGithubRepoFake } from './helpers/github-repo-fake.mjs';
 import { createDependencyReadPorts } from '../src/issue-dependencies-github.mjs';
@@ -35,7 +36,7 @@ async function allowed(w, n, winning) {
   } }, w.commandPorts());
 }
 
-test('four machines share one reviewer, one issue owner and one merge actor; dead owner and reviewer expire', async t => {
+test('four machines share one reviewer and one issue owner; dead owner and reviewer expire', async t => {
   const { machines, github, advance } = await fleet(t);
   const started = await Promise.all(machines.map(w => w.invoke('start')));
   assert.deepEqual(started.map(r => r.exitCode), [0, 0, 0, 0]);
@@ -53,10 +54,6 @@ test('four machines share one reviewer, one issue owner and one merge actor; dea
   let winning = JSON.parse((await claimPorts(machines[0]).owners.read({ repository: repo, issues: [key(1)] })).json).claims[0];
   const decisions = await Promise.all(machines.map(w => allowed(w, 1, winning)));
   assert.equal(decisions.filter(r => r.allowed).length, 1, 'one accepted workflow owner');
-  // The merge skill requires this same current winning ownership. Count its permitted actors,
-  // without pretending this native test executes an AI skill or GitHub's merge service.
-  const mergeActors = machines.filter((_, i) => decisions[i].allowed);
-  assert.equal(mergeActors.length, 1, 'one permitted merge actor for the issue PR');
   for (let i = 0; i < machines.length; i++) await claim(machines[i], i + 2);
   const status = await machines[3].invoke('status');
   assert.equal(status.exitCode, 0);
@@ -94,6 +91,73 @@ test('four machines share one reviewer, one issue owner and one merge actor; dea
   const takeover = await Promise.all(machines.map(w => allowed(w, 1, replacement)));
   assert.equal(takeover.filter(r => r.allowed).length, 1);
   assert.equal(takeover[machines.indexOf(survivors.at(-1))].allowed, true);
+});
+
+// Seed the counted launcher ledger with a real fake response at the reserve boundary.
+async function seedReserve(w, remaining = 1000, calls = 1) {
+  w.github.remaining = remaining + calls;
+  for (let i = 0; i < calls; i++) await w.commandPorts().execFile('gh', ['api', '--include', '--method', 'GET', `repos/${repo}`]);
+}
+const leaseWrites = calls => calls.filter(c => c.method === 'PUT' && c.endpoint.includes('/contents/'));
+const branchWrites = calls => calls.filter(c => c.method === 'POST' && c.endpoint.endsWith('/git/refs'));
+
+for (const deferred of [false, true]) test(`reserve guard stops reviewer renewal after GET crosses floor (${deferred ? 'deferred' : 'ordinary'} intake)`, async t => {
+  const w = await autopilotGithubWorld({ issues: 1 }); t.after(() => w.cleanup());
+  assert.equal((await w.invoke('start')).exitCode, 0);
+  assert.equal((await w.complete(w.requests[0])).result.state, 'complete');
+  w.agent = 'idle'; w.time += 30 * minute;
+  if (deferred) writeFileSync(join(w.cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: [], github: { share: 1 } } }));
+  await seedReserve(w, 1000, deferred ? 51 : 1);
+  const mark = w.github.mark();
+  await w.tick();
+  const calls = w.github.since(mark).calls;
+  assert.ok(calls.some(c => c.method === 'GET' && c.endpoint.includes('/contents/')), 'renewal observes the lease');
+  assert.equal(leaseWrites(calls).length, 0, 'no reviewer PUT below reserve after lease GET');
+  assert.equal(branchWrites(calls).length, 0);
+  if (deferred) assert.ok(w.warnings.some(text => /dependency re-sync/.test(text)), 'deferred route was reached');
+});
+
+for (const [boundary, remaining, existingBranch, expectedBranches] of [
+  ['lease read', 1000, false, 0],
+  ['default head read', 1003, false, 0],
+  ['branch creation', 1004, false, 1],
+  ['login read', 1002, true, 0],
+]) test(`reserve guard stops initial acquisition when ${boundary} crosses floor`, async t => {
+  const w = await autopilotGithubWorld({ issues: 1 }); t.after(() => w.cleanup());
+  if (existingBranch) w.github.branches.set('pdd/autopilot-reviewer', 'base-head');
+  await seedReserve(w, remaining);
+  const mark = w.github.mark();
+  assert.equal((await w.invoke('start')).exitCode, 0);
+  const calls = w.github.since(mark).calls;
+  assert.equal(branchWrites(calls).length, expectedBranches, 'branch creation respects current reserve');
+  assert.equal(leaseWrites(calls).length, 0, 'no initial reviewer PUT below reserve');
+  assert.equal(w.requests.length, 0);
+});
+
+test('repository status discovers live machines before local startup and reads only working issue details', async t => {
+  const { machines: [active, observer], github } = await fleet(t, 2);
+  assert.equal((await active.invoke('start')).exitCode, 0);
+  await claim(active, 2);
+  const mark = github.mark();
+  const result = await observer.invoke('status');
+  assert.equal(result.exitCode, 0);
+  assert.ok(result.message.includes(active.state().machine), 'fresh status finds the live reviewer machine');
+  assert.ok(result.message.includes(active.state().coordinatorId));
+  assert.match(result.message, /#2\b/);
+  const calls = github.since(mark).calls;
+  assert.equal(calls.filter(c => c.method !== 'GET').length, 0);
+  assert.deepEqual(calls.filter(c => /\/issues\/\d+$/.test(c.endpoint)).map(c => c.endpoint), [`repos/${repo}/issues/2`], 'unclaimed issues need no detail reads');
+  assert.deepEqual(existsSync(observer.stateRoot) ? readdirSync(observer.stateRoot).filter(name => /^[0-9a-f]{20}\.json$/.test(name)) : [], [], 'status creates no local launcher state');
+  assert.equal(observer.agentStarted, false);
+  assert.equal(observer.prompts.length, 0);
+});
+
+test('repository status with local state avoids detail reads for unclaimed issues', async t => {
+  const { machines: [active], github } = await fleet(t, 1);
+  assert.equal((await active.invoke('start')).exitCode, 0);
+  const mark = github.mark();
+  assert.equal((await active.invoke('status')).exitCode, 0);
+  assert.equal(github.since(mark).calls.filter(c => /\/issues\/\d+$/.test(c.endpoint)).length, 0, 'unclaimed issues need no detail reads');
 });
 
 test('managed nonreviewer prepare cannot bypass the shared lease and status makes no GitHub write', async t => {
