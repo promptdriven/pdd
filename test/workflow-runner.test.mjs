@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { execFile as callbackExec, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
-import { proseSha256 } from '../src/runtime-preflight.mjs';
+import { captureSource, proseSha256 } from '../src/runtime-preflight.mjs';
+import { renderJson } from '../src/runtime-output.mjs';
 import { startRun, stepDone, approveRun, changeRun, cancelRun, runStatus, openRun, askPerson } from '../src/workflow-runner.mjs';
 
 const exec = promisify(callbackExec);
@@ -293,6 +294,7 @@ for (const name of ['bug', 'feature']) {
   const areas = bundled.map(area => [area.name, area.steps]);
   test(`${name}: the bundled workflow runs story, PR 1 at the code-or-stop gate, then the code area and PR 2`, async t => {
     const f = await fixture(t, { name, agent: 'codex' });
+    writeFileSync(join(f.source, 'pdd.json'), JSON.stringify({ strict_approvals: true }));
     const report = 'https://checks.example.test/r/k3y-123';
     assert.equal((await f.run()).exitCode, 0);
     let run = f.record();
@@ -795,6 +797,15 @@ test('a chat that shows a question dialog is waiting for the person in status, a
   assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /State: the agent works on scope/);
 });
 
+// A Story approved under strict policy has no normal-run card approval. Switching to easy
+// policy then exercises the supported legacy gates, including explicit said approvals.
+async function approveLegacyStory(f) {
+  const policy = join(f.source, 'pdd.json'), previous = existsSync(policy) ? readFileSync(policy) : null;
+  writeFileSync(policy, JSON.stringify({ strict_approvals: true }));
+  try { const out = await approveRun({ ref: '17', cwd: f.source }, f.ports); assert.equal(out.exitCode, 0, out.message); }
+  finally { if (previous) writeFileSync(policy, previous); else rmSync(policy); }
+}
+
 // 0.1.4 #13: the person tries the prompt and approves before PR 1 opens.
 async function featureAtTryGate(t, { prompt = 'Return two.\n', tests = false, tried = 'Try: https://rt.example.test/s/TOKEN/' } = {}) {
   const f = await fixture(t, { name: 'feature', agent: 'codex' });
@@ -809,7 +820,7 @@ async function featureAtTryGate(t, { prompt = 'Return two.\n', tests = false, tr
   await done('understand', 'ok'); writeFileSync(join(run.root, 'feature.prompt.md'), prompt);
   if (tests) { mkdirSync(join(run.root, 'tests')); writeFileSync(join(run.root, 'tests', 'value.json'), JSON.stringify({ schema_version: 'prompt-runtime.program-scenario.v1', criteria: [], initial_world: {}, steps: [] })); }
   f.git(run.root, 'add', '.'); f.git(run.root, 'commit', '-qm', 'prompt');
-  await done('prompt-story', 'Story'); f.tick(); await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  await done('prompt-story', 'Story'); f.tick(); await approveLegacyStory(f);
   // A later revision must be reviewed at the prompt-pr gate.
   writeFileSync(join(run.root, 'feature.prompt.md'), prompt);
   await done('check', 'Runtime check: ✓ 2 of 2 criteria · Report: https://rt.example.test/r/abc');
@@ -2090,21 +2101,38 @@ test('2531: obsolete registry common/label rows cannot change the saved Git assi
 // #2530: a prose success cannot stand in for code replay evidence.
 async function replayArea(t, { stopAtPrompt = false, extraVectorPath = null } = {}) {
   const f = await fixture(t, {name:'feature',agent:'codex'});
+  f.ports.env.PDD_STATE_DIR = join(f.state, 'runtime');
   const skill=join(f.source,'.agents/skills/pdd-feature');mkdirSync(skill,{recursive:true});
   writeFileSync(join(skill,'workflow.json'),JSON.stringify({version:2,areas:[
     {name:'story',steps:['scope'],optional:[],gate:'approve'},
     {name:'prompt-pr',steps:['check'],optional:[],gate:'pr',before:'approve',then:'ask-code'},
     {name:'code',steps:['verify'],optional:[],gate:'pr',replay_evidence:'pdd.replay-evidence.v1'}]}));
+  // The module already exists; this run adds its Story and replay cases.
+  mkdirSync(join(f.source,'prompts'));
+  writeFileSync(join(f.source,'prompts/add.prompt.md'), 'Return the sum of the two inputs as total.\n');
+  f.git(f.source,'add','prompts'); f.git(f.source,'commit','-qm','Existing addition module');
+  f.git(f.source,'update-ref','refs/remotes/origin/main',f.git(f.source,'rev-parse','HEAD'));
   assert.equal((await f.run()).exitCode,0);
   const run=f.record();mkdirSync(join(run.root,'tests'));
-  const vector={schema_version:'prompt-runtime.program-scenario.v1',steps:[{step_id:'add',entry_path:'prompts/add.prompt.md',operation:'add',checks:[{criterion_id:'AC1',target:'result',path:'/total',op:'equals',value:3}]}]};
+  mkdirSync(join(run.root,'user_stories'));
+  writeFileSync(join(run.root,'user_stories/add.md'), '# Add\n\n## Acceptance criteria\n\n1. The total of 1 and 2 is 3.\n');
+  const vector={schema_version:'prompt-runtime.program-scenario.v1',story_path:'user_stories/add.md',criteria:[{id:'AC1',text:'The total of 1 and 2 is 3.'}],initial_world:{},steps:[{step_id:'add',entry_path:'prompts/add.prompt.md',operation:'add',input:{a:1,b:2},checks:[{criterion_id:'AC1',target:'result',path:'/total',op:'equals',value:3}]}]};
   writeFileSync(join(run.root,'tests/add.json'),JSON.stringify(vector));
   if (extraVectorPath) writeFileSync(join(run.root,extraVectorPath),JSON.stringify(vector));
   await stepDone({step:'scope',summary:'scoped',cwd:run.root},f.agentPorts());f.tick();
-  assert.equal((await approveRun({ref:'17',cwd:f.source},f.ports)).exitCode,0);
+  if (stopAtPrompt) await approveLegacyStory(f);
+  else assert.equal((await approveRun({ref:'17',cwd:f.source},f.ports)).exitCode,0);
+  if (!stopAtPrompt) {
+    const tests = ['tests/add.json', ...(extraVectorPath ? [extraVectorPath] : [])], capture = captureSource(run.root, { tests, appMap: null });
+    const batch = '20261027-170005-abcd', folder = join(f.ports.env.PDD_STATE_DIR, 'batches', batch);
+    mkdirSync(folder, {recursive:true});
+    writeFileSync(join(folder, 'batch.json'), JSON.stringify({version:1,batch,root:run.root,created_at:new Date(f.clock).toISOString(),intent:'check',source_sha256:capture.sha256,files:capture.files.map(file=>file.path),contract_snapshots:capture.stories,rows:tests.map(test=>({test,state:'passed',request_ids:[]}))}));
+    writeFileSync(join(folder, 'summary.json'), JSON.stringify(renderJson({batch,repo:run.root,sourceSha256:capture.sha256,exitCode:0,rows:tests.map(test=>({test,story:vector.story_path,state:'passed',criteria:{passed:1,total:1}})),summaryLine:'Prompt tests (add): ✓ 1 of 1 criteria'})));
+  }
   await stepDone({step:'check',summary:'Runtime check: ✓ 1 of 1 criteria',cwd:run.root},f.agentPorts());f.tick();
   if (stopAtPrompt) {
     assert.equal((await approveRun({ref:'17',cwd:f.source},{...f.ports,confirm:async question => /open PR 1/.test(question)})).exitCode,0);
+    assert.equal(f.prs.length,1,'the legacy terminal gate publishes PR 1');
     assert.equal(f.record().gate.kind,'ask-code');
     return {f,run,vector};
   }
@@ -2480,12 +2508,12 @@ test('2640 allocation race retains named files, releases new claim and never sav
 });
 test('2640 adopted prompt publication and code entry retain anchor and ignore caller declaration edits',async t=>{
   const {f,declaration}=await adoptedCorpusRun(t,{multi:true}),run=f.record(),anchor=structuredClone(run.replayBaseline);
-  writeFileSync(declaration,'{}');await stepDone({step:'scope',summary:'Scope unchanged',cwd:run.root},f.agentPorts());assert.equal((await approveRun({ref:'17',cwd:f.source},f.ports)).exitCode,0);
+  writeFileSync(declaration,'{}');await stepDone({step:'scope',summary:'Scope unchanged',cwd:run.root},f.agentPorts());await approveLegacyStory(f);
   writeFileSync(join(run.root,'note.txt'),'Implementation note.\n');await stepDone({step:'check',summary:'Runtime unavailable; original corpus retained',cwd:run.root},f.agentPorts());
   const out=await approveRun({ref:'17',cwd:f.source},f.ports);assert.equal(out.exitCode,0,out.message);assert.equal(f.record().areas[f.record().area].name,'code');assert.deepEqual(f.record().replayBaseline,anchor);
 });
 test('2640 adopted prompt publication refuses changed covered context before a push',async t=>{
-  const {f}=await adoptedCorpusRun(t,{multi:true}),run=f.record();await stepDone({step:'scope',summary:'Scope',cwd:run.root},f.agentPorts());await approveRun({ref:'17',cwd:f.source},f.ports);
+  const {f}=await adoptedCorpusRun(t,{multi:true}),run=f.record();await stepDone({step:'scope',summary:'Scope',cwd:run.root},f.agentPorts());await approveLegacyStory(f);
   writeFileSync(join(run.root,'rules/add.md'),'Changed requirement.\n');await stepDone({step:'check',summary:'Check',cwd:run.root},f.agentPorts());
   const out=await approveRun({ref:'17',cwd:f.source},f.ports);assert.equal(out.exitCode,1,out.message);assert.equal(f.pushes.length,0);assert.equal(f.prs.length,0);
 });

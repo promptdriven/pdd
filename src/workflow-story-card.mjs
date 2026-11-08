@@ -242,7 +242,7 @@ export function fullCheckPass({ root, since = 0, tests = [], prompts = [] } = {}
     }
   }
   let discovered = [];
-  try { discovered = (ports.findTests ?? findTests)({ root }).tests.map(test => test.path); }
+  try { discovered = (ports.findTests ?? findTests)({ root, excludeFixtureProjects: true }).tests.map(test => test.path); }
   catch (error) { problems.push({ kind: 'unavailable', path: '.', detail: `cannot discover the project tests (${clip(error.message, 120)})` }); }
   const selected = [...new Set([...tests, ...discovered, ...[...latest.keys()].filter(path => existsSync(join(root, path)))])].sort();
   const captures = new Map(), covered = new Set();

@@ -27,7 +27,7 @@ const RULE = 'The total is the sum of the line totals, in whole cents; a rounded
 const said = (f, words, extra = {}) => ({ ...f.agentPorts(extra), stdin: (async function* () { yield words; })() });
 
 // A feature run whose issue text has a quoted request, with the Harbor fixture as the Story, its test and its prompt.
-async function storyGate(t, { through, start = {}, existingStory = false, existingScenario = false } = {}) {
+async function storyGate(t, { through, start = {}, existingStory = false, existingScenario = false, existingFixtures = false } = {}) {
   const f = await fixture(t, { name: 'feature', agent: 'codex' });
   f.ports.env.PDD_STATE_DIR = join(f.state, 'runtime');
   const original = f.ports.execFile;
@@ -35,6 +35,13 @@ async function storyGate(t, { through, start = {}, existingStory = false, existi
     ? { stdout: JSON.stringify({ number: 17, html_url: 'https://github.com/example/project/issues/17', title: 'Show the order total',
       body: `<!-- template -->\n## User request\n\n> ${ASKED}\n\nMore notes that are not the request.` }) }
     : original(file, args, opts);
+  if (existingFixtures) {
+    const nested = join(f.source, 'test', 'fixtures', 'nested-project');
+    for (const dir of ['user_stories', 'tests', 'prompts']) mkdirSync(join(nested, dir), { recursive: true });
+    for (const path of [STORY, TEST, PROMPT]) cpSync(join(harbor, path), join(nested, path));
+    f.git(f.source, 'add', '.'); f.git(f.source, 'commit', '-qm', 'Existing fixture project');
+    f.git(f.source, 'update-ref', 'refs/remotes/origin/main', f.git(f.source, 'rev-parse', 'HEAD'));
+  }
   if (existingScenario) {
     for (const dir of ['user_stories', 'tests', 'prompts']) mkdirSync(join(f.source, dir), { recursive: true });
     cpSync(join(harbor, PROMPT), join(f.source, PROMPT));
@@ -589,4 +596,67 @@ test('#2962 repair 1: a saved code choice after merged PR 1 cannot bypass a revi
   assert.equal(f.record().gate.kind, 'approve-pr');
   assert.ok(f.record().gate.storyChanges.some(line => line.includes(STORY)));
   assert.equal(f.pushes.length, pushes); assert.equal(f.edits.length, edits);
+});
+
+test('#2962 repair 2: normal full checks should not require excluded nested fixture projects', async t => {
+  const f = await storyGate(t, { existingFixtures: true });
+  await approveStory(f);
+  const fake = await fakeRuntime(t, (entry, runtime) => {
+    if (entry.command === 'lint') return { status: 200, json: runtime.lint(entry.request.requestId) };
+    const id = entry.request?.requestId ?? entry.url.split('/').at(-1);
+    return { status: 200, json: runtime.check(id, 'passed', ['AC1', 'AC2', 'AC3'].map(criterion_id => ({ criterion_id, target: 'result', path: '/totalCents', op: 'equals', expected: 900, actual: 900, passed: true }))) };
+  });
+  const made = portsFor({ ...f.ports.env, PDD_RUNTIME_URL: fake.origin }); made.clock.now = f.clock;
+  const exit = await runCheck({ cwd: f.run.root, words: [], options: { '--json': true } }, made.ports);
+  assert.equal(exit, 0, made.ports.stderr.text);
+  const result = JSON.parse(made.ports.stdout.text);
+  assert.equal(result.rows.length, 1, 'the real default check excludes nested fixtures');
+  const out = await f.done('check');
+  assert.equal(f.prs.length, 1, out.message);
+});
+
+for (const route of ['said', 'terminal']) for (const merged of [false, true]) {
+  test(`#2962 repair 2: later ${route} code request reopens changed Story, merged=${merged}`, async t => {
+    const f = await storyGate(t); await approveStory(f); saveCheck(f); await f.done('check');
+    if (merged) { f.merged = true; await runStatus({ ref: '17', cwd: f.source }, f.ports); assert.equal(f.record().state, 'completed'); }
+    const pushes = f.pushes.length, edits = f.edits.length, decisions = f.record().decisions.length, questions = f.prompts.length;
+    writeFileSync(join(f.run.root, STORY), readFileSync(join(f.run.root, STORY), 'utf8').replace('900 cents', '950 cents'));
+    f.git(f.run.root, 'add', STORY); f.git(f.run.root, 'commit', '-qm', 'Unapproved Story revision');
+    const out = route === 'said' ? await approveStory(f, 'Make the code PR now.') : await approveRun({ ref: '17', cwd: f.source }, f.ports);
+    assert.equal(f.pushes.length, pushes, 'a code request cannot publish an unseen Story');
+    assert.equal(f.edits.length, edits); assert.equal(f.record().decisions.length, decisions);
+    assert.equal(f.prompts.length, questions, 'show the revised card before asking for code approval');
+    assert.equal(f.record().areas[f.record().area].name, 'prompt-pr', out.message);
+    assert.equal(f.record().gate.kind, 'approve-pr'); assert.ok(out.message.includes(join(f.run.root, STORY)));
+    assert.equal(f.record().state, 'waiting');
+  });
+}
+
+test('#2962 repair 2: later code request needs a current check for a prompt-only repair', async t => {
+  const f = await storyGate(t); await approveStory(f); saveCheck(f); await f.done('check');
+  const approval = f.record().storyApproval, pushes = f.pushes.length, decisions = f.record().decisions.length;
+  writeFileSync(join(f.run.root, PROMPT), readFileSync(join(f.run.root, PROMPT), 'utf8').replace('Return the order:', 'Return the priced order:'));
+  f.git(f.run.root, 'add', PROMPT); f.git(f.run.root, 'commit', '-qm', 'Repair prompt');
+  await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  assert.equal(f.pushes.length, pushes, 'a stale check cannot synchronize prompt repairs at code approval');
+  assert.equal(f.record().decisions.length, decisions);
+  assert.deepEqual(f.record().storyApproval, approval);
+  saveCheck(f); await f.done('check');
+  await approveStory(f, 'Make the code PR now.');
+  assert.equal(f.record().areas[f.record().area].name, 'code');
+  assert.deepEqual(f.record().storyApproval, approval);
+});
+
+test('#2962 repair 2: terminal code confirmation cannot approve a Story changed during the question', async t => {
+  const f = await storyGate(t); await approveStory(f); saveCheck(f); await f.done('check');
+  const pushes = f.pushes.length, decisions = f.record().decisions.length;
+  const out = await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async () => {
+    writeFileSync(join(f.run.root, STORY), readFileSync(join(f.run.root, STORY), 'utf8').replace('900 cents', '950 cents'));
+    f.git(f.run.root, 'add', STORY); f.git(f.run.root, 'commit', '-qm', 'Story changed while answering');
+    return true;
+  } });
+  assert.equal(f.pushes.length, pushes, 'terminal confirmation cannot publish a newly changed Story');
+  assert.equal(f.record().decisions.length, decisions);
+  assert.equal(f.record().gate.kind, 'approve-pr', out.message);
+  assert.equal(f.record().areas[f.record().area].name, 'prompt-pr');
 });

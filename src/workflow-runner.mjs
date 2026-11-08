@@ -1,7 +1,7 @@
 import { validateSnapshot } from './metrics-store.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
 import { createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 258a733855d83fa150501cac76303450ec5b9c2330d1e42e56965e4783361fef).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: af37af1ade247480e911185da08dcd7101b1a3c532ce793ce532471c34ecc37f).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -1569,8 +1569,8 @@ async function finishPr(run, area, step, p, lines, packageRoot = PACKAGE_ROOT) {
 const promptPathChanges = (approved, current) => !Array.isArray(approved) ? [] : [
   ...current.filter(path => !approved.includes(path)).map(path => `Prompt added: ${path}`),
   ...approved.filter(path => !current.includes(path)).map(path => `Prompt removed: ${path}`)];
-async function changedStoryGate(run, area, step, p, lines) {
-  const approval = run.storyApproval, snapshot = run.gate?.promptSnapshot;
+async function changedStoryGate(run, area, step, p, lines, snapshot = run.gate?.promptSnapshot) {
+  const approval = run.storyApproval;
   if (!approval?.fingerprint || !Array.isArray(snapshot)) return null;
   const paths = snapshot.map(row => row.path);
   const current = storyFingerprint({ root: run.root, changed: await changedFiles(run, p) });
@@ -1580,12 +1580,31 @@ async function changedStoryGate(run, area, step, p, lines) {
     commitRun(run, p, latest => { if (latest.gate?.id === gateId) {
       if (!latest.gate.storyChanges?.length || fingerprintChanges(latest.gate.storySnapshot, current).length) latest.gate.id = p.randomUUID();
       latest.state = 'waiting'; latest.doneAt = null; latest.gate.kind = 'approve-pr';
-      latest.gate.storyChanges = changes; latest.gate.storySnapshot = current;
+      latest.gate.storyChanges = changes; latest.gate.storySnapshot = current; latest.gate.promptSnapshot = snapshot;
     } });
     return done([...lines, `pdd recorded ${step}. The Story, an expected value or the prompt list changed after the person approved the Story, so the Story gate is open again. pdd does not open ${prLabel(run, area)} until the person approves the change.`,
       await cardText(run, p, { changes, results: pddTestLines(run, p) }), cardGate, approvalGuide(run, p.pdd),
       'If they ask for changes or say no, revise or undo the change in this chat, run done again for the step you changed, and show the new card.'].join('\n'));
   }
+  return null;
+}
+// A later code request is not approval of a changed Story or a replacement for current check evidence.
+async function normalCodeReview(run, area, p) {
+  if (!normalRun(run, p) || !run.storyApproval?.fingerprint) return null;
+  const snapshot = await gatePromptSnapshot(run, p);
+  const changed = await changedStoryGate(run, area, 'check', p, [], snapshot);
+  if (changed) return changed;
+  const pr1 = prOf(run, area.name);
+  if (commitSha(pr1?.publishedHeadSha)) {
+    const pending = await git(p, run.root, 'diff', '--name-only', '-z', pr1.publishedHeadSha);
+    const untracked = await git(p, run.root, 'ls-files', '--others', '--exclude-standard', '-z');
+    if (!pending && !untracked) return null;
+  }
+  const contents = await worktreeContents(run, p);
+  const check = fullCheckPass({ root: run.root, since: run.startedAt ?? 0, tests: contents.tests, prompts: snapshot.map(row => row.path) }, p);
+  if (!check.pass) return fail(['The prompt check did not pass in full on the current files. No code approval was recorded or source synchronized.',
+    ...check.problems.slice(0, 20).map(problem => `Not passed (${problem.kind}): ${problem.path}: ${problem.detail}`),
+    'Repair and check again, then run pdd workflow done check.'].join('\n'));
   return null;
 }
 async function normalPromptGate(run, area, step, p, lines, contents, packageRoot) {
@@ -1640,6 +1659,8 @@ async function afterPr1(run, area, p, head, packageRoot) {
   return done([...head, `PR 1: ${url}`, started].join('\n'));
 }
 async function startCodeFromCard(run, area, p, packageRoot) {
+  const review = await normalCodeReview(run, area, p);
+  if (review) return review.message;
   const refuse = why => `pdd did not start the code PR: ${oneLine(why)} The run waits at the code gate. ${codeLater(run)}`;
   const pr1 = prOf(run, area.name);
   let state;
@@ -2212,6 +2233,8 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
   if (approvalWords !== undefined && (!run.gate || area.steps.some(step => !run.done[step]))) return fail('The gate is not ready. Finish its steps and run done first.');
   if(!beforePr){const adoptedFailure=await adoptionFailure(run,p);if(adoptedFailure)return fail(adoptedFailure);}
   if (askCode && run.gate?.kind === 'ask-code') {
+    const review = await normalCodeReview(run, area, p);
+    if (review) return review;
     const pr1 = prOf(run, area.name);
     if (!pr1) return fail('PR 1 is unavailable; no approval was recorded.');
     let state;
@@ -2286,6 +2309,10 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
       edits = await approveGatePrompts(run, p, current);
     }
   } catch (error) { return fail(`Cannot inspect selected prompts: ${error.message}. Show the gate again and ask the person again.`); }
+  if (askCode && run.gate?.kind === 'ask-code') {
+    const review = await normalCodeReview(run, area, p);
+    if (review) return review;
+  }
   let saved;
   try { if (run.gate || beforePr || !askCode) saved = await saveGateApproval(run, area, record, edits, p, approvalSnapshot); }
   catch (error) { return fail(`Approval failed: ${error.message}`); }
