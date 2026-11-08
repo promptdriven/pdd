@@ -17,7 +17,7 @@ const shared = path => /(?:^|\/)(?:package(?:-lock)?\.json|npm-shrinkwrap\.json|
 function codeMask(text) {
   const mask = new Uint8Array(text.length).fill(1);
   const source = text.split('');
-  let uncertainTemplate = false;
+  let uncertainTemplate = false, uncertainSlash = false;
   for (let i = 0; i < text.length; i++) {
     const start = i, char = text[i];
     let comment = false;
@@ -26,6 +26,12 @@ function codeMask(text) {
     else if (["'", '"', '`'].includes(char)) {
       i++;
       while (i < text.length) { if (text[i] === '\\') i += 2; else if (text[i] === char) break; else i++; }
+    } else if (char === '/') {
+      // Regex and division need expression context. Stop before their contents
+      // can be mistaken for strings/comments and conceal executable imports.
+      uncertainSlash = true;
+      mask.fill(0, start);
+      break;
     } else continue;
     const span = text.slice(start, i+1);
     const interpolationImport = char === '`' && span.includes('${') && /\b(?:import|require)\s*(?:\(|\/[/*])/.test(span);
@@ -39,7 +45,7 @@ function codeMask(text) {
       if (!/[\r\n\u2028\u2029]/.test(source[j])) source[j] = ' ';
     }
   }
-  return { mask, source: source.join(''), uncertainTemplate };
+  return { mask, source: source.join(''), uncertainTemplate, uncertainSlash };
 }
 
 export function selectAffectedTests({ files, changed, smoke = SMOKE_TESTS }) {
@@ -62,16 +68,20 @@ export function selectAffectedTests({ files, changed, smoke = SMOKE_TESTS }) {
     if (!byBase.has(name)) byBase.set(name, []);
     byBase.get(name).push(path);
   }
-  const resolve = (from, ref) => {
-    const path = posix.normalize(posix.join(posix.dirname(from), ref.split(/[?#]/)[0]));
-    return [path, `${path}.mjs`, `${path}.js`, `${path}/index.mjs`, `${path}/index.js`].find(p => Object.hasOwn(inventory, p));
-  };
+  const localPaths = (from, ref) => unique([ref, ref.split(/[?#]/)[0]]
+    .map(value => posix.normalize(posix.join(posix.dirname(from), value))));
+  // Keep the union across loaders. Choosing one candidate can discard the file
+  // actually loaded by require (which prefers .js over the ESM alternatives).
+  const resolve = (from, ref) => unique(localPaths(from, ref).flatMap(path =>
+    [path, ...['.mjs', '.js', '.cjs', '.json', '.node'].flatMap(ext => [`${path}${ext}`, `${path}/index${ext}`])])
+    .filter(path => Object.hasOwn(inventory, path)));
   const errors = [];
   for (const path of paths) {
     const text = inventory[path], edges = deps.get(path);
     if (code(path)) {
-      const { mask, source, uncertainTemplate } = codeMask(text);
+      const { mask, source, uncertainTemplate, uncertainSlash } = codeMask(text);
       if (uncertainTemplate) errors.push(`unsupported-template-dependency:${path}`);
+      if (uncertainSlash) errors.push(`unsupported-slash-syntax:${path}`);
       const computedImport = [...source.matchAll(/\b(?:import|require)\s*\(/g)].some(match =>
         mask[match.index] && !/^\s*(?:'[^'\\\r\n]*'|"[^"\\\r\n]*")\s*(?:\)|,)/.test(source.slice(match.index + match[0].length)));
       // Computed access is an explicit overapproximation, including reads made by
@@ -83,8 +93,10 @@ export function selectAffectedTests({ files, changed, smoke = SMOKE_TESTS }) {
         if (!mask[match.index]) continue;
         const ref = match[1];
         if (ref.startsWith('.')) {
-          const target = resolve(path, ref);
-          if (target) edges.add(target); else errors.push(`unresolved:${path}:${ref}`);
+          const targets = resolve(path, ref);
+          if (targets.length) targets.forEach(target => edges.add(target)); else errors.push(`unresolved:${path}:${ref}`);
+          if (localPaths(path, ref).some(target => Object.hasOwn(inventory, `${target}/package.json`)))
+            errors.push(`unsupported-directory-dependency:${path}`);
         } else if (!ref.startsWith('node:') && !builtins.has(ref)) errors.push(`external:${path}:${ref}`);
       }
     }
@@ -93,8 +105,7 @@ export function selectAffectedTests({ files, changed, smoke = SMOKE_TESTS }) {
     for (const match of text.matchAll(/[\w@.+/-]+\.(?:mjs|cjs|js|prompt\.md|md|json|svg)\b/g)) {
       const ref = match[0];
       if (Object.hasOwn(inventory, ref)) edges.add(ref);
-      const target = resolve(path, ref);
-      if (target) edges.add(target);
+      resolve(path, ref).forEach(target => edges.add(target));
       for (const candidate of byBase.get(posix.basename(ref)) ?? []) edges.add(candidate);
     }
   }
@@ -106,7 +117,7 @@ export function selectAffectedTests({ files, changed, smoke = SMOKE_TESTS }) {
     for (const dep of deps.get(path) ?? []) visit(dep);
   };
   tests.forEach(visit);
-  const relevantErrors = errors.filter(error => [...reachable].some(path => (!opaque.has(path) && error.startsWith(`unresolved:${path}:`)) || error.startsWith(`external:${path}:`) || error === `unsupported-template-dependency:${path}`));
+  const relevantErrors = errors.filter(error => [...reachable].some(path => (!opaque.has(path) && error.startsWith(`unresolved:${path}:`)) || error.startsWith(`external:${path}:`) || error === `unsupported-template-dependency:${path}` || error === `unsupported-slash-syntax:${path}` || error === `unsupported-directory-dependency:${path}`));
   if (relevantErrors.length) return full(relevantErrors);
 
   const impacted = new Set(changed);

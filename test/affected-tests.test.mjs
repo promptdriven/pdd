@@ -242,3 +242,93 @@ test('the native runner catches a broken consumer behind a commented computed im
   assert.equal(result.evidence.counts.fail, 1);
   assert.equal(result.evidence.stale, false);
 });
+
+test('unclassified regex syntax cannot hide external imports after quotes or comment markers', () => {
+  for (const expression of ["/'/", '/"/', '/[\'"/]/', '/\\/\\*/', '/\\/\\//']) {
+    const result = select(['src/leaf.mjs'], {
+      'src/adapter.mjs': `const pattern = ${expression}; import 'third-party';`,
+      'test/consumer.test.mjs': "import '../src/adapter.mjs';",
+    });
+    assert.equal(result.mode, 'full', expression);
+    assert.equal(result.tests.length, result.total, expression);
+  }
+});
+
+// Replay each reported dependency break through real Git and Node. Full-mode
+// execution uses a fixture queue port, never the VM's shared queue or full suite.
+function brokenRequireConsumer(t, { prefix = '', ref = './target', target, candidates }) {
+  const r = repo(t);
+  for (const [path, text] of Object.entries(candidates)) r.put(path, text);
+  r.put('src/adapter.cjs', `${prefix}\nconst { value } = require('${ref}');\nmodule.exports = { value };`);
+  r.put('test/consumer.test.mjs', [
+    "import test from 'node:test';",
+    "import assert from 'node:assert/strict';",
+    "import adapter from '../src/adapter.cjs';",
+    "test('required value', () => assert.equal(adapter.value, 1));",
+  ].join('\n'));
+  r.git('add', '.'); r.git('commit', '-qm', 'require consumer');
+  const plan = () => affectedPlan({ root: r.root, base: 'HEAD' });
+  const execute = (command, args, options) => {
+    const env = { ...options.env }; delete env.NODE_TEST_CONTEXT;
+    if (command === 'bash') {
+      assert.deepEqual(args, [join(r.root, 'scripts/vm-suite-lock.sh')]);
+      assert.equal(options.env.SUITE, 'npm test');
+      return spawnSync(process.execPath, ['--test', ...plan().tests], { ...options, env });
+    }
+    return spawnSync(command, args, { ...options, env });
+  };
+  const direct = () => execute(process.execPath, ['--test', 'test/consumer.test.mjs'], {
+    cwd: r.root, encoding: 'utf8', env: process.env,
+  });
+  const before = direct();
+  assert.equal(before.status, 0, before.stdout + before.stderr);
+  r.put(target, 'module.exports = { value: 2 };');
+  const broken = direct();
+  assert.equal(broken.status, 1, broken.stdout + broken.stderr);
+  assert.match(broken.stdout, /ERR_ASSERTION/);
+  const result = runAffected({ root: r.root, base: 'HEAD', run: true }, { execute });
+  assert.equal(result.exitCode, 1, JSON.stringify(result));
+  assert.ok(result.plan.tests.includes('test/consumer.test.mjs'));
+  assert.equal(result.evidence.counts.fail, 1);
+  assert.equal(result.evidence.stale, false);
+  assert.equal(result.evidence.inventoryComplete, true);
+}
+
+test('native regex quotes cannot hide the consumer of a broken required module', t => {
+  brokenRequireConsumer(t, {
+    prefix: "const quote = /'/;", target: 'src/target.js',
+    candidates: { 'src/target.js': 'module.exports = { value: 1 };' },
+  });
+});
+
+test('native extensionless require keeps its loaded file among ESM and directory candidates', t => {
+  brokenRequireConsumer(t, {
+    target: 'src/target.js',
+    candidates: {
+      'src/target.mjs': 'export const value = 999;',
+      'src/target.js': 'module.exports = { value: 1 };',
+      'src/target/index.js': 'module.exports = { value: 999 };',
+    },
+  });
+});
+
+test('native directory require keeps the loaded CommonJS index among ESM candidates', t => {
+  brokenRequireConsumer(t, {
+    target: 'src/target/index.js',
+    candidates: {
+      'src/target/index.mjs': 'export const value = 999;',
+      'src/target/index.js': 'module.exports = { value: 1 };',
+    },
+  });
+});
+
+test('native directory package entries cannot be replaced by an unused index', t => {
+  brokenRequireConsumer(t, {
+    target: 'src/target/entry.js',
+    candidates: {
+      'src/target/package.json': '{"main":"entry.js"}',
+      'src/target/entry.js': 'module.exports = { value: 1 };',
+      'src/target/index.js': 'module.exports = { value: 999 };',
+    },
+  });
+});

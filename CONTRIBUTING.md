@@ -49,6 +49,11 @@ changes and unavailable inventories select the full suite. Full fallbacks use
 `scripts/vm-suite-lock.sh`, the shared suite queue adapter. Do not omit a selected
 test to make a run pass.
 
+The selector retains all plausible extensionless file and index targets. It uses
+full fallback for reachable directory package entry points and unclassified slash
+syntax, including regex and division expressions. These fallbacks protect test
+coverage when the scanner cannot determine the loaded dependencies.
+
 Record the working files, command, mode, fallback cause, counts and `suiteMinutes`
 in the PR. Keep these results separate from the merge result. The merge owner
 runs the full suite once through the shared queue on the exact clean PR head,

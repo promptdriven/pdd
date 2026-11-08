@@ -40,6 +40,13 @@ specifiers must preserve local dependencies, computed-consumer selection and
 external-import full fallback. Ignore comment markers inside string literals.
 When dependency syntax inside a template interpolation cannot be classified
 safely, require full fallback for its reachable consumer.
+An unclassified slash outside a string or comment can start a regex literal or
+division expression. Require full fallback for its reachable consumer before
+quotes or comment markers in that syntax can hide later dependencies.
+For extensionless references, retain every existing plausible file and directory
+index target, including CommonJS `.js` and JSON targets. An ESM candidate cannot
+exclude the target loaded by CommonJS. Directory package entry points require
+full fallback when their loader rules are not modeled.
 
 The adapter accepts `--base REF`, optional `--run`, and optional `--report PATH`.
 With no run, print the JSON plan only and execute no test. Resolve base to a commit
