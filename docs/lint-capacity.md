@@ -37,8 +37,17 @@ or it is interrupted; explicit retry retains its finite default. Reading standal
 leaves checks alone if they were already sent or their history is uncertain.
 A missing or mismatched reply never counts as a pass.
 
-Checks, remote lint and new simulation setup have no default local cap. All selected
-jobs can proceed without waiting for a local slot. Set `PDD_MAX_JOBS` to a
+Lint and check share a machine queue with a default cap of 2 requests. Set
+`PDD_INTERPRETER_CONCURRENCY` to a positive safe integer for another cap. All
+profiles must use the same absolute `PDD_INTERPRETER_QUEUE` when overriding the
+default `/tmp/pdd-interpreter-UID` directory. Waiting status shows the position;
+Autopilot pauses its stuck clock during that wait. Each queue ticket is also a
+request ledger row with timestamps, outcome and active request counts. Busy
+feedback temporarily lowers the cap. An uncertain dispatch keeps its slot until
+a same-ID terminal read confirms completion. It is never blindly resent.
+
+The optional profile cap for checks, remote lint and new simulation setup has no
+default limit. Set `PDD_MAX_JOBS` to a
 positive safe decimal integer to share that cap across repositories and
 worktrees among local pdd processes that set it. Use digits without a sign, whitespace or leading
 zero. Invalid values warn once per command and use no cap. With a cap, waiting

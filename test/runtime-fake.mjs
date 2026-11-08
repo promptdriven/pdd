@@ -129,6 +129,7 @@ export function portsFor(env, extra = {}) {
     randomUUID: () => { clock.uuids += 1; return randomUUID(); },
     gh: args => { clock.gh.push(args); return args[0] === 'auth' ? { status: 0, stdout: `${TOKEN}\n` } : { status: 0, stdout: 'octo 4242\n' }; },
     onInterrupt: handler => { interrupts.add(handler); return () => { interrupts.delete(handler); }; }, ...extra };
+  ports.env = { ...ports.env, PDD_INTERPRETER_QUEUE: ports.env.PDD_INTERPRETER_QUEUE ?? join(ports.env.PDD_STATE_DIR ?? ports.env.HOME, 'interpreter-queue') };
   return { ports, clock };
 }
 

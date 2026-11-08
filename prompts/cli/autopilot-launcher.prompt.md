@@ -958,7 +958,19 @@ a promise of later handling; the independent 30-minute tick remains fallback.
 Use the existing launcher ports and native defaults, including state, Git, settings,
 reconcile and wake boundaries; injected substitutes reach this same path.
 
+## Machine interpreter waiting
+
+Read [machine interpreter progress](interpreter-queue.prompt.md) for the run's
+worktree using the same machine queue environment. Keep workflow state separate
+from queue state. Show waiting with its position in workflow status. Exclude the
+union of persisted queue waiting intervals from the no-progress clock. An active
+wait or unavailable queue cannot establish a stuck run. Completed waiting time
+remains excluded after restart. Do not wake a chat or mutate queue records during
+observation. Preserve queue path and concurrency settings in launcher environments.
+
 ## Dependencies
+
+- [Machine interpreter queue](interpreter-queue.prompt.md): required progress and waiting-clock contract.
 
 - [Metrics store](metrics-store.prompt.md), [run records](workflow-runs.prompt.md) and [metrics gaps](metrics-gap.prompt.md): required native generation/verification context for observational selector/launch storage and identity.
 

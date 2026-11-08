@@ -1,3 +1,4 @@
+import { readInterpreterProgress, interpreterStatusWords } from './interpreter-queue.mjs';
 import { validateSnapshot } from './metrics-store.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
 import { createDependencyReadPorts } from './issue-dependencies-github.mjs';
@@ -434,10 +435,11 @@ const revising = run => { const last = run.changes?.at(-1); return Boolean(last 
 // A run stopped at the repair limit keeps that one-line reason, also after a later park (#3041).
 const stuckReason = run => run.repairLimit?.area ? repairLimitReason(run.repairLimit.area) : run.parkReason ?? 'automatic work stopped';
 // chat: what Herdr shows (chatState); facts: {drafts, nothing} read by the caller (gateFacts). describe itself makes no calls.
-function describe(run, chat = null, { drafts = [], nothing = false, health = null } = {}) {
+function describe(run, chat = null, { drafts = [], nothing = false, health = null, interpreter = null } = {}) {
   const area = run.areas[run.area], pr1 = askArea(run) && prOf(run, askArea(run).name);
   if (run.state === 'cancelled') return run.cancelled?.state === 'replaced' ? 'replaced' : 'cancelled';
   if (run.state === 'stuck') return `stuck: ${stuckReason(run)}`;
+  if (run.state === 'running' && interpreter?.state === 'waiting') return interpreterStatusWords(interpreter);
   if (runtimeWaiting(run)) return `waiting for the interpreter: ${run.runtimeWait.reason}. Autopilot checks the interpreter at each tick and wakes it when the interpreter is back; an Autopilot alert names any need for a person (pdd autopilot status)`;
   if (activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting', 'closed'].includes(chat)) return chatStatusWords(run, chat);
   if (openQuestion(run) && run.state !== 'completed') return `waiting for you: ${run.question.text.split('\n')[0]}`;
@@ -2987,6 +2989,9 @@ async function chatState(run, p, facts = {}) {
 }
 
 // What status needs to know about the gate: PR 1's draft prompts at the code gate, nothing to try before the PR.
+function interpreterFacts(run, p) {
+  return { interpreter: (p.readInterpreterProgress ?? readInterpreterProgress)({ cwd: run.root, env: p.env }, { now: p.now, ...p.interpreterQueuePorts }) };
+}
 async function gateFacts(run, p) {
   if (run.gate?.kind === 'ask-code') return { drafts: await pr1Drafts(run, p) };
   if (run.gate?.kind === 'approve-pr') return { nothing: nothingToTry(run, run.areas[run.area], await worktreeContents(run, p)) };
@@ -3023,7 +3028,7 @@ function detail(run, chat = null, facts = {}) {
 
 // One list line per run, grouped by what it needs: the person, the agent, a PR review, nothing.
 const GROUPS = ['waiting', 'working', 'pr-open', 'done', 'cancelled'];
-function summary(run, timeZone, chat = null, { drafts = [], nothing = false, health = null } = {}) {
+function summary(run, timeZone, chat = null, { drafts = [], nothing = false, health = null, interpreter = null } = {}) {
   const area = run.areas[run.area], ask = askArea(run), running = run.state === 'running';
   const replacementPending = run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase);
   const problem = replacementPending || activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting', 'closed'].includes(chat);
@@ -3035,6 +3040,7 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false, hea
   const words = group === 'cancelled' ? (run.cancelled?.state === 'replaced' ? 'replaced' : 'cancelled')
     : group === 'done' ? (run.gate?.kind === 'ask-code' ? 'done at PR 1' : 'done')
     : run.state === 'stuck' ? `stuck: ${stuckReason(run)}`
+    : running && interpreter?.state === 'waiting' ? interpreterStatusWords(interpreter)
     : runtimeWaiting(run) ? `waiting for the interpreter: ${run.runtimeWait.reason}`
     : replacementPending ? `chat replacement pending at ${run.chatReplacement.phase}; run pdd workflow open ${run.number} --new`
     : problem ? chatStatusWords(run, chat)
@@ -3078,7 +3084,7 @@ async function listStatus(runs, { json, cancelled, scope, snapshotOnly=false }, 
   for (const run of runs) {
     const ordinaryOwnership=readRunOwnership(run.runDir,p);
     const health = {}, chat = ordinaryOwnership||snapshotOnly?null:await chatState(run, p, health);
-    const item = summary(run, p.timeZone, chat, { ...(ended(run)||ordinaryOwnership||snapshotOnly ? {} : await gateFacts(run, p)), ...health });
+    const item = summary(run, p.timeZone, chat, { ...(ended(run)||ordinaryOwnership||snapshotOnly ? {} : await gateFacts(run, p)), ...health, ...interpreterFacts(run, p) });
     const snapshot = requestSnapshot(run, p);
     all.push({ ...item, steps: savedStepResults(run), ...snapshot, ordinaryOwnership, line: [item.line, ...ownershipLines(ordinaryOwnership), ...requestLines(snapshot, { openOnly: true, ended: ended(run), currentArea: run.areas[run.area]?.name, p })].join('\n') });
   }
@@ -3103,7 +3109,7 @@ async function runStatusCommand({ ref, cwd, all = false, json = false, cancelled
   if (found.run.pr?.length && found.run.state !== 'cancelled') p.say(`Reading ${found.run.pr.length === 1 ? 'the PR' : `${found.run.pr.length} PRs`} from GitHub…`);
   const ordinaryOwnership=readRunOwnership(found.run.runDir,p);
   if(!ordinaryOwnership&&!snapshotOnly)await refreshPr(found.run, p);
-  const run = found.run, facts = ended(run)||ordinaryOwnership||snapshotOnly ? {} : await gateFacts(run, p), chat = ordinaryOwnership||snapshotOnly?null:await chatState(run, p, facts);
+  const run = found.run, facts = { ...(ended(run)||ordinaryOwnership||snapshotOnly ? {} : await gateFacts(run, p)), ...interpreterFacts(run, p) }, chat = ordinaryOwnership||snapshotOnly?null:await chatState(run, p, facts);
   const snapshot = requestSnapshot(run, p);
   const nativeResults=ownResults(run,p).filter(result=>result.kind==='native evidence');
   const steps = savedStepResults(run);

@@ -1,3 +1,4 @@
+import { acquireInterpreterSlot, markInterpreterDispatch, observeInterpreterRequest } from './interpreter-queue.mjs';
 // Generated from prompts/cli/runtime-client.prompt.md (sha256: 7545c2e8cd819510317352e5108f757883d178f91ac9dc66aef4674dd56756ef).
 import {readEvidenceEligibility} from './workflow-runner.mjs';
 import {allRuns} from './workflow-runs.mjs';
@@ -788,7 +789,33 @@ function slotPorts(context, deadline = context.deadline) {
       return confirmedEnd(answer) ? 'ended' : ['queued', 'running'].includes(answer.state) ? 'running' : 'unknown';
     } };
 }
+function machinePorts(context) {
+  const { ports } = context;
+  return { ...ports.interpreterQueuePorts, now: ports.now, sleep: async ms => { await ports.sleep(ms, context.signal); await new Promise(done => setImmediate(done)); },
+    interrupted: () => context.interrupted || !!context.stopped || !!context.sendError,
+    say: message => line(ports.stderr, message) };
+}
+async function machineObservation(context, requestId, outcome, terminal, extra = {}) {
+  try { await observeInterpreterRequest({ env: context.ports.env, origin: context.origin, requestId, outcome, terminal, ...extra }, machinePorts(context)); }
+  catch (error) { throw new Stop(5, error.message); }
+}
+async function machineAnswer(context, answer) {
+  if (!['lint', 'check'].includes(answer?.command) || !sameJob(answer, answer.id, answer.command)) return;
+  const id = answer.id;
+  const capacity = answer.command === 'check' ? checkCapacity(answer) : null;
+  const lintWait = answer.command === 'lint' ? [answer.result?.report?.refusal, ...(answer.result?.refusals ?? [])].map(lintQueueWait).find(ms => ms !== null) : null;
+  const uncertainBusy = answer.command === 'check' && checkCapacityCandidate(answer) && capacity === null;
+  const busy = capacity !== null || lintWait != null || uncertainBusy;
+  if (busy) return machineObservation(context, id, uncertainBusy ? 'unknown' : 'busy', !uncertainBusy,
+    { busy: true, waitMs: capacity ?? lintWait ?? 5000 });
+  if (['passed', 'failed', 'refused', 'unknown'].includes(answer.state))
+    await machineObservation(context, id, ['passed', 'failed'].includes(answer.state) ? 'verdict' : answer.state, true);
+}
+async function finishMachineRequests(context) {
+  for (const id of context.machineRequests ?? []) await machineObservation(context, id, 'unknown', false);
+}
 async function finishReservation(context, target, answer) {
+  await machineAnswer(context, answer);
   if (target?.reservation && confirmedEnd(answer)) {
     await releaseRuntimeSlot(target.reservation, { ended: true }, slotPorts(context));
     target.reservation = null;
@@ -1283,13 +1310,42 @@ async function postJob(context, path, command, request, row, timeoutMs, deadline
   const registered = await recordRuntimeRequest(target.reservation, id, slotPorts(context, deadline));
   if (registered === false) { await finishReservation(context, target, { state: 'not_run' }); return { kind: 'not_sent' }; }
   if (context.interrupted || context.stopped || context.sendError || context.ports.now() >= deadline) { await finishReservation(context, target, { state: 'not_run' }); return { kind: 'not_sent' }; }
+  let machine;
+  if (['lint', 'check'].includes(command)) {
+    if (row) row.machineWaiting = true;
+    try { machine = await acquireInterpreterSlot({ cwd: context.root, origin: context.origin, requestId: id, kind: command,
+      env: context.ports.env, deadline }, machinePorts(context)); }
+    catch (error) { await finishReservation(context, target, { state: 'not_run' }); throw new Stop(5, error.message); }
+    finally { if (row) row.machineWaiting = false; }
+    if (!machine) { await finishReservation(context, target, { state: 'not_run' }); return { kind: 'not_sent' }; }
+    context.machineRequests ??= new Set(); context.machineRequests.add(id);
+    if (context.interrupted || context.stopped || context.sendError || context.ports.now() >= deadline) {
+      await machineObservation(context, id, 'not_sent', true);
+      await finishReservation(context, target, { state: 'not_run' }); return { kind: 'not_sent' };
+    }
+  }
   context.store.posted(context.folder, id);
   if (row) { if (!row.request_ids.includes(id)) row.request_ids.push(id); row.sent_at ??= context.ports.now(); row.state = 'sending'; row.phase = 'server'; row.calls = 'unknown'; row.post_verdict = 'uncertain'; }
   saveBatch(context);
-  const reply = await context.runtime.post(path, request, context.capture.tar, timeoutMs);
+  if (machine) {
+    try { await markInterpreterDispatch(machine, machinePorts(context)); }
+    catch (error) { await machineObservation(context, id, 'not_sent', true); throw new Stop(5, error.message); }
+    if (context.interrupted || context.stopped || context.sendError || context.ports.now() >= deadline) {
+      await machineObservation(context, id, 'not_sent', true);
+      await finishReservation(context, target, { state: 'not_run' }); return { kind: 'not_sent' };
+    }
+  }
+  const reply = await context.runtime.post(path, request, context.capture.tar, Math.max(1, Math.min(timeoutMs, deadline - context.ports.now())));
   const verdict = judgePost(reply, id, command, context.secrets);
   verdict.observed_at = context.ports.now();
   if (row) row.post_verdict = verdict.kind;
+  if (machine && !verdict.answer) {
+    const busy = !verdict.maintenance && ['busy', 'unknown'].includes(verdict.kind) && [429, 503].includes(reply.status);
+    await machineObservation(context, id, verdict.kind === 'unknown' ? 'unknown' : busy ? 'busy'
+      : verdict.kind === 'busy' ? 'busy' : reply.unreachable ? 'not_sent'
+      : ['refused', 'not_run', 'stop'].includes(verdict.kind) ? 'refused' : 'unknown',
+      ['busy', 'not_run', 'stop', 'refused', 'not_sent'].includes(verdict.kind), { busy, waitMs: verdict.wait });
+  }
   if (verdict.maintenance) maintenanceNotice(context, verdict, reply);
   if (verdict.answer) saveAnswer(context, id, verdict.answer);
   if (verdict.admission) context.store.write(join(context.folder, `${id}.admission.json`), verdict.admission);
@@ -1582,7 +1638,7 @@ async function runScheduledChecks(context, rows, toSend) {
   };
   let waitingShown = -1;
   const progress = context.checkProgress ??= { startedAt: ports.now(), shownAt: ports.now() };
-  const readable = row => isOpen(row) && ports.now() < Math.min(context.deadline, row.lost ? row.read_until ?? context.deadline : context.deadline);
+  const readable = row => !row.machineWaiting && isOpen(row) && ports.now() < Math.min(context.deadline, row.lost ? row.read_until ?? context.deadline : context.deadline);
   try {
   while (!context.interrupted && !context.readStop) {
     // Never count an uncertain dispatched job as a free slot, even if it cannot currently be read.
@@ -2206,6 +2262,7 @@ async function runCallRead(context, id) {
   const answer = verified && !(command === 'call' && reply.json.state === 'passed' && !isObject(reply.json.result?.program_result)) ? reply.json : null;
   if (answer?.command === 'check') {
     Object.assign(context, { origin, secrets: [identity.token] });
+    await machineAnswer(context, answer);
     const row = { test: '-', story: '-', title: '-', phase: 'server', request_ids: [id], state: 'unknown', refusals: [], warnings: [] };
     const owner = await refreshCheckBatches(context, identity, origin, id, answer);
     // Use the owning batch only to build the direct row's aggregate projection.
@@ -2375,7 +2432,7 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
     try { context.releaseBatch?.(); }
     catch (error) {
       try { line(ports.stderr, `Warning: could not release batch ${context.lockedBatch ?? context.batch ?? 'ownership'} (${cleanText(error.code ?? 'state error')}).`); } catch { /* preserve the command outcome */ }
-    } finally { release(); await Promise.all([...(context.reservations ?? [])].map(reservation => releaseRuntimeSlot(reservation, { ended: false }, slotPorts(context)))); }
+    } finally { release(); await finishMachineRequests(context); await Promise.all([...(context.reservations ?? [])].map(reservation => releaseRuntimeSlot(reservation, { ended: false }, slotPorts(context)))); }
   }
 }
 
@@ -3248,7 +3305,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     if (options['--cli'] || options['--serve'] || options['--save-last']) { line(ports.stderr, `pdd: ${cleanText(error.message || 'The Try could not start.', context.secrets ?? [])}`); return error.exitCode === 2 ? 2 : 125; }
     if (error instanceof Stop || error instanceof PreflightError || error instanceof RuntimeWorkspaceError) { line(ports.stderr, error.message); return error.exitCode; }
     throw error;
-  } finally { release();for(const lease of context.caseWriteLeases?.values()??[])lease.release(); await Promise.all([...(context.reservations ?? [])].map(reservation => releaseRuntimeSlot(reservation, { ended: false }, slotPorts(context)))); }
+  } finally { await finishMachineRequests(context); release();for(const lease of context.caseWriteLeases?.values()??[])lease.release(); await Promise.all([...(context.reservations ?? [])].map(reservation => releaseRuntimeSlot(reservation, { ended: false }, slotPorts(context)))); }
 }
 
 // pdd simulate --stop [STORY]: find the Try by its story name in the state record, so it works on any branch (real-user issue 14).

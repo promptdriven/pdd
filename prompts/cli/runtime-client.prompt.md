@@ -824,6 +824,24 @@ for all running rows with server progress, then the known calls of the other row
 step 5 above), or `AI calls unknown` when there is neither; never an invented zero. A row that a
 read turns into a lost, unknown row drops its old `progress`.
 
+## Machine interpreter admission
+
+Every lint and check POST also uses [machine admission](interpreter-queue.prompt.md),
+after ordinary profile admission and before immutable dispatch evidence. Waiting
+must not send a request or poll its unsent ID. Already dispatched checks keep
+being read while another check waits for the machine queue. Register the allocated ID, mark possible dispatch before
+POST and hold the machine ticket until a matching terminal receipt or confirmed
+unsent refusal. A lost reply, command return or interruption records unknown and
+keeps capacity; same-ID reads can later release it. Use existing capacity proof
+rules for retry authority. Machine busy feedback never grants retry permission,
+including when a capacity reply has uncertain accounting. Feed successful verdicts,
+busy, unknown and refused outcomes from POST and subsequent same-ID reads into
+the request ledger. Incomplete accounting stays unknown. Never record a request
+as not sent after its POST may have started. Private queue file identities do not allocate interpreter request IDs; saved reads
+keep the existing zero-new-request-ID promise. Ledger/queue failures stop new sends
+with a local-state-unavailable error; recovery advice remains read-only. Retain
+existing per-profile cap defaults and Simulator setup policy.
+
 ## Dependencies
 
 - [Native results](workflow-results.prompt.md#native-profile-and-criterion-assessment-draft):
@@ -844,6 +862,7 @@ read turns into a lost, unknown row drops its old `progress`.
 - [References](contract-refs.prompt.md): required generation and verification
   context for canonical provenance and explicit-lint copy comparison.
 
+- [Machine interpreter queue](interpreter-queue.prompt.md): required context for machine admission, waiting progress and request ledger.
 - [Runtime slots](runtime-slots.prompt.md): required generation and verification context for shared local admission and jobs. Runtime listing binds its own files port; native process exclusion remains a native verification obligation.
 
 - [Local bindings](runtime-bindings.prompt.md): required generation/runtime context for the local inventory helper.

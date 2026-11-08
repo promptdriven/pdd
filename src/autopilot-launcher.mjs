@@ -1,3 +1,4 @@
+import { readInterpreterProgress } from './interpreter-queue.mjs';
 // Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 6d458f9c212e77a828ba31b44319a394b071a8e7a919d1f309c2580982cc0ae9).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -73,7 +74,7 @@ function portsFor(state, ports) {
   const checked = async (command, args, options) => { const result = await execute(command, args, options); if (result.code !== 0) throw Error(`${command} failed; check its sign-in and retry.`); return result.stdout; };
   return { ...ports, env, run, execute, checked, githubRoot, warn: ports.warn ?? (text => process.stderr.write(`${text}\n`)), now };
 }
-const keepEnv = env => Object.fromEntries(['HOME', 'PATH', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME', 'XDG_CONFIG_HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS'].filter(k => typeof env[k] === 'string').map(k => [k, env[k]]));
+const keepEnv = env => Object.fromEntries(['HOME', 'PATH', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME', 'XDG_CONFIG_HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'PDD_INTERPRETER_QUEUE', 'PDD_INTERPRETER_CONCURRENCY'].filter(k => typeof env[k] === 'string').map(k => [k, env[k]]));
 const NOT_GIT = 'This folder is not a Git repository. cd into the repo you want Autopilot to work on, then run the command again.';
 // Git translates its messages; pdd reads the "not a git repository" text only in the C locale.
 const gitRootIn = p => p.execute('git', ['rev-parse', '--show-toplevel'], { env: { ...p.env, LC_ALL: 'C', LANG: 'C' } });
@@ -349,7 +350,9 @@ async function readRunProgress(state, p) {
     try {
       const file = join(folder, name, 'status.json'), run = read(file);
       if (run?.v === 1 && run.number === Number(name) && run.repo?.toLowerCase() === state.repo.toLowerCase() && ['running', 'waiting'].includes(run.state)) {
-        progress.push({ number: run.number, changedAt: statSync(file).mtimeMs });
+        const changedAt = statSync(file).mtimeMs;
+        const interpreter = typeof run.root === 'string' ? (p.readInterpreterProgress ?? readInterpreterProgress)({ cwd: run.root, since: changedAt, env: p.env }, { now: p.now, ...p.interpreterQueuePorts }) : null;
+        progress.push({ number: run.number, changedAt: changedAt + (interpreter?.pausedMs ?? 0), ...(interpreter ? { interpreter } : {}) });
       }
     } catch { /* Missing or unreadable records supply no progress fact. */ }
   }
@@ -1317,7 +1320,8 @@ async function runTick(stateFile, ports, completion) {
         pendingTimes[key] = claim.takeovers;
       }
     }
-    for (const { number, changedAt } of await (p.readRunProgress ?? readRunProgress)(state, p)) {
+    for (const { number, changedAt, interpreter } of await (p.readRunProgress ?? readRunProgress)(state, p)) {
+      if (['waiting', 'unavailable'].includes(interpreter?.state)) continue;
       const key = `run:${number}`;
       if (p.now() - changedAt >= STUCK_AFTER && state.timeSeen[key] !== changedAt) {
         timeRules.push({ kind: 'stuck-run', number, reason: `Run #${number} has had no progress for 60 minutes; follow the pdd:stuck rule.` });
