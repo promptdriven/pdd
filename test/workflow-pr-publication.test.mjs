@@ -539,6 +539,69 @@ test('READABLE-CODE: the code PR proof table reads the old-code proof and review
 // #3029: the formal status of a real code PR whose prompt area has no scenario vectors (PR 1 changed no scenario file,
 // as in prompt-runtime PRs #670 and #686). The code replay stays NOT REPLAYED; the formal block is read on its own.
 const VALUE_STORY = '# Value\n\nAs a maintainer, I want the value to be two,\nso that the report adds up.\n\n## Acceptance criteria\n\n1. The value is two.\n';
+
+// #3085: main can advance after the run starts. The PR diff excludes inherited
+// Stories even though the run's saved baseSha still sees them. Use the existing
+// publication fake: real local Git and gh redirected to the fixture's state file.
+for (const selection of ['docs', 'changed', 'named', 'approved', 'stacked-changed', 'stacked-named', 'stacked-approved']) {
+  test(`3085-STORY-SCOPE: ${selection} publication excludes inherited Stories and keeps its own`, t => {
+    const f = fixture(t);
+    const stacked = selection.startsWith('stacked-');
+    const ownPath = 'user_stories/own.md', inheritedPath = 'user_stories/inherited.md';
+    const own = VALUE_STORY.replace('two,', 'OWN3085,');
+    const inherited = VALUE_STORY.replace('two,', 'INHERITED3085,');
+    f.git('switch', 'main');
+    mkdirSync(join(f.root, 'user_stories'));
+    writeFileSync(join(f.root, inheritedPath), inherited);
+    if (['named', 'approved'].includes(selection)) writeFileSync(join(f.root, ownPath), own);
+    f.git('add', '.'); f.git('commit', '-qm', 'Upstream Stories after run start');
+    f.git('push', '-q', 'origin', 'main');
+    f.git('switch', 'topic'); f.git('merge', '--no-edit', 'main');
+    f.git('checkout', 'main', '--', 'value');
+    if (selection === 'changed' || stacked) writeFileSync(join(f.root, ownPath), own);
+    if (stacked) {
+      f.git('add', '.'); f.git('commit', '-qm', 'Own Story in prompt PR');
+      f.git('push', '-q', 'origin', 'HEAD:refs/heads/prompt-topic');
+      f.run.prBase = 'prompt-topic';
+      f.run.pr[0].branch = 'prompt-topic';
+    } else {
+      // A single-PR small-change, as in #3079.
+      f.run.areas = [{ name: 'change', steps: ['scope', 'change', 'verify', 'formal'], optional: [], gate: 'pr' }];
+      f.run.area = 0; f.run.pr = [];
+      f.run.done.change = f.run.done.build;
+    }
+    writeFileSync(join(f.root, 'CONTRIBUTING.md'), '# Contributing\n\nUse a shallow clone.\n');
+    f.git('add', '.'); f.git('commit', '-qm', 'Run documentation change');
+    if (selection.endsWith('named')) f.run.done.scope.summary = `Story: ${ownPath}`;
+    if (selection.endsWith('approved')) {
+      // Synthetic saved approval input, never a real approval command.
+      f.run.storyApproval = { fingerprint: { stories: [{ path: ownPath, criteria: ['AC1'] }] } };
+    }
+    f.save();
+    assert.ok(f.git('diff', '--name-only', f.run.baseSha).includes(inheritedPath), 'Reproduce the stale-base Story inventory.');
+    const result = f.invoke('Review: no must-fix');
+    assert.equal(result.exitCode, 0, result.message);
+    const body = f.data().prs[0].body, visible = body.split(DETAILS_OPEN)[0];
+    const saved = JSON.parse(readFileSync(join(f.runDir, 'status.json')));
+    const facts = saved.pr.find(pr => pr.number === 23).readable.facts;
+    assert.equal(facts.stories.length, selection === 'docs' ? 0 : 1, 'Only this run owns the selected Story.');
+    assert.doesNotMatch(visible, /INHERITED3085/);
+    if (selection === 'docs') {
+      assert.deepEqual(facts.diff.files.map(file => file.path), ['CONTRIBUTING.md']);
+      assert.doesNotMatch(visible, /^## User story$/m);
+      assert.match(detailsOf(body).details, /User story:.*no Story applies/i);
+    } else {
+      assert.match(visible, /^## User story$/m);
+      assert.match(visible, /OWN3085/);
+      assert.equal(facts.stories.filter(story => story.includes('OWN3085')).length, 1);
+      if (stacked) assert.ok(!facts.diff.files.some(file => file.path === ownPath), 'PR 2 keeps its own Story from PR 1.');
+    }
+    // Refresh from saved facts must preserve the same scoped selection.
+    assert.equal(f.invoke('', 'runStatus').exitCode, 0);
+    assert.doesNotMatch(f.data().prs[0].body.split(DETAILS_OPEN)[0], /INHERITED3085/);
+  });
+}
+
 // `story` is the Story path (null: the run has no Story file); `before` commits it before the run's base, so the run does not change it.
 function formalPublication(t, { rules, formal = null, story = 'user_stories/value.md', before = false, prepare = () => {}, summary = 'Review: no must-fix' }) {
   const f = fixture(t, { opted: true });

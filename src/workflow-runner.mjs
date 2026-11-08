@@ -1420,9 +1420,11 @@ function namedStories(run, extra = '') {
   }
   return paths.filter(path => selected.has(path));
 }
-// The Story files of a run: each changed user_stories/*.md (not PLAN.md or README.md) and each one that a step summary names.
+// Readable Stories come from the current run-base diff or explicit Story references/approval.
+// The original baseSha also sees changes inherited from main and cannot establish Story ownership.
 function runStoryPaths(run, files) {
-  return [...new Set([...files, ...namedStories(run)])].filter(path => safeStoryPath(path) && STORY_FILE.test(path));
+  const approved = (run.storyApproval?.fingerprint?.stories ?? []).map(story => story.path);
+  return [...new Set([...files, ...namedStories(run), ...approved])].filter(path => safeStoryPath(path) && STORY_FILE.test(path));
 }
 // #3029: true when a Story of the run (changed or named, user_stories/**/S.md) or the Story of an anchored scenario has
 // `## Rules to check`; false when pdd read a Story of the run and none has it; null (unknown) when pdd found no Story file.
@@ -1448,7 +1450,11 @@ async function readableFacts(run, area, p, evidence, { drafts = [], pending = fa
     verdict: layout === 'spec' ? verdict?.replace(/^Verdict:\s*/, '') ?? own.verdict : own.verdict,
     cases: own.cases.length ? own.cases : layout === 'code' ? earlier.cases.map(({ after, ...row }) => row) : [] };
   const files = await changedFiles(run, p);
-  const storyPaths = runStoryPaths(run, files);
+  const diffBase = base ?? run.prBase ?? run.baseBranch;
+  const diff = await diffStat(run, p, diffBase, head);
+  const storyDiff = diffBase === run.baseBranch ? diff : await diffStat(run, p, run.baseBranch, head);
+  const changed = new Set(files);
+  const storyPaths = runStoryPaths(run, (storyDiff?.files ?? []).map(file => file.path).filter(path => changed.has(path)));
   const stories = [], missing = [];
   for (const path of storyPaths) {
     let text = null;
@@ -1456,7 +1462,6 @@ async function readableFacts(run, area, p, evidence, { drafts = [], pending = fa
     const story = text === null ? null : userStory(text);
     if (story) stories.push(story); else if (text !== null) missing.push(path);
   }
-  const diff = await diffStat(run, p, base ?? run.prBase ?? run.baseBranch, head);
   const results = evidence.results ?? [], test = results.find(result => result.kind === 'pdd test'), lint = results.find(result => result.kind === 'pdd lint');
   const testResult = test ? resultText(test.summary) : '', lintCount = lint && /(\d+) of (\d+) tests pass/.exec(lint.summary);
   const native = /(\d+)\/(\d+) passed/.exec(evidence.nativeLine ?? '');
@@ -1477,7 +1482,7 @@ async function readableFacts(run, area, p, evidence, { drafts = [], pending = fa
   const first = layout === 'code' && pr1 ? await prStatusOf(run, pr1, p) : null;
   const pr1Merged = Boolean(pr1) && (run.prBase === run.baseBranch || first?.state === 'merged');
   return { layout, single: label === 'the PR', workflow: run.workflow, number: run.number, baseBranch: run.baseBranch, mode, pending, draft: run.draft === true, issueReference: evidence.issueReference,
-    stories, storyNote: missing.length ? `${missing.join(', ')} has no "As a …, I want …, so that …" line` : storyPaths.length ? 'the Story file could not be read' : 'this run changes no Story file',
+    stories, storyNote: missing.length ? `${missing.join(', ')} has no "As a …, I want …, so that …" line` : storyPaths.length ? 'the Story file could not be read' : 'no Story applies to this PR',
     fields, thisPr: holds.length ? `${others.length ? '' : 'no code change. '}It holds ${listed(holds)}.` : 'no code change.', diff,
     area: prArea({ area: fields.area, files, workflow: run.workflow }), title: fields.title,
     records: {
