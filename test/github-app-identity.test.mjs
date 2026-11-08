@@ -280,3 +280,33 @@ else process.exitCode = 1;
   } });
   assert.equal(result.state, 'healthy'); assert.equal(sent, true); assert.equal(w.tokens.length, 0);
 });
+
+for (const preferred of [false, true]) test(`automatic App worker keeps personal interpreter authentication with preferred gh ${preferred}`, async t => {
+  const w = await githubAppWorld(t), fakeBin = join(w.dir, 'automatic-runtime-bin'), runDir = join(w.dir, 'automatic-runtime-run');
+  mkdirSync(fakeBin); mkdirSync(runDir);
+  const callsFile = join(w.dir, 'personal-gh-calls.json');
+  writeFileSync(join(fakeBin, 'gh'), `#!${process.execPath}
+require('node:fs').writeFileSync(${JSON.stringify(callsFile)}, JSON.stringify(process.argv.slice(2)));
+if (process.argv[2] === 'auth' && process.argv[3] === 'token') console.log('personal-runtime-fake-token');
+else process.exitCode = 1;
+`, { mode: 0o755 });
+  const env = { ...w.env, PATH: `${fakeBin}:${w.env.PATH}`, PDD_GITHUB_ROOT: w.stateRoot };
+  const launch = chatLaunch({ run: { sourceRoot: w.cwd, root: w.cwd, runDir, automaticOrigin: true }, agent: 'codex', env });
+  assert.equal(launch.githubEnv.PDD_GITHUB_APP_ROOT, w.cwd);
+  const writeExecutable = join(launch.githubEnv.PATH.split(':')[0], 'gh');
+  const { checkRuntimeHealth } = await import('../src/runtime-client.mjs');
+  let sent = 0;
+  const result = await checkRuntimeHealth({ env: { ...env, ...launch.githubEnv } }, {
+    ...(preferred ? { ghPath: writeExecutable } : {}),
+    fetch: async (_url, init) => {
+      sent++;
+      assert.ok(new Headers(init.headers).get('authorization') === 'Bearer personal-runtime-fake-token');
+      return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+    },
+  });
+  assert.equal(result.state, 'healthy');
+  assert.equal(sent, 1);
+  assert.deepEqual(JSON.parse(readFileSync(callsFile, 'utf8')), ['auth', 'token']);
+  assert.equal(w.tokens.length, 0);
+  assert.ok(!JSON.stringify(result).includes('personal-runtime-fake-token'));
+});

@@ -171,7 +171,7 @@ export function githubWriteEnvironment({ root, env = process.env, fs = nativeFs 
   const folder = join(root, 'github-bin', hash(self));
   fs.mkdirSync(folder, { recursive: true, mode: 0o700 });
   const wrapper = join(folder, 'gh');
-  const source = `#!${process.execPath}\nimport(${JSON.stringify(new URL(import.meta.url).href)}).then(m => m.runGithubWriteProxy()).catch(() => { process.stderr.write('GitHub write transport unavailable\\n'); process.exitCode = 1; });\n`;
+  const source = `#!${process.execPath}\n// PDD GitHub write transport v1\nimport(${JSON.stringify(new URL(import.meta.url).href)}).then(m => m.runGithubWriteProxy()).catch(() => { process.stderr.write('GitHub write transport unavailable\\n'); process.exitCode = 1; });\n`;
   let same = false; try { same = fs.readFileSync(wrapper,'utf8') === source; } catch { /* First launch. */ }
   if (!same) { const temp = `${wrapper}.${process.pid}.tmp`; fs.writeFileSync(temp,source,{mode:0o700}); fs.renameSync(temp,wrapper); }
   const original = (env.PATH ?? '').split(delimiter).filter(path => !path.includes(`${delimiter === ':' ? '/' : '\\'}github-bin${delimiter === ':' ? '/' : '\\'}`));

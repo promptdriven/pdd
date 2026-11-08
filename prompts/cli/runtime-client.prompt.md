@@ -6,9 +6,13 @@ Own `src/runtime-client.mjs`. Export `runCheck({words, options, cwd, cache=false
 
 Hosted checks and capacity probes keep the person's gh identity when Autopilot
 uses an App for repository work. The native auth executable selector skips the
-bundled App transport, identified by `PDD GitHub App transport v1` in its first
-64 bytes, as it already skips the Try launcher. This also applies to a preferred
-ghPath. It selects the normal gh executable behind those wrappers. Do not mint,
+bundled App transport and private write transport, identified respectively by
+`PDD GitHub App transport v1` and `PDD GitHub write transport v1` in their first
+64 bytes after the optional shebang line, as it already skips the Try launcher.
+An absolute Node path can make that interpreter line longer than 64 bytes.
+This also applies to a preferred
+ghPath and to automatic workers with both transports on PATH. It selects the
+normal gh executable behind those wrappers. Do not mint,
 print or send an App installation token to the interpreter. Personal interpreter
 access remains a separate prerequisite; App mode adds no hosted authentication
 route. Preserve injected gh ports and all other runtime behavior.

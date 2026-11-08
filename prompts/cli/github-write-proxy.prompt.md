@@ -21,6 +21,9 @@ calls. Manual shells are unchanged. Exports:
   effect, and share cooldown outcomes. Do not store credentials.
 - `githubWriteEnvironment({root,env,fs})` returns `{PATH,PDD_GITHUB_ROOT}`.
   Prepare a private executable named gh under root, bound to this package.
+  Identify it with `PDD GitHub write transport v1` in the first 64 bytes after
+  its shebang line so
+  interpreter sign-in can select the personal gh behind both private transports.
   The executable delegates to the original gh found after removing private
   wrapper directories from PATH. Forward stdin, stdout, stderr and exit status;
   no shell interpolation of arguments. Do not alter the person's gh or config.

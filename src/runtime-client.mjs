@@ -59,8 +59,8 @@ function authExecutable(env, preferred) {
     try {
       const stat = lstatSync(path);
       if (!stat.isFile() && !stat.isSymbolicLink()) continue;
-      const marker = readFileSync(path).subarray(0, 64).toString();
-      if (marker.includes('PDD Try launcher v1') || marker.includes('PDD GitHub App transport v1')) continue;
+      const marker = readFileSync(path, 'utf8').replace(/^#![^\n]*\n/, '').slice(0, 64);
+      if (marker.includes('PDD Try launcher v1') || marker.includes('PDD GitHub App transport v1') || marker.includes('PDD GitHub write transport v1')) continue;
       return realpathSync(path);
     } catch { /* try the next PATH directory */ }
   }

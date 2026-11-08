@@ -75,7 +75,9 @@ pdd does not grant the App extra trust or merge authority.
 
 Run `pdd autopilot start` from the checkout. No personal `gh` login is needed
 for App repository API calls. Hosted prompt checks keep their separate personal
-GitHub sign-in and interpreter access. The App does not replace that sign-in. pdd validates the key, resolves the repository installation,
+GitHub sign-in and interpreter access. Interpreter sign-in selects the personal
+`gh` behind the App and write wrappers, including in automatic workers. The App
+does not replace that sign-in. pdd validates the key, resolves the repository installation,
 checks the grants and verifies repository access before starting a timer or
 chat. It reads the installation API limit before admitting work. A failure
 names the failed stage or HTTP status and starts no work. It does not try the
