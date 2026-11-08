@@ -13,7 +13,7 @@ import { codexConfigs, tomlBasicString } from './helpers/codex-config-args.mjs';
 const root = resolve('.');
 const capture = () => ({ text: '', write(s) { this.text += s; } });
 async function fixture(t, options = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'pdd-autopilot-'));
+  const dir = mkdtempSync(join(tmpdir(), options.tempPrefix ?? 'pdd-autopilot-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const cwd = join(dir, options.cwdName ?? 'repo'), home = join(dir, 'home');
   mkdirSync(cwd); mkdirSync(home);
@@ -354,7 +354,7 @@ test('two machine launchers offer the same issue to the skill without making a c
 
 test('native Linux and macOS user timers pin Node, script, state and environment without a shell', async t => {
   for (const platform of ['linux', 'darwin']) {
-    const f = await fixture(t); delete f.ports.timer; f.ports.platform = platform; f.ports.uid = 123;
+    const f = await fixture(t, {tempPrefix: 'pdd-autopilot-sh-'}); delete f.ports.timer; f.ports.platform = platform; f.ports.uid = 123;
     // Keep both platform branches independent of the host's XDG paths and user services.
     const env = { HOME: f.home, PATH: '/fixture/bin', XDG_CONFIG_HOME: join(f.home, '.config') };
     const run = f.ports.run, serviceCalls = [];
@@ -376,7 +376,8 @@ test('native Linux and macOS user timers pin Node, script, state and environment
       assert.ok(text.includes(process.execPath)); assert.ok(text.includes('/src/autopilot-launcher.mjs'));
       assert.ok(text.includes(f.stateFile())); assert.match(text, /Environment="PATH=/);
       assert.match(text, /^KillMode=process$/m);
-      assert.doesNotMatch(text, /\/bin\/.*sh|TOKEN|API_KEY/);
+      assert.doesNotMatch(text, /^ExecStart="?(?:[^"\s]*\/)?(?:sh|bash|dash|zsh|ksh|fish)"?(?:\s|$)/m);
+      assert.doesNotMatch(text, /TOKEN|API_KEY/);
       assert.match(readFileSync(join(folder, service.replace('.service', '.timer')), 'utf8'), /OnActiveSec=30min/);
       assert.deepEqual(serviceCalls.filter(([command]) => command === 'systemctl').map(([, args]) => args), [
         ['--user', 'daemon-reload'], ['--user', 'enable', service.replace('.service', '.timer')],
