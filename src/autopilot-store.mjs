@@ -46,14 +46,19 @@ export function openAutopilotStore({ root }, ports = {}) {
   try { fs.fchmodSync(fd, 0o600); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
   const db = new DatabaseSync(file);
   let active = false;
+  const deadline = performance.now() + 5000;
+  const pause = new Int32Array(new SharedArrayBuffer(4));
   try {
-    db.exec('PRAGMA busy_timeout=5000');
-    const version = db.prepare('PRAGMA user_version').get().user_version;
-    if (version > SCHEMA) throw Error('Unsupported machine state schema');
-    db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; BEGIN IMMEDIATE');
-    try {
-      if (db.prepare('PRAGMA user_version').get().user_version > SCHEMA) throw Error('Unsupported machine state schema');
-      db.exec(`CREATE TABLE IF NOT EXISTS records (
+    for (;;) {
+      // journal_mode can return SQLITE_BUSY immediately despite busy_timeout.
+      // Bound all initialization attempts by one deadline, including native waits.
+      db.exec(`PRAGMA busy_timeout=${Math.max(0, Math.ceil(deadline - performance.now()))}`);
+      try {
+        if (db.prepare('PRAGMA user_version').get().user_version > SCHEMA) throw Error('Unsupported machine state schema');
+        db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; BEGIN IMMEDIATE');
+        try {
+          if (db.prepare('PRAGMA user_version').get().user_version > SCHEMA) throw Error('Unsupported machine state schema');
+          db.exec(`CREATE TABLE IF NOT EXISTS records (
         bucket TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL,
         PRIMARY KEY (bucket,key)) STRICT;
         CREATE TABLE IF NOT EXISTS journal (
@@ -62,7 +67,19 @@ export function openAutopilotStore({ root }, ports = {}) {
         CREATE INDEX IF NOT EXISTS journal_scope ON journal(bucket,scope,sequence);
         CREATE TABLE IF NOT EXISTS imports (identity TEXT PRIMARY KEY) STRICT;
         PRAGMA user_version=1; COMMIT`);
-    } catch (error) { db.exec('ROLLBACK'); throw error; }
+        } catch (error) {
+          try { db.exec('ROLLBACK'); } catch { /* Preserve the initialization failure. */ }
+          throw error;
+        }
+        break;
+      } catch (error) {
+        // Extended result codes keep SQLITE_BUSY (5) or SQLITE_LOCKED (6) in the low byte.
+        const primary = error.errcode & 0xff, remaining = deadline - performance.now();
+        if ((primary !== 5 && primary !== 6) || remaining <= 0) throw error;
+        Atomics.wait(pause, 0, 0, Math.min(10, remaining));
+      }
+    }
+    db.exec('PRAGMA busy_timeout=5000');
   } catch (error) { db.close(); throw error; }
   return {
     close() { db.close(); },

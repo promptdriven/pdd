@@ -250,4 +250,9 @@ Store call rows in the events journal, scoped by the lowercase repository
 hash. Preserve every call, including identical calls. `githubLedger` also
 exposes `exists()` for participation checks. Import JSONL once, then compact
 inside a transaction. ETag merge and replacement use one cache transaction.
+Machine-wide reads isolate each legacy source read failure: keep readable and
+already committed observations from other repositories available for budget
+decisions. Leave a failed source unmarked so a later read can retry it; a failed
+read must not commit any rows from that source. Storage transaction failures
+retain the existing empty-result policy.
 An injected `store` port replaces the backend alongside the existing `fs` port.

@@ -12,6 +12,8 @@ use a runtime with SQLite for that installation. There is no dependency installa
 The database and its folder are private. A private `machine-backend` marker
 selects one format atomically when several processes first open the store. Each write uses a SQLite transaction,
 WAL journaling, FULL synchronous durability and a five-second busy wait.
+SQLite initialization retries transient lock contention within that same wait
+budget. Concurrent first opens can share a fresh state folder.
 
 The store has record buckets for control, queue, runs, leases, budgets, costs,
 events, cache and alerts. Journal rows retain independent events and cost rows,
@@ -34,6 +36,9 @@ marker, so an old file cannot restore completed work. An interrupted transaction
 leaves the prior committed state available. Malformed launcher JSON is reported;
 cache owners retain their normal empty-cache recovery policy. An unreadable
 database never switches back to old state files.
+Machine budget reads skip an unreadable legacy ledger and keep healthy and
+already committed observations. The failed ledger remains eligible for import
+on a later read.
 
 Use one storage version for the processes that share a state folder. A binary
 that reads only the retained JSON files cannot see later database writes. Stop
@@ -59,6 +64,7 @@ Run the bounded native checks from the repository root:
 
 ```sh
 node --test test/autopilot-store.test.mjs test/autopilot-store-regression.test.mjs
+node --test test/autopilot-store-repair.test.mjs
 node --test test/github-calls.test.mjs test/github-dependency-snapshot.test.mjs test/github-dependency-snapshot-repair.test.mjs
 ```
 

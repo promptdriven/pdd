@@ -45,7 +45,11 @@ values are refused. Exceptions, failed commits and process death roll back the
 whole transaction. A callback cannot return a promise, nest transactions or use
 a transaction after its callback ends. `close` releases native resources.
 Native writes use SQLite WAL, FULL synchronous durability and a bounded busy
-wait. Schema creation is transactional and versioned; refuse a newer schema
+wait. Concurrent SQLite-capable first openers must all be able to initialize
+the same unused root and retain their committed operations. Retry transient
+SQLite initialization contention within the same five-second wait budget;
+other initialization failures propagate without retry. Schema creation is
+transactional and versioned; refuse a newer schema
 without altering it. Private state folders and database files use 0700 and 0600.
 Database errors propagate to the owning caller's existing error policy. A failed
 database open must never silently return to stale JSON after import.

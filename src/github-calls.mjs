@@ -142,7 +142,10 @@ export function githubMachineEntries({ root, fs = nativeFs, store }) {
   try { return withAutopilotStore(root, { fs, store }, tx => {
     for (const name of names) {
       const scope = name.slice(0, -6);
-      tx.migrate(`github:${scope}`, () => readLines(fs, join(ledgerFolder(root), name), true), entries => {
+      tx.migrate(`github:${scope}`, () => {
+        try { return readLines(fs, join(ledgerFolder(root), name), true); }
+        catch { return undefined; } // Retry this source later; keep healthy machine evidence.
+      }, entries => {
         for (const entry of entries) tx.append('events', scope, entry);
         tx.put('budgets', scope, { repository: entries[0]?.repo ?? null });
       });
