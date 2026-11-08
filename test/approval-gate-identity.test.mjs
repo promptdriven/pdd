@@ -220,3 +220,18 @@ test('R1 legacy evidence remains readable without invented actor or words',async
  assert.ok(Array.isArray(result.approvalLines), 'preparePrEvidence requires approvalLines array for identified and legacy approval evidence');
  assert.equal(result.approvalLines.filter(line=>line.startsWith('Approved in terminal:')).length,1);assert.doesNotMatch(result.approvalLines.join('\n'),/actor|ship it/);
 });
+
+test('2897 PR1 code reply refresh follows the durable code decision',async t=>{
+ const f=await ready(t,'ask-code'),words='audit-code-0127',execute=f.ports.execFile;
+ let published=false;
+ const out=await approveRun({ref:'17',cwd:f.source,said:words},{...f.agentPorts(),execFile:async(file,args,opts)=>{
+  if(file==='gh'&&args[0]==='pr'&&args[1]==='edit'&&String(opts.input).includes(words)){
+   published=true;
+   assert.equal(f.record().decisions.at(-1).evidence.words,words);
+   assert.equal(f.record().approvalRecord.evidence.words,words);
+  }
+  return execute(file,args,opts);
+ }});
+ assert.equal(out.exitCode,0,out.message);
+ assert.equal(published,true,'successful code entry publishes its committed reply');
+});
