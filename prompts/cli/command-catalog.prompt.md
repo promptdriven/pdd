@@ -41,6 +41,10 @@ Help forms and completion name only the `NAMES` words.
 Catalog `autopilot.merge` with prefix `autopilot merge`, local `autopilot-merge`,
 one required issue-type numeric PR operand, text option `--input` and flag
 `--observe`. Form: `pdd autopilot merge PR --input - [--observe]`.
+Execution requires the PR operand and stdin evidence marker `--input -`.
+Runnable documentation examples supply a positive numeric PR, for example
+`pdd autopilot merge 123 --input -`; bare `pdd autopilot merge` is not an
+execution form. Preserve rejection of missing operands.
 Description: Check merge rules and submit to the base branch queue or merge the
 exact head. Read evidence JSON from stdin. --observe reads the result and audit
 without a write. [Merge owner](autopilot-merge.prompt.md) owns validation.
@@ -238,7 +242,7 @@ The closing lines are exactly:
 ```text
 Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex, /pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting).
 workflow run opens the first area chat in Herdr session pdd and exits. Manual workflows follow RUNBOOK §2 and its person gates; pdd opens a real PR.
-Auto agents use pdd-merge and pdd autopilot merge after repository review and tests, with required human approvals.
+Auto agents use pdd-merge and pdd autopilot merge PR --input - after repository review and tests, with required human approvals.
 ```
 
 (`run` is the [NAMES](#names) word. Codex calls a skill with `$name`, Claude Code with `/name`.)

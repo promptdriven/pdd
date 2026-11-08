@@ -5,7 +5,8 @@ This page lists every command of pdd 0.1.24, as `pdd --help` shows it. A test (`
 ## Autopilot merge
 
 `pdd autopilot merge PR --input - [--observe]` is the guarded Autopilot merge
-route. It reads one JSON object from stdin and prints one JSON result. It does
+route. Supply the PR number and `--input -`; the bare route is not an execution
+form. It reads one JSON object from stdin and prints one JSON result. It does
 not grant merge authority or approve prompts. The operator supplies attributed
 review, local full-suite and approval-gate evidence. GitHub supplies the live PR,
 base policy, issue author trust, required CI and repository review status.
@@ -617,7 +618,7 @@ The fresh replacement keeps the run, worktree, progress, gates and approvals, an
 - The first message of each chat gives the full path of this pdd. The agent uses it, so another `pdd` on its PATH does not matter.
 - A Codex chat also gets `-c shell_environment_policy.set.PDD_BIN=…` and `-c shell_environment_policy.set.PDD_AGENT_SESSION="1"` for this launch only, so its commands keep both values when the Codex profile sets `inherit = "core"` or `"none"`. pdd does not change Codex settings. Limit: a `shell_environment_policy.include_only` list that leaves out a name still removes it.
 - No command has a time limit. You can close the terminal at any time.
-In manual workflows, ask your agent to merge under [RUNBOOK §2](../RUNBOOK.md#2-the-files). In Autopilot `auto` mode, pdd-merge submits eligible merges through `pdd autopilot merge` after repository review and test rules pass; required human approvals still apply.
+In manual workflows, ask your agent to merge under [RUNBOOK §2](../RUNBOOK.md#2-the-files). In Autopilot `auto` mode, pdd-merge submits eligible merges through `pdd autopilot merge PR --input -` after repository review and test rules pass; required human approvals still apply.
 
 `pdd workflow run bug 2544 --draft` saves draft PR publication before starting the
 chat. The saved Boolean applies to PR 1 and the separately approved code PR, or
