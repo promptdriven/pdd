@@ -312,6 +312,10 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         line(stderr, `pdd stopped with an internal error. If it sent checks, read them with pdd test --read. Do not send them again.${reason(error)}`);
         return 3;
       }
+    case 'project-files': {
+      const { runProjectFiles } = await import('./project-files.mjs');
+      return runProjectFiles({ cwd, json: !!plan.options['--json'] }, { stdout, stderr });
+    }
     case 'prompt-approve': {
       const { runApprove } = await import('./prompt-approve.mjs');
       return runApprove({ words: [...plan.operands], cwd, said: plan.options['--said'] }, { stdout, stderr, stdin, env });

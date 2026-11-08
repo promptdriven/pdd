@@ -1696,22 +1696,17 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
     criterion_texts: Object.fromEntries((Array.isArray(test.doc?.criteria) ? test.doc.criteria : []).filter(isObject).map(item => [item.id, item.text])),
     ...(discoveryRefusal(test) ? { state: 'refused', phase: 'local', refusals: [discoveryRefusal(test)], steps: [] } : {}) }));
   const local = row => row.phase === 'local';
-  const {readPrompt,interfaceSchemaProblems} = await import('./runtime-preflight.mjs');
+  const {promptSchemaRefusals} = await import('./runtime-preflight.mjs');
   const prompts = new Map();
-  const limitsFor = (path, seen) => {
+  const problemsFor = (path, seen) => {
     if (typeof path !== 'string' || seen.has(path)) return [];
-    seen.add(path);
-    if (!prompts.has(path)) prompts.set(path,readPrompt(root,found.visible,path));
-    const prompt = prompts.get(path);
-    if (!prompt.interface) return [];
-    const own = interfaceSchemaProblems(prompt.interface).filter(problem =>
-      ['invalid-limits','invalid-interface'].includes(problem.code) && problem.pointer.startsWith('/limits'))
-      .map(problem => ({code:problem.code,section:problem.pointer,path,message:`${path} ${problem.pointer} ${problem.rule}`,hint:problem.hint}));
-    return [...own,...(Array.isArray(prompt.interface.calls) ? prompt.interface.calls : []).flatMap(call => limitsFor(call?.target,seen))];
+    if (!prompts.has(path)) prompts.set(path, readPrompt(root, found.visible, path, found.workspace));
+    return promptSchemaRefusals(root, found, prompts.get(path), prompts, seen).filter(problem =>
+      ['invalid-limits', 'invalid-interface'].includes(problem.code) && problem.section.startsWith('/limits'));
   };
   const limitRows = rows.map(row => {
     const seen = new Set();
-    return local(row) ? row : {...row,refusals:row.steps.flatMap(step => limitsFor(step.entry_path,seen))};
+    return local(row) ? row : {...row,refusals:row.steps.flatMap(step => problemsFor(step.entry_path,seen))};
   });
   const limited = limitRows.some(row => !local(row) && row.refusals.length);
   if (limited || rows.every(local)) {

@@ -44,7 +44,13 @@ Dispatch `workflow-yield` to workflow runner module function `yieldAutomaticCapa
 
 The `autopilot start --resume-custody FILE` option passes the file path unchanged to the launcher; the launcher owns recovery checks and effects.
 
+Dispatch `project-files` to `runProjectFiles({cwd,json}, {stdout,stderr})`
+from the files view module, with json from --json. Return its exit code. This
+local route imports no Runtime client, reads no token and installs no skills.
+
 ## Dependencies
+
+- [Files view](files.prompt.md): required generation/verification/testing context for read-only file inspection and exits.
 
 - [Metrics command](metrics-command.prompt.md): required native generation/verification context for local metrics dispatch.
 
