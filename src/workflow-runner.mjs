@@ -1426,11 +1426,15 @@ async function pr1StoryPaths(run, p) {
   if (!pr1) return [];
   const saved = pr1.readable?.facts?.storyPaths;
   if (Array.isArray(saved)) return saved;
-  // Older records have no path snapshot. Only the run's own first-parent commits
-  // establish ownership; main's Stories brought in by a merge do not.
-  const head = commitSha(pr1.publishedHeadSha) ? pr1.publishedHeadSha : `refs/remotes/origin/${pr1.branch}`;
+  // A legacy record has no ownership snapshot. The PR's file list distinguishes
+  // its changes from upstream updates, including fast-forwards before its first
+  // commit. Local history since baseSha cannot establish that distinction.
   try {
-    return (await rawGit(p, run.root, 'log', '--first-parent', '--no-merges', '--format=', '--name-only', '--no-renames', '-z', `${run.baseSha}..${head}`, '--')).split('\0');
+    const reply = await p.execFile('gh', ['api', `repos/${run.repo}/pulls/${pr1.number}/files?per_page=100`, '--paginate', '--slurp'], { cwd: run.root });
+    if (reply.code !== undefined && reply.code !== 0) return [];
+    const pages = JSON.parse(reply.stdout);
+    if (!Array.isArray(pages) || !pages.every(Array.isArray)) return [];
+    return pages.flatMap(page => page.map(file => file?.filename));
   } catch { return []; }
 }
 // Readable Stories come from the current run-base diff, PR 1 or explicit Story references/approval.

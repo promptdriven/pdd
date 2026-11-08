@@ -46,6 +46,10 @@ const remote=(ref='topic')=>{try{return cp.execFileSync('git',['ls-remote','orig
 if(a[0]==='repo')out({nameWithOwner:'example/project',defaultBranchRef:{name:'main'},url:'https://github.com/example/project'});
 else if(a[1]==='list')out(s.prs.filter(p=>(!a.includes('--head')||p.headRefName===flag('--head'))&&(!a.includes('--search')||p.body.includes(flag('--search').split('"')[1]))).map(p=>({...p,headRefOid:remote(p.headRefName)||p.headRefOid})));
 else if(a[1]==='view'){const found=s.prs.find(p=>p.url===a[2]),p=found?.headRefName?{...found,headRefOid:remote(found.headRefName)||found.headRefOid}:found||{body:''};out(String(flag('--json')).split(',').includes('comments')?{...p,comments:(s.comments||[]).map(c=>({author:{login:'reviewer'},authorAssociation:c.author_association,body:c.body,createdAt:c.created_at,url:c.html_url}))}:p)}
+else if(a[0]==='api'&&/^repos\\/example\\/project\\/pulls\\/\\d+\\/files\\?per_page=100$/.test(a[1])){
+ if(!a.includes('--paginate')||!a.includes('--slurp'))throw Error('file list must include every JSON page');
+ const pages=s.prFiles?.[a[1].split('/')[4]];if(!pages)throw Error('file list unavailable');out(pages);
+}
 else if(a[0]==='api'&&a.some(x=>x.includes('/comments')))out((s.comments||[]).map(c=>JSON.stringify(c)).join('\\n'));
 else if(a[1]==='create'||a[1]==='edit'){
  if(flag('--body-file')!=='-')throw Error('must read body from stdin');
@@ -602,7 +606,7 @@ for (const selection of ['docs', 'changed', 'named', 'approved', 'stacked-change
   });
 }
 
-for (const history of ['legacy-branch', 'legacy-head', 'published-merge', 'published-squash']) {
+for (const history of ['legacy-branch', 'legacy-head', 'published-merge', 'published-squash', 'legacy-branch-fast-forward', 'legacy-head-fast-forward']) {
   test(`3085-MERGED-STORY: ${history} retains PR 1 ownership without a named Story or fingerprint`, t => {
     const published = history.startsWith('published-');
     const f = fixture(t, { prompt: published });
@@ -613,7 +617,10 @@ for (const history of ['legacy-branch', 'legacy-head', 'published-merge', 'publi
     f.git('add', '.'); f.git('commit', '-qm', 'Unrelated upstream Story');
     const upstream = f.git('rev-parse', 'HEAD');
     f.git('push', '-q', 'origin', 'main');
-    f.git('switch', 'topic'); f.git('merge', '--no-edit', 'main');
+    f.git('switch', 'topic');
+    if (history.endsWith('fast-forward')) f.git('reset', '--hard', f.run.baseSha);
+    f.git('merge', '--no-edit', 'main');
+    if (history.endsWith('fast-forward')) assert.equal(f.git('rev-parse', 'HEAD'), upstream);
     writeFileSync(join(f.root, ownPath), VALUE_STORY.replace('two,', 'OWN3085,'));
     if (published) {
       // The retained Story inventory must survive the readable diff's 40-file cap.
@@ -634,7 +641,12 @@ for (const history of ['legacy-branch', 'legacy-head', 'published-merge', 'publi
     } else {
       f.git('push', '-q', 'origin', 'HEAD:refs/heads/prompt-topic');
       pr1 = f.run.pr[0];
-      if (history === 'legacy-head') pr1.publishedHeadSha = pr1Head;
+      if (history.startsWith('legacy-head')) pr1.publishedHeadSha = pr1Head;
+      // GitHub retains the PR's own diff after main merges it. Capture that diff
+      // with real Git before the merge, then serve its filenames as API pages.
+      const files = f.git('diff', '--name-only', '-z', `${upstream}...${pr1Head}`).split('\0').filter(Boolean);
+      assert.ok(files.includes(ownPath)); assert.ok(!files.includes(inheritedPath));
+      f.configure({ prFiles: { [pr1.number]: files.map(filename => [{ filename }]) } });
     }
     if (history === 'published-squash') {
       f.git('switch', 'main'); f.git('merge', '--squash', 'topic');
@@ -647,7 +659,7 @@ for (const history of ['legacy-branch', 'legacy-head', 'published-merge', 'publi
     f.git('push', '-q', 'origin', 'main');
     // PR 2 starts from merged main, as codeBranch does. The old PR branch can be gone.
     f.git('switch', '-qc', 'topic-code');
-    if (history !== 'legacy-branch') {
+    if (!history.startsWith('legacy-branch')) {
       f.git('push', '-q', 'origin', '--delete', pr1.branch);
       f.git('update-ref', '-d', `refs/remotes/origin/${pr1.branch}`);
     }
