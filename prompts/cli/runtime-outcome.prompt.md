@@ -7,6 +7,55 @@ decision, so two consumers can never disagree about the same answer. A pass need
 positive evidence about that test; missing or unrecognized evidence is never
 `passed`. Pure module: no IO, clock, mutation of its input or module state.
 
+## Public result vocabulary
+
+Export `CHECK_STATES`, the fixed ordered list `waiting`, `sent`, `passed`,
+`failed`, `refused`, `partial`, `not run`. Export pure
+`resultOutcome(row)` returning `{state, reason}`. `reason` is null only for
+`passed`; otherwise it is `{code, message}`, both nonempty strings.
+This is the single owner of public result names and reason mapping. Transport
+and recovery may retain their existing internal states. These are not public
+result names. Keep raw server refusal codes in refusal records.
+
+| Evidence or internal state | Public state | Default reason code |
+|---|---|---|
+| ready, waiting, no submission yet | waiting | awaiting-admission |
+| queued, running | sent | awaiting-server-verdict |
+| sending without a confirmed receipt | partial | dispatch-uncertain |
+| positive pass | passed | none |
+| failed check | failed | check-failed |
+| explicit refusal | refused | first refusal code, else admission-refused |
+| local SVG lint only | partial | local-only |
+| unknown or missing verdict after submission | partial | no-server-verdict |
+| not_run, not run | not run | no-server-verdict |
+
+A supplied reason or note code wins over defaults. Map check-busy and lint-busy
+to server-busy. Map the internal recovery note lint-pending to public deadline
+when an invocation ends its wait for a running lint. During the original
+free lint wait, interruption uses interrupted instead. A saved read can retain
+the producer deadline reason until fresh lint evidence replaces it. A retryable not-run capacity refusal defaults to server-busy in
+public rows; a supplied timeout-flag, deadline or interrupted cause takes precedence
+over that capacity default. Keep the capacity evidence and raw refusal code separately.
+Preserve broken-test as a not-run reason, for a caller that cannot
+run a malformed test; this module does not decide which tests to skip. A caller
+stopped by its explicit `--timeout` reports timeout-flag and names `--timeout` in
+the message. An internal or server deadline reports deadline. A known broken-test
+reason means not run. Provider failures retain their provider code and the existing provider-failure
+explanation in the public reason. A server step timeout retains its small-step
+advice as part of the deadline explanation. Unknown supplied public state names become partial with
+no-server-verdict. Keep supplied human explanations when available.
+
+Use this projection for text, JSON, saved batch rows and PR evidence lines.
+`outcomeText` uses the public state and includes its reason code. Progress may
+append queue position and step/call counts. Summary lines include the public
+states and reason codes of every non-passing row. Only passed counts as a full
+pass. A partial result never admits a PDD gate, workflow step or Autopilot pass.
+`resultOverall(outcomes, options)` projects the row that decides the existing
+exit precedence. Lint metadata uses this selected aggregate after judging rows,
+so a raw passing job without selected passes cannot appear as a full lint pass.
+The internal functions below retain recovery and exit precedence compatibility;
+a public partial result exits 3 unless its caller is the local SVG lint command.
+
 ## Outcomes
 
 Module function `outcomeFor(answer, {test, steps = [], kind = answer.command, timeLimit = false, sourceFiles, capacityUncertain = false})`
@@ -24,7 +73,7 @@ refusal classification; the answer cannot project as busy or not run.
 | passed | check: job state `passed` with a result object; lint: see below | lint: `draft` |
 | failed | check job state `failed` | `criteria` from `report.criterion_results` |
 | refused | an explicit refusal, see below | `code`, `field`, `fix`, `message`, `refusals` |
-| not_run | retryable pool refusal before dispatch; an ended lint with no pass for the test | `code`, `retryable`, `message` or `reason` |
+| not_run | retryable pool refusal before dispatch; an ended lint with no pass for the test | nonempty `code`, `retryable`, `message` or `reason` |
 | unknown | a lint or check that has not ended with a verdict, and every time-limit stop | `reason` |
 
 `unknown` means "still open or not known": reading the same job again may change
@@ -104,6 +153,8 @@ flowchart TD
   `The interpreter refused lint.`). A test with its own passing verdict is
   eligible under the selected compatibility rule; the job refusal stays visible
   as a diagnostic in the client.
+- **Not run code**: `deadline` when lint is incomplete; `no-server-verdict`
+  when complete lint has no verdict. Keep a compatibility issue code when known.
 - **Not run reason**: `lint did not finish` when lint is not complete, a reached
   prompt was not listed or the verdict is `not-checked`; else `lint gave no verdict
   for this test`.
@@ -183,25 +234,21 @@ number from 1, and a nonempty step name. Missing or invalid fields stay absent;
 never invent zero. This is a contract for a server field: use it when the server
 sends it.
 
-Each function below reads only `state`, `progress` and `ahead`, so a saved row
-that carries these outcome fields is used as it is.
+Presentation reads public state, reason, progress and queue fields. Recovery and
+exit helpers below also accept the internal outcome states.
 
-- Module function `outcomeText(outcome)`: `queued · 2 ahead` (or `queued`),
-  `not run`, the state name for other ended states, and for running
-  `running · step 3 of 5 (render) · 4 AI calls so far · 1 not yet settled`. A
-  whole-number `step` is the one-based step number; otherwise the number is
-  `steps_done + 1` while `steps_done` is below `steps_total`. A named `step` follows
-  the number in parentheses, or stands alone when no number is known. Omit each
-  missing fragment. `calls_open` counts calls without a settled result, which can
-  stay open until the check ends, so it reads `N not yet settled`, never as live
-  traffic, and appears only when it is above zero.
+- Module function `outcomeText(outcome)` uses the public result vocabulary above.
+  Append queue position when known. Append supplied progress: step number from
+  `step` or `steps_done + 1`, with `of steps_total` when known, then a supplied
+  step name in parentheses (or alone without a number). Append settled calls
+  as `N AI calls so far` and positive open calls as `N not yet settled`.
 - Module function `hasProgress(outcome)`: running with at least one progress field.
 - Module function `progressText(outcomes)`: one fragment for a line, or null when
   no outcome has progress. With one such outcome, its `outcomeText`. With several,
-  `running · <sum of calls_settled> AI calls so far · <sum of calls_open> not yet
+  `sent (awaiting-server-verdict) · <sum of calls_settled> AI calls so far · <sum of calls_open> not yet
   settled`, without a step; a sum is left out when no outcome reports it.
 - Module function `outcomeDone(outcome)`: true only for `passed`, `failed`,
-  `refused` and `not_run`. `unknown` is not done.
+  `refused`, `not_run` and public `not run`. `unknown` and `partial` are not done.
 - Module function `outcomeOverall(outcomes, {interrupted, lintUnknown} = {})`: the
   state that decides a group. Any state that is not done counts as `unknown`. Empty,
   interrupted or `lintUnknown` is `unknown`. Else the first present of `unknown`,

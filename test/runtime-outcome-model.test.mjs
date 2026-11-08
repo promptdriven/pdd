@@ -63,20 +63,20 @@ test('OUTCOME model: the exit precedence', () => {
 
 test('OUTCOME model: queued keeps its place in the table and JSON', () => {
   const view = row(projectAnswer({ command: 'check', state: 'queued', queue: { ahead: 2 } }));
-  assert.match(renderText({ batch: 'b', rows: [view], exitCode: 3 }), /One +tests\/one\.json +queued · 2 ahead/);
+  assert.match(renderText({ batch: 'b', rows: [view], exitCode: 3 }), /One +tests\/one\.json +sent \(awaiting-server-verdict\) · 2 ahead/);
   assert.equal(renderJson({ repo: 'r', rows: [view], exitCode: 3 }).rows[0].ahead, 2);
 });
 
 test('OUTCOME model: progress keeps only valid supplied fields and invents no numbers', () => {
   const partial = row(projectAnswer({ command: 'check', state: 'running', progress: { step: 'prepare', calls_settled: -1 } }));
   assert.deepEqual(partial.progress, { step: 'prepare' });
-  assert.match(summaryLine([partial]), /running · prepare/);
+  assert.match(summaryLine([partial]), /sent \(awaiting-server-verdict\) · prepare/);
   assert.doesNotMatch(summaryLine([partial]), /0 AI calls|step \d/);
   assert.equal(projectAnswer({ command: 'check', state: 'running', progress: { step: 0 } }).progress, undefined, 'steps are one-based');
   const counted = row(projectAnswer({ command: 'check', state: 'running', progress: { steps_done: 2, steps_total: 5 } }));
-  assert.match(summaryLine([counted]), /running · step 3 of 5/);
+  assert.match(summaryLine([counted]), /sent \(awaiting-server-verdict\) · step 3 of 5/);
   const named = row(projectAnswer({ command: 'check', state: 'running', progress: { steps_done: 2, steps_total: 5, step: 'render', calls_open: 1 } }));
-  assert.match(summaryLine([named]), /running · step 3 of 5 \(render\) · 1 not yet settled/, 'a named step keeps its number');
+  assert.match(summaryLine([named]), /sent \(awaiting-server-verdict\) · step 3 of 5 \(render\) · 1 not yet settled/, 'a named step keeps its number');
   assert.doesNotMatch(summaryLine([named]), /in flight/, 'an open call is not shown as live traffic');
 });
 
@@ -84,8 +84,8 @@ test('OUTCOME model: one progress part per line, and the calls of ended rows sta
   const progress = { steps_done: 2, steps_total: 5, step: 3, calls_settled: 4, calls_open: 1 };
   const moving = row(projectAnswer({ command: 'check', state: 'running', progress }));
   const ended = { ...row({ state: 'passed' }), calls: 5, criteria: { passed: 1, total: 1 }, checks: { passed: 1, total: 1 } };
-  assert.match(summaryLine([moving, ended]), /running · step 3 of 5 · 4 AI calls so far · 1 not yet settled · 1 running · 5 AI calls$/);
-  assert.match(summaryLine([moving, moving, ended]), /checks · running · 8 AI calls so far · 2 not yet settled · 2 running · 5 AI calls$/);
+  assert.match(summaryLine([moving, ended]), /sent \(awaiting-server-verdict\) · step 3 of 5 · 4 AI calls so far · 1 not yet settled · 1 sent \(awaiting-server-verdict\) · 5 AI calls$/);
+  assert.match(summaryLine([moving, moving, ended]), /checks · sent \(awaiting-server-verdict\) · 8 AI calls so far · 2 not yet settled · 2 sent \(awaiting-server-verdict\) · 5 AI calls$/);
 });
 
 test('OUTCOME model: a typed step timeout stays unknown even when the report verdict is refused', () => {

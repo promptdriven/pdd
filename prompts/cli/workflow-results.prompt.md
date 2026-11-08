@@ -422,6 +422,8 @@ The [workspace evidence owner](workflow-runner.prompt.md#read-evidence-eligibili
 
 ## Dependencies
 
+- Load [runtime outcome](runtime-outcome.prompt.md) for the public result projection, reason codes and pass boundary used by this module.
+
 - Existing local batch readers supply the `batch.json`/`summary.json` fields and original receipts declared above; the saved record is data, not an eligible/pass assertion.
 - Required supplied `ports.workspace` is the actual synchronous `src/workflow-runner.mjs` module function `readEvidenceEligibility({root,producerRoot,tests,source_sha256,runId=null,stage=null}, ports={})`, returning `{state,reason,runId,repo,producerRoot,tests,stage,sourceAnchor,source_sha256}`. State is `eligible`, `ineligible` or `unavailable`; only eligible resolves the owned identity and `current`/`pr1` stage/anchor. Null unresolved fields and reasons cannot authorize a result. The owner supplies this local read without registration/import or writes; this module consumes it without a second association policy.
 - Existing native `capture(root,{tests,appMap:null}) -> {sha256}` is the supplied preflight `captureSource` callback and default. It owns safe complete selection/capture; this module compares the returned hash and never recreates that policy.
@@ -460,3 +462,12 @@ The [workspace evidence owner](workflow-runner.prompt.md#read-evidence-eligibili
 }
 ```
 </details>
+
+## Named result evidence
+
+Load runtime-outcome's public vocabulary for saved lint and check rows. Include
+its public state and reason codes in pdd result lines, including when the saved
+summary is absent. Keep partial results visible as evidence, but `usableResult` returns false when
+its public `states` array contains partial. Each saved check/lint result includes
+`states: [{test, state, reason}]` from the public projection. It cannot establish
+a full pass. Suppress a saved pass mark when its own rows do not all pass. Keep existing source and identity checks.

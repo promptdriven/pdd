@@ -1,5 +1,26 @@
-// Generated from prompts/cli/runtime-outcome.prompt.md (sha256: 9dc6d2a4e44b4552e544d834e7f60fcab7191aeec5a92351e64db856fbbc8110).
+// Generated from prompts/cli/runtime-outcome.prompt.md (sha256: 224b75b774929d3bb89edbdc7e38b7f742d425df20a0e8282cca540283e83d82).
 // What happened to one selected test: the one place that turns a server answer into an outcome.
+export const PROVIDER_TEXT = 'the AI provider failed during the run. It is not a failed check. Do not send it again yet.';
+export const CHECK_STATES = Object.freeze(['waiting', 'sent', 'passed', 'failed', 'refused', 'partial', 'not run']);
+
+// The public result is independent of the transport state needed to resume a job.
+export function resultOutcome(row = {}) {
+  const supplied = row.note ?? (row.reason && typeof row.reason === 'object' ? row.reason : null);
+  const originalCode = supplied?.code || row.code || (row.time_limit ? 'deadline' : null) || row.provider?.code || (row.state === 'sending' ? 'dispatch-uncertain' : null) || row.refusals?.[0]?.code;
+  let code = ['check-busy', 'lint-busy'].includes(originalCode) ? 'server-busy' : originalCode === 'lint-pending' ? 'deadline' : originalCode;
+  const states = { ready: 'waiting', queued: 'sent', running: 'sent', sending: 'partial', not_run: 'not run', unknown: 'partial' };
+  let state = Object.hasOwn(states, row.state) ? states[row.state] : CHECK_STATES.includes(row.state) ? row.state : 'partial';
+  if (code === 'broken-test') state = 'not run';
+  if (state === 'not run' && (row.retryable === true || row.busy_display) && !['timeout-flag', 'deadline', 'interrupted'].includes(code)) code = 'server-busy';
+  if (state === 'passed') return { state, reason: null };
+  const defaults = { waiting: ['awaiting-admission', 'Waiting for admission.'], sent: ['awaiting-server-verdict', 'Sent; waiting for a server verdict.'],
+    failed: ['check-failed', 'A check failed.'], refused: ['admission-refused', 'Admission was refused.'],
+    partial: ['no-server-verdict', 'No complete server verdict.'], 'not run': ['no-server-verdict', 'No server verdict for this test.'] };
+  const [fallbackCode, fallbackMessage] = defaults[state];
+  const message = supplied?.message || (row.time_limit ? [row.time_limit.message, row.time_limit.fix].filter(Boolean).join(' ') : null) || (row.provider ? PROVIDER_TEXT : null) || row.message || (typeof row.reason === 'string' ? row.reason : null) || row.why || row.refusals?.[0]?.message || fallbackMessage;
+  return { state, reason: { code: code || fallbackCode, message } };
+}
+
 const objects = value => Array.isArray(value) ? value.filter(item => item && typeof item === 'object' && !Array.isArray(item)) : [];
 const count = value => Number.isSafeInteger(value) && value >= 0;
 const TERMINAL = new Set(['passed', 'failed', 'refused', 'not_run']);
@@ -15,6 +36,7 @@ const refused = (refusals, extra = {}) => {
 // Module function: one outcome for one selected test from one server answer.
 export function outcomeFor(answer, { test, steps = [], kind = answer?.command, timeLimit = false, sourceFiles, capacityUncertain = false } = {}) {
   const outcome = answerOutcome(answer, { test, steps, kind, timeLimit, sourceFiles, capacityUncertain });
+  if (outcome.state !== 'passed' && !outcome.code) outcome.code = timeLimit ? 'deadline' : resultOutcome(outcome).reason.code;
   return kind === 'lint' ? { ...outcome, compatibility: selectedCompatibility(answer, test, sourceFiles) } : outcome;
 }
 
@@ -33,7 +55,7 @@ function answerOutcome(answer, { test, steps, kind, timeLimit, sourceFiles, capa
   // A refusal the server declares retryable, before dispatch, is a check that did not run, whatever its code.
   const retry = refusals.find(item => item.retryable === true || item.details?.retryable === true);
   if (retry && (report?.dispatch ?? answer?.dispatch) === 'not_started')
-    return { state: 'not_run', code: retry.code ?? null, retryable: true, message: retry.reason ?? retry.message ?? retry.code ?? null };
+    return { state: 'not_run', code: retry.code ?? 'server-busy', retryable: true, message: retry.reason ?? retry.message ?? retry.code ?? null };
   if (kind === 'lint') return lintOutcome(answer, refusals, test, steps, sourceFiles);
   if (answer?.state === 'unknown') return { state: 'unknown', reason: result?.why ?? 'No verdict was returned.' };
   if (answer?.state === 'failed') return { state: 'failed', criteria: objects(report?.criterion_results) };
@@ -78,7 +100,7 @@ function lintOutcome(answer, refusals, test, steps, sourceFiles) {
       }
     }
   }
-  const notRun = reason => ({ state: 'not_run', code: null, retryable: false, reason, draft });
+  const notRun = (reason, code = complete ? 'no-server-verdict' : 'deadline') => ({ state: 'not_run', code, retryable: false, reason, draft });
   if (own.some(item => refusals.includes(item))) return refused(own, { draft });
   if (reachedProblem) return refused([reachedProblem], { draft });
   if (verdict === 'refused') return refused(own.length ? own : [{ code: 'lint-refused', message: `${test} was refused by complete lint.` }], { draft });
@@ -93,7 +115,7 @@ function lintOutcome(answer, refusals, test, steps, sourceFiles) {
       }
       if (compatibility.state === 'supported' && compatibility.reported.complete) return { state: 'passed', draft };
     }
-    return notRun(compatibility.issue ?? 'selected compatibility is unknown or incomplete');
+    return notRun(compatibility.issue ?? 'selected compatibility is unknown or incomplete', compatibility.issue ?? 'no-server-verdict');
   }
   // A job refusal refuses a selected test that has no verdict of its own.
   if (!listed.length && (answer.state === 'refused' || report?.verdict === 'refused' || refusals.length))
@@ -220,17 +242,15 @@ const callWords = (settled, open) => [...(count(settled) ? [`${settled} AI call$
 
 // Module function: the words for an outcome, or for a saved row that carries its outcome fields.
 export function outcomeText(outcome) {
-  if (outcome.state === 'queued') return `queued${count(outcome.ahead) ? ` · ${outcome.ahead} ahead` : ''}`;
-  if (outcome.state === 'not_run') return 'not run';
-  if (outcome.state !== 'running') return outcome.state;
+  const { state, reason } = resultOutcome(outcome);
   const p = outcome.progress ?? {};
-  const name = typeof p.step === 'string' ? p.step : null;
   const number = typeof p.step === 'number' ? p.step : count(p.steps_done) && count(p.steps_total) && p.steps_done < p.steps_total ? p.steps_done + 1 : null;
-  const step = number ? `step ${number}${count(p.steps_total) ? ` of ${p.steps_total}` : ''}${name ? ` (${name})` : ''}` : name;
-  return ['running', ...(step ? [step] : []), ...callWords(p.calls_settled, p.calls_open)].join(' · ');
+  const step = number ? `step ${number}${count(p.steps_total) ? ` of ${p.steps_total}` : ''}` : typeof p.step === 'string' ? p.step : null;
+  return [state + (reason ? ` (${reason.code})` : ''), ...(count(outcome.ahead) ? [`${outcome.ahead} ahead`] : []),
+    ...(step ? [step + (number && typeof p.step === 'string' ? ` (${p.step})` : '')] : []), ...callWords(p.calls_settled, p.calls_open)].join(' · ');
 }
 
-export const hasProgress = outcome => outcome.state === 'running' && Object.keys(outcome.progress ?? {}).length > 0;
+export const hasProgress = outcome => ['running', 'sent'].includes(outcome.state) && Object.keys(outcome.progress ?? {}).length > 0;
 
 // Module function: one progress fragment for a group of rows; null when no row has server progress.
 // One row keeps its step; several rows add up the counts they report.
@@ -239,15 +259,22 @@ export function progressText(outcomes) {
   if (moving.length < 2) return moving.length ? outcomeText(moving[0]) : null;
   const reported = key => moving.filter(outcome => count(outcome.progress[key]));
   const sum = key => reported(key).reduce((total, outcome) => total + outcome.progress[key], 0);
-  return ['running', ...callWords(reported('calls_settled').length ? sum('calls_settled') : undefined, sum('calls_open'))].join(' · ');
+  return ['sent (awaiting-server-verdict)', ...callWords(reported('calls_settled').length ? sum('calls_settled') : undefined, sum('calls_open'))].join(' · ');
 }
 
-export const outcomeDone = outcome => TERMINAL.has(outcome.state);
+export const outcomeDone = outcome => TERMINAL.has(outcome.state) || outcome.state === 'not run';
 
 // Module function: the state that decides a group's result, with the exit code's precedence.
 export function outcomeOverall(outcomes, { interrupted = false, lintUnknown = false } = {}) {
-  if (interrupted || lintUnknown || !outcomes.length) return 'unknown';
-  const present = new Set(outcomes.map(outcome => outcomeDone(outcome) ? outcome.state : 'unknown'));
+  if (interrupted || lintUnknown || !outcomes.length || outcomes.some(outcome => outcome.state === 'partial')) return 'unknown';
+  const present = new Set(outcomes.map(outcome => outcomeDone(outcome) ? outcome.state === 'not run' ? 'not_run' : outcome.state : 'unknown'));
   return DECIDES.find(([state]) => present.has(state))[0];
 }
 export const outcomeExitCode = (outcomes, options) => new Map(DECIDES).get(outcomeOverall(outcomes, options));
+
+// Public aggregate keeps the deciding row's explanation, not a raw job's label.
+export function resultOverall(outcomes, options) {
+  const state = outcomeOverall(outcomes, options);
+  const row = outcomes.find(row => (outcomeDone(row) ? row.state === 'not run' ? 'not_run' : row.state : 'unknown') === state);
+  return resultOutcome(row ?? { state });
+}

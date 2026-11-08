@@ -314,7 +314,7 @@ Use the [preflight hash-fill contract](runtime-preflight.prompt.md#prose-hash) f
 
 ### Local drawing checks
 
-`--lint --local [STORY...] [--json]` runs only [SVG layout lint](svg-layout.prompt.md), with no runtime, network, token lookup, state-directory access or AI call. With no Story, inspect every Git-visible prompt, including prompts without a Runtime interface or tests. With Story words, use ordinary Story selection and the selected source dependency closure to select prompts; unknown selection is exit 2. Do not run engine P1–P10 or require an approved interface for this advisory. Its warnings never change exit 0. Print every warning and `SVG layout lint: N warnings. 0 AI calls. No checks were sent.`; JSON is `{repo, exit_code:0, warnings, summary_line}`. An actual repository/discovery failure is exit 2. `--local` requires `--lint` and mixes only with `--json` and Story words.
+`--lint --local [STORY...] [--json]` runs only [SVG layout lint](svg-layout.prompt.md), with no runtime, network, token lookup, state-directory access or AI call. With no Story, inspect every Git-visible prompt, including prompts without a Runtime interface or tests. With Story words, use ordinary Story selection and the selected source dependency closure to select prompts; unknown selection is exit 2. Do not run engine P1–P10 or require an approved interface for this advisory. Its warnings never change exit 0. Print every warning and the partial result specified in Named check results; JSON is `{repo, exit_code:0, state, lint_state, reason, rows:[], warnings, summary_line}`. State and reason come from the shared projection. An actual repository/discovery failure is exit 2. `--local` requires `--lint` and mixes only with `--json` and Story words.
 
 Ordinary `--lint` runs the same advisory on its selected captured prompts before sign-in/server work; merge its warnings into the existing text/JSON warnings without changing server lint semantics, rows, refusal rules, request shapes or call counts. Warning-only SVG differences do not become server refusals.
 
@@ -770,7 +770,7 @@ owner API binding for this raise is pending the planner's contract; do not inven
 - A reused link says `It keeps its original 24-hour expiry; stop it with: pdd simulate --stop <story>`, so reopening never promises a fresh 24 hours.
 - Open a newly created link with `open` (macOS) or `xdg-open` (Linux) and print the end line `Try ready for "<title>": <link> (open in your browser). It ends in 24 hours, or with: pdd simulate --stop <story>`. `--no-open`, or a failed open, prints `Try ready for "<title>": <link>` and then how to open it.
 - `--stop [STORY]` finds the Try in the state record by story name, test path or test file name, so it works on a branch without the story (real-user issue 14). No STORY stops the one open Try; none or several is exit 2 with the open names. It sends DELETE `/v1/try/<id>` with the header `X-Request-Id: <new UUID>`; read the stop job until `passed`; then forget the Try. A DELETE answer 404 or 410 counts as stopped. A GET 404 or 410 on a recorded Try counts as ended. In both cases pdd deletes the record, so the next `pdd simulate` makes a new Try; the person never edits a state file.
-- The note on other files prints once per command, in calm words, to stderr. `pdd test` folds it into its send line: `Lint passed. Sent 2 checks at 10:47:49: 11 files, 55 KB (4 are not prompt, story or test files; run \`pdd test --files\` to see them).` `pdd simulate` folds it into its start line: `Starting your Try: sending M files, SIZE (N are not prompt, story or test files; run \`pdd test --files\` to see them)…`. It is not a warning.
+- The note on other files prints once per command, in calm words, to stderr, after capture. Sending progress follows the actual admission and POST event in Named check results.
 - Confirmed not-started 429 server-full or 503 check-queue-full/lint-queue-full during new Try setup waits under admission recovery within the existing setup allowance; accepted setup is read by its ID. Other 429 replies make no new attempt: exit 5 with the server's message, else `Too many Try links are open. Stop one with pdd simulate --stop`.
 - Approvals from the Try page (#9, agreed fields): with the saved cases, pdd reads `GET /v1/try/<id>/approvals` (`{approvals: [{id, prompt_path, prose_sha256, requested_at, state}]}`). For each `pending` request in a person's terminal it uses [prompt approve](prompt-approve.prompt.md): the path must be a Git-visible `*.prompt.md` inside the repo (else declined), the request's `prose_sha256` must equal the local prose hash (else declined: `the prompt changed since you clicked Approve`), an approved and current prompt is done with no question, otherwise it shows the interface and asks the same y/n; one reader serves all questions. Then it sends `POST /v1/try/<id>/approvals/<request id>` with `{"state": "done" | "declined"}` (JSON). `tries/<id>.approvals.json` keeps each answer, so pdd never asks twice and resends only an answer whose POST failed. Without a terminal (an agent) pdd only prints `The Try page asks to approve <path>. A person answers it in a terminal: pdd simulate <story>` once and answers nothing. A missing endpoint (404) is skipped. Waiting needs both stdin and stdout to be terminals.
 - Save as test: after the link is ready, fetch the existing `/v1/try/<id>/tests` endpoint with its unchanged response shape. Route every received case through [received-case import](#received-case-import); keep the exact seeded original test/session association across reopen. Do not use a first-test or handled-ID shortcut. Print successful append only after that owner establishes commit; pending/conflict reports its reason and recovery location. Terminal polling remains every 5 s until Ctrl-C/end; `--no-wait` or nonterminal reads once. Missing endpoint compatibility and Try exit handling remain unchanged. Collection of cases does not authorize an uncoordinated authored write.
@@ -810,7 +810,7 @@ its own passing verdict and admitting selected compatibility is sent. An
 incomplete lint holds back tests without their own admitting evidence. Unsent checks keep zero calls. The send line keeps
 `Lint passed.` only when every test passed; otherwise it says
 `Lint refused R of N tests.` and/or `Lint gave no verdict for U of N tests.` before
-`Sent K checks …`, and with no refused and no sent test there is no send line.
+the actual sending progress specified in Named check results. No sent test means no Sent line.
 When a test is sent, each job refusal and refused prompt that did not refuse one of
 the selected tests is added to the warnings as
 `Lint diagnostic: <code>  <file>  <reason or message>` (Try prints them on stderr).
@@ -821,8 +821,8 @@ passes the gate. When the restart replacement holds a test back, print one line:
 (`<N> checks` for more than one).
 
 `pdd lint` rows, `lint_state`, the summary and the exit code come from the same
-outcomes. A `not_run` row adds `reason: {code: null, message: <reason>}` in JSON and
-`not run: <reason>` in text, exit 5. With no ended lint answer, keep the existing
+outcomes, using the public state and nonempty reason code from runtime-outcome
+in JSON and text. A final not-run row exits 5. With no ended lint answer, keep the existing
 exit 3 line `The lint result is unknown. Run pdd lint again; a lint uses no AI calls.`
 
 The progress line counts a Story as done only when all its rows are done
@@ -835,6 +835,8 @@ read turns into a lost, unknown row drops its old `progress`.
 The GET-only `--request UUID` route reads known criterion coverage from an owning batch matched by repository, runtime, login, account id and request id. Retain unchecked reasons and the full Story total before projecting an answer. This route writes no receipt, batch, summary or test cache and never reposts.
 
 ## Dependencies
+
+- Load [runtime outcome](runtime-outcome.prompt.md) for the public result projection, reason codes and pass boundary used by this module.
 
 - [Native results](workflow-results.prompt.md#native-profile-and-criterion-assessment-draft):
   required generation/runtime/verification context for native admission,
@@ -1045,3 +1047,37 @@ verification. root identifies saved records when comparisonRoot names a merged
 run's current base. Missing state is empty. Malformed or unreadable
 records produce finite warnings and no invented pass, while unrelated readable
 batches remain usable. Do not recover by a network read or change saved caches.
+
+## Named check results
+
+Use the public result projection from runtime-outcome for every emitted lint or
+check row, saved batch and summary. Saved rows may additionally keep
+`recovery_state` with their transport state; restore it only for internal recovery.
+This also applies to earlier rows when a later submission is interrupted.
+Read older saved batches without that field. Lint metadata also carries the
+public state and reason, with its internal state in recovery_state.
+
+`pdd lint --local` exits 0 when its SVG check completes. Both text and JSON state
+`partial: checked SVG layout only; prompts not checked`. JSON includes state and
+lint_state partial, reason local-only, and rows with the same public result.
+It never supplies a full lint pass. Local mode runs this path for all selections.
+
+Print a Sent progress line only after the Check POST has occurred and its reply
+confirms admission (accepted job or terminal executed result). No such line may
+precede admission, or describe a busy/refused unsent check as sent.
+For a new Check, start the explicit --timeout clock after the free lint gate
+returns. With no explicit limit, ordinary Check stays uncapped, including
+free lint. For an explicitly bounded noninteractive Check, free lint uses the
+standalone agent lint wait (90 seconds), independent of the paid Check clock.
+When that wait ends, keep the lint-pending recovery note but project deadline
+for the held row and lint metadata. It is not a timeout-flag result. A standalone lint --timeout
+still bounds lint. Each explicit timeout result names --timeout, with reason
+code timeout-flag; server/default deadlines use deadline. This includes lint
+admission, maintenance, local slots and capacity retry waits, even before a POST.
+Retain the actual lint wait cause in text, JSON and saved rows and lint metadata.
+The independent default free-lint wait remains deadline even when the later Check
+has an explicit timeout. Interruption takes precedence over an expired wait.
+Early local-limit refusals also use the shared projection and text formatter for
+every selected row, including unaffected not-run siblings with no-server-verdict.
+A partial lint cannot
+admit Check or Try, including saved continuation and retry.

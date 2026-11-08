@@ -9,7 +9,7 @@ import { fakeRuntime, harbor, portsFor } from './runtime-fake.mjs';
 const TEST = 'tests/place-order.json';
 const refusal = { code: 'admission-stopped', message: 'Admission stopped before this test.', fix: 'Correct the admission input.' };
 const running = { steps_done: 2, steps_total: 5, step: 3, calls_settled: 4, calls_open: 1 };
-const progressText = 'running · step 3 of 5 · 4 AI calls so far · 1 not yet settled';
+const progressText = 'sent (timeout-flag) · step 3 of 5 · 4 AI calls so far · 1 not yet settled';
 function lintAnswer(f, id, shape) {
   const answer = f.lint(id);
   answer.result.report.lint = { complete: true, tests: [{ path: TEST, verdict: 'passed' }] };
@@ -72,7 +72,7 @@ async function setup(t, shape, { pending = false, check = 'passed', progress } =
 // An ended lint without a pass for the test is final: not run, exit 5 (exit 3 means "read again").
 for (const [shape, code, state] of [
   ['passed', 0, 'passed'], ['refused', 4, 'refused'], ['raw-refusal', 4, 'refused'], ['bare-refusal', 4, 'refused'],
-  ['incomplete', 5, 'not_run'], ['missing-verdict', 5, 'not_run'], ['empty', 5, 'not_run'], ['no-prompts', 5, 'not_run'],
+  ['incomplete', 5, 'not run'], ['missing-verdict', 5, 'not run'], ['empty', 5, 'not run'], ['no-prompts', 5, 'not run'],
   ['incomplete-own-pass', 0, 'passed'], ['public-tests', 0, 'passed'], ['unrelated', 0, 'passed'], ['unrelated-no-verdict', 4, 'refused'],
 ]) test(`OUTCOME explicit lint: ${shape}`, async t => {
   const r = await setup(t, shape);
@@ -136,7 +136,7 @@ for (const pending of [false, true]) test(`OUTCOME ${pending ? 'continuation' : 
   r.finish();
   const result = pending ? await r.command({ '--json': true, '--read': first.json.batch }, []) : first;
   assert.deepEqual(r.f.posts.filter(post => post.command === 'check').map(post => post.request.scenario), [TEST]);
-  assert.deepEqual(result.json.rows.map(row => row.state), ['passed', 'not_run']);
+  assert.deepEqual(result.json.rows.map(row => row.state), ['passed', 'not run']);
   assert.equal(result.json.rows[1].calls, 0);
   assert.match(result.json.rows[1].reason.message, /No lint pass for this test \(lint gave no verdict for this test\)/);
   assert.equal(result.code, 5, 'an ended lint without a verdict is final');
@@ -189,23 +189,23 @@ test('OUTCOME empty results cannot succeed or imply criterion passes', () => {
   // A row that is not passed and has no criterion_results counts its test's criteria (criteria_total, or 0 when absent), with 0 passed.
   assert.equal(
     summaryLine([{ state: 'refused', story: 'place-order', criteria_total: 3 }], 'place-order'),
-    'Prompt tests (place-order): no verdict · 0 of 3 criteria · 0/0 checks · 1 refused · 0 AI calls'
+    'Prompt tests (place-order): no verdict · 0 of 3 criteria · 0/0 checks · 1 refused (admission-refused) · 0 AI calls'
   );
   assert.equal(
     summaryLine([{ state: 'running', phase: 'server', story: 'place-order', criteria_total: 3 }], 'place-order'),
-    'Prompt tests (place-order): running · 0 of 3 criteria · 0/0 checks · 1 running · 0 AI calls + 1 unknown'
+    'Prompt tests (place-order): running · 0 of 3 criteria · 0/0 checks · 1 sent (awaiting-server-verdict) · 0 AI calls + 1 unknown'
   );
   assert.equal(
     summaryLine([
       { state: 'passed', story: 'one', criteria: { passed: 1, total: 1 }, checks: { passed: 1, total: 1 }, phase: 'server', calls: 1 },
       { state: 'refused', story: 'two', criteria_total: 3 }
     ]),
-    'Prompt tests: no verdict · 1 of 4 criteria · 1/1 checks · 1 refused · 1 AI call'
+    'Prompt tests: no verdict · 1 of 4 criteria · 1/1 checks · 1 refused (admission-refused) · 1 AI call'
   );
   for (const [state, suffix] of [
-    ['not_run', 'no verdict · 0 of 3 criteria · 0/0 checks · 1 not run · 0 AI calls'],
-    ['unknown', 'no verdict · 0 of 3 criteria · 0/0 checks · 1 unknown · 0 AI calls'],
-    ['failed', '✗ 0 of 3 criteria · 0/0 checks · 0 AI calls']
+    ['not_run', 'no verdict · 0 of 3 criteria · 0/0 checks · 1 not run (no-server-verdict) · 0 AI calls'],
+    ['unknown', 'no verdict · 0 of 3 criteria · 0/0 checks · 1 partial (no-server-verdict) · 0 AI calls'],
+    ['failed', '✗ 0 of 3 criteria · 0/0 checks · 1 failed (check-failed) · 0 AI calls']
   ]) {
     assert.equal(summaryLine([{ state, story: 'place-order', criteria_total: 3 }], 'place-order'), `Prompt tests (place-order): ${suffix}`);
   }
@@ -261,8 +261,9 @@ test(`OUTCOME a retryable refusal before dispatch is not run in every output, wh
   const r = await setup(t, 'passed', { check });
   const result = await r.command({ '--json': true });
   assert.equal(result.code, 5);
-  assert.equal(result.json.rows[0].state, 'not_run');
-  assert.equal(result.json.rows[0].reason?.code, code, 'its own code');
+  assert.equal(result.json.rows[0].state, 'not run');
+  assert.equal(result.json.rows[0].reason?.code, 'server-busy');
+  assert.ok(result.json.rows[0].refusals.some(item => item.code === code), 'retain the server code');
   assert.match(JSON.stringify(result.json), said);
   assert.equal(result.json.rows[0].reason.message, check === 'pool' ? 'No model login is available.' : 'Waited too long for a model login.');
   assert.equal(result.json.rows[0].refusals[0].code, code);
@@ -283,8 +284,8 @@ test('OUTCOME supplied progress reaches table, summary, stderr and saved reads',
   const result = await r.command({ '--json': true, '--timeout': 1 });
   assert.equal(result.code, 3);
   assert.deepEqual(result.json.rows[0].progress, running);
-  assert.match(result.json.summary_line, /running · step 3 of 5 · 4 AI calls so far · 1 not yet settled/);
-  assert.ok(result.err.includes(progressText), result.err);
+  assert.match(result.json.summary_line, /sent \(timeout-flag\) · step 3 of 5 · 4 AI calls so far · 1 not yet settled/);
+  assert.match(result.err, /sent \(awaiting-server-verdict\).*step 3 of 5/);
   assert.ok(renderText({ rows: result.json.rows, exitCode: 3 }).includes(progressText));
   const next = await r.command({ '--read': result.json.batch, '--json': true, '--timeout': 1 }, []);
   assert.deepEqual(next.json.rows[0].progress, running);
@@ -293,15 +294,15 @@ test('OUTCOME supplied progress reaches table, summary, stderr and saved reads',
 test('OUTCOME several running tests share one progress part', async t => {
   const r = await setup(t, 'both', { check: 'running', progress: running });
   const result = await r.command({ '--json': true, '--timeout': 1 }, ['place-order', 'unknown-item']);
-  assert.match(result.json.summary_line, /running · 8 AI calls so far · 2 not yet settled · 2 running$/);
+  assert.match(result.json.summary_line, /sent \(awaiting-server-verdict\) · 8 AI calls so far · 2 not yet settled · 2 sent \(timeout-flag\)$/);
   assert.equal(result.json.summary_line.split('step 3 of 5').length, 1, 'no per-row step in a shared line');
-  assert.ok(result.err.split('\n').filter(line => line.startsWith('Still running:')).every(line => line.split(' · running').length === 2), result.err);
+  assert.ok(result.err.split('\n').filter(line => line.startsWith('Still running:')).every(line => line.split(' · sent (awaiting-server-verdict)').length === 2), result.err);
 });
 
 test('OUTCOME partial progress never invents a call or step number', async t => {
   const r = await setup(t, 'passed', { check: 'running', progress: { step: 'prepare' } });
   const result = await r.command({ '--json': true, '--timeout': 1 });
-  assert.match(result.json.summary_line, /running · prepare/);
+  assert.match(result.json.summary_line, /sent \(timeout-flag\) · prepare/);
   assert.doesNotMatch(result.err, /0 AI calls so far|step \d+ of/);
 });
 
