@@ -1,5 +1,5 @@
 import { launchProfile, chatAgentName, validLaunchProfile } from './workflow-launch-profile.mjs';
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 2cef6319d8ba64b3a3f231d8a826fc2790c374a2998cfc39e09b5396e8a2472e).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 24e2ea32e4704d0abcd59a72f6df1ed06a633e0088d0e7aa49b15379c40da9b6).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, lstatSync, readdirSync, writeFileSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
@@ -275,7 +275,7 @@ export async function startChat({ run, area, message }, ports = {}) {
   };
   const checkpoint = async layout => {
     if (!ports.checkpoint) return;
-    const custody = layout.root ? {repoWorkspaceId: layout.repoWorkspaceId,
+    const custody = layout.root ? {createdWorkspaceId: layout.createdWorkspaceId, restartTerminal: layout.restartTerminal, repoWorkspaceId: layout.repoWorkspaceId,
       ...(Object.hasOwn(layout, 'repoRoot') ? {repoRoot: layout.repoRoot} : {}),
       ...(Object.hasOwn(layout, 'repoCreateIntent') ? {repoCreateIntent: layout.repoCreateIntent} : {}),
       workspaceId: layout.workspaceId, ...layout.root} : layout;
@@ -285,7 +285,7 @@ export async function startChat({ run, area, message }, ports = {}) {
   const {layout, chat} = await withHerdrLayoutLock(async () => {
     const layout = await openHerdrRunLayout({ repository: run.repo, issueNumber: run.number, runId: run.runId,
       workflowName: run.workflow, stageId: area, sourceRoot: run.sourceRoot, cwd: run.root, commonDir: run.commonDir, run },
-    { command: allocationCommand(herdr,ports), checkpoint, beforeCreate: need => ensurePaneBudget(need, {...ports,sweepFinished:null}), directory: ports.layoutDirectory, ...(ports.execFile?{execFile:ports.execFile}:{}) });
+    { env, command: allocationCommand(herdr,ports), checkpoint, beforeCreate: need => ensurePaneBudget(need, {...ports,sweepFinished:null}), directory: ports.layoutDirectory, ...(ports.execFile?{execFile:ports.execFile}:{}) });
     const chat = identity(layout);
     // Keep exact starting-chat custody durable under the same find/create lock.
     await checkpoint(layout);
@@ -632,11 +632,11 @@ export async function rebuildClosedChat({ run, chat, message, resumeMessage }, p
     if (verified.state !== 'ready' || !samePath(a?.worktreePath, run.root) || !samePath(a?.commonDir, run.commonDir)
       || a?.repository?.toLowerCase() !== run.repo.toLowerCase() || a?.runId !== run.runId)
       throw problem('invalid_worktree', 'The saved worktree assignment cannot be verified. Inspect this run before reopening it.');
-    const custody = layout => layout.root ? {repoWorkspaceId: layout.repoWorkspaceId,
+    const custody = layout => layout.root ? {createdWorkspaceId: layout.createdWorkspaceId, restartTerminal: layout.restartTerminal, repoWorkspaceId: layout.repoWorkspaceId,
       ...(Object.hasOwn(layout, 'repoRoot') ? {repoRoot: layout.repoRoot} : {}),
       ...(Object.hasOwn(layout, 'repoCreateIntent') ? {repoCreateIntent: layout.repoCreateIntent} : {}), workspaceId: layout.workspaceId, ...layout.root} : layout;
     const recovered = await recoverHerdrRunLayout({run, cwd: run.root, commonDir: run.commonDir}, {
-      command: herdr, checkpoint: layout => ports.checkpoint(null, custody(layout))
+      env, command: herdr, checkpoint: layout => ports.checkpoint(null, custody(layout))
     });
     if (!recovered.workspaceClosed && await present()) {
       const pane = recovered.panes.find(p => p.tab_id === chat.tabId && p.pane_id === chat.paneId);
@@ -659,7 +659,7 @@ export async function rebuildClosedChat({ run, chat, message, resumeMessage }, p
     }
     const layout = await openHerdrRunLayout({repository: run.repo, issueNumber: run.number, runId: run.runId,
       workflowName: run.workflow, stageId: chat.area, sourceRoot: run.sourceRoot, cwd: run.root, commonDir: run.commonDir, run},
-    {command: allocationCommand(herdr,ports), directory: ports.layoutDirectory, execFile: ports.execFile, beforeCreate: need => ensurePaneBudget(need, {...ports,sweepFinished:null}),
+    {env, command: allocationCommand(herdr,ports), directory: ports.layoutDirectory, execFile: ports.execFile, beforeCreate: need => ensurePaneBudget(need, {...ports,sweepFinished:null}),
       checkpoint: async value => ports.checkpoint(null, custody(value))});
     const live = await chatSession({...chat, paneId: layout.paneId, workspaceId: layout.workspaceId}, ports);
     if (live.alive || live.code !== 'agent_not_found') throw problem('chat_identity_changed', 'The rebuilt area pane is occupied or cannot be inspected. No chat was started.');
@@ -928,7 +928,7 @@ export async function closeFinishedChats(run, ports = {}) {
       const finalTabs = await inventory('tab', chat.workspaceId), finalPanes = await inventory('pane', chat.workspaceId);
       const finalRows = finalPanes.filter(p => p.tab_id === chat.tabId);
       if (!finalWorkspace || !samePath(finalWorkspace.worktree?.checkout_path,run.root) || !samePath(finalWorkspace.worktree?.repo_key,run.commonDir) || finalWorkspace.worktree?.is_linked_worktree !== true ||
-          !finalTabs.some(t => t.tab_id === chat.tabId && t.workspace_id === chat.workspaceId) || finalRows.length !== 1 || finalRows[0].workspace_id !== chat.workspaceId || finalRows[0].pane_id !== chat.paneId || finalRows[0].terminal_id !== chat.terminalId)
+          !finalTabs.some(t => t.tab_id === chat.tabId && t.workspace_id === chat.workspaceId && (!restarted || t.label === chat.area)) || finalRows.length !== 1 || finalRows[0].workspace_id !== chat.workspaceId || finalRows[0].pane_id !== chat.paneId || finalRows[0].terminal_id !== chat.terminalId)
         { keep('chat-identity'); continue; }
       let finalNative;
       try { finalNative = (await herdr(['agent','get',chat.paneId])).result?.agent; if (!finalNative) throw problem('invalid_agent_reply'); }
@@ -1027,7 +1027,14 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
     const dir = expandHome(target.configDir, env), variable = homeVariable(target.agent ?? run.agent);
     if (dir && !isFolder(dir)) throw problem('replacement_home_missing', `This run uses ${variable} "${dir}", but that folder does not exist. Make that folder, or cancel the run (pdd workflow cancel ${run.number}) and start it again with the right ${variable}.`);
   };
-  const save = async phase => { record.phase = phase; await ports.checkpoint(JSON.parse(JSON.stringify(record))); };
+  const save = async (phase, layout) => {
+    record.phase = phase;
+    const saved = JSON.parse(JSON.stringify(record));
+    if (layout) {
+      await ports.checkpoint(saved, structuredClone(layout));
+      run.layout = {...run.layout, ...structuredClone(layout)};
+    } else await ports.checkpoint(saved);
+  };
   try {
   return await withHerdrLayoutLock(async () => {
     let original = record?.original ?? chat;
@@ -1195,7 +1202,12 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
       requireHome({ agent, configDir });
       await reconcileHistorical();
       const layout=await openHerdrRunLayout({repository:run.repo,issueNumber:run.number,runId:run.runId,workflowName:run.workflow,stageId:record.recovery.allocationLabel,sourceRoot:run.sourceRoot,cwd:run.root,commonDir:run.commonDir,run},
-        {command:allocationCommand(herdr,ports),beforeCreate:need=>ensurePaneBudget(need,{...ports,sweepFinished:null}),checkpoint:async()=>{await save(record.phase);await reconcileHistorical();},directory:ports.layoutDirectory,...(ports.execFile?{execFile:ports.execFile}:{})});
+        {env, command:allocationCommand(herdr,ports),beforeCreate:need=>ensurePaneBudget(need,{...ports,sweepFinished:null}),checkpoint:async layout=>{
+          const custody = layout.root ? {createdWorkspaceId: layout.createdWorkspaceId, restartTerminal: layout.restartTerminal, repoWorkspaceId: layout.repoWorkspaceId,
+            ...(Object.hasOwn(layout, 'repoRoot') ? {repoRoot: layout.repoRoot} : {}),
+            ...(Object.hasOwn(layout, 'repoCreateIntent') ? {repoCreateIntent: layout.repoCreateIntent} : {}), workspaceId: layout.workspaceId, ...layout.root} : layout;
+          await save(record.phase, custody); await reconcileHistorical();
+        },directory:ports.layoutDirectory,...(ports.execFile?{execFile:ports.execFile}:{})});
       record.replacement={...record.replacement,area:record.area,agent,launchProfile:structuredClone(record.launchProfile),herdrAgentName:chatAgentName(record.launchProfile,record.area,run),tabId:layout.tabId,paneId:layout.paneId,terminalId:layout.terminalId,workspaceId:layout.workspaceId,repoWorkspaceId:layout.repoWorkspaceId,label:original.label,startedAt:record.replacement?.startedAt??now(),session:record.replacement?.session??(agent==='claude'?{agent,id:uuid()}:null),configDir,messageFile:join(run.runDir,`${record.area}-restart-${record.id}-start.md`),state:'starting'};
     };
     if(record.phase==='closed') {

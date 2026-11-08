@@ -120,14 +120,14 @@ test('bounded live checkout ownership: all 188 seeded worlds',async()=>{
    for(const row of peerLabels)assert.deepEqual(w.h.workspaces.find(x=>x.workspace_id===row.workspace_id),row,'allocation preserves peer labels and identities');
   }
   for(const order of [0,1])for(const target of [0,1])for(const state of ['idle','extra-tab','extra-pane','changed-terminal','changed-cwd','changed-clone','close-intent']){
-   const w=await world(order,target),id=`run-${target}`,layout={...w.saved.layout,phase:state==='close-intent'?'close_intent':'ready'};
+   const w=await world(order,target),id=`run-${target}`,layout={...w.saved.layout,createdWorkspaceId:id,phase:state==='close-intent'?'close_intent':'ready'};
    if(state==='extra-tab')w.h.tabs.push({workspace_id:id,tab_id:'person-tab',label:'personal'});
    if(state==='extra-pane')w.h.panes.push({...w.h.panes.find(p=>p.workspace_id===id),pane_id:'person-pane'});
    if(state==='changed-terminal')w.h.panes.find(p=>p.workspace_id===id).terminal_id='changed';
    if(state==='changed-cwd')w.h.workspaces.find(x=>x.workspace_id===id).worktree.checkout_path=clones[1-target].cwd;
    if(state==='changed-clone')w.h.workspaces.find(x=>x.workspace_id===id).worktree.repo_key=clones[1-target].common;
    const close=()=>withHerdrLayoutLock(()=>closeHerdrRunLayout({runId:w.saved.runId,cwd:w.c.cwd,commonDir:w.c.common,layout},w.ports),w.ports);
-   if(state==='idle'||state==='close-intent'){await assert.doesNotReject(close());assert.deepEqual(w.mutate(),[['workspace','close',id]]);assert.equal(layout.phase,'closed');}
+   if(['idle','close-intent','changed-terminal'].includes(state)){await assert.doesNotReject(close());assert.deepEqual(w.mutate(),[['workspace','close',id]]);assert.equal(layout.phase,'closed');}
    else {await assert.rejects(close());assert.deepEqual(w.mutate(),[],`${state}: destructive cleanup forbidden`);}
    const n=w.mutate().length;
    assert.equal(await closeHerdrRepoLayoutIfIdle({repository,commonDir:w.c.common},w.ports),false,'adopted parent has no creation custody');

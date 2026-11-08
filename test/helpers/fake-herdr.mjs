@@ -46,7 +46,7 @@ export function fakeHerdr() {
         return { id: 'cli:worktree:open', result: { workspace: source, already_open: true } };
       const cwd = flag('--path'), w = { workspace_id: id('w'), label: flag('--label'), worktree: { checkout_path: cwd, repo_key: commonDir(cwd), is_linked_worktree: true } };
       h.workspaces.push(w); const t = { tab_id: id('t'), workspace_id: w.workspace_id, label: '1' }; h.tabs.push(t); const p = pane(w.workspace_id, t.tab_id, cwd);
-      return { id: 'cli:worktree:open', result: { workspace: w, tab: t, root_pane: p } };
+      return { id: 'cli:worktree:open', result: { workspace: w, tab: t, root_pane: p, already_open: false } };
     }
     if (group === 'workspace' && verb === 'close') {
       h.workspaces = h.workspaces.filter(w => w.workspace_id !== rest[0]); h.tabs = h.tabs.filter(t => t.workspace_id !== rest[0]); h.panes = h.panes.filter(p => p.workspace_id !== rest[0]);

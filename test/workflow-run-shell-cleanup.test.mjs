@@ -120,7 +120,7 @@ for (const change of ['terminal', 'clone', 'extra-tab', 'unknown-inventory'])
     await sweep(f);
     const workspace = f.herdr.workspaces.find(w => w.workspace_id === run.layout.workspaceId);
     const terminal = shell.terminal_id, clone = workspace.worktree.repo_key;
-    if (change === 'terminal') shell.terminal_id = 'another-terminal';
+    if (change === 'terminal') { shell.terminal_id = 'another-terminal'; shell.agent = agent('idle'); }
     if (change === 'clone') workspace.worktree.repo_key = f.source;
     if (change === 'extra-tab') f.herdr.tabs.push({workspace_id:workspace.workspace_id, tab_id:'personal-tab', label:'personal'});
     f.ports.herdr = async args => change === 'unknown-inventory' && args[0] === 'workspace' && args[1] === 'list'
@@ -129,7 +129,7 @@ for (const change of ['terminal', 'clone', 'extra-tab', 'unknown-inventory'])
     await sweep(f);
     assert.ok(live(f, run)); assert.equal(shellCloses(f).length, 0);
     assert.equal(f.record().layout.phase, 'close_intent');
-    f.ports.herdr = command; shell.terminal_id = terminal; workspace.worktree.repo_key = clone;
+    f.ports.herdr = command; shell.terminal_id = terminal; shell.agent = null; workspace.worktree.repo_key = clone;
     f.herdr.tabs = f.herdr.tabs.filter(tab => tab.tab_id !== 'personal-tab');
     await sweep(f);
     assert.equal(live(f, run), false, 'restored original ownership must permit a safe retry');

@@ -10,7 +10,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 486a7cb6538de96a60f17d5f21c305f6d9bfc268fb76d5536a866ef1aab3e5f3).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: a009069ad1e8777429121b6b8ba8a57a7d00d95cbc2043fd28d06b4c64d7c708).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -101,14 +101,26 @@ const APPROVAL = /^\W*(?:(?:yes|ok(?:ay)?)\W+)?(?:i\W+)?(?:approve[ds]?|lgtm|loo
 const CHANGE_WORDS = /\b(?:but|however|except|instead|change[ds]?|rename[ds]?|add|remove|delete|fix|use|make|move|replace|drop|update|should|need|must|want|not|don'?t|without|only)\b/i;
 const looksLikeApproval = text => APPROVAL.test(text) && !CHANGE_WORDS.test(text.replace(APPROVAL, ''));
 
-function describePaneOwners(rows, ports) {
-  const runs = allRuns({cancelled:true},ports), chats = new Set(), shells = new Set(), refs = new Set();
-  const matches = (pane,saved) => pane.workspace_id === saved?.workspaceId && pane.pane_id === saved.paneId && pane.terminal_id === saved.terminalId;
-  for (const run of runs) {
-    for (const chat of run.chats ?? []) for (const pane of rows) if (matches(pane,chat)) { chats.add(pane.pane_id); refs.add(`${run.repo}#${run.number} (${String(run.runId ?? 'unknown').slice(0,8)})`); }
-    for (const pane of rows) if (matches(pane,run.layout)) shells.add(pane.pane_id);
+const shellQuote = value => "'" + String(value).replaceAll("'", "'\\''") + "'";
+function paneOwners(rows, runs) {
+  const owners = {working: 0, parked: 0, done: 0, unowned: 0}, chats = new Set(), shells = new Set(), refs = new Set();
+  const matches = (pane, saved, workspaceId = saved?.workspaceId) => pane.workspace_id === workspaceId
+    && pane.tab_id === saved?.tabId && pane.pane_id === saved?.paneId;
+  const ordered = [...runs].sort((a,b) => Number(ended(a)) - Number(ended(b)));
+  for (const pane of rows) {
+    const run = ordered.find(run => (run.chats ?? []).some(chat => matches(pane,chat))
+      || matches(pane,run.layout?.root ?? run.layout,run.layout?.workspaceId));
+    if (!run) { owners.unowned++; continue; }
+    owners[ended(run) ? 'done' : run.parking?.phase === 'parked' ? 'parked' : 'working']++;
+    if ((run.chats ?? []).some(chat => matches(pane,chat))) chats.add(pane.pane_id);
+    else shells.add(pane.pane_id);
+    refs.add(`${run.repo}#${run.number} (${String(run.runId ?? 'unknown').slice(0,8)})`);
   }
-  return `Open: ${chats.size} run chats (${[...refs].join(', ') || 'none'}), ${shells.size} run shells, ${rows.filter(pane=>!chats.has(pane.pane_id)&&!shells.has(pane.pane_id)).length} other panes.`;
+  return {owners, chats, shells, refs};
+}
+function describePaneOwners(rows, ports) {
+  const {owners, chats, shells, refs} = paneOwners(rows, allRuns({cancelled:true},ports));
+  return `Open: ${chats.size} run chats (${[...refs].join(', ') || 'none'}), ${shells.size} run shells, ${owners.unowned} other panes. By run state: ${owners.working} working, ${owners.parked} parked, ${owners.done} done, ${owners.unowned} unowned.`;
 }
 function deps(ports = {}) {
   const env = ports.env ?? process.env;
@@ -4074,7 +4086,19 @@ async function listStatus(runs, { json, cancelled, scope, snapshotOnly=false }, 
   let herdr = null, inventory = [];
   try {
     herdr = {...await paneUsage({...p,onPaneUsage:rows=>{inventory=rows;}}), finishedOpen: 0};
-    for (const run of runs) {
+    const machineRuns = allRuns({cancelled:true},p);
+    herdr.owners = paneOwners(inventory, machineRuns).owners;
+    herdr.warning = herdr.budget && herdr.panes >= Math.ceil(herdr.budget * 0.9)
+      ? `Herdr pane capacity is near its limit (${herdr.panes} of ${herdr.budget}). Run pdd workflow tidy.` : null;
+    const reply = await herdrCommand(p)(['workspace', 'list']), workspaces = reply?.result?.workspaces;
+    if (reply?.result?.type !== 'workspace_list' || !Array.isArray(workspaces)
+      || workspaces.some(w => typeof w?.workspace_id !== 'string' || !w.workspace_id)
+      || new Set(workspaces.map(w => w.workspace_id)).size !== workspaces.length) throw Error('invalid_workspace_inventory');
+    const known = new Set(machineRuns.flatMap(run => [run.layout?.workspaceId, run.layout?.repoWorkspaceId,
+      ...(run.chats ?? []).flatMap(chat => [chat.workspaceId, chat.repoWorkspaceId])]).filter(Boolean));
+    herdr.unownedWorkspaces = workspaces.filter(w => !known.has(w.workspace_id)).map(w => ({workspaceId: w.workspace_id,
+      closeCommand: `herdr --session pdd workspace close ${shellQuote(w.workspace_id)}`}));
+    for (const run of machineRuns) {
       if (readRunOwnership(run.runDir,p)) continue;
       const snapshot = structuredClone(run);
       snapshot.chats = (snapshot.chats ?? []).filter(chat => !Number.isFinite(chat.closed?.confirmedAt));
@@ -4082,9 +4106,11 @@ async function listStatus(runs, { json, cancelled, scope, snapshotOnly=false }, 
     }
   } catch {}
   if (json) return done(JSON.stringify({ herdr, runs: shown.map(({ line, ...item }) => item) }, null, 2));
-  if (!shown.length) return done([`No pdd runs ${scope}.${hidden ? ` ${hidden} cancelled run${hidden > 1 ? 's' : ''} hidden; add --cancelled to see ${hidden > 1 ? 'them' : 'it'}.` : ''}`, 'Start one with: pdd workflow run NAME ISSUE'].join('\n'));
+  const paneLines = herdr ? [`Herdr session pdd: ${herdr.panes} of ${herdr.budget} panes. ${herdr.finishedOpen} eligible finished chats.${herdr.finishedOpen ? ' Run pdd workflow tidy.' : ''} ${p.describePaneOwners(inventory)}`,
+    ...(herdr.warning ? [herdr.warning] : []), ...(herdr.unownedWorkspaces ?? []).map(w => `Unowned workspace ${JSON.stringify(w.workspaceId)}: ${w.closeCommand}`)] : [];
+  if (!shown.length) return done([...paneLines, `No pdd runs ${scope}.${hidden ? ` ${hidden} cancelled run${hidden > 1 ? 's' : ''} hidden; add --cancelled to see ${hidden > 1 ? 'them' : 'it'}.` : ''}`, 'Start one with: pdd workflow run NAME ISSUE'].join('\n'));
   const cards = shown.filter(item => item.waitingForStory).map(item => item.ref);
-  return done([...(herdr ? [`Herdr session pdd: ${herdr.panes} of ${herdr.budget} panes. ${herdr.finishedOpen} eligible finished chats.${herdr.finishedOpen ? ' Run pdd workflow tidy.' : ''} ${p.describePaneOwners(inventory)}`] : []), ...shown.map(item => item.line),
+  return done([...paneLines, ...shown.map(item => item.line),
     ...(cards.length ? [`Waiting for Story approval: ${cards.join(', ')}. Show each card: pdd workflow card N.`] : []),
     ...(hidden ? [`${hidden} cancelled run${hidden > 1 ? 's' : ''} hidden; add --cancelled to see ${hidden > 1 ? 'them' : 'it'}.`] : []),
     `Review without resuming: pdd workflow view ${shown[0].ref}`, `Open one: pdd workflow open ${shown[0].ref}`].join('\n'));
@@ -4467,7 +4493,7 @@ async function openRunLocked({ ref, cwd, area, newSession = false, model, herdrA
         ...(openQuestion(run) ? [`Pending question: ${openQuestion(run).text}`] : []),
       ].join('\n') + '\n';
       const replacementRun = { ...run, configDir: replacementConfig, launchProfile: replacementProfile };
-      const checkpoint = async record => {
+      const checkpoint = async (record, layout) => {
         if (!validReplacement(record, run)) throw Object.assign(Error('Invalid replacement checkpoint'), { code: 'invalid_replacement_checkpoint' });
         const admit = fresh => {
           if (!fresh || ended(fresh)) throw Object.assign(Error('The run ended during replacement.'), {code:'run_ended'});
@@ -4486,6 +4512,7 @@ async function openRunLocked({ ref, cwd, area, newSession = false, model, herdrA
           if (!admit(fresh)) (fresh.abandonedChats ??= []).push({ ...record.original, replacementId: record.id, abandonedAt: record.at, reason: 'explicit-new-session' });
           const priorPhase = fresh.chatReplacement?.phase;
           fresh.chatReplacement = structuredClone(record);
+          if (layout) fresh.layout = {...fresh.layout, ...structuredClone(layout)};
           // Only the first current-area installation selects later-area inheritance.
           // Observation/recovery checkpoints must not retarget a newer saved account.
           if (record.phase === 'launchRequested' && record.area === fresh.areas[fresh.area]?.name
