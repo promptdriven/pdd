@@ -2754,6 +2754,18 @@ async function deliveryJournal(run, p, action, { recover = true } = {}) {
   } finally { release(); }
 }
 
+// Shared lexical admission for a person's explicit continuation request. Trust belongs to the caller.
+export function isRetryRequest(text) {
+  const value = String(text ?? '').trim();
+  return /(?:^|[.;!,:\n]\s*)(?:(?:please\s+)|(?:(?:can|could|would)\s+you\s+(?:please\s+)?))?(?:retry|resume|try\s+again)\b/i.test(value);
+}
+const isPersonRetry = (run, text) => run.state === 'stuck' && isRetryRequest(text);
+async function personRetryRefusal(run, text, p, savedRetry = false) {
+  if (!(run.state === 'stuck' && savedRetry) && !isPersonRetry(run, text)) return null;
+  if (run.repairLimit) return 'The repair limit requires the existing cancel and new-run route.';
+  if (explicitlyStopped(run, p)) return 'Automatic continuation refused: Autopilot is stopped.';
+  return await continuationOwnership(run, run.root, p);
+}
 const isEnvironmentWake = text => String(text).startsWith('Environment validation wake for ');
 function currentEnvironmentWake(run, text, p) {
   const retry = environmentRecovery(run);
@@ -2772,6 +2784,8 @@ export async function changeRun({ ref, text, cwd, packageRoot = PACKAGE_ROOT }, 
   if (wake && !(runtimeWaiting(found.run) && wake === runtimeWakeTag(found.run.runtimeWait.at)))
     return done(`Run #${found.run.number} does not wait for the interpreter park that this wake names: it was already woken, or it parked again. Nothing was sent.`);
   if (await environmentWakeAllowed(found.run, text, p) === false) return done('Environment validation retry is not due, healthy or current. Nothing was sent.');
+  const retryRefusal = await personRetryRefusal(found.run, text, p);
+  if (retryRefusal) return fail(retryRefusal);
   return deliverRequest(found.run, text, p);
 }
 
@@ -2780,7 +2794,8 @@ export async function changeRun({ ref, text, cwd, packageRoot = PACKAGE_ROOT }, 
 async function deliverRequest(run, text, p, notice = false) {
   const selectedIdentity=runIdentity(run);
   if (ended(run)) return fail(`The run for ${run.repo}#${run.number} is ${run.state}.`);
-  const request = notice ? String(text) : oneLine(text), answer = !notice && !isEnvironmentWake(request) && Boolean(openQuestion(run)), kind = notice ? 'notice' : answer ? 'answer' : 'change';
+  const retryRequested = !notice && isPersonRetry(run, text);
+  const request = notice ? String(text) : oneLine(text), answer = !notice && !isEnvironmentWake(request) && !retryRequested && Boolean(openQuestion(run)), kind = notice ? 'notice' : answer ? 'answer' : 'change';
   if (!request.trim()) return fail('Write the change request after the issue number.');
   if (!notice && !answer && run.gate && looksLikeApproval(request)) return { exitCode: 2, message: `This looks like an approval. Tell your agent you approve this gate, or run pdd workflow approve ${run.number} in a terminal.
 Nothing was sent to the chat.` };
@@ -2808,7 +2823,7 @@ Nothing was sent to the chat.` };
   try {
     accepted = await deliveryJournal(run, p, journal => {
       let entry = journal.requests.find(item => matches(item) && item.kind === kind && item.text === request && !['delivered', 'superseded'].includes(item.state));
-      if (!entry) { entry = { id: (p.deliveryToken ?? randomUUID)(), text: request, kind, area: area.name, paneId: chat.paneId, state: 'pending', at: p.now(), question: notice ? null : run.question ?? null, gate: notice ? null : run.gate ?? null }; journal.requests.push(entry); }
+      if (!entry) { entry = { id: (p.deliveryToken ?? randomUUID)(), text: request, kind, area: area.name, paneId: chat.paneId, state: 'pending', at: p.now(), ...(retryRequested ? { personRetry: true } : {}), question: notice ? null : run.question ?? null, gate: notice ? null : run.gate ?? null }; journal.requests.push(entry); }
       return { ...entry };
     });
   } catch (error) { return fail(error.code === 'delivery_busy' ? `Another command is saving a request. Wait briefly, then retry. ${retry}` : `Could not save ${what}; it was not sent. Check the run folder and retry. ${retry}`); }
@@ -2838,8 +2853,13 @@ Nothing was sent to the chat.` };
         deferredEnvironment.add(entry.id);
         continue;
       }
+      const personRetry = entry.kind === 'change' && run.state === 'stuck' && (entry.personRetry === true || isRetryRequest(entry.text));
+      const retryRefusal = personRetry && await personRetryRefusal(run, entry.text, p, true);
+      if (retryRefusal) return fail(retryRefusal);
+      const retryTarget = environmentRecovery(run)?.step;
+      const retryInstruction = personRetry ? ` Resume only ${retryTarget ? `the failed validation step ${retryTarget}` : 'the failed step identified in the retained evidence'}, using its original command. Preserve completed work, gates, questions, branch and claim. Never replay an external operation with an unknown outcome.` : '';
       const message = entry.kind === 'notice' ? entry.text : entry.kind === 'answer' ? `${ANSWER_PREFIX}: ${entry.text} Go on with the step.`
-        : validSavedAutomaticOrigin(run) ? `Submitted request: ${entry.text} Address it in this chat and record uptake. This request is not an approval. Read the owner handoff and applicable automatic overlay before deciding what follows. Current package CLI: ${pddCommand(p.packageRoot ?? PACKAGE_ROOT)}.\nRequest ${entry.id}. After addressing it, record agent uptake with a short note:\n${uptakeCommand(entry.id, { ...p, pdd: pddCommand(p.packageRoot ?? PACKAGE_ROOT) })}` : `${CHANGE_PREFIX}: ${entry.text} Revise in this chat, run done again for the step you changed, then show the result and ask again.\nRequest ${entry.id}. After addressing it, record agent uptake with a short note:\n${uptakeCommand(entry.id, p)}`;
+        : validSavedAutomaticOrigin(run) ? `Submitted request: ${entry.text}${retryInstruction} Address it in this chat and record uptake. This request is not an approval. Read the owner handoff and applicable automatic overlay before deciding what follows. Current package CLI: ${pddCommand(p.packageRoot ?? PACKAGE_ROOT)}.\nRequest ${entry.id}. After addressing it, record agent uptake with a short note:\n${uptakeCommand(entry.id, { ...p, pdd: pddCommand(p.packageRoot ?? PACKAGE_ROOT) })}` : `${CHANGE_PREFIX}: ${entry.text} Revise in this chat, run done again for the step you changed, then show the result and ask again.\nRequest ${entry.id}. After addressing it, record agent uptake with a short note:\n${uptakeCommand(entry.id, p)}`;
       let custodyFailed = false, claimed = false;
       const transport = herdrCommand(p), guardedHerdr = async args => {
         try { return await transport(args); }
@@ -2853,6 +2873,7 @@ Nothing was sent to the chat.` };
       };
       const sent = await sendToChat(chat, message, { ...p, herdr: guardedHerdr, beforeSubmit: async () => {
         if (custodyFailed) return false;
+        if (personRetry && await personRetryRefusal(latest(), entry.text, p, true)) return false;
         if (entry.kind !== 'notice' && await environmentWakeAllowed(latest(), entry.text, p) === false) return false;
         try { return await deliveryJournal(run, p, journal => {
           const current = latest();
@@ -2887,9 +2908,13 @@ Nothing was sent to the chat.` };
               current.state = current.gate || openQuestion(current) ? 'waiting' : 'running';
               delete current.parkReason;
             }
-            if (!isEnvironmentWake(entry.text) && equalFact(current.question,entry.question))current.question=null;
+            if (personRetry && current.state === 'stuck' && !current.repairLimit) {
+              current.state = current.gate || openQuestion(current) ? 'waiting' : 'running';
+              delete current.parkReason;
+            }
+            if (!personRetry && !isEnvironmentWake(entry.text) && equalFact(current.question,entry.question))current.question=null;
             if(entry.kind==='answer'){if(!current.gate&&!current.question)current.state='running';}
-            else if(!entry.text.startsWith('Environment validation wake for ')&&current.gate&&equalFact(current.gate,entry.gate)){current.gate.id=p.randomUUID();current.gate.at=now;delete current.gate.promptSnapshot;}
+            else if(!personRetry&&!entry.text.startsWith('Environment validation wake for ')&&current.gate&&equalFact(current.gate,entry.gate)){current.gate.id=p.randomUUID();current.gate.at=now;delete current.gate.promptSnapshot;}
           }
           }); return {...saved};
         });

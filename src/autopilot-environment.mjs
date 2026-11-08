@@ -40,6 +40,10 @@ const psi = text => {
 export async function environmentHealthy({ env = process.env, reason = '' } = {}, ports = {}) {
   const readFile = ports.readFile ?? (path => readFileSync(path, 'utf8'));
   const readDir = ports.readDir ?? readdirSync;
+  const alive = ports.alive ?? (pid => {
+    try { process.kill(pid, 0); return true; }
+    catch (error) { return error.code === 'ESRCH' ? false : undefined; }
+  });
   try {
     const count = (ports.cpuCount ?? (() => cpus().length))(), load = (ports.load ?? (() => loadavg()[0]))();
     if (!Number.isFinite(count) || count <= 0 || !Number.isFinite(load) || load < 0 || load / count >= 1) return false;
@@ -65,6 +69,8 @@ export async function environmentHealthy({ env = process.env, reason = '' } = {}
       if (!Number.isSafeInteger(row.ticket) || row.ticket <= 0 || !Number.isSafeInteger(row.pid) || row.pid <= 0 || !['waiting', 'running', 'finished'].includes(row.state)
         || typeof row.cwd !== 'string' || !Number.isFinite(row.queuedAt)
         || row.startedAt !== null && !Number.isFinite(row.startedAt) || row.finishedAt !== null && !Number.isFinite(row.finishedAt)) return false;
+      if (row.state !== 'finished' && await alive(row.pid) === false
+        && (row.state === 'waiting' || Number.isSafeInteger(row.childPid) && row.childPid > 0 && await alive(-row.childPid) === false)) continue;
       if (row.state === 'waiting') return false;
       if (row.state === 'running') running++;
     }

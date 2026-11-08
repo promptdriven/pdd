@@ -36,7 +36,7 @@ with the failure time and next attempt. This is a per-failure delivery identity.
 
 Export async `environmentHealthy({env, reason}, ports = {})`, returning boolean.
 All host observations are behind `readFile`, `readDir`, `load`, `cpuCount`,
-`memory`, `toolPresent` and `suiteAvailable` injectable ports, with native defaults.
+`memory`, `toolPresent`, `alive` and `suiteAvailable` injectable ports, with native defaults.
 Fail closed on malformed or unavailable observations. Healthy means one-minute
 load per CPU below 1, available memory at least 10%, Linux I/O and memory PSI
 `some avg10` below 10%, and suite capacity available. Read `/proc/meminfo` for
@@ -48,7 +48,15 @@ Optional shared suite queue integration is read-only and does not require #3056.
 Observe its `ticket-*.json` records at absolute PDD_SUITE_QUEUE, else
 PDD_VM_SUITE_LOCK plus `.queue`, else `/tmp/pdd-full-suite-UID`. No directory means
 no queue restriction; unreadable or malformed records block. A waiting ticket
-or three running tickets blocks admission. Never reclaim stale ownership. This
+or three running tickets with effective ownership blocks admission. Use the queue's
+read-only effective ownership rule: a waiting ticket with a confirmed-dead runner
+is finished for capacity; a running ticket is finished only when both its runner
+and its saved descendant process group are confirmed dead. Probe the runner with
+its positive PID and the group with negative childPid through `alive(pid)`. The
+native probe uses signal zero: only ESRCH means dead; all other errors mean
+unknown and block. A missing or invalid childPid cannot prove a running ticket
+finished. Live or unknown descendants retain their slot. Do not write, delete or
+reclaim records, including records treated as effectively finished. This
 is a preflight only: the actual suite command must still use its normal queue
 admission, since another process can take the slot after this read.
 

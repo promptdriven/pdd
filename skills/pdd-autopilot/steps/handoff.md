@@ -24,6 +24,14 @@ selected explicit profile for new chats. Without a packet, use installed pdd and
 profile. These command bindings do not alone prove that a default-home profile
 reaches issue chats in an existing normal PDD server.
 
+A packet item with `retry` is a person's continuation signal: removal of an
+observed `pdd:stuck` label, or a new trusted retry comment. At the next available
+worker slot, pass its exact `retry.text` with `pdd workflow changes N`. Reuse the
+existing run and retry only its failed step with retained evidence and the original
+command. Preserve completed work, gates, questions, branch and claim. Do not start
+another run or bypass a repair ceiling. Worker delivery resumes the run; the tick
+only offers the signal and makes no AI call.
+
 After an automatic PDD run reaches `waiting`, `paused`, `stuck`, `question`,
 `completed` or `cancelled`, and its current worker turn is positively confirmed
 complete, the coordinator may run `pdd workflow yield ISSUE`. A native Herdr

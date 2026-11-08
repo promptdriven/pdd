@@ -19,7 +19,7 @@ import { reconcileDependencyIntake } from './issue-dependencies-intake.mjs';
 import { issueKey } from './issue-dependencies.mjs';
 import { createDependencyReadPorts, dependencySnapshotStore, issueRowVersion, recordLongRunningAlert, refreshClaimHeartbeat, takeoverLimited, withoutClaimHeartbeat } from './issue-dependencies-github.mjs';
 import { sendToChat, START_GRACE_MS } from './workflow-chat.mjs';
-import { acquireRunLock, runtimeWakeTag } from './workflow-runner.mjs';
+import { acquireRunLock, runtimeWakeTag, isRetryRequest } from './workflow-runner.mjs';
 import { checkVerdictSince } from './workflow-results.mjs';
 import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
 import { samePath } from './workflow-herdr-layout.mjs';
@@ -566,7 +566,7 @@ function message(state, issues, timeRules = []) {
   const workflow = { pddBin: join(state.packageRoot ?? dirname(dirname(self)), 'bin', 'pdd.mjs'), agent: state.agent.kind, home: state.environment?.HOME, configHome: path ? { variable, path } : null };
   const start = state.startAction?.mode === state.currentMode && state.startAction?.repository === state.repo ? state.startAction : null;
   const authority = start ? `The operator invoked pdd autopilot start for ${state.repo} in ${state.currentMode} mode. ${state.currentMode === 'auto' ? 'This action establishes scope for ordinary eligible work and automatic merge under the repository review, testing, strict approval and other rules.' : 'Follow observe mode limits.'} This is an operator action, not a quoted person reply or checker approval. Use the existing supported approval routes for the actual action where applicable; never treat it as a later person reply.\n` : '';
-  return `Read and follow the bundled skill at ${JSON.stringify(skillPath)} and its relative supporting files. ${authority}When recipeFirst is true, follow its bounded startup readiness, then dependency review, room, pdd:working claim and stuck-run rules. Inspect claimed issues for progress and stale claims; do not treat them as unclaimed work. An item with expiredClaim has an expired claim; take it over only under the skill's expired-claim rule. The packet contains only trusted text; further issue/comment reads must preserve that boundary. Use the skill's pdd-check and pdd-merge handoffs for review and merge work. For an issue you start, pass its decisionId with --origin autopilot --decision-id TOKEN to pdd workflow run; pass --outcome code or prompt-only when the required outcome is known.\n${JSON.stringify({ repository: state.repo, coordinatorId: state.coordinatorId, machine: state.machine, activatedAt: state.activatedAt, ...(start ? { startAction: start } : {}), currentMode: state.currentMode, recipeFirst: !state.recipeDelivered, workflow, ...(state.runs === undefined ? {} : { runs: state.runs }), issues, ...(timeRules.length ? { timeRules } : {}), ...(runtimePacket(state.runtime) ? { runtime: runtimePacket(state.runtime) } : {}) })}\n`;
+  return `Read and follow the bundled skill at ${JSON.stringify(skillPath)} and its relative supporting files. ${authority}When recipeFirst is true, follow its bounded startup readiness, then dependency review, room, pdd:working claim and stuck-run rules. Inspect claimed issues for progress and stale claims; do not treat them as unclaimed work. An item with expiredClaim has an expired claim; take it over only under the skill's expired-claim rule. For an item with retry, continue the existing run: pass retry.text unchanged through pdd workflow changes N as worker room allows and resume only the failed step from retained evidence. Preserve gates, questions, completed work and repair ceilings; never start another run for that signal. The packet contains only trusted text; further issue/comment reads must preserve that boundary. Use the skill's pdd-check and pdd-merge handoffs for review and merge work. For an issue you start, pass its decisionId with --origin autopilot --decision-id TOKEN to pdd workflow run; pass --outcome code or prompt-only when the required outcome is known.\n${JSON.stringify({ repository: state.repo, coordinatorId: state.coordinatorId, machine: state.machine, activatedAt: state.activatedAt, ...(start ? { startAction: start } : {}), currentMode: state.currentMode, recipeFirst: !state.recipeDelivered, workflow, ...(state.runs === undefined ? {} : { runs: state.runs }), issues, ...(timeRules.length ? { timeRules } : {}), ...(runtimePacket(state.runtime) ? { runtime: runtimePacket(state.runtime) } : {}) })}\n`;
 }
 function coordinatorEnvelope(state) {
   return { version: 'pdd.autopilot-coordinator.v1', repository: state.repo, coordinatorId: state.coordinatorId, machine: state.machine, activation: state.activatedAt, ...(state.runs === undefined ? {} : { runs: state.runs }) };
@@ -1389,6 +1389,9 @@ async function runTick(stateFile, ports, completion) {
         for (const pull of related) await reviewSubmissions(pull, state, p);
         const source = digest({ issue: [issue.title, issue.body, issue.updated_at, issue.comments, [...labels].sort()], comments: rows.map(row => [row.id, row.updated_at, row.user?.login, row.body]), pulls: related.map(pull => [pull.row.number, pull.present, pull.row.updated_at, pull.row.comments, pull.row.title, pull.row.body, Object.values(pull.reviews ?? {})]) });
         const previous = state.seen[issue.number];
+        const stuck = labels.includes('pdd:stuck');
+        const wasStuck = previous?.stuck ?? previous?.selectionReasons?.includes('pdd:stuck') ?? false;
+        const removedStuck = wasStuck && !stuck;
         // GitHub spells html_url with the owner's capitals; graph keys are canonical lowercase.
         const issueIdentity = issueKey(issue.html_url) ?? issue.html_url;
         const graphEligible = Array.isArray(intake.eligible) ? intake.eligible.some(key => (issueKey(key) ?? key) === issueIdentity) : undefined;
@@ -1420,6 +1423,11 @@ async function runTick(stateFile, ports, completion) {
             else trustedComments.push(row);
           }
         }
+        const retryComment = (stuck || labels.includes('pdd:working') || wasStuck) && trustedComments.findLast(row => isRetryRequest(row.body)
+          && !(previous?.view?.comments ?? []).some(old => old.id === row.id && old.updatedAt === row.updated_at && old.body === row.body)
+          && (previous?.view || latestTime([row.created_at, row.updated_at]) >= Date.parse(state.activatedAt)));
+        const retry = retryComment ? { source: 'comment', text: retryComment.body }
+          : removedStuck ? { source: 'stuck-label-removed', text: 'Retry the failed step from retained evidence. The pdd:stuck label was removed. Preserve completed work, gates, questions, branch and claim.' } : null;
         const authorTrusted = await trusted(issue, state, config, p);
         if (!authorTrusted && !trustedComments.length) {
           selection.state='excluded'; selection.reasons=['no-trusted-issue-or-comment'];
@@ -1435,23 +1443,23 @@ async function runTick(stateFile, ports, completion) {
           continue;
         }
         const pulls = await relatedPullRequests(issue.number, state, config, p);
-        const item = { number: issue.number, url: issue.html_url, eligible: graphEligible === true, ...(labels.includes('pdd:working') ? { claimed: true } : {}), ...(expiredClaim ? { expiredClaim: { lastSeen: expiredClaim.lastSeen } } : {}), ...(authorTrusted ? { title: issue.title, body: issue.body } : {}), comments: trustedComments.map(row => ({ author: row.user.login, body: row.body })), ...(pulls.length ? { pullRequests: pulls } : {}) };
+        const item = { number: issue.number, url: issue.html_url, eligible: graphEligible === true, ...(retry ? { retry } : {}), ...(labels.includes('pdd:working') ? { claimed: true } : {}), ...(expiredClaim ? { expiredClaim: { lastSeen: expiredClaim.lastSeen } } : {}), ...(authorTrusted ? { title: issue.title, body: issue.body } : {}), comments: trustedComments.map(row => ({ author: row.user.login, body: row.body })), ...(pulls.length ? { pullRequests: pulls } : {}) };
         const view = { text: authorTrusted ? { author: issue.user.login, title: item.title, body: item.body } : undefined, comments: trustedComments.map(row => heartbeat(row) ? { id: row.id, updatedAt: row.created_at, author: row.user.login, body: withoutClaimHeartbeat(row.body) } : { id: row.id, updatedAt: row.updated_at, author: row.user.login, body: row.body }), labels: labels.filter(name => !['pdd:working', 'pdd:stuck', 'pdd:code-pending'].includes(name)).sort(), ...(expiredClaim ? { expiredClaim: true } : {}), pulls: pulls.map(pull => ({ ...pull, author: state.pullCache[pull.number].row.user.login })) };
         const event = digest(view);
         const waiting = blocked || graphEligible !== true;
         if (!waiting) { selection.state='ready'; selection.reasons=[...claimNote]; }
         if (waiting && (blocked || graphEligible === false)) { selection.state='waiting'; selection.reasons=[...(blocked ? holdLabels : ['dependency-not-ready']), ...claimNote]; }
-        const observed = { event, view, source, mode: config.mode, waiting, blocked, selectionState:selection.state, selectionReasons:selection.reasons, ...(graphEligible === undefined ? {} : { graphEligible }) };
+        const observed = { event, view, source, stuck, mode: config.mode, waiting, blocked, selectionState:selection.state, selectionReasons:selection.reasons, ...(graphEligible === undefined ? {} : { graphEligible }) };
         const sameTrustedWork = previous?.view && digest(await revalidateView(previous.view, state, config, p)) === event;
         const becameReady = previous && !waiting && (previous.waiting || previous.blocked && !blocked || previous.mode === 'observe' && config.mode === 'auto');
-        if (!claimDue && (!previous && waiting || sameTrustedWork && !becameReady && !becameGraphEligible && !reconsiderReady)) {
+        if (!retry && !claimDue && (!previous && waiting || sameTrustedWork && !becameReady && !becameGraphEligible && !reconsiderReady)) {
           state.seen[issue.number] = observed; continue;
         }
-        if (graphEligible !== true && !labels.includes('pdd:working') && !claimDue) {
+        if (!retry && graphEligible !== true && !labels.includes('pdd:working') && !claimDue) {
           state.seen[issue.number] = observed; continue;
         }
         work.push(item); pending[issue.number] = observed;
-        if (blocked) held.add(item);
+        if (blocked || retry) held.add(item);
         if (claimDue) {
           timeRules.push({ kind: 'idle-claim', number: issue.number, reason: `Issue #${issue.number} has a pdd:working claim idle for about 1 hour; review stalled work under the skill's claim rule. Age alone does not authorize takeover or release the claim.` });
           pendingTimes[claimKey] = claimActivity;

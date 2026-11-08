@@ -649,6 +649,15 @@ While a run waits for the interpreter, or an outage or an interpreter access pro
 - A woken worker first runs `pdd test --read BATCH`. It resends only a check that surely gave no verdict: `pdd test --retry BATCH` only when pdd names it (busy or held checks), and else the Story's check once with `pdd test STORY --max-calls N`, for another check that did not run or an AI-service refusal. It never resends an unknown outcome or a failed check; when the read of an unknown outcome now shows that nothing was sent, it checks the Story once. Each wake reaches the run at most once for each park. `--max-calls`, strict mode and the merge rules do not change.
 
 Environment validation stops show the next attempt and UTC time in workflow status.
+A person can request another try by removing the observed `pdd:stuck` label or
+posting a trusted retry comment, such as `Please retry the failed validation.`
+The next tick offers the signal through the existing coordinator packet. The
+coordinator passes its exact retry text with `pdd workflow changes N`. Confirmed
+worker delivery resumes only the failed step and keeps completed work, gates,
+questions, branch, claim and the automatic retry count. This person request does
+not wait for the automatic backoff. STOP, current ownership and repair ceilings
+still apply. A failed or uncertain delivery does not resume the run.
+
 Autopilot classifies causes as environment, interpreter or work. Real failing
 assertions, review must-fixes and decisions follow the work rules. Unknown
 interpreter outcomes retain saved-batch reconciliation. Mixed causes with real
@@ -657,5 +666,8 @@ executable (for example `missing tool: node`); the retry checks PATH first.
 The host preflight requires one-minute load per CPU below 1, at least 10% available
 memory, and Linux I/O and memory PSI avg10 below 10%. Unknown host or queue facts
 block retry. The optional shared suite queue is observed without changing it;
-the validation command must still use normal suite admission. An environment wake
+only confirmed-dead waiting owners, or dead running owners with confirmed-dead
+descendant process groups, release capacity in this read. Live or unknown ownership
+still blocks. Queue records stay unchanged, and the validation command must still
+use normal suite admission. An environment wake
 is offered by the next regular tick after its due time, as worker room permits.

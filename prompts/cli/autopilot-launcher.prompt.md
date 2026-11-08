@@ -660,6 +660,29 @@ and failed-delivery retry rules. Send no early per-issue alert and no duplicate
 stuck-claim rule. Other work continues. Expose pending retry details in workflow
 status via its owner; do not run tests or mutate run records from a tick.
 
+### Person retry signals
+
+Removing `pdd:stuck` from an observed issue is new work at the next tick even if
+`pdd:working` remains and all trusted text is unchanged. Retain the observed stuck
+label separately from the trusted text digest; for older records without that
+flag, use the saved `pdd:stuck` selection reason as the prior observation. Also offer a new or edited trusted
+comment that satisfies the workflow runner's `isRetryRequest`, including on an
+initial held-issue baseline when the comment was posted or edited since activation.
+Ignore outsider retry text and already-observed retry comments. Use the existing
+trusted-comment work packet, source cache, guarded coordinator delivery and seen
+acknowledgement; perform no AI interpretation or run mutation in the tick.
+
+A retry item adds `retry: {source, text}`: source is `comment` or
+`stuck-label-removed`; text is the trusted person's original comment or a request
+to retry the failed step from retained evidence for label removal. Retry delivery
+is continuation work even without graph eligibility or after all hold labels are
+removed. It is never a fresh workflow start. A busy or failed delivery keeps the
+signal pending; a confirmed coordinator delivery consumes it once. Tell the
+coordinator to pass its exact retry text through `pdd workflow changes N` as room
+allows and resume the failed step using existing evidence. Never restart completed
+work, approve a gate, answer a question or bypass a repair ceiling. The runner
+owns continuation checks and the worker delivery effect.
+
 ### Interpreter outage (#3039)
 
 A worker whose `pdd test` has no verdict for an interpreter cause parks its own run
