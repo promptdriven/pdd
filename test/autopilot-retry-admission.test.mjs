@@ -8,6 +8,8 @@ import { isRetryRequest, parkAutomaticRun, changeRun } from '../src/workflow-run
 import { writeRun } from '../src/workflow-runs.mjs';
 
 const diagnostics = [
+  ['release inflected status', 'Retrying.'],
+  ['release inflected noun', 'Retries.'],
   ['release retrying denial', 'Please retry verify. No retrying.'],
   ['release retrying forbidden', 'Please retry verify. Retrying is forbidden.'],
   ['release retries disabled', 'Please retry verify. Retries are disabled.'],

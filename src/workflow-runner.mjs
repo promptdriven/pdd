@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: d0002248e25792e74f537337a4a8b1a66fb28d6329942aa77c7037bf4fd9b49a).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 59c9e69a8baa36da443a8928bfe76a429da4de135a9af7be8862522bf1a12604).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -3234,7 +3234,7 @@ export function isRetryRequest(text) {
   const command = request.split(/[.;!]/, 1)[0].trim();
   // Admit commands with known continuation targets, not noun phrases such as
   // "retry budget" or status reports such as "resume remains unsafe".
-  return /^(?:please\s+|(?:can|could|would)\s+you\s+(?:please\s+)?)?(?:retr(?:y(?:ing)?|ies)|resume|try\s+again)(?:\s+(?:(?:(?:the|this|that)\s+)?(?:(?:failed|original|retained|stuck|paused)\s+)?(?:validation(?:\s+step)?|step|run|work|check|tests?|build|verify|formal)|it))?(?:\s+(?:again|now|please))?(?:\s+(?:from\s+(?:the\s+)?retained\s+evidence|using\s+(?:the|its)\s+original\s+command|after\s+(?:the\s+)?(?:machine|host|environment)\s+repair))?\s*\??$/i.test(command);
+  return /^(?:please\s+|(?:can|could|would)\s+you\s+(?:please\s+)?)?(?:retry|resume|try\s+again)(?:\s+(?:(?:(?:the|this|that)\s+)?(?:(?:failed|original|retained|stuck|paused)\s+)?(?:validation(?:\s+step)?|step|run|work|check|tests?|build|verify|formal)|it))?(?:\s+(?:again|now|please))?(?:\s+(?:from\s+(?:the\s+)?retained\s+evidence|using\s+(?:the|its)\s+original\s+command|after\s+(?:the\s+)?(?:machine|host|environment)\s+repair))?\s*\??$/i.test(command);
 }
 const isPersonRetry = (run, text) => run.state === 'stuck' && isRetryRequest(text);
 async function personRetryRefusal(run, text, p, savedRetry = false) {
