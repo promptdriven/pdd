@@ -2,7 +2,7 @@ import {readSuiteProgress} from './test-suite-queue.mjs';
 import {readInterpreterProgress} from './interpreter-queue.mjs';
 import { readOwnerChoice, readSplitComment, partIdentity } from './issue-mixed.mjs';
 import { readSortGroups, sortPastAssignees, sortBookkeeping, readSortComment, addSortContext } from './issue-sort-github.mjs';
-// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: 02ae0c52eceaf67d03954cd1fbdeaae74bb685d6485fc29f7e5d066a42024e09).
+// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: b01fdc9bdb9876fe67ab03999b362f2b952c3c84f319809fb6605ba09c316978).
 import { execFile as execCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import * as nativeFs from 'node:fs';

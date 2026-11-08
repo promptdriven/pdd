@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-results.prompt.md (sha256: 2d66f9f6944e70debcd89a11ba416ede4b76d3b27a2d49eff20973aaebd4f37e).
+// Generated from prompts/cli/workflow-results.prompt.md (sha256: b446d02e320db400d0529b6cac337dbafd232c743611e9ca59ec41ad8975b500).
 import { outcomeText, resultOutcome } from './runtime-outcome.mjs';
 import { PROMPT_TESTS_WORDS } from './runtime-output.mjs';
 import { execFileSync } from 'node:child_process';

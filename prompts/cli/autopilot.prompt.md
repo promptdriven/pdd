@@ -27,7 +27,7 @@ Actions outside the stated set, invalid mode operands and missing or blank names
 
 ```json
 {
-  "status": "approved",
+  "status": "draft",
   "entries": [
     {
       "operation": "runAutopilot",
