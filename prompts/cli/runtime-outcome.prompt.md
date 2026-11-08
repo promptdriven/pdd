@@ -33,8 +33,10 @@ A supplied reason or note code wins over defaults. Map check-busy and lint-busy
 to server-busy. Map the internal recovery note lint-pending to public deadline
 when an invocation ends its wait for a running lint. During the original
 free lint wait, interruption uses interrupted instead. A saved read can retain
-the producer deadline reason until fresh lint evidence replaces it. A retryable not-run capacity refusal also uses server-busy in
-public rows; retain its server code in raw refusals. Preserve broken-test as a not-run reason, for a caller that cannot
+the producer deadline reason until fresh lint evidence replaces it. A retryable not-run capacity refusal defaults to server-busy in
+public rows; a supplied timeout-flag, deadline or interrupted cause takes precedence
+over that capacity default. Keep the capacity evidence and raw refusal code separately.
+Preserve broken-test as a not-run reason, for a caller that cannot
 run a malformed test; this module does not decide which tests to skip. A caller
 stopped by its explicit `--timeout` reports timeout-flag and names `--timeout` in
 the message. An internal or server deadline reports deadline. A known broken-test

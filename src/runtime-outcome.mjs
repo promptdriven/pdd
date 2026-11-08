@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-outcome.prompt.md (sha256: 79ce5289d66b386e1f4feb09fc5edd21916dab1d47313f16cb18d86fe0ad1270).
+// Generated from prompts/cli/runtime-outcome.prompt.md (sha256: 224b75b774929d3bb89edbdc7e38b7f742d425df20a0e8282cca540283e83d82).
 // What happened to one selected test: the one place that turns a server answer into an outcome.
 export const PROVIDER_TEXT = 'the AI provider failed during the run. It is not a failed check. Do not send it again yet.';
 export const CHECK_STATES = Object.freeze(['waiting', 'sent', 'passed', 'failed', 'refused', 'partial', 'not run']);
@@ -11,7 +11,7 @@ export function resultOutcome(row = {}) {
   const states = { ready: 'waiting', queued: 'sent', running: 'sent', sending: 'partial', not_run: 'not run', unknown: 'partial' };
   let state = Object.hasOwn(states, row.state) ? states[row.state] : CHECK_STATES.includes(row.state) ? row.state : 'partial';
   if (code === 'broken-test') state = 'not run';
-  if (state === 'not run' && (row.retryable === true || row.busy_display)) code = 'server-busy';
+  if (state === 'not run' && (row.retryable === true || row.busy_display) && !['timeout-flag', 'deadline', 'interrupted'].includes(code)) code = 'server-busy';
   if (state === 'passed') return { state, reason: null };
   const defaults = { waiting: ['awaiting-admission', 'Waiting for admission.'], sent: ['awaiting-server-verdict', 'Sent; waiting for a server verdict.'],
     failed: ['check-failed', 'A check failed.'], refused: ['admission-refused', 'Admission was refused.'],

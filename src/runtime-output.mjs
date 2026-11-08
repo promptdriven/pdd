@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: c61e9b094908bd0d8bfe11b0c28606732a6a2f831b3eebeb71b93d84899bf10c).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: f83a2f64c8cc9ec687319b770c7bfce180a2bbcf766b58993d9717192efd8a63).
 import { hasProgress, outcomeExitCode, outcomeFor, outcomeText, progressText, resultOutcome, PROVIDER_TEXT } from './runtime-outcome.mjs';
 export const OPEN_STATES = new Set(['queued', 'running', 'sent']);
 
@@ -415,6 +415,8 @@ export function renderText({ batch, rows, coverage, warnings = [], details = fal
   }
   for (const row of rows.filter(row => ['not_run', 'not run'].includes(row.state))) {
     if ((row.busy_display || row.busy && row.request_ids?.length) && !row.note?.message?.startsWith('Stopped.')) {
+      const { reason } = resultOutcome(row);
+      if (['timeout-flag', 'deadline', 'interrupted'].includes(reason?.code)) out.push(cleanText(reason.message, secrets));
       out.push(busyMessage(row, secrets));
       continue;
     }

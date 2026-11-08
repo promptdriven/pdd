@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: c448b8d61b194f12ba865c67e30fc5dec0b8b43090c06084175d50729f198e58).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 21c55508a317c34f472d7514687934f2c325b20a03afe55c7e49d162a3c1e753).
 import {readEvidenceEligibility} from './workflow-runner.mjs';
 import {allRuns} from './workflow-runs.mjs';
 import {assessNativeEvidence, resultLines, usableResult} from './workflow-results.mjs';
@@ -1440,10 +1440,17 @@ async function runLint(context) {
   const tick = progressTicker(context.ports.stderr, context.ports.now);
   line(context.ports.stderr, `Checking ${context.capture.files.length} files (${formatSize(context.capture.bytes)}) on the PDD interpreter (lint, 0 AI calls)…`);
   let paused = false;
-  const stopped = () => ({ kind: 'not_run', note: { code: null, message: paused ? stoppedPause(context, context.lint, 'lint')
+  const stopped = () => ({ kind: 'not_run', note: { code: 'interrupted', message: paused ? stoppedPause(context, context.lint, 'lint')
     : `Stopped before sending.${context.waitCause === 'maintenance' ? ' pdd stopped while waiting for maintenance.' : ''}` } });
-  const busy = () => context.interrupted && (paused || interruptedAdmissions.has(context.lint)) ? stopped()
-    : ({ kind: 'not_run', note: { code: 'lint-busy', message: `Your wait ended while pdd waited for ${context.waitCause ?? 'server capacity'}. No checks ran. Run the same pdd command again later.` } });
+  const busy = () => {
+    if (context.interrupted) return stopped();
+    const ended = context.ports.now() >= lintEnd;
+    const explicit = ended && context.explicitTimeout && lintEnd === context.deadline;
+    const note = { code: ended ? explicit ? 'timeout-flag' : 'deadline' : 'lint-busy',
+      message: `${explicit ? `Stopped waiting at --timeout ${context.timeoutMin} min. ` : ''}Your wait ended while pdd waited for ${context.waitCause ?? 'server capacity'}. No checks ran. Run the same pdd command again later.` };
+    Object.assign(context.lint, { state: 'not_run', note });
+    return { kind: 'not_run', note };
+  };
   const pause = async (wait, maintenance = false) => {
     paused = true;
     context.waitCause = maintenance ? 'maintenance' : 'server capacity';
@@ -1720,7 +1727,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
         line(ports.stderr, `${problem.code}  ${problem.message}`);
         if (problem.hint) line(ports.stderr, problem.hint);
       }
-      for (const row of refusedRows) line(ports.stdout, `  ${row.test}  ${row.state === 'refused' ? `refused: ${row.refusals.map(item => item.code).join(', ')}` : 'not run'}`);
+      for (const row of refusedRows) line(ports.stdout, `  ${row.test}  ${outcomeText(row)}`);
       line(ports.stdout,summary);
       line(ports.stdout,coverageText(context.coverage));
     }
@@ -1757,14 +1764,13 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   if (lint.kind === 'pending') { context.lintPending = true; Object.assign(context.lint, { state: lint.answer.state, pending: true });
     for (const row of rows) if (!local(row)) Object.assign(row, { state: 'not_run', calls: 0, phase: 'lint', note: { code: context.interrupted ? 'interrupted' : 'lint-pending', message: pendingLintMessage(context, lint.answer) } });
     saveBatch(context); line(ports.stderr, pendingLintMessage(context, lint.answer)); return printResult(context, rows); }
-  if (lint.kind === 'not_run' && context.json) {
+  if (lint.kind === 'not_run') {
     for (const row of rows) if (!local(row)) Object.assign(row, { state: 'not_run', calls: 0, note: lint.note });
+    Object.assign(context.lint, { state: 'not_run', note: lint.note, public_result: resultOverall(rows) });
     saveBatch(context); line(ports.stderr, lint.note.message);
-    line(ports.stdout, JSON.stringify({ batch, repo: root, exit_code: 5, lint_state: 'not run', summary_line: `Lint did not run. 0 AI calls. No checks were sent.`, coverage: context.coverage, problems: [],
-      rows: rows.map(row => ({ story: row.story, title: row.title, test: row.test, ...resultOutcome(row), refusals: row.refusals })), warnings: [...new Set([...context.warnings, ...context.unmatched])] }));
-    return 5;
+    return printLintResult(context, rows, []);
   }
-  if (lint.kind === 'not_run' || lint.kind === 'stop') throw new Stop(5, `${lint.note.message}${lint.note.code && lint.note.code !== 'blocked' ? ` (${lint.note.code})` : ''}`);
+  if (lint.kind === 'stop') throw new Stop(5, `${lint.note.message}${lint.note.code && lint.note.code !== 'blocked' ? ` (${lint.note.code})` : ''}`);
   const answer = lint.answer;
   if (context.interrupted || lint.kind === 'unknown') {
     context.lintUnknown = true;
@@ -2274,7 +2280,7 @@ async function withCheckRun(context, run) {
 // pdd test. Returns the exit code.
 export async function runCheck({ words = [], options = {}, cwd = process.cwd(), cache = false } = {}, givenPorts = {}) {
   const ports = withDefaults(givenPorts);
-  const context = { ports, cacheEnabled: cache || !!options['--lf'] || !!options['--cache-clear'], json: options['--json'] === true, details: options['--details'] === true, interrupted: false, warnings: [] };
+  const context = { ports, cacheEnabled: cache || !!options['--lf'] || !!options['--cache-clear'], json: options['--json'] === true, details: options['--details'] === true, explicitTimeout: options['--timeout'] !== undefined, interrupted: false, warnings: [] };
   let release = () => {};
   try {
     if (options['--lint'] === true && options['--local'] === undefined && words.length && Object.keys(options).every(key => ['--lint','--local','--json','--timeout'].includes(key))) {

@@ -2,6 +2,10 @@
 
 I can tell what lint or a check did, and why it did not pass.
 
+Defect: Some lint and Check rows lose their stop cause or omit their reason code in text.
+
+Not caught because: Earlier cases covered running lint timeouts and simple capacity results separately. They did not combine capacity waits with deadlines or a local refusal with an unaffected test.
+
 ## Acceptance criteria
 
 1. Every result has one public state: waiting, sent, passed, failed, refused, partial or not run. Each result except passed has a reason code. Text, JSON, saved batches and PR evidence use the same result.
@@ -12,7 +16,7 @@ I can tell what lint or a check did, and why it did not pass.
 
 ## Native verification
 
-Run `node --test test/named-check-states.test.mjs`. It loads the controlled result cases from `test/fixtures/named-check-states/results.json`. It uses the repo's Harbor fixture, fake Runtime HTTP server, fake clock and fake authentication. It also runs the real CLI process for local lint. No hosted interpreter or paid call is needed.
+Run `node --test test/named-check-states.test.mjs test/runtime-wait-reasons.test.mjs`. These tests load the controlled result cases from `test/fixtures/named-check-states/results.json` and cover capacity deadlines and mixed local refusals. They use the repo's Harbor fixture, fake Runtime HTTP server, fake clock and fake authentication. They also run the real CLI process for local lint. No hosted interpreter or paid call is needed.
 
 ## Rules to check
 

@@ -796,8 +796,8 @@ passes the gate. When the restart replacement holds a test back, print one line:
 (`<N> checks` for more than one).
 
 `pdd lint` rows, `lint_state`, the summary and the exit code come from the same
-outcomes. A `not_run` row adds `reason: {code: null, message: <reason>}` in JSON and
-`not run: <reason>` in text, exit 5. With no ended lint answer, keep the existing
+outcomes, using the public state and nonempty reason code from runtime-outcome
+in JSON and text. A final not-run row exits 5. With no ended lint answer, keep the existing
 exit 3 line `The lint result is unknown. Run pdd lint again; a lint uses no AI calls.`
 
 The progress line counts a Story as done only when all its rows are done
@@ -1044,5 +1044,12 @@ standalone agent lint wait (90 seconds), independent of the paid Check clock.
 When that wait ends, keep the lint-pending recovery note but project deadline
 for the held row and lint metadata. It is not a timeout-flag result. A standalone lint --timeout
 still bounds lint. Each explicit timeout result names --timeout, with reason
-code timeout-flag; server/default deadlines use deadline. A partial lint cannot
+code timeout-flag; server/default deadlines use deadline. This includes lint
+admission, maintenance, local slots and capacity retry waits, even before a POST.
+Retain the actual lint wait cause in text, JSON and saved rows and lint metadata.
+The independent default free-lint wait remains deadline even when the later Check
+has an explicit timeout. Interruption takes precedence over an expired wait.
+Early local-limit refusals also use the shared projection and text formatter for
+every selected row, including unaffected not-run siblings with no-server-verdict.
+A partial lint cannot
 admit Check or Try, including saved continuation and retry.
