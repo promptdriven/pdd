@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setTimeout } from 'node:timers/promises';
 import { launcher } from './helpers/environment-launcher-fixture.mjs';
 import { environmentHealthy } from '../src/autopilot-environment.mjs';
 
@@ -67,7 +68,7 @@ test('due validation reuses the tick checkout observation and retains retry rest
 // #3048 AC1: malformed protocol input must normalize at the native child boundary.
 for (const frame of [null, [], 'synthetic-private', 0, false]) {
   for (const phase of ['initialize', 'account/rateLimits/read']) {
-    test(`native account transport returns unknown and stops its child for ${JSON.stringify(frame)} at ${phase}`, t => {
+    test(`native account transport returns unknown and stops its child for ${JSON.stringify(frame)} at ${phase}`, async t => {
       const dir = mkdtempSync(join(tmpdir(), 'pdd-health-frame-'));
       t.after(() => rmSync(dir, { recursive: true, force: true }));
       const file = join(dir, 'codex'), stopped = join(dir, 'stopped');
@@ -75,10 +76,13 @@ for (const frame of [null, [], 'synthetic-private', 0, false]) {
 const fs = require('node:fs');
 const reader = require('node:readline').createInterface({ input: process.stdin });
 const keepAlive = setInterval(() => {}, 1000);
-process.stdin.on('end', () => clearInterval(keepAlive));
+// EOF must not end the process before its SIGTERM handler can write the marker.
 process.on('SIGTERM', () => {
-  fs.writeFileSync(${JSON.stringify(stopped)}, 'stopped');
-  clearInterval(keepAlive); reader.close(); process.stdin.destroy();
+  // Make shutdown asynchronous so a signal alone cannot prove completion.
+  setTimeout(() => {
+    fs.writeFileSync(${JSON.stringify(stopped)}, 'stopped');
+    clearInterval(keepAlive); reader.close(); process.stdin.destroy();
+  }, 50);
 });
 reader.on('line', text => {
   const row = JSON.parse(text);
@@ -98,6 +102,8 @@ console.log(JSON.stringify(await readCodexLimits({ command: ${JSON.stringify(fil
       assert.equal(reply.status, 0, 'malformed frame must not crash the consumer');
       assert.deepEqual(JSON.parse(reply.stdout), { state: 'unknown', resetAt: null, usedPercent: null });
       assert.equal(reply.stderr, '', 'transport must not expose raw protocol diagnostics');
+      const deadline = performance.now() + 5_000;
+      while (!existsSync(stopped) && performance.now() < deadline) await setTimeout(10);
       assert.equal(readFileSync(stopped, 'utf8'), 'stopped');
     });
   }

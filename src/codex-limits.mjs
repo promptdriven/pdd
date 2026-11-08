@@ -1,4 +1,4 @@
-// Generated from prompts/cli/codex-limits.prompt.md (sha256: 3a8dad8a541231a1194ff690fd67ae7441ec938f142232362a0c0f5c1739c294).
+// Generated from prompts/cli/codex-limits.prompt.md (sha256: 9f6669d6ddf6f0e0bcbbc0570a8ac8e83012d97e90f9eaec08dd70cc990e9cf6).
 import { spawn } from 'node:child_process';
 const unknown = () => ({ state: 'unknown', resetAt: null, usedPercent: null });
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -20,22 +20,20 @@ export function parseCodexLimits(reply) {
 export async function readCodexLimits({ command = 'codex', cwd, env = process.env } = {}, ports = {}) {
   return new Promise(resolve => {
     let child, done = false, buffer = '', size = 0, initialized = false, timer;
-    const finish = value => {
+    const finish = (value, closed = false) => {
       if (done) return;
       done = true; clearTimeout(timer);
-      if (child) {
-        child.stdin.end(); child.kill('SIGTERM');
-        const kill = setTimeout(() => child.kill('SIGKILL'), 500); kill.unref();
-        child.once('close', () => clearTimeout(kill));
-      }
-      resolve(value);
+      if (!child || closed) { resolve(value); return; }
+      const kill = setTimeout(() => child.kill('SIGKILL'), 500);
+      child.once('close', () => { clearTimeout(kill); resolve(value); });
+      child.stdin.end(); child.kill('SIGTERM');
     };
     const send = value => child.stdin.write(JSON.stringify(value) + '\n');
     timer = setTimeout(() => finish(unknown()), 10_000);
     try {
       child = (ports.spawn ?? spawn)(command, ['app-server', '--listen', 'stdio://'], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], shell: false });
       child.on('error', () => finish(unknown()));
-      child.on('close', () => finish(unknown()));
+      child.on('close', () => finish(unknown(), true));
       child.stdin.on('error', () => finish(unknown()));
       const data = chunk => {
         size += chunk.length;

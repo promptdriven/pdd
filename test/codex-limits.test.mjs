@@ -5,6 +5,7 @@ import { PassThrough } from 'node:stream';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setImmediate } from 'node:timers/promises';
 import { readCodexLimits, parseCodexLimits } from '../src/codex-limits.mjs';
 const window = (usedPercent, resetsAt = 1800000000) => ({ usedPercent, resetsAt });
 const limits = (primary, secondary = null) => ({ rateLimits: { primary, secondary } });
@@ -19,11 +20,11 @@ test('Codex limit normalization handles both windows and explicit reached types 
     assert.deepEqual(parseCodexLimits(row), { state: 'unknown', resetAt: null, usedPercent: null });
 });
 
-function fakeServer(reply, { earlyExit = false, badInitialize = false, flood = false } = {}) {
+function fakeServer(reply, { earlyExit = false, badInitialize = false, flood = false, closeOnKill = true } = {}) {
   const calls = [], process = new EventEmitter();
   process.stdin = new PassThrough(); process.stdout = new PassThrough(); process.stderr = new PassThrough();
-  let killed = 0;
-  process.kill = () => { killed++; queueMicrotask(() => process.emit('close', 0)); return true; };
+  const signals = [];
+  process.kill = signal => { signals.push(signal); if (closeOnKill) queueMicrotask(() => process.emit('close', 0)); return true; };
   process.stdin.on('data', bytes => {
     for (const line of bytes.toString().trim().split('\n')) {
       const row = JSON.parse(line); calls.push(row);
@@ -38,7 +39,7 @@ function fakeServer(reply, { earlyExit = false, badInitialize = false, flood = f
       });
     }
   });
-  return { calls, process, killed: () => killed };
+  return { calls, process, signals, killed: () => signals.length };
 }
 
 test('read-only app-server handshake sends exactly three allowed methods, binds profile and closes child', async () => {
@@ -56,8 +57,50 @@ test('bounded transport refuses startup error, early exit, invalid handshake and
   for (const options of [{ earlyExit: true }, { badInitialize: true }, { flood: true }]) {
     const f = fakeServer({}, options);
     assert.equal((await readCodexLimits({}, { spawn: () => f.process })).state, 'unknown');
+    assert.equal(f.killed(), options.earlyExit ? 0 : 1);
   }
   assert.equal((await readCodexLimits({}, { spawn: () => { throw Error('synthetic-private'); } })).state, 'unknown');
+});
+
+test('transport escalates after 500 milliseconds and still waits for close', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = fakeServer(limits(window(4)), { closeOnKill: false });
+  let settled = false;
+  const pending = readCodexLimits({}, { spawn: () => f.process }).then(value => { settled = true; return value; });
+  try {
+    await setImmediate();
+    assert.deepEqual(f.signals, ['SIGTERM']);
+    t.mock.timers.tick(499);
+    assert.deepEqual(f.signals, ['SIGTERM']);
+    t.mock.timers.tick(1);
+    assert.deepEqual(f.signals, ['SIGTERM', 'SIGKILL']);
+    assert.equal(settled, false);
+  } finally {
+    f.process.emit('close', 0);
+    await pending;
+  }
+  assert.deepEqual(await pending, { state: 'healthy', resetAt: null, usedPercent: 4 });
+  t.mock.timers.tick(10_000);
+  assert.deepEqual(f.signals, ['SIGTERM', 'SIGKILL']);
+});
+
+test('transport waits for child close before returning a response or failure', async () => {
+  for (const options of [{}, { badInitialize: true }, { flood: true }]) {
+    const f = fakeServer(limits(window(4)), { ...options, closeOnKill: false });
+    let settled = false;
+    const pending = readCodexLimits({}, { spawn: () => f.process }).then(value => { settled = true; return value; });
+    try {
+      await setImmediate();
+      assert.equal(f.killed(), 1);
+      assert.equal(settled, false, 'result must wait for child close');
+    } finally {
+      f.process.emit('close', 0);
+      await pending;
+    }
+    assert.deepEqual(await pending, options.badInitialize || options.flood
+      ? { state: 'unknown', resetAt: null, usedPercent: null }
+      : { state: 'healthy', resetAt: null, usedPercent: 4 });
+  }
 });
 
 test('native fake app-server process reads limits without creating a thread or a turn', async t => {
