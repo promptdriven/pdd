@@ -366,7 +366,7 @@ Escape only when rendering, retaining the original structured values without dou
 Full evidence stays in the run folder. Never
 let an agent's free-form PASS summary replace this status.
 
-A present base `pdd.json` must be a regular readable blob within the 10 MiB read limit. An oversized or nonregular config blocks the anchor with a reason naming base `pdd.json`; only an absent config defaults to linked.
+A present base `pdd.json` must be a regular readable blob within the 10 MiB read limit. An oversized or nonregular config (including a directory at that path) blocks the anchor with a reason naming base `pdd.json`; only an absent config defaults to linked.
 
 ## Dependencies
 

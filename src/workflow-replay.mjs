@@ -368,7 +368,7 @@ function baseScenarios(root,commit,changed,scenarios,codeSpace) {
   let named;const changedSet=new Set(changed);
   try {named=new Set(localGit(root,'grep','--no-color','-l','-z','-F','-e','prompt-runtime.program-scenario.v1',commit,'--','*.json').toString('utf8').split('\0').filter(Boolean).map(name=>name.slice(commit.length+1)));}
   catch(error) {if(error.status!==1)throw Error('The base scenario search failed.');named=new Set();}
-  const inventory=localGit(root,'ls-tree','-r','-l','-z','--full-tree',commit).toString('utf8').split('\0').filter(Boolean).map(row=>{
+  const inventory=localGit(root,'ls-tree','-r','-t','-l','-z','--full-tree',commit).toString('utf8').split('\0').filter(Boolean).map(row=>{
     const match=/^(\d+) (\w+) ([a-f0-9]+) +(-|\d+)\t([\s\S]+)$/.exec(row);
     requireThat(match,'Invalid Git tree inventory.');return {mode:match[1],type:match[2],oid:match[3],size:Number(match[4])||0,path:match[5]};
   });

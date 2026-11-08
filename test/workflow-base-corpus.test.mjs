@@ -449,3 +449,9 @@ test('2640 integration rename: first code-space read uses saved base vectors for
   assert.ok(f.record().replayBaseline.vectors.some(v=>v.path==='tests/add.json'));
   assert.match(f.prs.at(-1).body,/warning: Saved test values changed:/);
 });
+
+test('2640 integration config type: a base pdd.json directory cannot default to linked',async t=>{
+  const {pinRunAnchor}=await api(),r=repo(t,{...BASE,'pdd.json/config':'{}'});
+  const anchor=pinRunAnchor(r.root,{commit:r.base,changed:['prompts/add.prompt.md'],codeSpace:true});
+  assert.equal(anchor.outcome,'blocked');assert.match(anchor.reason,/pdd\.json/);
+});
