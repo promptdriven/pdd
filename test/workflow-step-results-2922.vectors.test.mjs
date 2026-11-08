@@ -1,3 +1,4 @@
+import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { setup, scenario } from './helpers/workflow-step-results-2922-fixture.mjs';

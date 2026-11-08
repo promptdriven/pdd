@@ -57,3 +57,24 @@ Use a fresh temporary directory if that destination already contains prior artif
 ## Scope and license
 
 Contributions are under the repository's [MIT license](LICENSE). Retain applicable notices. Keep the package self-contained, with no hosted services, private dependencies, operational fixtures or credentials in source or package artifacts. An optional proposal for a future capability is not an implemented public command.
+
+## Test homes
+
+Tests that use default home paths load `test/helpers/test-home.mjs` before
+production modules, either
+in the entrypoint or through a shared fixture. It gives each test process a
+private temporary HOME and clears inherited state and agent config directory
+overrides. Explicit fixture homes still select their own default state paths.
+Import the helper first when adding a test without a shared fixture. `npm test`
+also preloads it. The owning process removes its temporary home on exit. OS account-home lookup
+requires an injected `userInfo` fake; an un-injected lookup fails the process
+with `PDD_TEST_ACCOUNT_HOME`, even if the caller catches the error.
+
+The runtime workspace fixture uses `f.env.HOME` for its private home. It leaves
+`<parent>/home` available for tests that need a separate consumer home.
+
+Run a focused file with `node --test test/<file>.test.mjs`. To preload the same
+isolation for a new test, use
+`node --import ./test/helpers/test-home.mjs --test test/<file>.test.mjs`.
+The home isolation regression uses synthetic caller folders and the existing
+GitHub, Herdr and interpreter fakes. It needs no account or live service.

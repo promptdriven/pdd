@@ -1,3 +1,4 @@
+import './test-home.mjs';
 import { legacyManualGates } from './legacy-manual-gates.mjs';
 import assert from 'node:assert/strict';
 import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync} from 'node:fs';

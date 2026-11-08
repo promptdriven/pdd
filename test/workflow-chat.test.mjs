@@ -1,3 +1,4 @@
+import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { cpSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -24,7 +25,7 @@ test('the shell line gives the native CLI the whole first message as one argumen
   const id = '11111111-1111-4111-8111-111111111111';
   for (const [agent, line] of [['claude', chatCommand({ agent: 'claude', cwd, messageFile: file, sessionId: id, configDir: join(root, "cfg 'c'") })],
     ['codex', chatCommand({ agent: 'codex', cwd, messageFile: file })]]) {
-    const out = JSON.parse(execFileSync('/bin/sh', ['-c', line], { cwd: root, env: { PATH: `${bin}:/usr/bin:/bin` }, encoding: 'utf8' }));
+    const out = JSON.parse(execFileSync('/bin/sh', ['-c', line], { cwd: root, env: { HOME: root, PATH: `${bin}:/usr/bin:/bin` }, encoding: 'utf8' }));
     assert.equal(out.argv.at(-1), message.replace(/\n+$/, ''), agent);
     assert.equal(out.marker, '1');
     if (agent === 'claude') { assert.deepEqual(out.argv.slice(0, -1), ['--dangerously-skip-permissions', '--session-id', id]); assert.equal(out.config, join(root, "cfg 'c'")); }
@@ -48,7 +49,7 @@ test('Codex chats: new and resumed launches keep PDD_BIN and PDD_AGENT_SESSION u
   const file = join(root, 'start.md'); writeFileSync(file, 'Use the pdd-bug skill.');
   const id = '11111111-1111-4111-8111-111111111111';
   for (const [form, line] of [['new', installed.chatCommand({ agent: 'codex', cwd, messageFile: file, configDir: root })], ['resume', installed.chatCommand({ agent: 'codex', cwd, resumeId: id, configDir: root })]]) {
-    const out = JSON.parse(execFileSync('/bin/sh', ['-c', line], { cwd: root, env: { PATH: `${bin}:/usr/bin:/bin` }, encoding: 'utf8' }));
+    const out = JSON.parse(execFileSync('/bin/sh', ['-c', line], { cwd: root, env: { HOME: root, PATH: `${bin}:/usr/bin:/bin` }, encoding: 'utf8' }));
     const { set, config } = codexConfigs(out.argv);
     assert.deepEqual(set, { PDD_BIN: pddBin, PDD_AGENT_SESSION: '1' }, `${form}: expected shell_environment_policy.set PDD_BIN and PDD_AGENT_SESSION, got -c values ${JSON.stringify(out.argv)}`);
     assert.deepEqual({ bin: out.bin, session: out.session }, { bin: pddBin, session: '1' }, `${form}: the env prefix stays`);
@@ -64,7 +65,7 @@ test('Codex chats: a worktree path with a control character stays one valid TOML
   const root = temp(t), bin = join(root, 'bin'), cwd = join(root, 'work \u007f\t tree "x" \\ é');
   mkdirSync(bin); mkdirSync(cwd); writeFileSync(join(bin, 'codex'), nativeScript, { mode: 0o755 }); writeFileSync(join(root, 'start.md'), 'Use the pdd-bug skill.');
   for (const options of [{ messageFile: join(root, 'start.md') }, { resumeId: '11111111-1111-4111-8111-111111111111' }]) {
-    const out = JSON.parse(execFileSync('/bin/sh', ['-c', chatCommand({ agent: 'codex', cwd, ...options })], { cwd: root, env: { PATH: `${bin}:/usr/bin:/bin` }, encoding: 'utf8' }));
+    const out = JSON.parse(execFileSync('/bin/sh', ['-c', chatCommand({ agent: 'codex', cwd, ...options })], { cwd: root, env: { HOME: root, PATH: `${bin}:/usr/bin:/bin` }, encoding: 'utf8' }));
     const table = /^\{("(?:\\.|[^"\\])*")=\{trust_level="trusted"\}\}$/.exec(codexConfigs(out.argv).config.projects);
     assert.ok(table, `one trusted project key: ${codexConfigs(out.argv).config.projects}`);
     assert.equal(tomlBasicString(table[1]), cwd);
@@ -78,7 +79,7 @@ test('PIPE1: native launch preserves more than 64 KiB of guidance and zero/nonze
   for (const [agent, status] of [['codex', 0], ['claude', 7]]) {
     writeFileSync(join(bin, agent), nativeScript, { mode: 0o755 });
     const command = chatCommand({ agent, cwd: root, messageFile: file, sessionId: '11111111-1111-4111-8111-111111111111', configDir: root });
-    const r = spawnSync('/bin/sh', ['-c', command], { cwd: root, env: { PATH: `${bin}:/usr/bin:/bin`, PDD_FIXTURE_EXIT: String(status) }, encoding: 'utf8' });
+    const r = spawnSync('/bin/sh', ['-c', command], { cwd: root, env: { HOME: root, PATH: `${bin}:/usr/bin:/bin`, PDD_FIXTURE_EXIT: String(status) }, encoding: 'utf8' });
     assert.equal(r.status, status, r.stderr); assert.ok(Buffer.byteLength(r.stdout) > 65_536);
     const captured = JSON.parse(r.stdout);
     assert.equal(captured.argv.at(-1), message); assert.equal(captured.marker, '1'); assert.equal(captured.config, root);

@@ -1,3 +1,4 @@
+import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PUBLIC_COMMAND_ROUTES, PUBLIC_COMMAND_MANIFEST } from '../src/command-catalog.mjs';

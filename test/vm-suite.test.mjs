@@ -1,3 +1,4 @@
+import './helpers/test-home.mjs';
 import { calculateCheckCapacity } from '../src/test-suite-queue.mjs';
 import { checkMachine, withCheckLifetime } from './helpers/check-machine.mjs';
 import test from 'node:test';

@@ -1,3 +1,4 @@
+import './test-home.mjs';
 import { isolatedCheckCapacity } from './check-machine.mjs';
 import { healthyMachine } from './healthy-machine.mjs';
 // An Autopilot world for GitHub call counts: a real Git checkout, the real launcher tick, the real dependency intake
