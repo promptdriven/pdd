@@ -32,7 +32,7 @@ Measure file bytes before editing and compare them with the applicable limits:
 wc -c skills/pdd-{small-change,bug,feature}/SKILL.md skills/pdd-{small-change,bug,feature}/steps/*.md
 ```
 
-Also count ordinary step lines as the test does: trim trailing whitespace, then split on newlines. A checkout snapshot measured the three `SKILL.md` files at 2,741, 4,087 and 4,092 bytes respectively, leaving 331, 9 and 4 bytes; remeasure for the current checkout. The test is the authoritative source for current limits.
+Also count ordinary step lines as the test does: trim trailing whitespace, then split on newlines. A checkout snapshot measured the three `SKILL.md` files at 2,741, 4,091 and 4,088 bytes respectively, leaving 331, 5 and 8 bytes; remeasure for the current checkout. The test is the authoritative source for current limits.
 
 Put step-specific detail in the appropriate existing step brief and shared applicable guidance in [RUNBOOK.md](RUNBOOK.md), keeping its [skill copy](skills/pdd-prompting/RUNBOOK.md) in sync. Do not duplicate rules already in `SKILL.md` or use `steps/autopilot.md` as general overflow. The checks require the exact declared step files plus the Autopilot overlay and exact top-level contents; adding another file there requires a separate change to the checks and packaging.
 
