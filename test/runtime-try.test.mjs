@@ -490,6 +490,17 @@ test('RUNTIME-TRY21: a refused Try setup says what was refused, why and the fix,
     message: 'two button handlers on the screen list match by value and by name. Match all buttons of the screen list by name.' }])), ['place-order']);
   assert.deepEqual(placed.out.trimEnd().split('\n'), ['The Try could not start: the app map was refused (ambiguous-handler: two button handlers on the screen list match by value and by name; at app-map.json /screens/0/handlers/1).',
     'Match all buttons of the screen list by name. Then run pdd simulate place-order --new.']);
+  const after = await tryStory(withMap, await fakeRuntime(t, refusing([{ code: 'invalid-after-step', message: generic, where: 'app-map.json /handlers/0/after/0' }])), ['place-order']);
+  assert.equal(after.code, 4);
+  assert.match(after.out, /app map was refused \(invalid-after-step: each after entry uses a nested handler with prompt_path and operation; at app-map\.json \/handlers\/0\/after\/0\)/);
+  const specific = await tryStory(withMap, await fakeRuntime(t, refusing([{ code: 'invalid-after-step', reason: 'bad operation', fix: 'Choose a known operation.', where: 'map /after/0' }])), ['place-order']);
+  assert.equal(specific.code, 4);
+  assert.match(specific.out, /invalid-after-step: bad operation; at map \/after\/0/);
+  assert.match(specific.out, /Choose a known operation\. Then run pdd simulate place-order --new\./);
+  assert.doesNotMatch(specific.out, /nested handler/);
+  const noMap = await tryStory(harbor(t), await fakeRuntime(t, refusing([{ code: 'invalid-after-step', message: generic }])), ['place-order']);
+  assert.equal(noMap.code, 4);
+  assert.match(noMap.out, /the server refused it \(invalid-after-step: each after entry uses a nested handler/);
   const plain = harbor(t), posted = await fakeRuntime(t, (entry, f) => entry.method === 'POST' && entry.command === 'try'
     ? { status: 422, json: { error: { code: 'invalid-seed', message: 'The seed is not a test file.' } } } : trying()(entry, f));
   const seed = await tryStory(plain, posted, ['place-order']);

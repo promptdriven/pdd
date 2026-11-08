@@ -3556,7 +3556,8 @@ async function checkLint(context, rows) {
 }
 
 // A refused Try setup is not a check (runtime team, Oct 27): two plain lines with what was refused, why and the fix; no table.
-const APP_MAP_RULES = { 'ambiguous-handler': 'on one screen, all taps of one kind must match by the same key',
+const APP_MAP_RULES = { 'invalid-after-step': 'each after entry uses a nested handler with prompt_path and operation',
+  'ambiguous-handler': 'on one screen, all taps of one kind must match by the same key',
   'template-reference-schema': 'a field that gets a value from the screen ($ref) must be a plain {"type": "string"}' };
 const GENERIC_REFUSAL = /^The runtime refused this job\b/;
 function trySetupRefused(context, test, appMap, refusals, reportUrl) {

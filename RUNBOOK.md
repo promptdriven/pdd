@@ -475,7 +475,8 @@ screens. It holds no code. Without it, the person uses forms (or a terminal for 
   `value`, `name` and `label`. Examples: `button` `{"value": "place-order"}` (html `<button value="place-order">`),
   `region` `{"region_id": "price-latte-m", "callback": "onAdd"}` (SVG), `key` `{"value": "n"}`. `state` replaces the
   whole state: list every field, or give `null` to keep it. `after` runs more operations in order and puts a result
-  in the state (`"bind": "/order"`).
+  in the state (`"bind": "/order"`). Each `after` entry has a nested `handler` with `prompt_path` and `operation`;
+  `bind` places the whole operation result at that app-state location.
 - **`next`** always has these 3 keys. Stay on this screen: `{"kind": "same", "screen": null, "route_pointer": null}`.
   Go to a screen: `{"kind": "screen", "screen": "cart", "route_pointer": null}`. Use the router (only with a `router`):
   `{"kind": "route", "screen": null, "route_pointer": "/route"}`.
@@ -497,16 +498,22 @@ screens. It holds no code. Without it, the person uses forms (or a terminal for 
 - A tap's worst case is the handler's worst case (section 10) plus 1 to draw. The Simulator allows 40 for each tap.
   A screen or handler whose prompt's worst case is over 40 never opens (refused at 0 calls). Keep the chain small.
 
+Ordinary Story lint does not select an app map for full app-map validation. A new simulation with the selected map
+reaches full-engine admission and execution and can use AI calls; each tap also has the costs described above.
+`pdd test --files --app-map PATH` previews the selected upload files; it does not validate the map.
+
 A full, small app map (a book list with 2 filter buttons; one screen from an operation):
 ```json
 {"schema_version": "prompt-runtime.app-map.v1", "name": "Bookshelf", "initial_screen": "shelf", "initial_route": null,
- "initial_state": {"show": "all", "books": [{"id": "b1", "title": "Dune", "read": false}]},
+ "initial_state": {"show": "all", "books": [{"id": "b1", "title": "Dune", "read": false}], "last_process": {"count": 0}},
  "state_schema": {"type": "object", "properties": {
    "show": {"type": "string", "enum": ["all", "unread"]},
    "books": {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "string"},
      "title": {"type": "string"}, "read": {"type": "boolean"}}, "required": ["id", "title", "read"],
-     "additionalProperties": false}}},
-   "required": ["show", "books"], "additionalProperties": false},
+     "additionalProperties": false}},
+   "last_process": {"type": "object", "properties": {"count": {"type": "integer"}},
+     "required": ["count"], "additionalProperties": false}},
+   "required": ["show", "books", "last_process"], "additionalProperties": false},
  "synthetic": true, "router": null, "routes": [], "stylesheets": [],
  "screens": [{"id": "shelf", "prompt_path": "prompts/shelf_page.prompt.md", "operation": "render", "source": "operation",
    "format": "html", "input": {"books": {"$ref": "/state/books"}, "show": {"$ref": "/state/show"}}, "result_pointer": "/html"}],
@@ -514,12 +521,15 @@ A full, small app map (a book list with 2 filter buttons; one screen from an ope
   {"screen": "shelf", "kind": "button", "match": {"value": "show-unread"},
    "handler": {"prompt_path": "prompts/books_api.prompt.md", "operation": "list_books"}, "input": {"read": "false"},
    "next": {"kind": "same", "screen": null, "route_pointer": null},
-   "state": {"show": "unread", "books": {"$ref": "/result/books"}}},
+   "state": {"show": "unread", "books": {"$ref": "/result/books"}, "last_process": {"$ref": "/state/last_process"}},
+   "after": [{"handler": {"prompt_path": "prompts/books_api.prompt.md", "operation": "process_books"},
+     "input": {"books": {"$ref": "/state/books"}}, "bind": "/last_process"}]},
   {"screen": "shelf", "kind": "button", "match": {"value": "show-all"},
    "handler": {"prompt_path": "prompts/books_api.prompt.md", "operation": "list_books"}, "input": {},
    "next": {"kind": "same", "screen": null, "route_pointer": null},
-   "state": {"show": "all", "books": {"$ref": "/result/books"}}}]}
+   "state": {"show": "all", "books": {"$ref": "/result/books"}, "last_process": {"$ref": "/state/last_process"}}}]}
 ```
+`process_books` returns an object such as `{"count": 1}`; the entire object is stored at `/last_process`.
 `render` returns `{"html": "…"}` with `<button id="show-unread" value="show-unread">Only unread</button>`.
 
 Cut from the Harbor Coffee app map (`…` marks cut parts):
