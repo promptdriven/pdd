@@ -1787,3 +1787,15 @@ test('start saves check and run overrides and CLI forwards checks', async t => {
   assert.equal(f.state().checks,undefined);assert.equal(f.state().runs,undefined);
   assert.deepEqual([f.state().checkCapacity.checks,f.state().checkCapacity.runs],[3,6]);
 });
+
+test('stopping a launcher removes its shared capacity while leaving check tickets alone',async t=>{
+  const f=await fixture(t);
+  assert.equal((await f.invoke('start',{checks:'1'})).exitCode,0);
+  const capacityFile=join(f.ports.checkCapacityPorts.queueRoot,'capacity.json');
+  assert.equal(JSON.parse(readFileSync(capacityFile)).owner,f.stateFile());
+  const ticketFile=join(f.ports.checkCapacityPorts.queueRoot,'ticket-1.json');
+  const ticket={ticket:1,pid:process.pid,childPid:process.pid,cwd:f.cwd,state:'running',queuedAt:f.time,startedAt:f.time,finishedAt:null,reason:null,cpuIds:[0]};
+  writeFileSync(ticketFile,JSON.stringify(ticket));
+  assert.equal((await f.invoke('stop')).exitCode,0);
+  assert.equal(existsSync(capacityFile),false);assert.deepEqual(JSON.parse(readFileSync(ticketFile)),ticket);
+});

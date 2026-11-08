@@ -138,7 +138,10 @@ Optional --runs and --checks are positive safe integers with no product maximum.
 Save explicit `runs` and `checks` like other start options; omission selects the
 machine default on a new start, retaining options with uncertain pending custody.
 At every active tick, use the shared queue's machine capacity contract to refresh
-`checkCapacity` before selecting work, without an AI call. Persist the snapshot
+`checkCapacity` before selecting work, without an AI call. Bind its shared snapshot
+owner to this launcher state file. On stop, after disabling the timer, release only
+this owner’s shared snapshot; preserve running tickets and other repositories’
+snapshots. Shared snapshot expiry covers lost timers. Persist the snapshot
 under the existing current-control guard. Default open-run admission uses its
 `runs`; retain explicit `runs` as the stable coordinator identity. Thus machine
 resize changes capacity without changing coordinator custody. Packet `runs` is

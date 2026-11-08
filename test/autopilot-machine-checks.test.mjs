@@ -153,3 +153,26 @@ test('native settings reads the saved machine run cap separately from an explici
   state.checkCapacity.runs='invalid';writeFileSync(path,JSON.stringify(state));
   await assert.rejects(read());
 });
+
+test('expired busy state and override fall back to current machine capacity',async t=>{
+  const f=fixture(t,{count:64,load:65});
+  const saved=await queue.configureCheckCapacity({env:f.env,checks:1,owner:'lost-timer'},f.ports);
+  f.run();await until(()=>f.records().length===1);f.machine.load=0;f.machine.count=8;
+  f.time=saved.expiresAt-1;await new Promise(done=>setTimeout(done,20));assert.equal(f.calls.length,0);
+  f.time=saved.expiresAt;await until(()=>f.calls.length===1);
+  assert.equal(f.calls[0].options.env.PDD_CHECK_CPUS,'8','expired snapshots cannot hold busy state or an old CPU share');
+});
+
+test('stop releases only its own snapshot and retains running queue records',async t=>{
+  const f=fixture(t,{count:64,load:65});
+  await queue.configureCheckCapacity({env:f.env,checks:1,owner:'owner-a'},f.ports);
+  f.run();await until(()=>f.records().length===1);f.machine.load=0;
+  assert.equal(await queue.releaseCheckCapacity({env:f.env,owner:'owner-b'},f.ports),false);
+  await new Promise(done=>setTimeout(done,20));assert.equal(f.calls.length,0);
+  assert.equal(await queue.releaseCheckCapacity({env:f.env,owner:'owner-a'},f.ports),true);
+  await until(()=>f.calls.length===1);assert.equal(f.calls[0].options.env.PDD_CHECK_CPUS,'12','stopped override cannot govern standalone work');
+  await queue.configureCheckCapacity({env:f.env,owner:'owner-b'},f.ports);
+  assert.equal(await queue.releaseCheckCapacity({env:f.env,owner:'owner-a'},f.ports),false);
+  assert.equal(await queue.releaseCheckCapacity({env:f.env,owner:'owner-b'},f.ports),true);
+  assert.equal(f.records()[0].state,'running');assert.equal(await queue.releaseCheckCapacity({env:f.env,owner:'owner-b'},f.ports),false);
+});

@@ -1,5 +1,5 @@
 import { calculateCheckCapacity } from '../src/test-suite-queue.mjs';
-import { checkMachine } from './helpers/check-machine.mjs';
+import { checkMachine, withCheckLifetime } from './helpers/check-machine.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { chmodSync, copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -25,7 +25,7 @@ function fakes(t, options = {}) {
   mkdirSync(bin, { recursive: true });
   mkdirSync(home, { recursive: true });
   mkdirSync(join(dir,'suite-queue'));
-  writeFileSync(join(dir,'suite-queue','capacity.json'),JSON.stringify(calculateCheckCapacity({checks:3},checkMachine({taskset:null}).ports)));
+  writeFileSync(join(dir,'suite-queue','capacity.json'),JSON.stringify(withCheckLifetime(calculateCheckCapacity({checks:3},checkMachine({taskset:null}).ports))));
   writeFileSync(join(home, 'auth-sentinel'), 'original home must survive');
   writeFileSync(join(dir, 'scenario.json'), JSON.stringify({ tap: tap(), ...options }));
   // Replace external commands through PATH. The real Node still parses the footer.

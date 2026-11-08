@@ -48,8 +48,11 @@ export function calculateCheckCapacity({checks, runs} = {}, ports = {}) {
     calculatedChecks, checks:selected, calculatedRuns, runs:runs ?? calculatedRuns,
     coresPerCheck:Math.max(1, Math.floor(usable.length / selected)), busy:load > usable.length};
 }
-export async function configureCheckCapacity({env = process.env, checks, runs}, ports = {}) {
-  const p = portsFor(env, ports), capacity = calculateCheckCapacity({checks,runs}, {...p,env});
+const CAPACITY_LIFETIME = 31 * 60_000;
+export async function configureCheckCapacity({env = process.env, checks, runs, owner = null}, ports = {}) {
+  const p = portsFor(env, ports), observedAt = p.now();
+  if (owner !== null && (typeof owner !== 'string' || !owner)) throw Error('Invalid check capacity owner.');
+  const capacity = {...calculateCheckCapacity({checks,runs}, {...p,env}), owner, observedAt, expiresAt:observedAt + CAPACITY_LIFETIME};
   p.fs.mkdirSync(p.root, {recursive:true,mode:0o700});
   await underLock(p, () => {
     const path = join(p.root, 'capacity.json'), temp = `${path}.${p.uuid()}.tmp`;
@@ -58,11 +61,24 @@ export async function configureCheckCapacity({env = process.env, checks, runs}, 
   });
   return capacity;
 }
+export async function releaseCheckCapacity({env = process.env, owner}, ports = {}) {
+  if (typeof owner !== 'string' || !owner) throw Error('Invalid check capacity owner.');
+  const p = portsFor(env, ports), path = join(p.root,'capacity.json');
+  try { p.fs.accessSync(path); } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+  return underLock(p, () => {
+    let value;
+    try { value = JSON.parse(p.fs.readFileSync(path,'utf8')); } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+    if (value.owner !== owner) return false;
+    p.fs.unlinkSync(path); return true;
+  });
+}
 function admissionCapacity(p, env) {
   let value;
   try { value = JSON.parse(p.fs.readFileSync(join(p.root,'capacity.json'),'utf8')); }
   catch (error) { if (error.code === 'ENOENT') return calculateCheckCapacity({}, {...p,env}); throw error; }
   if (!value || typeof value.personal !== 'boolean' || typeof value.affinity !== 'boolean'
+    || value.owner !== null && (typeof value.owner !== 'string' || !value.owner)
+    || !Number.isFinite(value.observedAt) || value.expiresAt !== value.observedAt + CAPACITY_LIFETIME
     || typeof value.busy !== 'boolean' || !Number.isSafeInteger(value.cores) || value.cores < 1
     || !Number.isSafeInteger(value.checks) || value.checks < 1 || !Number.isSafeInteger(value.runs) || value.runs < 1
     || value.usableCores !== (value.personal ? Math.max(1,Math.floor(value.cores/2)) : value.cores)
@@ -76,6 +92,7 @@ function admissionCapacity(p, env) {
   if (result.usableCores !== value.usableCores || result.coresPerCheck !== value.coresPerCheck
     || result.busy !== value.busy || result.calculatedChecks !== value.calculatedChecks
     || result.calculatedRuns !== value.calculatedRuns) throw Error('Invalid saved machine check capacity.');
+  if (p.now() >= value.expiresAt) return calculateCheckCapacity({}, {...p,env});
   return {...result, affinity:value.affinity, taskset:value.taskset};
 }
 export function readCheckStatus({env = process.env, checks, runs}, ports = {}) {

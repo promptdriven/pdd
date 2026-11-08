@@ -1,4 +1,4 @@
-import { checkMachine } from './helpers/check-machine.mjs';
+import { checkMachine, withCheckLifetime } from './helpers/check-machine.mjs';
 import { calculateCheckCapacity } from '../src/test-suite-queue.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -20,7 +20,7 @@ function fixture(t) {
   const f = { root, queue:join(root,'queue'), clock:100_000, started:[], finished:false, promises:[], outputs:[] };
   f.env = { ...process.env, PDD_SUITE_QUEUE:f.queue, HOME:join(root,'home') };
   mkdirSync(f.queue,{recursive:true});
-  writeFileSync(join(f.queue,'capacity.json'),JSON.stringify(calculateCheckCapacity({checks:3},checkMachine({taskset:null}).ports)));
+  writeFileSync(join(f.queue,'capacity.json'),JSON.stringify(withCheckLifetime(calculateCheckCapacity({checks:3},checkMachine({taskset:null}).ports))));
   f.ports = { ...checkMachine({taskset:null}).ports, now:() => f.clock, alive:pid => f.isAlive ? f.isAlive(pid) : true, sleep:() => new Promise(done => setTimeout(done, 1)),
     execute:async (command, options) => {
       options.onChild(process.pid);
@@ -181,7 +181,7 @@ test('separate CLI processes and the compatibility script share the same three n
     await Promise.all(children.map(item => item.done)); rmSync(root,{recursive:true,force:true});
   });
   mkdirSync(queue);
-  writeFileSync(join(queue,'capacity.json'),JSON.stringify(calculateCheckCapacity({checks:3},checkMachine({taskset:null}).ports)));
+  writeFileSync(join(queue,'capacity.json'),JSON.stringify(withCheckLifetime(calculateCheckCapacity({checks:3},checkMachine({taskset:null}).ports))));
   const program = join(root,'controlled-suite.cjs');
   writeFileSync(program, `const fs=require('node:fs'),path=require('node:path'); fs.writeFileSync(path.join(process.cwd(),'started'),''); const timer=setInterval(()=>{if(fs.existsSync(path.join(process.cwd(),'release'))){clearInterval(timer); process.exitCode=0;}},10);`);
   const quote = value => `'${value.replaceAll("'", "'\\''")}'`;

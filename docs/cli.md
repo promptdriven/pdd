@@ -689,7 +689,11 @@ refreshes the shared snapshot, including busy-machine state. Running checks keep
 their CPU lists when the machine shrinks; queued checks wait for free CPUs.
 A standalone queue without a saved snapshot reads its machine ports on admission.
 The latest active tick supplies the machine-wide snapshot and any check override,
-including when several repositories use the same queue.
+including when several repositories use the same queue. Stopping its owner
+removes that snapshot, while running checks keep their tickets. A snapshot
+expires after 31 minutes without a refresh. Standalone checks then probe current
+machine capacity with default limits. Another active repository's snapshot is
+retained when a different repository stops.
 
 `pdd autopilot status` reports calculated and chosen checks and runs, and
 `check slots: B busy of S, W waiting, cores per check C`. It reads current machine

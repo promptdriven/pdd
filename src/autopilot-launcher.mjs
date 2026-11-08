@@ -1,4 +1,4 @@
-import { configureCheckCapacity, readCheckStatus, readSuiteProgress } from './test-suite-queue.mjs';
+import { configureCheckCapacity, releaseCheckCapacity, readCheckStatus, readSuiteProgress } from './test-suite-queue.mjs';
 // Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 15f35d56779ec0d8d93346c88b90b72a9719278adff4a95905490acdbb133236).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -1145,7 +1145,7 @@ async function runTick(stateFile, ports, completion) {
     };
     p.scanGuard = scanGuard;
     let capacity;
-    if (!await scanGuard(async latest => { capacity = await configureCheckCapacity({env:p.env,checks:state.checks,runs:state.runs}, p.checkCapacityPorts ?? p); latest.checkCapacity = capacity; })) return outcome('inactive', 'Autopilot control changed.');
+    if (!await scanGuard(async latest => { capacity = await configureCheckCapacity({env:p.env,checks:state.checks,runs:state.runs,owner:stateFile}, p.checkCapacityPorts ?? p); latest.checkCapacity = capacity; })) return outcome('inactive', 'Autopilot control changed.');
     state.checkCapacity = capacity;
     p.scanAction = async (action, cleanup = '') => {
       const release = await claimAdmission(state, p);
@@ -1764,6 +1764,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
     if (command === 'stop') {
       if (previous) { state.enabled = false; state.nextTick = null; state.controlRevision = randomUUID(); save(stateFile, state); }
       await timer('stop', state, p);
+      await releaseCheckCapacity({env:p.env,owner:stateFile}, p.checkCapacityPorts ?? p);
       if (previous) { state.timerInstalled = false; save(stateFile, state); }
       return ok('Autopilot stopped on this machine; the current step can finish.');
     }

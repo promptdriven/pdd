@@ -11,3 +11,6 @@ export function checkMachine(values = {}) {
 export function isolatedCheckCapacity(root, values) {
   return {...checkMachine(values).ports,queueRoot:`${root}/machine-check-queue`};
 }
+export function withCheckLifetime(capacity, now = Date.now()) {
+  return {...capacity,owner:null,observedAt:now,expiresAt:now+31*60_000};
+}

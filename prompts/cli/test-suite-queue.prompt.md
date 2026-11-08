@@ -69,9 +69,16 @@ Each check gets max(1, floor(U/chosen slots)) CPUs. Busy means load > U; equalit
 admits. A busy machine admits no new heavy work. Running checks are not killed
 when capacity falls. The next tick refreshes observations and shared capacity.
 
-`configureCheckCapacity({env, checks, runs}, ports)` computes and atomically saves
+`configureCheckCapacity({env, checks, runs, owner}, ports)` computes and atomically saves
 this snapshot as `capacity.json` under the shared queue admission lock and returns
-it. `readCheckStatus({env, checks, runs}, ports)` computes current values without
+it with `owner` (the launcher state-file identity, or null), `observedAt` and
+`expiresAt` (epoch milliseconds). Snapshots expire 31 minutes after observation,
+so a stopped or lost timer cannot hold busy state or an override forever.
+Admission ignores an expired snapshot and probes the machine with default limits.
+`releaseCheckCapacity({env, owner}, ports)` removes only the matching owner's
+snapshot under the admission lock and returns whether it removed one. Missing
+snapshots are harmless; another active repository's snapshot remains. Running
+tickets are never removed. `readCheckStatus({env, checks, runs}, ports)` computes current values without
 writing and adds machine-wide `busyChecks` and `waitingChecks` ticket counts.
 An unavailable observation or record read throws for the caller to report.
 Queue admission uses the saved snapshot when present, otherwise computes from
