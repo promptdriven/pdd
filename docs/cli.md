@@ -436,6 +436,25 @@ separate from approval of draft prompt interfaces.
 
 ## Tests on the PDD interpreter and prompt approval
 
+`pdd lint`, `pdd test` and `pdd test --files` report broken selected tests first,
+with the file, reason and fix step. Missing or unreadable dependencies and invalid
+test files do not stop other selected tests. The summary counts tests that could
+not run. JSON and saved batches retain these rows. The command exits nonzero if
+any selected test is broken. Broken tests are not sent for paid checks.
+Local numeric-review metadata keeps the same isolation. An unreadable test
+retains its refusal while valid reviews still apply to readable siblings.
+This also applies when a selected test changes during source capture. Capture
+checks its criterion texts and coverage against the captured Story before upload
+or cached-pass reuse. Authored partial-test metadata still refuses the test.
+A test with no exact criterion is refused and keeps all not-checked reasons.
+
+A Story criterion with no check or no exact check is reported as
+`not checked: <reason>`. Other criteria still run. An omitted Story item is also
+not checked. The Story is not a full pass while any criterion is not checked,
+and it cannot enter the complete-pass cache. PDD uses the engine's exemption
+format in the uploaded scenario copy. It leaves authored files unchanged.
+Changed criterion text and other malformed test rules still refuse the test.
+
 | Command | What it does |
 |---|---|
 | `pdd test [PATH\|STORY...] [--lf] [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]` | Reuse complete unchanged passes from `.pdd/cache/test/`. `--lf` selects last-known failures, or the normal scope when none are recorded. `--cache-clear` discards the cache while retaining operand scope and takes precedence over `--lf`. Check Stories on the PDD interpreter with your gh login. With no STORY, test every Story. Send your Git files and wait for the checks, with one progress line every 30 s. Then print one table with a report link for each test, one `Prompt tests` line for each Story and, with two or more Stories, the overall line |
@@ -443,7 +462,7 @@ separate from approval of draft prompt interfaces.
 | `pdd test --retry BATCH [--json] [--details] [--timeout MIN]` | Retry only confirmed unstarted checks with the saved source and call caps. Keeps completed, running and unknown jobs; changed source requires a fresh selected check |
 | `pdd test --fill-hash` | Fill the hash of draft runtime interfaces. No network |
 | `pdd test --fill-hash --compact` | Fill draft hashes and remove interface JSON formatting whitespace. Preserve values, strings, number spellings and prose. Approved and statusless files stay unchanged. No network |
-| `pdd test --files [STORY...] [--app-map PATH]` | List the exact selected upload manifest and byte sizes. No network; `--app-map` previews the Simulator's app map |
+| `pdd test --files [STORY...] [--app-map PATH] [--json]` | List the exact selected upload manifest and byte sizes. No network; `--app-map` previews the Simulator's app map |
 | `pdd lint [STORY...] [--json] [--timeout MIN]` | Print local SVG layout warnings, then the server checks the format of the prompts, Stories and tests only, with 0 AI calls, and requests complete diagnostics and prints the problems the server reports. Requires network access; use it before a real check |
 | `pdd lint --local [STORY...] [--json]` | Compare linked `.ui.svg` parts and labels with prompt prose locally; warning advice only, 0 AI calls and no network/authentication. Without Story names, inspect all Git-visible prompts, even with no PDD tests |
 | `pdd test --screen URL --drawing PATH [--json]` | Compare the real page with its `.ui.svg` layout spec in installed headless Chrome/Chromium at the SVG viewport. No AI or interpreter call; missing/hidden parts, order or region differences fail |

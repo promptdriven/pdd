@@ -13,7 +13,7 @@ import { chmodSync, closeSync, constants, fstatSync, fsyncSync, lstatSync, linkS
 import { isDeepStrictEqual } from 'node:util';
 import { homedir, hostname } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
-import { DRAFT_SERVER_TEXT, NO_TESTS, PreflightError, TEST_SCHEMA, captureSource, checkInput, expectedTestPath, fillHashes, sharedSourceFiles, whyNoTests, findTests, formatSize, gitFiles, otherFiles,
+import { DRAFT_SERVER_TEXT, NO_TESTS, PreflightError, TEST_SCHEMA, captureSource, scenarioShapeRefusal, checkInput, expectedTestPath, fillHashes, sharedSourceFiles, whyNoTests, findTests, formatSize, gitFiles, otherFiles,
   discoveryRefusal, preflight, interfaceBlocks, readPrompt, selectTests, sourceFilePort, sha256, STALE_HINT, staleHint } from './runtime-preflight.mjs';
 import { catalogRecords, compareCopies } from './contract-refs.mjs';
 import { askApproval, lineReader, promptPath } from './prompt-approve.mjs';
@@ -1029,8 +1029,76 @@ function select(found, words, root) {
   return selected;
 }
 
-const localRows = rows => rows.map(row => ({ ...row, state: row.refusals.length ? 'refused' : 'ready', phase: row.refusals.length ? 'local' : 'server',
+const localRows = rows => rows.map(row => ({ ...row, ...(row.refusals.length ? {unsent:true} : {}), state: row.refusals.length ? 'refused' : 'ready', phase: row.refusals.length ? 'local' : 'server',
+  refusals:row.refusals.map(item=>({...item,hint:item.hint??'Fix the named test or prompt rule, then run the selection again.'})),
   request_ids: [], calls: 0, report_url: null, checks: null, failed_checks: [], all_checks: [] }));
+
+const incompleteCriteria = row => {
+  if (!row.not_checked?.length) return;
+  if (row.criteria) row.criteria = {...row.criteria,total:row.criteria_total};
+  if (row.state === 'passed') Object.assign(row, {state:'not_run',note:{code:'criteria-not-checked',
+    message:'The Story is not a full pass: some criteria were not checked.'}});
+};
+
+function capturedCriteria(rows, capture) {
+  let broken = false;
+  for (const row of rows.filter(row=>!row.unsent)) {
+    const source = capture.sources?.find(source=>source.path===row.test);
+    if (!source) continue;
+    let doc; try { doc=JSON.parse(Buffer.from(source.bytes).toString('utf8')); } catch { /* Refuse captured invalid bytes below. */ }
+    const shape=scenarioShapeRefusal(doc,row.test);
+    if (shape) {
+      const error=Object.assign(new PreflightError(4,`${row.test}: ${shape.message}`),
+        {code:shape.code,hint:'Fix the named test JSON, schema version, criteria and steps, then run the selection again.'});
+      refuseSource(row,error);broken=true;continue;
+    }
+    row.steps=doc.steps;
+    row.criteria_total=doc.criteria.length;
+    row.criterion_texts=Object.fromEntries(doc.criteria.filter(isObject).map(item=>[item.id,item.text]));
+    const exemptions=Array.isArray(doc.check_exemptions)?doc.check_exemptions:[];
+    const unchecked=exemptions.filter(item=>isObject(item)&&item.reason==='out-of-scope').map(item=>({
+      criterion_id:item.criterion_id,text:row.criterion_texts[item.criterion_id],reason:item.detail}));
+    if (unchecked.length) row.not_checked=unchecked;
+    else delete row.not_checked;
+  }
+  return broken;
+}
+
+// Retry a refused combined capture per test, so a broken closure cannot hide good tests.
+const sourceUnavailable = error => !error.selection && (error instanceof PreflightError && error.exitCode === 4 || ['EACCES','EPERM','EISDIR'].includes(error.code));
+function refuseSource(row, error) {
+  if (error.not_checked?.length) Object.assign(row, {not_checked:error.not_checked,criteria_total:error.criteria_total});
+  Object.assign(row, {state:'refused',phase:'local',unsent:true,calls:0,refusals:[{code:error.code ?? 'source-unavailable',
+    section:error.section ?? 'source',message:error.message,hint:error.hint ?? 'Restore the named dependency, make it readable, or correct its declared path.'}]});
+}
+function captureIndependent(root, rows, ports, options) {
+  const capture = tests => {
+    const result=ports.captureSource(root,{...options,tests});
+    const requiredBroken=rows.find(row=>row.unsent&&result.files.some(file=>file.path===row.test));
+    if(requiredBroken)throw new PreflightError(4,`${requiredBroken.test} is broken and is required by the selected source. Fix that test or its declared reference.`);
+    return result;
+  };
+  if (!sentTests(rows).length) return null;
+  let captured;
+  try { captured=capture(sentTests(rows)); }
+  catch (error) {
+    if (!sourceUnavailable(error)) throw error;
+    let broken = false;
+    for (const row of rows.filter(row => !row.unsent)) {
+      try { capture([row.test]); }
+      catch (own) {
+        if (!sourceUnavailable(own)) throw own;
+        broken = true;
+        line(ports.stderr, own.message);
+        refuseSource(row, own);
+      }
+    }
+    if (!broken) throw error; // Aggregate limits and unstable/shared failures retain their rules.
+    return captureIndependent(root,rows,ports,options);
+  }
+  // Each repeat removes at least one broken row. Nothing is uploaded until the selection is usable.
+  return capturedCriteria(rows,captured) ? captureIndependent(root,rows,ports,options) : captured;
+}
 
 const capturedManifests = new WeakMap();
 function sourceFiles(capture) {
@@ -1180,6 +1248,12 @@ function applyAnswer(row, answer, context, observedWait = null, observedAt = con
   if (capacityUncertain) markCapacityUnknown(context, row);
   else if (wait !== null) markBusy(context, row, observedWait ?? wait, observedAt, context.reading && observedWait === null);
   else { row.busy = false; row.can_retry = false; row.note = view.note; }
+  if (row.not_checked?.length) {
+    const unchecked = new Set(row.not_checked.map(item=>item.criterion_id));
+    const results = answer?.result?.report?.criterion_results;
+    row.criteria = {passed:Array.isArray(results) ? results.filter(item=>item.status==='passed'&&!unchecked.has(item.criterion_id)).length : 0,total:row.criteria_total};
+  }
+  incompleteCriteria(row);
   if (row.state === 'refused') addHints(row, context.root, context.visible);
   if (ENDED.has(row.state) && row.sent_at && !row.ended_at && !context.reading) row.ended_at = context.ports.now();
   row.seconds = !ENDED.has(row.state) ? null : row.sent_at && row.ended_at ? (row.ended_at - row.sent_at) / 1000 : row.server_seconds;
@@ -1213,7 +1287,7 @@ function batchRecord(context) {
     test_cache: context.testCache ? { tokens: [...context.testCache.tokens] } : context.savedTestCache,
     rows: rows.map(row => ({ test: row.test, story: row.story, story_path: row.story_path, title: row.title, request_ids: row.request_ids, state: row.state,
       ...(!row.request_ids.length && Object.hasOwn(row, 'calls') ? { calls: row.calls } : {}),
-      ...(row.unsent ? { unsent: true } : {}), progress: row.progress, ahead: row.ahead, phase: row.phase, post_verdict: row.post_verdict ?? null, compatibility: row.compatibility, client_advice: row.client_advice, report_url: row.report_url, refusals: row.refusals, note: row.note ?? null, why: row.why ?? null, next_step: row.next_step ?? null,
+      ...(row.unsent ? { unsent: true } : {}), ...(row.not_checked?.length ? {not_checked:row.not_checked} : {}), progress: row.progress, ahead: row.ahead, phase: row.phase, post_verdict: row.post_verdict ?? null, compatibility: row.compatibility, client_advice: row.client_advice, report_url: row.report_url, refusals: row.refusals, note: row.note ?? null, why: row.why ?? null, next_step: row.next_step ?? null,
       sent_at: row.sent_at ?? null, ended_at: row.ended_at ?? null, max_calls: row.max_calls, warnings: row.warnings, steps: row.steps, criteria_total: row.criteria_total,
       reservation: row.reservation ?? null, restart_used: !!row.restart_used,
       busy: !!row.busy, can_retry: !!row.can_retry, eligible: !!row.eligible, retry_at: row.retry_at ?? null,
@@ -1669,18 +1743,29 @@ function printResult(context, rows, extra = {}) {
 function runFiles(cwd, words, options, ports) {
   const { root, found, normalized } = localSetup(cwd, words);
   const selected = select(found, normalized, root), coverage = bindingCoverage({ root, found, selected });
-  const tests = selected.filter(test => !test.error).map(test => test.path);
-  for (const test of selected.filter(test => test.error)) line(ports.stderr, `Warning: not sent: ${test.error}`);
+  const rows = selected.map(test => ({test:test.path,story:test.story,state:'ready',refusals:[],
+    ...(discoveryRefusal(test) ? {state:'refused',unsent:true,refusals:[discoveryRefusal(test)]} : {})}));
   const appMap = options['--app-map'] === undefined ? null : appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
   for (const path of found.excludedFixtureProjects ?? []) line(ports.stderr, `Warning: skipped nested fixture project ${path}.`);
-  const capture = ports.captureSource(root, { tests, appMap, excludeFixtureProjects: words.length === 0 });
+  const capture = captureIndependent(root, rows, ports, {appMap,excludeFixtureProjects:words.length === 0})
+    ?? {files:[],reads:[],bytes:0};
+  const broken = rows.filter(row => row.unsent), exitCode = broken.length ? 4 : 0;
+  const summary = `${capture.files.length} files, ${formatSize(capture.bytes)} (${capture.bytes} bytes). ${otherFiles(capture.files, found).length} of them are not prompt, story or test files.${broken.length ? ` ${broken.length} tests could not run.` : ''}`;
+  if (options['--json']) {
+    line(ports.stdout, JSON.stringify({repo:root,exit_code:exitCode,summary_line:summary,rows:[...broken,...rows.filter(row=>!row.unsent)],files:capture.files,coverage}));
+    return exitCode;
+  }
+  for (const row of broken) for (const problem of row.refusals) {
+    line(ports.stdout, `${row.test}: ${problem.message}`);
+    line(ports.stdout, problem.hint ?? 'Fix the named test file, then run the selection again.');
+  }
   for (const warning of [...(capture.warnings ?? []), ...unmatchedLines(found)]) line(ports.stderr, warning);
-  const other = otherFiles(capture.files, found), width = Math.max(0, ...capture.files.map(file => file.path.length));
+  const width = Math.max(0, ...capture.files.map(file => file.path.length));
   for(const read of capture.reads??[])line(ports.stderr,`Local read (${read.roles.join(', ')}, not uploaded): ${read.path}`);
   for (const file of capture.files) line(ports.stdout, `  ${(file.path + (file.target ? ` -> ${file.target}` : '')).padEnd(width)}  ${file.size} bytes`);
-  line(ports.stdout, `${capture.files.length} files, ${formatSize(capture.bytes)} (${capture.bytes} bytes). ${other.length} of them are not prompt, story or test files.`);
+  line(ports.stdout, summary);
   line(ports.stderr, coverageText(coverage));
-  return 0;
+  return exitCode;
 }
 
 // pdd lint: only the server's lint (0 AI calls) on the captured files.
@@ -1694,7 +1779,8 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   const rows = selected.map(test => ({ test: test.path, story: test.story, title: test.title, state: 'ready', phase: 'lint',
     refusals: [], request_ids: [], warnings: [], steps: Array.isArray(test.doc?.steps) ? test.doc.steps.filter(isObject) : [],
     criterion_texts: Object.fromEntries((Array.isArray(test.doc?.criteria) ? test.doc.criteria : []).filter(isObject).map(item => [item.id, item.text])),
-    ...(discoveryRefusal(test) ? { state: 'refused', phase: 'local', refusals: [discoveryRefusal(test)], steps: [] } : {}) }));
+    ...(discoveryRefusal(test) ? { state: 'refused', phase: 'local', unsent:true, refusals: [discoveryRefusal(test)], steps: [] } : {}) }));
+  context.rows = rows;
   const local = row => row.phase === 'local';
   const {promptSchemaRefusals} = await import('./runtime-preflight.mjs');
   const prompts = new Map();
@@ -1706,19 +1792,27 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   };
   const limitRows = rows.map(row => {
     const seen = new Set();
-    return local(row) ? row : {...row,refusals:row.steps.flatMap(step => problemsFor(step.entry_path,seen))};
+    try { return local(row) ? row : {...row,refusals:row.steps.flatMap(step => problemsFor(step.entry_path,seen))}; }
+    catch (error) { if (!sourceUnavailable(error)) throw error; refuseSource(row,error); return row; }
   });
   const limited = limitRows.some(row => !local(row) && row.refusals.length);
-  if (limited || rows.every(local)) {
-    const refusedRows = limitRows.map(row => ({story:row.story,title:row.title,test:row.test,state:row.refusals.length ? 'refused' : 'not_run',refusals:row.refusals}));
+  if (!limited && rows.every(local)) return printLintResult(context,rows,[],found.warnings);
+  if (limited) {
+    const refusedRows = limitRows.map(row => ({story:row.story,title:row.title,test:row.test,state:row.refusals.length ? 'refused' : 'not_run',refusals:row.refusals,
+      ...(row.unsent ? {unsent:true} : {})})).sort((a,b)=>Number(!!b.unsent)-Number(!!a.unsent));
     const problems = [];
     for (const problem of refusedRows.flatMap(row => row.refusals)) {
       if (!problems.some(item => item.code === problem.code && item.path === problem.path && item.section === problem.section)) problems.push(problem);
     }
-    const summary = limited ? 'Lint refused local Runtime limits. 0 AI calls. No files were sent.' : 'Lint refused every selected test before sending. 0 AI calls. No files were sent.';
+    const broken = refusedRows.filter(row=>row.unsent).length;
+    const summary = `Lint refused local Runtime limits.${broken ? ` ${broken} tests could not run.` : ''} 0 AI calls. No files were sent.`;
     if (context.json) line(ports.stdout, JSON.stringify({batch:null,repo:root,exit_code:4,lint_state:'refused',summary_line:summary,
       coverage:context.coverage,problems,rows:refusedRows,warnings:found.warnings}));
     else {
+      for (const row of refusedRows.filter(row=>row.unsent)) for (const problem of row.refusals) {
+        line(ports.stdout, `${row.test}: ${problem.message}`);
+        line(ports.stdout, problem.hint ?? 'Fix the named test file, then run the selection again.');
+      }
       for (const problem of problems) {
         line(ports.stderr, `${problem.code}  ${problem.message}`);
         if (problem.hint) line(ports.stderr, problem.hint);
@@ -1729,7 +1823,15 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
     }
     return 4;
   }
-  const capture = ports.captureSource(root, { tests: selected.filter((test, index) => !local(rows[index])).map(test => test.path), appMap: null, excludeFixtureProjects: words.length === 0 });
+  // Lint keeps engine validation ownership; only attach structural incomplete-coverage facts.
+  for (const row of rows.filter(row => !row.unsent)) {
+    const test = selected.find(test => test.path === row.test), checked = preflight({root,found,selected:[test]}).rows[0];
+    if (checked.not_checked?.length) Object.assign(row, {not_checked:checked.not_checked,criteria_total:checked.criteria_total});
+    if (checked.refusals.some(item=>item.code==='unchecked-criteria')) Object.assign(row,
+      {state:'refused',phase:'local',unsent:true,refusals:checked.refusals});
+  }
+  const capture = captureIndependent(root, rows, ports, {appMap:null,excludeFixtureProjects:words.length === 0});
+  if (!capture) return printLintResult(context, rows, [], found.warnings);
   const svgWarnings = lintSvgLayouts({ root, files: [...found.visible], promptPaths: capture.files.map(file => file.path).filter(path => path.endsWith('.prompt.md')) });
   const drift=[];
   try {
@@ -1763,8 +1865,10 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   if (lint.kind === 'not_run' && context.json) {
     for (const row of rows) if (!local(row)) Object.assign(row, { state: 'not_run', calls: 0, note: lint.note });
     saveBatch(context); line(ports.stderr, lint.note.message);
-    line(ports.stdout, JSON.stringify({ batch, repo: root, exit_code: 5, lint_state: 'not_run', summary_line: `Lint did not run. 0 AI calls. No checks were sent.`, coverage: context.coverage, problems: [],
-      rows: rows.map(row => ({ story: row.story, title: row.title, test: row.test, state: row.state, refusals: row.refusals })), warnings: [...new Set([...context.warnings, ...context.unmatched])] }));
+    const broken = rows.filter(row=>row.unsent).length, unchecked = rows.reduce((n,row)=>n+(row.not_checked?.length??0),0);
+    line(ports.stdout, JSON.stringify({ batch, repo: root, exit_code: 5, lint_state: 'not_run', summary_line: `Lint did not run.${broken ? ` ${broken} tests could not run.` : ''}${unchecked ? ` ${unchecked} criteria not checked.` : ''} 0 AI calls. No checks were sent.`, coverage: context.coverage, problems: [],
+      rows: [...rows.filter(row=>row.unsent),...rows.filter(row=>!row.unsent)].map(row => ({ story: row.story, title: row.title, test: row.test, state: row.state, refusals: row.refusals,
+        ...(row.unsent?{unsent:true}:{}),...(row.not_checked?.length?{not_checked:row.not_checked}:{}) })), warnings: [...new Set([...context.warnings, ...context.unmatched])] }));
     return 5;
   }
   if (lint.kind === 'not_run' || lint.kind === 'stop') throw new Stop(5, `${lint.note.message}${lint.note.code && lint.note.code !== 'blocked' ? ` (${lint.note.code})` : ''}`);
@@ -1778,6 +1882,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   for (const [row, outcome] of verdicts) {
     Object.assign(row, lint.kind === 'refused' ? { state: 'refused', refusals: problems }
       : { state: outcome.state, refusals: outcome.refusals, ...(outcome.reason ? { note: { code: null, message: outcome.reason } } : {}) });
+    incompleteCriteria(row);
   }
   Object.assign(context.lint, { state: answer?.state ?? lint.kind, unknown: rows.some(row => row.state === 'unknown'), pending: false });
   saveBatch(context);
@@ -1806,23 +1911,29 @@ function lintProblems(context, answer, refusal = null) {
 
 function printLintResult(context, rows, problems, warnings = [], answer = null) {
   const { ports, batch, root } = context;
+  rows.forEach(incompleteCriteria);
+  rows = [...rows.filter(row=>row.unsent),...rows.filter(row=>!row.unsent)];
   for (const row of rows) for (const problem of row.refusals ?? []) {
     // pdd's own per-test words stay on the row; every server or reached-prompt problem is listed once.
     if (problem.code === 'lint-refused' && !problem.path) continue;
     if (!problems.some(item => item.code === problem.code && (item.path ?? null) === (problem.path ?? null))) problems.push({ ...problem, path: problem.path ?? null, section: null });
   }
   const passing = rows.filter(row => row.state === 'passed').length, lintState = outcomeOverall(rows), exitCode = exitCodeFor(rows);
-  const summary = `Lint: ${passing} of ${rows.length} tests pass. 0 AI calls. No checks were sent.`;
+  const broken = rows.filter(row=>row.unsent).length, unchecked = rows.reduce((n,row)=>n+(row.not_checked?.length??0),0);
+  const summary = `Lint: ${passing} of ${rows.length} tests pass.${broken ? ` ${broken} tests could not run.` : ''}${unchecked ? ` ${unchecked} criteria not checked. The Story is not a full pass.` : ''} 0 AI calls. No checks were sent.`;
   const reportedCoverage = answer?.result?.capabilities_complete ?? answer?.result?.report?.lint?.capabilities_complete;
   const capabilityCoverage = typeof reportedCoverage === 'boolean' ? reportedCoverage : null;
   const result = { batch, repo: root, exit_code: exitCode, lint_state: lintState, summary_line: summary, capabilities_complete: capabilityCoverage, coverage: context.coverage, problems,
-    rows: rows.map(row => ({ story: row.story, title: row.title, test: row.test, state: row.state, refusals: row.refusals, compatibility: row.compatibility, client_advice: row.client_advice, ...(row.note ? { reason: row.note } : {}) })), warnings: [...new Set([...(context.warnings ?? []), ...(context.unmatched ?? [])])] };
+    rows: rows.map(row => ({ story: row.story, title: row.title, test: row.test, state: row.state, refusals: row.refusals, ...(row.unsent?{unsent:true}:{}), ...(row.not_checked?.length?{not_checked:row.not_checked}:{}), compatibility: row.compatibility, client_advice: row.client_advice, ...(row.note ? { reason: row.note } : {}) })), warnings: [...new Set([...(context.warnings ?? []), ...(context.unmatched ?? [])])] };
   if (context.folder) context.store.write(join(context.folder, 'summary.json'), result);
   if (context.json) {
     line(ports.stdout, JSON.stringify(result));
     return exitCode;
   }
   const out = [];
+  for (const row of rows.filter(row=>row.unsent)) for (const problem of row.refusals) out.push(
+    `${row.test}: ${problem.message}`, problem.hint ?? 'Fix the named test file, then run the selection again.');
+  for (const row of rows) for (const item of row.not_checked ?? []) out.push(`${row.test} ${item.criterion_id}: not checked: ${item.reason}`);
   if (problems.length) {
     out.push('Lint problems (from the PDD interpreter):');
     for (const item of problems) out.push(`  ${[item.code, item.path, item.section, item.message].filter(Boolean).join('  ')}`, ...(item.hint ? [`    ${item.hint}`] : []));
@@ -1909,6 +2020,7 @@ async function readUnsentLint(context, rows) {
     if (!busy && !sourceRecovered && state === 'not_run') extra.note = { code: 'lint-finished',
       message: 'The saved lint finished. This check was not sent because the saved source could not be verified.' };
     Object.assign(row, { state, calls: 0, phase: 'lint', why: lintView.why, next_step: lintView.next_step, ...extra });
+    incompleteCriteria(row);
     if (!busy && outcome.state === 'unknown') context.lintUnknown = lint.unknown = true;
   }
 }
@@ -2208,6 +2320,8 @@ async function runCallRead(context, id) {
     Object.assign(context, { origin, secrets: [identity.token] });
     const row = { test: '-', story: '-', title: '-', phase: 'server', request_ids: [id], state: 'unknown', refusals: [], warnings: [] };
     const owner = await refreshCheckBatches(context, identity, origin, id, answer);
+    if (owner?.row.not_checked?.length) Object.assign(row, {not_checked:owner.row.not_checked,criteria_total:owner.row.criteria_total,
+      criterion_texts:owner.row.criterion_texts,steps:owner.row.steps});
     // Use the owning batch only to build the direct row's aggregate projection.
     // UUID reads must not turn a one-row view into a saved batch or summary write.
     applyAnswer(row, answer, owner ? { ...context, batch: owner.batch, folder: owner.folder } : context);
@@ -2344,7 +2458,7 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
     }
     requestedCalls(options['--max-calls']);
     const modes = ['--read', '--retry', '--fill-hash', '--files', '--request', '--lint'].filter(name => options[name] !== undefined);
-    const others = Object.keys(options).filter(name => !modes.includes(name) && !(modes[0] === '--fill-hash' && name === '--compact') && !(modes[0] === '--retry' && ['--json', '--details', '--timeout'].includes(name)) && !(name === '--json' && ['--read', '--request', '--lint'].includes(modes[0])) && !(name === '--timeout' && ['--read', '--lint'].includes(modes[0])) && !(name === '--app-map' && modes[0] === '--files'));
+    const others = Object.keys(options).filter(name => !modes.includes(name) && !(modes[0] === '--fill-hash' && name === '--compact') && !(modes[0] === '--retry' && ['--json', '--details', '--timeout'].includes(name)) && !(name === '--json' && ['--read', '--request', '--lint', '--files'].includes(modes[0])) && !(name === '--timeout' && ['--read', '--lint'].includes(modes[0])) && !(name === '--app-map' && modes[0] === '--files'));
     if (modes.length > 1 || (modes.length && others.length) || (['--fill-hash', '--request', '--retry'].includes(modes[0]) && words.length)
       || (modes[0] === '--read' && words.length > 1) || (!modes.length && options['--app-map'] !== undefined)) throw new Stop(2, 'This mix of options does not work together. Run pdd test --help.');
     if (modes[0] === '--request') { release = interruptible(context); return await runRequest(context, options['--request']); }
@@ -2361,7 +2475,15 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
   } catch (error) {
     if (error instanceof Stop || error instanceof PreflightError || error instanceof RuntimeWorkspaceError) {
       line(ports.stderr, error.message);
-      if (context.json && error.bindingInventory) line(ports.stdout, JSON.stringify({ batch: null, repo: context.root, exit_code: 4, lint_state: 'refused',
+      if (context.rows?.some(row=>row.unsent || row.not_checked?.length)) {
+        const rows = context.rows.map(row=>['ready','sending','waiting'].includes(row.state)
+          ? {...row,state:'not_run',note:{code:null,message:error.message}} : row);
+        const summary = {...renderJson({batch:context.batch??null,repo:context.root,rows,coverage:context.coverage,
+          exitCode:error.exitCode,warnings:context.warnings}),message:error.message,lint_state:error.exitCode===3?'unknown':'not_run'};
+        if (context.folder) context.store.write(join(context.folder,'summary.json'),summary);
+        if (context.json) line(ports.stdout,JSON.stringify(summary));
+        else ports.stdout.write(renderText({batch:context.batch,rows,coverage:context.coverage,warnings:context.warnings,exitCode:error.exitCode,secrets:context.secrets}));
+      } else if (context.json && error.bindingInventory) line(ports.stdout, JSON.stringify({ batch: null, repo: context.root, exit_code: 4, lint_state: 'refused',
         coverage: { available: false, bound: null, total: null, modules: [] }, problems: [{ code: 'binding-invalid', path: 'pdd-bindings.json', message: error.message }], rows: [], warnings: [] }));
       else if (context.coverage && error.exitCode !== 5) {
         if (context.json) line(ports.stdout, JSON.stringify({ batch: context.batch ?? null, repo: context.root, exit_code: error.exitCode,
@@ -2876,12 +2998,14 @@ async function runBatch(context, cwd, words, options, setRelease) {
   context.coverage = bindingCoverage({ root, found, selected });
   const checked = preflight({ root, found, selected });
   const rows = localRows(checked.rows);
+  context.rows = rows;
   for (const row of rows) {
     const test = selected.find(item => item.path === row.test);
     row.story_path = test?.storyPath;
     // A test that discovery cannot use (a conflict, unreadable, invalid or over the upload limit) is refused and never uploaded.
     if (test?.error) row.unsent = true;
-    row.criterion_texts = Object.fromEntries((Array.isArray(test?.doc?.criteria) ? test.doc.criteria : []).filter(isObject).map(item => [item.id, item.text]));
+    row.criterion_texts = Object.fromEntries([...(Array.isArray(test?.doc?.criteria) ? test.doc.criteria : []).filter(isObject).map(item => [item.id, item.text]),
+      ...(row.not_checked??[]).map(item=>[item.criterion_id,item.text])]);
   }
   if (options['--max-calls'] !== undefined) for (const row of rows) row.max_calls = Number(options['--max-calls']);
   context.warnings.push(...found.warnings, ...checked.warnings, ...sharedSourceFiles(root, found.discoveryVisible ?? found.visible));
@@ -2889,8 +3013,12 @@ async function runBatch(context, cwd, words, options, setRelease) {
   if (cache) await beginTestAttempts(cache, rows.filter(row => row.state !== 'ready'), null, options, origin);
   if (!rows.some(row => row.state === 'ready')) return printResult(context, rows);
   let capture;
-  try { capture = ports.captureSource(root, { tests: sentTests(rows), appMap: null, excludeFixtureProjects: words.length === 0 }); }
+  try { capture = captureIndependent(root, rows, ports, {appMap:null,excludeFixtureProjects:words.length === 0}); }
   catch (error) { if (cache) await beginTestAttempts(cache, rows, null, options, origin); throw error; }
+  if (!capture || !rows.some(row=>row.state==='ready')) {
+    if (cache) await beginTestAttempts(cache,rows,null,options,origin);
+    return printResult(context,rows);
+  }
   context.warnings.push(...(capture.warnings ?? []));
   if (cache) await beginTestAttempts(cache, rows, capture, options, origin);
   context.testCache = cache;

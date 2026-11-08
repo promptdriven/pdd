@@ -111,7 +111,7 @@ const routes = [
       form(`pdd ${test} --retry BATCH [--json] [--details] [--timeout MIN]`, 'Retry only confirmed unstarted checks from a saved batch, with the same source and call caps; preserve completed and uncertain runs.'),
       form(`pdd ${test} --fill-hash`, 'Fill prose_sha256 of draft runtime interfaces; no network.'),
       form(`pdd ${test} --fill-hash --compact`, 'Fill draft hashes and remove interface JSON formatting whitespace; preserve values and prose, no network.'),
-      form(`pdd ${test} --files [STORY...] [--app-map PATH]`, 'List the exact selected upload files and byte sizes; no network. --app-map selects the Simulator\'s app map.'),
+      form(`pdd ${test} --files [STORY...] [--app-map PATH] [--json]`, 'List the exact selected upload files and byte sizes; no network. --app-map selects the Simulator\'s app map.'),
       form(`pdd ${test} --screen URL --drawing PATH [--json]`, 'Compare a real page with its drawing at the drawing viewport in installed headless Chrome/Chromium; no AI or interpreter calls.')] },
   // A lint plan always has --lint, so the runtime client runs the same code as for `pdd test --lint`.
   { id: 'lint', prefix: [lint], local: 'runtime-check', removed: ['check', '--lint'], implies: ['--lint'], operands: [{ name: 'story', type: 'text', optional: true, repeat: true }],

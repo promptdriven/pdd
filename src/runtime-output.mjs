@@ -206,7 +206,7 @@ function criterionCoverage(row) {
 
 export function jsonRow(row) {
   const publicChecks = checks => (checks ?? []).map(({ normal_result, ...check }) => check);
-  return { story: row.story, title: row.title, test: row.test, state: row.state, ...(row.compatibility ? { compatibility: row.compatibility, client_advice: row.client_advice } : {}), criterion_coverage: criterionCoverage(row), ...(row.progress ? { progress: row.progress } : {}), ...(row.ahead !== undefined && row.ahead !== null ? { ahead: row.ahead } : {}), checks: row.checks ?? null, criteria: row.criteria ?? null,
+  return { story: row.story, title: row.title, test: row.test, state: row.state, ...(row.unsent ? {unsent:true} : {}), ...(row.not_checked?.length ? {not_checked:row.not_checked} : {}), ...(row.compatibility ? { compatibility: row.compatibility, client_advice: row.client_advice } : {}), criterion_coverage: criterionCoverage(row), ...(row.progress ? { progress: row.progress } : {}), ...(row.ahead !== undefined && row.ahead !== null ? { ahead: row.ahead } : {}), checks: row.checks ?? null, criteria: row.criteria ?? null,
     failed_checks: publicChecks(row.failed_checks), refusals: (row.refusals ?? []).map(item => ({ code: item.code, ...(item.path ? { path: item.path } : {}), field: item.field ?? null, section: item.section ?? null,
       message: item.message ?? null, engine_message: item.engine_message ?? null, hint: item.hint ?? null, reason: item.reason ?? null, fix: item.fix ?? null,
       where: item.where ?? null, cause: item.cause ?? null })), calls: sentRow(row) ? row.calls ?? 'unknown' : 0,
@@ -219,6 +219,7 @@ export function jsonRow(row) {
 }
 
 export function renderJson({ batch = null, repo, sourceSha256 = null, coverage, rows, warnings = [], exitCode, summaryLine: line = summaryLine(rows) }) {
+  rows = [...rows.filter(row=>row.unsent),...rows.filter(row=>!row.unsent)];
   const perStory = new Map(storyLines(rows).map(([story, text]) => [story, text]));
   return { batch, repo, ...(coverage ? { coverage } : {}), source_sha256: sourceSha256, exit_code: exitCode, summary_line: line, draft: rows.some(row => row.draft),
     rows: rows.map(row => ({ ...jsonRow(row), summary_line: perStory.get(row.story) ?? null })), warnings };
@@ -263,8 +264,9 @@ export function summaryLine(rows, story = null) {
   const rerunShare = rerunCalls ? `${rerunCalls} for reruns` : '';
   const usage = known.length ? `${count(calls, 'AI call')}${rerunShare ? ` (${rerunShare})` : ''}` : rerunShare || count(calls, 'AI call');
   const skipped = rows.some(row => row.cached) ? [count(new Set(rows.filter(row => row.cached).map(row => row.story_path ?? row.story)).size, 'Story').replace('Storys', 'Stories') + ' skipped'] : [];
+  const broken = rows.filter(row=>row.unsent).length, unchecked = rows.reduce((n,row)=>n+(row.not_checked?.length??0),0);
   return [`${PROMPT_TESTS_LABEL}${story ? ` (${story})` : ''}${rows.some(row => row.draft) ? ' (DRAFT)' : ''}: ${mark} ${criteriaText}`,
-    `${checks.passed}/${checks.total} checks`, ...(progress ? [progress] : []), ...others, ...skipped, ...(progress && !sent.length ? [] : [`${usage}${unknownCalls ? ` + ${unknownCalls} unknown` : ''}`])].join(' · ');
+    `${checks.passed}/${checks.total} checks`, ...(broken ? [`${broken} tests could not run`] : []), ...(unchecked ? [`${unchecked} criteria not checked; the Story is not a full pass`] : []), ...(progress ? [progress] : []), ...others, ...skipped, ...(progress && !sent.length ? [] : [`${usage}${unknownCalls ? ` + ${unknownCalls} unknown` : ''}`])].join(' · ');
 }
 
 const shellWord = word => /^[A-Za-z0-9_./:@%+=,-]+$/.test(word) ? word : `'${word.replaceAll("'", "'\\''")}'`;
@@ -374,6 +376,8 @@ function localRefusals(rows, secrets) {
 // The terminal result of a batch (stdout).
 export function renderText({ batch, rows, coverage, warnings = [], details = false, timeoutMin = null, interrupted = false, reading = false, exitCode, secrets = [], recovery, now = Date.now(), noFailed = false }) {
   const out = [];
+  rows = [...rows.filter(row=>row.unsent),...rows.filter(row=>!row.unsent)];
+  out.push(...localRefusals(rows.filter(row=>row.unsent),secrets));
   if (exitCode === 3) out.push(recovery ?? `pdd test --read ${batch}`);
   // One Story: its own line is the result; the overall line comes only with two or more Stories.
   const perStory = storyLines(rows).map(([, text]) => text);
@@ -409,7 +413,7 @@ export function renderText({ batch, rows, coverage, warnings = [], details = fal
     if (!diagnosed && !row.next_step) lines.push('  Next: show this check to the person. A person decides expected values. The agent may propose a change, and never makes it.');
     lines.push(`  Report: ${row.report_url ?? 'none'}`); out.push(...lines);
   }
-  out.push(...localRefusals(rows, secrets));
+  out.push(...localRefusals(rows.filter(row=>!row.unsent), secrets));
   for (const row of rows.filter(row => row.state === 'refused' && sentRow(row))) {
     out.push(`REFUSED  ${row.title} (${row.test})`, ...row.refusals.flatMap(item => refusalLines(item, !!row.next_step)), ...serverAdvice(row, secrets), ...(row.report_url ? [`  Report: ${row.report_url}`] : []));
   }
@@ -446,6 +450,8 @@ export function renderText({ batch, rows, coverage, warnings = [], details = fal
     const text = row.criterion_texts?.[item.criterion_id];
     out.push(`criterion ${item.criterion_id}:${text ? ` ${cleanText(text, secrets)}` : ''}${item.exit_code_only ? ' — checked by exit code only' : ''}`);
   }
+  for (const row of rows) for (const item of row.not_checked ?? []) out.push(
+    `${row.test} ${item.criterion_id}: not checked: ${cleanText(item.reason,secrets)} (${cleanText(item.text,secrets)})`);
   for (const row of rows.filter(row => row.compatibility)) out.push(`Compatibility (${cleanText(row.test, secrets)}): ${JSON.stringify(row.compatibility, null, 2)}`,
     `  Client advice: ${JSON.stringify(row.client_advice)}`);
   if (coverage) out.push(coverageText(coverage));
