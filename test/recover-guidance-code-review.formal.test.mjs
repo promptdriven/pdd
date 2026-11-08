@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
-import {fixture, nativeCase, success} from './helpers/recover-guidance-cli-fixture.mjs';
+import {fixture, nativeCase, success, assertReviewCosts} from './helpers/recover-guidance-cli-fixture.mjs';
 
 // Independent oracle: user_stories/recover-guidance-code-review.md,
 // Rules to check and AC2--AC5, plus the unchanged native case inventory.
@@ -59,7 +59,7 @@ function world(t, selection, review, lifecycle = 'completed-pr1') {
 // are compared, rather than a selected list of progress fields.
 function withoutReviewSaveMetadata(run) {
   const copy = structuredClone(run);
-  delete copy.updatedAt; delete copy.journalSeq;
+  delete copy.updatedAt; delete copy.journalSeq; delete copy.cost;
   if (copy.gate) delete copy.gate.promptSnapshot;
   if (copy.waitingDecision) delete copy.waitingDecision.promptSnapshot;
   return copy;
@@ -99,6 +99,7 @@ for (const selection of selections) for (const review of reviews) for (const lif
       assert.equal(out.status, 0, out.stderr);
       assert.ok(Array.isArray(f.read().gate.promptSnapshot), 'FORMAL2979: eligible recovery must save present current review evidence');
       assert.deepEqual(f.read().gate.promptSnapshot.map(row => row.path), currentPaths(selection));
+      assertReviewCosts(before, f.read());
       assert.deepEqual(withoutReviewSaveMetadata(f.read()), withoutReviewSaveMetadata(before));
       assert.deepEqual(f.effects(), effects); assert.deepEqual(prompts(f), prose);
       assert.match(out.stdout, /Do you want the code PR now/);

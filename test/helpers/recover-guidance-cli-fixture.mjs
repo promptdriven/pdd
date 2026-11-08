@@ -134,3 +134,24 @@ export function missingCompletedReview(f) {
   assert.equal(f.read().state, row.expected.state); assert.equal(f.read().doneAt, row.expected.done_at);
   return f.read();
 }
+
+// #3061 adds cumulative cost observations to every ordinary save. A review
+// refresh may observe the seeded question and elapsed wait, but cannot spend,
+// approve or discard prior measurements. Keep these checks beside the full
+// workflow-state comparisons in the recovery tests.
+export function assertReviewCosts(before, after) {
+  const old = before.cost, current = after.cost;
+  assert.equal(current.schema, 'pdd.cost.v1');
+  assert.ok(current.capturedAt >= old.capturedAt);
+  for (const key of ['outcome', 'outcomeAt', 'tokens', 'sessions', 'measurements', 'suiteMinutes', 'ciMinutes'])
+    assert.deepEqual(current[key], old[key], key);
+  for (const key of ['answers', 'approvals', 'activeMinutes'])
+    assert.deepEqual(current.person[key], old.person[key], key);
+  assert.ok(current.githubCalls >= old.githubCalls);
+  const question = before.question;
+  const newQuestion = question && !old.waits[`q:${question.at}:${question.area}`] ? 1 : 0;
+  assert.equal(current.person.questions, old.person.questions + newQuestion);
+  assert.ok(current.person.waitingMinutes >= old.person.waitingMinutes);
+  assert.deepEqual(current.events.slice(0, old.events.length), old.events);
+  for (const [key, value] of Object.entries(old.waits)) assert.deepEqual(current.waits[key], value, key);
+}
