@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-worktree.prompt.md (sha256: e652ee62aac5531c229e221f5d9c21b5b41295e66e298df4fdb06dd39592092a).
+// Generated from prompts/cli/workflow-worktree.prompt.md (sha256: 56e7ee0aa71325c00a8536fb88e1832a4396450950b34bde28d01a810928b5df).
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
@@ -180,7 +180,9 @@ async function verifiedPrimary(ctx, c) {
   if (!plain(R)) disagree(`Git registers the primary repository at ${shown(R)}, but that path has a control character, so pdd cannot use it safely. Move the repository to a path without control characters, run "git worktree repair", then run the workflow again.`);
   try { await canonicalDirectory(R); }
   catch { disagree(`Git registers the primary repository at ${shown(R)}, but that folder is missing or is not a canonical folder. ${REPAIR}`); }
-  if (primary.bare === undefined) {
+  const primaryBare = primary.bare === undefined
+    ? (await c.git(R, ['rev-parse', '--is-bare-repository'])).trim() === 'true' : primary.bare;
+  if (primaryBare === false) {
     const top = await c.raw(R, ['rev-parse', '--show-toplevel']);
     if (top.code !== 0) disagree(`Git registers the primary checkout at ${shown(R)}, but Git finds no work tree there, so pdd cannot find the primary checkout (for example after "git clone --separate-git-dir"). Run the workflow from a normal clone or from a linked worktree of a bare repository.`);
     const sourceRoot = await realpath(top.stdout.trim());
@@ -189,7 +191,7 @@ async function verifiedPrimary(ctx, c) {
     sameOrigin(await originOf(R, c, `the primary checkout at ${shown(R)}`), ctx, `the primary checkout at ${shown(R)}`);
     return { root: R, bare: false, worktrees: besideFolder(R), accepted: [besideFolder(R)] };
   }
-  if (primary.bare !== true || R !== C && join(R, '.git') !== C)
+  if (primaryBare !== true || R !== C && join(R, '.git') !== C)
     disagree(`Git registers the bare primary repository at ${shown(R)}, but this checkout's common Git directory is ${shown(C)}. ${REPAIR}`);
   // Only reads that need no work tree run in a bare R.
   const bare = (await c.git(R, ['rev-parse', '--is-bare-repository'])).trim();

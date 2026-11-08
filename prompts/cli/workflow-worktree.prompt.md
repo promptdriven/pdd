@@ -30,7 +30,7 @@ pdd supports exactly the four layouts in the table below: a normal clone and its
 
 - R and the run worktrees folder must have no control character (the `plain` path rule). Check both before creating any directory or saving any record, so a refusal leaves nothing behind.
 - A normal R must resolve, through Git run in R, to its own checkout root, the same C and the same origin.
-- A bare R must be marked bare in the registration, and R must be C, or the folder that holds C when C is `R/.git`. Git run in R must report a bare repository whose Git directory and common directory are both C, `core.bare=true` and the same origin.
+- A bare R is marked bare in the registration, or, when that marker is absent, is confirmed by `rev-parse --is-bare-repository` in R. Git can omit the marker with per-worktree configuration. R must be C, or the folder that holds C when C is `R/.git`. Git run in R must report a bare repository whose Git directory and common directory are both C, `core.bare=true` and the same origin.
 - A bare C is inside a project folder P when Git, run in P = the parent folder of C, reports C as its Git directory: P holds C as `P/.git`, or P has a `.git` file that names C. Then the run worktrees folder is `P.pdd-worktrees` beside P. Otherwise it is `<C name>.pdd-worktrees` beside C. A folder inside P would be inside Git's discovery area of P's `.git` and is hidden from the person; beside P, it is in the same place as for a normal clone.
 - Lookup also accepts an assignment saved in `<R name>.pdd-worktrees` beside R, so a `.bare` run that an earlier version saved in `P/.bare.pdd-worktrees` stays valid. New allocations always use the table.
 

@@ -788,3 +788,22 @@ test('release frees only its own issue claim and keeps the old worktree, branch 
   assert((await lstat(a.assignment.worktreePath)).isDirectory()); await lstat(metadata(f, first.runId));
   assert.equal((await f.git('branch', '--list', a.assignment.branch)).stdout.trim().replace(/^[*+] /, ''), a.assignment.branch);
 });
+
+test('2698: a bare primary with worktree config verifies without a bare inventory marker', async t => {
+  const f = await layoutFixture(t, 'bare-in-dotgit');
+  await f.gitAt(f.primary, 'config', 'extensions.worktreeConfig', 'true');
+  await f.gitAt(f.primary, 'config', '--worktree', 'core.bare', 'true');
+  await f.gitAt(f.primary, 'config', '--local', '--unset', 'core.bare');
+  const execute = f.ports.execFile;
+  f.ports.execFile = async (file, args, options) => {
+    const reply = await execute(file, args, options);
+    // Git 2.43 omits this marker with worktreeConfig. Keep the boundary deterministic on newer Git too.
+    return args.join(' ') === 'worktree list --porcelain -z'
+      ? { ...reply, stdout: reply.stdout.replace(/\0bare\0/g, '\0') } : reply;
+  };
+  assert.deepEqual(await lookupRepositoryParent({ cwd: f.cwd, repository: 'Acme/Project', commonDir: f.common }, f.ports),
+    { state: 'ready', root: f.primary, bare: true });
+  const result = await allocateIssueWorktree(f.input(2698, { cwd: f.cwd }), f.ports);
+  assert.equal(result.state, 'ready', result.message);
+  assert.equal(dirname(result.assignment.worktreePath), LAYOUTS['bare-in-dotgit'](f).folder);
+});
