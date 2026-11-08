@@ -487,9 +487,14 @@ notice remains held. Only a changed area done record resets this allowance;
 working observations, resumed or replaced chats and status reads do not. Each area
 has its own allowance. After three attempts and another idle interval without
 recorded progress, set state stuck, `parkReason` naming the area and idle limit,
-and `chatIdleLimit:{area,at}`. Return this incident only when it is first saved,
-so later ticks send no second alert. Recheck current run identity, area, progress,
-chat, origin, close state, gate and question after inspection, before saving a stop
+and `chatIdleLimit:{area,at}`. Later calls for this saved stuck incident return
+the same `stuck` result and `area`, before testing nudge eligibility or inspecting
+Herdr. Require the same valid automatic origin, coordinator, machine and source
+checkout, and no layout or current-chat intentional close mark. This durable
+handoff lets the launcher retry the existing deduplicated alert service after
+failure or a process restart between saving the stop and handing off the alert;
+it never reserves another nudge or launches a chat. Recheck current run identity,
+area, progress, chat, origin, close state, gate and question after inspection, before saving a stop
 or reserving a nudge, and at delivery submission. A concurrent hold or progress
 wins and sends nothing. Never change completed steps or clear person decisions.
 

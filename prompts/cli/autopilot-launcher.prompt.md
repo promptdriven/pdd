@@ -25,9 +25,12 @@ This native reconciliation makes no model or interpreter call.
 
 In that same reconciliation, call the runner's `nudgeIdleRun` for eligible saved
 workers through the same injected ports and admission guard. The runner owns idle
-evidence, timing, bounded delivery and stop guards. Its first `stuck` result sends
-one existing stuck alert with the issue, idle cause, three attempted nudges and
-the need to inspect the agent. Later ticks send no second alert for that incident.
+evidence, timing, bounded delivery and stop guards. Forward each `stuck` result,
+including a saved incident on a later tick, to the existing stuck alert service
+with the issue, idle cause, three attempted nudges and the need to inspect the
+agent. Keep retrying the handoff after failure or restart. The alert service owns
+retries for known unsent failures and deduplication of delivered or unconfirmed
+incidents; do not bypass it or send an update for a repeated incident.
 
 The runner owns eligibility, recovery, request visibility and the per-area limit.
 On its `stuck` result, send a `stuck` alert through the existing alert service with

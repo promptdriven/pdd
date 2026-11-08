@@ -1,15 +1,41 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync, writeFileSync} from 'node:fs';
+import {existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync} from 'node:fs';
+import {execFileSync} from 'node:child_process';
 import {join} from 'node:path';
 import {tickAutopilot} from '../src/autopilot-launcher.mjs';
-import {openRun, runStatus} from '../src/workflow-runner.mjs';
+import {nudgeIdleRun, openRun, runStatus} from '../src/workflow-runner.mjs';
 import {fixture, packageRoot} from './helpers/workflow-runner-fixture.mjs';
 
 const WAIT = 600000;
 const save = (f, run) => writeFileSync(join(run.runDir, 'status.json'), JSON.stringify(run));
 const prompts = f => f.herdr.calls.filter(a => a[0] === 'agent' && a[1] === 'prompt');
 const launches = f => f.herdr.calls.filter(a => a[0] === 'pane' && a[1] === 'run');
+function useAlertService(f, ports) {
+  const config = join(f.ports.env.HOME, '.config', 'pdd');
+  mkdirSync(config, {recursive: true});
+  writeFileSync(join(config, 'autopilot-alerts.json'), JSON.stringify({v: 1, service: 'discord',
+    url: 'https://discord.com/api/webhooks/123456789012345678/test-fixture'}));
+  const requests = [];
+  delete ports.sendAlert;
+  ports.alertPorts = {hostname: () => 'idle-machine', http: async request => {
+    requests.push(request); return {status: 200, text: JSON.stringify({id: 'fixture-message', content: request.body.content})};
+  }};
+  return requests;
+}
+function alertIncident(f) {
+  const folder = join(f.state, 'alerts');
+  assert.ok(existsSync(folder), '3072: the alert service must retain custody of the saved idle incident');
+  const files = readdirSync(folder);
+  assert.equal(files.length, 1);
+  return JSON.parse(readFileSync(join(folder, files[0]), 'utf8')).incidents['17:stuck'];
+}
+async function exhaustIdle(f, tick, idle) {
+  idle(); await tick();
+  for (let i = 0; i < 3; i++) {f.tick(WAIT); await tick();}
+  assert.equal(prompts(f).length, 3);
+  f.tick(WAIT);
+}
 async function setup(t, agent = 'claude', name = 'small-change') {
   const f = await fixture(t, {agent, name});
   assert.equal((await f.run()).exitCode, 0);
@@ -55,7 +81,8 @@ for (const agent of ['claude', 'codex']) for (const automatic of [false, true]) 
   });
 
 test('3072 idle timing, three per-area nudges, then one stuck alert across ticks', async t => {
-  const {f, tick, idle, alerts, run} = await setup(t);
+  const {f, tick, idle, ports, run} = await setup(t);
+  const alerts = useAlertService(f, ports);
   idle(); await tick();
   f.tick(WAIT - 1); await tick(); assert.equal(prompts(f).length, 0);
   f.tick(1);
@@ -66,11 +93,120 @@ test('3072 idle timing, three per-area nudges, then one stuck alert across ticks
     f.tick(WAIT);
   }
   await tick(); assert.equal(f.record().state, 'stuck'); assert.equal(alerts.length, 1);
-  assert.equal(alerts[0].kind, 'stuck');
+  assert.equal(alertIncident(f).result, 'delivered');
   assert.equal(f.record().chatIdleLimit.area, run.chats.at(-1).area);
   for (let i = 0; i < 3; i++) {f.tick(WAIT); await tick();}
   assert.equal(alerts.length, 1); assert.equal(prompts(f).length, 3);
 });
+
+test('3072 repair 1: retry an alert handoff that throws before service custody', async t => {
+  const {f, tick, idle, ports} = await setup(t);
+  const requests = useAlertService(f, ports);
+  await exhaustIdle(f, tick, idle);
+  let attempts = 0;
+  ports.sendAlert = async () => {attempts++; throw Error('Controlled failure before alert custody');};
+  await tick();
+  assert.equal(attempts, 1); assert.equal(requests.length, 0);
+  assert.equal(f.record().state, 'stuck');
+  const stopped = f.record();
+  delete ports.sendAlert;
+  await tick(); await tick();
+  assert.equal(requests.length, 1, '3072: a definitely unsent idle alert must reach the service on a later tick');
+  assert.equal(alertIncident(f).result, 'delivered');
+  assert.deepEqual(f.record(), stopped);
+  assert.equal(prompts(f).length, 3); assert.equal(launches(f).length, 0);
+});
+
+for (const failure of ['failed', 'unconfirmed', 'not-configured']) test(`3072 repair 1: saved idle alerts preserve ${failure} service custody`, async t => {
+  const {f, tick, idle, ports} = await setup(t);
+  const requests = useAlertService(f, ports), http = ports.alertPorts.http;
+  await exhaustIdle(f, tick, idle);
+  ports.sendAlert = async () => {throw Error('Controlled failure before alert custody');};
+  await tick(); assert.equal(f.record().state, 'stuck'); assert.equal(requests.length, 0);
+  delete ports.sendAlert;
+  if (failure === 'not-configured') writeFileSync(join(f.ports.env.HOME, '.config', 'pdd', 'autopilot-alerts.json'), '{}');
+  else ports.alertPorts.http = async request => {
+    requests.push(request);
+    throw Object.assign(Error('Controlled alert transport failure'), {code: failure === 'failed' ? 'unreached' : 'unknown'});
+  };
+  await tick();
+  assert.equal(requests.length, failure === 'not-configured' ? 0 : 1,
+    '3072: a saved idle incident must be handed to the alert service');
+  assert.equal(alertIncident(f).result, failure);
+  if (failure === 'not-configured') useAlertService(f, ports);
+  // Keep one request counter across the destination and transport recovery.
+  ports.alertPorts.http = http;
+  const before = requests.length;
+  await tick(); await tick();
+  assert.equal(requests.length - before, failure === 'unconfirmed' ? 0 : 1,
+    '3072: retry known unsent alerts and retain unconfirmed custody');
+  assert.equal(alertIncident(f).result, failure === 'unconfirmed' ? 'unconfirmed' : 'delivered');
+  assert.equal(prompts(f).length, 3); assert.equal(launches(f).length, 0);
+});
+
+test('3072 repair 1: a fresh tick process hands off a saved idle stop once', async t => {
+  const {f, tick, idle, ports, stateFile} = await setup(t);
+  useAlertService(f, ports);
+  await exhaustIdle(f, tick, idle);
+  // Stop at the public runner boundary, before the launcher's alert handoff.
+  const stopped = await nudgeIdleRun({ref: '17', cwd: f.source, packageRoot,
+    coordinatorId: 'idle-owner', machine: 'idle-machine'}, ports);
+  assert.equal(stopped.recovery, 'stuck');
+  const saved = f.record();
+  const script = `
+    import {readFileSync} from 'node:fs';
+    import {execFile} from 'node:child_process';
+    import {promisify} from 'node:util';
+    import {tickAutopilot} from './src/autopilot-launcher.mjs';
+    import {fakeHerdr} from './test/helpers/fake-herdr.mjs';
+    const input = JSON.parse(readFileSync(0, 'utf8')), h = fakeHerdr(), exec = promisify(execFile);
+    const requests = [], warnings = [];
+    const execute = async (file, args, options) => {
+      if (file !== 'git' || !['rev-parse', 'config', 'status', 'show-ref', 'symbolic-ref', 'remote', 'worktree', 'for-each-ref', 'merge-base'].includes(args[0])) throw Error('Unexpected external command: ' + file + ' ' + args[0]);
+      return {code: 0, ...await exec(file, args, options)};
+    };
+    const ports = {stateDir: input.stateDir, env: input.env, layoutDirectory: input.layoutDirectory,
+      now: () => input.now, herdr: h.herdr, findNativeSessions: async () => [], run: execute, execFile: execute,
+      warn: value => warnings.push(value), alertPorts: {hostname: () => 'idle-machine',
+        http: async request => {requests.push(request); return {status: 200,
+          text: JSON.stringify({id: 'fixture-message', content: request.body.content})};}}};
+    await tickAutopilot(input.stateFile, ports);
+    await tickAutopilot(input.stateFile, ports);
+    process.stdout.write(JSON.stringify({requests, warnings,
+      deliveries: h.calls.filter(a => a[0] === 'agent' && a[1] === 'prompt'),
+      launches: h.calls.filter(a => a[0] === 'pane' && a[1] === 'run')}));
+  `;
+  const result = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+    cwd: packageRoot, encoding: 'utf8', timeout: 10000,
+    input: JSON.stringify({stateFile, stateDir: f.state, env: f.ports.env, layoutDirectory: f.ports.layoutDirectory, now: f.clock})
+  }));
+  assert.deepEqual(result.warnings, []);
+  assert.equal(result.requests.length, 1, '3072: a saved idle stop must reach the alert service after restart');
+  assert.equal(alertIncident(f).result, 'delivered');
+  assert.equal(result.deliveries.length, 0); assert.equal(result.launches.length, 0);
+  assert.deepEqual(f.record(), saved);
+});
+
+for (const hold of ['foreign-owner', 'foreign-machine', 'foreign-source', 'manual', 'paused', 'cancelled', 'closing', 'closed'])
+  test(`3072 repair 1: saved idle alert respects ${hold}`, async t => {
+    const {f, tick, idle, ports} = await setup(t);
+    await exhaustIdle(f, tick, idle);
+    const args = {ref: '17', cwd: f.source, packageRoot, coordinatorId: 'idle-owner', machine: 'idle-machine'};
+    assert.equal((await nudgeIdleRun(args, ports)).recovery, 'stuck');
+    assert.equal((await nudgeIdleRun(args, ports)).recovery, 'stuck', '3072: retain the saved idle incident for handoff');
+    const run = f.record();
+    if (hold === 'foreign-owner') run.automaticOrigin.coordinatorId = 'other';
+    if (hold === 'foreign-machine') run.automaticOrigin.machine = 'other';
+    if (hold === 'foreign-source') run.sourceRoot = run.root;
+    if (hold === 'manual') delete run.automaticOrigin;
+    if (['paused', 'cancelled'].includes(hold)) run.state = hold;
+    if (hold === 'closing') run.layout.phase = 'close_intent';
+    if (hold === 'closed') run.chats.at(-1).closed = {at: f.clock, reason: 'paused'};
+    save(f, run);
+    assert.equal((await nudgeIdleRun(args, ports)).recovery, 'skipped');
+    assert.deepEqual(f.record(), run);
+    assert.equal(prompts(f).length, 3); assert.equal(launches(f).length, 0);
+  });
 
 test('3072 all status views expose the idle interval and do not nudge', async t => {
   const {f, tick, idle, pane} = await setup(t);

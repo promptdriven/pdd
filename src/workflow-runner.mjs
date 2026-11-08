@@ -3448,10 +3448,15 @@ export const nudgeIdleRun = saveGuard((args, ports) => lockedMutation(args, port
   const skipped = () => ({...done(''), recovery: 'skipped'});
   if (!found.run) return found.error ? {...fail(found.error), recovery: 'skipped'} : skipped();
   const run = found.run, chat = currentChat(run), area = run.areas[run.area];
-  const eligible = fresh => fresh && runIdentity(fresh) === runIdentity(run)
+  const owned = fresh => fresh && runIdentity(fresh) === runIdentity(run)
     && validSavedAutomaticOrigin(fresh) && fresh.automaticOrigin.coordinatorId === input.coordinatorId
-    && fresh.automaticOrigin.machine === input.machine && samePath(fresh.sourceRoot, input.cwd)
-    && fresh.state === 'running' && !fresh.gate && !openQuestion(fresh) && !activeChatFailure(fresh)
+    && fresh.automaticOrigin.machine === input.machine && samePath(fresh.sourceRoot, input.cwd);
+  if (!owned(run) || layoutClosing(run) || chat?.closed) return skipped();
+  // The saved stop survives a failed alert handoff or process restart. The alert
+  // service owns retries and delivered/unconfirmed deduplication on later ticks.
+  if (run.state === 'stuck' && run.chatIdleLimit)
+    return {...done(run.parkReason), recovery: 'stuck', area: run.chatIdleLimit.area};
+  const eligible = fresh => owned(fresh) && fresh.state === 'running' && !fresh.gate && !openQuestion(fresh) && !activeChatFailure(fresh)
     && !layoutClosing(fresh) && !currentChat(fresh)?.closed && fresh.area === run.area
     && (!fresh.chatReplacement || ['launched', 'rolledBack', 'ended'].includes(fresh.chatReplacement.phase))
     && currentChat(fresh) && !currentChat(fresh).startUnconfirmed && validSessionId(currentChat(fresh).session?.id)

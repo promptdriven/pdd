@@ -18,8 +18,13 @@ The idle cases check manual and automatic saved-session resumes for Claude and
 Codex, with existing and rebuilt workspaces. They check first observation,
 10-minute boundaries, three attempts per area, recorded progress, working and
 held agents, pending and uncertain delivery, concurrent changes and one stuck
-alert. Status is checked in detail, list, all-repository and JSON forms. The
-stopped-chat and delivery tests check the shared recovery and journal behavior.
+alert. Alert tests use the real alert service with controlled HTTP responses.
+They check retry after a failure before service custody, known unsent transport
+failure, destination setup after the stop, and a fresh tick process after the
+runner saves the stop before alert handoff. Repeated ticks preserve delivered
+and unconfirmed alert custody. Status is checked in detail, list, all-repository
+and JSON forms. The stopped-chat and delivery tests check the shared recovery
+and journal behavior.
 
 Run the same idle test file against a separate checkout of the candidate's parent
 revision to check the regression. Keep its expected values unchanged. Missing
