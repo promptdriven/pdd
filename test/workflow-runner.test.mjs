@@ -782,7 +782,7 @@ test('a chat that shows a question dialog is waiting for the person in status, a
   const refused = await changeRun({ ref: '17', text: 'yes', cwd: f.source }, f.ports);
   assert.equal(refused.exitCode, 1); assert.match(refused.message, /shows a dialog/); assert.match(refused.message, /pdd workflow open 17/);
   pane.agent.agent_status = 'idle';
-  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /State: the agent works on scope/);
+  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /idle since \d{2}:\d{2}/);
 });
 
 // 0.1.4 #13: the person tries the prompt and approves before PR 1 opens.

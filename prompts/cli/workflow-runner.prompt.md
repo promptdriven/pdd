@@ -445,6 +445,54 @@ A problem wins over the `blocked` and normal working words. The run is in the `w
 
 Without a `<time>`, the usage-limit words have no ` until <time>`, and "After that time" is "After the limit ends". JSON status adds `chatProblem {kind, agent, until, message}` only for such a run: `until` is an ISO 8601 UTC time or null.
 
+## Idle workflow agents
+
+After a confirmed current-area saved-session resume, manual or automatic, send one
+continue notice through the existing change-request delivery journal and guarded
+transport. This also applies after workspace reconstruction. Send it before terminal
+attachment. Opening an already live chat or a historical area sends no notice.
+The notice names the current unfinished step, its bundled step brief and the run's
+STEP.md. It preserves completed work, approvals and any gate or question; it grants
+no approval. Save `continueAnchor` on the chat (epoch milliseconds of the resume)
+before delivery, so repeated opens do not create another request for that resume.
+Failures retain the existing pending/uncertain journal custody; never resend an
+uncertain request automatically. Inject `deliverContinue(run,text,ports)` with a
+native default that calls the same journal delivery as `changeRun`, as a notice.
+
+Export `nudgeIdleRun({ref,cwd,packageRoot,coordinatorId,machine},ports)` using the
+existing run lock. Return `{exitCode,message,recovery}` with recovery `skipped`,
+`nudged` or `stuck`. Apply the stopped-recovery origin, source, close, state,
+question, gate and replacement guards. Require a current unfinished step and no
+active chat failure or PR for this area. Read Herdr through the chat owner, with
+injected clock and transport; make no AI or interpreter call to inspect state.
+Only an exact saved native session reported idle or done is idle evidence.
+Starting, unknown, working, blocked, mismatched and unavailable observations cannot
+authorize a nudge. Login and usage problems keep their existing hold.
+
+Save `idleSince` on the current chat as epoch milliseconds at the first idle
+observation and `idleAnchor`, its launch/resume anchor. Any non-idle observation or
+a different anchor starts a new interval. A later resume clears the old interval.
+Status uses the same observation rule. Detail, list, all-repository and JSON words
+show `agent idle since HH:MM` in the status time zone (UTC when absent) while an
+unfinished running area is idle. Existing gate, question, PR, failure and health
+words win; idle words win over successful-resume and normal working words.
+
+After 600000 idle milliseconds, deliver one continue notice, at most once per
+600000 milliseconds. Persist `chatIdleNudges`, keyed by area, with `progress` (the
+area's saved done records), `count` (attempts, 0 to 3), and `lastAt` (last attempt,
+epoch milliseconds or null). Reserve an attempt before delivery, including failed
+or uncertain delivery. Reuse the same continue text for an unfinished step, so the
+journal retries a pending notice instead of queuing duplicate nudges; an uncertain
+notice remains held. Only a changed area done record resets this allowance;
+working observations, resumed or replaced chats and status reads do not. Each area
+has its own allowance. After three attempts and another idle interval without
+recorded progress, set state stuck, `parkReason` naming the area and idle limit,
+and `chatIdleLimit:{area,at}`. Return this incident only when it is first saved,
+so later ticks send no second alert. Recheck current run identity, area, progress,
+chat, origin, close state, gate and question after inspection, before saving a stop
+or reserving a nudge, and at delivery submission. A concurrent hold or progress
+wins and sends nothing. Never change completed steps or clear person decisions.
+
 ## Automatic recovery of stopped chats
 
 Export `resumeStoppedRun({ref,cwd,packageRoot,coordinatorId,machine}, ports)`.

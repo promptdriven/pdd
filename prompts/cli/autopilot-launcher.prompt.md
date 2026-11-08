@@ -23,6 +23,12 @@ other runs and tick work continue. Forward injected Herdr, clock and process por
 when only the launcher's process port exists, adapt it to the runner's execFile port.
 This native reconciliation makes no model or interpreter call.
 
+In that same reconciliation, call the runner's `nudgeIdleRun` for eligible saved
+workers through the same injected ports and admission guard. The runner owns idle
+evidence, timing, bounded delivery and stop guards. Its first `stuck` result sends
+one existing stuck alert with the issue, idle cause, three attempted nudges and
+the need to inspect the agent. Later ticks send no second alert for that incident.
+
 The runner owns eligibility, recovery, request visibility and the per-area limit.
 On its `stuck` result, send a `stuck` alert through the existing alert service with
 issue number, cause, tried and need fields. Its incident deduplication owns one alert
