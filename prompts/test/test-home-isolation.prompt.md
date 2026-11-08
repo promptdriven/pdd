@@ -24,7 +24,19 @@ port. Cover both a direct lookup and a production caller that catches the error.
 Load isolation before production code in focused test entrypoints or their
 shared fixtures. The npm test command also preloads isolation, so a new test gets
 a temporary HOME even if it omits the shared import. Each process owns its home;
-parallel test files cannot remove another file's home. Remove only the allocated
+parallel test files cannot remove another file's home.
+Each isolated process also sets a private `PDD_INTERPRETER_QUEUE` under its
+allocated temporary home, replacing inherited selectors. Checks using a fresh
+injected environment or a native child must explicitly carry a fixture queue.
+The shared runtime ports fixture supplies that queue when absent, including after
+environment replacement. Never use the machine default interpreter queue in tests.
+Extend the leak guard to queue access: reject reads and writes to the default
+`/tmp/pdd-interpreter-UID` path or its children before I/O, with diagnostic
+`PDD_TEST_INTERPRETER_QUEUE`. Fail the owning test process even when the error is
+caught. Cover synchronous, callback and promise filesystem access, and renames
+into the queue. A synthetic caller queue must keep the same entries and bytes
+after real fake-runtime checks and native children. Also cover the npm preload
+without an explicit helper import and cleanup on success and failure. Remove only the allocated
 temporary directory when its owning process exits. Do not add a dependency.
 
 The regression guard runs real fixture tests with a synthetic caller home and
@@ -72,7 +84,7 @@ no interpreter operation and makes no model or live service calls.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"draft","prose_sha256":"7e6e1b1dd1aac4858035050524779758309bee3256eff61f399df452202f3aa6","entries":[],"calls":[],"resources":[],"limits":{"max_steps":1,"max_model_calls":1},"conventions":[]}
+{"status":"draft","prose_sha256":"c2487f71fc76c243bd4fcf5a33743e62b6336bf315b6071f306dfec45d9b2bda","entries":[],"calls":[],"resources":[],"limits":{"max_steps":1,"max_model_calls":1},"conventions":[]}
 ```
 
 </details>

@@ -36,7 +36,7 @@ test('a removed name exits 2 with one line that names the new command, and runs 
   let fetches = 0; const realFetch = globalThis.fetch;
   globalThis.fetch = async (...args) => { fetches++; return realFetch(...args); };
   t.after(() => { globalThis.fetch = realFetch; });
-  const env = { HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin, PATH: `${bin}:/usr/bin:/bin` };
+  const env = { HOME: setup.home, PDD_INTERPRETER_QUEUE: join(setup.home, 'interpreter-queue'), PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin, PATH: `${bin}:/usr/bin:/bin` };
   const ports = { cwd: setup.repo, env, packageRoot: root, workflowRunner: forbidden, workflowAreas: forbidden, mcpServer: forbidden,
     runtimeSlots: forbidden, contracts: forbidden, product: forbidden, workflowProve: forbidden, gitContext: forbidden };
   let runs = 0;
@@ -115,7 +115,7 @@ test('workflow start reaches the same runner export as workflow run, with no ext
 
 test('sim runs like simulate and test --lint like lint, in local modes', async t => {
   const setup = harbor(t);
-  const options = () => ({ cwd: setup.repo, env: { HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: 'http://127.0.0.1:9', PATH: '/usr/bin:/bin' } });
+  const options = () => ({ cwd: setup.repo, env: { HOME: setup.home, PDD_INTERPRETER_QUEUE: join(setup.home, 'interpreter-queue'), PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: 'http://127.0.0.1:9', PATH: '/usr/bin:/bin' } });
   const lint = await sameRun([[LINT, '--local', '--json'], [TEST, '--lint', '--local', '--json']], options);
   assert.equal(lint[0].code, 0, lint[0].stderr); JSON.parse(lint[0].stdout); assert.deepEqual(lint[0], lint[1]);
   const story = await sameRun([[SIMULATE, 'no-such-story'], ['sim', 'no-such-story']], options);
@@ -127,7 +127,7 @@ test('pdd mcp stdout carries only MCP messages', t => {
   const input = [{ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '1' } } },
     { jsonrpc: '2.0', id: 2, method: 'tools/list' }].map(message => JSON.stringify(message)).join('\n') + '\n';
   const result = spawnSync(process.execPath, [join(root, 'bin/pdd.mjs'), 'mcp'], { cwd: setup.repo, input, encoding: 'utf8', timeout: 20000,
-    env: { HOME: setup.home, PDD_STATE_DIR: setup.state, PATH: '/usr/bin:/bin' } });
+    env: { HOME: setup.home, PDD_INTERPRETER_QUEUE: join(setup.home, 'interpreter-queue'), PDD_STATE_DIR: setup.state, PATH: '/usr/bin:/bin' } });
   assert.equal(result.status, 0, result.stderr);
   const rows = result.stdout.trim().split('\n').map(line => JSON.parse(line));
   assert.deepEqual(rows.map(row => [row.jsonrpc, row.id]), [['2.0', 1], ['2.0', 2]]);

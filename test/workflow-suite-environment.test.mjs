@@ -45,10 +45,11 @@ test('suite environment contract', () => {
   const env = process.env;
   const absent = ['CODEX_HOME','PDD_AUTOPILOT_CONTEXT','HERDR_SESSION','HERDR_CONFIG',
     'CLAUDECODE','CLAUDE_CONFIG_DIR','CODEX_THREAD_ID','PDD_AGENT_SESSION',
-    'OPENAI_API_KEY','ANTHROPIC_API_KEY','PDD_INTERPRETER_QUEUE','PDD_MAX_JOBS','BASH_ENV','NODE_OPTIONS'];
+    'OPENAI_API_KEY','ANTHROPIC_API_KEY','PDD_MAX_JOBS','BASH_ENV','NODE_OPTIONS'];
   for (const key of absent) assert.equal(env[key], undefined, key);
-  const paths = ['HOME','PDD_STATE_DIR','XDG_CONFIG_HOME','TMPDIR'].map(key => env[key]);
-  assert.equal(new Set(paths).size, 4);
+  assert.equal(typeof env.PDD_INTERPRETER_QUEUE, 'string', 'private-interpreter-queue');
+  const paths = ['HOME','PDD_STATE_DIR','XDG_CONFIG_HOME','TMPDIR','PDD_INTERPRETER_QUEUE'].map(key => env[key]);
+  assert.equal(new Set(paths).size, 5);
   for (const path of paths) { assert.ok(fs.statSync(path).isDirectory()); assert.equal(fs.existsSync(require('node:path').join(path, 'keep')), false); }
   assert.equal(env.PDD_CHECK_CPUS, '13');
   assert.equal(env.POCKET_BROWSER_BIN, '/usr/bin/google-chrome');
@@ -90,7 +91,7 @@ for (const outcome of ['nonzero', 'timeout', 'error']) test(`private suite envir
   const before = {...env}; let paths, allocated;
   const result = await runTestSuite({cwd:f.root, command:outcome === 'timeout' ? 'exec sleep 30' : 'exit 7', env}, {
     ...f.ports, say:() => {}, alive:pid => pid !== -12345, execute:async (command, options) => {
-      paths = ['HOME','PDD_STATE_DIR','XDG_CONFIG_HOME','TMPDIR'].map(key => options.env[key]);
+      paths = ['HOME','PDD_STATE_DIR','XDG_CONFIG_HOME','TMPDIR','PDD_INTERPRETER_QUEUE'].map(key => options.env[key]);
       allocated = paths.every(path => typeof path === 'string' && existsSync(path));
       if (outcome === 'error') {
         options.onChild(12345);
@@ -100,7 +101,7 @@ for (const outcome of ['nonzero', 'timeout', 'error']) test(`private suite envir
     },
   });
   assert.equal(result.exitCode, outcome === 'timeout' ? 124 : outcome === 'nonzero' ? 7 : 1);
-  assert.equal(allocated, true, 'suite execution must receive four private directories');
+  assert.equal(allocated, true, 'suite execution must receive five private directories');
   assert.ok(paths.every(path => !existsSync(path)));
   assert.deepEqual(env, before); assert.equal(readFileSync(join(f.caller, 'keep'), 'utf8'), 'caller-owned');
   const row = receipts(f.queue)[0];
@@ -127,7 +128,7 @@ for (const outcome of ['nonzero', 'timeout', 'error']) test(`private suite envir
   }
 });
 
-for (const boundary of ['mkdtemp', 'home', 'state', 'config', 'tmp']) {
+for (const boundary of ['mkdtemp', 'home', 'state', 'config', 'tmp', 'interpreter-queue']) {
   test(`private environment allocation failure at ${boundary} releases admission for the next suite`, async t => {
     const f = fixture(t), env = {PATH:process.env.PATH, HOME:f.caller, PDD_SUITE_QUEUE:f.queue};
     const machine = checkMachine();

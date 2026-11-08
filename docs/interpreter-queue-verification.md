@@ -8,7 +8,7 @@ Run:
 
 ```sh
 node --test test/interpreter-queue.test.mjs test/interpreter-queue-runtime.test.mjs test/interpreter-queue-repair.test.mjs test/interpreter-queue-storage.test.mjs
-node --test test/workflow-chat-queue.test.mjs
+node --test test/workflow-chat-queue.test.mjs test/test-home-isolation.test.mjs test/workflow-suite-environment.test.mjs
 node --test --test-name-pattern='interpreter queue|interpreter waiting' test/autopilot-launcher.test.mjs test/workflow-runner.test.mjs
 ```
 
@@ -49,3 +49,19 @@ that time marks when observation stopped, not proof that remote work ended.
 Ledger rows contain no request body, credentials or response text. This native
 verification uses controlled runtime replies. It does not prove hosted capacity
 or prompt-interpreter behavior.
+
+The dead-holder replay starts a native child that leaves one dispatched and one
+unsent running ticket, then exits. A public check uses the same private queue.
+It must complete lint and check once each, retain both old ticket identities,
+record their dead-owner releases, and keep the dispatched outcome unknown.
+No saved dead request is sent again. Admission tests also cover a holder dying
+while its successor waits and late same-ID completion after reclamation.
+
+The home isolation guard checks inherited caller queue bytes, private native
+child queues and npm preloading. It blocks machine-default filesystem access
+before I/O, including caught errors, callback and promise APIs and rename targets.
+Those guard probes stub the underlying I/O, so an old-code control cannot touch
+the live queue. Suite environment tests check five private directories and cover
+allocation failure for the interpreter queue directory. Use the same tests with
+only the queue, suite queue and home helper replaced by their base versions for
+a semantic old-code control. Keep its failing assertions as evidence.

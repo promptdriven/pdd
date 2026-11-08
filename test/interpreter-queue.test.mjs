@@ -70,12 +70,10 @@ test('busy pause also applies when the reduced capacity still has room', async t
   assert.ok(f.progress().requests[1].startedAt === null);
 });
 
-test('uncertain request retains its slot after command return and owner death until same-ID completion', async t => {
+test('a live uncertain request retains its slot until same-ID completion', async t => {
   const f = fixture(t, '1'), slot = await f.acquire('paid'); await markInterpreterDispatch(slot, f.ports);
   await f.finish('paid', { outcome: 'unknown', terminal: false });
-  f.ports.alive = () => false;
   assert.equal(f.progress().state, 'running');
-  f.ports.alive = () => true;
   assert.equal(await f.acquire('later', { deadline: f.now + 500 }), null);
   await f.finish('paid');
   assert.ok(await f.acquire('next'));
@@ -101,13 +99,18 @@ test('unreadable records fail closed and status does not rewrite evidence', asyn
   await assert.rejects(f.acquire('a'), { code: 'local-state-unavailable' });
 });
 
-test('dead waiters do not block admission or rewrite observed records', async t => {
+test('status leaves a dead waiter unchanged and admission persists its release', async t => {
   const f = fixture(t, '1'); await f.acquire('a');
   const row = f.progress().requests[0]; row.state = 'waiting'; row.startedAt = null; row.pid = 123456;
   writeFileSync(join(f.root, 'ticket-1.json'), JSON.stringify(row));
   f.ports.alive = pid => pid !== 123456;
-  assert.ok(await f.acquire('b'));
+  assert.equal(f.progress().state, 'finished');
   assert.equal(JSON.parse(readFileSync(join(f.root, 'ticket-1.json'))).state, 'waiting');
+  assert.ok(await f.acquire('b'));
+  const reclaimed = JSON.parse(readFileSync(join(f.root, 'ticket-1.json')));
+  assert.equal(reclaimed.state, 'finished');
+  assert.equal(reclaimed.releaseReason, 'owner-dead');
+  assert.equal(reclaimed.outcome, 'not_sent');
 });
 
 test('interruption removes only unsent waiting ownership', async t => {
@@ -159,4 +162,43 @@ test('a dead admitted owner with durable unsent proof does not leak machine capa
   assert.ok(await f.acquire('next', { deadline: f.now + 500 }));
   assert.equal(f.progress().requests[0].outcome, 'not_sent');
   assert.equal(f.progress().requests[1].activeAtStart, 1);
+});
+
+for (const dispatched of [false, true]) test(`admission records dead holder release with dispatched=${dispatched} and never replays it`, async t => {
+  const f = fixture(t, '1'), slot = await f.acquire('dead');
+  if (dispatched) await markInterpreterDispatch(slot, f.ports);
+  const file = join(f.root, 'ticket-1.json'), row = JSON.parse(readFileSync(file));
+  row.pid = 123456; writeFileSync(file, JSON.stringify(row));
+  f.ports.alive = pid => pid !== row.pid;
+  f.now += 500;
+  assert.ok(await f.acquire('next', { deadline: f.now + 500 }), 'dead-holder-capacity');
+  const released = JSON.parse(readFileSync(file));
+  assert.equal(released.state, 'finished');
+  assert.equal(released.releaseReason, 'owner-dead');
+  assert.equal(released.dispatched, dispatched);
+  assert.equal(released.outcome, dispatched ? 'unknown' : 'not_sent');
+  assert.equal(released.endedAt, 1500);
+  assert.equal(released.activeAtStart, 1); assert.equal(released.activeAtEnd, 1);
+  assert.equal(f.progress().requests[1].activeAtStart, 1);
+  await assert.rejects(f.acquire('dead'), { code: 'local-state-unavailable' });
+  assert.deepEqual(JSON.parse(readFileSync(file)), released);
+  await f.finish('dead');
+  const recovered = JSON.parse(readFileSync(file));
+  assert.deepEqual(recovered, { ...released, outcome: dispatched ? 'verdict' : 'not_sent' });
+  assert.equal(f.progress().requests[1].state, 'running');
+  await f.finish('dead', { outcome: 'refused' });
+  assert.deepEqual(JSON.parse(readFileSync(file)), recovered);
+});
+
+test('each waiting admission pass reclaims a holder that dies after registration', async t => {
+  const f = fixture(t, '1'), slot = await f.acquire('holder');
+  await markInterpreterDispatch(slot, f.ports);
+  const file = join(f.root, 'ticket-1.json'), row = JSON.parse(readFileSync(file));
+  row.pid = 123456; writeFileSync(file, JSON.stringify(row));
+  let alive = true, waits = 0;
+  f.ports.alive = pid => pid !== row.pid || alive;
+  f.ports.sleep = async ms => { waits++; f.now += ms; alive = false; };
+  assert.ok(await f.acquire('next', { deadline: f.now + 1000 }), 'dead-holder-during-wait');
+  assert.equal(waits, 1);
+  assert.equal(JSON.parse(readFileSync(file)).releaseReason, 'owner-dead');
 });

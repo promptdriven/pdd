@@ -1,4 +1,4 @@
-// Generated from prompts/cli/interpreter-queue.prompt.md (sha256: bee9c40a723ba59ecd6c01eaa5564369e0df78c98c079cde25a01d6b3785c62a).
+// Generated from prompts/cli/interpreter-queue.prompt.md (sha256: db428944dfc63bd72c83f5cc273fce445d1388b58437d886d1a1f331384ad6b3).
 import * as files from 'node:fs';
 import { join, isAbsolute, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -29,14 +29,14 @@ function save(p, name, row) {
   try { p.fs.writeFileSync(temporary, JSON.stringify(row), { mode: 0o600, flag: 'wx' }); p.fs.renameSync(temporary, path); }
   finally { try { p.fs.unlinkSync(temporary); } catch {} }
 }
-function records(p) {
+function records(p, reclaim = false) {
   let names;
   try {
     const rootStat = p.fs.lstatSync(p.root);
     if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw Error('Queue root is not a directory.');
     names = p.fs.readdirSync(p.root);
   } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
-  return names.filter(name => /^ticket-.*\.json$/.test(name)).map(name => {
+  const all = names.filter(name => /^ticket-.*\.json$/.test(name)).map(name => {
     const row = read(p, join(p.root, name));
     if (!Number.isSafeInteger(row.ticket) || row.ticket < 1 || name !== `ticket-${row.ticket}.json`
       || !Number.isSafeInteger(row.pid) || row.pid <= 0 || typeof row.cwd !== 'string' || !isAbsolute(row.cwd)
@@ -46,11 +46,24 @@ function records(p) {
       || ![null, 'verdict', 'unknown', 'busy', 'refused', 'not_sent'].includes(row.outcome)
       || typeof row.dispatched !== 'boolean'
       || ![row.activeAtStart, row.activeAtEnd].every(n => n === null || Number.isSafeInteger(n) && n >= 0)) throw Error('Unreadable interpreter queue ownership.');
-    // A dead owner proves only that a still-waiting ticket was not dispatched.
-    if ((row.state === 'waiting' || row.state === 'running' && !row.dispatched) && !p.alive(row.pid)) return { ...row, state: 'finished',
-      endedAt: p.fs.lstatSync(join(p.root, name)).mtimeMs, outcome: 'not_sent' };
+    if (row.releaseReason !== undefined && row.releaseReason !== 'owner-dead') throw Error('Unreadable interpreter release reason.');
     return row;
   }).sort((a, b) => a.ticket - b.ticket);
+  let active = all.filter(row => row.state === 'running').length;
+  return all.map(row => {
+    if (row.state === 'finished' || p.alive(row.pid)) return row;
+    if (reclaim) {
+      const finished = { ...row, state: 'finished', endedAt: p.now(), activeAtEnd: active,
+        outcome: row.outcome ?? (row.dispatched ? 'unknown' : 'not_sent'), releaseReason: 'owner-dead' };
+      save(p, `ticket-${row.ticket}.json`, finished);
+      if (row.state === 'running') active--;
+      return finished;
+    }
+    // Status is read-only; retain the existing safe unsent-owner projection.
+    if (row.state === 'waiting' || !row.dispatched) return { ...row, state: 'finished',
+      endedAt: p.fs.lstatSync(join(p.root, `ticket-${row.ticket}.json`)).mtimeMs, outcome: 'not_sent' };
+    return row;
+  });
 }
 function capacity(p) {
   let row;
@@ -109,7 +122,7 @@ export async function acquireInterpreterSlot({ cwd, origin, requestId, kind, env
     if (!p.fs.lstatSync(p.root).isDirectory() || p.fs.lstatSync(p.root).isSymbolicLink()) throw Error('Queue root is not a directory.');
     const ended = () => p.interrupted() || p.now() >= deadline;
     row = await locked(p, () => {
-      const all = records(p);
+      const all = records(p, true);
       if (all.some(other => other.origin === origin && other.requestId === requestId)) throw Error('Interpreter request already has a ticket.');
       const ticket = (all.at(-1)?.ticket ?? 0) + 1;
       if (!Number.isSafeInteger(ticket)) throw Error('Interpreter ticket range exhausted.');
@@ -121,7 +134,7 @@ export async function acquireInterpreterSlot({ cwd, origin, requestId, kind, env
     let last;
     while (!ended()) {
       const position = await locked(p, () => {
-        const all = records(p), position = place(all, row), active = all.filter(other => other.state === 'running').length, cap = capacity(p);
+        const all = records(p, true), position = place(all, row), active = all.filter(other => other.state === 'running').length, cap = capacity(p);
         if (position === 1 && active < Math.min(p.limit, cap.limit, Object.values(cap.testOwners ?? {}).some(until => until > p.now()) ? 1 : Infinity) && p.now() >= cap.blockedUntil) {
           row.state = 'running'; row.startedAt = p.now(); row.activeAtStart = active + 1;
           save(p, `ticket-${row.ticket}.json`, row); return 0;
@@ -161,7 +174,14 @@ export async function observeInterpreterRequest({ env = process.env, origin, req
     if (!p.fs.existsSync(p.root)) return;
     await locked(p, () => {
       const all = records(p), row = all.find(row => row.origin === origin && row.requestId === requestId);
-      if (!row || row.state === 'finished') return;
+      if (!row) return;
+      if (row.state === 'finished') {
+        if (row.releaseReason === 'owner-dead' && row.dispatched && row.outcome === 'unknown' && terminal) {
+          row.outcome = outcome;
+          save(p, `ticket-${row.ticket}.json`, row);
+        }
+        return;
+      }
       const active = all.filter(other => other.state === 'running').length;
       row.outcome = outcome; row.endedAt = p.now(); row.activeAtEnd = active;
       if (terminal) row.state = 'finished';

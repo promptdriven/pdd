@@ -47,9 +47,9 @@ path still needs an existing writable parent; the default log parent is created.
 Admission uses the caller's queue selectors and machine ports. Execution must
 not inherit the agent session or its configuration. After admission, allocate
 one private temporary directory under the queue root, with separate empty
-`home`, `state`, `config` and `tmp` directories. Set `HOME` and `USERPROFILE` to
+`home`, `state`, `config`, `tmp` and `interpreter-queue` directories. Set `HOME` and `USERPROFILE` to
 home, `PDD_STATE_DIR` to state, `XDG_CONFIG_HOME` to config and `TMPDIR`, `TMP`
-and `TEMP` to tmp. Remove this directory after execution settles, including a
+and `TEMP` to tmp. Set `PDD_INTERPRETER_QUEUE` to interpreter-queue. Remove this directory after execution settles, including a
 nonzero exit, timeout or execution error. Native execution settles only after
 its child group is stopped. Never remove the caller's folders.
 
@@ -67,7 +67,7 @@ and `WINDIR` when supplied. Set `POCKET_BROWSER_BIN` to the caller's value or
 `/usr/bin/google-chrome`, as for the VM suite. Include the assigned
 `PDD_CHECK_CPUS`. All other inherited variables are absent, including
 `CODEX_HOME`, `PDD_AUTOPILOT_CONTEXT`, `HERDR_*`, agent credentials, session and
-config variables, interpreter queue overrides, `NODE_OPTIONS`, `BASH_ENV` and
+config variables, caller interpreter queue overrides, `NODE_OPTIONS`, `BASH_ENV` and
 npm configuration. A command can explicitly set its own needed variables.
 Preserve the supplied command, cwd, output, status, timeout and CPU affinity.
 Do not change the parent environment.
