@@ -85,19 +85,22 @@ for (const kind of ['lint', 'try']) test(`2704: ${kind} has no local wait behind
 
 for (const limit of [undefined, Infinity]) test(`2704: ${String(limit)} slot limit preserves records without FIFO or occupancy wait`, async t => {
   const setup = selected(t, 1), origin = 'http://localhost:453';
-  const seeded = seed(setup, origin, Date.now()); let sleeps = 0, probes = 0; const lines = [];
-  const reservation = await acquireRuntimeSlot({ stateDir: setup.state, origin, kind: 'check', ...(limit === undefined ? {} : { limit }), deadline: Date.now() + 100 }, {
+  const start = Date.now(); let now = start;
+  const seeded = seed(setup, origin, start); let sleeps = 0, probes = 0; const lines = [];
+  const reservation = await acquireRuntimeSlot({ stateDir: setup.state, origin, kind: 'check', ...(limit === undefined ? {} : { limit }) }, {
+    now: () => (now += 125),
     say: line => lines.push(line), sleep: async () => { sleeps++; await pause(10); }, readRun: async () => { probes++; return 'unknown'; },
   });
   try {
     assert.ok(reservation, 'no-cap admission bypasses older waiting tickets');
+    assert.ok(now - start > 100, 'acquisition exceeds the former deadline budget');
     assert.equal(sleeps, 0); assert.equal(probes, 0); assert.deepEqual(lines, []);
     assert.equal(statSync(join(reservation.directory, `${reservation.id}.json`)).mode & 0o777, 0o600);
     await recordRuntimeRequest(reservation, 'a'); await recordRuntimeRequest(reservation, 'a'); await recordRuntimeRequest(reservation, 'b');
     await releaseRuntimeSlot(reservation, { ended: false });
     assert.deepEqual((await listRuntimeJobs({ stateDir: setup.state, origin })).jobs.find(row => row.id === reservation.id).request_ids, ['a', 'b']);
   } finally { if (reservation) await releaseRuntimeSlot(reservation, { ended: true }); }
-  assert.equal((await listRuntimeJobs({ stateDir: setup.state, origin })).jobs.length, seeded.rows.length);
+  assert.deepEqual((await listRuntimeJobs({ stateDir: setup.state, origin })).jobs.sort((a,b) => a.id.localeCompare(b.id)), seeded.rows.sort((a,b) => a.id.localeCompare(b.id)));
 });
 
 // The first accepted check stays open while a peer reports busy. Window=1 must
