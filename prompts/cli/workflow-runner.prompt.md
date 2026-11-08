@@ -597,13 +597,25 @@ feature/bug code areas opt in; saved runs/custom areas without it keep their exi
 The runner owns the anchor lifecycle and current inventory guard. Adopted runs retain the immutable anchor and revalidation rules in [corpus adoption](#adopt-an-existing-approved-corpus); the changed-file anchor refresh below applies only to runs without adoption. After each successful prompt-space
 publication or push preceding an opted-in area, refresh run.replayBaseline from the published changed
 scenario files through [replay evidence](workflow-replay.prompt.md), retaining empty or blocked selections.
+Build it with `pinRunAnchor` from the changed scenario files, the run's `baseSha` and its changed paths, so it
+also holds the [approved scenarios on the base](workflow-replay.prompt.md#approved-scenarios-on-the-base) that
+belong to the changed area (linked by a scenario, `pdd-bindings.json` or a changed file's `Generated from` header),
+or all of them when the base commit's `pdd.json` sets `replay.base_scenarios` to `all`. A run whose first opted-in area has no earlier `ask-code` area, and no adoption,
+has no such publication: before each replay read in that code area (step done and publication, including retries),
+build the anchor with `codeSpace` from the current changed paths and scenarios and save only run.replayBaseline
+through the run-record update boundary, so a publication in progress keeps its unsaved facts.
+Its values come only from base blobs. Both routes need no flag and behave the same in manual and Autopilot runs.
+The explicit `--adopt-corpus` route is unchanged and never adds base files.
 Include publications while waiting for code approval and the final approval publication before entering code
 space. At that final transition require scenario bytes to match the published prompt-space head; refuse with
 repair advice if unpublished scenario edits remain. Never silently approve or anchor dirty unpublished vectors.
 Freeze the final published anchor on entry into code space; code steps, publication retries and later edits
 cannot replace it. For a merged prompt-space branch retain its published anchor, never reconstruct from code.
 
-Discover changed files with NUL-delimited Git diff and untracked-file lists, preserving each exact path,
+Discover changed files with NUL-delimited Git diff and untracked-file lists. Disable rename detection so
+the inventory sees both the old and new paths. Disable color for parsed Git output regardless of user
+settings. A scenario removed or renamed by PR 1 makes its inventory unavailable and blocks the anchor.
+Preserve each exact path,
 including spaces, line breaks and non-ASCII characters; do not trim raw list output. Scenario classification
 uses parsed JSON with exact schema_version `prompt-runtime.program-scenario.v1`, not a text substring.
 An enumeration failure or unreadable/unclassifiable candidate makes the replay inventory unavailable;
