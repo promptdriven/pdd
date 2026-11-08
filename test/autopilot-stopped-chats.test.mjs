@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
+import {execFileSync} from 'node:child_process';
 import {tickAutopilot} from '../src/autopilot-launcher.mjs';
 import {acknowledgeRequest, askPerson, cancelRun, changeRun, openRun, runStatus, stepDone} from '../src/workflow-runner.mjs';
 import {fixture, packageRoot} from './helpers/workflow-runner-fixture.mjs';
@@ -395,4 +396,96 @@ for (const action of ['question', 'cancel', 'step']) test(`3068: concurrent ${ac
   assert.equal(after.chatResumeLimit, undefined);
   assert.equal(alerts.length, 0);
   assert.equal(launches(f).length, 0);
+});
+
+
+const closeMark = (f, reason, confirmed) => ({at: f.clock, reason, screen: null, ...(confirmed ? {confirmedAt: f.clock} : {})});
+for (const reason of ['area-end', 'run-end', 'budget', 'cancel']) for (const confirmed of [false, true]) {
+  for (const state of ['running', 'exhausted', 'stuck']) test(`3068 repair 2: ${reason} ${confirmed ? 'confirmed' : 'pending'} close blocks ${state} recovery`, async t => {
+    const {f, run, tick, stop, alerts} = await setup(t);
+    const chat = run.chats.at(-1), mark = closeMark(f, reason, confirmed);
+    chat.closed = mark;
+    if (state !== 'running') run.chatResumes = {[chat.area]: [f.clock, f.clock, f.clock]};
+    if (state === 'stuck') {
+      run.state = 'stuck'; run.parkReason = 'Resume allowance exhausted.';
+      run.chatResumeLimit = {area: chat.area, at: f.clock};
+    }
+    save(f, run); stop();
+    await f.herdr.herdr(['tab', 'close', chat.tabId]);
+    // A normal observation and later ticks must preserve the persisted intent.
+    assert.equal((await runStatus({ref: '17', cwd: f.source}, f.ports)).exitCode, 0);
+    assert.deepEqual(f.record().chats.at(-1).closed, mark);
+    for (let i = 0; i < 2; i++) {
+      await tick();
+      assert.equal(launches(f).length, 0);
+      const after = f.record();
+      assert.deepEqual(after.chats.at(-1).closed, mark);
+      assert.deepEqual(after.chatResumes, run.chatResumes);
+      assert.deepEqual(after.chatResumeLimit, run.chatResumeLimit);
+      assert.equal(after.state, run.state);
+      assert.equal(alerts.length, 0);
+    }
+  });
+}
+
+for (const confirmed of [false, true]) for (const target of ['present-tab', 'missing-tab', 'new-chat']) test(`3068 repair 2: ${confirmed ? 'confirmed' : 'pending'} close races dispatch to ${target}`, async t => {
+  const {f, run, tick, stop, ports, alerts} = await setup(t);
+  const mark = closeMark(f, 'budget', confirmed), chat = run.chats.at(-1);
+  stop();
+  if (target === 'missing-tab') await f.herdr.herdr(['tab', 'close', chat.tabId]);
+  const herdr = ports.herdr; let closed = false;
+  ports.herdr = async args => {
+    if (!closed && args[0] === 'tab' && args[1] === 'get') {
+      closed = true;
+      const fresh = f.record();
+      if (target === 'new-chat') fresh.chats.push({...fresh.chats.at(-1), session: {agent: 'claude', id: '00000000-0000-4000-8000-000000000099'}});
+      fresh.chats.at(-1).closed = mark; save(f, fresh);
+    }
+    return herdr(args);
+  };
+  await tick();
+  assert.ok(closed, 'the controlled close must reach dispatch preparation');
+  assert.equal(launches(f).length, 0);
+  const after = f.record();
+  assert.deepEqual(after.chats.at(-1).closed, mark);
+  assert.equal(after.chatResumes, undefined);
+  assert.equal(after.chatResumeLimit, undefined);
+  assert.equal(after.state, 'running');
+  assert.equal(alerts.length, 0);
+});
+
+for (const confirmed of [false, true]) test(`3068 repair 2: ${confirmed ? 'confirmed' : 'pending'} close survives a fresh tick process`, async t => {
+  const {f, run, stop, stateFile} = await setup(t);
+  const mark = closeMark(f, 'run-end', confirmed);
+  run.chats.at(-1).closed = mark; save(f, run); stop();
+  // A fresh process has no prior run object or native server. Use the same repository fake.
+  const script = `
+    import {readFileSync} from 'node:fs';
+    import {execFile} from 'node:child_process';
+    import {promisify} from 'node:util';
+    import {tickAutopilot} from './src/autopilot-launcher.mjs';
+    import {fakeHerdr} from './test/helpers/fake-herdr.mjs';
+    const input = JSON.parse(readFileSync(0, 'utf8')), h = fakeHerdr(), exec = promisify(execFile);
+    const alerts = [], warnings = [];
+    const execute = async (file, args, options) => {
+      if (file !== 'git' || !['rev-parse', 'config', 'status', 'show-ref', 'symbolic-ref', 'remote', 'worktree', 'for-each-ref', 'merge-base'].includes(args[0])) throw Error('Unexpected external command: ' + file + ' ' + args[0]);
+      return {code: 0, ...await exec(file, args, options)};
+    };
+    await tickAutopilot(input.stateFile, {stateDir: input.stateDir, env: input.env,
+      layoutDirectory: input.layoutDirectory, now: () => input.now, herdr: h.herdr,
+      findNativeSessions: async () => [], run: execute, execFile: execute,
+      warn: value => warnings.push(value), sendAlert: async value => {alerts.push(value); return {exitCode: 0};}});
+    process.stdout.write(JSON.stringify({launches: h.calls.filter(a => a[0] === 'pane' && a[1] === 'run'), alerts, warnings}));
+  `;
+  const result = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+    cwd: packageRoot, encoding: 'utf8', timeout: 10000,
+    input: JSON.stringify({stateFile, stateDir: f.state, env: f.ports.env, layoutDirectory: f.ports.layoutDirectory, now: f.clock})
+  }));
+  assert.equal(result.launches.length, 0);
+  assert.deepEqual(result.warnings, []);
+  assert.equal(result.alerts.length, 0);
+  assert.deepEqual(f.record().chats.at(-1).closed, mark);
+  assert.equal(f.record().chatResumes, undefined);
+  assert.equal(f.record().chatResumeLimit, undefined);
+  assert.equal(f.record().state, 'running');
 });

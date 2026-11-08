@@ -1,7 +1,7 @@
 import { validateSnapshot } from './metrics-store.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
 import { createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 2f52d60ab486642f53834490bdca85aa8957344eccf6e7fff793be1cd0e02a60).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 20bdbb356e9fd075d31ba51e451c59f0e789143ebd1b019eb788880cdef64974).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -3215,14 +3215,14 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
     const skipped = () => ({...done(''), recovery: 'skipped'});
     if (!validSavedAutomaticOrigin(run) || run.automaticOrigin.coordinatorId !== automaticResume.coordinatorId
       || run.automaticOrigin.machine !== automaticResume.machine || !samePath(run.sourceRoot, cwd)) return skipped();
-    if (layoutClosing(run)) return skipped();
+    if (layoutClosing(run) || chat?.closed) return skipped();
     if (run.state === 'stuck' && run.chatResumeLimit) return {...done(run.parkReason), recovery: 'stuck', area: run.chatResumeLimit.area};
     if (run.state !== 'running' || run.gate || openQuestion(run) || !chat || chat.startUnconfirmed
       || !validSessionId(chat.session?.id)
       || run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase)) return skipped();
     const selectedChat = structuredClone(chat);
     const stillEligible = fresh => fresh && fresh.runId === run.runId && fresh.state === 'running'
-      && !layoutClosing(fresh)
+      && !layoutClosing(fresh) && !lastChat(fresh, selectedChat.area)?.closed
       && fresh.area === selected && !fresh.gate && !openQuestion(fresh)
       && sameFact(lastChat(fresh, selectedChat.area), selectedChat) && sameFact(fresh.done, run.done)
       && sameFact(fresh.automaticOrigin, run.automaticOrigin) && sameFact(fresh.chatReplacement, run.chatReplacement);
@@ -3243,7 +3243,8 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
     }
     beforeLaunch = async () => {
       const saved = conditionalCommit(run, p, fresh => fresh && fresh.runId === run.runId && fresh.state === 'running'
-        && !layoutClosing(fresh)
+        && !layoutClosing(fresh) && !lastChat(fresh, name)?.closed
+        && sameFact(lastChat(fresh, name), defaultOriginal)
         && fresh.area === selected && !fresh.gate && !openQuestion(fresh)
         && sameFact(fresh.automaticOrigin, run.automaticOrigin), fresh => {
           const at = p.now(), recent = (fresh.chatResumes?.[name] ?? []).filter(time => Number.isFinite(time) && time > at - 3600000);
