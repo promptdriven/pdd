@@ -159,7 +159,15 @@ export async function prepareDependencyIntake({ cwd = '', repository, issue }, p
   // Small batches: one new issue never waits for a large review.
   const queued = selected.filter(x => !skipped.includes(x.key)).map(x => x.key).slice(0, REVIEW_BATCH);
   let contextJson = queued.length ? (await ports.evidence.read({ cwd, repository, issues: queued })).json : JSON.stringify({ source: [], requirements: [] });
-  contextJson = JSON.stringify({ ...json(contextJson), ...prepareSortContext(reviewPacket(snapshot, queued)) });
+  // Sort work is determined before neighbour histories are trimmed. Only the
+  // queued subjects can submit sort outputs in this request.
+  const sortContext = prepareSortContext(snapshot);
+  if (sortContext.sort) {
+    sortContext.sort.required = sortContext.sort.required.filter(key => queued.includes(key));
+    sortContext.sort.records = sortContext.sort.records.filter(record => queued.includes(record.issue));
+    sortContext.sort.groups = reviewPacket(snapshot, queued).sortContext.groups;
+  }
+  contextJson = JSON.stringify({ ...json(contextJson), ...sortContext });
   const evidence = json(contextJson);
   if (!Array.isArray(evidence.source) || !Array.isArray(evidence.requirements) || evidence.requirements.some(x => x.authority !== 'trusted')) throw Error('invalid-input');
   const current = rows(snapshot);

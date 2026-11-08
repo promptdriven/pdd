@@ -34,6 +34,16 @@ provenance with empty analysis, inputs, candidates and questions, so PDD-written
 links remain distinguishable from person links. In retained subject reviews,
 keep candidate rows only for named prerequisites; historical full-backlog candidate
 lists must not expand the packet.
+Retain compact current issue observations named in retained subject review inputs,
+even when they are not prerequisites and fall outside the ranked neighbours.
+Keep their coverage rows; a historical examined issue must not become missing
+context merely because retrieval omitted it. Actual unavailable observations
+remain unavailable.
+Retain trusted intact incoming PDD-link provenance for subjects independently of
+host selection, including confirmed links now absent from native edges. For an
+unselected host keep only dependencies targeting subjects, with empty analysis,
+inputs, candidates and questions. This preserves subject link rows and person
+removal semantics without loading that host's body or history into issue rows.
 Filter edges, input, coverage, impact and group rows to this scope. An edge is retained only when both endpoints are selected. Keep full state
 outside the packet for validation and map updates. Do not change the full graph.
 

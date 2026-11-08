@@ -54,7 +54,12 @@ export function reviewPacket(snapshot, subjects, { limit = 20 } = {}) {
     for (const named of a.namedIssues ?? []) selected.add(named.toLowerCase());
     if (sa.duplicate) selected.add(sa.duplicate);
     for (const edge of snapshot.edges) if (edge.dependent === key || edge.blocker === key) { selected.add(edge.dependent); selected.add(edge.blocker); }
-    for (const r of snapshot.reviews.filter(r => r.issue === key && r.authority === 'trusted' && r.intact)) for (const d of r.dependencies) selected.add(d.key);
+    for (const r of snapshot.reviews.filter(r => r.issue === key && r.authority === 'trusted' && r.intact)) {
+      for (const d of r.dependencies) selected.add(d.key);
+      // Issue revisions live in issues, not inputs. Keep observations used by
+      // retained reviews even when no prerequisite was declared.
+      for (const row of r.inputs) if (all.has(row.key)) selected.add(row.key);
+    }
     for (const g of snapshot.sortContext?.groups ?? []) if (g.members.includes(key) && g.umbrella) selected.add(g.umbrella);
   }
   // Native prerequisite closure is mandatory, including closed/cross-repo endpoints.
@@ -67,8 +72,12 @@ export function reviewPacket(snapshot, subjects, { limit = 20 } = {}) {
     return { ...rest, title: i.title.slice(0, 240), reviewSummary: summaries.get(i.key) };
   });
   copy.edges = copy.edges.filter(e => selected.has(e.dependent) && selected.has(e.blocker));
-  copy.reviews = copy.reviews.filter(r => selected.has(r.issue)).map(r => requested.has(r.issue) ? r : {
+  copy.reviews = copy.reviews.filter(r => selected.has(r.issue) || r.authority === 'trusted' && r.intact
+    && ['pending', 'confirmed'].includes(r.effects) && r.dependencies.some(d => requested.has(d.key))).map(r => requested.has(r.issue) ? r : {
     ...r, analysis: '', inputs: [], candidates: [], questions: [],
+    // Incoming removed links still contribute to the subject's link row, even
+    // when their host has no current edge and is outside retrieval.
+    dependencies: selected.has(r.issue) ? r.dependencies : r.dependencies.filter(d => requested.has(d.key)),
   }).map(r => ({ ...r, candidates: r.candidates.filter(c => r.dependencies.some(d => d.key === c.key)) }));
   copy.impacts = copy.impacts.filter(i => i.reviews.some(id => copy.reviews.some(r => r.id === id)));
   const used = new Set(copy.reviews.flatMap(r => r.inputs.map(x => x.key)));

@@ -530,7 +530,10 @@ Workflow approval reads `pdd.json` from the main checkout (`sourceRoot`), outsid
 the backlog sort and dependency records once. It queues only new or changed
 issues. Each packet includes up to 20 likely neighbours per subject, using saved
 area, cause, file and word matches. Explicit issue links and native prerequisites
-are always included. Neighbours carry short summaries. A packet that cannot fit
+are always included. Packets also retain issue observations used by saved subject
+reviews and incoming PDD link history, including removed links. Neighbours carry
+short summaries. Required sort work and saved sort records name only queued
+subjects. A packet that cannot fit
 its required context in 2 MiB fails with `review-packet-too-large`.
 
 Issue text, links, trusted comments and named files make a review stale.
