@@ -10,7 +10,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: a3f1ac7296348e6c8fd1f4c6fecbcf3be8b78b39fbb7ee38bf03cfb2e5b961ea).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 137c3c1ba0bfe80eedca301134e9bd28d2fe497b6bbf7ee0de0dfa6ceca20934).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -4668,12 +4668,20 @@ export const nudgeIdleRun = saveGuard((args, ports) => lockedMutation(args, port
 }));
 
 // A replacement wait owns its clearing condition, while disk and slot custody survive.
-function replaceParkingBlocker(run, blocker, interpreterBatch) {
+function replaceParkingBlocker(run, blocker, interpreterBatch, interpreterCheck, now) {
   if (!blocker) return;
   // Read current evidence before replacing the old blocker. A person park must
   // never lend a stale interpreter cache to its replacement.
-  const wait = blocker.kind === 'interpreter' ? interpreterWaitFor(run) ?? {
+  let wait = blocker.kind === 'interpreter' ? interpreterWaitFor(run) ?? {
     at: run.updatedAt ?? run.startedAt ?? 0, reason: 'The finished prompt check has no saved verdict.', batch: interpreterBatch ?? null, cause: 'unknown'} : null;
+  if (blocker.kind === 'interpreter' && interpreterCheck !== undefined) {
+    const unchanged = sameFact(run.parking.interpreterGate, run.gate ?? null)
+      && sameFact(run.parking.interpreterCheck, interpreterCheck);
+    wait = unchanged && run.parking.interpreterWait ? run.parking.interpreterWait : {
+      at: Math.max(now, (run.parking.interpreterWait?.at ?? -Infinity) + 1),
+      reason: 'The finished prompt check has no saved verdict.', batch: interpreterBatch ?? null, cause: 'unknown'};
+    run.parking.interpreterCheck = structuredClone(interpreterCheck);
+  } else delete run.parking.interpreterCheck;
   const changed = !sameFact(run.parking.blocker, blocker);
   if (changed) {
     run.parking.blocker = structuredClone(blocker);
@@ -4703,7 +4711,7 @@ export const parkBlockedRun = saveGuard((args, ports) => lockedMutation(args, po
     .some(key => !sameFact(run[key], input.expected[key]))) return skipped();
   if (run.parking?.phase === 'parked') {
     commitRun(run, p, fresh => {
-      replaceParkingBlocker(fresh, input.blocker, input.interpreterBatch);
+      replaceParkingBlocker(fresh, input.blocker, input.interpreterBatch, input.interpreterCheck, p.now());
       if (continuationCheckHeld(fresh, p)) fresh.parking.checkHeld = true;
       else delete fresh.parking.checkHeld;
     });
@@ -4718,7 +4726,7 @@ export const parkBlockedRun = saveGuard((args, ports) => lockedMutation(args, po
     fresh.parking ??= {at: p.now(), blocker: input.blocker, phase: 'closing',
       ...(input.blocker.kind === 'person' && (run.gate || openQuestion(run))
         ? {personWait: {gate: run.gate ?? null, question: run.question ?? null}} : {})};
-    replaceParkingBlocker(fresh, input.blocker, input.interpreterBatch);
+    replaceParkingBlocker(fresh, input.blocker, input.interpreterBatch, input.interpreterCheck, p.now());
   })) return skipped();
   const parked = readRun(run.runDir), copy = structuredClone(parked);
   const result = await closeFinishedChats(copy, {...p, force: true, reason: 'park', checkpoint: async (chat, layout) => {

@@ -8,7 +8,7 @@ import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
 import { readInterpreterProgress, configureInterpreterTestMode } from './interpreter-queue.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 9260207aa0e09954909122da4d82eff9706c2b52987b97662ce01e072c20fe34).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 754a05669cb6e19b662453bb8cd43684da73b879873aa2cd77b02a89c15a3a65).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -407,12 +407,16 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
       return health?.kind === 'usage-limit' ? {kind: 'account', until: Number.isFinite(reset) ? new Date(reset).toISOString() : null} : null;
     },
     park: async (run, blocker) => {
-      let interpreterBatch = null;
-      if (blocker.kind === 'interpreter' && !interpreterWaitFor(run)) {
-        try {interpreterBatch = (p.readRunResults ?? readRunResults)({root: run.root, runDir: run.runDir, runId: run.runId, since: run.startedAt ?? 0}, {env: p.env}).find(row => row.kind === 'pdd test')?.batch ?? null;}
+      let interpreterBatch = null, interpreterCheck;
+      if (blocker.kind === 'interpreter' && !interpreterWaitFor({...run, parking: null})) {
+        let check;
+        try {check = (p.readRunResults ?? readRunResults)({root: run.root, runDir: run.runDir, runId: run.runId, since: run.startedAt ?? 0}, {env: p.env}).find(row => row.kind === 'pdd test');}
         catch { /* Unknown saved reads must never cause a blind resend. */ }
+        interpreterBatch = check?.batch ?? null;
+        interpreterCheck = {step: run.done?.check ?? null,
+          result: check ? {batch: interpreterBatch, at: check.at ?? null, states: check.states ?? null} : null};
       }
-      return p.scanAction(() => parkBlockedRun({...args(run), blocker, expected: run, interpreterBatch}, worker));
+      return p.scanAction(() => parkBlockedRun({...args(run), blocker, expected: run, interpreterBatch, interpreterCheck}, worker));
     },
     wake: (run, rule) => p.scanAction(() => wakeParkedRun({...args(run), at: run.parking.at,
       text: rule?.text ?? (run.parking.blocker.kind === 'pdd'
