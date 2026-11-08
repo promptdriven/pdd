@@ -126,7 +126,7 @@ async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
   }
   f.prompts = [];
   f.ports = { execFile, herdr: f.herdr.herdr, stateDir: state, layoutDirectory: join(state, 'herdr-layout'), now: () => f.clock,
-    env: { HOME: home, CLAUDE_CONFIG_DIR: join(home, '.claude') }, isTTY: true, pdd: '/abs/node /abs/pdd.mjs',
+    env: { HOME: home, PDD_INTERPRETER_QUEUE: join(base, 'interpreter-queue'), CLAUDE_CONFIG_DIR: join(home, '.claude') }, isTTY: true, pdd: '/abs/node /abs/pdd.mjs',
     confirm: async question => { f.prompts.push(question); return f.answer ?? true; },
     attach: async () => 0, readApprovalEvidence: async () => assert.fail('A terminal person needs no chat evidence') };
   f.run = () => startRun({ name, issue: '17', agent, cwd: source, packageRoot }, f.ports);
