@@ -301,15 +301,20 @@ Only an explicit approve call can pass an approval gate. Chat messages, steps an
 Run `pdd workflow tidy --dry-run` to count eligible finished chat tabs, then
 `pdd workflow tidy` to close them. A live run keeps its current area chat,
 including a gate waiting for a person. Finished chats need verified Herdr IDs,
-a saved native session and an idle agent. The grace period is 15 minutes from
+a saved native session and safe occupancy. The grace period is 15 minutes from
 area/run end and from the last explicit open. Budget pressure can remove the
-grace period. Personal tabs and busy chats remain protected.
+grace period. Personal tabs and busy chats remain protected. An idle or done
+agent is safe. If the agent has
+exited, cleanup also requires process information that proves only the shell
+occupies the foreground. Foreground work or uncertain inspection keeps the tab.
+These checks repeat after the saved close intent, before the close request.
 
 After its last chat closes, an ended run can release its original shell workspace.
 Cleanup keeps the shell if it is the caller's pane, has live work, or cannot be
 checked. Tidy counts retained shells and status shows the reason. A failed shell
 close stays pending. The next tidy confirms absence or retries only after it
-checks the same workspace, original shell IDs and occupancy again.
+checks the same workspace, original shell IDs and occupancy again. This also
+applies when startup failed before the run recorded its first area chat.
 
 An intentional close saves `chats[].closed = {at, reason, screen, confirmedAt?}` in status.json
 before sending the close request. This is the integration contract for automatic

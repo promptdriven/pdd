@@ -1,7 +1,7 @@
 import { validateSnapshot } from './metrics-store.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
 import { createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: e24cc2597295698c3b75506f86dd9b358238988bc37d54399f801b0b585e4325).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 6c682e1a3e073cbf3b8635d0475dc9fd32a73e9ef6876267c993de0c2416cd15).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -2944,17 +2944,21 @@ export async function tidyRuns({dryRun = false, graceMs, need, timeBudgetMs} = {
   const p = deps(ports), runs = allRuns({cancelled:true}, p), kept = [], warnings = [];
   let closed = 0;
   const elapsed = p.elapsedNow ?? (() => Number(process.hrtime.bigint() / 1_000_000n)), began = elapsed();
-  const candidates = runs.flatMap(run => finishedChats(run).map(chat => ({run,chat})))
-    .sort((a,b) => finishedAt(a.run,a.chat) - finishedAt(b.run,b.chat));
+  const candidates = runs.flatMap(run => {
+    const chats = finishedChats(run);
+    if (chats.length) return chats.map(chat => ({run,chat,at:finishedAt(run,chat)}));
+    return ended(run) && run.layout?.workspaceId && run.layout.phase !== 'closed'
+      ? [{run,chat:null,at:run.cancelled?.at ?? run.updatedAt ?? run.startedAt}] : [];
+  }).sort((a,b) => a.at - b.at);
   for (const [index,{run,chat}] of candidates.entries()) {
-    if (timeBudgetMs !== undefined && elapsed()-began >= timeBudgetMs) { kept.push(...candidates.slice(index).map(({chat})=>({area:chat.area,reason:'sweep-time-budget'}))); break; }
+    if (timeBudgetMs !== undefined && elapsed()-began >= timeBudgetMs) { kept.push(...candidates.slice(index).map(({chat})=>({area:chat?.area ?? 'run shell',reason:'sweep-time-budget'}))); break; }
     if (readRunOwnership(run.runDir,p)) { kept.push({runId:run.runId,reason:'run-busy'}); continue; }
     let release;
     try {
       release = acquireRunLock(run.runDir);
       const latest = readRun(run.runDir);
       if (!latest || latest.runId !== run.runId) continue;
-      const result = await cleanupRunChats(latest, {...p,progressGuard:undefined}, {dryRun, onlyChat:chat,
+      const result = await cleanupRunChats(latest, {...p,progressGuard:undefined}, {dryRun, ...(chat ? {onlyChat:chat} : {}),
         ...(graceMs === undefined ? {} : {graceMs}), ...(graceMs === 0 ? {reason:'budget'} : {})});
       closed += result.closed; kept.push(...result.kept); warnings.push(...result.warnings);
       if (need !== undefined) { const usage = await paneUsage(p); if (!usage.budget || usage.panes + need <= usage.budget) break; }

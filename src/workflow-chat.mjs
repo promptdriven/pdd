@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: b67cd7c041447893c48b2d73752c88f782a2c0addc6a7ba1652a98965445c800).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 6b522c2776b651eda9747d1dcef4639fb828630aec2293d0b5ef9b1b9c6a84f4).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, lstatSync, readdirSync, writeFileSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
@@ -771,6 +771,20 @@ export async function closeFinishedChats(run, ports = {}) {
         new Set(rows.map(row => row[key])).size !== rows.length) throw problem('invalid_cleanup_inventory');
     return rows;
   };
+  const assertEmptyForeground = async paneId => {
+    let reply;
+    try { reply = await herdr(['pane', 'process-info', '--pane', paneId]); }
+    catch { throw problem('pane-unknown'); }
+    const info = reply?.result?.process_info, rows = info?.foreground_processes;
+    if (reply?.result?.type !== 'pane_process_info' || info?.pane_id !== paneId ||
+        !Number.isSafeInteger(info.shell_pid) || info.shell_pid <= 0 ||
+        !Number.isSafeInteger(info.foreground_process_group_id) || info.foreground_process_group_id <= 0 ||
+        !Array.isArray(rows) || !rows.length || rows.some(row => !Number.isSafeInteger(row?.pid) || row.pid <= 0 || typeof row.name !== 'string' || !row.name))
+      throw problem('pane-unknown');
+    if (info.foreground_process_group_id !== info.shell_pid || rows.length !== 1 || rows[0].pid !== info.shell_pid)
+      throw problem('pane-busy');
+    if (!SHELLS.has(rows[0].name)) throw problem('pane-unknown');
+  };
   const finished = ports.force ? run.chats ?? [] : finishedChats(run);
   const candidates = ports.onlyChat ? finished.filter(chat => chat.paneId === ports.onlyChat.paneId && chat.terminalId === ports.onlyChat.terminalId) : finished;
   for (const chat of [...candidates].sort((a,b) => finishedAt(run,a) - finishedAt(run,b))) {
@@ -805,6 +819,7 @@ export async function closeFinishedChats(run, ports = {}) {
           validSessionId(chat.session?.id) && native.agent_session?.kind === 'id' && native.agent_session.value !== chat.session.id))
         { keep('agent-identity'); continue; }
       if (!ports.force && native && !['idle','done'].includes(native.agent_status)) { keep('agent-busy'); continue; }
+      if (!ports.force && !native) await assertEmptyForeground(chat.paneId);
       let id = validSessionId(chat.session?.id) ? chat.session.id : null;
       if (!id && agent === 'codex') {
         if (native?.agent_session?.kind === 'id' && validSessionId(native.agent_session.value)) id = native.agent_session.value;
@@ -835,6 +850,8 @@ export async function closeFinishedChats(run, ports = {}) {
       if (finalNative && (finalNative.pane_id !== chat.paneId || finalNative.agent !== agent || id && finalNative.agent_session?.kind === 'id' && finalNative.agent_session.value !== id))
         { keep('agent-identity'); continue; }
       if (!ports.force && finalNative && !['idle','done'].includes(finalNative.agent_status)) { keep('agent-busy'); continue; }
+      if (!ports.force && !finalNative) await assertEmptyForeground(chat.paneId);
+      if (chat.paneId === (ports.env ?? process.env).HERDR_PANE_ID) { keep('caller-pane'); continue; }
       try { await herdr(['tab', 'close', chat.tabId]); }
       catch (error) { if (error.code !== 'tab_not_found') throw error; }
       // Require absence, including after a lost acknowledgement on a later sweep.

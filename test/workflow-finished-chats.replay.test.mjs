@@ -65,3 +65,39 @@ test('2709 repair replay: live run shell survives completion cleanup and a later
   assert.ok(f.record().chats[0].session.id);
   assert.ok(existsSync(run.root));
 });
+
+test('2709 repair 2 replay: retain former area work, then recover a failed-start shell', async t => {
+  const f = await fixture(t);
+  assert.equal((await f.run()).exitCode, 0);
+  const run = f.record(), chat = run.chats[0], pane = f.herdr.paneOf(chat);
+  run.state = 'completed'; chat.endedAt = f.clock;
+  writeFileSync(`${run.runDir}/status.json`, JSON.stringify(run));
+  f.tick(16 * 60_000); pane.agent = null;
+  pane.processInfo = {pane_id:pane.pane_id, shell_pid:100, foreground_process_group_id:200,
+    foreground_processes:[{pid:200, name:'make'}]};
+  const held = await runner.tidyRuns({}, f.ports);
+  assert.equal(held.closed, 0, 'former area foreground work must survive a sweep');
+  assert.ok(f.herdr.paneOf(chat)); assert.equal(held.kept, 1);
+  delete pane.processInfo;
+  assert.equal((await runner.tidyRuns({}, f.ports)).closed, 1);
+  assert.equal(f.record().layout.phase, 'closed');
+
+  const command = f.ports.herdr;
+  f.ports.herdr = async args => {
+    if (args[0] === 'tab' && args[1] === 'create') throw Object.assign(Error('tab refused'), {code:'herdr_failed'});
+    return command(args);
+  };
+  assert.notEqual((await f.run()).exitCode, 0);
+  const failed = f.record(); assert.equal(failed.chats.length, 0);
+  f.ports.herdr = async args => {
+    if (args[0] === 'workspace' && args[1] === 'close') throw Object.assign(Error('close refused'), {code:'herdr_failed'});
+    return command(args);
+  };
+  assert.equal((await runner.cancelRun({ref:'17', cwd:f.source}, f.ports)).exitCode, 0);
+  assert.equal(f.record().layout.phase, 'close_intent');
+  f.ports.herdr = command;
+  assert.equal((await runner.tidyRuns({}, f.ports)).kept, 0);
+  assert.equal(f.record().layout.phase, 'closed', 'the sweep must reconcile a zero-chat failed start');
+  assert.equal(f.herdr.panes.length, 1);
+  assert.ok(existsSync(failed.root));
+});

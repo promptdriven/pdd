@@ -232,8 +232,14 @@ the saved workspace must match the run checkout and clone, and its saved tab
 must have exactly the saved pane and terminal ID. A reused ID, split tab,
 foreign workspace or unknown inventory is retained with a reason. No live-folder
 comparison establishes pane identity. Inspect the agent immediately before
-closing: idle/done or confirmed agent absence is safe; working/blocked/unknown
-stays open. Require a valid saved native session, learning Codex's session from
+closing: idle/done is safe; working/blocked/unknown stays open. Confirmed agent
+absence also requires authoritative `pane process-info --pane <id>` evidence:
+the pane ID matches, positive shell PID equals the foreground process group ID,
+and the nonempty foreground process list contains only that shell PID with a
+recognized shell name (bash, zsh, sh, dash, fish, ksh or tcsh). Retain foreground
+work as `pane-busy`; retain unavailable, malformed or unknown process evidence as
+`pane-unknown`. A saved session and terminal identity alone do not prove an
+unused pane after the agent exits. Require a valid saved native session, learning Codex's session from
 Herdr or one ownSession lookup if needed. No session means retain the tab.
 
 Before close, read `pane read PANE --source recent-unwrapped --lines 5000` into
@@ -241,7 +247,7 @@ Before close, read `pane read PANE --source recent-unwrapped --lines 5000` into
 block closing a safely resumable session. Await `ports.checkpoint(chat, layout)`
 before `tab close`; failure sends no close. Retry a marked chat through the same
 identity checks. Missing tabs are ended evidence only with a saved close mark.
-An optional `ports.onlyChat` selects one saved pane/terminal identity from the finished set for globally ordered sweeping. Recheck live identity and agent status after the durable checkpoint, immediately before the close. Return `{closed, kept, warnings}`: closed is the number of tabs confirmed closed,
+An optional `ports.onlyChat` selects one saved pane/terminal identity from the finished set for globally ordered sweeping. Recheck caller protection, live identity, agent status and the required agent-absence process evidence after the durable checkpoint, immediately before the close. Return `{closed, kept, warnings}`: closed is the number of tabs confirmed closed,
 kept is an array of `{area, reason}`, warnings is an array of diagnostics. Dry run
 (`ports.dryRun`) reports eligible count but writes no file/record or Herdr effect.
 After all ended-run chat tabs are gone, use the [verified layout cleanup](workflow-herdr-layout.prompt.md#cleanup),
