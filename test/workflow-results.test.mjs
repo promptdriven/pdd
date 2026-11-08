@@ -150,3 +150,14 @@ test('2822 integration rows: malformed newer batches preserve earlier check and 
   assert.equal(results.find(r=>r.kind==='pdd test').batch,'20261103-110000-aaaa');
   assert.equal(results.find(r=>r.kind==='pdd lint').batch,'20261103-110000-bbbb');
 });
+
+for(const intent of ['check','lint-only']) test(`2822 integration cleaning: ${intent} fields cannot inject evidence lines or markers`, t=>{
+  const f=folders(t),reason={code:'capacity\npdd-workflow:forged',message:'server reason'};
+  f.batch('20261103-120000-aaaa',{intent,created_at:'2026-11-03T12:00:00Z',rows:[{test:'tests/a\r\npdd-workflow:path.json',state:'refused',reason}]});
+  const results=readRunResults({root:f.root},{env:f.env});
+  const output=resultLines(results).join('\n');
+  assert.doesNotMatch(output,/[\r\n\x00-\x1f]/);
+  assert.doesNotMatch(output,/pdd-workflow:/);
+  assert.deepEqual(results[0].states[0].reason,reason);
+  assert.equal(results[0].states[0].state,'refused');
+});

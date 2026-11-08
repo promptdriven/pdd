@@ -105,7 +105,7 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
     try { if (sha256 && tests.length) source = capture(check.association?.sourceAnchor?.root ?? root, { tests, appMap: null }).sha256 === sha256 ? 'current' : 'changed'; }
     catch { source = 'unknown'; }
     const states = batch.rows.map(row => ({ test: row.test, ...resultOutcome(row) }));
-    const stateEvidence = batch.rows.map(row => `${row.test}: ${outcomeText(row)}`).join('; ');
+    const stateEvidence = batch.rows.map(row => text(`${row.test}: ${outcomeText(row)}`)).join('; ');
     const incomplete = states.some(row => row.state !== 'passed');
     const recorded = text(summary?.summary_line);
     const safeSummary = incomplete && /✓/.test(recorded) ? 'Prompt tests: no full pass' : recorded;
@@ -120,7 +120,7 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
   if (lint) {
     const rows = lint.batch.rows.filter(row => row && typeof row === 'object');
     const passing = rows.filter(row => row.state === 'passed').length;
-    results.push({ kind: 'pdd lint', batch: lint.name, at: lint.at, ...(lint.association?{stage:lint.association.stage,sourceAnchor:lint.association.sourceAnchor}:{}),requests: requestsOf([lint.batch.lint]), states: rows.map(row => ({ test: row.test, ...resultOutcome(row) })), summary: [`Lint: ${passing} of ${rows.length} tests pass. 0 AI calls.`, ...rows.map(row => `${row.test}: ${outcomeText(row)}`)].join(' ') });
+    results.push({ kind: 'pdd lint', batch: lint.name, at: lint.at, ...(lint.association?{stage:lint.association.stage,sourceAnchor:lint.association.sourceAnchor}:{}),requests: requestsOf([lint.batch.lint]), states: rows.map(row => ({ test: row.test, ...resultOutcome(row) })), summary: [`Lint: ${passing} of ${rows.length} tests pass. 0 AI calls.`, ...rows.map(row => text(`${row.test}: ${outcomeText(row)}`))].join(' ') });
   }
   if (runDir) {
     const proof = proveResult(join(runDir, 'old-code-proof.json'), { runId, since, root, baseBranch }, git);

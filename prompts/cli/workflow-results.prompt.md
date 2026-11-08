@@ -420,6 +420,8 @@ and relevant physical effects.
 
 The [workspace evidence owner](workflow-runner.prompt.md#read-evidence-eligibility) owns the read binding supplied below. This is navigation; the supplied interface closes this reader without loading its caller.
 
+Clean every displayed row path, state and reason with the existing one-line control removal and ownership-marker escaping boundary. Keep structured state/reason data intact.
+
 Validate saved row records before selecting the newest batch. A null, scalar or array row makes that batch malformed; skip it and retain other valid check, lint and proof evidence.
 
 ## Dependencies
