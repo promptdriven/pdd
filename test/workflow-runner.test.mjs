@@ -2964,3 +2964,21 @@ test('2921: product counts nothing from a generated PR body whose only Prompt te
     assert.equal(status.runs.find(row => row.run === 'phone-1').fromPr, 61, 'the pdd result line still names the PR as the evidence source');
   }
 });
+
+test('area chats select working tests and retain a distinct exact-head queued merge gate', async t => {
+  const f = await fixture(t);
+  mkdirSync(join(f.source, 'scripts'));
+  writeFileSync(join(f.source, 'scripts/affected-tests.mjs'), '// repository selector\n');
+  f.git(f.source, 'add', '.'); f.git(f.source, 'commit', '-qm', 'declare test selector');
+  f.git(f.source, 'update-ref', 'refs/remotes/origin/main', f.git(f.source, 'rev-parse', 'HEAD'));
+  const out = await f.run();
+  assert.equal(out.exitCode, 0, out.message);
+  const run = f.record();
+  const text = readFileSync(join(run.runDir, 'plan-start.md'), 'utf8');
+  const line = text.split('\n').find(line => line.includes('Native test policy: '));
+  assert.ok(line, 'native chat must receive a test policy');
+  const policy = JSON.parse(line.slice(line.indexOf('Native test policy: ') + 'Native test policy: '.length));
+  assert.equal(policy.working.mode, 'affected');
+  assert.deepEqual(policy.working.argv, ['node', 'scripts/affected-tests.mjs', '--base', run.baseSha, '--run', '--report', join(run.runDir, 'working-tests.json')]);
+  assert.deepEqual(policy.beforeMerge, { mode: 'full', queue: true, exactHead: true, reuseGreenHead: true });
+});

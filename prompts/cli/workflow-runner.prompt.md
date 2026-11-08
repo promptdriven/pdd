@@ -2,6 +2,19 @@
 
 Own `src/workflow-runner.mjs`. It runs a workflow for one GitHub issue as a few area chats. pdd has four jobs: start, gates, PR and status. The agent does the work. For an automatic fresh area chat, arm the one-shot [worker completion bridge](workflow-worker-completion.prompt.md) after its identity is saved and launch confirmed. The bridge waits for native worker completion and coordinator availability; it does not impose a workflow timeout. After saving a supported current automatic resume, arm the same bridge with its new resume anchor and require fresh activity evidence before completion. Arm a confirmed current automatic `--new` replacement with its saved fresh pane identity, and treat a resumed replacement as a resume. Reused-pane recovery needs fresh activity evidence and is not armed as a fresh turn. pdd does not run tests automatically or merge. The explicit local [old-code proof](workflow-prove.prompt.md) command is the sole bounded supplied-command execution exception; this runner never executes a command from notes or evidence.
 
+## Working native tests
+
+Area messages direct workers to use a repository-declared safe affected-test
+selector plus its smoke set during work, including repairs and verification.
+For this repository use `node scripts/affected-tests.mjs --base BASE --run
+--report REPORT`, with the saved base SHA and an external run-folder report.
+If that adapter is absent or cannot select safely, run the full suite through the
+shared suite queue. Record the working commands, files and counts in verify notes.
+Do not repeat the full suite at each step. The merge owner must still obtain one
+queued green full-suite result on the exact current clean PR head, reuse a green
+result on that head, and show the working result and the full result separately
+in the PR. A plan or an affected pass cannot satisfy the full-suite merge gate.
+
 ## Current Autopilot start ownership
 
 Ordinary module function `startRun` consumes optional structured `coordinator` from

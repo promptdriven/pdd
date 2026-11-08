@@ -18,3 +18,13 @@ Still in force: product calls the issue does not settle, actions that cannot be 
 After a failed check, find its real cause and change the repair before another permitted check; two failed rounds alone do not block the issue. Keep repairing while a useful correction is available, preserving behavior expectations and required validation, for at most 5 repair rounds in one area (a round is a return to an earlier step that clears later steps; a retry of the same step is not one); pdd refuses a 6th. Then, or if a real blocker remains, record its cause and next action in the run and take the stuck path: `pdd:stuck`, one comment with the cause, one `stuck` alert. Keep its claim and progress; the coordinator continues other eligible work. Never repeat an external action with an unknown outcome.
 
 A prompt that a test, command or prompt runs needs an interface block: draft it through pdd from the prompt text and save it; one that nothing runs needs none. No prompt covers the code: use the verdict "no prompt covers this yet".
+
+During native work and repairs, use the repository-declared safe affected-test
+selector plus its fixed smoke set. For PDD use `node scripts/affected-tests.mjs
+--base BASE --run --report REPORT`, with the run base and an external run-folder
+report. If selection is unavailable or unsafe, run the full suite through the
+shared suite queue (`pdd workflow suite --command "npm test"` when installed,
+else the repository queue adapter). Put working test files, commands, counts and
+fallback causes in verify.md and the PR. The merge owner obtains one queued full
+suite on the exact clean PR head, reuses a green result on that head, and shows
+its head/result separately in the PR. An affected pass cannot satisfy that gate.

@@ -15,7 +15,13 @@ PR 2 (code): read the issue, the PR 1 Story (open or merged) and the diff. Build
 
 Read pdd-prompting/review.md.
 
-Both PRs: the full suite is green on the head, with no new skip or only. One exception: new native tests in PR 1 may be red only for the missing behavior. Say so in the verdict; then PR 1 merges only together with its code PR.
+Both PRs: during checking, run the repository's affected-test selector plus smoke.
+If it cannot select safely, run the full suite through the shared suite queue.
+Do not repeat a green full suite on the same head. Report the working command,
+selected files and counts separately from the queued full-suite result and head,
+or mark that merge result pending. A checker PASS does not waive the full-suite
+merge gate: the merge owner must have a green full suite on the exact clean head,
+with no new skip or only. One exception: new native tests in PR 1 may be red only for the missing behavior. Say so in the verdict; then PR 1 merges only together with its code PR.
 
 Verdict: one PR comment with a JSON block: `verdict` (PASS, FAIL or NOT SURE), `head` (the SHA you checked), `risk` (1-5, before merge), `family`, `session`, `checker_mode`, and the evidence. Then run `pdd workflow status N` to refresh the PR top. Never send a failed check again on your own.
 
