@@ -12,6 +12,28 @@ issues (argv issue references), and optional runs text. Return `{exitCode,messag
 The CLI owns streams. Outside programs, timer installation, clock and state I/O
 are injectable ports; native defaults implement these on macOS and Linux.
 
+## Several machines on one repository
+
+The [reviewer lease](autopilot-reviewer.prompt.md) owns repository review authority.
+Pass the saved machine/coordinator identity to intake. Cache an authenticated
+login only after this coordinator holds the lease; a foreign reviewer login is
+never this coordinator's login. The native `machine` port may supply the hostname
+for controlled verification; the default is the actual hostname. Include its observed lease
+as `reviewer` in coordinator packets; a null or foreign reviewer allows issue work
+under existing claims, but no sorting, grouping or dependency analysis. Renew the
+lease on ordinary ticks, including ticks that defer intake for a low budget. At
+the reserve floor, preserve claim heartbeats and let the reviewer lease expire;
+no lease write may bypass the floor. Stopped or Off launchers do not renew.
+
+Repository status reads current GitHub claims and the lease and shows all live
+machine/coordinator pairs, their held issues, last seen times and the reviewer.
+A failed observation shows an unavailable repository view, never an empty fleet.
+`status --all` remains the local machine-only view. From live claims plus the
+lease, warn once per saved launcher when multiple coordinators share a GitHub
+login. This warning does not grant ownership and uses the existing state save
+boundary. Status is read-only and may show the warning without persisting it;
+the tick records the once-only warning. The GitHub usage ledger remains local.
+
 ## Native Codex startup
 
 For a selected Codex launcher, apply invocation-only config overrides that trust
@@ -959,6 +981,8 @@ Use the existing launcher ports and native defaults, including state, Git, setti
 reconcile and wake boundaries; injected substitutes reach this same path.
 
 ## Dependencies
+
+- [Shared reviewer](autopilot-reviewer.prompt.md): required native generation and verification context for the lease and repository machine view.
 
 - [Metrics store](metrics-store.prompt.md), [run records](workflow-runs.prompt.md) and [metrics gaps](metrics-gap.prompt.md): required native generation/verification context for observational selector/launch storage and identity.
 

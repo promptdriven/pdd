@@ -5,6 +5,12 @@ pure-model owner. Use their public boundaries; do not infer readiness from text.
 This step leaves startup readiness, profiles, agent family and workflow handoff with
 their existing owners. It is distinct from steps/handoff.md.
 
+- Only the live repository reviewer in the launcher packet may sort, group or
+  analyse dependencies. Other machines reuse GitHub reviews and do issue work
+  under their own winning claims. No reviewer or an unreadable lease means wait
+  for reviews. Prepare and completion enforce the lease for managed coordinators;
+  an expired request cannot be completed after takeover. A worker's issue claim
+  does not prevent the repository reviewer from reviewing that issue.
 - When a wake names a request artifact, read its exact bytes and verify the
   declared SHA-256, valid request, opaque request ID and repository before any
   analysis or completion. Use that exact request for the existing completion;

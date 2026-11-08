@@ -508,6 +508,10 @@ but that issue's detail coverage remains false. Mark each resource only after a
 complete successful read; failed context, execution, relationship, timeline or
 authority observation remains unknown. Never infer coverage for a legacy packet.
 
+Winning claims with a known comment author also expose optional `login`, the
+GitHub author's login. This is fleet display and shared-login evidence only;
+coordinator and machine identity still determine ownership.
+
 ## Dependencies
 
 - [GitHub calls](github-calls.prompt.md): required native generation and verification context for the call ledger and the ETag cache.
