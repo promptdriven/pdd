@@ -202,7 +202,7 @@ for (const name of BARE_IN_PROJECT) test(`2698: ${name}: a bare parent with anot
   for (const attempt of [1, 2]) {
     const refused = await openAgain(l);
     assert.equal(refused.exitCode, 1, `attempt ${attempt}: ${refused.message}`);
-    assert.match(refused.message, /herdr_layout_identity_changed: .*elsewhere\.git/);
+    assert.match(refused.message, /herdr_layout_identity_changed: .*elsewhere\.git/s);
     const saved = l.record().layout;
     assert.equal(saved.repoWorkspaceId, parent.workspace_id); assert.equal(saved.repoCreateIntent.parentRoot, l.root);
     assert.equal(saved.repoRoot.cwd, l.root);
@@ -212,7 +212,7 @@ for (const name of BARE_IN_PROJECT) test(`2698: ${name}: a bare parent with anot
   parent.worktree = { ...parent.worktree, repo_key: l.common };
   const extra = (await herdr(['tab', 'create', '--workspace', parent.workspace_id, '--cwd', l.root, '--label', 'mine', '--no-focus'])).result.tab;
   const changed = await openAgain(l);
-  assert.equal(changed.exitCode, 1, changed.message); assert.match(changed.message, /herdr_layout_identity_changed: .*root_pane/);
+  assert.equal(changed.exitCode, 1, changed.message); assert.match(changed.message, /herdr_layout_identity_changed: .*parent_root/s);
   assert.equal(l.record().layout.repoCreateIntent.parentRoot, l.root);
   assert.equal(f.herdr.panes.some(p => p.commands), false, 'no agent starts');
   assert.equal(f.herdr.calls.filter(isOpen).length, opens, 'no other worktree open');

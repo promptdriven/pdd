@@ -243,6 +243,7 @@ async function launcher(t) {
   writeFileSync(join(cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: [] } }));
   const f = { dir, cwd, home, time: Date.parse('2026-11-06T12:00:00Z'), prompts: [], issues: [], waits: [], health: { state: 'healthy', detail: 'HTTP 200' }, healthCalls: 0, probe: 'pending', alerts: [], sent: [] };
   f.ports = {
+    allocationCheck: async () => ({ state: 'ready', message: '' }),
     stateRoot: join(home, 'state'), now: () => f.time, readRunProgress: async () => [], warn: () => {},
     readRuntimeWaits: async () => structuredClone(f.waits),
     runtimeHealth: async () => { f.healthCalls++; return f.health; },

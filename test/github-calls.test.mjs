@@ -31,6 +31,7 @@ async function tickWorld(t, { github } = {}) {
   writeFileSync(join(cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: [], ...(github ? { github } : {}) } }));
   const w = { time: NOW, remaining: 4000, issues: [], since: [], gh: [], patches: [], intakes: 0, prompts: [], claim: null, warnings: [] };
   w.ports = {
+    allocationCheck: async () => ({ state: 'ready', message: '' }),
     stateRoot: join(home, 'state'), now: () => w.time, readRunProgress: async () => [], warn: text => w.warnings.push(text),
     selectAgent: async () => ({ id: 'codex', kind: 'codex', command: 'codex', env: {} }), pathDiagnostic: () => [], timer: async () => true,
     run: async (command, args, options = {}) => {

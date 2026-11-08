@@ -697,7 +697,7 @@ test('a forbidden permission lookup with remaining quota defers only that issue'
   f.issues = [issue(75, { user: { login: 'writer' } }), issue(76)];
   const run = f.ports.run;
   f.ports.run = async (cmd, args, opts) => args.some(x => String(x).endsWith('/writer/permission'))
-    ? { code: 1, stderr: '', stdout: `HTTP/2.0 403 Forbidden\r\nx-ratelimit-remaining: 499\r\nx-ratelimit-reset: ${f.time / 1000 + 3600}\r\n\r\n{"message":"Resource not accessible"}` } : run(cmd, args, opts);
+    ? { code: 1, stderr: '', stdout: `HTTP/2.0 403 Forbidden\r\nx-ratelimit-remaining: 1499\r\nx-ratelimit-reset: ${f.time / 1000 + 3600}\r\n\r\n{"message":"Resource not accessible"}` } : run(cmd, args, opts);
   const result = await f.tick();
   assert.equal(f.state().retryAt, undefined); assert.match(result.message, /75/); assert.match(f.warnings[0], /75/);
   assert.match(f.prompts.at(-1), /"number":76,/); assert.doesNotMatch(f.prompts.at(-1), /"number":75,/);
@@ -846,7 +846,7 @@ test('a forbidden issue query with quota remaining has no rate-limit cooldown', 
   const f = await fixture(t); await f.invoke('start'); delete f.ports.queryIssues;
   const run = f.ports.run;
   f.ports.run = async (cmd, args, opts) => cmd === 'gh' && args.some(x => String(x).includes('/issues?'))
-    ? { code: 1, stderr: '', stdout: `HTTP/2.0 403 Forbidden\r\nx-ratelimit-remaining: 499\r\nx-ratelimit-reset: ${f.time / 1000 + 3600}\r\n\r\n{"message":"Resource not accessible"}` } : run(cmd, args, opts);
+    ? { code: 1, stderr: '', stdout: `HTTP/2.0 403 Forbidden\r\nx-ratelimit-remaining: 1499\r\nx-ratelimit-reset: ${f.time / 1000 + 3600}\r\n\r\n{"message":"Resource not accessible"}` } : run(cmd, args, opts);
   await assert.rejects(f.tick(), /GitHub issue check failed/);
   assert.equal(f.state().retryAt, undefined);
 });
