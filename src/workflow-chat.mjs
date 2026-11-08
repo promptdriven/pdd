@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 734f28fdf2a21cf1703b2c2ccb66c032ff7f2021fee24f03b6203f48b33c05ec).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: dd7dedefba503af0742dbdc1066853f62f9d36a211966da545e8b91f6d1c6ef2).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, lstatSync, readdirSync, writeFileSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
@@ -195,10 +195,14 @@ export function chatLaunch({ run, agent, configDir, env = process.env }) {
   return { unset, loginFile, program: entry?.command ?? null, queueEnv };
 }
 // One native launch or resume in a pane with the caller's login; a failed request deletes the login file at once.
-async function launchInPane(herdr, paneId, options, { run, env }) {
+async function launchInPane(herdr, paneId, options, { run, env, beforeLaunch }) {
   removeStaleLoginFiles(run.runDir);
   const launch = chatLaunch({ run, agent: options.agent, configDir: options.configDir, env });
-  try { return await herdr(['pane', 'run', paneId, chatCommand({ ...options, ...launch })]); }
+  try {
+    const command = chatCommand({...options, ...launch});
+    await beforeLaunch?.();
+    return await herdr(['pane', 'run', paneId, command]);
+  }
   catch (error) { if (launch.loginFile) rmSync(launch.loginFile, { force: true }); throw error; }
 }
 
@@ -511,7 +515,7 @@ function screenProblem(screen, agent, context) {
 }
 export async function chatHealth({ run, chat, live }, ports = {}) {
   const agent = chat?.agent ?? run?.agent;
-  if (!live?.alive || !['claude', 'codex'].includes(agent)) return null;
+  if (!live || !['claude', 'codex'].includes(agent)) return null;
   try {
     const env = ports.env ?? process.env, now = (ports.now ?? Date.now)(), fs = ports.sessionFs ?? nodeFs, context = { now, timeZone: ports.timeZone };
     const home = env.HOME || homedir(), id = validSessionId(live.sessionId) ? live.sessionId : validSessionId(chat.session?.id) ? chat.session.id : null;
@@ -558,7 +562,7 @@ async function workspaceInventory(herdr) {
   return rows;
 }
 
-export async function rebuildClosedChat({ run, chat, message }, ports = {}) {
+export async function rebuildClosedChat({ run, chat, message, resumeMessage }, ports = {}) {
   const herdr = herdrCommand(ports), now = ports.now ?? Date.now, env = ports.env ?? process.env;
   await ensureServer(herdr, ports);
   const present = async () => {
@@ -607,7 +611,7 @@ export async function rebuildClosedChat({ run, chat, message }, ports = {}) {
     }
     await ports.checkpoint(chat, custody(layout));
     await launchInPane(herdr, chat.paneId, {commonDir: run.commonDir, sourceRoot: run.sourceRoot,
-      agent, cwd: run.root, addDirs: agentDirs(run), configDir, ...(resumeId ? {resumeId} : {messageFile: chat.messageFile, sessionId: chat.session?.id})}, {run, env});
+      agent, cwd: run.root, addDirs: agentDirs(run), configDir, ...(resumeId ? {resumeId, ...resumeInput(run, chat, resumeMessage)} : {messageFile: chat.messageFile, sessionId: chat.session?.id})}, {run, env, beforeLaunch: ports.beforeLaunch});
     delete chat.startUnconfirmed;
     await ports.checkpoint(chat, custody(layout));
     return true;
@@ -622,8 +626,15 @@ function attachSession() {
   });
 }
 
+function resumeInput(run, chat, message) {
+  if (!message) return {};
+  const messageFile = join(run.runDir, `${chat.area}-resume.md`);
+  writeFileSync(messageFile, message, {mode: 0o600});
+  return {messageFile};
+}
+
 // Returns {resumed, attached}; it may change chat.tabId/paneId/terminalId/session/resumedAt, and the caller saves the run.
-export async function openChat({ run, chat }, ports = {}) {
+export async function openChat({ run, chat, resumeMessage }, ports = {}) {
   const herdr = herdrCommand(ports), env = ports.env ?? process.env, now = ports.now ?? Date.now, configDir = expandHome(chat.configDir, env);
   const sleep = ports.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
   const elapsedNow = ports.elapsedNow ?? (() => Number(process.hrtime.bigint() / 1_000_000n));
@@ -684,12 +695,12 @@ export async function openChat({ run, chat }, ports = {}) {
     savedAgentEntry(run, run.agent, env);
     // Herdr sees the agent only after it starts; the shared grace counts from this resume request.
     chat.resumedAt = now(); applyLifecycle(chat, { state: 'starting' });
-    try { await launchInPane(herdr, chat.paneId, { commonDir: run.commonDir, sourceRoot: run.sourceRoot, agent: run.agent, cwd: run.root, addDirs: agentDirs(run), resumeId: id, configDir }, { run, env }); }
+    try { await launchInPane(herdr, chat.paneId, { commonDir: run.commonDir, sourceRoot: run.sourceRoot, agent: run.agent, cwd: run.root, addDirs: agentDirs(run), resumeId: id, configDir, ...resumeInput(run, chat, resumeMessage) }, { run, env, beforeLaunch: ports.beforeLaunch }); }
     catch (error) { chat.startUnconfirmed = true; throw error; }
     resumed = true;
   }
-  await herdr(['tab', 'focus', chat.tabId]);
-  const attach = (ports.isTTY ?? Boolean(process.stdin.isTTY && process.stdout.isTTY)) && env.HERDR_ENV !== '1';
+  if (!ports.background) await herdr(['tab', 'focus', chat.tabId]);
+  const attach = !ports.background && (ports.isTTY ?? Boolean(process.stdin.isTTY && process.stdout.isTTY)) && env.HERDR_ENV !== '1';
   if (ports.beforeAttach) await ports.beforeAttach(chat);
   if (attach) await (ports.attach ?? attachSession)();
   return { resumed, attached: attach };

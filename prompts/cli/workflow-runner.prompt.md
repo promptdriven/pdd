@@ -531,6 +531,86 @@ When judging a full check for a normal run, supply each approved Story with numb
 
 For initial and reopened normal Story gates, revalidate the displayed Story/test fingerprint after terminal confirmation and before recording an approval or changing any prompt approval. Refuse a changed fingerprint and require a new card and later answer. Save the exact validated fingerprint as the Story approval; do not recapture unseen bytes for it.
 
+## Automatic recovery of stopped chats
+
+Export `resumeStoppedRun({ref,cwd,packageRoot,coordinatorId,machine}, ports)`.
+It returns the ordinary `{exitCode,message}` plus `recovery` (`skipped`, `resumed`,
+or `stuck`); a stuck reply includes `area`. Failed automatic open observations
+retain the running state for a later tick; uncertain dispatch retains its existing
+unconfirmed custody and cannot authorize another dispatch. Use the same run lock and open operation
+as `openRun`, including the chat owner's workspace rebuild and exact saved-session
+resume. Automatic recovery never attaches a terminal or focuses a tab.
+
+Inside the lock, require a valid saved automatic origin matching coordinator and
+machine, matching source checkout, and state running with no gate, open question,
+or unfinished replacement. A run layout marked `phase: close_intent` or `closed` by the
+layout owner is deliberately closing or closed: skip recovery, consume no allowance and do
+not mark resume exhaustion. Recheck this disposition after asynchronous inspection
+before saving exhaustion, and immediately before dispatch.
+Also consume the chat owner's durable intentional-close mark `chat.closed` on
+the current area's latest saved chat. Pending closure and confirmed closure both
+forbid automatic recovery, allowance use, recording exhaustion and returning a
+saved exhaustion result for alerting. Check this before the saved stuck-result
+return, after asynchronous inspection before saving exhaustion, and on the exact
+current target immediately before dispatch. A newer chat or close mark wins over
+the inspected snapshot, including during workspace/tab reconstruction. Preserve
+the mark through observations and process/server restart. An automatic route must
+never clear it; explicit successful open is the chat owner's clearing route.
+Only the current area's latest confirmed chat with a valid saved native session
+UUID qualifies. Automatic recovery never starts a fresh conversation to replace
+missing session history; manual open retains its existing recovery options.
+A positive missing agent/pane or `server_not_running` observation and an ended
+lifecycle permit recovery. For this preflight, a confirmed `pane_not_found` is
+endpoint absence like `agent_not_found`; the shared open operation still verifies
+and rebuilds its tab. For an acknowledged launch that status never observed running,
+use the chat owner's `sessionEvidenceDue`, `ownSession` and `observedSession`
+rules, just as manual open does, before judging its lifecycle. A unique matching
+native session after grace can prove that launch ran; its initially chosen Claude
+UUID alone cannot. Missing, unreadable or ambiguous native evidence and lost launch
+acknowledgements never authorize recovery.
+Workspace closure alone does not bypass lifecycle evidence. Unknown observations, starting/unconfirmed launches without that proof,
+working/idle/blocked agents and completed/cancelled/paused runs do not. Before any
+launch, call the shared chat-health reader on the stopped session. Login and usage
+limit evidence prevents automatic recovery even after a reported limit end.
+
+Persist `chatResumes`, an object keyed by area name whose value is an array of
+dispatch-attempt times in epoch milliseconds. Keep attempts in the rolling hour (times
+strictly greater than now minus 3600000); record each attempt immediately before the shared chat owner sends `pane run`,
+through its `beforeLaunch` hook, after readiness and recovery checks. A failed
+dispatch consumes its attempt; a failed pre-launch check consumes none. Allow at most three per area. If the chat stops again
+with three attempts still in that hour, set state stuck and `parkReason` naming
+area and the exhausted resume limit; save `chatResumeLimit:{area,at}`. After
+asynchronous inspection, conditionally commit this stop only if run state, current
+area, chat custody, progress, origin, gate, question and replacement are unchanged.
+If they changed, skip recovery and send no alert. Later calls
+return that same stuck result without another launch, so the launcher can retry
+its deduplicated alert. Each area has an independent allowance. Manual open keeps
+its existing behavior and does not spend this automatic allowance.
+
+After an acknowledged automatic resume and a successful save of its chat custody,
+persist `chatResumeSuccess:{area,at,count,paneId,sessionId,resumedAt}`: the area,
+dispatch time in epoch milliseconds, attempt number within that rolling hour
+(1 through 3, including earlier failed dispatches), and the resumed chat's pane,
+native session and resume anchor. Failed or uncertain dispatches consume allowance
+but never create this success record. Ordinary manual open never creates one.
+Detail status and list/all-repository/JSON status words show
+`resumed after the chat stopped (N of 3)` while this success is within the rolling
+hour and still matches the current area's latest pane, native session and resume
+anchor. Expiry, a later manual resume or replacement, or area advancement removes
+these words from view without rewriting history. Gates, questions, completion,
+stuck state, runtime waits, chat failures, stopped/blocked chats and health problems
+keep their existing precedence; recovery words replace only normal working words.
+
+Hold automatic recovery if the delivery journal cannot be read.
+For either manual or automatic resume, include the current area's delivered,
+unacknowledged, non-in-flight change requests in the resumed agent's startup input:
+their original IDs, text and uptake commands. Use the chat owner's optional
+`resumeMessage` input. For manual reconstruction with no saved session, include the same reminder in
+the first message. Do not alter delivery state, retarget pending or
+uncertain requests, or record uptake. Preserve run ID, worktree, branch, progress,
+claims, gates and approvals. A reminder is not approval and does not rerun completed
+steps.
+
 ## Dependencies
 
 - [Shared full-suite queue](test-suite-queue.prompt.md): required execution, status and paused inactivity contract.
@@ -654,7 +734,7 @@ observation. Preserve queue path and concurrency settings in launcher environmen
 - [Approval policy and journal](approval-policy.prompt.md) and [prompt approval](prompt-approve.prompt.md): required authoring/generation/native-production/verification/testing context for said approval policy, actor/journal and prompt edit validation.
 - [Command catalog](command-catalog.prompt.md): required authoring/generation/verification/testing context for the stable `workflow.request-uptake` route; the catalog owns command names. Derive every printed uptake command, including delivery envelopes and missing-input hints, from its prefix using the complete current `p.pdd`/`pddFor` command prefix exactly like done/ask hints, preserving the prefix's individually shell-quoted executable and script arguments without wrapping the whole prefix as one executable; this runner owns no public spelling. Render the exact request id as one shell-single-quoted argument, escaping each embedded single quote with the standard close-quote, quoted-single-quote, reopen-quote sequence. Include a shell-quoted short-note placeholder for the summary option. Never interpolate request ids or notes as executable shell syntax, even when injected ids contain quotes, spaces, dollar signs, backticks or command substitution characters.
 - [Workflow areas](workflow-areas.prompt.md), [run records](workflow-runs.prompt.md), [approval evidence](approval-evidence.prompt.md), [GitHub](workflow-github.prompt.md) and [worktree](workflow-worktree.prompt.md).
-- [Area chats](workflow-chat.prompt.md): required authoring/generation/native-production/verification/testing context for bounded readiness, transport acknowledgements, uncertain delivery, replacement checkpoints and attempt configuration and chat health; this runner owns request custody, retry order and caller account selection. Its checkpoint interface supplies the effective profile to native effects without a required dependency back to this runner.
+- [Area chats](workflow-chat.prompt.md): required authoring/generation/native-production/verification/testing context for bounded readiness, transport acknowledgements, uncertain delivery, replacement checkpoints and attempt configuration and chat health; this runner owns request custody, retry order and caller account selection. Its checkpoint interface supplies the effective profile to native effects without a required dependency back to this runner. Recovery also consumes the owner's durable `chat.closed` disposition supplied by finished-chat cleanup; this consumer requires its presence only, regardless of close reason or confirmation.
 - [Workflow agents](workflow-agents.prompt.md#named-agentsjson-entries): required authoring/generation/testing context for `workflowAgentEntry`, which resolves a built-in agent or an agents.json entry name at start.
 - [PR evidence preparation](workflow-pr-evidence.prompt.md): required authoring/generation/native-production/verification/testing context for the real `src/workflow-pr-evidence.mjs` module function `preparePrEvidence({run,isCode}, ports)`. Both PR creation and updates must call it with the actual saved-run projection and native ports; insert its lines/reference through the existing body protections. It owns lifted labels, machine proof freshness, reference substitution and their publication-refresh requirements. No alternative test-only renderer.
 - [Results reader](workflow-results.prompt.md): required generation/runtime/verification context for pdd's own saved results and their lines.

@@ -25,6 +25,7 @@ import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mj
 import { allRuns, currentChat, gitContext, listRuns, readRun, readRunOwnership, resolveRun, runDirFor, runForWorktree, updateRun, updateRunCosts, writeRun } from './workflow-runs.mjs';
 import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
 import { startChat, sendToChat, herdrCommand, chatSession, chatHealth, openChat, rebuildClosedChat, assertRestartCaller, restartChat, validSessionId, closeChats, expandHome, homeVariable, isFolder, observeLifecycle, applyLifecycle, launchAnchor, sessionEvidenceDue, ownSession, observedSession, START_GRACE_MS, removeStaleLoginFiles } from './workflow-chat.mjs';
+import { samePath } from './workflow-herdr-layout.mjs';
 import { workflowAgentEntry } from './workflow-agents.mjs';
 import { captureSource, findTests, gitFiles, interfaceBlocks, interfaceSchemaProblems, isStoryPath, proseSha256 } from './runtime-preflight.mjs';
 import { storyLines, PROMPT_TESTS_LABEL, PROMPT_TESTS_WORDS } from './runtime-output.mjs';
@@ -519,8 +520,17 @@ export function automaticAttention({ repo, machine }, ports = {}) {
     return item ? [{ number: run.number, ...item }] : [];
   }).sort((a, b) => a.number - b.number);
 }
+const layoutClosing = run => ['close_intent', 'closed'].includes(run.layout?.phase);
+function automaticResumeWords(run, now) {
+  const success = run.chatResumeSuccess, chat = currentChat(run);
+  if (!success || !chat || !Number.isFinite(now) || !Number.isFinite(success.at)
+    || success.at > now || success.at <= now - 3600000 || ![1, 2, 3].includes(success.count)
+    || success.area !== chat.area || success.paneId !== chat.paneId
+    || success.sessionId !== chat.session?.id || success.resumedAt !== chat.resumedAt) return null;
+  return `resumed after the chat stopped (${success.count} of 3)`;
+}
 // chat: what Herdr shows (chatState); facts: {drafts, nothing} read by the caller (gateFacts). describe itself makes no calls.
-function describe(run, chat = null, { drafts = [], nothing = false, health = null, normal = false, suite = null, interpreter = null } = {}) {
+function describe(run, chat = null, { drafts = [], nothing = false, health = null, now = null, normal = false, suite = null, interpreter = null } = {}) {
   const area = run.areas[run.area], pr1 = askArea(run) && prOf(run, askArea(run).name);
   if (run.state === 'cancelled') return run.cancelled?.state === 'replaced' ? 'replaced' : 'cancelled';
   if (environmentStatus(run)) return environmentStatus(run);
@@ -545,6 +555,8 @@ function describe(run, chat = null, { drafts = [], nothing = false, health = nul
   if (run.gate?.kind === 'ask-code') return `PR 1 open (${pr1?.url}); waiting for you: code PR now, or stop and merge PR 1. ${codeLater(run)}`;
   if (run.gate) return `waiting for you: approve the ${run.gate.area} area or ask for changes`;
   if (prOf(run, area?.name) && area.gate === 'pr') return `waiting for you: review and merge ${prLabel(run, area)} on GitHub`;
+  const recovery = run.state === 'running' && automaticResumeWords(run, now);
+  if (recovery) return recovery;
   const step = area?.steps.find(item => !run.done[item]);
   return step ? `the agent works on ${step}` : 'the agent works';
 }
@@ -3528,7 +3540,7 @@ function detail(run, chat = null, facts = {}) {
 
 // One list line per run, grouped by what it needs: the person, the agent, a PR review, nothing.
 const GROUPS = ['waiting', 'working', 'pr-open', 'done', 'cancelled'];
-function summary(run, timeZone, chat = null, { drafts = [], nothing = false, health = null, normal = false, suite = null, interpreter = null } = {}) {
+function summary(run, timeZone, chat = null, { drafts = [], nothing = false, health = null, normal = false, suite = null, interpreter = null, now = null } = {}) {
   const area = run.areas[run.area], ask = askArea(run), running = run.state === 'running';
   const cardRun = normal && Boolean(run.storyApproval);
   const replacementPending = run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase);
@@ -3559,6 +3571,7 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false, hea
     : run.gate?.kind === 'approve-pr' ? `waiting for you: ${nothing ? '' : 'try it, then '}approve to open ${area.then === 'ask-code' ? 'PR 1' : 'the PR'}`
     : run.gate ? `waiting for you: approve the ${run.gate.area}`
     : group === 'pr-open' ? `${!ask ? 'PR' : area.then === 'ask-code' ? 'PR 1' : 'PR 2'} open`
+    : running && automaticResumeWords(run, now) ? automaticResumeWords(run, now)
     : step ? `agent working on ${step}` : 'agent working';
   const ref = `${run.repo}#${run.number}`;
   const when = Number.isFinite(run.updatedAt) ? new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', ...(timeZone ? { timeZone } : {}) }).format(new Date(run.updatedAt)) : 'unknown time';
@@ -3589,7 +3602,7 @@ async function listStatus(runs, { json, cancelled, scope, snapshotOnly=false }, 
   for (const run of runs) {
     const ordinaryOwnership=readRunOwnership(run.runDir,p);
     const health = {}, chat = ordinaryOwnership||snapshotOnly?null:await chatState(run, p, health);
-    const item = summary(run, p.timeZone, chat, { ...(ended(run)||ordinaryOwnership||snapshotOnly ? {} : await gateFacts(run, p)), ...health, ...interpreterFacts(run, p), suite: readSuiteProgress({cwd:run.root, since:run.updatedAt ?? 0, env:p.env}, p) });
+    const item = summary(run, p.timeZone, chat, { ...(ended(run)||ordinaryOwnership||snapshotOnly ? {} : await gateFacts(run, p)), ...health, now: p.now(), ...interpreterFacts(run, p), suite: readSuiteProgress({cwd:run.root, since:run.updatedAt ?? 0, env:p.env}, p) });
     const snapshot = requestSnapshot(run, p);
     all.push({ ...item, steps: savedStepResults(run), ...snapshot, ordinaryOwnership, line: [item.line, ...ownershipLines(ordinaryOwnership), ...requestLines(snapshot, { openOnly: true, ended: ended(run), currentArea: run.areas[run.area]?.name, p })].join('\n') });
   }
@@ -3630,6 +3643,7 @@ async function runStatusCommand({ ref, cwd, all = false, json = false, cancelled
   if(!ordinaryOwnership&&!snapshotOnly)await refreshPr(found.run, p);
   const run = found.run, facts = { ...(ended(run)||ordinaryOwnership||snapshotOnly ? {} : await gateFacts(run, p)), ...interpreterFacts(run, p) }, chat = ordinaryOwnership||snapshotOnly?null:await chatState(run, p, facts);
   facts.suite = readSuiteProgress({cwd:run.root, since:run.updatedAt ?? 0, env:p.env}, p);
+  facts.now = p.now();
   const snapshot = requestSnapshot(run, p);
   const nativeResults=ownResults(run,p).filter(result=>result.kind==='native evidence');
   const steps = savedStepResults(run);
@@ -3683,7 +3697,7 @@ function saveAreaObservations(run, original, observed, p) {
     fresh => copyObservation(lastChat(fresh, original.area), observed));
 }
 // Default open and startup own chat observations, never a stale workflow snapshot.
-function saveChatObservations(run, original, observed, p, { error, phase = 'open', reset = false, checkpoint = false, layout = null } = {}) {
+function saveChatObservations(run, original, observed, p, { error, phase = 'open', reset = false, checkpoint = false, layout = null, automatic = false, resumeSuccess = null } = {}) {
   const area = original?.area ?? observed?.area ?? run.areas[run.area].name;
   // A late reset cannot retire historical custody; a dispatched start retains it.
   return conditionalCommit(run, p, fresh => fresh && fresh.runId === run.runId && !ended(fresh) && sameFact(lastChat(fresh, area), original) && !(reset && fresh.area !== run.area), fresh => {
@@ -3696,6 +3710,8 @@ function saveChatObservations(run, original, observed, p, { error, phase = 'open
     // Verified live custody supersedes stale hints; partial allocation saves retain known fields.
     if (layout) fresh.layout = { ...fresh.layout, ...structuredClone(layout) };
     if (checkpoint) return;
+    if (resumeSuccess && observed && !observed.startUnconfirmed && fresh.state === 'running' && fresh.areas[fresh.area].name === area)
+      fresh.chatResumeSuccess = {...resumeSuccess, area, paneId: observed.paneId, sessionId: observed.session?.id, resumedAt: observed.resumedAt};
     // A late failed open of an area that is no longer current keeps its own record, but never replaces a current failure.
     if (error && phase === 'open' && fresh.areas[fresh.area].name !== area && !activeChatFailure(fresh))
       fresh.chatFailure = { area, phase, code: oneLine(error.code ?? 'error').slice(0, 100), message: firstLine(error.message ?? 'Herdr request failed').slice(0, 500), at: p.now() };
@@ -3704,7 +3720,7 @@ function saveChatObservations(run, original, observed, p, { error, phase = 'open
       const unchanged = stateFields.every(key => sameFact(fresh[key], run[key]));
       if (error) {
         fresh.chatFailure = { area, phase, code: oneLine(error.code ?? 'error').slice(0, 100), message: firstLine(error.message ?? 'Herdr request failed').slice(0, 500), at: p.now() };
-        if (unchanged) fresh.state = 'waiting';
+        if (unchanged && !automatic) fresh.state = 'waiting';
       } else if (fresh.chatFailure) {
         if (unchanged) clearChatFailure(fresh);
         else delete fresh.chatFailure;
@@ -3712,14 +3728,59 @@ function saveChatObservations(run, original, observed, p, { error, phase = 'open
     }
   });
 }
-async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot = PACKAGE_ROOT }, ports) {
+async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot = PACKAGE_ROOT, automaticResume = null }, ports) {
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
   const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
   const run = found.run;
-  if (ended(run)) return fail(`The run for ${run.repo}#${run.number} is ${run.state}. Its worktree is ${run.root}.`);
+  if (ended(run) && !automaticResume) return fail(`The run for ${run.repo}#${run.number} is ${run.state}. Its worktree is ${run.root}.`);
   const selected = area === undefined ? run.area : run.areas.findIndex(item => item.name === area);
   let chat = [...(run.chats ?? [])].reverse().find(item => item.area === run.areas[selected]?.name), started = false, handedOff = false, rebuilt = false;
+  let beforeLaunch, resumeSuccess = null;
+  if (automaticResume) {
+    const skipped = () => ({...done(''), recovery: 'skipped'});
+    if (!validSavedAutomaticOrigin(run) || run.automaticOrigin.coordinatorId !== automaticResume.coordinatorId
+      || run.automaticOrigin.machine !== automaticResume.machine || !samePath(run.sourceRoot, cwd)) return skipped();
+    if (layoutClosing(run) || chat?.closed) return skipped();
+    if (run.state === 'stuck' && run.chatResumeLimit) return {...done(run.parkReason), recovery: 'stuck', area: run.chatResumeLimit.area};
+    if (run.state !== 'running' || run.gate || openQuestion(run) || !chat || chat.startUnconfirmed
+      || !validSessionId(chat.session?.id)
+      || run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase)) return skipped();
+    const selectedChat = structuredClone(chat);
+    const stillEligible = fresh => fresh && fresh.runId === run.runId && fresh.state === 'running'
+      && !layoutClosing(fresh) && !lastChat(fresh, selectedChat.area)?.closed
+      && fresh.area === selected && !fresh.gate && !openQuestion(fresh)
+      && sameFact(lastChat(fresh, selectedChat.area), selectedChat) && sameFact(fresh.done, run.done)
+      && sameFact(fresh.automaticOrigin, run.automaticOrigin) && sameFact(fresh.chatReplacement, run.chatReplacement);
+    const live = await chatSession(chat, p);
+    if (live.alive || !['agent_not_found', 'pane_not_found', 'server_not_running'].includes(live.code)) return skipped();
+    const absent = live.code === 'pane_not_found' ? {...live, code: 'agent_not_found'} : live;
+    const own = sessionEvidenceDue(chat, absent, p.now()) && !observedSession(chat, chat.agent ?? run.agent)
+      ? await ownSession({run, chat, since: launchAnchor(chat), ports: p}) : null;
+    const observed = observeLifecycle(chat, absent, p.now(), chat.agent ?? run.agent, own?.kind === 'match' ? own.id : null);
+    if (observed.state !== 'ended') return skipped();
+    if (await chatHealth({run, chat, live}, p)) return skipped();
+    const name = run.areas[run.area].name, at = p.now();
+    const attempts = (run.chatResumes?.[name] ?? []).filter(time => Number.isFinite(time) && time > at - 3600000);
+    if (attempts.length >= 3) {
+      const reason = `The ${name} chat stopped after 3 automatic resume attempts in one hour. Inspect the chat before resuming this run.`;
+      const saved = conditionalCommit(run, p, stillEligible, fresh => {fresh.state = 'stuck'; fresh.parkReason = reason; fresh.chatResumeLimit = {area: name, at};});
+      return saved ? {...done(reason), recovery: 'stuck', area: name} : skipped();
+    }
+    beforeLaunch = async () => {
+      const saved = conditionalCommit(run, p, fresh => fresh && fresh.runId === run.runId && fresh.state === 'running'
+        && !layoutClosing(fresh) && !lastChat(fresh, name)?.closed
+        && sameFact(lastChat(fresh, name), defaultOriginal)
+        && fresh.area === selected && !fresh.gate && !openQuestion(fresh)
+        && sameFact(fresh.automaticOrigin, run.automaticOrigin), fresh => {
+          const at = p.now(), recent = (fresh.chatResumes?.[name] ?? []).filter(time => Number.isFinite(time) && time > at - 3600000);
+          if (recent.length >= 3) throw Object.assign(Error('Automatic resume limit reached.'), {code: 'chat_resume_limit'});
+          (fresh.chatResumes ??= {})[name] = [...recent, at];
+          resumeSuccess = {at, count: recent.length + 1};
+        });
+      if (!saved) throw Object.assign(Error('The run changed before automatic resume.'), {code: 'chat_target_changed'});
+    };
+  }
   if (selected < 0) return fail(`Unknown area ${area}. Valid areas: ${run.areas.map(item => item.name).join(', ')}.`);
   if (selected > run.area || area !== undefined && !chat) return fail(`The area ${area} has no recorded chat at or before the current area.`);
   const historical = selected < run.area;
@@ -3745,10 +3806,16 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
   const missing = !recovering && missingHome({ ...run, configDir: replacementConfig }, p.env);
   if (missing) return fail(missing);
 
+  const snapshot = requestSnapshot(run, p);
+  if (automaticResume && snapshot.requestWarning) return fail(snapshot.requestWarning);
+  const requests = (snapshot.requests ?? []).filter(entry => entry.area === chat?.area && entry.ackedAt == null
+    && !(snapshot.inFlightRequests ?? []).some(active => active.id === entry.id));
+  const resumeMessage = requests.length ? ['Continue this same run. Keep completed steps and approvals. These requests are not approval.',
+    ...requestLines({requests, pendingRequests: [], uncertainRequests: [], inFlightRequests: []}, {agent: true, p})].join('\n') : undefined;
   try {
     if (newSession) assertRestartCaller({chat, pending}, p);
     if (chat && !recovering) {
-      rebuilt = await rebuildClosedChat({run, chat, message: await areaMessage(run, selected, p, packageRoot)}, {...p,
+      rebuilt = await rebuildClosedChat({run, chat, resumeMessage, message: await areaMessage(run, selected, p, packageRoot) + (resumeMessage ?? '')}, {...p, beforeLaunch,
         checkpoint: async (observed, layout) => {
           if (!saveChatObservations(run, defaultOriginal, observed, p, {checkpoint: true, layout}))
             throw Object.assign(Error('The run changed during workspace recovery.'), {code: 'chat_target_changed'});
@@ -3814,9 +3881,9 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
     if (!chat) { chat = await startNextChat(run, p, packageRoot); defaultOriginal = structuredClone(chat); started = true; }
     p.say(`Opening the ${chat.area} chat in Herdr…`);
     const priorResumeAnchor = launchAnchor(chat);
-    const opened = await openChat({ run, chat }, { ...p, beforeAttach: async () => {
+    const opened = await openChat({ run, chat, resumeMessage }, { ...p, background: Boolean(automaticResume), beforeLaunch, beforeAttach: async () => {
       const saved = areaOriginal ? saveAreaObservations(run, areaOriginal, chat, p)
-        : saveChatObservations(run, defaultOriginal, chat, p);
+        : saveChatObservations(run, defaultOriginal, chat, p, {resumeSuccess});
       if (saved && !historical && (rebuilt || Number.isFinite(chat.resumedAt) && launchAnchor(chat) !== priorResumeAnchor)) armCurrentAutomaticChat(run, p);
       handedOff = true;
       p.releaseRunLock?.();
@@ -3843,7 +3910,7 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
     if (newSession) return fail([`Chat replacement ${run.chatReplacement?.phase ?? 'refused'} (${failureReason(error)}).${run.chatReplacement ? ` Retry: pdd workflow open ${run.number} --new` : ''}`, ...failureDetails(error)].join('\n'));
     if (!handedOff) {
       if (areaOriginal) saveAreaObservations(run, areaOriginal, chat, p);
-      else saveChatObservations(run, defaultOriginal, chat, p, { error, phase: chat ? 'open' : 'start' });
+      else saveChatObservations(run, defaultOriginal, chat, p, { error, phase: chat ? 'open' : 'start', automatic: Boolean(automaticResume) });
     }
     // A starting chat is not a failed one: say so, with the one safe next step.
     if (['chat_start_unconfirmed', 'chat_start_failed'].includes(error.code)) return fail(oneLine(error.message));
@@ -3852,6 +3919,11 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
 }
 
 const openRunCommand = (args, ports) => lockedMutation(args, ports, openRunLocked);
+export const resumeStoppedRun = saveGuard(async ({ref, cwd, packageRoot, coordinatorId, machine}, ports) => {
+  const args = {ref, cwd, packageRoot};
+  const result = await lockedMutation(args, ports, (input, p) => openRunLocked({...input, automaticResume: {coordinatorId, machine}}, p));
+  return result.recovery ? result : {...result, recovery: result.exitCode === 0 ? 'resumed' : 'skipped'};
+});
 
 async function startRunCommand(args, ports = {}) {
   if (Object.hasOwn(args, 'automaticOrigin')) return fail('Invalid automatic start context.');
