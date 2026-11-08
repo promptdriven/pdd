@@ -409,3 +409,30 @@ test('public CLI requires literal CDATA labels, distinct occurrences and visible
     assert.equal(result.report.rows.find(row => row.part === '“CDATA REQUIRED”')?.status, 'region');
   });
 });
+
+test('public screen comparison excludes only established fully clipped page paint', { skip: !chrome, timeout: 120000 }, async t => {
+  const box = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400"><rect id="box" x="20" y="20" width="100" height="80" fill="silver"/></svg>';
+  const input = setup(t, box);
+  let page = '';
+  const server = createServer((_, res) => { res.writeHead(200, { 'content-type': 'text/html' }); res.end(page); });
+  await new Promise(done => server.listen(0, '127.0.0.1', done));
+  t.after(() => new Promise(done => { server.closeAllConnections(); server.close(done); }));
+  const url = `http://127.0.0.1:${server.address().port}/`;
+  const check = async (markup, drawing = box) => {
+    writeFileSync(join(input.cwd, input.drawingPath), drawing);
+    page = `<style>body{margin:0}#box{position:absolute;left:20px;top:20px;width:100px;height:80px;background:silver}.sr{position:absolute;width:1px;height:1px;overflow:hidden;white-space:nowrap;clip-path:inset(50%)}</style><div id="box"></div>${markup}`;
+    const stdout = sink(), stderr = sink();
+    const code = await runPdd(['test', '--screen', url, '--drawing', input.drawingPath, '--json'], { cwd: input.cwd, env: { ...process.env, PDD_CHROME_PATH: chrome, PDD_RUNTIME_URL: 'invalid-offline', PDD_STATE_DIR: input.cwd }, stdout, stderr });
+    return { code, stderr: stderr.text, report: stdout.text ? JSON.parse(stdout.text) : null };
+  };
+  for (const markup of ['', '<span class="sr"><b>Accessible label</b></span>']) {
+    const result = await check(markup); assert.equal(result.code, 0, result.stderr); assert.equal(result.report.rows.find(row => row.part === '#box').status, 'pass');
+  }
+  const labeled = box.replace('</svg>', '<text x="20" y="160">Accessible label</text></svg>');
+  const hidden = await check('<span class="sr">Accessible label</span>', labeled);
+  assert.equal(hidden.code, 1, hidden.stderr); assert.ok(['hidden', 'missing'].includes(hidden.report.rows.find(row => row.kind === 'text').status));
+  for (const style of ['clip-path:inset(49%)', 'clip-path:circle(0)', 'clip-path:inset(50%);filter:blur(1px)', 'clip-path:inset(50%);mask-image:linear-gradient(black,transparent)', 'filter:blur(1px)', 'mask-image:linear-gradient(black,transparent)']) {
+    const result = await check(`<span style="position:absolute;left:20px;top:150px;width:100px;height:20px;${style}">Accessible label</span>`);
+    assert.equal(result.code, 5, `${style}: ${result.stderr}`); assert.match(result.stderr, /unsupported.*clip|clip.*unsupported/i);
+  }
+});
