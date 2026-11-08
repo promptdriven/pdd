@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 8fa749bc8ce4e5fe817f7b74ccc7d0b464a0a2422b367315af2c7a321e362bf7).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: a01a23356bfbfc80317d138fd42fff287c39ffc48f6b13777f2f03b2f89fbfcb).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
@@ -910,18 +910,19 @@ export function preflight({ root, found, selected,workspace=found.workspace??loa
   const prompts = new Map(), warnings = [];
   const reviews = numericReviews(root, found, warnings);
   const rows = selected.map(test => {
-    let refused, plan;
+    let refused, plan, testSha = null;
     try {
       refused = checkTest(root, found, test, prompts);
       if (!refused || refused.code === 'unchecked-criteria') {
         plan = criterionPlan(test.doc, storyCriteria(readText(root, test.doc.story_path)));
       }
+      if (!refused && reviews.length) testSha = sha256(readFileSync(join(root,test.path)));
     } catch (error) {
       if (!(error instanceof PreflightError && error.exitCode === 4) && !['ENOENT','EACCES','EPERM','EISDIR'].includes(error.code)) throw error;
       refused = refusal(error.code ?? 'source-unavailable', 'source', error.message,
         {hint:'Restore the named dependency, make it readable, or correct its declared path.'});
     }
-    const row = { test: test.path, story: test.story, title: test.title, refusals: refused ? [refused].flat() : [], warnings: numberWarnings(test.doc, { testPath: test.path, testSha: reviews.length ? sha256(readFileSync(join(root,test.path))) : null, reviews }),
+    const row = { test: test.path, story: test.story, title: test.title, refusals: refused ? [refused].flat() : [], warnings: numberWarnings(test.doc, { testPath: test.path, testSha, reviews }),
       max_calls: defaultMaxCalls(test.doc), steps: Array.isArray(test.doc?.steps) ? test.doc.steps : [],
       criteria_total: plan?.criteria.length ?? (Array.isArray(test.doc?.criteria) ? test.doc.criteria.length : 0),
       ...(plan?.not_checked.length ? {not_checked:plan.not_checked} : {}), draft: false };

@@ -149,9 +149,11 @@ test('NATIVE missing and unsafe references stop Check, explicit lint and Try bef
     if(target.includes('link'))symlinkSync(join(setup.sandbox,'outside-contract.json'),join(setup.repo,'contracts/link.json'));
     updatePrompt(setup.repo,PLACE,value=>value.entries[0].input_schema={$contract:target});
     for(const [run,options]of[[runCheck,{}],[runCheck,{'--lint':true}],[runTry,{'--no-open':true,'--no-wait':true}]]) {
-      const ports=portsFor({HOME:setup.home,PDD_STATE_DIR:setup.state},{gh:()=>assert.fail('must not sign in'),fetch:()=>assert.fail('must not upload')}).ports;
-      assert.equal(await run({cwd:setup.repo,words:['place-order'],options},ports),4,ports.stderr.text);
-      assert.match(ports.stderr.text,/contract-(?:missing|unsafe)/);
+      await t.test(`${target}: ${run===runTry?'Try':options['--lint']?'lint':'Check'}`,async()=>{
+        const ports=portsFor({HOME:setup.home,PDD_STATE_DIR:setup.state},{gh:()=>assert.fail('must not sign in'),fetch:()=>assert.fail('must not upload')}).ports;
+        assert.equal(await run({cwd:setup.repo,words:['place-order'],options},ports),4,ports.stderr.text);
+        assert.match(ports.stdout.text,/contract-(?:missing|unsafe)/);
+      });
     }
   }
 });
