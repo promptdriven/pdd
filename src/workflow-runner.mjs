@@ -4770,9 +4770,16 @@ export const wakeParkedRun = saveGuard((args, ports) => lockedMutation(args, por
   if (text && (RUNTIME_WAKE_TAG.test(text) || isEnvironmentWake(text)) && (run.gate || openQuestion(run)) && !inferredGate) return skipped();
   commitRun(run, p, fresh => {
     if (fresh.parking?.at !== input.at) throw Object.assign(Error('Park changed'), {code: 'workflow_progress_refused'});
+    if (fresh.parking.phase === 'parked') {
+      endRuntimeWait(fresh); delete fresh.blockedOn;
+      // Consume the accepted stop before resume/delivery can save a new one.
+      // Environment retry delivery still needs its cause for validation.
+      if (fresh.parking.blocker.kind !== 'environment') {
+        delete fresh.parkReason; delete fresh.stuckCause;
+      }
+    }
     fresh.parking.phase = 'waking';
     if (text) fresh.parking.text = text;
-    endRuntimeWait(fresh); delete fresh.blockedOn;
     if (fresh.parking.blocker.kind !== 'environment' && (inferredGate || !fresh.gate && !openQuestion(fresh) || fresh.parking.blocker.kind === 'pdd')) fresh.state = 'running';
   });
   const result = await openRunLocked({...input, automaticResume: {...input, parked: true}}, p);

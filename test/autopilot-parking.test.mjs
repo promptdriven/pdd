@@ -943,3 +943,76 @@ test('3091 backfill an independent question replaces an inferred interpreter wai
   assert.deepEqual(f.record().parking.personWait.question, question.question);
   assert.equal(launches(f).length, 0);
 });
+
+for (const cause of ['pdd', 'interpreter reason', 'stuckCause', 'interpreter reason and stuckCause'])
+  test(`3091 repair 1 ${cause} wake retires its cause before a later person gate`, async t => {
+    const {f, tick, ports, stateFile, warnings} = await setup(t);
+    const held = f.record(); held.state = 'stuck';
+    if (cause === 'pdd') held.parkReason = 'Waiting for missing PDD feature #2897.';
+    else {
+      fullTicks(f, stateFile, ports);
+      ports.runtimeHealth = async () => ({state: 'unavailable', detail: 'controlled outage'});
+      if (cause.includes('reason')) held.parkReason = 'Interpreter saved read is unknown (runner-stopped).';
+      if (cause.includes('stuckCause')) held.stuckCause = 'interpreter';
+    }
+    save(f, held);
+    await tick();
+    if (cause !== 'pdd') {
+      assert.equal(f.record().parking?.blocker.kind, 'interpreter');
+      ports.runtimeHealth = async () => ({state: 'healthy', detail: 'controlled recovery'});
+      await tick();
+    }
+    assert.equal(f.record().state, 'running');
+    assert.equal(f.record().parking, undefined);
+    assert.equal(launches(f).length, 1); assert.equal(deliveries(f).length, 1);
+    assert.equal(f.record().chats.at(-1).session.id, held.chats.at(-1).session.id);
+
+    f.tick(60001);
+    const waiting = f.record(); waiting.state = 'waiting';
+    waiting.gate = {kind: 'ask-code', area: waiting.areas[waiting.area].name, at: f.clock};
+    save(f, waiting); f.herdr.calls.length = 0;
+    await tick(); await tick();
+    const parked = f.record();
+    assert.equal(parked.parking?.blocker.kind, 'person', 'consumed recovery must not own a later person gate');
+    assert.equal(parked.parking.phase, 'parked');
+    assert.equal(parked.state, 'waiting'); assert.deepEqual(parked.gate, waiting.gate);
+    assert.deepEqual(parked.decisions, waiting.decisions);
+    assert.equal(launches(f).length, 0); assert.equal(deliveries(f).length, 0);
+    assert.deepEqual(JSON.parse(readFileSync(stateFile)).parking.blockers, {person: 1});
+    assert.equal(JSON.parse(readFileSync(stateFile)).parking.working, 0);
+    assert.equal(parked.parkReason, undefined); assert.equal(parked.stuckCause, undefined);
+    assert.deepEqual(warnings, []);
+
+    // A new saved cause must still replace that person wait, without consuming its gate/question.
+    const changed = f.record(); changed.state = 'stuck';
+    changed.parkReason = 'Waiting for issue #321 to merge.'; changed.stuckCause = 'work';
+    changed.question = {at: f.clock, text: 'Waiting for issue #321 to merge.'};
+    save(f, changed); await tick();
+    assert.deepEqual(f.record().parking.blocker, {kind: 'dependency', until: '321'});
+    assert.equal(f.record().parkReason, changed.parkReason); assert.equal(f.record().stuckCause, 'work');
+    assert.deepEqual(f.record().gate, changed.gate); assert.deepEqual(f.record().question, changed.question);
+
+    if (cause === 'pdd') {
+      const retry = f.record(); retry.blockedOn = {kind: 'pdd', until: '#2897'};
+      save(f, retry);
+      const herdr = ports.herdr;
+      let replacement;
+      ports.herdr = async args => {
+        const result = await herdr(args);
+        if (args[0] === 'agent' && args[1] === 'prompt') {
+          replacement = f.record(); replacement.state = 'stuck';
+          replacement.parkReason = 'Waiting for issue #322 to merge.'; replacement.stuckCause = 'work';
+          replacement.blockedOn = {kind: 'dependency', until: '322'};
+          save(f, replacement);
+        }
+        return result;
+      };
+      await tick();
+      assert.ok(replacement, 'save a new stop during recovery notice delivery');
+      assert.equal(f.record().parkReason, replacement.parkReason); assert.equal(f.record().stuckCause, 'work');
+      assert.deepEqual(f.record().gate, retry.gate); assert.deepEqual(f.record().question, retry.question);
+      f.herdr.calls.length = 0; await tick();
+      assert.deepEqual(f.record().parking.blocker, {kind: 'dependency', until: '322'});
+      assert.equal(launches(f).length, 0); assert.equal(deliveries(f).length, 0);
+    }
+  });
