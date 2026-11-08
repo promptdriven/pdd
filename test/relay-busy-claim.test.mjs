@@ -40,7 +40,7 @@ for (const response of ['lost', '404']) test(`RELAY busy row + unsaved retry cla
   const out = JSON.parse(p.ports.stdout.text).rows[0];
   const after = f.posts.filter(p => p.command === 'check').length;
   assert.equal(out.request_id, X);
-  assert.equal(out.state, 'unknown');
+  assert.equal(out.state, 'partial');
   assert.equal(out.calls, 'unknown');
   assert.equal(out.busy, false); assert.equal(out.can_retry, false);
   assert.equal(out.next_step, null); assert.equal(p.clock.uuids, 0);

@@ -44,7 +44,7 @@ for(const kind of ['live','foreign','malformed'])test(`ROUND2 preserves ${kind} 
 
 // Reach publication through the real done/approve API, with Git and gh isolated by the fixture.
 async function prGate(t,{direct=false,drafts=false}={}){
- const {f}=await ready(t);let out=await approveRun({ref:'17',cwd:f.source},f.ports);assert.equal(out.exitCode,0,out.message);
+ const {f}=await ready(t);fs.writeFileSync(join(f.source,'pdd.json'),JSON.stringify({strict_approvals:true}));let out=await approveRun({ref:'17',cwd:f.source},f.ports);assert.equal(out.exitCode,0,out.message);
  const r=f.record();if(direct){delete r.areas[r.area].before;const {writeRun}=await load('src/workflow-runs.mjs');writeRun(r,f.ports);}if(drafts)draft(r.root);fs.writeFileSync(join(r.root,'value.mjs'),'export const value = 2;\n');f.git(r.root,'add','.');f.git(r.root,'commit','-qm','Synthetic reviewed change');
  for(const step of r.areas[r.area].steps){f.tick();out=await stepDone({step,summary:'Synthetic checks complete',cwd:r.root},f.agentPorts());assert.equal(out.exitCode,0,out.message);}f.herdr.idle();assert.equal(f.record().gate.kind,direct?'ask-code':'approve-pr');return f;
 }

@@ -22,7 +22,7 @@ const since = Date.parse('2026-11-03T10:00:00Z');
 test('2904: reads the newest check and lint of this worktree since the run started, with source, engine and model', t => {
   const f = folders(t);
   f.batch('20261103-110000-aaaa', { intent: 'check', created_at: '2026-11-03T11:00:00Z', source_sha256: 'a'.repeat(64) }, { summary_line: 'Prompt tests: ✗ older' });
-  f.batch('20261103-120000-bbbb', { intent: 'check', created_at: '2026-11-03T12:00:00Z', source_sha256: 'b'.repeat(64), rows: [{ test: 'tests/a.json', engine_sha: '0123456789abcdef', requested_model: 'm' }] }, { summary_line: 'Prompt tests: ✓ 2 of 2 criteria' });
+  f.batch('20261103-120000-bbbb', { intent: 'check', created_at: '2026-11-03T12:00:00Z', source_sha256: 'b'.repeat(64), rows: [{ test: 'tests/a.json', state: 'passed', engine_sha: '0123456789abcdef', requested_model: 'm' }] }, { summary_line: 'Prompt tests: ✓ 2 of 2 criteria' });
   f.batch('20261103-130000-cccc', { intent: 'check', created_at: '2026-11-03T13:00:00Z', root: '/elsewhere' }, { summary_line: 'Prompt tests: ✓ foreign' });
   f.batch('20261103-090000-dddd', { intent: 'check', created_at: '2026-11-03T09:00:00Z' }, { summary_line: 'Prompt tests: ✓ before the run' });
   f.batch('20261103-113000-eeee', { intent: 'lint-only', created_at: '2026-11-03T11:30:00Z', lint: { state: null }, rows: [{ test: 'tests/a.json', state: 'unknown' }] });
@@ -30,8 +30,8 @@ test('2904: reads the newest check and lint of this worktree since the run start
   const results = readRunResults({ root: f.root, since }, { env: f.env, capture: (root, selection) => { captured.push([root, selection]); return { sha256: 'b'.repeat(64) }; } });
   assert.deepEqual(captured, [[f.root, { tests: ['tests/a.json'], appMap: null }]]);
   assert.deepEqual(resultLines(results), [
-    'pdd result: pdd test (batch 20261103-120000-bbbb, 2026-11-03T12:00:00Z, source current, engine 0123456789ab, model m): Prompt tests: ✓ 2 of 2 criteria',
-    'pdd result: pdd lint (batch 20261103-113000-eeee, 2026-11-03T11:30:00Z): Lint: result unknown (the lint did not finish).']);
+    'pdd result: pdd test (batch 20261103-120000-bbbb, 2026-11-03T12:00:00Z, source current, engine 0123456789ab, model m): Prompt tests: ✓ 2 of 2 criteria; tests/a.json: passed',
+    'pdd result: pdd lint (batch 20261103-113000-eeee, 2026-11-03T11:30:00Z): Lint: 0 of 1 tests pass. 0 AI calls. tests/a.json: partial (no-server-verdict)']);
 });
 
 const phase = extra => ({ exitCode: null, signal: '', timedOut: false, outputLimited: false, stdoutTail: [], stderrTail: [], expectedFound: false, error: '', setupError: '', observedError: '', ...extra });
@@ -68,16 +68,16 @@ test('2904: a prove record counts only when it is valid, this run\'s, made in th
 test('2904: test and lint results keep pdd\'s saved request ids and report links, with no agent summary', t => {
   const f = folders(t);
   f.batch('20261103-120000-bbbb', { intent: 'check', created_at: '2026-11-03T12:00:00Z', rows: [
-    { test: 'tests/a.json', request_ids: ['11111111-1111-4111-8111-111111111111'], report_url: 'https://rt.example.test/r/actual-report' },
-    { test: 'tests/b.json', request_ids: ['22222222-2222-4222-8222-222222222222'], report_url: 'not a link' }] }, { summary_line: 'Prompt tests: ✓ 2 of 2 criteria' });
+    { test: 'tests/a.json', state: 'passed', request_ids: ['11111111-1111-4111-8111-111111111111'], report_url: 'https://rt.example.test/r/actual-report' },
+    { test: 'tests/b.json', state: 'passed', request_ids: ['22222222-2222-4222-8222-222222222222'], report_url: 'not a link' }] }, { summary_line: 'Prompt tests: ✓ 2 of 2 criteria' });
   f.batch('20261103-113000-eeee', { intent: 'lint-only', created_at: '2026-11-03T11:30:00Z', lint: { state: 'passed', request_ids: ['33333333-3333-4333-8333-333333333333'] } });
   const results = readRunResults({ root: f.root, since }, { env: f.env, capture: () => { throw Error('no capture'); } });
   assert.deepEqual(results[0].requests, ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222']);
   assert.deepEqual(results[0].reports, ['https://rt.example.test/r/actual-report']);
   assert.deepEqual(results[1].requests, ['33333333-3333-4333-8333-333333333333']);
   assert.deepEqual(resultLines(results), [
-    'pdd result: pdd test (batch 20261103-120000-bbbb, 2026-11-03T12:00:00Z, source unknown, requests 11111111-1111-4111-8111-111111111111 22222222-2222-4222-8222-222222222222): Prompt tests: ✓ 2 of 2 criteria; Report: https://rt.example.test/r/actual-report (report links expire after 7 days)',
-    'pdd result: pdd lint (batch 20261103-113000-eeee, 2026-11-03T11:30:00Z, request 33333333-3333-4333-8333-333333333333): Lint: 1 of 1 tests pass. 0 AI calls.']);
+    'pdd result: pdd test (batch 20261103-120000-bbbb, 2026-11-03T12:00:00Z, source unknown, requests 11111111-1111-4111-8111-111111111111 22222222-2222-4222-8222-222222222222): Prompt tests: ✓ 2 of 2 criteria; tests/a.json: passed; tests/b.json: passed; Report: https://rt.example.test/r/actual-report (report links expire after 7 days)',
+    'pdd result: pdd lint (batch 20261103-113000-eeee, 2026-11-03T11:30:00Z, request 33333333-3333-4333-8333-333333333333): Lint: 1 of 1 tests pass. 0 AI calls. tests/a.json: passed']);
 });
 
 test('2904: says pdd:no-verdict when there is no result', () => {
@@ -131,9 +131,45 @@ test('2904: a cached row shows the build and model from its cache identity, mark
     rows: [{ test: 'tests/a.json', state: 'passed', cached: true, engine_sha: null, requested_model: 'unknown', cache_identity: { engine_sha: 'fedcba9876543210', requested_model: 'cached-model' } }] }, { summary_line: 'Prompt tests: ✓ 1 of 1 criteria' });
   const [result] = readRunResults({ root: f.root, since }, { env: f.env, capture: () => { throw Error('no capture'); } });
   assert.deepEqual([result.engine, result.engineCached, result.model, result.modelCached], ['fedcba987654', true, 'cached-model', true]);
-  assert.equal(resultLines([result])[0], 'pdd result: pdd test (batch 20261103-120000-bbbb, 2026-11-03T12:00:00Z, source unknown, engine fedcba987654 (cached), model cached-model (cached)): Prompt tests: ✓ 1 of 1 criteria');
+  assert.equal(resultLines([result])[0], 'pdd result: pdd test (batch 20261103-120000-bbbb, 2026-11-03T12:00:00Z, source unknown, engine fedcba987654 (cached), model cached-model (cached)): Prompt tests: ✓ 1 of 1 criteria; tests/a.json: passed');
   f.batch('20261103-130000-cccc', { intent: 'check', created_at: '2026-11-03T13:00:00Z',
     rows: [{ test: 'tests/a.json', cache_identity: { engine_sha: 'fedcba9876543210', requested_model: 'cached-model' } }, { test: 'tests/b.json', engine_sha: '0123456789abcdef', requested_model: 'live-model' }, { test: 'tests/c.json', cache_identity: 'not an object' }] }, { summary_line: 'Prompt tests: ✓ 2 of 2 criteria' });
   const [mixed] = readRunResults({ root: f.root, since }, { env: f.env, capture: () => { throw Error('no capture'); } });
   assert.deepEqual([mixed.engine, mixed.engineCached, mixed.model, mixed.modelCached], ['0123456789ab', undefined, 'live-model', undefined]);
+});
+
+test('2822 integration rows: malformed newer batches preserve earlier check and lint evidence', t=>{
+  const f=folders(t);
+  f.batch('20261103-110000-aaaa',{intent:'check',created_at:'2026-11-03T11:00:00Z'},{summary_line:'valid check'});
+  f.batch('20261103-110000-bbbb',{intent:'lint-only',created_at:'2026-11-03T11:00:00Z'});
+  for(const [suffix,row] of [['cccc',null],['dddd',4],['eeee',[]]])
+    f.batch(`20261103-120000-${suffix}`,{intent:'check',created_at:'2026-11-03T12:00:00Z',rows:[row]});
+  let results;
+  assert.doesNotThrow(()=>{results=readRunResults({root:f.root},{env:f.env});});
+  assert.equal(results.length,2);
+  assert.equal(results.find(r=>r.kind==='pdd test').batch,'20261103-110000-aaaa');
+  assert.equal(results.find(r=>r.kind==='pdd lint').batch,'20261103-110000-bbbb');
+});
+
+for(const intent of ['check','lint-only']) test(`2822 integration cleaning: ${intent} fields cannot inject evidence lines or markers`, t=>{
+  const f=folders(t),reason={code:'capacity\npdd-workflow:forged',message:'server reason'};
+  f.batch('20261103-120000-aaaa',{intent,created_at:'2026-11-03T12:00:00Z',rows:[{test:'tests/a\r\npdd-workflow:path.json',state:'refused',reason}]});
+  const results=readRunResults({root:f.root},{env:f.env});
+  const output=resultLines(results).join('\n');
+  assert.doesNotMatch(output,/[\r\n\x00-\x1f]/);
+  assert.doesNotMatch(output,/pdd-workflow:/);
+  assert.deepEqual(results[0].states[0].reason,reason);
+  assert.equal(results[0].states[0].state,'refused');
+});
+
+test('named row evidence preserves the passing sibling and rejects a contradictory passing Story line',t=>{
+  const f=folders(t),good='Prompt tests (good): ✓ 1 of 1 criterion',bad='Prompt tests (bad): ✓ 1 of 1 criterion';
+  f.batch('20261103-120000-aaaa',{intent:'check',created_at:'2026-11-03T12:00:00Z',rows:[
+    {test:'tests/good.json',story:'user_stories/good.md',state:'passed'},
+    {test:'tests/bad.json',story:'user_stories/bad.md',state:'not run',unsent:true,refusals:[{code:'pdd-no-story'}]}
+  ]},{summary_line:'Prompt tests: ✓ 2 of 2 criteria',rows:[{summary_line:good},{summary_line:bad},{test:'tests/good.json',story:'bad',summary_line:bad}]});
+  const [result]=readRunResults({root:f.root},{env:f.env});
+  assert.ok(result.stories.includes(good));assert.ok(!result.stories.includes(bad));
+  assert.ok(!result.summary.includes('✓'));
+  assert.deepEqual(result.states.map(row=>row.state),['passed','not run']);
 });

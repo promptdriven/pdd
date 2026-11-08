@@ -120,7 +120,7 @@ test('RELAY-I c: the lock owner adopts a claim, clears busy retry advice and ref
   } finally { r.resume.resolve(); result = await bounded(owner.done, 'owner claim result'); }
   assert.equal(result.code, 3, result.err);
   const out = result.json.rows[0];
-  assert.equal(out.request_id, CLAIMED); assert.equal(out.state, 'unknown'); assert.equal(out.calls, 'unknown');
+  assert.equal(out.request_id, CLAIMED); assert.equal(out.state, 'partial'); assert.equal(out.calls, 'unknown');
   assert.equal(out.busy, false); assert.equal(out.can_retry, false); assert.equal(out.next_step, null);
   assert.notEqual(out.why, 'This check was never sent.');
   assert.equal(r.fake.posts.filter(post => post.command === 'check').length, 0, 'an uncertain claimed check must never be replayed');

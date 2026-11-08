@@ -6,7 +6,7 @@ import { renderJson, renderText, summaryLine, exitCodeFor } from '../src/runtime
 import { harbor, fakeRuntime, portsFor, TOKEN } from './runtime-fake.mjs';
 const row = (state, story = 'one', extra = {}) => ({ state, story, title: story, test: `${story}.json`, refusals: [], ...extra });
 
-test('NO-VERDICT replay: unchanged Story scenario, every step and criterion', () => {
+test('NO-VERDICT replay: Story scenario with named result summaries, every step and criterion', () => {
   const scenario = JSON.parse(readFileSync(new URL('./runtime/check-no-verdict.json', import.meta.url)));
   const seen = new Set();
   assert.equal(scenario.steps.length, 19);
@@ -45,7 +45,7 @@ test('NO-VERDICT notices count Stories and preserve failure/open/busy precedence
   for (const state of ['refused', 'unknown']) assert.match(summaryLine([row(state, 'one', { busy: true })]), /: no verdict · /);
   for (const state of ['passed', 'failed']) {
     const output = renderJson({ rows: [row(state, 'one', { note: { message: 'stale' }, provider: { code: 'stale' }, time_limit: { code: 'stale' } })] });
-    assert.equal(output.rows[0].reason, null);
+    assert.equal(output.rows[0].reason?.code ?? null, state === 'passed' ? null : 'deadline');
   }
 
 });
@@ -126,7 +126,7 @@ test('NO-VERDICT lint advice survives initial refusal and unknown mapping and sa
     for (const output of [saved, savedAgain, initial, initialRead]) for (const r of JSON.parse(output.stdout.text).rows) {
       assert.equal(r.why, 'No verdict. [secret] <server path>');
       assert.equal(r.next_step, 'Tell the person. Never resend.');
-      assert.equal(r.state, state === 'unknown' ? 'not_run' : 'refused');
+      assert.equal(r.state, state === 'unknown' ? 'not run' : 'refused');
     }
     // Older batches did not persist next_step; they still read with the existing fallback.
     const oldPath = `${setup.state}/batches/${JSON.parse(initial.stdout.text).batch}/batch.json`;
@@ -136,7 +136,7 @@ test('NO-VERDICT lint advice survives initial refusal and unknown mapping and sa
     const older = makePorts();
     await runCheck({ words: [], options: { '--json': true, '--read': oldBatch.batch }, cwd: setup.repo }, older);
     for (const r of JSON.parse(older.stdout.text).rows) {
-      assert.equal(r.state, state === 'unknown' ? 'not_run' : 'refused');
+      assert.equal(r.state, state === 'unknown' ? 'not run' : 'refused');
       assert.equal(r.why, 'No verdict. [secret] <server path>');
       if (state === 'refused') assert.equal(r.next_step, null);
     }

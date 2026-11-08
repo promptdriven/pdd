@@ -121,7 +121,7 @@ test('2899 retained source cannot escape the run folder through a symlink',async
   assert.equal(result.exitCode,1,result.message);assert.equal(readFileSync(f.status,'utf8'),before);assert.deepEqual((await import('node:fs')).readdirSync(outside),[]);
 });
 
-test('2899 normal prompt publication records the owned head and prepared PR evidence remains stage specific',async t=>{
+test('2899 strict prompt publication records the owned head and prepared PR evidence remains stage specific',async t=>{
   const {fixture}=await import('./helpers/workflow-runner-fixture.mjs');
   const {stepDone,approveRun}=await import('../src/workflow-runner.mjs');
   const {cpSync}=await import('node:fs');const seeded=await evidenceFixture(t),f=await fixture(t,{name:'feature',agent:'codex'});
@@ -132,6 +132,7 @@ test('2899 normal prompt publication records the owned head and prepared PR evid
     });
     return f.ports.execFile(file,args,opts);
   }};
+  writeFileSync(join(f.source,'pdd.json'),JSON.stringify({strict_approvals:true}));
   const skill=join(f.source,'.agents/skills/pdd-feature');mkdirSync(skill,{recursive:true});
   writeFileSync(join(skill,'workflow.json'),JSON.stringify({version:2,areas:[
     {name:'story',steps:['scope'],optional:[],gate:'approve'},

@@ -9,6 +9,7 @@ import { stepDone, approveRun, cancelRun, runStatus } from '../src/workflow-runn
 // Build the held notice through the public workflow, not a saved-state edit.
 async function heldNotice(t) {
   const f = await fixture(t, { name: 'feature', agent: 'codex' });
+  writeFileSync(join(f.source, 'pdd.json'), JSON.stringify({strict_approvals:true}));
   f.ports.stateDir = join(f.ports.env.HOME, '.local', 'state', 'pdd');
   const skill = join(f.source, '.agents/skills/pdd-feature');
   mkdirSync(skill, { recursive: true });

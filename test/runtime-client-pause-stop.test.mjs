@@ -67,7 +67,7 @@ for (const cap of [undefined, '2']) for (const earlier of ['confirmed', 'unknown
     rmSync(join(repo, 'tests/unknown-item.json'));
     storyTest(repo, 'earlier');
   });
-  let made, checks = 0, paused = false; const answers = new Map();
+  let made, checks = 0, paused = false, interruptedAtEvidence = false; const answers = new Map();
   const fake = await fakeRuntime(t, (e, f) => {
     if (e.command === 'check') {
       checks++;
@@ -89,14 +89,19 @@ for (const cap of [undefined, '2']) for (const earlier of ['confirmed', 'unknown
     const saved = receipts(setup).find(r => r.path.endsWith('/batch.json'));
     const previous = saved && JSON.parse(saved.raw).rows.find(r => r.test === 'tests/earlier.json');
     if (paused && receipts(setup).some(r => r.path.endsWith('.admission.json'))
-      && previous?.state === (earlier === 'confirmed' ? 'passed' : 'unknown')) made.clock.interrupt();
+      && previous?.state === (earlier === 'confirmed' ? 'passed' : 'partial')) {
+      interruptedAtEvidence = true; made.clock.interrupt();
+    }
   };
   assert.equal(await runCheck({ cwd: setup.repo, words: [], options: { '--json': true } }, made.ports), 3);
   const report = JSON.parse(made.ports.stdout.text), previous = report.rows.find(r => r.test === 'tests/earlier.json'), current = report.rows.find(r => r.test === 'tests/place-order.json');
-  assert.equal(previous.state, earlier === 'confirmed' ? 'passed' : 'unknown');
+  assert.equal(previous.state, earlier === 'confirmed' ? 'passed' : 'partial');
+  assert.equal(interruptedAtEvidence, true, 'interrupt at the saved public evidence gate');
   assert.equal(previous.calls, earlier === 'confirmed' ? 1 : 'unknown');
   assert.match(current.reason.message, /^Stopped\./);
   const before = savedBatch(setup, report.batch), earlierSaved = before.rows.find(r => r.test === 'tests/earlier.json');
+  assert.equal(earlierSaved.state, previous.state);
+  assert.equal(earlierSaved.recovery_state, earlier === 'confirmed' ? 'passed' : 'unknown');
   assert.equal(earlierSaved.request_ids.length, 1);
   for (const [id, answer] of answers) assert.deepEqual(JSON.parse(readFileSync(join(setup.state, 'batches', report.batch, `${id}.json`))), answer);
   const leases = (await listRuntimeJobs({ stateDir: setup.state, origin: fake.origin })).jobs;

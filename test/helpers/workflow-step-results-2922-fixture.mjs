@@ -32,6 +32,7 @@ export async function setup(t, { completed = true } = {}) {
     { ...cases.input.selectedRun.areas[0], gate: 'approve' },
     { ...cases.input.selectedRun.areas[1], gate: 'pr', before: 'approve' }
   ] }));
+  writeFileSync(join(source, 'pdd.json'), JSON.stringify({strict_approvals:true}));
   writeFileSync(join(source, 'value.mjs'), 'export const value = 1;\n');
   git(source, 'add', '.'); git(source, 'commit', '-qm', 'Synthetic baseline');
   git(source, 'remote', 'add', 'origin', 'https://github.com/example/project.git');
