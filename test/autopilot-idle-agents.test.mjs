@@ -30,7 +30,7 @@ function assertHold(f, held) {
     assert.deepEqual(saved[key], held[key], `resume must preserve ${key}`);
 }
 function useAlertService(f, ports) {
-  const config = join(f.ports.env.HOME, '.config', 'pdd');
+  const config = join(f.ports.env.XDG_CONFIG_HOME, 'pdd');
   mkdirSync(config, {recursive: true});
   writeFileSync(join(config, 'autopilot-alerts.json'), JSON.stringify({v: 1, service: 'discord',
     url: 'https://discord.com/api/webhooks/123456789012345678/test-fixture'}));
@@ -56,6 +56,7 @@ async function exhaustIdle(f, tick, idle) {
 }
 async function setup(t, agent = 'claude', name = 'small-change') {
   const f = await fixture(t, {agent, name});
+  f.ports.env.XDG_CONFIG_HOME = join(f.base, 'idle-config');
   assert.equal((await f.run()).exitCode, 0);
   assert.equal((await runStatus({ref: '17', cwd: f.source}, f.ports)).exitCode, 0);
   const run = f.record();
