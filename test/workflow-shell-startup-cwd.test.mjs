@@ -90,11 +90,11 @@ test('2903: with a shell startup cd, the run layout opens, a retry reuses the sa
   assert.equal(f.herdr.tabs.filter(tab => tab.workspace_id === first.workspaceId && tab.label === 'story').length, 1);
 });
 
-test('2903: a real Herdr ID change still refuses, and start, approve, open and status say what changed and what to do', async t => {
+test('2903: a changed root with a live chat refuses, and start, approve, open and status say what changed and what to do', async t => {
   const f = await fixture(t);
   assert.equal((await f.run()).exitCode, 0);
   let run = f.record();
-  f.herdr.panes.find(p => p.pane_id === run.layout.paneId).terminal_id = 'replaced-terminal';
+  Object.assign(f.herdr.panes.find(p => p.pane_id === run.layout.paneId), {pane_id: 'replaced-pane', terminal_id: 'replaced-terminal'});
   const effects = () => f.herdr.calls.filter(a => (a[0] === 'tab' && a[1] === 'create') || (a[0] === 'pane' && a[1] === 'run')).length, before = effects();
   const { workspaceId, terminalId: savedTerminal } = run.layout;
   // Structure, not wording: the reason line has the code once and names the workspace, there is no JSON,
@@ -158,11 +158,12 @@ test('2903: an identity refusal names the tab that changed, and its Found line l
   await f.open();
   const legacy = await f.open({ run: { runId: f.input.runId, chats: [] }, stageId: 'plan' }).catch(error => error);
   assert.equal(legacy.code, 'herdr_layout_identity_changed', legacy.message); assert.equal(legacy.field, 'root_tab');
-  // A changed root terminal: the Found line shows the live Herdr IDs, not the folder of the moved shell.
+  // A changed root with a live chat: the Found line shows IDs, not the moved shell folder.
   const g = await liveLayout(t), elsewhere = join(g.base, 'elsewhere'); mkdirSync(elsewhere);
   g.herdr.shellStartFolder = elsewhere;
   const first = await g.open();
-  g.herdr.panes.find(p => p.pane_id === first.root.paneId).terminal_id = 'replaced-terminal';
+  Object.assign(g.herdr.panes.find(p => p.pane_id === first.root.paneId), {pane_id: 'replaced-pane', terminal_id: 'replaced-terminal'});
+  g.herdr.paneOf(first).agent = {agent: 'claude', agent_status: 'working'};
   const changed = await g.open({ run: ownerFor(g, first) }).catch(error => error);
   assert.equal(changed.field, 'root_pane', changed.message);
   const found = changed.message.split('\n').find(line => line.startsWith('Found '));
