@@ -209,8 +209,23 @@ Usage-limit text: `You've hit your … limit`, `You have reached your … limit`
 
 Limits: the screen is a fallback. A Claude error that comes after a tool call in the same turn is found only in the transcript. When no transcript is readable, a person's prompt that quotes a `⎿` error line on its second line can look like one. Codex wording that pdd does not know stays unknown. pdd reads a Codex time in its own local zone; when the Herdr server runs in another zone, `resetsAt` is off by the difference. A time without a date on the screen keeps `resetsAt` null, so status can still name that time after it has passed. A Claude error line so long that it wraps inside its limit sentence gives only the part on its first line as `message`.
 
+## Shared suite queue environment
+
+`chatLaunch` adds `queueEnv` to its existing result. It is a mapping with only
+present string values for `PDD_SUITE_QUEUE` and `PDD_VM_SUITE_LOCK`.
+`chatCommand` accepts optional `queueEnv = {}` for Codex command overrides.
+On every worker launch and resume, forward the caller's `PDD_SUITE_QUEUE` and
+`PDD_VM_SUITE_LOCK` values through the private launch environment; current named
+agent overrides retain their normal precedence. Unset either missing selector
+in the native child so an older Herdr server environment cannot select a
+different queue. Pass selected values to Codex commands with invocation-only
+`shell_environment_policy.set` overrides as well. Preserve all other shell
+policy entries. The [shared queue contract](test-suite-queue.prompt.md) owns
+selector precedence and admission.
+
 ## Dependencies
 
+- [Shared suite queue](test-suite-queue.prompt.md): required selector context for launch and resume environments.
 - [Herdr layout](workflow-herdr-layout.prompt.md): required authoring/generation/verification context for workspace ownership, allocation and its existing lock. The runner's replacement protocol is the caller contract above, not a recursively loaded dependency.
 - [Worktree assignment](workflow-worktree.prompt.md): load for closed-workspace recovery verification through `lookupIssueWorktree`, including the saved current branch.
 - [Workflow agents](workflow-agents.prompt.md#login-variables): required context for `LOGIN_VARIABLES`, the one per-kind list of login variables.
@@ -220,7 +235,7 @@ Limits: the screen is a fallback. A Claude error that comes after a tool call in
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"1ee6e379d9a9787f5f8e93f554975c26267bd45138c41678b0a8186f3ed65d2f","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+{"status":"draft","prose_sha256":"1ee6e379d9a9787f5f8e93f554975c26267bd45138c41678b0a8186f3ed65d2f","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
 ```
 </details>
 

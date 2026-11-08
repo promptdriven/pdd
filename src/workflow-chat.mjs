@@ -117,7 +117,7 @@ export function herdrCommand(ports = {}) {
 }
 
 // `unset`, `loginFile` and `program` come from chatLaunch: the caller's login and the run's agents.json command.
-export function chatCommand({ agent, cwd, messageFile, sessionId, resumeId, configDir, commonDir, sourceRoot, addDirs = [], unset = [], loginFile = null, program = null }) {
+export function chatCommand({ agent, cwd, messageFile, sessionId, resumeId, configDir, commonDir, sourceRoot, addDirs = [], unset = [], loginFile = null, program = null, queueEnv = {} }) {
   if (resumeId !== undefined && !validSessionId(resumeId)) throw problem('invalid_session_id', 'The saved native session id is not a UUID, so pdd will not resume it.');
   if (typeof cwd !== 'string' || !cwd) throw problem('invalid_worktree', 'The chat has no worktree folder, so pdd will not start it.');
   if (resumeId !== undefined) resumeId = quote(resumeId);
@@ -138,7 +138,8 @@ export function chatCommand({ agent, cwd, messageFile, sessionId, resumeId, conf
   // Codex builds each command's environment from shell_environment_policy; `set` applies after `inherit`.
   return [...env, ...start, ...(resumeId ? ['resume', resumeId] : []), '--no-daemon', '--dangerously-bypass-approvals-and-sandbox',
     '-c', quote(`projects={${tomlString(cwd)}={trust_level="trusted"}}`),
-    '-c', quote(`shell_environment_policy.set.PDD_BIN=${tomlString(PACKAGE_BIN)}`), '-c', quote(`shell_environment_policy.set.PDD_AGENT_SESSION=${tomlString('1')}`), ...message].join(' ');
+    '-c', quote(`shell_environment_policy.set.PDD_BIN=${tomlString(PACKAGE_BIN)}`), '-c', quote(`shell_environment_policy.set.PDD_AGENT_SESSION=${tomlString('1')}`),
+    ...Object.entries(queueEnv).flatMap(([name, value]) => ['-c', quote(`shell_environment_policy.set.${name}=${tomlString(value)}`)]), ...message].join(' ');
 }
 
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -180,13 +181,16 @@ export function chatLaunch({ run, agent, configDir, env = process.env }) {
   const entry = savedAgentEntry(run, agent, env), names = LOGIN_VARIABLES[agent] ?? [], home = homeVariable(agent), values = {};
   for (const name of names) if (typeof env[name] === 'string' && env[name] !== '') values[name] = env[name];
   for (const [name, value] of Object.entries(entry?.env ?? {})) if (name !== home && ENV_NAME.test(name)) values[name] = value;
-  const unset = [...names.filter(name => !Object.hasOwn(values, name)), ...(home && !configDir ? [home] : [])];
+  const queueNames = ['PDD_SUITE_QUEUE', 'PDD_VM_SUITE_LOCK'];
+  for (const name of queueNames) if (!Object.hasOwn(values, name) && typeof env[name] === 'string') values[name] = env[name];
+  const queueEnv = Object.fromEntries(queueNames.filter(name => Object.hasOwn(values, name)).map(name => [name, values[name]]));
+  const unset = [...queueNames.filter(name => !Object.hasOwn(values, name)), ...names.filter(name => !Object.hasOwn(values, name)), ...(home && !configDir ? [home] : [])];
   let loginFile = null;
   if (Object.keys(values).length) {
     loginFile = join(run.runDir, `login-${randomUUID()}.env`);
     writeFileSync(loginFile, Object.entries(values).map(([name, value]) => `export ${name}=${quote(value)}\n`).join(''), { mode: 0o600, flag: 'wx' });
   }
-  return { unset, loginFile, program: entry?.command ?? null };
+  return { unset, loginFile, program: entry?.command ?? null, queueEnv };
 }
 // One native launch or resume in a pane with the caller's login; a failed request deletes the login file at once.
 async function launchInPane(herdr, paneId, options, { run, env }) {

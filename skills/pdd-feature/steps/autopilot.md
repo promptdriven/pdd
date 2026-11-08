@@ -20,3 +20,7 @@ After a failed check, find its real cause and change the repair before another p
 A prompt that a test, command or prompt runs needs an interface block: draft it through pdd from the prompt text and save it; one that nothing runs needs none.
 
 A screen change gets before/after screenshots in the code PR.
+
+## Full-suite validation
+
+Use the current invoked pdd CLI: `pdd workflow suite --command "REPOSITORY FULL-SUITE COMMAND"`. Select the actual command from the repository. The shared machine queue admits three suites. Wait for its result; do not start a direct copy or mark slot waiting as stuck. Report a running suite failure or timeout with its specific cause and the `test-suite` alert kind. Focused checks keep their normal route. See `pdd workflow suite --help`.

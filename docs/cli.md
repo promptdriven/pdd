@@ -81,7 +81,7 @@ Run Autopilot commands inside the repo folder. Each repo has its own Autopilot o
 | `pdd autopilot alerts set --discord-channel ID [--token-command CMD]` | Use a Discord bot in one channel: read its token from stdin, or save CMD and run it at each send to get the token |
 | `pdd autopilot alerts test` | Send one test message and confirm that it was posted; for a bot, first check and show the bot name and channel name |
 | `pdd autopilot alerts clear` | Remove the alert destination from this machine |
-| `pdd autopilot alert --issue N --kind usage-limit\|resource\|interpreter\|interpreter-access\|access\|decision\|stuck\|long-running\|recovered --input - [--update]` | For the coordinator: record one alert and send it to this machine's destination |
+| `pdd autopilot alert --issue N --kind usage-limit\|resource\|interpreter\|interpreter-access\|access\|decision\|stuck\|test-suite\|long-running\|recovered --input - [--update]` | For the coordinator: record one alert and send it to this machine's destination |
 
 Outside a Git repository, `start`, `stop`, `status`, `add`, `off`, `observe`,
 `auto`, `trust` and `untrust` stop with exit code 1 and say: `This folder is not a
@@ -668,3 +668,31 @@ While a run waits for the interpreter, or an outage or an interpreter access pro
 - interpreter healthy and no outage open: waiting runs, from one issue or from many, are a problem of their own issues. Autopilot wakes each run once to retry. If the same step waits for the interpreter again, the coordinator follows the stuck rule.
 - the interpreter back after an outage: Autopilot first wakes one waiting run as a test, the oldest. Only when that run saves a new `pdd test` result that passed or failed does Autopilot send one recovery and wake the others, oldest first, within the worker cap. A test run that waits again or goes stuck is no proof, and neither is a test with no verdict within 60 minutes of its wake, also a wake that was never delivered. Each run is the test at most once in an outage.
 - A woken worker first runs `pdd test --read BATCH`. It resends only a check that surely gave no verdict: `pdd test --retry BATCH` only when pdd names it (busy or held checks), and else the Story's check once with `pdd test STORY --max-calls N`, for another check that did not run or an AI-service refusal. It never resends an unknown outcome or a failed check; when the read of an unknown outcome now shows that nothing was sent, it checks the Story once. Each wake reaches the run at most once for each park. `--max-calls`, strict mode and the merge rules do not change.
+
+## Shared full-suite queue
+
+`pdd workflow suite --command COMMAND [--timeout MIN]` runs the repository's full
+suite through one machine queue. Use the actual repository command, for example
+`pdd workflow suite --command "npm test"`. Focused tests can run normally.
+
+Three suites can execute at once across repositories and worktrees. Additional
+runs show "waiting for a test slot (position N)". Workflow status also shows the
+queue position. Queue waiting and suite execution pause Autopilot's stuck clock.
+A suite failure, interruption or execution timeout has its own reason and the
+`test-suite` alert kind. It does not mark the issue stuck.
+
+The execution timeout defaults to 30 minutes. `--timeout` accepts 1 to 120
+minutes. Waiting does not use that time. Output and exit status come from the
+suite; timeout returns 124. The runner stops the suite process group before
+releasing its slot.
+
+The default queue directory is `/tmp/pdd-full-suite-UID`, where UID is the local
+user ID. It is independent of repository, HOME and agent profile. All launchers
+on the machine must use the same queue directory. `PDD_SUITE_QUEUE` can select
+an absolute shared directory. `PDD_VM_SUITE_LOCK` selects `VALUE.queue` when
+`PDD_SUITE_QUEUE` is absent. `scripts/vm-suite-lock.sh` uses the same queue.
+Autopilot keeps both selectors in its saved environment, timers and coordinator
+and worker launches. Workflow status reports an unavailable queue with its cause.
+While queue activity is unknown, Autopilot withholds inactivity rules for the run
+and retries the read on later ticks.
+Queue records stay outside the repository and contain no commands or test output.

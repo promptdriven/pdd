@@ -45,6 +45,7 @@ const staleLine = ({ found, stale, staleSkills = [] }, version, cwd) => {
   return `PDD skills in ${found} ${stale === 'older' ? `are older than pdd ${version}` : `differ from the skills of pdd ${version}`}.${details ? ` ${details}.` : ''} For copies installed by pdd in user folders, run: pdd setup. For other copies, run: npx skills add promptdriven/pdd${[join(cwd, '.agents/skills'), join(cwd, '.claude/skills')].includes(found) ? '' : ' -g'} -a codex -a claude-code -y`;
 };
 const RUNNER_ROUTES = {
+  'workflow-suite': plan => ['runSuite', {command:plan.options['--command'], ...(plan.options['--timeout'] ? {timeout:Number(plan.options['--timeout'])} : {})}],
   'workflow-request-uptake': plan => ['acknowledgeRequest', { requestId: plan.operands[0], summary: plan.options['--summary'] }],
   'workflow-run': plan => ['startRun', { name: plan.operands[0], issue: plan.operands[1], agent: plan.options['--agent'] ?? 'codex', ...(plan.options['--base'] !== undefined ? { base: plan.options['--base'] } : {}), ...(plan.options['--adopt-corpus'] !== undefined ? { adoptCorpus: plan.options['--adopt-corpus'] } : {}), ...(plan.options['--draft'] !== undefined ? { draft: plan.options['--draft'] } : {}), ...(plan.options['--origin'] !== undefined ? {origin:plan.options['--origin']} : {}), ...(plan.options['--decision-id'] !== undefined ? {decisionId:plan.options['--decision-id']} : {}), ...(plan.options['--outcome'] !== undefined ? {outcome:plan.options['--outcome']} : {}), ...(plan.options['--through'] !== undefined ? {through:plan.options['--through']} : {}) }],
   'workflow-evidence-associate': plan => ['associateEvidenceWorkspace', { ref: plan.operands[0], workspace: plan.options['--workspace'], stage: plan.options['--stage'], tests: plan.options['--test'] }],
@@ -194,8 +195,9 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         return result.exitCode;
       } catch (error) { line(stderr, `The product command failed.${reason(error)}`); return 1; }
     }
-    case 'workflow-park': case 'workflow-yield': case 'workflow-request-uptake': case 'workflow-run': case 'workflow-done': case 'workflow-ask': case 'workflow-approve': case 'workflow-changes':
+    case 'workflow-suite': case 'workflow-park': case 'workflow-yield': case 'workflow-request-uptake': case 'workflow-run': case 'workflow-done': case 'workflow-ask': case 'workflow-approve': case 'workflow-changes':
     case 'workflow-cancel': case 'workflow-status': case 'workflow-open': case 'workflow-evidence': case 'workflow-evidence-associate': case 'workflow-card': {
+      if (plan.local === 'workflow-suite' && !plan.options['--command']?.trim()) { line(stderr, 'Use pdd workflow suite --command COMMAND [--timeout MIN].'); return 2; }
       if (plan.local === 'workflow-evidence-associate' && (!plan.options['--workspace']?.trim() || !plan.options['--stage'] || !plan.options['--test']?.length)) {
         line(stderr, 'Use pdd workflow evidence-associate ISSUE --workspace PATH --stage current|pr1 --test PATH... .'); return 2;
       }
@@ -217,7 +219,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       try {
         const runner = workflowRunner ?? await import('./workflow-runner.mjs');
         if (typeof runner[name] !== 'function') throw Error('Missing runner export');
-        const result = await runner[name]({ ...input, cwd, packageRoot }, { say: text => line(stderr, text), ...(['workflow-run', 'workflow-yield'].includes(plan.local) ? { env } : {}) });
+        const result = await runner[name]({ ...input, cwd, packageRoot, ...(plan.local === 'workflow-suite' ? {env} : {}) }, { say: text => line(plan.local === 'workflow-suite' ? stdout : stderr, text), ...(['workflow-run', 'workflow-yield'].includes(plan.local) ? { env } : {}) });
         if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255
           || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid runner reply');
         line(result.exitCode === 0 ? stdout : stderr, result.message);
