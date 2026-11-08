@@ -42,3 +42,26 @@ test('manual identity is absent before the first launcher and managed after migr
   await w.invoke('stop');
   assert.equal((await reviewerIdentity({ cwd: w.cwd, repository: w.repository }, w.commandPorts())).enabled, false);
 });
+
+test('a direct tick keeps managed authority when only the state filename supplies its root', async t => {
+  const w = await autopilotGithubWorld({ issues: 1 });
+  t.after(() => w.cleanup());
+  assert.equal((await w.invoke('start')).exitCode, 0);
+  const request = structuredClone(w.requests[0]);
+  const context = JSON.parse(request.contextJson); delete context.reviewer;
+  request.contextJson = JSON.stringify(context);
+  request.id = 'missing-authority';
+  w.agent = 'idle';
+  const { tickAutopilot } = await import('../src/autopilot-launcher.mjs');
+  const before = w.requests.length;
+  await tickAutopilot(w.stateFile(), { ...w.ports, stateRoot: undefined,
+    reconcileDependencyIntake: async (_input, { pending }) => {
+      await pending.save({ json: JSON.stringify({ requested: 'missing-authority' }) });
+      await pending.deliver({ requestJson: JSON.stringify(request) });
+      return { eligible: [], queued: [], skipped: [], pending: true };
+    },
+  });
+  assert.equal(w.requests.length, before);
+  assert.equal(w.state().dependencyPending.requested, 'missing-authority');
+  assert.equal(w.state().dependencyPending.delivered, undefined);
+});

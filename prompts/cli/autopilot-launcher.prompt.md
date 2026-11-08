@@ -35,7 +35,9 @@ authority matches and both its request expiry and observed expiry
 are strictly later than the current time. An unavailable or changed lease leaves
 the request pending under the existing delivery custody rules. A request without
 reviewer authority may use the unmanaged manual route only when a fresh local
-identity read confirms the checkout is unmanaged; absence from the request alone
+identity read beside the active state file confirms the checkout is unmanaged,
+including direct ticks where no separate stateRoot option is supplied; absence
+from the request alone
 never grants that route.
 
 Repository status reads current GitHub claims and the lease and shows all live

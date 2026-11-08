@@ -1254,7 +1254,7 @@ async function runTick(stateFile, ports, completion) {
         try {
           const expected = JSON.parse(JSON.parse(requestJson).contextJson).reviewer;
           const canSubmit = async () => {
-            if (!expected) return !await reviewerIdentity({ cwd: state.cwd, repository: state.repo }, { ...p, autopilotStateRoot: p.stateRoot });
+            if (!expected) return !await reviewerIdentity({ cwd: state.cwd, repository: state.repo }, { ...p, autopilotStateRoot: p.githubRoot });
             const current = state.reviewer;
             return current && current.machine === state.machine && current.coordinatorId === state.coordinatorId
               && ['generation', 'machine', 'coordinatorId'].every(key => current[key] === expected[key])
