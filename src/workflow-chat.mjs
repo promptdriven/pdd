@@ -892,14 +892,14 @@ export async function closeFinishedChats(run, ports = {}) {
       let native;
       try { native = (await herdr(['agent', 'get', chat.paneId])).result?.agent; if (!native) throw problem('invalid_agent_reply'); }
       catch (error) { if (error.code !== 'agent_not_found') throw error; }
-      const terminalChanged = rows[0].terminal_id !== chat.terminalId;
-      if (terminalChanged && (native || tab.label !== chat.area || chat.startUnconfirmed)) { keep('chat-identity'); continue; }
+      const terminalChanged = rows[0].terminal_id !== chat.terminalId, restarted = terminalChanged || chat.closed?.restartTerminal === true;
+      if (restarted && (native || tab.label !== chat.area || chat.startUnconfirmed)) { keep('chat-identity'); continue; }
       const agent = chat.agent ?? run.agent;
       if (native && (native.pane_id !== chat.paneId || native.agent !== agent ||
           validSessionId(chat.session?.id) && native.agent_session?.kind === 'id' && native.agent_session.value !== chat.session.id))
         { keep('agent-identity'); continue; }
       if (!ports.force && native && !['idle','done'].includes(native.agent_status)) { keep('agent-busy'); continue; }
-      if ((!ports.force || terminalChanged) && !native) await assertEmptyForeground(chat.paneId);
+      if ((!ports.force || restarted) && !native) await assertEmptyForeground(chat.paneId);
       let id = validSessionId(chat.session?.id) ? chat.session.id : null;
       if (!id && agent === 'codex') {
         if (native?.agent_session?.kind === 'id' && validSessionId(native.agent_session.value)) id = native.agent_session.value;
@@ -917,6 +917,7 @@ export async function closeFinishedChats(run, ports = {}) {
       if (terminalChanged) chat.terminalId = rows[0].terminal_id;
       if (id) chat.session = {agent, id};
       chat.closed ??= {at: now(), reason: ports.reason ?? (ports.force ? 'cancel' : endedRun(run) ? 'run-end' : 'area-end'), screen};
+      if (restarted) chat.closed.restartTerminal = true;
       chat.state = 'ended';
       await checkpoint(chat);
       const finalWorkspace = (await inventory('workspace')).find(w => w.workspace_id === chat.workspaceId);
@@ -930,8 +931,9 @@ export async function closeFinishedChats(run, ports = {}) {
       catch (error) { if (error.code !== 'agent_not_found') throw error; }
       if (finalNative && (finalNative.pane_id !== chat.paneId || finalNative.agent !== agent || id && finalNative.agent_session?.kind === 'id' && finalNative.agent_session.value !== id))
         { keep('agent-identity'); continue; }
+      if (restarted && finalNative) { keep('agent-identity'); continue; }
       if (!ports.force && finalNative && !['idle','done'].includes(finalNative.agent_status)) { keep('agent-busy'); continue; }
-      if (!ports.force && !finalNative) await assertEmptyForeground(chat.paneId);
+      if ((!ports.force || restarted) && !finalNative) await assertEmptyForeground(chat.paneId);
       if (chat.paneId === (ports.env ?? process.env).HERDR_PANE_ID) { keep('caller-pane'); continue; }
       try { await herdr(['tab', 'close', chat.tabId]); }
       catch (error) { if (error.code !== 'tab_not_found') throw error; }

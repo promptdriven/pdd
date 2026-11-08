@@ -56,3 +56,24 @@ for (const guard of ['absent', 'busy', 'split', 'grace', 'caller', 'unknown']) {
     assert.equal(f.herdr.calls.some(args=>['close','create','run'].includes(args[1])),false);
   });
 }
+
+for (const activity of ['foreground','native']) test(`3084 tidy: forced cancellation rechecks restarted ${activity} after checkpoint and on retry`, async t => {
+  const {cancelRun} = await import('../src/workflow-runner.mjs');
+  const {f, chat} = await finished(t),pane=f.herdr.paneOf(chat),herdr=f.ports.herdr;
+  pane.terminal_id += '-restart'; pane.agent=null;
+  let raced=false;
+  f.ports.herdr=async args=>{
+    if (!raced && args[0]==='workspace' && args[1]==='list' && f.record().chats[0].closed) {
+      raced=true;
+      if (activity==='native') pane.agent={agent:'claude',agent_status:'working',agent_session:{kind:'id',value:chat.session.id}};
+      pane.processInfo={pane_id:chat.paneId,shell_pid:100,foreground_process_group_id:200,foreground_processes:[{pid:200,name:'node'}]};
+    }
+    return herdr(args);
+  };
+  const out=await cancelRun({ref:'17',cwd:f.source},f.ports);
+  assert.equal(out.exitCode,0,out.message); assert.equal(raced,true);
+  assert.ok(f.herdr.paneOf(chat),'restart-foreground-retained');
+  assert.equal(f.record().chats[0].closed.confirmedAt,undefined);
+  assert.equal((await cancelRun({ref:'17',cwd:f.source},f.ports)).exitCode,0);
+  assert.ok(f.herdr.paneOf(chat),'restart-retry-retained');
+});

@@ -268,7 +268,7 @@ time. Close only after 15 minutes from that boundary and from `openedAt`.
 Never park the current live chat, including a gate, question or failed chat.
 Never close the caller's `HERDR_PANE_ID`. Require complete valid live inventory:
 the saved workspace must match the run checkout and clone, and its saved tab
-must have exactly the saved pane. After a restart, terminal-only drift may be refreshed when the saved area tab label still matches, agent absence is authoritative, and the foreground is an idle shell. Save that terminal identity before close and recheck it after the checkpoint. A live agent with a different terminal, a reused ID, split tab,
+must have exactly the saved pane. After a restart, terminal-only drift may be refreshed when the saved area tab label still matches, agent absence is authoritative, and the foreground is an idle shell. Save that terminal identity before close and recheck it after the checkpoint. A refreshed terminal requires authoritative agent absence and an empty shell at both checks, including forced cancellation. Persist `closed.restartTerminal: true` with its close intent so these guards also apply on retries. A live agent with a different terminal, a reused ID, split tab,
 foreign workspace or unknown inventory is retained with a reason. No live-folder
 comparison establishes pane identity. Inspect the agent immediately before
 closing: idle/done is safe; working/blocked/unknown stays open. Confirmed agent
@@ -386,7 +386,7 @@ The stable saved name and pane let tools inspect and interrupt the chat with
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"a2320e91bd72be3ba94d6df4843f156ec2df2ebece11b4ec39288c068ebda60b","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+{"status":"draft","prose_sha256":"1657bd4d1099522f7fd692cd0ae86939e2d593284276c48d93cfe6cdd439062f","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
 ```
 </details>
 
