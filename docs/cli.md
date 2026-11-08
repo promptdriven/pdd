@@ -651,6 +651,7 @@ While a run waits for the interpreter, or an outage or an interpreter access pro
 Environment validation stops show the next attempt and UTC time in workflow status.
 A person can request another try by removing the observed `pdd:stuck` label or
 posting a trusted retry comment, such as `Please retry the failed validation.`
+Diagnostic mentions and negative continuation instructions do not request a retry.
 The next tick offers the signal through the existing coordinator packet. The
 coordinator passes its exact retry text with `pdd workflow changes N`. Confirmed
 worker delivery resumes only the failed step and keeps completed work, gates,

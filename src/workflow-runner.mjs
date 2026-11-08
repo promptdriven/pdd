@@ -2756,8 +2756,17 @@ async function deliveryJournal(run, p, action, { recover = true } = {}) {
 
 // Shared lexical admission for a person's explicit continuation request. Trust belongs to the caller.
 export function isRetryRequest(text) {
-  const value = String(text ?? '').trim();
-  return /(?:^|[.;!,:\n]\s*)(?:(?:please\s+)|(?:(?:can|could|would)\s+you\s+(?:please\s+)?))?(?:retry|resume|try\s+again)\b/i.test(value);
+  const value = String(text ?? '').trim().replace(/\s+/g, ' ');
+  // Negative continuation instructions win, even after an otherwise direct request.
+  if (/\b(?:do\s+not|don['’]t|never|must\s+not|should\s+not|cannot|can['’]t|not|no)\b[^.;!?]*\b(?:retry|resume|try\s+again|continue|proceed|restart)\b/i.test(value)) return false;
+  // A repaired-machine preface may precede the command. Arbitrary diagnostic or log
+  // prefixes cannot turn a quoted/reported command into the person's instruction.
+  // Whitespace also admits the saved one-line form of a multiline repair request.
+  const request = value.replace(/^(?:the\s+)?(?:machine|host|environment|server|disk|tool)\s+(?:(?:is|was|has\s+been)\s+)?(?:fixed|repaired|healthy|ready|available|restored)(?:\s+now)?[.;!,:\s]+/i, '');
+  const command = request.split(/[.;!]/, 1)[0].trim();
+  // Admit commands with known continuation targets, not noun phrases such as
+  // "retry budget" or status reports such as "resume remains unsafe".
+  return /^(?:please\s+|(?:can|could|would)\s+you\s+(?:please\s+)?)?(?:retry|resume|try\s+again)(?:\s+(?:(?:(?:the|this|that)\s+)?(?:(?:failed|original|retained|stuck|paused)\s+)?(?:validation(?:\s+step)?|step|run|work|check|tests?|build|verify|formal)|it))?(?:\s+(?:again|now|please))?(?:\s+(?:from\s+(?:the\s+)?retained\s+evidence|using\s+(?:the|its)\s+original\s+command|after\s+(?:the\s+)?(?:machine|host|environment)\s+repair))?\s*\??$/i.test(command);
 }
 const isPersonRetry = (run, text) => run.state === 'stuck' && isRetryRequest(text);
 async function personRetryRefusal(run, text, p, savedRetry = false) {
@@ -2853,7 +2862,7 @@ Nothing was sent to the chat.` };
         deferredEnvironment.add(entry.id);
         continue;
       }
-      const personRetry = entry.kind === 'change' && run.state === 'stuck' && (entry.personRetry === true || isRetryRequest(entry.text));
+      const personRetry = entry.kind === 'change' && run.state === 'stuck' && isRetryRequest(entry.text);
       const retryRefusal = personRetry && await personRetryRefusal(run, entry.text, p, true);
       if (retryRefusal) return fail(retryRefusal);
       const retryTarget = environmentRecovery(run)?.step;
