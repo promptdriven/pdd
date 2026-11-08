@@ -887,17 +887,19 @@ export async function closeFinishedChats(run, ports = {}) {
         continue;
       }
       if (!tab || tab.workspace_id !== chat.workspaceId || rows.length !== 1 || rows[0].workspace_id !== chat.workspaceId ||
-          rows[0].pane_id !== chat.paneId || !chat.terminalId || rows[0].terminal_id !== chat.terminalId)
+          rows[0].pane_id !== chat.paneId || !chat.terminalId || !rows[0].terminal_id)
         { keep('chat-identity'); continue; }
       let native;
       try { native = (await herdr(['agent', 'get', chat.paneId])).result?.agent; if (!native) throw problem('invalid_agent_reply'); }
       catch (error) { if (error.code !== 'agent_not_found') throw error; }
+      const terminalChanged = rows[0].terminal_id !== chat.terminalId;
+      if (terminalChanged && (native || tab.label !== chat.area || chat.startUnconfirmed)) { keep('chat-identity'); continue; }
       const agent = chat.agent ?? run.agent;
       if (native && (native.pane_id !== chat.paneId || native.agent !== agent ||
           validSessionId(chat.session?.id) && native.agent_session?.kind === 'id' && native.agent_session.value !== chat.session.id))
         { keep('agent-identity'); continue; }
       if (!ports.force && native && !['idle','done'].includes(native.agent_status)) { keep('agent-busy'); continue; }
-      if (!ports.force && !native) await assertEmptyForeground(chat.paneId);
+      if ((!ports.force || terminalChanged) && !native) await assertEmptyForeground(chat.paneId);
       let id = validSessionId(chat.session?.id) ? chat.session.id : null;
       if (!id && agent === 'codex') {
         if (native?.agent_session?.kind === 'id' && validSessionId(native.agent_session.value)) id = native.agent_session.value;
@@ -912,6 +914,7 @@ export async function closeFinishedChats(run, ports = {}) {
         screen = join(folder, `${chat.area}-${chat.startedAt}.txt`);
         writeFileSync(screen, text, {mode: 0o600});
       } catch { /* A saved native session retains history if screen capture fails. */ }
+      if (terminalChanged) chat.terminalId = rows[0].terminal_id;
       if (id) chat.session = {agent, id};
       chat.closed ??= {at: now(), reason: ports.reason ?? (ports.force ? 'cancel' : endedRun(run) ? 'run-end' : 'area-end'), screen};
       chat.state = 'ended';

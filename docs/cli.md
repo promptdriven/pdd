@@ -490,7 +490,7 @@ senders at their own source; PDD does not change those programs.
 
 Finished chats close after a 15-minute grace period when they are idle and have a
 saved native session. Each new start and each Autopilot tick tries cleanup.
-`pdd workflow tidy` also retries cleanup. Status and view close nothing. A manual
+`pdd workflow tidy` also retries cleanup. It refreshes restart terminal IDs only for matching area tabs and panes with confirmed idle shells. Missing or foreign workspaces stay protected. List status suggests tidy only when its read-only eligibility check finds a chat it can close. Status and view close nothing. A manual
 start on a completed issue keeps its history and starts a fresh run. A replaced
 run remains discoverable from its retained worktree; its agent sees the old and
 replacement run IDs and must stop. Run `pdd workflow cancel ISSUE` from that old

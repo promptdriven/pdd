@@ -268,7 +268,7 @@ time. Close only after 15 minutes from that boundary and from `openedAt`.
 Never park the current live chat, including a gate, question or failed chat.
 Never close the caller's `HERDR_PANE_ID`. Require complete valid live inventory:
 the saved workspace must match the run checkout and clone, and its saved tab
-must have exactly the saved pane and terminal ID. A reused ID, split tab,
+must have exactly the saved pane. After a restart, terminal-only drift may be refreshed when the saved area tab label still matches, agent absence is authoritative, and the foreground is an idle shell. Save that terminal identity before close and recheck it after the checkpoint. A live agent with a different terminal, a reused ID, split tab,
 foreign workspace or unknown inventory is retained with a reason. No live-folder
 comparison establishes pane identity. Inspect the agent immediately before
 closing: idle/done is safe; working/blocked/unknown stays open. Confirmed agent

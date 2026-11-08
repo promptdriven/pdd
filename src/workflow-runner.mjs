@@ -3446,7 +3446,7 @@ Nothing was sent to the chat.` };
 function cleanupLines(run) {
   const closed = (run.chats ?? []).filter(chat => Number.isFinite(chat.closed?.confirmedAt)).map(chat => chat.area);
   const pending = (run.chats ?? []).filter(chat => chat.closed && !Number.isFinite(chat.closed.confirmedAt)).map(chat => chat.area);
-  return [...(pending.length ? [`Close pending: ${pending.join(', ')}. Retry: pdd workflow tidy`] : []), ...(closed.length ? [`Closed chats: ${closed.join(', ')}. Reopen one: pdd workflow open ${run.number} ${closed[0]}`] : []),
+  return [...(pending.length ? [`Close pending: ${pending.join(', ')}`] : []), ...(closed.length ? [`Closed chats: ${closed.join(', ')}. Reopen one: pdd workflow open ${run.number} ${closed[0]}`] : []),
     ...(run.cleanupKept ?? []).map(item => `Kept open: ${item.area} (${item.reason})`)];
 }
 function stoppedRunMessage(run) {
@@ -3464,14 +3464,15 @@ function endedChatHelp(run) {
   return done(lines.join('\n'));
 }
 async function cleanupRunChats(run, p, options = {}) {
-  const snapshot = structuredClone(run);
+  const snapshot = structuredClone(run), savedTerminals = new Map((run.chats ?? []).map(chat => [chat.paneId, chat.terminalId]));
   for (const chat of finishedChats(snapshot)) chat.endedAt ??= finishedAt(snapshot,chat);
   const result = await closeFinishedChats(snapshot, {...p, ...options, checkpoint: async (chat, layout) => {
     commitRun(run, p, latest => {
       if (chat) {
-        const target = latest.chats?.find(item => sameChat(item,chat) && item.terminalId === chat.terminalId);
+        const target = latest.chats?.find(item => sameChat(item,chat) && item.terminalId === savedTerminals.get(chat.paneId));
         if (!target || !options.force && !finishedChats(latest).includes(target)) throw Object.assign(Error('Cleanup target changed'), {code:'workflow_progress_refused'});
         Object.assign(target, structuredClone(chat));
+        savedTerminals.set(chat.paneId, chat.terminalId);
       }
       if (layout) latest.layout = structuredClone(layout);
     });
@@ -3763,11 +3764,19 @@ async function listStatus(runs, { json, cancelled, scope, snapshotOnly=false }, 
   const shown = all.filter(item => cancelled || item.group !== 'cancelled')
     .sort((a, b) => GROUPS.indexOf(a.group) - GROUPS.indexOf(b.group) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
   let herdr = null, inventory = [];
-  try { herdr = {...await paneUsage({...p,onPaneUsage:rows=>{inventory=rows;}}), finishedOpen: runs.reduce((n,run) => n + finishedChats(run).filter(chat => !Number.isFinite(chat.closed?.confirmedAt)).length,0)}; } catch {}
+  try {
+    herdr = {...await paneUsage({...p,onPaneUsage:rows=>{inventory=rows;}}), finishedOpen: 0};
+    for (const run of runs) {
+      if (readRunOwnership(run.runDir,p)) continue;
+      const snapshot = structuredClone(run);
+      snapshot.chats = (snapshot.chats ?? []).filter(chat => !Number.isFinite(chat.closed?.confirmedAt));
+      herdr.finishedOpen += (await closeFinishedChats(snapshot, {...p, dryRun:true})).closed;
+    }
+  } catch {}
   if (json) return done(JSON.stringify({ herdr, runs: shown.map(({ line, ...item }) => item) }, null, 2));
   if (!shown.length) return done([`No pdd runs ${scope}.${hidden ? ` ${hidden} cancelled run${hidden > 1 ? 's' : ''} hidden; add --cancelled to see ${hidden > 1 ? 'them' : 'it'}.` : ''}`, 'Start one with: pdd workflow run NAME ISSUE'].join('\n'));
   const cards = shown.filter(item => item.waitingForStory).map(item => item.ref);
-  return done([...(herdr ? [`Herdr session pdd: ${herdr.panes} of ${herdr.budget} panes. ${herdr.finishedOpen} finished chats: pdd workflow tidy. ${p.describePaneOwners(inventory)}`] : []), ...shown.map(item => item.line),
+  return done([...(herdr ? [`Herdr session pdd: ${herdr.panes} of ${herdr.budget} panes. ${herdr.finishedOpen} eligible finished chats.${herdr.finishedOpen ? ' Run pdd workflow tidy.' : ''} ${p.describePaneOwners(inventory)}`] : []), ...shown.map(item => item.line),
     ...(cards.length ? [`Waiting for Story approval: ${cards.join(', ')}. Show each card: pdd workflow card N.`] : []),
     ...(hidden ? [`${hidden} cancelled run${hidden > 1 ? 's' : ''} hidden; add --cancelled to see ${hidden > 1 ? 'them' : 'it'}.`] : []),
     `Review without resuming: pdd workflow view ${shown[0].ref}`, `Open one: pdd workflow open ${shown[0].ref}`].join('\n'));

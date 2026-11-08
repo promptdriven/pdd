@@ -683,7 +683,7 @@ steps.
 Use the chat owner's finished-chat cleanup at area handoff, replacement, cancel,
 and sweep. Handoff records the earlier chat's endedAt before starting the next
 area, then tries cleanup. Completion records endedAt for all chats; status and
-view perform no Herdr close. `tidyRuns({dryRun=false,cwd}, ports)` returns the
+view perform no Herdr close. List status counts only chats eligible under the same read-only cleanup checks (including grace, caller protection, restart-aware identity, session and occupancy), skips busy run owners, and suggests tidy only when that count is positive. Refreshing a terminal during cleanup must compare the saved pre-refresh identity at the checkpoint. `tidyRuns({dryRun=false,cwd}, ports)` returns the
 usual exitCode/message plus `closed` and `kept` counts. Optional native inputs `graceMs`, `need` and `timeBudgetMs` support pressure and bounded tick sweeps; timeBudgetMs limits monotonic elapsed milliseconds between candidates, never interrupts a close already underway. Sweep all machine-indexed
 runs including archived runs, globally oldest finished chat first and stopping budget cleanup as soon as the next allocation fits, taking the existing
 run lock and skipping busy/uncertain owners. Include ended runs with outstanding
