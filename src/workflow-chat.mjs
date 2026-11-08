@@ -9,7 +9,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const PACKAGE_BIN = join(dirname(dirname(fileURLToPath(import.meta.url))), 'bin/pdd.mjs');
 import { promisify } from 'node:util';
-import { PDD_HERDR_SESSION, withHerdrLayoutLock, openHerdrRunLayout, closeHerdrRunLayout, samePath } from './workflow-herdr-layout.mjs';
+import { PDD_HERDR_SESSION, withHerdrLayoutLock, openHerdrRunLayout, recoverHerdrRunLayout, closeHerdrRunLayout, closeHerdrRepoLayoutIfIdle, samePath } from './workflow-herdr-layout.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
 import { tomlString } from './toml-string.mjs';
 import { lookupIssueWorktree } from './workflow-worktree.mjs';
@@ -623,9 +623,8 @@ export async function rebuildClosedChat({ run, chat, message, resumeMessage }, p
     }
     return Boolean(workspace);
   };
-  if (await present()) return false;
   return withHerdrLayoutLock(async () => {
-    if (await present()) return false;
+    await present();
     if (typeof ports.checkpoint !== 'function') throw problem('checkpoint_required');
     if (!isFolder(run.root)) throw problem('invalid_worktree', `The saved worktree folder "${run.root}" is missing. Restore that folder before running pdd workflow open ${run.number}.`);
     const verified = await lookupIssueWorktree({cwd: run.sourceRoot, runId: run.runId, branch: run.branch}, ports);
@@ -633,6 +632,20 @@ export async function rebuildClosedChat({ run, chat, message, resumeMessage }, p
     if (verified.state !== 'ready' || !samePath(a?.worktreePath, run.root) || !samePath(a?.commonDir, run.commonDir)
       || a?.repository?.toLowerCase() !== run.repo.toLowerCase() || a?.runId !== run.runId)
       throw problem('invalid_worktree', 'The saved worktree assignment cannot be verified. Inspect this run before reopening it.');
+    const custody = layout => layout.root ? {repoWorkspaceId: layout.repoWorkspaceId,
+      ...(Object.hasOwn(layout, 'repoRoot') ? {repoRoot: layout.repoRoot} : {}),
+      ...(Object.hasOwn(layout, 'repoCreateIntent') ? {repoCreateIntent: layout.repoCreateIntent} : {}), workspaceId: layout.workspaceId, ...layout.root} : layout;
+    const recovered = await recoverHerdrRunLayout({run, cwd: run.root, commonDir: run.commonDir}, {
+      command: herdr, checkpoint: layout => ports.checkpoint(null, custody(layout))
+    });
+    if (!recovered.workspaceClosed && await present()) {
+      const pane = recovered.panes.find(p => p.tab_id === chat.tabId && p.pane_id === chat.paneId);
+      if (pane && pane.terminal_id !== chat.terminalId) {
+        chat.terminalId = pane.terminal_id;
+        await ports.checkpoint(chat, null);
+      }
+      return false;
+    }
     const agent = chat.agent ?? run.agent, configDir = expandHome(chat.configDir, ports.env ?? process.env);
     let resumeId = validSessionId(chat.session?.id) ? chat.session.id : null;
     if (chat.startUnconfirmed) {
@@ -640,9 +653,6 @@ export async function rebuildClosedChat({ run, chat, message, resumeMessage }, p
       if (own.kind !== 'match' || resumeId && own.id !== resumeId) throw problem('chat_start_unconfirmed', 'Inspect the saved unconfirmed session before rebuilding its workspace.');
       resumeId = own.id;
     }
-    const custody = layout => layout.root ? {repoWorkspaceId: layout.repoWorkspaceId,
-      ...(Object.hasOwn(layout, 'repoRoot') ? {repoRoot: layout.repoRoot} : {}),
-      ...(Object.hasOwn(layout, 'repoCreateIntent') ? {repoCreateIntent: layout.repoCreateIntent} : {}), workspaceId: layout.workspaceId, ...layout.root} : layout;
     const layout = await openHerdrRunLayout({repository: run.repo, issueNumber: run.number, runId: run.runId,
       workflowName: run.workflow, stageId: chat.area, sourceRoot: run.sourceRoot, cwd: run.root, commonDir: run.commonDir, run},
     {command: allocationCommand(herdr,ports), directory: ports.layoutDirectory, execFile: ports.execFile, beforeCreate: need => ensurePaneBudget(need, {...ports,sweepFinished:null}),

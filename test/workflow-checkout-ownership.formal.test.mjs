@@ -1,5 +1,6 @@
 import './helpers/test-home.mjs';
 // Oracle: approved retry-with-live-herdr-layout.md, Rules to check and AC2–5.
+// Issue 3084 permits terminal refresh in an unchanged layout.
 // Registry contents have no authority; parent adoption does not confer close custody.
 // Cleanup also applies the #2709 repair contract: reconcile a pending close only
 // with verified original ownership and safe shell occupancy.
@@ -16,7 +17,7 @@ const repository='example/project';
 const copy=x=>structuredClone(x);
 const registries=['ready','intent','refused','malformed'];
 // area-shell-moved: the area tab's shell is in another folder (a shell startup cd); a live folder is not identity (2903).
-const openStates=['unique','absent','already-open','duplicate-run','wrong-clone','wrong-linked','area-shell-moved','duplicate-area','changed-root'];
+const openStates=['unique','absent','already-open','duplicate-run','wrong-clone','wrong-linked','area-shell-moved','duplicate-area','restarted-terminal'];
 // Exhaustive Cartesian products: open 4 registry states × 2 inventory orders ×
 // 2 independent clones × 9 live states = 144; parent labels 2×2×4 = 16;
 // cleanup 2×2×7 = 28. Total 188 seeded worlds, real public module boundaries.
@@ -85,9 +86,9 @@ test('bounded live checkout ownership: all 188 seeded worlds',async()=>{
    if(state==='wrong-linked')row.worktree.is_linked_worktree=false;
    if(state==='area-shell-moved')addArea('moved',clones[1-target].cwd);
    if(state==='duplicate-area'){addArea('one',w.c.cwd);addArea('two',w.c.cwd);}
-   if(state==='changed-root')w.h.panes.find(p=>p.workspace_id===id).terminal_id='changed';
+   if(state==='restarted-terminal')w.h.panes.find(p=>p.workspace_id===id).terminal_id='changed';
    if(state==='unique')addArea('existing',w.c.cwd);
-   const forbidden=['duplicate-run','wrong-clone','wrong-linked','duplicate-area','changed-root'].includes(state);
+   const forbidden=['duplicate-run','wrong-clone','wrong-linked','duplicate-area'].includes(state);
    if(forbidden){await assert.rejects(w.open(),e=>e.code==='herdr_layout_identity_changed',state);assert.deepEqual(w.mutate(),[],`${state}: uncertainty forbids effects`);}
    else {
     let result;await assert.doesNotReject(async()=>{result=await w.open();},`${registry}/${order}/${target}/${state}: approved live identity succeeds`);
@@ -98,6 +99,7 @@ test('bounded live checkout ownership: all 188 seeded worlds',async()=>{
     assert.ok(w.checkpoints>0,'verified returned identities checkpointed');
     if(state==='unique'){assert.equal(result.tabId,'area-existing');assert.deepEqual(w.mutate(),[]);}
     else if(state==='area-shell-moved'){assert.equal(result.tabId,'area-moved','the area tab is adopted although its shell moved');assert.deepEqual(w.mutate(),[]);}
+    else if(state==='restarted-terminal'){assert.equal(result.root.terminalId,'changed');assert.equal(result.workspaceId,id);assert.deepEqual(w.mutate().map(a=>a.slice(0,2).join(':')),['tab:create']);}
     else assert.deepEqual(w.mutate().map(a=>a.slice(0,2).join(':')),['worktree:open','tab:create']);
     // Replay adopts the same workspace/area and does not allocate duplicates.
     const n=w.mutate().length;w.input.run.layout={...result,phase:'ready'};

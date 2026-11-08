@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: 9646f6f9761b11af5adbe7eadd4d73577d208d540b5a0ad36f3971703fc6a550).
+// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: 370d00768997a9ebc00522a48dadc87e627029f3757f674003557ca6010edb5d).
 import { mkdir, lstat, realpath } from 'node:fs/promises';
 import { openSync, closeSync, readFileSync, writeFileSync, fsyncSync, unlinkSync, lstatSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -46,14 +46,14 @@ function readable(value, prefix = '', noise = NOISE) {
 }
 const detail = (name, value, noise) => { const text = `${name}: ${readable(value, '', noise).join(', ') || 'nothing'}`; return text.length > 500 ? `${text.slice(0, 499)}…` : text; };
 // The run expected one value and live Herdr shows another. The first line says what changed and what to do;
-// the escaped values follow on later lines. Repair never closes or deletes anything.
+// the escaped values follow on later lines. Refusal preserves the workspace.
 // Both lines leave out the same fields; only a refusal of pdd's saved folder (`parent_custody`) passes NOISE to show it.
 function identityChanged(workspaceId, field, expected, found, noise = LIVE_NOISE) {
   const what = field === 'workspace_id' ? (Array.isArray(found) || workspaceId === null ? 'more than one workspace shows this run worktree' : 'the saved workspace is gone')
     : CHANGES[field] ?? `its ${field} changed`;
   const where = id(workspaceId) ? `Herdr session ${PDD_HERDR_SESSION}, workspace ${shown(workspaceId)}` : `Herdr session ${PDD_HERDR_SESSION}`;
   // The message starts with the code, as every other layout error does (callers show it once; tests match on it).
-  return Object.assign(new Error([`herdr_layout_identity_changed: ${where}: ${what}. Look at ${id(workspaceId) ? 'that workspace' : 'its workspaces'} in Herdr, undo the change, then try again.`,
+  return Object.assign(new Error([`herdr_layout_identity_changed: ${where}: ${what}. Look at ${id(workspaceId) ? 'that workspace' : 'its workspaces'} in Herdr, then retry when its live chat has ended or its ownership can be verified.`,
     detail(`Expected ${field}`, expected, noise), detail(`Found ${field}`, found, noise)].join('\n')), { code: 'herdr_layout_identity_changed', field, expected, found });
 }
 async function ensureDirectory(directory) {
@@ -162,6 +162,49 @@ async function attachCreatedParent(command, workspaceId, parentRoot, commonDir, 
   await assertParentRoot(command, workspaceId, root, parentRoot);
   return row;
 }
+// Caller holds the layout lock. Workspace identity is checked before any recovery effect.
+export async function recoverHerdrRunLayout({run, cwd, commonDir}, {command, checkpoint}) {
+  const saved = run?.layout;
+  if (!saved?.workspaceId) return {workspaceClosed: false, root: null, panes: []};
+  const rows = await inventory(command);
+  if (!rows.some(row => row.workspace_id === saved.workspaceId)) return {workspaceClosed: true, root: null, panes: []};
+  ownedWorkspace(rows, {...saved, commonDir, runId: run.runId}, cwd);
+  const matches = rows.filter(row => runWorkspace(row, cwd, commonDir));
+  if (matches.length > 1) throw identityChanged(null, 'workspace_id', 'one run workspace', matches.map(w => w.workspace_id));
+  const panes = await paneRows(command, saved.workspaceId), tabs = await tabsFor(command, saved.workspaceId);
+  const root = saved.root ?? saved;
+  const checkpointRoot = actual => {
+    const {tabId, paneId, terminalId, rootLabel, ...custody} = saved;
+    return checkpoint({...custody, root: actual});
+  };
+  // Incomplete legacy custody is still handled by the normal root-discovery rules.
+  if (![root.tabId, root.paneId, root.terminalId].every(id)) return {workspaceClosed: false, root: null, panes};
+  const tab = tabs.find(t => t.tab_id === root.tabId), group = panes.filter(p => p.tab_id === root.tabId);
+  const pane = group.find(p => p.pane_id === root.paneId);
+  if (tab && tab.label === (root.rootLabel ?? '1') && group.length === 1 && pane) {
+    const actual = {...rootFields(pane), rootLabel: tab.label};
+    if (pane.terminal_id !== root.terminalId || root.rootLabel === undefined)
+      await checkpointRoot(actual);
+    return {workspaceClosed: false, root: actual, panes};
+  }
+  // Absence of an agent must be authoritative for every pane, including historical areas.
+  for (const pane of panes) {
+    try {
+      await command(['agent', 'get', pane.pane_id]);
+    } catch (error) {
+      if (error.code === 'agent_not_found') continue;
+      throw error;
+    }
+    throw identityChanged(saved.workspaceId, 'root_pane', root, group.length === 1 ? group[0] : group);
+  }
+  if ((run.chats ?? []).some(chat => chat.workspaceId === saved.workspaceId && chat.startUnconfirmed && chat.state !== 'ended'))
+    throw problem('chat_start_unconfirmed');
+  await checkpointRoot(structuredClone(root));
+  const reply = await command(['workspace', 'close', saved.workspaceId]);
+  if (reply.id !== 'cli:workspace:close' || reply.result?.type !== 'ok'
+    || (await inventory(command)).some(row => row.workspace_id === saved.workspaceId)) throw problem('workspace_close_unconfirmed');
+  return {workspaceClosed: true, root: null, panes: []};
+}
 async function runRoot(command, workspaceId, owner, opened, stageId) {
   const panes = await paneRows(command, workspaceId), tabs = await tabsFor(command, workspaceId);
   const saved = owner?.layout?.workspaceId === workspaceId ? owner.layout : null;
@@ -177,14 +220,14 @@ async function runRoot(command, workspaceId, owner, opened, stageId) {
   if (!pane || ![pane.tab_id, pane.pane_id, pane.terminal_id].every(id))
     throw identityChanged(workspaceId, root ? 'root_pane' : 'root_tab', root ? {tabId: root.tabId, paneId: root.paneId, terminalId: root.terminalId} : 'one shell tab',
       pane ?? panes.find(p => p.pane_id === root?.paneId) ?? null);
-  return rootFields(pane);
+  return {...rootFields(pane), rootLabel: tabs.find(t => t.tab_id === pane.tab_id)?.label};
 }
 
 export async function openHerdrRunLayout(input, ports) {
   const {command, checkpoint} = ports;
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(input.repository ?? '') || !Number.isSafeInteger(input.issueNumber) || input.issueNumber < 1
     || ![input.runId, input.workflowName, input.stageId, input.commonDir].every(id) || typeof checkpoint !== 'function') throw problem('invalid_herdr_layout_input');
-  const owner = input.run;
+  let owner = input.run;
   if (owner !== undefined && (!owner || typeof owner !== 'object' || owner.runId !== input.runId)
     || input.repair !== undefined && (input.repair !== true || !owner)) throw problem('invalid_herdr_layout_input');
   if (owner?.layout?.phase === 'closed') throw problem('herdr_run_binding_changed');
@@ -204,6 +247,11 @@ export async function openHerdrRunLayout(input, ports) {
   const hint = owner?.layout?.workspaceId ?? owner?.chats?.at(-1)?.workspaceId;
   if (id(hint) && rows.some(w => w.workspace_id === hint))
     ownedWorkspace(rows, {workspaceId: hint, commonDir, runId: input.runId}, cwd);
+  if (owner?.layout?.workspaceId && matches[0]?.workspace_id === owner.layout.workspaceId) {
+    const recovered = await recoverHerdrRunLayout({run: owner, cwd, commonDir}, ports);
+    if (recovered.workspaceClosed) { rows = await inventory(command); matches = []; }
+    else if (recovered.root) owner = {...owner, layout: {...owner.layout, ...recovered.root}};
+  }
   let workspace = matches[0], opened;
   let custody = {};
   const save = () => checkpoint(structuredClone(custody));
