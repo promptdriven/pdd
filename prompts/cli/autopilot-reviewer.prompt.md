@@ -68,7 +68,13 @@ coordinators. The view must not infer ownership from a shared account.
 with its issue numbers, login and last seen time. No exact English sentence is an
 API guarantee.
 
+Native reviewer identity reads and enumerates launcher state through machine
+storage, including migrated SQLite records and legacy imports. A managed launcher
+must retain its identity after migration and must not fall through to manual authority.
+
 ## Dependencies
+
+- [Machine storage](autopilot-store.prompt.md): required native generation and verification context for launcher state discovery and reads.
 
 - [GitHub call ledger](github-calls.prompt.md): required native context for counted
   execFile calls. Callers supply their existing counted process port.

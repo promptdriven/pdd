@@ -26,6 +26,13 @@ the reserve floor, preserve claim heartbeats and let the reviewer lease expire;
 pass the current reserve guard to the lease on both intake routes. The lease's
 mutation guard applies to acquisition and renewal. Stopped or Off launchers do not renew.
 
+Dependency delivery carries the request's exact reviewer generation, machine and
+coordinator to the final prompt transport. After readiness and admission waits,
+read the current shared lease without acquiring or renewing it. Submit only if
+that exact authority is still held and both its request expiry and observed expiry
+are strictly later than the current time. An unavailable or changed lease leaves
+the request pending under the existing delivery custody rules.
+
 Repository status reads current GitHub claims and the lease and shows all live
 machine/coordinator pairs, their held issues, last seen times and the reviewer.
 Without a saved repository identity, resolve the current checkout's GitHub origin

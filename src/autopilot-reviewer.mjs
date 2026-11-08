@@ -1,3 +1,4 @@
+import { autopilotStateFiles, readAutopilotState } from './autopilot-store.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -33,9 +34,10 @@ export async function reviewerIdentity({ cwd, repository }, ports = {}) {
     try { owner = JSON.parse(carried); } catch { throw Error('Reviewer identity unavailable'); }
     if (owner.repository?.toLowerCase() !== repository.toLowerCase() || !validIdentity(owner)) throw Error('Reviewer identity unavailable');
     const folder = ports.autopilotStateRoot ?? join(stateDirFor(ports), 'autopilot');
-    for (const name of readdirSync(folder).filter(name => /^[0-9a-f]{20}\.json$/.test(name))) {
-      const state = JSON.parse(readFileSync(join(folder, name), 'utf8'));
-      if (state.repo?.toLowerCase() === repository.toLowerCase() && pair(state, owner) && state.activatedAt === owner.activation)
+    for (const name of autopilotStateFiles(folder, ports)) {
+      const state = readAutopilotState(join(folder, name), null, ports);
+      if (!state) return null;
+  if (state.repo?.toLowerCase() === repository.toLowerCase() && pair(state, owner) && state.activatedAt === owner.activation)
         return { machine: state.machine, coordinatorId: state.coordinatorId, login: state.reviewerLogin ?? '', enabled: state.enabled === true };
     }
     throw Error('Reviewer identity unavailable');
@@ -45,7 +47,7 @@ export async function reviewerIdentity({ cwd, repository }, ports = {}) {
   const folder = ports.autopilotStateRoot ?? join(stateDirFor(ports), 'autopilot');
   const hash = createHash('sha256').update(context.toplevel).digest('hex').slice(0, 20);
   let state;
-  try { state = JSON.parse(readFileSync(join(folder, `${hash}.json`), 'utf8')); }
+  try { state = readAutopilotState(join(folder, `${hash}.json`), null, ports); }
   catch (error) { if (error.code === 'ENOENT') return null; throw Error('Reviewer identity unavailable'); }
   if (state.repo?.toLowerCase() !== repository.toLowerCase() || state.cwd !== context.toplevel || !validIdentity(state)) throw Error('Reviewer identity unavailable');
   // A stopped coordinator is still managed. It must not fall through to manual authority.

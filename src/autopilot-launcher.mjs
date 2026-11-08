@@ -768,7 +768,7 @@ async function currentRecoveryTargetMatches(state, p, verifyRepository = true, s
     return true;
   } catch { return false; }
 }
-async function wake(state, makeText, p, prepare = async () => {}, explicitStartReconcile = false, semanticIdentity = null, capture = async () => {}) {
+async function wake(state, makeText, p, prepare = async () => {}, explicitStartReconcile = false, semanticIdentity = null, capture = async () => {}, canSubmit = async () => true) {
   if (p.githubFloor?.blocked('core') || p.githubFloor?.blocked('graphql')) return false;
   if (p.scanGuard && !await p.scanGuard()) return false;
   const oldDelivery = state.deliveryIntent, oldReconciliation = state.reconciliationIntent;
@@ -866,6 +866,7 @@ async function wake(state, makeText, p, prepare = async () => {}, explicitStartR
         if (submitting) {
           await observe('attempted');
           try { reply = await p.scanTransport(async () => {
+            if (!await canSubmit()) throw Object.assign(Error('Reviewer authority changed'), { code: 'agent_blocked' });
             try { return await herdr(args, p); } catch (error) { transportError = error; throw error; }
           }); }
           catch (error) { await observe(['agent_not_found','pane_not_found','agent_blocked'].includes(error?.code) ? 'failed' : 'uncertain'); throw error; }
@@ -1220,7 +1221,17 @@ async function runTick(stateFile, ports, completion) {
         const instruction = artifact.text();
         if (Buffer.byteLength(instruction, 'utf8') > 16384) return { state: 'busy' };
         try {
-          const delivered = await wake(state, () => instruction, p, artifact.prepare, false, state.dependencyPending?.requested ? { kind: 'dependency', requested: state.dependencyPending.requested, ...(again ? { again: again.attempt } : {}) } : null);
+          const expected = JSON.parse(JSON.parse(requestJson).contextJson).reviewer;
+          const canSubmit = async () => {
+            if (!expected) return false;
+            const current = await reviewerLease({ repository: state.repo, identity: state }, {
+              cwd: state.cwd, now: p.now,
+              execFile: (file, args, options) => p.execute(file, args, { purpose: 'dependencies', ...options }),
+            });
+            return current.held && ['generation', 'machine', 'coordinatorId'].every(key => current.lease?.[key] === expected[key])
+              && Date.parse(expected.expiresAt) > p.now() && Date.parse(current.lease.expiresAt) > p.now();
+          };
+          const delivered = await wake(state, () => instruction, p, artifact.prepare, false, state.dependencyPending?.requested ? { kind: 'dependency', requested: state.dependencyPending.requested, ...(again ? { again: again.attempt } : {}) } : null, undefined, canSubmit);
           if (delivered && !state.recipeDelivered && await scanGuard(latest => { latest.recipeDelivered = true; })) state.recipeDelivered = true;
           return { state: delivered ? 'delivered' : 'busy' };
         }
