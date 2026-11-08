@@ -6,6 +6,11 @@ is the default. The [App adapter](github-app.prompt.md) authenticates native
 calls when configured; this module never records credentials.
 Autopilot chat calls pass through the same counter via its private gh wrapper.
 
+<a id="call-primitives"></a>
+The call-primitives context selection is this module's classification, reply,
+ledger and countGithubCalls contract. It excludes nativeGithubCounter and the
+native counter transport dependency. These primitives do not load the proxy.
+
 ## Exports
 
 | Export | Result |
@@ -248,6 +253,12 @@ page. A page with a next page, or with fewer than `P` entries, stays conditional
 a new entry changes its body, or GitHub serves the saved next page.
 
 ## Dependencies
+
+- [Native counter transport](github-write-proxy.prompt.md#native-counter-transport):
+  required generation and verification context for nativeGithubCounter's use of
+  githubWriteRunner and githubOriginalExecutable. Load that export selection;
+  the proxy uses the call-primitives selection defined above, not this counter.
+
 
 - [Autopilot machine storage](autopilot-store.prompt.md): required native generation and verification context for local state and atomic migration.
 

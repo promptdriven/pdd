@@ -35,6 +35,13 @@ Use the non-secret githubIdentity on its result or error as the canonical App
 budget identity. Worker routing preserves both the App binding and the private
 write route without recursive wrappers or duplicate reservations.
 
+## Cancellation
+
+The private executable forwards catchable SIGTERM, SIGINT and SIGHUP to every
+active child. Wait for child shutdown before terminating with the same signal.
+After cancellation begins, start no further child or write. Keep any uncertain
+write reservation; cancellation cannot undo a request a server already accepted.
+
 ## Reduce content writes
 
 For a REST issue-comment POST whose body contains
@@ -71,9 +78,18 @@ operations separate; never combine a removal and addition of the same label.
 Other gh commands pass through with conservative per-command reservations.
 This transport is a usage guard for cooperative agents, not a security sandbox.
 
+## Native counter transport
+
+The native counter requires `githubOriginalExecutable` and `githubWriteRunner`
+from the export contracts above, including pass-through and identity behavior.
+This selection uses the call primitives supplied by its caller; it does not load
+the native counter itself.
+
 ## Dependencies
 
 [Shared write budget](github-writes.prompt.md) supplies reservation and cooldown
-rules. [GitHub calls](github-calls.prompt.md) supplies classification, ledger and
-reply parsing. Injected process, files, environment and clock supply external
+rules. [GitHub call primitives](github-calls.prompt.md#call-primitives) supplies only
+classification, ledger, countGithubCalls and reply parsing. This required selection
+excludes nativeGithubCounter and its proxy dependency, so the loading chain is
+acyclic. Injected process, files, environment and clock supply external
 operations. Native execution uses child_process and node:fs.

@@ -182,13 +182,30 @@ export async function runGithubWriteProxy() {
   const env = { ...process.env }, root = env.PDD_GITHUB_ROOT || githubStateRoot(env);
   env.PATH = (env.PATH ?? '').split(delimiter).filter(path => !path.includes('/github-bin/')).join(delimiter);
   const args = process.argv.slice(2);
+  const children = new Set(), signals = ['SIGTERM', 'SIGINT', 'SIGHUP'];
+  let cancelling;
+  const finishCancellation = () => {
+    for (const signal of signals) process.removeListener(signal, handlers[signal]);
+    process.kill(process.pid, cancelling);
+  };
+  const handlers = Object.fromEntries(signals.map(signal => [signal, () => {
+    if (cancelling) return;
+    cancelling = signal;
+    for (const child of children) child.kill(signal);
+    if (!children.size) finishCancellation();
+  }]));
+  for (const signal of signals) process.on(signal, handlers[signal]);
   const raw = (file, words, options = {}) => new Promise((resolveResult, reject) => {
+    if (cancelling) { reject(Error('GitHub command cancelled')); return; }
     const child = spawn(file, words, { env: { ...env, ...options.env }, stdio: ['pipe', 'pipe', 'pipe'] });
+    children.add(child);
+    child.once('close', () => { children.delete(child); if (cancelling && !children.size) finishCancellation(); });
     let stdout = '', stderr = '';
     child.stdout.on('data', data => { stdout += data; }); child.stderr.on('data', data => { stderr += data; });
     child.on('error', reject); child.on('close', (code, signal) => resolveResult({ code: code ?? (128 + (osConstants.signals[signal] ?? 0)), stdout, stderr }));
     child.stdin.on('error', () => {}); child.stdin.end(options.input);
   });
+  try {
   let input = '';
   if (!process.stdin.isTTY) for await (const part of process.stdin) input += part;
   if (env.PDD_GITHUB_COUNTED === '1') {
@@ -200,4 +217,5 @@ export async function runGithubWriteProxy() {
     const result = await runner('gh', args, { input });
     process.stdout.write(result.stdout); process.stderr.write(result.stderr); process.exitCode = result.code;
   } catch (error) { process.stderr.write(`${error.message}\n`); process.exitCode = 1; }
+  } finally { if (!cancelling) for (const signal of signals) process.removeListener(signal, handlers[signal]); }
 }
