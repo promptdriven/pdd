@@ -65,6 +65,21 @@ Status and status --all read these saved observations only. Show each full area 
 `AREA: waiting: N PRs wait for review`, or say review queue observations are
 unavailable. No status GitHub call is added. State how many PRs wait, not CI jobs.
 
+## Installation identity
+
+Use [GitHub App identity](github-app.prompt.md) for optional App authentication.
+Before start makes any gh call or opens any chat or timer, validate selected
+settings and run preflight. Skip the personal `gh auth status` requirement in
+App mode. Each active tick preflights before work; errors claim no work and
+never fall back. Status reads the saved non-secret `githubIdentity` and
+`githubBot` without authentication calls. Record the installation rate reply as
+setup with its identity. Count each tick gh call through the App runner. Budget,
+status usage and floor guards select only entries for the active identity;
+personal mode selects entries with no identity. ETags are scoped by identity.
+Include githubIdentity (null for personal login) in the launch fingerprint so an identity change refreshes an idle coordinator. Persist only githubIdentity and githubBot from authentication. Pass the shared non-secret App environment to coordinator launches, overriding
+custom launcher PATH for Git and gh routing, and to Codex shell_environment_policy.set.
+Never put credentials in launch lines, timer state, packets or saved environment.
+
 ## Native Codex startup
 
 For a selected Codex launcher, apply invocation-only config overrides that trust
@@ -1021,6 +1036,8 @@ reconcile and wake boundaries; injected substitutes reach this same path.
 
 - [PR review limit](autopilot-pr-limit.prompt.md): required context for review backlog admission and status.
 
+
+- [GitHub App identity](github-app.prompt.md): required native generation and verification context for authentication, preflight and shell routing.
 
 - [Metrics store](metrics-store.prompt.md), [run records](workflow-runs.prompt.md) and [metrics gaps](metrics-gap.prompt.md): required native generation/verification context for observational selector/launch storage and identity.
 

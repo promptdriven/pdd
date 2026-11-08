@@ -1,7 +1,9 @@
 // Implements prompts/cli/autopilot-launcher.prompt.md.
 import { reviewerLease, repositoryMachines, repositoryMachineLines } from './autopilot-reviewer.mjs';
 import { readReviewQueue, reviewWait, maxOpenPrs } from './autopilot-pr-limit.mjs';
+
 import { spawn } from 'node:child_process';
+import { githubAppSettings, createGithubApp, githubAppRunner, githubAppEnvironment } from './github-app.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
 import { homedir, hostname } from 'node:os';
@@ -26,7 +28,7 @@ import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
 import { samePath } from './workflow-herdr-layout.mjs';
 import { tomlString } from './toml-string.mjs';
 import { alertStatusLine, runAutopilotAlerts } from './autopilot-alerts.mjs';
-import { countGithubCalls, githubBudget, githubBudgetSettings, githubEtagCache, githubFloorGuard, githubFullLastPage, githubLedger, githubMachineEntries, githubReply, githubStateRoot, githubStatusLine, githubUsage } from './github-calls.mjs';
+import { countGithubCalls, githubBudget, githubBudgetSettings, githubEtagCache, githubFloorGuard, githubFullLastPage, githubLedger, githubMachineEntries, githubEntry, githubReply, githubStateRoot, githubStatusLine, githubUsage } from './github-calls.mjs';
 import { lookupRepositoryParent, githubOriginRepository } from './workflow-worktree.mjs';
 
 import { readAutopilotState, saveAutopilotState, autopilotStateFiles } from './autopilot-store.mjs';
@@ -72,7 +74,8 @@ function portsFor(state, ports) {
   // The ledgers sit beside the launcher state files.
   const githubRoot = ports.githubRoot ?? (typeof state?.stateFile === 'string' ? dirname(state.stateFile) : githubStateRoot(env, ports.stateRoot)), ledgers = new Map();
   const ledger = () => { const repo = state?.repo; if (typeof repo !== 'string' || !repo) return null; if (!ledgers.has(repo)) ledgers.set(repo, githubLedger({ root: githubRoot, repository: repo })); return ledgers.get(repo); };
-  const execute = countGithubCalls(async (command, args, options = {}) => run(command, args, { cwd: state.cwd, env, timeoutMs: 10000, maxBytes: 8 * 1024 * 1024, ...options }), { ledger, now });
+  const authenticated = githubAppRunner(async (command, args, options = {}) => run(command, args, { cwd: state.cwd, env, timeoutMs: 10000, maxBytes: 8 * 1024 * 1024, ...options }), { env, now, ...ports.githubApp });
+  const execute = countGithubCalls((command, args, options = {}) => authenticated(command, args, { cwd: state.cwd, env, ...options }), { ledger, now });
   const checked = async (command, args, options) => { const result = await execute(command, args, options); if (result.code !== 0) throw Error(`${command} failed; check its sign-in and retry.`); return result.stdout; };
   return { ...ports, env, run, execute, checked, githubRoot, warn: ports.warn ?? (text => process.stderr.write(`${text}\n`)), now };
 }
@@ -92,6 +95,18 @@ async function repositoryView(state, p) {
 }
 const sharedLoginWarning = view => view.sharedLogins.length ? `Warning: several Autopilots share GitHub login ${view.sharedLogins.join(', ')}; their API limit is shared and people cannot be distinguished from agents by login.` : '';
 
+
+async function appPreflight(state, p) {
+  const config = githubAppSettings({ cwd: state.cwd, env: p.env });
+  if (!config) { delete state.githubIdentity; delete state.githubBot; p.githubIdentity = null; return false; }
+  const app = createGithubApp(config, { env: p.env, now: p.now, exec: (file, args, options) => p.execute(file, args, options), ...p.githubApp });
+  const checked = await app.preflight();
+  if (state.repo && state.repo.toLowerCase() !== checked.repository) throw Error('GitHub App repository does not match the saved Autopilot repository.');
+  state.repo = checked.repository; state.githubIdentity = checked.identity; state.githubBot = checked.bot;
+  p.githubIdentity = checked.identity;
+  githubLedger({ root: p.githubRoot, repository: state.repo }).record({ ...githubEntry(['api', 'rate_limit'], { stdout: checked.rate }, 'setup', p.now()), identity: checked.identity });
+  return true;
+}
 const keepEnv = env => Object.fromEntries(['HOME', 'PATH', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME', 'XDG_CONFIG_HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS'].filter(k => typeof env[k] === 'string').map(k => [k, env[k]]));
 const NOT_GIT = 'This folder is not a Git repository. cd into the repo you want Autopilot to work on, then run the command again.';
 // Git translates its messages; pdd reads the "not a git repository" text only in the C locale.
@@ -558,9 +573,10 @@ function profileBinding(state, p) {
 }
 // Codex builds each chat command's environment from shell_environment_policy; `set` applies after `inherit`.
 // An explicit saved CODEX_HOME also reaches the commands, so a pdd workflow run from the chat keeps the profile.
-function providerArgs(kind, cwd, context, codexHome) {
+function providerArgs(kind, cwd, context, codexHome, githubEnv = {}) {
   if (kind === 'codex') return ['--no-daemon', '--dangerously-bypass-approvals-and-sandbox',
     '-c', quote(`projects={${tomlString(cwd)}={trust_level="trusted"}}`), '-c', quote('check_for_update_on_startup=false'),
+    ...Object.entries(githubEnv).flatMap(([name, value]) => ['-c', quote(`shell_environment_policy.set.${name}=${tomlString(value)}`)]),
     '-c', quote(`shell_environment_policy.set.PDD_AUTOPILOT_CONTEXT=${tomlString(context)}`),
     ...(codexHome ? ['-c', quote(`shell_environment_policy.set.CODEX_HOME=${tomlString(codexHome)}`)] : [])];
   return [kind === 'gemini' ? '--yolo' : '--dangerously-skip-permissions'];
@@ -577,7 +593,7 @@ export function autopilotLaunchFingerprint(state) {
   const root = resolve(state.packageRoot ?? dirname(dirname(self)));
   let version = null;
   try { version = read(join(root, 'package.json'))?.version ?? null; } catch { /* An unreadable package has no version. */ }
-  return digest({ version: 'pdd.autopilot-launch.v1', package: { root, version }, kind: state.agent.kind, start: startIn(state.cwd), args: providerArgs(state.agent.kind, state.cwd, '', state.environment?.CODEX_HOME) });
+  return digest({ version: 'pdd.autopilot-launch.v1', package: { root, version }, githubIdentity: state.githubIdentity ?? null, kind: state.agent.kind, start: startIn(state.cwd), args: providerArgs(state.agent.kind, state.cwd, '', state.environment?.CODEX_HOME) });
 }
 function ownerLaunchMatches(state, p) {
   const launch = state.ownerLaunch;
@@ -969,8 +985,9 @@ async function wake(state, makeText, p, prepare = async () => {}, explicitStartR
   const definition = launchDefinition(state, p);
   if (definition.kind !== state.agent.kind) { p.warn('Run pdd autopilot start to select the changed agent profile.'); return false; }
   const context = JSON.stringify(envelope());
-  const args = providerArgs(definition.kind, state.cwd, context, state.environment?.CODEX_HOME);
-  const childEnv = { ...keepEnv(p.env), ...definition.env, HOME: state.environment?.HOME ?? p.env.HOME, PDD_AUTOPILOT_CONTEXT: context };
+  const githubEnv = state.githubIdentity ? githubAppEnvironment({ root: state.cwd, env: { ...p.env, ...definition.env } }) : {};
+  const args = providerArgs(definition.kind, state.cwd, context, state.environment?.CODEX_HOME, githubEnv);
+  const childEnv = { ...keepEnv(p.env), ...definition.env, ...githubEnv, HOME: state.environment?.HOME ?? p.env.HOME, PDD_AUTOPILOT_CONTEXT: context };
   for (const variable of ['CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME']) {
     if (state.environment?.[variable]) childEnv[variable] = state.environment?.[variable]; else delete childEnv[variable];
   }
@@ -1136,6 +1153,7 @@ async function runTick(stateFile, ports, completion) {
     }
     const config = await settings(state, p);
     if (config.mode === 'off') return outcome('inactive', line(config.message));
+    await appPreflight(state, p);
     state.currentMode = config.mode;
     let accepted = JSON.stringify([state.controlRevision ?? null, state.coordinatorId, state.machine, state.activatedAt, state.runs ?? null, profileBinding(state, p)]);
     scanGuard = async (mutate = null) => {
@@ -1172,7 +1190,7 @@ async function runTick(stateFile, ports, completion) {
     // The GitHub budget of the tick on this machine, from the local ledgers and the newest limit that GitHub reported.
     let budget = { state: 'normal' }, restLeft;
     try {
-      const usage = githubUsage(githubMachineEntries({ root: p.githubRoot }), p.now());
+      const usage = githubUsage(githubMachineEntries({ root: p.githubRoot, identity: state.githubIdentity ?? null }), p.now(), state.githubIdentity ?? null);
       restLeft = usage.rate.core?.remaining;
       budget = githubBudget({ usage, ...githubBudgetSettings(config.github) });
     } catch { /* An unreadable ledger leaves the budget normal. */ }
@@ -1247,9 +1265,9 @@ async function runTick(stateFile, ports, completion) {
     // uses the last eligible list and claims. Heartbeats of live claims keep their priority.
     const savedIntake = state.githubIntake;
     // One ETag cache for the reads of this tick: the intake's and the tick's own comment, PR and permission reads.
-    const etags = githubEtagCache({ root: p.githubRoot, repository: state.repo, now: p.now }); p.etags = etags;
+    const etags = githubEtagCache({ root: p.githubRoot, repository: state.repo, now: p.now, identity: state.githubIdentity ?? null }); p.etags = etags;
     let githubFloor;
-    try { githubFloor = githubFloorGuard({ floor: githubBudgetSettings(config.github).floor, entries: githubMachineEntries({ root: p.githubRoot }), now: p.now }); } catch { githubFloor = undefined; }
+    try { githubFloor = githubFloorGuard({ floor: githubBudgetSettings(config.github).floor, entries: githubMachineEntries({ root: p.githubRoot, identity: state.githubIdentity ?? null }), now: p.now }); } catch { githubFloor = undefined; }
     p.githubFloor = githubFloor;
     if (githubFloor) {
       const execute = p.execute;
@@ -1560,7 +1578,7 @@ async function runTick(stateFile, ports, completion) {
   } finally {
     try {
       if (state && scanGuard) await scanGuard(latest => {
-        for (const key of ['retryAt','cachedIssues','etag','pages','issuesSince','issuesFullAt','githubIntake','acknowledged','commentCache','seen','timeSeen','pullCache','recipeDelivered','dependencyPending','deliveryIntent','reconciliationIntent','uncertainDeliveryHistory','paneId','workspaceId','ownerLaunch','contextPane','contextBinding','relaunchPending','relaunchHeld','runtime','reviewer','reviewerLogin','sharedLoginWarned','reviewQueue','reviewQueueLimit','reviewQueueUnknown']) {
+        for (const key of ['githubIdentity','githubBot','retryAt','cachedIssues','etag','pages','issuesSince','issuesFullAt','githubIntake','acknowledged','commentCache','seen','timeSeen','pullCache','recipeDelivered','dependencyPending','deliveryIntent','reconciliationIntent','uncertainDeliveryHistory','paneId','workspaceId','ownerLaunch','contextPane','contextBinding','relaunchPending','relaunchHeld','runtime','reviewer','reviewerLogin','sharedLoginWarned','reviewQueue','reviewQueueLimit','reviewQueueUnknown']) {
           if (Object.hasOwn(state, key)) latest[key] = state[key]; else delete latest[key];
         }
         latest.nextTick = (ports.now ?? Date.now)() + INTERVAL;
@@ -1783,8 +1801,8 @@ export async function runAutopilotLauncher(input, ports = {}) {
       let github = '';
       try {
         if (state.repo) {
-          const now = p.now(), usage = githubUsage(githubLedger({ root: p.githubRoot, repository: state.repo }).read(), now);
-          const machine = githubUsage(githubMachineEntries({ root: p.githubRoot }), now);
+          const now = p.now(), usage = githubUsage(githubLedger({ root: p.githubRoot, repository: state.repo }).read(), now, state.githubIdentity ?? null);
+          const machine = githubUsage(githubMachineEntries({ root: p.githubRoot, identity: state.githubIdentity ?? null }), now, state.githubIdentity ?? null);
           if (usage.calls || machine.calls) {
             let setting;
             try { setting = (await settings(state, p)).github; } catch { /* The defaults apply. */ }
@@ -1798,7 +1816,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
       const readiness = await workflowReadiness(state, p);
       const reviewQueue = reviewQueueStatus(state).map(text => `\n${text}`).join('');
       const workflows = readiness.state === 'ready' ? '' : `\nWorkflows cannot start in this folder: ${line(readiness.message)}`;
-      return ok(`Autopilot ${state.enabled ? 'enabled' : 'disabled'}; timer ${timerActive ? 'active' : 'inactive'}; Herdr ${serverRunning ? 'running' : 'unavailable'}; coordinator ${coordinatorState}: ${state.repo ? `${state.repo} in ${state.cwd}` : state.cwd} · ${state.agent?.id ?? 'no agent'} · next tick: ${timerActive && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}${workflows}${reviewQueue}${relaunch}${alerts ? `\n${alerts}` : ''}${github ? `\n${github}` : ''}\n${fleet}`);
+      return ok(`Autopilot ${state.enabled ? 'enabled' : 'disabled'}; timer ${timerActive ? 'active' : 'inactive'}; Herdr ${serverRunning ? 'running' : 'unavailable'}; coordinator ${coordinatorState}: ${state.repo ? `${state.repo} in ${state.cwd}` : state.cwd} · ${state.agent?.id ?? 'no agent'}${state.githubBot ? ` · GitHub ${state.githubBot} (${state.githubIdentity})` : ''} · next tick: ${timerActive && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}${workflows}${reviewQueue}${relaunch}${alerts ? `\n${alerts}` : ''}${github ? `\n${github}` : ''}\n${fleet}`);
     }
     if (command === 'stop') {
       if (previous) { state.enabled = false; state.nextTick = null; state.controlRevision = randomUUID(); save(stateFile, state, ports); }
@@ -1807,11 +1825,13 @@ export async function runAutopilotLauncher(input, ports = {}) {
       return ok('Autopilot stopped on this machine; the current step can finish.');
     }
     if (command === 'start' && runs !== undefined && (!/^[1-9][0-9]*$/.test(runs) || !Number.isSafeInteger(Number(runs)))) return { exitCode: 2, message: 'Use --runs with a positive integer, or omit it for no fixed cap.' };
+    let appMode = false;
     if (command === 'start') {
       const config = await settings(state, p);
       if (config.mode === 'off') return ok(`${line(config.message)} Choose observe or auto with pdd autopilot observe or pdd autopilot auto.`);
       if (previous && resolve(previous.packageRoot ?? dirname(dirname(self))) !== resolve(packageRoot)) state.recipeDelivered = false;
       state.packageRoot = packageRoot;
+      appMode = await appPreflight(state, p);
     }
     if (!state.repo) state.repo = JSON.parse(await p.checked('gh', ['repo', 'view', '--json', 'nameWithOwner'])).nameWithOwner;
     if (command === 'add') {
@@ -1829,7 +1849,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
     if (command !== 'start') return { exitCode: 2, message: 'Use pdd autopilot start, stop, status or add.' };
     const readiness = await workflowReadiness(state, p);
     if (readiness.state !== 'ready') return bad(`Autopilot did not start: pdd workflows cannot start in ${state.cwd}. ${readiness.message} Nothing was started or claimed, and every timer is unchanged.`);
-    if ((await p.execute('gh', ['auth', 'status'])).code !== 0) return bad('GitHub is not signed in; run gh auth login.');
+    if (!appMode && (await p.execute('gh', ['auth', 'status'])).code !== 0) return bad('GitHub is not signed in; run gh auth login.');
     try { if ((await p.execute('herdr', ['--version'])).code !== 0) throw Error(); }
     catch { return bad('Herdr is missing or unavailable; install Herdr, then run herdr --help.'); }
     if (resumeCustody && !previous) return bad('Original coordinator recovery needs saved local state.');

@@ -1,5 +1,6 @@
 // Implements prompts/cli/github-calls.prompt.md.
 import * as nativeFs from 'node:fs';
+import { githubAppRunner } from './github-app.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -135,7 +136,7 @@ export function githubLedger({ root, repository, fs = nativeFs, store }) {
   };
 }
 
-export function githubMachineEntries({ root, fs = nativeFs, store }) {
+export function githubMachineEntries({ root, fs = nativeFs, store, identity = null }) {
   let names = [];
   try { names = fs.readdirSync(ledgerFolder(root)).filter(name => /^[0-9a-f]{20}\.jsonl$/.test(name)); } catch { /* No legacy ledgers. */ }
   if (!store && !names.length && !fs.existsSync(join(root, 'machine.sqlite')) && !fs.existsSync(join(root, 'machine-state.json'))) return [];
@@ -150,7 +151,7 @@ export function githubMachineEntries({ root, fs = nativeFs, store }) {
         tx.put('budgets', scope, { repository: entries[0]?.repo ?? null });
       });
     }
-    return tx.entries('events').map(row => row.value);
+    return tx.entries('events').map(row => row.value).filter(entry => (entry.identity ?? null) === identity);
   }); } catch { return []; }
 }
 
@@ -165,7 +166,8 @@ export function countGithubCalls(exec, { ledger, purpose, now = Date.now } = {})
     try { result = await exec(file, args, rest); } catch (error) { failure = error; failed = true; }
     try {
       const target = typeof ledger === 'function' ? ledger(args, repository) : ledger;
-      target?.record(githubEntry(args, failed ? failure : result, named ?? purpose, now()));
+      const outcome = failed ? failure : result;
+      target?.record({ ...githubEntry(args, outcome, named ?? purpose, now()), ...(outcome?.githubIdentity ? { identity: outcome.githubIdentity } : {}) });
     } catch { /* best effort */ }
     if (failed) throw failure;
     return result;
@@ -175,8 +177,8 @@ export function countGithubCalls(exec, { ledger, purpose, now = Date.now } = {})
 // A counter for a pdd command outside the tick: the ledger of the repository that each call names, only when
 // Autopilot already keeps a ledger for it on this machine. Other repositories, and test doubles of gh, write nothing.
 // The folder is found at each call, so a later HOME applies.
-export function nativeGithubCounter(exec, { env = process.env, stateRoot, purpose, fs = nativeFs, now = Date.now, store } = {}) {
-  return countGithubCalls(exec, { purpose, now, ledger: (args, named) => {
+export function nativeGithubCounter(exec, { env = process.env, stateRoot, purpose, fs = nativeFs, now = Date.now, appPorts = {}, store } = {}) {
+  return countGithubCalls(githubAppRunner(exec, { env, fs, now, ...appPorts }), { purpose, now, ledger: (args, named) => {
     const repository = githubRepository(args) ?? (typeof named === 'string' && REPOSITORY.test(named) ? named.toLowerCase() : null);
     if (!repository) return null;
     const ledger = githubLedger({ root: githubStateRoot(env, stateRoot), repository, fs, store });
@@ -185,7 +187,8 @@ export function nativeGithubCounter(exec, { env = process.env, stateRoot, purpos
 }
 
 // Calls in the last hour, by purpose, and the newest limit that GitHub reported for each resource.
-export function githubUsage(entries, now) {
+export function githubUsage(entries, now, identity = null) {
+  entries = entries.filter(entry => (entry.identity ?? null) === identity);
   const recent = entries.filter(entry => entry.at > now - HOUR && entry.at <= now);
   const byPurpose = {}; let rest = 0, graphql = 0, counted = 0, conditional = 0, notModified = 0;
   for (const entry of recent) {
@@ -195,12 +198,16 @@ export function githubUsage(entries, now) {
     // A 304 reply does not count against the REST limit.
     if (entry.api !== 'graphql' && entry.status !== 304) counted++;
   }
+  return { calls: recent.length, rest, graphql, counted, conditional, notModified, byPurpose, rate: githubRates(entries, now) };
+}
+
+function githubRates(entries, now) {
   const rate = {};
   for (const entry of entries) {
     if (typeof entry.resource !== 'string' || !finite(entry.remaining) || !finite(entry.resetAt) || entry.resetAt <= now || entry.at > now) continue;
     if (!rate[entry.resource] || entry.at >= rate[entry.resource].at) rate[entry.resource] = { remaining: entry.remaining, ...(finite(entry.limit) ? { limit: entry.limit } : {}), resetAt: entry.resetAt, at: entry.at };
   }
-  return { calls: recent.length, rest, graphql, counted, conditional, notModified, byPurpose, rate };
+  return rate;
 }
 
 // The share and the floor from the repository's Autopilot settings, else the defaults.
@@ -236,9 +243,9 @@ export function githubStatusLine({ usage, machine = usage, budget }) {
 // Saved ETags and bodies of GET replies, for conditional requests on the next read. A save merges with the file as
 // it is then, so the tick and the pdd commands keep each other's entries: an entry stays while it was used in the
 // last day, and the newest used entries stay within the count and size bounds.
-export function githubEtagCache({ root, repository, fs = nativeFs, now = Date.now, store }) {
-  const file = join(ledgerFolder(root), `${hash(String(repository).toLowerCase())}.etags.json`);
-  const storage = machineJson({ root, bucket: 'cache', key: `etags:${hash(String(repository).toLowerCase())}`, file, invalidLegacy: null }, { fs, store });
+export function githubEtagCache({ root, repository, fs = nativeFs, now = Date.now, identity = null, store }) {
+  const file = join(ledgerFolder(root), `${hash(String(repository).toLowerCase() + (identity ? `:${identity}` : ''))}.etags.json`);
+  const storage = machineJson({ root, bucket: 'cache', key: `etags:${hash(String(repository).toLowerCase() + (identity ? `:${identity}` : ''))}`, file, invalidLegacy: null }, { fs, store });
   let saved, used = new Map();
   const readFile = () => {
     try { const value = storage.read(); return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; } catch { return {}; }
@@ -279,7 +286,8 @@ export function githubEtagCache({ root, repository, fs = nativeFs, now = Date.no
 // ledgers of this machine and follows the rate-limit headers of each later reply.
 export function githubFloorGuard({ floor = GITHUB_FLOOR, entries = [], now = Date.now } = {}) {
   const rate = {}; let stopped = false;
-  for (const [resource, value] of Object.entries(githubUsage(entries, now()).rate)) rate[resource] = { remaining: value.remaining, resetAt: value.resetAt };
+  // Callers have already selected the active identity's machine entries.
+  for (const [resource, value] of Object.entries(githubRates(entries, now()))) rate[resource] = { remaining: value.remaining, resetAt: value.resetAt };
   return {
     floor,
     // One reply of `gh api --include`, as githubReply reads it; a reply without rate-limit headers changes nothing.

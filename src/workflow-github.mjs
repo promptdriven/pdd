@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-github.prompt.md (sha256: 8102daf832ac8efa77608fb6723ea9355d60b5a79e61d2f5509b6b2fc5e97188).
+// Implements prompts/cli/workflow-github.prompt.md.
 import { execFile } from 'node:child_process';
 import { isAbsolute } from 'node:path';
 import { causeText } from './runtime-output.mjs';
@@ -44,8 +44,8 @@ function refusal(stderr) {
 }
 
 // The native runner records each gh call in the GitHub call ledger of its repository.
-const counted = nativeGithubCounter((file, args, { cwd, input }) => execute(file, args,
-  { cwd, input, encoding: 'utf8', shell: false, maxBuffer: 8 * 1024 * 1024 }));
+const counted = nativeGithubCounter((file, args, { cwd, input, env }) => execute(file, args,
+  { cwd, input, env, encoding: 'utf8', shell: false, maxBuffer: 8 * 1024 * 1024 }));
 function dependencies(ports = {}) {
   const run = ports.execFile ?? counted;
   async function raw(cwd, file, args, input) {

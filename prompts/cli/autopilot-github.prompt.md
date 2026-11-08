@@ -99,8 +99,12 @@ The native gh runner records each `gh` call in the GitHub call ledger of the rep
 
 ## Dependencies
 
+- [GitHub App identity](github-app.prompt.md): required native generation and verification context for installation authentication and quota identity.
+
 - [GitHub calls](github-calls.prompt.md): native generation and verification context for counting `gh` calls.
 
 - [Workflow GitHub](workflow-github.prompt.md): required generation context for `resolveWorkflowRepository` and its `execFile` port.
 - [Autopilot settings](autopilot.prompt.md): owns the local `pdd.json` shape and its writes. The change table above follows its rules for the local write.
 - The [CLI](pdd-cli.prompt.md) calls Publish after the mode, trust and untrust commands, and Check after `pdd autopilot start` and `pdd autopilot status`.
+
+Native process adapters preserve the child environment supplied by the GitHub counter, including optional installation authentication from [GitHub App identity](github-app.prompt.md).

@@ -11,6 +11,7 @@ import { resolveWorkflowRepository } from './workflow-github.mjs';
 import { gitContext, currentChat, stateDirFor } from './workflow-runs.mjs';
 import { chatLifecycle, chatSession, observeLifecycle, sessionEvidenceDue, observedSession, ownSession, launchAnchor, validSessionId } from './workflow-chat.mjs';
 import { dependencyLinks, projectIssueGraph, validateDependencyChange } from './issue-dependencies.mjs';
+import { githubAppSettings, createGithubApp } from './github-app.mjs';
 import { githubBudgetSettings, githubEtagCache, githubFloorGuard, githubFullLastPage, githubLedger, githubMachineEntries, githubReply, nativeGithubCounter } from './github-calls.mjs';
 
 import { machineJson, readAutopilotState } from './autopilot-store.mjs';
@@ -392,12 +393,14 @@ function defaultStores(ports) {
   const root = autopilotRoot(ports);
   return repository => autopilotRepository(root, repository) ? dependencySnapshotStore({ root, repository }) : null;
 }
-function defaultEtagCache(ports) {
+function defaultEtagCache(ports, cwd) {
+  const app = githubAppSettings({ cwd, env: ports.env ?? process.env });
+  const identity = app ? `app:${app.id}:${app.privateKeyFile}` : null;
   const root = autopilotRoot(ports), caches = new Map();
   const cacheFor = endpoint => {
     const repo = /^repos\/([^/?#]+\/[^/?#]+)/.exec(String(endpoint))?.[1]?.toLowerCase();
     if (!repo || !repositoryName(repo)) return null;
-    if (!caches.has(repo)) caches.set(repo, autopilotRepository(root, repo) ? githubEtagCache({ root, repository: repo }) : null);
+    if (!caches.has(repo)) caches.set(repo, autopilotRepository(root, repo) ? githubEtagCache({ root, repository: repo, identity }) : null);
     return caches.get(repo);
   };
   const cache = { get: endpoint => cacheFor(endpoint)?.get(endpoint), set: (endpoint, entry) => cacheFor(endpoint)?.set(endpoint, entry),
@@ -416,7 +419,9 @@ export async function commandGithubFloor({ cwd = '', repository }, ports = {}) {
   let setting;
   try { const top = cwd ? (await gitContext(cwd, ports.execFile ? { execFile: ports.execFile } : {}))?.toplevel : null; if (top) setting = readJson(join(top, 'pdd.json'), {})?.autopilot?.github; } catch { /* The default floor applies. */ }
   const now = typeof ports.now === 'function' ? ports.now : Date.now;
-  return githubFloorGuard({ floor: githubBudgetSettings(setting).floor, entries: githubMachineEntries({ root }), now });
+  const env = ports.env ?? process.env, app = githubAppSettings({ cwd, env });
+  const identity = app ? (await createGithubApp(app, { env, now, ...(ports.execFile ? { exec: ports.execFile } : {}), ...ports.githubApp }).credentials()).identity : null;
+  return githubFloorGuard({ floor: githubBudgetSettings(setting).floor, entries: githubMachineEntries({ root, identity }), now });
 }
 
 // The reads of one pdd process (one tick, one command): the issue list and the issue reads of this process, the saved
@@ -1092,7 +1097,7 @@ export function createDependencyReadPorts({ cwd = '' } = {}, supplied = {}, scop
   if (!supplied.github) {
     // The native reader of one process: its reads, the saved snapshot of an Autopilot repository, and the ETag cache.
     ports.dependencyReads ??= readSession(defaultStores(ports), typeof supplied.now === 'function' ? supplied.now : Date.now);
-    if (ports.githubCache === undefined) ports.githubCache = defaultEtagCache(ports);
+    if (ports.githubCache === undefined) ports.githubCache = defaultEtagCache(ports, cwd);
   }
   ports.github ??= ports.dependencyReads ? sessionGithub(rawGithub(cwd, ports), ports.dependencyReads) : rawGithub(cwd, ports);
   ports.authority = supplied.authority?.[NATIVE_AUTHORITY] ? nativeAuthority(cwd, ports) : supplied.authority ?? nativeAuthority(cwd, ports);

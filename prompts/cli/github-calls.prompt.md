@@ -1,13 +1,9 @@
 # GitHub calls: count, budget and conditional reads
 
-Own `src/github-calls.mjs`. Autopilot uses the person's own `gh` sign-in. Its
-REST limit (5,000 calls each hour for a person) is also the limit of the
-person's own work. Several coordinators on one login used the whole limit. This
-module counts each `gh` call that pdd makes, keeps a small local ledger for each
-repository on this machine, tells the tick when to read less, and keeps ETags
-and bodies for conditional reads. It makes no GitHub call itself and adds no
-credentials. It counts only the calls that pdd runs: the `gh` calls that the
-coordinator and worker chats make themselves are not counted.
+Own `src/github-calls.mjs`. Count pdd GitHub calls, budget from the active
+identity's observed limit, and keep conditional read caches. Personal gh login
+is the default. The [App adapter](github-app.prompt.md) authenticates native
+calls when configured; this module never records credentials.
 
 ## Exports
 
@@ -143,7 +139,7 @@ native dependency observations for Autopilot repositories:
   including `pdd dependencies prepare`, `complete`, direct snapshot reads and
   automatic start. Safety reads and writes go on. Other `pdd` operations are
   counted but do not wait for this floor. The coordinator and worker chats never
-  wait for the budget, and their own `gh` calls are not counted.
+  wait for the budget. The App shell wrapper counts their own `gh` calls; personal shell calls are not counted.
 
 `githubBudgetSettings(value)` reads `share` (an integer from 1 to
 100) and `floor` (an integer, 0 or more) from the object `autopilot.github` in
@@ -199,7 +195,7 @@ write failure gives an empty cache or a lost save; it only costs counted reads.
 ### Floor guard
 
 `githubFloorGuard({floor, entries, now})` starts from the newest valid rate of
-each resource in `entries` (as `githubUsage` gives it) and follows each later
+each resource in `entries` and follows each later
 reply: `observe(reply)` takes the `rate` of a `githubReply` result, and a reply
 without rate headers changes nothing. `blocked(resource)` (default `core`) is
 true while the newest remaining of that resource is less than `floor` and its
@@ -211,6 +207,13 @@ checks, heartbeats, trust and permission reads, the reads that a write depends
 on and readbacks after writes) and writes never ask it. A rate-limit reply (403
 or 429 with no calls left) is a reply with remaining 0, so the reads after it
 stop at once instead of failing one by one.
+
+The caller selects `entries` for the active identity before constructing the
+guard. Consume that selection without filtering it back to personal identity.
+Use the same rate validity rules as `githubUsage`, including reset expiry and
+future observation rejection. This preserves a known installation reserve
+breach before the first non-safety read. Personal and other installation limits
+must not override the caller's selected installation.
 
 <a id="full-last-page"></a>
 ### A full last page
@@ -256,3 +259,17 @@ decisions. Leave a failed source unmarked so a later read can retry it; a failed
 read must not commit any rows from that source. Storage transaction failures
 retain the existing empty-result policy.
 An injected `store` port replaces the backend alongside the existing `fs` port.
+
+## App accounting
+
+`countGithubCalls` records a non-secret `identity` from outcome.githubIdentity
+when present. Personal entries omit it. `githubMachineEntries({root,fs,identity})`
+and `githubUsage(entries,now,identity)` select only that identity; omitted
+identity means personal entries. App installations therefore share their local
+quota across repositories but do not borrow a personal or another installation's
+limit. `githubEtagCache` accepts identity and uses a different cache filename for
+each identity. Native counters use `githubAppRunner` before execution, accept
+`appPorts` for its injected ports, and retain existing counting policy.
+
+- [GitHub App identity](github-app.prompt.md): required native generation and
+  verification context for authenticating native gh calls and Git network commands and the bundled wrappers.
