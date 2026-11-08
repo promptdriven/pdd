@@ -75,7 +75,6 @@ for (const frame of [null, [], 'synthetic-private', 0, false]) {
 const fs = require('node:fs');
 const reader = require('node:readline').createInterface({ input: process.stdin });
 const keepAlive = setInterval(() => {}, 1000);
-process.stdin.on('end', () => clearInterval(keepAlive));
 process.on('SIGTERM', () => {
   fs.writeFileSync(${JSON.stringify(stopped)}, 'stopped');
   clearInterval(keepAlive); reader.close(); process.stdin.destroy();
@@ -91,17 +90,57 @@ reader.on('line', text => {
   else if (row.method === 'account/rateLimits/read') console.log(JSON.stringify({ id: 2, result: { rateLimits: { primary: { usedPercent: 4, resetsAt: null } } } }));
 });
 `, { mode: 0o755 });
-      const code = `import { readCodexLimits } from ${JSON.stringify(new URL('../src/codex-limits.mjs', import.meta.url).href)};
-console.log(JSON.stringify(await readCodexLimits({ command: ${JSON.stringify(file)}, cwd: ${JSON.stringify(dir)} })));`;
+      const code = `import { spawn } from 'node:child_process';
+import { readCodexLimits } from ${JSON.stringify(new URL('../src/codex-limits.mjs', import.meta.url).href)};
+let child, close;
+const closed = new Promise(resolve => { close = resolve; });
+const result = await readCodexLimits({ command: ${JSON.stringify(file)}, cwd: ${JSON.stringify(dir)} }, {
+  spawn: (...args) => { child = spawn(...args); child.once('close', (code, signal) => close({ code, signal })); return child; }
+});
+const termination = await Promise.race([closed, new Promise(resolve => setTimeout(() => resolve(null), 3000).unref())]);
+if (!termination) child.kill('SIGKILL');
+console.log(JSON.stringify({ result, termination }));`;
       const reply = spawnSync(process.execPath, ['--input-type=module', '-e', code], { cwd: dir, encoding: 'utf8', timeout: 15_000 });
       assert.equal(reply.error, undefined, 'transport must finish within its bound');
       assert.equal(reply.status, 0, 'malformed frame must not crash the consumer');
-      assert.deepEqual(JSON.parse(reply.stdout), { state: 'unknown', resetAt: null, usedPercent: null });
+      const { result, termination } = JSON.parse(reply.stdout);
+      assert.deepEqual(result, { state: 'unknown', resetAt: null, usedPercent: null });
+      assert.deepEqual(termination, { code: 0, signal: null }, 'child must close after SIGTERM');
       assert.equal(reply.stderr, '', 'transport must not expose raw protocol diagnostics');
       assert.equal(readFileSync(stopped, 'utf8'), 'stopped');
     });
   }
 }
+
+
+test('native account transport escalates when the child ignores SIGTERM', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'pdd-health-escalation-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = join(dir, 'codex');
+  writeFileSync(file, `#!${process.execPath}
+process.on('SIGTERM', () => {});
+setInterval(() => {}, 1000);
+process.stdin.once('data', () => console.log('[]'));
+`, { mode: 0o755 });
+  const code = `import { spawn } from 'node:child_process';
+import { readCodexLimits } from ${JSON.stringify(new URL('../src/codex-limits.mjs', import.meta.url).href)};
+let child, close;
+const closed = new Promise(resolve => { close = resolve; });
+const result = await readCodexLimits({ command: ${JSON.stringify(file)}, cwd: ${JSON.stringify(dir)} }, {
+  spawn: (...args) => { child = spawn(...args); child.once('close', (code, signal) => close({ code, signal })); return child; }
+});
+const termination = await Promise.race([closed, new Promise(resolve => setTimeout(() => resolve(null), 3000).unref())]);
+if (!termination) child.kill('SIGKILL');
+console.log(JSON.stringify({ result, termination }));`;
+  const reply = spawnSync(process.execPath, ['--input-type=module', '-e', code], { cwd: dir, encoding: 'utf8', timeout: 15_000 });
+  assert.equal(reply.error, undefined, 'transport and child cleanup must finish within the bound');
+  assert.equal(reply.status, 0);
+  assert.equal(reply.stderr, '');
+  assert.deepEqual(JSON.parse(reply.stdout), {
+    result: { state: 'unknown', resetAt: null, usedPercent: null },
+    termination: { code: null, signal: 'SIGKILL' },
+  });
+});
 
 // Release integration: #3048 and #3067 must use the same tick sample.
 test('release: one machine observation controls health and check capacity', async t => {
