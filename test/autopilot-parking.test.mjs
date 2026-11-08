@@ -7,6 +7,7 @@ import {join} from 'node:path';
 import {fixture, packageRoot} from './helpers/workflow-runner-fixture.mjs';
 import {healthyMachine} from './helpers/healthy-machine.mjs';
 import {isolatedCheckCapacity} from './helpers/check-machine.mjs';
+import {readRunResults} from '../src/workflow-results.mjs';
 import {tickAutopilot, runAutopilotLauncher} from '../src/autopilot-launcher.mjs';
 import {runStatus, parkAutomaticRun, changeRun, startRun, openRun} from '../src/workflow-runner.mjs';
 import {createDependencyReadPorts} from '../src/issue-dependencies-github.mjs';
@@ -162,6 +163,100 @@ for (const previous of ['person', 'interpreter'])
     const sent = JSON.stringify(deliveries(f)[0]);
     assert.ok(sent.includes(`--read ${newBatch}`)); assert.ok(!sent.includes(oldBatch));
     await tick(); assert.equal(deliveries(f).length, 1);
+    assert.deepEqual(warnings, []);
+  });
+
+// #3091: saved-check identity must be current even when only one input changes.
+for (const change of ['batch', 'check', 'result', 'verdict'])
+  test(`3091 batch refresh ${change} evidence at an inferred interpreter park`, async t => {
+    const {f, tick, ports, stateFile, warnings} = await setup(t, 'claude', 'feature');
+    fullTicks(f, stateFile, ports);
+    ports.runtimeHealth = async () => ({state: 'unavailable', detail: 'controlled outage'});
+    const oldBatch = '20261101-120000-abcd', newBatch = '20261102-120000-efgh';
+    const held = f.record(); held.area = 1; held.state = 'waiting';
+    for (const chat of held.chats) chat.area = held.areas[held.area].name;
+    held.gate = {kind: 'approve-pr', area: held.areas[held.area].name, at: f.clock};
+    held.done.check = {at: f.clock}; save(f, held);
+    const created = new Date(f.clock).toISOString();
+    const savedBatch = (batch, state = 'partial', code = 'runner-stopped') => {
+      const folder = join(f.ports.env.HOME, '.pdd/runtime/batches', batch);
+      mkdirSync(folder, {recursive: true});
+      writeFileSync(join(folder, 'batch.json'), JSON.stringify({batch, root: held.root,
+        intent: 'check', created_at: created,
+        rows: [{test: 'tests/value.json', state, reason: {code}}]}));
+    };
+    savedBatch(oldBatch);
+    await tick();
+    const original = f.record(), age = original.parking.at, oldWait = original.parking.interpreterWait;
+    assert.equal(oldWait.batch, oldBatch);
+    assert.equal(original.parking.blocker.kind, 'interpreter');
+    f.tick(); await tick();
+    assert.deepEqual(f.record().parking.interpreterWait, oldWait);
+    assert.equal(f.record().parking.at, age);
+    f.tick();
+    const changed = f.record();
+    // Change only the named input. In particular, leave updatedAt and the gate
+    // intact for a replacement saved batch or an updated result in that batch.
+    if (change === 'check') changed.done.check = {...changed.done.check, at: f.clock};
+    save(f, changed);
+    if (change === 'batch') savedBatch(newBatch);
+    if (change === 'result') savedBatch(oldBatch, 'partial', 'no-server-verdict');
+    if (change === 'verdict') savedBatch(oldBatch, 'failed', 'check-failed');
+    const batch = change === 'batch' ? newBatch : oldBatch;
+    const current = readRunResults({root: held.root, since: held.startedAt}, {env: f.ports.env})
+      .find(row => row.kind === 'pdd test');
+    assert.equal(current.batch, batch);
+    if (change === 'result') assert.equal(current.states[0].reason.code, 'no-server-verdict');
+    await tick();
+    const parked = f.record();
+    assert.equal(parked.parking.at, age);
+    assert.equal(parked.parking.phase, 'parked');
+    for (const key of ['root', 'branch', 'gate', 'question', 'done', 'decisions', 'automaticOrigin'])
+      assert.deepEqual(parked[key], changed[key]);
+    assert.equal(parked.chats.at(-1).session.id, held.chats.at(-1).session.id);
+    assert.equal(launches(f).length, 0); assert.equal(deliveries(f).length, 0);
+    if (change === 'verdict') {
+      assert.equal(parked.parking.blocker.kind, 'person');
+      assert.equal(parked.parking.interpreterWait, undefined);
+      assert.equal(parked.parking.interpreterCheck, undefined);
+      ports.runtimeHealth = async () => ({state: 'healthy', detail: 'controlled recovery'});
+      await tick();
+      assert.equal(f.record().parking.blocker.kind, 'person');
+      assert.equal(deliveries(f).length, 0);
+    } else {
+      assert.equal(parked.parking.interpreterWait.batch, batch);
+      assert.deepEqual(parked.parking.interpreterGate, changed.gate);
+      assert.notEqual(parked.parking.interpreterWait.at, oldWait.at, 'changed evidence has a new wait identity');
+      const wait = parked.parking.interpreterWait;
+      const pattern = JSON.parse(readFileSync(stateFile)).interpreterPattern;
+      assert.equal(pattern.streak, 2);
+      if (change === 'check') {
+        // Refresh a different gate at the same clock value and saved batch.
+        changed.gate = {...changed.gate, at: f.clock};
+        const nextGate = f.record(); nextGate.gate = changed.gate; save(f, nextGate);
+        await tick();
+        const rebound = f.record();
+        assert.equal(rebound.parking.interpreterWait.batch, batch);
+        assert.notEqual(rebound.parking.interpreterWait.at, wait.at);
+        assert.deepEqual(rebound.parking.interpreterGate, changed.gate);
+        assert.equal(rebound.parking.at, age);
+        f.tick(); await tick();
+        assert.deepEqual(f.record().parking.interpreterWait, rebound.parking.interpreterWait);
+      } else {
+        f.tick(); await tick();
+        assert.deepEqual(f.record().parking.interpreterWait, wait);
+      }
+      ports.runtimeHealth = async () => ({state: 'healthy', detail: 'controlled recovery'});
+      await tick();
+      assert.equal(f.record().parking, undefined);
+      for (const key of ['gate', 'decisions', 'automaticOrigin']) assert.deepEqual(f.record()[key], changed[key]);
+      assert.equal(f.record().chats.at(-1).session.id, held.chats.at(-1).session.id);
+      assert.equal(launches(f).length, 1); assert.equal(deliveries(f).length, 1);
+      const sent = JSON.stringify(deliveries(f)[0]);
+      assert.ok(sent.includes(`--read ${batch}`));
+      if (change === 'batch') assert.ok(!sent.includes(oldBatch));
+      await tick(); assert.equal(deliveries(f).length, 1);
+    }
     assert.deepEqual(warnings, []);
   });
 

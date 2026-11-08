@@ -69,7 +69,9 @@ export async function reconcileParking(state, ports, {wakeRules = [], wake = fal
     if (['waking', 'releasing'].includes(run.parking?.phase)) continue;
     const chat = [...(run.chats ?? [])].reverse().find(chat => chat.area === run.areas?.[run.area]?.name);
     if (!run.parking && ['area-end', 'run-end', 'budget', 'cancel'].includes(chat?.closed?.reason)) continue;
-    const saved = blockerFor(run);
+    // Classify current facts before consulting the park's cached inference.
+    // A finished check can change its saved result at an unchanged gate.
+    const saved = blockerFor({...run, parking: undefined});
     // Native check/limit evidence can refine a generic gate; explicit named waits win.
     const observed = !saved || saved.kind === 'person' ? await ports.observeBlocker?.(run) : null;
     const blocker = observed ?? saved ?? run.parking?.blocker ?? (stopped(run) ? {kind: 'unknown', until: null} : null);
